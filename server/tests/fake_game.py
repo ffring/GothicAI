@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import asynccontextmanager
 from typing import Any
 
 from websockets.asyncio.client import ClientConnection, connect
+
+from gothic_ai.game import GameLink, GameServer
 
 KNOWN_ANIMS = {"T_GREETNOV"}
 WAYPOINTS = {"NW_XARDAS_TOWER_IN1_31": 0.0, "NW_XARDAS_TOWER_04": 850.0, "NW_XARDAS_STAIRS_01": 1200.0}
@@ -17,6 +21,8 @@ class FakeGame:
         self.received: list[dict[str, Any]] = []
         self.busy_attaches = busy_attaches  # first N attach requests fail as "npc is in dialog"
         self.ws: ClientConnection | None = None
+        self.said: list[str] = []
+        self.statuses: list[str] = []
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -46,7 +52,7 @@ class FakeGame:
     async def run(self, url: str) -> None:
         async with connect(url) as ws:
             self.ws = ws
-            await self.send(type="hello", protocol=1, client="fake", codepage="cp1251")
+            await self.send(type="hello", protocol=2, client="fake", codepage="cp1251")
             await self.send(type="world_loaded", world="NEWWORLD.ZEN")
             async for raw in ws:
                 msg = json.loads(raw)
@@ -68,6 +74,11 @@ class FakeGame:
                 await self.send(**self.snapshot(msg["npc"]))
             case "action":
                 await self.handle_action(msg)
+            case "say":
+                self.said.append(msg["text"])
+                await self.send(type="line_started", npc=msg["npc"], line=msg["line"])
+            case "chat_status":
+                self.statuses.append(msg["status"])
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
@@ -88,3 +99,20 @@ class FakeGame:
         if action == "return_to_routine" and status == "done":
             self.attached.discard(npc)
             await self.send(type="detached", npc=npc, reason="routine")
+
+
+@asynccontextmanager
+async def connected(fake: FakeGame):
+    """Server on a free port with the fake game connected; yields the game link."""
+    server = GameServer(port=0)
+    serving = asyncio.create_task(server.serve_forever())
+    await server.started.wait()
+    game = asyncio.create_task(fake.run(f"ws://127.0.0.1:{server.port}"))
+    try:
+        link: GameLink = await asyncio.wait_for(server.wait_link(), 5)
+        await link.wait_world(5)
+        yield link
+    finally:
+        game.cancel()
+        serving.cancel()
+        await asyncio.gather(game, serving, return_exceptions=True)

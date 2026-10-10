@@ -9,9 +9,10 @@
 | Путь | Что |
 |---|---|
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
-| `server/` | ИИ-сервер (Python): соединение с игрой, сценарии. Дальше здесь будут память, оркестратор и адаптер LLM |
+| `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, адаптер LLM, сценарии |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
-| `scripts/e2e-m0.sh` | Сквозная проверка: сервер + новая игра, управление Ксардасом |
+| `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `SCENARIO=m1` — диалог |
+| `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
 | `asr-service/` | Сервис распознавания речи со сменными провайдерами *(появится в M3)* |
 | `reports/` | Итоговые исследования |
 | `research_notes/` | Заметки исследований с источниками |
@@ -27,13 +28,25 @@ cmake -S OpenGothic -B OpenGothic/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebIn
 cmake --build OpenGothic/build --target Gothic2Notr
 ```
 
-ИИ-сервер. Ждёт игру на `ws://127.0.0.1:47817` и принимает команды из консоли: `attach`, `goto`, `come`, `ani`, `routine`, …
+Вход в ChatGPT. Один раз: откроется браузер, токены сохранятся в `~/.config/gothic-ai/chatgpt.json`.
+
+```bash
+cd server && uv run gothic-ai login chatgpt
+```
+
+Проверить модель и задержку:
+
+```bash
+cd server && uv run gothic-ai llm-test "Кто ты?"
+```
+
+ИИ-сервер. Ждёт игру на `ws://127.0.0.1:47817` и принимает команды из консоли: `attach`, `goto`, `come`, `ani`, `talk <текст>`, `routine`, … Бэкенд LLM выбирается флагом `--llm chatgpt|openai|local|fake`, модель — `--model`.
 
 ```bash
 cd server && uv run gothic-ai serve
 ```
 
-Игра в режиме разработчика (консоль Marvin по F2, там доступны `ai status` и `ai attach <npc>`):
+Игра в режиме разработчика. Чат с NPC открывается клавишей **T**, когда игрок на него смотрит; Enter отправляет, Esc закрывает. Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
 
 ```bash
 OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/shared/projects/Gothic II" -devmode
@@ -46,5 +59,5 @@ cd server && uv run pytest
 ```
 
 ```bash
-scripts/e2e-m0.sh
+scripts/e2e.sh
 ```

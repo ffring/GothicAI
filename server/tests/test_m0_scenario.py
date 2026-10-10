@@ -1,30 +1,12 @@
 import asyncio
-from contextlib import asynccontextmanager
 
 import pytest
 
 from gothic_ai import scenarios
-from gothic_ai.game import GameDisconnected, GameError, GameLink, GameServer
-from tests.fake_game import FakeGame
+from gothic_ai.game import GameDisconnected, GameError
+from tests.fake_game import FakeGame, connected
 
 XARDAS = "NONE_100_XARDAS"
-
-
-@asynccontextmanager
-async def connected(fake: FakeGame):
-    """Server on a free port with the fake game connected; yields the game link."""
-    server = GameServer(port=0)
-    serving = asyncio.create_task(server.serve_forever())
-    await server.started.wait()
-    game = asyncio.create_task(fake.run(f"ws://127.0.0.1:{server.port}"))
-    try:
-        link: GameLink = await asyncio.wait_for(server.wait_link(), 5)
-        await link.wait_world(5)
-        yield link
-    finally:
-        game.cancel()
-        serving.cancel()
-        await asyncio.gather(game, serving, return_exceptions=True)
 
 
 async def test_m0_scenario_drives_npc_and_returns_it_to_routine():

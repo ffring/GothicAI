@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# End-to-end M0 check: starts the AI server with the m0 scenario, then a new game in OpenGothic.
-# The scenario takes Xardas over, walks him around and returns him to his routine.
-# A new game first plays the intro video (~80 s), so the whole run takes ~2 min.
+# End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   m0: takes Xardas over, walks him around and returns him to his routine
+#   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
+# A new game first plays the intro video (~80 s), so a run takes ~2 min.
 #
-#   GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e-m0.sh
+#   SCENARIO=m1 LLM=fake GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,8 +12,10 @@ GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d -t gothic-e2e)}"
 TIMEOUT="${TIMEOUT:-240}"
+SCENARIO="${SCENARIO:-m0}"
+LLM="${LLM:-fake}"
 
-(cd "$ROOT/server" && exec uv run gothic-ai serve --scenario m0 --exit-after --no-console) >"$LOG_DIR/server.log" 2>&1 &
+(cd "$ROOT/server" && exec uv run gothic-ai serve --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console) >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
 # `|| true`: with set -e a failing kill of an already finished process would change the exit code
@@ -42,7 +45,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenarios|attached|detached|ERROR" "$LOG_DIR/server.log" || true
+grep -E "scenario|attached|detached|replied|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

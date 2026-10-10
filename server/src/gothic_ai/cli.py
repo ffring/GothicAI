@@ -1,22 +1,33 @@
-"""`gothic-ai serve`: wait for the game, optionally run a scenario, then accept console commands."""
+"""`gothic-ai`: AI server for the game, ChatGPT sign-in and diagnostics."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
+import os
 import shlex
 import sys
+import time
+from pathlib import Path
 
 from . import scenarios
+from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
-from .protocol import Attached, Detached, GameMessage, Perception
+from .gamedata.ou import load_npc_lines
+from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, make_backend
+from .llm.siwc import TokenStore, login
+from .persona import PersonaProvider
+from .protocol import Attached, ChatClose, ChatOpen, Detached, GameMessage, Perception, PlayerText
 
 log = logging.getLogger("gothic_ai")
+
+DEFAULT_GAME_DIR = "/Volumes/shared/projects/Gothic II"
 
 HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping
   goto <waypoint> | come | turn | ani <name> | wait <ms> | stop | routine
+  talk <text>       speak to the npc as the player (opens a conversation)
   quit"""
 
 
@@ -27,14 +38,26 @@ def print_event(msg: GameMessage) -> None:
         case Detached():
             log.info("detached %s: %s", msg.npc, msg.reason)
         case Perception():
-            log.info("perception %s: %s from %s at %.0fcm", msg.npc, msg.perc, msg.other, msg.distance)
+            log.debug("perception %s: %s from %s at %.0fcm", msg.npc, msg.perc, msg.other, msg.distance)
+        case ChatOpen():
+            log.info("chat opened with %s", msg.npc)
+        case PlayerText():
+            log.info("player -> %s: %s", msg.npc, msg.text)
+        case ChatClose():
+            log.info("chat closed with %s", msg.npc)
+
+
+class ServerState:
+    def __init__(self) -> None:
+        self.dialogue: DialogueManager | None = None
 
 
 class Console:
     """Line commands from stdin, executed against the current game link."""
 
-    def __init__(self, server: GameServer, npc: str) -> None:
+    def __init__(self, server: GameServer, state: ServerState, npc: str) -> None:
         self.server = server
+        self.state = state
         self.npc = npc
 
     async def run(self) -> None:
@@ -54,7 +77,7 @@ class Console:
                 continue
             try:
                 await self.execute(link, args)
-            except (GameError, TimeoutError) as err:
+            except (GameError, TimeoutError, KeyError) as err:
                 print(f"error: {err}", flush=True)
 
     async def execute(self, link: GameLink, args: list[str]) -> None:
@@ -84,26 +107,44 @@ class Console:
                 print(await link.act(npc, "stop"))
             case "routine":
                 print(await link.act(npc, "return_to_routine"))
+            case "talk" if rest and self.state.dialogue is not None:
+                snap = await link.snapshot(npc)
+                self.state.dialogue.open(npc, snap.npc.name)
+                await self.state.dialogue.say_as_player(npc, " ".join(rest))
             case _:
                 print(HELP)
+
+
+def _backend(args: argparse.Namespace) -> LLMBackend:
+    return make_backend(args.llm, args.model, base_url=args.base_url, reasoning_effort=args.reasoning_effort)
 
 
 async def serve(args: argparse.Namespace) -> int:
     done = asyncio.Event()
     exit_code = 0
+    state = ServerState()
+    llm = _backend(args)
+    game_dir = Path(args.game_dir) if args.game_dir else None
+    personas = PersonaProvider(game_dir if game_dir and game_dir.is_dir() else None)
+    log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
 
     async def on_link(link: GameLink) -> None:
         nonlocal exit_code
         link.listeners.append(print_event)
-        if args.scenario != "m0":
+        state.dialogue = DialogueManager(link, llm, personas, greet=not args.no_greet)
+        if args.scenario is None:
             return
         try:
-            steps = await scenarios.m0_smoke(link, args.npc)
-            failed = [s for s in steps if s.result.status != "done"]
-            log.info("scenario m0: %d steps, %d not done", len(steps), len(failed))
-            exit_code = 1 if any(s.result.status in ("failed", "timeout") for s in steps) else 0
+            if args.scenario == "m0":
+                steps = await scenarios.m0_smoke(link, args.npc)
+                failed = [s for s in steps if s.result.status in ("failed", "timeout")]
+                log.info("scenario m0: %d steps, %d failed", len(steps), len(failed))
+                exit_code = 1 if failed else 0
+            elif args.scenario == "m1":
+                lines = await scenarios.m1_chat(link, state.dialogue, args.npc)
+                log.info("scenario m1: npc spoke %d line(s)", len(lines))
         except Exception:
-            log.exception("scenario m0 failed")
+            log.exception("scenario %s failed", args.scenario)
             exit_code = 1
         if args.exit_after:
             done.set()
@@ -111,7 +152,7 @@ async def serve(args: argparse.Namespace) -> int:
     server = GameServer(args.host, args.port, on_link)
     tasks = [asyncio.create_task(server.serve_forever()), asyncio.create_task(done.wait())]
     if not args.no_console:
-        tasks.append(asyncio.create_task(Console(server, args.npc).run()))
+        tasks.append(asyncio.create_task(Console(server, state, args.npc).run()))
     finished, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for task in tasks:
         task.cancel()
@@ -123,25 +164,114 @@ async def serve(args: argparse.Namespace) -> int:
     return exit_code
 
 
+async def llm_test(args: argparse.Namespace) -> int:
+    """One request, prints the reply and latency: compare backends and models."""
+    llm = _backend(args)
+    personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
+    persona = personas.get(args.npc, args.name)
+    started = time.monotonic()
+    first = None
+    try:
+        async for event in llm.stream(
+            instructions=persona.instructions, messages=[Message("user", args.text)]
+        ):
+            if isinstance(event, TextDelta):
+                if first is None:
+                    first = time.monotonic() - started
+                print(event.text, end="", flush=True)
+    except LLMError as err:
+        print(f"\nerror: {err}", file=sys.stderr)
+        return 1
+    total = time.monotonic() - started
+    print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
+    return 0
+
+
+async def login_chatgpt() -> int:
+    store = TokenStore()
+    try:
+        creds = await login(store)
+    except (LLMError, TimeoutError) as err:
+        print(f"sign-in failed: {err}", file=sys.stderr)
+        return 1
+    print(f"signed in{f' as {creds.email}' if creds.email else ''}; credentials saved to {store.path}")
+    return 0
+
+
+def lines(args: argparse.Namespace) -> int:
+    found = load_npc_lines(Path(args.game_dir), args.npc)
+    for name, text in found:
+        print(f"{name}: {text}")
+    print(f"{len(found)} line(s)", file=sys.stderr)
+    return 0
+
+
+def _add_llm_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--llm", choices=BACKENDS, default=os.environ.get("GOTHIC_AI_LLM", "chatgpt"))
+    p.add_argument("--model", help="model id (default depends on the backend)")
+    p.add_argument("--base-url", help="API base url (openai/local backends)")
+    p.add_argument("--reasoning-effort", default="low", help="reasoning effort for Responses models")
+    p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
+    p.add_argument("--npc", default="NONE_100_XARDAS", help="default npc for commands and scenarios")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="gothic-ai")
+    parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
+
     p = sub.add_parser("serve", help="wait for the game and drive npc's")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=47817)
-    p.add_argument("--npc", default="NONE_100_XARDAS", help="default npc for commands and scenarios")
-    p.add_argument("--scenario", choices=["m0"], help="run a scripted check when the game connects")
+    p.add_argument("--scenario", choices=["m0", "m1"], help="run a scripted check when the game connects")
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
-    p.add_argument("-v", "--verbose", action="store_true")
-    args = parser.parse_args()
+    p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
+    _add_llm_args(p)
 
+    p = sub.add_parser("llm-test", help="send one message to the LLM and measure latency")
+    p.add_argument("text")
+    p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
+    _add_llm_args(p)
+
+    p = sub.add_parser("login", help="sign in to a provider")
+    p.add_argument("provider", choices=["chatgpt"])
+
+    p = sub.add_parser("logout", help="forget stored credentials")
+    p.add_argument("provider", choices=["chatgpt"])
+
+    p = sub.add_parser("lines", help="print an npc's original dialog lines")
+    p.add_argument("npc")
+    p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
+
+    args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname).1s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    for noisy in ("httpx", "httpx2", "httpcore", "openai"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     try:
-        sys.exit(asyncio.run(serve(args)))
+        match args.command:
+            case "serve":
+                code = asyncio.run(serve(args))
+            case "llm-test":
+                code = asyncio.run(llm_test(args))
+            case "login":
+                code = asyncio.run(login_chatgpt())
+            case "logout":
+                TokenStore().delete()
+                print("ChatGPT credentials removed")
+                code = 0
+            case "lines":
+                code = lines(args)
+            case _:
+                code = 2
+    except LLMError as err:
+        print(f"error: {err}", file=sys.stderr)
+        code = 1
     except KeyboardInterrupt:
-        pass
+        code = 130
+    sys.exit(code)

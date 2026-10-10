@@ -6,8 +6,9 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from .dialogue import DialogueManager
 from .game import GameError, GameLink
-from .protocol import ActionResult
+from .protocol import ActionResult, LineStarted
 
 log = logging.getLogger(__name__)
 
@@ -68,3 +69,29 @@ async def m0_smoke(link: GameLink, npc: str = "NONE_100_XARDAS") -> list[Step]:
         await step(f"go_to_waypoint {home}", link.act(npc, "go_to_waypoint", waypoint=home))
     await step("return_to_routine", link.act(npc, "return_to_routine"))
     return steps
+
+
+async def m1_chat(
+    link: GameLink, dialogue: DialogueManager, npc: str = "NONE_100_XARDAS", text: str = "Кто ты такой?"
+) -> list[str]:
+    """M1 check without the keyboard: player text injected on the server, the npc must speak every line."""
+    await link.wait_world()
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc)
+    conv = dialogue.open(npc, snap.npc.name)
+
+    started: list[str] = []
+    link.listeners.append(lambda msg: started.append(msg.line) if isinstance(msg, LineStarted) else None)
+
+    await dialogue.say_as_player(npc, text)
+    lines = conv.last_lines
+    log.info("%s said %d line(s), waiting for the npc to speak them", npc, len(lines))
+    for _ in range(20 * max(1, len(lines))):  # ~10 s per line
+        if all(line in started for line in lines):
+            break
+        await asyncio.sleep(0.5)
+    await link.act(npc, "return_to_routine")
+    missing = [line for line in lines if line not in started]
+    if not lines or missing:
+        raise RuntimeError(f"npc did not speak lines: {missing or 'no lines generated'}")
+    return lines

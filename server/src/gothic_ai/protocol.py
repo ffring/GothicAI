@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # --- game -> server -----------------------------------------------------------
 
@@ -123,6 +123,35 @@ class Pong(_GameMessage):
     req: str = ""
 
 
+class ChatOpen(_GameMessage):
+    """The player opened the chat with the npc they look at (the game has already attached it)."""
+
+    type: Literal["chat_open"]
+    npc: str
+    name: str
+
+
+class PlayerText(_GameMessage):
+    type: Literal["player_text"]
+    npc: str
+    text: str
+
+
+class ChatClose(_GameMessage):
+    """The player closed the chat; the game hands the npc back to its routine."""
+
+    type: Literal["chat_close"]
+    npc: str
+
+
+class LineStarted(_GameMessage):
+    """The npc started speaking a line sent with `say`."""
+
+    type: Literal["line_started"]
+    npc: str
+    line: str
+
+
 GameMessage = Annotated[
     Hello
     | WorldLoaded
@@ -133,7 +162,11 @@ GameMessage = Annotated[
     | ActionResult
     | Snapshot
     | Perception
-    | Pong,
+    | Pong
+    | ChatOpen
+    | PlayerText
+    | ChatClose
+    | LineStarted,
     Field(discriminator="type"),
 ]
 
@@ -187,3 +220,22 @@ class SnapshotCmd(_Command):
 class PingCmd(_Command):
     type: Literal["ping"] = "ping"
     req: str
+
+
+class SayCmd(_Command):
+    """One line (usually a sentence) for the npc to speak; shown as a subtitle."""
+
+    type: Literal["say"] = "say"
+    npc: str
+    line: str
+    text: str
+
+
+ChatStatus = Literal["thinking", "idle", "error"]
+
+
+class ChatStatusCmd(_Command):
+    type: Literal["chat_status"] = "chat_status"
+    npc: str
+    status: ChatStatus
+    detail: str | None = None
