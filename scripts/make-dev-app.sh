@@ -13,12 +13,19 @@ APP="$OUT/OpenGothic Dev.app"
 
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ln -sf "../../../Gothic2Notr" "$APP/Contents/MacOS/Gothic2Notr"
-# OpenGothic's own icon (a Windows .ico holding one 246x256 PNG), squared and turned into .icns
+# OpenGothic's own icon (a Windows .ico holding one 246x256 PNG), squared, in every size the Dock and
+# Finder ask for, as .icns
 if [ -f "$ROOT/OpenGothic/icon.ico" ]; then
   TMP="$(mktemp -d)"
   sips -s format png "$ROOT/OpenGothic/icon.ico" --out "$TMP/icon.png" >/dev/null
   sips -p 256 256 "$TMP/icon.png" --out "$TMP/square.png" >/dev/null
-  sips -s format icns "$TMP/square.png" --out "$APP/Contents/Resources/OpenGothic.icns" >/dev/null
+  SET="$TMP/OpenGothic.iconset"
+  mkdir "$SET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$TMP/square.png" --out "$SET/icon_${size}x${size}.png" >/dev/null
+    sips -z "$((size * 2))" "$((size * 2))" "$TMP/square.png" --out "$SET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$SET" -o "$APP/Contents/Resources/OpenGothic.icns"
   rm -rf "$TMP"
 fi
 cat >"$APP/Contents/Info.plist" <<'PLIST'
@@ -38,5 +45,6 @@ cat >"$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+touch "$APP" # a newer bundle date makes Finder and the Dock drop an icon they cached before
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
 echo "$APP"
