@@ -17,10 +17,25 @@ from .service import AsrService
 
 log = logging.getLogger("gothic_asr")
 
-# self-hosted Voxtral Realtime (streams, ~0.3 s after speech), ChatGPT plan when it is unreachable
-DEFAULT_PROVIDER = os.environ.get("GOTHIC_ASR_PROVIDER", "voxtral")
-DEFAULT_FALLBACK = os.environ.get("GOTHIC_ASR_FALLBACK", "chatgpt")
+# self-hosted Voxtral Realtime (streams, ~0.15 s after speech), ChatGPT plan when it is unreachable
+DEFAULT_PROVIDER = "voxtral"
+DEFAULT_FALLBACK = "chatgpt"
 CHUNK_S = 0.1
+
+
+def load_env_file(start: Path | None = None) -> Path | None:
+    """Reads the nearest `.env` at or above `start` (local settings live in the repository root's `.env`).
+    Variables already set in the environment win."""
+    here = start or Path.cwd()
+    for d in (here, *here.parents):
+        path = d / ".env"
+        if path.is_file():
+            for line in path.read_text().splitlines():
+                key, sep, value = line.strip().removeprefix("export ").partition("=")
+                if sep and key and not key.startswith("#"):
+                    os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+            return path
+    return None
 
 
 def _recognizer(args: argparse.Namespace) -> Recognizer:
@@ -87,14 +102,19 @@ async def transcribe(args: argparse.Namespace) -> int:
 def _add_provider_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--provider",
-        default=DEFAULT_PROVIDER,
+        default=os.environ.get("GOTHIC_ASR_PROVIDER", DEFAULT_PROVIDER),
         help=f"provider spec: name[:key=value,...]; names: {', '.join(PROVIDERS)}",
     )
-    p.add_argument("--fallback", default=DEFAULT_FALLBACK, help="fallback provider spec, or none")
+    p.add_argument(
+        "--fallback",
+        default=os.environ.get("GOTHIC_ASR_FALLBACK", DEFAULT_FALLBACK),
+        help="fallback provider spec, or none",
+    )
     p.add_argument("--timeout", type=float, default=4.0, help="seconds per provider before falling back")
 
 
 def main() -> None:
+    env_file = load_env_file()
     parser = argparse.ArgumentParser(prog="gothic-asr")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -122,6 +142,8 @@ def main() -> None:
     )
     for noisy in ("httpx", "httpx2", "httpcore", "huggingface_hub", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    if env_file is not None:
+        log.info("environment from %s", env_file)
     try:
         match args.command:
             case "serve":

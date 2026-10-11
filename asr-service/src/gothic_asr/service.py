@@ -9,6 +9,9 @@
     service -> client  {"type":"error","detail":"..."}
 
 `latency_s` counts from `end`. Utterances on one connection are handled one after another.
+
+`GET /health` on the same port answers {"ok":true,"service":"gothic-asr","providers":[{"name":"..."}]}:
+the launcher waits for it before starting the game.
 """
 
 from __future__ import annotations
@@ -16,9 +19,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from http import HTTPStatus
 
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
+from websockets.http11 import Request, Response
 
 from .audio import RATE, pcm16_to_float, resample
 from .providers import AsrError
@@ -36,12 +41,20 @@ class AsrService:
         self.port = port
 
     async def serve_forever(self, started=None) -> None:
-        async with serve(self._handler, self.host, self.port, max_size=2**22) as server:
+        async with serve(
+            self._handler, self.host, self.port, max_size=2**22, process_request=self._health
+        ) as server:
             self.port = server.sockets[0].getsockname()[1]
             log.info("listening on ws://%s:%d", self.host, self.port)
             if started is not None:
                 started.set()
             await server.serve_forever()
+
+    def _health(self, conn: ServerConnection, request: Request) -> Response | None:
+        if request.path != "/health":
+            return None
+        providers = [{"name": p.name} for p in self.recognizer.providers]
+        return _json(conn, {"ok": True, "service": "gothic-asr", "providers": providers})
 
     async def _handler(self, conn: ServerConnection) -> None:
         log.info("client connected from %s", conn.remote_address)
@@ -126,3 +139,10 @@ async def _write(conn: ServerConnection, outbox: asyncio.Queue[dict]) -> None:
             await conn.send(json.dumps(await outbox.get(), ensure_ascii=False))
     except ConnectionClosed:
         pass
+
+
+def _json(conn: ServerConnection, body: dict) -> Response:
+    resp = conn.respond(HTTPStatus.OK, json.dumps(body, ensure_ascii=False))
+    del resp.headers["Content-Type"]
+    resp.headers["Content-Type"] = "application/json"
+    return resp

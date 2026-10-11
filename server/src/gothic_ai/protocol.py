@@ -221,11 +221,12 @@ class PttCancel(_GameMessage):
 
 
 class LineStarted(_GameMessage):
-    """The npc started speaking a line sent with `say`."""
+    """The npc started speaking a line sent with `say` (`voiced`: aloud, with its audio)."""
 
     type: Literal["line_started"]
     npc: str
     line: str
+    voiced: bool = False
 
 
 NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
@@ -390,12 +391,48 @@ class PingCmd(_Command):
 
 
 class SayCmd(_Command):
-    """One line (usually a sentence) for the npc to speak; shown as a subtitle."""
+    """One line (usually a sentence) for the npc to speak; shown as a subtitle. Aloud either with
+    `audio` (base64 of a 16-bit mono WAV file, the line lasts as long as it) or `stream`: the voice
+    follows in `say_audio` chunks (16-bit mono PCM at `rate`) and ends with `say_end`."""
 
     type: Literal["say"] = "say"
     npc: str
     line: str
     text: str
+    audio: str | None = None
+    stream: bool | None = None
+    rate: int | None = None
+    reply: str | None = None  # the line is part of this reply, already shown with chat_text
+
+
+class ChatTextCmd(_Command):
+    """The npc's reply as it is generated (`text` so far), for the chat window; its lines (`say`
+    with the same `reply`) then voice and animate it without showing the text again."""
+
+    type: Literal["chat_text"] = "chat_text"
+    npc: str
+    reply: str
+    text: str
+    final: bool = False
+
+
+class SayAudioCmd(_Command):
+    """A chunk of a streamed line's voice: base64 of 16-bit mono PCM."""
+
+    type: Literal["say_audio"] = "say_audio"
+    npc: str
+    line: str
+    data: str
+
+
+class SayEndCmd(_Command):
+    """The streamed voice of a line is complete (`audio_s` long), or broke off with `error`."""
+
+    type: Literal["say_end"] = "say_end"
+    npc: str
+    line: str
+    audio_s: float | None = None
+    error: str | None = None
 
 
 ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # notice: detail shown as is

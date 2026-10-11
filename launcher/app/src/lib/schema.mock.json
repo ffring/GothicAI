@@ -1,0 +1,322 @@
+{
+ "settings": {
+  "$defs": {
+   "GameSettings": {
+    "additionalProperties": false,
+    "properties": {
+     "dir": {
+      "anyOf": [
+       {
+        "format": "path",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Gothic II с аддоном «Ночь Ворона» и русской локализацией",
+      "title": "Папка игры"
+     },
+     "dev_mode": {
+      "default": false,
+      "description": "Консоль Marvin (F2) и отладочные команды ИИ",
+      "title": "Режим разработчика",
+      "type": "boolean"
+     },
+     "chat_scale": {
+      "anyOf": [
+       {
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Пусто: 1",
+      "title": "Масштаб окна чата"
+     }
+    },
+    "title": "GameSettings",
+    "type": "object"
+   },
+   "LlmSettings": {
+    "additionalProperties": false,
+    "properties": {
+     "backend": {
+      "default": "chatgpt",
+      "description": "chatgpt: подписка ChatGPT; openai: ключ API; local: OpenAI-совместимый сервер",
+      "enum": [
+       "chatgpt",
+       "openai",
+       "local",
+       "fake"
+      ],
+      "title": "Мозг NPC",
+      "type": "string"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Пусто: модель бэкенда по умолчанию",
+      "title": "Модель"
+     },
+     "base_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Для бэкендов openai и local",
+      "title": "Адрес API"
+     },
+     "reasoning_effort": {
+      "default": "low",
+      "title": "Глубина рассуждений",
+      "type": "string"
+     }
+    },
+    "title": "LlmSettings",
+    "type": "object"
+   },
+   "PathSettings": {
+    "additionalProperties": false,
+    "properties": {
+     "repo": {
+      "anyOf": [
+       {
+        "format": "path",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Пусто: тот, где лежит лаунчер",
+      "title": "Репозиторий"
+     },
+     "uv": {
+      "anyOf": [
+       {
+        "format": "path",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Пусто: найти самому",
+      "title": "Путь к uv"
+     },
+     "game_bin": {
+      "anyOf": [
+       {
+        "format": "path",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Пусто: OpenGothic/build/opengothic/Gothic2Notr",
+      "title": "Исполняемый файл игры"
+     },
+     "game_home": {
+      "anyOf": [
+       {
+        "format": "path",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Туда игра пишет сохранения, Gothic.ini и log.txt. Пусто: ~/.local/share/gothic-ai/game",
+      "title": "Папка сохранений"
+     }
+    },
+    "title": "PathSettings",
+    "type": "object"
+   },
+   "TtsSettings": {
+    "additionalProperties": false,
+    "properties": {
+     "enabled": {
+      "default": true,
+      "description": "Выключено: только субтитры",
+      "title": "Озвучка NPC",
+      "type": "boolean"
+     },
+     "provider": {
+      "default": "inworld",
+      "description": "inworld, voxcpm или openai:…",
+      "title": "Голоса",
+      "type": "string"
+     },
+     "fallback": {
+      "default": "voxcpm",
+      "description": "none: без запасного",
+      "title": "Запасные голоса",
+      "type": "string"
+     },
+     "voxcpm_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Адрес VoxCPM2"
+     },
+     "loudness": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "const": "none",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Пусто: как озвучка игры; none: как отдал провайдер",
+      "title": "Громкость реплик, LUFS"
+     }
+    },
+    "title": "TtsSettings",
+    "type": "object"
+   },
+   "VoiceSettings": {
+    "additionalProperties": false,
+    "properties": {
+     "enabled": {
+      "default": true,
+      "description": "Удерживайте T, чтобы сказать реплику",
+      "title": "Голосовой ввод",
+      "type": "boolean"
+     },
+     "provider": {
+      "default": "voxtral",
+      "description": "voxtral, chatgpt или openai:…",
+      "title": "Распознавание",
+      "type": "string"
+     },
+     "fallback": {
+      "default": "chatgpt",
+      "description": "none: без запасного",
+      "title": "Запасное распознавание",
+      "type": "string"
+     },
+     "voxtral_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Адрес Voxtral"
+     },
+     "mic_device": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Имя или номер; пусто: системный",
+      "title": "Микрофон"
+     }
+    },
+    "title": "VoiceSettings",
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "game": {
+    "$ref": "#/$defs/GameSettings",
+    "title": "Игра"
+   },
+   "llm": {
+    "$ref": "#/$defs/LlmSettings",
+    "title": "Мозг NPC"
+   },
+   "voice": {
+    "$ref": "#/$defs/VoiceSettings",
+    "title": "Голос игрока"
+   },
+   "tts": {
+    "$ref": "#/$defs/TtsSettings",
+    "title": "Озвучка NPC"
+   },
+   "paths": {
+    "$ref": "#/$defs/PathSettings",
+    "title": "Дополнительно"
+   }
+  },
+  "title": "Settings",
+  "type": "object"
+ },
+ "secrets": {
+  "additionalProperties": false,
+  "properties": {
+   "openai_api_key": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "secret": true,
+    "title": "Ключ OpenAI"
+   },
+   "inworld_api_key": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "secret": true,
+    "title": "Ключ Inworld"
+   }
+  },
+  "title": "Secrets",
+  "type": "object"
+ }
+}

@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
+import math
 import os
 import shlex
 import sys
 import time
+from array import array
 from pathlib import Path
+from typing import Any
 
 from . import npc_tools, scenarios
 from .brain import DeciderClient, GameApplier, NpcPlanner
 from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
+from .journal import Journal, print_sink
 from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, ToolCall, make_backend
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
@@ -32,7 +37,17 @@ from .protocol import (
     Saved,
     Session,
 )
-from .voice import DEFAULT_ASR_URL, AsrClient, AudioSource, Microphone, VoiceError, VoiceInput, WavSource
+from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
+from .voice import (
+    DEFAULT_ASR_URL,
+    MIC_DENIED,
+    AsrClient,
+    AudioSource,
+    Microphone,
+    VoiceError,
+    VoiceInput,
+    WavSource,
+)
 
 log = logging.getLogger("gothic_ai")
 
@@ -179,14 +194,19 @@ async def serve(args: argparse.Namespace) -> int:
     asr = None if args.no_voice else AsrClient(args.asr_url)
     decider = None if args.no_brain or not args.decider_url else DeciderClient(args.decider_url)
     source = None if args.no_voice else _audio_source(args)
+    tts = None if args.no_tts else TtsClient(args.tts_url)
+    journal = Journal(print_sink if args.journal else None)
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
+    log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
 
     async def on_link(link: GameLink) -> None:
         link.listeners.append(print_event)
-        state.dialogue = DialogueManager(link, llm, personas, memory=memory, greet=not args.no_greet)
+        state.dialogue = DialogueManager(
+            link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet, journal=journal
+        )
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
         brain = None
@@ -234,6 +254,11 @@ async def serve(args: argparse.Namespace) -> int:
                 }
                 log.info("scenario m4: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "tts":
+                results = await scenarios.tts_lines(link, state.dialogue, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario tts: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "m3":
                 results = await scenarios.m3_memory_voice(link, state.dialogue, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -256,6 +281,8 @@ async def serve(args: argparse.Namespace) -> int:
     await llm.aclose()
     if asr is not None:
         await asr.aclose()
+    if tts is not None:
+        await tts.aclose()
     if decider is not None:
         await decider.aclose()
     memory.close()
@@ -267,7 +294,8 @@ async def serve(args: argparse.Namespace) -> int:
 
 
 async def llm_test(args: argparse.Namespace) -> int:
-    """One request, prints the reply and latency: compare backends and models."""
+    """One request, prints the reply and latency: compare backends and models. With --json one object
+    on stdout ({"text", "llm", "model", "first_token_s", "total_s"} or {"error"}), for the launcher."""
     llm = _backend(args)
     personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
     persona = personas.get(args.npc, args.name)
@@ -277,22 +305,38 @@ async def llm_test(args: argparse.Namespace) -> int:
     tools = npc_tools.TOOLS if args.tools else None
     started = time.monotonic()
     first = None
+    text = ""
     try:
         async for event in llm.stream(instructions=persona.instructions, messages=messages, tools=tools):
             if isinstance(event, TextDelta):
                 if first is None:
                     first = time.monotonic() - started
-                print(event.text, end="", flush=True)
-            elif isinstance(event, ToolCall):
+                text += event.text
+                if not args.json:
+                    print(event.text, end="", flush=True)
+            elif isinstance(event, ToolCall) and not args.json:
                 at = time.monotonic() - started
                 print(f"\n  -> {event.name}({event.arguments}) at {at:.2f}s", flush=True)
     except LLMError as err:
-        print(f"\nerror: {err}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"error": str(err)}, ensure_ascii=False))
+        else:
+            print(f"\nerror: {err}", file=sys.stderr)
         return 1
     finally:
         await llm.aclose()
     total = time.monotonic() - started
-    print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
+    if args.json:
+        result = {
+            "text": text.strip(),
+            "llm": llm.name,
+            "model": getattr(llm, "model", None),
+            "first_token_s": round(first or 0.0, 2),
+            "total_s": round(total, 2),
+        }
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
     return 0
 
 
@@ -309,38 +353,140 @@ async def login_chatgpt() -> int:
 
 async def voice_test(args: argparse.Namespace) -> int:
     """Record from the microphone (or play a wav), streaming it to the ASR service like push-to-talk;
-    prints partial text as it comes and the final one with the latency after the end of speech."""
+    prints partial text as it comes and the final one with the latency after the end of speech.
+    With --json, JSON lines on stdout for the launcher: {"level": 0..1} while recording (~10 a second),
+    {"partial": text}, and last {"text", "provider", "audio_s", "latency_s"} or {"error"}."""
     source = _audio_source(args)
     asr = AsrClient(args.asr_url)
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
     loop = asyncio.get_running_loop()
     seconds = getattr(source, "duration", args.seconds)
+
+    def out(msg: dict[str, object]) -> None:
+        print(json.dumps(msg, ensure_ascii=False), flush=True)
+
+    def partial(text: str) -> None:
+        if args.json:
+            out({"partial": text})
+        else:
+            print(f"  … {text}", file=sys.stderr)
+
+    def fail(detail: str) -> int:
+        if args.json:
+            out({"error": detail})
+        else:
+            print(f"error: {detail}", file=sys.stderr)
+        return 1
+
     try:
-        session = await asr.open(source.rate, on_partial=lambda text: print(f"  … {text}", file=sys.stderr))
+        session = await asr.open(source.rate, on_partial=partial)
         source.start(lambda data: loop.call_soon_threadsafe(queue.put_nowait, data))
-        if not args.voice_file:
+        if not args.voice_file and not args.json:
             print(f"говорите {seconds:g} с...", file=sys.stderr, flush=True)
         loop.call_later(seconds + 0.1, lambda: (source.stop(), queue.put_nowait(None)))
-        size, heard = 0, False
+        size, heard, peak, last_level = 0, False, 0.0, 0.0
         while (chunk := await queue.get()) is not None:
             size += len(chunk)
             heard = heard or chunk.count(0) != len(chunk)
+            if args.json:
+                peak = max(peak, _level(chunk))
+                if (now := time.monotonic()) - last_level >= 0.1:
+                    out({"level": round(peak, 3)})
+                    peak, last_level = 0.0, now
             await session.feed(chunk)
         if size and not heard:
             await session.cancel()
-            print("микрофон записал тишину: проверьте доступ к микрофону", file=sys.stderr)
-            return 1
+            return fail(MIC_DENIED)
         result = await session.finish()
     except VoiceError as err:
-        print(f"error: {err}", file=sys.stderr)
-        return 1
+        return fail(str(err))
     finally:
         await asr.aclose()
+    audio_s = size / 2 / source.rate
+    if args.json:
+        out(
+            {
+                "text": result.text,
+                "provider": result.provider,
+                "audio_s": round(audio_s, 2),
+                "latency_s": round(result.latency_s, 2),
+            }
+        )
+        return 0
     print(result.text or "(ничего не распознано)")
-    print(
-        f"[{result.provider}] {size / 2 / source.rate:.1f}s audio, {result.latency_s:.2f}s after it ended",
-        file=sys.stderr,
-    )
+    took = f"{audio_s:.1f}s audio, {result.latency_s:.2f}s after it ended"
+    print(f"[{result.provider}] {took}", file=sys.stderr)
+    return 0
+
+
+def _level(chunk: bytes) -> float:
+    """Loudness of 16-bit PCM as 0..1: -60 dBFS and below is 0, full scale is 1."""
+    samples = array("h", chunk[: len(chunk) // 2 * 2])
+    if not samples:
+        return 0.0
+    rms = math.sqrt(sum(x * x for x in samples) / len(samples))
+    if rms < 1:
+        return 0.0
+    return max(0.0, min(1.0, (20 * math.log10(rms / 32768) + 60) / 60))
+
+
+def mics(args: argparse.Namespace) -> int:
+    """Input devices, for the launcher's microphone setting."""
+    try:
+        import sounddevice as sd
+
+        devices = sd.query_devices()
+        default = sd.default.device[0]
+    except Exception as err:  # PortAudio missing or broken
+        print(json.dumps({"error": f"нет доступа к аудио: {err}"}, ensure_ascii=False))
+        return 1
+    found = [
+        {"index": i, "name": d["name"], "default": i == default}
+        for i, d in enumerate(devices)
+        if d["max_input_channels"] > 0
+    ]
+    print(json.dumps(found, ensure_ascii=False))
+    return 0
+
+
+async def speech_test(args: argparse.Namespace) -> int:
+    """One line in an npc's voice through the TTS service, played as it arrives, the way the game gets
+    it (same voice id and description, so the provider reuses the npc's voice). With --json one object:
+    {"text", "provider", "first_chunk_s", "audio_s", "latency_s"} or {"error"}."""
+    personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
+    persona = personas.get(args.npc, args.name)
+    tts = TtsClient(args.tts_url)
+    player: Any = None
+    try:
+        import sounddevice as sd
+
+        async def start(rate: int, _provider: str) -> None:
+            nonlocal player
+            player = sd.RawOutputStream(samplerate=rate, channels=1, dtype="int16")
+            player.start()
+
+        async def chunk(data: bytes) -> None:
+            await asyncio.to_thread(player.write, data[: len(data) // 2 * 2])
+
+        speech = await tts.stream(args.text, args.npc.upper(), persona.voice, start, chunk)
+        if player is not None:
+            await asyncio.to_thread(player.stop)  # waits until the last chunk is heard
+    except Exception as err:  # TtsError, or sounddevice's own errors when playing
+        detail = str(err) if isinstance(err, TtsError) else f"звук не проигрался: {err}"
+        print(json.dumps({"error": detail}, ensure_ascii=False) if args.json else f"error: {detail}")
+        return 1
+    finally:
+        if player is not None:
+            player.close()
+        await tts.aclose()
+    result = {
+        "text": args.text,
+        "provider": speech.provider,
+        "first_chunk_s": round(speech.first_chunk_s, 2),
+        "audio_s": round(speech.audio_s, 2),
+        "latency_s": round(speech.latency_s, 2),
+    }
+    print(json.dumps(result, ensure_ascii=False) if args.json else result)
     return 0
 
 
@@ -393,7 +539,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4"],
+        choices=["m0", "m1", "m2", "m3", "m4", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
@@ -401,6 +547,9 @@ def main() -> None:
     p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
     p.add_argument("--memory-db", default=str(DEFAULT_MEMORY_DB), help="SQLite file with npc memories")
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
+    p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
+    p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
+    p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     p.add_argument(
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),
@@ -415,6 +564,7 @@ def main() -> None:
     p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
     p.add_argument("--tools", action="store_true", help="offer the npc action tools")
     p.add_argument("--situation", help="situation note sent before the message")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout instead of the stream")
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")
@@ -425,7 +575,18 @@ def main() -> None:
 
     p = sub.add_parser("voice-test", help="record from the microphone and print what ASR heard")
     p.add_argument("--seconds", type=float, default=4.0)
+    p.add_argument("--json", action="store_true", help="JSON lines: levels, partials, the result")
     _add_voice_args(p)
+
+    sub.add_parser("mics", help="input devices as JSON")
+
+    p = sub.add_parser("speech-test", help="say a line in an npc's voice through the TTS service, aloud")
+    p.add_argument("--text", default="Я ждал тебя. Нам нужно поговорить.")
+    p.add_argument("--npc", default="NONE_100_XARDAS")
+    p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
+    p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
+    p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout")
 
     p = sub.add_parser("memory", help="list save branches, or show what an npc remembers in one")
     p.add_argument("branch", nargs="?")
@@ -461,6 +622,10 @@ def main() -> None:
                 code = lines(args)
             case "voice-test":
                 code = asyncio.run(voice_test(args))
+            case "mics":
+                code = mics(args)
+            case "speech-test":
+                code = asyncio.run(speech_test(args))
             case "memory":
                 code = show_memory(args)
             case _:

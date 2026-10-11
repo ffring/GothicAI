@@ -1,6 +1,3 @@
-# Fork of OpenGothic is a separate repository (kaifaty/OpenGothic)
-/OpenGothic/
-
 # Python
 .venv/
 __pycache__/
@@ -9,8 +6,10 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# Secrets and local config
+# Secrets and local config (.env.example is the template)
 .env
+.env.*
+!.env.example
 *.local.toml
 secrets/
 
@@ -23,6 +22,15 @@ data/
 # OS
 .DS_Store
 
+# Game data: never in the repository (needs your own copy of the game)
+/game/
+*.vdf
+*.VDF
+
+# Claude Code: per-session worktrees and personal settings
+.claude/worktrees/
+.claude/settings.local.json
+
 # OpenGothic runtime files (written to the directory the game was started from)
 Gothic.ini
 log.txt
@@ -30,3 +38,4 @@ log.txt
 
 # Local agent rules (not shared)
 /AGENTS.md
+/tts-samples/

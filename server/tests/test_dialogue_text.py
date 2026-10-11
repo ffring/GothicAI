@@ -70,3 +70,42 @@ def test_persona_prompt_contains_samples_and_is_deterministic():
     a = render_instructions("NONE_100_XARDAS", "Ксардас", samples)
     assert a == render_instructions("NONE_100_XARDAS", "Ксардас", samples)
     assert "некромант" in a and samples[0] in a
+
+
+def test_first_line_can_go_out_alone():
+    text = "Ты вернулся. Хорошо. Времени у нас мало, так что слушай внимательно. Драконы уже здесь."
+    default = SentenceSplitter()
+    assert default.feed(text + " ") == [
+        "Ты вернулся. Хорошо. Времени у нас мало, так что слушай внимательно."
+    ]
+    voiced = SentenceSplitter(first_min_len=1)
+    lines = voiced.feed(text + " ") + voiced.flush()
+    assert lines == [
+        "Ты вернулся.",
+        "Хорошо. Времени у нас мало, так что слушай внимательно.",
+        "Драконы уже здесь.",
+    ]
+
+
+def test_first_line_at_the_first_clause():
+    def lines(text: str) -> list[str]:
+        sp = SentenceSplitter(first_clause=True)
+        out = []
+        for i in range(0, len(text), 3):  # streamed in small deltas
+            out += sp.feed(text[i : i + 3])
+        return out + sp.flush()
+
+    assert lines("Ты вернулся из храма, и это хорошо. Теперь слушай меня внимательно.") == [
+        "Ты вернулся из храма,",
+        "и это хорошо. Теперь слушай меня внимательно.",
+    ]
+    # a short first sentence goes alone, a comma too early does not cut
+    assert lines("Ты вернулся. Хорошо, теперь слушай меня внимательно.")[0] == "Ты вернулся."
+    assert lines("Да, конечно. Драконы уже здесь, и их много.")[0] == "Да, конечно."
+    # no punctuation: cut after a few words, never right after a preposition
+    first = lines("Когда ты пойдёшь в город через северные ворота мимо стражи найди там Лестера.")[0]
+    assert first == "Когда ты пойдёшь в город через северные ворота мимо стражи"
+    first = lines("Последний крик Спящего призвал их вместе со всей армией тьмы на этот остров.")[0]
+    assert first == "Последний крик Спящего призвал их вместе со всей армией тьмы"
+    first = lines("Я долго ждал тебя здесь и думал о том что делать с этим.")[0]
+    assert first == "Я долго ждал тебя здесь и думал о том что делать"  # "с" is not left at the end

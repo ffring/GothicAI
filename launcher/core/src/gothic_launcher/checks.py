@@ -1,0 +1,254 @@
+"""Checks the launcher window shows before anything starts: is the game folder usable, and can each
+chosen provider be reached. Texts are for the player (Russian); nothing here spends a plan's quota.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import re
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+
+from .settings import Config
+
+CHATGPT_TOKENS = Path.home() / ".config" / "gothic-ai" / "chatgpt.json"
+INWORLD_VOICES = "https://api.inworld.ai/tts/v1/voices"
+DEFAULT_VOXTRAL_URL = "http://127.0.0.1:47830"  # the services' own defaults
+DEFAULT_VOXCPM_URL = "ws://127.0.0.1:47831"
+# share of cp1251 Cyrillic letters among the letters of OU.BIN: 0.27 in the Russian game, where line names
+# (DIA_XARDAS_HELLO_14_01.WAV) stay Latin; the English one has only hash bytes in that range
+RUSSIAN_MIN_SHARE = 0.1
+TIMEOUT_S = 3.0
+STEAM = Path.home() / "Library" / "Application Support" / "Steam"
+# Windows Steam and GOG installs inside Wine bottles (CrossOver, Whisky)
+BOTTLES = (
+    Path.home() / "Library" / "Application Support" / "CrossOver" / "Bottles",
+    Path.home() / "Library" / "Containers" / "com.isaacmarovitz.Whisky" / "Bottles",
+)
+GAME_FOLDERS = ("Gothic II", "Gothic 2 Gold", "Gothic II Gold")
+OU_PATH = "_work/Data/Scripts/Content/Cutscene/OU.BIN"
+
+
+@dataclass(frozen=True)
+class Check:
+    id: str
+    ok: bool
+    title: str
+    detail: str
+
+    def plain(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def find_games(extra: list[Path] | None = None) -> list[Path]:
+    """Folders that look like Gothic II (they have a Data folder): Steam libraries, Wine bottles with
+    Steam or GOG, the usual places. A copy made by hand elsewhere is not found: the player picks it."""
+    steam_roots = [STEAM, *_steam_libraries(STEAM / "steamapps" / "libraryfolders.vdf")]
+    for bottles in BOTTLES:
+        for drive in _children(bottles, lambda p: p / "drive_c"):
+            steam_roots += [drive / "Program Files (x86)" / "Steam", drive / "Program Files" / "Steam"]
+            steam_roots += [drive / "GOG Games", drive / "Program Files (x86)" / "GOG Galaxy" / "Games"]
+    places = [root / "steamapps" / "common" for root in steam_roots] + steam_roots
+    places += [Path.home() / "Games", Path("/Applications"), Path.home()]
+    candidates = [place / name for place in places for name in GAME_FOLDERS] + (extra or [])
+    found: dict[Path, Path] = {}
+    for c in candidates:
+        if _child(c, "data") is not None:
+            found.setdefault(c.resolve(), c)
+    return list(found.values())
+
+
+def _steam_libraries(vdf: Path) -> list[Path]:
+    """`"path"  "/Volumes/Games/SteamLibrary"` lines of libraryfolders.vdf."""
+    try:
+        text = vdf.read_text(errors="replace")
+    except OSError:
+        return []
+    return [Path(m.group(1).replace("\\\\", "\\")) for m in re.finditer(r'"path"\s+"([^"]+)"', text)]
+
+
+def _children(folder: Path, pick: Callable[[Path], Path]) -> list[Path]:
+    try:
+        return [pick(p) for p in folder.iterdir() if p.is_dir()]
+    except OSError:
+        return []
+
+
+def game_folder(folder: Path | None) -> list[Check]:
+    """What the game needs from the folder; one check per thing a player can fix."""
+    if folder is None:
+        return [Check("folder", False, "Папка игры", "Не выбрана")]
+    data = _child(folder, "data")
+    if not folder.is_dir() or data is None:
+        return [Check("folder", False, "Папка игры", f"В {folder} нет папки Data: это не Gothic II")]
+    archives = sorted(p.name for p in data.iterdir() if p.suffix.lower() == ".vdf")
+    addon = [n for n in archives if "addon" in n.lower()]
+    checks = [
+        Check("archives", bool(archives), "Архивы Gothic II", _names(archives) or "В Data нет архивов .vdf"),
+        Check(
+            "addon",
+            bool(addon),
+            "Аддон «Ночь Ворона»",
+            _names(addon) or "Нет архивов аддона: нужна Gothic II Gold или «Ночь Ворона»",
+        ),
+    ]
+    ou = _ou_file(folder)
+    if ou is None:
+        checks.append(Check("russian", False, "Русская локализация", f"Нет файла реплик {OU_PATH}"))
+    else:
+        russian = _cyrillic_share(ou) >= RUSSIAN_MIN_SHARE
+        checks.append(
+            Check(
+                "russian",
+                russian,
+                "Русская локализация",
+                "Реплики NPC на русском"
+                if russian
+                else "Реплики NPC не на русском: поставьте русскую локализацию (текст и шрифты)",
+            )
+        )
+    return checks
+
+
+async def providers(config: Config) -> dict[str, Any]:
+    """For each part (brain, voice, speech): its primary and fallback provider and whether they answer."""
+    s = config.settings
+    async with httpx.AsyncClient(timeout=TIMEOUT_S, trust_env=False) as http:
+        brain = asyncio.create_task(_llm(config, http))
+        voice = asyncio.gather(
+            *(_asr(name, config, http) for name in (s.voice.provider, s.voice.fallback) if name != "none")
+        )
+        speech = asyncio.gather(
+            *(_tts(name, config, http) for name in (s.tts.provider, s.tts.fallback) if name != "none")
+        )
+        llm_check, asr_checks, tts_checks = await asyncio.gather(brain, voice, speech)
+    return {
+        "brain": {"enabled": True, "providers": [llm_check.plain()]},
+        "voice": {"enabled": s.voice.enabled, "providers": [c.plain() for c in asr_checks]},
+        "speech": {"enabled": s.tts.enabled, "providers": [c.plain() for c in tts_checks]},
+    }
+
+
+async def _llm(config: Config, http: httpx.AsyncClient) -> Check:
+    llm = config.settings.llm
+    match llm.backend:
+        case "chatgpt":
+            return _chatgpt("chatgpt", "Подписка ChatGPT")
+        case "openai":
+            ok = bool(config.secrets.openai_api_key)
+            return Check("openai", ok, "Ключ OpenAI", "Ключ задан" if ok else "Ключ не задан")
+        case "local":
+            url = (llm.base_url or "").rstrip("/")
+            if not url:
+                return Check("local", False, "Свой сервер", "Адрес не задан")
+            return await _http("local", "Свой сервер", f"{url}/models", http, any_status=True)
+        case _:
+            return Check(llm.backend, True, "Заглушка", "Ответы без модели, для проверок")
+
+
+async def _asr(name: str, config: Config, http: httpx.AsyncClient) -> Check:
+    provider = name.partition(":")[0]
+    match provider:
+        case "voxtral":
+            url = (config.settings.voice.voxtral_url or DEFAULT_VOXTRAL_URL).rstrip("/")
+            return await _http("voxtral", "Voxtral на своём сервере", f"{url}/health", http)
+        case "chatgpt":
+            return _chatgpt("chatgpt", "Подписка ChatGPT")
+        case "openai":
+            ok = bool(config.secrets.openai_api_key)
+            return Check("openai", ok, "Ключ OpenAI", "Ключ задан" if ok else "Ключ не задан")
+        case _:
+            return Check(provider, True, name, "Не проверяется")
+
+
+async def _tts(name: str, config: Config, http: httpx.AsyncClient) -> Check:
+    provider = name.partition(":")[0]
+    match provider:
+        case "inworld":
+            key = config.secrets.inworld_api_key
+            if not key:
+                return Check("inworld", False, "Inworld", "Ключ не задан")
+            try:
+                auth = {"Authorization": f"Basic {key}"}
+                resp = await http.get(INWORLD_VOICES, params={"filter": "language=ru"}, headers=auth)
+            except httpx.HTTPError as err:
+                return Check("inworld", False, "Inworld", f"Не отвечает: {type(err).__name__}")
+            if resp.status_code in (401, 403):
+                return Check("inworld", False, "Inworld", "Ключ не подходит")
+            ok = resp.status_code == 200
+            return Check("inworld", ok, "Inworld", "Доступен" if ok else f"Ответил {resp.status_code}")
+        case "voxcpm":
+            url = config.settings.tts.voxcpm_url or DEFAULT_VOXCPM_URL
+            return await _tcp("voxcpm", "VoxCPM2 на своём сервере", url)
+        case "openai":
+            ok = bool(config.secrets.openai_api_key)
+            return Check("openai", ok, "Ключ OpenAI", "Ключ задан" if ok else "Ключ не задан")
+        case _:
+            return Check(provider, True, name, "Не проверяется")
+
+
+def _chatgpt(id_: str, title: str) -> Check:
+    ok = CHATGPT_TOKENS.is_file()
+    return Check(id_, ok, title, "Вход выполнен" if ok else "Нужно войти в ChatGPT")
+
+
+async def _http(id_: str, title: str, url: str, http: httpx.AsyncClient, any_status: bool = False) -> Check:
+    try:
+        resp = await http.get(url)
+    except httpx.HTTPError as err:
+        return Check(id_, False, title, f"Не отвечает: {type(err).__name__}")
+    ok = any_status or resp.status_code == 200
+    return Check(id_, ok, title, "Доступен" if ok else f"Ответил {resp.status_code}")
+
+
+async def _tcp(id_: str, title: str, url: str) -> Check:
+    parts = urlsplit(url)
+    host, port = parts.hostname, parts.port or (443 if parts.scheme in ("wss", "https") else 80)
+    if not host:
+        return Check(id_, False, title, "Адрес не задан")
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), TIMEOUT_S)
+    except (OSError, TimeoutError) as err:
+        return Check(id_, False, title, f"Не отвечает: {type(err).__name__}")
+    writer.close()
+    with contextlib.suppress(OSError):
+        await writer.wait_closed()
+    return Check(id_, True, title, "Доступен")
+
+
+def _child(folder: Path, name: str) -> Path | None:
+    """Gothic's folders differ in case between installs (Data, DATA)."""
+    try:
+        return next((p for p in folder.iterdir() if p.name.lower() == name and p.is_dir()), None)
+    except OSError:
+        return None
+
+
+def _ou_file(folder: Path) -> Path | None:
+    d: Path | None = folder
+    for part in ("_work", "data", "scripts", "content", "cutscene"):
+        d = _child(d, part) if d is not None else None
+    if d is None:
+        return None
+    return next((p for p in d.iterdir() if p.name.lower() == "ou.bin"), None)
+
+
+def _cyrillic_share(path: Path) -> float:
+    """cp1251 letters А-я (0xC0-0xFF) among all letters of the line library."""
+    data = path.read_bytes()
+    cyrillic = sum(data.count(bytes([b])) for b in range(0xC0, 0x100))
+    latin = sum(data.count(bytes([b])) for b in (*range(0x41, 0x5B), *range(0x61, 0x7B)))
+    return cyrillic / max(cyrillic + latin, 1)
+
+
+def _names(names: list[str], limit: int = 3) -> str:
+    if not names:
+        return ""
+    shown = ", ".join(names[:limit])
+    return f"{shown} и ещё {len(names) - limit}" if len(names) > limit else shown

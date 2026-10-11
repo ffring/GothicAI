@@ -123,3 +123,24 @@ async def test_end_conversation_waits_for_the_goodbye_to_be_spoken():
     kinds = [m["type"] for m in fake.received]
     assert kinds.index("say") < kinds.index("chat_end")
     assert dialogue.conversations[XARDAS].history[-1].content == "[Ты закончил разговор]"
+
+
+async def test_reply_text_streams_to_the_chat_before_its_lines():
+    fake = FakeGame()
+    llm = FakeBackend(
+        "Ты наконец вернулся из храма. Хорошо, теперь слушай меня внимательно.", chunk=4, delay=0.02
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Где я?")
+        await _until(lambda: any(m["type"] == "chat_text" and m["final"] for m in fake.received))
+
+    texts = [m for m in fake.received if m["type"] == "chat_text"]
+    says = [m for m in fake.received if m["type"] == "say"]
+    assert len(texts) > 2 and texts[-1]["text"] == llm.reply and texts[-1]["final"]
+    assert all(len(a["text"]) <= len(b["text"]) for a, b in zip(texts, texts[1:], strict=False))
+    assert {m["reply"] for m in texts} == {s["reply"] for s in says}
+    # the first words were on screen before the first line was complete
+    first_text = fake.received.index(texts[0])
+    assert first_text < fake.received.index(says[0]) and len(texts[0]["text"]) < len(says[0]["text"])

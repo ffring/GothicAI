@@ -51,11 +51,20 @@ RULES = """Как отвечать:
 - Не обещай действий, которых не можешь совершить (сражаться, колдовать, создавать предметы)."""
 
 
+# Voices for text-to-speech, as natural-language descriptions (VoxCPM2 voice design). Designed, not
+# cloned: the original voice actors' recordings are never used as references.
+VOICES = {
+    "NONE_100_XARDAS": "An old man with a deep, low, calm and wise voice, speaking slowly and gravely",
+}
+DEFAULT_VOICE = "A middle-aged man with an ordinary, slightly rough voice, speaking calmly"
+
+
 @dataclass(frozen=True)
 class Persona:
     npc: str
     name: str
     instructions: str
+    voice: str = DEFAULT_VOICE
 
 
 def render_instructions(npc: str, name: str, sample_lines: list[str]) -> str:
@@ -95,4 +104,4 @@ class PersonaProvider:
             lines = [text for _, text in load_npc_lines(self.game_dir, npc)]
             samples = pick_samples(lines)
             log.info("persona %s: %d original lines, %d samples", npc, len(lines), len(samples))
-        return Persona(npc, name, render_instructions(npc, name, samples))
+        return Persona(npc, name, render_instructions(npc, name, samples), VOICES.get(npc, DEFAULT_VOICE))
