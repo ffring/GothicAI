@@ -16,10 +16,20 @@ from .synthesizer import Synthesizer
 
 log = logging.getLogger("gothic_tts")
 
-# self-hosted VoxCPM2. No fallback by default: without a voice the game shows subtitles, which is
-# safer than `codex` (its conversational voice paraphrases and improvises, see providers/codex.py)
-DEFAULT_PROVIDER = os.environ.get("GOTHIC_TTS_PROVIDER", "voxcpm")
-DEFAULT_FALLBACK = os.environ.get("GOTHIC_TTS_FALLBACK", "none")
+
+def load_env_file(start: Path | None = None) -> Path | None:
+    """Reads the nearest `.env` at or above `start` (API keys live in the repository root's `.env`).
+    Variables already set in the environment win."""
+    here = start or Path.cwd()
+    for d in (here, *here.parents):
+        path = d / ".env"
+        if path.is_file():
+            for line in path.read_text().splitlines():
+                key, sep, value = line.strip().removeprefix("export ").partition("=")
+                if sep and key and not key.startswith("#"):
+                    os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+            return path
+    return None
 
 
 def _synthesizer(args: argparse.Namespace) -> Synthesizer:
@@ -78,15 +88,22 @@ def _write(path: str, data: bytes) -> None:
 
 
 def _add_provider_args(p: argparse.ArgumentParser) -> None:
+    # self-hosted VoxCPM2. No fallback by default: without a voice the game shows subtitles, which is
+    # safer than `codex` (its conversational voice paraphrases and improvises, see providers/codex.py)
     p.add_argument(
         "--provider",
-        default=DEFAULT_PROVIDER,
+        default=os.environ.get("GOTHIC_TTS_PROVIDER", "voxcpm"),
         help=f"provider spec: name[:key=value,...]; names: {', '.join(PROVIDERS)}",
     )
-    p.add_argument("--fallback", default=DEFAULT_FALLBACK, help="fallback provider spec, or none")
+    p.add_argument(
+        "--fallback",
+        default=os.environ.get("GOTHIC_TTS_FALLBACK", "none"),
+        help="fallback provider spec, or none",
+    )
 
 
 def main() -> None:
+    env_file = load_env_file()
     parser = argparse.ArgumentParser(prog="gothic-tts")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -113,6 +130,8 @@ def main() -> None:
     )
     for noisy in ("httpx", "httpcore", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    if env_file is not None:
+        log.info("environment from %s", env_file)
     try:
         match args.command:
             case "serve":

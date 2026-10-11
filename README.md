@@ -11,7 +11,7 @@
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
 | `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, память, голосовой ввод, адаптер LLM, сценарии |
 | `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере, подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на dev-ubuntu |
-| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на dev-ubuntu |
+| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на dev-ubuntu |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
@@ -58,6 +58,14 @@ TTS-сервис (голоса NPC) сам моделей не запускае�
 
 ```bash
 cd tts-service && uv run gothic-tts serve
+```
+
+Провайдер меняется флагами `--provider` и `--fallback` или переменными `GOTHIC_TTS_PROVIDER` и `GOTHIC_TTS_FALLBACK`. Ключи API сервис берёт из ближайшего `.env` выше текущей папки, то есть из `.env` в корне репозитория (он в `.gitignore`).
+
+- `inworld` — Inworld Realtime TTS-2 по ключу `INWORLD_API_KEY`. Голос NPC один раз создаётся по описанию из персоны (Voice Design), публикуется в библиотеку голосов Inworld с тегом `gothic-ai` и запоминается в `~/.local/share/gothic-ai/inworld-voices.json`. Готовый голос из библиотеки задаётся опцией `voice` (например, `inworld:voice=Dmitry`); описание из персоны тогда управляет подачей. Более быстрая модель без управления подачей — `inworld:model=inworld-tts-2-flash`.
+
+```bash
+cd tts-service && uv run gothic-tts serve --provider inworld
 ```
 
 Послушать и замерить (`--out` сохраняет последнюю реплику в WAV):

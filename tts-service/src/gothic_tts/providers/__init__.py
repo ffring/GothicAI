@@ -1,6 +1,6 @@
 """Provider registry. A provider is chosen by a spec string: `name` or `name:key=value,key=value`,
-e.g. `voxcpm` (self-hosted VoxCPM2), `codex:voice=spruce` (Codex's realtime voice, ChatGPT plan) or
-`openai:model=gpt-4o-mini-tts,voice=onyx` (API key).
+e.g. `voxcpm` (self-hosted VoxCPM2), `codex:voice=spruce` (Codex's realtime voice, ChatGPT plan),
+`openai:model=gpt-4o-mini-tts,voice=onyx` or `inworld:model=inworld-tts-2` (API keys).
 Models are never run on this machine: self-hosted ones live on a GPU server (see AGENTS.md).
 """
 
@@ -31,6 +31,12 @@ def _openai(**opts: str) -> TtsProvider:
     return OpenAISpeech(**opts)
 
 
+def _inworld(**opts: str) -> TtsProvider:
+    from .inworld import InworldTTS
+
+    return InworldTTS(**opts)
+
+
 def _fake(**opts: str) -> TtsProvider:
     from .fake import FakeProvider
 
@@ -41,6 +47,7 @@ PROVIDERS: dict[str, Callable[..., TtsProvider]] = {
     "voxcpm": _voxcpm,
     "codex": _codex,
     "openai": _openai,
+    "inworld": _inworld,
     "fake": _fake,
 }
 

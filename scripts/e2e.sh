@@ -5,7 +5,7 @@
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
 #       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
-#   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm) and play aloud
+#   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
