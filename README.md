@@ -36,6 +36,14 @@ cmake --build OpenGothic/build --target Gothic2Notr
 cp .env.example .env
 ```
 
+Модели на GPU-сервере (Voxtral для ASR, VoxCPM2 для TTS) ставятся из репозитория по ssh (`GOTHIC_GPU_SSH` в `.env`). Настройки сервера, `~/gothic-ai/gothic-ai.env`, скрипт собирает из того же `.env`: модель слушает адрес и порт из `GOTHIC_VOXTRAL_URL` / `GOTHIC_VOXCPM_URL`, а строки `GPU_<ИМЯ>=…` попадают туда как `<ИМЯ>=…`. Ключи API на сервер не уходят.
+
+```bash
+scripts/deploy-gpu.sh show            # что уйдёт на сервер
+scripts/deploy-gpu.sh env             # обновить настройки; изменившиеся сервисы перезапустятся
+scripts/deploy-gpu.sh voxcpm          # установить или обновить модель (или voxtral)
+```
+
 Вход в ChatGPT. Один раз: откроется браузер, токены сохранятся в `~/.config/gothic-ai/chatgpt.json`.
 
 ```bash

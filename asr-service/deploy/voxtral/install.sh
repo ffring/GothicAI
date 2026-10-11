@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Installs Voxtral Mini 4B Realtime (Q4_K GGUF on audio.cpp) on the GPU server as a systemd user service.
-# Run on the server (NVIDIA GPU with ~4 GB free, CUDA toolkit in /usr/local/cuda, cmake, ninja, git):
-#   scp -r asr-service/deploy/voxtral gpu-host:gothic-ai/ && ssh gpu-host gothic-ai/voxtral/install.sh
-# and put VOXTRAL_HOST=<address to listen on> into ~/gothic-ai/gothic-ai.env.
+# Server needs an NVIDIA GPU with ~4 GB free, CUDA toolkit in /usr/local/cuda, cmake, ninja, git.
+# Run from the repository: scripts/deploy-gpu.sh voxtral (copies this directory and the settings,
+# VOXTRAL_HOST/VOXTRAL_PORT in ~/gothic-ai/gothic-ai.env, then runs this script on the server).
 # Needs no root and no Docker changes. Builds audio.cpp (~7 min) and downloads the model (2.9 GB).
 # Logs: journalctl --user -u gothic-voxtral -f
 set -euo pipefail
