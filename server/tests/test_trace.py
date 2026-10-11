@@ -8,6 +8,9 @@ from gothic_ai.trace import TraceWriter, find_turn, read
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import XARDAS, _until
 
+GIVE = {"item": "ITPO_HEALTH_01", "count": 1}
+FOLLOW = {"goal": "follow_hero", "target": None, "attitude": "friendly", "agenda": ""}
+
 
 async def _talk(llm: FakeBackend, writer: TraceWriter, *phrases: str) -> DialogueManager:
     fake = FakeGame()
@@ -23,7 +26,7 @@ async def _talk(llm: FakeBackend, writer: TraceWriter, *phrases: str) -> Dialogu
 
 async def test_every_turn_is_traced_with_its_instructions_once(tmp_path):
     writer = TraceWriter(tmp_path)
-    llm = FakeBackend("Держи, это поможет.", tool_calls=[ToolCall("follow_player", {})], delay=0)
+    llm = FakeBackend("Держи, это поможет.", tool_calls=[ToolCall("give_item", GIVE)], delay=0)
     await _talk(llm, writer, "Пойдём со мной", "Ещё раз")
 
     records = read(writer.path())
@@ -35,13 +38,13 @@ async def test_every_turn_is_traced_with_its_instructions_once(tmp_path):
     (step,) = turn["steps"]
     assert step["added"][-1] == {"role": "user", "content": "Пойдём со мной"}  # the whole request
     assert step["text"] == "Держи, это поможет."
-    assert [(c["name"], c["outcome"]) for c in step["calls"]] == [("follow_player", "accepted")]
+    assert [(c["name"], c["outcome"]) for c in step["calls"]] == [("give_item", "accepted")]
 
 
 async def test_a_turn_without_words_goes_on_and_keeps_the_players_phrase(tmp_path):
     writer = TraceWriter(tmp_path)
     llm = FakeBackend(
-        script=[FakeStep("", [ToolCall("follow_player", {})]), FakeStep("Идём. Не отставай.")], delay=0
+        script=[FakeStep("", [ToolCall("set_intent", FOLLOW)]), FakeStep("Идём. Не отставай.")], delay=0
     )
     dialogue = await _talk(llm, writer, "Пойдём со мной")
 

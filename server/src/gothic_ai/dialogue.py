@@ -9,11 +9,12 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import npc_tools
+from . import executor, npc_tools
+from .executor import Intent
 from .game import GameError, GameLink
 from .journal import Journal
 from .llm import (
@@ -202,6 +203,7 @@ class Conversation:
     # lines waiting for their audio, sent to the game strictly in order (with tts)
     voice: asyncio.Queue[tuple[str, str, str]] | None = None  # (line, text, reply)
     voicing: asyncio.Task[None] | None = None
+    intent: Intent = field(default_factory=Intent)  # what the npc wants now (set by the model)
 
     @property
     def history(self) -> list[Message]:
@@ -240,6 +242,8 @@ class DialogueManager:
         self.link = link
         self.journal = journal or Journal()  # lines and actions for the launcher (see journal.py)
         self.trace = trace  # every turn as a JSON line (see trace.py)
+        # the npc's intent changed (e.g. for the planner: what it wants from the hero after the chat)
+        self.on_intent: Callable[[str, Intent], None] | None = None
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -368,6 +372,8 @@ class DialogueManager:
         if conv is None:
             branch = self._current_branch()
             conv = Conversation(npc, self.personas.get(npc, name), branch, self.memory.load(branch, npc))
+            if conv.memory.intent:
+                conv.intent = Intent.from_json(conv.memory.intent)
             self.conversations[npc] = conv
             if conv.memory.entries or conv.memory.summary:
                 log.info(
@@ -490,27 +496,26 @@ class DialogueManager:
             log.info("%s note: %s", conv.npc, note)
             self._remember(conv, "developer", f"[{note}]")
 
-    def _act(self, conv: Conversation, call: ToolCall) -> None:
-        """Run a tool call next to the speech; its outcome lands in the history as a note."""
-        log.info("%s calls %s %s", conv.npc, call.name, call.arguments)
-        self.journal.add(
-            "action", npc=conv.npc, name=conv.persona.name, action=call.name, arguments=call.arguments
-        )
-        snapshot = self.link.snapshots.get(conv.npc)
-
+    def _after_speech(self, conv: Conversation, job: Callable[[], Awaitable[str]]) -> None:
+        """Run a body job once the npc has said its queued lines; the note it returns goes into the
+        history after the current turn."""
         reply = conv.reply
 
         async def run() -> None:
             if conv.voice is not None:
                 await conv.voice.join()  # the npc says what it said before acting on it
-            outcome = await npc_tools.execute(self.link, conv.npc, call, snapshot)
-            if reply is not None and not reply.done():
+            note = await job()
+            if reply is not None and not reply.done() and reply is not asyncio.current_task():
                 await asyncio.wait({reply})  # the note goes after this turn's reply in the history
-            self._note(conv, outcome.note)
+            self._note(conv, note)
 
         task = asyncio.create_task(run())
         conv.actions.add(task)
         task.add_done_callback(conv.actions.discard)
+
+    def _journal_call(self, conv: Conversation, name: str, arguments: dict[str, Any]) -> None:
+        log.info("%s calls %s %s", conv.npc, name, arguments)
+        self.journal.add("action", npc=conv.npc, name=conv.persona.name, action=name, arguments=arguments)
 
     async def _end_after_speech(self, conv: Conversation, lines: list[str]) -> None:
         """Close the chat only once the npc has said its goodbye (closing clears its speech queue)."""
@@ -534,7 +539,7 @@ class DialogueManager:
                 when = game_time(self.link.snapshots.get(conv.npc))
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         snap = self.link.snapshots.get(conv.npc)
-        situation = Message("developer", npc_tools.render_situation(snap))
+        situation = Message("developer", npc_tools.render_situation(snap, conv.intent))
         request: list[Item] = [*conv.history, situation, trigger]
         conv.last_lines = []
         state = TurnState(
@@ -674,14 +679,64 @@ class DialogueManager:
         await self._say(conv, line, state.reply)
 
     async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
-        """Handle a call of the model: commitments are accepted (their effect follows the speech)."""
-        if call.name == npc_tools.END_CONVERSATION:
-            state.end_requested = True
-            return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
-        if call.name not in {t.name for t in self.tools}:
-            return ToolOutcome(f"Нет такого инструмента: {call.name}", "rejected")
-        self._act(conv, call)
-        return ToolOutcome("Принято: выполнится после твоей реплики, итог придёт ремаркой.", "accepted")
+        """Handle a call of the model. Checks run here, against what the npc has and sees: a rejection
+        goes back to the model at once. Accepted commitments are carried out after the npc's line."""
+        snap = self.link.snapshots.get(conv.npc)
+        match call.name:
+            case npc_tools.END_CONVERSATION:
+                state.end_requested = True
+                return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
+            case npc_tools.SET_INTENT:
+                return self._set_intent(conv, call, snap)
+            case npc_tools.GIVE_ITEM:
+                args, reason = executor.check_give(call.arguments, snap)
+                if args is None:
+                    return ToolOutcome(f"Отклонено: {reason}", "rejected")
+                key = (args["item"], state.reply)
+                if key in state.given:  # the same item again in this turn: already on its way
+                    return ToolOutcome("Этот предмет ты уже отдаёшь.", "accepted")
+                state.given.add(key)
+                self._journal_call(conv, call.name, args)
+                give = ToolCall(call.name, args, call.call_id)
+                self._after_speech(conv, lambda: self._give(conv, give, snap))
+                return ToolOutcome("Принято: отдашь после реплики.", "accepted")
+        return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
+
+    async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> str:
+        return (await npc_tools.execute(self.link, conv.npc, call, snap)).note
+
+    def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
+        intent, reason = executor.check_intent(executor.parse_intent(call.arguments), snap)
+        if intent is None:
+            return ToolOutcome(f"Отклонено: {reason}", "rejected")
+        old = conv.intent
+        if executor.same(old, intent):
+            return ToolOutcome("Намерение не изменилось.", "accepted")
+        conv.intent = intent
+        seq = self.memory.set_intent(
+            conv.branch, conv.npc, intent.to_json(), game_time(self.link.snapshots.get(conv.npc))
+        )
+        self._send_head(conv.branch, seq)
+        self._journal_call(conv, call.name, call.arguments)
+        if self.on_intent is not None:
+            self.on_intent(conv.npc, intent)
+        acts = executor.intent_actions(old, intent, snap.npc.following if snap else False)
+        if acts:
+            self._after_speech(conv, lambda: self._body(conv, acts))
+        return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
+
+    async def _body(self, conv: Conversation, acts: list[executor.Action]) -> str:
+        """Game actions for an intent; only what did not work is noted."""
+        failed = []
+        for action, args in acts:
+            try:
+                res = await self.link.act(conv.npc, action, **args)  # type: ignore[arg-type]
+            except (GameError, TimeoutError) as err:
+                failed.append(f"{action}: {err}")
+                continue
+            if res.status != "done":
+                failed.append(f"{action}: {res.detail or res.status}")
+        return f"Тело не выполнило намерение ({'; '.join(failed)})" if failed else ""
 
 
 @dataclass
@@ -695,3 +750,4 @@ class TurnState:
     first_delta: float | None = None
     first_line: float | None = None
     end_requested: bool = False
+    given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn

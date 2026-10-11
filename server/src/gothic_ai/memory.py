@@ -5,8 +5,9 @@ branches off the saved branch at the sequence number written into the save, so w
 after that save is forgotten, exactly like in the game world. Each branch holds its own copy of the
 events it inherited, which keeps reads to one branch.
 
-Events per npc: dialogue messages (`user` = the hero, `assistant` = the npc, `developer` = notes)
-and summaries that fold older messages into a short recollection.
+Events per npc: dialogue messages (`user` = the hero, `assistant` = the npc, `developer` = notes),
+summaries that fold older messages into a short recollection, and the npc's intents (JSON, see
+executor.py): the latest one is what the npc wants now.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS events (
     branch    TEXT NOT NULL,
     seq       INTEGER NOT NULL,
     npc       TEXT NOT NULL,
-    kind      TEXT NOT NULL,          -- message | summary
+    kind      TEXT NOT NULL,          -- message | summary | intent
     role      TEXT,                   -- message: user | assistant | developer
     content   TEXT NOT NULL,
     covers    INTEGER,                -- summary: messages up to this seq are folded in
@@ -65,6 +66,7 @@ class NpcMemory:
     summary: str = ""
     summary_seq: int = 0  # entries up to this seq are folded into the summary
     entries: list[Entry] = field(default_factory=list)
+    intent: str | None = None  # the latest intent, JSON
 
 
 @dataclass(frozen=True)
@@ -118,6 +120,9 @@ class MemoryStore:
     def add_summary(self, branch: str, npc: str, summary: str, covers: int) -> int:
         return self._insert(branch, npc, "summary", None, summary, covers, None)
 
+    def set_intent(self, branch: str, npc: str, intent: str, game_time: str | None = None) -> int:
+        return self._insert(branch, npc, "intent", None, intent, None, game_time)
+
     def load(self, branch: str, npc: str) -> NpcMemory:
         mem = NpcMemory()
         row = self._db.execute(
@@ -133,6 +138,11 @@ class MemoryStore:
             (branch, npc, mem.summary_seq, LOAD_LIMIT),
         ).fetchall()
         mem.entries = [Entry(int(seq), role, content) for seq, role, content in reversed(rows)]
+        row = self._db.execute(
+            "SELECT content FROM events WHERE branch=? AND npc=? AND kind='intent' ORDER BY seq DESC LIMIT 1",
+            (branch, npc),
+        ).fetchone()
+        mem.intent = row[0] if row else None
         return mem
 
     def branches(self) -> list[BranchInfo]:
