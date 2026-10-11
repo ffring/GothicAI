@@ -90,7 +90,8 @@ def login(args: argparse.Namespace) -> int:
 
 
 def config_cmd(args: argparse.Namespace) -> int:
-    config = Config.load()
+    # any first command starts the settings from `.env`, not only `up`
+    config = Config.load() if args.action == "import-env" else _config()
     match args.action:
         case "show":
             print(f"# {config.settings_path}\n# {config.secrets_path}\n")
@@ -158,7 +159,7 @@ def _echo(name: str, line: str) -> None:
 
 
 def _config() -> Config:
-    """On the first run the settings start from the repository's `.env`."""
+    """On the first run (no settings.toml yet) the settings start from the repository's `.env`."""
     config = Config.load()
     if not config.settings_path.exists():
         env = tools(config)[0] / ".env"
