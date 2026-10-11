@@ -101,7 +101,7 @@ class FakeGame:
                 await self.handle_action(msg)
             case "say":
                 self.said.append(msg["text"])
-                self.voiced.append(bool(msg.get("audio")))
+                self.voiced.append(bool(msg.get("audio") or msg.get("stream")))
                 await self.send(type="line_started", npc=msg["npc"], line=msg["line"])
             case "chat_status":
                 self.statuses.append(msg["status"])

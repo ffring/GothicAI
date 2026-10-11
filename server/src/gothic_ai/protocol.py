@@ -315,14 +315,36 @@ class PingCmd(_Command):
 
 
 class SayCmd(_Command):
-    """One line (usually a sentence) for the npc to speak; shown as a subtitle. With `audio`
-    (base64 of a 16-bit mono WAV file) the npc says it aloud and the line lasts as long as the audio."""
+    """One line (usually a sentence) for the npc to speak; shown as a subtitle. Aloud either with
+    `audio` (base64 of a 16-bit mono WAV file, the line lasts as long as it) or `stream`: the voice
+    follows in `say_audio` chunks (16-bit mono PCM at `rate`) and ends with `say_end`."""
 
     type: Literal["say"] = "say"
     npc: str
     line: str
     text: str
     audio: str | None = None
+    stream: bool | None = None
+    rate: int | None = None
+
+
+class SayAudioCmd(_Command):
+    """A chunk of a streamed line's voice: base64 of 16-bit mono PCM."""
+
+    type: Literal["say_audio"] = "say_audio"
+    npc: str
+    line: str
+    data: str
+
+
+class SayEndCmd(_Command):
+    """The streamed voice of a line is complete (`audio_s` long), or broke off with `error`."""
+
+    type: Literal["say_end"] = "say_end"
+    npc: str
+    line: str
+    audio_s: float | None = None
+    error: str | None = None
 
 
 ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # notice: detail shown as is

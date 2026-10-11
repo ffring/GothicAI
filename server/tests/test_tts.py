@@ -1,13 +1,11 @@
 import asyncio
 import base64
-import io
 import json
-import wave
 from contextlib import asynccontextmanager
 
+import pytest
 from websockets.asyncio.server import serve
 
-from gothic_ai import dialogue as dialogue_mod
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend
@@ -53,18 +51,20 @@ async def test_lines_are_voiced_in_order_and_actions_wait_for_them():
 
     assert fake.said == ["Держи, это поможет тебе.", "Береги его, другого не будет."]
     assert fake.voiced == [True, True]
-    kinds = [m["type"] for m in fake.received if m["type"] in ("say", "action")]
-    assert kinds == ["say", "say", "action"]  # the slow first voice did not let the action jump ahead
+    flow = [m for m in fake.received if m["type"] in ("say", "say_audio", "say_end", "action")]
+    kinds = [m["type"] for m in flow]
+    # each line: say with its first audio, the rest of the audio, its end; the action after both lines
+    assert kinds == ["say", "say_audio", "say_end", "say", "say_audio", "say_end", "action"]
     assert requests[0]["voice"]["id"] == XARDAS and "old man" in requests[0]["voice"]["description"]
 
-    say = next(m for m in fake.received if m["type"] == "say")
-    with wave.open(io.BytesIO(base64.b64decode(say["audio"]))) as w:
-        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (16000, 1, 2)
-        assert w.getnframes() == 800 * len(say["text"])
+    say, chunk, end = flow[0], flow[1], flow[2]
+    assert say["stream"] is True and say["rate"] == 16000 and "audio" not in say
+    assert chunk["line"] == say["line"] == end["line"]
+    assert len(base64.b64decode(chunk["data"])) == 2 * 800 * len(say["text"])
+    assert end["audio_s"] == pytest.approx(0.05 * len(say["text"]))
 
 
-async def test_without_a_tts_service_lines_go_out_silent(monkeypatch):
-    monkeypatch.setattr(dialogue_mod, "TTS_TIMEOUT", 1.0)
+async def test_without_a_tts_service_lines_go_out_silent():
     fake = FakeGame()
     llm = FakeBackend("Ты наконец вернулся из храма. Хорошо, теперь слушай меня внимательно.", delay=0)
     async with connected(fake) as link:

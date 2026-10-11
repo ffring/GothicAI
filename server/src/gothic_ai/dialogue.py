@@ -28,7 +28,9 @@ from .protocol import (
     LineStarted,
     MemoryCmd,
     PlayerText,
+    SayAudioCmd,
     SayCmd,
+    SayEndCmd,
     Session,
     Snapshot,
 )
@@ -37,7 +39,6 @@ from .tts import TtsClient, TtsError
 log = logging.getLogger(__name__)
 
 GREETING_CUE = "[Герой подходит к тебе и хочет поговорить.]"
-TTS_TIMEOUT = 8.0  # per line; then it goes out silent
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
@@ -358,35 +359,49 @@ class DialogueManager:
         conv.voice.put_nowait((line, text))
 
     async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str]]) -> None:
-        """Gives each line its audio and sends it, in order. Without audio the line still goes out."""
+        """Voices the lines one by one and streams them to the game: `say` goes out with the first
+        audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
+        audio still goes out, silent."""
         assert self.tts is not None
         while True:
             line, text = await queue.get()
+            started = False
             try:
-                audio = None
                 if time.monotonic() >= self._tts_paused_until:
-                    try:
-                        speech = await asyncio.wait_for(
-                            self.tts.speak(text, conv.npc, conv.persona.voice), TTS_TIMEOUT
+
+                    async def start(rate: int, _provider: str, line: str = line, text: str = text) -> None:
+                        nonlocal started
+                        started = True
+                        await self.link.send(
+                            SayCmd(npc=conv.npc, line=line, text=text, stream=True, rate=rate)
                         )
-                        audio = base64.b64encode(speech.wav).decode()
+
+                    async def chunk(pcm: bytes, line: str = line) -> None:
+                        await self.link.send(
+                            SayAudioCmd(npc=conv.npc, line=line, data=base64.b64encode(pcm).decode())
+                        )
+
+                    try:
+                        speech = await self.tts.stream(text, conv.npc, conv.persona.voice, start, chunk)
+                        await self.link.send(
+                            SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
+                        )
                         log.info(
-                            "%s voice %s: %.2fs of audio in %.2fs (%s)",
+                            "%s voice %s: first audio after %.2fs, %.2fs of audio in %.2fs (%s)",
                             conv.npc,
                             line,
+                            speech.first_chunk_s,
                             speech.audio_s,
                             speech.latency_s,
                             speech.provider,
                         )
-                    except (TtsError, TimeoutError) as err:
+                    except TtsError as err:
                         self._tts_paused_until = time.monotonic() + TTS_PAUSE
-                        log.warning(
-                            "%s: no voice, subtitles only for %.0fs: %s",
-                            conv.npc,
-                            TTS_PAUSE,
-                            err or "timeout",
-                        )
-                await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, audio=audio))
+                        log.warning("%s: no voice, subtitles only for %.0fs: %s", conv.npc, TTS_PAUSE, err)
+                        if started:
+                            await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
+                if not started:
+                    await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
             except GameError:
                 pass
             finally:

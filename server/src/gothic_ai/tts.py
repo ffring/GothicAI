@@ -1,4 +1,4 @@
-"""Client of the TTS service (tts-service/): an npc line in, its audio as a WAV file out."""
+"""Client of the TTS service (tts-service/): an npc line in, its audio out, streamed as it is made."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 import logging
 import time
 import wave
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from websockets.asyncio.client import ClientConnection, connect
@@ -18,6 +19,9 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TTS_URL = "ws://127.0.0.1:47820"
 
+StartCallback = Callable[[int, str], Awaitable[None]]  # sample rate, provider
+ChunkCallback = Callable[[bytes], Awaitable[None]]  # 16-bit mono PCM
+
 
 class TtsError(RuntimeError):
     pass
@@ -25,10 +29,11 @@ class TtsError(RuntimeError):
 
 @dataclass(frozen=True)
 class Speech:
-    wav: bytes
+    wav: bytes  # empty when streamed
     audio_s: float
     provider: str
     latency_s: float
+    first_chunk_s: float = 0.0
 
 
 class TtsClient:
@@ -42,6 +47,24 @@ class TtsClient:
         self._ids = itertools.count(1)
 
     async def speak(self, text: str, voice_id: str, description: str) -> Speech:
+        """The whole line as a WAV file."""
+        pcm = bytearray()
+        rate = 0
+
+        async def start(r: int, _provider: str) -> None:
+            nonlocal rate
+            rate = r
+
+        async def chunk(data: bytes) -> None:
+            pcm.extend(data)
+
+        s = await self.stream(text, voice_id, description, start, chunk)
+        return Speech(_wav(bytes(pcm), rate), s.audio_s, s.provider, s.latency_s, s.first_chunk_s)
+
+    async def stream(
+        self, text: str, voice_id: str, description: str, on_start: StartCallback, on_chunk: ChunkCallback
+    ) -> Speech:
+        """Speak `text`, passing audio on as it is generated (`on_start` comes before the first chunk)."""
         async with self._lock:
             started = time.monotonic()
             try:
@@ -60,11 +83,13 @@ class TtsClient:
                         ensure_ascii=False,
                     )
                 )
-                rate, provider, pcm = 0, "", bytearray()
+                rate, provider, size, first = 0, "", 0, 0.0
                 while True:
                     msg = await asyncio.wait_for(ws.recv(), self.timeout)
                     if isinstance(msg, bytes):
-                        pcm += msg
+                        first = first or time.monotonic() - started
+                        size += len(msg)
+                        await on_chunk(msg)
                         continue
                     ev = json.loads(msg)
                     if ev.get("id") != req:
@@ -72,13 +97,9 @@ class TtsClient:
                     match ev.get("type"):
                         case "start":
                             rate, provider = int(ev["sample_rate"]), str(ev.get("provider", ""))
+                            await on_start(rate, provider)
                         case "done":
-                            return Speech(
-                                _wav(bytes(pcm), rate),
-                                len(pcm) / 2 / rate,
-                                provider,
-                                time.monotonic() - started,
-                            )
+                            return Speech(b"", size / 2 / rate, provider, time.monotonic() - started, first)
                         case "error":
                             raise TtsError(str(ev.get("detail")))
             except (OSError, WebSocketException, TimeoutError) as err:
