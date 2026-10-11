@@ -64,6 +64,8 @@ class FootIk final {
       bool  hardOff = false;
       float weight  = 0;
       float pelvis  = 0;
+      float target  = 0;   // where the pelvis goes
+      float limit   = 0;   // how high it may be for the planted feet to reach the ground
       float floorY  = 0;
       Leg   leg[2];
       };
@@ -99,11 +101,13 @@ class FootIk final {
       std::vector<size_t> thighTree, calfTree, footTree;
 
       Tempest::Vec3       animAnkle  = {};
+      Tempest::Vec3       animHip    = {};
       Tempest::Vec3       animToe    = {};
       Tempest::Vec3       finalAnkle = {};
       float               groundY    = 0;  // world height of the ground under the foot, smoothed
       float               plant      = 1;  // 1: the foot stands on the ground, 0: it swings
       float               slack      = 0;  // how much lower the animated leg could still reach
+      float               behind     = 0;  // 0..1: how far the foot is behind the hip (toes stay on the ground)
       Tempest::Vec3       normal     = {0,1,0};  // the foot is tilted to it, smoothed
       Tempest::Vec3       heading    = {1,0,0};  // horizontal direction of the toes in the animation
       Tempest::Vec3       outDir     = {0,0,0};  // horizontal direction away from the other leg
@@ -117,14 +121,18 @@ class FootIk final {
       };
 
     float offset(const Chain& c, float floorY) const;
+    float swingOffset(const Chain& c, float floorY, float lowAnkle) const;
     void  solve(Tempest::Matrix4x4* tr, const Chain& c, const Tempest::Vec3& target,
-                const Tempest::Vec3& normal, float outward) const;
+                const Tempest::Vec3& normal, float outward, float toeOff) const;
 
     Chain    legs[2];
-    float    pelvis    = 0;  // how far the body is lowered, relative to the floor, smoothed
-    float    lastFloor = 0;
-    float    weight   = 0;
-    bool     valid    = false;
-    uint64_t logTimer = 0;
-    uint64_t logTime  = 0;
+    float    pelvis     = 0;  // how far the body is lowered, relative to the floor, smoothed
+    float    lastFloor  = 0;
+    float    lastDFloor = 0;  // how much the floor moved in the last frame
+    float    dbgTarget  = 0;
+    float    dbgLimit   = 0;
+    float    weight     = 0;
+    bool     valid      = false;
+    uint64_t logTimer   = 0;
+    uint64_t logTime    = 0;
   };
