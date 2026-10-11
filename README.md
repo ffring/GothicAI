@@ -19,27 +19,20 @@
 | `docs/launcher.md` | План лаунчера: запуск игры и сервисов одной кнопкой, настройки и ключи в окне |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
 | `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
-| `scripts/init-engine.sh` | Библиотеки движка (git-подмодули) и сборка игры, в том числе в новой рабочей копии (git worktree) |
+| `scripts/build-engine.sh` | Сборка игры: `OpenGothic/build/opengothic/Gothic2Notr` |
 | `reports/` | Итоговые исследования |
 | `research_notes/` | Заметки исследований с источниками |
-| `OpenGothic/` | Движок: OpenGothic (git subtree от upstream `Try/OpenGothic`) с ИИ-мостом `ai_bridge/` и IK стоп. Сторонние библиотеки в `lib/` — git-подмодули |
+| `OpenGothic/` | Движок: OpenGothic (от upstream `Try/OpenGothic`) с ИИ-мостом `ai_bridge/` и IK стоп. Сторонние библиотеки лежат в `lib/` обычными файлами, без подмодулей (`lib/VENDORED.md`) |
 
 ## Сборка и запуск (macOS)
 
-Игра: скрипт подтягивает библиотеки движка (git-подмодули) и собирает `OpenGothic/build/opengothic/Gothic2Notr`.
+Игра: всё нужное для сборки, включая библиотеки движка, лежит в репозитории.
 
 ```bash
-scripts/init-engine.sh
+scripts/build-engine.sh
 ```
 
-Вручную то же самое: `git submodule update --init --recursive`, затем
-
-```bash
-cmake -S OpenGothic -B OpenGothic/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build OpenGothic/build --target Gothic2Notr
-```
-
-Обновления upstream OpenGothic, если понадобятся: `git subtree pull --prefix=OpenGothic https://github.com/Try/OpenGothic master --squash`.
+Изменения из upstream OpenGothic при необходимости переносятся вручную: движок сильно отличается от оригинала.
 
 Локальные настройки: адреса GPU-сервера и ключи API. ASR- и TTS-сервисы читают ближайший `.env` выше текущей папки, то есть `.env` в корне репозитория (он в `.gitignore`). Переменные окружения важнее файла.
 

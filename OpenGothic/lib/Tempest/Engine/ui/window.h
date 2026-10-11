@@ -1,0 +1,70 @@
+#pragma once
+
+#include <Tempest/SystemApi>
+#include <Tempest/Widget>
+
+namespace Tempest {
+
+class VectorImage;
+class TextureAtlas;
+
+class Window : public Widget {
+  public:
+    enum ShowMode : uint8_t {
+      Minimized,
+      Normal,
+      Maximized,
+      FullScreen,
+      };
+
+    enum Orientation : uint8_t {
+      Portrait           = 1 << 0,
+      PortraitUpsideDown = 1 << 1,
+      LandscapeLeft      = 1 << 2,
+      LandscapeRight     = 1 << 3,
+      Landscape          = LandscapeLeft | LandscapeRight,
+      AllOrientations    = Portrait | PortraitUpsideDown | Landscape,
+      };
+
+    Window();
+    Window( ShowMode sm );
+    ~Window() override;
+
+    void setWindowTitle(const char* utf8);
+
+    // App and platform restrictions still apply. AllOrientations restores the
+    // app defaults. Has no effect on platforms without orientation support.
+    void setAllowedOrientations(Orientation orientations);
+
+  protected:
+    virtual void render();
+    using        Widget::dispatchPaintEvent;
+    void         dispatchPaintEvent(VectorImage &e,TextureAtlas &ta);
+    void         closeEvent       (Tempest::CloseEvent& event) override;
+
+    SystemApi::Window* hwnd() const { return id; }
+
+    void         setCursorPosition(int x, int y);
+    void         setCursorPosition(const Point& p);
+
+  private:
+    void         implShowCursor(CursorShape s);
+
+    SystemApi::Window* id             = nullptr;
+    CursorShape        resolvedCursor = CursorShape::Arrow;
+
+  friend class Widget;
+  friend class UiOverlay;
+  friend class EventDispatcher;
+  friend class SystemApi;
+  };
+
+inline Window::Orientation operator | (Window::Orientation a, const Window::Orientation& b) {
+  return Window::Orientation(uint8_t(a)|uint8_t(b));
+  }
+
+inline Window::Orientation operator & (Window::Orientation a, const Window::Orientation& b) {
+  return Window::Orientation(uint8_t(a)&uint8_t(b));
+  }
+
+}

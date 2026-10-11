@@ -24,7 +24,7 @@ out/*
 
 # internal
 .vs/
-internal/
+/internal/
 
 #os
 .DS_Store
