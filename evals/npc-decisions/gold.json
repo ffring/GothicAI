@@ -1,0 +1,1024 @@
+{
+ "lothar_weapon_drawn": {
+  "tags": [
+   "threat"
+  ],
+  "react": [
+   "svm_weapon_down"
+  ],
+  "think": false,
+  "attitude": [
+   1,
+   0
+  ]
+ },
+ "lothar_weapon_ignored_warnings": {
+  "tags": [
+   "threat"
+  ],
+  "react": [
+   "attack"
+  ],
+  "think": false,
+  "attitude": [
+   0,
+   1
+  ]
+ },
+ "coragon_robbery": {
+  "tags": [
+   "threat",
+   "speech"
+  ],
+  "react": [
+   "call_guards",
+   "flee"
+  ],
+  "think": false,
+  "attitude": [
+   0
+  ]
+ },
+ "harad_theft_witnessed": {
+  "tags": [
+   "threat"
+  ],
+  "react": [
+   "attack",
+   "call_guards"
+  ],
+  "think": false,
+  "attitude": [
+   0
+  ]
+ },
+ "bosper_missing_bow": {
+  "tags": [
+   "threat",
+   "memory"
+  ],
+  "react": [
+   "confront"
+  ],
+  "think": true,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "lobart_sheep_beaten": {
+  "tags": [
+   "threat",
+   "farm"
+  ],
+  "react": [
+   "svm_sheepkiller",
+   "call_farmhands"
+  ],
+  "think": false,
+  "attitude": [
+   1
+  ]
+ },
+ "lobart_sheep_killed": {
+  "tags": [
+   "threat",
+   "farm"
+  ],
+  "react": [
+   "svm_sheepkiller_crime"
+  ],
+  "think": false,
+  "attitude": [
+   0
+  ]
+ },
+ "valentino_bedroom_night": {
+  "tags": [
+   "threat"
+  ],
+  "react": [
+   "call_guards",
+   "svm_get_out"
+  ],
+  "think": false,
+  "attitude": [
+   0,
+   1
+  ]
+ },
+ "vatras_magic_in_crowd": {
+  "tags": [
+   "threat"
+  ],
+  "react": [
+   "svm_stop_magic"
+  ],
+  "think": false,
+  "attitude": [
+   1
+  ]
+ },
+ "moe_harbour_toll": {
+  "tags": [
+   "initiative"
+  ],
+  "react": [
+   "extort"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "gorn_friend_attacked": {
+  "tags": [
+   "combat"
+  ],
+  "react": [
+   "help_hero"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "edda_market_fight": {
+  "tags": [
+   "combat"
+  ],
+  "react": [
+   "svm_its_a_fight",
+   "flee"
+  ],
+  "think": false,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "sylvio_militia_on_farm": {
+  "tags": [
+   "threat",
+   "initiative"
+  ],
+  "react": [
+   "threaten",
+   "svm_mock"
+  ],
+  "think": true,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "bandit_wanted_man": {
+  "tags": [
+   "combat"
+  ],
+  "react": [
+   "attack"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "gate_guard_ragged_stranger": {
+  "tags": [
+   "initiative"
+  ],
+  "react": [
+   "block_and_question"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "zuris_passerby_customer": {
+  "tags": [
+   "initiative",
+   "trade"
+  ],
+  "react": [
+   "call_out_offer"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "coragon_beer_order": {
+  "tags": [
+   "speech",
+   "trade"
+  ],
+  "react": [
+   "serve_beer"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "citizen_way_to_market": {
+  "tags": [
+   "speech",
+   "svm",
+   "param"
+  ],
+  "react": [
+   "svm_galgen_2_markt"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "citizen_way_to_temple": {
+  "tags": [
+   "speech",
+   "svm",
+   "param"
+  ],
+  "react": [
+   "svm_markt_2_tempel"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "citizen_way_to_barracks": {
+  "tags": [
+   "speech",
+   "svm",
+   "param"
+  ],
+  "react": [
+   "svm_galgen_2_kaserne"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "thekla_hungry_mercenary": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "give_stew"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "pepe_wolves": {
+  "tags": [
+   "initiative"
+  ],
+  "react": [
+   "ask_help"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "bennet_ore_armor": {
+  "tags": [
+   "initiative"
+  ],
+  "react": [
+   "svm_not_bad",
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "milten_friend_returns": {
+  "tags": [
+   "initiative",
+   "memory"
+  ],
+  "react": [
+   "greet_and_talk"
+  ],
+  "think": true,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "hanna_room_for_night": {
+  "tags": [
+   "speech",
+   "trade"
+  ],
+  "react": [
+   "offer_room"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "pyrokar_insolent_novice": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "rebuke"
+  ],
+  "think": true,
+  "attitude": [
+   1,
+   0
+  ]
+ },
+ "lehmar_debt_overdue": {
+  "tags": [
+   "memory",
+   "initiative"
+  ],
+  "react": [
+   "demand_money",
+   "send_thugs"
+  ],
+  "think": true,
+  "attitude": [
+   1
+  ]
+ },
+ "halvor_fence": {
+  "tags": [
+   "speech",
+   "trade"
+  ],
+  "react": [
+   "buy_stolen"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "constantino_herbs_delivered": {
+  "tags": [
+   "speech",
+   "trade"
+  ],
+  "react": [
+   "pay_reward"
+  ],
+  "think": false,
+  "attitude": [
+   3
+  ]
+ },
+ "xardas_hero_back_from_valley": {
+  "tags": [
+   "initiative",
+   "memory"
+  ],
+  "react": [
+   "ask_report"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "harad_hero_passes_far": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue",
+   "greet"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "farmhand_sleeping": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "wulfgar_watched_training": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue",
+   "greet"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "lee_hero_walks_through": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "vatras_hero_listens": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "patrol_hero_sleeping": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "matteo_after_trade": {
+  "tags": [
+   "noop",
+   "trade"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "gorax_hero_on_bench": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue",
+   "rebuke_idle"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "citizen_hero_eats_apple": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "bandit_sentry_noise": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "investigate",
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "kardif_drunk_hero": {
+  "tags": [
+   "noop"
+  ],
+  "react": [
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "citizen_polite_greeting": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "greet_back"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "bosper_thief_returns": {
+  "tags": [
+   "memory"
+  ],
+  "react": [
+   "svm_you_again",
+   "refuse_service"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   1
+  ]
+ },
+ "akil_rescuer_arrives": {
+  "tags": [
+   "memory",
+   "initiative"
+  ],
+  "react": [
+   "thank_warmly"
+  ],
+  "think": true,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "lobart_scythe_returned": {
+  "tags": [
+   "memory",
+   "speech"
+  ],
+  "react": [
+   "take_and_thank"
+  ],
+  "think": false,
+  "attitude": [
+   3,
+   2
+  ]
+ },
+ "sekob_beaten_yesterday": {
+  "tags": [
+   "memory"
+  ],
+  "react": [
+   "svm_not_now",
+   "flee"
+  ],
+  "think": false,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "diego_promised_reward": {
+  "tags": [
+   "memory",
+   "initiative"
+  ],
+  "react": [
+   "approach_pay"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "peck_bribed_before": {
+  "tags": [
+   "memory"
+  ],
+  "react": [
+   "let_pass",
+   "demand_bribe"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "sagitta_wounded_hero": {
+  "tags": [
+   "initiative"
+  ],
+  "react": [
+   "offer_heal",
+   "sell_potion"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "coragon_unpaid_tab": {
+  "tags": [
+   "memory"
+  ],
+  "react": [
+   "demand_payment"
+  ],
+  "think": true,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "guard_insulted": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "svm_want_more",
+   "attack"
+  ],
+  "think": false,
+  "attitude": [
+   0,
+   1
+  ]
+ },
+ "thekla_compliment": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "thank_smile",
+   "give_more"
+  ],
+  "think": false,
+  "attitude": [
+   3
+  ]
+ },
+ "vatras_lore_question": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "answer"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "jora_threatened": {
+  "tags": [
+   "speech",
+   "threat"
+  ],
+  "react": [
+   "call_guards"
+  ],
+  "think": false,
+  "attitude": [
+   0
+  ]
+ },
+ "bosper_apprentice_request": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "discuss_apprenticeship"
+  ],
+  "think": true,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "edda_gift": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "accept_thank"
+  ],
+  "think": true,
+  "attitude": [
+   4,
+   3
+  ]
+ },
+ "gate_guard_false_envoy": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "question_doubt",
+   "laugh_off"
+  ],
+  "think": true,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "citizen_gibberish": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "svm_not_now",
+   "ask_what",
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   1,
+   2
+  ]
+ },
+ "zuris_lowball": {
+  "tags": [
+   "speech",
+   "trade"
+  ],
+  "react": [
+   "refuse_haggle"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   1
+  ]
+ },
+ "hagen_dragon_report": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "question_report"
+  ],
+  "think": true,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "coragon_goodbye": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "farewell",
+   "continue"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "wulfgar_overheard_insult": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "confront",
+   "svm_want_more"
+  ],
+  "think": true,
+  "attitude": [
+   1
+  ]
+ },
+ "lothar_fake_paladin": {
+  "tags": [
+   "unusual"
+  ],
+  "react": [
+   "question"
+  ],
+  "think": true,
+  "attitude": [
+   2,
+   1
+  ]
+ },
+ "bengar_sheep_dead_news": {
+  "tags": [
+   "unusual",
+   "speech"
+  ],
+  "react": [
+   "shock_ask"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "rengaru_dropped_purse": {
+  "tags": [
+   "unusual"
+  ],
+  "react": [
+   "take_purse"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "vatras_naked_hero": {
+  "tags": [
+   "unusual"
+  ],
+  "react": [
+   "svm_where_clothes"
+  ],
+  "think": false,
+  "attitude": [
+   1
+  ]
+ },
+ "vino_wolf_killed": {
+  "tags": [
+   "unusual"
+  ],
+  "react": [
+   "svm_good_kill",
+   "thank"
+  ],
+  "think": false,
+  "attitude": [
+   3,
+   4
+  ]
+ },
+ "gate_orc_appears": {
+  "tags": [
+   "unusual",
+   "combat"
+  ],
+  "react": [
+   "svm_alarm",
+   "attack_orc"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ]
+ },
+ "xardas_unknown_ring": {
+  "tags": [
+   "unusual",
+   "speech"
+  ],
+  "react": [
+   "examine_explain"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ]
+ },
+ "gorn_join_request": {
+  "tags": [
+   "speech"
+  ],
+  "react": [
+   "agree_follow",
+   "discuss_first"
+  ],
+  "think": true,
+  "attitude": [
+   2,
+   3
+  ]
+ },
+ "xardas_healing_request": {
+  "tags": [
+   "param",
+   "speech"
+  ],
+  "react": [
+   "give_item"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ],
+  "extra": [
+   "ITPO_HEALTH_01"
+  ]
+ },
+ "lobart_pays_for_work": {
+  "tags": [
+   "param",
+   "memory"
+  ],
+  "react": [
+   "give_item"
+  ],
+  "think": false,
+  "attitude": [
+   3,
+   2
+  ],
+  "extra": [
+   "ITAR_BAU_L"
+  ]
+ },
+ "edda_sees_pickpocket": {
+  "tags": [
+   "param"
+  ],
+  "react": [
+   "call_for_help"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ],
+  "extra": [
+   "PABLO",
+   "PLAYER"
+  ]
+ },
+ "milten_report_rams": {
+  "tags": [
+   "param",
+   "speech"
+  ],
+  "react": [
+   "go_report",
+   "ask_more"
+  ],
+  "think": false,
+  "attitude": [
+   2,
+   3
+  ],
+  "extra": [
+   "OC_GAROND"
+  ]
+ },
+ "coragon_strong_drink": {
+  "tags": [
+   "param",
+   "speech",
+   "trade"
+  ],
+  "react": [
+   "serve_drink"
+  ],
+  "think": false,
+  "attitude": [
+   2
+  ],
+  "extra": [
+   "ITFO_BOOZE"
+  ]
+ },
+ "harad_needs_ore": {
+  "tags": [
+   "param",
+   "initiative"
+  ],
+  "react": [
+   "ask_job"
+  ],
+  "think": true,
+  "attitude": [
+   2
+  ],
+  "extra": [
+   "PLAYER"
+  ]
+ }
+}

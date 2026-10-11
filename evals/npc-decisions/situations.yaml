@@ -1,0 +1,1535 @@
+# Набор ситуаций для decision-моделей (слой «рефлексов» NPC).
+#
+# Каждая ситуация — то, что сервер отправил бы модели в момент события:
+#   state_en — состояние по-английски, реплики героя по-русски (так планируем в проде);
+#   state_ru — то же целиком по-русски.
+# Вопросы:
+#   react    — choice «что делаешь сейчас», варианты свои у каждой ситуации;
+#   think    — noul «нужен ли продуманный ответ большой модели»;
+#   attitude — score, как изменилось отношение к герою (0 сильно хуже … 4 сильно лучше);
+#   extra    — иногда второй choice с параметром: предмет, кого звать, куда идти.
+# gold — эталон, ok — тоже приемлемые ответы. Эталон расставлен вручную (Claude) по смыслу сцены.
+# Реплики svm_* — родные озвученные фразы SVM, текст из русского OU.BIN.
+
+questions:
+  react:
+    instructions: What do you do right now?
+  think:
+    instructions: >-
+      Does this moment call for a thoughtful, unscripted spoken response from you,
+      something that a stock phrase or a simple action cannot cover?
+    criteria:
+      "true": >-
+        The hero engages you with something specific (a question, request, offer, accusation,
+        news) or the situation is unusual and personal, so the answer must be composed for it.
+      "false": >-
+        Doing nothing, a simple action or a stock phrase is enough.
+  attitude:
+    instructions: How does what just happened change your attitude toward the hero?
+    levels:
+      - much worse (a serious offense, a threat, a crime against you)
+      - slightly worse (rude, suspicious or annoying)
+      - unchanged
+      - slightly better (polite, a small favor, good business)
+      - much better (saved you, a big gift, a great service)
+
+situations:
+
+# ───────────── угрозы и преступления ─────────────
+
+- id: lothar_weapon_drawn
+  tags: [threat]
+  state_en: >-
+    You are Lothar, a paladin guarding the gate to the upper quarter of Khorinis. Stern, loyal to
+    the king, not easily scared. It is 22:10, night. The hero (no guild, farmer's clothes) is 3 m
+    away and has just drawn a sword. He says nothing.
+  state_ru: >-
+    Ты — Лотар, паладин, охраняешь ворота в верхний квартал Хориниса. Суровый, верен королю, тебя
+    трудно напугать. 22:10, ночь. Герой (без гильдии, в одежде крестьянина) в 3 м от тебя и только
+    что обнажил меч. Он молчит.
+  react:
+    options:
+      continue: keep standing guard and ignore him
+      svm_weapon_down: "shout a warning: 'Put that weapon away!'"
+      attack: attack the hero right away
+      call_guards: "shout 'GUARDS!' for help"
+      step_back: step back and watch him
+    gold: svm_weapon_down
+  think: false
+  attitude: {gold: 1, ok: [0]}
+
+- id: lothar_weapon_ignored_warnings
+  tags: [threat]
+  state_en: >-
+    You are Lothar, a paladin guarding the gate to the upper quarter. Stern, not easily scared.
+    The hero (no guild) drew a sword a minute ago. You already warned him twice: "Put that weapon
+    away!" and "I said put that damned weapon away!". He keeps the sword drawn and steps closer.
+  state_ru: >-
+    Ты — Лотар, паладин у ворот верхнего квартала. Суровый, тебя трудно напугать. Минуту назад
+    герой (без гильдии) обнажил меч. Ты уже дважды предупредил его: «Убери оружие!» и «Ты уберешь
+    это чертово оружие?!». Он не убирает меч и подходит ближе.
+  react:
+    options:
+      continue: keep standing guard
+      warn_again: warn him once more
+      attack: attack the hero
+      flee: retreat behind the gate
+    gold: attack
+  think: false
+  attitude: {gold: 0, ok: [1]}
+
+- id: coragon_robbery
+  tags: [threat, speech]
+  state_en: >-
+    You are Coragon, the innkeeper of a tavern in the lower town. A trader, not a fighter, a bit
+    of a coward. The hero has drawn his sword, walks up to your counter and says: «Гони золото,
+    трактирщик!» A militia patrol usually passes outside the door.
+  state_ru: >-
+    Ты — Корагон, хозяин таверны в нижней части города. Торговец, а не боец, немного трус. Герой
+    обнажил меч, подошёл к стойке и говорит: «Гони золото, трактирщик!» Обычно у двери проходит
+    патруль ополчения.
+  react:
+    options:
+      continue: go on wiping the counter
+      give_gold: hand over the cash box
+      attack: grab a club and fight
+      call_guards: "shout 'GUARDS!' toward the door"
+      flee: run into the back room
+    gold: call_guards
+    ok: [flee]
+  think: false
+  attitude: {gold: 0}
+
+- id: harad_theft_witnessed
+  tags: [threat]
+  state_en: >-
+    You are Harad, the city smith. Strong, proud, does not suffer fools. You just saw the hero
+    take a sword from your workbench and walk off with it without paying. He is 4 m away.
+  state_ru: >-
+    Ты — Харад, городской кузнец. Сильный, гордый, дураков не терпит. Ты только что видел, как
+    герой взял меч с твоего верстака и пошёл прочь, не заплатив. Он в 4 м от тебя.
+  react:
+    options:
+      continue: go back to hammering
+      attack: go after the thief and beat him to get the sword back
+      greet: nod at the hero in a friendly way
+      offer_trade: offer to sell him a better sword
+      call_guards: "shout 'GUARDS!'"
+    gold: attack
+    ok: [call_guards]
+  think: false
+  attitude: {gold: 0}
+
+- id: bosper_missing_bow
+  tags: [threat, memory]
+  state_en: >-
+    You are Bosper, the bowyer. Suspicious, sharp-tongued. A hunting bow disappeared from your
+    rack. You did not see who took it, but the hero was the only visitor in the last hour. Now he
+    is on the street 10 m from your shop, looking at the market.
+  state_ru: >-
+    Ты — Боспер, мастер луков. Подозрительный, острый на язык. С твоей стойки пропал охотничий
+    лук. Ты не видел, кто его взял, но за последний час в лавке был только герой. Сейчас он на
+    улице в 10 м от лавки и разглядывает рынок.
+  react:
+    options:
+      continue: get back to work and forget it
+      confront: go up to the hero and ask him about the missing bow
+      attack: attack the hero
+      call_guards: "shout 'GUARDS!'"
+      greet: wave at the hero
+    gold: confront
+  think: true
+  attitude: {gold: 1, ok: [2]}
+
+- id: lobart_sheep_beaten
+  tags: [threat, farm]
+  state_en: >-
+    You are Lobart, a farmer near the city. Hard-working, protective of his farm. The hero is
+    beating one of your sheep with a stick. Your farmhands Vino and Maleth are working in the
+    field nearby.
+  state_ru: >-
+    Ты — Лобарт, фермер возле города. Работящий, бережёт своё хозяйство. Герой бьёт палкой одну из
+    твоих овец. Рядом в поле работают твои батраки Вино и Малет.
+  react:
+    options:
+      continue: keep working in the field
+      svm_sheepkiller: "shout: 'Hey! Leave our sheep alone!'"
+      attack: attack the hero
+      flee: run into the house
+      call_farmhands: call Vino and Maleth to help
+    gold: svm_sheepkiller
+    ok: [call_farmhands]
+  think: false
+  attitude: {gold: 1}
+
+- id: lobart_sheep_killed
+  tags: [threat, farm]
+  state_en: >-
+    You are Lobart, a farmer near the city. Protective of his farm. The hero has just killed one
+    of your sheep right in front of you. Earlier you shouted at him to leave the sheep alone.
+  state_ru: >-
+    Ты — Лобарт, фермер возле города. Бережёт своё хозяйство. Герой только что убил одну из твоих
+    овец прямо у тебя на глазах. До этого ты кричал ему, чтобы он оставил овец в покое.
+  react:
+    options:
+      continue: keep working
+      svm_sheepkiller_crime: "shout 'Killing a sheep is too much! Get lost!' and attack"
+      svm_sheepkiller: "shout: 'Hey! Leave our sheep alone!'"
+      flee: run into the house
+      offer_trade: offer to sell him the dead sheep's meat
+    gold: svm_sheepkiller_crime
+  think: false
+  attitude: {gold: 0}
+
+- id: valentino_bedroom_night
+  tags: [threat]
+  state_en: >-
+    You are Valentino, a rich idler in the upper quarter. Arrogant and cowardly. It is 2:30 at
+    night. You woke up: the hero (no guild, ragged clothes) is standing in your bedroom near your
+    chest. A guard patrols the street outside.
+  state_ru: >-
+    Ты — Валентино, богатый бездельник из верхнего квартала. Высокомерный и трусливый. 2:30 ночи.
+    Ты проснулся: герой (без гильдии, в обносках) стоит в твоей спальне у сундука. Снаружи по
+    улице ходит стражник.
+  react:
+    options:
+      continue: go back to sleep
+      svm_get_out: "shout 'Get out!'"
+      attack: attack the intruder
+      call_guards: "shout 'GUARDS!'"
+      offer_gold: offer him gold to leave
+    gold: call_guards
+    ok: [svm_get_out]
+  think: false
+  attitude: {gold: 0, ok: [1]}
+
+- id: vatras_magic_in_crowd
+  tags: [threat]
+  state_en: >-
+    You are Vatras, a Water Mage preaching at the temple square. Calm, wise and very powerful.
+    During your sermon the hero starts casting a fire spell next to the listening crowd.
+  state_ru: >-
+    Ты — Ватрас, маг Воды, проповедуешь на храмовой площади. Спокойный, мудрый и очень сильный. Во
+    время проповеди герой начинает творить огненное заклинание рядом со слушателями.
+  react:
+    options:
+      continue: keep preaching
+      svm_stop_magic: "warn him: 'Stop that magic right now!'"
+      attack: strike him with magic
+      flee: leave the square
+      call_guards: "shout 'GUARDS!'"
+    gold: svm_stop_magic
+  think: false
+  attitude: {gold: 1}
+
+- id: moe_harbour_toll
+  tags: [initiative]
+  state_en: >-
+    You are Moe, a thug in the harbour district who extorts newcomers. The hero (no guild, ragged
+    clothes) is a stranger entering the harbour district for the first time. He looks lost.
+  state_ru: >-
+    Ты — Мо, громила из портового квартала, который трясёт деньги с новичков. Герой (без гильдии, в
+    обносках) — незнакомец, впервые зашёл в портовый квартал. Выглядит растерянным.
+  react:
+    options:
+      continue: keep leaning against the wall
+      extort: block his path and demand a "harbour toll"
+      attack: attack him
+      greet: nod at him
+      flee: walk away
+    gold: extort
+  think: true
+  attitude: {gold: 2}
+
+- id: gorn_friend_attacked
+  tags: [combat]
+  state_en: >-
+    You are Gorn, a mercenary and an old friend of the hero. Big, loyal, loves a good fight. Two
+    bandits have just attacked the hero 6 m from you.
+  state_ru: >-
+    Ты — Горн, наёмник и старый друг героя. Здоровяк, верный, любит хорошую драку. Два бандита
+    только что напали на героя в 6 м от тебя.
+  react:
+    options:
+      continue: keep sitting by the fire
+      help_hero: draw your axe and fight the bandits
+      cheer: "shout 'Show them!' from where you sit"
+      flee: back away
+      call_guards: "shout 'GUARDS!'"
+    gold: help_hero
+  think: false
+  attitude: {gold: 2}
+
+- id: edda_market_fight
+  tags: [combat]
+  state_en: >-
+    You are Edda, a poor woman who cooks fish soup at the harbour. Timid. Right in front of you
+    the hero is fist-fighting a militiaman.
+  state_ru: >-
+    Ты — Эдда, бедная женщина, варит рыбную похлёбку в порту. Робкая. Прямо перед тобой герой
+    дерётся на кулаках с ополченцем.
+  react:
+    options:
+      continue: keep stirring the soup
+      svm_its_a_fight: "gasp 'Oh my god, a fight!' and watch"
+      cheer: cheer the hero on
+      help_militia: hit the hero with a ladle
+      flee: run away
+    gold: svm_its_a_fight
+    ok: [flee]
+  think: false
+  attitude: {gold: 1, ok: [2]}
+
+- id: sylvio_militia_on_farm
+  tags: [threat, initiative]
+  state_en: >-
+    You are Sylvio, an arrogant mercenary at Onar's farm. You hate the city militia. The hero, now
+    wearing militia armor, walks into the farmyard.
+  state_ru: >-
+    Ты — Сильвио, высокомерный наёмник на ферме Онара. Ненавидишь городское ополчение. Герой, теперь
+    в доспехах ополченца, заходит во двор фермы.
+  react:
+    options:
+      continue: keep standing by the barn
+      svm_mock: "mock him loudly: 'What is THAT doing here?'"
+      attack: attack him at once
+      threaten: walk up and threaten him to get off the farm
+      greet: greet him politely
+    gold: threaten
+    ok: [svm_mock]
+  think: true
+  attitude: {gold: 1, ok: [2]}
+
+- id: bandit_wanted_man
+  tags: [combat]
+  state_en: >-
+    You are a bandit from Dexter's gang guarding the road near Lobart's farm. Dexter ordered you to
+    kill a man who looks like the wanted poster. The hero (no guild) is approaching and matches
+    the poster.
+  state_ru: >-
+    Ты — бандит из банды Декстера, сторожишь дорогу у фермы Лобарта. Декстер приказал убить
+    человека с объявления о розыске. К тебе идёт герой (без гильдии), и он похож на того, что на
+    объявлении.
+  react:
+    options:
+      continue: keep watching the road
+      attack: attack the hero
+      question: ask him who he is
+      flee: run to the camp
+      greet: greet him
+    gold: attack
+  think: false
+  attitude: {gold: 2}
+
+- id: gate_guard_ragged_stranger
+  tags: [initiative]
+  state_en: >-
+    You are a militiaman guarding the east gate of Khorinis. Orders: no ragged vagrants in the city
+    without a good reason. The hero (no guild, torn clothes) walks toward the gate.
+  state_ru: >-
+    Ты — ополченец, охраняешь восточные ворота Хориниса. Приказ: оборванцев без веской причины в
+    город не пускать. Герой (без гильдии, в рваной одежде) идёт к воротам.
+  react:
+    options:
+      continue: let him pass without a word
+      block_and_question: stop him and ask what business he has in the city
+      attack: attack him
+      greet: greet him
+      svm_get_out: "shout 'Get lost!'"
+    gold: block_and_question
+  think: true
+  attitude: {gold: 2}
+
+# ───────────── общение и инициатива ─────────────
+
+- id: zuris_passerby_customer
+  tags: [initiative, trade]
+  state_en: >-
+    You are Zuris, a potion seller at the market. Pushy salesman. The hero (adventurer's gear,
+    a fat purse on his belt) slowly walks past your stall, glancing at the potions.
+  state_ru: >-
+    Ты — Зурис, торговец зельями на рынке. Напористый продавец. Герой (снаряжение искателя
+    приключений, на поясе туго набитый кошель) медленно идёт мимо прилавка и косится на зелья.
+  react:
+    options:
+      continue: keep arranging the bottles
+      call_out_offer: call out and offer him your potions
+      greet: nod at him
+      svm_not_now: "grumble 'Leave me alone!'"
+    gold: call_out_offer
+  think: false
+  attitude: {gold: 2}
+
+- id: coragon_beer_order
+  tags: [speech, trade]
+  state_en: >-
+    You are Coragon, the innkeeper. Friendly with paying customers. The hero sits at your counter
+    and says: «Налей мне пива.»
+  state_ru: >-
+    Ты — Корагон, хозяин таверны. Приветлив с теми, кто платит. Герой садится за стойку и говорит:
+    «Налей мне пива.»
+  react:
+    options:
+      continue: keep wiping mugs
+      serve_beer: pour a beer and ask for payment
+      svm_not_now: "grumble 'Leave me alone!'"
+      call_guards: "shout 'GUARDS!'"
+    gold: serve_beer
+  think: false
+  attitude: {gold: 2, ok: [3]}
+
+- id: citizen_way_to_market
+  tags: [speech, svm, param]
+  state_en: >-
+    You are a citizen of Khorinis standing on the gallows square in front of the barracks. The hero
+    asks you: «Как пройти на рынок?»
+  state_ru: >-
+    Ты — горожанин Хориниса, стоишь на Площади Правосудия перед казармами. Герой спрашивает: «Как
+    пройти на рынок?»
+  react:
+    options:
+      svm_galgen_2_markt: "'Just walk past the barracks and you will reach the market square.'"
+      svm_galgen_2_tempel: "'Take the alley from the gallows square and you will reach the temple square.'"
+      svm_galgen_2_kaserne: "'That huge building is the barracks. Just go up the stairs.'"
+      svm_not_now: "'Leave me alone!'"
+      continue: ignore the question
+    gold: svm_galgen_2_markt
+  think: false
+  attitude: {gold: 2}
+
+- id: citizen_way_to_temple
+  tags: [speech, svm, param]
+  state_en: >-
+    You are a citizen standing on the market square of Khorinis. The hero asks you: «Где тут храм?»
+  state_ru: >-
+    Ты — горожанин, стоишь на рыночной площади Хориниса. Герой спрашивает: «Где тут храм?»
+  react:
+    options:
+      svm_markt_2_tempel: "'Walk along the high city wall from the market and you will reach the temple.'"
+      svm_markt_2_galgen: "'Just walk past the barracks and you will reach the gallows square.'"
+      svm_markt_2_kaserne: "'That huge building is the barracks. Go up the stairs from the hotel.'"
+      svm_not_now: "'Leave me alone!'"
+      continue: ignore the question
+    gold: svm_markt_2_tempel
+  think: false
+  attitude: {gold: 2}
+
+- id: citizen_way_to_barracks
+  tags: [speech, svm, param]
+  state_en: >-
+    You are a citizen standing on the gallows square of Khorinis. The hero asks you: «Где казармы?»
+  state_ru: >-
+    Ты — горожанин, стоишь на Площади Правосудия в Хоринисе. Герой спрашивает: «Где казармы?»
+  react:
+    options:
+      svm_galgen_2_markt: "'Just walk past the barracks and you will reach the market square.'"
+      svm_galgen_2_tempel: "'Take the alley from the gallows square and you will reach the temple square.'"
+      svm_galgen_2_kaserne: "'That huge building is the barracks. Just go up the stairs.'"
+      continue: ignore the question
+    gold: svm_galgen_2_kaserne
+  think: false
+  attitude: {gold: 2}
+
+- id: thekla_hungry_mercenary
+  tags: [speech]
+  state_en: >-
+    You are Thekla, the cook at Onar's farm. Grumpy but feeds everyone who works or fights for
+    Onar. The hero (a mercenary of Onar now) comes into the kitchen and says: «Я голоден, есть что
+    поесть?»
+  state_ru: >-
+    Ты — Текла, кухарка на ферме Онара. Ворчливая, но кормит всех, кто работает или воюет за Онара.
+    Герой (теперь наёмник Онара) заходит на кухню и говорит: «Я голоден, есть что поесть?»
+  react:
+    options:
+      give_stew: hand him a bowl of stew
+      ask_payment: tell him to pay first
+      svm_get_out: "shout 'Get out!'"
+      continue: keep cooking and ignore him
+    gold: give_stew
+  think: false
+  attitude: {gold: 2}
+
+- id: pepe_wolves
+  tags: [initiative]
+  state_en: >-
+    You are Pepe, a young shepherd at Onar's farm. Wolves have been taking your sheep every night
+    and Onar will punish you for it. You are scared. The hero, armed and strong-looking, walks past
+    your pasture.
+  state_ru: >-
+    Ты — Пепе, молодой пастух на ферме Онара. Каждую ночь волки таскают твоих овец, и Онар тебя за
+    это накажет. Тебе страшно. Мимо пастбища идёт герой, вооружённый и с виду сильный.
+  react:
+    options:
+      continue: keep watching the sheep
+      ask_help: run up to the hero and ask him to deal with the wolves
+      greet: wave at him
+      flee: hide behind the sheep
+      svm_help: "shout 'Help!'"
+    gold: ask_help
+  think: true
+  attitude: {gold: 2}
+
+- id: bennet_ore_armor
+  tags: [initiative]
+  state_en: >-
+    You are Bennet, the smith at Onar's farm. A craftsman who appreciates good work. The hero walks
+    past your forge in heavy dragon hunter armor made of magic ore.
+  state_ru: >-
+    Ты — Беннет, кузнец на ферме Онара. Мастер, ценит хорошую работу. Герой проходит мимо кузницы
+    в тяжёлых доспехах охотника на драконов из магической руды.
+  react:
+    options:
+      continue: keep forging
+      svm_not_bad: "say approvingly: 'Not bad...'"
+      offer_trade: offer to sell him a sword
+      attack: attack him
+    gold: svm_not_bad
+    ok: [continue]
+  think: false
+  attitude: {gold: 2, ok: [3]}
+
+- id: milten_friend_returns
+  tags: [initiative, memory]
+  state_en: >-
+    You are Milten, a Fire Mage in Garond's castle in the Valley of Mines, and an old friend of
+    the hero. You have not seen him for weeks. He has just walked through the castle gate.
+  state_ru: >-
+    Ты — Мильтен, маг Огня в замке Гаронда в Долине Рудников, старый друг героя. Ты не видел его
+    несколько недель. Он только что прошёл через ворота замка.
+  react:
+    options:
+      continue: keep reading by the fire
+      greet_and_talk: walk up to him, greet him warmly and start talking
+      svm_greet: "say 'For Innos!'"
+      svm_not_now: "'Leave me alone!'"
+    gold: greet_and_talk
+  think: true
+  attitude: {gold: 2, ok: [3]}
+
+- id: hanna_room_for_night
+  tags: [speech, trade]
+  state_en: >-
+    You are Hanna, the owner of the hotel in the city. Polite businesswoman. It is 21:40. The hero
+    comes to your desk and says: «Мне нужна комната на ночь.»
+  state_ru: >-
+    Ты — Ханна, хозяйка гостиницы в городе. Вежливая деловая женщина. 21:40. Герой подходит к
+    стойке и говорит: «Мне нужна комната на ночь.»
+  react:
+    options:
+      offer_room: tell him the price and give him a room
+      svm_not_now: "'Leave me alone!'"
+      continue: keep writing in the ledger
+      call_guards: "shout 'GUARDS!'"
+    gold: offer_room
+  think: false
+  attitude: {gold: 2}
+
+- id: pyrokar_insolent_novice
+  tags: [speech]
+  state_en: >-
+    You are Pyrokar, the head of the Fire Mages in the monastery. Stern, demands respect. The hero
+    is a novice of the monastery. He bumps into you in the corridor and says: «Эй, старик,
+    подвинься.»
+  state_ru: >-
+    Ты — Пирокар, глава магов Огня в монастыре. Строгий, требует уважения. Герой — послушник
+    монастыря. Он натыкается на тебя в коридоре и говорит: «Эй, старик, подвинься.»
+  react:
+    options:
+      continue: walk on silently
+      rebuke: sternly rebuke the novice for his insolence
+      attack: strike him with fire magic
+      svm_not_now: "'Leave me alone!'"
+    gold: rebuke
+  think: true
+  attitude: {gold: 1, ok: [0]}
+
+- id: lehmar_debt_overdue
+  tags: [memory, initiative]
+  state_en: >-
+    You are Lehmar, a moneylender in the harbour district. Cold, has thugs on his payroll. The hero
+    borrowed 100 gold from you, and the deadline passed two days ago. He has just walked past your
+    door.
+  state_ru: >-
+    Ты — Лемар, ростовщик в портовом квартале. Холодный, держит на жалованье громил. Герой занял у
+    тебя 100 золотых, и срок вышел два дня назад. Он только что прошёл мимо твоей двери.
+  react:
+    options:
+      continue: let him go for now
+      demand_money: walk up and demand your money back
+      send_thugs: call your thugs to beat him
+      greet: greet him
+    gold: demand_money
+    ok: [send_thugs]
+  think: true
+  attitude: {gold: 1}
+
+- id: halvor_fence
+  tags: [speech, trade]
+  state_en: >-
+    You are Halvor, a fishmonger at the harbour and secretly a fence for the thieves' guild. The
+    hero is a known member of the guild. He puts a stolen silver goblet on your counter and asks:
+    «Сколько дашь за это?»
+  state_ru: >-
+    Ты — Халвор, торговец рыбой в порту и тайный скупщик краденого для гильдии воров. Герой —
+    известный тебе член гильдии. Он ставит на прилавок краденый серебряный кубок и спрашивает:
+    «Сколько дашь за это?»
+  react:
+    options:
+      buy_stolen: quietly offer him a price
+      call_guards: "shout 'GUARDS!'"
+      continue: pretend you did not hear
+      svm_get_out: "shout 'Get out!'"
+    gold: buy_stolen
+  think: true
+  attitude: {gold: 2}
+
+- id: constantino_herbs_delivered
+  tags: [speech, trade]
+  state_en: >-
+    You are Constantino, the city alchemist. Grumpy but fair. You promised to pay the hero for ten
+    fire nettles. He comes in, puts the herbs on your table and says: «Вот твои травы.»
+  state_ru: >-
+    Ты — Константино, городской алхимик. Ворчливый, но честный. Ты обещал заплатить герою за десять
+    огненных крапив. Он заходит, кладёт травы на стол и говорит: «Вот твои травы.»
+  react:
+    options:
+      pay_reward: take the herbs and pay the agreed reward
+      continue: keep brewing and ignore him
+      svm_not_now: "'Leave me alone!'"
+      attack: attack him
+    gold: pay_reward
+  think: false
+  attitude: {gold: 3}
+
+- id: xardas_hero_back_from_valley
+  tags: [initiative, memory]
+  state_en: >-
+    You are Xardas, a necromancer and the hero's mentor. You sent him to the Valley of Mines to
+    find out about the dragons. He has just come back and entered your tower.
+  state_ru: >-
+    Ты — Ксардас, некромант и наставник героя. Ты отправил его в Долину Рудников разузнать о
+    драконах. Он только что вернулся и вошёл в твою башню.
+  react:
+    options:
+      continue: keep reading your book
+      ask_report: turn to him and ask what he learned
+      svm_not_now: "'Leave me alone!'"
+      teleport_away: teleport away
+    gold: ask_report
+  think: true
+  attitude: {gold: 2}
+
+# ───────────── когда лучше ничего не делать ─────────────
+
+- id: harad_hero_passes_far
+  tags: [noop]
+  state_en: >-
+    You are Harad, the city smith, hammering a blade. It is noon. The hero walks along the street
+    12 m away and does not look at you.
+  state_ru: >-
+    Ты — Харад, городской кузнец, куёшь клинок. Полдень. Герой идёт по улице в 12 м от тебя и не
+    смотрит в твою сторону.
+  react:
+    options:
+      continue: keep hammering
+      approach_talk: walk up and talk to him
+      greet: nod at him
+      svm_get_out: "shout 'Get lost!'"
+      call_guards: "shout 'GUARDS!'"
+    gold: continue
+    ok: [greet]
+  think: false
+  attitude: {gold: 2}
+
+- id: farmhand_sleeping
+  tags: [noop]
+  state_en: >-
+    You are a farmhand at Sekob's farm, asleep in your bed. It is 1:00 at night. The hero walks
+    along the path outside the house, 15 m away.
+  state_ru: >-
+    Ты — батрак на ферме Секоба, спишь в своей кровати. Час ночи. Герой идёт по тропинке за домом,
+    в 15 м от тебя.
+  react:
+    options:
+      continue: keep sleeping
+      wake_and_check: get up and check who is outside
+      svm_help: "shout 'Help!'"
+      attack: run out and attack him
+    gold: continue
+  think: false
+  attitude: {gold: 2}
+
+- id: wulfgar_watched_training
+  tags: [noop]
+  state_en: >-
+    You are Wulfgar, a militia instructor drilling recruits in the barracks yard. A citizen — the
+    hero, no guild — stands 5 m away and quietly watches the training.
+  state_ru: >-
+    Ты — Вульфгар, инструктор ополчения, гоняешь новобранцев во дворе казарм. Горожанин — герой, без
+    гильдии — стоит в 5 м и молча смотрит на тренировку.
+  react:
+    options:
+      continue: keep drilling the recruits
+      invite: call him to join the drill
+      svm_get_out: "shout 'Get lost!'"
+      greet: nod at him
+    gold: continue
+    ok: [greet]
+  think: false
+  attitude: {gold: 2}
+
+- id: lee_hero_walks_through
+  tags: [noop]
+  state_en: >-
+    You are Lee, the leader of the mercenaries at Onar's farm, studying a map at your table. The
+    hero walks through the hall past your table without stopping.
+  state_ru: >-
+    Ты — Ли, предводитель наёмников на ферме Онара, изучаешь карту за своим столом. Герой проходит
+    через зал мимо стола, не останавливаясь.
+  react:
+    options:
+      continue: keep studying the map
+      approach_talk: call him over to talk
+      svm_not_now: "'Leave me alone!'"
+      svm_get_out: "'Get out!'"
+    gold: continue
+  think: false
+  attitude: {gold: 2}
+
+- id: vatras_hero_listens
+  tags: [noop]
+  state_en: >-
+    You are Vatras, a Water Mage preaching at the temple square. The hero stands quietly in the
+    crowd and listens to your sermon.
+  state_ru: >-
+    Ты — Ватрас, маг Воды, проповедуешь на храмовой площади. Герой тихо стоит в толпе и слушает
+    проповедь.
+  react:
+    options:
+      continue: keep preaching
+      address_hero: stop the sermon and talk to the hero
+      svm_get_out: "'Get out!'"
+      svm_stop_magic: "'Stop that magic right now!'"
+    gold: continue
+  think: false
+  attitude: {gold: 2, ok: [3]}
+
+- id: patrol_hero_sleeping
+  tags: [noop]
+  state_en: >-
+    You are a militiaman on night patrol in the lower town. You pass the hotel. The hero is asleep
+    in the room he rented for the night.
+  state_ru: >-
+    Ты — ополченец в ночном патруле в нижней части города. Ты проходишь мимо гостиницы. Герой спит
+    в комнате, которую снял на ночь.
+  react:
+    options:
+      continue: continue the patrol
+      wake_hero: go in and wake him
+      arrest: arrest him
+      call_guards: "shout 'GUARDS!'"
+    gold: continue
+  think: false
+  attitude: {gold: 2}
+
+- id: matteo_after_trade
+  tags: [noop, trade]
+  state_en: >-
+    You are Matteo, a trader in the city. The hero finished buying from you 30 seconds ago, said
+    goodbye and is walking away.
+  state_ru: >-
+    Ты — Маттео, торговец в городе. Герой закончил у тебя покупки 30 секунд назад, попрощался и
+    уходит.
+  react:
+    options:
+      continue: go back to your counter
+      call_out_offer: call after him and offer more goods
+      approach_talk: follow him to talk
+      svm_not_now: "'Leave me alone!'"
+    gold: continue
+  think: false
+  attitude: {gold: 2, ok: [3]}
+
+- id: gorax_hero_on_bench
+  tags: [noop]
+  state_en: >-
+    You are Gorax, the monk who keeps the monastery's wine. You are crossing the monastery yard.
+    The hero, a novice, sits quietly on a bench.
+  state_ru: >-
+    Ты — Горакс, монах, хранитель монастырского вина. Ты идёшь через монастырский двор. Герой,
+    послушник, тихо сидит на скамейке.
+  react:
+    options:
+      continue: keep walking to the cellar
+      rebuke_idle: tell him off for idling and give him work
+      svm_get_out: "'Get out!'"
+      attack: attack him
+    gold: continue
+    ok: [rebuke_idle]
+  think: false
+  attitude: {gold: 2}
+
+- id: citizen_hero_eats_apple
+  tags: [noop]
+  state_en: >-
+    You are a citizen buying bread at the market. The hero stands next to the stall eating an
+    apple.
+  state_ru: >-
+    Ты — горожанин, покупаешь хлеб на рынке. Герой стоит рядом с прилавком и ест яблоко.
+  react:
+    options:
+      continue: keep buying bread
+      approach_talk: start a conversation with him
+      svm_get_out: "'Get lost!'"
+      call_guards: "shout 'GUARDS!'"
+    gold: continue
+  think: false
+  attitude: {gold: 2}
+
+- id: bandit_sentry_noise
+  tags: [noop]
+  state_en: >-
+    You are a bandit sentry at the camp entrance at night. You heard a faint crack of a branch
+    somewhere in the dark forest, about 30 m away. You saw no one.
+  state_ru: >-
+    Ты — бандит, ночью стоишь на посту у входа в лагерь. Где-то в тёмном лесу, метрах в 30, тихо
+    хрустнула ветка. Ты никого не видел.
+  react:
+    options:
+      continue: keep watching the entrance
+      investigate: go and look where the sound came from
+      svm_alarm: "shout 'ALARM!'"
+      attack: run into the forest swinging your sword
+    gold: investigate
+    ok: [continue]
+  think: false
+  attitude: {gold: 2}
+
+- id: kardif_drunk_hero
+  tags: [noop]
+  state_en: >-
+    You are Kardif, the owner of the harbour tavern. Rough place, you have seen everything. The hero
+    is drunk and dancing alone in the middle of the room. He bothers no one.
+  state_ru: >-
+    Ты — Кардиф, хозяин портовой таверны. Место грубое, ты всякого навидался. Герой пьян и танцует
+    один посреди зала. Он никому не мешает.
+  react:
+    options:
+      continue: keep serving drinks
+      svm_get_out: "shout 'Get out!'"
+      call_guards: "shout 'GUARDS!'"
+      throw_out: throw him out of the tavern
+    gold: continue
+  think: false
+  attitude: {gold: 2}
+
+- id: citizen_polite_greeting
+  tags: [speech]
+  state_en: >-
+    You are a citizen walking through the lower town. The hero passes by and says: «Добрый день!»
+  state_ru: >-
+    Ты — горожанин, идёшь по нижней части города. Герой проходит мимо и говорит: «Добрый день!»
+  react:
+    options:
+      greet_back: nod and greet him back
+      continue: walk on without reacting
+      svm_not_now: "'Leave me alone!'"
+      approach_talk: stop and start a long conversation
+    gold: greet_back
+  think: false
+  attitude: {gold: 2, ok: [3]}
+
+# ───────────── память ─────────────
+
+- id: bosper_thief_returns
+  tags: [memory]
+  state_en: >-
+    You are Bosper, the bowyer. Yesterday you caught the hero stealing a bow from your shop; he
+    paid the fine to the militia. Now he walks into your shop again.
+  state_ru: >-
+    Ты — Боспер, мастер луков. Вчера ты поймал героя на краже лука из твоей лавки; он заплатил
+    штраф ополчению. Сейчас он снова заходит в твою лавку.
+  react:
+    options:
+      continue: keep working
+      greet: greet him like any customer
+      svm_you_again: "say suspiciously: 'YOU again!'"
+      refuse_service: tell him you will not trade with thieves
+      call_guards: "shout 'GUARDS!'"
+    gold: svm_you_again
+    ok: [refuse_service]
+  think: false
+  attitude: {gold: 2, ok: [1]}
+
+- id: akil_rescuer_arrives
+  tags: [memory, initiative]
+  state_en: >-
+    You are Akil, a farmer. Two days ago the hero killed the bandits who threatened your farm and
+    your family. Now he walks into your farmyard.
+  state_ru: >-
+    Ты — Акил, фермер. Два дня назад герой перебил бандитов, которые угрожали твоей ферме и семье.
+    Сейчас он заходит к тебе во двор.
+  react:
+    options:
+      continue: keep working in the field
+      thank_warmly: come over, thank him warmly and offer food
+      greet: nod at him
+      svm_get_out: "'Get out!'"
+    gold: thank_warmly
+  think: true
+  attitude: {gold: 2, ok: [3]}
+
+- id: lobart_scythe_returned
+  tags: [memory, speech]
+  state_en: >-
+    You are Lobart, a farmer. Yesterday you lent the hero your scythe. He comes back, hands it to
+    you and says: «Вот твоя коса, спасибо.»
+  state_ru: >-
+    Ты — Лобарт, фермер. Вчера ты одолжил герою косу. Он возвращается, протягивает её и говорит:
+    «Вот твоя коса, спасибо.»
+  react:
+    options:
+      take_and_thank: take the scythe and thank him
+      continue: ignore him
+      svm_get_out: "'Get out!'"
+      ask_payment: ask him to pay for using it
+    gold: take_and_thank
+  think: false
+  attitude: {gold: 3, ok: [2]}
+
+- id: sekob_beaten_yesterday
+  tags: [memory]
+  state_en: >-
+    You are Sekob, a stingy farmer and a coward. Yesterday the hero beat you up to collect the rent
+    you owed Onar. Now he walks toward you again.
+  state_ru: >-
+    Ты — Секоб, скупой фермер и трус. Вчера герой избил тебя, чтобы забрать долг для Онара. Сейчас
+    он снова идёт к тебе.
+  react:
+    options:
+      continue: keep working as if nothing happened
+      flee: run into the house
+      svm_want_more: "say aggressively: 'Want another punch in the face?'"
+      svm_not_now: "'Leave me alone!'"
+      attack: attack him
+    gold: svm_not_now
+    ok: [flee]
+  think: false
+  attitude: {gold: 1, ok: [2]}
+
+- id: diego_promised_reward
+  tags: [memory, initiative]
+  state_en: >-
+    You are Diego, an old friend of the hero. In the Valley of Mines you promised him a big reward
+    for getting your gold out. Now you are in Khorinis with your gold. The hero walks into the
+    tavern where you sit.
+  state_ru: >-
+    Ты — Диего, старый друг героя. В Долине Рудников ты обещал ему щедрую награду за то, что он
+    вынесет твоё золото. Теперь ты в Хоринисе, и золото при тебе. Герой заходит в таверну, где ты
+    сидишь.
+  react:
+    options:
+      continue: keep drinking
+      approach_pay: go up to him and hand over the promised reward
+      greet_only: just wave at him
+      svm_not_now: "'Leave me alone!'"
+    gold: approach_pay
+  think: true
+  attitude: {gold: 2}
+
+- id: peck_bribed_before
+  tags: [memory]
+  state_en: >-
+    You are Peck, a lazy and greedy militiaman at the city gate. Last week the hero bribed you to
+    let him in. He approaches the gate again.
+  state_ru: >-
+    Ты — Пек, ленивый и жадный ополченец у городских ворот. На прошлой неделе герой дал тебе взятку,
+    чтобы пройти. Он снова подходит к воротам.
+  react:
+    options:
+      let_pass: let him pass without trouble
+      block_and_question: stop him and question him
+      attack: attack him
+      demand_bribe: hint that the "fee" is due again
+    gold: let_pass
+    ok: [demand_bribe]
+  think: false
+  attitude: {gold: 2}
+
+- id: sagitta_wounded_hero
+  tags: [initiative]
+  state_en: >-
+    You are Sagitta, a healer living in the forest. Kind to the wounded. The hero staggers to your
+    hut, badly wounded (15 of 240 health), bleeding.
+  state_ru: >-
+    Ты — Сагитта, целительница, живёшь в лесу. Добра к раненым. Герой, шатаясь, подходит к твоей
+    хижине, тяжело ранен (15 из 240 здоровья), истекает кровью.
+  react:
+    options:
+      continue: keep grinding herbs
+      offer_heal: offer to heal his wounds
+      svm_get_out: "'Get out!'"
+      sell_potion: offer to sell him a healing potion
+    gold: offer_heal
+    ok: [sell_potion]
+  think: false
+  attitude: {gold: 2}
+
+- id: coragon_unpaid_tab
+  tags: [memory]
+  state_en: >-
+    You are Coragon, the innkeeper. Last night the hero drank three beers and left without
+    paying. Now he walks into the tavern again.
+  state_ru: >-
+    Ты — Корагон, хозяин таверны. Вчера вечером герой выпил три пива и ушёл, не заплатив. Сейчас
+    он снова заходит в таверну.
+  react:
+    options:
+      continue: keep wiping mugs
+      demand_payment: remind him he owes you for three beers
+      call_guards: "shout 'GUARDS!'"
+      attack: attack him
+      greet: greet him like a regular
+    gold: demand_payment
+  think: true
+  attitude: {gold: 1, ok: [2]}
+
+# ───────────── реплики героя ─────────────
+
+- id: guard_insulted
+  tags: [speech]
+  state_en: >-
+    You are a militiaman on duty at the market. Short-tempered. The hero walks up to you and says:
+    «Ты, жирная свинья в доспехах!»
+  state_ru: >-
+    Ты — ополченец, дежуришь на рынке. Вспыльчивый. Герой подходит к тебе и говорит: «Ты, жирная
+    свинья в доспехах!»
+  react:
+    options:
+      continue: ignore him
+      svm_want_more: "say aggressively: 'Want a punch in the face?'"
+      attack: attack him
+      call_guards: "shout 'GUARDS!'"
+      thank: thank him
+    gold: svm_want_more
+    ok: [attack]
+  think: false
+  attitude: {gold: 0, ok: [1]}
+
+- id: thekla_compliment
+  tags: [speech]
+  state_en: >-
+    You are Thekla, the cook at Onar's farm. Grumpy but proud of her cooking. The hero finishes his
+    bowl and says: «Лучшее рагу, что я ел в жизни!»
+  state_ru: >-
+    Ты — Текла, кухарка на ферме Онара. Ворчливая, но гордится своей стряпнёй. Герой доедает миску и
+    говорит: «Лучшее рагу, что я ел в жизни!»
+  react:
+    options:
+      continue: keep cooking
+      thank_smile: smile and accept the compliment
+      svm_get_out: "'Get out!'"
+      give_more: pour him another bowl
+    gold: thank_smile
+    ok: [give_more]
+  think: false
+  attitude: {gold: 3}
+
+- id: vatras_lore_question
+  tags: [speech]
+  state_en: >-
+    You are Vatras, a Water Mage. Wise, likes to teach. After the sermon the hero asks you:
+    «Скажи, кто такой Белиар и почему он сильнее Инноса?»
+  state_ru: >-
+    Ты — Ватрас, маг Воды. Мудрый, любит учить. После проповеди герой спрашивает тебя: «Скажи, кто
+    такой Белиар и почему он сильнее Инноса?»
+  react:
+    options:
+      continue: walk away without answering
+      svm_not_now: "'Leave me alone!'"
+      answer: answer his question
+      attack: attack him
+    gold: answer
+  think: true
+  attitude: {gold: 2}
+
+- id: jora_threatened
+  tags: [speech, threat]
+  state_en: >-
+    You are Jora, a merchant at the market. Not brave. Militiamen are on the market square. The
+    hero leans over your stall and says: «Отдай мне все свои деньги, или я сожгу твою лавку.»
+  state_ru: >-
+    Ты — Йора, торговец на рынке. Не храбрец. На площади стоят ополченцы. Герой наклоняется над
+    прилавком и говорит: «Отдай мне все свои деньги, или я сожгу твою лавку.»
+  react:
+    options:
+      continue: ignore him
+      call_guards: "shout 'GUARDS!'"
+      attack: attack him
+      give_gold: give him all your money
+      laugh_off: laugh it off
+    gold: call_guards
+  think: false
+  attitude: {gold: 0}
+
+- id: bosper_apprentice_request
+  tags: [speech]
+  state_en: >-
+    You are Bosper, the bowyer. You could use help in the shop. The hero asks you: «Тебе не нужен
+    ученик?»
+  state_ru: >-
+    Ты — Боспер, мастер луков. Тебе не помешала бы помощь в лавке. Герой спрашивает: «Тебе не нужен
+    ученик?»
+  react:
+    options:
+      svm_not_now: "'Leave me alone!'"
+      discuss_apprenticeship: discuss taking him on as an apprentice
+      continue: ignore him
+      attack: attack him
+    gold: discuss_apprenticeship
+  think: true
+  attitude: {gold: 2, ok: [3]}
+
+- id: edda_gift
+  tags: [speech]
+  state_en: >-
+    You are Edda, a poor woman cooking fish soup at the harbour. The hero hands you a purse and
+    says: «Вот, возьми 50 золотых, купи себе что-нибудь.»
+  state_ru: >-
+    Ты — Эдда, бедная женщина, варит рыбную похлёбку в порту. Герой протягивает тебе кошель и
+    говорит: «Вот, возьми 50 золотых, купи себе что-нибудь.»
+  react:
+    options:
+      accept_thank: accept the gold and thank him
+      refuse: refuse the gift
+      continue: keep stirring the soup
+      call_guards: "shout 'GUARDS!'"
+    gold: accept_thank
+  think: true
+  attitude: {gold: 4, ok: [3]}
+
+- id: gate_guard_false_envoy
+  tags: [speech]
+  state_en: >-
+    You are a militiaman guarding the city gate. The hero, in farmer's clothes, says: «Я посланник
+    паладинов, пропусти меня немедленно!»
+  state_ru: >-
+    Ты — ополченец у городских ворот. Герой в одежде крестьянина говорит: «Я посланник паладинов,
+    пропусти меня немедленно!»
+  react:
+    options:
+      let_pass: let him pass
+      question_doubt: ask him for proof, sounding doubtful
+      attack: attack him
+      laugh_off: laugh in his face
+    gold: question_doubt
+    ok: [laugh_off]
+  think: true
+  attitude: {gold: 1, ok: [2]}
+
+- id: citizen_gibberish
+  tags: [speech]
+  state_en: >-
+    You are a citizen in the lower town. The hero walks up to you and says: «Абырвалг шмырдык!»
+  state_ru: >-
+    Ты — горожанин в нижней части города. Герой подходит к тебе и говорит: «Абырвалг шмырдык!»
+  react:
+    options:
+      continue: walk on
+      svm_not_now: "'Leave me alone!'"
+      ask_what: ask what he means
+      call_guards: "shout 'GUARDS!'"
+    gold: svm_not_now
+    ok: [ask_what, continue]
+  think: false
+  attitude: {gold: 1, ok: [2]}
+
+- id: zuris_lowball
+  tags: [speech, trade]
+  state_en: >-
+    You are Zuris, a potion seller. A healing potion costs 25 gold at your stall. The hero says:
+    «Продай мне зелье лечения за 5 золотых.»
+  state_ru: >-
+    Ты — Зурис, торговец зельями. Зелье лечения у тебя стоит 25 золотых. Герой говорит: «Продай
+    мне зелье лечения за 5 золотых.»
+  react:
+    options:
+      refuse_haggle: refuse and name the real price
+      sell_cheap: sell it for 5 gold
+      continue: ignore him
+      svm_get_out: "'Get out!'"
+    gold: refuse_haggle
+  think: false
+  attitude: {gold: 2, ok: [1]}
+
+- id: hagen_dragon_report
+  tags: [speech]
+  state_en: >-
+    You are Lord Hagen, the commander of the paladins in Khorinis. Responsible, skeptical. The hero
+    stands before you and says: «В Долине Рудников драконы, я видел их своими глазами!»
+  state_ru: >-
+    Ты — лорд Хаген, командующий паладинами в Хоринисе. Ответственный, недоверчивый. Герой стоит
+    перед тобой и говорит: «В Долине Рудников драконы, я видел их своими глазами!»
+  react:
+    options:
+      continue: go back to your papers
+      svm_not_now: "'Leave me alone!'"
+      question_report: take it seriously and question him in detail
+      arrest: have him arrested
+    gold: question_report
+  think: true
+  attitude: {gold: 2, ok: [3]}
+
+- id: coragon_goodbye
+  tags: [speech]
+  state_en: >-
+    You are Coragon, the innkeeper. You have been chatting with the hero. He says: «Ладно, бывай.»
+  state_ru: >-
+    Ты — Корагон, хозяин таверны. Вы с героем разговаривали. Он говорит: «Ладно, бывай.»
+  react:
+    options:
+      farewell: nod goodbye
+      continue: turn back to your work
+      svm_get_out: "'Get out!'"
+      approach_talk: keep him talking
+    gold: farewell
+    ok: [continue]
+  think: false
+  attitude: {gold: 2}
+
+- id: wulfgar_overheard_insult
+  tags: [speech]
+  state_en: >-
+    You are Wulfgar, a militia instructor. Proud of your skill. 4 m away from you the hero tells
+    another militiaman: «Вульфгар — бездарный учитель, его бы на свалку.» He does not know you
+    hear him.
+  state_ru: >-
+    Ты — Вульфгар, инструктор ополчения. Гордишься своим мастерством. В 4 м от тебя герой говорит
+    другому ополченцу: «Вульфгар — бездарный учитель, его бы на свалку.» Он не знает, что ты
+    слышишь.
+  react:
+    options:
+      continue: pretend you did not hear
+      svm_want_more: "say aggressively: 'Want a punch in the face?'"
+      confront: walk up and confront him about what he said
+      attack: attack him
+    gold: confront
+    ok: [svm_want_more]
+  think: true
+  attitude: {gold: 1}
+
+# ───────────── необычное и эскалация ─────────────
+
+- id: lothar_fake_paladin
+  tags: [unusual]
+  state_en: >-
+    You are Lothar, a paladin at the upper quarter gate. You know every paladin in Khorinis by
+    face. A stranger — the hero — walks toward the gate wearing paladin armor. You have never seen
+    him before.
+  state_ru: >-
+    Ты — Лотар, паладин у ворот верхнего квартала. Ты знаешь в лицо каждого паладина в Хоринисе. К
+    воротам идёт незнакомец — герой — в доспехах паладина. Ты никогда его раньше не видел.
+  react:
+    options:
+      continue: let him pass
+      svm_pal_greet: "salute: 'For Innos!'"
+      question: stop him and ask who he is and where he serves
+      attack: attack him
+      call_guards: "shout 'GUARDS!'"
+    gold: question
+  think: true
+  attitude: {gold: 2, ok: [1]}
+
+- id: bengar_sheep_dead_news
+  tags: [unusual, speech]
+  state_en: >-
+    You are Bengar, a farmer who lives by his sheep. The hero comes to you and says: «Твои овцы —
+    все мертвы. Волки разорвали стадо.»
+  state_ru: >-
+    Ты — Бенгар, фермер, живёт своими овцами. Герой подходит к тебе и говорит: «Твои овцы — все
+    мертвы. Волки разорвали стадо.»
+  react:
+    options:
+      continue: keep working
+      shock_ask: react with shock and ask what happened
+      attack: attack him
+      svm_not_now: "'Leave me alone!'"
+    gold: shock_ask
+  think: true
+  attitude: {gold: 2}
+
+- id: rengaru_dropped_purse
+  tags: [unusual]
+  state_en: >-
+    You are Rengaru, a pickpocket at the market. The hero has just dropped a purse with gold on the
+    ground 2 m from you and has not noticed. Nobody else is looking.
+  state_ru: >-
+    Ты — Ренгару, карманник на рынке. Герой только что уронил кошель с золотом в 2 м от тебя и не
+    заметил. Больше никто не смотрит.
+  react:
+    options:
+      continue: ignore it
+      return_purse: pick it up and give it back to him
+      take_purse: quietly pick up the purse and walk away
+      call_out: tell him he dropped it
+    gold: take_purse
+  think: false
+  attitude: {gold: 2}
+
+- id: vatras_naked_hero
+  tags: [unusual]
+  state_en: >-
+    You are Vatras, a Water Mage at the temple. The hero walks into the temple without any clothes
+    on.
+  state_ru: >-
+    Ты — Ватрас, маг Воды в храме. Герой заходит в храм совсем без одежды.
+  react:
+    options:
+      continue: keep praying
+      svm_where_clothes: "'Where are your clothes? Go and get dressed, then I will talk to you.'"
+      attack: attack him
+      call_guards: "shout 'GUARDS!'"
+    gold: svm_where_clothes
+  think: false
+  attitude: {gold: 1}
+
+- id: vino_wolf_killed
+  tags: [unusual]
+  state_en: >-
+    You are Vino, a farmhand at Lobart's farm. A wolf attacked the field workers, and the hero has
+    just killed it right next to you.
+  state_ru: >-
+    Ты — Вино, батрак на ферме Лобарта. На работников в поле напал волк, и герой только что убил
+    его рядом с тобой.
+  react:
+    options:
+      continue: go back to work
+      svm_good_kill: "'Yes! That is how you deal with these beasts!'"
+      flee: run away
+      thank: walk up and thank him
+    gold: svm_good_kill
+    ok: [thank]
+  think: false
+  attitude: {gold: 3, ok: [4]}
+
+- id: gate_orc_appears
+  tags: [unusual, combat]
+  state_en: >-
+    You are a militiaman at the city gate. An orc warrior has just come out of the forest and is
+    running at the gate. The hero is standing near you.
+  state_ru: >-
+    Ты — ополченец у городских ворот. Из леса только что вышел орк-воин и бежит к воротам. Рядом с
+    тобой стоит герой.
+  react:
+    options:
+      continue: keep standing at your post
+      svm_alarm: "shout 'ALARM!'"
+      attack_orc: attack the orc
+      flee: run into the city
+      attack_hero: attack the hero
+    gold: svm_alarm
+    ok: [attack_orc]
+  think: false
+  attitude: {gold: 2}
+
+- id: xardas_unknown_ring
+  tags: [unusual, speech]
+  state_en: >-
+    You are Xardas, a necromancer and the hero's mentor. The hero shows you a ring and says:
+    «Нашёл это кольцо у мёртвого мага. Что это?»
+  state_ru: >-
+    Ты — Ксардас, некромант и наставник героя. Герой показывает тебе кольцо и говорит: «Нашёл это
+    кольцо у мёртвого мага. Что это?»
+  react:
+    options:
+      continue: keep reading
+      examine_explain: examine the ring and explain what it is
+      take_silently: take the ring without a word
+      svm_not_now: "'Leave me alone!'"
+    gold: examine_explain
+  think: true
+  attitude: {gold: 2}
+
+- id: gorn_join_request
+  tags: [speech]
+  state_en: >-
+    You are Gorn, a mercenary and the hero's old friend. You have nothing to do at the farm and you
+    are itching for a fight. The hero asks: «Пойдёшь со мной в Долину Рудников?»
+  state_ru: >-
+    Ты — Горн, наёмник и старый друг героя. На ферме тебе нечем заняться, руки чешутся подраться.
+    Герой спрашивает: «Пойдёшь со мной в Долину Рудников?»
+  react:
+    options:
+      agree_follow: agree and start following him
+      refuse: refuse
+      continue: ignore him
+      discuss_first: ask about the plan before deciding
+    gold: agree_follow
+    ok: [discuss_first]
+  think: true
+  attitude: {gold: 2, ok: [3]}
+
+# ───────────── выбор параметра ─────────────
+
+- id: xardas_healing_request
+  tags: [param, speech]
+  state_en: >-
+    You are Xardas, the hero's mentor. The hero is wounded (40 of 200 health) and says: «Мне нужно
+    лечение, у тебя есть что-нибудь?» Your inventory: essence of healing ×3, mana essence ×5,
+    fire bolt scroll ×2, gold ×300.
+  state_ru: >-
+    Ты — Ксардас, наставник героя. Герой ранен (40 из 200 здоровья) и говорит: «Мне нужно лечение,
+    у тебя есть что-нибудь?» У тебя в инвентаре: эссенция исцеления ×3, эссенция маны ×5, свиток
+    огненной стрелы ×2, золото ×300.
+  react:
+    options:
+      give_item: give him something from your inventory
+      refuse: refuse
+      continue: ignore him
+    gold: give_item
+  extra:
+    instructions: If you give the hero an item now, which one?
+    options:
+      ITPO_HEALTH_01: essence of healing
+      ITPO_MANA_01: mana essence
+      ITSC_FIREBOLT: fire bolt scroll
+      ITMI_GOLD: gold
+    gold: ITPO_HEALTH_01
+  think: false
+  attitude: {gold: 2}
+
+- id: lobart_pays_for_work
+  tags: [param, memory]
+  state_en: >-
+    You are Lobart, a farmer. You promised the hero a set of farmer's clothes if he helped harvest
+    the turnips. He has just finished the work and comes back to you. Your inventory: farmer's
+    clothes ×1, bread ×4, milk ×2, gold ×40.
+  state_ru: >-
+    Ты — Лобарт, фермер. Ты обещал герою комплект крестьянской одежды, если он поможет собрать
+    репу. Он только что закончил работу и вернулся к тебе. У тебя в инвентаре: крестьянская одежда
+    ×1, хлеб ×4, молоко ×2, золото ×40.
+  react:
+    options:
+      give_item: give him the promised reward
+      refuse: refuse to pay
+      continue: ignore him
+    gold: give_item
+  extra:
+    instructions: Which item do you give the hero?
+    options:
+      ITAR_BAU_L: farmer's clothes
+      ITFO_BREAD: bread
+      ITFO_MILK: milk
+      ITMI_GOLD: gold
+    gold: ITAR_BAU_L
+  think: false
+  attitude: {gold: 3, ok: [2]}
+
+- id: edda_sees_pickpocket
+  tags: [param]
+  state_en: >-
+    You are Edda, a timid woman at the market. A thief has just snatched a purse from a merchant
+    and is running away. Nearby: Pablo, a militiaman (8 m); Valentino, a rich idler (5 m); the
+    hero, no guild (3 m); Zuris, a potion seller (6 m).
+  state_ru: >-
+    Ты — Эдда, робкая женщина на рынке. Вор только что выхватил кошель у торговца и убегает. Рядом:
+    Пабло, ополченец (8 м); Валентино, богатый бездельник (5 м); герой, без гильдии (3 м); Зурис,
+    торговец зельями (6 м).
+  react:
+    options:
+      call_for_help: call someone to catch the thief
+      chase: chase the thief yourself
+      continue: pretend you saw nothing
+      flee: run away
+    gold: call_for_help
+  extra:
+    instructions: Who do you call to catch the thief?
+    options:
+      PABLO: Pablo, the militiaman
+      VALENTINO: Valentino, the rich idler
+      PLAYER: the hero
+      ZURIS: Zuris, the potion seller
+    gold: PABLO
+    ok: [PLAYER]
+  think: false
+  attitude: {gold: 2}
+
+- id: milten_report_rams
+  tags: [param, speech]
+  state_en: >-
+    You are Milten, a Fire Mage in Garond's castle. The hero has just told you: «Орки строят таран
+    у ворот замка.» Commander Garond must know at once. Nearby places: Garond's hall in the
+    castle keep; the castle smithy; the castle gate; the mages' tower.
+  state_ru: >-
+    Ты — Мильтен, маг Огня в замке Гаронда. Герой только что сказал тебе: «Орки строят таран у
+    ворот замка.» Командующий Гаронд должен узнать об этом немедленно. Места рядом: зал Гаронда в
+    главной башне; кузница замка; ворота замка; башня магов.
+  react:
+    options:
+      go_report: go and tell Garond
+      continue: keep reading
+      ask_more: ask the hero for more details first
+    gold: go_report
+    ok: [ask_more]
+  extra:
+    instructions: Where do you go?
+    options:
+      OC_GAROND: Garond's hall in the castle keep
+      OC_SMITH: the castle smithy
+      OC_GATE: the castle gate
+      OC_MAGE_TOWER: the mages' tower
+    gold: OC_GAROND
+  think: false
+  attitude: {gold: 2, ok: [3]}
+
+- id: coragon_strong_drink
+  tags: [param, speech, trade]
+  state_en: >-
+    You are Coragon, the innkeeper. The hero says: «Дай мне чего-нибудь покрепче.» Behind the
+    counter: beer, gin, milk, water.
+  state_ru: >-
+    Ты — Корагон, хозяин таверны. Герой говорит: «Дай мне чего-нибудь покрепче.» За стойкой: пиво,
+    джин, молоко, вода.
+  react:
+    options:
+      serve_drink: serve him a drink and ask for payment
+      svm_not_now: "'Leave me alone!'"
+      continue: ignore him
+    gold: serve_drink
+  extra:
+    instructions: Which drink do you pour?
+    options:
+      ITFO_BEER: beer
+      ITFO_BOOZE: gin
+      ITFO_MILK: milk
+      ITFO_WATER: water
+    gold: ITFO_BOOZE
+  think: false
+  attitude: {gold: 2}
+
+- id: harad_needs_ore
+  tags: [param, initiative]
+  state_en: >-
+    You are Harad, the city smith. You ran out of iron ore and cannot finish the paladins' order.
+    You know the hero does odd jobs for money. He walks into your smithy. Options for whom to send
+    for ore: the hero; your apprentice Brian, who is busy at the forge; nobody.
+  state_ru: >-
+    Ты — Харад, городской кузнец. У тебя кончилась железная руда, и ты не можешь закончить заказ
+    паладинов. Ты знаешь, что герой берётся за любую работу за деньги. Он заходит в кузницу.
+    Варианты, кого послать за рудой: герой; твой подмастерье Брайан, он занят у горна; никого.
+  react:
+    options:
+      continue: keep hammering
+      ask_job: ask the hero to bring ore for pay
+      greet: nod at him
+      svm_get_out: "'Get out!'"
+    gold: ask_job
+  extra:
+    instructions: Whom do you send for the ore?
+    options:
+      PLAYER: the hero
+      BRIAN: your apprentice Brian
+      NOBODY: nobody, wait for a delivery
+    gold: PLAYER
+  think: true
+  attitude: {gold: 2}

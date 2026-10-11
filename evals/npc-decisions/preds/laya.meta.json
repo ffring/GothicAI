@@ -1,0 +1,9 @@
+{
+ "model": "laya",
+ "requests": 228,
+ "load_s": 8.1,
+ "ms_p50": 11.3,
+ "ms_p95": 20.0,
+ "peak_alloc_gb": 4.4,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}

@@ -1,0 +1,300 @@
+{
+ "capacity": [
+  {
+   "questions": "react",
+   "state": "short",
+   "sweep": [
+    {
+     "batch": 1,
+     "ms": 33.1,
+     "req_per_s": 30.2
+    },
+    {
+     "batch": 8,
+     "ms": 131.1,
+     "req_per_s": 61.0
+    },
+    {
+     "batch": 32,
+     "ms": 467.7,
+     "req_per_s": 68.4
+    },
+    {
+     "batch": 64,
+     "ms": 825.1,
+     "req_per_s": 77.6
+    },
+    {
+     "batch": 128,
+     "ms": 1563.4,
+     "req_per_s": 81.9
+    }
+   ]
+  },
+  {
+   "questions": "react",
+   "state": "long",
+   "sweep": [
+    {
+     "batch": 1,
+     "ms": 37.5,
+     "req_per_s": 26.6
+    },
+    {
+     "batch": 8,
+     "ms": 240.0,
+     "req_per_s": 33.3
+    },
+    {
+     "batch": 32,
+     "ms": 831.6,
+     "req_per_s": 38.5
+    },
+    {
+     "batch": 64,
+     "ms": 1575.6,
+     "req_per_s": 40.6
+    },
+    {
+     "batch": 128,
+     "ms": 3073.4,
+     "req_per_s": 41.6
+    }
+   ]
+  },
+  {
+   "questions": "react+attitude",
+   "state": "short",
+   "sweep": [
+    {
+     "batch": 1,
+     "ms": 48.9,
+     "req_per_s": 20.4
+    },
+    {
+     "batch": 8,
+     "ms": 282.6,
+     "req_per_s": 28.3
+    },
+    {
+     "batch": 32,
+     "ms": 1005.3,
+     "req_per_s": 31.8
+    },
+    {
+     "batch": 64,
+     "ms": 1822.5,
+     "req_per_s": 35.1
+    },
+    {
+     "batch": 128,
+     "ms": 3535.2,
+     "req_per_s": 36.2
+    }
+   ]
+  },
+  {
+   "questions": "react+attitude",
+   "state": "long",
+   "sweep": [
+    {
+     "batch": 1,
+     "ms": 74.2,
+     "req_per_s": 13.5
+    },
+    {
+     "batch": 8,
+     "ms": 472.2,
+     "req_per_s": 16.9
+    },
+    {
+     "batch": 32,
+     "ms": 1717.3,
+     "req_per_s": 18.6
+    },
+    {
+     "batch": 64,
+     "ms": 3319.7,
+     "req_per_s": 19.3
+    },
+    {
+     "batch": 128,
+     "ms": 6546.8,
+     "req_per_s": 19.6
+    }
+   ]
+  },
+  {
+   "questions": "all",
+   "state": "short",
+   "sweep": [
+    {
+     "batch": 1,
+     "ms": 64.3,
+     "req_per_s": 15.5
+    },
+    {
+     "batch": 8,
+     "ms": 407.7,
+     "req_per_s": 19.6
+    },
+    {
+     "batch": 32,
+     "ms": 1477.0,
+     "req_per_s": 21.7
+    },
+    {
+     "batch": 64,
+     "ms": 2732.3,
+     "req_per_s": 23.4
+    },
+    {
+     "batch": 128,
+     "ms": 5401.3,
+     "req_per_s": 23.7
+    }
+   ]
+  },
+  {
+   "questions": "all",
+   "state": "long",
+   "sweep": [
+    {
+     "batch": 1,
+     "ms": 101.7,
+     "req_per_s": 9.8
+    },
+    {
+     "batch": 8,
+     "ms": 696.1,
+     "req_per_s": 11.5
+    },
+    {
+     "batch": 32,
+     "ms": 2562.9,
+     "req_per_s": 12.5
+    },
+    {
+     "batch": 64,
+     "ms": 4968.7,
+     "req_per_s": 12.9
+    },
+    {
+     "batch": 128,
+     "ms": 10026.2,
+     "req_per_s": 12.8
+    }
+   ]
+  }
+ ],
+ "tiered": {
+  "proposed": {
+   "req_per_s": 12.1,
+   "mean_batch": 12.7,
+   "tiers": [
+    {
+     "tier": "near",
+     "npc": 6,
+     "every_s": 0.5,
+     "questions": "all",
+     "requests": 151,
+     "p50_ms": 1613.3,
+     "p95_ms": 4083.0,
+     "max_ms": 4846.1
+    },
+    {
+     "tier": "mid",
+     "npc": 20,
+     "every_s": 5,
+     "questions": "all",
+     "requests": 183,
+     "p50_ms": 1697.9,
+     "p95_ms": 3934.6,
+     "max_ms": 4944.8
+    },
+    {
+     "tier": "far",
+     "npc": 125,
+     "every_s": 20,
+     "questions": "all",
+     "requests": 390,
+     "p50_ms": 1950.6,
+     "p95_ms": 4652.7,
+     "max_ms": 5674.3
+    }
+   ]
+  },
+  "island": {
+   "req_per_s": 13.6,
+   "mean_batch": 1.2,
+   "tiers": [
+    {
+     "tier": "near",
+     "npc": 8,
+     "every_s": 2,
+     "questions": "react+attitude",
+     "requests": 217,
+     "p50_ms": 76.2,
+     "p95_ms": 186.0,
+     "max_ms": 294.8
+    },
+    {
+     "tier": "mid",
+     "npc": 30,
+     "every_s": 10,
+     "questions": "react",
+     "requests": 204,
+     "p50_ms": 54.6,
+     "p95_ms": 147.8,
+     "max_ms": 219.8
+    },
+    {
+     "tier": "far",
+     "npc": 250,
+     "every_s": 60,
+     "questions": "react",
+     "requests": 396,
+     "p50_ms": 49.1,
+     "p95_ms": 157.9,
+     "max_ms": 294.8
+    }
+   ]
+  },
+  "island_fast_near": {
+   "req_per_s": 27.8,
+   "mean_batch": 8.0,
+   "tiers": [
+    {
+     "tier": "near",
+     "npc": 8,
+     "every_s": 0.5,
+     "questions": "react+attitude",
+     "requests": 444,
+     "p50_ms": 529.5,
+     "p95_ms": 1018.2,
+     "max_ms": 1481.8
+    },
+    {
+     "tier": "mid",
+     "npc": 30,
+     "every_s": 5,
+     "questions": "react",
+     "requests": 346,
+     "p50_ms": 566.6,
+     "p95_ms": 1044.2,
+     "max_ms": 1471.5
+    },
+    {
+     "tier": "far",
+     "npc": 250,
+     "every_s": 20,
+     "questions": "react",
+     "requests": 878,
+     "p50_ms": 589.7,
+     "p95_ms": 1121.0,
+     "max_ms": 1527.9
+    }
+   ]
+  }
+ }
+}

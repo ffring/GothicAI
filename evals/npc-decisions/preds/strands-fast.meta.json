@@ -1,0 +1,9 @@
+{
+ "model": "strands",
+ "requests": 228,
+ "load_s": 5.0,
+ "ms_p50": 84.1,
+ "ms_p95": 96.0,
+ "peak_alloc_gb": 3.73,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}

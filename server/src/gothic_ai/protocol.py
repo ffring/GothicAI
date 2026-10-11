@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 # --- game -> server -----------------------------------------------------------
 
@@ -228,6 +228,63 @@ class LineStarted(_GameMessage):
     line: str
 
 
+NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
+
+
+class RosterEntry(_GameMessage):
+    id: str
+    name: str
+    guild: int = 0
+    distance: float  # to the player, cm
+    in_view: bool = False  # on the player's screen
+    activity: NpcActivity = "routine"
+
+
+class NpcRoster(_GameMessage):
+    """People within ~60 m of the player, twice a second (v5). Npc's missing from a full roster are gone
+    (out of range or out of the world); monsters are never listed."""
+
+    type: Literal["npc_roster"]
+    t: int
+    npcs: list[RosterEntry]
+    full: bool = True
+    hour: int | None = None  # game time
+    minute: int | None = None
+
+
+class NpcEvent(_GameMessage):
+    """Something an npc that is not under control noticed about the player (v5): came close, entered its
+    room, gave an item, drew a weapon, stole, cast a spell, attacked or killed (`detail`: whom). The
+    engine's own perceptions still run; this is a copy."""
+
+    type: Literal["npc_event"]
+    npc: str
+    kind: str
+    other: str = "PLAYER"
+    distance: float | None = None
+    detail: str | None = None
+
+
+class NpcIdle(_GameMessage):
+    """A soft action (`npc_act`) is over (v5): a good moment to decide what the npc does next.
+    `reason`: done (its AI queue ran empty), gone (down, removed, taken over) or timeout."""
+
+    type: Literal["npc_idle"]
+    npc: str
+    act: str | None = None
+    reason: str | None = None
+
+
+class NpcActResult(_GameMessage):
+    """Reply to `npc_act`: queued into the npc's AI queue, or rejected (busy, down, unknown...)."""
+
+    type: Literal["npc_act_result"]
+    id: str
+    npc: str
+    status: Literal["queued", "rejected"]
+    detail: str | None = None
+
+
 GameMessage = Annotated[
     Hello
     | WorldLoaded
@@ -248,7 +305,11 @@ GameMessage = Annotated[
     | PttStart
     | PttStop
     | PttCancel
-    | LineStarted,
+    | LineStarted
+    | NpcRoster
+    | NpcEvent
+    | NpcIdle
+    | NpcActResult,
     Field(discriminator="type"),
 ]
 
@@ -300,6 +361,21 @@ class ActionCmd(_Command):
     id: str
     npc: str
     action: ActionType
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+NpcActType = Literal["say_svm", "turn_to", "look_at", "play_ani", "go_to_npc", "turn_away"]
+
+
+class NpcActCmd(_Command):
+    """A soft action for an npc that follows its routine (v5): queued the way scripts do it, the routine
+    resumes by itself afterwards. `args.npc` is the target (default the player); say_svm takes `svm`
+    (e.g. NOTNOW), play_ani `name`, look_at `ms`."""
+
+    type: Literal["npc_act"] = "npc_act"
+    id: str
+    npc: str
+    action: NpcActType
     args: dict[str, Any] = Field(default_factory=dict)
 
 

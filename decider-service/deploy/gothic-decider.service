@@ -1,0 +1,13 @@
+[Unit]
+Description=Gothic AI: NPC decision service (Strands Decider, WebSocket port 47832)
+After=network-online.target
+
+[Service]
+# DECIDER_HOST: the address to listen on (the server's VPN address)
+EnvironmentFile=-%h/gothic-ai/gothic-ai.env
+ExecStart=%h/gothic-ai/decider/deploy/run.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

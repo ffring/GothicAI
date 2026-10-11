@@ -1,0 +1,9 @@
+{
+ "model": "openjev-4b",
+ "requests": 228,
+ "load_s": 6.1,
+ "ms_p50": 271.2,
+ "ms_p95": 421.8,
+ "peak_alloc_gb": 9.06,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}

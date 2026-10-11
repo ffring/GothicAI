@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from . import npc_tools, scenarios
+from .brain import DeciderClient, GameApplier, NpcPlanner
 from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
@@ -43,6 +44,7 @@ HELP = """commands (npc defaults to the last attached one):
   talk <text>       speak to the npc as the player (opens a conversation)
   additem <item> [n] put an item into the npc's inventory (game needs -devmode)
   memory [npc]      the current save branch and what the npc remembers
+  brain             what the npc planner is doing (tiers, requests, decisions)
   save <slot> | load <slot>   save_slot_<slot>.sav (game needs -devmode)
   quit"""
 
@@ -71,6 +73,7 @@ class ServerState:
     def __init__(self) -> None:
         self.dialogue: DialogueManager | None = None
         self.voice: VoiceInput | None = None
+        self.brain: NpcPlanner | None = None
 
 
 class Console:
@@ -142,6 +145,10 @@ class Console:
                     print(f"  {e.seq:4d} {e.role:9s} {e.content}")
             case "save" | "load" if rest:
                 await link.debug(cmd, int(rest[0]))
+            case "brain" if self.state.brain is not None:
+                print(self.state.brain.snapshot())
+                for d in list(self.state.brain.applier.recent)[-10:]:
+                    print(f"  {d.npc} {d.question}={d.choice} ({d.confidence:.2f}) {','.join(d.stimuli)}")
             case "talk" if rest and self.state.dialogue is not None:
                 snap = await link.snapshot(npc)
                 self.state.dialogue.open(npc, snap.npc.name)
@@ -170,17 +177,33 @@ async def serve(args: argparse.Namespace) -> int:
     personas = PersonaProvider(game_dir if game_dir and game_dir.is_dir() else None)
     memory = MemoryStore(args.memory_db)
     asr = None if args.no_voice else AsrClient(args.asr_url)
+    decider = None if args.no_brain or not args.decider_url else DeciderClient(args.decider_url)
     source = None if args.no_voice else _audio_source(args)
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
+    log.info("npc planner: %s", "off" if decider is None else args.decider_url)
 
     async def on_link(link: GameLink) -> None:
-        nonlocal exit_code
         link.listeners.append(print_event)
         state.dialogue = DialogueManager(link, llm, personas, memory=memory, greet=not args.no_greet)
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
+        brain = None
+        if decider is not None:
+            # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
+            state.brain = NpcPlanner(decider, GameApplier(link))
+            link.listeners.append(state.brain.on_message)
+            brain = asyncio.create_task(state.brain.run())
+        try:
+            await _run_scenario(link)
+            await link.closed.wait()  # the session lives while the game is connected
+        finally:
+            if brain is not None:
+                brain.cancel()
+
+    async def _run_scenario(link: GameLink) -> None:
+        nonlocal exit_code
         if args.scenario is None:
             return
         try:
@@ -201,6 +224,16 @@ async def serve(args: argparse.Namespace) -> int:
             elif args.scenario == "m1":
                 lines = await scenarios.m1_chat(link, state.dialogue, args.npc)
                 log.info("scenario m1: npc spoke %d line(s)", len(lines))
+            elif args.scenario == "m4":
+                results = await scenarios.m4_planner_bridge(link, args.npc, state.brain)
+                expected_rejects = ("unknown_npc", "attached_soft_act")
+                bad = {
+                    k: v
+                    for k, v in results.items()
+                    if not v.startswith("rejected" if k in expected_rejects else "done")
+                }
+                log.info("scenario m4: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "m3":
                 results = await scenarios.m3_memory_voice(link, state.dialogue, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -223,6 +256,8 @@ async def serve(args: argparse.Namespace) -> int:
     await llm.aclose()
     if asr is not None:
         await asr.aclose()
+    if decider is not None:
+        await decider.aclose()
     memory.close()
     for task in finished:
         if not task.cancelled() and (err := task.exception()) is not None:
@@ -357,13 +392,21 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
-        "--scenario", choices=["m0", "m1", "m2", "m3"], help="run a scripted check when the game connects"
+        "--scenario",
+        choices=["m0", "m1", "m2", "m3", "m4"],
+        help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
     p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
     p.add_argument("--memory-db", default=str(DEFAULT_MEMORY_DB), help="SQLite file with npc memories")
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
+    p.add_argument(
+        "--decider-url",
+        default=os.environ.get("GOTHIC_DECIDER_URL"),
+        help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
+    )
+    p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     _add_voice_args(p)
     _add_llm_args(p)
 

@@ -1,0 +1,46 @@
+[project]
+name = "gothic-decider"
+version = "0.1.0"
+description = "NPC decision service: a typed decision model (Strands Decider) behind a priority queue with deadlines"
+authors = [
+    { name = "Kaifat", email = "11953142+kaifaty@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "websockets>=17.2",
+]
+
+[project.optional-dependencies]
+# GPU host only. causal-conv1d is built from source by deploy/install.sh (no wheels for torch cu130).
+gpu = [
+    "strands-decider>=0.1.0",
+    "flash-linear-attention>=0.5.2",
+]
+
+[project.scripts]
+gothic-decider = "gothic_decider.cli:main"
+
+[tool.uv.build-backend]
+module-name = "gothic_decider"
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

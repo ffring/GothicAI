@@ -7,13 +7,27 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .brain import NpcPlanner
 from .dialogue import DialogueManager
 from .game import GameError, GameLink
 from .llm import ToolCall
 from .llm.fake import FakeBackend
 from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider
-from .protocol import ActionResult, FollowEnded, GameMessage, LineStarted, Saved, Session, Snapshot
+from .protocol import (
+    ActionResult,
+    FollowEnded,
+    GameMessage,
+    LineStarted,
+    NpcActResult,
+    NpcActType,
+    NpcEvent,
+    NpcIdle,
+    NpcRoster,
+    Saved,
+    Session,
+    Snapshot,
+)
 from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
@@ -261,4 +275,71 @@ async def m3_memory_voice(
     await link.act(npc, "return_to_routine")
     for name, outcome in results.items():
         log.info("%-10s %s", name, outcome)
+    return results
+
+
+async def m4_planner_bridge(
+    link: GameLink, npc: str = "NONE_100_XARDAS", planner: NpcPlanner | None = None
+) -> dict[str, str]:
+    """M4 check of what the npc planner needs from the bridge (protocol v5): the roster, soft actions
+    queued like script actions and their end (npc_idle), and that a taken-over npc is left alone."""
+    events: list[NpcEvent] = []
+    link.listeners.append(lambda m: events.append(m) if isinstance(m, NpcEvent) else None)
+    await link.wait_world()
+    results: dict[str, str] = {}
+    roster = await wait_message(link, NpcRoster, lambda m: bool(m.npcs), timeout=120)
+    if not any(e.id == npc for e in roster.npcs):  # e.g. a save elsewhere: the nearest npc on its routine
+        free = sorted((e for e in roster.npcs if e.activity == "routine"), key=lambda e: e.distance)
+        npc = (free or roster.npcs)[0].id
+    me = next(e for e in roster.npcs if e.id == npc)
+    log.info("roster: %s", [(e.id, e.name, round(e.distance), e.activity, e.in_view) for e in roster.npcs])
+    results["roster"] = (
+        f"done ({len(roster.npcs)} npc, {npc}: {me.distance:.0f} cm, {me.activity}, in_view={me.in_view}, "
+        f"time {roster.hour}:{roster.minute:02d})"
+    )
+
+    async def soft(action: NpcActType, target: str = npc, wait_busy: bool = True, **args: object) -> str:
+        for _ in range(60 if wait_busy else 1):  # the npc may be in a scripted dialog at a new game
+            # the bridge works in the world tick: while the game pauses (menu, video) it answers later
+            res = asyncio.ensure_future(
+                wait_message(link, NpcActResult, lambda m: m.npc == target, timeout=15)
+            )
+            idle = asyncio.ensure_future(wait_message(link, NpcIdle, lambda m: m.npc == target, timeout=40))
+            await asyncio.sleep(0)  # both listen before the command goes out
+            await link.npc_act(target, action, **args)
+            r = await res
+            if r.status == "queued":
+                i = await idle
+                return f"{'done' if i.reason == 'done' else 'failed'} ({i.reason})"
+            idle.cancel()
+            if not wait_busy or "busy" not in (r.detail or ""):
+                return f"rejected ({r.detail})"
+            await asyncio.sleep(1)
+        return "rejected (busy for a minute)"
+
+    results["turn_to"] = await soft("turn_to")
+    results["say_svm"] = await soft("say_svm", svm="NOTNOW")
+    results["play_ani"] = await soft("play_ani", name="T_GREETNOV")
+    results["look_at"] = await soft("look_at", ms=1000)
+    results["unknown_npc"] = await soft("turn_to", target="NOT_AN_NPC")
+
+    await attach_when_free(link, npc)
+    busy = await wait_message(
+        link, NpcRoster, lambda m: any(e.id == npc and e.activity == "attached" for e in m.npcs), timeout=5
+    )
+    results["attached_in_roster"] = "done" if busy else "failed"
+    results["attached_soft_act"] = await soft("turn_to", wait_busy=False)
+    await link.act(npc, "return_to_routine")
+
+    near = [e for e in events if e.npc == npc and e.kind == "player_near"]
+    if me.distance <= 500:  # the bridge reports the player coming within 5 m
+        results["player_near"] = f"done ({near[0].distance:.0f} cm)" if near else "failed (no event)"
+    if planner is not None:
+        await asyncio.sleep(1)
+        snap = planner.snapshot()
+        asked = sum(snap["sent"].values())
+        ok = snap["npcs"] and (asked > 0 or not near)  # an event near the player makes it ask the model
+        results["planner"] = f"{'done' if ok else 'failed'} ({snap})"
+    for name, outcome in results.items():
+        log.info("%-20s %s", name, outcome)
     return results

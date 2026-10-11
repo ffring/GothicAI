@@ -1,0 +1,6 @@
+{
+ "model": "gpt-6.1-sol-low",
+ "requests": 76,
+ "batch": 4,
+ "call_ms_p50": 7181.4
+}

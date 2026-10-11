@@ -5,7 +5,10 @@
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
 #       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
-# A new game first plays the intro video (~80 s), so a run takes ~2 min. The game runs in LOG_DIR,
+#   m4: what the npc planner needs from the bridge: npc roster, soft actions (npc_act) and their end
+#       (npc_idle); with DECIDER_URL the planner runs against that decision service too
+# A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
+# instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
 #   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
@@ -23,6 +26,11 @@ ASR="${ASR:-fake}"
 PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
 VOICE_FILE="${VOICE_FILE:-$ROOT/asr-service/tests/audio/ru_1.wav}"
+# the npc planner is off unless a decision service is given (DECIDER_URL=ws://<gpu-host>:47832)
+BRAIN_ARGS=(--no-brain)
+if [ -n "${DECIDER_URL:-}" ]; then
+  BRAIN_ARGS=(--decider-url "$DECIDER_URL")
+fi
 
 ASR_PID=""
 VOICE_ARGS=(--no-voice)
@@ -33,7 +41,7 @@ if [ "$SCENARIO" = "m3" ]; then
 fi
 
 (cd "$ROOT/server" && exec uv run gothic-ai serve --port "$PORT" --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console \
-  --memory-db "$LOG_DIR/memory.sqlite3" "${VOICE_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
+  --memory-db "$LOG_DIR/memory.sqlite3" "${VOICE_ARGS[@]}" "${BRAIN_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
 # `|| true`: with set -e a failing kill of an already finished process would change the exit code
@@ -45,7 +53,12 @@ if ! kill -0 "$SRV" 2>/dev/null; then
   exit 1
 fi
 
-(cd "$LOG_DIR" && GOTHIC_AI_URL="ws://127.0.0.1:$PORT" exec "$GAME_BIN" -g "$GOTHIC_DIR" -nomenu -devmode) >"$LOG_DIR/game.log" 2>&1 &
+START_ARGS=(-nomenu)
+if [ -n "${SAVE:-}" ]; then
+  cp "$SAVE" "$LOG_DIR/save_slot_1.sav"
+  START_ARGS=(-save 1)
+fi
+(cd "$LOG_DIR" && GOTHIC_AI_URL="ws://127.0.0.1:$PORT" exec "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 
 for _ in $(seq 1 "$TIMEOUT"); do
@@ -63,7 +76,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|ERROR" "$LOG_DIR/server.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

@@ -1,0 +1,311 @@
+{
+ "tag": "fast",
+ "token_budget": 8192,
+ "gpu": "NVIDIA GeForce RTX 3090",
+ "state_tokens": {
+  "short_mean": 51,
+  "long_mean": 200
+ },
+ "check": {
+  "react_same": "76/76",
+  "max_prob_diff": 0.0109
+ },
+ "sweep_short": [
+  {
+   "batch": 1,
+   "ms": 64.5,
+   "req_per_s": 15.5,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 2,
+   "ms": 109.7,
+   "req_per_s": 18.2,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 4,
+   "ms": 209.0,
+   "req_per_s": 19.1,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 8,
+   "ms": 406.4,
+   "req_per_s": 19.7,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 16,
+   "ms": 788.7,
+   "req_per_s": 20.3,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 32,
+   "ms": 1469.8,
+   "req_per_s": 21.8,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 50,
+   "ms": 2172.5,
+   "req_per_s": 23.0,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 64,
+   "ms": 2728.5,
+   "req_per_s": 23.5,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 100,
+   "ms": 4299.6,
+   "req_per_s": 23.3,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": "sequential",
+   "ms": 85.4,
+   "req_per_s": 11.7
+  }
+ ],
+ "sweep_long": [
+  {
+   "batch": 1,
+   "ms": 101.8,
+   "req_per_s": 9.8,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 2,
+   "ms": 186.0,
+   "req_per_s": 10.8,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 4,
+   "ms": 359.1,
+   "req_per_s": 11.1,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 8,
+   "ms": 697.1,
+   "req_per_s": 11.5,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 16,
+   "ms": 1313.1,
+   "req_per_s": 12.2,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 32,
+   "ms": 2564.2,
+   "req_per_s": 12.5,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 50,
+   "ms": 3920.1,
+   "req_per_s": 12.8,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 64,
+   "ms": 4967.1,
+   "req_per_s": 12.9,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": 100,
+   "ms": 7944.7,
+   "req_per_s": 12.6,
+   "peak_gb": 4.33
+  },
+  {
+   "batch": "sequential",
+   "ms": 84.8,
+   "req_per_s": 11.8
+  }
+ ],
+ "live": [
+  {
+   "npc": 10,
+   "mean_interval_s": 5,
+   "requests": 71,
+   "req_per_s": 2.4,
+   "p50_ms": 60.9,
+   "p95_ms": 108.3,
+   "max_ms": 123.1,
+   "mean_batch": 1.0,
+   "state": "short"
+  },
+  {
+   "npc": 25,
+   "mean_interval_s": 5,
+   "requests": 167,
+   "req_per_s": 5.6,
+   "p50_ms": 60.5,
+   "p95_ms": 138.0,
+   "max_ms": 743.6,
+   "mean_batch": 1.1,
+   "state": "short"
+  },
+  {
+   "npc": 50,
+   "mean_interval_s": 5,
+   "requests": 322,
+   "req_per_s": 10.7,
+   "p50_ms": 103.7,
+   "p95_ms": 497.6,
+   "max_ms": 1442.5,
+   "mean_batch": 1.3,
+   "state": "short"
+  },
+  {
+   "npc": 100,
+   "mean_interval_s": 5,
+   "requests": 505,
+   "req_per_s": 16.8,
+   "p50_ms": 1338.5,
+   "p95_ms": 2808.5,
+   "max_ms": 3632.2,
+   "mean_batch": 9.2,
+   "state": "short"
+  },
+  {
+   "npc": 50,
+   "mean_interval_s": 2,
+   "requests": 565,
+   "req_per_s": 18.8,
+   "p50_ms": 647.4,
+   "p95_ms": 1524.3,
+   "max_ms": 2193.0,
+   "mean_batch": 7.1,
+   "state": "short"
+  },
+  {
+   "npc": 100,
+   "mean_interval_s": 2,
+   "requests": 679,
+   "req_per_s": 22.6,
+   "p50_ms": 2746.8,
+   "p95_ms": 3744.7,
+   "max_ms": 4416.1,
+   "mean_batch": 30.9,
+   "state": "short"
+  },
+  {
+   "npc": 10,
+   "mean_interval_s": 5,
+   "requests": 70,
+   "req_per_s": 2.3,
+   "p50_ms": 97.7,
+   "p95_ms": 186.5,
+   "max_ms": 229.4,
+   "mean_batch": 1.0,
+   "state": "long"
+  },
+  {
+   "npc": 25,
+   "mean_interval_s": 5,
+   "requests": 163,
+   "req_per_s": 5.4,
+   "p50_ms": 101.7,
+   "p95_ms": 371.9,
+   "max_ms": 472.9,
+   "mean_batch": 1.1,
+   "state": "long"
+  },
+  {
+   "npc": 50,
+   "mean_interval_s": 5,
+   "requests": 300,
+   "req_per_s": 10.0,
+   "p50_ms": 359.3,
+   "p95_ms": 1351.2,
+   "max_ms": 1803.5,
+   "mean_batch": 2.2,
+   "state": "long"
+  },
+  {
+   "npc": 100,
+   "mean_interval_s": 5,
+   "requests": 385,
+   "req_per_s": 12.8,
+   "p50_ms": 3644.9,
+   "p95_ms": 5675.5,
+   "max_ms": 6566.2,
+   "mean_batch": 21.4,
+   "state": "long"
+  },
+  {
+   "npc": 50,
+   "mean_interval_s": 2,
+   "requests": 373,
+   "req_per_s": 12.4,
+   "p50_ms": 2315.4,
+   "p95_ms": 3259.9,
+   "max_ms": 3579.8,
+   "mean_batch": 15.5,
+   "state": "long"
+  },
+  {
+   "npc": 100,
+   "mean_interval_s": 2,
+   "requests": 424,
+   "req_per_s": 14.1,
+   "p50_ms": 5979.1,
+   "p95_ms": 7162.3,
+   "max_ms": 7376.6,
+   "mean_batch": 35.3,
+   "state": "long"
+  }
+ ],
+ "burst": [
+  {
+   "npc": 10,
+   "all_answered_ms": 511.5,
+   "state": "short"
+  },
+  {
+   "npc": 25,
+   "all_answered_ms": 1150.8,
+   "state": "short"
+  },
+  {
+   "npc": 50,
+   "all_answered_ms": 2172.2,
+   "state": "short"
+  },
+  {
+   "npc": 100,
+   "all_answered_ms": 4565.3,
+   "state": "short"
+  },
+  {
+   "npc": 10,
+   "all_answered_ms": 856.8,
+   "state": "long"
+  },
+  {
+   "npc": 25,
+   "all_answered_ms": 2039.8,
+   "state": "long"
+  },
+  {
+   "npc": 50,
+   "all_answered_ms": 3924.7,
+   "state": "long"
+  },
+  {
+   "npc": 100,
+   "all_answered_ms": 7952.3,
+   "state": "long"
+  }
+ ]
+}

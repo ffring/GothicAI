@@ -25,6 +25,9 @@ from .protocol import (
     GameMessage,
     Hello,
     Loading,
+    NpcActCmd,
+    NpcActResult,
+    NpcActType,
     PingCmd,
     Pong,
     Result,
@@ -111,6 +114,8 @@ class GameLink:
                     _resolve(fut, msg)
             case Detached():
                 self.snapshots.pop(msg.npc, None)
+            case NpcActResult(status="rejected"):
+                log.debug("npc_act %s for %s rejected: %s", msg.id, msg.npc, msg.detail)
         for listener in self.listeners:
             listener(msg)
 
@@ -180,6 +185,13 @@ class GameLink:
             return await asyncio.wait_for(fut, timeout)
         finally:
             self._actions.pop(cmd.id, None)
+
+    async def npc_act(self, npc: str, action: NpcActType, /, **args: Any) -> str:
+        """Queue a soft action for an npc that follows its routine; returns the id. The game answers
+        `npc_act_result` at once and `npc_idle` when the npc is done."""
+        cmd = NpcActCmd(id=self._next_id("n"), npc=npc, action=action, args=args)
+        await self.send(cmd)
+        return cmd.id
 
     async def snapshot(self, npc: str, *, fresh: bool = False, timeout: float = 5.0) -> Snapshot:
         npc = npc.upper()
