@@ -44,3 +44,17 @@ def test_unknown_parent_starts_empty(tmp_path) -> None:
     # persisted across reopen
     db = MemoryStore(tmp_path / "m.sqlite3")
     assert [b.id for b in db.branches()] == ["B"]
+
+
+def test_search_finds_older_messages_by_word_stems() -> None:
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    store.append("A", "X", "user", "Я видел ДРАКОНА у прохода!", "день 1, 10:00")
+    store.append("A", "X", "assistant", "Драконы? Ты уверен?", "день 1, 10:00")
+    store.append("A", "X", "user", "Принеси мне грибов", "день 1, 11:00")
+    store.append("A", "X", "user", "Дракон снова прилетел", "день 2, 09:00")  # newer than asked for
+
+    found = store.search("A", "X", "драконы", before_seq=3)
+    assert [(r.seq, r.game_time) for r in found] == [(1, "день 1, 10:00"), (2, "день 1, 10:00")]
+    assert store.search("A", "X", "драконы", before_seq=0) == []
+    assert store.search("A", "X", "и в", before_seq=4) == []  # no words long enough to match

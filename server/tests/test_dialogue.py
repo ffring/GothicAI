@@ -36,7 +36,12 @@ async def test_chat_open_greets_and_player_text_gets_a_reply():
     instructions, messages, tools = llm.calls[-1]
     assert "Ксардас" in instructions and messages[-1] == Message("user", "Где я?")
     assert messages[-2].role == "developer" and "Обстановка" in messages[-2].content
-    assert {t.name for t in tools} == {"set_intent", "give_item", "end_conversation"}  # no body tools
+    assert {t.name for t in tools} == {
+        "set_intent",
+        "give_item",
+        "recall",
+        "end_conversation",
+    }  # no body tools
 
 
 async def test_new_player_text_interrupts_the_reply_in_flight():

@@ -750,6 +750,11 @@ class DialogueManager:
                 return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
             case npc_tools.SET_INTENT:
                 return self._set_intent(conv, call, snap)
+            case npc_tools.RECALL:
+                if state.recalled:
+                    return ToolOutcome("Больше ничего не вспоминается.", "ignored")
+                state.recalled = True
+                return ToolOutcome(self._recall(conv, str(call.arguments.get("query", ""))), "read")
             case npc_tools.GIVE_ITEM:
                 args, reason = executor.check_give(call.arguments, snap)
                 if args is None:
@@ -763,6 +768,20 @@ class DialogueManager:
                 self._after_speech(conv, lambda: self._give(conv, give, snap))
                 return ToolOutcome("Принято: отдашь после реплики.", "accepted")
         return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
+
+    def _recall(self, conv: Conversation, query: str) -> str:
+        """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded)."""
+        first = conv.memory.entries[0].seq if conv.memory.entries else conv.memory.summary_seq + 1
+        found = self.memory.search(conv.branch, conv.npc, query, min(conv.memory.summary_seq, first - 1))
+        log.info("%s recalls %r: %d message(s)", conv.npc, query, len(found))
+        if not found:
+            return "Ничего такого не вспоминается."
+        speaker = {"user": "Герой", "assistant": "Ты", "developer": ""}
+        lines = []
+        for r in found:
+            who = speaker.get(r.role, "")
+            lines.append(f"[{r.game_time or '?'}] {who + ': ' if who else ''}{r.content}")
+        return "Ты вспоминаешь:\n" + "\n".join(lines)
 
     async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
         outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
@@ -821,3 +840,4 @@ class TurnState:
     end_requested: bool = False
     given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
+    recalled: bool = False  # recall is used once per turn

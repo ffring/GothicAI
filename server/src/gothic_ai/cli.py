@@ -20,6 +20,7 @@ from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .dialogue import DialogueManager
+from .executor import Intent
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
 from .incidents import IncidentDesk
@@ -246,7 +247,11 @@ async def serve(args: argparse.Namespace) -> int:
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
-            planner = state.brain = NpcPlanner(decider, GameApplier(link))
+            def agenda_of(npc: str, dialogue: DialogueManager = state.dialogue) -> str | None:
+                saved = memory.intent(dialogue.branch, npc) if dialogue.branch else None
+                return (Intent.from_json(saved).agenda or None) if saved else None
+
+            planner = state.brain = NpcPlanner(decider, GameApplier(link), agenda_of=agenda_of)
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
             state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(npc, intent.agenda or None)

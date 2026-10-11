@@ -428,3 +428,23 @@ def test_protocol_v5_messages() -> None:
         "action": "say_svm",
         "args": {"svm": "NOTNOW"},
     }
+
+
+async def test_after_a_chat_the_npc_does_not_walk_up_to_the_hero_again_at_once() -> None:
+    planner, _, applier, clock = make(FakeDecider(choice="approach_talk", confidence=0.9), ask_attitude=False)
+    planner.on_roster([entry("PABLO", 6)], clock.t)
+    planner.set_agenda("PABLO", "find the thief")
+    planner.on_message(parse_game_message(json.dumps({"type": "chat_open", "npc": "PABLO", "name": "Pablo"})))
+    planner.on_message(parse_game_message(json.dumps({"type": "chat_close", "npc": "PABLO"})))
+    await step(planner, clock, 1.6)  # the catch-up decision after the dialog
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock)
+    assert not applier.recent and planner.stats.cooldown >= 1
+
+
+async def test_a_new_npc_brings_the_agenda_its_last_conversation_left() -> None:
+    planner, decider, _, clock = make()
+    planner.agenda_of = lambda npc: "make the hero go to Lord Hagen" if npc == "XARDAS" else None
+    planner.on_roster([entry("XARDAS", 6), entry("BAUER", 8)], clock.t)
+    assert planner.npcs["XARDAS"].agenda == "make the hero go to Lord Hagen"
+    assert planner.npcs["BAUER"].agenda is None

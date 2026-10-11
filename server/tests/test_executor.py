@@ -135,3 +135,27 @@ async def test_the_same_intent_twice_is_not_carried_out_twice():
     fake = FakeGame()
     await _turn(llm, fake)
     assert [m["action"] for m in fake.received if m["type"] == "action"] == ["follow"]
+
+
+async def test_recall_brings_back_what_the_summary_lost():
+    store = MemoryStore(":memory:")
+    store.ensure_branch("test-branch")
+    store.append(
+        "test-branch", XARDAS, "user", "Меня зовут Ронан, я ищу своего брата Бенно.", "день 1, 09:00"
+    )
+    store.append("test-branch", XARDAS, "assistant", "Брата ищи в городе.", "день 1, 09:00")
+    store.add_summary("test-branch", XARDAS, "Герой пришёл к тебе в первый день.", covers=2)
+    llm = FakeBackend(
+        script=[
+            FakeStep("Хм…", [ToolCall("recall", {"query": "брат героя"})]),
+            FakeStep("Ты искал брата, Бенно. Так ты его нашёл?"),
+        ],
+        delay=0,
+    )
+    dialogue, _ = await _turn(llm, FakeGame(), store, "Помнишь, кого я искал?")
+
+    assert len(llm.calls) == 2
+    result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert "[день 1, 09:00] Герой: Меня зовут Ронан, я ищу своего брата Бенно." in result.output
+    history = dialogue.conversations[XARDAS].history
+    assert history[-1].content == "Хм… Ты искал брата, Бенно. Так ты его нашёл?"

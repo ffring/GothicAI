@@ -42,6 +42,7 @@ def _object(properties: dict | None = None) -> dict:
 
 SET_INTENT = "set_intent"
 GIVE_ITEM = "give_item"
+RECALL = "recall"
 
 TOOLS = [
     Tool(
@@ -79,6 +80,12 @@ TOOLS = [
                 "count": {"type": "integer", "description": "сколько штук, не меньше 1"},
             }
         ),
+    ),
+    Tool(
+        RECALL,
+        "Вспомнить подробности прежних встреч с героем, которых нет в сводке твоей памяти: что он "
+        "рассказывал, о чём просил, что ты обещал. Перед вызовом скажи что-то короткое вроде «Хм…».",
+        _object({"query": {"type": "string", "description": "о чём вспомнить, ключевые слова"}}),
     ),
     Tool(
         END_CONVERSATION,
