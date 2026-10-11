@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve
@@ -116,6 +117,27 @@ async def test_websocket_speak(service) -> None:
 
         await ws.send(json.dumps({"type": "speak", "id": "2", "text": "  "}))
         assert json.loads(await ws.recv())["type"] == "error"
+
+
+async def test_health_shows_providers_left_out() -> None:
+    synth = Synthesizer(FakeProvider(fail=True), FakeProvider())
+    await _collect(synth, "Привет")  # the primary fails and waits for its check in the background
+    svc = TtsService(synth, port=0)
+    started = asyncio.Event()
+    task = asyncio.create_task(svc.serve_forever(started))
+    await started.wait()
+    try:
+        async with httpx.AsyncClient() as http:
+            r = await http.get(f"http://127.0.0.1:{svc.port}/health")
+        assert r.json() == {
+            "ok": True,
+            "service": "gothic-tts",
+            "providers": [{"name": "fake", "ok": False}, {"name": "fake", "ok": True}],
+        }
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await synth.aclose()
 
 
 async def test_voxcpm_client_against_a_stand_in_server() -> None:

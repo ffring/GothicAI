@@ -73,6 +73,14 @@ async def service():
     await asyncio.gather(task, return_exceptions=True)
 
 
+async def test_health(service) -> None:
+    svc, _ = service
+    async with httpx.AsyncClient() as http:
+        r = await http.get(f"http://127.0.0.1:{svc.port}/health")
+    assert r.headers["content-type"] == "application/json"
+    assert r.json() == {"ok": True, "service": "gothic-asr", "providers": [{"name": "fake"}]}
+
+
 async def test_websocket_roundtrip(service) -> None:
     svc, fake = service
     async with connect(f"ws://127.0.0.1:{svc.port}") as ws:

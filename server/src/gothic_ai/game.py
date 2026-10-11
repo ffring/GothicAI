@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
 from collections.abc import Awaitable, Callable
+from http import HTTPStatus
 from typing import Any
 
 from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
+from websockets.http11 import Request, Response
 
 from .protocol import (
     PROTOCOL_VERSION,
@@ -213,7 +216,10 @@ OnLink = Callable[[GameLink], Awaitable[None]]
 
 
 class GameServer:
-    """WebSocket server the game connects to. A new connection replaces the previous one."""
+    """WebSocket server the game connects to. A new connection replaces the previous one.
+
+    `GET /health` on the same port answers {"ok":true,"service":"gothic-ai","game":<connected>}:
+    the launcher waits for it before starting the game."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 47817, on_link: OnLink | None = None) -> None:
         self.host = host
@@ -251,8 +257,17 @@ class GameServer:
                     self.link = None
                 self._link_changed.notify_all()
 
+    def _health(self, conn: ServerConnection, request: Request) -> Response | None:
+        if request.path != "/health":
+            return None
+        game = self.link is not None and not self.link.closed.is_set()
+        resp = conn.respond(HTTPStatus.OK, json.dumps({"ok": True, "service": "gothic-ai", "game": game}))
+        del resp.headers["Content-Type"]
+        resp.headers["Content-Type"] = "application/json"
+        return resp
+
     async def serve_forever(self) -> None:
-        async with serve(self._handler, self.host, self.port) as server:
+        async with serve(self._handler, self.host, self.port, process_request=self._health) as server:
             self.port = server.sockets[0].getsockname()[1]  # actual port when 0 was requested
             self.started.set()
             log.info("waiting for the game on ws://%s:%d", self.host, self.port)

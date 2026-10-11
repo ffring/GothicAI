@@ -9,15 +9,22 @@
     service -> client  {"type":"error","id":"7","detail":"..."}
 
 Requests on one connection are handled one after another.
+
+`GET /health` on the same port answers
+    {"ok":true,"service":"gothic-tts","providers":[{"name":"...","ok":true}]}
+(`ok` false: the provider failed and waits for its check in the background). The launcher waits for it
+before starting the game.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from http import HTTPStatus
 
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
+from websockets.http11 import Request, Response
 
 from .providers import TtsError, TtsProvider, Voice
 from .synthesizer import Synthesizer
@@ -34,12 +41,21 @@ class TtsService:
         self.port = port
 
     async def serve_forever(self, started=None) -> None:
-        async with serve(self._handler, self.host, self.port, max_size=2**20) as server:
+        async with serve(
+            self._handler, self.host, self.port, max_size=2**20, process_request=self._health
+        ) as server:
             self.port = server.sockets[0].getsockname()[1]
             log.info("listening on ws://%s:%d", self.host, self.port)
             if started is not None:
                 started.set()
             await server.serve_forever()
+
+    def _health(self, conn: ServerConnection, request: Request) -> Response | None:
+        if request.path != "/health":
+            return None
+        up = {id(p) for p in self.synthesizer.available()}
+        providers = [{"name": p.name, "ok": id(p) in up} for p in self.synthesizer.providers]
+        return _json(conn, {"ok": True, "service": "gothic-tts", "providers": providers})
 
     async def _handler(self, conn: ServerConnection) -> None:
         log.info("client connected from %s", conn.remote_address)
@@ -98,3 +114,10 @@ class TtsService:
 
 async def _send(conn: ServerConnection, msg: dict) -> None:
     await conn.send(json.dumps(msg, ensure_ascii=False))
+
+
+def _json(conn: ServerConnection, body: dict) -> Response:
+    resp = conn.respond(HTTPStatus.OK, json.dumps(body, ensure_ascii=False))
+    del resp.headers["Content-Type"]
+    resp.headers["Content-Type"] = "application/json"
+    return resp
