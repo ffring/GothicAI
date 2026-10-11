@@ -2,7 +2,7 @@
 
 Управление NPC в Gothic 2 NotR с помощью LLM, а дальше новые механики и генерация сюжетных линий.
 
-Движок: форк [OpenGothic](https://github.com/kaifaty/OpenGothic) (upstream [Try/OpenGothic](https://github.com/Try/OpenGothic)). Он лежит в `OpenGothic/` как отдельный репозиторий. ИИ работает в отдельных сервисах, а в игре остаётся только тонкий мост.
+Движок: [OpenGothic](https://github.com/Try/OpenGothic) с нашими изменениями, лежит в `OpenGothic/` этого репозитория. ИИ работает в отдельных сервисах, а в игре остаётся только тонкий мост.
 
 ## Структура
 
@@ -16,19 +16,27 @@
 | `docs/protocol.md` | Протокол игра ↔ сервер |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
 | `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
+| `scripts/init-engine.sh` | Библиотеки движка (git-подмодули) и сборка игры, в том числе в новой рабочей копии (git worktree) |
 | `reports/` | Итоговые исследования |
 | `research_notes/` | Заметки исследований с источниками |
-| `OpenGothic/` | Форк движка, отдельный git-репозиторий (здесь игнорируется) |
+| `OpenGothic/` | Движок: OpenGothic (git subtree от upstream `Try/OpenGothic`) с ИИ-мостом `ai_bridge/` и IK стоп. Сторонние библиотеки в `lib/` — git-подмодули |
 
 ## Сборка и запуск (macOS)
 
-Игра (ветка `ai-bridge` форка):
+Игра: скрипт подтягивает библиотеки движка (git-подмодули) и собирает `OpenGothic/build/opengothic/Gothic2Notr`.
 
 ```bash
-git clone --recurse-submodules -b ai-bridge https://github.com/kaifaty/OpenGothic.git
+scripts/init-engine.sh
+```
+
+Вручную то же самое: `git submodule update --init --recursive`, затем
+
+```bash
 cmake -S OpenGothic -B OpenGothic/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build OpenGothic/build --target Gothic2Notr
 ```
+
+Обновления upstream OpenGothic, если понадобятся: `git subtree pull --prefix=OpenGothic https://github.com/Try/OpenGothic master --squash`.
 
 Локальные настройки: адреса GPU-сервера и ключи API. ASR- и TTS-сервисы читают ближайший `.env` выше текущей папки, то есть `.env` в корне репозитория (он в `.gitignore`). Переменные окружения важнее файла.
 

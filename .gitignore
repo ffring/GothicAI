@@ -1,6 +1,3 @@
-# Fork of OpenGothic is a separate repository (kaifaty/OpenGothic)
-/OpenGothic/
-
 # Python
 .venv/
 __pycache__/
