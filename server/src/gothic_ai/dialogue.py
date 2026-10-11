@@ -15,6 +15,7 @@ from typing import Any
 
 from . import npc_tools
 from .game import GameError, GameLink
+from .journal import Journal
 from .llm import LLMBackend, LLMError, Message, Role, TextDelta, ToolCall
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import Persona, PersonaProvider
@@ -220,8 +221,10 @@ class DialogueManager:
         tts: TtsClient | None = None,
         greet: bool = True,
         tools: bool = True,
+        journal: Journal | None = None,
     ) -> None:
         self.link = link
+        self.journal = journal or Journal()  # lines and actions for the launcher (see journal.py)
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -253,6 +256,7 @@ class DialogueManager:
                 if conv is None:
                     log.warning("player_text for npc without open chat: %s", msg.npc)
                     return
+                self.journal.add("player", npc=conv.npc, name=conv.persona.name, text=msg.text, via="text")
                 self._start_reply(conv, msg.text)
             case ChatClose():
                 if conv := self.conversations.get(msg.npc.upper()):
@@ -441,6 +445,13 @@ class DialogueManager:
                     except TtsError as err:
                         self._tts_paused_until = time.monotonic() + TTS_PAUSE
                         log.warning("%s: no voice, subtitles only for %.0fs: %s", conv.npc, TTS_PAUSE, err)
+                        self.journal.add(
+                            "tts_off",
+                            npc=conv.npc,
+                            name=conv.persona.name,
+                            seconds=TTS_PAUSE,
+                            detail=str(err),
+                        )
                         if started:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started:
@@ -465,6 +476,9 @@ class DialogueManager:
     def _act(self, conv: Conversation, call: ToolCall) -> None:
         """Run a tool call next to the speech; its outcome lands in the history as a note."""
         log.info("%s calls %s %s", conv.npc, call.name, call.arguments)
+        self.journal.add(
+            "action", npc=conv.npc, name=conv.persona.name, action=call.name, arguments=call.arguments
+        )
         snapshot = self.link.snapshots.get(conv.npc)
 
         reply = conv.reply
@@ -547,6 +561,7 @@ class DialogueManager:
                 )
         except LLMError as err:
             log.error("%s: %s", conv.npc, err)
+            self.journal.add("llm_error", npc=conv.npc, name=conv.persona.name, detail=str(err))
             await self._status(conv, "error", str(err))
             return
         except asyncio.CancelledError:
@@ -554,13 +569,24 @@ class DialogueManager:
             raise
 
         self._commit(conv, user, text)
+        total = time.monotonic() - started
+        if text:
+            self.journal.add(
+                "npc",
+                npc=conv.npc,
+                name=conv.persona.name,
+                text=to_game_text(text),
+                llm=self.llm.name,
+                first_token_s=round(first_delta or 0.0, 2),
+                total_s=round(total, 2),
+            )
         log.info(
             "%s replied via %s: first token %.2fs, first line %.2fs, total %.2fs",
             conv.npc,
             self.llm.name,
             first_delta or 0.0,
             first_line or 0.0,
-            time.monotonic() - started,
+            total,
         )
         await self._status(conv, "idle")
         if end_requested:

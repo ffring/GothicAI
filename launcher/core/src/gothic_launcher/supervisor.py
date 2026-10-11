@@ -8,6 +8,8 @@
 - Output goes to `<name>.log` in the session's log directory, a restart appends to the same file.
 - While the session runs, the health answers are polled, and a change (a TTS provider dropped out, the game
   connected) is reported as a status event.
+- A `JOURNAL {json}` line in a process's output (the AI server with --journal: player and npc lines,
+  actions) becomes a journal event with that entry.
 """
 
 from __future__ import annotations
@@ -37,7 +39,8 @@ STABLE_S = 60.0  # a service that ran this long restarts after the shortest dela
 STATUS_EVERY_S = 3.0
 TAIL_LINES = 40
 
-EventKind = Literal["starting", "ready", "status", "exited", "restarting", "stopped", "failed"]
+EventKind = Literal["starting", "ready", "status", "exited", "restarting", "stopped", "failed", "journal"]
+JOURNAL_PREFIX = "JOURNAL "
 
 
 @dataclass(frozen=True)
@@ -45,7 +48,7 @@ class Event:
     proc: str
     kind: EventKind
     detail: str = ""
-    data: dict[str, Any] | None = None  # the health answer for ready/status
+    data: dict[str, Any] | None = None  # the health answer for ready/status, the entry for journal
 
 
 class NotReady(Exception):
@@ -211,6 +214,11 @@ class Supervisor:
             r.tail.append(text)
             if self.echo is not None:
                 self.echo(r.proc.name, text)
+            if text.startswith(JOURNAL_PREFIX):
+                with contextlib.suppress(ValueError):
+                    entry = json.loads(text.removeprefix(JOURNAL_PREFIX))
+                    if isinstance(entry, dict):
+                        self.on_event(Event(r.proc.name, "journal", data=entry))
 
     async def _wait_ready(self, proc: Proc) -> dict[str, Any]:
         r = self.running[proc.name]

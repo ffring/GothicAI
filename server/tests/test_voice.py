@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from websockets.asyncio.server import serve
 
 from gothic_ai.dialogue import DialogueManager
+from gothic_ai.journal import Journal
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.voice import MIC_DENIED, AsrClient, VoiceInput
@@ -66,8 +67,10 @@ async def fake_asr(text: str = "Дай мне зелье"):
 async def test_push_to_talk_becomes_the_players_line():
     fake = FakeGame()
     llm = FakeBackend("Держи.", delay=0)
+    entries: list[dict] = []
     async with fake_asr() as (url, utterances), connected(fake) as link:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        journal = Journal(entries.append)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False, journal=journal)
         voice = VoiceInput(link, dialogue, FakeSource(speech()), AsrClient(url))
         await fake.send(type="chat_open", npc=XARDAS, name="Ксардас")
         await fake.send(type="ptt_start", npc=XARDAS)
@@ -80,6 +83,9 @@ async def test_push_to_talk_becomes_the_players_line():
         assert utterances == [32000]
         assert "recognizing" in fake.statuses
         assert llm.calls[-1][1][-1].content == "Дай мне зелье"
+        player = entries[0]
+        assert (player["kind"], player["text"], player["via"]) == ("player", "Дай мне зелье", "voice")
+        assert player["name"] == "Ксардас" and "asr" in player and player["latency_s"] >= 0
 
 
 async def test_short_tap_is_cancelled_without_recognition():
@@ -98,8 +104,11 @@ async def test_short_tap_is_cancelled_without_recognition():
 
 async def test_silent_microphone_and_missing_service_are_reported():
     fake = FakeGame()
+    entries: list[dict] = []
     async with connected(fake) as link:
-        dialogue = DialogueManager(link, FakeBackend(delay=0), PersonaProvider(None), greet=False)
+        dialogue = DialogueManager(
+            link, FakeBackend(delay=0), PersonaProvider(None), greet=False, journal=Journal(entries.append)
+        )
         voice = VoiceInput(link, dialogue, FakeSource(bytes(32000)), AsrClient("ws://127.0.0.1:9"))
         await fake.send(type="ptt_start", npc=XARDAS)
         await _until(lambda: voice.active is not None and voice.active.npc == XARDAS)
@@ -112,3 +121,5 @@ async def test_silent_microphone_and_missing_service_are_reported():
         await fake.send(type="ptt_stop", npc=XARDAS)
         await _until(lambda: sum(s == "error" for s in fake.statuses) == 2)
         assert "ASR-сервис недоступен" in fake.received[-1]["detail"]
+        assert [e["kind"] for e in entries] == ["voice_error", "voice_error"]
+        assert entries[0]["detail"] == MIC_DENIED

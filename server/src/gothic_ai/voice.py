@@ -357,6 +357,7 @@ class VoiceInput:
             self.source.start(lambda data: loop.call_soon_threadsafe(utt.queue.put_nowait, data))
         except VoiceError as err:
             log.error("voice: %s", err)
+            self.dialogue.journal.add("voice_error", npc=npc, detail=str(err))
             self._spawn(self._status(npc, "error", str(err)))
             return
         utt.task = asyncio.create_task(self._run(utt))
@@ -396,6 +397,7 @@ class VoiceInput:
         if size and not heard:
             await session.cancel()
             log.error("voice: %.1fs of pure silence, microphone access is probably denied", seconds)
+            self.dialogue.journal.add("voice_error", npc=npc, detail=MIC_DENIED)
             await self._status(npc, "error", MIC_DENIED)
             return
         await self._status(npc, "recognizing")
@@ -403,6 +405,7 @@ class VoiceInput:
             result = await session.finish()
         except VoiceError as err:
             log.error("voice: %s", err)
+            self.dialogue.journal.add("voice_error", npc=npc, detail=str(err))
             await self._status(npc, "error", str(err))
             return
         finally:
@@ -419,6 +422,16 @@ class VoiceInput:
             await self._status(npc, "notice", "Не расслышал. Удерживайте T, пока говорите")
             return
         await self.link.send(TranscriptCmd(npc=npc, text=result.text))
+        conv = self.dialogue.conversations.get(npc)
+        self.dialogue.journal.add(
+            "player",
+            npc=npc,
+            name=conv.persona.name if conv else npc,
+            text=result.text,
+            via="voice",
+            asr=result.provider,
+            latency_s=round(result.latency_s, 2),
+        )
         try:
             self.dialogue.say_as_player(npc, result.text)
         except KeyError:

@@ -13,12 +13,15 @@ import os
 import re
 import shutil
 import socket
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .settings import Config
+from .settings import CONFIG_DIR, Config
 
 GAME_HOME = Path.home() / ".local" / "share" / "gothic-ai" / "game"
+LOG_ROOT = Path.home() / "Library" / "Logs" / "GothicAI"
+KEEP_LOGS = 20
 UV_CANDIDATES = ("~/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv", "~/.cargo/bin/uv")
 MANAGED_ENV = ("OPENAI_API_KEY", "INWORLD_API_KEY")
 FOREIGN_ENV = ("VIRTUAL_ENV",)  # the launcher's own venv: `uv run` of a service would warn and ignore it
@@ -67,6 +70,37 @@ class Ports:
         finally:
             for s in socks:
                 s.close()
+
+
+@dataclass(frozen=True)
+class EnvImport:
+    path: Path
+    imported: list[str]
+    skipped: list[str]
+
+
+def load_config(config_dir: Path = CONFIG_DIR) -> tuple[Config, EnvImport | None]:
+    """The settings. On the first run (no settings.toml yet) they start from the repository's `.env` and
+    are saved; the second value then says what came from it."""
+    config = Config.load(config_dir)
+    if config.settings_path.exists():
+        return config, None
+    taken = None
+    repo = repo_dir(config)
+    env = repo / ".env" if repo is not None else None
+    if env is not None and env.is_file():
+        taken = EnvImport(env, *config.import_env(env))
+    config.save()
+    return config, taken
+
+
+def new_log_dir(root: Path = LOG_ROOT) -> Path:
+    """A folder for this session's logs (made by the supervisor); the oldest ones beyond KEEP_LOGS go."""
+    root.mkdir(parents=True, exist_ok=True)
+    old = sorted(p for p in root.iterdir() if p.is_dir())
+    for p in old[: max(0, len(old) - KEEP_LOGS + 1)]:
+        shutil.rmtree(p, ignore_errors=True)
+    return root / time.strftime("%Y-%m-%d_%H-%M-%S")
 
 
 def find_layout(config: Config) -> Layout:
@@ -135,7 +169,7 @@ def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Pr
     s, keys = config.settings, config.secrets
     procs: list[Proc] = []
     server_args = [
-        "--port", str(ports.server), "--no-console",
+        "--port", str(ports.server), "--no-console", "--journal",
         "--game-dir", str(layout.game_dir),
         "--llm", s.llm.backend, "--reasoning-effort", s.llm.reasoning_effort,
     ]  # fmt: skip

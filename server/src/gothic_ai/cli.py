@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shlex
@@ -15,6 +16,7 @@ from . import npc_tools, scenarios
 from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
+from .journal import Journal, print_sink
 from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, ToolCall, make_backend
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
@@ -173,6 +175,7 @@ async def serve(args: argparse.Namespace) -> int:
     asr = None if args.no_voice else AsrClient(args.asr_url)
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
+    journal = Journal(print_sink if args.journal else None)
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
@@ -181,7 +184,9 @@ async def serve(args: argparse.Namespace) -> int:
     async def on_link(link: GameLink) -> None:
         nonlocal exit_code
         link.listeners.append(print_event)
-        state.dialogue = DialogueManager(link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet)
+        state.dialogue = DialogueManager(
+            link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet, journal=journal
+        )
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
         if args.scenario is None:
@@ -242,7 +247,8 @@ async def serve(args: argparse.Namespace) -> int:
 
 
 async def llm_test(args: argparse.Namespace) -> int:
-    """One request, prints the reply and latency: compare backends and models."""
+    """One request, prints the reply and latency: compare backends and models. With --json one object
+    on stdout ({"text", "llm", "model", "first_token_s", "total_s"} or {"error"}), for the launcher."""
     llm = _backend(args)
     personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
     persona = personas.get(args.npc, args.name)
@@ -252,22 +258,38 @@ async def llm_test(args: argparse.Namespace) -> int:
     tools = npc_tools.TOOLS if args.tools else None
     started = time.monotonic()
     first = None
+    text = ""
     try:
         async for event in llm.stream(instructions=persona.instructions, messages=messages, tools=tools):
             if isinstance(event, TextDelta):
                 if first is None:
                     first = time.monotonic() - started
-                print(event.text, end="", flush=True)
-            elif isinstance(event, ToolCall):
+                text += event.text
+                if not args.json:
+                    print(event.text, end="", flush=True)
+            elif isinstance(event, ToolCall) and not args.json:
                 at = time.monotonic() - started
                 print(f"\n  -> {event.name}({event.arguments}) at {at:.2f}s", flush=True)
     except LLMError as err:
-        print(f"\nerror: {err}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"error": str(err)}, ensure_ascii=False))
+        else:
+            print(f"\nerror: {err}", file=sys.stderr)
         return 1
     finally:
         await llm.aclose()
     total = time.monotonic() - started
-    print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
+    if args.json:
+        result = {
+            "text": text.strip(),
+            "llm": llm.name,
+            "model": getattr(llm, "model", None),
+            "first_token_s": round(first or 0.0, 2),
+            "total_s": round(total, 2),
+        }
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
     return 0
 
 
@@ -378,6 +400,7 @@ def main() -> None:
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
+    p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     _add_voice_args(p)
     _add_llm_args(p)
 
@@ -386,6 +409,7 @@ def main() -> None:
     p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
     p.add_argument("--tools", action="store_true", help="offer the npc action tools")
     p.add_argument("--situation", help="situation note sent before the message")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout instead of the stream")
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")

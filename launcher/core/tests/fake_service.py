@@ -1,7 +1,7 @@
 """Stand-ins for the supervisor tests, run as real processes.
 
     python fake_service.py service --port N [--ready-after S] [--exit-after S --code N] [--child]
-                                   [--health-file F] [--pidfile F] [--ignore-term]
+                                   [--health-file F] [--pidfile F] [--ignore-term] [--journal JSON]...
     python fake_service.py game --check URL... [--run S] [--code N] [--pidfile F]
 
 A service answers GET /health on its port (the body is --health-file's content when given) and prints a
@@ -58,6 +58,8 @@ def service(args: argparse.Namespace) -> None:
 
     server = HTTPServer(("127.0.0.1", args.port), Handler)
     print(f"fake service listening on {args.port}", flush=True)
+    for entry in args.journal:
+        print(f"JOURNAL {entry}", flush=True)
     server.serve_forever()
 
 
@@ -87,6 +89,7 @@ def main() -> None:
     s.add_argument("--health-file")
     s.add_argument("--pidfile")
     s.add_argument("--ignore-term", action="store_true")
+    s.add_argument("--journal", action="append", default=[], help="a journal entry (JSON) to print once up")
     g = sub.add_parser("game")
     g.add_argument("--check", nargs="*", default=[])
     g.add_argument("--run", type=float, default=0.0)

@@ -5,6 +5,7 @@
     gothic-launcher up --no-game        only the services, on their usual ports, until Ctrl-C
     gothic-launcher login               sign in to ChatGPT (once)
     gothic-launcher config show | set KEY [VALUE] | unset KEY | import-env [FILE]
+    gothic-launcher control             the launcher window's link to the core (see control.py)
 
 The first run takes the values of the repository's `.env`.
 """
@@ -15,7 +16,6 @@ import argparse
 import asyncio
 import getpass
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -23,15 +23,23 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .commands import LaunchError, Ports, find_layout, game, latest_save, services, tools
+from .checks import CHATGPT_TOKENS
+from .commands import (
+    LaunchError,
+    Ports,
+    find_layout,
+    game,
+    latest_save,
+    load_config,
+    new_log_dir,
+    services,
+    tools,
+)
 from .settings import Config, SettingsError
 from .state import AlreadyRunning, SessionFile
 from .supervisor import Event, Supervisor
 
-LOG_ROOT = Path.home() / "Library" / "Logs" / "GothicAI"
-KEEP_LOGS = 20
 DEFAULT_PORTS = Ports(server=47817, asr=47819, tts=47820)  # what the services and the game use by default
-CHATGPT_TOKENS = Path.home() / ".config" / "gothic-ai" / "chatgpt.json"
 
 
 def up(args: argparse.Namespace) -> int:
@@ -48,7 +56,7 @@ def _up(args: argparse.Namespace, session: SessionFile) -> int:
     config = _config()
     layout = find_layout(config)
     ports = DEFAULT_PORTS if args.no_game else Ports.free()
-    log_dir = _new_log_dir()
+    log_dir = new_log_dir()
     save = args.save
     if args.continue_:
         save = latest_save(layout.game_home)
@@ -145,6 +153,21 @@ def _describe(e: Event) -> str | None:
             return f"stopped{': ' + e.detail if e.detail else ''}"
         case "starting":
             return "starting"
+        case "journal":
+            return _journal_line(data)
+    return None
+
+
+def _journal_line(entry: dict[str, Any]) -> str | None:
+    match entry.get("kind"):
+        case "player":
+            return f"you -> {entry.get('name')}: {entry.get('text')}"
+        case "npc":
+            return f"{entry.get('name')}: {entry.get('text')}"
+        case "action":
+            return f"{entry.get('name')} does {entry.get('action')} {entry.get('arguments') or ''}".rstrip()
+        case "tts_off" | "llm_error" | "voice_error":
+            return f"{entry['kind']}: {entry.get('detail')}"
     return None
 
 
@@ -160,18 +183,18 @@ def _echo(name: str, line: str) -> None:
 
 def _config() -> Config:
     """On the first run (no settings.toml yet) the settings start from the repository's `.env`."""
-    config = Config.load()
-    if not config.settings_path.exists():
-        env = tools(config)[0] / ".env"
-        if env.is_file():
-            _import_env(config, env)
-        config.save()
+    config, taken = load_config()
+    if taken is not None:
+        _report_import(taken.path, taken.imported, taken.skipped)
         print(f"settings saved to {config.settings_path}; change them with `gothic-launcher config set`")
     return config
 
 
 def _import_env(config: Config, path: Path) -> None:
-    imported, skipped = config.import_env(path)
+    _report_import(path, *config.import_env(path))
+
+
+def _report_import(path: Path, imported: list[str], skipped: list[str]) -> None:
     print(f"from {path}: {', '.join(imported) or 'nothing'}")
     if skipped:
         print(f"  not launcher settings, left out: {', '.join(skipped)}")
@@ -184,14 +207,6 @@ def _warn_login(config: Config) -> None:
     )
     if uses_chatgpt and not CHATGPT_TOKENS.exists():
         print("not signed in to ChatGPT: run `gothic-launcher login` first", file=sys.stderr)
-
-
-def _new_log_dir() -> Path:
-    LOG_ROOT.mkdir(parents=True, exist_ok=True)
-    old = sorted(p for p in LOG_ROOT.iterdir() if p.is_dir())
-    for p in old[: max(0, len(old) - KEEP_LOGS + 1)]:
-        shutil.rmtree(p, ignore_errors=True)
-    return LOG_ROOT / time.strftime("%Y-%m-%d_%H-%M-%S")
 
 
 def main() -> None:
@@ -207,6 +222,7 @@ def main() -> None:
     p.add_argument("-v", "--verbose", action="store_true", help="show the output of every process")
 
     sub.add_parser("login", help="sign in to ChatGPT")
+    sub.add_parser("control", help="serve the launcher window: JSON lines on stdin and stdout")
 
     p = sub.add_parser("config", help="show or change the settings")
     actions = p.add_subparsers(dest="action", required=True)
@@ -226,6 +242,10 @@ def main() -> None:
                 code = up(args)
             case "login":
                 code = login(args)
+            case "control":
+                from . import control
+
+                code = control.main()
             case "config":
                 code = config_cmd(args)
             case _:
