@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "game/constants.h"
+#include "game/gamescript.h"
 
 class Npc;
 class World;
@@ -41,6 +42,9 @@ class NpcObserver final {
       std::string symbol;
       size_t      instance = 0;
       uint64_t    start    = 0;
+      ScriptFn    state;            // fight/flee: done when the npc leaves this script state
+      bool        entered  = false;
+      uint64_t    maxMs    = 0;
       };
 
     void emitRoster(World& world);

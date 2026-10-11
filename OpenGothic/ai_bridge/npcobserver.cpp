@@ -11,6 +11,7 @@
 
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "npcfind.h"
 #include "textcodec.h"
 
 namespace {
@@ -27,6 +28,8 @@ constexpr uint64_t MonsterNearPeriodMs = 10000;
 constexpr uint64_t NearPeriodMs   = 30000;
 constexpr uint64_t ActMaxMs       = 30000; // npc_idle at the latest after this
 constexpr uint64_t ActGraceMs     = 200;   // let the npc take the action from its queue
+constexpr uint64_t StateMaxMs     = 120000; // fight/flee: npc_idle at the latest after this
+constexpr uint64_t StateStartMs   = 3000;
 
 std::string upper(std::string_view s) {
   std::string r(s);
@@ -240,12 +243,13 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   const auto& args   = (argsIt!=msg.MemberEnd() && argsIt->value.IsObject()) ? argsIt->value : empty;
   Npc*        target = pl;
   if(auto t = JsonRead::str(args,"npc"); !t.empty()) {
-    target = npcBySymbol(world,t);
-    if(target==nullptr) {
+    target = AiNpc::findNpc(world,t,npc);
+    if(target==nullptr || target==npc) {
       reply(id,symbol,"rejected","target not found");
       return;
       }
     }
+  ScriptFn state;
 
   if(action=="say_svm") {
     std::string svm = upper(JsonRead::str(args,"svm"));
@@ -283,6 +287,24 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   else if(action=="turn_away") {
     npc->aiPush(AiQueue::aiTurnAway(target));
     }
+  else if(action=="fight" || action=="flee") {
+    // the game's own behaviour, the way B_Attack / B_Flee start it; the routine resumes afterwards
+    state = AiNpc::scriptState(world,action=="fight" ? "ZS_ATTACK" : "ZS_FLEE");
+    if(!state.isValid() || target->isDead()) {
+      reply(id,symbol,"rejected",state.isValid() ? "target is dead" : "the scripts have no such state");
+      return;
+      }
+    npc->setTarget(target);
+    npc->aiPush(AiQueue::aiStartState(state,0,target,nullptr,""));
+    }
+  else if(action=="draw_weapon") {
+    const auto kind = JsonRead::str(args,"kind");
+    npc->aiPush(kind=="ranged" ? AiQueue::aiReadyRangedWeapon()
+                               : (kind=="melee" ? AiQueue::aiReadyMeleeWeapon() : AiQueue::aiDrawWeapon()));
+    }
+  else if(action=="remove_weapon") {
+    npc->aiPush(AiQueue::aiRemoveWeapon());
+    }
   else {
     reply(id,symbol,"rejected","unknown action: " + std::string(action));
     return;
@@ -291,7 +313,8 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   // a newer action for the same npc replaces the tracking of the older one
   running.erase(std::remove_if(running.begin(),running.end(),[&](const Running& r){ return r.symbol==symbol; }),
                 running.end());
-  running.push_back({std::string(id),symbol,world.script().findSymbolIndex(symbol),world.tickCount()});
+  running.push_back({std::string(id),symbol,world.script().findSymbolIndex(symbol),world.tickCount(),
+                     state,false,state.isValid() ? StateMaxMs : ActMaxMs});
   reply(id,symbol,"queued","");
   }
 
@@ -300,8 +323,16 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
     auto& r   = running[i];
     Npc*  npc = world.findNpcByInstance(r.instance);
     const bool gone = npc==nullptr || npc->isDead() || npc->isDown() || !owner(r.symbol).empty();
-    const bool done = !gone && now>r.start+ActGraceMs && npc->isAiQueueEmpty();
-    const bool late = now>r.start+ActMaxMs;
+    bool       done = false;
+    if(!gone && r.state.isValid()) {
+      // a script state: done once the npc has entered it and left it again
+      const bool in = npc->isInState(r.state);
+      r.entered = r.entered || in;
+      done      = (r.entered && !in) || (!r.entered && now>r.start+StateStartMs);
+      } else {
+      done = !gone && now>r.start+ActGraceMs && npc->isAiQueueEmpty();
+      }
+    const bool late = now>r.start+r.maxMs;
     if(!gone && !done && !late) {
       ++i;
       continue;

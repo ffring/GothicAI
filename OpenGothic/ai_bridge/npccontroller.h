@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "game/constants.h"
+#include "game/gamescript.h"
 
 class Npc;
 class World;
@@ -58,6 +59,9 @@ class NpcController final {
       float           radius   = 0;     // success radius for movement, cm
       size_t          item     = 0;     // give_item: item instance and count
       size_t          count    = 0;
+      ScriptFn        state;            // fight/flee: the script state that runs it
+      const Npc*      targetNpc = nullptr; // fight/flee: exactly whom (symbols of monsters are shared)
+      bool            entered  = false; // the npc is in that state already
       };
 
     struct Follow final {
@@ -74,6 +78,7 @@ class NpcController final {
       std::optional<Action> act;
       std::optional<Follow> follow;
       uint64_t              nextSnapshot = 0;
+      bool                  scripted     = false; // handed to a script state (fight/flee) for now
       };
 
     Controlled* find(std::string_view symbol);
@@ -81,6 +86,10 @@ class NpcController final {
 
     bool startAction(World& world, Controlled& c, Action& a, const rapidjson::Value& args, std::string& err);
     void updateAction(World& world, Controlled& c, uint64_t now);
+    void updateStateAction(World& world, Controlled& c, uint64_t now);
+    bool startScriptState(World& world, Controlled& c, Action& a, std::string_view state, const rapidjson::Value& args,
+                          std::string& err);
+    void regainControl(Controlled& c);
     void updateFollow(World& world, Controlled& c, uint64_t now);
     void stopFollow(Controlled& c, std::string_view reason);
     bool giveItem(World& world, Controlled& c, const Action& a, std::string& err);

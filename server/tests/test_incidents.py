@@ -221,3 +221,13 @@ async def test_a_fight_ends_with_the_incident_and_the_old_intent_comes_back(tmp_
     finally:
         await link_cm.__aexit__(None, None, None)
     assert conv.intent.attitude == "friendly" and conv.intent.agenda == "wants the hero to see Hagen"
+
+
+async def test_fights_are_carried_out_only_when_threats_may_be_applied():
+    tracker = IncidentTracker()
+    inc = tracker.add(XARDAS, IncidentEvent("attacked", 1.0, "WOLF", "Волк"))
+    ctx = NpcContext(XARDAS, "Ксардас", -1, 300.0, True)
+    allowed = await Reflexes(FakeDecider("fight_back", 0.9), apply_threats=True).react(ctx, inc, None)
+    assert allowed is not None and allowed.applied and allowed.actions == [("fight", {"npc": "WOLF"})]
+    shadow = await Reflexes(FakeDecider("fight_back", 0.9)).react(ctx, inc, None)
+    assert shadow is not None and not shadow.applied and shadow.why == "shadow"

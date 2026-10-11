@@ -6,9 +6,10 @@ Two questions:
   menu is narrowed by the npc's intent (an npc that means to flee is not offered to fight);
 - `gesture` — the hero just spoke: a gesture in the pause before the npc answers, if any.
 
-Options the game cannot carry out for a controlled npc yet (fleeing, fighting) and threats in general
-are answered in *shadow*: traced, not applied, until the model is trained on them (docs/npc-agent.md).
-The code's own safety rule (incidents.py) covers the dangerous cases meanwhile.
+Fighting and fleeing are carried out by the game's own script states (the bridge hands the npc over
+and takes it back). Until the model is trained on threats they are answered in *shadow* — traced, not
+applied — unless `apply_threats` is set (docs/npc-agent.md). The code's own safety rule
+(incidents.py) covers the dangerous cases meanwhile.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ GESTURE = "The hero is talking to you. What gesture do you make while you think 
 class Option:
     text: str  # English, may use {other}, {target}
     actions: tuple[Action, ...] = ()  # may use "{other}" / "{target}" as npc ids
-    applied: bool = True  # False: decided in shadow only
+    threat: bool = False  # a fight or flight: applied only when the reflexes may (apply_threats)
     threshold: float = 0.5
     ru: str = ""  # what the body did, for the conversational model
 
@@ -49,9 +50,14 @@ REACT_OPTIONS: dict[str, Option] = {
     "run_to_helper": Option(
         "run to {target} for help", (("go_to_npc", {"npc": "{target}"}),), ru="ты бежишь за помощью"
     ),
-    "fight_back": Option("fight {other}", applied=False),
-    "flee": Option("run away from {other}", applied=False),
-    "back_away": Option("step back from {other}", applied=False),
+    "fight_back": Option("fight {other}", (("fight", {"npc": "{other}"}),), threat=True, ru="ты дерёшься"),
+    "flee": Option("run away from {other}", (("flee", {"npc": "{other}"}),), threat=True, ru="ты убегаешь"),
+    "back_away": Option(
+        "step back from {other}",
+        (("flee", {"npc": "{other}", "timeout_ms": 3000}),),
+        threat=True,
+        ru="ты отступил",
+    ),
 }
 GESTURE_OPTIONS: dict[str, Option] = {
     "none": Option("no gesture, just listen"),
@@ -118,8 +124,10 @@ class Reflexes:
         *,
         deadline_ms: int = 400,
         clock: Callable[[], float] = time.monotonic,
+        apply_threats: bool = False,
     ) -> None:
         self.decider = decider
+        self.apply_threats = apply_threats
         self.builder = builder or SituationBuilder()
         self.deadline_ms = deadline_ms
         self.clock = clock
@@ -203,7 +211,7 @@ class Reflexes:
             reaction.why = "unknown option"
         elif conf < opt.threshold:
             reaction.why = f"unsure ({conf:.2f} < {opt.threshold})"
-        elif not opt.applied:
+        elif opt.threat and not self.apply_threats:
             reaction.why = "shadow"
         else:
             reaction.actions = [

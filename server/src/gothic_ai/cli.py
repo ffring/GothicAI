@@ -240,7 +240,7 @@ async def serve(args: argparse.Namespace) -> int:
             budget=budget,
         )
         # npc's we control: the body's instant reactions (behavioral model) and words for incidents
-        reflexes = Reflexes(decider) if decider is not None else None
+        reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
         state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
@@ -711,6 +711,11 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
+    p.add_argument(
+        "--apply-threats",
+        action="store_true",
+        help="carry out the behavioral model's fights and flights (default: traced only until trained)",
+    )
     _add_voice_args(p)
     _add_llm_args(p)
 

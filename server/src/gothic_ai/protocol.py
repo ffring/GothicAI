@@ -340,6 +340,11 @@ ActionType = Literal[
     "follow",
     "give_item",
     "return_to_routine",
+    "fight",  # v6: the game's own combat (ZS_ATTACK) against args.npc, then control comes back
+    "flee",  # v6: the game's own fleeing (ZS_FLEE) from args.npc
+    "draw_weapon",  # v6: args.kind melee|ranged (default: what the npc has)
+    "remove_weapon",  # v6
+    "say_svm",  # v6: the npc's own recorded line, args.svm; args.overlay: said on the move
     "debug_add_item",  # game must run with -devmode
 ]
 
@@ -371,7 +376,18 @@ class ActionCmd(_Command):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
-NpcActType = Literal["say_svm", "turn_to", "look_at", "play_ani", "go_to_npc", "turn_away"]
+NpcActType = Literal[
+    "say_svm",
+    "turn_to",
+    "look_at",
+    "play_ani",
+    "go_to_npc",
+    "turn_away",
+    "fight",  # v6: ZS_ATTACK against args.npc; npc_idle when the npc leaves that state
+    "flee",  # v6: ZS_FLEE from args.npc
+    "draw_weapon",  # v6
+    "remove_weapon",  # v6
+]
 
 
 class NpcActCmd(_Command):

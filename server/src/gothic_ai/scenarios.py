@@ -20,6 +20,7 @@ from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider
 from .protocol import (
     ActionResult,
+    Detached,
     FollowEnded,
     GameMessage,
     LineStarted,
@@ -546,6 +547,58 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         if e
         else "failed (no threat event)"
     )
+
+    # 3. a free npc fights it with the game's own combat; npc_idle once it is over
+    idles: list[NpcIdle] = []
+    link.listeners.append(lambda m: idles.append(m) if isinstance(m, NpcIdle) else None)
+    started = time.monotonic()
+    act = await link.npc_act(npc, "fight", npc="WOLF")
+    for _ in range(300):
+        if any(i.act == act for i in idles):
+            break
+        await asyncio.sleep(0.2)
+    idle = next((i for i in idles if i.act == act), None)
+    took = time.monotonic() - started
+    ok = idle is not None and idle.reason == "done"
+    results["free_fight"] = (
+        f"{'done' if ok else 'failed'} ({idle.reason if idle else 'no npc_idle'}, {took:.1f} s)"
+    )
+
+    # 4. an attached npc: weapons, its own voiced line, and fight/flee handed to the scripts and back
+    detached: list[str] = []
+    link.listeners.append(lambda m: detached.append(m.reason) if isinstance(m, Detached) else None)
+    await attach_when_free(link, npc)
+
+    def wolves(sn: Snapshot) -> str:
+        return ", ".join(
+            f"{o.name} {o.distance / 100:.0f} m{' dead' if o.dead else ''}" for o in sn.nearby_npcs
+        )
+
+    results["after_free_fight"] = f"done (around: {wolves(await link.snapshot(npc, fresh=True)) or 'nobody'})"
+    for name, action, args in (
+        ("attached_draw", "draw_weapon", {}),
+        ("attached_remove", "remove_weapon", {}),
+        ("attached_svm", "say_svm", {"svm": "NOTNOW"}),
+    ):
+        res = await link.act(npc, action, **args)  # type: ignore[arg-type]
+        results[name] = f"{res.status} {res.detail or ''}".strip()
+    await link.debug("spawn", instance="WOLF", near=npc, distance=500)
+    started = time.monotonic()
+    res = await link.act(npc, "fight", npc="WOLF", timeout=90)
+    took = time.monotonic() - started
+    snap = await link.snapshot(npc, fresh=True)
+    results["attached_fight"] = (
+        f"{'done' if res.status == 'done' and not detached else 'failed'} "
+        f"({res.status} {res.detail or ''} in {took:.1f} s, still attached: {not detached}, "
+        f"hp {snap.npc.hp}/{snap.npc.hp_max}, around: {wolves(snap)})"
+    )
+    await link.debug("spawn", instance="WOLF", near=npc, distance=800)
+    res = await link.act(npc, "flee", npc="WOLF", timeout_ms=4000)
+    results["attached_flee"] = (
+        f"{'done' if res.status in ('done', 'timeout') and not detached else 'failed'} "
+        f"({res.status} {res.detail or ''}, still attached: {not detached})"
+    )
+    await link.act(npc, "return_to_routine")
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
     return results
