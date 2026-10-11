@@ -1,0 +1,77 @@
+import asyncio
+import base64
+import io
+import json
+import wave
+from contextlib import asynccontextmanager
+
+from websockets.asyncio.server import serve
+
+from gothic_ai import dialogue as dialogue_mod
+from gothic_ai.dialogue import DialogueManager
+from gothic_ai.llm import ToolCall
+from gothic_ai.llm.fake import FakeBackend
+from gothic_ai.persona import PersonaProvider
+from gothic_ai.tts import TtsClient
+from tests.fake_game import FakeGame, connected
+from tests.test_dialogue import XARDAS, _until
+
+
+@asynccontextmanager
+async def fake_tts(delay: float = 0.0):
+    """TTS service stand-in: 50 ms of audio per character, the first line slower than the rest."""
+    requests: list[dict] = []
+
+    async def handler(ws) -> None:
+        async for raw in ws:
+            msg = json.loads(raw)
+            requests.append(msg)
+            await asyncio.sleep(delay if len(requests) == 1 else 0)
+            await ws.send(
+                json.dumps({"type": "start", "id": msg["id"], "sample_rate": 16000, "provider": "fake"})
+            )
+            await ws.send(b"\0\1" * (800 * len(msg["text"])))
+            await ws.send(json.dumps({"type": "done", "id": msg["id"], "audio_s": 0.05 * len(msg["text"])}))
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        yield f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}", requests
+
+
+async def test_lines_are_voiced_in_order_and_actions_wait_for_them():
+    fake = FakeGame()
+    llm = FakeBackend(
+        "Держи, это поможет тебе. Береги его, другого не будет.",
+        delay=0,
+        tool_calls=[ToolCall("give_item", {"item": "ITPO_HEALTH_01", "count": 1})],
+    )
+    async with fake_tts(delay=0.3) as (url, requests), connected(fake) as link:
+        await link.attach(XARDAS)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient(url), greet=False)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай зелье")
+        await _until(lambda: any(m["type"] == "action" for m in fake.received))
+
+    assert fake.said == ["Держи, это поможет тебе.", "Береги его, другого не будет."]
+    assert fake.voiced == [True, True]
+    kinds = [m["type"] for m in fake.received if m["type"] in ("say", "action")]
+    assert kinds == ["say", "say", "action"]  # the slow first voice did not let the action jump ahead
+    assert requests[0]["voice"]["id"] == XARDAS and "old man" in requests[0]["voice"]["description"]
+
+    say = next(m for m in fake.received if m["type"] == "say")
+    with wave.open(io.BytesIO(base64.b64decode(say["audio"]))) as w:
+        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (16000, 1, 2)
+        assert w.getnframes() == 800 * len(say["text"])
+
+
+async def test_without_a_tts_service_lines_go_out_silent(monkeypatch):
+    monkeypatch.setattr(dialogue_mod, "TTS_TIMEOUT", 1.0)
+    fake = FakeGame()
+    llm = FakeBackend("Ты наконец вернулся из храма. Хорошо, теперь слушай меня внимательно.", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, llm, PersonaProvider(None), tts=TtsClient("ws://127.0.0.1:9"), greet=False
+        )
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Привет")
+        await _until(lambda: len(fake.said) == 2)
+    assert fake.voiced == [False, False]

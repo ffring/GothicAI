@@ -11,6 +11,7 @@
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
 | `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, память, голосовой ввод, адаптер LLM, сценарии |
 | `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере, подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на dev-ubuntu |
+| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на dev-ubuntu |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
@@ -53,7 +54,19 @@ cd asr-service && uv run gothic-asr serve
 cd asr-service && uv run gothic-asr transcribe tests/audio/*.wav --provider voxtral --fallback none --realtime
 ```
 
-ИИ-сервер. Ждёт игру на `ws://127.0.0.1:47817` и принимает команды из консоли: `attach`, `goto`, `come`, `ani`, `talk <текст>`, `memory`, `routine`, … Бэкенд LLM выбирается флагом `--llm chatgpt|openai|local|fake`, модель — `--model`. Память NPC хранится в `~/.local/share/gothic-ai/memory.sqlite3` по веткам сохранений; голос пишется с микрофона Mac (`--no-voice` выключает).
+TTS-сервис (голоса NPC) сам моделей не запускает. По умолчанию он берёт VoxCPM2 на dev-ubuntu. Голос каждого NPC создаётся один раз по текстовому описанию из персоны, это не клон актёра. Если сервис недоступен, NPC говорят только субтитрами.
+
+```bash
+cd tts-service && uv run gothic-tts serve
+```
+
+Послушать и замерить (`--out` сохраняет последнюю реплику в WAV):
+
+```bash
+cd tts-service && uv run gothic-tts say "Драконы уже здесь." --voice-id xardas --voice "An old man with a deep calm voice" --out /tmp/x.wav
+```
+
+ИИ-сервер. Ждёт игру на `ws://127.0.0.1:47817` и принимает команды из консоли: `attach`, `goto`, `come`, `ani`, `talk <текст>`, `memory`, `routine`, … Бэкенд LLM выбирается флагом `--llm chatgpt|openai|local|fake`, модель — `--model`. Память NPC хранится в `~/.local/share/gothic-ai/memory.sqlite3` по веткам сохранений; голос пишется с микрофона Mac (`--no-voice` выключает). NPC говорят вслух через TTS-сервис (`--no-tts` оставляет только субтитры).
 
 ```bash
 cd server && uv run gothic-ai serve
@@ -79,6 +92,10 @@ cd server && uv run pytest
 
 ```bash
 cd asr-service && uv run pytest
+```
+
+```bash
+cd tts-service && uv run pytest
 ```
 
 ```bash

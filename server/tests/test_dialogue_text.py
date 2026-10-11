@@ -70,3 +70,18 @@ def test_persona_prompt_contains_samples_and_is_deterministic():
     a = render_instructions("NONE_100_XARDAS", "Ксардас", samples)
     assert a == render_instructions("NONE_100_XARDAS", "Ксардас", samples)
     assert "некромант" in a and samples[0] in a
+
+
+def test_first_line_can_go_out_alone():
+    text = "Ты вернулся. Хорошо. Времени у нас мало, так что слушай внимательно. Драконы уже здесь."
+    default = SentenceSplitter()
+    assert default.feed(text + " ") == [
+        "Ты вернулся. Хорошо. Времени у нас мало, так что слушай внимательно."
+    ]
+    voiced = SentenceSplitter(first_min_len=1)
+    lines = voiced.feed(text + " ") + voiced.flush()
+    assert lines == [
+        "Ты вернулся.",
+        "Хорошо. Времени у нас мало, так что слушай внимательно.",
+        "Драконы уже здесь.",
+    ]

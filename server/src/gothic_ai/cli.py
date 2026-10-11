@@ -31,6 +31,7 @@ from .protocol import (
     Saved,
     Session,
 )
+from .tts import DEFAULT_TTS_URL, TtsClient
 from .voice import DEFAULT_ASR_URL, AsrClient, AudioSource, Microphone, VoiceError, VoiceInput, WavSource
 
 log = logging.getLogger("gothic_ai")
@@ -171,14 +172,16 @@ async def serve(args: argparse.Namespace) -> int:
     memory = MemoryStore(args.memory_db)
     asr = None if args.no_voice else AsrClient(args.asr_url)
     source = None if args.no_voice else _audio_source(args)
+    tts = None if args.no_tts else TtsClient(args.tts_url)
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
+    log.info("npc voices: %s", "off" if tts is None else args.tts_url)
 
     async def on_link(link: GameLink) -> None:
         nonlocal exit_code
         link.listeners.append(print_event)
-        state.dialogue = DialogueManager(link, llm, personas, memory=memory, greet=not args.no_greet)
+        state.dialogue = DialogueManager(link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet)
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
         if args.scenario is None:
@@ -201,6 +204,11 @@ async def serve(args: argparse.Namespace) -> int:
             elif args.scenario == "m1":
                 lines = await scenarios.m1_chat(link, state.dialogue, args.npc)
                 log.info("scenario m1: npc spoke %d line(s)", len(lines))
+            elif args.scenario == "tts":
+                results = await scenarios.tts_lines(link, state.dialogue, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario tts: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "m3":
                 results = await scenarios.m3_memory_voice(link, state.dialogue, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -223,6 +231,8 @@ async def serve(args: argparse.Namespace) -> int:
     await llm.aclose()
     if asr is not None:
         await asr.aclose()
+    if tts is not None:
+        await tts.aclose()
     memory.close()
     for task in finished:
         if not task.cancelled() and (err := task.exception()) is not None:
@@ -357,13 +367,17 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
-        "--scenario", choices=["m0", "m1", "m2", "m3"], help="run a scripted check when the game connects"
+        "--scenario",
+        choices=["m0", "m1", "m2", "m3", "tts"],
+        help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
     p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
     p.add_argument("--memory-db", default=str(DEFAULT_MEMORY_DB), help="SQLite file with npc memories")
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
+    p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
+    p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
     _add_voice_args(p)
     _add_llm_args(p)
 

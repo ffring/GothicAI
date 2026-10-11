@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import itertools
 import logging
 import re
@@ -31,10 +32,13 @@ from .protocol import (
     Session,
     Snapshot,
 )
+from .tts import TtsClient, TtsError
 
 log = logging.getLogger(__name__)
 
 GREETING_CUE = "[Герой подходит к тебе и хочет поговорить.]"
+TTS_TIMEOUT = 8.0  # per line; then it goes out silent
+TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
 
@@ -75,11 +79,14 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"»)]*\s+")
 
 
 class SentenceSplitter:
-    """Cuts streamed text into subtitle lines: whole sentences, merged if short, split if too long."""
+    """Cuts streamed text into subtitle lines: whole sentences, merged if short, split if too long.
+    `first_min_len` lets the first line go out sooner (with TTS it is voiced before it is heard)."""
 
-    def __init__(self, min_len: int = 24, max_len: int = 200) -> None:
+    def __init__(self, min_len: int = 24, max_len: int = 200, first_min_len: int | None = None) -> None:
         self.min_len = min_len
         self.max_len = max_len
+        self.first_min_len = min_len if first_min_len is None else first_min_len
+        self._emitted = False
         self._buf = ""
 
     def feed(self, text: str) -> list[str]:
@@ -90,10 +97,11 @@ class SentenceSplitter:
         for m in _SENTENCE_END.finditer(self._buf):
             pending += self._buf[start : m.end()]
             start = m.end()
-            if len(pending.strip()) >= self.min_len:
+            if len(pending.strip()) >= (self.min_len if self._emitted or out else self.first_min_len):
                 out.extend(self._limit(pending))
                 pending = ""
         self._buf = pending + self._buf[start:]
+        self._emitted = self._emitted or bool(out)
         return out
 
     def flush(self) -> list[str]:
@@ -136,6 +144,9 @@ class Conversation:
     actions: set[asyncio.Task[None]] = field(default_factory=set)
     new_meeting: bool = True  # the next reply starts a new meeting (noted in memory)
     compacting: asyncio.Task[None] | None = None
+    # lines waiting for their audio, sent to the game strictly in order (with tts)
+    voice: asyncio.Queue[tuple[str, str]] | None = None
+    voicing: asyncio.Task[None] | None = None
 
     @property
     def history(self) -> list[Message]:
@@ -148,7 +159,7 @@ class Conversation:
         return msgs
 
     def tasks(self) -> list[asyncio.Task[None]]:
-        return [t for t in (self.reply, self.compacting, *self.actions) if t is not None]
+        return [t for t in (self.reply, self.compacting, self.voicing, *self.actions) if t is not None]
 
 
 class DialogueManager:
@@ -165,6 +176,7 @@ class DialogueManager:
         personas: PersonaProvider,
         *,
         memory: MemoryStore | None = None,
+        tts: TtsClient | None = None,
         greet: bool = True,
         tools: bool = True,
     ) -> None:
@@ -172,6 +184,8 @@ class DialogueManager:
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
+        self.tts = tts
+        self._tts_paused_until = 0.0
         self.greet = greet
         self.tools = npc_tools.TOOLS if tools else []
         self.branch: str | None = None
@@ -317,6 +331,10 @@ class DialogueManager:
 
     def _start_reply(self, conv: Conversation, user_text: str) -> asyncio.Task[None]:
         self._cancel(conv)
+        if conv.voice is not None:  # lines of the interrupted reply that were not voiced yet
+            while not conv.voice.empty():
+                conv.voice.get_nowait()
+                conv.voice.task_done()
         conv.reply = asyncio.create_task(self._reply(conv, user_text))
         return conv.reply
 
@@ -331,7 +349,48 @@ class DialogueManager:
         conv.last_lines.append(line)
         self._lines[line] = (text, None)
         log.info("%s: %s", conv.persona.name, text)
-        await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
+        if self.tts is None:
+            await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
+            return
+        if conv.voice is None:
+            conv.voice = asyncio.Queue()
+            conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
+        conv.voice.put_nowait((line, text))
+
+    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str]]) -> None:
+        """Gives each line its audio and sends it, in order. Without audio the line still goes out."""
+        assert self.tts is not None
+        while True:
+            line, text = await queue.get()
+            try:
+                audio = None
+                if time.monotonic() >= self._tts_paused_until:
+                    try:
+                        speech = await asyncio.wait_for(
+                            self.tts.speak(text, conv.npc, conv.persona.voice), TTS_TIMEOUT
+                        )
+                        audio = base64.b64encode(speech.wav).decode()
+                        log.info(
+                            "%s voice %s: %.2fs of audio in %.2fs (%s)",
+                            conv.npc,
+                            line,
+                            speech.audio_s,
+                            speech.latency_s,
+                            speech.provider,
+                        )
+                    except (TtsError, TimeoutError) as err:
+                        self._tts_paused_until = time.monotonic() + TTS_PAUSE
+                        log.warning(
+                            "%s: no voice, subtitles only for %.0fs: %s",
+                            conv.npc,
+                            TTS_PAUSE,
+                            err or "timeout",
+                        )
+                await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, audio=audio))
+            except GameError:
+                pass
+            finally:
+                queue.task_done()
 
     def _commit(self, conv: Conversation, user: Message, text: str) -> None:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here
@@ -353,6 +412,8 @@ class DialogueManager:
         reply = conv.reply
 
         async def run() -> None:
+            if conv.voice is not None:
+                await conv.voice.join()  # the npc says what it said before acting on it
             outcome = await npc_tools.execute(self.link, conv.npc, call, snapshot)
             if reply is not None and not reply.done():
                 await asyncio.wait({reply})  # the note goes after this turn's reply in the history
@@ -386,7 +447,8 @@ class DialogueManager:
         messages = [*conv.history, situation, user]
         conv.last_lines = []
         await self._status(conv, "thinking")
-        splitter = SentenceSplitter()
+        # voiced, the first line is synthesized whole before it is heard: keep it short
+        splitter = SentenceSplitter(first_min_len=1 if self.tts is not None else None)
         started = time.monotonic()
         first_delta: float | None = None
         first_line: float | None = None

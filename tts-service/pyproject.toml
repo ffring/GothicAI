@@ -1,0 +1,45 @@
+[project]
+name = "gothic-tts"
+version = "0.1.0"
+description = "Text-to-speech service with swappable providers (self-hosted VoxCPM2, APIs)"
+authors = [
+    { name = "Kaifat", email = "11953142+kaifaty@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "websockets>=17.2",
+]
+
+[project.scripts]
+gothic-tts = "gothic_tts.cli:main"
+
+[project.optional-dependencies]
+codex = [
+    "aiortc>=1.15.0",
+]
+
+[tool.uv.build-backend]
+module-name = "gothic_tts"
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

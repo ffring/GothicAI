@@ -1,0 +1,11 @@
+[Unit]
+Description=Gothic AI: VoxCPM2 TTS (ws://127.0.0.1:47831)
+After=network-online.target
+
+[Service]
+ExecStart=%h/gothic-ai/voxcpm/run.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

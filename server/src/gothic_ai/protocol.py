@@ -221,11 +221,12 @@ class PttCancel(_GameMessage):
 
 
 class LineStarted(_GameMessage):
-    """The npc started speaking a line sent with `say`."""
+    """The npc started speaking a line sent with `say` (`voiced`: aloud, with its audio)."""
 
     type: Literal["line_started"]
     npc: str
     line: str
+    voiced: bool = False
 
 
 GameMessage = Annotated[
@@ -314,12 +315,14 @@ class PingCmd(_Command):
 
 
 class SayCmd(_Command):
-    """One line (usually a sentence) for the npc to speak; shown as a subtitle."""
+    """One line (usually a sentence) for the npc to speak; shown as a subtitle. With `audio`
+    (base64 of a 16-bit mono WAV file) the npc says it aloud and the line lasts as long as the audio."""
 
     type: Literal["say"] = "say"
     npc: str
     line: str
     text: str
+    audio: str | None = None
 
 
 ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # notice: detail shown as is

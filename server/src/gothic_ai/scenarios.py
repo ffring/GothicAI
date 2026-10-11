@@ -186,6 +186,37 @@ async def m2_actions(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     return results
 
 
+async def tts_lines(
+    link: GameLink, dialogue: DialogueManager, npc: str = "NONE_100_XARDAS"
+) -> dict[str, str]:
+    """TTS check: every line of a reply reaches the game with its audio and is spoken aloud."""
+    await link.wait_world()
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc)
+    conv = dialogue.open(npc, snap.npc.name)
+    voiced: dict[str, bool] = {}
+    link.listeners.append(
+        lambda m: voiced.__setitem__(m.line, m.voiced) if isinstance(m, LineStarted) else None
+    )
+    started = asyncio.get_running_loop().time()
+    await dialogue.say_as_player(npc, "Расскажи о драконах.")
+    lines = list(conv.last_lines)
+    for _ in range(240):  # each line is voiced, then spoken for as long as its audio lasts
+        if lines and all(line in voiced for line in lines):
+            break
+        await asyncio.sleep(0.25)
+    first = asyncio.get_running_loop().time() - started
+    await asyncio.sleep(3)  # let the last line play
+    await link.act(npc, "return_to_routine")
+    ok = bool(lines) and all(voiced.get(line) for line in lines)
+    aloud = sum(voiced.get(line, False) for line in lines)
+    results = {"voice": f"{'done' if ok else 'failed'} ({aloud}/{len(lines)} voiced)"}
+    results["timing"] = f"done (all lines started within {first:.1f}s)"
+    for name, outcome in results.items():
+        log.info("%-10s %s", name, outcome)
+    return results
+
+
 async def m3_memory_voice(
     link: GameLink,
     dialogue: DialogueManager,
