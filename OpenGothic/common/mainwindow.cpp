@@ -1243,6 +1243,15 @@ void MainWindow::render(){
     const uint64_t dt = tick();
     updateAnimation(dt);
     tickCamera(dt);
+    { // LOCAL TEST HARNESS
+      std::string footIkTestTick(uint64_t);
+      const auto shot = footIkTestTick(dt);
+      if(!shot.empty()) {
+        auto tex = renderer.screenshoot(cmdId);
+        auto pm  = device.readPixels(textureCast<const Texture2d&>(tex));
+        pm.save(shot.c_str());
+        }
+      }
 
     auto& sync = fence[cmdId];
     if(!sync.wait(0)) {
