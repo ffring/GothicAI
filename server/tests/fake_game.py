@@ -44,15 +44,33 @@ class FakeGame:
                 "action": None,
                 "waypoint": "NW_XARDAS_TOWER_IN1_31",
                 "nearest_waypoint": "NW_XARDAS_TOWER_IN1_31",
+                "following": False,
+                "inventory": [
+                    {"item": "ITPO_HEALTH_01", "name": "Эликсир лечения", "count": 3, "equipped": False},
+                    {"item": "ITMW_ZWEIHAENDER1", "name": "Двуручник", "count": 1, "equipped": True},
+                ],
             },
-            "player": {"name": "Я", "pos": [100.0, 2.0, 3.0], "distance": 99.0},
+            "player": {
+                "name": "Я",
+                "pos": [100.0, 2.0, 3.0],
+                "distance": 99.0,
+                "guild": 0,
+                "hp": 40,
+                "hp_max": 40,
+                "armor": None,
+                "melee": "Палка",
+                "ranged": None,
+            },
+            "nearby_npcs": [
+                {"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}
+            ],
             "nearby_waypoints": [{"name": n, "distance": d} for n, d in WAYPOINTS.items()],
         }
 
     async def run(self, url: str) -> None:
         async with connect(url) as ws:
             self.ws = ws
-            await self.send(type="hello", protocol=2, client="fake", codepage="cp1251")
+            await self.send(type="hello", protocol=3, client="fake", codepage="cp1251")
             await self.send(type="world_loaded", world="NEWWORLD.ZEN")
             async for raw in ws:
                 msg = json.loads(raw)

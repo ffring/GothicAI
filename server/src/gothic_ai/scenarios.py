@@ -8,7 +8,11 @@ from dataclasses import dataclass
 
 from .dialogue import DialogueManager
 from .game import GameError, GameLink
-from .protocol import ActionResult, LineStarted
+from .llm import ToolCall
+from .llm.fake import FakeBackend
+from .npc_tools import GESTURES as NPC_GESTURES
+from .persona import PersonaProvider
+from .protocol import ActionResult, FollowEnded, LineStarted, Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -95,3 +99,69 @@ async def m1_chat(
     if not lines or missing:
         raise RuntimeError(f"npc did not speak lines: {missing or 'no lines generated'}")
     return lines
+
+
+async def m2_actions(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, str]:
+    """M2 check of the game-side actions: snapshot contents, give_item, follow/stop, gestures."""
+    await link.wait_world()
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc)
+    log.info("inventory of %s: %s", npc, [(i.item, i.name, i.count, i.equipped) for i in snap.npc.inventory])
+    if snap.player is not None:
+        p = snap.player
+        log.info(
+            "player: guild=%s armor=%s melee=%s ranged=%s hp=%s/%s",
+            p.guild,
+            p.armor,
+            p.melee,
+            p.ranged,
+            p.hp,
+            p.hp_max,
+        )
+    log.info("nearby npcs: %s", [(o.id, o.name, round(o.distance)) for o in snap.nearby_npcs])
+
+    results: dict[str, str] = {}
+    potion = "ITPO_HEALTH_01"
+    results["debug_add_item"] = (await link.act(npc, "debug_add_item", item=potion, count=2)).status
+
+    def count_of(s: Snapshot) -> int:
+        return next((i.count for i in s.npc.inventory if i.item == potion), 0)
+
+    # the whole path: the model speaks and calls give_item, the game transfers, the outcome becomes a note
+    llm = FakeBackend(
+        "Держи, это поможет тебе.", delay=0, tool_calls=[ToolCall("give_item", {"item": potion, "count": 1})]
+    )
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+    conv = dialogue.open(npc, snap.npc.name)
+    before = count_of(await link.snapshot(npc, fresh=True))
+    await dialogue.say_as_player(npc, "Дай зелье")
+    for _ in range(60):
+        if any(m.role == "developer" for m in conv.history):
+            break
+        await asyncio.sleep(0.5)
+    after = count_of(await link.snapshot(npc, fresh=True))
+    note = next((m.content for m in conv.history if m.role == "developer"), "no note")
+    results["give_item"] = (
+        f"{'done' if after == before - 1 else 'failed'} ({potion}: {before} -> {after}, {note})"
+    )
+
+    res = await link.act(npc, "give_item", item="ITMI_NOT_A_REAL_ITEM", count=1)
+    results["give_item_missing"] = res.status
+
+    ended: list[str] = []
+    link.listeners.append(lambda m: ended.append(m.reason) if isinstance(m, FollowEnded) else None)
+    res = await link.act(npc, "follow", npc="PLAYER")
+    following = (await link.snapshot(npc, fresh=True)).npc.following
+    results["follow"] = f"{res.status}, following={following}"
+    await asyncio.sleep(2)
+    res = await link.act(npc, "stop")
+    await asyncio.sleep(0.5)
+    results["stop"] = f"{res.status}, follow_ended={ended}"
+
+    for gesture, anim in NPC_GESTURES.items():
+        results[f"gesture {gesture}"] = (await link.act(npc, "play_ani", name=anim)).status
+
+    await link.act(npc, "return_to_routine")
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
+    return results

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from .base import Done, LLMBackend, LLMError, LLMEvent, Message, TextDelta
+from .base import Done, LLMBackend, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall
 from .fake import FakeBackend
 from .openai_compat import OpenAICompatBackend
 from .openai_responses import OpenAIResponsesBackend
@@ -13,7 +13,18 @@ from .siwc import ChatGPTAuth
 BACKENDS = ("chatgpt", "openai", "local", "fake")
 DEFAULT_MODELS = {"chatgpt": "gpt-6.1-sol", "openai": "gpt-6.1-sol", "local": "qwen3:8b", "fake": "fake"}
 
-__all__ = ["BACKENDS", "Done", "LLMBackend", "LLMError", "LLMEvent", "Message", "TextDelta", "make_backend"]
+__all__ = [
+    "BACKENDS",
+    "Done",
+    "LLMBackend",
+    "LLMError",
+    "LLMEvent",
+    "Message",
+    "TextDelta",
+    "Tool",
+    "ToolCall",
+    "make_backend",
+]
 
 
 def make_backend(

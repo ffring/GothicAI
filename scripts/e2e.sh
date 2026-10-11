@@ -45,7 +45,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|ERROR" "$LOG_DIR/server.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

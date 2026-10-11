@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # --- game -> server -----------------------------------------------------------
 
@@ -76,6 +76,13 @@ class WorldInfo(_GameMessage):
     minute: int
 
 
+class InventoryItem(_GameMessage):
+    item: str  # script symbol, e.g. ITMW_1H_BAU_MACE
+    name: str
+    count: int
+    equipped: bool = False
+
+
 class NpcState(_GameMessage):
     id: str
     name: str
@@ -85,14 +92,30 @@ class NpcState(_GameMessage):
     hp_max: int
     busy: bool
     action: str | None = None
+    following: bool = False
     waypoint: str | None = None
     nearest_waypoint: str | None = None
+    inventory: list[InventoryItem] = Field(default_factory=list)
 
 
 class PlayerState(_GameMessage):
     name: str
     pos: tuple[float, float, float]
     distance: float
+    guild: int = 0
+    hp: int | None = None
+    hp_max: int | None = None
+    armor: str | None = None
+    melee: str | None = None
+    ranged: str | None = None
+
+
+class NearbyNpc(_GameMessage):
+    id: str
+    name: str
+    distance: float
+    guild: int = 0
+    dead: bool = False
 
 
 class WaypointRef(_GameMessage):
@@ -107,6 +130,7 @@ class Snapshot(_GameMessage):
     npc: NpcState
     player: PlayerState | None = None
     nearby_waypoints: list[WaypointRef] = Field(default_factory=list)
+    nearby_npcs: list[NearbyNpc] = Field(default_factory=list)
 
 
 class Perception(_GameMessage):
@@ -144,6 +168,16 @@ class ChatClose(_GameMessage):
     npc: str
 
 
+class FollowEnded(_GameMessage):
+    """The npc stopped following: `stopped`/`replaced` by a command, or on its own
+    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine
+    unless the chat is open."""
+
+    type: Literal["follow_ended"]
+    npc: str
+    reason: str
+
+
 class LineStarted(_GameMessage):
     """The npc started speaking a line sent with `say`."""
 
@@ -166,6 +200,7 @@ GameMessage = Annotated[
     | ChatOpen
     | PlayerText
     | ChatClose
+    | FollowEnded
     | LineStarted,
     Field(discriminator="type"),
 ]
@@ -181,7 +216,16 @@ def parse_game_message(raw: str | bytes) -> GameMessage:
 # --- server -> game -----------------------------------------------------------
 
 ActionType = Literal[
-    "go_to_waypoint", "go_to_npc", "turn_to", "play_ani", "wait", "stop", "return_to_routine"
+    "go_to_waypoint",
+    "go_to_npc",
+    "turn_to",
+    "play_ani",
+    "wait",
+    "stop",
+    "follow",
+    "give_item",
+    "return_to_routine",
+    "debug_add_item",  # game must run with -devmode
 ]
 
 
@@ -239,3 +283,10 @@ class ChatStatusCmd(_Command):
     npc: str
     status: ChatStatus
     detail: str | None = None
+
+
+class ChatEndCmd(_Command):
+    """The npc ends the conversation: the game closes the chat and releases the npc (unless it follows)."""
+
+    type: Literal["chat_end"] = "chat_end"
+    npc: str

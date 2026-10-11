@@ -22,3 +22,8 @@ data/
 
 # OS
 .DS_Store
+
+# OpenGothic runtime files (written to the directory the game was started from)
+Gothic.ini
+log.txt
+*.sav

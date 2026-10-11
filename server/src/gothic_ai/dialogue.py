@@ -1,4 +1,4 @@
-"""Free-form conversation with an npc: player text in, npc lines (sentence by sentence) out."""
+"""Free-form conversation with an npc: player text in, npc lines (sentence by sentence) and actions out."""
 
 from __future__ import annotations
 
@@ -9,10 +9,21 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from . import npc_tools
 from .game import GameLink
-from .llm import LLMBackend, LLMError, Message, TextDelta
+from .llm import LLMBackend, LLMError, Message, TextDelta, ToolCall
 from .persona import Persona, PersonaProvider
-from .protocol import ChatClose, ChatOpen, ChatStatus, ChatStatusCmd, GameMessage, PlayerText, SayCmd
+from .protocol import (
+    ChatClose,
+    ChatEndCmd,
+    ChatOpen,
+    ChatStatus,
+    ChatStatusCmd,
+    GameMessage,
+    LineStarted,
+    PlayerText,
+    SayCmd,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +48,11 @@ def to_game_text(text: str) -> str:
         except UnicodeEncodeError:
             out.append(" ")
     return _SPACES.sub(" ", "".join(out)).strip()
+
+
+def line_duration(text: str) -> float:
+    """Seconds the game gives a line (mirrors LineLibrary::durationFor in ai_bridge)."""
+    return min(max(0.8 + 0.065 * len(text.encode("cp1251", "replace")), 1.5), 12.0)
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"»)]*\s+")
@@ -93,20 +109,29 @@ class Conversation:
     history: list[Message] = field(default_factory=list)
     reply: asyncio.Task[None] | None = None
     last_lines: list[str] = field(default_factory=list)  # line ids of the latest reply
+    actions: set[asyncio.Task[None]] = field(default_factory=set)
 
 
 class DialogueManager:
     """Reacts to chat messages from the game. One reply in flight per npc; new player text interrupts it."""
 
     def __init__(
-        self, link: GameLink, llm: LLMBackend, personas: PersonaProvider, *, greet: bool = True
+        self,
+        link: GameLink,
+        llm: LLMBackend,
+        personas: PersonaProvider,
+        *,
+        greet: bool = True,
+        tools: bool = True,
     ) -> None:
         self.link = link
         self.llm = llm
         self.personas = personas
         self.greet = greet
+        self.tools = npc_tools.TOOLS if tools else []
         self.conversations: dict[str, Conversation] = {}
         self._line_ids = itertools.count(1)
+        self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
         link.listeners.append(self._on_message)
 
     def _on_message(self, msg: GameMessage) -> None:
@@ -124,6 +149,9 @@ class DialogueManager:
             case ChatClose():
                 if conv := self.conversations.get(msg.npc.upper()):
                     self._cancel(conv)
+            case LineStarted():
+                if msg.line in self._lines:
+                    self._lines[msg.line] = (self._lines[msg.line][0], time.monotonic())
 
     def open(self, npc: str, name: str) -> Conversation:
         npc = npc.upper()
@@ -155,10 +183,13 @@ class DialogueManager:
 
     async def _say(self, conv: Conversation, text: str) -> None:
         text = to_game_text(text)
-        if text:
-            line = f"AIB_{next(self._line_ids)}"
-            conv.last_lines.append(line)
-            await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
+        if not text:
+            return
+        line = f"AIB_{next(self._line_ids)}"
+        conv.last_lines.append(line)
+        self._lines[line] = (text, None)
+        log.info("%s: %s", conv.persona.name, text)
+        await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
 
     def _commit(self, conv: Conversation, user: Message, text: str) -> None:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here
@@ -166,9 +197,45 @@ class DialogueManager:
             conv.history += [user, Message("assistant", text)]
             del conv.history[:-MAX_HISTORY]
 
+    def _note(self, conv: Conversation, note: str) -> None:
+        if note:
+            log.info("%s note: %s", conv.npc, note)
+            conv.history.append(Message("developer", f"[{note}]"))
+
+    def _act(self, conv: Conversation, call: ToolCall) -> None:
+        """Run a tool call next to the speech; its outcome lands in the history as a note."""
+        log.info("%s calls %s %s", conv.npc, call.name, call.arguments)
+        snapshot = self.link.snapshots.get(conv.npc)
+
+        reply = conv.reply
+
+        async def run() -> None:
+            outcome = await npc_tools.execute(self.link, conv.npc, call, snapshot)
+            if reply is not None and not reply.done():
+                await asyncio.wait({reply})  # the note goes after this turn's reply in the history
+            self._note(conv, outcome.note)
+
+        task = asyncio.create_task(run())
+        conv.actions.add(task)
+        task.add_done_callback(conv.actions.discard)
+
+    async def _end_after_speech(self, conv: Conversation, lines: list[str]) -> None:
+        """Close the chat only once the npc has said its goodbye (closing clears its speech queue)."""
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            started = [self._lines.get(line, ("", None)) for line in lines]
+            if all(at is not None for _, at in started):
+                last_text, last_at = started[-1] if started else ("", time.monotonic())
+                await asyncio.sleep(max(0.0, (last_at or 0) + line_duration(last_text) - time.monotonic()))
+                break
+            await asyncio.sleep(0.2)
+        self._note(conv, "Ты закончил разговор")
+        await self.link.send(ChatEndCmd(npc=conv.npc))
+
     async def _reply(self, conv: Conversation, user_text: str) -> None:
         user = Message("user", user_text)
-        messages = [*conv.history, user]
+        situation = Message("developer", npc_tools.render_situation(self.link.snapshots.get(conv.npc)))
+        messages = [*conv.history, situation, user]
         conv.last_lines = []
         await self._status(conv, "thinking")
         splitter = SentenceSplitter()
@@ -176,8 +243,17 @@ class DialogueManager:
         first_delta: float | None = None
         first_line: float | None = None
         text = ""
+        end_requested = False
         try:
-            async for event in self.llm.stream(instructions=conv.persona.instructions, messages=messages):
+            async for event in self.llm.stream(
+                instructions=conv.persona.instructions, messages=messages, tools=self.tools
+            ):
+                if isinstance(event, ToolCall):
+                    if event.name == npc_tools.END_CONVERSATION:
+                        end_requested = True
+                    else:
+                        self._act(conv, event)
+                    continue
                 if not isinstance(event, TextDelta):
                     continue
                 if first_delta is None:
@@ -209,3 +285,7 @@ class DialogueManager:
             time.monotonic() - started,
         )
         await self._status(conv, "idle")
+        if end_requested:
+            task = asyncio.create_task(self._end_after_speech(conv, list(conv.last_lines)))
+            conv.actions.add(task)
+            task.add_done_callback(conv.actions.discard)

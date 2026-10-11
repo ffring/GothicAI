@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 
 from gothic_ai import scenarios
 from gothic_ai.dialogue import GREETING_CUE, DialogueManager
-from gothic_ai.llm import LLMError, LLMEvent, Message
+from gothic_ai.llm import LLMError, LLMEvent, Message, ToolCall
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.persona import PersonaProvider
 from tests.fake_game import FakeGame, connected
@@ -33,8 +33,10 @@ async def test_chat_open_greets_and_player_text_gets_a_reply():
     assert [m.role for m in history] == ["user", "assistant", "user", "assistant"]
     assert history[0].content == GREETING_CUE and history[2].content == "Где я?"
     # the llm saw the whole conversation and the persona
-    instructions, messages = llm.calls[-1]
+    instructions, messages, tools = llm.calls[-1]
     assert "Ксардас" in instructions and messages[-1] == Message("user", "Где я?")
+    assert messages[-2].role == "developer" and "Обстановка" in messages[-2].content
+    assert {t.name for t in tools} >= {"give_item", "follow_player", "end_conversation"}
 
 
 async def test_new_player_text_interrupts_the_reply_in_flight():
@@ -56,7 +58,9 @@ async def test_new_player_text_interrupts_the_reply_in_flight():
 class FailingBackend:
     name = "failing"
 
-    async def stream(self, *, instructions: str, messages: list[Message]) -> AsyncIterator[LLMEvent]:
+    async def stream(
+        self, *, instructions: str, messages: list[Message], tools=None
+    ) -> AsyncIterator[LLMEvent]:
         raise LLMError("plan limit reached")
         yield  # pragma: no cover
 
@@ -81,3 +85,41 @@ async def test_m1_scenario_with_fake_llm():
 
     assert len(lines) >= 2
     assert fake.attached == set()  # returned to routine
+
+
+async def test_tool_call_runs_in_the_game_and_its_outcome_becomes_a_note():
+    fake = FakeGame()
+    llm = FakeBackend(
+        "Возьми это зелье, оно тебе пригодится.",
+        delay=0,
+        tool_calls=[ToolCall("give_item", {"item": "ITPO_HEALTH_01", "count": 2})],
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай что-нибудь")
+        await _until(lambda: any(m.role == "developer" for m in dialogue.conversations[XARDAS].history))
+
+    give = next(m for m in fake.received if m["type"] == "action")
+    assert give["action"] == "give_item" and give["args"] == {"item": "ITPO_HEALTH_01", "count": 2}
+    history = dialogue.conversations[XARDAS].history
+    assert [m.role for m in history] == ["user", "assistant", "developer"]
+    assert history[-1].content == "[Ты отдал герою: Эликсир лечения ×2]"
+
+
+async def test_end_conversation_waits_for_the_goodbye_to_be_spoken():
+    fake = FakeGame()
+    llm = FakeBackend(
+        "Довольно. Ступай, мне нужно работать.", delay=0, tool_calls=[ToolCall("end_conversation", {})]
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Ты старый дурак")
+        assert not any(m["type"] == "chat_end" for m in fake.received)  # goodbye not spoken yet
+        await _until(lambda: any(m["type"] == "chat_end" for m in fake.received), timeout=6)
+
+    kinds = [m["type"] for m in fake.received]
+    assert kinds.index("say") < kinds.index("chat_end")
+    assert dialogue.conversations[XARDAS].history[-1].content == "[Ты закончил разговор]"

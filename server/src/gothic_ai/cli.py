@@ -11,11 +11,11 @@ import sys
 import time
 from pathlib import Path
 
-from . import scenarios
+from . import npc_tools, scenarios
 from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
-from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, make_backend
+from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, ToolCall, make_backend
 from .llm.siwc import TokenStore, login
 from .persona import PersonaProvider
 from .protocol import Attached, ChatClose, ChatOpen, Detached, GameMessage, Perception, PlayerText
@@ -28,6 +28,7 @@ HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping
   goto <waypoint> | come | turn | ani <name> | wait <ms> | stop | routine
   talk <text>       speak to the npc as the player (opens a conversation)
+  additem <item> [n] put an item into the npc's inventory (game needs -devmode)
   quit"""
 
 
@@ -107,6 +108,9 @@ class Console:
                 print(await link.act(npc, "stop"))
             case "routine":
                 print(await link.act(npc, "return_to_routine"))
+            case "additem" if rest:
+                count = int(rest[1]) if len(rest) > 1 else 1
+                print(await link.act(npc, "debug_add_item", item=rest[0].upper(), count=count))
             case "talk" if rest and self.state.dialogue is not None:
                 snap = await link.snapshot(npc)
                 self.state.dialogue.open(npc, snap.npc.name)
@@ -140,6 +144,15 @@ async def serve(args: argparse.Namespace) -> int:
                 failed = [s for s in steps if s.result.status in ("failed", "timeout")]
                 log.info("scenario m0: %d steps, %d failed", len(steps), len(failed))
                 exit_code = 1 if failed else 0
+            elif args.scenario == "m2":
+                results = await scenarios.m2_actions(link, args.npc)
+                bad = {
+                    k: v
+                    for k, v in results.items()
+                    if not k.startswith("gesture") and k != "give_item_missing" and not v.startswith("done")
+                }
+                log.info("scenario m2: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "m1":
                 lines = await scenarios.m1_chat(link, state.dialogue, args.npc)
                 log.info("scenario m1: npc spoke %d line(s)", len(lines))
@@ -157,6 +170,7 @@ async def serve(args: argparse.Namespace) -> int:
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    await llm.aclose()
     for task in finished:
         if not task.cancelled() and (err := task.exception()) is not None:
             log.error("%s", err)
@@ -169,19 +183,26 @@ async def llm_test(args: argparse.Namespace) -> int:
     llm = _backend(args)
     personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
     persona = personas.get(args.npc, args.name)
+    messages = [Message("user", args.text)]
+    if args.situation:
+        messages.insert(0, Message("developer", args.situation))
+    tools = npc_tools.TOOLS if args.tools else None
     started = time.monotonic()
     first = None
     try:
-        async for event in llm.stream(
-            instructions=persona.instructions, messages=[Message("user", args.text)]
-        ):
+        async for event in llm.stream(instructions=persona.instructions, messages=messages, tools=tools):
             if isinstance(event, TextDelta):
                 if first is None:
                     first = time.monotonic() - started
                 print(event.text, end="", flush=True)
+            elif isinstance(event, ToolCall):
+                at = time.monotonic() - started
+                print(f"\n  -> {event.name}({event.arguments}) at {at:.2f}s", flush=True)
     except LLMError as err:
         print(f"\nerror: {err}", file=sys.stderr)
         return 1
+    finally:
+        await llm.aclose()
     total = time.monotonic() - started
     print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
     return 0
@@ -223,7 +244,9 @@ def main() -> None:
     p = sub.add_parser("serve", help="wait for the game and drive npc's")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=47817)
-    p.add_argument("--scenario", choices=["m0", "m1"], help="run a scripted check when the game connects")
+    p.add_argument(
+        "--scenario", choices=["m0", "m1", "m2"], help="run a scripted check when the game connects"
+    )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
     p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
@@ -232,6 +255,8 @@ def main() -> None:
     p = sub.add_parser("llm-test", help="send one message to the LLM and measure latency")
     p.add_argument("text")
     p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
+    p.add_argument("--tools", action="store_true", help="offer the npc action tools")
+    p.add_argument("--situation", help="situation note sent before the message")
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")
