@@ -23,16 +23,19 @@ const PROVIDER_TITLES: Record<string, string> = {
 
 export const providerTitle = (name: string) => PROVIDER_TITLES[name.split(":")[0]] ?? name;
 
+/** "Не отвечает: ConnectError" -> "не отвечает: ConnectError": for text that continues a sentence. */
+export const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+
 function fromChecks(key: string, icon: Row["icon"], title: string, part: Part | undefined, checking: boolean): Row {
   if (!part) return { key, icon, title, detail: checking ? "проверяю…" : "не проверено", chip: "…", tone: "idle" };
   if (!part.enabled) return { key, icon, title, detail: "Выключено в настройках", chip: "выключено", tone: "idle" };
   const [primary, fallback] = part.providers as [Check, Check | undefined];
   const names = fallback ? `${primary.title}, запасной ${fallback.title}` : primary.title;
-  if (primary.ok) return { key, icon, title, detail: names, chip: primary.detail.toLowerCase(), tone: "ok" };
+  if (primary.ok) return { key, icon, title, detail: names, chip: lowerFirst(primary.detail), tone: "ok" };
   if (fallback?.ok) {
-    return { key, icon, title, detail: `${primary.title}: ${primary.detail.toLowerCase()}`, chip: "запасной", tone: "warn" };
+    return { key, icon, title, detail: `${primary.title}: ${lowerFirst(primary.detail)}`, chip: "запасной", tone: "warn" };
   }
-  return { key, icon, title, detail: `${primary.title}: ${primary.detail.toLowerCase()}`, chip: "недоступно", tone: "bad" };
+  return { key, icon, title, detail: `${primary.title}: ${lowerFirst(primary.detail)}`, chip: "недоступно", tone: "bad" };
 }
 
 export function beforeGame(p: Providers | null, checking: boolean, gameProblems: string[], gameDir: string | null): Row[] {

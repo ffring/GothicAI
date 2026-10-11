@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,13 @@ DEFAULT_VOXCPM_URL = "ws://127.0.0.1:47831"
 # (DIA_XARDAS_HELLO_14_01.WAV) stay Latin; the English one has only hash bytes in that range
 RUSSIAN_MIN_SHARE = 0.1
 TIMEOUT_S = 3.0
+STEAM = Path.home() / "Library" / "Application Support" / "Steam"
+# Windows Steam and GOG installs inside Wine bottles (CrossOver, Whisky)
+BOTTLES = (
+    Path.home() / "Library" / "Application Support" / "CrossOver" / "Bottles",
+    Path.home() / "Library" / "Containers" / "com.isaacmarovitz.Whisky" / "Bottles",
+)
+GAME_FOLDERS = ("Gothic II", "Gothic 2 Gold", "Gothic II Gold")
 OU_PATH = "_work/Data/Scripts/Content/Cutscene/OU.BIN"
 
 
@@ -35,6 +44,40 @@ class Check:
 
     def plain(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def find_games(extra: list[Path] | None = None) -> list[Path]:
+    """Folders that look like Gothic II (they have a Data folder): Steam libraries, Wine bottles with
+    Steam or GOG, the usual places. A copy made by hand elsewhere is not found: the player picks it."""
+    steam_roots = [STEAM, *_steam_libraries(STEAM / "steamapps" / "libraryfolders.vdf")]
+    for bottles in BOTTLES:
+        for drive in _children(bottles, lambda p: p / "drive_c"):
+            steam_roots += [drive / "Program Files (x86)" / "Steam", drive / "Program Files" / "Steam"]
+            steam_roots += [drive / "GOG Games", drive / "Program Files (x86)" / "GOG Galaxy" / "Games"]
+    places = [root / "steamapps" / "common" for root in steam_roots] + steam_roots
+    places += [Path.home() / "Games", Path("/Applications"), Path.home()]
+    candidates = [place / name for place in places for name in GAME_FOLDERS] + (extra or [])
+    found: dict[Path, Path] = {}
+    for c in candidates:
+        if _child(c, "data") is not None:
+            found.setdefault(c.resolve(), c)
+    return list(found.values())
+
+
+def _steam_libraries(vdf: Path) -> list[Path]:
+    """`"path"  "/Volumes/Games/SteamLibrary"` lines of libraryfolders.vdf."""
+    try:
+        text = vdf.read_text(errors="replace")
+    except OSError:
+        return []
+    return [Path(m.group(1).replace("\\\\", "\\")) for m in re.finditer(r'"path"\s+"([^"]+)"', text)]
+
+
+def _children(folder: Path, pick: Callable[[Path], Path]) -> list[Path]:
+    try:
+        return [pick(p) for p in folder.iterdir() if p.is_dir()]
+    except OSError:
+        return []
 
 
 def game_folder(folder: Path | None) -> list[Check]:

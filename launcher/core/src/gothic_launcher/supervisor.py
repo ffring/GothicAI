@@ -22,7 +22,7 @@ import shlex
 import signal
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO, Literal
@@ -221,25 +221,9 @@ class Supervisor:
                         self.on_event(Event(r.proc.name, "journal", data=entry))
 
     async def _wait_ready(self, proc: Proc) -> dict[str, Any]:
-        r = self.running[proc.name]
         if proc.health is None:
             return {}
-        deadline = time.monotonic() + READY_TIMEOUT_S
-        exited = asyncio.ensure_future(_exit_code(r.process))
-        try:
-            async with httpx.AsyncClient(timeout=2.0, trust_env=False) as http:
-                while True:
-                    if exited.done():
-                        raise NotReady(f"exited with code {exited.result()} before it was ready")
-                    with contextlib.suppress(httpx.HTTPError, ValueError):
-                        resp = await http.get(proc.health)
-                        if resp.status_code == 200:
-                            return resp.json()
-                    if time.monotonic() > deadline:
-                        raise NotReady(f"not ready after {READY_TIMEOUT_S:.0f}s")
-                    await asyncio.wait({exited}, timeout=0.2)
-        finally:
-            exited.cancel()
+        return await wait_ready(self.running[proc.name].process, proc.health)
 
     async def _watch_status(self) -> None:
         async with httpx.AsyncClient(timeout=2.0, trust_env=False) as http:
@@ -292,6 +276,63 @@ class Supervisor:
         if r.reader is not None and not r.reader.done():
             with contextlib.suppress(TimeoutError, asyncio.CancelledError):
                 await asyncio.wait_for(asyncio.shield(r.reader), 1.0)
+
+
+async def wait_ready(process: asyncio.subprocess.Process, health: str) -> dict[str, Any]:
+    """The service's health answer once it gives one; NotReady if it exits first or takes too long."""
+    deadline = time.monotonic() + READY_TIMEOUT_S
+    exited = asyncio.ensure_future(_exit_code(process))
+    try:
+        async with httpx.AsyncClient(timeout=2.0, trust_env=False) as http:
+            while True:
+                if exited.done():
+                    raise NotReady(f"exited with code {exited.result()} before it was ready")
+                with contextlib.suppress(httpx.HTTPError, ValueError):
+                    resp = await http.get(health)
+                    if resp.status_code == 200:
+                        return resp.json()
+                if time.monotonic() > deadline:
+                    raise NotReady(f"not ready after {READY_TIMEOUT_S:.0f}s")
+                await asyncio.wait({exited}, timeout=0.2)
+    finally:
+        exited.cancel()
+
+
+@contextlib.asynccontextmanager
+async def temporary(proc: Proc, log: Path, session: SessionFile) -> AsyncIterator[asyncio.subprocess.Process]:
+    """One service outside a game session, for a check (the setup's microphone and voice tests): started,
+    ready (NotReady carries the end of its output), stopped with its group afterwards. Its group goes
+    into the session file, so a killed launcher's next start stops it."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    proc.cwd.mkdir(parents=True, exist_ok=True)
+    with log.open("wb") as out:
+        process = await asyncio.create_subprocess_exec(
+            *proc.argv,
+            cwd=proc.cwd,
+            env=child_env(proc.env),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=out,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+        session.add(proc.name, process.pid)
+        try:
+            if proc.health is not None:
+                try:
+                    await wait_ready(process, proc.health)
+                except NotReady as err:
+                    out.flush()
+                    text = await asyncio.to_thread(log.read_text, errors="replace")
+                    tail = text.splitlines()[-TAIL_LINES:]
+                    raise NotReady(f"{err}\n{_indent(tail)}") from None
+            yield process
+        finally:
+            _killpg(process.pid, signal.SIGTERM)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(_exit_code(process), STOP_GRACE_S)
+            _killpg(process.pid, signal.SIGKILL)
+            await _exit_code(process)
+            session.remove(proc.name)
 
 
 async def _exit_code(process: asyncio.subprocess.Process) -> int:

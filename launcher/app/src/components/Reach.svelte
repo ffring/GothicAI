@@ -2,6 +2,7 @@
   // Whether the chosen providers of one part answer (from check.providers).
   import type { Part } from "../lib/core";
   import { launcher } from "../lib/launcher.svelte";
+  import { lowerFirst } from "../lib/status";
   import Icon from "./Icon.svelte";
 
   let { part }: { part: Part | undefined } = $props();
@@ -14,7 +15,7 @@
     {#each part.providers as p, i (p.id + i)}
       <span class="item" class:bad={!p.ok}>
         <Icon name={p.ok ? "check" : "cross"} size={14} />
-        {i ? "Запасной" : "Основной"}: {p.title} — {p.detail.toLowerCase()}
+        {i ? "Запасной" : "Основной"}: {p.title} — {lowerFirst(p.detail)}
       </span>
     {/each}
   {/if}

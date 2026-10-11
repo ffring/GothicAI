@@ -14,7 +14,13 @@
   let loadError = $state<string | null>(null);
 
   onMount(() => {
-    launcher.init().catch((err) => (loadError = String(err)));
+    launcher
+      .init()
+      .then(() => {
+        // the first setup stays open until its "Готово", even once the folder alone makes it complete
+        if (!launcher.state?.configured) view = "wizard";
+      })
+      .catch((err) => (loadError = String(err)));
   });
 
   const screen = $derived.by(() => {

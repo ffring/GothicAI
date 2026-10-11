@@ -10,7 +10,7 @@ from gothic_launcher import control as control_module
 from gothic_launcher import supervisor as sv
 from gothic_launcher.commands import Ports, Proc
 from gothic_launcher.control import Control
-from tests.test_supervisor import FAKE
+from tests.test_supervisor import FAKE, gone
 
 NPC_LINE = {"kind": "npc", "npc": "NONE_100_XARDAS", "name": "Ксардас", "text": "Придержи язык."}
 
@@ -158,3 +158,65 @@ async def test_report_has_the_logs_without_keys(setup):
         text = z.read("2026-10-11_18-00-00/tts.log").decode()
         settings = z.read("settings.toml").decode()
     assert "iw-secret" not in text and "<hidden>" in text and "<set>" in settings
+
+
+@pytest.fixture
+def checks_setup(setup, monkeypatch):
+    """Services for the checks are fake ones; the helper commands print canned JSON lines."""
+    c, window, tmp_path = setup
+
+    def fake_services(config, layout, ports: Ports, cwd: Path) -> list[Proc]:
+        procs = []
+        for name, port in (("asr", ports.asr), ("tts", ports.tts)):
+            pidfile = tmp_path / f"{name}.pid"
+            argv = [sys.executable, FAKE, "service", "--port", str(port), "--pidfile", str(pidfile)]
+            procs.append(Proc(name, argv, cwd, health=f"http://127.0.0.1:{port}/health"))
+        return procs
+
+    answers = {
+        "voice-test": [
+            '{"level": 0.4}',
+            '{"partial": "Привет"}',
+            '{"text": "Привет, Ксардас.", "provider": "voxtral"}',
+        ],
+        "speech-test": ['{"text": "Я ждал тебя.", "provider": "inworld", "first_chunk_s": 0.26}'],
+    }
+
+    def fake_argv(layout, command, *args):
+        return [sys.executable, FAKE, "say", *answers[command]]
+
+    monkeypatch.setattr(control_module, "services", fake_services)
+    monkeypatch.setattr(Control, "_server_argv", staticmethod(fake_argv))
+    return c, window, tmp_path
+
+
+async def test_voice_check_streams_levels_and_stops_its_service(checks_setup):
+    c, window, tmp_path = checks_setup
+    result = await call(c, "test.voice", seconds=1)
+
+    assert result == {"text": "Привет, Ксардас.", "provider": "voxtral"}
+    assert window.events("voice_test") == [{"level": 0.4}, {"partial": "Привет"}]
+    pid = int((tmp_path / "asr.pid").read_text().split()[0])
+    assert await gone(pid)
+    assert (tmp_path / "launcher.json").read_text() == ""  # the lock is free again
+
+
+async def test_speech_check_answers_with_the_provider(checks_setup):
+    c, window, tmp_path = checks_setup
+    result = await call(c, "test.speech")
+    assert result["provider"] == "inworld" and result["first_chunk_s"] == 0.26
+
+
+async def test_checks_wait_for_the_game_to_end(checks_setup):
+    c, window, tmp_path = checks_setup
+    c.task = asyncio.get_running_loop().create_future()  # a session that runs
+    with pytest.raises(RuntimeError, match="остановите игру"):
+        await call(c, "test.voice")
+    c.task.cancel()
+
+
+async def test_checks_respect_switched_off_parts(checks_setup):
+    c, window, tmp_path = checks_setup
+    await call(c, "settings.set", key="voice.enabled", value=False)
+    with pytest.raises(RuntimeError, match="выключен"):
+        await call(c, "test.voice")

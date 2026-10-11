@@ -115,6 +115,29 @@ export function installMock(): void {
           }
           return structuredClone(state);
         }
+        case "mics":
+          return [{ index: 0, name: "Микрофон MacBook Pro", default: true }];
+        case "find.game":
+          await sleep(400);
+          return scenario === "fresh"
+            ? [
+                {
+                  path: "/Users/me/Library/Application Support/Steam/steamapps/common/Gothic II",
+                  ok: true,
+                  checks: [{ id: "archives", ok: true, title: "Архивы Gothic II", detail: "Worlds.vdf" }],
+                },
+              ]
+            : [];
+        case "test.voice":
+          for (let i = 0; i < 30; i++) {
+            await emit("core", { event: "voice_test", data: { level: Math.abs(Math.sin(i / 3)) * 0.8 } });
+            if (i === 15) await emit("core", { event: "voice_test", data: { partial: "Привет" } });
+            await sleep(100);
+          }
+          return { text: "Привет, Ксардас.", provider: "voxtral", audio_s: 4, latency_s: 0.49 };
+        case "test.speech":
+          await sleep(1800);
+          return { text: "Я ждал тебя. Нам нужно поговорить.", provider: "inworld", first_chunk_s: 0.26, audio_s: 2.4, latency_s: 0.9 };
         case "test.llm":
           await sleep(1500);
           return { text: "Придержи язык.", llm: "chatgpt", model: "gpt-6.1-sol", first_token_s: 3.13, total_s: 5.06 };

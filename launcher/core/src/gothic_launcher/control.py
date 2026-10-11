@@ -15,14 +15,20 @@ Methods (params in brackets):
     settings.import_env [path?]        the repository's .env by default
     check.game [dir?]                  the game folder, default: the one in the settings
     check.providers                    can each chosen provider be reached (no quota spent)
+    find.game                          Gothic II folders found on this Mac, each with its checks
+    mics                               input devices
     login.chatgpt                      the browser sign-in, answers when it is done
     test.llm [text?]                   one reply from the npc brain, with its latency (spends quota)
+    test.voice [seconds?]              record the microphone and recognize it through a temporary ASR
+                                       service; voice_test events carry {"level"} and {"partial"}
+    test.speech                        one line in Xardas' voice through a temporary TTS service, aloud
     session.start [mode]               "menu" (default), "continue" or "new"
     session.stop
     report.create                      a zip of the latest session's logs, keys removed
 
 Events: service (supervisor events: starting, ready, status, exited, restarting, stopped, failed),
-journal (lines and actions, see the server's journal.py), session ({"state": "running"|"stopped"}).
+journal (lines and actions, see the server's journal.py), session ({"state": "running"|"stopped"}),
+voice_test (the microphone test: levels and partial text while it records).
 """
 
 from __future__ import annotations
@@ -46,6 +52,7 @@ from .commands import (
     GAME_HOME,
     LOG_ROOT,
     LaunchError,
+    Layout,
     Ports,
     child_env,
     find_layout,
@@ -58,7 +65,7 @@ from .commands import (
 )
 from .settings import CONFIG_DIR, Config, Secrets, Settings
 from .state import STATE_DIR, AlreadyRunning, SessionFile
-from .supervisor import Event, Supervisor
+from .supervisor import Event, NotReady, Supervisor, temporary
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +96,7 @@ class Control:
         self.task: asyncio.Task[None] | None = None
         self.session: dict[str, Any] | None = None  # the running (or last) session, as the window sees it
         self.journal: deque[dict[str, Any]] = deque(maxlen=JOURNAL_KEEP)
+        self._testing = asyncio.Lock()  # one microphone or voice test at a time
         self.methods: dict[str, Callable[..., Awaitable[Any]]] = {
             "state": self.state,
             "schema": self.schema,
@@ -96,6 +104,10 @@ class Control:
             "settings.import_env": self.settings_import_env,
             "check.game": self.check_game,
             "check.providers": self.check_providers,
+            "find.game": self.find_game,
+            "mics": self.mics,
+            "test.voice": self.test_voice,
+            "test.speech": self.test_speech,
             "login.chatgpt": self.login_chatgpt,
             "test.llm": self.test_llm,
             "session.start": self.session_start,
@@ -182,6 +194,99 @@ class Control:
 
     async def check_providers(self) -> dict[str, Any]:
         return await checks.providers(self._config())
+
+    async def find_game(self) -> list[dict[str, Any]]:
+        found = await asyncio.to_thread(checks.find_games)
+        out = []
+        for folder in found:
+            items = await asyncio.to_thread(checks.game_folder, folder)
+            out.append(
+                {"path": str(folder), "ok": all(c.ok for c in items), "checks": [c.plain() for c in items]}
+            )
+        return sorted(out, key=lambda f: not f["ok"])
+
+    async def mics(self) -> list[dict[str, Any]]:
+        out: list[str] = []
+        await _run("mics", self._server_argv(self._tool_layout(self._config()), "mics"), stdout=out.append)
+        result = json.loads(out[-1]) if out else {"error": "нет ответа"}
+        if isinstance(result, dict):
+            raise RequestError(result.get("error", "микрофоны не найдены"))
+        return result
+
+    async def test_voice(self, seconds: float = 4.0) -> dict[str, Any]:
+        config = self._config()
+        if not config.settings.voice.enabled:
+            raise RequestError("Голосовой ввод выключен в настройках")
+        layout, ports = self._tool_layout(config), Ports.free()
+        argv = self._server_argv(layout, "voice-test", "--json", "--seconds", f"{seconds:g}")
+        argv += ["--asr-url", f"ws://127.0.0.1:{ports.asr}"]
+        if config.settings.voice.mic_device:
+            argv += ["--mic-device", config.settings.voice.mic_device]
+        result: dict[str, Any] = {}
+
+        def line(text: str) -> None:
+            with contextlib.suppress(ValueError):
+                msg = json.loads(text)
+                if "level" in msg or "partial" in msg:
+                    self.write({"event": "voice_test", "data": msg})
+                else:
+                    result.update(msg)
+
+        async with self._service_for_test(config, layout, ports, "asr"):
+            await _run("voice-test", argv, stdout=line)
+        if "error" in result or "text" not in result:
+            raise RequestError(result.get("error", "Проверка не удалась: voice-test ничего не ответил"))
+        return result
+
+    async def test_speech(self) -> dict[str, Any]:
+        config = self._config()
+        if not config.settings.tts.enabled:
+            raise RequestError("Озвучка выключена в настройках")
+        layout, ports = self._tool_layout(config), Ports.free()
+        argv = self._server_argv(layout, "speech-test", "--json", "--tts-url", f"ws://127.0.0.1:{ports.tts}")
+        if config.settings.game.dir:
+            argv += ["--game-dir", str(config.settings.game.dir)]
+        out: list[str] = []
+        async with self._service_for_test(config, layout, ports, "tts"):
+            await _run("speech-test", argv, stdout=out.append)
+        try:
+            result = json.loads(out[-1])
+        except (IndexError, ValueError):
+            raise RequestError("Проверка не удалась: speech-test ничего не ответил") from None
+        if "error" in result:
+            raise RequestError(result["error"])
+        return result
+
+    def _tool_layout(self, config: Config) -> Layout:
+        """The repository and uv are enough for the checks: the game need not be built yet."""
+        repo, uv = tools(config)
+        game_dir = config.settings.game.dir or Path()
+        return Layout(repo, uv, Path(), game_dir, config.settings.paths.game_home or GAME_HOME)
+
+    @staticmethod
+    def _server_argv(layout: Layout, *args: str) -> list[str]:
+        return [str(layout.uv), "run", "--project", str(layout.repo / "server"), "gothic-ai", *args]
+
+    @contextlib.asynccontextmanager
+    async def _service_for_test(self, config: Config, layout: Layout, ports: Ports, name: str):  # noqa: ANN202
+        """The service `name` as the session would run it, on its own, while a check needs it."""
+        if self.task is not None and not self.task.done():
+            raise RequestError("Сначала остановите игру: проверки запускают свои сервисы")
+        if self._testing.locked():
+            raise RequestError("Уже идёт другая проверка")
+        async with self._testing:
+            proc = next(
+                p for p in services(config, layout, ports, cwd=self.log_root / "checks") if p.name == name
+            )
+            lock = SessionFile(self.state_file)
+            lock.acquire()  # AlreadyRunning: `gothic-launcher up` runs in a terminal
+            try:
+                async with temporary(proc, self.log_root / "checks" / f"{name}.log", lock):
+                    yield
+            except NotReady as err:
+                raise RequestError(f"Сервис для проверки не запустился: {err}") from None
+            finally:
+                lock.release()
 
     async def login_chatgpt(self) -> dict[str, Any]:
         repo, uv = tools(self._config())

@@ -60,6 +60,11 @@ export type JournalEntry = {
   detail?: string;
 };
 
+export type Mic = { index: number; name: string; default: boolean };
+export type FoundGame = { path: string; ok: boolean; checks: Check[] };
+export type VoiceResult = { text: string; provider: string; audio_s: number; latency_s: number };
+export type SpeechResult = { text: string; provider: string; first_chunk_s: number; audio_s: number; latency_s: number };
+
 export type ServiceEvent = { proc: string; kind: string; detail: string; data: Health | null };
 
 export type State = {
@@ -79,6 +84,7 @@ export type CoreMessage =
   | { event: "session"; data: Session }
   | { event: "service"; data: ServiceEvent }
   | { event: "journal"; data: JournalEntry }
+  | { event: "voice_test"; data: { level?: number; partial?: string } }
   | { event: "core_exit"; data: Record<string, never> }
   | { event: "error"; data: { detail: string } };
 

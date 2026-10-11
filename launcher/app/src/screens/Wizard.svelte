@@ -5,7 +5,9 @@
   import Reach from "../components/Reach.svelte";
   import Setting from "../components/Setting.svelte";
   import SignIn from "../components/SignIn.svelte";
-  import { call, type Check } from "../lib/core";
+  import SpeechTest from "../components/SpeechTest.svelte";
+  import VoiceTest from "../components/VoiceTest.svelte";
+  import { call, type Check, type FoundGame } from "../lib/core";
   import { launcher, seconds } from "../lib/launcher.svelte";
   import { ASR, ASR_FALLBACK, TTS, TTS_FALLBACK } from "../lib/options";
 
@@ -22,6 +24,11 @@
     void call<Check[]>("check.game").then((c) => (gameChecks = c));
   });
   const gameReady = $derived(gameChecks.length > 0 && gameChecks.every((c) => c.ok));
+  // copies found in Steam libraries and Wine bottles, offered while no folder is chosen
+  let found = $state<FoundGame[] | null>(null);
+  $effect(() => {
+    if (!s.settings.game.dir && found === null) void call<FoundGame[]>("find.game").then((f) => (found = f));
+  });
   // problems other than the folder (the game is not built, no uv): the folder step shows them too
   const otherProblems = $derived(s.problems.filter((p) => !p.startsWith("game folder") && !p.includes("has no Data")));
 
@@ -62,6 +69,21 @@
       <h1 class="display">Где лежит игра</h1>
       <p class="muted">Нужна своя копия Gothic II с аддоном «Ночь Ворона» и русской локализацией. Файлы игры лаунчер не меняет.</p>
       <Setting key="game.dir" kind="folder" title="Папка игры" description="" />
+      {#if !s.settings.game.dir && found}
+        {#if found.length}
+          <ul class="found" aria-label="Найденные копии игры">
+            {#each found as f (f.path)}
+              <li>
+                <span class="mono selectable">{f.path.replace(/^\/Users\/[^/]+/, "~")}</span>
+                <span class="chip" class:bad={!f.ok}>{f.ok ? "подходит" : "не всё на месте"}</span>
+                <button class="btn btn-ghost" onclick={() => launcher.set("game.dir", f.path)}>Использовать</button>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="faint">В библиотеках Steam и бутылках CrossOver и Whisky игра не нашлась: выберите папку вручную.</p>
+        {/if}
+      {/if}
       <ul class="checks panel" aria-label="Проверка папки">
         {#each gameChecks as c (c.id)}
           <li>
@@ -123,6 +145,7 @@
         {/if}
         <Setting key="voice.fallback" kind="choice" options={ASR_FALLBACK} />
         <Reach part={launcher.providers?.voice} />
+        <VoiceTest />
         <p class="faint">macOS один раз спросит доступ к микрофону для лаунчера.</p>
       {/if}
     {:else}
@@ -139,6 +162,7 @@
         {/if}
         <Setting key="tts.fallback" kind="choice" options={TTS_FALLBACK} />
         <Reach part={launcher.providers?.speech} />
+        <SpeechTest />
       {/if}
     {/if}
   </main>
@@ -240,6 +264,34 @@
   .checks :global(svg) {
     flex: none;
     margin-top: 2px;
+  }
+  .found {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .found li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .found .mono {
+    flex: 1 1 260px;
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .found .chip.bad {
+    border-color: var(--bad-line);
+    color: var(--bad-text);
   }
   .cards {
     display: flex;

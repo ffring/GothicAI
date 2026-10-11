@@ -4,6 +4,8 @@
   import Reach from "../components/Reach.svelte";
   import Setting from "../components/Setting.svelte";
   import SignIn from "../components/SignIn.svelte";
+  import SpeechTest from "../components/SpeechTest.svelte";
+  import VoiceTest from "../components/VoiceTest.svelte";
   import { openFolder } from "../lib/core";
   import { launcher } from "../lib/launcher.svelte";
   import { ASR, ASR_FALLBACK, EFFORT, LLM_BACKENDS, TTS, TTS_FALLBACK } from "../lib/options";
@@ -55,8 +57,8 @@
           <Setting key="voice.provider" kind="choice" options={ASR} />
           <Setting key="voice.fallback" kind="choice" options={ASR_FALLBACK} />
           <Setting key="voice.voxtral_url" placeholder="http://127.0.0.1:47830" mono />
-          <Setting key="voice.mic_device" placeholder="системный" />
           <Reach part={launcher.providers?.voice} />
+          <VoiceTest />
         {/if}
       {:else if tab === "speech"}
         <Setting key="tts.enabled" kind="toggle" />
@@ -67,6 +69,7 @@
           <Setting key="tts.voxcpm_url" placeholder="ws://127.0.0.1:47831" mono />
           <Setting key="tts.loudness" placeholder="как озвучка игры" />
           <Reach part={launcher.providers?.speech} />
+          <SpeechTest />
         {/if}
       {:else}
         <Setting key="game.dev_mode" kind="toggle" />

@@ -113,6 +113,8 @@ class Launcher {
   checking = $state(false);
   lines = $state<Line[]>([]);
   coreDown = $state(false);
+  /** The microphone check while it records: recent levels (0..1) and the text heard so far. */
+  voiceTest = $state<{ levels: number[]; partial: string }>({ levels: [], partial: "" });
   error = $state<string | null>(null);
 
   constructor(private role: "window" | "panel") {}
@@ -217,6 +219,10 @@ class Launcher {
         if (line) this.push(line);
         break;
       }
+      case "voice_test":
+        if (m.data.level !== undefined) this.voiceTest.levels = [...this.voiceTest.levels, m.data.level].slice(-24);
+        if (m.data.partial !== undefined) this.voiceTest.partial = m.data.partial;
+        break;
       case "core_exit":
         this.coreDown = true;
         break;

@@ -3,6 +3,7 @@
     python fake_service.py service --port N [--ready-after S] [--exit-after S --code N] [--child]
                                    [--health-file F] [--pidfile F] [--ignore-term] [--journal JSON]...
     python fake_service.py game --check URL... [--run S] [--code N] [--pidfile F]
+    python fake_service.py say [JSON]...    prints each JSON argument (a helper command's answer)
 
 A service answers GET /health on its port (the body is --health-file's content when given) and prints a
 line. --child keeps a sleeping child in its process group, as `uv run` keeps the service. The game checks
@@ -77,6 +78,12 @@ def game(args: argparse.Namespace) -> None:
     sys.exit(args.code)
 
 
+def say(args: argparse.Namespace) -> None:
+    for line in args.lines:
+        if line.startswith("{"):  # the caller's own flags (--asr-url …) follow the canned lines
+            print(line, flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="kind", required=True)
@@ -95,8 +102,10 @@ def main() -> None:
     g.add_argument("--run", type=float, default=0.0)
     g.add_argument("--code", type=int, default=0)
     g.add_argument("--pidfile")
+    y = sub.add_parser("say")
+    y.add_argument("lines", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    service(args) if args.kind == "service" else game(args)
+    {"service": service, "game": game, "say": say}[args.kind](args)
 
 
 if __name__ == "__main__":
