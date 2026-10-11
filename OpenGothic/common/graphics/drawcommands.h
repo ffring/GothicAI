@@ -20,6 +20,7 @@ class DrawCommands {
       Pfx,
       Morph,
       };
+    static uint32_t hiddenTypes; // debug (test bench): a bit per Type that is not drawn
 
     struct DrawCmd {
       const Tempest::RenderPipeline* pMain        = nullptr;

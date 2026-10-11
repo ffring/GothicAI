@@ -4,6 +4,7 @@
 #include <Tempest/Vec>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -38,8 +39,42 @@ class FootIk final {
       uint64_t dt      = 0;
       };
 
+    // State of the legs for the test bench: positions before and after IK, the ground, metrics
+    struct Probe final {
+      struct Leg final {
+        Tempest::Vec3 anim [4] = {};  // thigh, calf, foot, toe from the animation
+        Tempest::Vec3 final[4] = {};  // the same after IK
+        bool          hasCol   = false;
+        float         groundY  = 0;   // ground under the ankle (ray)
+        Tempest::Vec3 n        = {0,1,0};
+        bool          toeCol   = false;
+        float         toeY     = 0;   // ground under the toes (ray)
+        float         smoothY  = 0;   // smoothed ground height that IK aims at
+        float         plant    = 0;
+        float         slack    = 0;
+        float         err      = 0;   // contact error, see debugLog
+        float         kneeDev  = 0;
+        float         tilt     = 0;
+        float         roll     = 0;
+        float         yaw      = 0;
+        float         outward  = 0;
+        };
+      bool  valid   = false;
+      bool  enable  = false;
+      bool  hardOff = false;
+      float weight  = 0;
+      float pelvis  = 0;
+      float floorY  = 0;
+      Leg   leg[2];
+      };
+
     static bool    isEnabled();
     static void    setEnabled(bool e);
+    static bool    setParam(std::string_view name, float value);
+    static auto    paramList() -> std::string;
+    static void    setProbing(bool p);
+    static bool    isProbing();
+    static Probe   playerProbe; // filled every frame while probing
 
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
@@ -53,6 +88,7 @@ class FootIk final {
     void           apply(Tempest::Matrix4x4* tr, size_t numBones, float floorY);
 
     void           debugLog(std::string_view name, const Input& in, bool verbose);
+    void           probe(Probe& p, const Input& in) const;
 
   private:
     struct Chain final {
@@ -76,6 +112,8 @@ class FootIk final {
       float               tilt       = 0;  // debug: degrees the foot is tilted to the ground
       float               roll       = 0;  // debug: degrees the foot is rolled sideways
       float               yaw        = 0;  // debug: degrees the toes turned outward (+) from the animation
+      Tempest::Vec3       dbgAnim [4] = {};  // debug: thigh, calf, foot, toe before IK
+      Tempest::Vec3       dbgFinal[4] = {};  // debug: the same after IK
       };
 
     float offset(const Chain& c, float floorY) const;

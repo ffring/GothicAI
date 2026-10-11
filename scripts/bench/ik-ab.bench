@@ -1,0 +1,23 @@
+# The same run up a 27 degree slope with IK off and on; side by side:
+#   scripts/bench_report.py compare <out>/off.mp4 <out>/on.mp4
+cheat god
+set time 12 0
+view clean
+walkmode run
+ik off
+goto NW_XARDAS_TOWER_VALLEY_05
+wait 500
+face uphill
+cam follow 240 40 90
+rec off
+hold forward 3000
+wait 3000
+stop
+ik on
+goto NW_XARDAS_TOWER_VALLEY_05
+wait 500
+face uphill
+rec on
+hold forward 3000
+wait 3000
+stop

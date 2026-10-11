@@ -17,3 +17,10 @@ automatically; to update one, copy the needed parts of a newer upstream version 
 | `edd-dbg/`, `miniz/` | as in upstream OpenGothic | — | see the directories | — |
 
 Git metadata of the libraries (`.git`, `.github`, `.gitmodules`, `.gitignore`) was not copied.
+
+## Local changes
+
+Keep these when updating a library from upstream.
+
+- `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_BACKGROUND=1` starts the app without taking the
+  focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).

@@ -25,11 +25,12 @@
 
 #include "commandline.h"
 #include "gothic.h"
+#include "testbench.h"
 
 using namespace Tempest;
 
 MainWindow::MainWindow(Device& device)
-  : Window(Maximized),device(device),swapchain(device,hwnd()),
+  : Window(TestBench::isActive() ? Minimized : Maximized),device(device),swapchain(device,hwnd()),
     atlas(device),rootMenu(keycodec),inventory(keycodec),
     dialogs(inventory),document(keycodec),
     console(*this),
@@ -903,6 +904,7 @@ uint64_t MainWindow::tick() {
 
   if(dt>50)
     dt=50;
+  dt = TestBench::frameDt(dt);
 
   if(runtimeMode==R_Step) {
     runtimeMode = R_Suspended;
@@ -1243,14 +1245,12 @@ void MainWindow::render(){
     const uint64_t dt = tick();
     updateAnimation(dt);
     tickCamera(dt);
-    { // LOCAL TEST HARNESS
-      std::string footIkTestTick(uint64_t);
-      const auto shot = footIkTestTick(dt);
-      if(!shot.empty()) {
-        auto tex = renderer.screenshoot(cmdId);
-        auto pm  = device.readPixels(textureCast<const Texture2d&>(tex));
-        pm.save(shot.c_str());
-        }
+    if(TestBench::tick(dt,player)) {
+      auto   tex = renderer.screenshoot(cmdId);
+      Pixmap pm;
+      if(!tex.isEmpty())
+        pm = device.readPixels(textureCast<const Texture2d&>(tex));
+      TestBench::capture(pm);
       }
 
     auto& sync = fence[cmdId];

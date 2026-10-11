@@ -1,5 +1,7 @@
 #include "macosapi.h"
 
+#include <cstdlib>
+
 #ifdef __OSX__
 
 #include <Carbon/Carbon.h>
@@ -367,8 +369,14 @@ MacOSApi::MacOSApi() {
   [barItem release];
   [bar release];
 
-  [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-  [NSApp activateIgnoringOtherApps:YES];
+  // TEMPEST_BACKGROUND=1: automated runs, do not take the focus from the user and stay out of the Dock
+  const char* bg = std::getenv("TEMPEST_BACKGROUND");
+  if(bg!=nullptr && bg[0]!='\0' && bg[0]!='0') {
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    } else {
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [NSApp activateIgnoringOtherApps:YES];
+    }
   }
 
 SystemApi::Window *MacOSApi::implCreateWindow(Tempest::Window *owner, uint32_t width, uint32_t height,
