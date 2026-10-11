@@ -206,6 +206,7 @@ class Conversation:
     voicing: asyncio.Task[None] | None = None
     intent: Intent = field(default_factory=Intent)  # what the npc wants now (set by the model)
     pending: list[str] = field(default_factory=list)  # events that came while a turn was running
+    calm: Intent | None = None  # the intent before an incident goal replaced it
 
     @property
     def history(self) -> list[Message]:
@@ -788,24 +789,40 @@ class DialogueManager:
         return outcome.note, outcome.ok
 
     def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
-        intent, reason = executor.check_intent(executor.parse_intent(call.arguments), snap)
+        intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap)
         if intent is None:
             return ToolOutcome(f"Отклонено: {reason}", "rejected")
-        old = conv.intent
-        if executor.same(old, intent):
+        if executor.same(conv.intent, intent):
             return ToolOutcome("Намерение не изменилось.", "accepted")
+        self._journal_call(conv, call.name, call.arguments)
+        self._change_intent(conv, intent, snap)
+        return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
+
+    def _change_intent(self, conv: Conversation, intent: Intent, snap: Snapshot | None) -> None:
+        old = conv.intent
+        if intent.goal in executor.INCIDENT_GOALS and old.goal not in executor.INCIDENT_GOALS:
+            conv.calm = old  # what to go back to when the incident is over
         conv.intent = intent
         seq = self.memory.set_intent(
             conv.branch, conv.npc, intent.to_json(), game_time(self.link.snapshots.get(conv.npc))
         )
         self._send_head(conv.branch, seq)
-        self._journal_call(conv, call.name, call.arguments)
         if self.on_intent is not None:
             self.on_intent(conv.npc, intent)
         acts = executor.intent_actions(old, intent, snap.npc.following if snap else False)
         if acts:
             self._after_speech(conv, lambda: self._body(conv, acts))
-        return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
+
+    def incident_over(self, npc: str) -> None:
+        """Goals that only hold while something is going on (flee, fight...) end with it: the npc goes
+        back to what it wanted before, keeping its attitude and agenda."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None or conv.intent.goal not in executor.INCIDENT_GOALS:
+            return
+        calm = conv.calm or Intent()
+        intent = Intent(calm.goal, calm.target, conv.intent.attitude, conv.intent.agenda)
+        log.info("%s: the incident is over, intent back to %s", conv.npc, intent.goal)
+        self._change_intent(conv, intent, self.link.snapshots.get(conv.npc))
 
     async def _body(self, conv: Conversation, acts: list[executor.Action]) -> tuple[str, bool]:
         """Game actions for an intent; only what did not work is noted."""

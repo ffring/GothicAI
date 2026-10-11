@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from .brain.incident import IncidentEvent, IncidentTracker, escalation_reason
+from .brain.incident import INCIDENT_GAP_S, IncidentEvent, IncidentTracker, escalation_reason
 from .brain.reflex import REACT_OPTIONS, Reaction, Reflexes
 from .brain.situation import NpcContext, clock_text
 from .budget import Budget
@@ -78,6 +78,7 @@ class IncidentDesk:
         *,
         clock: Callable[[], float] = time.monotonic,
         settle_s: float = SETTLE_S,
+        gap_s: float = INCIDENT_GAP_S,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -86,7 +87,7 @@ class IncidentDesk:
         self.trace = trace
         self.clock = clock
         self.settle_s = settle_s
-        self.tracker = IncidentTracker()
+        self.tracker = IncidentTracker(gap_s)
         self.attached: set[str] = set()
         self.reactions: list[Reaction] = []  # recent ones, for the console and tests
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -133,6 +134,8 @@ class IncidentDesk:
     def _event(self, npc: str, event: IncidentEvent) -> None:
         inc = self.tracker.add(npc, event)
         log.info("%s incident #%d: %s", npc, inc.id, event.describe_en())
+        if inc.version == 1:
+            self._spawn(self._watch(npc, inc.id))
         if event.kind == "down":
             self.dialogue.note(npc, event.describe_ru())
             return
@@ -218,6 +221,15 @@ class IncidentDesk:
         except (GameError, TimeoutError) as err:
             log.info("%s: release failed: %s", npc, err)
 
+    async def _watch(self, npc: str, incident_id: int) -> None:
+        """When the incident is over, so are the goals that only held during it."""
+        while True:
+            inc = self.tracker.current.get(npc)
+            if inc is None or inc.id != incident_id or not inc.active(self.clock(), self.tracker.gap_s):
+                break
+            await asyncio.sleep(max(0.05, inc.last + self.tracker.gap_s - self.clock()))
+        self.dialogue.incident_over(npc)
+
     # --- the slow loop ----------------------------------------------------------------------
 
     async def _escalate_later(self, npc: str, incident_id: int) -> None:
@@ -236,7 +248,7 @@ class IncidentDesk:
         inc.escalated_version, inc.escalated_at = inc.version, self.clock()
         body = [r for r in self.reactions if r.npc == npc and r.applied and r.question == "react"]
         did = REACT_OPTIONS[body[-1].choice].ru if body and body[-1].choice in REACT_OPTIONS else ""
-        done = f" Твоё тело уже среагировало: {did}." if did else ""
+        done = f" Твоё тело уже среагировало: {did} — это уже случилось, не противоречь этому." if did else ""
         cue = f"[Событие: {inc.describe_ru()}.{done}]"
         log.info("%s incident #%d: calling the conversational model (%s)", npc, inc.id, reason)
         self.dialogue.event_turn(

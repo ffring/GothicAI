@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .brain import NpcPlanner
+from .brain import Decider, NpcPlanner, Outcome
+from .brain.reflex import Reflexes
+from .budget import Budget
 from .dialogue import DialogueManager
 from .game import GameError, GameLink
+from .incidents import IncidentDesk
 from .llm import ToolCall
-from .llm.fake import FakeBackend
+from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider
 from .protocol import (
@@ -24,10 +28,12 @@ from .protocol import (
     NpcEvent,
     NpcIdle,
     NpcRoster,
+    Perception,
     Saved,
     Session,
     Snapshot,
 )
+from .trace import TraceWriter
 from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
@@ -373,4 +379,133 @@ async def m4_planner_bridge(
         results["planner"] = f"{'done' if ok else 'failed'} ({snap})"
     for name, outcome in results.items():
         log.info("%-20s %s", name, outcome)
+    return results
+
+
+class FixedDecider:
+    """A stand-in for the behavioral model: the same choice for every question that offers it."""
+
+    def __init__(self, choices: dict[str, str]) -> None:
+        self.choices = choices
+
+    async def decide(self, rid, lane, priority, deadline_ms, state, questions) -> Outcome:  # noqa: ANN001
+        answers = {}
+        for name, q in questions.items():
+            pick = self.choices.get(name)
+            pick = pick if pick in q["criteria"] else next(iter(q["criteria"]))
+            answers[name] = {
+                "type": "choice",
+                "choice": pick,
+                "probabilities": {pick: 0.9},
+                "confidence": 0.9,
+            }
+        return Outcome("answers", answers, 0.0, 1.0)
+
+    async def cancel(self, rid: str) -> None:
+        pass
+
+
+async def m5_turn_loop(
+    link: GameLink,
+    npc: str = "NONE_100_XARDAS",
+    decider: Decider | None = None,
+    trace: TraceWriter | None = None,
+) -> dict[str, str]:
+    """M5a on the game: the turn loop with checks, intents moving the body, and the two loops on an
+    incident (the body reacts before the words). The conversational model is scripted; the behavioral
+    model is the live service when given, a fixed stand-in otherwise. The game cannot hit an npc on
+    command, so the incident's perception is injected on the server side."""
+    await link.wait_world()
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc, fresh=True)
+    results: dict[str, str] = {}
+    potion = "ITPO_HEALTH_01"
+    results["debug_add_item"] = (await link.act(npc, "debug_add_item", item=potion, count=2)).status
+
+    def count_of(s: Snapshot) -> int:
+        return next((i.count for i in s.npc.inventory if i.item == potion and not i.equipped), 0)
+
+    intent = {"target": None, "attitude": "friendly", "agenda": "wants the hero to visit Lord Hagen"}
+    llm = FakeBackend(
+        script=[
+            FakeStep(
+                "Держи свиток огненного шара.",
+                [ToolCall("give_item", {"item": "ITSC_NOT_THERE", "count": 1})],
+            ),
+            FakeStep("Хотя нет, такого свитка у меня нет."),
+            FakeStep("Вот, возьми зелье.", [ToolCall("give_item", {"item": potion, "count": 1})]),
+            FakeStep("Хорошо, пойдём вместе.", [ToolCall("set_intent", {"goal": "follow_hero", **intent})]),
+            FakeStep(
+                "Довольно, у меня свои дела.", [ToolCall("set_intent", {"goal": "keep_routine", **intent})]
+            ),
+            FakeStep("Проклятая тварь! Ко мне, герой!"),
+        ],
+        delay=0,
+    )
+    budget = Budget()
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False, trace=trace, budget=budget)
+    reflexes = Reflexes(decider or FixedDecider({"react": "run_to_hero", "gesture": "nod"}))
+    desk = IncidentDesk(link, dialogue, reflexes, budget, trace)
+    desk.attached.add(npc)  # it was attached before the desk was listening
+    conv = dialogue.open(npc, snap.npc.name)
+
+    async def following(expected: bool) -> bool:
+        for _ in range(20):
+            if (await link.snapshot(npc, fresh=True)).npc.following == expected:
+                return True
+            await asyncio.sleep(0.5)
+        return False
+
+    try:
+        # 1. a commitment the npc cannot keep is rejected before the game and corrected in the same turn
+        before = count_of(await link.snapshot(npc, fresh=True))
+        await dialogue.say_as_player(npc, "Дай мне свиток огненного шара")
+        said = conv.history[-1].content if conv.history else ""
+        unchanged = count_of(await link.snapshot(npc, fresh=True)) == before
+        ok = len(llm.calls) == 2 and "Хотя нет" in said and unchanged
+        results["rejected_give"] = f"{'done' if ok else 'failed'} ({len(llm.calls)} calls: {said})"
+
+        # 2. a commitment it can keep: the body gives after the line
+        await dialogue.say_as_player(npc, "Тогда дай зелье")
+        for _ in range(60):
+            if any(m.role == "developer" and "отдал" in m.content for m in conv.history):
+                break
+            await asyncio.sleep(0.5)
+        after = count_of(await link.snapshot(npc, fresh=True))
+        results["give"] = f"{'done' if after == before - 1 else 'failed'} ({potion}: {before} -> {after})"
+
+        # 3. intents move the body: follow, then back to its own business
+        await dialogue.say_as_player(npc, "Пойдём со мной")
+        results["intent_follow"] = "done" if await following(True) else "failed (not following)"
+        await dialogue.say_as_player(npc, "Можешь остаться")
+        results["intent_routine"] = "done" if await following(False) else "failed (still following)"
+
+        # 4. an incident: the body reacts at once, the words come after
+        calls = len(llm.calls)
+        reacted_at: float | None = None
+        started = time.monotonic()
+        link._dispatch(
+            Perception(type="perception", npc=npc, perc="ASSESSDAMAGE", other="WOLF", distance=300.0)
+        )
+        for _ in range(100):
+            if reacted_at is None and any(r.question == "react" for r in desk.reactions):
+                reacted_at = time.monotonic() - started
+            if len(llm.calls) > calls and conv.reply is not None and conv.reply.done():
+                break
+            await asyncio.sleep(0.1)
+        words_at = time.monotonic() - started
+        reaction = next((r for r in reversed(desk.reactions) if r.question == "react"), None)
+        spoke = conv.history[-1].content if conv.history and conv.history[-1].role == "assistant" else ""
+        results["incident_reflex"] = (
+            f"{'done' if reaction else 'failed'} "
+            f"({reaction.choice if reaction else '-'}, applied={reaction.applied if reaction else '-'}, "
+            f"{(reacted_at or 0) * 1000:.0f} ms)"
+        )
+        results["incident_words"] = (
+            f"{'done' if spoke and (reacted_at or 99) < words_at else 'failed'} ({spoke})"
+        )
+    finally:
+        await link.act(npc, "return_to_routine")
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
     return results

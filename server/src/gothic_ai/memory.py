@@ -29,7 +29,7 @@ DEFAULT_PATH = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local" / "s
 )
 LOAD_LIMIT = 100  # newest messages read back for one npc (older ones should be summarized already)
 SEARCH_SCAN = 2000  # how far back a search looks
-STEM = 5  # a crude stem for Russian: the first letters of longer words ("драконы" ~ "дракон")
+STEM = 4  # a crude stem for Russian: the first letters of longer words ("драконы" ~ "дракон")
 _WORDS = re.compile(r"\w+")
 
 _SCHEMA = """
@@ -162,19 +162,20 @@ class MemoryStore:
         return row[0] if row else None
 
     def search(
-        self, branch: str, npc: str, query: str, before_seq: int, limit: int = 5
+        self, branch: str, npc: str, query: str, before_seq: int, limit: int = 6
     ) -> list[Recollection]:
-        """Messages up to `before_seq` (older than what the npc has in mind) that share the most word
-        stems with `query`; newer first among equals. Matching is done here, not in SQL: SQLite's LIKE
+        """Messages up to `before_seq` (older than what the npc has in mind): those sharing the most word
+        stems with `query`, topped up with the latest of them (a word search misses "как меня зовут" vs
+        "моё имя"; the model reads what comes back). Matching is done here, not in SQL: SQLite's LIKE
         ignores case for ASCII only."""
-        stems = _stems(query)
-        if not stems or before_seq <= 0:
+        if before_seq <= 0:
             return []
         rows = self._db.execute(
             "SELECT seq, role, content, game_time FROM events "
             "WHERE branch=? AND npc=? AND kind='message' AND seq<=? ORDER BY seq DESC LIMIT ?",
             (branch, npc, before_seq, SEARCH_SCAN),
         ).fetchall()
+        stems = _stems(query)
         scored = []
         for seq, role, content, game_time in rows:
             text = content.lower()
@@ -182,7 +183,12 @@ class MemoryStore:
             if score:
                 scored.append((score, int(seq), Recollection(int(seq), role, content, game_time)))
         scored.sort(key=lambda x: (-x[0], -x[1]))
-        return sorted((r for _, _, r in scored[:limit]), key=lambda r: r.seq)
+        found = {r.seq: r for _, _, r in scored[:limit]}
+        for seq, role, content, game_time in rows:  # newest first
+            if len(found) >= limit:
+                break
+            found.setdefault(int(seq), Recollection(int(seq), role, content, game_time))
+        return sorted(found.values(), key=lambda r: r.seq)
 
     def branches(self) -> list[BranchInfo]:
         rows = self._db.execute(
@@ -231,4 +237,4 @@ class _Transaction:
 
 
 def _stems(text: str) -> set[str]:
-    return {w[:STEM] for w in _WORDS.findall(text.lower()) if len(w) >= 4}
+    return {w[:STEM] for w in _WORDS.findall(text.lower()) if len(w) >= 3}

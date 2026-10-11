@@ -54,7 +54,8 @@ def test_search_finds_older_messages_by_word_stems() -> None:
     store.append("A", "X", "user", "Принеси мне грибов", "день 1, 11:00")
     store.append("A", "X", "user", "Дракон снова прилетел", "день 2, 09:00")  # newer than asked for
 
-    found = store.search("A", "X", "драконы", before_seq=3)
+    found = store.search("A", "X", "драконы", before_seq=3, limit=2)
     assert [(r.seq, r.game_time) for r in found] == [(1, "день 1, 10:00"), (2, "день 1, 10:00")]
     assert store.search("A", "X", "драконы", before_seq=0) == []
-    assert store.search("A", "X", "и в", before_seq=4) == []  # no words long enough to match
+    # nothing matches: the latest older messages come back anyway (the model reads them)
+    assert [r.seq for r in store.search("A", "X", "как меня зовут", before_seq=3, limit=2)] == [2, 3]

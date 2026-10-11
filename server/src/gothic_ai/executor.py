@@ -101,13 +101,15 @@ def targets(snap: Snapshot | None) -> dict[str, str]:
     return out
 
 
-def parse_intent(args: dict[str, Any]) -> Intent:
+def parse_intent(args: dict[str, Any], current: Intent | None = None) -> Intent:
+    """The model's set_intent arguments; an agenda of null keeps the current one."""
     target = args.get("target")
+    agenda = args.get("agenda")
     return Intent(
         goal=str(args.get("goal") or "none"),
         target=str(target).strip() or None if target else None,
         attitude=str(args.get("attitude") or "neutral"),
-        agenda=str(args.get("agenda") or "").strip()[:AGENDA_MAX],
+        agenda=(current.agenda if current else "") if agenda is None else str(agenda).strip()[:AGENDA_MAX],
     )
 
 

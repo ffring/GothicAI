@@ -7,7 +7,7 @@ from gothic_ai.budget import Budget
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import Intent
 from gothic_ai.incidents import IncidentDesk
-from gothic_ai.llm import FakeBackend
+from gothic_ai.llm import FakeBackend, FakeStep, ToolCall
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.trace import TraceWriter, read
 from tests.fake_game import FakeGame, connected
@@ -185,3 +185,39 @@ async def test_the_body_gestures_while_the_npc_thinks_of_an_answer(tmp_path):
     assert kinds[0] == ("action", "play_ani")
     nod = next(m for m in fake.received if m["type"] == "action")
     assert nod["args"] == {"name": "T_YES"}
+
+
+async def test_a_fight_ends_with_the_incident_and_the_old_intent_comes_back(tmp_path):
+    fake = FakeGame()
+    fake.nearby.append(WOLF)
+    follow = {
+        "goal": "follow_hero",
+        "target": None,
+        "attitude": "friendly",
+        "agenda": "wants the hero to see Hagen",
+    }
+    fight = {"goal": "fight", "target": "WOLF", "attitude": "friendly", "agenda": None}  # null: agenda kept
+    llm = FakeBackend(
+        script=[
+            FakeStep("Хорошо, пойдём.", [ToolCall("set_intent", follow)]),
+            FakeStep("Прочь, тварь!", [ToolCall("set_intent", fight)]),
+        ],
+        delay=0,
+    )
+    link_cm = connected(fake)
+    link = await link_cm.__aenter__()
+    try:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        desk = IncidentDesk(link, dialogue, None, Budget(), None, settle_s=0.05, gap_s=0.5)
+        await link.attach(XARDAS)
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await _until(lambda: XARDAS in desk.attached)
+        await link.snapshot(XARDAS, fresh=True)
+        await dialogue.say_as_player(XARDAS, "Пойдём со мной")
+        await fake.perception(XARDAS, "ASSESSDAMAGE", "WOLF")
+        await _until(lambda: conv.intent.goal == "fight", timeout=5)
+        assert conv.intent.agenda == "wants the hero to see Hagen"
+        await _until(lambda: conv.intent.goal == "follow_hero", timeout=5)  # the wolf is gone
+    finally:
+        await link_cm.__aexit__(None, None, None)
+    assert conv.intent.attitude == "friendly" and conv.intent.agenda == "wants the hero to see Hagen"
