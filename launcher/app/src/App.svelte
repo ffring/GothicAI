@@ -2,6 +2,7 @@
   // Which screen the window shows: the wizard until the setup is complete, the game while it runs,
   // the failure of the last start until dismissed, otherwise the main screen or the settings.
   import { onMount } from "svelte";
+  import { onQuitRequested, quitApp } from "./lib/core";
   import { launcher } from "./lib/launcher.svelte";
   import Failed from "./screens/Failed.svelte";
   import Main from "./screens/Main.svelte";
@@ -12,8 +13,11 @@
   let view = $state<"main" | "settings" | "wizard">("main");
   let dismissed = $state<number | null>(null); // the start time of the failed session put aside
   let loadError = $state<string | null>(null);
+  let confirmQuit = $state(false);
+  let quitting = $state(false);
 
   onMount(() => {
+    const unlisten = onQuitRequested(() => (confirmQuit = true));
     launcher
       .init()
       .then(() => {
@@ -21,7 +25,13 @@
         if (!launcher.state?.configured) view = "wizard";
       })
       .catch((err) => (loadError = String(err)));
+    return () => void unlisten.then((stop) => stop());
   });
+
+  function quit() {
+    quitting = true;
+    void quitApp();
+  }
 
   const screen = $derived.by(() => {
     const s = launcher.state;
@@ -53,6 +63,23 @@
   <Main onSettings={() => (view = "settings")} />
 {/if}
 
+{#if confirmQuit}
+  <div class="backdrop">
+    <div class="dialog panel" role="alertdialog" aria-modal="true" aria-labelledby="quit-title" aria-describedby="quit-text">
+      <h2 id="quit-title" class="display">Игра ещё идёт</h2>
+      <p id="quit-text" class="muted">
+        Если выйти, лаунчер остановит игру и сервисы. Несохранённое в игре пропадёт.
+      </p>
+      <div class="actions">
+        <button class="btn btn-stop" onclick={quit} disabled={quitting}>
+          {quitting ? "Останавливаю…" : "Остановить игру и выйти"}
+        </button>
+        <button class="btn btn-ghost" onclick={() => (confirmQuit = false)} disabled={quitting}>Отмена</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .center {
     height: 100%;
@@ -67,5 +94,30 @@
   }
   .center p {
     font-size: 15px;
+  }
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    background: rgba(10, 8, 6, 0.72);
+  }
+  .dialog {
+    max-width: 440px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 22px 24px;
+  }
+  .dialog h2 {
+    font-size: 26px;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 6px;
   }
 </style>

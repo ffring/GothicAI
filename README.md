@@ -117,10 +117,10 @@ gothic-launcher up --no-game
 cd launcher/app && bun install && bun tauri dev
 ```
 
-Собрать `Gothic AI.app` (в `launcher/app/src-tauri/target/debug/bundle/macos/`):
+Собрать, подписать и поставить в `/Applications`. Подпись берётся из `GOTHIC_SIGNING_IDENTITY` в `.env` (см. `.env.example`): с постоянной подписью macOS спрашивает доступ к микрофону один раз, а не после каждой сборки.
 
 ```bash
-cd launcher/app && bun tauri build --debug --bundles app
+scripts/build-launcher.sh
 ```
 
 Экраны можно править в обычном браузере, без Tauri: `bun run dev` в `launcher/app` и http://localhost:47850. Вместо ядра там отвечает заглушка (`src/lib/mock.ts`), `?scenario=fresh` открывает мастер, `?scenario=failed` — ошибку запуска.

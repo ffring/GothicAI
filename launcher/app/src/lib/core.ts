@@ -99,5 +99,9 @@ export function onCore(handler: (msg: CoreMessage) => void): Promise<UnlistenFn>
 /** The launcher window hides; the menu bar icon stays (while the game runs). */
 export const toMenuBar = () => invoke("to_menu_bar");
 export const showWindow = () => invoke("show_window");
+/** Stops the game and the services and quits (after the player confirmed `quit_requested`). */
+export const quitApp = () => invoke("quit_app");
+/** Quitting while the game runs: the window asks first. */
+export const onQuitRequested = (handler: () => void) => listen("quit_requested", handler);
 export const reveal = (path: string) => invoke("reveal", { path });
 export const openFolder = (path: string) => invoke("open_folder", { path });

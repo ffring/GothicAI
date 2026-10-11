@@ -129,6 +129,11 @@ def test_find_layout_lists_everything_missing(config, tmp_path):
     layout = find_layout(config)
     assert layout.game_bin == binary and layout.game_dir == game_dir and layout.uv == Path("/bin/sh")
 
+    bundled = binary.parent / "OpenGothic Dev.app" / "Contents" / "MacOS" / "Gothic2Notr"
+    bundled.parent.mkdir(parents=True)
+    bundled.symlink_to("../../../Gothic2Notr")  # as scripts/make-dev-app.sh makes it
+    assert find_layout(config).game_bin == bundled  # the game gets its own name and icon in the Dock
+
 
 def test_free_ports_differ():
     ports = Ports.free()

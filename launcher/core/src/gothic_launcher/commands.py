@@ -112,7 +112,7 @@ def find_layout(config: Config) -> Layout:
     except LaunchError as err:
         problems.append(str(err))
         repo, uv = repo_dir(config) or Path(), Path("uv")
-    game_bin = paths.game_bin or repo / "OpenGothic" / "build" / "opengothic" / "Gothic2Notr"
+    game_bin = paths.game_bin or default_game_bin(repo)
     if not os.access(game_bin, os.X_OK):
         problems.append(f"the game is not built: no {game_bin} (see README, «Сборка и запуск»)")
     game_dir = config.settings.game.dir
@@ -162,6 +162,14 @@ def uv_path(config: Config) -> Path | None:
         if os.access(p, os.X_OK):
             return p
     return None
+
+
+def default_game_bin(repo: Path) -> Path:
+    """The build's Gothic2Notr; from inside `OpenGothic Dev.app` (scripts/make-dev-app.sh) when that bundle
+    exists, so the game has its own name and icon in the Dock."""
+    build = repo / "OpenGothic" / "build" / "opengothic"
+    bundled = build / "OpenGothic Dev.app" / "Contents" / "MacOS" / "Gothic2Notr"
+    return bundled if os.access(bundled, os.X_OK) else build / "Gothic2Notr"
 
 
 def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Proc]:

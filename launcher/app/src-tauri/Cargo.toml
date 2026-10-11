@@ -19,3 +19,12 @@ tauri-plugin-single-instance = "2"
 serde_json = "1"
 tokio = { version = "1", features = ["sync"] }
 libc = "0.2"
+
+# Cargo strips release builds by default, proc macros included, and this macOS's dyld refuses the
+# stripped proc-macro dylibs ("mis-aligned LINKEDIT string pool"); release builds carry no debug info
+# anyway, so there is little to strip
+[profile.release]
+strip = "none"
+
+[profile.release.build-override]
+strip = "none"
