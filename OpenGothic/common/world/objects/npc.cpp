@@ -3239,6 +3239,11 @@ void Npc::commitSpell() {
     }
   }
 
+void Npc::forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const {
+  for(auto& r:routines)
+    f(RoutineInfo{r.start,r.end,r.callback,r.wayPointName()});
+  }
+
 const Npc::Routine& Npc::currentRoutine(bool assertWp) const {
   // find routine for current time
   // if there is no such routine search counter clock-wise until one is found

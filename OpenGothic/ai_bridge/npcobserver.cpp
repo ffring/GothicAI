@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 
 #include "game/gamescript.h"
 #include "world/aiqueue.h"
@@ -30,6 +31,7 @@ constexpr uint64_t ActMaxMs       = 30000; // npc_idle at the latest after this
 constexpr uint64_t ActGraceMs     = 200;   // let the npc take the action from its queue
 constexpr uint64_t StateMaxMs     = 120000; // fight/flee: npc_idle at the latest after this
 constexpr uint64_t StateStartMs   = 3000;
+constexpr uint64_t ActivityMaxMs  = 10*60*1000;
 
 std::string upper(std::string_view s) {
   std::string r(s);
@@ -305,6 +307,31 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   else if(action=="remove_weapon") {
     npc->aiPush(AiQueue::aiRemoveWeapon());
     }
+  else if(action=="start_activity") {
+    // what a routine entry does (TA_Sit_Bench: ZS_SIT_BENCH at a waypoint), now, for `minutes` of game
+    // time; afterwards the routine goes on by itself
+    const auto name = upper(JsonRead::str(args,"state"));
+    const auto wp   = world.findPoint(JsonRead::str(args,"waypoint"),false);
+    state = name.starts_with("ZS_") ? AiNpc::scriptState(world,name) : ScriptFn();
+    if(!state.isValid() || wp==nullptr) {
+      reply(id,symbol,"rejected",!state.isValid() ? "unknown state: " + name : "unknown waypoint");
+      return;
+      }
+    auto until = world.time();
+    until.addMilis(uint64_t(std::clamp<int64_t>(JsonRead::integer(args,"minutes",60),1,24*60))*60*1000);
+    npc->startState(state,wp->name,until,false);
+    }
+  else if(action=="set_routine") {
+    // Npc_ExchangeRoutine: another set of routine entries (Rtn_<name>_<id>), effective at once
+    const auto   name = upper(JsonRead::str(args,"name"));
+    const size_t fn   = world.script().findSymbolIndex("RTN_" + name + "_" + std::to_string(npc->handle().id));
+    if(name.empty() || fn==size_t(-1)) {
+      reply(id,symbol,"rejected","unknown routine: " + name);
+      return;
+      }
+    npc->excRoutine(fn);
+    npc->resumeAiRoutine();
+    }
   else {
     reply(id,symbol,"rejected","unknown action: " + std::string(action));
     return;
@@ -313,9 +340,51 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   // a newer action for the same npc replaces the tracking of the older one
   running.erase(std::remove_if(running.begin(),running.end(),[&](const Running& r){ return r.symbol==symbol; }),
                 running.end());
+  const uint64_t maxMs = action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs);
   running.push_back({std::string(id),symbol,world.script().findSymbolIndex(symbol),world.tickCount(),
-                     state,false,state.isValid() ? StateMaxMs : ActMaxMs});
+                     state,false,maxMs});
   reply(id,symbol,"queued","");
+  }
+
+void NpcObserver::routine(World& world, const rapidjson::Value& msg) {
+  const auto symbol = upper(JsonRead::str(msg,"npc"));
+  Npc*       npc    = npcBySymbol(world,symbol);
+  JsonWriter j("routine");
+  j.str("req",JsonRead::str(msg,"req")).str("npc",symbol);
+  if(npc==nullptr || npc->isPlayer()) {
+    emit(j.str("error","npc not found").finish());
+    return;
+    }
+  auto stateName = [&](ScriptFn fn) -> std::string {
+    auto sym = fn.isValid() ? world.script().findSymbol(fn.ptr) : nullptr;
+    return sym!=nullptr ? sym->name() : "";
+    };
+  auto hhmm = [](gtime t) {
+    char buf[8];
+    std::snprintf(buf,sizeof(buf),"%02d:%02d",int(t.hour()),int(t.minute()));
+    return std::string(buf);
+    };
+  j.str("current",stateName(npc->currentState())).array("entries");
+  npc->forEachRoutine([&](const Npc::RoutineInfo& r) {
+    j.object()
+       .str("start",hhmm(r.start))
+       .str("end",hhmm(r.end))
+       .str("state",stateName(r.state))
+       .str("waypoint",r.point)
+     .end();
+    });
+  j.endArray().array("routines");
+  // the npc's routine variants: Rtn_<name>_<id> in the scripts
+  const std::string suffix = "_" + std::to_string(npc->handle().id);
+  for(size_t i=0; i<world.script().symbolsCount(); ++i) {
+    auto sym = world.script().findSymbol(i);
+    if(sym==nullptr)
+      continue;
+    const std::string& n = sym->name();
+    if(n.size()>4+suffix.size() && n.starts_with("RTN_") && n.ends_with(suffix))
+      j.item(n.substr(4,n.size()-4-suffix.size()));
+    }
+  emit(j.endArray().finish());
   }
 
 void NpcObserver::checkRunning(World& world, uint64_t now) {

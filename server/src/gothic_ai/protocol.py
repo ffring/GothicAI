@@ -292,6 +292,26 @@ class NpcActResult(_GameMessage):
     detail: str | None = None
 
 
+class RoutineEntry(_GameMessage):
+    start: str  # "HH:MM" game time
+    end: str
+    state: str  # script state, e.g. ZS_SIT_BENCH
+    waypoint: str
+
+
+class RoutineInfo(_GameMessage):
+    """An npc's daily routine (v6), the answer to `routine`: its entries, the routine variants the scripts
+    have for it (`set_routine` names, e.g. START, GUIDE) and the script state it is in now."""
+
+    type: Literal["routine"]
+    req: str = ""
+    npc: str
+    current: str = ""
+    entries: list[RoutineEntry] = Field(default_factory=list)
+    routines: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
 GameMessage = Annotated[
     Hello
     | WorldLoaded
@@ -316,7 +336,8 @@ GameMessage = Annotated[
     | NpcRoster
     | NpcEvent
     | NpcIdle
-    | NpcActResult,
+    | NpcActResult
+    | RoutineInfo,
     Field(discriminator="type"),
 ]
 
@@ -387,7 +408,17 @@ NpcActType = Literal[
     "flee",  # v6: ZS_FLEE from args.npc
     "draw_weapon",  # v6
     "remove_weapon",  # v6
+    "start_activity",  # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine
+    "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
 ]
+
+
+class RoutineCmd(_Command):
+    """Ask for an npc's daily routine (v6); the game answers `routine`."""
+
+    type: Literal["routine"] = "routine"
+    req: str
+    npc: str
 
 
 class NpcActCmd(_Command):

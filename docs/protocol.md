@@ -216,6 +216,15 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `flee` (v6) | — | родное бегство (`ZS_FLEE`) от цели |
 | `draw_weapon` (v6) | `kind`: `melee` / `ranged` | достать оружие |
 | `remove_weapon` (v6) | — | убрать оружие |
+| `start_activity` (v6) | `state` (`ZS_*`, например `ZS_SIT_CAMPFIRE`), `waypoint` (точное имя), `minutes`=60 | занятие, как его ставит запись распорядка (`TA_*`), сейчас и на `minutes` игрового времени; дальше распорядок идёт сам. `npc_idle`, когда NPC вышел из этого состояния |
+| `set_routine` (v6) | `name` (например `START`) | другой вариант распорядка (`Npc_ExchangeRoutine`, функция `Rtn_<name>_<id>`), действует сразу |
+
+**Сервер → игра: `routine`** (`req`, `npc`, v6) — распорядок NPC. Ответ — `routine` (`req`, `npc`, `current`, `entries[]`, `routines[]`, `error?`):
+- `entries` — записи распорядка: `start`, `end` (игровое время «ЧЧ:ММ»), `state` (`ZS_*`), `waypoint`;
+- `routines` — варианты распорядка, которые есть в скриптах для этого NPC (имена для `set_routine`);
+- `current` — скриптовое состояние, в котором NPC сейчас.
+
+Пример, Ксардас: `ZS_READ_BOOKSTAND` у `NW_XARDAS_TOWER_IN1_28` круглые сутки; варианты `PRESTART`, `START`, `RITUALINNOSEYEREPAIR`, `RITUALINNOSEYE`, `TOT`. В консоли сервера — команда `schedule [npc]`.
 
 Решения планировщика превращаются в эти действия в `GameApplier` ([brain/apply.py](../server/src/gothic_ai/brain/apply.py)).
 

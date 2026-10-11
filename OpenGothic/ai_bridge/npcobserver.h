@@ -34,6 +34,8 @@ class NpcObserver final {
     void tick(World& world);
     void perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
     void act(World& world, const rapidjson::Value& msg);
+    // `routine`: an npc's daily routine, its routine variants and current state (v6)
+    void routine(World& world, const rapidjson::Value& msg);
     void clear();
 
   private:

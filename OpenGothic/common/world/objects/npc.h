@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animation.h"
 #include "graphics/meshobjects.h"
@@ -320,6 +322,16 @@ class Npc final {
 
     void      addRoutine(gtime s, gtime e, uint32_t callback, std::string_view point);
     void      excRoutine(size_t callback);
+
+    // the daily routine, read-only: for tools outside the scripts (the AI bridge)
+    struct RoutineInfo final {
+      gtime            start;
+      gtime            end;
+      ScriptFn         state;
+      std::string_view point;
+      };
+    void      forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const;
+    ScriptFn  currentState() const { return aiState.funcIni; }
     void      multSpeed(float s);
 
     bool      testMove(const Tempest::Vec3& pos);

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
-from .dialogue import DialogueManager, line_duration
+from .dialogue import DialogueManager
 from .game import GameError, GameLink
 from .incidents import IncidentDesk
 from .llm import ToolCall
@@ -617,21 +617,41 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     await link.act(npc, "return_to_routine")
 
     # 5. a free npc speaks: queued like its own lines, or on the move (overlay) without stopping
+    # right after return_to_routine the npc walks back to its spot: queued speech would wait for that,
+    # a line on the move starts at once
     long_line = "Слушай внимательно, у нас мало времени, и я не стану повторять дважды: драконы уже здесь."
     t0 = time.monotonic()
     await link.send(SayCmd(npc=npc, line="AIB_900002", text=long_line, overlay=True))
-    act = await link.npc_act(npc, "look_at", ms=1500)
-    for _ in range(100):
-        if any(i.act == act for i in idles):
+    for _ in range(50):
+        if any(m.line == "AIB_900002" for m in started_lines):
             break
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
     took = time.monotonic() - t0
     said = any(m.line == "AIB_900002" for m in started_lines)
-    ok = said and took < line_duration(long_line) - 2
     results["free_say_on_the_move"] = (
-        f"{'done' if ok else 'failed'} (line started: {said}, look_at done after {took:.1f} s, "
-        f"the line lasts {line_duration(long_line):.1f} s)"
+        f"{'done' if said and took < 1.0 else 'failed'} (started after {took:.2f} s while the npc walks back)"
     )
+
+    # 6. the routine: read it, put the npc to an activity for a while, then back to a routine variant
+    info = await link.routine(npc)
+    entries = "; ".join(f"{e.start}-{e.end} {e.state} {e.waypoint}" for e in info.entries)
+    results["routine"] = (
+        f"{'done' if info.entries else 'failed'} (now {info.current}, variants {info.routines}, {entries})"
+    )
+    if info.entries:
+        spot = info.entries[0].waypoint
+        act = await link.npc_act(npc, "start_activity", state="ZS_SIT_CAMPFIRE", waypoint=spot, minutes=30)
+        await asyncio.sleep(1.0)
+        now = (await link.routine(npc)).current
+        results["start_activity"] = (
+            f"{'done' if now == 'ZS_SIT_CAMPFIRE' else 'failed'} (now {now} at {spot})"
+        )
+        variant = "START" if "START" in info.routines or not info.routines else info.routines[0]
+        await link.npc_act(npc, "set_routine", name=variant)
+        await asyncio.sleep(1.0)
+        now = (await link.routine(npc)).current
+        back = now == info.entries[0].state or now != "ZS_SIT_CAMPFIRE"
+        results["set_routine"] = f"{'done' if back else 'failed'} ({variant}: now {now})"
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
     return results

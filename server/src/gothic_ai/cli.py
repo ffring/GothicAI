@@ -76,6 +76,7 @@ DEFAULT_GAME_DIR = "/Volumes/shared/projects/Gothic II"
 HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping
   goto <waypoint> | come | turn | ani <name> | wait <ms> | stop | routine
+  schedule [npc]    the npc's daily routine, its variants and current script state
   talk <text>       speak to the npc as the player (opens a conversation)
   additem <item> [n] put an item into the npc's inventory (game needs -devmode)
   memory [npc]      the current save branch and what the npc remembers
@@ -151,6 +152,11 @@ class Console:
                 await link.detach(rest[0] if rest else npc)
             case "snap":
                 print((await link.snapshot(rest[0] if rest else npc, fresh=True)).model_dump_json(indent=2))
+            case "schedule":
+                info = await link.routine(rest[0] if rest else npc)
+                print(f"now: {info.current}; variants: {', '.join(info.routines) or '-'}")
+                for e in info.entries:
+                    print(f"  {e.start}-{e.end} {e.state} at {e.waypoint}")
             case "ping":
                 print(f"pong in {await link.ping() * 1000:.1f} ms")
             case "goto" if rest:

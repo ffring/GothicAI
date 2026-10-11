@@ -538,6 +538,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="npc_act") {
     observer.act(*world,doc);
     }
+  else if(type=="routine") {
+    observer.routine(*world,doc);
+    }
   else if(type=="say") {
     onSay(*world,doc);
     }
