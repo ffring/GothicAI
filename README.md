@@ -13,7 +13,8 @@
 | `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере (audio.cpp), подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на GPU-сервере |
 | `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на GPU-сервере |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
-| `launcher/core/` | Лаунчер `gothic-launcher`: поднимает сервисы и игру одной командой, хранит настройки и ключи |
+| `launcher/core/` | Ядро лаунчера `gothic-launcher`: поднимает сервисы и игру одной командой, хранит настройки и ключи |
+| `launcher/app/` | Окно лаунчера (Tauri, Svelte): мастер, запуск, журнал, настройки, значок в строке меню |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
 | `docs/launcher.md` | План лаунчера: запуск игры и сервисов одной кнопкой, настройки и ключи в окне |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
@@ -105,6 +106,24 @@ gothic-launcher config set secrets.inworld_api_key
 ```bash
 gothic-launcher up --no-game
 ```
+
+### Окно лаунчера
+
+Приложение `Gothic AI` на Tauri: мастер первой настройки, кнопка «Играть», журнал реплик и настройки. Пока идёт игра, окно уходит в строку меню. Ядро и сервисы оно берёт из этого репозитория, поэтому нужны `uv` и `bun`.
+
+Запустить в режиме разработки:
+
+```bash
+cd launcher/app && bun install && bun tauri dev
+```
+
+Собрать `Gothic AI.app` (в `launcher/app/src-tauri/target/debug/bundle/macos/`):
+
+```bash
+cd launcher/app && bun tauri build --debug --bundles app
+```
+
+Экраны можно править в обычном браузере, без Tauri: `bun run dev` в `launcher/app` и http://localhost:47850. Вместо ядра там отвечает заглушка (`src/lib/mock.ts`), `?scenario=fresh` открывает мастер, `?scenario=failed` — ошибку запуска.
 
 ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`.
 

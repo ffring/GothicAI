@@ -1,0 +1,204 @@
+/* Dark stone, parchment text, torch-amber for the main actions (see the mockup in docs/launcher.md). */
+:root {
+  --ground: #15120f;
+  --panel: #1e1a16;
+  --raised: #26211b;
+  --sunk: #110f0c;
+  --selected: #241d15;
+  --line: #2f2821;
+  --border: #3b3229;
+  --control: #4a3d31;
+  --control-hover: #6b5843;
+  --text: #ece2cc;
+  --text-2: #b9aa8f;
+  --text-3: #9a8b78;
+  --text-soft: #d9ccb3;
+  --log: #cfc2a8;
+  --ember: #e09a3e;
+  --ember-hover: #eaa94f;
+  --on-ember: #1b1209;
+  --link: #e0b36e;
+  --link-hover: #f0c98a;
+  --ok: #a9cfae;
+  --ok-line: #3f5a46;
+  --warn: #e9b467;
+  --warn-line: #7a5a2a;
+  --bad: #d0644a;
+  --bad-line: #6a3a2c;
+  --bad-text: #e6b6a8;
+  --display: "Cormorant SC", serif;
+  --body: "Alegreya Sans", "PT Sans", sans-serif;
+  --mono: "JetBrains Mono", monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+#app {
+  height: 100%;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+.display {
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.muted {
+  color: var(--text-2);
+}
+
+.faint {
+  color: var(--text-3);
+  font-size: 14px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--ember);
+  color: var(--on-ember);
+  border: 0;
+  font-weight: 700;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--ember-hover);
+}
+.btn-ghost {
+  background: none;
+  color: var(--text-soft);
+  border: 1px solid var(--control);
+}
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--control-hover);
+  color: var(--text);
+}
+.btn-stop {
+  background: none;
+  color: var(--bad-text);
+  border: 1px solid var(--bad-line);
+}
+.btn-stop:hover:not(:disabled) {
+  border-color: var(--bad);
+  color: #f3d2c8;
+}
+.link {
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--link);
+  cursor: pointer;
+}
+.link:hover {
+  color: var(--link-hover);
+}
+
+/* form controls */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select {
+  min-height: 40px;
+  padding: 0 10px;
+  background: var(--raised);
+  border: 1px solid var(--control);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  user-select: text;
+}
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: 2px;
+}
+input[type="radio"],
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--ember);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--ok-line);
+  border-radius: 999px;
+  color: var(--ok);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.chip.warn {
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+.chip.bad {
+  border-color: var(--bad-line);
+  color: var(--bad-text);
+}
+.chip.idle {
+  border-color: var(--control);
+  color: var(--text-3);
+}

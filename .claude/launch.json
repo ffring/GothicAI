@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "launcher-ui",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "--cwd", "launcher/app", "dev"],
+      "port": 47850
+    }
+  ]
+}
