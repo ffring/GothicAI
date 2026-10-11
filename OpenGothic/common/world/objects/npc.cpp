@@ -3696,6 +3696,7 @@ bool Npc::drawWeaponFist() {
 
   invent.switchActiveWeaponFist();
   hnpc->weapon = 1;
+  emitDrawWeapon();
   return true;
   }
 
@@ -3722,6 +3723,7 @@ bool Npc::drawWeaponMelee() {
 
   invent.switchActiveWeapon(*this,1);
   hnpc->weapon = (st==WeaponState::W1H ? 3:4);
+  emitDrawWeapon();
   return true;
   }
 
@@ -3745,6 +3747,7 @@ bool Npc::drawWeaponBow() {
     return false;
   invent.switchActiveWeapon(*this,2);
   hnpc->weapon = (st==WeaponState::Bow ? 5:6);
+  emitDrawWeapon();
   return true;
   }
 
@@ -3778,7 +3781,15 @@ bool Npc::drawSpell(int32_t spell) {
   hnpc->weapon = 7;
 
   updateWeaponSkeleton();
+  if(weaponSt==WeaponState::NoWeapon)
+    emitDrawWeapon();
   return true;
+  }
+
+void Npc::emitDrawWeapon() {
+  // as in the original game: npc's around react to the player drawing a weapon (B_AssessDrawWeapon)
+  if(isPlayer())
+    owner.sendPassivePerc(*this,*this,PERC_DRAWWEAPON);
   }
 
 WeaponState Npc::weaponState() const {

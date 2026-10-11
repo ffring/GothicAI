@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 # --- game -> server -----------------------------------------------------------
 
@@ -254,14 +254,20 @@ class NpcRoster(_GameMessage):
 
 
 class NpcEvent(_GameMessage):
-    """Something an npc that is not under control noticed about the player (v5): came close, entered its
-    room, gave an item, drew a weapon, stole, cast a spell, attacked or killed (`detail`: whom). The
-    engine's own perceptions still run; this is a copy."""
+    """Something an npc that is not under control noticed (v5, threats from others since v6).
+
+    About the player: came close, entered its room, gave an item, drew a weapon (`weapon_drawn`), aimed
+    at it with a weapon (`threatened`), stole, cast a spell, attacked or killed (`detail`: whom).
+    Threats from others (`other` is their script symbol, `other_name` the shown name): a monster it
+    senses (`monster_near`), a monster attacking it or someone near (`monster_attack`, `detail`: "you"
+    or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
+    `distance` is from the npc to `other`. The engine's own perceptions still run; this is a copy."""
 
     type: Literal["npc_event"]
     npc: str
     kind: str
     other: str = "PLAYER"
+    other_name: str | None = None
     distance: float | None = None
     detail: str | None = None
 
@@ -470,13 +476,19 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load"]
+DebugCommand = Literal["save", "load", "spawn", "player_weapon"]
 
 
 class DebugCmd(_Command):
-    """Save or load a slot (`save_slot_<slot>.sav`) for automated checks; the game must run with -devmode."""
+    """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
+    spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
+    player draw (`state: "melee"`) or put away (`"none"`) a weapon."""
 
     type: Literal["debug"] = "debug"
     req: str
     cmd: DebugCommand
-    slot: int
+    slot: int = 0
+    instance: str | None = None
+    near: str | None = None
+    distance: int | None = None
+    state: str | None = None

@@ -169,9 +169,10 @@ class GameLink:
     async def detach(self, npc: str, timeout: float = 5.0) -> None:
         await self._request(DetachCmd(req=self._next_id("r"), npc=npc), timeout)
 
-    async def debug(self, cmd: DebugCommand, slot: int, timeout: float = 10.0) -> None:
-        """Start saving/loading `save_slot_<slot>.sav` (game in -devmode). Returns once it has started."""
-        await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot), timeout)
+    async def debug(self, cmd: DebugCommand, slot: int = 0, timeout: float = 10.0, **args: Any) -> None:
+        """A test helper (game in -devmode): saving/loading `save_slot_<slot>.sav` (returns once it has
+        started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none")."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot, **args), timeout)
 
     async def act(
         self, npc: str, action: ActionType, /, *, timeout: float = 90.0, **args: Any

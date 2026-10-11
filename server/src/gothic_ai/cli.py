@@ -300,6 +300,11 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "m5b":
+                results = await scenarios.m5b_bridge(link, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5b: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -680,7 +685,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")

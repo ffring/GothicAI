@@ -509,3 +509,43 @@ async def m5_turn_loop(
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
     return results
+
+
+async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, str]:
+    """M5b on the game: threats from others reach the server, the player's drawn weapon is perceived,
+    and the new body actions work for free and attached npc's. A wolf is spawned next to the npc."""
+    await link.wait_world()
+    events: list[NpcEvent] = []
+    link.listeners.append(lambda m: events.append(m) if isinstance(m, NpcEvent) else None)
+    results: dict[str, str] = {}
+
+    async def event(kinds: set[str], timeout: float) -> NpcEvent | None:
+        for _ in range(int(timeout / 0.2)):
+            hit = next((e for e in events if e.kind in kinds), None)
+            if hit is not None:
+                return hit
+            await asyncio.sleep(0.2)
+        return None
+
+    # 1. the player draws a weapon next to the npc: the npc perceives it (it is free, scripts run)
+    await attach_when_free(link, npc)
+    await link.act(npc, "go_to_npc", npc="PLAYER", radius=300)
+    await link.act(npc, "return_to_routine")
+    events.clear()
+    await link.debug("player_weapon", state="melee")
+    e = await event({"weapon_drawn"}, 5)
+    results["weapon_drawn"] = f"done ({e.npc}, {e.distance:.0f} cm)" if e else "failed (no weapon_drawn)"
+    await link.debug("player_weapon", state="none")
+
+    # 2. a wolf next to the npc: the npc senses it or sees it attack
+    events.clear()
+    await link.debug("spawn", instance="WOLF", near=npc, distance=700)
+    e = await event({"monster_near", "monster_attack", "hero_attacked"}, 20)
+    results["monster_event"] = (
+        f"done ({e.npc}: {e.kind} {e.other} '{e.other_name}' {e.distance or 0:.0f} cm {e.detail or ''})"
+        if e
+        else "failed (no threat event)"
+    )
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
+    return results

@@ -153,10 +153,14 @@ class PlayerControl final {
     int            rotationAni    = 0;
     bool           g2Ctrl         = false;
 
+    Npc*           threatened     = nullptr; //!< last npc the armed player aimed at (PERC_ASSESSTHREAT)
+    uint64_t       threatenedAt   = 0;
+
     DialogMenu&    dlg;
     InventoryMenu& inv;
 
     void           setupSettings();
+    void           assessThreat(Npc& pl, Npc& other);
     bool           canInteract() const;
     void           marvinF8(uint64_t dt);
     void           marvinK(uint64_t dt);

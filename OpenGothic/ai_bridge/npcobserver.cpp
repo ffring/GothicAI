@@ -22,7 +22,8 @@ constexpr float    ViewRadius     = 3000;
 constexpr float    ViewHalfAngle  = 60;    // degrees around where the player faces
 constexpr float    NearEnter      = 500;   // cm: "player_near" when the player comes this close
 constexpr float    NearLeave      = 700;   // and forgets it once they are this far again
-constexpr uint64_t EventPeriodMs  = 1000;  // per npc and kind
+constexpr uint64_t EventPeriodMs  = 1000;  // per npc, kind and who did it
+constexpr uint64_t MonsterNearPeriodMs = 10000;
 constexpr uint64_t NearPeriodMs   = 30000;
 constexpr uint64_t ActMaxMs       = 30000; // npc_idle at the latest after this
 constexpr uint64_t ActGraceMs     = 200;   // let the npc take the action from its queue
@@ -73,26 +74,47 @@ std::string_view activity(Npc& npc, std::string_view owner) {
   return "routine";
   }
 
-// what a perception of `self` says about the player, if anything: kind and the npc it concerns
+// what a perception of `self` is about: the player's doings, or a threat from someone else
+// (a monster, an armed npc). `about` is the victim for attacks and murders.
 struct Seen final {
   std::string_view kind;
-  Npc*             about = nullptr;  // victim, for attacks and murders
+  Npc*             about    = nullptr;
+  uint64_t         periodMs = EventPeriodMs;
   };
 
 Seen classify(Npc& self, Npc& other, Npc* victim, PercType perc) {
-  const bool byPlayer = other.isPlayer();
+  if(other.isPlayer()) {
+    switch(perc) {
+      case PERC_DRAWWEAPON:      return Seen{"weapon_drawn"};
+      case PERC_ASSESSTHREAT:    return Seen{"threatened"};
+      case PERC_ASSESSTHEFT:     return Seen{"theft"};
+      case PERC_ASSESSENTERROOM: return Seen{"enter_room"};
+      case PERC_ASSESSGIVENITEM: return Seen{"item_given"};
+      case PERC_ASSESSMAGIC:
+      case PERC_ASSESSCASTER:    return Seen{"magic"};
+      case PERC_ASSESSDAMAGE:    return Seen{"attack",&self};
+      case PERC_ASSESSOTHERSDAMAGE:
+        return victim!=nullptr ? Seen{"attack",victim} : Seen{};
+      case PERC_ASSESSMURDER:
+        return victim!=nullptr ? Seen{"murder",victim} : Seen{};
+      default:
+        return Seen{};
+      }
+    }
+  if(other.isDead() || other.isDown())
+    return Seen{};
   switch(perc) {
-    case PERC_DRAWWEAPON:      return byPlayer ? Seen{"weapon_drawn"} : Seen{};
-    case PERC_ASSESSTHEFT:     return byPlayer ? Seen{"theft"}        : Seen{};
-    case PERC_ASSESSENTERROOM: return byPlayer ? Seen{"enter_room"}   : Seen{};
-    case PERC_ASSESSGIVENITEM: return byPlayer ? Seen{"item_given"}   : Seen{};
-    case PERC_ASSESSMAGIC:
-    case PERC_ASSESSCASTER:    return byPlayer ? Seen{"magic"}        : Seen{};
-    case PERC_ASSESSDAMAGE:    return byPlayer ? Seen{"attack",&self} : Seen{};
+    case PERC_ASSESSENEMY:
+      // an enemy the npc senses; repeats every perception tick, so reported seldom
+      return other.isMonster() ? Seen{"monster_near",nullptr,MonsterNearPeriodMs} : Seen{};
+    case PERC_ASSESSDAMAGE:
+      return Seen{other.isMonster() ? "monster_attack" : "npc_attack",&self};
     case PERC_ASSESSOTHERSDAMAGE:
-      return byPlayer && victim!=nullptr ? Seen{"attack",victim} : Seen{};
-    case PERC_ASSESSMURDER:
-      return byPlayer && victim!=nullptr ? Seen{"murder",victim} : Seen{};
+      if(victim==nullptr)
+        return Seen{};
+      if(victim->isPlayer())
+        return Seen{"hero_attacked",victim};
+      return other.isMonster() ? Seen{"monster_attack",victim} : Seen{};
     default:
       return Seen{};
     }
@@ -153,7 +175,7 @@ void NpcObserver::emitRoster(World& world) {
   j.endArray();
   emit(j.finish());
   for(auto& n:cameClose)
-    emitEvent(n.symbol,"player_near","PLAYER",double(n.dist),"");
+    emitEvent(n.symbol,"player_near","PLAYER",double(n.dist),"","");
   }
 
 bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol, float dist) {
@@ -169,7 +191,7 @@ bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol
   }
 
 void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
-  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM)
+  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || &other==&self)
     return;
   const Seen seen = classify(self,other,victim,perc);
   if(seen.kind.empty())
@@ -177,20 +199,21 @@ void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, P
   Npc* pl = world.player();
   if(pl==nullptr)
     return;
-  const float dist = std::sqrt(self.qDistTo(*pl));
-  if(dist>EventRadius)
+  if(std::sqrt(self.qDistTo(*pl))>EventRadius)
     return;
   const auto symbol = npcId(world,self);
   if(symbol.empty() || !owner(symbol).empty())
     return;
-  if(throttled(symbol,seen.kind,world.tickCount(),EventPeriodMs))
+  const auto otherId = npcId(world,other);
+  if(otherId.empty() || throttled(symbol,std::string(seen.kind)+"/"+otherId,world.tickCount(),seen.periodMs))
     return;
   std::string detail;
   if(seen.about==&self)
     detail = "you"; else
   if(seen.about!=nullptr)
-    detail = TextCodec::toUtf8(seen.about->displayName());
-  emitEvent(symbol,seen.kind,"PLAYER",dist,detail);
+    detail = seen.about->isPlayer() ? "PLAYER" : TextCodec::toUtf8(seen.about->displayName());
+  const double dist = std::sqrt(double(self.qDistTo(other)));
+  emitEvent(symbol,seen.kind,otherId,dist,detail,other.isPlayer() ? "" : TextCodec::toUtf8(other.displayName()));
   }
 
 void NpcObserver::act(World& world, const rapidjson::Value& msg) {
@@ -293,9 +316,11 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
   }
 
 void NpcObserver::emitEvent(std::string_view npc, std::string_view kind, std::string_view other,
-                            double distance, std::string_view detail) {
+                            double distance, std::string_view detail, std::string_view otherName) {
   JsonWriter j("npc_event");
   j.str("npc",npc).str("kind",kind).str("other",other).num("distance",distance);
+  if(!otherName.empty())
+    j.str("other_name",otherName);
   if(!detail.empty())
     j.str("detail",detail);
   emit(j.finish());

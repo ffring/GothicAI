@@ -192,7 +192,13 @@ class NpcPlanner:
                 self.on_roster(msg.npcs, now, full=msg.full)
             case NpcEvent():
                 self.on_event(
-                    msg.npc, msg.kind, now, other=msg.other, distance_cm=msg.distance, detail=msg.detail
+                    msg.npc,
+                    msg.kind,
+                    now,
+                    other=msg.other,
+                    distance_cm=msg.distance,
+                    detail=msg.detail,
+                    other_name=msg.other_name,
                 )
             case NpcIdle():
                 self.on_idle(msg.npc, now)
@@ -241,12 +247,13 @@ class NpcPlanner:
         other: str = "PLAYER",
         distance_cm: float | None = None,
         detail: str | None = None,
+        other_name: str | None = None,
     ) -> None:
         rec = self.npcs.get(npc.upper())
         if rec is None or rec.tier is Tier.OFF:
             return
         self.stats.events += 1
-        stim = Stimulus(kind, now, other, distance_cm, detail)
+        stim = Stimulus(kind, now, other, distance_cm, detail, other_name)
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
             rec.last_interaction = now

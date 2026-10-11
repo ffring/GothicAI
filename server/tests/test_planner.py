@@ -448,3 +448,26 @@ async def test_a_new_npc_brings_the_agenda_its_last_conversation_left() -> None:
     planner.on_roster([entry("XARDAS", 6), entry("BAUER", 8)], clock.t)
     assert planner.npcs["XARDAS"].agenda == "make the hero go to Lord Hagen"
     assert planner.npcs["BAUER"].agenda is None
+
+
+async def test_monster_threats_are_context_for_now() -> None:
+    planner, decider, _, clock = make()
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    msg = parse_game_message(
+        json.dumps(
+            {
+                "type": "npc_event",
+                "npc": "PEPE",
+                "kind": "monster_attack",
+                "other": "WOLF",
+                "other_name": "Волк",
+                "distance": 300,
+                "detail": "you",
+            }
+        )
+    )
+    planner.on_message(msg)
+    await step(planner, clock, 0.5)
+    assert decider.calls == [] and planner.stats.scripted_events == 1  # the scripts still react
+    (stim,) = planner.npcs["PEPE"].stimuli
+    assert stim.describe(clock.t) == "Волк attacks you."

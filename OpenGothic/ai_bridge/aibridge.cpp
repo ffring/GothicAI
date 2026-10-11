@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -41,7 +42,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 5;
+constexpr int         ProtocolVersion = 6;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -155,6 +156,7 @@ struct AiBridge::Impl final {
   void updateSaveRecord();
   void onDebug(const rapidjson::Value& msg);
   void runDebug();
+  void runWorldDebug(const rapidjson::Value& msg);
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   // who drives the npc instead of its scripts: "dialog" (our chat), "attached", or nobody
@@ -584,6 +586,12 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     sendResult(req,false,"debug commands need -devmode");
     return;
     }
+  const auto cmd = JsonRead::str(msg,"cmd");
+  if(cmd=="spawn" || cmd=="player_weapon") {
+    // world changes that are safe within the tick
+    runWorldDebug(msg);
+    return;
+    }
   if(!debugReq.empty()) {
     sendResult(req,false,"another debug command is pending");
     return;
@@ -621,6 +629,41 @@ void AiBridge::Impl::runDebug() {
   else {
     sendResult(req,false,"unknown debug command: " + cmd);
     }
+  }
+
+void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
+  const auto req   = JsonRead::str(msg,"req");
+  const auto cmd   = JsonRead::str(msg,"cmd");
+  World*     world = Gothic::inst().world();
+  Npc*       pl    = world!=nullptr ? world->player() : nullptr;
+  if(world==nullptr || pl==nullptr) {
+    sendResult(req,false,"no world loaded");
+    return;
+    }
+  if(cmd=="spawn") {
+    // a creature next to an npc (or the player): monsters for tests of threats
+    std::string inst(JsonRead::str(msg,"instance"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id   = world->script().findSymbolIndex(inst);
+    const auto   near = JsonRead::str(msg,"near");
+    Npc*         at   = near.empty() ? pl : npcBySymbol(*world,near);
+    if(id==size_t(-1) || at==nullptr) {
+      sendResult(req,false,id==size_t(-1) ? "unknown instance" : "unknown npc to spawn near");
+      return;
+      }
+    const float dist = float(JsonRead::integer(msg,"distance",600));
+    const float rot  = at->rotationRad();
+    auto        pos  = at->position();
+    pos.x += dist*std::cos(rot);
+    pos.z += dist*std::sin(rot);
+    sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    return;
+    }
+  // player_weapon: the player draws ("melee") or puts away ("none") a weapon
+  const auto state = JsonRead::str(msg,"state");
+  const bool ok    = state=="none" ? pl->closeWeapon(false) : pl->drawWeaponMelee();
+  sendResult(req,ok,"the player cannot switch weapons now");
   }
 
 void AiBridge::Impl::send(std::string&& text) {
