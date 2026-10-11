@@ -252,7 +252,10 @@ class IncidentDesk:
         cue = f"[Событие: {inc.describe_ru()}.{done}]"
         log.info("%s incident #%d: calling the conversational model (%s)", npc, inc.id, reason)
         self.dialogue.event_turn(
-            npc, cue, relevant=lambda: self.tracker.is_current(npc, incident_id, self.clock())
+            npc,
+            cue,
+            relevant=lambda: self.tracker.is_current(npc, incident_id, self.clock()),
+            overlay=inc.urgent,  # shouted on the move: the body keeps running or fighting
         )
 
     # --- helpers ----------------------------------------------------------------------------

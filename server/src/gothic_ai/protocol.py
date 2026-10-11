@@ -413,7 +413,8 @@ class PingCmd(_Command):
 
 
 class SayCmd(_Command):
-    """One line (usually a sentence) for the npc to speak; shown as a subtitle. Aloud either with
+    """One line (usually a sentence) for the npc to speak, controlled or (v6) free; shown as a subtitle.
+    Aloud either with
     `audio` (base64 of a 16-bit mono WAV file, the line lasts as long as it) or `stream`: the voice
     follows in `say_audio` chunks (16-bit mono PCM at `rate`) and ends with `say_end`."""
 
@@ -425,6 +426,9 @@ class SayCmd(_Command):
     stream: bool | None = None
     rate: int | None = None
     reply: str | None = None  # the line is part of this reply, already shown with chat_text
+    # v6: said on the move, not through the npc's AI queue: it keeps running or fighting. Such lines
+    # are not ordered by the game: the server sends the next one when the previous has been said.
+    overlay: bool | None = None
 
 
 class ChatTextCmd(_Command):

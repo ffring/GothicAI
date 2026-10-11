@@ -202,11 +202,12 @@ class Conversation:
     new_meeting: bool = True  # the next reply starts a new meeting (noted in memory)
     compacting: asyncio.Task[None] | None = None
     # lines waiting for their audio, sent to the game strictly in order (with tts)
-    voice: asyncio.Queue[tuple[str, str, str]] | None = None  # (line, text, reply)
+    voice: asyncio.Queue[tuple[str, str, str, bool]] | None = None  # (line, text, reply, overlay)
     voicing: asyncio.Task[None] | None = None
     intent: Intent = field(default_factory=Intent)  # what the npc wants now (set by the model)
     pending: list[str] = field(default_factory=list)  # events that came while a turn was running
     calm: Intent | None = None  # the intent before an incident goal replaced it
+    overlay_free_at: float = 0.0  # lines said on the move: when the last one is over
 
     @property
     def history(self) -> list[Message]:
@@ -422,7 +423,7 @@ class DialogueManager:
         return conv.reply
 
     def event_turn(
-        self, npc: str, cue: str, relevant: Callable[[], bool] | None = None
+        self, npc: str, cue: str, relevant: Callable[[], bool] | None = None, *, overlay: bool = False
     ) -> asyncio.Task[None] | None:
         """A turn about something that happened (an incident): the npc may speak and change its intent.
         While a turn is running the event waits for the next one's situation instead of interrupting."""
@@ -432,7 +433,9 @@ class DialogueManager:
         if conv.reply is not None and not conv.reply.done():
             conv.pending.append(cue)
             return None
-        conv.reply = asyncio.create_task(self._turn(conv, Message("developer", cue), "incident", relevant))
+        conv.reply = asyncio.create_task(
+            self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay)
+        )
         return conv.reply
 
     def note(self, npc: str, text: str) -> None:
@@ -453,7 +456,7 @@ class DialogueManager:
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
         await self.link.send(ChatStatusCmd(npc=conv.npc, status=status, detail=detail))
 
-    async def _say(self, conv: Conversation, text: str, reply: str) -> None:
+    async def _say(self, conv: Conversation, text: str, reply: str, overlay: bool = False) -> None:
         text = to_game_text(text)
         if not text:
             return
@@ -462,31 +465,54 @@ class DialogueManager:
         self._lines[line] = (text, None)
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
-            await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, reply=reply))
+            if overlay:  # the game does not order lines said on the move
+                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
+                conv.overlay_free_at = time.monotonic() + line_duration(text)
+            await self.link.send(
+                SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None)
+            )
             return
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
-        conv.voice.put_nowait((line, text, reply))
+        conv.voice.put_nowait((line, text, reply, overlay))
 
-    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str]]) -> None:
+    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str, bool]]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
-        audio still goes out, silent."""
+        audio still goes out, silent. Lines said on the move are not ordered by the game: the next one
+        waits until the previous has been said."""
         assert self.tts is not None
         while True:
-            line, text, reply = await queue.get()
+            line, text, reply, overlay = await queue.get()
             started = False
+            spoken_at = 0.0
+            if overlay:
+                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
             try:
                 if time.monotonic() >= self._tts_paused_until:
 
                     async def start(
-                        rate: int, _provider: str, line: str = line, text: str = text, reply: str = reply
+                        rate: int,
+                        _provider: str,
+                        line: str = line,
+                        text: str = text,
+                        reply: str = reply,
+                        overlay: bool = overlay,
                     ) -> None:
-                        nonlocal started
+                        nonlocal started, spoken_at
                         started = True
+                        spoken_at = time.monotonic()
                         await self.link.send(
-                            SayCmd(npc=conv.npc, line=line, text=text, stream=True, rate=rate, reply=reply)
+                            SayCmd(
+                                npc=conv.npc,
+                                line=line,
+                                text=text,
+                                stream=True,
+                                rate=rate,
+                                reply=reply,
+                                overlay=overlay or None,
+                            )
                         )
 
                     async def chunk(pcm: bytes, line: str = line) -> None:
@@ -499,6 +525,8 @@ class DialogueManager:
                         await self.link.send(
                             SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
                         )
+                        if overlay:
+                            conv.overlay_free_at = spoken_at + speech.audio_s + 0.25
                         log.info(
                             "%s voice %s: first audio after %.2fs, %.2fs of audio in %.2fs (%s)",
                             conv.npc,
@@ -521,7 +549,11 @@ class DialogueManager:
                         if started:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started:
-                    await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, reply=reply))
+                    if overlay:
+                        conv.overlay_free_at = time.monotonic() + line_duration(text)
+                    await self.link.send(
+                        SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None)
+                    )
             except GameError:
                 pass
             finally:
@@ -577,7 +609,13 @@ class DialogueManager:
         await self.link.send(ChatEndCmd(npc=conv.npc))
 
     async def _turn(
-        self, conv: Conversation, trigger: Message, kind: str, relevant: Callable[[], bool] | None = None
+        self,
+        conv: Conversation,
+        trigger: Message,
+        kind: str,
+        relevant: Callable[[], bool] | None = None,
+        *,
+        overlay: bool = False,
     ) -> None:
         """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
         chat and the voice as it comes; tool calls are handled after their step."""
@@ -596,6 +634,7 @@ class DialogueManager:
         conv.last_lines = []
         state = TurnState(
             relevant=relevant,
+            overlay=overlay,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
@@ -739,7 +778,7 @@ class DialogueManager:
     async def _line(self, conv: Conversation, state: TurnState, line: str) -> None:
         if state.first_line is None:
             state.first_line = time.monotonic() - state.started
-        await self._say(conv, line, state.reply)
+        await self._say(conv, line, state.reply, state.overlay)
 
     async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
         """Handle a call of the model. Checks run here, against what the npc has and sees: a rejection
@@ -858,3 +897,4 @@ class TurnState:
     given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
     recalled: bool = False  # recall is used once per turn
+    overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it

@@ -231,3 +231,20 @@ async def test_fights_are_carried_out_only_when_threats_may_be_applied():
     assert allowed is not None and allowed.applied and allowed.actions == [("fight", {"npc": "WOLF"})]
     shadow = await Reflexes(FakeDecider("fight_back", 0.9)).react(ctx, inc, None)
     assert shadow is not None and not shadow.applied and shadow.why == "shadow"
+
+
+async def test_lines_said_on_the_move_wait_for_each_other(tmp_path):
+    fake = FakeGame()
+    llm = FakeBackend("Волки! Все сюда, на помощь! Бегите к ферме, быстрее!", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        dialogue.open(XARDAS, "Ксардас")
+        t0 = asyncio.get_running_loop().time()
+        task = dialogue.event_turn(XARDAS, "[Событие: волки]", overlay=True)
+        assert task is not None
+        await asyncio.wait_for(task, 10)
+        await _until(lambda: len(fake.said) >= 2)
+        took = asyncio.get_running_loop().time() - t0
+    says = [m for m in fake.received if m["type"] == "say"]
+    assert all(m["overlay"] for m in says)
+    assert took >= 1.5  # the second line waited for the first one to be said
