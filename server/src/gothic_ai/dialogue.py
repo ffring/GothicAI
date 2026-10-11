@@ -16,7 +16,18 @@ from typing import Any
 from . import npc_tools
 from .game import GameError, GameLink
 from .journal import Journal
-from .llm import LLMBackend, LLMError, Message, Role, TextDelta, ToolCall
+from .llm import (
+    Done,
+    Item,
+    LLMBackend,
+    LLMError,
+    Message,
+    Role,
+    TextDelta,
+    ToolCall,
+    ToolChoice,
+    ToolResult,
+)
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import Persona, PersonaProvider
 from .protocol import (
@@ -36,7 +47,9 @@ from .protocol import (
     Session,
     Snapshot,
 )
+from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
 from .tts import TtsClient, TtsError
+from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
 
 log = logging.getLogger(__name__)
 
@@ -222,9 +235,11 @@ class DialogueManager:
         greet: bool = True,
         tools: bool = True,
         journal: Journal | None = None,
+        trace: TraceWriter | None = None,
     ) -> None:
         self.link = link
         self.journal = journal or Journal()  # lines and actions for the launcher (see journal.py)
+        self.trace = trace  # every turn as a JSON line (see trace.py)
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -381,7 +396,8 @@ class DialogueManager:
             while not conv.voice.empty():
                 conv.voice.get_nowait()
                 conv.voice.task_done()
-        conv.reply = asyncio.create_task(self._reply(conv, user_text))
+        kind = "greeting" if user_text == GREETING_CUE else "player"
+        conv.reply = asyncio.create_task(self._turn(conv, Message("user", user_text), kind))
         return conv.reply
 
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
@@ -461,12 +477,13 @@ class DialogueManager:
             finally:
                 queue.task_done()
 
-    def _commit(self, conv: Conversation, user: Message, text: str) -> None:
-        # one synchronous step: an interrupted reply and its replacement cannot interleave here
+    def _commit(self, conv: Conversation, trigger: Message, text: str) -> None:
+        # one synchronous step: an interrupted reply and its replacement cannot interleave here.
+        # What started the turn is remembered even when the npc said nothing (it may have acted).
+        self._remember(conv, trigger.role, trigger.content)
         if text:
-            self._remember(conv, "user", user.content)
             self._remember(conv, "assistant", text)
-            self._maybe_compact(conv)
+        self._maybe_compact(conv)
 
     def _note(self, conv: Conversation, note: str) -> None:
         if note:
@@ -508,88 +525,173 @@ class DialogueManager:
         self._note(conv, "Ты закончил разговор")
         await self.link.send(ChatEndCmd(npc=conv.npc))
 
-    async def _reply(self, conv: Conversation, user_text: str) -> None:
+    async def _turn(self, conv: Conversation, trigger: Message, kind: str) -> None:
+        """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
+        chat and the voice as it comes; tool calls are handled after their step."""
         if conv.new_meeting:
             conv.new_meeting = False
             if conv.memory.entries or conv.memory.summary:
                 when = game_time(self.link.snapshots.get(conv.npc))
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
-        user = Message("user", user_text)
-        situation = Message("developer", npc_tools.render_situation(self.link.snapshots.get(conv.npc)))
-        messages = [*conv.history, situation, user]
+        snap = self.link.snapshots.get(conv.npc)
+        situation = Message("developer", npc_tools.render_situation(snap))
+        request: list[Item] = [*conv.history, situation, trigger]
         conv.last_lines = []
+        state = TurnState(
+            reply=f"R{next(self._reply_ids)}",
+            # voiced, the first line is synthesized before it is heard: cut it at the first clause
+            splitter=SentenceSplitter(first_clause=self.tts is not None),
+            started=time.monotonic(),
+        )
+        trace = TurnTrace(
+            self.trace,
+            npc=conv.npc,
+            branch=conv.branch,
+            trigger={"kind": kind, "text": trigger.content},
+            instructions=conv.persona.instructions,
+            tools=[t.name for t in self.tools],
+            snapshot=snap.model_dump(mode="json") if snap is not None else None,
+            llm=self.llm.name,
+            model=getattr(self.llm, "model", None),
+        )
         await self._status(conv, "thinking")
-        # voiced, the first line is synthesized before it is heard: cut it at the first clause
-        splitter = SentenceSplitter(first_clause=self.tts is not None)
-        started = time.monotonic()
-        first_delta: float | None = None
-        first_line: float | None = None
-        text = ""
-        end_requested = False
-        reply = f"R{next(self._reply_ids)}"
-        shown, shown_at = "", 0.0
+        status = "completed"
+        added: list[Item] = list(request)
         try:
-            async for event in self.llm.stream(
-                instructions=conv.persona.instructions, messages=messages, tools=self.tools
-            ):
-                if isinstance(event, ToolCall):
-                    if event.name == npc_tools.END_CONVERSATION:
-                        end_requested = True
-                    else:
-                        self._act(conv, event)
-                    continue
-                if not isinstance(event, TextDelta):
-                    continue
-                if first_delta is None:
-                    first_delta = time.monotonic() - started
-                text += event.text
-                # the chat shows the reply as it is written; voice and animation follow line by line
-                if time.monotonic() - shown_at >= CHAT_TEXT_EVERY and (now := to_game_text(text)) != shown:
-                    shown, shown_at = now, time.monotonic()
-                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=reply, text=shown))
-                for line in splitter.feed(event.text):
-                    if first_line is None:
-                        first_line = time.monotonic() - started
-                    await self._say(conv, line, reply)
-            for line in splitter.flush():
-                if first_line is None:
-                    first_line = time.monotonic() - started
-                await self._say(conv, line, reply)
-            if text:
+            for step in range(MAX_STEPS):
+                st = trace.step(added, tool_choice(step))
+                done = await self._step(conv, state, request, tool_choice(step), st)
+                calls = [i for i in done.items if isinstance(i, ToolCall)]
+                outcomes = [await self._tool(conv, call, state) for call in calls]
+                for call, outcome in zip(calls, outcomes, strict=True):
+                    st.calls.append(
+                        CallTrace(call.name, call.arguments, call.call_id, outcome.output, outcome.status)
+                    )
+                if not go_on(outcomes, bool(state.text.strip())):
+                    break
+                if step == MAX_STEPS - 1:
+                    status = "step_cap"
+                    break
+                results = [ToolResult(c.call_id, o.output) for c, o in zip(calls, outcomes, strict=True)]
+                added = [*done.items, *results]
+                request += added
+            if state.text:
                 await self.link.send(
-                    ChatTextCmd(npc=conv.npc, reply=reply, text=to_game_text(text), final=True)
+                    ChatTextCmd(npc=conv.npc, reply=state.reply, text=to_game_text(state.text), final=True)
                 )
         except LLMError as err:
             log.error("%s: %s", conv.npc, err)
             self.journal.add("llm_error", npc=conv.npc, name=conv.persona.name, detail=str(err))
+            if state.text:  # a turn that failed before a word was said is not remembered
+                self._commit(conv, trigger, state.text)
+            trace.close("llm_error")
             await self._status(conv, "error", str(err))
             return
         except asyncio.CancelledError:
-            self._commit(conv, user, text)  # the npc remembers what it already said
+            self._commit(conv, trigger, state.text)  # the npc remembers what it already said
+            trace.close("cancelled")
             raise
 
-        self._commit(conv, user, text)
-        total = time.monotonic() - started
-        if text:
+        self._commit(conv, trigger, state.text)
+        trace.close(status)
+        total = time.monotonic() - state.started
+        if state.text:
             self.journal.add(
                 "npc",
                 npc=conv.npc,
                 name=conv.persona.name,
-                text=to_game_text(text),
+                text=to_game_text(state.text),
                 llm=self.llm.name,
-                first_token_s=round(first_delta or 0.0, 2),
+                first_token_s=round(state.first_delta or 0.0, 2),
                 total_s=round(total, 2),
             )
         log.info(
-            "%s replied via %s: first token %.2fs, first line %.2fs, total %.2fs",
+            "%s replied via %s in %d step(s): first token %.2fs, first line %.2fs, total %.2fs",
             conv.npc,
             self.llm.name,
-            first_delta or 0.0,
-            first_line or 0.0,
+            len(trace.steps),
+            state.first_delta or 0.0,
+            state.first_line or 0.0,
             total,
         )
         await self._status(conv, "idle")
-        if end_requested:
+        if state.end_requested:
             task = asyncio.create_task(self._end_after_speech(conv, list(conv.last_lines)))
             conv.actions.add(task)
             task.add_done_callback(conv.actions.discard)
+
+    async def _step(
+        self,
+        conv: Conversation,
+        state: TurnState,
+        request: list[Item],
+        choice: ToolChoice | None,
+        st: StepTrace,
+    ) -> Done:
+        """One model call. Its text continues the turn's reply: the chat shows it as it is written, voice
+        and animation follow line by line; what is left of the last sentence is said at the end."""
+        started = time.monotonic()
+        first: float | None = None
+        done: Done | None = None
+        if state.text and not state.text.endswith((" ", "\n")):
+            state.text += " "
+        try:
+            async for event in self.llm.stream(
+                instructions=conv.persona.instructions,
+                messages=request,
+                tools=self.tools,
+                tool_choice=choice,
+            ):
+                if isinstance(event, Done):
+                    done = event
+                if not isinstance(event, TextDelta):
+                    continue
+                now = time.monotonic()
+                first = first if first is not None else now - started
+                if state.first_delta is None:
+                    state.first_delta = now - state.started
+                state.text += event.text
+                # the chat shows the reply as it is written
+                if (
+                    now - state.shown_at >= CHAT_TEXT_EVERY
+                    and (shown := to_game_text(state.text)) != state.shown
+                ):
+                    state.shown, state.shown_at = shown, now
+                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
+                for line in state.splitter.feed(event.text):
+                    await self._line(conv, state, line)
+            for line in state.splitter.flush():
+                await self._line(conv, state, line)
+        finally:
+            TurnTrace.finish_step(st, done, first, time.monotonic() - started)
+        if done is None:
+            raise LLMError(f"{self.llm.name}: the stream ended without a result", retryable=True)
+        return done
+
+    async def _line(self, conv: Conversation, state: TurnState, line: str) -> None:
+        if state.first_line is None:
+            state.first_line = time.monotonic() - state.started
+        await self._say(conv, line, state.reply)
+
+    async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
+        """Handle a call of the model: commitments are accepted (their effect follows the speech)."""
+        if call.name == npc_tools.END_CONVERSATION:
+            state.end_requested = True
+            return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
+        if call.name not in {t.name for t in self.tools}:
+            return ToolOutcome(f"Нет такого инструмента: {call.name}", "rejected")
+        self._act(conv, call)
+        return ToolOutcome("Принято: выполнится после твоей реплики, итог придёт ремаркой.", "accepted")
+
+
+@dataclass
+class TurnState:
+    reply: str  # chat entry id of this turn's text
+    splitter: SentenceSplitter
+    started: float
+    text: str = ""  # everything said in the turn, all steps
+    shown: str = ""
+    shown_at: float = 0.0
+    first_delta: float | None = None
+    first_line: float | None = None
+    end_requested: bool = False

@@ -49,6 +49,8 @@ from .protocol import (
     Saved,
     Session,
 )
+from .replay import replay as replay_turn
+from .trace import TraceWriter, find_turn, latest
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
 from .voice import (
     DEFAULT_ASR_URL,
@@ -62,6 +64,8 @@ from .voice import (
 )
 
 log = logging.getLogger("gothic_ai")
+
+DEFAULT_TRACE_DIR = DEFAULT_MEMORY_DB.parent / "traces"
 
 DEFAULT_GAME_DIR = "/Volumes/shared/projects/Gothic II"
 
@@ -208,8 +212,10 @@ async def serve(args: argparse.Namespace) -> int:
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
     journal = Journal(print_sink if args.journal else None)
+    trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
+    log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
@@ -217,7 +223,14 @@ async def serve(args: argparse.Namespace) -> int:
     async def on_link(link: GameLink) -> None:
         link.listeners.append(print_event)
         state.dialogue = DialogueManager(
-            link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet, journal=journal
+            link,
+            llm,
+            personas,
+            memory=memory,
+            tts=tts,
+            greet=not args.no_greet,
+            journal=journal,
+            trace=trace,
         )
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
@@ -405,6 +418,45 @@ async def llm_test(args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False))
     else:
         print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
+    return 0
+
+
+async def replay(args: argparse.Namespace) -> int:
+    """A recorded turn, run again: compare models and prompts on real situations from the game."""
+    path = Path(args.file) if args.file else latest(Path(args.trace_dir))
+    if path is None:
+        print(f"no traces in {args.trace_dir}", file=sys.stderr)
+        return 2
+    try:
+        record, instructions = find_turn(path, args.turn)
+    except LookupError as err:
+        print(err, file=sys.stderr)
+        return 2
+    if args.persona_now or instructions is None:
+        game_dir = Path(args.game_dir) if args.game_dir else None
+        personas = PersonaProvider(game_dir if game_dir and game_dir.is_dir() else None)
+        instructions = personas.get(record["npc"], args.name).instructions
+    llm = _backend(args)
+    try:
+        result = await replay_turn(llm, record, instructions)
+    finally:
+        await llm.aclose()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    print(
+        f"turn {result['turn']} ({result['npc']}), {result['trigger']['kind']}: {result['trigger']['text']}"
+    )
+    for title, steps in (("recorded", result["original"]), (f"{llm.name}", result["replay"])):
+        print(f"\n[{title}]")
+        for n, st in enumerate(steps, 1):
+            calls = ", ".join(
+                c if isinstance(c, str) else f"{c['name']}{c['arguments']}" for c in st["calls"]
+            )
+            timing = f" ({st['first_token_s']:.2f}s / {st['total_s']:.2f}s)" if "total_s" in st else ""
+            print(f"  {n}. {st['text'] or '-'}{f'  -> {calls}' if calls else ''}{timing}")
+    if result["diverged"]:
+        print("\n(the replay made calls the recorded turn did not: their results are not known)")
     return 0
 
 
@@ -618,6 +670,8 @@ def main() -> None:
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
+    p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
+    p.add_argument("--no-trace", action="store_true", help="do not write turn traces")
     p.add_argument(
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),
@@ -638,6 +692,15 @@ def main() -> None:
         action="store_true",
         help="check that a turn goes on after a tool result (reasoning carried, tool_choice none, cache)",
     )
+    _add_llm_args(p)
+
+    p = sub.add_parser("replay", help="run a recorded npc turn again, with another model or prompt")
+    p.add_argument("file", nargs="?", help="trace file (default: the newest in --trace-dir)")
+    p.add_argument("--turn", help="turn id or its prefix (default: the last turn in the file)")
+    p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR))
+    p.add_argument("--name", default="Ксардас", help="npc display name for --persona-now")
+    p.add_argument("--persona-now", action="store_true", help="today's persona instead of the recorded one")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")
@@ -685,6 +748,8 @@ def main() -> None:
                 code = asyncio.run(serve(args))
             case "llm-test":
                 code = asyncio.run(llm_test(args))
+            case "replay":
+                code = asyncio.run(replay(args))
             case "login":
                 code = asyncio.run(login_chatgpt())
             case "logout":

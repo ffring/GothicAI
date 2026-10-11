@@ -59,7 +59,7 @@ class FailingBackend:
     name = "failing"
 
     async def stream(
-        self, *, instructions: str, messages: list[Message], tools=None
+        self, *, instructions: str, messages: list[Message], tools=None, tool_choice=None
     ) -> AsyncIterator[LLMEvent]:
         raise LLMError("plan limit reached")
         yield  # pragma: no cover
