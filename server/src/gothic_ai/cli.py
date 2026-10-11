@@ -21,7 +21,19 @@ from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
 from .journal import Journal, print_sink
-from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, ToolCall, make_backend
+from .llm import (
+    BACKENDS,
+    Done,
+    Item,
+    LLMBackend,
+    LLMError,
+    Message,
+    Reasoning,
+    TextDelta,
+    ToolCall,
+    ToolResult,
+    make_backend,
+)
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
@@ -293,12 +305,68 @@ async def serve(args: argparse.Namespace) -> int:
     return exit_code
 
 
+PROBE_SITUATION = "[Обстановка: твой инвентарь — зелье лечения (ITPO_HEALTH_01) ×2.]"
+PROBE_TEXT = "Дай мне зелье лечения, пожалуйста."  # the npc has one: it calls give_item
+PROBE_REJECTION = "Отклонено: зелья у тебя больше нет, ты отдал последнее раньше."
+
+
+async def probe_tools(llm: LLMBackend, instructions: str, text: str) -> dict[str, Any]:
+    """Can a turn go on after a tool call? Step 1 offers the tools; every call is answered as rejected and
+    step 2 goes on with the response's own items (reasoning included) and tool_choice="none"."""
+    messages: list[Item] = [Message("developer", PROBE_SITUATION), Message("user", text)]
+    steps: list[dict[str, Any]] = []
+    for n in (1, 2):
+        started = time.monotonic()
+        first: float | None = None
+        done: Done | None = None
+        async for event in llm.stream(
+            instructions=instructions,
+            messages=messages,
+            tools=npc_tools.TOOLS,
+            tool_choice="none" if n == 2 else None,
+        ):
+            if isinstance(event, TextDelta) and first is None:
+                first = time.monotonic() - started
+            elif isinstance(event, Done):
+                done = event
+        assert done is not None
+        calls = [i for i in done.items if isinstance(i, ToolCall)]
+        steps.append(
+            {
+                "text": done.text.strip(),
+                "calls": [f"{c.name}({c.raw})" for c in calls],
+                "reasoning_items": sum(isinstance(i, Reasoning) for i in done.items),
+                "first_token_s": round(first or 0.0, 2),
+                "total_s": round(time.monotonic() - started, 2),
+                "usage": vars(done.usage) if done.usage else None,
+            }
+        )
+        if not calls:
+            break
+        messages += [*done.items, *(ToolResult(c.call_id, PROBE_REJECTION) for c in calls)]
+    ok = len(steps) == 2 and not steps[1]["calls"] and bool(steps[1]["text"])
+    return {"ok": ok, "llm": llm.name, "model": getattr(llm, "model", None), "steps": steps}
+
+
 async def llm_test(args: argparse.Namespace) -> int:
     """One request, prints the reply and latency: compare backends and models. With --json one object
     on stdout ({"text", "llm", "model", "first_token_s", "total_s"} or {"error"}), for the launcher."""
     llm = _backend(args)
     personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
     persona = personas.get(args.npc, args.name)
+    if args.probe_tools:
+        try:
+            result = await probe_tools(llm, persona.instructions, args.text or PROBE_TEXT)
+        except LLMError as err:
+            result = {"ok": False, "error": str(err)}
+        finally:
+            await llm.aclose()
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 2))
+        return 0 if result["ok"] else 1
+    if not args.text:
+        await llm.aclose()
+        print("llm-test: the text to send is required", file=sys.stderr)
+        return 2
     messages = [Message("user", args.text)]
     if args.situation:
         messages.insert(0, Message("developer", args.situation))
@@ -560,11 +628,16 @@ def main() -> None:
     _add_llm_args(p)
 
     p = sub.add_parser("llm-test", help="send one message to the LLM and measure latency")
-    p.add_argument("text")
+    p.add_argument("text", nargs="?", default="")
     p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
     p.add_argument("--tools", action="store_true", help="offer the npc action tools")
     p.add_argument("--situation", help="situation note sent before the message")
     p.add_argument("--json", action="store_true", help="one JSON object on stdout instead of the stream")
+    p.add_argument(
+        "--probe-tools",
+        action="store_true",
+        help="check that a turn goes on after a tool result (reasoning carried, tool_choice none, cache)",
+    )
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")

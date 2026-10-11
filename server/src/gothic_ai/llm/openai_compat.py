@@ -4,12 +4,24 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from typing import Any
 
 import openai
 from openai import AsyncOpenAI
 
-from .base import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall
+from .base import (
+    Done,
+    Item,
+    LLMError,
+    LLMEvent,
+    Message,
+    TextDelta,
+    Tool,
+    ToolCall,
+    ToolChoice,
+    ToolResult,
+)
 
 log = logging.getLogger(__name__)
 
@@ -24,14 +36,15 @@ class OpenAICompatBackend:
         await self._client.close()
 
     async def stream(
-        self, *, instructions: str, messages: list[Message], tools: list[Tool] | None = None
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> AsyncIterator[LLMEvent]:
-        chat = [{"role": "system", "content": instructions}]
-        # chat completions has no developer role everywhere: situation notes go in as system messages
-        chat += [
-            {"role": "system" if m.role == "developer" else m.role, "content": m.content} for m in messages
-        ]
-        kwargs = {}
+        chat = [{"role": "system", "content": instructions}, *chat_messages(messages)]
+        kwargs: dict[str, Any] = {}
         if tools:
             kwargs["tools"] = [
                 {
@@ -40,6 +53,8 @@ class OpenAICompatBackend:
                 }
                 for t in tools
             ]
+            if tool_choice:
+                kwargs["tool_choice"] = tool_choice
         text = ""
         calls: dict[int, dict[str, str]] = {}
         try:
@@ -63,13 +78,42 @@ class OpenAICompatBackend:
             raise LLMError(f"{self.name}: HTTP {err.status_code}: {err.message}") from err
         except openai.APIConnectionError as err:
             raise LLMError(f"{self.name}: cannot reach {self._client.base_url}", retryable=True) from err
+        items: list[Item] = [Message("assistant", text)] if text else []
         for acc in calls.values():
             try:
                 args = json.loads(acc["arguments"] or "{}")
             except json.JSONDecodeError:
                 log.warning("tool call %s with invalid arguments: %r", acc["name"], acc["arguments"])
                 continue
-            yield ToolCall(
-                name=acc["name"], arguments=args if isinstance(args, dict) else {}, call_id=acc["id"]
+            call = ToolCall(
+                name=acc["name"],
+                arguments=args if isinstance(args, dict) else {},
+                call_id=acc["id"],
+                raw=acc["arguments"],
             )
-        yield Done(text)
+            items.append(call)
+            yield call
+        yield Done(text, tuple(items))
+
+
+def chat_messages(messages: Sequence[Item]) -> list[dict[str, Any]]:
+    """Request items as chat messages. Chat completions has no developer role everywhere: notes go in as
+    system messages. Tool calls join the assistant message before them; reasoning is not carried."""
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        match m:
+            case Message():
+                out.append({"role": "system" if m.role == "developer" else m.role, "content": m.content})
+            case ToolCall():
+                call = {
+                    "id": m.call_id,
+                    "type": "function",
+                    "function": {"name": m.name, "arguments": m.raw or json.dumps(m.arguments)},
+                }
+                if out and out[-1]["role"] == "assistant":
+                    out[-1].setdefault("tool_calls", []).append(call)
+                else:
+                    out.append({"role": "assistant", "content": None, "tool_calls": [call]})
+            case ToolResult():
+                out.append({"role": "tool", "tool_call_id": m.call_id, "content": m.output})
+    return out
