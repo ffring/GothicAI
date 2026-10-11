@@ -46,7 +46,7 @@ class InworldTTS:
         cache: str | Path = DEFAULT_CACHE,
         base_url: str = "https://api.inworld.ai",
         api_key_env: str = "INWORLD_API_KEY",
-        timeout: str | float = 20.0,
+        timeout: str | float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.model = model
@@ -60,7 +60,9 @@ class InworldTTS:
         # lines come tens of seconds apart; httpx drops an idle connection after 5 s, and a new TLS
         # connection to Inworld added ~1 s to the next line's first audio
         self._client = httpx.AsyncClient(
-            timeout=float(timeout), transport=transport, limits=httpx.Limits(keepalive_expiry=120)
+            timeout=httpx.Timeout(float(timeout), connect=3.0),
+            transport=transport,
+            limits=httpx.Limits(keepalive_expiry=120),
         )
         self._designing = asyncio.Lock()
 
@@ -127,7 +129,7 @@ class InworldTTS:
                         size += cut
                         await on_chunk(data[:cut])
         except httpx.HTTPError as err:
-            raise TtsError(f"inworld: {type(err).__name__}: {err}") from err
+            raise TtsError(f"inworld: {_describe(err)}") from err
         except ValueError as err:  # a line that is not JSON or not Base64
             raise TtsError(f"inworld: bad stream: {err}") from err
         return size / 2 / self.rate
@@ -180,7 +182,7 @@ class InworldTTS:
                 method, f"{self.base_url}{path}", headers=self._headers(), **kwargs
             )
         except httpx.HTTPError as err:
-            raise TtsError(f"inworld: {type(err).__name__}: {err}") from err
+            raise TtsError(f"inworld: {_describe(err)}") from err
         if resp.status_code != 200:
             _raise(resp.status_code, resp.text)
         return resp.json()
@@ -207,6 +209,10 @@ class InworldTTS:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _describe(err: Exception) -> str:
+    return f"{type(err).__name__}: {err}" if str(err) else type(err).__name__  # timeouts have no text
 
 
 def _raise(status: int, detail: str) -> None:

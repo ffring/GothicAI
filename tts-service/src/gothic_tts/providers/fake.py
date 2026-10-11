@@ -26,7 +26,8 @@ class FakeProvider:
         self.calls: list[tuple[str, Voice]] = []
 
     async def warmup(self) -> None:
-        pass
+        if self.fail:
+            raise TtsError("fake provider failure")
 
     async def synthesize(self, text: str, voice: Voice, on_chunk: ChunkCallback) -> float:
         self.calls.append((text, voice))

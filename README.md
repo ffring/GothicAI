@@ -54,7 +54,14 @@ cd asr-service && uv run gothic-asr serve
 cd asr-service && uv run gothic-asr transcribe tests/audio/*.wav --provider voxtral --fallback none --realtime
 ```
 
-TTS-сервис (голоса NPC) сам моделей не запускает. По умолчанию он берёт VoxCPM2 на dev-ubuntu. Голос каждого NPC создаётся один раз по текстовому описанию из персоны, это не клон актёра. Если сервис недоступен, NPC говорят только субтитрами.
+TTS-сервис (голоса NPC) сам моделей не запускает. По умолчанию голоса идут по цепочке:
+1. Inworld TTS-2 (облако, ключ `INWORLD_API_KEY`);
+2. если Inworld недоступен, VoxCPM2 на dev-ubuntu;
+3. если недоступен и он, NPC говорят только субтитрами (как и при остановленном TTS-сервисе).
+
+Упавший провайдер пропускается, пока фоновая проверка не увидит, что он снова работает. Проверки идут через 5 с, затем интервал удваивается до 2 минут. Если провайдер ломается посреди реплики, реплика дальше идёт без звука: переключиться на другой голос на полуслове нельзя. Следующая реплика уже озвучивается запасным.
+
+Голос каждого NPC создаётся один раз по текстовому описанию из персоны, это не клон актёра. У Inworld и VoxCPM2 голоса разные.
 
 ```bash
 cd tts-service && uv run gothic-tts serve
@@ -64,8 +71,10 @@ cd tts-service && uv run gothic-tts serve
 
 - `inworld` — Inworld Realtime TTS-2 по ключу `INWORLD_API_KEY`. Голос NPC один раз создаётся по описанию из персоны (Voice Design), публикуется в библиотеку голосов Inworld с тегом `gothic-ai` и запоминается в `~/.local/share/gothic-ai/inworld-voices.json`. Готовый голос из библиотеки задаётся опцией `voice` (например, `inworld:voice=Dmitry`); описание из персоны тогда управляет подачей. Более быстрая модель без управления подачей — `inworld:model=inworld-tts-2-flash`.
 
+Только один провайдер, без запасного:
+
 ```bash
-cd tts-service && uv run gothic-tts serve --provider inworld
+cd tts-service && uv run gothic-tts serve --provider voxcpm --fallback none
 ```
 
 Послушать и замерить (`--out` сохраняет последнюю реплику в WAV):

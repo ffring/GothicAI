@@ -37,8 +37,10 @@ async def _collect(synth: Synthesizer, text: str) -> tuple[bytes, list[str]]:
 
 async def test_fallback_only_before_audio() -> None:
     primary, fallback = FakeProvider(fail=True), FakeProvider()
-    pcm, providers = await _collect(Synthesizer(primary, fallback), "Привет")
+    synth = Synthesizer(primary, fallback)
+    pcm, providers = await _collect(synth, "Привет")
     assert pcm and primary.calls and fallback.calls
+    await synth.aclose()
 
     class HalfSpoken(FakeProvider):
         async def synthesize(self, text, voice, on_chunk):
@@ -46,9 +48,43 @@ async def test_fallback_only_before_audio() -> None:
             raise TtsError("broke mid-line")
 
     second = FakeProvider()
+    synth = Synthesizer(HalfSpoken(), second)
     with pytest.raises(TtsError, match="mid-line"):
-        await _collect(Synthesizer(HalfSpoken(), second), "Привет")
+        await _collect(synth, "Привет")
     assert not second.calls  # no voice switch halfway through a line
+    assert synth.available() == [second]  # but the next line is the fallback's
+    await synth.aclose()
+
+
+async def test_failed_provider_left_out_until_it_is_back() -> None:
+    primary, fallback = FakeProvider(), FakeProvider()
+    synth = Synthesizer(primary, fallback, retry_s=0.05)
+    primary.fail = True
+    await _collect(synth, "Раз")
+    assert len(primary.calls) == 1 and len(fallback.calls) == 1
+    await _collect(synth, "Два")
+    assert len(primary.calls) == 1  # not tried again: the line goes straight to the fallback
+    assert len(fallback.calls) == 2
+
+    primary.fail = False  # the background check finds it working again
+    for _ in range(50):
+        if primary in synth.available():
+            break
+        await asyncio.sleep(0.02)
+    await _collect(synth, "Три")
+    assert len(primary.calls) == 2 and len(fallback.calls) == 2
+    await synth.aclose()
+
+
+async def test_no_voice_at_once_when_every_provider_is_out() -> None:
+    primary, fallback = FakeProvider(fail=True), FakeProvider(fail=True)
+    synth = Synthesizer(primary, fallback, retry_s=60)
+    await synth.warmup()  # both fail their warmup
+    assert synth.available() == []
+    with pytest.raises(TtsError, match="no voice: fake, fake unavailable"):
+        await _collect(synth, "Привет")
+    assert not primary.calls and not fallback.calls  # the game gets a subtitle without waiting
+    await synth.aclose()
 
 
 @pytest.fixture

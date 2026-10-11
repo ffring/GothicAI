@@ -21,9 +21,12 @@ class VoxCPM:
     name = "voxcpm"
     rate = 48000
 
-    def __init__(self, url: str = DEFAULT_URL, timeout: str | float = 10.0) -> None:
+    def __init__(
+        self, url: str = DEFAULT_URL, timeout: str | float = 10.0, connect_timeout: str | float = 3.0
+    ) -> None:
         self.url = url
         self.timeout = float(timeout)  # also the limit for the first chunk
+        self.connect_timeout = float(connect_timeout)  # an offline server (Tailscale) hangs the connect
         self._ws: ClientConnection | None = None
         self._lock = asyncio.Lock()
         self._ids = itertools.count(1)
@@ -72,7 +75,7 @@ class VoxCPM:
     async def _connection(self) -> ClientConnection:
         if self._ws is None:
             try:
-                self._ws = await connect(self.url, open_timeout=self.timeout, max_size=2**22)
+                self._ws = await connect(self.url, open_timeout=self.connect_timeout, max_size=2**22)
             except (WebSocketException, OSError, TimeoutError) as err:
                 raise TtsError(f"voxcpm {self.url}: {type(err).__name__}: {err}") from err
             log.info("voxcpm connected (%s)", self.url)
