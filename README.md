@@ -168,6 +168,12 @@ cd tts-service && uv run gothic-tts say "Драконы уже здесь." --vo
 cd server && uv run gothic-ai serve
 ```
 
+Каждый ход NPC и каждая реакция его тела пишутся в трассу `~/.local/share/gothic-ai/traces/<дата>.jsonl` (`--no-trace` выключает). Устройство агента NPC — [docs/npc-agent.md](docs/npc-agent.md). Прогнать последний записанный ход заново, например на другой модели или с сегодняшней персоной:
+
+```bash
+cd server && uv run gothic-ai replay --persona-now
+```
+
 Проверить микрофон и распознавание (macOS спросит доступ к микрофону для терминала):
 
 ```bash
