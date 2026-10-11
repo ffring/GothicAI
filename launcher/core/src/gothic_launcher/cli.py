@@ -1,0 +1,237 @@
+"""`gothic-launcher`: the AI services and the game with one command, and the settings they run with.
+
+    gothic-launcher up                  services, then the game (its menu); everything stops with the game
+    gothic-launcher up --continue       ... loading the newest save
+    gothic-launcher up --no-game        only the services, on their usual ports, until Ctrl-C
+    gothic-launcher login               sign in to ChatGPT (once)
+    gothic-launcher config show | set KEY [VALUE] | unset KEY | import-env [FILE]
+
+The first run takes the values of the repository's `.env`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import getpass
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+from .commands import LaunchError, Ports, find_layout, game, latest_save, services, tools
+from .settings import Config, SettingsError
+from .state import AlreadyRunning, SessionFile
+from .supervisor import Event, Supervisor
+
+LOG_ROOT = Path.home() / "Library" / "Logs" / "GothicAI"
+KEEP_LOGS = 20
+DEFAULT_PORTS = Ports(server=47817, asr=47819, tts=47820)  # what the services and the game use by default
+CHATGPT_TOKENS = Path.home() / ".config" / "gothic-ai" / "chatgpt.json"
+
+
+def up(args: argparse.Namespace) -> int:
+    session = SessionFile()
+    for name, pgid in session.acquire().items():  # a second launcher stops here, before touching anything
+        print(f"stopped {name} (group {pgid}), left running by a launcher that was killed")
+    try:
+        return _up(args, session)
+    finally:
+        session.release()
+
+
+def _up(args: argparse.Namespace, session: SessionFile) -> int:
+    config = _config()
+    layout = find_layout(config)
+    ports = DEFAULT_PORTS if args.no_game else Ports.free()
+    log_dir = _new_log_dir()
+    save = args.save
+    if args.continue_:
+        save = latest_save(layout.game_home)
+        if save is None:
+            print(f"no saves in {layout.game_home} yet: starting with the menu")
+    _warn_login(config)
+    print(f"logs: {log_dir}")
+    if args.no_game:
+        print(f"the game connects to ws://127.0.0.1:{ports.server} (its default)")
+    sup = Supervisor(
+        services(config, layout, ports, cwd=log_dir),
+        None if args.no_game else game(config, layout, ports, save=save, new=args.new),
+        log_dir,
+        print_event,
+        session=session,
+        echo=_echo if args.verbose else None,
+    )
+    return asyncio.run(_run(sup))
+
+
+async def _run(sup: Supervisor) -> int:
+    loop = asyncio.get_running_loop()
+    interrupted: list[int] = []
+
+    def stop(sig: signal.Signals) -> None:
+        interrupted.append(sig)
+        sup.stop()
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        loop.add_signal_handler(sig, stop, sig)
+    code = await sup.run()
+    return 128 + interrupted[0] if interrupted else code
+
+
+def login(args: argparse.Namespace) -> int:
+    repo, uv = tools(Config.load())
+    argv = [str(uv), "run", "--project", str(repo / "server"), "gothic-ai", "login", "chatgpt"]
+    return subprocess.call(argv)
+
+
+def config_cmd(args: argparse.Namespace) -> int:
+    config = Config.load()
+    match args.action:
+        case "show":
+            print(f"# {config.settings_path}\n# {config.secrets_path}\n")
+            print(config.show(), end="")
+        case "set":
+            value = args.value
+            if value is None:
+                if not config.is_secret(args.key):
+                    raise SettingsError(f"{args.key}: value missing")
+                value = getpass.getpass(f"{args.key}: ")  # keys stay out of the shell history
+            if value.startswith("~"):
+                value = os.path.expanduser(value)
+            config.set(args.key, value)
+            config.save()
+            print(f"{args.key} = {'<set>' if config.is_secret(args.key) else config.get(args.key)}")
+        case "unset":
+            config.set(args.key, None)
+            config.save()
+            print(f"{args.key} = {config.get(args.key)} (default)")
+        case "import-env":
+            path = Path(args.file) if args.file else tools(config)[0] / ".env"
+            _import_env(config, path)
+            config.save()
+    return 0
+
+
+def print_event(e: Event) -> None:
+    text = _describe(e)
+    if text is not None:
+        print(f"{time.strftime('%H:%M:%S')} {e.proc:<6} {text}", flush=True)
+
+
+def _describe(e: Event) -> str | None:
+    data = e.data or {}
+    match e.kind:
+        case "ready":
+            return " ".join(filter(None, ["ready", e.detail, _providers(data)]))
+        case "status":
+            if not data.get("ok"):
+                return "not answering"
+            if "game" in data:
+                return "game connected" if data["game"] else "game disconnected"
+            return _providers(data)
+        case "exited":
+            return f"exited with {e.detail}"
+        case "restarting":
+            return f"restarting {e.detail}"
+        case "failed":
+            return f"failed: {e.detail}"
+        case "stopped":
+            return f"stopped{': ' + e.detail if e.detail else ''}"
+        case "starting":
+            return "starting"
+    return None
+
+
+def _providers(health: dict[str, Any]) -> str:
+    """`voxtral, chatgpt`; a provider that dropped out is marked: `inworld (down), voxcpm`."""
+    names = [p["name"] + ("" if p.get("ok", True) else " (down)") for p in health.get("providers", [])]
+    return ", ".join(names)
+
+
+def _echo(name: str, line: str) -> None:
+    print(f"{name:<6}| {line}", flush=True)
+
+
+def _config() -> Config:
+    """On the first run the settings start from the repository's `.env`."""
+    config = Config.load()
+    if not config.settings_path.exists():
+        env = tools(config)[0] / ".env"
+        if env.is_file():
+            _import_env(config, env)
+        config.save()
+        print(f"settings saved to {config.settings_path}; change them with `gothic-launcher config set`")
+    return config
+
+
+def _import_env(config: Config, path: Path) -> None:
+    imported, skipped = config.import_env(path)
+    print(f"from {path}: {', '.join(imported) or 'nothing'}")
+    if skipped:
+        print(f"  not launcher settings, left out: {', '.join(skipped)}")
+
+
+def _warn_login(config: Config) -> None:
+    s = config.settings
+    uses_chatgpt = s.llm.backend == "chatgpt" or (
+        s.voice.enabled and "chatgpt" in (s.voice.provider, s.voice.fallback)
+    )
+    if uses_chatgpt and not CHATGPT_TOKENS.exists():
+        print("not signed in to ChatGPT: run `gothic-launcher login` first", file=sys.stderr)
+
+
+def _new_log_dir() -> Path:
+    LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    old = sorted(p for p in LOG_ROOT.iterdir() if p.is_dir())
+    for p in old[: max(0, len(old) - KEEP_LOGS + 1)]:
+        shutil.rmtree(p, ignore_errors=True)
+    return LOG_ROOT / time.strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="gothic-launcher")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("up", help="start the services and the game; everything stops when the game exits")
+    which = p.add_mutually_exclusive_group()
+    which.add_argument("--continue", dest="continue_", action="store_true", help="load the newest save")
+    which.add_argument("--save", help="load this save slot")
+    which.add_argument("--new", action="store_true", help="start a new game at once (no menu)")
+    which.add_argument("--no-game", action="store_true", help="only the services, on their default ports")
+    p.add_argument("-v", "--verbose", action="store_true", help="show the output of every process")
+
+    sub.add_parser("login", help="sign in to ChatGPT")
+
+    p = sub.add_parser("config", help="show or change the settings")
+    actions = p.add_subparsers(dest="action", required=True)
+    actions.add_parser("show")
+    a = actions.add_parser("set", help="a key without a value asks for it (API keys)")
+    a.add_argument("key")
+    a.add_argument("value", nargs="?")
+    a = actions.add_parser("unset", help="back to the default")
+    a.add_argument("key")
+    a = actions.add_parser("import-env", help="take the values of a .env (default: the repository's)")
+    a.add_argument("file", nargs="?")
+
+    args = parser.parse_args()
+    try:
+        match args.command:
+            case "up":
+                code = up(args)
+            case "login":
+                code = login(args)
+            case "config":
+                code = config_cmd(args)
+            case _:
+                code = 2
+    except (SettingsError, LaunchError, AlreadyRunning) as err:
+        print(f"error: {err}", file=sys.stderr)
+        code = 2
+    except KeyboardInterrupt:
+        code = 130
+    sys.exit(code)

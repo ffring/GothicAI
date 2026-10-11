@@ -13,7 +13,9 @@
 | `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере (audio.cpp), подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на GPU-сервере |
 | `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на GPU-сервере |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
+| `launcher/core/` | Лаунчер `gothic-launcher`: поднимает сервисы и игру одной командой, хранит настройки и ключи |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
+| `docs/launcher.md` | План лаунчера: запуск игры и сервисов одной кнопкой, настройки и ключи в окне |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
 | `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
 | `scripts/init-engine.sh` | Библиотеки движка (git-подмодули) и сборка игры, в том числе в новой рабочей копии (git worktree) |
@@ -62,6 +64,46 @@ cd server && uv run gothic-ai login chatgpt
 
 ```bash
 cd server && uv run gothic-ai llm-test "Кто ты?"
+```
+
+### Запуск одной командой
+
+Лаунчер поднимает ASR, TTS и ИИ-сервер на свободных портах и ждёт их готовности, потом запускает игру. Сервис, который упал во время игры, лаунчер перезапускает. Когда игра закрывается, всё останавливается. План и устройство описаны в [docs/launcher.md](docs/launcher.md).
+
+Настройки и ключи лаунчера лежат в `~/.config/gothic-ai/settings.toml` и `secrets.toml` (права 600). При первом запуске туда переносятся значения из `.env`, потом лаунчер `.env` не читает. Логи каждого запуска пишутся в `~/Library/Logs/GothicAI/<время>/`. Игра работает в `~/.local/share/gothic-ai/game/`: там её сохранения, `Gothic.ini` и `log.txt`.
+
+Поставить команду `gothic-launcher` (правки кода подхватываются без переустановки):
+
+```bash
+uv tool install --editable launcher/core
+```
+
+Один раз указать папку игры:
+
+```bash
+gothic-launcher config set game.dir "/Volumes/shared/projects/Gothic II"
+```
+
+Играть, продолжив последнее сохранение (`--new` — сразу новая игра, `-v` — вывод всех процессов в терминал):
+
+```bash
+gothic-launcher up --continue
+```
+
+Посмотреть и поменять настройки. Ключ без значения лаунчер спросит, чтобы он не остался в истории оболочки:
+
+```bash
+gothic-launcher config show
+```
+
+```bash
+gothic-launcher config set secrets.inworld_api_key
+```
+
+Только сервисы, на их обычных портах, а игру запускать вручную:
+
+```bash
+gothic-launcher up --no-game
 ```
 
 ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`.
@@ -141,6 +183,10 @@ cd tts-service && uv run pytest
 
 ```bash
 cd libs/chatgpt-auth && uv run pytest
+```
+
+```bash
+cd launcher/core && uv run pytest
 ```
 
 Сквозная проверка. Запускает свои сервер и игру на отдельных портах; сохранения и память остаются во временной папке:
