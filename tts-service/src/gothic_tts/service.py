@@ -4,6 +4,7 @@
                         "voice":{"id":"xardas","description":"...","preset":null}}
     service -> client  {"type":"start","id":"7","sample_rate":48000,"provider":"voxcpm"}
     service -> client  binary frames: 16-bit little-endian mono PCM, as it is generated
+                       (at the loudness of the game's own dialogue, see loudness.py)
     service -> client  {"type":"done","id":"7","audio_s":2.1,"first_chunk_s":0.06,"latency_s":1.1}
     service -> client  {"type":"error","id":"7","detail":"..."}
 

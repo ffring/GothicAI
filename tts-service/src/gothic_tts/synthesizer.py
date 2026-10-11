@@ -4,6 +4,8 @@ A provider that fails is left out until a check in the background (its `warmup`)
 again, so lines do not each wait for it to fail. With every provider out a line fails at once, and
 the game shows it as a subtitle. The fallback takes over only before any audio was produced:
 switching mid-line would change the voice halfway through a sentence.
+
+Every line is brought to the loudness of the game's own dialogue (see loudness.py).
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from .loudness import Leveler, Line
 from .providers import TtsError, TtsProvider, Voice
 
 log = logging.getLogger(__name__)
@@ -42,9 +45,11 @@ class Synthesizer:
         *,
         retry_s: float = RETRY_S,
         retry_max_s: float = RETRY_MAX_S,
+        leveler: Leveler | None = None,
     ) -> None:
         self.primary = primary
         self.fallback = fallback
+        self.leveler = leveler  # None: as loud as the provider speaks
         self.retry_s = retry_s
         self.retry_max_s = retry_max_s
         self._down: dict[int, asyncio.Task[None]] = {}  # id(provider) -> its recovery check
@@ -76,14 +81,19 @@ class Synthesizer:
         if not providers:
             raise TtsError(f"no voice: {', '.join(p.name for p in self.providers)} unavailable")
         errors: list[str] = []
+        leveler = self.leveler
         for p in providers:
             first: float | None = None
+            line = leveler.start(p.name, voice.id, p.rate) if leveler is not None else None
 
-            async def chunk(pcm: bytes, p: TtsProvider = p) -> None:
+            async def chunk(pcm: bytes, p: TtsProvider = p, line: Line | None = line) -> None:
                 nonlocal first
                 if first is None:
                     first = time.monotonic() - started
-                await on_chunk(pcm, p)
+                if line is not None:
+                    pcm = line.process(pcm)
+                if pcm:
+                    await on_chunk(pcm, p)
 
             try:
                 audio_s = await p.synthesize(text, voice, chunk)
@@ -95,14 +105,21 @@ class Synthesizer:
                 errors.append(f"{p.name}: {err}")
                 continue
             self._failures.pop(id(p), None)
+            gain = ""
+            if leveler is not None and line is not None:
+                if tail := line.flush():
+                    await on_chunk(tail, p)
+                leveler.learn(p.name, voice.id, line)
+                gain = f", {line.gain_db:+.1f} dB"
             took = time.monotonic() - started
             log.info(
-                "%s: %.2fs of audio in %.2fs (first chunk %.2fs) [%s]: %s",
+                "%s: %.2fs of audio in %.2fs (first chunk %.2fs) [%s%s]: %s",
                 p.name,
                 audio_s,
                 took,
                 first or 0.0,
                 voice.id,
+                gain,
                 text[:60],
             )
             return Speech(p.name, p.rate, audio_s, first or 0.0, took)

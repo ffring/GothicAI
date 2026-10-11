@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from .audio import to_wav
+from .loudness import TARGET_LUFS, Leveler
 from .providers import PROVIDERS, TtsError, TtsProvider, Voice, make_provider
 from .service import TtsService
 from .synthesizer import Synthesizer
@@ -34,7 +35,8 @@ def load_env_file(start: Path | None = None) -> Path | None:
 
 def _synthesizer(args: argparse.Namespace) -> Synthesizer:
     fallback = make_provider(args.fallback) if args.fallback and args.fallback != "none" else None
-    return Synthesizer(make_provider(args.provider), fallback)
+    leveler = Leveler(args.loudness) if args.loudness is not None else None
+    return Synthesizer(make_provider(args.provider), fallback, leveler=leveler)
 
 
 async def serve(args: argparse.Namespace) -> int:
@@ -100,6 +102,17 @@ def _add_provider_args(p: argparse.ArgumentParser) -> None:
         default=os.environ.get("GOTHIC_TTS_FALLBACK", "voxcpm"),
         help="fallback provider spec, or none",
     )
+    p.add_argument(
+        "--loudness",
+        type=_loudness,
+        default=TARGET_LUFS,
+        help=f"loudness of the lines in LUFS (default {TARGET_LUFS:g}, as the game's own dialogue), "
+        "or none to keep the provider's",
+    )
+
+
+def _loudness(value: str) -> float | None:
+    return None if value == "none" else float(value)
 
 
 def main() -> None:
