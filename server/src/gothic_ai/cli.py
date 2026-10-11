@@ -17,9 +17,12 @@ from typing import Any
 
 from . import npc_tools, scenarios
 from .brain import DeciderClient, GameApplier, NpcPlanner
+from .brain.reflex import Reflexes
+from .budget import Budget
 from .dialogue import DialogueManager
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
+from .incidents import IncidentDesk
 from .journal import Journal, print_sink
 from .llm import (
     BACKENDS,
@@ -105,6 +108,7 @@ class ServerState:
         self.dialogue: DialogueManager | None = None
         self.voice: VoiceInput | None = None
         self.brain: NpcPlanner | None = None
+        self.incidents: IncidentDesk | None = None
 
 
 class Console:
@@ -213,6 +217,7 @@ async def serve(args: argparse.Namespace) -> int:
     tts = None if args.no_tts else TtsClient(args.tts_url)
     journal = Journal(print_sink if args.journal else None)
     trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
+    budget = Budget(per_npc_per_min=args.llm_per_npc_min, total_per_min=args.llm_total_min)
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
     log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
@@ -231,15 +236,21 @@ async def serve(args: argparse.Namespace) -> int:
             greet=not args.no_greet,
             journal=journal,
             trace=trace,
+            budget=budget,
         )
+        # npc's we control: the body's instant reactions (behavioral model) and words for incidents
+        reflexes = Reflexes(decider) if decider is not None else None
+        state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
-            state.brain = NpcPlanner(decider, GameApplier(link))
-            link.listeners.append(state.brain.on_message)
-            brain = asyncio.create_task(state.brain.run())
+            planner = state.brain = NpcPlanner(decider, GameApplier(link))
+            link.listeners.append(planner.on_message)
+            # what the npc wants from the hero, from the conversation, steers it afterwards
+            state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(npc, intent.agenda or None)
+            brain = asyncio.create_task(planner.run())
         try:
             await _run_scenario(link)
             await link.closed.wait()  # the session lives while the game is connected
@@ -672,6 +683,13 @@ def main() -> None:
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
     p.add_argument("--no-trace", action="store_true", help="do not write turn traces")
+    p.add_argument(
+        "--llm-per-npc-min",
+        type=float,
+        default=6.0,
+        help="calls of the conversational model per npc and minute nobody asked for (incidents, summaries)",
+    )
+    p.add_argument("--llm-total-min", type=float, default=20.0, help="the same for all npc's together")
     p.add_argument(
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),

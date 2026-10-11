@@ -64,6 +64,14 @@ VOICES = {
 }
 DEFAULT_VOICE = "A middle-aged man with an ordinary, slightly rough voice, speaking calmly"
 
+# One English line of character for the behavioral model (it reads English best).
+TRAITS = {
+    "NONE_100_XARDAS": (
+        "A powerful necromancer who once was a Fire Mage. Aloof, proud and wise; the hero's mentor. "
+        "He does not fight the hero's battles, but he is no coward."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class Persona:
@@ -71,6 +79,7 @@ class Persona:
     name: str
     instructions: str
     voice: str = DEFAULT_VOICE
+    traits: str | None = None  # English, for the behavioral model
 
 
 def render_instructions(npc: str, name: str, sample_lines: list[str]) -> str:
@@ -110,4 +119,10 @@ class PersonaProvider:
             lines = [text for _, text in load_npc_lines(self.game_dir, npc)]
             samples = pick_samples(lines)
             log.info("persona %s: %d original lines, %d samples", npc, len(lines), len(samples))
-        return Persona(npc, name, render_instructions(npc, name, samples), VOICES.get(npc, DEFAULT_VOICE))
+        return Persona(
+            npc,
+            name,
+            render_instructions(npc, name, samples),
+            VOICES.get(npc, DEFAULT_VOICE),
+            TRAITS.get(npc),
+        )

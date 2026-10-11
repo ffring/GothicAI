@@ -25,6 +25,16 @@ GOALS = {
     "keep_routine": "заниматься своими делами",
     "change_plans": "изменить свои планы",
 }
+GOALS_EN = {
+    "none": "nothing in particular",
+    "follow_hero": "to follow the hero",
+    "flee": "to get away from danger",
+    "seek_help": "to find help",
+    "fight": "to fight",
+    "guard_hero": "to protect the hero",
+    "keep_routine": "to go about your own business",
+    "change_plans": "to change your plans",
+}
 ATTITUDES = {
     "hostile": "враждебное",
     "wary": "настороженное",
@@ -55,6 +65,15 @@ class Intent:
             return cls()
         fields = {k: data[k] for k in ("goal", "target", "attitude", "agenda") if k in data}
         return cls(**fields)
+
+    def describe_en(self) -> str:
+        """English, for the behavioral model's state."""
+        target = "the hero" if self.target == "PLAYER" else self.target
+        parts = [f"You want {GOALS_EN.get(self.goal, self.goal)}{f' ({target})' if target else ''}."]
+        parts.append(f"Your attitude toward the hero is {self.attitude}.")
+        if self.agenda:
+            parts.append(f"What you want from the hero: {self.agenda}")
+        return " ".join(parts)
 
     def describe(self) -> str:
         """Russian, for the conversational model's situation block."""

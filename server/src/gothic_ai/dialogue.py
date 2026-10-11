@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import executor, npc_tools
+from .budget import Budget
 from .executor import Intent
 from .game import GameError, GameLink
 from .journal import Journal
@@ -204,6 +205,7 @@ class Conversation:
     voice: asyncio.Queue[tuple[str, str, str]] | None = None  # (line, text, reply)
     voicing: asyncio.Task[None] | None = None
     intent: Intent = field(default_factory=Intent)  # what the npc wants now (set by the model)
+    pending: list[str] = field(default_factory=list)  # events that came while a turn was running
 
     @property
     def history(self) -> list[Message]:
@@ -238,12 +240,18 @@ class DialogueManager:
         tools: bool = True,
         journal: Journal | None = None,
         trace: TraceWriter | None = None,
+        budget: Budget | None = None,
     ) -> None:
         self.link = link
         self.journal = journal or Journal()  # lines and actions for the launcher (see journal.py)
         self.trace = trace  # every turn as a JSON line (see trace.py)
+        self.budget = budget  # calls nobody asked for (summaries); the player's turns are only counted
         # the npc's intent changed (e.g. for the planner: what it wants from the hero after the chat)
         self.on_intent: Callable[[str, Intent], None] | None = None
+        # the hero said something to the npc (the body may react before the answer)
+        self.on_player_phrase: Callable[[str, str], None] | None = None
+        # something the npc's body was to do did not work (npc, what)
+        self.on_body_failed: Callable[[str, str], None] | None = None
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -335,6 +343,8 @@ class DialogueManager:
     def _maybe_compact(self, conv: Conversation) -> None:
         if len(conv.memory.entries) <= MAX_HISTORY or (conv.compacting and not conv.compacting.done()):
             return
+        if self.budget is not None and not self.budget.allow(conv.npc):
+            return  # later: the next message tries again
         conv.compacting = asyncio.create_task(self._compact(conv))
 
     async def _compact(self, conv: Conversation) -> None:
@@ -403,8 +413,41 @@ class DialogueManager:
                 conv.voice.get_nowait()
                 conv.voice.task_done()
         kind = "greeting" if user_text == GREETING_CUE else "player"
+        if self.budget is not None:
+            self.budget.note(conv.npc)
         conv.reply = asyncio.create_task(self._turn(conv, Message("user", user_text), kind))
+        if kind == "player" and self.on_player_phrase is not None:
+            self.on_player_phrase(conv.npc, user_text)
         return conv.reply
+
+    def event_turn(
+        self, npc: str, cue: str, relevant: Callable[[], bool] | None = None
+    ) -> asyncio.Task[None] | None:
+        """A turn about something that happened (an incident): the npc may speak and change its intent.
+        While a turn is running the event waits for the next one's situation instead of interrupting."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None:
+            return None
+        if conv.reply is not None and not conv.reply.done():
+            conv.pending.append(cue)
+            return None
+        conv.reply = asyncio.create_task(self._turn(conv, Message("developer", cue), "incident", relevant))
+        return conv.reply
+
+    def note(self, npc: str, text: str) -> None:
+        """A remark in the npc's history (what happened to it)."""
+        if conv := self.conversations.get(npc.upper()):
+            self._note(conv, text)
+
+    def has_spoken(self, npc: str) -> bool:
+        """The npc's current turn has sent a line already."""
+        conv = self.conversations.get(npc.upper())
+        return conv is not None and bool(conv.last_lines)
+
+    def body_busy(self, npc: str) -> bool:
+        """A commitment is being carried out (a gesture now would cancel it)."""
+        conv = self.conversations.get(npc.upper())
+        return conv is not None and bool(conv.actions)
 
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
         await self.link.send(ChatStatusCmd(npc=conv.npc, status=status, detail=detail))
@@ -496,18 +539,20 @@ class DialogueManager:
             log.info("%s note: %s", conv.npc, note)
             self._remember(conv, "developer", f"[{note}]")
 
-    def _after_speech(self, conv: Conversation, job: Callable[[], Awaitable[str]]) -> None:
+    def _after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
         """Run a body job once the npc has said its queued lines; the note it returns goes into the
-        history after the current turn."""
+        history after the current turn. A failure is reported (`on_body_failed`)."""
         reply = conv.reply
 
         async def run() -> None:
             if conv.voice is not None:
                 await conv.voice.join()  # the npc says what it said before acting on it
-            note = await job()
+            note, ok = await job()
             if reply is not None and not reply.done() and reply is not asyncio.current_task():
                 await asyncio.wait({reply})  # the note goes after this turn's reply in the history
             self._note(conv, note)
+            if not ok and self.on_body_failed is not None:
+                self.on_body_failed(conv.npc, note)
 
         task = asyncio.create_task(run())
         conv.actions.add(task)
@@ -530,7 +575,9 @@ class DialogueManager:
         self._note(conv, "Ты закончил разговор")
         await self.link.send(ChatEndCmd(npc=conv.npc))
 
-    async def _turn(self, conv: Conversation, trigger: Message, kind: str) -> None:
+    async def _turn(
+        self, conv: Conversation, trigger: Message, kind: str, relevant: Callable[[], bool] | None = None
+    ) -> None:
         """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
         chat and the voice as it comes; tool calls are handled after their step."""
         if conv.new_meeting:
@@ -539,10 +586,15 @@ class DialogueManager:
                 when = game_time(self.link.snapshots.get(conv.npc))
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         snap = self.link.snapshots.get(conv.npc)
-        situation = Message("developer", npc_tools.render_situation(snap, conv.intent))
+        situation_text = npc_tools.render_situation(snap, conv.intent)
+        if conv.pending:  # events that came during the last turn
+            situation_text += "\nТолько что: " + "; ".join(c.strip("[]") for c in conv.pending) + "."
+            conv.pending = []
+        situation = Message("developer", situation_text)
         request: list[Item] = [*conv.history, situation, trigger]
         conv.last_lines = []
         state = TurnState(
+            relevant=relevant,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
@@ -566,6 +618,8 @@ class DialogueManager:
             for step in range(MAX_STEPS):
                 st = trace.step(added, tool_choice(step))
                 done = await self._step(conv, state, request, tool_choice(step), st)
+                if not state.text.strip() and state.relevant is not None and not state.relevant():
+                    raise StaleTurn  # nothing said yet and the incident is over: no late intents either
                 calls = [i for i in done.items if isinstance(i, ToolCall)]
                 outcomes = [await self._tool(conv, call, state) for call in calls]
                 for call, outcome in zip(calls, outcomes, strict=True):
@@ -591,6 +645,12 @@ class DialogueManager:
                 self._commit(conv, trigger, state.text)
             trace.close("llm_error")
             await self._status(conv, "error", str(err))
+            return
+        except StaleTurn:
+            # what the turn was about is over: words now would be out of place
+            self._commit(conv, trigger, state.text)
+            trace.close("stale")
+            await self._status(conv, "idle")
             return
         except asyncio.CancelledError:
             self._commit(conv, trigger, state.text)  # the npc remembers what it already said
@@ -652,6 +712,8 @@ class DialogueManager:
                 if not isinstance(event, TextDelta):
                     continue
                 now = time.monotonic()
+                if first is None and state.relevant is not None and not state.relevant():
+                    raise StaleTurn
                 first = first if first is not None else now - started
                 if state.first_delta is None:
                     state.first_delta = now - state.started
@@ -702,8 +764,9 @@ class DialogueManager:
                 return ToolOutcome("Принято: отдашь после реплики.", "accepted")
         return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
 
-    async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> str:
-        return (await npc_tools.execute(self.link, conv.npc, call, snap)).note
+    async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
+        outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
+        return outcome.note, outcome.ok
 
     def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
         intent, reason = executor.check_intent(executor.parse_intent(call.arguments), snap)
@@ -725,7 +788,7 @@ class DialogueManager:
             self._after_speech(conv, lambda: self._body(conv, acts))
         return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
 
-    async def _body(self, conv: Conversation, acts: list[executor.Action]) -> str:
+    async def _body(self, conv: Conversation, acts: list[executor.Action]) -> tuple[str, bool]:
         """Game actions for an intent; only what did not work is noted."""
         failed = []
         for action, args in acts:
@@ -736,7 +799,13 @@ class DialogueManager:
                 continue
             if res.status != "done":
                 failed.append(f"{action}: {res.detail or res.status}")
-        return f"Тело не выполнило намерение ({'; '.join(failed)})" if failed else ""
+        if failed:
+            return f"Тело не выполнило намерение ({'; '.join(failed)})", False
+        return "", True
+
+
+class StaleTurn(Exception):
+    """The incident a turn was about is over before the npc said a word."""
 
 
 @dataclass
@@ -751,3 +820,4 @@ class TurnState:
     first_line: float | None = None
     end_requested: bool = False
     given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
+    relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
