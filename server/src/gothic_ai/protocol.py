@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 # --- game -> server -----------------------------------------------------------
 
@@ -31,7 +31,31 @@ class WorldLoaded(_GameMessage):
 
 
 class Loading(_GameMessage):
+    """A world is being loaded (new game, save game or a world change); npc's were released."""
+
     type: Literal["loading"]
+
+
+SessionReason = Literal["new_game", "load", "connect"]
+
+
+class Session(_GameMessage):
+    """The line of play the game is on. A new game and every load start a new `branch`; a load
+    branches off `parent` at `parent_seq` (the memory head written into the save)."""
+
+    type: Literal["session"]
+    branch: str
+    parent: str | None = None
+    parent_seq: int = 0
+    reason: SessionReason = "connect"
+
+
+class Saved(_GameMessage):
+    """The game was saved with this memory head in it."""
+
+    type: Literal["saved"]
+    branch: str
+    seq: int
 
 
 class Attached(_GameMessage):
@@ -178,6 +202,24 @@ class FollowEnded(_GameMessage):
     reason: str
 
 
+class PttStart(_GameMessage):
+    """The player pressed the push-to-talk key in the chat with `npc`: start recording.
+    Followed by `ptt_stop` (recognize what was said) or `ptt_cancel` (it was a short tap)."""
+
+    type: Literal["ptt_start"]
+    npc: str
+
+
+class PttStop(_GameMessage):
+    type: Literal["ptt_stop"]
+    npc: str
+
+
+class PttCancel(_GameMessage):
+    type: Literal["ptt_cancel"]
+    npc: str
+
+
 class LineStarted(_GameMessage):
     """The npc started speaking a line sent with `say`."""
 
@@ -190,6 +232,8 @@ GameMessage = Annotated[
     Hello
     | WorldLoaded
     | Loading
+    | Session
+    | Saved
     | Attached
     | Detached
     | Result
@@ -201,6 +245,9 @@ GameMessage = Annotated[
     | PlayerText
     | ChatClose
     | FollowEnded
+    | PttStart
+    | PttStop
+    | PttCancel
     | LineStarted,
     Field(discriminator="type"),
 ]
@@ -275,7 +322,7 @@ class SayCmd(_Command):
     text: str
 
 
-ChatStatus = Literal["thinking", "idle", "error"]
+ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # notice: detail shown as is
 
 
 class ChatStatusCmd(_Command):
@@ -290,3 +337,33 @@ class ChatEndCmd(_Command):
 
     type: Literal["chat_end"] = "chat_end"
     npc: str
+
+
+class TranscriptCmd(_Command):
+    """What the player says (push-to-talk). Partial (`final=false`) while speaking: text so far;
+    the final one is shown in the chat as the hero's line."""
+
+    type: Literal["transcript"] = "transcript"
+    npc: str
+    text: str
+    final: bool = True
+
+
+class MemoryCmd(_Command):
+    """The memory head of the branch: the game writes it into the next save."""
+
+    type: Literal["memory"] = "memory"
+    branch: str
+    seq: int
+
+
+DebugCommand = Literal["save", "load"]
+
+
+class DebugCmd(_Command):
+    """Save or load a slot (`save_slot_<slot>.sav`) for automated checks; the game must run with -devmode."""
+
+    type: Literal["debug"] = "debug"
+    req: str
+    cmd: DebugCommand
+    slot: int

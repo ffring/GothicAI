@@ -9,11 +9,12 @@
 | Путь | Что |
 |---|---|
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
-| `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, адаптер LLM, сценарии |
+| `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, память, голосовой ввод, адаптер LLM, сценарии |
+| `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере, подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на dev-ubuntu |
+| `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
-| `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `SCENARIO=m1` — диалог |
+| `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
 | `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
-| `asr-service/` | Сервис распознавания речи со сменными провайдерами *(появится в M3)* |
 | `reports/` | Итоговые исследования |
 | `research_notes/` | Заметки исследований с источниками |
 | `OpenGothic/` | Форк движка, отдельный git-репозиторий (здесь игнорируется) |
@@ -40,24 +41,52 @@ cd server && uv run gothic-ai login chatgpt
 cd server && uv run gothic-ai llm-test "Кто ты?"
 ```
 
-ИИ-сервер. Ждёт игру на `ws://127.0.0.1:47817` и принимает команды из консоли: `attach`, `goto`, `come`, `ani`, `talk <текст>`, `routine`, … Бэкенд LLM выбирается флагом `--llm chatgpt|openai|local|fake`, модель — `--model`.
+ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на dev-ubuntu, а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Развёртывание Voxtral описано в `asr-service/deploy/voxtral/install.sh`.
+
+```bash
+cd asr-service && uv run gothic-asr serve
+```
+
+Сравнить провайдеры на своих записях (16-битный WAV). `--realtime` подаёт звук в темпе речи, как при push-to-talk:
+
+```bash
+cd asr-service && uv run gothic-asr transcribe tests/audio/*.wav --provider voxtral --fallback none --realtime
+```
+
+ИИ-сервер. Ждёт игру на `ws://127.0.0.1:47817` и принимает команды из консоли: `attach`, `goto`, `come`, `ani`, `talk <текст>`, `memory`, `routine`, … Бэкенд LLM выбирается флагом `--llm chatgpt|openai|local|fake`, модель — `--model`. Память NPC хранится в `~/.local/share/gothic-ai/memory.sqlite3` по веткам сохранений; голос пишется с микрофона Mac (`--no-voice` выключает).
 
 ```bash
 cd server && uv run gothic-ai serve
 ```
 
-Игра в режиме разработчика. Чат с NPC открывается клавишей **T**, когда игрок на него смотрит; Enter отправляет, Esc закрывает. Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
+Проверить микрофон и распознавание (macOS спросит доступ к микрофону для терминала):
+
+```bash
+cd server && uv run gothic-ai voice-test
+```
+
+Игра в режиме разработчика. Чат с NPC открывается клавишей **T**, когда игрок на него смотрит; Enter отправляет, Esc закрывает. **Удерживайте T, чтобы сказать реплику голосом** (в закрытом чате удержание сразу открывает его и пишет речь). Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
 
 ```bash
 OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/shared/projects/Gothic II" -devmode
 ```
 
-Тесты сервера и сквозная проверка:
+Тесты (в каждом проекте свои):
 
 ```bash
 cd server && uv run pytest
 ```
 
 ```bash
-scripts/e2e.sh
+cd asr-service && uv run pytest
+```
+
+```bash
+cd libs/chatgpt-auth && uv run pytest
+```
+
+Сквозная проверка. Запускает свои сервер и игру на отдельных портах; сохранения и память остаются во временной папке:
+
+```bash
+SCENARIO=m3 ASR=voxtral scripts/e2e.sh
 ```

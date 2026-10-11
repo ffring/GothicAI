@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from .base import Done, LLMBackend, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall
+from .base import Done, LLMBackend, LLMError, LLMEvent, Message, Role, TextDelta, Tool, ToolCall
 from .fake import FakeBackend
 from .openai_compat import OpenAICompatBackend
 from .openai_responses import OpenAIResponsesBackend
@@ -20,6 +20,7 @@ __all__ = [
     "LLMError",
     "LLMEvent",
     "Message",
+    "Role",
     "TextDelta",
     "Tool",
     "ToolCall",

@@ -1,0 +1,222 @@
+import asyncio
+import base64
+import json
+import os
+
+import httpx
+import numpy as np
+import pytest
+from websockets.asyncio.client import connect
+
+from gothic_asr.audio import RATE, float_to_pcm16, resample
+from gothic_asr.providers import AsrError, make_provider, parse_spec
+from gothic_asr.providers.fake import FakeProvider
+from gothic_asr.providers.remote import OpenAICompatible
+from gothic_asr.recognizer import Recognizer
+from gothic_asr.service import AsrService
+
+
+def tone(seconds: float, rate: int = RATE) -> np.ndarray:
+    t = np.arange(int(seconds * rate)) / rate
+    return (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+
+
+def test_parse_spec() -> None:
+    assert parse_spec("chatgpt") == ("chatgpt", {})
+    assert parse_spec("openai:model=whisper-large-v3-turbo,base_url=https://x/v1") == (
+        "openai",
+        {"model": "whisper-large-v3-turbo", "base_url": "https://x/v1"},
+    )
+    with pytest.raises(ValueError):
+        parse_spec("openai:model")
+    with pytest.raises(ValueError):
+        make_provider("nope")
+    assert make_provider("fake:text=Да").text == "Да"
+
+
+async def test_silence_is_skipped() -> None:
+    fake = FakeProvider()
+    r = await Recognizer(fake).recognize(np.zeros(RATE * 2, dtype=np.float32), "ru")
+    assert r.text == "" and r.provider == "" and not fake.calls
+
+
+async def test_fallback_on_failure() -> None:
+    primary, fallback = FakeProvider(fail=True), FakeProvider(text="запасной")
+    r = await Recognizer(primary, fallback).recognize(tone(1), "ru")
+    assert (r.text, r.provider) == ("запасной", "fake")
+    assert primary.calls and fallback.calls
+
+    with pytest.raises(AsrError, match="fake provider failure"):
+        await Recognizer(FakeProvider(fail=True)).recognize(tone(1), "ru")
+
+
+async def test_fallback_on_timeout() -> None:
+    r = await Recognizer(FakeProvider(delay=1), FakeProvider(text="быстрый"), timeout=0.05).recognize(
+        tone(1), "ru"
+    )
+    assert r.text == "быстрый"
+
+
+def test_resample_length() -> None:
+    assert len(resample(tone(1, 48000), 48000)) == RATE
+    assert len(resample(tone(1, 8000), 8000)) == RATE
+
+
+@pytest.fixture
+async def service():
+    fake = FakeProvider(text="Привет, Ксардас.")
+    svc = AsrService(Recognizer(fake), port=0)
+    started = asyncio.Event()
+    task = asyncio.create_task(svc.serve_forever(started))
+    await started.wait()
+    yield svc, fake
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_websocket_roundtrip(service) -> None:
+    svc, fake = service
+    async with connect(f"ws://127.0.0.1:{svc.port}") as ws:
+        hello = json.loads(await ws.recv())
+        assert hello["type"] == "hello" and hello["providers"] == ["fake"]
+
+        # 48 kHz input is resampled to 16 kHz for the provider
+        await ws.send(json.dumps({"type": "start", "lang": "ru", "sample_rate": 48000, "format": "pcm16"}))
+        pcm = float_to_pcm16(tone(1.5, 48000))
+        for i in range(0, len(pcm), 9600):
+            await ws.send(pcm[i : i + 9600])
+        await ws.send(json.dumps({"type": "end"}))
+        final = json.loads(await ws.recv())
+        assert final["type"] == "final" and final["text"] == "Привет, Ксардас."
+        assert final["audio_s"] == pytest.approx(1.5, abs=0.01)
+        assert fake.calls == [(int(1.5 * RATE), "ru")]
+
+        # cancelled utterances are dropped, the next one works
+        await ws.send(json.dumps({"type": "start", "sample_rate": RATE}))
+        await ws.send(float_to_pcm16(tone(1)))
+        await ws.send(json.dumps({"type": "cancel"}))
+        await ws.send(json.dumps({"type": "end"}))
+        assert json.loads(await ws.recv())["type"] == "error"
+        assert len(fake.calls) == 1
+
+
+async def test_openai_compatible() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if b"bad-model" in request.content:
+            return httpx.Response(400, json={"error": {"message": "model not found"}})
+        return httpx.Response(200, json={"text": " Стой здесь. "})
+
+    os.environ["TEST_ASR_KEY"] = "k"
+    p = OpenAICompatible(api_key_env="TEST_ASR_KEY", transport=httpx.MockTransport(handler))
+    t = await p.transcribe(tone(1), "ru")
+    assert t.text == "Стой здесь."
+    assert seen[0].url.path == "/v1/audio/transcriptions"
+    assert seen[0].headers["authorization"] == "Bearer k"
+    assert b'name="language"\r\n\r\nru' in seen[0].content
+
+    bad = OpenAICompatible(
+        model="bad-model", api_key_env="TEST_ASR_KEY", transport=httpx.MockTransport(handler)
+    )
+    with pytest.raises(AsrError, match="model not found"):
+        await bad.transcribe(tone(1), "ru")
+
+    nokey = OpenAICompatible(api_key_env="TEST_ASR_MISSING_KEY")
+    with pytest.raises(AsrError, match="TEST_ASR_MISSING_KEY"):
+        await nokey.transcribe(tone(1), "ru")
+
+
+async def _roundtrip(port: int, pcm: bytes, chunk: int = 3200) -> list[dict]:
+    """One utterance sent in chunks; every event up to the final (or error)."""
+    events = []
+    async with connect(f"ws://127.0.0.1:{port}") as ws:
+        events.append(json.loads(await ws.recv()))
+        await ws.send(json.dumps({"type": "start", "lang": "ru", "sample_rate": RATE}))
+        for i in range(0, len(pcm), chunk):
+            await ws.send(pcm[i : i + chunk])
+        await asyncio.sleep(0.05)  # partials of the last chunks
+        await ws.send(json.dumps({"type": "end"}))
+        while events[-1]["type"] not in ("final", "error"):
+            events.append(json.loads(await ws.recv()))
+    return events
+
+
+@pytest.fixture
+async def streaming_service(request):
+    primary = FakeProvider(text="Стой здесь и никуда не уходи.", stream=True, **request.param)
+    fallback = FakeProvider(text="запасной")
+    svc = AsrService(Recognizer(primary, fallback), port=0)
+    started = asyncio.Event()
+    task = asyncio.create_task(svc.serve_forever(started))
+    await started.wait()
+    yield svc, primary, fallback
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("streaming_service", [{}], indirect=True)
+async def test_streaming_partials_then_final(streaming_service) -> None:
+    svc, primary, fallback = streaming_service
+    events = await _roundtrip(svc.port, float_to_pcm16(tone(1)))
+    assert events[0]["streaming"] is True
+    partials = [e["text"] for e in events if e["type"] == "partial"]
+    assert partials[:2] == ["Стой", "Стой здесь"] and partials[-1] == "Стой здесь и никуда не уходи."
+    assert events[-1]["type"] == "final" and events[-1]["provider"] == "fake"
+    assert primary.streams[0].samples == RATE and not fallback.calls
+
+
+@pytest.mark.parametrize("streaming_service", [{"stream_fail": True}], indirect=True)
+async def test_broken_stream_falls_back_with_the_whole_recording(streaming_service) -> None:
+    svc, primary, fallback = streaming_service
+    events = await _roundtrip(svc.port, float_to_pcm16(tone(1.5)))
+    assert events[-1]["text"] == "запасной"
+    assert fallback.calls == [(int(1.5 * RATE), "ru")]
+    assert primary.streams[0].cancelled
+
+
+async def test_voxtral_speaks_vllm_realtime() -> None:
+    """The provider against a stand-in for vLLM's /v1/realtime."""
+    from websockets.asyncio.server import serve
+
+    from gothic_asr.providers.voxtral import VoxtralRealtime
+
+    seen: list[dict] = []
+
+    async def vllm(ws) -> None:
+        await ws.send(json.dumps({"type": "session.created", "id": "sess-1"}))
+        audio = 0
+        async for raw in ws:
+            ev = json.loads(raw)
+            seen.append({k: v for k, v in ev.items() if k != "audio"})
+            if ev["type"] == "input_audio_buffer.append":
+                audio += len(base64.b64decode(ev["audio"]))
+                await ws.send(json.dumps({"type": "transcription.delta", "delta": " Стой"}))
+            elif ev["type"] == "input_audio_buffer.commit" and not ev.get("final"):
+                audio = 0  # a new generation
+            elif ev["type"] == "input_audio_buffer.commit":
+                await ws.send(json.dumps({"type": "transcription.delta", "delta": " здесь."}))
+                await ws.send(json.dumps({"type": "transcription.done", "text": f" Стой здесь. {audio}"}))
+
+    async with serve(vllm, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        p = VoxtralRealtime(url=f"ws://127.0.0.1:{port}/v1/realtime", model="voxtral-test")
+        partials: list[str] = []
+        stream = await p.open_stream("ru", partials.append)
+        await stream.feed(tone(0.5))
+        await stream.feed(tone(0.5))
+        t = await stream.finish()
+        assert t.text == f"Стой здесь. {RATE * 2}" and t.provider == "voxtral"
+        assert partials[-1] == "Стой Стой здесь."
+        # batch use reuses the connection; a cancelled stream drops it and the next one reconnects
+        assert (await p.transcribe(tone(1), "ru")).text == f"Стой здесь. {RATE * 2}"
+        cancelled = await p.open_stream("ru")
+        await cancelled.cancel()
+        assert (await p.transcribe(tone(0.5), "ru")).text == f"Стой здесь. {RATE}"
+        await p.aclose()
+
+    kinds = [e["type"] for e in seen]
+    assert kinds[:2] == ["session.update", "input_audio_buffer.commit"]
+    assert seen[0]["model"] == "voxtral-test"
+    assert {"type": "input_audio_buffer.commit", "final": True} in seen

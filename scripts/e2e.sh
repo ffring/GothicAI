@@ -2,9 +2,13 @@
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
 #   m0: takes Xardas over, walks him around and returns him to his routine
 #   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
-# A new game first plays the intro video (~80 s), so a run takes ~2 min.
+#   m2: npc actions (give_item, follow/stop, gestures)
+#   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
+#       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
+# A new game first plays the intro video (~80 s), so a run takes ~2 min. The game runs in LOG_DIR,
+# so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
-#   SCENARIO=m1 LLM=fake GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
+#   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,12 +18,26 @@ LOG_DIR="${LOG_DIR:-$(mktemp -d -t gothic-e2e)}"
 TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
 LLM="${LLM:-fake}"
+ASR="${ASR:-fake}"
+# own ports, so a server / ASR service running for a play session is left alone
+PORT="${PORT:-47827}"
+ASR_PORT="${ASR_PORT:-47829}"
+VOICE_FILE="${VOICE_FILE:-$ROOT/asr-service/tests/audio/ru_1.wav}"
 
-(cd "$ROOT/server" && exec uv run gothic-ai serve --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console) >"$LOG_DIR/server.log" 2>&1 &
+ASR_PID=""
+VOICE_ARGS=(--no-voice)
+if [ "$SCENARIO" = "m3" ]; then
+  (cd "$ROOT/asr-service" && exec uv run gothic-asr serve --port "$ASR_PORT" --provider "$ASR" --fallback none) >"$LOG_DIR/asr.log" 2>&1 &
+  ASR_PID=$!
+  VOICE_ARGS=(--asr-url "ws://127.0.0.1:$ASR_PORT" --voice-file "$VOICE_FILE")
+fi
+
+(cd "$ROOT/server" && exec uv run gothic-ai serve --port "$PORT" --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console \
+  --memory-db "$LOG_DIR/memory.sqlite3" "${VOICE_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
 # `|| true`: with set -e a failing kill of an already finished process would change the exit code
-trap 'if [ -n "$GAME" ]; then kill "$GAME" 2>/dev/null || true; fi; kill "$SRV" 2>/dev/null || true' EXIT
+trap 'if [ -n "$GAME" ]; then kill "$GAME" 2>/dev/null || true; fi; kill "$SRV" 2>/dev/null || true; if [ -n "$ASR_PID" ]; then kill "$ASR_PID" 2>/dev/null || true; fi' EXIT
 
 sleep 2
 if ! kill -0 "$SRV" 2>/dev/null; then
@@ -27,7 +45,7 @@ if ! kill -0 "$SRV" 2>/dev/null; then
   exit 1
 fi
 
-(cd "$LOG_DIR" && exec "$GAME_BIN" -g "$GOTHIC_DIR" -nomenu -devmode) >"$LOG_DIR/game.log" 2>&1 &
+(cd "$LOG_DIR" && GOTHIC_AI_URL="ws://127.0.0.1:$PORT" exec "$GAME_BIN" -g "$GOTHIC_DIR" -nomenu -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 
 for _ in $(seq 1 "$TIMEOUT"); do
@@ -45,7 +63,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|note|calls|ERROR" "$LOG_DIR/server.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

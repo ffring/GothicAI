@@ -18,6 +18,8 @@ from .protocol import (
     ActionResult,
     ActionType,
     AttachCmd,
+    DebugCmd,
+    DebugCommand,
     DetachCmd,
     Detached,
     GameMessage,
@@ -26,6 +28,7 @@ from .protocol import (
     PingCmd,
     Pong,
     Result,
+    Session,
     Snapshot,
     SnapshotCmd,
     WorldLoaded,
@@ -59,6 +62,7 @@ class GameLink:
         self._world_ready = asyncio.Event()
         self.hello: Hello | None = None
         self.world: str | None = None
+        self.session: Session | None = None
         self.snapshots: dict[str, Snapshot] = {}
         self.listeners: list[Listener] = []
         self.closed = asyncio.Event()
@@ -89,6 +93,8 @@ class GameLink:
             case WorldLoaded():
                 self.world = msg.world
                 self._world_ready.set()
+            case Session():
+                self.session = msg
             case Loading():
                 self.world = None
                 self._world_ready.clear()
@@ -138,7 +144,7 @@ class GameLink:
         assert self.world is not None
         return self.world
 
-    async def _request(self, cmd: AttachCmd | DetachCmd, timeout: float) -> None:
+    async def _request(self, cmd: AttachCmd | DetachCmd | DebugCmd, timeout: float) -> None:
         fut: asyncio.Future[Result] = asyncio.get_running_loop().create_future()
         self._requests[cmd.req] = fut
         try:
@@ -154,6 +160,10 @@ class GameLink:
 
     async def detach(self, npc: str, timeout: float = 5.0) -> None:
         await self._request(DetachCmd(req=self._next_id("r"), npc=npc), timeout)
+
+    async def debug(self, cmd: DebugCommand, slot: int, timeout: float = 10.0) -> None:
+        """Start saving/loading `save_slot_<slot>.sav` (game in -devmode). Returns once it has started."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot), timeout)
 
     async def act(
         self, npc: str, action: ActionType, /, *, timeout: float = 90.0, **args: Any

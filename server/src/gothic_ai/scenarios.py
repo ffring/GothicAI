@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .dialogue import DialogueManager
@@ -12,7 +13,8 @@ from .llm import ToolCall
 from .llm.fake import FakeBackend
 from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider
-from .protocol import ActionResult, FollowEnded, LineStarted, Snapshot
+from .protocol import ActionResult, FollowEnded, GameMessage, LineStarted, Saved, Session, Snapshot
+from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +25,23 @@ GESTURES = ("T_COMEOVERHERE", "T_GREETNOV", "T_YES")
 class Step:
     name: str
     result: ActionResult
+
+
+async def wait_message[M: GameMessage](
+    link: GameLink, kind: type[M], match: Callable[[M], bool] = lambda _: True, timeout: float = 120
+) -> M:
+    """The next message of `kind` from the game that satisfies `match`."""
+    fut: asyncio.Future[M] = asyncio.get_running_loop().create_future()
+
+    def listener(msg: GameMessage) -> None:
+        if isinstance(msg, kind) and match(msg) and not fut.done():
+            fut.set_result(msg)
+
+    link.listeners.append(listener)
+    try:
+        return await asyncio.wait_for(fut, timeout)
+    finally:
+        link.listeners.remove(listener)
 
 
 async def attach_when_free(link: GameLink, npc: str, *, attempts: int = 60, delay: float = 1.0) -> None:
@@ -164,4 +183,82 @@ async def m2_actions(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     await link.act(npc, "return_to_routine")
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
+    return results
+
+
+async def m3_memory_voice(
+    link: GameLink,
+    dialogue: DialogueManager,
+    voice: VoiceInput | None,
+    npc: str = "NONE_100_XARDAS",
+    slot: int = 9,
+) -> dict[str, str]:
+    """M3 check: memories survive save/load and follow the save, push-to-talk becomes a player line.
+
+    Talk, save into `slot`, talk more, load the slot: the npc must remember the first talk only.
+    Then one push-to-talk utterance (the server's audio source, e.g. a wav file) goes through ASR.
+    """
+    results: dict[str, str] = {}
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    assert link.session is not None
+    first = link.session.branch
+    results["session"] = f"done ({first}, {link.session.reason})"
+
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc)
+    dialogue.open(npc, snap.npc.name)
+    await dialogue.say_as_player(npc, "Запомни: меня зовут Тестер.")
+    head = dialogue.memory.head(first)
+    await asyncio.sleep(0.5)  # the game has the head by now
+
+    for attempt in range(30):  # the game refuses to save during the opening dialog
+        try:
+            saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+            await link.debug("save", slot)
+            break
+        except GameError as err:
+            saving.cancel()
+            if attempt == 29:
+                raise
+            log.info("save refused (%s), retrying", err)
+            await asyncio.sleep(2)
+    saved = await saving
+    results["save"] = f"{'done' if (saved.branch, saved.seq) == (first, head) else 'failed'} ({saved.seq})"
+
+    await dialogue.say_as_player(npc, "А это я сказал уже после сохранения.")
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    session = await loaded
+    ok = (session.parent, session.parent_seq) == (first, head) and session.branch != first
+    results["load"] = (
+        f"{'done' if ok else 'failed'} ({session.branch} from {session.parent}@{session.parent_seq})"
+    )
+
+    await link.wait_world()
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc, fresh=True)
+    conv = dialogue.open(npc, snap.npc.name)
+    said = [m.content for m in conv.history if m.role == "user"]
+    ok = said == ["Запомни: меня зовут Тестер."]
+    results["memory"] = f"{'done' if ok else 'failed'} (remembers {said})"
+
+    if voice is not None:
+        started: list[str] = []
+        link.listeners.append(lambda m: started.append(m.line) if isinstance(m, LineStarted) else None)
+        before = len(conv.memory.entries)
+        voice.start(npc)
+        await asyncio.sleep(getattr(voice.source, "duration", 0.3) + 0.2)  # a wav is "spoken" in real time
+        voice.stop(npc, recognize=True)
+        for _ in range(120):
+            if len(conv.memory.entries) >= before + 2 and conv.last_lines and conv.last_lines[0] in started:
+                break
+            await asyncio.sleep(0.25)
+        heard = next((e.content for e in conv.memory.entries[before:] if e.role == "user"), None)
+        results["voice"] = f"{'done' if heard else 'failed'} (heard {heard!r})"
+
+    await link.act(npc, "return_to_routine")
+    for name, outcome in results.items():
+        log.info("%-10s %s", name, outcome)
     return results

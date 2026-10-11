@@ -1,0 +1,11 @@
+[Unit]
+Description=Gothic AI: Voxtral Mini 4B Realtime (vLLM, ws://127.0.0.1:47830/v1/realtime)
+After=network-online.target
+
+[Service]
+ExecStart=%h/gothic-ai/voxtral/run.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

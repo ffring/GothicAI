@@ -1,0 +1,45 @@
+[project]
+name = "gothic-asr"
+version = "0.1.0"
+description = "Speech recognition service with swappable providers (ChatGPT plan, self-hosted Voxtral, APIs)"
+authors = [
+    { name = "Kaifat", email = "11953142+kaifaty@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "chatgpt-auth",
+    "httpx>=0.28.1",
+    "numpy>=2.0",
+    "websockets>=17.2",
+]
+
+[project.scripts]
+gothic-asr = "gothic_asr.cli:main"
+
+[tool.uv.sources]
+chatgpt-auth = { path = "../libs/chatgpt-auth", editable = true }
+
+[tool.uv.build-backend]
+module-name = "gothic_asr"
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

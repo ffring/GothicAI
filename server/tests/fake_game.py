@@ -16,13 +16,17 @@ WAYPOINTS = {"NW_XARDAS_TOWER_IN1_31": 0.0, "NW_XARDAS_TOWER_04": 850.0, "NW_XAR
 
 
 class FakeGame:
-    def __init__(self, busy_attaches: int = 0) -> None:
+    def __init__(self, busy_attaches: int = 0, branch: str | None = "test-branch") -> None:
         self.attached: set[str] = set()
         self.received: list[dict[str, Any]] = []
         self.busy_attaches = busy_attaches  # first N attach requests fail as "npc is in dialog"
         self.ws: ClientConnection | None = None
         self.said: list[str] = []
         self.statuses: list[str] = []
+        self.branch = branch  # reported as the session on connect (None: an old game without sessions)
+        self.heads: list[tuple[str, int]] = []  # memory heads the server reported
+        self.transcripts: list[str] = []  # final ones
+        self.partials: list[str] = []
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -70,7 +74,9 @@ class FakeGame:
     async def run(self, url: str) -> None:
         async with connect(url) as ws:
             self.ws = ws
-            await self.send(type="hello", protocol=3, client="fake", codepage="cp1251")
+            await self.send(type="hello", protocol=4, client="fake", codepage="cp1251")
+            if self.branch is not None:
+                await self.send(type="session", branch=self.branch, reason="new_game")
             await self.send(type="world_loaded", world="NEWWORLD.ZEN")
             async for raw in ws:
                 msg = json.loads(raw)
@@ -97,6 +103,10 @@ class FakeGame:
                 await self.send(type="line_started", npc=msg["npc"], line=msg["line"])
             case "chat_status":
                 self.statuses.append(msg["status"])
+            case "memory":
+                self.heads.append((msg["branch"], msg["seq"]))
+            case "transcript":
+                (self.transcripts if msg.get("final", True) else self.partials).append(msg["text"])
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})

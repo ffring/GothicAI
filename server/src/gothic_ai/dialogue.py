@@ -7,11 +7,15 @@ import itertools
 import logging
 import re
 import time
+import uuid
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import npc_tools
-from .game import GameLink
-from .llm import LLMBackend, LLMError, Message, TextDelta, ToolCall
+from .game import GameError, GameLink
+from .llm import LLMBackend, LLMError, Message, Role, TextDelta, ToolCall
+from .memory import Entry, MemoryStore, NpcMemory
 from .persona import Persona, PersonaProvider
 from .protocol import (
     ChatClose,
@@ -21,14 +25,26 @@ from .protocol import (
     ChatStatusCmd,
     GameMessage,
     LineStarted,
+    MemoryCmd,
     PlayerText,
     SayCmd,
+    Session,
+    Snapshot,
 )
 
 log = logging.getLogger(__name__)
 
 GREETING_CUE = "[Герой подходит к тебе и хочет поговорить.]"
-MAX_HISTORY = 40  # messages kept per npc
+MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
+KEEP_RECENT = 16  # messages left verbatim after folding
+
+SUMMARY_INSTRUCTIONS = (
+    "Ты ведёшь память персонажа {name} из игры Gothic 2. Тебе дают прежнюю сводку и новые записи "
+    'его разговоров с героем. Напиши обновлённую сводку от второго лица ("ты" — это {name}), '
+    "не длиннее 1200 символов: кто такой герой и что он о себе рассказал, о чём просил, что ты обещал "
+    "и что отдал, как ты к нему относишься, важные события и когда они были. Только факты из записей, "
+    "ничего не выдумывай. Выведи только текст сводки."
+)
 
 
 # --- text shaping for the game ------------------------------------------------------
@@ -102,18 +118,45 @@ class SentenceSplitter:
 # --- conversation -------------------------------------------------------------------
 
 
+def game_time(snap: Snapshot | None) -> str | None:
+    if snap is None:
+        return None
+    w = snap.world
+    return f"день {w.day + 1}, {w.hour:02d}:{w.minute:02d}"
+
+
 @dataclass
 class Conversation:
     npc: str
     persona: Persona
-    history: list[Message] = field(default_factory=list)
+    branch: str  # memories of this conversation belong to this line of play
+    memory: NpcMemory = field(default_factory=NpcMemory)
     reply: asyncio.Task[None] | None = None
     last_lines: list[str] = field(default_factory=list)  # line ids of the latest reply
     actions: set[asyncio.Task[None]] = field(default_factory=set)
+    new_meeting: bool = True  # the next reply starts a new meeting (noted in memory)
+    compacting: asyncio.Task[None] | None = None
+
+    @property
+    def history(self) -> list[Message]:
+        msgs = []
+        if self.memory.summary:
+            msgs.append(
+                Message("developer", f"[Что ты помнишь о прежних встречах с героем: {self.memory.summary}]")
+            )
+        msgs.extend(e.message() for e in self.memory.entries)
+        return msgs
+
+    def tasks(self) -> list[asyncio.Task[None]]:
+        return [t for t in (self.reply, self.compacting, *self.actions) if t is not None]
 
 
 class DialogueManager:
-    """Reacts to chat messages from the game. One reply in flight per npc; new player text interrupts it."""
+    """Reacts to chat messages from the game. One reply in flight per npc; new player text interrupts it.
+
+    Every message is stored in `memory` under the game's current branch (see memory.py), so npc's
+    remember earlier conversations of the same save game.
+    """
 
     def __init__(
         self,
@@ -121,24 +164,33 @@ class DialogueManager:
         llm: LLMBackend,
         personas: PersonaProvider,
         *,
+        memory: MemoryStore | None = None,
         greet: bool = True,
         tools: bool = True,
     ) -> None:
         self.link = link
         self.llm = llm
         self.personas = personas
+        self.memory = memory or MemoryStore(":memory:")
         self.greet = greet
         self.tools = npc_tools.TOOLS if tools else []
+        self.branch: str | None = None
         self.conversations: dict[str, Conversation] = {}
         self._line_ids = itertools.count(1)
         self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
+        self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
+        if link.session is not None:
+            self._switch_branch(link.session)
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
+            case Session():
+                self._switch_branch(msg)
             case ChatOpen():
                 conv = self.open(msg.npc, msg.name)
-                if self.greet and not conv.history:
+                conv.new_meeting = True
+                if self.greet and not conv.memory.entries and not conv.memory.summary:
                     self._start_reply(conv, GREETING_CUE)
             case PlayerText():
                 conv = self.conversations.get(msg.npc.upper())
@@ -153,16 +205,106 @@ class DialogueManager:
                 if msg.line in self._lines:
                     self._lines[msg.line] = (self._lines[msg.line][0], time.monotonic())
 
+    # --- memory -------------------------------------------------------------------------
+
+    def _switch_branch(self, session: Session) -> None:
+        if session.branch != self.branch:
+            # another line of play (new game or a load): conversations are read again from memory
+            for conv in self.conversations.values():
+                for task in conv.tasks():
+                    task.cancel()
+            self.conversations.clear()
+            self.branch = session.branch
+        head = self.memory.ensure_branch(session.branch, session.parent, session.parent_seq)
+        log.info(
+            "memory: branch %s (%s%s), head %d",
+            session.branch,
+            session.reason,
+            f" from {session.parent}@{session.parent_seq}" if session.parent else "",
+            head,
+        )
+        self._send_head(session.branch, head)
+
+    def _current_branch(self) -> str:
+        if self.branch is None:
+            self.branch = f"unsaved-{uuid.uuid4().hex[:12]}"
+            self.memory.ensure_branch(self.branch)
+            log.warning("the game did not report a session; memories go to %s", self.branch)
+        return self.branch
+
+    def _remember(self, conv: Conversation, role: Role, content: str) -> None:
+        seq = self.memory.append(
+            conv.branch, conv.npc, role, content, game_time(self.link.snapshots.get(conv.npc))
+        )
+        conv.memory.entries.append(Entry(seq, role, content))
+        self._send_head(conv.branch, seq)
+
+    def _send_head(self, branch: str, seq: int) -> None:
+        self._spawn(self.link.send(MemoryCmd(branch=branch, seq=seq)))
+
+    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
+        async def run() -> None:
+            try:
+                await coro
+            except GameError:
+                pass  # the game is gone; it learns the head again on reconnect
+
+        task = asyncio.create_task(run())
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    def _maybe_compact(self, conv: Conversation) -> None:
+        if len(conv.memory.entries) <= MAX_HISTORY or (conv.compacting and not conv.compacting.done()):
+            return
+        conv.compacting = asyncio.create_task(self._compact(conv))
+
+    async def _compact(self, conv: Conversation) -> None:
+        """Fold older messages into the summary (one extra LLM call per ~25 messages)."""
+        old = conv.memory.entries[:-KEEP_RECENT]
+        speaker = {"user": "Герой", "assistant": conv.persona.name, "developer": ""}
+        records = "\n".join(f"{speaker[e.role]}: {e.content}" if speaker[e.role] else e.content for e in old)
+        prompt = f"Прежняя сводка: {conv.memory.summary or 'нет'}\n\nНовые записи:\n{records}"
+        text = ""
+        try:
+            async for event in self.llm.stream(
+                instructions=SUMMARY_INSTRUCTIONS.format(name=conv.persona.name),
+                messages=[Message("user", prompt)],
+            ):
+                if isinstance(event, TextDelta):
+                    text += event.text
+        except LLMError as err:
+            log.warning("%s: summary failed, will retry later: %s", conv.npc, err)
+            return
+        text = text.strip()
+        if not text:
+            return
+        covers = old[-1].seq
+        seq = self.memory.add_summary(conv.branch, conv.npc, text, covers)
+        conv.memory.summary, conv.memory.summary_seq = text, covers
+        conv.memory.entries = [e for e in conv.memory.entries if e.seq > covers]
+        log.info("%s: %d messages folded into the summary (%d chars)", conv.npc, len(old), len(text))
+        self._send_head(conv.branch, seq)
+
+    # --- conversation -------------------------------------------------------------------
+
     def open(self, npc: str, name: str) -> Conversation:
         npc = npc.upper()
         conv = self.conversations.get(npc)
         if conv is None:
-            conv = Conversation(npc, self.personas.get(npc, name))
+            branch = self._current_branch()
+            conv = Conversation(npc, self.personas.get(npc, name), branch, self.memory.load(branch, npc))
             self.conversations[npc] = conv
+            if conv.memory.entries or conv.memory.summary:
+                log.info(
+                    "%s remembers %d message(s)%s",
+                    npc,
+                    len(conv.memory.entries),
+                    " and a summary" if conv.memory.summary else "",
+                )
         return conv
 
     def say_as_player(self, npc: str, text: str) -> asyncio.Task[None]:
-        """Server-side injection of player text (console, scenarios)."""
+        """Player text that did not come as `player_text`: voice, console, scenarios."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             raise KeyError(f"no conversation with {npc}")
@@ -194,13 +336,14 @@ class DialogueManager:
     def _commit(self, conv: Conversation, user: Message, text: str) -> None:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here
         if text:
-            conv.history += [user, Message("assistant", text)]
-            del conv.history[:-MAX_HISTORY]
+            self._remember(conv, "user", user.content)
+            self._remember(conv, "assistant", text)
+            self._maybe_compact(conv)
 
     def _note(self, conv: Conversation, note: str) -> None:
         if note:
             log.info("%s note: %s", conv.npc, note)
-            conv.history.append(Message("developer", f"[{note}]"))
+            self._remember(conv, "developer", f"[{note}]")
 
     def _act(self, conv: Conversation, call: ToolCall) -> None:
         """Run a tool call next to the speech; its outcome lands in the history as a note."""
@@ -233,6 +376,11 @@ class DialogueManager:
         await self.link.send(ChatEndCmd(npc=conv.npc))
 
     async def _reply(self, conv: Conversation, user_text: str) -> None:
+        if conv.new_meeting:
+            conv.new_meeting = False
+            if conv.memory.entries or conv.memory.summary:
+                when = game_time(self.link.snapshots.get(conv.npc))
+                self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         user = Message("user", user_text)
         situation = Message("developer", npc_tools.render_situation(self.link.snapshots.get(conv.npc)))
         messages = [*conv.history, situation, user]
