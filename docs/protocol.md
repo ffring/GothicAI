@@ -147,7 +147,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 ## Планировщик NPC (v5)
 
 Сообщения для [планировщика решений NPC](npc-scheduler.md) о NPC, которые живут по своему распорядку (не под `attach`).
-- В мосте: [ai_bridge/npcobserver.cpp](https://github.com/kaifaty/OpenGothic) (ветка `ai-bridge-planner`).
+- В мосте: [OpenGothic/ai_bridge/npcobserver.cpp](../OpenGothic/ai_bridge/npcobserver.cpp).
 - На сервере: `NpcPlanner`.
 - Восприятия видны через сигнал `Gothic::onObservedPerception`. Движок продолжает обрабатывать их как обычно, сигнал лишь копирует.
 

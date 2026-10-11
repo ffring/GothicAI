@@ -185,6 +185,8 @@ class Gothic final {
     // external AI control (ai_bridge)
     Tempest::Signal<void(uint64_t)>                                     onTick;
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onExternalPerception;
+    // perceptions of npc's that follow their scripts (seen, not consumed): ai_bridge watches them
+    Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onObservedPerception;
     std::function<bool(std::string_view,std::string&)>                  consoleCommandFn;
     // runtime dialog lines: id -> subtitle text and duration (ms); false if the id is not external
     std::function<bool(std::string_view,std::string_view&,uint32_t&)>   externalMessageFn;

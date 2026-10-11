@@ -4248,6 +4248,7 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     Gothic::inst().onExternalPerception(*this,pl,victim,perc);
     return false;
     }
+  Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
   if(hasPerc(perc)) {
     owner.script().invokeState(this,&pl,victim,perception[perc].func);

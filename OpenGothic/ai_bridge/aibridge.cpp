@@ -33,6 +33,7 @@
 #include "jsonwriter.h"
 #include "linelibrary.h"
 #include "npccontroller.h"
+#include "npcobserver.h"
 #include "textcodec.h"
 #include "voicebuffer.h"
 
@@ -40,7 +41,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 4;
+constexpr int         ProtocolVersion = 5;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -155,6 +156,9 @@ struct AiBridge::Impl final {
   void onDebug(const rapidjson::Value& msg);
   void runDebug();
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
+  void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
+  // who drives the npc instead of its scripts: "dialog" (our chat), "attached", or nobody
+  std::string_view npcOwner(std::string_view symbol) const;
   bool onConsoleCommand(std::string_view cmd, std::string& reply);
 
   void handle(World* world, const std::string& text);
@@ -190,6 +194,8 @@ struct AiBridge::Impl final {
   bool                 connected = false;
   std::string          lastError;
   NpcController        ctrl{[this](std::string&& s){ send(std::move(s)); }};
+  NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
+                                [this](std::string_view symbol){ return npcOwner(symbol); }};
 
   Session              session;
   bool                 saving = false;  // a save is in progress: the same world comes back
@@ -222,6 +228,7 @@ AiBridge::Impl::Impl() {
   gothic.onStartLoading      .bind(this,&Impl::onStartLoading);
   gothic.onWorldLoaded       .bind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
+  gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
     };
@@ -296,6 +303,7 @@ AiBridge::Impl::~Impl() {
   gothic.onStartLoading      .ubind(this,&Impl::onStartLoading);
   gothic.onWorldLoaded       .ubind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.ubind(this,&Impl::onPerception);
+  gothic.onObservedPerception.ubind(this,&Impl::onObservedPerception);
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
   gothic.externalSoundFn   = nullptr;
@@ -354,6 +362,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
 
   if(world!=nullptr) {
     ctrl.tick(*world);
+    if(connected)
+      observer.tick(*world);
     tickVoices(*world);
     }
   ensureChat();
@@ -371,6 +381,7 @@ void AiBridge::Impl::onStartLoading() {
   voices.clear();  // the world and its sound device are about to go
   lastLine.clear();
   lines.clear();
+  observer.clear();
   if(auto world = Gothic::inst().world())
     ctrl.detachAll(*world,"loading"); else
     ctrl.dropAll("loading");
@@ -451,6 +462,21 @@ void AiBridge::Impl::onPerception(Npc& self, Npc& other, Npc* victim, PercType p
     ctrl.perception(*world,self,other,victim,perc);
   }
 
+void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc) {
+  if(!connected)
+    return;
+  if(auto world = Gothic::inst().world())
+    observer.perception(*world,self,other,victim,perc);
+  }
+
+std::string_view AiBridge::Impl::npcOwner(std::string_view symbol) const {
+  if(!chatNpc.empty() && symbol==chatNpc)
+    return "dialog";
+  if(ctrl.isAttached(symbol))
+    return "attached";
+  return {};
+  }
+
 void AiBridge::Impl::handle(World* world, const std::string& text) {
   rapidjson::Document doc;
   doc.Parse(text.c_str(),text.size());
@@ -505,6 +531,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="snapshot") {
     ctrl.requestSnapshot(JsonRead::str(doc,"npc"));
+    }
+  else if(type=="npc_act") {
+    observer.act(*world,doc);
     }
   else if(type=="say") {
     onSay(*world,doc);

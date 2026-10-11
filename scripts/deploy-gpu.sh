@@ -5,11 +5,13 @@
 #   scripts/deploy-gpu.sh env [--no-restart]   sync ~/gothic-ai/gothic-ai.env; running services whose
 #                                              settings changed are restarted
 #   scripts/deploy-gpu.sh voxtral|voxcpm       sync the settings, copy deploy/<name> and run its install.sh
+#   scripts/deploy-gpu.sh decider              the same for the npc decision service (all of decider-service/)
 #
 # Settings come from the nearest .env at or above the repository (real environment variables win):
 #   GOTHIC_GPU_SSH       ssh destination of the GPU server (required)
 #   GOTHIC_VOXTRAL_URL   -> VOXTRAL_HOST, VOXTRAL_PORT: the server listens where the ASR service connects
 #   GOTHIC_VOXCPM_URL    -> VOXCPM_HOST, VOXCPM_PORT: the same for the TTS service
+#   GOTHIC_DECIDER_URL   -> DECIDER_HOST, DECIDER_PORT: the same for the AI server's npc planner
 #   GPU_<NAME>=value     -> <NAME>=value, for anything else the server needs (e.g. GPU_HF_TOKEN)
 # Nothing else is sent: API keys of the services on this machine stay here.
 set -euo pipefail
@@ -51,6 +53,7 @@ render_env() {
   echo "# Managed by scripts/deploy-gpu.sh from the repository's .env: edits here are overwritten."
   listen_lines VOXTRAL GOTHIC_VOXTRAL_URL
   listen_lines VOXCPM GOTHIC_VOXCPM_URL
+  listen_lines DECIDER GOTHIC_DECIDER_URL
   local name value
   { env; [ -z "$ENV_FILE" ] || sed -E 's/^[[:space:]]*export[[:space:]]+//' "$ENV_FILE"; } \
     | sed -n -E 's/^GPU_([A-Za-z0-9_]+)=.*/\1/p' | awk '!seen[$0]++' | while read -r name; do
@@ -69,9 +72,9 @@ case "${1:-}" in
     render_env
     exit 0
     ;;
-  env | voxtral | voxcpm) ;;
+  env | voxtral | voxcpm | decider) ;;
   *)
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac
@@ -103,7 +106,7 @@ sync_env() {
 needs_restart() {
   local prefix="$1" changed="$2"
   printf '%s\n' "$changed" | grep -q -E "^$prefix" && return 0
-  printf '%s\n' "$changed" | grep -v -E '^(VOXTRAL|VOXCPM)_' | grep -q .
+  printf '%s\n' "$changed" | grep -v -E '^(VOXTRAL|VOXCPM|DECIDER)_' | grep -q .
 }
 
 case "${1:-}" in
@@ -114,7 +117,7 @@ case "${1:-}" in
       echo "not restarting; running services pick the settings up on their next restart" >&2
       exit 0
     fi
-    for svc in voxtral voxcpm; do
+    for svc in voxtral voxcpm decider; do
       prefix="$(echo "$svc" | tr '[:lower:]' '[:upper:]')_"
       if needs_restart "$prefix" "$changed" && remote "systemctl --user is-active --quiet gothic-$svc"; then
         echo "restarting gothic-$svc" >&2
@@ -132,5 +135,13 @@ case "${1:-}" in
     scp -q -r "$src" "$SSH_DEST:$REMOTE_DIR/"
     # install.sh (re)starts the service, which reads the settings itself
     remote "set -a; . ~/$REMOTE_ENV; set +a; ~/$REMOTE_DIR/$1/install.sh"
+    ;;
+  decider)
+    sync_env >/dev/null
+    remote "mkdir -p ~/$REMOTE_DIR/decider"
+    # the whole package; the server's own .venv stays
+    rsync -a --delete --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache \
+      "$ROOT/decider-service/" "$SSH_DEST:$REMOTE_DIR/decider/"
+    remote "set -a; . ~/$REMOTE_ENV; set +a; ~/$REMOTE_DIR/decider/deploy/install.sh"
     ;;
 esac
