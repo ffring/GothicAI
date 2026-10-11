@@ -4,8 +4,23 @@ from __future__ import annotations
 
 import os
 
-from .base import Done, LLMBackend, LLMError, LLMEvent, Message, Role, TextDelta, Tool, ToolCall
-from .fake import FakeBackend
+from .base import (
+    Done,
+    Item,
+    LLMBackend,
+    LLMError,
+    LLMEvent,
+    Message,
+    Reasoning,
+    Role,
+    TextDelta,
+    Tool,
+    ToolCall,
+    ToolChoice,
+    ToolResult,
+    Usage,
+)
+from .fake import FakeBackend, FakeStep
 from .openai_compat import OpenAICompatBackend
 from .openai_responses import OpenAIResponsesBackend
 from .siwc import ChatGPTAuth
@@ -16,14 +31,21 @@ DEFAULT_MODELS = {"chatgpt": "gpt-6.1-sol", "openai": "gpt-6.1-sol", "local": "q
 __all__ = [
     "BACKENDS",
     "Done",
+    "FakeBackend",
+    "FakeStep",
+    "Item",
     "LLMBackend",
     "LLMError",
     "LLMEvent",
     "Message",
+    "Reasoning",
     "Role",
     "TextDelta",
     "Tool",
     "ToolCall",
+    "ToolChoice",
+    "ToolResult",
+    "Usage",
     "make_backend",
 ]
 

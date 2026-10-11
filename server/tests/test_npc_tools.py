@@ -1,4 +1,5 @@
-from gothic_ai.npc_tools import GESTURES, TOOLS, render_situation
+from gothic_ai.executor import ATTITUDES, GOALS, Intent
+from gothic_ai.npc_tools import TOOLS, render_situation
 from gothic_ai.protocol import Snapshot
 from tests.fake_game import FakeGame
 
@@ -22,5 +23,16 @@ def test_tools_are_strict_json_schemas():
         params = tool.parameters
         assert params["type"] == "object" and params["additionalProperties"] is False
         assert sorted(params["required"]) == sorted(params["properties"])
-    gesture = next(t for t in TOOLS if t.name == "gesture")
-    assert gesture.parameters["properties"]["name"]["enum"] == list(GESTURES)
+    intent = next(t for t in TOOLS if t.name == "set_intent").parameters["properties"]
+    assert intent["goal"]["enum"] == list(GOALS) and intent["attitude"]["enum"] == list(ATTITUDES)
+    assert intent["target"]["type"] == ["string", "null"]
+
+
+def test_situation_shows_the_intent_and_its_possible_targets():
+    snap = Snapshot.model_validate(FakeGame().snapshot("NONE_100_XARDAS"))
+    text = render_situation(
+        snap, Intent("follow_hero", attitude="friendly", agenda="wants the hero to see Hagen")
+    )
+    assert "Твоё намерение: цель — идти за героем; отношение к герою — дружеское" in text
+    assert "agenda — wants the hero to see Hagen" in text
+    assert "PLAYER (герой)" in text and "PC_THIEF (Диего, 6 м)" in text and "NW_XARDAS_TOWER_04" in text
