@@ -326,6 +326,18 @@ class SayCmd(_Command):
     audio: str | None = None
     stream: bool | None = None
     rate: int | None = None
+    reply: str | None = None  # the line is part of this reply, already shown with chat_text
+
+
+class ChatTextCmd(_Command):
+    """The npc's reply as it is generated (`text` so far), for the chat window; its lines (`say`
+    with the same `reply`) then voice and animate it without showing the text again."""
+
+    type: Literal["chat_text"] = "chat_text"
+    npc: str
+    reply: str
+    text: str
+    final: bool = False
 
 
 class SayAudioCmd(_Command):

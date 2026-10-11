@@ -24,6 +24,7 @@ from .protocol import (
     ChatOpen,
     ChatStatus,
     ChatStatusCmd,
+    ChatTextCmd,
     GameMessage,
     LineStarted,
     MemoryCmd,
@@ -39,6 +40,7 @@ from .tts import TtsClient, TtsError
 log = logging.getLogger(__name__)
 
 GREETING_CUE = "[Герой подходит к тебе и хочет поговорить.]"
+CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
@@ -77,22 +79,60 @@ def line_duration(text: str) -> float:
 
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"»)]*\s+")
+_CLAUSE_END = re.compile(r"(?<=[,;:—–])\s+")
+_WORD = re.compile(r"\S+\s+")
+FIRST_CLAUSE_MIN = 12  # a first line cut at a comma is at least this long
+FIRST_WORDS_MAX = 10  # ...or cut after this many words when there is no punctuation
+# a cut never leaves one of these at the end of the first line ("вместе с" | "армией")
+_FUNCTION_WORDS = frozenset(
+    "а и но да или что чтобы как когда если не же ли бы "
+    "в во на с со к ко по о об от до из за для у при без над под".split()
+)
 
 
 class SentenceSplitter:
     """Cuts streamed text into subtitle lines: whole sentences, merged if short, split if too long.
-    `first_min_len` lets the first line go out sooner (with TTS it is voiced before it is heard)."""
+    `first_min_len` lets the first line go out sooner (with TTS it is voiced before it is heard);
+    `first_clause` goes further: the first line ends at the first clause (a comma) or after a few
+    words, whichever comes first."""
 
-    def __init__(self, min_len: int = 24, max_len: int = 200, first_min_len: int | None = None) -> None:
+    def __init__(
+        self,
+        min_len: int = 24,
+        max_len: int = 200,
+        first_min_len: int | None = None,
+        first_clause: bool = False,
+    ) -> None:
         self.min_len = min_len
         self.max_len = max_len
-        self.first_min_len = min_len if first_min_len is None else first_min_len
+        self.first_min_len = 1 if first_clause else min_len if first_min_len is None else first_min_len
+        self.first_clause = first_clause
         self._emitted = False
         self._buf = ""
+
+    def _first_cut(self) -> int | None:
+        cuts = []
+        if m := _SENTENCE_END.search(self._buf):
+            cuts.append(m.end())
+        for m in _CLAUSE_END.finditer(self._buf):
+            if len(self._buf[: m.end()].strip()) >= FIRST_CLAUSE_MIN:
+                cuts.append(m.end())
+                break
+        words = list(_WORD.finditer(self._buf))
+        n = FIRST_WORDS_MAX
+        while n <= len(words) and words[n - 1].group().strip().lower() in _FUNCTION_WORDS:
+            n += 1
+        if n <= len(words):
+            cuts.append(words[n - 1].end())
+        return min(cuts) if cuts else None
 
     def feed(self, text: str) -> list[str]:
         self._buf += text
         out: list[str] = []
+        if self.first_clause and not self._emitted and (cut := self._first_cut()) is not None:
+            out.append(self._buf[:cut].strip())
+            self._buf = self._buf[cut:]
+            self._emitted = True
         start = 0
         pending = ""
         for m in _SENTENCE_END.finditer(self._buf):
@@ -146,7 +186,7 @@ class Conversation:
     new_meeting: bool = True  # the next reply starts a new meeting (noted in memory)
     compacting: asyncio.Task[None] | None = None
     # lines waiting for their audio, sent to the game strictly in order (with tts)
-    voice: asyncio.Queue[tuple[str, str]] | None = None
+    voice: asyncio.Queue[tuple[str, str, str]] | None = None  # (line, text, reply)
     voicing: asyncio.Task[None] | None = None
 
     @property
@@ -192,6 +232,7 @@ class DialogueManager:
         self.branch: str | None = None
         self.conversations: dict[str, Conversation] = {}
         self._line_ids = itertools.count(1)
+        self._reply_ids = itertools.count(1)
         self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
@@ -342,7 +383,7 @@ class DialogueManager:
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
         await self.link.send(ChatStatusCmd(npc=conv.npc, status=status, detail=detail))
 
-    async def _say(self, conv: Conversation, text: str) -> None:
+    async def _say(self, conv: Conversation, text: str, reply: str) -> None:
         text = to_game_text(text)
         if not text:
             return
@@ -351,29 +392,31 @@ class DialogueManager:
         self._lines[line] = (text, None)
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
-            await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
+            await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, reply=reply))
             return
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
-        conv.voice.put_nowait((line, text))
+        conv.voice.put_nowait((line, text, reply))
 
-    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str]]) -> None:
+    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str]]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
         audio still goes out, silent."""
         assert self.tts is not None
         while True:
-            line, text = await queue.get()
+            line, text, reply = await queue.get()
             started = False
             try:
                 if time.monotonic() >= self._tts_paused_until:
 
-                    async def start(rate: int, _provider: str, line: str = line, text: str = text) -> None:
+                    async def start(
+                        rate: int, _provider: str, line: str = line, text: str = text, reply: str = reply
+                    ) -> None:
                         nonlocal started
                         started = True
                         await self.link.send(
-                            SayCmd(npc=conv.npc, line=line, text=text, stream=True, rate=rate)
+                            SayCmd(npc=conv.npc, line=line, text=text, stream=True, rate=rate, reply=reply)
                         )
 
                     async def chunk(pcm: bytes, line: str = line) -> None:
@@ -401,7 +444,7 @@ class DialogueManager:
                         if started:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started:
-                    await self.link.send(SayCmd(npc=conv.npc, line=line, text=text))
+                    await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, reply=reply))
             except GameError:
                 pass
             finally:
@@ -462,13 +505,15 @@ class DialogueManager:
         messages = [*conv.history, situation, user]
         conv.last_lines = []
         await self._status(conv, "thinking")
-        # voiced, the first line is synthesized whole before it is heard: keep it short
-        splitter = SentenceSplitter(first_min_len=1 if self.tts is not None else None)
+        # voiced, the first line is synthesized before it is heard: cut it at the first clause
+        splitter = SentenceSplitter(first_clause=self.tts is not None)
         started = time.monotonic()
         first_delta: float | None = None
         first_line: float | None = None
         text = ""
         end_requested = False
+        reply = f"R{next(self._reply_ids)}"
+        shown, shown_at = "", 0.0
         try:
             async for event in self.llm.stream(
                 instructions=conv.persona.instructions, messages=messages, tools=self.tools
@@ -484,14 +529,22 @@ class DialogueManager:
                 if first_delta is None:
                     first_delta = time.monotonic() - started
                 text += event.text
+                # the chat shows the reply as it is written; voice and animation follow line by line
+                if time.monotonic() - shown_at >= CHAT_TEXT_EVERY and (now := to_game_text(text)) != shown:
+                    shown, shown_at = now, time.monotonic()
+                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=reply, text=shown))
                 for line in splitter.feed(event.text):
                     if first_line is None:
                         first_line = time.monotonic() - started
-                    await self._say(conv, line)
+                    await self._say(conv, line, reply)
             for line in splitter.flush():
                 if first_line is None:
                     first_line = time.monotonic() - started
-                await self._say(conv, line)
+                await self._say(conv, line, reply)
+            if text:
+                await self.link.send(
+                    ChatTextCmd(npc=conv.npc, reply=reply, text=to_game_text(text), final=True)
+                )
         except LLMError as err:
             log.error("%s: %s", conv.npc, err)
             await self._status(conv, "error", str(err))
