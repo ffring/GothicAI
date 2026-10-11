@@ -19,7 +19,7 @@ log = logging.getLogger("gothic_tts")
 
 
 def load_env_file(start: Path | None = None) -> Path | None:
-    """Reads the nearest `.env` at or above `start` (API keys live in the repository root's `.env`).
+    """Reads the nearest `.env` at or above `start` (API keys and local settings live in the repository root's `.env`).
     Variables already set in the environment win."""
     here = start or Path.cwd()
     for d in (here, *here.parents):

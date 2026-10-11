@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Voxtral Mini 4B Realtime behind vLLM's realtime WebSocket API, for the Gothic AI ASR service.
-# Listens on the Tailscale address only; ~55% of the 3090 (BF16 weights ~9 GB + cache).
+# Listens on VOXTRAL_HOST only (a VPN address, set in ~/gothic-ai/gothic-ai.env); ~55% of a 24 GB GPU
+# (BF16 weights ~9 GB + cache).
 # 2048 tokens per request: one push-to-talk utterance (80 ms of audio per token) fits easily.
 set -euo pipefail
 cd "$(dirname "$0")"

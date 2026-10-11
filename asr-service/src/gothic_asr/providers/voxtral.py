@@ -1,5 +1,5 @@
 """Voxtral Mini 4B Realtime, self-hosted behind vLLM's realtime WebSocket API (on the GPU server,
-never on this machine; see AGENTS.md).
+never on this machine).
 
 vLLM protocol: `session.update{model}` once per connection; per utterance `input_audio_buffer.commit`
 starts a generation, `input_audio_buffer.append` (base64 PCM16, 16 kHz) feeds audio while the model
@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 
 import numpy as np
 from websockets.asyncio.client import ClientConnection, connect
@@ -23,7 +24,7 @@ from .base import AsrError, PartialCallback, Transcript
 
 log = logging.getLogger(__name__)
 
-DEFAULT_URL = "ws://127.0.0.1:47830/v1/realtime"  # dev-ubuntu over Tailscale
+DEFAULT_URL = "ws://127.0.0.1:47830/v1/realtime"  # GOTHIC_VOXTRAL_URL: the GPU server running it
 DEFAULT_MODEL = "mistralai/Voxtral-Mini-4B-Realtime-2602"
 LANGUAGES = frozenset("en fr es de ru zh ja it pt nl ar hi ko".split())
 BATCH_CHUNK = 16000  # samples per append when a whole recording is sent at once
@@ -35,9 +36,9 @@ class VoxtralRealtime:
     languages = LANGUAGES
 
     def __init__(
-        self, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL, timeout: str | float = 10.0
+        self, url: str = "", model: str = DEFAULT_MODEL, timeout: str | float = 10.0
     ) -> None:
-        self.url = url
+        self.url = url or os.environ.get("GOTHIC_VOXTRAL_URL", DEFAULT_URL)
         self.model = model
         self.timeout = float(timeout)
         self._ws: ClientConnection | None = None

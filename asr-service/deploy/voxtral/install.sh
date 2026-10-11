@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs Voxtral Mini 4B Realtime (vLLM) on the GPU server as a systemd user service.
-# Run on the server (dev-ubuntu: RTX 3090, CUDA toolkit in /usr/local/cuda, uv in ~/.local/bin):
-#   scp -r asr-service/deploy/voxtral dev-ubuntu:gothic-ai/ && ssh dev-ubuntu gothic-ai/voxtral/install.sh
+# Run on the server (24 GB GPU, CUDA toolkit in /usr/local/cuda, uv in ~/.local/bin):
+#   scp -r asr-service/deploy/voxtral gpu-host:gothic-ai/ && ssh gpu-host gothic-ai/voxtral/install.sh
+# and put VOXTRAL_HOST=<address to listen on> into ~/gothic-ai/gothic-ai.env.
 # Needs no root and no Docker changes. First start downloads the model (~9 GB) and JIT-compiles
 # FlashInfer kernels (~2 min). Logs: journalctl --user -u gothic-voxtral -f
 set -euo pipefail

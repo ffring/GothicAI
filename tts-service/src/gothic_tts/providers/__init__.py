@@ -1,7 +1,7 @@
 """Provider registry. A provider is chosen by a spec string: `name` or `name:key=value,key=value`,
 e.g. `voxcpm` (self-hosted VoxCPM2), `codex:voice=spruce` (Codex's realtime voice, ChatGPT plan),
 `openai:model=gpt-4o-mini-tts,voice=onyx` or `inworld:model=inworld-tts-2` (API keys).
-Models are never run on this machine: self-hosted ones live on a GPU server (see AGENTS.md).
+Models are never run on this machine: self-hosted ones live on a GPU server.
 """
 
 from __future__ import annotations

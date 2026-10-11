@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# VoxCPM2 TTS (server.py) for the Gothic AI TTS service. Tailscale address only; ~6 GB of the 3090.
+# VoxCPM2 TTS (server.py) for the Gothic AI TTS service. Listens on VOXCPM_HOST only (a VPN address,
+# set in ~/gothic-ai/gothic-ai.env); ~6 GB of GPU memory.
 set -euo pipefail
 cd "$(dirname "$0")"
 export CUDA_HOME=/usr/local/cuda

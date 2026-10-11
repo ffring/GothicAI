@@ -1,4 +1,4 @@
-"""VoxCPM2 on the GPU server (tts-service/deploy/voxcpm/server.py; never on this machine, see AGENTS.md)."""
+"""VoxCPM2 on the GPU server (tts-service/deploy/voxcpm/server.py; never on this machine)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import itertools
 import json
 import logging
+import os
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import WebSocketException
@@ -14,7 +15,7 @@ from .base import ChunkCallback, TtsError, Voice
 
 log = logging.getLogger(__name__)
 
-DEFAULT_URL = "ws://127.0.0.1:47831"  # dev-ubuntu over Tailscale
+DEFAULT_URL = "ws://127.0.0.1:47831"  # GOTHIC_VOXCPM_URL: the GPU server running it
 
 
 class VoxCPM:
@@ -22,9 +23,9 @@ class VoxCPM:
     rate = 48000
 
     def __init__(
-        self, url: str = DEFAULT_URL, timeout: str | float = 10.0, connect_timeout: str | float = 3.0
+        self, url: str = "", timeout: str | float = 10.0, connect_timeout: str | float = 3.0
     ) -> None:
-        self.url = url
+        self.url = url or os.environ.get("GOTHIC_VOXCPM_URL", DEFAULT_URL)
         self.timeout = float(timeout)  # also the limit for the first chunk
         self.connect_timeout = float(connect_timeout)  # an offline server (Tailscale) hangs the connect
         self._ws: ClientConnection | None = None

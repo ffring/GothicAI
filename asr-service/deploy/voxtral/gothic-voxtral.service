@@ -1,8 +1,10 @@
 [Unit]
-Description=Gothic AI: Voxtral Mini 4B Realtime (vLLM, ws://127.0.0.1:47830/v1/realtime)
+Description=Gothic AI: Voxtral Mini 4B Realtime (vLLM realtime API, port 47830)
 After=network-online.target
 
 [Service]
+# VOXTRAL_HOST: the address to listen on (the server's VPN address)
+EnvironmentFile=-%h/gothic-ai/gothic-ai.env
 ExecStart=%h/gothic-ai/voxtral/run.sh
 Restart=on-failure
 RestartSec=15

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Installs VoxCPM2 TTS on the GPU server as a systemd user service (no root, no Docker changes):
-#   scp -r tts-service/deploy/voxcpm dev-ubuntu:gothic-ai/ && ssh dev-ubuntu gothic-ai/voxcpm/install.sh
+#   scp -r tts-service/deploy/voxcpm gpu-host:gothic-ai/ && ssh gpu-host gothic-ai/voxcpm/install.sh
+# and put VOXCPM_HOST=<address to listen on> into ~/gothic-ai/gothic-ai.env.
 # First start downloads the model (~5 GB). Logs: journalctl --user -u gothic-voxcpm -f
 set -euo pipefail
 cd "$(dirname "$0")"

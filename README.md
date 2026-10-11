@@ -10,8 +10,8 @@
 |---|---|
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
 | `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, память, голосовой ввод, адаптер LLM, сценарии |
-| `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере, подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на dev-ubuntu |
-| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на dev-ubuntu |
+| `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере, подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на GPU-сервере |
+| `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на GPU-сервере |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
@@ -30,6 +30,12 @@ cmake -S OpenGothic -B OpenGothic/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebIn
 cmake --build OpenGothic/build --target Gothic2Notr
 ```
 
+Локальные настройки: адреса GPU-сервера и ключи API. ASR- и TTS-сервисы читают ближайший `.env` выше текущей папки, то есть `.env` в корне репозитория (он в `.gitignore`). Переменные окружения важнее файла.
+
+```bash
+cp .env.example .env
+```
+
 Вход в ChatGPT. Один раз: откроется браузер, токены сохранятся в `~/.config/gothic-ai/chatgpt.json`.
 
 ```bash
@@ -42,7 +48,7 @@ cd server && uv run gothic-ai login chatgpt
 cd server && uv run gothic-ai llm-test "Кто ты?"
 ```
 
-ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на dev-ubuntu, а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Развёртывание Voxtral описано в `asr-service/deploy/voxtral/install.sh`.
+ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Развёртывание Voxtral описано в `asr-service/deploy/voxtral/install.sh`.
 
 ```bash
 cd asr-service && uv run gothic-asr serve
@@ -56,7 +62,7 @@ cd asr-service && uv run gothic-asr transcribe tests/audio/*.wav --provider voxt
 
 TTS-сервис (голоса NPC) сам моделей не запускает. По умолчанию голоса идут по цепочке:
 1. Inworld TTS-2 (облако, ключ `INWORLD_API_KEY`);
-2. если Inworld недоступен, VoxCPM2 на dev-ubuntu;
+2. если Inworld недоступен, VoxCPM2 на GPU-сервере (адрес в `GOTHIC_VOXCPM_URL`);
 3. если недоступен и он, NPC говорят только субтитрами (как и при остановленном TTS-сервисе).
 
 Упавший провайдер пропускается, пока фоновая проверка не увидит, что он снова работает. Проверки идут через 5 с, затем интервал удваивается до 2 минут. Если провайдер ломается посреди реплики, реплика дальше идёт без звука: переключиться на другой голос на полуслове нельзя. Следующая реплика уже озвучивается запасным.
@@ -69,7 +75,7 @@ TTS-сервис (голоса NPC) сам моделей не запускае�
 cd tts-service && uv run gothic-tts serve
 ```
 
-Провайдер меняется флагами `--provider` и `--fallback` или переменными `GOTHIC_TTS_PROVIDER` и `GOTHIC_TTS_FALLBACK`. Ключи API сервис берёт из ближайшего `.env` выше текущей папки, то есть из `.env` в корне репозитория (он в `.gitignore`).
+Провайдер меняется флагами `--provider` и `--fallback` или переменными `GOTHIC_TTS_PROVIDER` и `GOTHIC_TTS_FALLBACK`. Ключи API и адрес VoxCPM2 сервис берёт из `.env` в корне репозитория (см. `.env.example`).
 
 - `inworld` — Inworld Realtime TTS-2 по ключу `INWORLD_API_KEY`. Голос NPC один раз создаётся по описанию из персоны (Voice Design), публикуется в библиотеку голосов Inworld с тегом `gothic-ai` и запоминается в `~/.local/share/gothic-ai/inworld-voices.json`. Готовый голос из библиотеки задаётся опцией `voice` (например, `inworld:voice=Dmitry`); описание из персоны тогда управляет подачей. Более быстрая модель без управления подачей — `inworld:model=inworld-tts-2-flash`.
 
@@ -126,3 +132,7 @@ cd libs/chatgpt-auth && uv run pytest
 ```bash
 SCENARIO=m3 ASR=voxtral scripts/e2e.sh
 ```
+
+## Лицензия
+
+[MIT](LICENSE). Данные игры (Gothic II) в репозиторий не входят: нужна своя копия игры.

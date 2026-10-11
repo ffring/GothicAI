@@ -1,7 +1,7 @@
 """Provider registry. A provider is chosen by a spec string: `name` or `name:key=value,key=value`,
 e.g. `voxtral` (self-hosted Voxtral Realtime), `chatgpt` (ChatGPT plan) or
 `openai:base_url=https://api.groq.com/openai/v1,model=whisper-large-v3-turbo,api_key_env=GROQ_API_KEY`.
-Models are never run on this machine: self-hosted ones live on a GPU server (see AGENTS.md).
+Models are never run on this machine: self-hosted ones live on a GPU server.
 """
 
 from __future__ import annotations
