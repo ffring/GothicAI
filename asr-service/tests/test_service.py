@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import os
 
@@ -176,47 +175,75 @@ async def test_broken_stream_falls_back_with_the_whole_recording(streaming_servi
     assert primary.streams[0].cancelled
 
 
-async def test_voxtral_speaks_vllm_realtime() -> None:
-    """The provider against a stand-in for vLLM's /v1/realtime."""
-    from websockets.asyncio.server import serve
+async def test_voxtral_speaks_audiocpp_live() -> None:
+    """The provider against a stand-in for audio.cpp's /v1/audio/transcriptions/live."""
+    from gothic_asr.providers.voxtral import TAIL_S, VoxtralRealtime
 
-    from gothic_asr.providers.voxtral import VoxtralRealtime
+    requests: list[tuple[str, dict[str, str]]] = []
 
-    seen: list[dict] = []
+    async def audiocpp(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        method, target, _ = (await reader.readuntil(b"\r\n")).decode().split()
+        headers = {}
+        while (line := (await reader.readuntil(b"\r\n")).decode().strip()) != "":
+            key, _, value = line.partition(":")
+            headers[key.strip().lower()] = value.strip()
+        requests.append((f"{method} {target}", headers))
+        if method == "GET":
+            writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{"status":"ok"}')
+        elif "model=busy" in target:
+            body = b'{"error":{"message":"server_busy","type":"server_busy"}}'
+            writer.write(b"HTTP/1.1 503 Busy\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
+        else:
+            writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
 
-    async def vllm(ws) -> None:
-        await ws.send(json.dumps({"type": "session.created", "id": "sess-1"}))
-        audio = 0
-        async for raw in ws:
-            ev = json.loads(raw)
-            seen.append({k: v for k, v in ev.items() if k != "audio"})
-            if ev["type"] == "input_audio_buffer.append":
-                audio += len(base64.b64decode(ev["audio"]))
-                await ws.send(json.dumps({"type": "transcription.delta", "delta": " Стой"}))
-            elif ev["type"] == "input_audio_buffer.commit" and not ev.get("final"):
-                audio = 0  # a new generation
-            elif ev["type"] == "input_audio_buffer.commit":
-                await ws.send(json.dumps({"type": "transcription.delta", "delta": " здесь."}))
-                await ws.send(json.dumps({"type": "transcription.done", "text": f" Стой здесь. {audio}"}))
+            def sse(ev: dict) -> None:
+                data = f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode()
+                writer.write(b"%x\r\n%s\r\n" % (len(data), data))
 
-    async with serve(vllm, "127.0.0.1", 0) as server:
-        port = server.sockets[0].getsockname()[1]
-        p = VoxtralRealtime(url=f"ws://127.0.0.1:{port}/v1/realtime", model="voxtral-test")
-        partials: list[str] = []
-        stream = await p.open_stream("ru", partials.append)
-        await stream.feed(tone(0.5))
-        await stream.feed(tone(0.5))
-        t = await stream.finish()
-        assert t.text == f"Стой здесь. {RATE * 2}" and t.provider == "voxtral"
-        assert partials[-1] == "Стой Стой здесь."
-        # batch use reuses the connection; a cancelled stream drops it and the next one reconnects
-        assert (await p.transcribe(tone(1), "ru")).text == f"Стой здесь. {RATE * 2}"
-        cancelled = await p.open_stream("ru")
-        await cancelled.cancel()
-        assert (await p.transcribe(tone(0.5), "ru")).text == f"Стой здесь. {RATE}"
-        await p.aclose()
+            samples = 0
+            try:
+                while size := int(await reader.readuntil(b"\r\n"), 16):
+                    samples += len(await reader.readexactly(size)) // 2
+                    await reader.readexactly(2)
+                    if samples == size // 2:
+                        sse({"type": "transcript.text.delta", "delta": " Стой"})
+                        await writer.drain()
+                await reader.readexactly(2)
+            except asyncio.IncompleteReadError:
+                writer.close()  # the client dropped the request: no transcript
+                return
+            sse({"type": "transcript.text.delta", "delta": " здесь."})
+            sse({"type": "transcript.text.done", "text": f" Стой здесь. {samples}"})
+            writer.write(b"e\r\ndata: [DONE]\n\n\r\n0\r\n\r\n")
+        await writer.drain()
+        writer.close()
 
-    kinds = [e["type"] for e in seen]
-    assert kinds[:2] == ["session.update", "input_audio_buffer.commit"]
-    assert seen[0]["model"] == "voxtral-test"
-    assert {"type": "input_audio_buffer.commit", "final": True} in seen
+    server = await asyncio.start_server(audiocpp, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    tail = round(TAIL_S * RATE)
+    p = VoxtralRealtime(url=f"http://127.0.0.1:{port}", model="voxtral-test")
+    await p.warmup()
+    partials: list[str] = []
+    stream = await p.open_stream("ru", partials.append)
+    await stream.feed(tone(0.5))
+    await stream.feed(tone(0.5))
+    t = await stream.finish()
+    assert t.text == f"Стой здесь. {RATE + tail}" and t.provider == "voxtral"
+    assert partials == ["Стой", "Стой здесь."]
+    # a cancelled stream frees the model for the next utterance
+    cancelled = await p.open_stream("ru")
+    await cancelled.feed(tone(0.2))
+    await cancelled.cancel()
+    assert (await p.transcribe(tone(1), "ru")).text == f"Стой здесь. {RATE + tail}"
+    with pytest.raises(AsrError, match="503: server_busy"):
+        await VoxtralRealtime(url=f"http://127.0.0.1:{port}", model="busy").transcribe(tone(0.5), "ru")
+    await p.aclose()
+    server.close()
+    await server.wait_closed()
+
+    assert requests[0][0] == "GET /health"
+    target, headers = requests[1]
+    path, _, query = target.partition("?")
+    assert path == "POST /v1/audio/transcriptions/live"
+    assert query == "model=voxtral-test&sample_rate=16000&channels=1&sample_format=s16le"
+    assert headers["transfer-encoding"] == "chunked"

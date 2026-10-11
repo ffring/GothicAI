@@ -17,7 +17,7 @@ from .service import AsrService
 
 log = logging.getLogger("gothic_asr")
 
-# self-hosted Voxtral Realtime (streams, ~0.3 s after speech), ChatGPT plan when it is unreachable
+# self-hosted Voxtral Realtime (streams, ~0.15 s after speech), ChatGPT plan when it is unreachable
 DEFAULT_PROVIDER = "voxtral"
 DEFAULT_FALLBACK = "chatgpt"
 CHUNK_S = 0.1

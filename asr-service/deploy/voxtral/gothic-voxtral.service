@@ -1,5 +1,5 @@
 [Unit]
-Description=Gothic AI: Voxtral Mini 4B Realtime (vLLM realtime API, port 47830)
+Description=Gothic AI: Voxtral Mini 4B Realtime (audio.cpp, HTTP port 47830)
 After=network-online.target
 
 [Service]

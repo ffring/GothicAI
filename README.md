@@ -10,7 +10,7 @@
 |---|---|
 | `docs/MVP.md` | Спецификация MVP «один живой NPC»: решения, объём работ, вехи |
 | `server/` | ИИ-сервер (Python): соединение с игрой, диалоги, персоны, память, голосовой ввод, адаптер LLM, сценарии |
-| `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере, подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на GPU-сервере |
+| `asr-service/` | Сервис распознавания речи со сменными провайдерами: Voxtral Realtime на GPU-сервере (audio.cpp), подписка ChatGPT, OpenAI-совместимые API. `deploy/voxtral/` — развёртывание Voxtral на GPU-сервере |
 | `tts-service/` | Сервис синтеза речи для голосов NPC со сменными провайдерами: VoxCPM2 на GPU-сервере, Inworld TTS-2 и OpenAI-совместимые API по ключу. `deploy/voxcpm/` — развёртывание на GPU-сервере |
 | `libs/chatgpt-auth/` | Вход через ChatGPT (OAuth PKCE) и общее хранилище токенов для сервера и ASR-сервиса |
 | `docs/protocol.md` | Протокол игра ↔ сервер |
@@ -48,7 +48,7 @@ cd server && uv run gothic-ai login chatgpt
 cd server && uv run gothic-ai llm-test "Кто ты?"
 ```
 
-ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Развёртывание Voxtral описано в `asr-service/deploy/voxtral/install.sh`.
+ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`.
 
 ```bash
 cd asr-service && uv run gothic-asr serve
