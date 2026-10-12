@@ -145,18 +145,21 @@ bool Aim::update(const Input& in) {
       approach(pitch,p,k,MaxTrack*dt,changed);
       }
 
-    // the turn the upper body needs: the shortest one from where the animation aims to where the shot
-    // has to go. Measured while the bow holds still (raising it, reloading swing the arrow around: the turn
-    // found before stays)
+    // where the animation aims, measured while the bow holds still (raising it, reloading swing the
+    // arrow around), kept in the body's frame; then the turn the upper body needs: the shortest one from
+    // there to where the shot has to go, every frame (the target may change while reloading)
     const Vec3 a = arrow ? animArrow : forward;
     const bool still = !arrow || (measured && std::acos(std::clamp(dot(a,prevArrow),-1.f,1.f))<SteadyAngle);
     steadyFrames = still ? uint8_t(std::min(steadyFrames+1,255)) : 0;
     steady       = steadyFrames>=SteadyFrames || !arrow;
-    if(steady) {
+    if(steady)
+      rest = toBody(a,forward);
+    if(steady || ready) {
+      const Vec3  ar   = fromBody(rest,forward);
       const Vec3  want = mul(axisAngle(Up,yaw),forward)*std::cos(pitch) + Up*std::sin(pitch);
-      const Vec3  axis = cross(a,want);
+      const Vec3  axis = cross(ar,want);
       const float s    = length(axis);
-      const float an   = std::min(std::atan2(s,dot(a,want)), MaxTurn);
+      const float an   = std::min(std::atan2(s,dot(ar,want)), MaxTurn);
       goal = s>1e-4f ? toBody(axis*(an/s),forward) : Vec3();
       if(!ready)
         rot = goal;

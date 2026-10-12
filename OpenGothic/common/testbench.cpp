@@ -980,7 +980,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="ledges") {
     // ledges [min drop] [max drop] [count] [steep]: waypoints at an edge, open ground that much lower
-    // 4..14 m away and seen from there (a target below); prints the waypoint, the yaw to face
+    // 1.5..14 m away and seen from there (a target below); prints the waypoint, the yaw to face
     // (`face <yaw>`), the distance, the drop and the angle down; near first, or the steepest first
     const float minDrop = num(a,1,300), maxDrop = num(a,2,1000);
     const size_t count  = size_t(num(a,3,15));
@@ -1001,7 +1001,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       best.down = 0;
       for(int k=0; k<16; ++k) {
         const float y = float(k)*22.5f*float(M_PI)/180.f;
-        for(float d:{400.f,550.f,700.f,1000.f,1400.f}) {
+        for(float d:{150.f,250.f,400.f,550.f,700.f,1000.f,1400.f}) {
           const Vec3 p = Vec3(wp.pos.x+std::cos(y)*d, g0, wp.pos.z+std::sin(y)*d);
           auto r = w.physic()->ray({p.x,g0+200,p.z},{p.x,g0-maxDrop-100,p.z});
           if(!r.hasCol)
@@ -1032,6 +1032,39 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                     double(all[i].yaw),double(all[i].dist),double(all[i].drop),double(all[i].down),double(all[i].from));
       say(buf);
       }
+    }
+  else if(c=="edge") {
+    // edge <yaw> [max cm]: the hero walks (is put) that way to where the ground falls away, and stands
+    // at the edge facing it; prints how deep it goes down right past the edge
+    const float y   = num(a,1,0)*float(M_PI)/180.f;
+    const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
+    const float max = num(a,2,2000);
+    Vec3        pos = pl.position();
+    const float g0  = pos.y;
+    bool        found = false;
+    for(float d=25; d<=max; d+=25) {
+      const Vec3  p = pl.position() + dir*d;
+      auto        r = w.physic()->ray({p.x,g0+100,p.z},{p.x,g0-150,p.z});
+      if(!r.hasCol || std::abs(r.v.y-g0)>60) {
+        found = true;
+        break;
+        }
+      pos = Vec3(p.x,r.v.y,p.z);
+      }
+    if(!found) {
+      say("edge: no edge that way");
+      return;
+      }
+    // a step back from the very edge, the feet on the ground
+    pos -= dir*20.f;
+    pl.setPosition(pos);
+    face(pl,dir);
+    pl.updateTransform();
+    const Vec3 past = pos + dir*80.f;
+    auto       r    = w.physic()->ray({past.x,pos.y-60,past.z},{past.x,pos.y-3000,past.z});
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"edge at %.0f %.0f %.0f, down past it %.0f",pos.x,pos.y,pos.z,r.hasCol ? pos.y-r.v.y : -1.f);
+    say(buf);
     }
   else if(c=="findwp") {
     for(auto& s:findSpots(w,pl,K_Name,0,90,rest(line),40)) {

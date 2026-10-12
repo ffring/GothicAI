@@ -66,6 +66,7 @@ class Aim final {
     float               yaw     = 0;  // radians, smoothed, from the facing
     float               pitch   = 0;
     uint8_t             steadyFrames = 0;
+    Tempest::Vec3       rest    = {}; // where the animation aims while the bow holds still, body's frame
     Tempest::Vec3       goal    = {}; // turn of the upper body from the arrow to the target: axis*angle,
     Tempest::Vec3       rot     = {}; // in the body's frame (forward, up, side); and the one smoothed
     Tempest::Vec3       forward = {1,0,0};

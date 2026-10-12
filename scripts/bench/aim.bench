@@ -1,6 +1,7 @@
 # Aim: the hero draws a bow at a sheep hung at different heights (pin): level, up, steep up (another aim
 # pose of the game), to the side; the same "up" with aim off; a crossbow; on a slope (the feet stay on
-# the ground while aiming); down from three ledges; a fire bolt; last shoots three times up (the reload swings the arrow: the
+# the ground while aiming); down from three ledges and from a ship's deck steeply down; a fire
+# bolt; last shoots three times up (the reload swings the arrow: the
 # turn holds; the sheep does not live through it)
 cheat god
 set time 12 0
@@ -122,6 +123,22 @@ wait 500
 pin SHEEP 1400 0 -1446
 wait 300
 rec down46
+press action
+wait 2500
+release action
+wait 800
+stop
+goto SHIP_DECK_23                 # a ship in the harbour: at the bulwark (edge), 3.8 m down to the quay
+wait 500
+edge 112.5
+cam follow 330 60 90
+cam look 40
+wait 500
+pin SHEEP 250 0 -382              # 2.5 m out from the hull: about 70 deg down, the aim-down pose covers it
+                                  # (1.5 m out, 80 deg, works too, but the bulwark nearly hides the target;
+                                  # closer it does: no focus)
+wait 300
+rec deck70
 press action
 wait 2500
 release action

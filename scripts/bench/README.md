@@ -27,8 +27,8 @@ Lean: `lean` (running in circles left and right, a slalom, walking in a circle, 
 and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
 for `bench_report.py diff`.
 Aim: `aim` (the hero draws a bow at a sheep hung level, above, steeply above, to the side; the same with
-aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 and 46 degrees; a fire
-bolt; three shots in a row).
+aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 and 46 degrees, and
+from a ship's deck at 70 degrees; a fire bolt; three shots in a row).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -157,7 +157,8 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
-| `ledges [min drop] [max drop] [count] [steep]` | waypoints at an edge with open ground that much lower 4..14 m away, seen from there (a target below): the yaw to `face`, the distance, the drop, the angle down; nearest first or the steepest |
+| `edge <yaw> [max cm]` | the hero is put that way to where the ground falls away, at the edge facing it; prints the drop past it (a wall, a ship's side) |
+| `ledges [min drop] [max drop] [count] [steep]` | waypoints at an edge with open ground that much lower 1.5..14 m away, seen from there (a target below): the yaw to `face`, the distance, the drop, the angle down; nearest first or the steepest |
 | `say <text>`, `quit` | |
 
 Environment of `scripts/bench.sh`: `GOTHIC_DIR`, `SAVE` (default: `save_slot_1.sav` of the main
