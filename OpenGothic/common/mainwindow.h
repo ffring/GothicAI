@@ -98,6 +98,8 @@ class MainWindow : public Tempest::Window {
     void setupUi();
 
     void render() override;
+    // the test bench: the frame as the player sees it, the interface on top
+    Tempest::Attachment screenshotWithUi();
 
     uint64_t tick();
     void     updateAnimation(uint64_t dt);

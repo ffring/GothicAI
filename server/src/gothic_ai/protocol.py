@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 11  # v10: deals (another line of work), v11: what npc's perceive
+PROTOCOL_VERSION = 11  # v10: deals, v11: what npc's perceive
 
 # --- game -> server -----------------------------------------------------------
 
@@ -262,6 +262,23 @@ class StoryWorld(_GameMessage):
     tags: list[TagState]
 
 
+class DealAccept(_GameMessage):
+    """The player accepted the deal in the window (v10): Y, once the hero has all he gives and the terms
+    have not changed for a moment. `version` is the one he saw: an older one is not carried out."""
+
+    type: Literal["deal_accept"]
+    deal: str
+    version: int
+
+
+class DealDecline(_GameMessage):
+    """The player declined the deal in the window (v10): N. The window is gone already."""
+
+    type: Literal["deal_decline"]
+    deal: str
+    version: int
+
+
 NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
 
 
@@ -451,6 +468,8 @@ GameMessage = Annotated[
     | DialogChosen
     | NpcDied
     | StoryWorld
+    | DealAccept
+    | DealDecline
     | NpcViews,
     Field(discriminator="type"),
 ]
@@ -686,6 +705,9 @@ DebugCommand = Literal[
     "teleport",
     "skip_important",
     "time",
+    "deal",
+    "deal_accept",
+    "deal_decline",
     "player_equip",
 ]
 
@@ -701,7 +723,11 @@ class DebugCmd(_Command):
     hit); make an npc's important dialogs count as told (`skip_important`, `near`: it will not stop the
     player to talk); set the clock to `hour`:`minute` (`time`, the next day if that is earlier, like
     sleeping); press the talk key as the player does (`ptt`, `state`: start, stop, cancel; with the hero's
-    own focus) or send a typed line (`type`, `text`); give the player an `item` and put it on
+    own focus) or send a typed line (`type`, `text`); the deal window (v10): `deal` — what it shows
+    (`value`: {deal, version, npc, npc_gives, hero_gives: the lines, missing: items the hero lacks, sent},
+    null without a window), `deal_accept` — Y as the player
+    presses it (`value`: "sent", or why not: "none", "waiting", "missing", "changed", "blocked"),
+    `deal_decline` — N (`value`: "declined", "none", "blocked"); give the player an `item` and put it on
     (`player_equip`, v11).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
@@ -773,12 +799,47 @@ class StoryEffectCmd(_Command):
     the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
     constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`) — an npc held by
     the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
-    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`."""
+    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`.
+
+    `check` (v10): the gives are checked first, and nothing happens unless each giver has all it gives
+    (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)")."""
 
     type: Literal["story_effect"] = "story_effect"
     req: str
     npc: str
     effects: list[dict[str, Any]]
+    check: bool | None = None
+
+
+class DealTerm(BaseModel):
+    """One thing a side gives: an item instance, how many, and the line the window shows."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    item: str
+    count: int
+    text: str
+
+
+class DealShowCmd(_Command):
+    """The deal window (v10, docs/npc-tools.md): what the npc and the hero give, as the window shows it.
+    It does not take the controls. A new version replaces the one shown, the lines that changed are
+    marked; what the hero lacks is red, Y accepts (`deal_accept`) once he has it all and the terms have
+    not changed for a second, N declines (`deal_decline`)."""
+
+    type: Literal["deal_show"] = "deal_show"
+    deal: str
+    version: int
+    npc: str
+    npc_gives: list[DealTerm] = []
+    hero_gives: list[DealTerm] = []
+
+
+class DealHideCmd(_Command):
+    """The deal window goes: carried out, withdrawn, or the conversation is over (v10)."""
+
+    type: Literal["deal_hide"] = "deal_hide"
+    deal: str
 
 
 class StoryStateCmd(_Command):

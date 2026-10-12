@@ -168,6 +168,8 @@ class TalkDesk:
         self.held: dict[str, set[str]] = {}  # npc's we attached, and what for
         self._noted: dict[tuple[str, str], float] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
+        # a conversation is over (npc, why: npc, gone, walked_away, switched): e.g. an offer not taken goes
+        self.on_talk_end: list[Callable[[str, str], None]] = []
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -412,6 +414,8 @@ class TalkDesk:
         self.free(talk.npc, "walk")
         if self.planner is not None:
             self.planner.talking(talk.npc, False)
+        for listener in self.on_talk_end:
+            listener(talk.npc, why)
 
     def _witnesses(self, text: str, to: Addressee | None) -> None:
         for e in self.people.values():
