@@ -141,6 +141,22 @@ void MdlVisual::implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, co
   view.setSkeleton(skeleton);
   view.setPose(pos,*skInst);
   hnpcVisual.view.setMesh(&view);
+  fitHitZones();
+  }
+
+void MdlVisual::fitHitZones() {
+  // the zones as thick as the body is: its mesh by bone, its parts on the bones of their names, the head's
+  // mesh on its bone
+  std::vector<HitZones::Shape> shape;
+  if(auto p = view.protoMesh()) {
+    shape.push_back({&p->nodePoints,size_t(-1),nullptr});
+    for(size_t i=0; skeleton!=nullptr && i<p->attach.size() && i<p->attachPoints.size(); ++i)
+      if(!p->attach[i].hasNode)
+        shape.push_back({nullptr,skeleton->findNode(p->attach[i].name),&p->attachPoints[i]});
+    }
+  if(auto p = head.view.protoMesh(); p!=nullptr && skeleton!=nullptr)
+    shape.push_back({nullptr,skeleton->findNode("BIP01 HEAD"),&p->points});
+  hitZones.fit(shape);
   }
 
 void MdlVisual::setSlotAttachment(MeshObjects::Mesh&& itm, std::string_view bone) {
@@ -962,7 +978,10 @@ void MdlVisual::hitZonesPosed(std::vector<HitZones::Posed>& out) const {
 
 std::string MdlVisual::hitZonesDump() const {
   const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
-  return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length());
+  auto       body = view.protoMesh();
+  return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length()) +
+         hitZones.coverage(skInst->transform(),skInst->boneCount(),sx.length()) +
+         " body " + (body!=nullptr ? body->fname : std::string("-"));
   }
 
 float MdlVisual::aimTrackError() const {

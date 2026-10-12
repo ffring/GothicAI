@@ -104,6 +104,7 @@ class MdlVisual final {
     bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string                    hitZonesDump() const;
     void                           hitZonesPosed(std::vector<HitZones::Posed>& out) const;
+    void                           fitHitZones();
     // the bow in the hand, in the arrow's frame (the test bench)
     std::string                    bowDump() const;
     // cm the bow's string goes from rest to drawn as held in the aim (its morph), 0: not known

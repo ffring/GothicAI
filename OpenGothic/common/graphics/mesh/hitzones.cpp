@@ -12,7 +12,13 @@ using namespace IkMath;
 
 namespace {
 
-constexpr float RefSize = 160.f; // cm: a human from the toes to the head bone; the radii below are for it
+constexpr float RefSize   = 160.f; // cm: a human from the toes to the head bone; the radii below are for it
+constexpr float FitPart   = 0.8f;  // the thickness takes in that much of the flesh around a bone (the
+constexpr float FitHead   = 0.9f;  // head more: a snout, the back of the skull is the head too)...
+constexpr size_t FitMin   = 3;     // ...if it has that many points
+constexpr float FitMax    = 0.35f; // of the creature's size at most
+
+bool fitEnabled = true;
 
 struct Kind final {
   HitZones::Zone zone;
@@ -61,6 +67,13 @@ Kind kindOf(std::string_view n) {
   if(has(n,"SPINE"))
     return {HitZones::Body,15};
   return {HitZones::Body,12};
+  }
+
+float segmentDist(const Vec3& p, const Vec3& a, const Vec3& b) {
+  const Vec3  ab = b-a;
+  const float l  = dot(ab,ab);
+  const float t  = l>1e-6f ? std::clamp(dot(p-a,ab)/l,0.f,1.f) : 0.f;
+  return length(a+ab*t-p);
   }
 
 // a ray (rd: unit) and a sphere: the distance it enters at, 0 from inside, -1: misses
@@ -113,8 +126,18 @@ float capsuleHit(const Vec3& ro, const Vec3& rd, const Vec3& pa, const Vec3& pb,
 
 }
 
+bool HitZones::isFitEnabled() {
+  return fitEnabled;
+  }
+
+void HitZones::setFitEnabled(bool e) {
+  fitEnabled = e;
+  }
+
 void HitZones::setSkeleton(const Skeleton* sk) {
   caps.clear();
+  shape.clear();
+  skeleton = sk;
   if(sk==nullptr || sk->tr.size()!=sk->nodes.size())
     return;
 
@@ -165,8 +188,9 @@ void HitZones::setSkeleton(const Skeleton* sk) {
       Capsule c;
       c.a    = End{p,Vec3()};
       c.b    = End{i,Vec3()};
-      c.r    = kp.r*k;
-      c.zone = kp.zone;
+      c.r     = kp.r*k;
+      c.zone  = kp.zone;
+      c.owner = p;
       // the trunk ends where the neck, the head begin: else its round end covers the chin
       const float len = length(pi-pp);
       if(kp.zone==Body && (ki.zone==Head || has(nodes[i].name,"NECK")) && len>0.f)
@@ -188,11 +212,13 @@ void HitZones::setSkeleton(const Skeleton* sk) {
     if(ki.zone==Head && has(nodes[i].name,"HEAD")) {
       // the skull: up to the helmet slot (a human), else on past the bone, away from the neck
       Capsule c;
-      c.a    = End{i,Vec3()};
-      c.r    = ki.r*k;
-      c.zone = Head;
+      c.a     = End{i,Vec3()};
+      c.r     = ki.r*k;
+      c.zone  = Head;
+      c.owner = i;
       if(helmet.bone!=size_t(-1)) {
-        c.b = helmet;
+        // in the head's frame: the head's mesh goes with the head, the slot does not quite
+        c.b = local(i, pos(helmet.bone));
         } else {
         Vec3 dir = p<nodes.size() ? normalize(pi-pos(p)) : Vec3(0,1,0);
         if(length(dir)<0.5f)
@@ -204,12 +230,72 @@ void HitZones::setSkeleton(const Skeleton* sk) {
     else if(!children) {
       // an end: a hand, a toe, a tail tip
       Capsule c;
-      c.a    = End{i,Vec3()};
-      c.b    = c.a;
-      c.r    = ki.r*k;
-      c.zone = ki.zone;
+      c.a     = End{i,Vec3()};
+      c.b     = c.a;
+      c.r     = ki.r*k;
+      c.zone  = ki.zone;
+      c.owner = i;
       caps.push_back(c);
       }
+    }
+  for(auto& c:caps)
+    c.guess = c.r;
+  size = k*RefSize;
+  }
+
+void HitZones::fit(const std::vector<Shape>& sh) {
+  shape.clear();
+  for(auto& c:caps) {
+    c.r      = c.guess;
+    c.fitted = false;
+    }
+  if(skeleton==nullptr || caps.empty())
+    return;
+  const size_t numNodes = skeleton->tr.size();
+  for(auto& s:sh) {
+    if(s.byNode!=nullptr)
+      for(size_t n=0; n<s.byNode->size() && n<numNodes; ++n)
+        for(auto& p:(*s.byNode)[n])
+          shape.push_back({n,p});
+    if(s.points!=nullptr && s.node<numNodes)
+      for(auto& p:*s.points)
+        shape.push_back({s.node,p});
+    }
+
+  // each point to the nearest capsule of its bone (else of any: the flesh of a bone without one), in the
+  // bind pose; the thickness takes in most of each one's points
+  std::vector<std::vector<float>> dist(caps.size());
+  auto& bind = skeleton->tr;
+  for(auto& pt:shape) {
+    Vec3 q = pt.at;
+    bind[pt.node].project(q);
+    size_t best = size_t(-1);
+    float  bd   = 0;
+    for(int pass=0; pass<2 && best==size_t(-1); ++pass)
+      for(size_t i=0; i<caps.size(); ++i) {
+        auto& c = caps[i];
+        if(pass==0 && c.owner!=pt.node)
+          continue;
+        const float d = segmentDist(q,point(bind.data(),c.a),point(bind.data(),c.b));
+        if(best==size_t(-1) || d<bd) {
+          best = i;
+          bd   = d;
+          }
+        }
+    if(best!=size_t(-1))
+      dist[best].push_back(bd);
+    }
+  if(!fitEnabled)
+    return;
+  for(size_t i=0; i<caps.size(); ++i) {
+    auto& d = dist[i];
+    if(d.size()<FitMin)
+      continue;
+    std::sort(d.begin(),d.end());
+    const float part = caps[i].zone==Head ? FitHead : FitPart;
+    const float r    = d[std::min(d.size()-1,size_t(float(d.size())*part))];
+    caps[i].r      = std::clamp(r,0.5f,size*FitMax);
+    caps[i].fitted = true;
     }
   }
 
@@ -283,12 +369,68 @@ std::string HitZones::dump(const Matrix4x4* tr, size_t numBones, float scale) co
     if(c.a.bone>=numBones || c.b.bone>=numBones)
       continue;
     const Vec3 a = point(tr,c.a), b = point(tr,c.b);
-    char buf[160];
-    std::snprintf(buf,sizeof(buf),"  %s %zu-%zu: %.0f %.0f %.0f - %.0f %.0f %.0f r %.1f\n",std::string(name(c.zone)).c_str(),c.a.bone,c.b.bone,
-                  a.x,a.y,a.z,b.x,b.y,b.z,double(c.r*scale));
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"  %s %zu-%zu: %.0f %.0f %.0f - %.0f %.0f %.0f r %.1f (guess %.1f)\n",std::string(name(c.zone)).c_str(),c.a.bone,c.b.bone,
+                  a.x,a.y,a.z,b.x,b.y,b.z,double(c.r*scale),double(c.guess*scale));
     out += buf;
     }
   return out;
+  }
+
+std::string HitZones::coverage(const Matrix4x4* tr, size_t numBones, float scale) const {
+  // each point of the body as posed: the zone of the capsule nearest to it among its bone's (the flesh of
+  // that zone), whether it is in a capsule of that zone, in one of another zone only, in none
+  struct Count { size_t n = 0, own = 0, wrong = 0; };
+  Count cnt[4];
+  for(auto& pt:shape) {
+    if(pt.node>=numBones)
+      continue;
+    Vec3 q = pt.at;
+    tr[pt.node].project(q);
+    Zone  zone = None, any = None;
+    float bd   = 0;
+    bool  in   = false;
+    for(auto& c:caps) {
+      if(c.a.bone>=numBones || c.b.bone>=numBones)
+        continue;
+      const float d = segmentDist(q,point(tr,c.a),point(tr,c.b));
+      if(c.owner==pt.node && (zone==None || d<bd)) {
+        zone = c.zone;
+        bd   = d;
+        }
+      if(d<=c.r*scale)
+        any = any==None ? c.zone : any;
+      }
+    if(zone==None)
+      continue;
+    for(auto& c:caps)
+      if(c.zone==zone && c.a.bone<numBones && c.b.bone<numBones &&
+         segmentDist(q,point(tr,c.a),point(tr,c.b))<=c.r*scale)
+        in = true;
+    auto& k = cnt[zone];
+    ++k.n;
+    if(in)
+      ++k.own;
+    else if(any!=None)
+      ++k.wrong;
+    }
+  std::string out = "  coverage (points in their zone / in another / in none):";
+  for(Zone z:{Head,Body,Limb}) {
+    auto& k = cnt[z];
+    if(k.n==0)
+      continue;
+    char buf[96];
+    std::snprintf(buf,sizeof(buf)," %s %zu: %.0f%% / %.0f%% / %.0f%%;",std::string(name(z)).c_str(),k.n,
+                  100.0*double(k.own)/double(k.n),100.0*double(k.wrong)/double(k.n),100.0*double(k.n-k.own-k.wrong)/double(k.n));
+    out += buf;
+    }
+  size_t fitted = 0;
+  for(auto& c:caps)
+    if(c.fitted)
+      ++fitted;
+  char buf[96];
+  std::snprintf(buf,sizeof(buf)," %zu of %zu capsules fitted (%s)",fitted,caps.size(),fitEnabled ? "fit on" : "fit off");
+  return out + buf;
   }
 
 std::string_view HitZones::name(Zone z) {
