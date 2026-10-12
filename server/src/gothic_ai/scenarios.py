@@ -16,7 +16,7 @@ from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Fact
-from .deals import GOLD, Deals
+from .deals import GOLD, Deals, gold_text
 from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
@@ -2235,9 +2235,10 @@ async def deal_window(
     link: GameLink, dialogue: DialogueManager, talk: TalkDesk, deals: Deals, seller: str = LOBART
 ) -> dict[str, str]:
     """A deal (docs/npc-tools.md, wave 1), on the game. The hero asks Lobart to sell him something he has;
-    Lobart (scripted unless LLM=chatgpt) offers it for 50 gold, then for 30 after haggling: the window shows
-    the new version of the same deal. Y right after the change waits, Y without the gold waits; with the gold
-    the deal is done: the gold and the thing change hands at once, the window goes, Lobart answers."""
+    Lobart (scripted unless LLM=chatgpt) offers it for 50 gold: Y waits, the hero lacks the gold. He declines
+    (N): the window goes, Lobart hears of it and offers it for 40; after haggling for 30 the window shows a
+    new version of that deal, Y right after the change waits. Then the deal is done: the gold and the thing
+    change hands at once, the window goes, Lobart answers."""
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object = "") -> None:
@@ -2287,6 +2288,7 @@ async def deal_window(
         dialogue.llm = ClaimScript(
             said=[
                 ("продай", FakeStep(f"{ware.name}? Пятьдесят золотых.", [offer(50)])),
+                ("отказался", FakeStep("Ну, как знаешь. Сорок?", [offer(40)])),
                 ("дорого", FakeStep("Ладно, тридцать — и по рукам.", [offer(30)])),
             ],
             told=[],
@@ -2308,12 +2310,23 @@ async def deal_window(
     window = await link.deal_window() or {}
     check("waits_gold", pressed == "missing" and window.get("missing") == [GOLD], f"{pressed}, {window}")
 
+    # he declines (N): the window goes at once; Lobart hears of it and offers it for 40
+    declined = await link.decline_deal()
+    window = await link.deal_window()
+    check("declined", declined == "declined" and window is None and first.state == "declined", declined)
+    ok = await _until(lambda: seller in deals.open and deals.open[seller].id != first.id, 30)
+    window = await link.deal_window() or {}
+    check("offered_again", ok and window.get("hero_gives") == [gold_text(40)], window)
+    if not ok:
+        return _logged(results)
+    second = deals.open[seller]
+
     # 40 gold, and he haggles it down to 30: the same window, a new version, Y waits a moment
     await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 30}])
     await link.debug("type", text=f"{name}, это дорого, давай за тридцать.")
     ok = await _until(lambda: seller in deals.open and deals.open[seller].version == 2, 30)
     window = await link.deal_window() or {}
-    check("haggled", ok and window.get("deal") == first.id and window.get("version") == 2, window)
+    check("haggled", ok and window.get("deal") == second.id and window.get("version") == 2, window)
     pressed = await link.press_deal()
     check("waits_change", pressed == "changed", pressed)
 

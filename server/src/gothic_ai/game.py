@@ -326,6 +326,11 @@ class GameLink:
         res = await self._request(DebugCmd(req=self._next_id("r"), cmd="deal_accept"), timeout)
         return str(res.value or "")
 
+    async def decline_deal(self, timeout: float = 5.0) -> str:
+        """N as the player presses it on the deal window (game in -devmode): "declined", "none", "blocked"."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="deal_decline"), timeout)
+        return str(res.value or "")
+
     async def check_conditions(self, timeout: float = 30.0) -> dict[str, Any]:
         """Script conditions of every npc in the world against their lifted form (game in -devmode)."""
         return dict((await self._request(DebugCmd(req=self._next_id("r"), cmd="check"), timeout)).value or {})

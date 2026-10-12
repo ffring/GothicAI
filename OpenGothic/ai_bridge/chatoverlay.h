@@ -18,9 +18,10 @@
 //   open: Enter sends the line, Esc closes it.
 // - it shows what is said around the player as subtitles (npc's and the hero's own lines), the words
 //   recognized while he speaks and a status line.
-// - an npc's offer of a deal (v10, docs/npc-tools.md) in a window at the side: what each gives. It takes
-//   nothing but Y, which accepts the version shown once the hero has all he gives and the terms have not
-//   changed for a moment. A new version replaces the shown one and highlights what changed.
+// - an npc's offer of a deal (v10, docs/npc-tools.md): a contract on parchment at the side, what each gives.
+//   It takes nothing but two keys: Y accepts the version shown once the hero has all he gives and the terms
+//   have not changed for a moment, N declines it (while the window is up N does not open the log; L does).
+//   A new version replaces the shown one and marks what changed.
 // All strings are in the game codepage.
 class ChatOverlay final : public Tempest::UiOverlay {
   public:
@@ -51,6 +52,7 @@ class ChatOverlay final : public Tempest::UiOverlay {
     std::function<void()>                   onPttCancel;
     std::function<bool()>                   canDeal;
     std::function<void(const std::string& deal, int32_t version)> onDealAccept;
+    std::function<void(const std::string& deal, int32_t version)> onDealDecline;
 
     void openInput();
     void closeInput();
@@ -77,6 +79,8 @@ class ChatOverlay final : public Tempest::UiOverlay {
     void markMissing(const std::function<bool(const DealLine&)>& lacks);
     // Y: "sent", or why not: "none", "waiting" (sent already), "missing", "changed" (a moment ago)
     std::string pressDeal();
+    // N: "declined" (the window goes at once), or "none"
+    std::string declineDeal();
 
   protected:
     void paintEvent    (Tempest::PaintEvent& e) override;
@@ -117,4 +121,5 @@ class ChatOverlay final : public Tempest::UiOverlay {
     std::deque<Entry>  log;
     Deal               deal;
     bool               yDown = false;  // Y went to the deal window
+    bool               nDown = false;  // and N
   };

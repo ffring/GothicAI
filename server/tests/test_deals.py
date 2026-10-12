@@ -106,6 +106,36 @@ async def test_haggle_then_accept_what_he_saw():
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_declined_the_npc_offers_otherwise():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = FakeBackend(
+        script=[
+            FakeStep("Эликсир — за пятьдесят.", [_offer(1, 50)]),
+            FakeStep("Ну, тогда сорок.", [_offer(1, 40, "c2")]),
+        ],
+        delay=0,
+    )
+    link_cm, dialogue, chronicle, deals = await _setup(fake, llm, store)
+    try:
+        await dialogue.say_as_player(XARDAS, "Продай эликсир.")
+        await _until(lambda: len(_shown(fake)) == 1)
+        # N: the window is gone in the game already; the npc hears of it and may offer again
+        await fake.send(type="deal_decline", deal="D1", version=1)
+        await _until(lambda: len(llm.calls) == 2)
+        assert "Герой отказался от сделки" in llm.calls[1][1][-1].content
+        assert [t.name for t in llm.calls[1][2]] == ["propose_deal"]
+        await _until(lambda: len(_shown(fake)) == 2)
+        again = _shown(fake)[1]
+        assert (again["deal"], again["version"], again["hero_gives"][0]["count"]) == ("D2", 1, 40)
+        assert {"type": "deal_hide", "deal": "D1"} in fake.deals
+        notes = [e.content for e in dialogue.conversations[XARDAS].memory.entries]
+        assert any("Герой отказался от твоего предложения" in n and "50 золотых" in n for n in notes)
+        assert chronicle.facts("deal") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_what_cannot_be_offered():
     fake = FakeGame(branch="A")
     store = MemoryStore(":memory:")

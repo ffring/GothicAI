@@ -714,7 +714,8 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     }
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
-     cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept") {
+     cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
+     cmd=="deal_decline") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -840,6 +841,13 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // Y as the player presses it
     ensureChat();
     const std::string r = chat->canDeal() ? chat->pressDeal() : "blocked";
+    sendResult(req,true,"","\"" + r + "\"");
+    return;
+    }
+  if(cmd=="deal_decline") {
+    // N as the player presses it
+    ensureChat();
+    const std::string r = chat->canDeal() ? chat->declineDeal() : "blocked";
     sendResult(req,true,"","\"" + r + "\"");
     return;
     }
@@ -1319,6 +1327,9 @@ void AiBridge::Impl::ensureChat() {
     };
   chat->onDealAccept = [this](const std::string& deal, int32_t version) {
     send(JsonWriter("deal_accept").str("deal",deal).integer("version",version).finish());
+    };
+  chat->onDealDecline = [this](const std::string& deal, int32_t version) {
+    send(JsonWriter("deal_decline").str("deal",deal).integer("version",version).finish());
     };
   SystemApi::addOverlay(chat.get());
   }

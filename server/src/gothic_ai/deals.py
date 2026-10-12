@@ -2,9 +2,9 @@
 
 The conversational model proposes (`propose_deal`) what each side gives, once the two have talked it
 over. The game shows it in a window that does not take the controls: the hero keeps walking, talking and
-fighting. Proposing again in the same conversation changes the terms in that window (a new version), so
-haggling needs no "decline": the hero says no in words, and the offer goes when the npc withdraws it
-(`withdraw_deal`) or the conversation is over.
+fighting. Proposing again in the same conversation changes the terms in that window (a new version): the
+two haggle in words. The hero declines with N (the npc hears of it and may offer again); the offer also
+goes when the npc withdraws it (`withdraw_deal`) or the conversation is over.
 
 The hero accepts the version he sees (Y). The game sends it only once he has all he gives and the terms
 have not changed for a moment; here an older version is not carried out. Then everything changes hands
@@ -31,6 +31,7 @@ from .llm import Tool, ToolCall
 from .protocol import (
     ChatStatusCmd,
     DealAccept,
+    DealDecline,
     DealHideCmd,
     DealShowCmd,
     DealTerm,
@@ -123,7 +124,7 @@ class Give:
         return {"item": self.item, "count": self.count, "name": self.name}
 
 
-DealState = Literal["open", "accepting", "done", "withdrawn", "expired"]
+DealState = Literal["open", "accepting", "done", "withdrawn", "declined", "expired"]
 
 
 @dataclass
@@ -174,6 +175,8 @@ class Deals:
         match msg:
             case DealAccept():
                 self._spawn(self.accept(msg.deal, msg.version))
+            case DealDecline():
+                self._spawn(self.decline(msg.deal, msg.version))
             case Loading():
                 self.open.clear()  # the game drops its window with the world
 
@@ -335,6 +338,20 @@ class Deals:
         self.dialogue.note(deal.npc, f"Герой принял твою сделку, всё перешло из рук в руки: {deal.terms()}")
         self.dialogue.event_turn(
             deal.npc, "[Герой согласился, сделка состоялась. Отзовись коротко.]", tools=()
+        )
+
+    async def decline(self, deal_id: str, version: int) -> None:
+        """The hero declined (N): the offer goes, the npc hears of it and may offer otherwise."""
+        deal = next((d for d in self.open.values() if d.id == deal_id), None)
+        if deal is None or deal.state != "open":
+            log.info("deal %s v%d declined, but it is not open", deal_id, version)
+            return
+        await self._close(deal, "declined")
+        self.dialogue.note(deal.npc, f"Герой отказался от твоего предложения: {deal.terms()}")
+        self.dialogue.event_turn(
+            deal.npc,
+            "[Герой отказался от сделки. Отзовись коротко; захочешь — предложи иначе.]",
+            tools=(PROPOSE_DEAL,),
         )
 
     async def _failed(self, deal: Deal, error: str) -> None:

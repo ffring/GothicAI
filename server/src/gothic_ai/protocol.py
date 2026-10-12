@@ -271,6 +271,14 @@ class DealAccept(_GameMessage):
     version: int
 
 
+class DealDecline(_GameMessage):
+    """The player declined the deal in the window (v10): N. The window is gone already."""
+
+    type: Literal["deal_decline"]
+    deal: str
+    version: int
+
+
 NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
 
 
@@ -402,7 +410,8 @@ GameMessage = Annotated[
     | DialogChosen
     | NpcDied
     | StoryWorld
-    | DealAccept,
+    | DealAccept
+    | DealDecline,
     Field(discriminator="type"),
 ]
 
@@ -639,6 +648,7 @@ DebugCommand = Literal[
     "time",
     "deal",
     "deal_accept",
+    "deal_decline",
 ]
 
 
@@ -656,7 +666,8 @@ class DebugCmd(_Command):
     own focus) or send a typed line (`type`, `text`); the deal window (v10): `deal` — what it shows
     (`value`: {deal, version, npc, npc_gives, hero_gives: the lines, missing: items the hero lacks, sent},
     null without a window), `deal_accept` — Y as the player
-    presses it (`value`: "sent", or why not: "none", "waiting", "missing", "changed", "blocked").
+    presses it (`value`: "sent", or why not: "none", "waiting", "missing", "changed", "blocked"),
+    `deal_decline` — N (`value`: "declined", "none", "blocked").
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -751,8 +762,8 @@ class DealTerm(BaseModel):
 class DealShowCmd(_Command):
     """The deal window (v10, docs/npc-tools.md): what the npc and the hero give, as the window shows it.
     It does not take the controls. A new version replaces the one shown, the lines that changed are
-    highlighted; what the hero lacks is marked, and Y accepts (`deal_accept`) once he has it all and the
-    terms have not changed for a second."""
+    marked; what the hero lacks is red, Y accepts (`deal_accept`) once he has it all and the terms have
+    not changed for a second, N declines (`deal_decline`)."""
 
     type: Literal["deal_show"] = "deal_show"
     deal: str
