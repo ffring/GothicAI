@@ -1139,6 +1139,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   in.draw   = lmb;
   in.breath = ctrl[Action::Walk];
   in.turn   = turn;
+  in.reload = pl.animProgress(Archery::BowReload)>=0.f;
   in.dt     = dt;
   if(ar.tick(in,st))
     ar.onShot(pl.releaseArrow(ar.draw(),st));

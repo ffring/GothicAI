@@ -474,7 +474,26 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
       return nullptr;
 
     PackedMesh packed(zmm.mesh,PackedMesh::PK_VisualMorph);
-    return std::unique_ptr<ProtoMesh>{new ProtoMesh(std::move(packed),zmm.animations,name)};
+    std::unique_ptr<ProtoMesh> ret{new ProtoMesh(std::move(packed),zmm.animations,name)};
+    // the vertex each morph moves the most, where it rests: the string's middle of a bow
+    for(size_t i=0; i<ret->morph.size() && i<zmm.animations.size(); ++i) {
+      auto&       a    = zmm.animations[i];
+      auto&       m    = ret->morph[i];
+      const auto  per  = a.vertices.size();
+      float       best = -1;
+      for(size_t k=0; per>0 && k<a.samples.size(); ++k) {
+        auto&       sm = a.samples[k];
+        const float d  = sm.x*sm.x + sm.y*sm.y + sm.z*sm.z;
+        const auto  id = a.vertices[k%per];
+        if(d<=best || id>=zmm.mesh.positions.size())
+          continue;
+        best       = d;
+        auto& at   = zmm.mesh.positions[id];
+        m.peakAt   = Tempest::Vec3(at.x,at.y,at.z);
+        m.peakMove = Tempest::Vec3(sm.x,sm.y,sm.z);
+        }
+      }
+    return ret;
     }
 
   if(FileExt::hasExt(name,"MDS")) {

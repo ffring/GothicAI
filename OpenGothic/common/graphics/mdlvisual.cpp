@@ -652,6 +652,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
+        in.reload = pose.animProgress("T_BOWRELOAD",npc.world().tickCount())>=0.f;
         } else {
         in.dir  = World::bulletVelocity(from,aimAt());
         }
@@ -690,10 +691,18 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   bd.ready  = ar.stage()==Archer::Nocked || ar.stage()==Archer::Drawing || ar.stage()==Archer::Held;
   bd.draw   = ar.draw();
   bd.span   = bowSpan();
-  if(ar.isNocking()) {
-    // the arrow is brought to the string in the last part of the reload, the bow held still after it
+  bd.arrow  = !ammunition.view.isEmpty() && ammunition.bone=="ZS_RIGHTHAND";
+  if(auto p = bow.view.protoMesh())
+    for(auto& m:p->morph)
+      if(m.name==BowHeld) {
+        bd.hasString  = true;
+        bd.stringRest = m.peakAt;
+        bd.stringPull = m.peakMove;
+        }
+  if(ar.stage()==Archer::Reloading) {
+    // how far the reload is: not begun (the shot), the animation, over (the bow comes to rest)
     const float p = pose.animProgress("T_BOWRELOAD",npc.world().tickCount());
-    bd.nock = p<0.f ? 1.f : std::clamp((p-NockFrom)/(1.f-NockFrom),0.f,1.f);
+    bd.reload = p>=0.f ? p : (ar.isNocking() ? 1.f : 0.f);
     }
   changed  |= pose.updateBowDraw(bd);
   const float string = pose.bowDrawIk().string();

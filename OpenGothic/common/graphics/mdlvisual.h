@@ -147,8 +147,6 @@ class MdlVisual final {
   private:
     // the bow's morph that holds it drawn as the aim animation does (G2)
     static constexpr const char* BowHeld = "S_READY";
-    // the reload brings the arrow to the string from this part of it on
-    static constexpr float       NockFrom = 0.7f;
 
     template<class View>
     struct Attach {

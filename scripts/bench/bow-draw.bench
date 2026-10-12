@@ -1,4 +1,4 @@
-# Bow draw (graphics/mesh/bowdraw): the right hand draws the string by hand, the arrow with it. Close by
+# Bow draw (graphics/mesh/bowdraw): the right hand draws the string by hand, the arrow with it; the reload. Close by
 # from the side and from the front: the hand going to the string after the raise, a slow draw (a novice),
 # a quick one (a master), held, the shot, the reload; a draw let down without a shot; `bowdraw off` for
 # the animation as it is (drawn fully all the time)
@@ -70,4 +70,34 @@ cam follow 150 155 -50
 wait 300
 rec tremble
 volley 1 7000
+stop
+
+# the reload slowly, from still cameras: the upper body holds the aim (the bow stays up), the hand reaches
+# over the shoulder for the arrow and brings it straight to the string, off the head
+stats str 120 dex 120 bow 100
+wait 300
+animspeed T_BOWRELOAD 0.7
+cam world 200 150 135
+cam look 140
+wait 300
+rec reload_side
+volley 1 300
+wait 600
+stop
+cam world 200 150 315
+cam look 140
+wait 300
+rec reload_back
+volley 1 300
+wait 600
+stop
+
+# as the player sees it: the game's camera over the shoulder, the master's tempo
+animspeed T_BOWRELOAD 1.45
+view full
+cam game
+wait 500
+rec game
+volley 2 300
+wait 300
 stop

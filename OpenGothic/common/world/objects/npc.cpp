@@ -2399,12 +2399,13 @@ void Npc::tickAnimationTags() {
     // what the hero's animations do, for the test bench (the reload at another tempo: each event once)
     char buf[256];
     for(auto& i:ev.timed) {
-      std::snprintf(buf,sizeof(buf),"anim event %d %.*s %.*s %.*s",int(i.def),int(i.item.size()),i.item.data(),
-                    int(i.slot[0].size()),i.slot[0].data(),int(i.slot[1].size()),i.slot[1].data());
+      std::snprintf(buf,sizeof(buf),"anim event %d %.*s %.*s %.*s (reload %.2f)",int(i.def),int(i.item.size()),i.item.data(),
+                    int(i.slot[0].size()),i.slot[0].data(),int(i.slot[1].size()),i.slot[1].data(),double(animProgress("T_BOWRELOAD")));
       TestBench::note(buf);
       }
     for(auto& i:ev.morph) {
-      std::snprintf(buf,sizeof(buf),"anim morph %.*s %.*s",int(i.anim.size()),i.anim.data(),int(i.node.size()),i.node.data());
+      std::snprintf(buf,sizeof(buf),"anim morph %.*s %.*s (reload %.2f)",int(i.anim.size()),i.anim.data(),int(i.node.size()),i.node.data(),
+                    double(animProgress("T_BOWRELOAD")));
       TestBench::note(buf);
       }
     }
@@ -4236,6 +4237,10 @@ bool Npc::shootBow(Interactive* focOverride) {
       b.setHitChance(float(hnpc->hitchance[TALENT_BOW]     )/100.f);
     }
   return true;
+  }
+
+float Npc::animProgress(std::string_view name) const {
+  return visual.pose().animProgress(name,owner.tickCount());
   }
 
 void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway, const Tempest::Vec2& tremor) {

@@ -425,6 +425,7 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
     implMkSkeleton(m,size_t(-1));
   lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
   ik.apply(tr,numBones,mt.at(3,1));
+  bowDraw.hold(tr,numBones,mt);
   aim.apply(tr,numBones);
   bowDraw.apply(tr,numBones);
   gaze.apply(tr,numBones);
@@ -877,6 +878,47 @@ void Pose::setAnimSpeed(std::string_view name, float k) {
     speeds.emplace_back(std::string(name),k);
   }
 
+bool Pose::animRelative(std::string_view name, float at, size_t from, size_t to, Tempest::Matrix4x4& out) const {
+  if(skeleton==nullptr || from>=skeleton->nodes.size() || to>=skeleton->nodes.size())
+    return false;
+  const Animation::Sequence* seq = nullptr;
+  for(auto& i:lay)
+    if(i.seq->name==name)
+      seq = i.seq;
+  if(seq==nullptr || seq->data==nullptr)
+    return false;
+  auto&        d      = *seq->data;
+  const size_t idSize = d.nodeIndex.size();
+  if(d.numFrames==0 || idSize==0 || d.samples.size()<size_t(d.numFrames)*idSize)
+    return false;
+  const float  f  = std::clamp(at,0.f,1.f)*float(d.numFrames-1);
+  const size_t fa = std::min(size_t(f),size_t(d.numFrames-1));
+  const size_t fb = std::min(fa+1,size_t(d.numFrames-1));
+  const float  a  = f-float(fa);
+  auto local = [&](size_t node) {
+    for(size_t i=0; i<idSize; ++i)
+      if(d.nodeIndex[i]==node)
+        return mkMatrix(mix(d.samples[fa*idSize+i],d.samples[fb*idSize+i],a));
+    return skeleton->nodes[node].tr;
+    };
+  Tempest::Matrix4x4 m;
+  m.identity();
+  for(size_t n=to; n!=from; n=skeleton->nodes[n].parent) {
+    if(n>=skeleton->nodes.size())
+      return false;
+    m = local(n)*m;
+    }
+  out = m;
+  return true;
+  }
+
+float Pose::animDuration(std::string_view name) const {
+  for(auto& i:lay)
+    if(i.seq->name==name)
+      return i.seq->totalTime()/1000.f/i.speed;
+  return 0;
+  }
+
 float Pose::animProgress(std::string_view name, uint64_t tickCount) const {
   for(auto& i:lay)
     if(i.seq->name==name) {
@@ -888,7 +930,15 @@ float Pose::animProgress(std::string_view name, uint64_t tickCount) const {
   return -1;
   }
 
-bool Pose::updateBowDraw(const BowDraw::Input& in) {
+bool Pose::updateBowDraw(const BowDraw::Input& input) {
+  // the reload: where the drawing hand takes the arrow (the animation at that moment), relative to the chest
+  BowDraw::Input in = input;
+  size_t chest = size_t(-1), hand = size_t(-1), elbow = size_t(-1);
+  if(in.reload>=0.f)
+    in.reloadTime = animDuration(BowDraw::ReloadAnim);
+  if(in.reload>=0.f && bowDraw.grabNodes(chest,hand,elbow))
+    in.grabKnown = animRelative(BowDraw::ReloadAnim,BowDraw::GrabAt,chest,hand,in.grabHand) &&
+                   animRelative(BowDraw::ReloadAnim,BowDraw::GrabAt,chest,elbow,in.grabElbow);
   if(!bowDraw.update(in))
     return false;
   mkSkeleton(pos);

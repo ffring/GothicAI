@@ -104,6 +104,11 @@ class Pose final {
     bool               updateAim(const Aim::Input& in);
     // How far the animation of that name has played, 0..1; -1: it does not play
     float              animProgress(std::string_view name, uint64_t tickCount) const;
+    // Seconds the animation of that name takes at its speed; 0: it does not play
+    float              animDuration(std::string_view name) const;
+    // The animation of that name as it is at `at` (0..1 of it): bone `to` relative to its ancestor `from`;
+    // false: it does not play
+    bool               animRelative(std::string_view name, float at, size_t from, size_t to, Tempest::Matrix4x4& out) const;
     // The animation of that name plays k times as fast, from its next start on (1: as it is)
     void               setAnimSpeed(std::string_view name, float k);
     BowDraw&           bowDrawIk() { return bowDraw; }

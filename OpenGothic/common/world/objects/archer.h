@@ -27,6 +27,7 @@ class Archer final {
       bool     draw   = false; // the button is held
       bool     breath = false; // the breath is held
       float    turn   = 0;     // radians the aim turned since the last tick
+      bool     reload = false; // the reload animation still plays: the next arrow is not on the string yet
       uint64_t dt     = 0;
       };
 

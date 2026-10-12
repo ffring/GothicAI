@@ -106,7 +106,7 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
         // the next arrow: the bow moves, then holds still again
         if(!in.ready)
           unready = true;
-        if((unready && in.ready) || stageTime>=ReloadMax) {
+        if((unready && in.ready && !in.reload) || stageTime>=ReloadMax) {
           setStage(Nocked);
           disturb = std::max(disturb,NockDisturb);
           }

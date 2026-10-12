@@ -178,7 +178,7 @@ bool Aim::update(const Input& in) {
     // arrow around), kept in the body's frame; then the turn the upper body needs: the shortest one from
     // there to where the shot has to go, every frame (the target may change while reloading)
     const Vec3 a = arrow ? animArrow : forward;
-    const bool still = !arrow || (measured && std::acos(std::clamp(dot(a,prevArrow),-1.f,1.f))<SteadyAngle);
+    const bool still = !arrow || (!in.reload && measured && std::acos(std::clamp(dot(a,prevArrow),-1.f,1.f))<SteadyAngle);
     steadyFrames = still ? uint8_t(std::min(steadyFrames+1,255)) : 0;
     steady       = steadyFrames>=SteadyFrames || !arrow;
     if(steady)

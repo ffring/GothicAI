@@ -25,6 +25,8 @@ class Aim final {
                                        // shot has to go, as it is: the chest
       Tempest::Vec2 tremor  = {};      // and the arms trembling (not smoothed: fast): the arms, not the head
       bool          manual  = false;   // aimed by hand: the upper body follows the mouse faster
+      bool          reload  = false;   // the reload plays: the arrow is not on the string, not measured (the
+                                       // hand holds still at the quiver for a while)
       uint64_t      dt      = 0;
       };
 

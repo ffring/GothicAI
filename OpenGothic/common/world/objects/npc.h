@@ -299,6 +299,8 @@ class Npc final {
     bool      hasManualAim() const { return manualAim; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
     void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
+    // how far the animation of that name has played, 0..1; -1: it does not play
+    float     animProgress(std::string_view name) const;
     auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
     auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
     auto      manualAimTremor() const -> Tempest::Vec2 { return manualTremor; }
