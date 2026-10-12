@@ -51,7 +51,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 11;
+constexpr int         ProtocolVersion = 12;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -1203,7 +1203,8 @@ void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
     voice = std::make_shared<VoiceBuffer>(uint32_t(JsonRead::integer(msg,"rate",24000)));
   lines.add(line,symbol,TextCodec::fromUtf8(JsonRead::str(msg,"text")),std::move(wav),std::move(voice),
             std::string(JsonRead::str(msg,"reply")));
-  lines.find(line)->mood = std::string(JsonRead::str(msg,"mood"));
+  lines.find(line)->mood   = std::string(JsonRead::str(msg,"mood"));
+  lines.find(line)->filler = JsonRead::boolean(msg,"filler",false);
   if(!JsonRead::boolean(msg,"overlay",false)) {
     npc->aiPush(AiQueue::aiOutput(*pl,line,0));
     return;
@@ -1597,8 +1598,8 @@ void AiBridge::Impl::sendPtt(std::string_view type, std::string_view audio) {
 
 void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
   const bool voiced = !line.wav.empty() || line.voice!=nullptr;
-  if(line.npc==thinker)
-    thinkUntil = 0;  // it answers: the eyes come back (tickListener)
+  if(line.npc==thinker && !line.filler)
+    thinkUntil = 0;  // it answers: the eyes come back (tickListener); "Хм..." is said thinking
   send(JsonWriter("line_started").str("npc",line.npc).str("line",line.id).boolean("voiced",voiced).finish());
   lastLine[line.npc] = line.id;
   if(line.voice!=nullptr)

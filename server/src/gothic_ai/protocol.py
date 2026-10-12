@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 11  # v10: deals, v11: what npc's perceive
+PROTOCOL_VERSION = 12  # v10: deals, v11: what npc's perceive, v12: fillers
 
 # --- game -> server -----------------------------------------------------------
 
@@ -615,6 +615,8 @@ class SayCmd(_Command):
     # are not ordered by the game: the server sends the next one when the previous has been said.
     overlay: bool | None = None
     mood: Mood | None = None  # v9: the face while the line is said; none: the face stays as it is
+    # v12: "Хм..." said while the model thinks: the npc goes on thinking after it (the eyes aside)
+    filler: bool | None = None
 
 
 class ChatTextCmd(_Command):
