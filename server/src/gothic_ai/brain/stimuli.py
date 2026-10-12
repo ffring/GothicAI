@@ -42,12 +42,24 @@ POLICIES: dict[str, EventPolicy] = {
     "npc_attack": EventPolicy("{other} attacked you.", 60, urgent=True, salient=True, threat=True),
     "fight_nearby": EventPolicy("A fight broke out nearby: {detail}.", 30, salient=True, threat=True),
     "cry_for_help": EventPolicy("{other} is shouting for help nearby.", 30, salient=True, threat=True),
+    # the end of such a danger: the monster is dead (the threats from it are dropped, see `NpcPlanner`)
+    "monster_killed": EventPolicy(
+        "{other} killed {detail}{context}; the danger is over.", 30, urgent=True, salient=True
+    ),
 }
 DEFAULT_POLICY = EventPolicy("Something happened: {kind} ({detail}).", 15)
 
 
 def policy(kind: str) -> EventPolicy:
     return POLICIES.get(kind, DEFAULT_POLICY)
+
+
+# monster_killed: what the dead monster had been doing, by the threats from it the npc had in mind
+THREAT_CONTEXT = {
+    "npc_attack": ", which attacked you",
+    "monster_near": ", which was coming at you",
+    "fight_nearby": ", which was attacking someone nearby",
+}
 
 
 def normalize(kind: str, other: str, other_name: str | None, detail: str | None) -> tuple[str, str | None]:
@@ -72,6 +84,7 @@ class Stimulus:
     distance_cm: float | None = None
     detail: str | None = None
     other_name: str | None = None  # shown name of `other` (not the player)
+    context: str = ""  # what it was about, e.g. the threat a killed monster was to the npc
 
     @property
     def policy(self) -> EventPolicy:
@@ -84,7 +97,10 @@ class Stimulus:
         other = "the hero" if self.other == "PLAYER" else (self.other_name or self.other)
         dist = f"{self.distance_cm / 100:.0f} m" if self.distance_cm is not None else "a few metres"
         detail = {"you": "you", "PLAYER": "the hero"}.get(self.detail or "", self.detail or "something")
-        text = self.policy.text.format(other=other, detail=detail, dist=dist, kind=self.kind)
+        text = self.policy.text.format(
+            other=other, detail=detail, dist=dist, kind=self.kind, context=self.context
+        )
+        text = text[:1].upper() + text[1:]  # "{other} ..." may start with "the hero"
         ago = now - self.at
         return text if ago < 3 else f"{text} ({ago:.0f} s ago)"
 

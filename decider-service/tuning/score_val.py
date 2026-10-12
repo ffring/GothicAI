@@ -8,8 +8,8 @@ Per checkpoint:
 - react accuracy on the planner's menu (prod) and on npc-specific menus (rich), and for prod react what
   the planner would do with its thresholds (an action below its threshold means the npc keeps its
   routine, i.e. `continue`);
-- attitude and escalate: exactly / within one level; for escalate also AUROC of "level 3 or more" by the
-  expected level;
+- attitude and escalate: exactly / within one level, also per row variant (prod, game, rich); for escalate
+  also AUROC of "level 3 or more" by the expected level, overall and on the game-format rows;
 - with `--eval DIR` (evals/npc-decisions: requests.jsonl, escalate_gold.yaml): the escalate question
   asked of the 76 eval scenes, against its hand-labelled levels.
 """
@@ -50,8 +50,7 @@ def auroc(pos: list[float], neg: list[float]) -> float:
 def score(engine, reqs: list[dict], gold: dict) -> dict:
     n: dict[str, int] = {}
     ok: dict[str, int] = {}
-    esc_pos: list[float] = []
-    esc_neg: list[float] = []
+    esc: dict[str, tuple[list[float], list[float]]] = {}  # "" (all) or a variant -> (≥3, below)
 
     def add(key: str, hit: bool) -> None:
         n[key] = n.get(key, 0) + 1
@@ -70,13 +69,24 @@ def score(engine, reqs: list[dict], gold: dict) -> dict:
                     if g[name] == "continue":
                         add("prod react, gold continue", best == g[name])
             else:
-                add(name, int(best) == g[name])
-                add(f"{name} ±1", abs(int(best) - g[name]) <= 1)
+                for key in (name, f"{r['variant']} {name}"):
+                    add(key, int(best) == g[name])
+                    add(f"{key} ±1", abs(int(best) - g[name]) <= 1)
                 if name == "escalate":
-                    (esc_pos if g[name] >= 3 else esc_neg).append(expected_level(probs))
+                    for key in ("", r["variant"]):
+                        pos, neg = esc.setdefault(key, ([], []))
+                        (pos if g[name] >= 3 else neg).append(expected_level(probs))
+                    # what the planner does with it: the large model is called from the expected level 3 on
+                    add(
+                        f"{r['variant']} escalate: call or not",
+                        (expected_level(probs) >= 3) == (g[name] >= 3),
+                    )
     out = {k: f"{ok[k] / n[k]:.0%} ({ok[k]}/{n[k]})" for k in sorted(n)}
-    if esc_pos:
-        out["escalate AUROC (≥3)"] = f"{auroc(esc_pos, esc_neg):.2f} ({len(esc_pos)}/{len(esc_neg)})"
+    for key, (pos, neg) in sorted(esc.items()):
+        if pos and neg:
+            out[f"{key + ' ' if key else ''}escalate AUROC (≥3)"] = (
+                f"{auroc(pos, neg):.2f} ({len(pos)}/{len(neg)})"
+            )
     return out
 
 

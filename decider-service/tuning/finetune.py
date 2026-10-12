@@ -62,6 +62,9 @@ def calibrate(checkpoint: str, val: list, parent_cfg: dict) -> dict[str, float]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, help="the tuning data directory (train/, replay/)")
+    ap.add_argument(
+        "--train", default="train", help="the training files' directory under --data (make_train.py --out)"
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--parent", default=PARENT)
     ap.add_argument("--epochs", type=int, default=3)
@@ -72,8 +75,8 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=4)
     args = ap.parse_args()
 
-    train_file = os.path.join(args.data, "train", "gothic_train.jsonl")
-    val_file = os.path.join(args.data, "train", "gothic_val.jsonl")
+    train_file = os.path.join(args.data, args.train, "gothic_train.jsonl")
+    val_file = os.path.join(args.data, args.train, "gothic_val.jsonl")
     replay_file = os.path.join(args.data, "replay", "replay.jsonl")
     heldout_file = os.path.join(args.data, "replay", "replay_heldout.jsonl")
     teacher_file = os.path.join(args.out, "replay_teacher.jsonl")

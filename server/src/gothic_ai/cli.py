@@ -487,6 +487,14 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5c: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario in ("rescue", "rescue_self"):
+                killer = "hero" if args.scenario == "rescue" else "npc"
+                results = await scenarios.rescue(
+                    link, planner=state.brain, killer=killer, dialogue=state.dialogue if state.brain else None
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "m5e":
                 assert state.dialogue is not None and state.talk is not None
                 results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
@@ -936,6 +944,8 @@ def main() -> None:
             "vlie",
             "vcheck",
             "rumor",
+            "rescue",
+            "rescue_self",
             "tts",
         ],
         help="run a scripted check when the game connects",

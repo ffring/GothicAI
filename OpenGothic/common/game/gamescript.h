@@ -154,6 +154,8 @@ class GameScript final {
     bool isUnconscious(const Npc &pl);
     bool isTalk       (const Npc &pl);
     bool isAttack     (const Npc &pl) const;
+    // the npc's important dialogs count as told to the player: it will not stop him to talk (test helper)
+    void skipImportantInfos(Npc& npc, Npc& pl);
 
     std::string_view spellCastAnim(Npc& npc, Item&  fn);
     std::string_view messageFromSvm(std::string_view id,int voice) const;
