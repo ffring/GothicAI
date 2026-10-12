@@ -9,6 +9,8 @@
 #      NO_BUILD=1    do not rebuild the engine first
 #      TIMEOUT=300   seconds before the game is killed
 #      KEEP=1        the game stays open after the scenario
+#      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
+#                    goes into <segment>.wav instead of the speakers
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -40,12 +42,12 @@ fi
 RUN="$OUT/run"
 mkdir -p "$RUN"
 cp "$SAVE" "$RUN/save_slot_1.sav"
-cat >"$RUN/Gothic.ini" <<'EOF'
+cat >"$RUN/Gothic.ini" <<EOF
 [INTERNAL]
 vidResIndex=2
 [SOUND]
-soundVolume=0
-musicVolume=0
+soundVolume=${SOUND:-0}
+musicVolume=${MUSIC:-0}
 EOF
 
 # the sharper textures the launcher gives the game too (scripts/hd-textures.sh)

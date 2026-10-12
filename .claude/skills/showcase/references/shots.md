@@ -24,7 +24,7 @@ Each idea names what the short proves. Film it, look at the takes, keep the hone
 | actions | ask the npc to follow you or to hand something over, then walk off (`walkmode walk`, `hold forward 3000`) and keep the npc in `cam two` | "He actually came with me" |
 | interrupting | a long question, `wait 2500` while the npc starts answering, then a short `hero Хватит.` | "You can interrupt them" |
 | gaze | two npc's and the hero, `cam face <npc>` on the npc you do not address: its eyes follow the talk | "They look at whoever speaks" |
-| feet (no AI) | not gothic-shorts: `scripts/bench.sh ik-ab`, then `scripts/bench_report.py compare` off/on, stacked for 9:16 | "Before and after on stairs" |
+| animation (no AI) | not gothic-shorts: `shorts/compare` films a bench scenario with the animation work off and on and stacks them (`compare/bodies.bench`: feet on a 24 degree slope at NW_CITY_TO_LIGHTHOUSE_07, a wolf there, a farmer on NW_BIGFARM_FIELD_01 noticing the hero, a slalom on that field) | "Gothic II: before and after" |
 
 Lines that work: the npc's name first, one request per line, the way a player would say it aloud.
 Lines that fail: long sentences (recognition drops words), names the model does not know, questions the
