@@ -1387,6 +1387,8 @@ void AiBridge::Impl::tickDeal(World& world) {
   if(chat==nullptr || chat->shownDeal().id.empty() || pl==nullptr)
     return;
   chat->markMissing([&](const ChatOverlay::DealLine& l) {
+    if(l.item.empty())
+      return false;  // not a thing given now: a lie forgiven, a debt to pay later
     const size_t id = world.script().findSymbolIndex(l.item);
     return id==size_t(-1) || pl->itemCount(id) < size_t(std::max(0,l.count));
     });
