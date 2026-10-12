@@ -45,3 +45,6 @@ log.txt
 
 # Shorts: takes and voiced lines (gothic-shorts)
 /.shorts/
+
+# Site build (gothic-site)
+/site/_build/
