@@ -135,5 +135,6 @@ app's token lasts 7 days, then `login` again (the upload opens the browser itsel
 `youtube.<lang>` of the JSON: title (up to 100 characters), description, tags, `synthetic` (altered or
 synthetic content: set it for shorts with AI voices). Uploads are private: a project without YouTube's audit
 can not publish through the API; make the video public in YouTube Studio. `upload` shows the channel, the
-file and the title and asks before it sends anything.
+file and the title and asks before it sends anything; it refuses any channel but the project's (`Gothic AI`,
+`--channel` or `GOTHIC_YOUTUBE_CHANNEL`).
 

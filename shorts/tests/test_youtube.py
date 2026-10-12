@@ -30,3 +30,9 @@ def test_auth_url_asks_offline_with_pkce():
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
     assert q["access_type"] == "offline" and q["code_challenge_method"] == "S256" and q["state"] == "st"
     assert set(q["scope"].split()) == set(youtube.SCOPES)
+
+
+def test_upload_only_to_the_projects_channel():
+    youtube.check_channel("gothic ai", "Gothic AI")
+    with pytest.raises(youtube.YouTubeError):
+        youtube.check_channel("Kaifat", "Gothic AI")
