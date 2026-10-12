@@ -292,6 +292,8 @@ class Npc final {
     bool      aimBow();
     bool      shootBow(Interactive* focOverride = nullptr);
     bool      hasAmmunition() const;
+    // an arrow (a bolt) is put in, ready to shoot
+    bool      isBowLoaded() const;
 
     // the bow aimed by hand (game/archery): the hero's input drives it (PlayerControl)
     Archer&   archer() { return arch; }

@@ -165,6 +165,8 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
       if(bs==BS_AIMNEAR || bs==BS_AIMFAR)
         return solveFrm("S_%sSHOOT",st);
       }
+    if(a==ReloadBow)
+      return solveFrm("T_%sRELOAD",st);
     }
 
   if(a==MagNoMana)

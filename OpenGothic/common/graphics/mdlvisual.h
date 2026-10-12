@@ -57,6 +57,7 @@ class MdlVisual final {
     // the arrow (the bolt) has left: not shown in the hand till the next one is placed (the slot is kept:
     // the shot leaves from there)
     void                           dropAmmo();
+    bool                           hasAmmoShown() const { return !ammunition.view.isEmpty(); }
     void                           setSlotItem   (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           setStateItem  (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           clearSlotItem (std::string_view bone);
