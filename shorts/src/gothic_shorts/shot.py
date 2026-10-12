@@ -15,7 +15,7 @@
     '''
 
 The script is the bench's own language (scripts/bench/README.md) plus `hero <text>`, which becomes
-`speak <wav> <text>` once the line is voiced (voice.py).
+`ptt <wav> <text>` once the line is voiced (voice.py).
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ class Shot:
             if cmd == "hero":
                 if rest not in voiced:
                     raise ShotError(f"{self.name}: the line is not voiced yet: {rest}")
-                lines.append(f"speak {voiced[rest].resolve()} {rest}")
+                lines.append(f"ptt {voiced[rest].resolve()} {rest}")
             else:
                 lines.append(f"{cmd} {rest}".strip())
         return "\n".join(lines) + "\n"

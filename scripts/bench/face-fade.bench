@@ -1,0 +1,36 @@
+# Faces fade in and out at the heads' own speeds (S_* about a second, T_HURT 0.1 s), and a new face takes
+# over from the last one gradually. Xardas, the camera at his face. The report flags face_jump: a face that
+# came or went at once. Columns face_* of metrics.csv: how much of each face shows.
+cheat god
+view clean 30
+watch nearest
+freeze nearest
+wait 500
+place 150 0
+cam face 45 15 1
+wait 800
+rec fade
+wait 300
+faceanim nearest S_FRIENDLY 1500   # in, held, out
+wait 3800
+faceanim nearest S_ANGRY 4000
+wait 1500
+faceanim nearest S_FRIENDLY 2000   # angry gives way to friendly
+wait 500
+faceanim nearest S_ANGRY 2000      # and back before friendly is fully in: no jump
+wait 3500
+faceanim nearest S_FRIENDLY 2000   # three faces a moment apart: the slots run short
+wait 300
+faceanim nearest S_HOSTILE 2000
+wait 300
+faceanim nearest S_FRIGHTENED 2000
+wait 4000
+faceanim nearest T_HURT 800        # pain comes fast
+wait 1500
+stop
+wait 500
+faceanim nearest S_ANGRY 4000
+speak nearest DIA_Addon_Xardas_Hello_14_00
+rec talk                           # the lips over a face that fades out
+wait 9000
+stop

@@ -23,7 +23,7 @@ Each idea names what the short proves. Film it, look at the takes, keep the hone
 | reacting to deeds | mid-conversation `tap weapon`, wait, then speak again; the npc answers the drawn sword | "Drew a sword mid-sentence" |
 | actions | ask the npc to follow you or to hand something over, then walk off (`walkmode walk`, `hold forward 3000`) and keep the npc in `cam two` | "He actually came with me" |
 | interrupting | a long question, `wait 2500` while the npc starts answering, then a short `hero Хватит.` | "You can interrupt them" |
-| gaze | two npc's and the hero, `cam face` on the npc you do not address: its eyes follow the talk | "They look at whoever speaks" |
+| gaze | two npc's and the hero, `cam face <npc>` on the npc you do not address: its eyes follow the talk | "They look at whoever speaks" |
 | feet (no AI) | not gothic-shorts: `scripts/bench.sh ik-ab`, then `scripts/bench_report.py compare` off/on, stacked for 9:16 | "Before and after on stairs" |
 
 Lines that work: the npc's name first, one request per line, the way a player would say it aloud.
@@ -38,6 +38,9 @@ npc can only answer with lore dumps (the answer runs past the short).
 | the npc answers | `cam face {npc} 150 0 25` | the face from where it looks, turned towards the hero |
 | a reaction to a deed, walking together | `cam two {npc}` | both in frame |
 | a hard cut between shots | `cam cut` before the next `cam` | otherwise the camera glides (`cam smooth 0.12`) |
+
+`cam face` takes an npc's name here; with a number first it is the bench's close-up of the watched one's
+mouth (lip sync), not a shot of a short.
 
 Change the camera after a hero line and before `waitreply`, so the answer opens on the npc's face.
 Interiors are tight: if a frame of the sheet shows a wall, pull `near <npc> <dist>` closer, change the

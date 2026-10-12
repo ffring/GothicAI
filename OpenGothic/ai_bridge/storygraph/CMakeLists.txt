@@ -1,0 +1,60 @@
+# storygraph: lifts the story layer of a compiled GOTHIC.DAT (dialogs, quest variables) into a graph.
+# See docs/story-graph.md in the monorepo.
+#
+# Standalone build (only ZenKit, no engine):
+#   cmake -S OpenGothic/ai_bridge/storygraph -B OpenGothic/ai_bridge/storygraph/build -G Ninja
+#   cmake --build OpenGothic/ai_bridge/storygraph/build
+
+cmake_minimum_required(VERSION 3.21)
+project(StoryGraph CXX)
+
+if(PROJECT_IS_TOP_LEVEL)
+  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo)
+  endif()
+  set(BUILD_SQUISH_WITH_SSE2 OFF CACHE INTERNAL "")
+  set(ZK_ENABLE_ASAN         OFF CACHE INTERNAL "")
+  set(ZK_ENABLE_DEPRECATION  OFF CACHE INTERNAL "")
+  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../lib/ZenKit ${CMAKE_CURRENT_BINARY_DIR}/zenkit)
+endif()
+
+set(STORYGRAPH_SOURCES
+  bytecode.cpp bytecode.h
+  eval.cpp     eval.h
+  expr.cpp     expr.h
+  exprjson.cpp exprjson.h
+  lifter.cpp   lifter.h
+  model.cpp    model.h
+  predicates.cpp predicates.h
+  vocab.h
+  ../textcodec.cpp ../textcodec.h)
+if(PROJECT_IS_TOP_LEVEL)
+  add_library(StoryGraph STATIC ${STORYGRAPH_SOURCES})
+  target_link_libraries(StoryGraph PUBLIC zenkit)
+else()
+  # inside the game the objects go into ai_bridge, which gets ZenKit through the engine: linking ZenKit
+  # here again reorders the static libraries and pulls in a second copy of squish
+  add_library(StoryGraph OBJECT ${STORYGRAPH_SOURCES})
+  target_include_directories(StoryGraph PRIVATE $<TARGET_PROPERTY:zenkit,INTERFACE_INCLUDE_DIRECTORIES>)
+  target_compile_definitions(StoryGraph PRIVATE $<TARGET_PROPERTY:zenkit,INTERFACE_COMPILE_DEFINITIONS>)
+endif()
+target_include_directories(StoryGraph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+# rapidjson 1.1 trips modern clang warnings; treat it as a system header
+target_include_directories(StoryGraph SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/rapidjson/include)
+
+if(NOT MSVC)
+  target_compile_options(StoryGraph PRIVATE -Wall -Wconversion -Werror)
+endif()
+
+# the command line tool; inside the game build (ai_bridge) only the library is needed
+option(STORYGRAPH_TOOL "build the storygraph command line tool" ${PROJECT_IS_TOP_LEVEL})
+if(STORYGRAPH_TOOL)
+  add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h
+                            effects.cpp effects.h snapshot.h)
+  target_link_libraries(storygraph PRIVATE StoryGraph)
+  if(NOT MSVC)
+    target_compile_options(storygraph PRIVATE -Wall -Wconversion -Werror)
+  endif()
+endif()

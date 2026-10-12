@@ -31,9 +31,9 @@ def test_hero_lines_become_speak_with_their_recording(tmp_path):
     assert scenario.splitlines() == [
         "cam shoulder NONE_100_XARDAS",
         "rec main",
-        f"speak {wav.resolve()} Ксардас, привет.",
+        f"ptt {wav.resolve()} Ксардас, привет.",
         "waitreply",
-        f"speak {wav.resolve()} Пока.",
+        f"ptt {wav.resolve()} Пока.",
         "stop",
     ]
 

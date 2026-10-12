@@ -53,7 +53,7 @@ shots:
 
 | Command | |
 |---|---|
-| `hero <text>` | the hero says it: a TTS recording held on the talk key (the bench's `speak <wav> <text>`) |
+| `hero <text>` | the hero says it: a TTS recording held on the talk key (the bench's `ptt <wav> <text>`) |
 | `waitreply [timeout ms] [quiet ms]` | until an npc of the AI has answered the hero's last phrase and has been quiet for `quiet` (1200) |
 | `waitquiet [quiet ms] [timeout ms]` | until no npc of the AI speaks |
 | `near <npc> [dist cm] [deg]` | the hero stands in front of the npc (off its facing by `deg`), facing it |

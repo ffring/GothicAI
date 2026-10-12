@@ -11,12 +11,15 @@ ChunkCallback = Callable[[bytes], Awaitable[None]]
 
 @dataclass(frozen=True)
 class Voice:
-    """Who speaks. Providers use what they understand: VoxCPM designs a voice from `description`
-    (and keeps it per `id`), preset-voice APIs take `preset`."""
+    """Who speaks, and how this line is said. Providers use what they understand: VoxCPM designs a
+    voice from `description` (and keeps it per `id`), preset-voice APIs take `preset`. `style` is an
+    English instruction for this line's delivery ("say angrily with force"), empty for the voice's
+    usual manner; the voice stays the same."""
 
     id: str
     description: str = ""
     preset: str | None = None
+    style: str = ""
 
 
 class TtsError(RuntimeError):

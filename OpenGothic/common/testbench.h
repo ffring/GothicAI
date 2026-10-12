@@ -23,7 +23,7 @@ namespace TestBench {
   // Filming a short (OPENGOTHIC_BENCH_REALTIME): in step with the wall clock, the window is not drawn
   bool     filming();
 
-  // What the AI bridge does, for scenarios that talk (`speak`, `waitreply`; scripts/shorts): texts in UTF-8.
+  // What the AI bridge does, for scenarios that talk (`ptt`, `waitreply`; shorts/): texts in UTF-8.
   // An npc line starts (`ms`: its length as known now), an npc voice has played out, the hero's phrase was
   // recognized (`to`: whom the server says it was said to)
   void     aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms);

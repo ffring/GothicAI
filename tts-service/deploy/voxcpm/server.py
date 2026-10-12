@@ -1,13 +1,15 @@
 """VoxCPM2 behind a small WebSocket API, for the Gothic AI TTS service. Runs on the GPU server.
 
-    client -> server {"type":"speak","id":"1","text":"...","voice":{"id":"xardas","description":"..."}}
+    client -> server {"type":"speak","id":"1","text":"...","voice":{"id":"xardas","description":"..."},
+                      "style":"say angrily with force"}  (style: optional)
     server -> client binary frames: 16-bit little-endian mono PCM at `sample_rate`, as generated
     server -> client {"type":"done","id":"1","sample_rate":48000,"audio_s":2.1,"first_chunk_s":0.05}
     server -> client {"type":"error","id":"1","detail":"..."}
 
 A voice is designed once from its description (VoxCPM2 voice design: "(description)text") and kept
 as a reference clip; every line is then cloned from that clip, so an npc sounds the same in every
-line. Requests are served one at a time (one GPU).
+line. A line's style steers how it is said (controllable cloning: "(style)text" with the reference: the
+clip gives the timbre, the style the delivery). Requests are served one at a time (one GPU).
 """
 
 from __future__ import annotations
@@ -63,13 +65,17 @@ class Engine:
             log.info("designed voice %s in %.1fs: %s", path.name, time.monotonic() - t, description)
         return path
 
-    def speak(self, text: str, voice_id: str, description: str, on_chunk) -> float:
+    def speak(self, text: str, voice_id: str, description: str, on_chunk, style: str = "") -> float:
         """Generates `text` in the voice, calling on_chunk(pcm16 bytes) as audio comes. Returns seconds."""
+        style = re.sub(r"[()]", "", style).strip()
         with self.lock:
             ref = self.reference(voice_id, description)
             samples = 0
             for chunk in self.model.generate_streaming(
-                text=text, reference_wav_path=str(ref), cfg_value=2.0, inference_timesteps=self.steps
+                text=f"({style}){text}" if style else text,
+                reference_wav_path=str(ref),
+                cfg_value=2.0,
+                inference_timesteps=self.steps,
             ):
                 pcm = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype("<i2")
                 samples += len(pcm)
@@ -107,6 +113,7 @@ async def handle(conn: ServerConnection, engine: Engine) -> None:
                 str(voice.get("id", "default")),
                 str(voice.get("description") or DEFAULT_DESCRIPTION),
                 lambda pcm, q=queue: loop.call_soon_threadsafe(q.put_nowait, pcm),
+                str(msg.get("style") or ""),
             )
             job.add_done_callback(lambda _f, q=queue: loop.call_soon_threadsafe(q.put_nowait, None))
             first = None

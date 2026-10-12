@@ -26,6 +26,16 @@ running and sneaking past; a script look; the hero looks at the npc in focus; a 
 Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
 and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
 for `bench_report.py diff`.
+Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
+with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
+the first choice: the lines of both are played the way the game plays them).
+Faces: `faces` (the face animations of a head one after another, then two of them while Xardas speaks),
+`face-fade` (faces fade in and out, one gives way to the next, three a moment apart, the lips over a
+fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serve --scenario m1 --llm fake
+--no-tts` on a port of your own and run the bench with `GOTHIC_AI_URL=ws://127.0.0.1:<port>`; with a TTS
+service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
+`face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
+watched npc shows, 0..1.
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -67,6 +77,8 @@ git worktree remove --force /tmp/before
   under a planted foot, yellow under a swinging one; the short line is the ground normal;
 - bottom right: the feet zoomed in;
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
+- lips (under the gaze text): `F` the two mouth shapes (VISEME frames) mixed with `A`, intensity `I`;
+  the thin white bar is the voice, the thick blue one how wide the mouth is shown;
 - gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
@@ -88,6 +100,9 @@ git worktree remove --force /tmp/before
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
 | `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
+| `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
+| `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
+| `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -99,7 +114,9 @@ steps of one leg of a pair than on the other's. `gaze on` is the share of frames
 at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
 the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
 looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
-roll into a turn and the range of the trunk pitch (+ forward) of the watched one.
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `lips corr` is the
+correlation of the voice level and the shown mouth opening over the frames lip sync is on (~0.8-0.9 on
+Xardas' lines).
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -141,6 +158,12 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
+| `cam face <dist> [angle] [height]` | close to the face of the watched one, looking at the mouth; `angle` from its facing |
+| `speak <npc\|nearest\|player> <output name>` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script |
+| `dialog <npc\|nearest>` | the hero talks to it, as with the action key: the dialog window opens |
+| `choose <n>` | runs the n-th choice (from 1) of the dialog with the watched npc, as if the player picked it |
+| `faceanim <npc\|nearest\|player> <anim> [ms] [intensity]` | a face animation of the head (`S_ANGRY`, `S_FRIENDLY`, `T_HURT`...) |
+| `lips on\|off`, `lips param <name> <value>`, `lips params` | lip sync (off: the old talk loop) and its parameters |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
@@ -150,10 +173,10 @@ Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
 
 | Command | |
 |---|---|
-| `speak <wav> [text]` | the hero holds the talk key while the recording is said (`ai ptt start <wav>`: the AI server takes the file instead of the microphone, `--voice-files`) |
+| `ptt <wav> [text]` | the hero holds the talk key while the recording is said (`ai ptt start <wav>`: the AI server takes the file instead of the microphone, `--voice-files`) |
 | `waitreply [timeout ms] [quiet ms]`, `waitquiet [quiet ms] [timeout ms]` | until an npc of the AI has answered and has been quiet that long; until none speaks |
 | `near <npc> [dist] [deg]`, `approach <npc>`, `face npc <npc>` | the hero in front of an npc (teleport), walks up to it, turns to it |
-| `cam shoulder\|face\|two <npc> [dist] [height] [side\|deg]`, `cam cut`, `cam smooth <k>` | shots of the hero and an npc; they glide from one to the next unless `cut` |
+| `cam shoulder\|face\|two <npc> [dist] [height] [side\|deg]`, `cam cut`, `cam smooth <k>` | shots of the hero and an npc; they glide from one to the next unless `cut`. `cam face` with an npc's name is this shot, with a number the close-up above |
 | `caption <text>`, `mark <text>` | events for the cut of a short |
 | `ai <...>` | the AI bridge's console: `ai attach <npc>`, `ai ptt start [<wav>]\|stop\|cancel` |
 
@@ -175,6 +198,7 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 `OpenGothic/common/testbench.cpp`, inert unless `OPENGOTHIC_BENCH` is set. Hooks: the fixed time step and
 the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
 and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL loopback device in Tempest's
-`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK), `Camera::setNearClip`
+`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
+`LipSync::subjectProbe` (the mouth), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

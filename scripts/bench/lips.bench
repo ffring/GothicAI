@@ -1,0 +1,24 @@
+# Lip sync: Xardas (the nearest npc in the default save) says a voiced line of the game to the hero,
+# the camera close to his face. First with lip sync, then the same line with the old talk loop.
+cheat god
+view clean 30
+watch nearest
+freeze nearest       # he leaves his bookstand and stands still
+wait 500
+place 150 0          # the hero in front of him: he looks at the camera's side
+cam face 36 15 1
+wait 800
+rec quiet
+wait 1000
+lips on
+speak nearest DIA_Addon_Xardas_Hello_14_00
+rec lips
+wait 9500
+stop
+wait 1500
+lips off
+speak nearest DIA_Addon_Xardas_Hello_14_00
+rec loop
+wait 9500
+stop
+lips on

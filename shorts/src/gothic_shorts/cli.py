@@ -104,7 +104,7 @@ def _summary(take: Path) -> None:
     log = take / "bench.log"
     if log.is_file():
         for row in log.read_text().splitlines():
-            if row.startswith(("realtime:", "speak: not", "can not", "unknown", "near: no", "cam ")):
+            if row.startswith(("realtime:", "ptt: not", "can not", "unknown", "near: no", "cam ")):
                 print(f"  bench: {row}")
 
 

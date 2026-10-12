@@ -112,12 +112,15 @@ void WorldSound::addSound(const zenkit::VSound &vob) {
   worldEff.emplace_back(std::move(s));
   }
 
-Sound WorldSound::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen) {
+Sound WorldSound::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen,
+                              std::shared_ptr<LipSync::Track>* voice) {
   if(!isInListenerRange(pos,range))
     return Sound();
   auto snd = Resources::loadSoundBuffer(s);
   if(snd.isEmpty())
     return Sound();
+  if(voice!=nullptr)
+    *voice = LipSync::Track::fromSound(snd);
 
   auto ret = implAddSound(game.loadSound(snd), pos, range);
   if(ret.isEmpty())
