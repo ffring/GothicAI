@@ -5,7 +5,7 @@ situation of its quests (vanilla.py), and what it knows of the hero's honesty is
 
 - lied: it caught him lying (`caught`) or found a lie of his out later (`found_out`). It takes his word
   no more: a quest is accepted only on what it sees for itself (quests.py and vanilla.py enforce it);
-- heard: rumors that he lied to someone else (`rumor`);
+- heard: rumors that he lied to someone else (`rumor`): told before it, or retold by whom (social.py);
 - kept: claims of his to it that were true (`claim` with `truth`).
 
 The last two the conversational model weighs in character.
@@ -59,7 +59,9 @@ class Trust:
                     how = f.get("how", "")
                     r.lied.append(f"«{title}»{f' — {how}' if how else ''}")
                 case "rumor" if f.get("to") == npc:
-                    r.heard.append(f"{f.get('name') or f.get('from', '')} («{title}»)")
+                    about = f.get("about_name") or f.get("name") or f.get("from", "")
+                    teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None
+                    r.heard.append(f"{about} («{title}»{f', со слов: {teller}' if teller else ''})")
                 case "claim" if f.get("npc") == npc and f.get("truth"):
                     r.kept.append(f"«{title}»")
         r.heard = list(dict.fromkeys(r.heard))

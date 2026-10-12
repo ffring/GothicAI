@@ -296,8 +296,17 @@ async def unmask(
 ) -> None:
     """The giver learns the truth: it remembers, turns against the hero, acts through the scripts (refusing
     to talk, a beating if the hero is near), and the people around hear it."""
+    day = await _day(link)
     chronicle.record(
-        {"fact": "found_out", "quest": lie.quest, "npc": lie.giver, "title": lie.title, "how": how}
+        {
+            "fact": "found_out",
+            "quest": lie.quest,
+            "npc": lie.giver,
+            "name": lie.giver_name,
+            "title": lie.title,
+            "how": how,
+            **day,
+        }
     )
     belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
     chronicle.record({**belief, "source": how})
@@ -324,7 +333,7 @@ async def unmask(
         f"Слух: {lie.giver_name} при тебе рассказывал, что герой его обманул — сказал, что выполнил "
         f"поручение «{lie.title}», взял награду ({lie.reward}), а это неправда"
     )
-    _tell(dialogue, chronicle, lie, rumor, people)
+    _tell(dialogue, chronicle, lie, "found_out", rumor, people, day)
 
 
 async def caught(
@@ -337,6 +346,7 @@ async def caught(
 ) -> None:
     """The giver sees for itself that the hero lies to it, before it pays: it remembers, takes his word no
     more (trust.py), is wary of him, and the people around hear it. No beating: he took nothing."""
+    day = await _day(link)
     chronicle.record(
         {
             "fact": "caught",
@@ -345,6 +355,7 @@ async def caught(
             "name": lie.giver_name,
             "title": lie.title,
             "how": how,
+            **day,
         }
     )
     belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
@@ -369,25 +380,46 @@ async def caught(
         f"Слух: {lie.giver_name} при тебе уличил героя во лжи — тот уверял, что сделал «{lie.title}», "
         "а это неправда"
     )
-    _tell(dialogue, chronicle, lie, rumor, people)
+    _tell(dialogue, chronicle, lie, "caught", rumor, people, day)
 
 
 def _tell(
-    dialogue: DialogueManager, chronicle: Chronicle, lie: Lie, rumor: str, people: list[dict[str, Any]]
+    dialogue: DialogueManager,
+    chronicle: Chronicle,
+    lie: Lie,
+    kind: str,
+    rumor: str,
+    people: list[dict[str, Any]],
+    day: dict[str, int],
 ) -> None:
-    """The people around the giver keep what they heard as a rumor."""
+    """The people around the giver keep what they heard as a rumor; then it goes round (social.py)."""
     for p in people:
         dialogue.remember(p["npc"], p.get("name") or p["npc"], rumor)
         chronicle.record(
             {
                 "fact": "rumor",
                 "quest": lie.quest,
-                "from": lie.giver,
-                "name": lie.giver_name,
+                "kind": kind,
+                "about": lie.giver,
+                "about_name": lie.giver_name,
                 "title": lie.title,
+                "from": lie.giver,
+                "from_name": lie.giver_name,
                 "to": p["npc"],
+                "hops": 1,
+                "how": "heard",
+                **day,
             }
         )
+
+
+async def _day(link: GameLink) -> dict[str, int]:
+    """The game day, for the facts of a lie (a rumor of it is news for a while); empty if the game says
+    nothing."""
+    try:
+        return {"day": int((await link.story_state()).get("day", 0))}
+    except (GameError, TimeoutError):
+        return {}
 
 
 def _m(cm: float) -> int:
