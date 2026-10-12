@@ -186,23 +186,23 @@ v1-2610 по тому же замеру `escalate` против `think` даёт
   - через 6,2 с большая модель кричит на ходу: «На помощь! Волк! Не дай ему добраться до меня — я с ним не справлюсь!» — и ставит намерение «искать помощи у героя»;
   - волка Малет убил сам (скрипты отбились), и g7 героя не благодарит: `escalate` 1,7, отношение «не изменилось».
 
-Модель g7 нельзя ставить в сервис без нового кода планировщика: она учена на коротких формулировках из `server/src/gothic_ai/brain/situation.py`.
+Модель g7 нельзя ставить в сервис без нового кода планировщика: она учена на коротких формулировках из `server/src/gothic_ai/brain/situation.py`. Этот код в `main` с коммита «M5c: the end of a threat; a free npc's words and body agree». И наоборот: g5 с новым кодом получает непривычные вопросы, так что сервер и сервис меняются вместе.
+
+На игре g7 с этим кодом проходит `rescue` и `rescue_self` 8 из 8 (см. [docs/npc-agent.md](../../docs/npc-agent.md)).
 
 ## Как включить в сервисе
 
-С 2026-10-12 сервис на GPU-сервере работает на **g5**. Через сервис она отвечает так же, как в прогоне без него: тот же выбор во всех 228 запросах тестового набора, вероятности расходятся не больше чем на 0,022. Видеопамяти 4,65 ГБ.
-
-Сервис берёт чекпоинт из `GOTHIC_DECIDER_CHECKPOINT`. На GPU-сервере:
+Сервис берёт чекпоинт из `GOTHIC_DECIDER_CHECKPOINT`. На GPU-сервере (чекпоинт g7 уже скопирован в `~/gothic-ai/decider/models/gothic-g7`):
 
 ```bash
-rsync -a --exclude replay_teacher.jsonl ~/gothic-ai/tuning/ckpt/g5/ ~/gothic-ai/decider/models/gothic-g5/
+rsync -a --exclude replay_teacher.jsonl ~/gothic-ai/tuning/ckpt/g7/ ~/gothic-ai/decider/models/gothic-g7/
 mkdir -p ~/.config/systemd/user/gothic-decider.service.d
-printf '[Service]\nEnvironment=GOTHIC_DECIDER_CHECKPOINT=%%h/gothic-ai/decider/models/gothic-g5\n' \
+printf '[Service]\nEnvironment=GOTHIC_DECIDER_CHECKPOINT=%%h/gothic-ai/decider/models/gothic-g7\n' \
   > ~/.config/systemd/user/gothic-decider.service.d/checkpoint.conf
 systemctl --user daemon-reload && systemctl --user restart gothic-decider
 ```
 
-Вернуть v1-2610: удалить `checkpoint.conf`, затем `daemon-reload` и `restart`.
+Вернуться к g5 — тот же `checkpoint.conf` с `gothic-g5`. g5 через сервис отвечала так же, как без него: тот же выбор во всех 228 запросах тестового набора, вероятности расходятся не больше чем на 0,022, видеопамяти 4,65 ГБ. Вернуть v1-2610: удалить `checkpoint.conf`, затем `daemon-reload` и `restart`.
 
 ## Что дальше
 
