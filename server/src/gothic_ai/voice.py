@@ -306,6 +306,7 @@ def _fail(fut: asyncio.Future[Recognized], err: Exception) -> None:
 @dataclass
 class _Utterance:
     focus: str | None  # the npc the hero looked at when he spoke
+    source: AudioSource
     queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     recognize: bool = False
     finished: bool = False  # the final transcript was sent: drop late partials
@@ -317,7 +318,11 @@ Heard = Callable[[str, str | None, dict[str, Any]], None]
 
 
 class VoiceInput:
-    """Turns push-to-talk key events from the game into the hero's phrases (`heard`)."""
+    """Turns push-to-talk key events from the game into the hero's phrases (`heard`).
+
+    `files`: a `ptt_start` may name a recording (`audio`) the hero says instead of the microphone; the test
+    bench speaks for the hero this way (scripts/shorts/). Off by default: the game is not to make the server
+    read files."""
 
     def __init__(
         self,
@@ -328,6 +333,7 @@ class VoiceInput:
         *,
         lang: str = "ru",
         journal: Journal | None = None,
+        files: bool = False,
     ) -> None:
         self.link = link
         self.heard = heard
@@ -335,6 +341,7 @@ class VoiceInput:
         self.source = source
         self.asr = asr
         self.lang = lang
+        self.files = files
         self.active: _Utterance | None = None  # while the key is held
         self._watchdog: asyncio.TimerHandle | None = None
         self._tasks: set[asyncio.Task[None]] = set()
@@ -343,19 +350,21 @@ class VoiceInput:
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
             case PttStart():
-                self.start(msg.focus)
+                self.start(msg.focus, msg.audio)
             case PttStop():
                 self.stop(recognize=True, focus=msg.focus)
             case PttCancel() | Loading():
                 self.stop(recognize=False)
 
-    def start(self, focus: str | None = None) -> None:
+    def start(self, focus: str | None = None, audio: str | None = None) -> None:
+        """`audio`: a recording to say instead of the microphone (only with `files`)."""
         if self.active is not None:
             self.stop(recognize=False)
         loop = asyncio.get_running_loop()
-        utt = _Utterance(focus.upper() if focus else None)
         try:
-            self.source.start(lambda data: loop.call_soon_threadsafe(utt.queue.put_nowait, data))
+            source = self._source(audio)
+            utt = _Utterance(focus.upper() if focus else None, source)
+            source.start(lambda data: loop.call_soon_threadsafe(utt.queue.put_nowait, data))
         except VoiceError as err:
             log.error("voice: %s", err)
             self.journal.add("voice_error", detail=str(err))
@@ -364,6 +373,16 @@ class VoiceInput:
         utt.task = asyncio.create_task(self._run(utt))
         self.active = utt
         self._watchdog = loop.call_later(MAX_SECONDS, self.stop, True)
+
+    def _source(self, audio: str | None) -> AudioSource:
+        if audio is None:
+            return self.source
+        if not self.files:
+            raise VoiceError("сервер запущен без --voice-files: запись вместо микрофона не принимается")
+        try:
+            return WavSource(audio)
+        except (OSError, EOFError, ValueError, wave.Error) as err:
+            raise VoiceError(f"запись {audio} не читается: {err}") from err
 
     def stop(self, recognize: bool, focus: str | None = None) -> None:
         """The key is released (`recognize`) or it was a tap; `focus` at release wins over the one at
@@ -375,7 +394,7 @@ class VoiceInput:
         if self._watchdog is not None:
             self._watchdog.cancel()
             self._watchdog = None
-        self.source.stop()
+        utt.source.stop()
         if focus:
             utt.focus = focus.upper()
         utt.recognize = recognize
@@ -383,7 +402,7 @@ class VoiceInput:
 
     async def _run(self, utt: _Utterance) -> None:
         """Streams the recording into the ASR service while it lasts, then gets the final text."""
-        rate = self.source.rate
+        rate = utt.source.rate
 
         def partial(text: str) -> None:
             if text and not utt.finished:
