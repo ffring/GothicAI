@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 8
 
 # --- game -> server -----------------------------------------------------------
 
@@ -172,31 +172,18 @@ class Pong(_GameMessage):
     req: str = ""
 
 
-class ChatOpen(_GameMessage):
-    """The player opened the chat with the npc they look at (the game has already attached it)."""
-
-    type: Literal["chat_open"]
-    npc: str
-    name: str
-
-
 class PlayerText(_GameMessage):
+    """A line the player typed (v7: into the input line, to nobody in particular). `focus` is the npc he
+    looks at, if any; the server decides whom it is said to (talk.py)."""
+
     type: Literal["player_text"]
-    npc: str
     text: str
-
-
-class ChatClose(_GameMessage):
-    """The player closed the chat; the game hands the npc back to its routine."""
-
-    type: Literal["chat_close"]
-    npc: str
+    focus: str | None = None
 
 
 class FollowEnded(_GameMessage):
     """The npc stopped following: `stopped`/`replaced` by a command, or on its own
-    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine
-    unless the chat is open."""
+    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine."""
 
     type: Literal["follow_ended"]
     npc: str
@@ -204,21 +191,21 @@ class FollowEnded(_GameMessage):
 
 
 class PttStart(_GameMessage):
-    """The player pressed the push-to-talk key in the chat with `npc`: start recording.
-    Followed by `ptt_stop` (recognize what was said) or `ptt_cancel` (it was a short tap)."""
+    """The player pressed the push-to-talk key, anywhere (v7): start recording. Followed by `ptt_stop`
+    (recognize what was said) or `ptt_cancel` (it was a short tap). `focus`: the npc he looks at."""
 
     type: Literal["ptt_start"]
-    npc: str
+    focus: str | None = None
 
 
 class PttStop(_GameMessage):
     type: Literal["ptt_stop"]
-    npc: str
+    focus: str | None = None
 
 
 class PttCancel(_GameMessage):
     type: Literal["ptt_cancel"]
-    npc: str
+    focus: str | None = None
 
 
 class LineStarted(_GameMessage):
@@ -231,7 +218,7 @@ class LineStarted(_GameMessage):
 
 
 class DialogChosen(_GameMessage):
-    """The player chose a dialog or one of its choices in the dialog menu (v6). `node` is the script
+    """The player chose a dialog or one of its choices in the dialog menu (v8). `node` is the script
     symbol of the dialog (C_INFO) or of the choice's function, or the id of a dialog the director added
     (`made`)."""
 
@@ -251,6 +238,8 @@ class RosterEntry(_GameMessage):
     distance: float  # to the player, cm
     in_view: bool = False  # on the player's screen
     activity: NpcActivity = "routine"
+    state: str = ""  # v7: the script state it is in, e.g. ZS_SIT_BENCH
+    moving: bool = False  # v7: walking or running
 
 
 class NpcRoster(_GameMessage):
@@ -266,14 +255,20 @@ class NpcRoster(_GameMessage):
 
 
 class NpcEvent(_GameMessage):
-    """Something an npc that is not under control noticed about the player (v5): came close, entered its
-    room, gave an item, drew a weapon, stole, cast a spell, attacked or killed (`detail`: whom). The
-    engine's own perceptions still run; this is a copy."""
+    """Something an npc that is not under control noticed (v5, threats from others since v6).
+
+    About the player: came close, entered its room, gave an item, drew a weapon (`weapon_drawn`), aimed
+    at it with a weapon (`threatened`), stole, cast a spell, attacked or killed (`detail`: whom).
+    Threats from others (`other` is their script symbol, `other_name` the shown name): a monster it
+    senses (`monster_near`), a monster attacking it or someone near (`monster_attack`, `detail`: "you"
+    or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
+    `distance` is from the npc to `other`. The engine's own perceptions still run; this is a copy."""
 
     type: Literal["npc_event"]
     npc: str
     kind: str
     other: str = "PLAYER"
+    other_name: str | None = None
     distance: float | None = None
     detail: str | None = None
 
@@ -298,6 +293,41 @@ class NpcActResult(_GameMessage):
     detail: str | None = None
 
 
+class PerceptionHeld(_GameMessage):
+    """A threat to a free npc the game holds back from its scripts for the behavioral model (v6, after
+    `threat_control{hold:true}`): a monster near or attacking, an npc attacking. Fields as in `npc_event`.
+    The server answers `hold_verdict`; without one the scripts get it after 0.6 s."""
+
+    type: Literal["perception_held"]
+    hold: str
+    npc: str
+    kind: str
+    other: str
+    other_name: str | None = None
+    distance: float | None = None
+    detail: str | None = None
+
+
+class RoutineEntry(_GameMessage):
+    start: str  # "HH:MM" game time
+    end: str
+    state: str  # script state, e.g. ZS_SIT_BENCH
+    waypoint: str
+
+
+class RoutineInfo(_GameMessage):
+    """An npc's daily routine (v6), the answer to `routine`: its entries, the routine variants the scripts
+    have for it (`set_routine` names, e.g. START, GUIDE) and the script state it is in now."""
+
+    type: Literal["routine"]
+    req: str = ""
+    npc: str
+    current: str = ""
+    entries: list[RoutineEntry] = Field(default_factory=list)
+    routines: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
 GameMessage = Annotated[
     Hello
     | WorldLoaded
@@ -311,9 +341,7 @@ GameMessage = Annotated[
     | Snapshot
     | Perception
     | Pong
-    | ChatOpen
     | PlayerText
-    | ChatClose
     | FollowEnded
     | PttStart
     | PttStop
@@ -323,6 +351,8 @@ GameMessage = Annotated[
     | NpcEvent
     | NpcIdle
     | NpcActResult
+    | RoutineInfo
+    | PerceptionHeld
     | DialogChosen,
     Field(discriminator="type"),
 ]
@@ -347,6 +377,11 @@ ActionType = Literal[
     "follow",
     "give_item",
     "return_to_routine",
+    "fight",  # v6: the game's own combat (ZS_ATTACK) against args.npc, then control comes back
+    "flee",  # v6: the game's own fleeing (ZS_FLEE) from args.npc
+    "draw_weapon",  # v6: args.kind melee|ranged (default: what the npc has)
+    "remove_weapon",  # v6
+    "say_svm",  # v6: the npc's own recorded line, args.svm; args.overlay: said on the move
     "debug_add_item",  # game must run with -devmode
 ]
 
@@ -378,7 +413,44 @@ class ActionCmd(_Command):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
-NpcActType = Literal["say_svm", "turn_to", "look_at", "play_ani", "go_to_npc", "turn_away"]
+NpcActType = Literal[
+    "say_svm",
+    "turn_to",
+    "look_at",
+    "play_ani",
+    "go_to_npc",
+    "turn_away",
+    "fight",  # v6: ZS_ATTACK against args.npc; npc_idle when the npc leaves that state
+    "flee",  # v6: ZS_FLEE from args.npc
+    "draw_weapon",  # v6
+    "remove_weapon",  # v6
+    "start_activity",  # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine
+    "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
+]
+
+
+class ThreatControlCmd(_Command):
+    """Whether threats to free npc's are held from their scripts for the behavioral model (v6)."""
+
+    type: Literal["threat_control"] = "threat_control"
+    hold: bool
+
+
+class HoldVerdictCmd(_Command):
+    """What becomes of a held threat (v6): `server` — the behavioral model took the body over (fight,
+    flee), repeats of it are kept from the scripts for a while; `scripts` — they get it now."""
+
+    type: Literal["hold_verdict"] = "hold_verdict"
+    hold: str
+    to: Literal["server", "scripts"]
+
+
+class RoutineCmd(_Command):
+    """Ask for an npc's daily routine (v6); the game answers `routine`."""
+
+    type: Literal["routine"] = "routine"
+    req: str
+    npc: str
 
 
 class NpcActCmd(_Command):
@@ -404,7 +476,8 @@ class PingCmd(_Command):
 
 
 class SayCmd(_Command):
-    """One line (usually a sentence) for the npc to speak; shown as a subtitle. Aloud either with
+    """One line (usually a sentence) for the npc to speak, controlled or (v6) free; shown as a subtitle.
+    Aloud either with
     `audio` (base64 of a 16-bit mono WAV file, the line lasts as long as it) or `stream`: the voice
     follows in `say_audio` chunks (16-bit mono PCM at `rate`) and ends with `say_end`."""
 
@@ -416,10 +489,13 @@ class SayCmd(_Command):
     stream: bool | None = None
     rate: int | None = None
     reply: str | None = None  # the line is part of this reply, already shown with chat_text
+    # v6: said on the move, not through the npc's AI queue: it keeps running or fighting. Such lines
+    # are not ordered by the game: the server sends the next one when the previous has been said.
+    overlay: bool | None = None
 
 
 class ChatTextCmd(_Command):
-    """The npc's reply as it is generated (`text` so far), for the chat window; its lines (`say`
+    """The npc's reply as it is generated (`text` so far), shown as its subtitle; its lines (`say`
     with the same `reply`) then voice and animate it without showing the text again."""
 
     type: Literal["chat_text"] = "chat_text"
@@ -452,27 +528,34 @@ ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # no
 
 
 class ChatStatusCmd(_Command):
+    """A status line under the subtitles: `thinking` names the npc, the others are about the player's
+    voice (`npc` empty)."""
+
     type: Literal["chat_status"] = "chat_status"
-    npc: str
+    npc: str = ""
     status: ChatStatus
     detail: str | None = None
 
 
-class ChatEndCmd(_Command):
-    """The npc ends the conversation: the game closes the chat and releases the npc (unless it follows)."""
-
-    type: Literal["chat_end"] = "chat_end"
-    npc: str
-
-
 class TranscriptCmd(_Command):
-    """What the player says (push-to-talk). Partial (`final=false`) while speaking: text so far;
-    the final one is shown in the chat as the hero's line."""
+    """What the player says. Partial (`final=false`) while he speaks: text so far; the final one is his
+    line, shown as "Ты -> `to_name`: ..." (v7: whom it is said to, decided by the server; none: to nobody)."""
 
     type: Literal["transcript"] = "transcript"
-    npc: str
     text: str
     final: bool = True
+    to: str | None = None
+    to_name: str | None = None
+
+
+class HushCmd(_Command):
+    """The npc is interrupted (v7): its voice stops, its lines that have not started yet are dropped,
+    its reply's subtitle keeps only what it `said`."""
+
+    type: Literal["hush"] = "hush"
+    npc: str
+    reply: str | None = None
+    said: str | None = None
 
 
 class MemoryCmd(_Command):
@@ -483,30 +566,52 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load", "dialogs", "choose", "eval", "check"]
+DebugCommand = Literal[
+    "save",
+    "load",
+    "spawn",
+    "player_weapon",
+    "player_goto",
+    "ptt",
+    "type",
+    "dialogs",
+    "choose",
+    "eval",
+    "check",
+]
 
 
 class DebugCmd(_Command):
-    """For automated checks; the game must run with -devmode.
+    """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
+    spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
+    player draw (`state: "melee"`) or put away (`"none"`) a weapon; move the player to a `waypoint` (or to
+    the nearest one at least `distance` cm from `near`);
+    press the talk key as the player does (`ptt`, `state`: start, stop, cancel; with the hero's own focus)
+    or send a typed line (`type`, `text`).
 
-    - save / load: `save_slot_<slot>.sav`;
-    - dialogs: the dialogs `npc` offers the player now (`value`: their ids, as the menu would list them);
-    - choose: plays dialog `node` of `npc` as if the player chose it in the menu;
-    - eval: computes `expr` (story graph expression) with self = `npc`, other = the hero (`value`);
-    - check: every npc of the world builds its dialog menu, each script condition is compared with its
-      lifted form (`value`: {npcs, computed, differ, differences})."""
+    The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
+    menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
+    `eval` — computes `expr` (story graph expression) with self = `npc`, other = the hero (`value`);
+    `check` — every npc of the world builds its dialog menu, each script condition is compared with its
+    lifted form (`value`: {npcs, computed, differ, differences})."""
 
     type: Literal["debug"] = "debug"
     req: str
     cmd: DebugCommand
-    slot: int | None = None
+    slot: int = 0
+    instance: str | None = None
+    near: str | None = None
+    distance: int | None = None
+    state: str | None = None
+    waypoint: str | None = None
+    text: str | None = None
     npc: str | None = None
     node: str | None = None
     expr: list[Any] | None = None
 
 
 class GraphPatchCmd(_Command):
-    """Changes to the story graph (v6): which dialogs npc's offer. `replace` drops the earlier ones first.
+    """Changes to the story graph (v8): which dialogs npc's offer. `replace` drops the earlier ones first.
 
     Operations (`op`): `disable` / `enable` a dialog or a choice (`node`); `condition`: add `expr` to the
     dialog's script condition (`expr` null drops the added ones); `add_node` (`node` = {id, npc,

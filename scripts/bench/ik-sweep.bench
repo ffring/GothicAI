@@ -1,0 +1,27 @@
+# Bug hunt for foot IK: slopes all over the world; on each one run up, run down, walk across
+cheat god
+set time 12 0
+view clean
+foreach slope 12 35 12
+  cam auto 240 40
+  face uphill
+  walkmode run
+  wait 300             # the instant turn is not a game situation: let the legs settle
+  rec s$I_up
+  hold forward 2500
+  wait 2500
+  stop
+  face downhill
+  wait 300
+  rec s$I_down
+  hold forward 2500
+  wait 2500
+  stop
+  face across
+  walkmode walk
+  wait 300
+  rec s$I_across
+  hold forward 2500
+  wait 2500
+  stop
+end

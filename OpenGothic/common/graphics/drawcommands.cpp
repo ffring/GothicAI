@@ -354,6 +354,8 @@ void DrawCommands::visibilityVsm(Encoder<CommandBuffer>& cmd) {
   // cmd.dispatchIndirect(vsmIndirectCmd, 0);
   }
 
+uint32_t DrawCommands::hiddenTypes = 0;
+
 void DrawCommands::drawVsm(Tempest::Encoder<Tempest::CommandBuffer>& cmd) {
   // return;
   struct Push { uint32_t commandId; } push = {};
@@ -366,6 +368,8 @@ void DrawCommands::drawVsm(Tempest::Encoder<Tempest::CommandBuffer>& cmd) {
     if(cx.alpha!=Material::Solid && cx.alpha!=Material::AlphaTest)
       continue;
     if(cx.pVsm==nullptr)
+      continue;
+    if((hiddenTypes>>cx.type) & 1u)
       continue;
 
     auto id  = size_t(std::distance(this->cmd.data(), &cx));
@@ -416,6 +420,8 @@ void DrawCommands::drawHiZ(Tempest::Encoder<Tempest::CommandBuffer>& cmd) {
       continue;
     if(cx.pHiZ==nullptr)
       continue;
+    if((hiddenTypes>>cx.type) & 1u)
+      continue;
 
     auto id  = size_t(std::distance(this->cmd.data(), &cx));
     push.firstMeshlet = cx.firstPayload;
@@ -447,6 +453,8 @@ void DrawCommands::drawCommon(Tempest::Encoder<Tempest::CommandBuffer>& cmd, Sce
       continue;
 
     if(cx.maxPayload==0)
+      continue;
+    if((hiddenTypes>>cx.type) & 1u)
       continue;
 
     const RenderPipeline* pso = nullptr;

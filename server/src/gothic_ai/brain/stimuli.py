@@ -17,6 +17,9 @@ class EventPolicy:
     urgent: bool = False  # the player is right there and expects a reaction now
     salient: bool = False  # worth a decision for MID npc's too (NEAR ones react to any event)
     scripted: bool = False  # the game's scripts react; context only
+    threat: bool = (
+        False  # danger from someone else (not the hero): the behavioral model reacts, `other` is it
+    )
 
 
 POLICIES: dict[str, EventPolicy] = {
@@ -28,16 +31,37 @@ POLICIES: dict[str, EventPolicy] = {
     "player_sleeps": EventPolicy("The hero lay down to sleep nearby.", 60),
     "player_sits": EventPolicy("The hero sat down nearby.", 30),
     "weapon_drawn": EventPolicy("The hero drew a weapon near you.", 20, scripted=True),
+    "threatened": EventPolicy("The hero aims a weapon at you.", 10, scripted=True),
     "theft": EventPolicy("The hero stole {detail}.", 300, scripted=True),
     "attack": EventPolicy("The hero attacked {detail}.", 300, scripted=True),
     "magic": EventPolicy("The hero cast a spell nearby.", 30, scripted=True),
     "murder": EventPolicy("The hero killed {detail}.", 600, scripted=True),
+    # threats from others (v6): the behavioral model reacts (fight, flee, call for help), worded as in the
+    # scenes it was trained on (decider-service/tuning); the bridge's kinds are mapped by `normalize`
+    "monster_near": EventPolicy("{other} is coming at you.", 20, urgent=True, salient=True, threat=True),
+    "npc_attack": EventPolicy("{other} attacked you.", 60, urgent=True, salient=True, threat=True),
+    "fight_nearby": EventPolicy("A fight broke out nearby: {detail}.", 30, salient=True, threat=True),
+    "cry_for_help": EventPolicy("{other} is shouting for help nearby.", 30, salient=True, threat=True),
 }
 DEFAULT_POLICY = EventPolicy("Something happened: {kind} ({detail}).", 15)
 
 
 def policy(kind: str) -> EventPolicy:
     return POLICIES.get(kind, DEFAULT_POLICY)
+
+
+def normalize(kind: str, other: str, other_name: str | None, detail: str | None) -> tuple[str, str | None]:
+    """The bridge's threat events (protocol v6) as the kinds the behavioral model was trained on: an attack
+    on the npc itself is `npc_attack`, an attack on someone else (the hero too) is `fight_nearby`."""
+    who = other_name or other
+    if kind == "monster_attack":
+        if detail == "you":
+            return "npc_attack", None
+        victim = "the hero" if detail == "PLAYER" else (detail or "someone")
+        return "fight_nearby", f"{who} attacks {victim}"
+    if kind == "hero_attacked":
+        return "fight_nearby", f"{who} attacks the hero"
+    return kind, detail
 
 
 @dataclass(frozen=True)
@@ -47,6 +71,7 @@ class Stimulus:
     other: str = "PLAYER"
     distance_cm: float | None = None
     detail: str | None = None
+    other_name: str | None = None  # shown name of `other` (not the player)
 
     @property
     def policy(self) -> EventPolicy:
@@ -56,11 +81,10 @@ class Stimulus:
         return now - self.at <= self.policy.ttl_s
 
     def describe(self, now: float) -> str:
-        other = "the hero" if self.other == "PLAYER" else self.other
+        other = "the hero" if self.other == "PLAYER" else (self.other_name or self.other)
         dist = f"{self.distance_cm / 100:.0f} m" if self.distance_cm is not None else "a few metres"
-        text = self.policy.text.format(
-            other=other, detail=self.detail or "something", dist=dist, kind=self.kind
-        )
+        detail = {"you": "you", "PLAYER": "the hero"}.get(self.detail or "", self.detail or "something")
+        text = self.policy.text.format(other=other, detail=detail, dist=dist, kind=self.kind)
         ago = now - self.at
         return text if ago < 3 else f"{text} ({ago:.0f} s ago)"
 

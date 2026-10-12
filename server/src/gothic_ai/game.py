@@ -35,6 +35,8 @@ from .protocol import (
     PingCmd,
     Pong,
     Result,
+    RoutineCmd,
+    RoutineInfo,
     Session,
     Snapshot,
     SnapshotCmd,
@@ -66,6 +68,7 @@ class GameLink:
         self._actions: dict[str, asyncio.Future[ActionResult]] = {}
         self._pongs: dict[str, asyncio.Future[Pong]] = {}
         self._snapshot_waiters: dict[str, list[asyncio.Future[Snapshot]]] = {}
+        self._routines: dict[str, asyncio.Future[RoutineInfo]] = {}
         self._world_ready = asyncio.Event()
         self.hello: Hello | None = None
         self.world: str | None = None
@@ -112,6 +115,8 @@ class GameLink:
                 _resolve(self._actions.pop(msg.id, None), msg)
             case Pong():
                 _resolve(self._pongs.pop(msg.req, None), msg)
+            case RoutineInfo():
+                _resolve(self._routines.pop(msg.req, None), msg)
             case Snapshot():
                 self.snapshots[msg.npc.id] = msg
                 for fut in self._snapshot_waiters.pop(msg.npc.id, []):
@@ -128,6 +133,7 @@ class GameLink:
             *self._requests.values(),
             *self._actions.values(),
             *self._pongs.values(),
+            *self._routines.values(),
             *(f for waiters in self._snapshot_waiters.values() for f in waiters),
         ]
         for fut in pending:
@@ -136,6 +142,7 @@ class GameLink:
         self._requests.clear()
         self._actions.clear()
         self._pongs.clear()
+        self._routines.clear()
         self._snapshot_waiters.clear()
 
     # --- requests ---------------------------------------------------------------
@@ -172,9 +179,24 @@ class GameLink:
     async def detach(self, npc: str, timeout: float = 5.0) -> None:
         await self._request(DetachCmd(req=self._next_id("r"), npc=npc), timeout)
 
-    async def debug(self, cmd: DebugCommand, slot: int, timeout: float = 10.0) -> None:
-        """Start saving/loading `save_slot_<slot>.sav` (game in -devmode). Returns once it has started."""
-        await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot), timeout)
+    async def routine(self, npc: str, timeout: float = 5.0) -> RoutineInfo:
+        """The npc's daily routine, its routine variants and current script state (v6)."""
+        cmd = RoutineCmd(req=self._next_id("q"), npc=npc)
+        fut: asyncio.Future[RoutineInfo] = asyncio.get_running_loop().create_future()
+        self._routines[cmd.req] = fut
+        try:
+            await self.send(cmd)
+            info = await asyncio.wait_for(fut, timeout)
+        finally:
+            self._routines.pop(cmd.req, None)
+        if info.error:
+            raise GameError(info.error)
+        return info
+
+    async def debug(self, cmd: DebugCommand, slot: int = 0, timeout: float = 10.0, **args: Any) -> None:
+        """A test helper (game in -devmode): saving/loading `save_slot_<slot>.sav` (returns once it has
+        started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none")."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot, **args), timeout)
 
     async def patch_graph(
         self, ops: list[dict[str, Any]], replace: bool = False, timeout: float = 5.0

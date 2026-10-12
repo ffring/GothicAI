@@ -1,0 +1,34 @@
+# Four-legged foot IK: the player as a wolf on slopes all over the world;
+# run up, run down, walk across, stand. "ik off" before the foreach shows the old whole-body tilt
+cheat god
+set time 12 0
+view clean
+transform Wolf
+wait 500
+foreach slope 12 35 6
+  cam auto 260 40
+  face uphill
+  walkmode run
+  wait 300
+  rec w$I_up
+  hold forward 2000
+  wait 2000
+  stop
+  face downhill
+  wait 300
+  rec w$I_down
+  hold forward 2000
+  wait 2000
+  stop
+  face across
+  walkmode walk
+  wait 300
+  rec w$I_across
+  hold forward 2000
+  wait 2000
+  stop
+  wait 300
+  rec w$I_stand
+  wait 1000
+  stop
+end

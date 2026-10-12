@@ -1,6 +1,7 @@
-"""Push-to-talk: while the player holds the key, the server records the Mac microphone and streams
-it to the ASR service (asr-service/) as it is spoken. Partial text goes to the chat right away; on
-release only the recognizer's short tail is left, and the final text becomes the player's line.
+"""Push-to-talk: while the player holds the key (anywhere, protocol v7), the server records the Mac
+microphone and streams it to the ASR service (asr-service/) as it is spoken. Partial text goes to the
+game right away; on release only the recognizer's short tail is left, and the final text is the hero's
+phrase: talk.py decides whom it is said to (the hero's focus at the key is one of the hints).
 
 The game only reports the key (`ptt_start` / `ptt_stop` / `ptt_cancel`); no audio passes through it.
 """
@@ -20,10 +21,9 @@ from typing import Any, Protocol
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import WebSocketException
 
-from .dialogue import DialogueManager
 from .game import GameError, GameLink
+from .journal import Journal
 from .protocol import (
-    ChatClose,
     ChatStatus,
     ChatStatusCmd,
     GameMessage,
@@ -305,27 +305,33 @@ def _fail(fut: asyncio.Future[Recognized], err: Exception) -> None:
 
 @dataclass
 class _Utterance:
-    npc: str
+    focus: str | None  # the npc the hero looked at when he spoke
     queue: asyncio.Queue[bytes | None] = field(default_factory=asyncio.Queue)
     recognize: bool = False
     finished: bool = False  # the final transcript was sent: drop late partials
     task: asyncio.Task[None] | None = None
 
 
+# the hero's recognized phrase: (text, focus, details for the journal)
+Heard = Callable[[str, str | None, dict[str, Any]], None]
+
+
 class VoiceInput:
-    """Turns push-to-talk key events from the game into player lines in the dialogue."""
+    """Turns push-to-talk key events from the game into the hero's phrases (`heard`)."""
 
     def __init__(
         self,
         link: GameLink,
-        dialogue: DialogueManager,
+        heard: Heard,
         source: AudioSource,
         asr: AsrClient,
         *,
         lang: str = "ru",
+        journal: Journal | None = None,
     ) -> None:
         self.link = link
-        self.dialogue = dialogue
+        self.heard = heard
+        self.journal = journal or Journal()
         self.source = source
         self.asr = asr
         self.lang = lang
@@ -337,48 +343,47 @@ class VoiceInput:
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
             case PttStart():
-                self.start(msg.npc.upper())
+                self.start(msg.focus)
             case PttStop():
-                self.stop(msg.npc.upper(), recognize=True)
-            case PttCancel():
-                self.stop(msg.npc.upper(), recognize=False)
-            case ChatClose():
-                self.stop(msg.npc.upper(), recognize=False)
-            case Loading():
-                if self.active is not None:
-                    self.stop(self.active.npc, recognize=False)
+                self.stop(recognize=True, focus=msg.focus)
+            case PttCancel() | Loading():
+                self.stop(recognize=False)
 
-    def start(self, npc: str) -> None:
+    def start(self, focus: str | None = None) -> None:
         if self.active is not None:
-            self.stop(self.active.npc, recognize=False)
+            self.stop(recognize=False)
         loop = asyncio.get_running_loop()
-        utt = _Utterance(npc)
+        utt = _Utterance(focus.upper() if focus else None)
         try:
             self.source.start(lambda data: loop.call_soon_threadsafe(utt.queue.put_nowait, data))
         except VoiceError as err:
             log.error("voice: %s", err)
-            self.dialogue.journal.add("voice_error", npc=npc, detail=str(err))
-            self._spawn(self._status(npc, "error", str(err)))
+            self.journal.add("voice_error", detail=str(err))
+            self._spawn(self._status("error", str(err)))
             return
         utt.task = asyncio.create_task(self._run(utt))
         self.active = utt
-        self._watchdog = loop.call_later(MAX_SECONDS, self.stop, npc, True)
+        self._watchdog = loop.call_later(MAX_SECONDS, self.stop, True)
 
-    def stop(self, npc: str, *, recognize: bool) -> None:
+    def stop(self, recognize: bool, focus: str | None = None) -> None:
+        """The key is released (`recognize`) or it was a tap; `focus` at release wins over the one at
+        the press (the hero may turn to whom he speaks)."""
         utt = self.active
-        if utt is None or utt.npc != npc:
+        if utt is None:
             return
         self.active = None
         if self._watchdog is not None:
             self._watchdog.cancel()
             self._watchdog = None
         self.source.stop()
+        if focus:
+            utt.focus = focus.upper()
         utt.recognize = recognize
         utt.queue.put_nowait(None)
 
     async def _run(self, utt: _Utterance) -> None:
         """Streams the recording into the ASR service while it lasts, then gets the final text."""
-        npc, rate = utt.npc, self.source.rate
+        rate = self.source.rate
 
         def partial(text: str) -> None:
             if text and not utt.finished:
@@ -397,52 +402,42 @@ class VoiceInput:
         if size and not heard:
             await session.cancel()
             log.error("voice: %.1fs of pure silence, microphone access is probably denied", seconds)
-            self.dialogue.journal.add("voice_error", npc=npc, detail=MIC_DENIED)
-            await self._status(npc, "error", MIC_DENIED)
+            self.journal.add("voice_error", detail=MIC_DENIED)
+            await self._status("error", MIC_DENIED)
             return
-        await self._status(npc, "recognizing")
+        await self._status("recognizing")
         try:
             result = await session.finish()
         except VoiceError as err:
             log.error("voice: %s", err)
-            self.dialogue.journal.add("voice_error", npc=npc, detail=str(err))
-            await self._status(npc, "error", str(err))
+            self.journal.add("voice_error", detail=str(err))
+            await self._status("error", str(err))
             return
         finally:
             utt.finished = True
         log.info(
-            "voice -> %s: %r (%.1fs of audio, %s, %.2fs after release)",
-            npc,
+            "voice: %r (%.1fs of audio, %s, %.2fs after release, focus %s)",
             result.text,
             seconds,
             result.provider,
             result.latency_s,
+            utt.focus or "-",
         )
         if not result.text:
-            await self._status(npc, "notice", "Не расслышал. Удерживайте T, пока говорите")
+            await self._status("notice", "Не расслышал. Удерживайте T, пока говорите")
             return
-        await self.link.send(TranscriptCmd(npc=npc, text=result.text))
-        conv = self.dialogue.conversations.get(npc)
-        self.dialogue.journal.add(
-            "player",
-            npc=npc,
-            name=conv.persona.name if conv else npc,
-            text=result.text,
-            via="voice",
-            asr=result.provider,
-            latency_s=round(result.latency_s, 2),
+        self.heard(
+            result.text,
+            utt.focus,
+            {"via": "voice", "asr": result.provider, "latency_s": round(result.latency_s, 2)},
         )
-        try:
-            self.dialogue.say_as_player(npc, result.text)
-        except KeyError:
-            log.warning("voice: no open conversation with %s", npc)
 
     async def _partial(self, utt: _Utterance, text: str) -> None:
         if not utt.finished:
-            await self.link.send(TranscriptCmd(npc=utt.npc, text=text, final=False))
+            await self.link.send(TranscriptCmd(text=text, final=False))
 
-    async def _status(self, npc: str, status: ChatStatus, detail: str | None = None) -> None:
-        await self.link.send(ChatStatusCmd(npc=npc, status=status, detail=detail))
+    async def _status(self, status: ChatStatus, detail: str | None = None) -> None:
+        await self.link.send(ChatStatusCmd(status=status, detail=detail))
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
         async def run() -> None:

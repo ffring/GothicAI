@@ -17,27 +17,45 @@ from typing import Any
 
 from . import npc_tools, scenarios
 from .brain import DeciderClient, GameApplier, NpcPlanner
+from .brain.reflex import Reflexes
+from .budget import Budget
 from .dialogue import DialogueManager
+from .executor import Intent
 from .game import GameError, GameLink, GameServer
 from .gamedata.ou import load_npc_lines
+from .incidents import IncidentDesk
 from .journal import Journal, print_sink
-from .llm import BACKENDS, LLMBackend, LLMError, Message, TextDelta, ToolCall, make_backend
+from .llm import (
+    BACKENDS,
+    Done,
+    Item,
+    LLMBackend,
+    LLMError,
+    Message,
+    Reasoning,
+    TextDelta,
+    ToolCall,
+    ToolResult,
+    make_backend,
+)
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
-from .persona import PersonaProvider
+from .persona import PersonaProvider, habits_of
 from .protocol import (
     Attached,
-    ChatClose,
-    ChatOpen,
     Detached,
     GameMessage,
     Perception,
     PlayerText,
     Saved,
     Session,
+    ThreatControlCmd,
 )
+from .replay import replay as replay_turn
 from .story import StoryPatches
+from .talk import TalkDesk
+from .trace import TraceWriter, find_turn, latest
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
 from .voice import (
     DEFAULT_ASR_URL,
@@ -52,12 +70,15 @@ from .voice import (
 
 log = logging.getLogger("gothic_ai")
 
+DEFAULT_TRACE_DIR = DEFAULT_MEMORY_DB.parent / "traces"
+
 DEFAULT_GAME_DIR = "/Volumes/shared/projects/Gothic II"
 
 HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping
   goto <waypoint> | come | turn | ani <name> | wait <ms> | stop | routine
-  talk <text>       speak to the npc as the player (opens a conversation)
+  schedule [npc]    the npc's daily routine, its variants and current script state
+  talk <text>       say it as the hero, looking at the npc (talk.py decides whom it is said to)
   additem <item> [n] put an item into the npc's inventory (game needs -devmode)
   memory [npc]      the current save branch and what the npc remembers
   brain             what the npc planner is doing (tiers, requests, decisions)
@@ -81,12 +102,8 @@ def print_event(msg: GameMessage) -> None:
             log.info("detached %s: %s", msg.npc, msg.reason)
         case Perception():
             log.debug("perception %s: %s from %s at %.0fcm", msg.npc, msg.perc, msg.other, msg.distance)
-        case ChatOpen():
-            log.info("chat opened with %s", msg.npc)
         case PlayerText():
-            log.info("player -> %s: %s", msg.npc, msg.text)
-        case ChatClose():
-            log.info("chat closed with %s", msg.npc)
+            log.info("player typed (focus %s): %s", msg.focus or "-", msg.text)
         case Saved():
             log.info("game saved at memory %s@%d", msg.branch, msg.seq)
         case Session():
@@ -98,6 +115,8 @@ class ServerState:
         self.dialogue: DialogueManager | None = None
         self.voice: VoiceInput | None = None
         self.brain: NpcPlanner | None = None
+        self.incidents: IncidentDesk | None = None
+        self.talk: TalkDesk | None = None
         self.story: StoryPatches | None = None
 
 
@@ -140,6 +159,11 @@ class Console:
                 await link.detach(rest[0] if rest else npc)
             case "snap":
                 print((await link.snapshot(rest[0] if rest else npc, fresh=True)).model_dump_json(indent=2))
+            case "schedule":
+                info = await link.routine(rest[0] if rest else npc)
+                print(f"now: {info.current}; variants: {', '.join(info.routines) or '-'}")
+                for e in info.entries:
+                    print(f"  {e.start}-{e.end} {e.state} at {e.waypoint}")
             case "ping":
                 print(f"pong in {await link.ping() * 1000:.1f} ms")
             case "goto" if rest:
@@ -182,10 +206,8 @@ class Console:
                 await link.choose_dialog(rest[1] if len(rest) > 1 else npc, rest[0])
             case "eval" if rest:
                 print(json.dumps(await link.evaluate(json.loads(rest[0]), rest[1] if len(rest) > 1 else npc)))
-            case "talk" if rest and self.state.dialogue is not None:
-                snap = await link.snapshot(npc)
-                self.state.dialogue.open(npc, snap.npc.name)
-                await self.state.dialogue.say_as_player(npc, " ".join(rest))
+            case "talk" if rest and self.state.talk is not None:
+                self.state.talk.hear(" ".join(rest), npc, {"via": "console"})
             case _:
                 print(HELP)
 
@@ -240,8 +262,11 @@ async def serve(args: argparse.Namespace) -> int:
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
     journal = Journal(print_sink if args.journal else None)
+    trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
+    budget = Budget(per_npc_per_min=args.llm_per_npc_min, total_per_min=args.llm_total_min)
     log.info("LLM backend: %s (%s)", llm.name, getattr(llm, "model", "-"))
     log.info("memory: %s", args.memory_db)
+    log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
@@ -249,17 +274,42 @@ async def serve(args: argparse.Namespace) -> int:
     async def on_link(link: GameLink) -> None:
         link.listeners.append(print_event)
         state.dialogue = DialogueManager(
-            link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet, journal=journal
+            link,
+            llm,
+            personas,
+            memory=memory,
+            tts=tts,
+            journal=journal,
+            trace=trace,
+            budget=budget,
         )
         state.story = StoryPatches(link, memory)
+        # npc's we control: the body's instant reactions (behavioral model) and words for incidents
+        reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
+        state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
+        # the hero talks to the world: whom he speaks to, the conversation, the body meanwhile (M5e)
+        state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
         if asr is not None and source is not None:
-            state.voice = VoiceInput(link, state.dialogue, source, asr)
+            state.voice = VoiceInput(link, state.talk.hear, source, asr, journal=journal)
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
-            state.brain = NpcPlanner(decider, GameApplier(link))
-            link.listeners.append(state.brain.on_message)
-            brain = asyncio.create_task(state.brain.run())
+            def agenda_of(npc: str, dialogue: DialogueManager = state.dialogue) -> str | None:
+                saved = memory.intent(dialogue.branch, npc) if dialogue.branch else None
+                return (Intent.from_json(saved).agenda or None) if saved else None
+
+            planner = state.brain = NpcPlanner(
+                decider, GameApplier(link), agenda_of=agenda_of, routine_of=link.routine, habits_of=habits_of
+            )
+            state.incidents.follow(planner)  # free npc's speak when the moment calls for it
+            state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
+            if not args.no_hold_threats:
+                # threats to free npc's: the behavioral model first, the scripts if it does not take them
+                await link.send(ThreatControlCmd(hold=True))
+            link.listeners.append(planner.on_message)
+            # what the npc wants from the hero, from the conversation, steers it afterwards
+            state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(npc, intent.agenda or None)
+            brain = asyncio.create_task(planner.run())
         try:
             await _run_scenario(link)
             await link.closed.wait()  # the session lives while the game is connected
@@ -300,10 +350,31 @@ async def serve(args: argparse.Namespace) -> int:
                 log.info("scenario m4: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m5":
-                assert state.story is not None
-                results = await scenarios.m5_story_graph(link, state.story, args.npc)
+                results = await scenarios.m5_turn_loop(link, args.npc, decider, trace)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5b":
+                results = await scenarios.m5b_bridge(link, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5b: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5c":
+                results = await scenarios.m5c_free_npc(link, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5c: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5e":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "graph":
+                assert state.story is not None
+                results = await scenarios.graph_dialogs(link, state.story, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario graph: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
@@ -344,12 +415,68 @@ async def serve(args: argparse.Namespace) -> int:
     return exit_code
 
 
+PROBE_SITUATION = "[Обстановка: твой инвентарь — зелье лечения (ITPO_HEALTH_01) ×2.]"
+PROBE_TEXT = "Дай мне зелье лечения, пожалуйста."  # the npc has one: it calls give_item
+PROBE_REJECTION = "Отклонено: зелья у тебя больше нет, ты отдал последнее раньше."
+
+
+async def probe_tools(llm: LLMBackend, instructions: str, text: str) -> dict[str, Any]:
+    """Can a turn go on after a tool call? Step 1 offers the tools; every call is answered as rejected and
+    step 2 goes on with the response's own items (reasoning included) and tool_choice="none"."""
+    messages: list[Item] = [Message("developer", PROBE_SITUATION), Message("user", text)]
+    steps: list[dict[str, Any]] = []
+    for n in (1, 2):
+        started = time.monotonic()
+        first: float | None = None
+        done: Done | None = None
+        async for event in llm.stream(
+            instructions=instructions,
+            messages=messages,
+            tools=npc_tools.TOOLS,
+            tool_choice="none" if n == 2 else None,
+        ):
+            if isinstance(event, TextDelta) and first is None:
+                first = time.monotonic() - started
+            elif isinstance(event, Done):
+                done = event
+        assert done is not None
+        calls = [i for i in done.items if isinstance(i, ToolCall)]
+        steps.append(
+            {
+                "text": done.text.strip(),
+                "calls": [f"{c.name}({c.raw})" for c in calls],
+                "reasoning_items": sum(isinstance(i, Reasoning) for i in done.items),
+                "first_token_s": round(first or 0.0, 2),
+                "total_s": round(time.monotonic() - started, 2),
+                "usage": vars(done.usage) if done.usage else None,
+            }
+        )
+        if not calls:
+            break
+        messages += [*done.items, *(ToolResult(c.call_id, PROBE_REJECTION) for c in calls)]
+    ok = len(steps) == 2 and not steps[1]["calls"] and bool(steps[1]["text"])
+    return {"ok": ok, "llm": llm.name, "model": getattr(llm, "model", None), "steps": steps}
+
+
 async def llm_test(args: argparse.Namespace) -> int:
     """One request, prints the reply and latency: compare backends and models. With --json one object
     on stdout ({"text", "llm", "model", "first_token_s", "total_s"} or {"error"}), for the launcher."""
     llm = _backend(args)
     personas = PersonaProvider(Path(args.game_dir) if args.game_dir else None)
     persona = personas.get(args.npc, args.name)
+    if args.probe_tools:
+        try:
+            result = await probe_tools(llm, persona.instructions, args.text or PROBE_TEXT)
+        except LLMError as err:
+            result = {"ok": False, "error": str(err)}
+        finally:
+            await llm.aclose()
+        print(json.dumps(result, ensure_ascii=False, indent=None if args.json else 2))
+        return 0 if result["ok"] else 1
+    if not args.text:
+        await llm.aclose()
+        print("llm-test: the text to send is required", file=sys.stderr)
+        return 2
     messages = [Message("user", args.text)]
     if args.situation:
         messages.insert(0, Message("developer", args.situation))
@@ -388,6 +515,45 @@ async def llm_test(args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False))
     else:
         print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
+    return 0
+
+
+async def replay(args: argparse.Namespace) -> int:
+    """A recorded turn, run again: compare models and prompts on real situations from the game."""
+    path = Path(args.file) if args.file else latest(Path(args.trace_dir))
+    if path is None:
+        print(f"no traces in {args.trace_dir}", file=sys.stderr)
+        return 2
+    try:
+        record, instructions = find_turn(path, args.turn)
+    except LookupError as err:
+        print(err, file=sys.stderr)
+        return 2
+    if args.persona_now or instructions is None:
+        game_dir = Path(args.game_dir) if args.game_dir else None
+        personas = PersonaProvider(game_dir if game_dir and game_dir.is_dir() else None)
+        instructions = personas.get(record["npc"], args.name).instructions
+    llm = _backend(args)
+    try:
+        result = await replay_turn(llm, record, instructions)
+    finally:
+        await llm.aclose()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+    print(
+        f"turn {result['turn']} ({result['npc']}), {result['trigger']['kind']}: {result['trigger']['text']}"
+    )
+    for title, steps in (("recorded", result["original"]), (f"{llm.name}", result["replay"])):
+        print(f"\n[{title}]")
+        for n, st in enumerate(steps, 1):
+            calls = ", ".join(
+                c if isinstance(c, str) else f"{c['name']}{c['arguments']}" for c in st["calls"]
+            )
+            timing = f" ({st['first_token_s']:.2f}s / {st['total_s']:.2f}s)" if "total_s" in st else ""
+            print(f"  {n}. {st['text'] or '-'}{f'  -> {calls}' if calls else ''}{timing}")
+    if result["diverged"]:
+        print("\n(the replay made calls the recorded turn did not: their results are not known)")
     return 0
 
 
@@ -590,32 +756,64 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "graph", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
-    p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
     p.add_argument("--memory-db", default=str(DEFAULT_MEMORY_DB), help="SQLite file with npc memories")
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
+    p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
+    p.add_argument("--no-trace", action="store_true", help="do not write turn traces")
+    p.add_argument(
+        "--llm-per-npc-min",
+        type=float,
+        default=6.0,
+        help="calls of the conversational model per npc and minute nobody asked for (incidents, summaries)",
+    )
+    p.add_argument("--llm-total-min", type=float, default=20.0, help="the same for all npc's together")
     p.add_argument(
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
+    p.add_argument(
+        "--no-hold-threats",
+        action="store_true",
+        help="threats to free npc's go straight to the game's scripts, not to the behavioral model first",
+    )
+    p.add_argument(
+        "--apply-threats",
+        action="store_true",
+        help="carry out the behavioral model's fights and flights (default: traced only until trained)",
+    )
     _add_voice_args(p)
     _add_llm_args(p)
 
     p = sub.add_parser("llm-test", help="send one message to the LLM and measure latency")
-    p.add_argument("text")
+    p.add_argument("text", nargs="?", default="")
     p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
     p.add_argument("--tools", action="store_true", help="offer the npc action tools")
     p.add_argument("--situation", help="situation note sent before the message")
     p.add_argument("--json", action="store_true", help="one JSON object on stdout instead of the stream")
+    p.add_argument(
+        "--probe-tools",
+        action="store_true",
+        help="check that a turn goes on after a tool result (reasoning carried, tool_choice none, cache)",
+    )
+    _add_llm_args(p)
+
+    p = sub.add_parser("replay", help="run a recorded npc turn again, with another model or prompt")
+    p.add_argument("file", nargs="?", help="trace file (default: the newest in --trace-dir)")
+    p.add_argument("--turn", help="turn id or its prefix (default: the last turn in the file)")
+    p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR))
+    p.add_argument("--name", default="Ксардас", help="npc display name for --persona-now")
+    p.add_argument("--persona-now", action="store_true", help="today's persona instead of the recorded one")
+    p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")
@@ -663,6 +861,8 @@ def main() -> None:
                 code = asyncio.run(serve(args))
             case "llm-test":
                 code = asyncio.run(llm_test(args))
+            case "replay":
+                code = asyncio.run(replay(args))
             case "login":
                 code = asyncio.run(login_chatgpt())
             case "logout":

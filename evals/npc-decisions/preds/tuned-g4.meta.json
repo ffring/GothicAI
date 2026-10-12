@@ -1,0 +1,9 @@
+{
+ "model": "tuned-g4",
+ "requests": 228,
+ "load_s": 8.8,
+ "ms_p50": 88.4,
+ "ms_p95": 99.8,
+ "peak_alloc_gb": 3.88,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}

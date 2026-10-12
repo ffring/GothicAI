@@ -43,6 +43,18 @@ EVENT_OPTIONS = {
     "item_given": {"thank": "thank the hero for the gift", "give_back": "give the item back to the hero"},
     "enter_room": {"tell_to_leave": "tell the hero to get out of your house"},
     "item_dropped": {"pick_up": "pick up the item"},
+    # threats from others: the body fights or flees with the game's own combat (npc_act fight / flee)
+    "monster_near": {"call_help": "shout for help", "flee": "run away from it", "fight": "fight it"},
+    "npc_attack": {
+        "call_help": "shout for help",
+        "flee": "run away from the attacker",
+        "fight": "fight back",
+    },
+    "fight_nearby": {
+        "call_guards": "shout for the guards",
+        "fight": "join the fight against the attacker",
+        "flee": "get away from the fight",
+    },
 }
 
 ATTITUDE = "How does what just happened change your attitude toward the hero?"
@@ -52,6 +64,22 @@ ATTITUDE_LEVELS = [
     "unchanged",
     "slightly better (polite, a small favor, good business)",
     "much better (saved you, a big gift, a great service)",
+]
+
+# Whether the moment deserves the large model: the npc speaking in its own words and thinking ahead. The
+# planner decides by rules whether to call it (the hero sees it, budget, cooldown); this only ranks moments.
+ESCALATE = (
+    "How much does this moment call for you to speak in your own words and think about what to do next, "
+    "beyond stock phrases and simple actions?"
+)
+ESCALATE_LEVELS = [
+    "routine: doing nothing or a simple action is enough",
+    "a stock phrase or a gesture covers it",
+    "worth a short remark of your own, nothing more",
+    "calls for real speech in your own words: shouting, pleading, arguing, explaining, or personal business "
+    "with the hero (news, a debt, a promise, a grudge, gratitude)",
+    "a turning point for you: danger to your life, a big loss or gain, something about your goals; "
+    "you need to speak and to plan what to do next",
 ]
 
 PLAN = "What do you do during the next hour?"
@@ -111,13 +139,22 @@ class SituationBuilder:
         q = {"attitude": {"type": "score", "instructions": ATTITUDE, "criteria": ATTITUDE_LEVELS}}
         return Situation(react.state, q)
 
-    def plan(self, npc: NpcContext, clock: str | None) -> Situation:
+    def escalate(self, react: Situation) -> Situation:
+        q = {"escalate": {"type": "score", "instructions": ESCALATE, "criteria": ESCALATE_LEVELS}}
+        return Situation(react.state, q)
+
+    def plan(self, npc: NpcContext, clock: str | None, options: dict[str, str] | None = None) -> Situation:
+        """What to do in the next hour: the npc's own activities and habits (brain/day.py), or generic
+        options when its routine is not known."""
         parts = [self.who(npc)]
         if clock:
             parts.append(f"It is {clock}.")
+        if npc.agenda:
+            parts.append(f"What you want: {npc.agenda}")
         if npc.facts:
             parts.append("What you remember: " + " ".join(npc.facts))
-        q = {"plan": {"type": "choice", "instructions": PLAN, "criteria": dict(PLAN_OPTIONS)}}
+        criteria = dict(options) if options else dict(PLAN_OPTIONS)
+        q = {"plan": {"type": "choice", "instructions": PLAN, "criteria": criteria}}
         return Situation(" ".join(parts), q)
 
 

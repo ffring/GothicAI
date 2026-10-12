@@ -8,35 +8,38 @@
 #include <string>
 #include <string_view>
 
-// Free-form chat with an npc, drawn over the game. Closed, it only shows recent npc lines
-// (subtitles) and lets every input through except the chat key (T).
-// T is also push-to-talk: held past a short delay it records the player's voice until released
-// (a short tap opens the chat, or types the letter into an empty input). Recording itself happens
-// on the AI server: the overlay only reports the key via onPttStart/onPttStop/onPttCancel.
+// Talking to the world, drawn over the game (protocol v7). Nothing here is a mode:
+// - T held past a short delay records the player's voice until released, anywhere: every other key
+//   still goes to the game, so the hero keeps running or fighting while he speaks. Recording itself
+//   happens on the AI server: the overlay only reports the key via onPttStart/onPttStop/onPttCancel.
+// - a short tap on T opens a one-line input at the bottom. The keyboard is taken only while it is
+//   open: Enter sends the line, Esc closes it.
+// - it shows what is said around the player as subtitles (npc's and the hero's own lines), the words
+//   recognized while he speaks and a status line.
 // All strings are in the game codepage.
 class ChatOverlay final : public Tempest::UiOverlay {
   public:
     ChatOverlay();
 
-    std::function<bool()>                   canOpen;
-    std::function<void()>                   onOpenRequest;
+    std::function<bool()>                   canSpeak;
     std::function<void(const std::string&)> onSubmit;
-    std::function<void()>                   onClose;
     // T went down: recording may start (the server begins capturing right away so no word is lost);
-    // then either onPttStop (held long enough: recognize) or onPttCancel (a short tap)
+    // then either onPttStop (held long enough: recognize) or onPttCancel (a short tap: the input opens)
     std::function<void()>                   onPttStart;
     std::function<void()>                   onPttStop;
     std::function<void()>                   onPttCancel;
 
-    void open(std::string npcName);
-    void close();
-    bool isOpen() const { return active; }
+    void openInput();
+    void closeInput();
+    bool isInputOpen() const { return active; }
 
     void addLine(std::string speaker, std::string text, uint32_t showMs);
     // an entry that grows while the npc's reply is generated: added once, then updated in place
     void upsertLine(std::string_view key, std::string speaker, std::string text, uint32_t showMs);
     // keep an entry on screen for at least `showMs` more (its lines are being spoken)
     void extend(std::string_view key, uint32_t showMs);
+    // the npc was interrupted: the entry keeps only what it said (`said`, empty: nothing) and fades
+    void cut(std::string_view key, std::string said);
     void setStatus(std::string text);
     // what the player is saying, recognized so far (push-to-talk); empty clears it
     void setPartial(std::string text);
@@ -49,7 +52,6 @@ class ChatOverlay final : public Tempest::UiOverlay {
     void keyUpEvent    (Tempest::KeyEvent&   e) override;
     void mouseDownEvent(Tempest::MouseEvent& e) override;
     void mouseUpEvent  (Tempest::MouseEvent& e) override;
-    void mouseMoveEvent(Tempest::MouseEvent& e) override;
     void mouseWheelEvent(Tempest::MouseEvent& e) override;
 
   private:
@@ -66,14 +68,13 @@ class ChatOverlay final : public Tempest::UiOverlay {
     void pttRelease();
     void pttReset();
 
-    bool               active      = false;
+    bool               active      = false;  // the input line is open
     bool               wasVisible  = false;
     // push-to-talk on T
-    bool               tDown       = false;  // T is held (and was taken by the chat)
+    bool               tDown       = false;  // T is held (and was taken by the overlay)
     bool               recording   = false;  // held past the delay: the player is speaking
     uint64_t           tDownAt     = 0;
     char               tPendingChar = '\0';  // typed if it turns out to be a short tap
-    std::string        npcName;
     std::string        input;
     size_t             cursor = 0;
     std::string        status;

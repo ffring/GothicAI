@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animation.h"
 #include "graphics/meshobjects.h"
@@ -264,6 +266,7 @@ class Npc final {
     bool      drawWeaponBow();
     bool      drawMage(uint8_t slot);
     bool      drawSpell(int32_t spell);
+    void      emitDrawWeapon();
     auto      weaponState() const -> WeaponState;
 
     bool      canFinish(Npc &oth);
@@ -300,6 +303,8 @@ class Npc final {
 
     bool      perceptionProcess(Npc& pl);
     bool      perceptionProcess(Npc& pl, Npc *victim, float quadDist, PercType perc);
+    // a perception held back by Gothic::interceptPerception, given to the scripts after all
+    bool      passPerception(Npc& other, Npc* victim, PercType perc);
     bool      hasPerc(PercType perc) const;
     uint64_t  percNextTime() const;
 
@@ -319,6 +324,16 @@ class Npc final {
 
     void      addRoutine(gtime s, gtime e, uint32_t callback, std::string_view point);
     void      excRoutine(size_t callback);
+
+    // the daily routine, read-only: for tools outside the scripts (the AI bridge)
+    struct RoutineInfo final {
+      gtime            start;
+      gtime            end;
+      ScriptFn         state;
+      std::string_view point;
+      };
+    void      forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const;
+    ScriptFn  currentState() const { return aiState.funcIni; }
     void      multSpeed(float s);
 
     bool      testMove(const Tempest::Vec3& pos);
@@ -332,6 +347,7 @@ class Npc final {
     bool      hasCollision() const { return physic.hasCollision(); }
 
     void      startDive();
+    bool      transformInto(size_t instance); // shape change spell: another creature until transformBack
     void      transformBack();
 
     auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoice>;
@@ -611,6 +627,7 @@ class Npc final {
     AiQueue                        aiQueue;
     AiQueue                        aiQueueOverlay;
     bool                           externalCtrl=false; // transient, not serialized
+    bool                           percPassThrough=false; // passPerception: no interception
     std::vector<Routine>           routines;
 
     Interactive*                   currentInteract=nullptr;

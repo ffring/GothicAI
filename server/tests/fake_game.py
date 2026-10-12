@@ -11,7 +11,13 @@ from websockets.asyncio.client import ClientConnection, connect
 
 from gothic_ai.game import GameLink, GameServer
 
-KNOWN_ANIMS = {"T_GREETNOV"}
+KNOWN_ANIMS = {
+    "T_GREETNOV",
+    "T_YES",
+    "T_NO",
+    "T_DONTKNOW",
+    "T_FORGETIT",
+}  # not T_COMEOVERHERE: m0 tries it first
 WAYPOINTS = {"NW_XARDAS_TOWER_IN1_31": 0.0, "NW_XARDAS_TOWER_04": 850.0, "NW_XARDAS_STAIRS_01": 1200.0}
 
 
@@ -29,6 +35,23 @@ class FakeGame:
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
+        self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
+        self.hp = 999
+        self.soft: list[tuple[str, str]] = []  # npc_act's: (npc, action)
+        self.hushed: list[dict[str, Any]] = []
+        self.heard: list[dict[str, Any]] = []  # final transcripts with whom they were said to
+
+    async def perception(
+        self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
+    ):
+        """What a controlled npc noticed (the game sends these for attached npc's only)."""
+        extra = {"victim": victim} if victim else {}
+        await self.send(type="perception", npc=npc, perc=perc, other=other, distance=distance, **extra)
+
+    async def roster(self, *people: dict[str, Any]) -> None:
+        """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
+        npcs = [{"guild": 0, "in_view": False, "activity": "routine", **p} for p in people]
+        await self.send(type="npc_roster", t=1000, hour=8, minute=0, full=True, npcs=npcs)
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -44,7 +67,7 @@ class FakeGame:
                 "name": "Ксардас",
                 "pos": [1.0, 2.0, 3.0],
                 "rot": 90.0,
-                "hp": 999,
+                "hp": self.hp,
                 "hp_max": 999,
                 "busy": False,
                 "action": None,
@@ -67,9 +90,7 @@ class FakeGame:
                 "melee": "Палка",
                 "ranged": None,
             },
-            "nearby_npcs": [
-                {"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}
-            ],
+            "nearby_npcs": self.nearby,
             "nearby_waypoints": [{"name": n, "distance": d} for n, d in WAYPOINTS.items()],
         }
 
@@ -87,6 +108,15 @@ class FakeGame:
 
     async def handle(self, msg: dict[str, Any]) -> None:
         match msg["type"]:
+            case "detach":
+                self.attached.discard(msg["npc"])
+                await self.send(type="result", req=msg["req"], ok=True)
+                await self.send(type="detached", npc=msg["npc"], reason="server")
+            case "npc_act":
+                self.soft.append((msg["npc"], msg["action"]))
+                await self.send(type="npc_act_result", id=msg["id"], npc=msg["npc"], status="queued")
+            case "hush":
+                self.hushed.append(msg)
             case "attach":
                 if self.busy_attaches > 0:
                     self.busy_attaches -= 1
@@ -110,6 +140,8 @@ class FakeGame:
                 self.heads.append((msg["branch"], msg["seq"]))
             case "transcript":
                 (self.transcripts if msg.get("final", True) else self.partials).append(msg["text"])
+                if msg.get("final", True):
+                    self.heard.append(msg)
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):

@@ -1,0 +1,33 @@
+# Foot IK edge cases on slopes: standing, turning on the spot, strafing, walking backwards, sneaking
+cheat god
+set time 12 0
+view clean
+foreach slope 10 35 6
+  cam auto 220 40
+  face across
+  walkmode walk
+  wait 600
+  rec m$I_stand
+  wait 1500
+  rec m$I_turn
+  hold turnl 1500
+  wait 1500
+  stop
+  wait 300
+  rec m$I_strafe
+  hold left 1500
+  wait 1500
+  stop
+  wait 300
+  rec m$I_back
+  hold back 1500
+  wait 1500
+  stop
+  walkmode sneak
+  face uphill
+  wait 300
+  rec m$I_sneak
+  hold forward 1500
+  wait 1500
+  stop
+end

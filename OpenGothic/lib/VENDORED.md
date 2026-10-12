@@ -20,8 +20,10 @@ Git metadata of the libraries (`.git`, `.github`, `.gitmodules`, `.gitignore`) w
 
 ## Local changes
 
-Changes made here on top of the upstream commits above. Carry them over when updating a library.
+Keep these when updating a library from upstream.
 
-| Library | Change | Why |
-|---|---|---|
-| `ZenKit/` | `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine function the way the `BE` instruction does | the story graph (`ai_bridge/storygraph`) evaluates conditions of the AI director with the engine's own externals |
+- `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_BACKGROUND=1` starts the app without taking the
+  focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
+- `ZenKit/` `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine
+  function the way the `BE` instruction does. The story graph (`ai_bridge/storygraph`) computes the AI
+  director's conditions with the engine's own functions through it.

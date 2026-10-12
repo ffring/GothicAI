@@ -3228,15 +3228,25 @@ void Npc::commitSpell() {
       }
     }
 
-  if(spellInfo!=0 && transformSpl==nullptr) {
-    transformSpl.reset(new TransformBack(*this));
-    invent.updateView(*this);
-    visual.clearOverlays();
+  if(spellInfo!=0 && transformInto(size_t(spellInfo)))
+    spellInfo = 0;
+  }
 
-    owner.script().initializeInstanceNpc(hnpc, size_t(spellInfo));
-    spellInfo  = 0;
-    hnpc->level = transformSpl->hnpc->level;
-    }
+bool Npc::transformInto(size_t instance) {
+  if(transformSpl!=nullptr)
+    return false;
+  transformSpl.reset(new TransformBack(*this));
+  invent.updateView(*this);
+  visual.clearOverlays();
+
+  owner.script().initializeInstanceNpc(hnpc, instance);
+  hnpc->level = transformSpl->hnpc->level;
+  return true;
+  }
+
+void Npc::forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const {
+  for(auto& r:routines)
+    f(RoutineInfo{r.start,r.end,r.callback,r.wayPointName()});
   }
 
 const Npc::Routine& Npc::currentRoutine(bool assertWp) const {
@@ -3696,6 +3706,7 @@ bool Npc::drawWeaponFist() {
 
   invent.switchActiveWeaponFist();
   hnpc->weapon = 1;
+  emitDrawWeapon();
   return true;
   }
 
@@ -3722,6 +3733,7 @@ bool Npc::drawWeaponMelee() {
 
   invent.switchActiveWeapon(*this,1);
   hnpc->weapon = (st==WeaponState::W1H ? 3:4);
+  emitDrawWeapon();
   return true;
   }
 
@@ -3745,6 +3757,7 @@ bool Npc::drawWeaponBow() {
     return false;
   invent.switchActiveWeapon(*this,2);
   hnpc->weapon = (st==WeaponState::Bow ? 5:6);
+  emitDrawWeapon();
   return true;
   }
 
@@ -3778,7 +3791,15 @@ bool Npc::drawSpell(int32_t spell) {
   hnpc->weapon = 7;
 
   updateWeaponSkeleton();
+  if(weaponSt==WeaponState::NoWeapon)
+    emitDrawWeapon();
   return true;
+  }
+
+void Npc::emitDrawWeapon() {
+  // as in the original game: npc's around react to the player drawing a weapon (B_AssessDrawWeapon)
+  if(isPlayer())
+    owner.sendPassivePerc(*this,*this,PERC_DRAWWEAPON);
   }
 
 WeaponState Npc::weaponState() const {
@@ -4232,6 +4253,13 @@ bool Npc::perceptionProcess(Npc &pl) {
   return ret;
   }
 
+bool Npc::passPerception(Npc& other, Npc* victim, PercType perc) {
+  percPassThrough = true;
+  const bool ret = perceptionProcess(other,victim,0,perc);
+  percPassThrough = false;
+  return ret;
+  }
+
 bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc) {
   if(!aiState.started && aiState.funcIni.isValid()) {
     // avoid ugly soft-lock (ZS_MM_Attack <-> B_MM_AssessWarn) for the orks near ramp
@@ -4251,6 +4279,9 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
   if(hasPerc(perc)) {
+    auto& intercept = Gothic::inst().interceptPerception;
+    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc))
+      return true;  // taken over by an outside AI (ai_bridge); it may hand it back
     owner.script().invokeState(this,&pl,victim,perception[perc].func);
     return true;
     }
@@ -4755,7 +4786,9 @@ bool Npc::canSeeItem(const Item& it, bool freeLos) const {
 
 bool Npc::isAlignedToGround() const {
   auto gl = guild();
-  return (owner.script().guildVal().surface_align[gl]!=0) || isDead() || isLie();
+  // four-legged creatures stand on the ground with foot IK instead of tilting as a whole
+  const bool align = owner.script().guildVal().surface_align[gl]!=0 && !visual.hasQuadrupedIk();
+  return align || isDead() || isLie();
   }
 
 Vec3 Npc::groundNormal() const {

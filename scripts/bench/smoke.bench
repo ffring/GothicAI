@@ -1,0 +1,15 @@
+# Quick check of the bench itself: camera, overlay, video, metrics
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_05
+wait 500
+face uphill
+cam auto 220 40
+rec stand
+wait 1000
+rec run_up
+walkmode run
+hold forward 3000
+wait 3000
+stop

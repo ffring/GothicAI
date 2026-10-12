@@ -115,6 +115,7 @@ class Camera final {
     Tempest::Vec3      originLwc() const { return origin+shake; };
 
     float              zNear() const;
+    void               setNearClip(float zNear); // debug (test bench): clips away what is closer to the camera
     float              zFar()  const;
 
   private:
@@ -149,6 +150,7 @@ class Camera final {
     float                 dlgRange   = 0;
 
     Tempest::Matrix4x4    proj;
+    float                 nearClip = 10.f;
     uint32_t              vpWidth=0;
     uint32_t              vpHeight=0;
     float                 depthNear = 0;

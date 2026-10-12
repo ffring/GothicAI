@@ -20,6 +20,7 @@
 | `scripts/e2e.sh` | Сквозная проверка: сервер + новая игра. `SCENARIO=m0` — управление Ксардасом, `m1` — диалог, `m2` — действия, `m3` — память и голос |
 | `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
 | `scripts/build-engine.sh` | Сборка игры: `OpenGothic/build/opengothic/Gothic2Notr` |
+| `scripts/bench.sh` | Тестовый стенд механик: сценарий в игре → видео с отладочным наложением, метрики и отчёт с подозрительными кадрами, см. `scripts/bench/README.md` |
 | `reports/` | Итоговые исследования |
 | `research_notes/` | Заметки исследований с источниками |
 | `OpenGothic/` | Движок: OpenGothic (от upstream `Try/OpenGothic`) с ИИ-мостом `ai_bridge/` и IK стоп. Сторонние библиотеки лежат в `lib/` обычными файлами, без подмодулей (`lib/VENDORED.md`) |
@@ -167,13 +168,19 @@ cd tts-service && uv run gothic-tts say "Драконы уже здесь." --vo
 cd server && uv run gothic-ai serve
 ```
 
+Каждый ход NPC и каждая реакция его тела пишутся в трассу `~/.local/share/gothic-ai/traces/<дата>.jsonl` (`--no-trace` выключает). Устройство агента NPC — [docs/npc-agent.md](docs/npc-agent.md). Прогнать последний записанный ход заново, например на другой модели или с сегодняшней персоной:
+
+```bash
+cd server && uv run gothic-ai replay --persona-now
+```
+
 Проверить микрофон и распознавание (macOS спросит доступ к микрофону для терминала):
 
 ```bash
 cd server && uv run gothic-ai voice-test
 ```
 
-Игра в режиме разработчика. Чат с NPC открывается клавишей **T**, когда игрок на него смотрит; Enter отправляет, Esc закрывает. **Удерживайте T, чтобы сказать реплику голосом** (в закрытом чате удержание сразу открывает его и пишет речь). Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
+Игра в режиме разработчика. Окна чата нет: **удерживайте T где угодно, чтобы сказать фразу голосом**, а короткое нажатие T открывает строку ввода (Enter отправляет, Esc закрывает). Кому сказано, решает сервер: имя во фразе, NPC, на которого смотрит герой, текущий собеседник или ближайший NPC перед героем. Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
 
 ```bash
 OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/shared/projects/Gothic II" -devmode

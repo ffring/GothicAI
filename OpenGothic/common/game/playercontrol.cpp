@@ -42,7 +42,24 @@ void PlayerControl::setTarget(Npc *other) {
       }
     } else {
     pl->setTarget(other);
+    if(ws!=WeaponState::NoWeapon)
+      assessThreat(*pl,*other);
     }
+  }
+
+void PlayerControl::assessThreat(Npc& pl, Npc& other) {
+  // as in the original game: an npc the armed player aims at feels threatened (B_AssessThreat);
+  // repeated while the aim is held, not every frame
+  constexpr uint64_t ThreatPeriodMs = 2000;
+  auto w = Gothic::inst().world();
+  if(w==nullptr || other.isDead() || other.isDown())
+    return;
+  const uint64_t now = w->tickCount();
+  if(&other==threatened && now<threatenedAt+ThreatPeriodMs)
+    return;
+  threatened   = &other;
+  threatenedAt = now;
+  other.perceptionProcess(pl,nullptr,other.qDistTo(pl),PERC_ASSESSTHREAT);
   }
 
 void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType key, KeyCodec::Mapping mapping) {
