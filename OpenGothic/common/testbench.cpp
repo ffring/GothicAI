@@ -436,8 +436,23 @@ Npc* findNpc(World& w, Npc& pl, const std::string& name) {
       }
     return best;
     }
+  // by its script symbol; of several (two sheep inserted) a living one, the nearest
   const size_t id = w.script().findSymbolIndex(name);
-  return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
+  if(id==size_t(-1))
+    return nullptr;
+  Npc*  best = nullptr;
+  float dist = 0;
+  for(uint32_t i=0; i<w.npcCount(); ++i) {
+    Npc* n = w.npcById(i);
+    if(n==nullptr || n->instanceSymbol()!=id)
+      continue;
+    const float d = (n->position()-pl.position()).quadLength() + (n->isDead() ? 1e12f : 0.f);
+    if(best==nullptr || d<dist) {
+      best = n;
+      dist = d;
+      }
+    }
+  return best!=nullptr ? best : w.findNpcByInstance(id);
   }
 
 std::string symName(World& w, const Npc* n) {
@@ -559,7 +574,7 @@ void writeHeader() {
     }
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
-  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -599,7 +614,7 @@ void writeRow(Npc& pl) {
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
                am.animYaw,am.animPitch,am.turn,am.bend,am.error);
-  std::fprintf(bench.csv,",%d",int(am.steady));
+  std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -861,6 +876,52 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   int(s.weaponState()),symName(w,s.target()).c_str());
     say(buf + s.animNames());
     }
+  else if(c=="cansee") {
+    // cansee <npc|nearest>: can the hero see it (from the head, leaning over an edge), and what is between
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("cansee: no npc " + line);
+      return;
+      }
+    const Vec3  head = pl.mapHeadBone();
+    const Vec3  tg   = n->centerPosition();
+    const Vec3  d    = tg-head;
+    const float h    = std::sqrt(d.x*d.x+d.z*d.z);
+    auto        r    = w.physic()->ray(head,tg);
+    const auto& fr = w.script().focusRange();
+    char buf[300];
+    std::snprintf(buf,sizeof(buf),"cansee %s: head %d, over the edge %d; dist %.0f, down %.0f deg; the ray from the head hits at %.0f cm of %.0f; bow focus %.0f..%.0f",
+                  symName(w,n).c_str(),int(pl.canSeeNpc(*n,true)),int(pl.canSeeNpcOverEdge(*n)),double(d.length()),
+                  double(-std::atan2(d.y,h)*180.f/float(M_PI)),r.hasCol ? double((r.v-head).length()) : -1.0,double(d.length()),
+                  double(fr.npc_range1),double(fr.npc_range2));
+    say(buf);
+    // the lean over the edge, as Npc::canSeeNpcOverEdge does it at full lean
+    const float an   = pl.rotationRad();
+    const Vec3  dir  = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(an),0,std::sin(an))*0.25f);
+    const Vec3  eye  = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
+    auto        r1   = w.physic()->ray(head,eye);
+    auto        r2   = w.physic()->ray(eye,tg);
+    std::snprintf(buf,sizeof(buf),"  leaned head: room %d (hit at %.0f of %.0f), to it %d (hit at %.0f of %.0f), head at %.0f above the feet",
+                  int(!r1.hasCol),r1.hasCol ? double((r1.v-head).length()) : -1.0,double((eye-head).length()),
+                  int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(head.y-pl.position().y));
+    say(buf);
+    }
+  else if(c=="hp") {
+    // hp <npc>: hit points of the 3 nearest npcs of that script symbol (sheep are all over the world),
+    // and how far (did the arrow hit)
+    const std::string name = a.size()>1 ? a[1] : "";
+    const size_t      id   = w.script().findSymbolIndex(name);
+    std::vector<std::pair<float,Npc*>> list;
+    for(uint32_t i=0; i<w.npcCount(); ++i)
+      if(Npc* n = w.npcById(i); n!=nullptr && n->instanceSymbol()==id)
+        list.emplace_back((n->position()-pl.position()).length(),n);
+    std::sort(list.begin(),list.end(),[](auto& x, auto& y) { return x.first<y.first; });
+    std::string out = "hp " + name + ":";
+    for(size_t i=0; i<list.size() && i<3; ++i)
+      out += " " + std::to_string(list[i].second->attribute(ATR_HITPOINTS)) + (list[i].second->isDead() ? " dead" : "") +
+             " at " + std::to_string(int(list[i].first/100.f)) + " m;";
+    say(out);
+    }
   else if(c=="give" || c=="equip") {
     // give <item> [count]: into the hero's inventory; equip <item>: give one and put it on (a bow, a rune)
     const std::string name = a.size()>1 ? a[1] : "";
@@ -1033,9 +1094,70 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say(buf);
       }
     }
+  else if(c=="walls") {
+    // walls [count]: spots at a wall's edge (from a waypoint, walking to where the ground falls away) with
+    // the foot of the wall 2.5..10 m below, 1 m out: hidden from the head, seen leaning over (the aim's
+    // lean); prints the waypoint and the yaw for `goto`, `edge <yaw>`
+    const size_t count = size_t(num(a,1,15));
+    struct Wall { std::string name; float yaw, drop, from; };
+    std::vector<Wall> all;
+    const Vec3 at = pl.position();
+    auto ground = [&](const Vec3& p, float y0, float up, float down) {
+      auto r = w.physic()->ray({p.x,y0+up,p.z},{p.x,y0-down,p.z});
+      return r.hasCol ? r.v.y : NAN;
+      };
+    w.findWayPoint(at,[&](const WayPoint& wp) {
+      const float g0 = groundY(w,wp.pos.x,wp.pos.z,wp.pos.y);
+      if(std::isnan(g0))
+        return false;
+      for(int k=0; k<16; ++k) {
+        const float y   = float(k)*22.5f*float(M_PI)/180.f;
+        const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
+        Vec3 e = Vec3(wp.pos.x,g0,wp.pos.z);
+        bool edge = false;
+        for(float d=25; d<=600; d+=25) {
+          const Vec3  p = Vec3(wp.pos.x,g0,wp.pos.z) + dir*d;
+          const float g = ground(p,e.y,100,150);
+          if(std::isnan(g) || std::abs(g-e.y)>60) {
+            edge = true;
+            break;
+            }
+          e = Vec3(p.x,g,p.z);
+          }
+        if(!edge)
+          continue;
+        const Vec3  st   = e - dir*35.f;
+        const Vec3  t    = st + dir*135.f;
+        const float tg   = ground(t,st.y,-60,1000);
+        if(std::isnan(tg) || st.y-tg<250 || st.y-tg>1000)
+          continue;
+        const Vec3 head = st + Vec3(0,148,0); // drawing a bow the head is that low
+        const Vec3 aimT = Vec3(t.x,tg+60,t.z);
+        if(!w.physic()->ray(head,aimT).hasCol)
+          continue; // seen from the head anyway
+        const Vec3 eye = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
+        if(w.physic()->ray(head,eye).hasCol || w.physic()->ray(eye,aimT).hasCol)
+          continue;
+        if(w.physic()->ray({t.x,tg+100,t.z},{t.x,tg+1500,t.z}).hasCol)
+          continue; // under a roof, an arch
+        all.push_back(Wall{wp.name, float(k)*22.5f, st.y-tg, (wp.pos-at).length()});
+        break;
+        }
+      return false;
+      });
+    std::sort(all.begin(),all.end(),[](const Wall& x, const Wall& y) { return x.from<y.from; });
+    say("walls " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"wall %s yaw=%.1f drop=%.0f from=%.0f",all[i].name.c_str(),double(all[i].yaw),
+                    double(all[i].drop),double(all[i].from));
+      say(buf);
+      }
+    }
   else if(c=="edge") {
-    // edge <yaw> [max cm]: the hero walks (is put) that way to where the ground falls away, and stands
-    // at the edge facing it; prints how deep it goes down right past the edge
+    // edge <yaw> [max cm] [margin cm]: the hero is put that way to where the ground falls away, and stands
+    // that far from the edge (35: closer the body slips over it) facing it; prints how deep it goes down
+    // right past the edge
     const float y   = num(a,1,0)*float(M_PI)/180.f;
     const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
     const float max = num(a,2,2000);
@@ -1056,7 +1178,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       return;
       }
     // a step back from the very edge, the feet on the ground
-    pos -= dir*20.f;
+    pos -= dir*num(a,3,35);
     pl.setPosition(pos);
     face(pl,dir);
     pl.updateTransform();
@@ -1423,8 +1545,8 @@ void drawOverlay(Pixmap& pm) {
     }
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   if(am.valid && am.active) {
-    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f",double(am.weight),double(am.error),double(am.yaw),
-                  double(am.pitch),double(am.turn),double(am.bend));
+    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f",double(am.weight),double(am.error),double(am.yaw),
+                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean));
     cv.text(x,y,buf,2,{255,140,60,255});
     y += 16;
     }

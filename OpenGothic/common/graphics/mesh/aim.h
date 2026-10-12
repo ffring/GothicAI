@@ -19,8 +19,20 @@ class Aim final {
                                        // lies (an aim up, down is another pose); a spell: straight ahead
       Tempest::Vec3 dir     = {};      // where the shot has to leave, world
       Tempest::Vec3 forward = {1,0,0}; // horizontal facing of the body
+      float         lean    = 0;       // radians: bend forward from the hips over an edge (leanFor), 0 if
+                                       // there is no room in front of the head
       uint64_t      dt      = 0;
       };
+
+    // At an edge one leans over it to shoot who is below: steeper down than LeanFrom the trunk bends
+    // forward from the hips, up to LeanMax at LeanFull; the head goes LeanReach forward and LeanDrop down
+    // then. The focus looks from there too (Npc::canSeeNpcOverEdge)
+    static constexpr float LeanFrom  = 55.f; // degrees down
+    static constexpr float LeanFull  = 80.f;
+    static constexpr float LeanMax   = 55.f;
+    static constexpr float LeanReach = 58.f; // cm: the head 70 cm above the hips, bent 55 degrees
+    static constexpr float LeanDrop  = 28.f;
+    static float           leanFor(float down); // the lean for the angle down, radians
 
     // State for the test bench, degrees
     struct Probe final {
@@ -34,6 +46,7 @@ class Aim final {
       float animPitch = 0;
       float turn      = 0;  // the turn and the bend of the upper body
       float bend      = 0;
+      float lean      = 0;  // over an edge
       float error     = -1; // between where it aims after the turn and where the shot has to go
       };
 
@@ -55,16 +68,16 @@ class Aim final {
   private:
     Tempest::Vec3       arrowOf(const Tempest::Matrix4x4* tr) const;
 
-    size_t              waist = size_t(-1), chest = size_t(-1), slot = size_t(-1);
-    std::vector<size_t> waistTree, chestTree;
+    size_t              spine = size_t(-1), waist = size_t(-1), chest = size_t(-1), slot = size_t(-1);
+    std::vector<size_t> spineTree, waistTree, chestTree;
     bool                valid  = false;
 
     bool                arrow   = false;
     bool                ready   = false; // the turn was measured once since the bow went up
     bool                steady  = false;
     float               weight  = 0;
-    float               yaw     = 0;  // radians, smoothed, from the facing
-    float               pitch   = 0;
+    float               leanAmt = 0;  // radians, smoothed
+    Tempest::Vec3       wantB   = {}; // where the shot has to go, body's frame, smoothed
     uint8_t             steadyFrames = 0;
     Tempest::Vec3       rest    = {}; // where the animation aims while the bow holds still, body's frame
     Tempest::Vec3       goal    = {}; // turn of the upper body from the arrow to the target: axis*angle,

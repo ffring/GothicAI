@@ -1058,7 +1058,7 @@ template<class T>
 static bool canSee(const Npc&,const T&){ return true; }
 
 static bool canSee(const Npc& pl, const Npc& n){
-  return pl.canSeeNpc(n,true);
+  return pl.canSeeNpc(n,true) || pl.canSeeNpcOverEdge(n);
   }
 
 static bool canSee(const Npc& pl, const Interactive& n){

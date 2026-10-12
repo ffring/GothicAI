@@ -24,6 +24,8 @@ constexpr float BodyRate    = 16.f;      // 1/s, how fast the upper body takes a
 constexpr float MaxBody     = 180.f*Deg; // per second
 constexpr float SteadyAngle = 1.5f*Deg;  // the arrow moved less than this in a frame...
 constexpr int   SteadyFrames= 4;         // ...that many frames: the bow holds still
+constexpr float LeanRate    = 6.f;       // 1/s, leaning over an edge...
+constexpr float MaxLeanRate = 90.f*Deg;  // ...not faster than this, per second
 constexpr float BlendIn     = 0.2f;      // seconds: the upper body turns to the target...
 constexpr float BlendOut    = 0.25f;     // ...and back when the bow goes down
 constexpr float Snap        = 0.0005f;
@@ -51,6 +53,17 @@ Vec3 fromBody(const Vec3& v, const Vec3& f) {
   return f*v.x + Up*v.y + cross(Up,f)*v.z;
   }
 
+// bending forward toward where the shot goes (horizontally; straight down: where the body faces)
+Vec3 leanDir(const Vec3& want, const Vec3& forward) {
+  return normalize(Vec3(want.x,0,want.z) + forward*0.25f);
+  }
+
+Mat3 leanRotation(const Vec3& want, const Vec3& forward, float angle) {
+  if(angle==0.f)
+    return axisAngle(Up,0.f);
+  return axisAngle(normalize(cross(Up,leanDir(want,forward))),angle);
+  }
+
 void approach(Vec3& v, const Vec3& target, float k, float maxStep, bool& changed) {
   Vec3 d = (target-v)*k;
   if(length(d)>maxStep)
@@ -76,6 +89,11 @@ void approach(float& v, float target, float k, float maxStep, bool& changed) {
 Aim::Probe Aim::playerProbe;
 Aim::Probe Aim::subjectProbe;
 const void* Aim::probeNpc = nullptr;
+
+float Aim::leanFor(float down) {
+  const float k = std::clamp((down/Deg - LeanFrom)/(LeanFull - LeanFrom), 0.f, 1.f);
+  return k*LeanMax*Deg;
+  }
 
 bool Aim::isEnabled() {
   return enabled;
@@ -110,11 +128,15 @@ void Aim::setSkeleton(const Skeleton* sk) {
         out.push_back(i);
     };
 
+  spine = find("BIP01 SPINE");
   waist = find("BIP01 SPINE1");
   chest = find("BIP01 SPINE2");
   slot  = find("ZS_RIGHTHAND"); // the arrow, the bolt, the spell sit there
   if(waist==size_t(-1) || chest==size_t(-1) || slot==size_t(-1) || !isUnder(chest,waist) || !isUnder(slot,chest))
     return;
+  if(spine==size_t(-1) || !isUnder(waist,spine))
+    spine = waist;
+  tree(spine,spineTree);
   tree(waist,waistTree);
   tree(chest,chestTree);
   valid = true;
@@ -128,21 +150,18 @@ bool Aim::update(const Input& in) {
   bool        changed = false;
   const Vec3  f       = normalize(Vec3(in.forward.x,0,in.forward.z));
   const Vec3  d       = normalize(in.dir);
-  const Vec3  dh      = Vec3(d.x,0,d.z);
-  const bool  on      = in.active && enabled && length(f)>0.5f && length(d)>0.5f && length(dh)>0.05f;
+  const bool  on      = in.active && enabled && length(f)>0.5f && length(d)>0.5f;
 
   if(on) {
     forward = f;
     arrow   = in.arrow;
-    const float y = yawBetween(forward,normalize(dh));
-    const float p = std::asin(std::clamp(d.y,-1.f,1.f));
+    // a direction, not yaw and pitch: straight down the yaw means nothing
+    const Vec3 db = toBody(d,forward);
     if(!ready) {
-      yaw   = y;
-      pitch = p;
+      wantB = db;
       } else {
-      const float k = 1.f - std::exp(-TrackRate*dt);
-      approach(yaw,  y,k,MaxTrack*dt,changed);
-      approach(pitch,p,k,MaxTrack*dt,changed);
+      approach(wantB,db,1.f - std::exp(-TrackRate*dt),MaxTrack*dt,changed);
+      wantB = normalize(wantB);
       }
 
     // where the animation aims, measured while the bow holds still (raising it, reloading swing the
@@ -154,9 +173,11 @@ bool Aim::update(const Input& in) {
     steady       = steadyFrames>=SteadyFrames || !arrow;
     if(steady)
       rest = toBody(a,forward);
+    approach(leanAmt,in.lean,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
     if(steady || ready) {
-      const Vec3  ar   = fromBody(rest,forward);
-      const Vec3  want = mul(axisAngle(Up,yaw),forward)*std::cos(pitch) + Up*std::sin(pitch);
+      // where it aims once leaned over the edge
+      const Vec3  want = fromBody(wantB,forward);
+      const Vec3  ar   = mul(leanRotation(want,forward,leanAmt),fromBody(rest,forward));
       const Vec3  axis = cross(ar,want);
       const float s    = length(axis);
       const float an   = std::min(std::atan2(s,dot(ar,want)), MaxTurn);
@@ -171,6 +192,8 @@ bool Aim::update(const Input& in) {
     }
   prevArrow = animArrow;
 
+  if(!on)
+    approach(leanAmt,0.f,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
   if(ready)
     approach(rot,goal,1.f - std::exp(-BodyRate*dt),MaxBody*dt,changed);
 
@@ -194,12 +217,18 @@ Vec3 Aim::arrowOf(const Matrix4x4* tr) const {
 
 void Aim::apply(Matrix4x4* tr, size_t numBones) {
   error = -1;
-  if(!valid || waistTree.back()>=numBones || chestTree.back()>=numBones || slot>=numBones)
+  if(!valid || spineTree.back()>=numBones || waistTree.back()>=numBones || chestTree.back()>=numBones || slot>=numBones)
     return;
   animArrow = arrowOf(tr);
   measured  = true;
   if(weight<=0.f)
     return;
+
+  // over an edge the trunk bends forward from the hips toward the target first
+  const Vec3  want = fromBody(wantB,forward);
+  const float l    = leanAmt*weight;
+  if(l>0.f)
+    rotateAbout(tr,spineTree,leanRotation(want,forward,l),position(tr[spine]));
 
   // the upper body turns from where it aims to the target: the waist a part, the chest the rest
   const Vec3  r  = fromBody(rot,forward);
@@ -210,7 +239,6 @@ void Aim::apply(Matrix4x4* tr, size_t numBones) {
     rotateAbout(tr,chestTree,axisAngle(axis,an*(1.f-WaistShare)), position(tr[chest]));
     }
 
-  const Vec3 want = mul(axisAngle(Up,yaw),forward)*std::cos(pitch) + Up*std::sin(pitch);
   const Vec3 now  = arrow ? arrowOf(tr) : (an>0.f ? mul(axisAngle(normalize(r),an),forward) : forward);
   error = std::acos(std::clamp(dot(now,want),-1.f,1.f))/Deg;
   }
@@ -222,11 +250,14 @@ void Aim::probe(Probe& p) const {
   p.active    = weight>0.f;
   p.steady    = steady;
   p.weight    = weight;
-  p.yaw       = yaw/Deg;
-  p.pitch     = pitch/Deg;
+  const Vec3 w  = fromBody(wantB,forward);
+  const Vec3 wh = Vec3(w.x,0,w.z);
+  p.yaw       = length(wh)>1e-3f ? yawBetween(forward,normalize(wh))/Deg : 0.f;
+  p.pitch     = std::asin(std::clamp(w.y,-1.f,1.f))/Deg;
   p.animYaw   = length(ah)>0.05f ? yawBetween(forward,normalize(ah))/Deg : 0.f;
   p.animPitch = std::asin(std::clamp(a.y,-1.f,1.f))/Deg;
   p.turn      = rot.y*weight/Deg;   // about up, + to the right
   p.bend      = -rot.z*weight/Deg;  // about the side, + up
+  p.lean      = leanAmt*weight/Deg;
   p.error     = error;
   }

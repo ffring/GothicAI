@@ -411,6 +411,9 @@ class Npc final {
     void      stopWalking();
 
     bool      canSeeNpc(const Npc& oth, bool freeLos) const;
+    // with a bow, a crossbow, a spell drawn: one steeply below seen when leaning over an edge (the aim
+    // leans the body that far), for the focus
+    bool      canSeeNpcOverEdge(const Npc& oth) const;
     bool      canSeeItem(const Item& it, bool freeLos) const;
     bool      canSeeSource() const;
     bool      canRayHitPoint(const Tempest::Vec3 pos, bool freeLos = true, float extRange=0.f) const;
