@@ -37,6 +37,12 @@ class FakeGame:
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect messages
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
+        # what story_state answers: globals, npc's ({"state", "name"}), dialogs the hero heard, script names
+        self.vars: dict[str, int] = {}
+        self.npc_states: dict[str, dict[str, str]] = {}
+        self.known: set[str] = set()
+        self.symbols: dict[str, str] = {}
+        self.in_dialog = False
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
         self.hp = 999
         self.soft: list[tuple[str, str]] = []  # npc_act's: (npc, action)
@@ -154,6 +160,16 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True)
             case "story_nearby":
                 await self.send(type="result", req=msg["req"], ok=True, value=self.people_near)
+            case "story_state":
+                value = {
+                    "vars": {v: self.vars[v] for v in msg.get("vars", []) if v in self.vars},
+                    "npcs": {n: self.npc_states.get(n, {"state": "absent"}) for n in msg.get("npcs", [])},
+                    "knows": {k: k in self.known for k in msg.get("knows", [])},
+                    "symbols": {n: self.symbols[n] for n in msg.get("symbols", []) if n in self.symbols},
+                    "dialog": self.in_dialog,
+                    "cutscene": False,
+                }
+                await self.send(type="result", req=msg["req"], ok=True, value=value)
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):

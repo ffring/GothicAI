@@ -6,7 +6,7 @@ import asyncio
 import itertools
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from http import HTTPStatus
 from typing import Any
 
@@ -43,6 +43,7 @@ from .protocol import (
     StoryEffectCmd,
     StoryNearbyCmd,
     StorySpawnCmd,
+    StoryStateCmd,
     StoryWatchCmd,
     WorldLoaded,
     _Command,
@@ -52,7 +53,16 @@ from .protocol import (
 log = logging.getLogger(__name__)
 
 # requests answered with `result`
-_Request = AttachCmd | DetachCmd | DebugCmd | GraphPatchCmd | StorySpawnCmd | StoryEffectCmd | StoryNearbyCmd
+_Request = (
+    AttachCmd
+    | DetachCmd
+    | DebugCmd
+    | GraphPatchCmd
+    | StorySpawnCmd
+    | StoryEffectCmd
+    | StoryNearbyCmd
+    | StoryStateCmd
+)
 
 Listener = Callable[[GameMessage], None]
 
@@ -237,6 +247,24 @@ class GameLink:
         """People within `radius` cm of an npc."""
         res = await self._request(StoryNearbyCmd(req=self._next_id("s"), npc=npc.upper(), radius=radius), 5.0)
         return list(res.value or [])
+
+    async def story_state(
+        self,
+        vars: Iterable[str] = (),
+        npcs: Iterable[str] = (),
+        knows: Iterable[str] = (),
+        symbols: Iterable[str] = (),
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
+        """What the director's rules read (see StoryStateCmd)."""
+        cmd = StoryStateCmd(
+            req=self._next_id("s"),
+            vars=list(vars),
+            npcs=[n.upper() for n in npcs],
+            knows=list(knows),
+            symbols=list(symbols),
+        )
+        return dict((await self._request(cmd, timeout)).value or {})
 
     async def offered_dialogs(self, npc: str, timeout: float = 5.0) -> list[str]:
         """The dialogs the npc offers the player now (game in -devmode)."""

@@ -17,6 +17,9 @@
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
 #        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
+#   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
+#       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
+#       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
@@ -98,7 +101,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|incident|reflex|rejected_give|give|intent_|story|ERROR" "$LOG_DIR/server.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|incident|reflex|rejected_give|give|intent_|story|director|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[(ai|story)\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

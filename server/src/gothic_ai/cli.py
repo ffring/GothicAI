@@ -21,8 +21,10 @@ from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Chronicle
 from .dialogue import DialogueManager
+from .director import Director
 from .executor import Intent
 from .game import GameError, GameLink, GameServer
+from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .incidents import IncidentDesk
 from .journal import Journal, print_sink
@@ -93,6 +95,8 @@ HELP = """commands (npc defaults to the last attached one):
   quest <instance> <n> <item> <n> <title>   the npc gives the hero a quest: kill n creatures
                     (they appear 30 m away), the reward is an item it has
   quests            the director's quests: paid, lied about, found out
+  director          quests left without an ending and the director's repairs of them
+  director look     look for such quests now and repair them
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -125,6 +129,7 @@ class ServerState:
         self.story: StoryPatches | None = None
         self.chronicle: Chronicle | None = None
         self.quests: QuestBoard | None = None
+        self.director: Director | None = None
 
 
 class Console:
@@ -214,6 +219,8 @@ class Console:
                 for q in board.quests.values():
                     state = "found out" if q.found_out else "lied" if q.lie else "paid" if q.paid else "open"
                     print(f"{q.id} {q.giver}: {q.title}; {q.reward()}; {state}; done {board.done(q)}")
+            case "director" if self.state.director is not None:
+                await self.director(rest)
             case "dialogs":
                 print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
             case "choose" if rest:
@@ -234,6 +241,19 @@ class Console:
         title = " ".join(rest[4:])
         q = await self.state.quests.give(npc, snap.npc.name, title, instance, count, item, reward, pay)
         print(f"{q.id}: {q.title} ({q.count} {q.instance} as {q.tag}), reward {q.reward()}")
+
+    async def director(self, rest: list[str]) -> None:
+        director = self.state.director
+        assert director is not None
+        if rest == ["look"]:
+            print("repaired:", " ".join(await director.look()) or "nothing to repair")
+            return
+        story = await director.story()
+        print("without an ending:", " ".join(story.dead_ends()) or "none")
+        for r in director.repairs:
+            print(f"  {r.quest}: {r.kind} {r.npc} {r.node}".rstrip())
+        if director.given_up:
+            print("no repair found:", " ".join(sorted(director.given_up)))
 
     async def graph(self, rest: list[str]) -> None:
         story = self.state.story
@@ -260,6 +280,19 @@ class Console:
                 return
         await story.apply(op)
         print("ok")
+
+
+def _story_graph(args: argparse.Namespace, game_dir: Path | None) -> storygraph.StoryGraph | None:
+    """The scripts' story graph (storygraph's JSON): a given file, or made from the game's scripts."""
+    path = Path(args.story_graph) if args.story_graph else None
+    if path is None and game_dir is not None:
+        path = storygraph.ensure(game_dir, DEFAULT_MEMORY_DB.parent / "story.json")
+    if path is None or not path.exists():
+        log.warning(
+            "story director off: no story graph (build OpenGothic/ai_bridge/storygraph or --story-graph)"
+        )
+        return None
+    return storygraph.load(path)
 
 
 def _backend(args: argparse.Namespace) -> LLMBackend:
@@ -294,6 +327,11 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
+    graph = None if args.no_director else _story_graph(args, game_dir)
+    log.info(
+        "story director: %s",
+        "off" if graph is None else f"{len(graph.nodes)} nodes, {len(graph.quests)} quests",
+    )
 
     async def on_link(link: GameLink) -> None:
         link.listeners.append(print_event)
@@ -326,6 +364,13 @@ async def serve(args: argparse.Namespace) -> int:
             journal=journal,
         )
         lies = asyncio.create_task(state.quests.run())
+        directing = None
+        if graph is not None:
+            # quests the hero can no longer finish get repaired (story graph, stage 5)
+            state.director = Director(
+                link, graph, state.story, state.chronicle, llm, dialogue=state.dialogue, journal=journal
+            )
+            directing = asyncio.create_task(state.director.run())
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
@@ -350,6 +395,8 @@ async def serve(args: argparse.Namespace) -> int:
             await link.closed.wait()  # the session lives while the game is connected
         finally:
             lies.cancel()
+            if directing is not None:
+                directing.cancel()
             if brain is not None:
                 brain.cancel()
 
@@ -412,6 +459,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.lie_found_out(link, dialogue, talk, quests, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario lie: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "repair":
+                assert state.director is not None and state.story is not None
+                results = await scenarios.repair_after_death(link, state.director, state.story)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "graph":
                 assert state.story is not None
@@ -799,7 +852,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "graph", "lie", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "graph", "lie", "repair", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
@@ -824,6 +877,8 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
+    p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
+    p.add_argument("--story-graph", help="storygraph JSON (default: made from the game's scripts and cached)")
     p.add_argument(
         "--no-hold-threats",
         action="store_true",

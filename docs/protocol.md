@@ -81,7 +81,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `transcript` | `text`, `final`, `to?`, `to_name?` | что говорит игрок. `final:false` — текст, распознанный на лету, пока клавиша зажата: игра показывает его в строке записи. `final:true` — итог, для голоса и для набранной строки: субтитр «Ты -> `to_name`: …» (v7: кому сказано, решил сервер; без `to` — в воздух). Ответ NPC сервер запускает сам |
 | `hush` | `npc`, `reply?`, `said?` | NPC перебили (v7): его голос смолкает сразу, реплики, которые ещё не начались, не звучат, очередь ИИ идёт дальше. Субтитр ответа `reply` оставляет только сказанное (`said`) и гаснет |
 | `memory` | `branch`, `seq` | позиция памяти ветки после каждой записи; игра пишет её в следующее сохранение |
-| `debug` | `req`, `cmd`, аргументы команды | только с `-devmode`, для автотестов. Ответ — `result`. Команды: `save` / `load` (`slot`) — сохранить или загрузить `save_slot_<slot>.sav`; `spawn` (`instance`, `near`=герой, `distance`=600) — создать существо, например `WOLF`, на `distance` см перед NPC (v6); `player_weapon` (`state`: `melee` / `none`) — герой достаёт или убирает оружие (v6); `player_goto` (`waypoint`, или `near` + `distance`=1500 — ближайший вейпоинт не ближе `distance` см от NPC) — герой переносится туда (v7); `ptt` (`state`: `start` / `stop` / `cancel`) — клавиша T так, как её нажимает игрок, с его фокусом (v7); `type` (`text`) — набранная и отправленная строка (v7); про диалоги (v8, см. «Граф сюжета»): `dialogs`, `choose`, `eval`, `check` |
+| `debug` | `req`, `cmd`, аргументы команды | только с `-devmode`, для автотестов. Ответ — `result`. Команды: `save` / `load` (`slot`) — сохранить или загрузить `save_slot_<slot>.sav`; `spawn` (`instance`, `near`=герой, `distance`=600) — создать существо, например `WOLF`, на `distance` см перед NPC (v6); `player_weapon` (`state`: `melee` / `none`) — герой достаёт или убирает оружие (v6); `player_goto` (`waypoint`, или `near` + `distance`=1500 — ближайший вейпоинт не ближе `distance` см от NPC) — герой переносится туда (v7); `ptt` (`state`: `start` / `stop` / `cancel`) — клавиша T так, как её нажимает игрок, с его фокусом (v7); `type` (`text`) — набранная и отправленная строка (v7); про диалоги (v8, см. «Граф сюжета»): `dialogs`, `choose`, `eval`, `check`; для режиссёра (v8): `kill` (`npc`) — NPC умирает, никем не убитый; `player_goto` с `to` — ближайший к NPC `to` вейпоинт не ближе `distance`=300 см |
 
 **`attach`** отказывает в трёх случаях: NPC не найден в текущем мире, это игрок, или NPC без сознания либо в диалоге. Пока NPC под управлением:
 - его распорядок и скриптовые восприятия на паузе (восприятия уходят серверу событиями `perception`);
@@ -275,7 +275,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `permanent` | предлагается и после выбора (у `important` не бывает) |
 | `condition` | выражение; нет — всегда |
 | `lines[]` | `{speaker: "self"/"other", line}` — оригинальная реплика с озвучкой, или `{speaker, text}` — своя, пока только субтитр |
-| `effects[]` | `{do: "give", item, count, to: "other"/"self"}`, `{do: "xp", amount}`, `{do: "set", var, value}`, `{do: "journal", topic, text}` (создаёт тему миссии и делает запись), `{do: "end"}` (конец разговора) |
+| `effects[]` | `{do: "give", item, count, to: "other"/"self"}`, `{do: "xp", amount}`, `{do: "set", var, value}`, `{do: "journal", topic, text, status}` (создаёт тему миссии, ставит ей статус — `LOG_RUNNING` по умолчанию, `LOG_SUCCESS`, `LOG_FAILED`, `LOG_OBSOLETE` — и делает запись), `{do: "end"}` (конец разговора) |
 
 Реплики встают в очередь, как `AI_Output` в функции диалога. Эффекты выполняются сразу при выборе, как в скриптах. Для них вызываются функции скриптов: `B_GiveInvItems`, `B_GivePlayerXP`, `B_LogEntry`, `AI_StopProcessInfos`.
 
@@ -301,7 +301,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 
 ## Руки режиссёра в мире (v8)
 
-Для поручений режиссёра и последствий лжи ([story-graph.md](story-graph.md), этап 4). В мосте — [storyworld.cpp](../OpenGothic/ai_bridge/storyworld.cpp), на сервере — [chronicle.py](../server/src/gothic_ai/chronicle.py) и [quests.py](../server/src/gothic_ai/quests.py).
+Для поручений режиссёра, последствий лжи и ремонта квестов ([story-graph.md](story-graph.md), этапы 4–5). В мосте — [storyworld.cpp](../OpenGothic/ai_bridge/storyworld.cpp), на сервере — [chronicle.py](../server/src/gothic_ai/chronicle.py), [quests.py](../server/src/gothic_ai/quests.py) и [director.py](../server/src/gothic_ai/director.py).
 
 **Сервер → игра:**
 
@@ -311,6 +311,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `story_watch` | `npcs[]` | NPC, для которых игра сообщает расстояние до живых существ каждой метки. Список заменяет прежний |
 | `story_effect` | `req`, `npc`, `effects[]` | эффекты через функции самих скриптов, `self` — NPC, `other` — герой. Те же, что в диалогах режиссёра (`give`, `xp`, `set`, `journal`, `end`), и ещё два: `attack` — `B_Attack`, `reason` — константа `AR_*`, по умолчанию `AR_NONE`: бьёт, пока герой не упадёт, не до смерти; `refuse_talk` — `Npc_SetRefuseTalk`, `seconds`. На время этих двух мост отпускает NPC, если тот под управлением |
 | `story_nearby` | `req`, `npc`, `radius`=2000 | люди в радиусе от NPC: `result.value` = `[{npc, name, distance, guild}]` |
+| `story_state` | `req`, `vars[]`, `npcs[]`, `knows[]`, `symbols[]` | что читают правила режиссёра (этап 5). `result.value`: `vars` — значения глобалов `int`; `npcs` — `{state: "alive"/"dead"/"absent", name}`; `knows` — слышал ли герой диалог; `symbols` — что это за имя в скриптах: `npc`, `item`, `info`, `var`, `const`, `func`, `other` (неизвестных нет в ответе); `dialog`, `cutscene` — идёт ли сейчас диалог или ролик |
 
 **Игра → сервер:**
 

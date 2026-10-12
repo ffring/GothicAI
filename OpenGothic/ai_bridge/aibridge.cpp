@@ -606,6 +606,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     auto list = story.nearby(*world,doc);
     sendResult(req,!list.empty(),"no npc " + std::string(JsonRead::str(doc,"npc")),list);
     }
+  else if(type=="story_state") {
+    sendResult(req,true,"",story.state(*world,doc));
+    }
   else if(type=="story_effect") {
     std::string err;
     const bool  ok = story.effects(*world,doc,err);
@@ -657,7 +660,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     return;
     }
   const auto cmd = JsonRead::str(msg,"cmd");
-  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type") {
+  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -739,12 +742,30 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
     return;
     }
+  if(cmd=="kill") {
+    // an npc dies, killed by no one (a quest giver for the director's repairs)
+    Npc* npc = npcBySymbol(*world,JsonRead::str(msg,"npc"));
+    if(npc==nullptr || npc->isDead() || npc->isPlayer()) {
+      sendResult(req,false,npc==nullptr ? "no such npc" : "it can't die now");
+      return;
+      }
+    npc->changeAttribute(ATR_HITPOINTS,-npc->attribute(ATR_HITPOINTSMAX)-1,false);
+    sendResult(req,npc->isDead(),"it did not die (immortal?)");
+    return;
+    }
   if(cmd=="player_goto") {
-    // the hero steps to a waypoint (walking away from a conversation): a named one, or the nearest one
-    // at least `distance` cm away from an npc (`near`)
+    // the hero steps to a waypoint (walking away from a conversation): a named one, the nearest one at
+    // least `distance` cm away from an npc (`near`), or one next to an npc (`to`, `distance` cm off)
     const WayPoint* wp = nullptr;
     if(auto name = JsonRead::str(msg,"waypoint"); !name.empty()) {
       wp = world->findPoint(name,false);
+      }
+    else if(Npc* to = npcBySymbol(*world,JsonRead::str(msg,"to"))) {
+      const float off = float(JsonRead::integer(msg,"distance",300));
+      const auto  at  = to->position();
+      wp = world->findWayPoint(at,[&](const WayPoint& w) {
+        return (w.position()-at).quadLength() >= off*off;
+        });
       }
     else if(Npc* from = npcBySymbol(*world,JsonRead::str(msg,"near"))) {
       const float min  = float(JsonRead::integer(msg,"distance",1500));

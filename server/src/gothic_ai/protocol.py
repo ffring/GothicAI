@@ -611,6 +611,7 @@ DebugCommand = Literal[
     "choose",
     "eval",
     "check",
+    "kill",
 ]
 
 
@@ -618,9 +619,9 @@ class DebugCmd(_Command):
     """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
     spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
     player draw (`state: "melee"`) or put away (`"none"`) a weapon; move the player to a `waypoint` (or to
-    the nearest one at least `distance` cm from `near`);
-    press the talk key as the player does (`ptt`, `state`: start, stop, cancel; with the hero's own focus)
-    or send a typed line (`type`, `text`).
+    the nearest one at least `distance` cm from `near`, or one `distance` cm off the npc `to`); `kill` an
+    `npc` (killed by no one); press the talk key as the player does (`ptt`, `state`: start, stop, cancel;
+    with the hero's own focus) or send a typed line (`type`, `text`).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -637,6 +638,7 @@ class DebugCmd(_Command):
     distance: int | None = None
     state: str | None = None
     waypoint: str | None = None
+    to: str | None = None
     text: str | None = None
     npc: str | None = None
     node: str | None = None
@@ -687,6 +689,20 @@ class StoryEffectCmd(_Command):
     req: str
     npc: str
     effects: list[dict[str, Any]]
+
+
+class StoryStateCmd(_Command):
+    """What the director's rules read (v8, stage 5). `result.value`: {"vars": {name: int}, "npcs": {symbol:
+    {"state": "alive" | "dead" | "absent", "name"}}, "knows": {dialog: bool} (the hero has heard it),
+    "symbols": {name: "npc" | "item" | "info" | "var" | "const" | "func" | "other"} (unknown names are
+    left out), "dialog": bool, "cutscene": bool}."""
+
+    type: Literal["story_state"] = "story_state"
+    req: str
+    vars: list[str] = []
+    npcs: list[str] = []
+    knows: list[str] = []
+    symbols: list[str] = []
 
 
 class StoryNearbyCmd(_Command):

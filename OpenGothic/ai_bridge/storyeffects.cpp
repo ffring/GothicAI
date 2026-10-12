@@ -30,6 +30,7 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.reason = upper(JsonRead::str(x,"reason"));
   e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
   e.text   = TextCodec::fromUtf8(JsonRead::str(x,"text"));
+  e.status = upper(JsonRead::str(x,"status"));
   e.count  = int32_t(JsonRead::integer(x,"count",JsonRead::integer(x,"amount",
                      JsonRead::integer(x,"value",JsonRead::integer(x,"seconds",1)))));
   e.toHero = JsonRead::str(x,"to")!="self";
@@ -47,8 +48,14 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
       return "set: no variable " + e.var;
     return {};
     }
-  if(e.kind=="journal")
+  if(e.kind=="journal") {
+    if(e.status.empty())
+      e.status = "LOG_RUNNING";
+    auto* st = vm ? vm->find_symbol_by_name(e.status) : nullptr;
+    if(vm && (st==nullptr || !st->is_const() || st->type()!=DaedalusDataType::INT))
+      return "journal: no status " + e.status;
     return e.topic.empty() || e.text.empty() ? "journal: needs topic and text" : "";
+    }
   if(e.kind=="attack") {
     if(e.reason.empty())
       e.reason = "AR_NONE";
@@ -100,7 +107,7 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
     }
   else if(kind=="journal") {
     call("LOG_CREATETOPIC",{Value::str(topic),Value::integer(constant("LOG_MISSION",0))});
-    call("LOG_SETTOPICSTATUS",{Value::str(topic),Value::integer(constant("LOG_RUNNING",1))});
+    call("LOG_SETTOPICSTATUS",{Value::str(topic),Value::integer(constant(status,1))});
     call("B_LOGENTRY",{Value::str(topic),Value::str(text)});
     }
   else if(kind=="end") {

@@ -7,9 +7,12 @@
 #include <cmath>
 #include <limits>
 
+#include <zenkit/DaedalusVm.hh>
+
 #include "world/objects/npc.h"
 #include "world/world.h"
 
+#include "eval.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "storyeffects.h"
@@ -43,6 +46,42 @@ Npc* bySymbol(World& world, std::string_view symbol) {
 float distance(const Npc& a, const Npc& b) {
   auto d = a.position()-b.position();
   return std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);
+  }
+
+// the class an instance (or prototype) is of: C_NPC, C_ITEM, C_INFO...
+std::string classOf(zenkit::DaedalusVm& vm, const zenkit::DaedalusSymbol& sym) {
+  auto* s = &sym;
+  for(int i=0; i<8 && s!=nullptr && s->type()!=zenkit::DaedalusDataType::CLASS; ++i)
+    s = vm.find_symbol_by_index(s->parent());
+  return s!=nullptr && s->type()==zenkit::DaedalusDataType::CLASS ? std::string(s->name()) : std::string();
+  }
+
+std::string kindOf(zenkit::DaedalusVm& vm, const zenkit::DaedalusSymbol& sym) {
+  using zenkit::DaedalusDataType;
+  if(sym.is_member())
+    return "other";
+  switch(sym.type()) {
+    case DaedalusDataType::INSTANCE: {
+      const auto cls = classOf(vm,sym);
+      return cls=="C_NPC" ? "npc" : cls=="C_ITEM" ? "item" : cls=="C_INFO" ? "info" : "other";
+      }
+    case DaedalusDataType::INT:
+      return sym.is_const() ? "const" : "var";
+    case DaedalusDataType::FUNCTION:
+      return "func";
+    default:
+      return "other";
+    }
+  }
+
+template<class F>
+void eachString(const rapidjson::Value& msg, const char* key, F f) {
+  auto it = msg.FindMember(key);
+  if(it==msg.MemberEnd() || !it->value.IsArray())
+    return;
+  for(auto& v : it->value.GetArray())
+    if(v.IsString())
+      f(upper(std::string_view(v.GetString(),v.GetStringLength())));
   }
 
 }
@@ -159,6 +198,77 @@ std::string StoryWorld::nearby(World& world, const rapidjson::Value& msg) {
     w.EndObject();
     }
   w.EndArray();
+  return std::string(buf.GetString(),buf.GetSize());
+  }
+
+std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
+  using zenkit::DaedalusDataType;
+  auto&  vm = world.script().getVm();
+  Npc*   pl = world.player();
+  rapidjson::StringBuffer                    buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  auto key = [&](const std::string& k) { w.Key(k.data(),rapidjson::SizeType(k.size())); };
+  w.StartObject();
+
+  w.Key("vars");
+  w.StartObject();
+  eachString(msg,"vars",[&](const std::string& name) {
+    auto* s = vm.find_symbol_by_name(name);
+    if(s!=nullptr && s->type()==DaedalusDataType::INT && !s->is_member()) {
+      key(name);
+      w.Int(s->get_int(0));
+      }
+    });
+  w.EndObject();
+
+  w.Key("npcs");
+  w.StartObject();
+  eachString(msg,"npcs",[&](const std::string& name) {
+    Npc* n = bySymbol(world,name);
+    key(name);
+    w.StartObject();
+    w.Key("state");
+    w.String(n==nullptr ? "absent" : n->isDead() ? "dead" : "alive");
+    if(n!=nullptr) {
+      auto display = TextCodec::toUtf8(n->displayName());
+      w.Key("name");
+      w.String(display.data(),rapidjson::SizeType(display.size()));
+      }
+    w.EndObject();
+    });
+  w.EndObject();
+
+  w.Key("knows");
+  w.StartObject();
+  auto* knows = vm.find_symbol_by_name("NPC_KNOWSINFO");
+  eachString(msg,"knows",[&](const std::string& name) {
+    auto*       s = vm.find_symbol_by_name(name);
+    std::string err;
+    auto        r = s!=nullptr && pl!=nullptr && knows!=nullptr
+                    ? storygraph::callFunction(vm,*knows,{storygraph::Value::instance(pl->handlePtr()),
+                                                          storygraph::Value::integer(int32_t(s->index()))},err)
+                    : std::nullopt;
+    if(r && r->type==storygraph::Value::Int) {
+      key(name);
+      w.Bool(r->i!=0);
+      }
+    });
+  w.EndObject();
+
+  w.Key("symbols");
+  w.StartObject();
+  eachString(msg,"symbols",[&](const std::string& name) {
+    if(auto* s = vm.find_symbol_by_name(name)) {
+      key(name);
+      auto kind = kindOf(vm,*s);
+      w.String(kind.data(),rapidjson::SizeType(kind.size()));
+      }
+    });
+  w.EndObject();
+
+  w.Key("dialog");   w.Bool(world.isInDialog());
+  w.Key("cutscene"); w.Bool(world.currentCs()!=nullptr);
+  w.EndObject();
   return std::string(buf.GetString(),buf.GetSize());
   }
 

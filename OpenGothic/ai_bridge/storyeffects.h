@@ -20,6 +20,7 @@ struct StoryEffect final {
   std::string var;      // set: global int variable
   std::string topic;    // journal: topic, game codepage
   std::string text;     // journal: entry, game codepage
+  std::string status;   // journal: LOG_RUNNING (default), LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE
   std::string reason;   // attack: AR_* constant (default AR_NONE: until the hero is down, not to death)
   int32_t     count  = 1;  // give: count; xp: amount; set: value; refuse_talk: seconds
   bool        toHero = true;  // give: the npc gives to the hero, else the hero to the npc

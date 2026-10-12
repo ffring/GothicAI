@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .dialogue import DialogueManager
+from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .incidents import IncidentDesk
-from .llm import ToolCall
+from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider, habits_of
@@ -1096,6 +1099,183 @@ async def lie_found_out(
     check("knows_in_talk", seen, f"{len(llm.calls)} call(s) to {to}")
     await link.detach(bystander)
     return _logged(results)
+
+
+LOBART, HILDA = "BAU_950_LOBART", "BAU_951_HILDA"
+RUEBEN = "MIS_LOBART_RUEBEN"
+
+
+class RepairScript:
+    """The cloud model of the director, scripted: first a successor that is dead (the giver himself), then,
+    told why not, Hilda, with the effects the brief offers for experience, gold and the turnips."""
+
+    name = "repair-script"
+
+    def __init__(self, giver: str, successor: str) -> None:
+        self.giver = giver
+        self.successor = successor
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+        ending = re.search(r"^1\. (\S+)", brief, re.M)
+        wanted = ("опыт +", "герою: ITMI_GOLD", "забрать у героя ITPL_BEET")
+        effects = [
+            m.group(1)
+            for m in re.finditer(r"^\s+(E\d+): (.*)$", brief, re.M)
+            if m.group(2).startswith(wanted)
+        ]
+        args = {
+            "kind": "handover",
+            "ending": ending.group(1) if ending else "",
+            "npc": self.giver if len(self.calls) == 1 else self.successor,
+            "description": "Лобарт мёртв. Я собрал репу.",
+            "lines": [
+                {"speaker": "hero", "text": "Лобарт мёртв. Я собрал репу, как он велел."},
+                {
+                    "speaker": "npc",
+                    "text": "Знаю. Давай её сюда. Работников кормить надо, а плату получишь, как он обещал.",
+                },
+            ],
+            "effects": effects,
+            "status": "obsolete",
+            "journal_now": "Лобарт мёртв. Репу, наверное, теперь примет его жена Хильда.",
+            "journal_done": "Я отдал репу Хильде, она заплатила за мужа.",
+            "reason": "Хильда ведёт хозяйство вместе с мужем",
+        }
+        call = ToolCall(PROPOSE, args, f"r{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
+async def repair_after_death(
+    link: GameLink, director: Director, story: StoryPatches, giver: str = LOBART, successor: str = HILDA
+) -> dict[str, str]:
+    """Stage 5 of the story graph on the game: a quest giver dies, the director repairs the quest, the hero
+    finishes it.
+
+    Lobart gives the hero the turnip field (the effects of his own dialog: the quest variable and the
+    journal). He dies. The director finds the quest without an ending and asks its model for a repair
+    (scripted unless the server runs a real one, LLM=chatgpt): first the dead Lobart himself, which the
+    validator rejects, then his wife Hilda. Her dialog appears once the hero has 20 turnips; he chooses it,
+    the quest ends with Lobart's reward, and the dialog is not offered again."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    script = None
+    if isinstance(director.model.llm, FakeBackend):
+        director.model.llm = script = RepairScript(giver, successor)
+    facts = director.chronicle.facts
+    hero = ["inst", "HERO"]
+
+    async def var(name: str) -> int | None:
+        return (await link.story_state(vars=[name])).get("vars", {}).get(name)
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    # the quest, as Lobart gives it (his dialog's choice "Хорошо...": the variable and the journal)
+    taken = [
+        {"do": "set", "var": RUEBEN, "value": 1},
+        {
+            "do": "journal",
+            "topic": "Убрать поле репы",
+            "text": "Фермер Лобарт хочет, чтобы я собрал репу на поле. За это он заплатит мне золотом "
+            "или продаст мне одежду по значительно сниженной цене.",
+        },
+    ]
+    await link.story_effect(giver, taken)
+    before = await director.story()
+    check("quest_taken", await var(RUEBEN) == 1 and before.state.alive(giver), before.endings(RUEBEN))
+    check("has_an_ending", RUEBEN not in before.dead_ends())
+
+    # Lobart dies
+    await link.debug("kill", npc=giver)
+    ok = await _until(lambda: any(f.get("npc") == giver for f in facts("died")), 10)
+    check("died", ok)
+    ok = await _until(
+        lambda: any(f.get("quest") == RUEBEN for f in facts("repair") + facts("unrepaired")), 60
+    )
+    dead_end = [f for f in facts("dead_end") if f.get("quest") == RUEBEN]
+    check("dead_end", bool(dead_end), dead_end[-1:])
+    rejected = [f for f in facts("repair_rejected") if f.get("quest") == RUEBEN]
+    if script is not None:
+        check("rejected", any("мёртв" in why for f in rejected for why in f["why"]), rejected[-1:])
+    repair = next((f for f in facts("repair") if f.get("quest") == RUEBEN), None)
+    check(
+        "repaired",
+        ok and repair is not None and (script is None or repair.get("npc") == successor),
+        repair or facts("unrepaired"),
+    )
+    if repair is None or repair.get("kind") != "handover":
+        return _logged(results)
+    node, successor = repair["node"], repair["npc"]
+    # what the repair gives: Lobart's reward when scripted, what the model chose when not
+    made = next(op["node"] for op in story.ops() if op.get("op") == "add_node" and op["node"]["id"] == node)
+    give_gold = sum(e["count"] for e in made["effects"] if e["do"] == "give" and e["item"] == "ITMI_GOLD")
+    give_exp = sum(e["amount"] for e in made["effects"] if e["do"] == "xp")
+    takes = any(e["do"] == "give" and e.get("to") == "self" for e in made["effects"])
+    if script is not None:
+        check("lobarts_reward", (give_gold, give_exp, takes) == (5, 50, True), made["effects"])
+
+    # the hero brings the turnips (Hilda's dialog wants 20)
+    offered = await link.offered_dialogs(successor)
+    await link.attach(successor)
+    await link.act(successor, "debug_add_item", item="ITPL_BEET", count=20)
+    await link.detach(successor)
+    await link.story_effect(successor, [{"do": "give", "item": "ITPL_BEET", "count": 20}])
+    gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
+    now = await link.offered_dialogs(successor)
+    check(
+        "offered", node not in offered and node in now and await has("ITPL_BEET") >= 20, f"{offered} -> {now}"
+    )
+
+    # he talks to her and chooses it
+    await link.debug("player_goto", to=successor, distance=300)
+    for _ in range(40):  # her own greeting may start as he comes in
+        if not (await link.story_state()).get("dialog"):
+            break
+        await asyncio.sleep(0.5)
+    await link.choose_dialog(successor, node)
+    ok = await _until_async(lambda: var(RUEBEN), lambda v: v == 2, 15)
+    check("quest_done", ok, await var(RUEBEN))
+    after = (await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]), await has("ITPL_BEET"))
+    check(
+        "reward",
+        after[0] >= gold + give_gold and after[1] >= exp + give_exp and (after[2] == 0 or not takes),
+        f"gold, exp, turnips {(gold, exp)} -> {after}",
+    )
+    await asyncio.sleep(1)
+    check("once", node not in await link.offered_dialogs(successor))
+    check("kept", any(op.get("op") == "add_node" for op in story.ops()))
+    return _logged(results)
+
+
+async def _until_async(get: Callable[[], Any], ok: Callable[[Any], bool], timeout: float) -> bool:
+    """Poll an async getter until its value is ok or `timeout` seconds pass."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if ok(await get()):
+            return True
+        await asyncio.sleep(0.25)
+    return False
 
 
 def _logged(results: dict[str, str]) -> dict[str, str]:

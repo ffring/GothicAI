@@ -32,6 +32,11 @@ class StoryWorld final {
     // story_nearby: people within `radius` cm of `npc` (alive, not the hero), as JSON
     // [{"npc", "name", "distance", "guild"}]; empty if there is no such npc
     std::string nearby(World& world, const rapidjson::Value& msg);
+    // story_state: what the director's rules read (stage 5), as JSON: values of global int `vars`, whether
+    // `npcs` live ({"state": "alive", "dead" or "absent", "name"}), which dialogs (`knows`) the hero has
+    // heard, what script `symbols` are ("npc", "item", "info", "var", "const", "func", "other"; missing:
+    // absent), and whether a dialog or a cutscene runs now
+    std::string state(World& world, const rapidjson::Value& msg);
     // deaths of people and of tagged creatures (npc_died) and, once a second, the tags (story_world)
     void tick(World& world);
     // a load or a new world: what was tracked belongs to the old one

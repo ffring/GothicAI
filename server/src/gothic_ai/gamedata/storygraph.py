@@ -16,11 +16,20 @@ is in `functions`), `["cases", guard, value, ...]` (the first true guard picks t
 from __future__ import annotations
 
 import json
+import logging
+import os
+import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 VERSION = 1
+# the converter, built in the repository (docs/story-graph.md, stage 1)
+REPO = Path(__file__).resolve().parents[4]
+TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
+DAT_PATH = ("_work", "Data", "Scripts", "_compiled", "GOTHIC.DAT")
 
 Expr = list
 
@@ -164,6 +173,39 @@ def load(path: Path) -> StoryGraph:
     return StoryGraph(
         nodes=nodes, functions=data["functions"], instances=data["instances"], vars=vars, quests=quests
     )
+
+
+def find_dat(game_dir: Path) -> Path | None:
+    """GOTHIC.DAT of the installation (names in any case)."""
+    path = game_dir
+    for part in DAT_PATH:
+        if not path.is_dir():
+            return None
+        path = next((p for p in path.iterdir() if p.name.upper() == part.upper()), path / part)
+    return path if path.is_file() else None
+
+
+def ensure(game_dir: Path, cache: Path, tool: Path | None = None) -> Path | None:
+    """The graph of the game's scripts as JSON in `cache`, made again by the converter when the scripts or
+    the converter are newer; None if there is neither a cache nor the means to make one."""
+    tool = tool or Path(os.environ.get("STORYGRAPH_TOOL", TOOL))
+    dat = find_dat(game_dir)
+    sources = [p for p in (dat, tool) if p is not None and p.exists()]
+    if cache.exists() and all(cache.stat().st_mtime >= p.stat().st_mtime for p in sources):
+        return cache
+    if dat is None or not tool.exists():
+        return cache if cache.exists() else None
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    try:
+        cmd = [str(tool), str(dat), "--json", str(tmp)]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as err:
+        log.warning("story graph: %s failed: %s", tool, err)
+        return cache if cache.exists() else None
+    tmp.replace(cache)
+    log.info("story graph: %s from %s", cache, dat)
+    return cache
 
 
 def walk(expr: Expr | None) -> Iterator[Expr]:
