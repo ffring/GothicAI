@@ -37,8 +37,14 @@ FLAGS = {
     "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
     "gaze_jerk": (10.0, "deg", "the face turned this much in one frame (a turn to the partner goes up to 9)"),
     "anim_pop":  (20.0, "cm", "a joint of the animated pose (before lean, IK, gaze) jumped at a switch of animations: second difference over 3 frames"),
+    "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
+    "lip_shut":  (0.7, "",    "the voice is loud but the mouth stays shut"),
+    "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
 }
 TEXT = ("an_bone", "an_layers")  # columns that are names, not numbers
+FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
+LIPS = ("lip_open", "lip_shut")
+LIP_FRAMES = 4  # the mouth closes and opens over a frame or two: shorter runs are not flagged
 
 
 def num(v):
@@ -126,6 +132,14 @@ def frame_flags(prev2, prev, r, switch=False):
     # Only at a switch: within an animation it is how the animation moves (a running waran: 80 cm)
     if "an_pop" in r and r["frame"] >= 2 and switch:
         out.append(("anim_pop", r.get("an_bone", "-"), r["an_pop"]))
+    if prev is not None and FACES[0] in r and FACES[0] in prev:
+        out.append(("face_jump", "-", max(abs(r[c] - prev[c]) for c in FACES)))
+    if r.get("lip_on", 0) > 0:
+        # the level the mouth aims at (the voice a moment ahead) against how wide it is shown
+        if r["lip_level"] < 0.05:
+            out.append(("lip_open", "-", r["lip_open"]))
+        if r["lip_open"] < 0.1:
+            out.append(("lip_shut", "-", r["lip_level"]))
     for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
@@ -255,18 +269,30 @@ def analyze(rows):
         stats["lean_pitch"] = (min(r["ln_pitch"] for r in rows), max(r["ln_pitch"] for r in rows))
     # the animated pose: pops (second difference of a joint) overall and next to a switch of animations
     if rows and "an_pop" in rows[0]:
-        pops = sorted(r["an_pop"] for r in rows[2:])
+        pops = sorted(r["an_pop"] for r in rows[2:] if not math.isnan(r["an_pop"]))
         if pops:
             stats["anim_p99"] = pops[min(len(pops) - 1, int(len(pops) * 0.99))]
             stats["anim_max"] = pops[-1]
         stats["anim_switches"] = len(switches(rows))
         stats["anim_switch_max"] = max([rows[j]["an_pop"] for j in near if j >= 2] or [0.0])
+    # lips: how well the mouth follows the voice (correlation of the voice level and the shown opening)
+    lips = [(r["lip_level"], r["lip_open"]) for r in rows if r.get("lip_on", 0) > 0]
+    if len(lips) > 10:
+        n = len(lips)
+        ma = sum(a for a, _ in lips) / n
+        mb = sum(b for _, b in lips) / n
+        va = sum((a - ma) ** 2 for a, _ in lips)
+        vb = sum((b - mb) ** 2 for _, b in lips)
+        cov = sum((a - ma) * (b - mb) for a, b in lips)
+        if va > 0 and vb > 0:
+            stats["lip_corr"] = cov / math.sqrt(va * vb)
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
     # a contact error for a single frame at the start or the end of a step is not visible
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
+    events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
@@ -320,8 +346,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | lips corr | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -336,8 +362,9 @@ def report(out):
             f"{st['lean_roll']:.1f} / {st['lean_pitch'][0]:.1f}..{st['lean_pitch'][1]:.1f}"
         an = "-" if "anim_p99" not in st else \
             f"{st['anim_p99']:.1f} / {st['anim_max']:.1f} ({st['anim_switches']}, {st['anim_switch_max']:.1f})"
+        lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {lc} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

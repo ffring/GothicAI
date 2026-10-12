@@ -1,4 +1,4 @@
-from gothic_ai.dialogue import SentenceSplitter, to_game_text
+from gothic_ai.dialogue import MoodTag, MoodTags, SentenceSplitter, mood_of, to_game_text
 from gothic_ai.gamedata.ou import npc_dialog_key, npc_lines, parse_ou_bin
 from gothic_ai.persona import pick_samples, render_instructions
 
@@ -29,6 +29,37 @@ def test_splitter_breaks_overlong_sentence_at_commas():
     parts = s.feed("Драконы пришли с севера, орки идут с востока, паладины заперлись в городе. ")
     assert all(len(p) <= 40 for p in parts)
     assert " ".join(parts) == "Драконы пришли с севера, орки идут с востока, паладины заперлись в городе."
+
+
+def _run(tags: MoodTags, *pieces: str) -> list[str | MoodTag]:
+    out: list[str | MoodTag] = []
+    for p in pieces:
+        out += tags.feed(p)
+    return out + tags.flush()
+
+
+def test_mood_tags_come_out_of_the_text():
+    out = _run(MoodTags(), "[angry] Опять ты? [neutral] Ладно, говори.")
+    assert out == [MoodTag("angry"), " Опять ты? ", MoodTag("neutral"), " Ладно, говори."]
+
+
+def test_mood_tag_split_across_pieces_waits_for_its_end():
+    tags = MoodTags()
+    assert tags.feed("[ang") == []
+    assert tags.feed("ry] Оп") == [MoodTag("angry"), " Оп"]
+
+
+def test_mood_tag_synonyms_and_stage_directions():
+    assert mood_of(" Злость ") == "angry" and mood_of("испуг") == "afraid" and mood_of("HOSTILE") == "hostile"
+    assert mood_of("задумчиво") is None
+    # an unknown short tag is a stage direction: not said
+    assert _run(MoodTags(), "[смеётся] Ха!") == [" Ха!"]
+
+
+def test_long_brackets_and_unclosed_ones_are_text():
+    long = "[" + "очень длинная ремарка, совсем не метка" + "]"
+    assert "".join(p for p in _run(MoodTags(), long + " да") if isinstance(p, str)) == long + " да"
+    assert _run(MoodTags(), "Цена [пять") == ["Цена ", "[пять"]
 
 
 def test_game_text_drops_markdown_and_non_cp1251():

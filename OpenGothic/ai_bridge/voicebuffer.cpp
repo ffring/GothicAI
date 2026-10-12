@@ -27,11 +27,13 @@ void VoiceBuffer::append(const uint8_t* pcm16, size_t bytes) {
   const size_t at = pcm.size();
   pcm.resize(at + bytes/2);
   std::memcpy(pcm.data()+at, pcm16, (bytes/2)*2);
+  lips->append(pcm.data()+at, bytes/2);
   }
 
 void VoiceBuffer::finish() {
   std::lock_guard<std::mutex> guard(sync);
   ended = true;
+  lips->finish();
   }
 
 bool VoiceBuffer::isFinished() const {
@@ -55,6 +57,7 @@ void VoiceBuffer::render(int16_t* out, size_t n) {
   std::memcpy(out, pcm.data()+pos, have*sizeof(int16_t));
   std::memset(out+have, 0, (n-have)*sizeof(int16_t));
   pos += have;
+  lips->setPlayed(freq>0 ? uint64_t(pos)*1000/freq : 0);
   }
 
 std::unique_ptr<Tempest::SoundProducer> VoiceBuffer::producer(std::shared_ptr<VoiceBuffer> buf) {

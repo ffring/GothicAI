@@ -17,6 +17,7 @@
 
 #include <vector>
 #include <mutex>
+#include <cstdlib>
 #include <cstring>
 
 using namespace Tempest;
@@ -34,12 +35,26 @@ struct SoundDevice::Data {
   ALCcontext*             context;
   };
 
+static uint32_t loopbackRateEnv() {
+  static const uint32_t rate = []() -> uint32_t {
+    const char* v = std::getenv("TEMPEST_AUDIO_LOOPBACK");
+    if(v==nullptr || v[0]=='\0' || v[0]=='0')
+      return 0;
+    const long r = std::strtol(v,nullptr,10);
+    return r>=8000 ? uint32_t(r) : 48000;
+    }();
+  return rate;
+  }
+
 struct SoundDevice::Device {
   Device(std::string_view deviceNameSV) {
     std::string deviceName = std::string(deviceNameSV);
     gLogLevel = LogLevel::Error;
     // gLogLevel = LogLevel::Trace;
-    dev = alcOpenDevice(deviceName.c_str());
+    loopback = loopbackRateEnv()>0;
+    if(loopback)
+      dev = alcLoopbackOpenDeviceSOFT(nullptr); else
+      dev = alcOpenDevice(deviceName.c_str());
     if(dev==nullptr)
       throw std::system_error(Tempest::SoundErrc::NoDevice);
     }
@@ -48,6 +63,7 @@ struct SoundDevice::Device {
     }
 
   ALCdevice*  dev = nullptr;
+  bool        loopback = false;
   };
 
 #if 0
@@ -104,11 +120,14 @@ SoundDevice::SoundDevice():SoundDevice("") {
 SoundDevice::SoundDevice(std::string_view name):data(new Data()) {
   data->dev = PhysicalDeviceList::inst().device(name);
 
-  data->context = alcCreateContext(data->dev->dev,nullptr);
+  // a loopback device takes its format from the context
+  const ALCint loopbackAttr[] = {ALC_FORMAT_CHANNELS_SOFT, ALC_STEREO_SOFT, ALC_FORMAT_TYPE_SOFT, ALC_SHORT_SOFT,
+                                 ALC_FREQUENCY, ALCint(loopbackRateEnv()), 0};
+  data->context = alcCreateContext(data->dev->dev,data->dev->loopback ? loopbackAttr : nullptr);
   if(data->context==nullptr)
     throw std::system_error(Tempest::SoundErrc::NoDevice);
 
-  {
+  if(!data->dev->loopback) {
     ALenum e[] = {AL_EVENT_TYPE_DISCONNECTED_SOFT};
     alEventControlDirectSOFT(data->context, 1, e, true);
 
@@ -121,7 +140,7 @@ SoundDevice::SoundDevice(std::string_view name):data(new Data()) {
         }, data.get());
   }
 
-  {
+  if(!data->dev->loopback) {
   alcSetThreadContext(data->context);
   ALenum e[] = {ALC_EVENT_TYPE_DEVICE_REMOVED_SOFT, ALC_EVENT_TYPE_DEVICE_ADDED_SOFT, ALC_EVENT_TYPE_DEFAULT_DEVICE_CHANGED_SOFT};
   alcEventControlSOFT(3, e, true);
@@ -248,6 +267,27 @@ void SoundDevice::setGlobalVolume(float v) {
 
 void* SoundDevice::context() {
   return data->context;
+  }
+
+uint32_t SoundDevice::loopbackRate() {
+  return loopbackRateEnv();
+  }
+
+bool SoundDevice::renderLoopback(int16_t* out, size_t frames) {
+  if(loopbackRateEnv()==0)
+    return false;
+  auto& list = PhysicalDeviceList::inst();
+  std::shared_ptr<Device> dev;
+  {
+    std::lock_guard<std::mutex> guard(list.sync);
+    dev = list.val.lock();
+  }
+  if(dev==nullptr || !dev->loopback) {
+    std::memset(out,0,frames*2*sizeof(int16_t));  // no sound device right now: silence
+    return true;
+    }
+  alcRenderSamplesSOFT(dev->dev,out,ALCsizei(frames));
+  return true;
   }
 
 #endif

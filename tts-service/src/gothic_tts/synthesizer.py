@@ -5,7 +5,9 @@ again, so lines do not each wait for it to fail. With every provider out a line 
 the game shows it as a subtitle. The fallback takes over only before any audio was produced:
 switching mid-line would change the voice halfway through a sentence.
 
-Every line is brought to the loudness of the game's own dialogue (see loudness.py).
+Every line is brought to the loudness of the game's own dialogue (see loudness.py). Only lines in the
+voice's usual manner teach how loud it speaks: an angry line is louder and stays louder, and the next
+calm line must not come out quieter for it.
 """
 
 from __future__ import annotations
@@ -109,8 +111,11 @@ class Synthesizer:
             if leveler is not None and line is not None:
                 if tail := line.flush():
                     await on_chunk(tail, p)
-                leveler.learn(p.name, voice.id, line)
+                if not voice.style:
+                    leveler.learn(p.name, voice.id, line)
                 gain = f", {line.gain_db:+.1f} dB"
+            if voice.style:
+                gain += f", {voice.style}"
             took = time.monotonic() - started
             log.info(
                 "%s: %.2fs of audio in %.2fs (first chunk %.2fs) [%s%s]: %s",

@@ -3,7 +3,8 @@
 An npc's voice is designed once from its description (Voice Design), published to the workspace's
 voice library and remembered in a local file, so every line of that npc has the same voice. A library
 voice can be used instead: `voice=Dmitry` for every npc, or a request's `preset`; its description then
-steers the delivery (`instruction`, TTS-2 only, Flash has no steering).
+steers the delivery. A line's `style` steers it too (an angry line), whichever the voice. Steering is
+the request's `instruction`, in English; TTS-2 only, Flash has none.
 """
 
 from __future__ import annotations
@@ -84,15 +85,21 @@ class InworldTTS:
     async def synthesize(self, text: str, voice: Voice, on_chunk: ChunkCallback) -> float:
         preset = voice.preset or self.voice
         if preset:
-            instruction = voice.description if self.steerable else ""
-            return await self._stream(text, preset, instruction, on_chunk)
+            return await self._stream(text, preset, self._instruction(voice, preset=True), on_chunk)
         voice_id = await self._designed(voice)
+        instruction = self._instruction(voice, preset=False)  # the description is in the voice itself
         try:
-            return await self._stream(text, voice_id, "", on_chunk)
+            return await self._stream(text, voice_id, instruction, on_chunk)
         except _UnknownVoice:
             log.warning("inworld: designed voice %s of %s is gone, designing again", voice_id, voice.id)
             self._forget(voice.id)
-            return await self._stream(text, await self._designed(voice), "", on_chunk)
+            return await self._stream(text, await self._designed(voice), instruction, on_chunk)
+
+    def _instruction(self, voice: Voice, preset: bool) -> str:
+        if not self.steerable:
+            return ""
+        parts = [voice.description] if preset else []
+        return ". ".join(p.strip().rstrip(".") for p in (*parts, voice.style) if p.strip())
 
     async def _stream(self, text: str, voice_id: str, instruction: str, on_chunk: ChunkCallback) -> float:
         body: dict[str, Any] = {

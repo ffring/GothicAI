@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 
 from .base import Done, Item, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolChoice
 
-DEFAULT_REPLY = "Ты вернулся. Хорошо. Времени у нас мало, так что слушай внимательно. Драконы уже здесь."
+# with mood tags, as the persona's rules ask (the server takes them out of what is said)
+DEFAULT_REPLY = (
+    "[friendly] Ты вернулся. Хорошо. "
+    "[angry] Времени у нас мало, так что слушай внимательно. Драконы уже здесь."
+)
 
 
 @dataclass(frozen=True)

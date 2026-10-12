@@ -137,3 +137,30 @@ async def test_silent_microphone_and_missing_service_are_reported():
         assert "ASR-сервис недоступен" in fake.received[-1]["detail"]
         assert [e["kind"] for e in entries] == ["voice_error", "voice_error"]
         assert entries[0]["detail"] == MIC_DENIED
+
+
+async def test_the_bench_says_a_recording_for_the_hero_only_when_files_are_allowed(tmp_path):
+    import wave
+
+    rec = tmp_path / "hero.wav"
+    with wave.open(str(rec), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(speech(0.3))
+    fake = FakeGame()
+    heard: list[str] = []
+    async with fake_asr("Я от Ли") as (url, utterances), connected(fake) as link:
+        mic = FakeSource(speech())
+        voice = VoiceInput(link, lambda text, *a: heard.append(text), mic, AsrClient(url), files=True)
+        await fake.send(type="ptt_start", audio=str(rec))
+        await _until(lambda: voice.active is not None)
+        await asyncio.sleep(0.5)  # the recording is said at speaking pace
+        await fake.send(type="ptt_stop")
+        await _until(lambda: heard == ["Я от Ли"])
+        assert not mic.recording and utterances == [9600]
+
+        voice.files = False
+        await fake.send(type="ptt_start", audio=str(rec))
+        await _until(lambda: fake.statuses[-1:] == ["error"])
+        assert voice.active is None and "--voice-files" in fake.received[-1]["detail"]
