@@ -156,6 +156,7 @@ void Pose::setSkeleton(const Skeleton* sk) {
   gaze.setSkeleton(skeleton);
   lean.setSkeleton(skeleton);
   aim.setSkeleton(skeleton);
+  walk.setSkeleton(skeleton);
   bowDraw.setSkeleton(skeleton);
   flinch.setSkeleton(skeleton);
   trY          = skeleton->rootTr.y;
@@ -423,6 +424,7 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
   if(skeleton->ordered)
     implMkSkeleton(m); else
     implMkSkeleton(m,size_t(-1));
+  walk.apply(tr,numBones,base,m);
   lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
   ik.apply(tr,numBones,mt.at(3,1));
   bowDraw.hold(tr,numBones,mt);
@@ -589,14 +591,16 @@ void Pose::setObjectMatrix(const Tempest::Matrix4x4& obj, bool sync) {
   }
 
 Tempest::Vec3 Pose::animMoveSpeed(uint64_t tickCount, uint64_t dt) const {
+  // steps with the bow drawn: the legs' own
+  const Tempest::Vec3 steps = walk.move(dt);
   for(size_t i=lay.size(); i>0; ) {
     --i;
     auto& lx = lay[i];
     if(!lx.seq->data->hasMoveTr)
       continue;
-    return lx.seq->speed(layerTime(lx,tickCount)-lx.sAnim,uint64_t(float(dt)*lx.speed));
+    return lx.seq->speed(layerTime(lx,tickCount)-lx.sAnim,uint64_t(float(dt)*lx.speed)) + steps;
     }
-  return Tempest::Vec3();
+  return steps;
   }
 
 bool Pose::isDefParWindow(uint64_t tickCount) const {
@@ -928,6 +932,13 @@ float Pose::animProgress(std::string_view name, uint64_t tickCount) const {
       return std::clamp(float(layerTime(i,tickCount)-i.sAnim)/total, 0.f, 1.f);
       }
   return -1;
+  }
+
+bool Pose::updateAimWalk(const AimWalk::Input& in) {
+  if(!walk.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
   }
 
 bool Pose::updateBowDraw(const BowDraw::Input& input) {

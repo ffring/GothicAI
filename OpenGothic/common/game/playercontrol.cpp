@@ -1078,8 +1078,9 @@ Npc* PlayerControl::aimRayHit(Npc& pl, Tempest::Vec3& at) const {
 
 bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   // the bow aimed by hand (game/archery): the left button raises it and draws the string, letting it go
-  // shoots along the arrow; the right one lowers the bow, a step too; shift holds the breath; the sneak
-  // key crouches, the side steps lean out round a corner, the wheel cants the bow (onMouseWheel)
+  // shoots along the arrow; the right one lowers the bow, a jump too; shift holds the breath; forward and
+  // back step with the bow drawn (slowly, sneaking); the sneak key crouches, the side steps lean out round
+  // a corner, the wheel cants the bow (onMouseWheel)
   const auto ws = pl.weaponState();
   if(!Archery::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow) || pl.isDown() ||
      pl.isInAir() || pl.isSwim() || pl.isDive() || pl.interactive()!=nullptr)
@@ -1089,7 +1090,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   auto&      ar     = pl.archer();
   const bool lmb    = ctrl[KeyCodec::ActionGeneric];
-  const bool moving = wantsToMoveForward() || wantsToMoveBackward() || ctrl[Action::Jump];
+  const bool moving = ctrl[Action::Jump];
   bool raised = ar.isRaised();
   if(!raised && lmb && !moving && pl.hasAmmunition())
     raised = true;
@@ -1129,6 +1130,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   const float dtS  = float(dt)/1000.f;
   const float peek = (wantsToStrafeRight() ? 1.f : 0.f) - (wantsToStrafeLeft() ? 1.f : 0.f);
   const float cant = aimCant && ws==WeaponState::Bow ? 1.f : 0.f;
+  const float step = (wantsToMoveForward() ? 1.f : 0.f) - (wantsToMoveBackward() ? 1.f : 0.f);
   const float ease = 1.f - std::exp(-StanceRate*dtS);
   crouchK += ((aimCrouch ? 1.f : 0.f) - crouchK)*ease;
   peekK   += (peek - peekK)*ease;
@@ -1139,7 +1141,11 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     peekK = peek;
   if(std::abs(cantK-cant)<1e-3f)
     cantK = cant;
-  pl.setAimStance(crouchK,peekK,cantK);
+  // the steps ease in and out by themselves (AimWalk); the aim shakes as they do
+  walkK += (std::abs(step) - walkK)*ease;
+  if(std::abs(walkK-std::abs(step))<1e-3f)
+    walkK = std::abs(step);
+  pl.setAimStance(crouchK,peekK,cantK,step);
   manualAiming = true;
 
   // the mouse (the keys) turn the hero, the camera follows; up and down is the camera's
@@ -1184,6 +1190,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   in.loaded = pl.isBowLoaded();
   in.crouch = crouchK;
   in.peek   = peekK;
+  in.walk   = walkK;
   in.dt     = dt;
   if(ar.tick(in,st))
     ar.onShot(pl.releaseArrow(ar.draw(),st));
@@ -1224,11 +1231,12 @@ void PlayerControl::endManualAim(Npc& pl) {
       pl.setAnim(Npc::Anim::Idle);
     }
   pl.setManualAim(false);
-  pl.setAimStance(0,0,0);
+  pl.setAimStance(0,0,0,0);
   aimCrouch = false;
   crouchK   = 0;
   peekK     = 0;
   cantK     = 0;
+  walkK     = 0;
   Archer::playerProbe = Archer::Probe();
   ctrl[Action::Walk] = false;
   if(auto camera = Gothic::inst().camera()) {
