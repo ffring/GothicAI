@@ -72,12 +72,13 @@ class Meta:
 
 
 def load_meta(path: Path, lang: str) -> Meta:
-    """The `youtube.<lang>` section of a short's JSON (shorts/compare/<name>.json)"""
+    """The `<lang>` section of a short's metadata, kept next to the short (.shorts/<name>/youtube.json),
+    outside the repository; a JSON with a `youtube` section works too"""
     data = json.loads(path.read_text())
     try:
-        yt = data["youtube"][lang]
+        yt = data.get("youtube", data)[lang]
     except KeyError as err:
-        raise YouTubeError(f"{path} has no youtube.{lang}") from err
+        raise YouTubeError(f"{path} has no {lang}") from err
     return Meta(title=yt["title"], description=yt["description"], tags=yt.get("tags", []), language=lang,
                 synthetic=bool(yt.get("synthetic", False)))
 

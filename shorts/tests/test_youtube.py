@@ -19,6 +19,13 @@ def test_meta_from_json(tmp_path):
         youtube.load_meta(p, "en")
 
 
+def test_meta_by_language(tmp_path):
+    p = tmp_path / "youtube.json"
+    p.write_text(json.dumps({"en": {"title": "T", "description": "D", "synthetic": True}}))
+    m = youtube.load_meta(p, "en")
+    assert m.title == "T" and m.language == "en" and m.synthetic
+
+
 def test_title_limit():
     with pytest.raises(youtube.YouTubeError):
         youtube.Meta(title="x" * 101, description="").body()
