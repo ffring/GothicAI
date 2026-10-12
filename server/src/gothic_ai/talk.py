@@ -157,6 +157,8 @@ class TalkDesk:
         self.trace = trace
         self.clock = clock
         self.planner = planner
+        # what an npc perceives now, for the behavioral model (perception.py)
+        self.view_of: Callable[[str], tuple[str, ...]] = lambda npc: ()
         self.end_silence_s = end_silence_s
         self.people: dict[str, RosterEntry] = {}  # the roster: people around the hero
         self.game_time: tuple[int, int] | None = None
@@ -166,6 +168,8 @@ class TalkDesk:
         self.held: dict[str, set[str]] = {}  # npc's we attached, and what for
         self._noted: dict[tuple[str, str], float] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
+        # a conversation is over (npc, why: npc, gone, walked_away, switched): e.g. an offer not taken goes
+        self.on_talk_end: list[Callable[[str, str], None]] = []
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -293,6 +297,7 @@ class TalkDesk:
             entry.distance if entry else 0.0,
             entry.in_view if entry else True,
             traits=conv.persona.traits if conv else None,
+            view=self.view_of(talk.npc),
         )
         clock = clock_text(*self.game_time) if self.game_time else None
         reaction = await self.reflexes.posture(ctx, text, doing(entry), conv.intent if conv else None, clock)
@@ -409,6 +414,8 @@ class TalkDesk:
         self.free(talk.npc, "walk")
         if self.planner is not None:
             self.planner.talking(talk.npc, False)
+        for listener in self.on_talk_end:
+            listener(talk.npc, why)
 
     def _witnesses(self, text: str, to: Addressee | None) -> None:
         for e in self.people.values():

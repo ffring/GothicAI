@@ -11,6 +11,7 @@
 #      KEEP=1        the game stays open after the scenario
 #      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
 #                    goes into <segment>.wav instead of the speakers
+#      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
@@ -48,6 +49,12 @@ vidResIndex=2
 soundVolume=${SOUND:-0}
 musicVolume=${MUSIC:-0}
 EOF
+
+# the sharper textures the launcher gives the game too (scripts/hd-textures.sh)
+HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
+if [[ -z "${OPENGOTHIC_TEXTURES+set}" && -d "$HD_TEXTURES" ]]; then
+  export OPENGOTHIC_TEXTURES="$HD_TEXTURES"
+fi
 
 START=$(date +%s)
 (cd "$RUN" && exec env TEMPEST_BACKGROUND=1 OPENGOTHIC_BENCH="$SCEN" OPENGOTHIC_BENCH_OUT="$OUT" ${KEEP:+OPENGOTHIC_BENCH_KEEP=1} \

@@ -41,6 +41,7 @@ class FootIk final {
       bool     enable  = false;
       bool     hardOff = false; // jump, fall, swim: switch off at once instead of fading out
       float    floorY  = 0;     // height that the animation treats as ground (object origin)
+      float    crouch  = 0;     // cm the body is lowered on purpose (crouched to aim a bow), the legs bend
       Ground   ground[MaxLegs];
       uint64_t dt      = 0;
       };
@@ -75,6 +76,7 @@ class FootIk final {
       float pelvis  = 0;
       float chest   = 0;   // four legs: how far the shoulders are lowered
       float target  = 0;   // where the pelvis goes
+      float crouch  = 0;   // cm of it on purpose (crouched)
       float limit   = 0;   // how high it may be for the planted feet to reach the ground
       float floorY  = 0;
       Leg   leg[MaxLegs];
@@ -83,6 +85,8 @@ class FootIk final {
     static bool    isEnabled();
     static void    setEnabled(bool e);
     static bool    setParam(std::string_view name, float value);
+    // cm the body goes down crouched to aim (a human)
+    static float   aimCrouchDepth();
     static auto    paramList() -> std::string;
     static void    setProbing(bool p);
     static bool    isProbing();
@@ -147,6 +151,7 @@ class FootIk final {
     Tempest::Vec3 forward = {};  // four legs: horizontal direction from the hips to the shoulders
     float    spread     = 0;    // a foot further than this from the origin: the pose is not valid yet
     float    pelvis     = 0;  // how far the body is lowered, relative to the floor, smoothed
+    float    crouch     = 0;  // cm of the target on purpose (crouched to aim)
     float    chest      = 0;  // four legs: how far the shoulders are lowered
     float    roll       = 0;  // four legs: radians the body leans to its left side (+) across a slope, smoothed
     float    pairWidth[2] = {}; // four legs: distance between the hips and between the shoulders

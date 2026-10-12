@@ -1,0 +1,489 @@
+"""What an npc perceives (docs/npc-tools.md «Восприятие NPC», wave 1 step 4).
+
+The bridge reports what the npc can see right now, with the engine's own sight (npc_view, protocol v11):
+where it is, what it does, the hero, whom it sees and what they look like. Here that becomes meaning, the
+same for both models:
+- names only for those the npc knows: people it meets by its routine or has dealings with (social.py),
+  the hero once they have talked or he has heard its dialogs. A stranger is told by his look, by his armor:
+  in militia armor the hero is a militiaman to whoever does not know him;
+- in Russian for the conversational model, in place of the omniscient lines of the situation
+  (npc_tools.render_situation), and a `look` tool for the details of whom it sees;
+- a few English lines for the behavioral model (NpcContext.view), the most telling first.
+
+The npc's nearest to the hero are pushed once a second (npc_views); before a turn of the conversational
+model its view is asked afresh.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from .game import GameError, GameLink
+from .llm import Tool, ToolCall
+from .npc_tools import guild_name
+from .protocol import GameMessage, HeroLook, Loading, Look, NpcView, NpcViews, Session, Snapshot
+from .turn import ToolOutcome
+
+if TYPE_CHECKING:
+    from .dialogue import Conversation, DialogueManager
+    from .social import Social
+
+log = logging.getLogger(__name__)
+
+FRESH_S = 3.0  # a pushed view older than this is not used
+HEARD_CM = 1500  # the hero unseen but this close: it hears him
+PEOPLE_MAX, EN_OTHERS_MAX = 8, 3
+# guilds whose members know each other wherever they meet: an order, a garrison, a band of mercenaries
+ORDERS = {1, 2, 4, 5, 6, 7, 14}
+
+LOOK = "look"
+LOOK_TOOL = Tool(
+    LOOK,
+    "Присмотреться к тому, кого ты видишь: во что одет, что в руках, оружие, ранен ли, чем занят, с кем "
+    "говорит. Только то, что видно отсюда.",
+    {
+        "type": "object",
+        "properties": {
+            "who": {
+                "type": "string",
+                "description": "имя, «герой» или как ты его описал в обстановке (например «незнакомец, по "
+                "виду наёмник»)",
+            }
+        },
+        "required": ["who"],
+        "additionalProperties": False,
+    },
+)
+
+# what someone looks like by his armor (the scripts' own table, C_PlayerHasFakeGuild): Russian, English
+ARMOR_LOOKS = {
+    "ITAR_MIL": ("ополченец", "a militiaman"),
+    "ITAR_PAL": ("паладин", "a paladin"),
+    "ITAR_SLD": ("наёмник", "a mercenary"),
+    "ITAR_DJG": ("охотник на драконов", "a dragon hunter"),
+    "ITAR_BAU": ("крестьянин", "a farmer"),
+    "ITAR_VLK": ("горожанин", "a townsman"),
+    "ITAR_KDF": ("маг Огня", "a Fire Mage"),
+    "ITAR_KDW": ("маг Воды", "a Water Mage"),
+    "ITAR_NOV": ("послушник", "a novice"),
+    "ITAR_BDT": ("бандит", "a bandit"),
+    "ITAR_THORUS": ("бандит", "a bandit"),
+    "ITAR_PIR": ("пират", "a pirate"),
+    "ITAR_PRISONER": ("каторжник", "a convict"),
+    "ITAR_DEMENTOR": ("человек в чёрном балахоне", "a man in a black robe"),
+}
+
+ROOMS = {  # whose room it is, by the scripts' room guilds
+    1: "паладинов",
+    2: "ополчения",
+    3: "горожан",
+    4: "магов Огня",
+    5: "послушников",
+    7: "наёмников",
+    8: "крестьян",
+    9: "бандитов",
+    14: "магов Воды",
+}
+
+# what someone does, by script state: of others (3rd person), of the npc itself (2nd person)
+DOING = {
+    "ZS_STAND_ARMSCROSSED": ("стоит, скрестив руки", "стоишь, скрестив руки"),
+    "ZS_STAND_GUARDING": ("стоит на страже", "стоишь на страже"),
+    "ZS_GUARD_PASSAGE": ("охраняет проход", "охраняешь проход"),
+    "ZS_STAND_EATING": ("ест", "ешь"),
+    "ZS_STAND_DRINKING": ("пьёт", "пьёшь"),
+    "ZS_STAND_SWEEPING": ("подметает", "подметаешь"),
+    "ZS_STAND_WP": ("стоит", "стоишь"),
+    "ZS_SIT_BENCH": ("сидит на скамье", "сидишь на скамье"),
+    "ZS_SIT_CHAIR": ("сидит на стуле", "сидишь на стуле"),
+    "ZS_SIT_THRONE": ("сидит на троне", "сидишь на троне"),
+    "ZS_SIT_CAMPFIRE": ("сидит у костра", "сидишь у костра"),
+    "ZS_SIT_GROUND": ("сидит на земле", "сидишь на земле"),
+    "ZS_SLEEP": ("спит", "спишь"),
+    "ZS_SLEEP_GROUND": ("спит на земле", "спишь на земле"),
+    "ZS_SMALLTALK": ("болтает", "болтаешь"),
+    "ZS_READ_BOOKSTAND": ("читает у книжной стойки", "читаешь у книжной стойки"),
+    "ZS_POTION_ALCHEMY": ("варит зелья", "варишь зелья"),
+    "ZS_PRACTICE_MAGIC": ("упражняется в магии", "упражняешься в магии"),
+    "ZS_PRACTICE_SWORD": ("упражняется с мечом", "упражняешься с мечом"),
+    "ZS_SMITH_FIRE": ("работает у горна", "работаешь у горна"),
+    "ZS_SMITH_ANVIL": ("куёт на наковальне", "куёшь на наковальне"),
+    "ZS_SMITH_COOL": ("закаляет клинок", "закаляешь клинок"),
+    "ZS_SMITH_SHARP": ("точит клинок", "точишь клинок"),
+    "ZS_COOK_CAULDRON": ("готовит у котла", "готовишь у котла"),
+    "ZS_COOK_STOVE": ("готовит у плиты", "готовишь у плиты"),
+    "ZS_COOK_PAN": ("жарит на сковороде", "жаришь на сковороде"),
+    "ZS_ROAST_SCAVENGER": ("жарит мясо", "жаришь мясо"),
+    "ZS_PICK_FIELD": ("работает в поле", "работаешь в поле"),
+    "ZS_PICK_ORE": ("добывает руду", "добываешь руду"),
+    "ZS_RAKE_FIP": ("работает граблями", "работаешь граблями"),
+    "ZS_PRAY_INNOS": ("молится Инносу", "молишься Инносу"),
+    "ZS_PRAY_INNOS_FP": ("молится Инносу", "молишься Инносу"),
+    "ZS_PRAY_SLEEPER": ("молится Спящему", "молишься Спящему"),
+    "ZS_PLAY_LUTE": ("играет на лютне", "играешь на лютне"),
+    "ZS_STOMP_HERB": ("толчёт травы", "толчёшь травы"),
+    "ZS_SAW": ("пилит", "пилишь"),
+    "ZS_REPAIR_HUT": ("чинит хижину", "чинишь хижину"),
+    "ZS_WASH_FP": ("умывается", "умываешься"),
+    "ZS_TALK": ("разговаривает", "разговариваешь"),
+    "ZS_ATTACK": ("дерётся", "дерёшься"),
+    "ZS_FLEE": ("убегает", "убегаешь"),
+    "ZS_FOLLOW_PLAYER": ("идёт за героем", "идёшь за героем"),
+    "ZS_GUIDE_PLAYER": ("ведёт героя", "ведёшь героя"),
+    "ZS_UNCONSCIOUS": ("лежит без сознания", "лежишь без сознания"),
+    "ZS_DEAD": ("мёртв", "мёртв"),
+}
+BODY = {  # by the body, when the state says nothing
+    "walk": ("идёт", "идёшь"),
+    "run": ("бежит", "бежишь"),
+    "swim": ("плывёт", "плывёшь"),
+    "sit": ("сидит", "сидишь"),
+    "lie": ("лежит", "лежишь"),
+    "down": ("лежит без сознания", "лежишь без сознания"),
+    "dead": ("мёртв", "мёртв"),
+}
+WEAPON = {  # drawn
+    "fists": ("сжал кулаки", "fists up"),
+    "melee": ("оружие наголо", "a weapon drawn"),
+    "ranged": ("лук или арбалет наготове", "a bow drawn"),
+    "magic": ("готовит заклинание", "a spell ready"),
+}
+EN_DOING = {
+    "ZS_ATTACK": "fighting",
+    "ZS_FLEE": "running away",
+    "ZS_SLEEP": "asleep",
+    "ZS_SLEEP_GROUND": "asleep",
+    "ZS_TALK": "talking",
+    "ZS_SMALLTALK": "chatting",
+}
+
+
+@dataclass(frozen=True)
+class Sight:
+    """The npc's view for the conversational model's situation, in place of the omniscient lines."""
+
+    place: str
+    hero: str | None
+    people: str
+
+
+def armor_look(armor: str | None) -> tuple[str, str] | None:
+    if not armor:
+        return None
+    for prefix, look in ARMOR_LOOKS.items():
+        if armor.upper().startswith(prefix):
+            return look
+    return None
+
+
+class PerceptionDesk:
+    """What npc's perceive: the views the game pushes and the ones asked before a turn; a TurnExtension
+    (the `look` tool) for the conversational model, English lines for the behavioral one."""
+
+    def __init__(
+        self,
+        link: GameLink,
+        *,
+        social: Callable[[], Social | None] = lambda: None,
+        knows_hero: Callable[[str], bool] = lambda npc: False,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.link = link
+        self.social = social
+        self.knows_hero = knows_hero
+        self.clock = clock
+        self._views: dict[str, tuple[float, NpcView]] = {}
+        link.listeners.append(self._on_message)
+
+    def _on_message(self, msg: GameMessage) -> None:
+        match msg:
+            case NpcViews():
+                now = self.clock()
+                for v in msg.views:
+                    self._views[v.npc.upper()] = (now, v)
+            case Session() | Loading():
+                self._views.clear()
+
+    def view(self, npc: str) -> NpcView | None:
+        """Its latest view, if fresh enough."""
+        got = self._views.get(npc.upper())
+        return got[1] if got is not None and self.clock() - got[0] <= FRESH_S else None
+
+    def views(self) -> list[NpcView]:
+        """The fresh views of all npc's."""
+        now = self.clock()
+        return [v for t, v in self._views.values() if now - t <= FRESH_S]
+
+    async def fresh(self, npc: str) -> NpcView | None:
+        """Its view asked from the game now (a free npc far from the hero is not pushed)."""
+        views = await self.link.npc_view([npc])
+        for v in views:
+            self._views[v.npc.upper()] = (self.clock(), v)
+        return self.view(npc)
+
+    # --- who is who ------------------------------------------------------------------------------
+
+    def knows(self, viewer: str, other: Look) -> bool:
+        """Whether `viewer` knows `other` by name: whom it meets or has dealings with, its order's people."""
+        if other.kind == "monster":
+            return True  # a wolf is a wolf
+        social = self.social()
+        if social is not None and social.ties.get(viewer.upper(), {}).get(other.id.upper()) is not None:
+            return True
+        guild = social.guilds.get(viewer.upper()) if social is not None else None
+        return guild is not None and guild in ORDERS and guild == other.guild
+
+    def label(self, viewer: str, other: Look) -> str:
+        """How the npc calls someone it sees, in Russian."""
+        if self.knows(viewer, other):
+            return other.name
+        look = armor_look(other.armor.item if other.armor else None)
+        return f"незнакомец, по виду {look[0]}" if look else "незнакомец"
+
+    # --- the conversational model ---------------------------------------------------------------
+
+    def sight(self, npc: str, snap: Snapshot | None = None) -> Sight | None:
+        view = self.view(npc)
+        if view is None:
+            return None
+        return Sight(self._place(view), self._hero(view, snap), self._people(view))
+
+    def _place(self, view: NpcView) -> str:
+        where = "под крышей" if view.indoors else "под открытым небом"
+        if view.indoors and view.room_guild in ROOMS:
+            where += f" (это помещение {ROOMS[view.room_guild]})"
+        wp = view.waypoint or view.nearest_waypoint
+        line = f"Ты {where}" + (f", у точки {wp}" if wp else "") + "."
+        doing = _doing(view.state, view.body, 1)
+        if view.body == "mob" and view.mob:
+            line += f" Ты занят: {view.mob}."
+        elif doing:
+            line += f" Ты {doing}."
+        if view.weapon in WEAPON:
+            line += " Твоё оружие наготове." if view.weapon != "magic" else " Ты держишь заклинание наготове."
+        if view.in_hands:
+            line += f" В руках у тебя: {view.in_hands.name}."
+        return line
+
+    def _hero(self, view: NpcView, snap: Snapshot | None) -> str | None:
+        hero = view.hero
+        if hero is None:
+            return None
+        metres = _m(hero.distance)
+        if not hero.seen:
+            if hero.distance <= HEARD_CM:
+                return f"Героя ты сейчас не видишь, но слышишь: он в {metres} м."
+            return f"Героя не видно, он в {metres} м."
+        known = self.knows_hero(view.npc)
+        line = f"Герой в {metres} м" + (", смотрит на тебя" if hero.faces_you else "")
+        details = _details(hero)
+        look = armor_look(hero.armor.item if hero.armor else None)
+        if known:
+            if snap is not None and snap.player is not None:
+                details.insert(0, f"гильдия: {guild_name(snap.player.guild)}")
+        else:
+            details.insert(0, f"ты его не знаешь, по виду {look[0]}" if look else "ты его не знаешь")
+        if hero.armor is None:
+            details.append("без доспеха")
+        return line + (": " + "; ".join(details) if details else "") + "."
+
+    def _people(self, view: NpcView) -> str:
+        # creatures of a kind that only stand about are told once: «Овца ×6 (6–14 м)»
+        herds: dict[str, list[Look]] = {}
+        for o in view.sees:
+            if o.kind == "monster" and o.state != "ZS_MM_ATTACK":
+                herds.setdefault(o.name, []).append(o)
+        items: list[str] = []
+        told: set[str] = set()
+        for o in view.sees:
+            if len(items) >= PEOPLE_MAX:
+                break
+            herd = herds.get(o.name, []) if o.kind == "monster" else []
+            if len(herd) > 1:
+                if o.name not in told:
+                    told.add(o.name)
+                    near, far = _m(herd[0].distance), _m(herd[-1].distance)
+                    items.append(
+                        f"{o.name} ×{len(herd)} ({near}–{far} м)"
+                        if near != far
+                        else f"{o.name} ×{len(herd)} ({near} м)"
+                    )
+                continue
+            if o.kind == "body":
+                who = o.name if self.knows(view.npc, o) else "чьё-то"
+                items.append(f"тело ({who}, {_m(o.distance)} м)")
+                continue
+            parts = [f"{self.label(view.npc, o)} ({_m(o.distance)} м)", *_details(o, with_armor=False)]
+            if o.talking_to == view.npc:
+                parts.append("говорит с тобой")
+            elif o.talking_to == "PLAYER":
+                parts.append("говорит с героем")
+            elif o.talking_to:
+                partner = next((p for p in view.sees if p.id == o.talking_to), None)
+                if partner is not None:
+                    parts.append(f"говорит с: {self.label(view.npc, partner)}")
+            items.append(", ".join(parts))
+        return ("Видишь: " + "; ".join(items) + ".") if items else "Больше никого не видишь."
+
+    def look(self, npc: str, who: str) -> str:
+        """The `look` tool: the details of one it sees."""
+        view = self.view(npc)
+        if view is None:
+            return "Сейчас не разглядеть."
+        target = self._find(view, who)
+        if target is None:
+            return f"Не видно: {who}."
+        name = "Герой" if isinstance(target, HeroLook) else self.label(view.npc, target)
+        details = _details(target)
+        if target.kind == "human" and target.armor is None:
+            details.append("без доспеха")
+        if target.in_hands:
+            details.append(f"в руках: {target.in_hands.name}")
+        if target.talking_to:
+            details.append(
+                "говорит с тобой"
+                if target.talking_to == view.npc
+                else "говорит с героем"
+                if target.talking_to == "PLAYER"
+                else "с кем-то говорит"
+            )
+        if not details:
+            details.append("ничего особенного")
+        return f"{name}, {_m(target.distance)} м: " + "; ".join(details) + "."
+
+    def _find(self, view: NpcView, who: str) -> Look | None:
+        text = who.lower().strip()
+        if view.hero is not None and view.hero.seen and ("геро" in text or text in ("player", "hero")):
+            return view.hero
+        for o in view.sees:
+            if o.name.lower() in text or text in o.name.lower() or text == o.id.lower():
+                if self.knows(view.npc, o) or o.kind == "monster":
+                    return o
+        strangers = [o for o in view.sees if o.kind == "human" and not self.knows(view.npc, o)]
+        for o in strangers:  # a stranger, by what he looks like
+            look = armor_look(o.armor.item if o.armor else None)
+            if look is not None and look[0] in text:
+                return o
+        if "незнаком" in text and strangers:
+            return strangers[0]  # the nearest one
+        return None
+
+    # --- TurnExtension --------------------------------------------------------------------------
+
+    async def prepare(self, npc: str) -> None:
+        try:
+            await self.fresh(npc)
+        except GameError as err:
+            log.info("no view of %s: %s", npc, err)
+
+    def situation(self, npc: str) -> str | None:
+        return None  # the view goes into the situation itself (npc_tools.render_situation)
+
+    def tools(self, npc: str) -> list[Tool]:
+        view = self.view(npc)
+        seen = view is not None and (bool(view.sees) or (view.hero is not None and view.hero.seen))
+        return [LOOK_TOOL] if seen else []
+
+    async def handle(
+        self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
+    ) -> ToolOutcome | None:
+        if call.name != LOOK:
+            return None
+        return ToolOutcome(self.look(conv.npc, str(call.arguments.get("who", ""))), "read")
+
+    # --- the behavioral model -------------------------------------------------------------------
+
+    def english(self, npc: str) -> tuple[str, ...]:
+        """A few lines of what it perceives, the most telling first: for NpcContext.view."""
+        view = self.view(npc)
+        if view is None:
+            return ()
+        lines = []
+        if view.indoors:
+            room = f", in the {_EN_ROOMS[view.room_guild]} quarters" if view.room_guild in _EN_ROOMS else ""
+            lines.append(f"You are indoors{room}.")
+        hero = view.hero
+        if hero is not None:
+            if not hero.seen:
+                lines.append("You cannot see the hero.")
+            else:
+                said = []
+                if not self.knows_hero(view.npc):
+                    look = armor_look(hero.armor.item if hero.armor else None)
+                    said.append("you do not know him" + (f", he looks like {look[1]}" if look else ""))
+                if hero.weapon in WEAPON:
+                    said.append(f"he has {WEAPON[hero.weapon][1]}")
+                if hero.hurt:
+                    said.append("he is wounded")
+                if said:
+                    lines.append("The hero: " + "; ".join(said) + ".")
+        others = sorted(view.sees, key=lambda o: (_salience(o), o.distance))
+        for o in others[:EN_OTHERS_MAX]:
+            if o.kind == "body":
+                lines.append(f"A dead body lies {_m(o.distance)} m away.")
+                continue
+            if o.kind == "monster":
+                who = o.name  # a creature: its name as the game shows it
+            elif self.knows(view.npc, o):
+                who = f"{o.name}, whom you know,"
+            else:
+                look = armor_look(o.armor.item if o.armor else None)
+                who = f"A stranger who looks like {look[1]}," if look else "A stranger"
+            what = []
+            if o.weapon in WEAPON and o.kind == "human":
+                what.append(f"with {WEAPON[o.weapon][1]}")
+            if o.state in EN_DOING:
+                what.append(EN_DOING[o.state])
+            lines.append(f"{who} is {_m(o.distance)} m away" + (", " + ", ".join(what) if what else "") + ".")
+        return tuple(lines)
+
+
+_EN_ROOMS = {
+    1: "paladins'",
+    2: "militia's",
+    4: "Fire Mages'",
+    5: "novices'",
+    7: "mercenaries'",
+    9: "bandits'",
+}
+
+
+def _salience(o: Look) -> int:
+    """Danger first: monsters and the armed, then the fighting, then the rest."""
+    if o.kind == "monster" or (o.weapon in WEAPON and o.kind == "human"):
+        return 0
+    if o.state in ("ZS_ATTACK", "ZS_FLEE"):
+        return 1
+    return 2 if o.kind == "human" else 3
+
+
+def _doing(state: str, body: str, person: int) -> str:
+    """What someone does: 0 of another, 1 of the npc itself."""
+    if state in DOING:
+        return DOING[state][person]
+    if body in BODY:
+        return BODY[body][person]
+    return ""
+
+
+def _details(o: Look, with_armor: bool = True) -> list[str]:
+    out = []
+    if (doing := _doing(o.state, o.body, 0)) and o.kind != "monster":
+        out.append(doing)
+    elif o.kind == "monster" and o.moving:
+        out.append("бежит" if o.body == "run" else "бродит")
+    if o.weapon in WEAPON and o.kind == "human":
+        out.append(WEAPON[o.weapon][0])
+    if o.hurt:
+        out.append("в крови")
+    if with_armor and o.armor:
+        out.append(f"на нём: {o.armor.name}")
+    return out
+
+
+def _m(cm: float) -> int:
+    return max(1, round(cm / 100))

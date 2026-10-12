@@ -11,9 +11,10 @@ import csv
 import json
 import math
 import os
+import re
 import subprocess
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 
 FPS = 30
 TOP_EVENTS = 12
@@ -43,11 +44,19 @@ FLAGS = {
     "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
     "flinch_none": (1.0, "x", "a blow and the upper body hardly gave way: 1.5 degrees over the peak"),
     "flinch_slow": (1.5, "s", "the upper body is not back this long after the last blow"),
+    "blink_shut": (0.5, "",   "a blink keeps the eyes shut too long (a blink is closed for 2-4 frames)"),
 }
 TEXT = ("an_bone", "an_layers")  # columns that are names, not numbers
 FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
 LIPS = ("lip_open", "lip_shut")
+BLINK_FRAMES = 7  # the eyes half shut by a blink longer than this many frames: stuck
 LIP_FRAMES = 4  # the mouth closes and opens over a frame or two: shorter runs are not flagged
+
+
+def counted(rows, col):
+    """what a counter of the watched one added over the rows: a switch of the watched one (a new counter,
+    first read as 0) is not counted"""
+    return int(sum(d for d in (b[col] - a[col] for a, b in zip(rows, rows[1:])) if 0 < d <= 3))
 
 
 def num(v):
@@ -140,6 +149,8 @@ def frame_flags(prev2, prev, r, switch=False):
         out.append(("aim_off", "-", r["a_err"]))
     if prev is not None and FACES[0] in r and FACES[0] in prev:
         out.append(("face_jump", "-", max(abs(r[c] - prev[c]) for c in FACES)))
+    if r.get("bk_w", 0) > 0.5:
+        out.append(("blink_shut", "-", r["bk_w"]))
     if r.get("lip_on", 0) > 0:
         # the level the mouth aims at (the voice a moment ahead) against how wide it is shown
         if r["lip_level"] < 0.05:
@@ -299,6 +310,21 @@ def analyze(rows):
         cov = sum((a - ma) * (b - mb) for a, b in lips)
         if va > 0 and vb > 0:
             stats["lip_corr"] = cov / math.sqrt(va * vb)
+    # hands while it speaks: how much of the talk has a gesture, how much of the listening after it
+    # (a second after the voice), gestures started, started over a playing one, stopped early
+    if rows and "ge_talk" in rows[0]:
+        talk = [r for r in rows if r["ge_talk"] > 0]
+        quiet, since = [], None
+        for i, r in enumerate(rows):
+            since = i if r["ge_talk"] > 0 else since
+            if r["ge_talk"] == 0 and since is not None and i - since > FPS:
+                quiet.append(r)
+        if talk:
+            stats["ges_talk"] = sum(1 for r in talk if r["ge_id"] > 0) / len(talk)
+            stats["ges_listen"] = None if not quiet else sum(1 for r in quiet if r["ge_id"] > 0) / len(quiet)
+            for k in ("starts", "cuts", "stops") + (("nods",) if "ge_nods" in rows[0] else ()):
+                stats["ges_" + k] = counted(rows, "ge_" + k)
+            stats["ges_kinds"] = len({int(r["ge_id"]) for r in rows if r["ge_id"] > 0})
     # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
     # to come back after a blow; a blow without a flinch, a flinch that does not come back
     if rows and "f_hits" in rows[0]:
@@ -322,6 +348,15 @@ def analyze(rows):
                         events.append({"flag": "flinch_slow", "leg": "-", "start": int(rows[i]["frame"]),
                                        "end": int(rows[-1]["frame"]), "worst": t, "at": int(rows[-1]["frame"])})
             stats["flinch_settle"] = settle
+    # blinks of the watched one: how many a minute, of them in a pause of the voice, at a shift of the eyes
+    if rows and "bk_n" in rows[0] and rows[-1]["bk_on"] > 0:
+        secs = (rows[-1]["t"] - rows[0]["t"]) / 1000.0
+        if secs > 1:
+            for k in ("pause", "shift", "double"):
+                stats["blink_" + k] = counted(rows, "bk_" + k)
+            # the blinks seen: the eyes going half shut
+            stats["blink_n"] = sum(1 for a, b in zip(rows, rows[1:]) if a["bk_w"] <= 0.3 < b["bk_w"])
+            stats["blink_rate"] = stats["blink_n"] * 60.0 / secs
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -329,6 +364,7 @@ def analyze(rows):
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
     events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
+    events = [ev for ev in events if ev["flag"] != "blink_shut" or ev["end"] - ev["start"] + 1 > BLINK_FRAMES]
     # a blow throws the head around on purpose (the flinch, the stumble): no gaze jerk for a second after it
     if rows and "f_hits" in rows[0]:
         struck = [int(rows[i]["frame"]) for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
@@ -337,6 +373,129 @@ def analyze(rows):
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
+
+
+ARCHER_STAGE = {0: "lowered", 1: "raising", 2: "nocked", 3: "drawing", 4: "held", 5: "reloading"}
+
+
+def arrows(out):
+    """the arrows of the manual aim per segment, from bench.log: [(zone or 'miss', draw, flew cm)]. An arrow
+    counts for the segment it was shot in: a far miss may come down when the next one runs (they come
+    down in the order they were shot)"""
+    path = os.path.join(out, "bench.log")
+    per = defaultdict(list)
+    if not os.path.exists(path):
+        return per
+    seg, shot = None, deque()
+    with open(path, errors="replace") as f:  # names of the game's npcs come in its codepage
+        for line in f:
+            line = line.strip()
+            if line.startswith("rec stop"):
+                seg = None
+            elif line.startswith("rec "):
+                seg = line.split()[1]
+            elif line.startswith("arrow shot"):
+                shot.append(seg)
+            elif line.startswith("arrow hit") or line.startswith("arrow missed"):
+                at = shot.popleft() if shot else seg
+                if not at:
+                    continue
+                if line.startswith("arrow hit"):
+                    body = line.split(": ", 1)[1]
+                    zone = body.split(",")[0].strip()
+                    draw = float(body.split("draw ")[1].split(",")[0])
+                    flew = float(body.split("flew ")[1].split(" ")[0])
+                    per[at].append((zone, draw, flew))
+                else:
+                    # "came down at <xyz>, flew <cm> cm" or "flew out at <xyz>, flew <cm> cm"
+                    m = re.search(r"flew (-?[0-9.]+) cm", line)
+                    per[at].append(("miss", math.nan, float(m.group(1)) if m else math.nan))
+    return per
+
+
+def manual_aim(out, segs):
+    """the manual aim: hits by zone, the sway at full draw, how long the draw takes"""
+    shots = arrows(out)
+    lines = []
+    for seg, rows in segs.items():
+        if not rows or "m_stage" not in rows[0] or not any(r["m_stage"] >= 1 for r in rows):
+            continue
+        held = [r for r in rows if r["m_stage"] == 4]
+        sway = math.sqrt(sum(r["m_sway_yaw"] ** 2 + r["m_sway_pitch"] ** 2 for r in held) / len(held)) if held else math.nan
+        offs = sorted(r["m_off"] for r in held if r["m_off"] >= 0)
+        off = f"{offs[len(offs) // 2]:.2f} / {offs[int(len(offs) * 0.9)]:.2f}" if offs else "-"
+        draws, start = [], None
+        for r in rows:
+            if r["m_stage"] == 3 and start is None:
+                start = r["t"]
+            elif r["m_stage"] != 3 and start is not None:
+                if r["m_stage"] == 4:
+                    draws.append(r["t"] - start)
+                start = None
+        draw = f"{sum(draws) / len(draws) / 1000:.2f}" if draws else "-"
+        a = shots.get(seg, [])
+        count = defaultdict(int)
+        for z, _, _ in a:
+            count[z] += 1
+        hits = " ".join(f"{z} {count[z]}" for z in ("head", "body", "limb", "miss") if count[z])
+        flew = f"{sum(x[2] for x in a) / len(a) / 100:.1f}" if a else "-"
+        # the crosshair: how open at full draw, how far it jumps in a frame (it stays where it aims)
+        spreads = sorted(r["m_spread"] for r in held if r.get("m_spread", -1) >= 0)
+        spread = f"{spreads[len(spreads) // 2]:.2f}" if spreads else "-"
+        jumps = [r["m_cross"] for r in rows if r.get("m_cross", -1) >= 0]
+        jump = f"{max(jumps):.2f}" if jumps else "-"
+        # how smooth it opens and closes: the fastest, deg/s; the largest change of that speed in a frame
+        # (a jerk: it starts moving at once)
+        rates = []
+        for p, q in zip(rows, rows[1:]):
+            if p.get("m_spread", -1) >= 0 and q.get("m_spread", -1) >= 0 and q["t"] > p["t"]:
+                rates.append((q["m_spread"] - p["m_spread"]) / (q["t"] - p["t"]) * 1000)
+        rate = f"{max(abs(v) for v in rates):.0f} / {max(abs(v - u) for u, v in zip(rates, rates[1:])):.0f}" \
+            if len(rates) > 1 else "-"
+        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {spread} | {jump} | {rate} | {draw} | "
+                     f"{max(r['m_fatigue'] for r in rows):.2f} | {'yes' if any(r['m_holding'] > 0 for r in rows) else '-'} |")
+    if not lines:
+        return []
+    return ["## Manual aim", "",
+            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | crosshair open deg (held) | crosshair jump max % screen | crosshair speed max / its step deg/s | draw s | fatigue max | breath held |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"] + lines + [""]
+
+
+def hit_zones(out):
+    """the hit zones fitted to the bodies (`zones` with `zones fit on|off`): of each zone, the points of the
+    body in it, in another zone only; by the body's mesh, with the guess and fitted"""
+    path = os.path.join(out, "game.log")
+    if not os.path.exists(path):
+        return []
+    fit, table = "on", {}
+    for l in open(path, encoding="utf-8", errors="replace"):
+        m = re.search(r"\[bench\] zones fit (on|off)", l)
+        if m:
+            fit = m.group(1)
+            continue
+        if "coverage (points" not in l:
+            continue
+        body = re.search(r" body (\S+)\s*$", l)
+        name = body.group(1) if body else "?"
+        zones = {z: (int(n), int(o), int(w)) for z, n, o, w in
+                 re.findall(r"(head|body|limb) (\d+): (\d+)% / (\d+)% / \d+%", l)}
+        fitted = re.search(r"(\d+ of \d+) capsules fitted", l)
+        table.setdefault(name, {})[fit] = (zones, fitted.group(1) if fitted else "-")
+    if not table:
+        return []
+    lines = ["## Hit zones", "",
+             "Of each zone: the points of the body in it, guessed -> fitted (in another zone only, fitted).", "",
+             "| body | head | trunk | limbs | fitted capsules |", "|---|---|---|---|---|"]
+    for name, v in table.items():
+        def cell(z):
+            a = v.get("off", ({}, ""))[0].get(z)
+            b = v.get("on", ({}, ""))[0].get(z)
+            if a is None and b is None:
+                return "-"
+            s = (f"{a[1]}%" if a else "?") + " -> " + (f"{b[1]}%" if b else "?")
+            return s + (f" ({b[2]}%)" if b and b[2] >= 5 else "")
+        lines.append(f"| {name} | {cell('head')} | {cell('body')} | {cell('limb')} | {v.get('on', ({}, '-'))[1]} |")
+    return lines + [""]
 
 
 def sheet(video, frames, path, cols=4, width=400):
@@ -387,8 +546,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | events |")
-    lines.append("|" + "---|" * 16)
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | gestures talk / listen % (started, over one, stopped) | blinks /min (in a pause, at a shift) | events |")
+    lines.append("|" + "---|" * 18)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -405,13 +564,21 @@ def report(out):
             f"{st['anim_p99']:.1f} / {st['anim_max']:.1f} ({st['anim_switches']}, {st['anim_switch_max']:.1f})"
         am = "-" if "aim_p90" not in st else f"{st['aim_p90']:.1f} / {st['aim_bend']:.0f}"
         lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
+        gl = "-" if st.get("ges_listen") is None else f"{st['ges_listen'] * 100:.0f}"
+        gs = "-" if "ges_talk" not in st else \
+            f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})" + \
+            ("" if "ges_nods" not in st else f" nods {st['ges_nods']}")
+        bk = "-" if "blink_rate" not in st else \
+            f"{st['blink_rate']:.0f} ({st['blink_pause']}, {st['blink_shift']})"
         fl = "-" if "flinch_hits" not in st else \
             f"{st['flinch_hits']}, {st['flinch_peak']:.1f}, {st['flinch_settle']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {gs} | {bk} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
+    lines += manual_aim(out, segs)
+    lines += hit_zones(out)
 
     all_events.sort(key=lambda e: -e["severity"])
     lines.append("## Worst events")
@@ -484,6 +651,9 @@ def diff(a, b):
             ret += "" if "spread" not in st else f" spread {st['spread']:.1f}"
             ret += "" if "anim_p99" not in st else \
                 f" pop {st['anim_p99']:.1f}/{st['anim_max']:.1f} sw {st['anim_switch_max']:.1f}"
+            ret += "" if "ges_talk" not in st else \
+                f" gest {st['ges_talk'] * 100:.0f}/{'-' if st['ges_listen'] is None else round(st['ges_listen'] * 100)}%" \
+                f" n{st['ges_starts']} over{st['ges_cuts']}"
             return ret + ("" if "limp" not in st else f" limp {st['limp']:.1f}")
         print(f"| {seg} | {c(res[0][0])} | {c(res[1][0])} | {changes or 'same'} |")
     print()

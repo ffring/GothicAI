@@ -32,6 +32,8 @@ from .protocol import (
     NpcActCmd,
     NpcActResult,
     NpcActType,
+    NpcView,
+    NpcViewCmd,
     PingCmd,
     Pong,
     Result,
@@ -218,7 +220,8 @@ class GameLink:
 
     async def debug(self, cmd: DebugCommand, slot: int = 0, timeout: float = 10.0, **args: Any) -> None:
         """A test helper (game in -devmode): saving/loading `save_slot_<slot>.sav` (returns once it has
-        started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none")."""
+        started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none"),
+        `teleport` (near=, distance=), `kill` (instance=, near=)."""
         await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot, **args), timeout)
 
     async def patch_graph(
@@ -253,9 +256,18 @@ class GameLink:
         keeps its own list."""
         await self.send(StoryWatchCmd(npcs=[n.upper() for n in npcs], owner=owner))
 
-    async def story_effect(self, npc: str, effects: list[dict[str, Any]], timeout: float = 5.0) -> None:
-        """Effects on an npc through the scripts (see StoryEffectCmd)."""
-        await self._request(StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects), timeout)
+    async def story_effect(
+        self, npc: str, effects: list[dict[str, Any]], timeout: float = 5.0, *, check: bool = False
+    ) -> None:
+        """Effects on an npc through the scripts (see StoryEffectCmd); `check`: all or nothing, the gives
+        only if each giver has what it gives."""
+        cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
+        await self._request(cmd, timeout)
+
+    async def npc_view(self, npcs: list[str], timeout: float = 3.0) -> list[NpcView]:
+        """What these npc's perceive now (see NpcViewCmd)."""
+        res = await self._request(NpcViewCmd(req=self._next_id("v"), npcs=[n.upper() for n in npcs]), timeout)
+        return [NpcView.model_validate(v) for v in res.value or []]
 
     async def story_nearby(self, npc: str, radius: int = 2000) -> list[dict[str, Any]]:
         """People within `radius` cm of an npc."""
@@ -308,6 +320,23 @@ class GameLink:
         await self._request(
             DebugCmd(req=self._next_id("r"), cmd="choose", npc=npc.upper(), node=node.upper()), timeout
         )
+
+    async def deal_window(self, timeout: float = 5.0) -> dict[str, Any] | None:
+        """What the deal window shows (game in -devmode): {deal, version, npc, npc_gives, hero_gives,
+        missing, sent}, or None."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="deal"), timeout)
+        return dict(res.value) if res.value else None
+
+    async def press_deal(self, timeout: float = 5.0) -> str:
+        """Y as the player presses it on the deal window (game in -devmode): "sent", or why not ("none",
+        "waiting", "missing", "changed", "blocked")."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="deal_accept"), timeout)
+        return str(res.value or "")
+
+    async def decline_deal(self, timeout: float = 5.0) -> str:
+        """N as the player presses it on the deal window (game in -devmode): "declined", "none", "blocked"."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="deal_decline"), timeout)
+        return str(res.value or "")
 
     async def check_conditions(self, timeout: float = 30.0) -> dict[str, Any]:
         """Script conditions of every npc in the world against their lifted form (game in -devmode)."""

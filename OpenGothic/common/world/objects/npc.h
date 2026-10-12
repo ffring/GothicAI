@@ -14,6 +14,7 @@
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
 #include "world/objects/attention.h"
+#include "world/objects/archer.h"
 #include "world/fplock.h"
 #include "world/waypath.h"
 
@@ -183,6 +184,7 @@ class Npc final {
     // a voiced line starts: the mouth follows the voice (LipSync)
     void       startSpeech(const Tempest::Sound& voice);
     void       startSpeech(std::shared_ptr<LipSync::Track> voice);
+    void       setTalkMood(std::string_view mood);  // of the line it starts to say: its gestures follow it
     void       stopSpeech();
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;
@@ -290,6 +292,39 @@ class Npc final {
     bool      aimBow();
     bool      shootBow(Interactive* focOverride = nullptr);
     bool      hasAmmunition() const;
+    // an arrow (a bolt) is put in, ready to shoot
+    bool      isBowLoaded() const;
+
+    // the bow aimed by hand (game/archery): the hero's input drives it (PlayerControl)
+    Archer&   archer() { return arch; }
+    void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {},
+                           const Tempest::Vec2& tremor = {});
+    bool      hasManualAim() const { return manualAim; }
+    // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), as smooth as
+    // whoever drives it makes it (PlayerControl)
+    void      setAimStance(float crouch, float peek) { stanceCrouch = crouch; stancePeek = peek; }
+    float     aimCrouch() const { return stanceCrouch; }
+    float     aimPeek()   const { return stancePeek; }
+    // the animation of that name plays k times as fast from its next start (the reload by dexterity)
+    void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
+    // how far the animation of that name has played, 0..1; -1: it does not play
+    float     animProgress(std::string_view name) const;
+    auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
+    auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
+    auto      manualAimTremor() const -> Tempest::Vec2 { return manualTremor; }
+    bool      isAimSteady() const;
+    float     aimTrackError() const { return visual.aimTrackError(); }
+    // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
+    bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // lets the arrow go along the arrow: drawn that far, thrown off by the release
+    bool      releaseArrow(float draw, const Archery::Stats& st);
+    // where an arrow passing from-to hits this one, t: how far from 'from'
+    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
+    std::string hitZonesDump() const { return visual.hitZonesDump(); }
+    void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
+    void        fitHitZones() { visual.fitHitZones(); }
+    std::string bowDump() const { return visual.bowDump(); }
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
@@ -440,6 +475,9 @@ class Npc final {
     void      setVictim(Npc* ot);
 
     bool      haveOutput() const;
+    uint64_t  speechLeft() const;      // ms of the line it says now (0: none)
+    bool      hasOutputQueued() const; // a line waits in its ai queue
+    bool      isPlayingQueuedAnim() const; // AI_PlayAni: a nod, a shrug...
     void      setAiOutputBarrier(uint64_t dt, bool overlay);
 
     bool      doAttack(Anim anim, BodyState bs);
@@ -659,6 +697,13 @@ class Npc final {
     Npc*                           talkWith        =nullptr;
     uint64_t                       talkUntil       =0;
     Attention                      attention;
+    Archer                         arch;
+    bool                           manualAim   = false;
+    Tempest::Vec3                  manualPoint = {};
+    Tempest::Vec2                  manualSway  = {};
+    Tempest::Vec2                  manualTremor = {};
+    float                          stanceCrouch = 0;
+    float                          stancePeek   = 0;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

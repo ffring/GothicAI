@@ -9,6 +9,8 @@
 #include "objvisual.h"
 #include "gothic.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 
 using namespace Tempest;
@@ -64,6 +66,7 @@ void MdlVisual::setVisual(const Skeleton *v) {
   view.setSkeleton(v);
 
   skeleton = v;
+  hitZones.setSkeleton(v);
   setObjMatrix(pos); // invalidate obj matrix
   }
 
@@ -138,6 +141,22 @@ void MdlVisual::implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, co
   view.setSkeleton(skeleton);
   view.setPose(pos,*skInst);
   hnpcVisual.view.setMesh(&view);
+  fitHitZones();
+  }
+
+void MdlVisual::fitHitZones() {
+  // the zones as thick as the body is: its mesh by bone, its parts on the bones of their names, the head's
+  // mesh on its bone
+  std::vector<HitZones::Shape> shape;
+  if(auto p = view.protoMesh()) {
+    shape.push_back({&p->nodePoints,size_t(-1),nullptr});
+    for(size_t i=0; skeleton!=nullptr && i<p->attach.size() && i<p->attachPoints.size(); ++i)
+      if(!p->attach[i].hasNode)
+        shape.push_back({nullptr,skeleton->findNode(p->attach[i].name),&p->attachPoints[i]});
+    }
+  if(auto p = head.view.protoMesh(); p!=nullptr && skeleton!=nullptr)
+    shape.push_back({nullptr,skeleton->findNode("BIP01 HEAD"),&p->points});
+  hitZones.fit(shape);
   }
 
 void MdlVisual::setSlotAttachment(MeshObjects::Mesh&& itm, std::string_view bone) {
@@ -176,6 +195,10 @@ void MdlVisual::setShield(MeshObjects::Mesh&& s) {
 
 void MdlVisual::setAmmoItem(MeshObjects::Mesh&& a, std::string_view bone) {
   bind(ammunition,std::move(a),bone);
+  }
+
+void MdlVisual::dropAmmo() {
+  ammunition.view = MeshObjects::Mesh();
   }
 
 void MdlVisual::setMagicWeapon(Effect&& spell, World& owner) {
@@ -550,6 +573,7 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   Gaze::Input in;
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
+  in.talk    = {gestures.head().pitch, gestures.head().yaw, gestures.head().roll};
   // a blow throws the head around: the gaze lets go while one stumbles
   if(!npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_STUMBLE)
     in.source = npc.gazeTarget(in.target);
@@ -620,10 +644,14 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   const auto  bs = npc.bodyStateMasked() & BS_MAX;
   const auto  ws = npc.weaponState();
   const Npc*  t  = npc.target();
+  // aimed by hand (game/archery): at the crosshair, else at the target
+  const bool  manual = npc.hasManualAim();
   Aim::Input in;
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
-  if(t!=nullptr && t!=&npc && !npc.isDown()) {
+  if((manual || (t!=nullptr && t!=&npc)) && !npc.isDown()) {
+    // only while aiming: the target may not be valid yet (a save loading)
+    auto aimAt = [&]() { return manual ? npc.manualAimPoint() : t->collosionCenter(); };
     float shoulder = 145; // human, bind pose
     if(skeleton!=nullptr) {
       const size_t sh = skeleton->findNode("BIP01 R UPPERARM");
@@ -635,11 +663,41 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
     if((ws==WeaponState::Bow || ws==WeaponState::CBow) && (bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==(BS_HIT & BS_MAX))) {
       in.active = true;
       in.arrow  = true;
-      in.dir    = World::bulletVelocity(from,t->collosionCenter());
+      if(manual) {
+        // by hand: the arrow straight at the crosshair (the archer holds over by himself), from where
+        // the arrow is (not too close: the turn moves it)
+        const Tempest::Vec3 at = aimAt();
+        Tempest::Vec3       ap, ad;
+        Tempest::Vec3       o  = from;
+        if(arrowRay(ap,ad) && (at-ap).length()>150.f)
+          o = ap;
+        in.dir    = at - o;
+        in.sway   = npc.manualAimSway();
+        in.tremor = npc.manualAimTremor();
+        in.manual = true;
+        in.follow = 1.f - CrouchSlow*npc.aimCrouch();
+        in.reload = pose.animProgress(ws==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload,npc.world().tickCount())>=0.f;
+        // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
+        in.slot   = ammunition.boneId;
+        } else {
+        in.dir  = World::bulletVelocity(from,aimAt());
+        }
       }
     else if(ws==WeaponState::Mage && bs==BS_CASTING) {
       in.active = true;
-      in.dir    = t->collosionCenter() - from;
+      in.dir    = aimAt() - from;
+      }
+    if(in.active && manual && npc.aimPeek()!=0.f) {
+      // round a corner: lean out sideways as far as there is room beside the head
+      const float           peek  = npc.aimPeek();
+      const Tempest::Vec3   right = Tempest::Vec3::normalize(Tempest::Vec3::crossProduct(Tempest::Vec3(0,1,0),in.forward));
+      // from where the head is upright (not leaned: the room does not chase itself)
+      const Tempest::Vec3   head  = npc.position() + Tempest::Vec3(0,shoulder+HeadOverShoulder,0);
+      const Tempest::Vec3   dir   = right*(peek>0.f ? 1.f : -1.f);
+      const float           reach = Aim::SideReach + PeekClear;
+      auto                  r     = npc.world().physic()->ray(head,head+dir*reach);
+      const float           room  = r.hasCol ? std::clamp(((r.v-head).length()-PeekClear)/Aim::SideReach,0.f,1.f) : 1.f;
+      in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
       // steeply down: lean over the edge, if there is room in front of the head
@@ -656,11 +714,69 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         }
       }
     }
-  const bool changed = pose.updateAim(in);
+  bool changed = pose.updateAim(in);
   if(npc.isPlayer())
     aim.probe(Aim::playerProbe);
   if(&npc==Aim::probeNpc)
     aim.probe(Aim::subjectProbe);
+
+  // a bow drawn by hand: the hand goes to the string as far as it is not drawn, the string with it (a
+  // crossbow is not drawn). The bow of G2 is drawn by its morph: S_READY holds it as the animation does,
+  // StringDrawn straight back as the bow is held by hand (graphics/mesh/bowdraw)
+  auto&          ar = npc.archer();
+  BowDraw::Input bd;
+  bd.dt     = dt;
+  bd.active = manual && in.active && ws==WeaponState::Bow;
+  bd.ready  = ar.stage()==Archer::Nocked || ar.stage()==Archer::Drawing || ar.stage()==Archer::Held;
+  bd.draw   = ar.draw();
+  bd.span   = bowSpan();
+  bd.arrow  = !ammunition.view.isEmpty() && ammunition.bone=="ZS_RIGHTHAND";
+  if(auto p = bow.view.protoMesh()) {
+    bool high = false, straight = false;
+    for(auto& m:p->morph) {
+      if(m.name==BowHeld) {
+        high          = true;
+        bd.stringHigh = m.peakMove;
+        }
+      if(m.name==BowDraw::StringDrawn) {
+        straight      = true;
+        bd.stringRest = m.peakAt;
+        bd.stringPull = m.peakMove;
+        }
+      }
+    // along the limbs: the longest way of the bow
+    const Tempest::Vec3 ext = p->bboxMesh[1]-p->bboxMesh[0];
+    bd.bowAxis   = ext.x>=ext.y && ext.x>=ext.z ? Tempest::Vec3(1,0,0) : (ext.y>=ext.z ? Tempest::Vec3(0,1,0) : Tempest::Vec3(0,0,1));
+    bd.hasString = high && straight;
+    }
+  if(ar.stage()==Archer::Reloading) {
+    // how far the reload is: not begun (the shot), the animation, over (the bow comes to rest)
+    const float p = pose.animProgress("T_BOWRELOAD",npc.world().tickCount());
+    bd.reload = p>=0.f ? p : (ar.isNocking() ? 1.f : 0.f);
+    }
+  changed  |= pose.updateBowDraw(bd);
+  // the string as drawn by hand: straight back as far as the bow is held so, else as G2 draws it
+  const float string = pose.bowDrawIk().string();
+  const float held   = pose.bowDrawIk().aligned();
+  if(string>=0.f) {
+    bow.view.setMMShape(BowHeld,0,0,0,string*(1.f-held));
+    bow.view.setMMShape(BowDraw::StringDrawn,0,0,0,string*held);
+    stringByHand = true;
+    }
+  else if(stringByHand) {
+    // let go: the string goes (the shot: it trembles at once, the animation's release is late), else the
+    // animation's morphs from here
+    bow.view.startMMAnim(BowHeld,0,0);
+    bow.view.startMMAnim(BowDraw::StringDrawn,0,0);
+    if(pose.bowDrawIk().loosed()) {
+      bow.view.startMMAnim(held>0.5f ? BowDraw::StringLoose : BowLoose,1,uint64_t(-1));
+      looseAt = npc.world().tickCount();
+      }
+    stringByHand = false;
+    }
+  if(npc.isPlayer())
+    pose.bowDrawIk().probe(BowDraw::playerProbe);
+
   if(changed)
     view.setPose(pos,pose);
   return changed;
@@ -750,6 +866,155 @@ Vec3 MdlVisual::mapWeaponBone() const {
   if(fgtMode==WeaponState::Mage && skeleton!=nullptr)
     return mapBone(skeleton->findNode("ZS_RIGHTHAND"));
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
+  }
+
+void MdlVisual::setAnimSpeed(std::string_view name, float k) {
+  skInst->setAnimSpeed(name,k);
+  }
+
+float MdlVisual::bowSpan() const {
+  // how far the string goes from rest to held drawn: the string's middle moves the most
+  if(auto p = bow.view.protoMesh())
+    for(auto& m:p->morph)
+      if(m.name==BowHeld)
+        return m.peak;
+  return 0;
+  }
+
+bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
+  // the arrow (the bolt) lies along -X of its slot, the nock at the string (graphics/mesh/aim)
+  size_t id = ammunition.boneId;
+  if(id==size_t(-1) && skeleton!=nullptr)
+    id = skeleton->findNode("ZS_RIGHTHAND");
+  if(id==size_t(-1) || id>=skInst->boneCount())
+    return false;
+  const auto& m = skInst->bone(id);
+  p = Vec3(m.at(3,0),m.at(3,1),m.at(3,2));
+  d = Vec3::normalize(Vec3(-m.at(0,0),-m.at(0,1),-m.at(0,2)));
+  return true;
+  }
+
+HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t) const {
+  if(!hitZones.isValid()) {
+    // no bones to tell: its box was hit
+    t = 0;
+    return HitZones::Body;
+    }
+  const Vec3 sx    = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
+  const float scale = sx.length();
+  return hitZones.rayTest(skInst->transform(),skInst->boneCount(),scale>0.f ? scale : 1.f,from,to,t);
+  }
+
+bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
+  return hitZones.center(skInst->transform(),skInst->boneCount(),z,at);
+  }
+
+std::string MdlVisual::bowDump() const {
+  // points of the bow and the bow hand in the frame of the arrow: x along it from the slot it sits in
+  // (forward), y up across it, z to the side
+  auto proto = bow.view.protoMesh();
+  if(proto==nullptr || skeleton==nullptr || bow.boneId>=skInst->boneCount())
+    return "bow: none";
+  const size_t aSlot = skeleton->findNode("ZS_RIGHTHAND");
+  if(aSlot>=skInst->boneCount())
+    return "bow: no arrow slot";
+  const auto& am = skInst->bone(aSlot);
+  const Vec3  o  = Vec3(am.at(3,0),am.at(3,1),am.at(3,2));
+  const Vec3  ax = Vec3::normalize(Vec3(-am.at(0,0),-am.at(0,1),-am.at(0,2)));
+  Vec3        up = Vec3(0,1,0) - ax*Vec3::dotProduct(Vec3(0,1,0),ax);
+  up             = Vec3::normalize(up);
+  const Vec3  sd = Vec3::crossProduct(ax,up);
+  const auto& bm = skInst->bone(bow.boneId);
+  std::string out;
+  char        buf[200];
+  auto put = [&](const char* name, Vec3 p) {
+    p = p - o;
+    std::snprintf(buf,sizeof(buf),"  %-14s %6.1f %6.1f %6.1f\n",name,double(Vec3::dotProduct(p,ax)),double(Vec3::dotProduct(p,up)),
+                  double(Vec3::dotProduct(p,sd)));
+    out += buf;
+    };
+  auto inBow = [&](Vec3 p) {
+    bm.project(p);
+    return p;
+    };
+  auto dirOf = [&](const Vec3& d) {
+    return Vec3(bm.at(0,0)*d.x + bm.at(1,0)*d.y + bm.at(2,0)*d.z,
+                bm.at(0,1)*d.x + bm.at(1,1)*d.y + bm.at(2,1)*d.z,
+                bm.at(0,2)*d.x + bm.at(1,2)*d.y + bm.at(2,2)*d.z);
+    };
+  const Vec3* bb = proto->bboxMesh;
+  std::snprintf(buf,sizeof(buf),"bow %s: bbox %.1f %.1f %.1f .. %.1f %.1f %.1f (mesh)\n",proto->fname.c_str(),
+                double(bb[0].x),double(bb[0].y),double(bb[0].z),double(bb[1].x),double(bb[1].y),double(bb[1].z));
+  out += buf;
+  const Vec3 mid = (bb[0]+bb[1])*0.5f;
+  for(int i=0; i<3; ++i) {
+    const Vec3 e  = i==0 ? Vec3(1,0,0)        : (i==1 ? Vec3(0,1,0)        : Vec3(0,0,1));
+    const Vec3 lo = i==0 ? Vec3(bb[0].x,mid.y,mid.z) : (i==1 ? Vec3(mid.x,bb[0].y,mid.z) : Vec3(mid.x,mid.y,bb[0].z));
+    const Vec3 hi = i==0 ? Vec3(bb[1].x,mid.y,mid.z) : (i==1 ? Vec3(mid.x,bb[1].y,mid.z) : Vec3(mid.x,mid.y,bb[1].z));
+    const Vec3 d = dirOf(e);
+    std::snprintf(buf,sizeof(buf),"  mesh axis %d in the arrow frame: %.2f %.2f %.2f\n",i,double(Vec3::dotProduct(d,ax)),
+                  double(Vec3::dotProduct(d,up)),double(Vec3::dotProduct(d,sd)));
+    out += buf;
+    char n0[16], n1[16];
+    std::snprintf(n0,sizeof(n0),"bbox-%d",i);
+    std::snprintf(n1,sizeof(n1),"bbox+%d",i);
+    put(n0,inBow(lo));
+    put(n1,inBow(hi));
+    }
+  put("grip (slot)",inBow(Vec3()));
+  put("bbox middle",inBow((bb[0]+bb[1])*0.5f));
+  for(auto& m:proto->morph) {
+    std::snprintf(buf,sizeof(buf),"  morph %s: peak %.1f at %.1f %.1f %.1f move %.1f %.1f %.1f (mesh)\n",m.name.c_str(),double(m.peak),
+                  double(m.peakAt.x),double(m.peakAt.y),double(m.peakAt.z),double(m.peakMove.x),double(m.peakMove.y),double(m.peakMove.z));
+    out += buf;
+    if(m.name==BowHeld) {
+      put("string rest",inBow(m.peakAt));
+      put("string drawn",inBow(m.peakAt+m.peakMove));
+      }
+    if(m.name==BowDraw::StringDrawn) {
+      put("straight rest",inBow(m.peakAt));
+      put("straight drawn",inBow(m.peakAt+m.peakMove));
+      }
+    }
+  if(ammunition.boneId<skInst->boneCount()) {
+    // the arrow (the bolt) as it lies: where the shot leaves from, along what
+    const auto& m = skInst->bone(ammunition.boneId);
+    const Vec3  d = Vec3::normalize(Vec3(-m.at(0,0),-m.at(0,1),-m.at(0,2)));
+    std::snprintf(buf,sizeof(buf),"  ammo in %s%s, along %.3f %.3f %.3f (the arrow frame)\n",std::string(ammunition.bone).c_str(),
+                  ammunition.view.isEmpty() ? " (not shown)" : "",double(Vec3::dotProduct(d,ax)),double(Vec3::dotProduct(d,up)),
+                  double(Vec3::dotProduct(d,sd)));
+    out += buf;
+    put("ammo",Vec3(m.at(3,0),m.at(3,1),m.at(3,2)));
+    }
+  for(auto name:{"BIP01 L HAND","BIP01 L FINGER0","BIP01 L FINGER1","BIP01 L FINGER2","BIP01 L FOREARM","BIP01 R HAND","BIP01 HEAD"}) {
+    const size_t id = skeleton->findNode(name);
+    if(id<skInst->boneCount()) {
+      const auto& m = skInst->bone(id);
+      put(name+6,Vec3(m.at(3,0),m.at(3,1),m.at(3,2)));
+      }
+    }
+  return out;
+  }
+
+void MdlVisual::hitZonesPosed(std::vector<HitZones::Posed>& out) const {
+  const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
+  hitZones.posed(skInst->transform(),skInst->boneCount(),sx.length(),out);
+  }
+
+std::string MdlVisual::hitZonesDump() const {
+  const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
+  auto       body = view.protoMesh();
+  return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length()) +
+         hitZones.coverage(skInst->transform(),skInst->boneCount(),sx.length()) +
+         " body " + (body!=nullptr ? body->fname : std::string("-"));
+  }
+
+float MdlVisual::aimTrackError() const {
+  return skInst->aimIk().trackError();
+  }
+
+bool MdlVisual::isAimSteady() const {
+  return skInst->aimIk().isSteady();
   }
 
 Vec3 MdlVisual::mapHeadBone() const {
@@ -929,6 +1194,7 @@ const Animation::Sequence* MdlVisual::startAnimAndGet(Npc& npc, AnimationSolver:
       bs = BS_STUMBLE;
       break;
     case AnimationSolver::Anim::AimBow:
+    case AnimationSolver::Anim::ReloadBow:
       bs = BS_AIMNEAR; //TODO: BS_AIMFAR
       break;
     case AnimationSolver::Anim::ItmGet:
@@ -1124,7 +1390,38 @@ const Animation::Sequence* MdlVisual::startAnimSpell(Npc &npc, std::string_view 
   return nullptr;
   }
 
+namespace {
+// T_DIALOGGESTURE_01..
+std::array<char,32> gestureName(uint16_t id) {
+  std::array<char,32> name = {};
+  std::snprintf(name.data(),name.size(),"T_DIALOGGESTURE_%02d",id);
+  return name;
+  }
+}
+
+void MdlVisual::setupGestures() {
+  // how long each gesture plays; an alias of one before it (Gothic II: 11 is 01) is left out
+  const uint16_t count = Gothic::inst().version().dialogGestureCount();
+  std::vector<uint32_t>                   time(count);
+  std::vector<const Animation::AnimData*> seen;
+  for(uint16_t i=0; i<count; ++i) {
+    auto sq = solver.solveFrm(gestureName(uint16_t(i+1)).data());
+    if(sq==nullptr || sq->data==nullptr || std::find(seen.begin(),seen.end(),sq->data.get())!=seen.end())
+      continue;
+    seen.push_back(sq->data.get());
+    time[i] = uint32_t(sq->totalTime());
+    }
+  gestures.setGestures(std::move(time),Gothic::inst().version().game==2);
+  }
+
 bool MdlVisual::startAnimDialog(Npc &npc) {
+  if(TalkGestures::isEnabled()) {
+    // the gestures go with the line from now on (updateGestures)
+    setupGestures();
+    gestures.lineStart(npc.world().tickCount());
+    return true;
+    }
+
   if((npc.bodyState()&BS_FLAG_FREEHANDS)==0 || fgtMode!=WeaponState::NoWeapon)
     return true;
   if(npc.bodyStateMasked()!=BS_STAND)
@@ -1133,20 +1430,100 @@ bool MdlVisual::startAnimDialog(Npc &npc) {
   const uint16_t count = Gothic::inst().version().dialogGestureCount();
   const int      id    = std::rand()%count + 1;
 
-  char name[32]={};
-  std::snprintf(name,sizeof(name),"T_DIALOGGESTURE_%02d",id);
-
-  const Animation::Sequence *sq = solver.solveFrm(name);
-  if(skInst->startAnim(solver,sq,0,BS_STAND,Pose::NoHint,npc.world().tickCount()))
+  const Animation::Sequence *sq   = solver.solveFrm(gestureName(uint16_t(id)).data());
+  const bool                 over = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
+  if(skInst->startAnim(solver,sq,0,BS_STAND,Pose::NoHint,npc.world().tickCount())) {
+    gestureSeq = sq;
+    gestures.started(uint8_t(id),over);
     return true;
+    }
   return false;
   }
 
-void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) {
+void MdlVisual::updateGestures(Npc& npc, uint64_t dt) {
+  const bool     probing = &npc==TalkGestures::probeNpc;
+  const uint64_t now     = npc.world().tickCount();
+  const bool     voiced  = mouth.isSpeaking(now);
+  const uint64_t left    = std::max(npc.speechLeft(),mouth.voiceLeft(now));
+  if(skInst==nullptr || (gestureSeq==nullptr && gestures.isIdle() && !probing && !voiced && left==0))
+    return;
+  const bool playing = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
+  if(!playing)
+    gestureSeq = nullptr;
+  const uint32_t syl = mouth.syllableCount();
+  const bool     beat = syl!=gestureSyl;
+  gestureSyl = syl;
+
+  // the head: Gaze turns it (updateGaze)
+  gestures.updateHead(dt,voiced || left>0,beat,mouth.syllablePeak());
+
+  TalkGestures::Input in;
+  in.now      = now;
+  // not over an animation of the ai queue (a nod, a shrug the AI server or a script plays)
+  in.allowed  = (npc.bodyState()&BS_FLAG_FREEHANDS)!=0 && fgtMode==WeaponState::NoWeapon &&
+                npc.bodyStateMasked()==BS_STAND && !npc.isPlayingQueuedAnim();
+  in.voiced   = voiced;
+  in.left     = left;
+  in.speaking = voiced || left>0;
+  in.more     = npc.hasOutputQueued();
+  in.playing  = playing;
+  in.syllable = beat;
+
+  const auto d = gestures.update(in);
+  if(d.act==TalkGestures::Act::Start) {
+    auto sq = solver.solveFrm(gestureName(d.gesture).data());
+    if(sq!=nullptr && skInst->startAnim(solver,sq,0,BS_STAND,Pose::NoHint,now))
+      gestureSeq = sq;
+    }
+  else if(d.act==TalkGestures::Act::Stop && gestureSeq!=nullptr) {
+    skInst->stopAnim(gestureSeq->name);
+    gestureSeq = nullptr;
+    }
+  if(probing)
+    gestures.probe(TalkGestures::subjectProbe);
+  }
+
+void MdlVisual::updateBlink(Npc& npc, uint64_t dt) {
+  const bool probing = &npc==EyeBlink::probeNpc;
+  // a far face is not seen blinking (and its morph is not worth the upload)
+  if(skInst==nullptr || head.view.isEmpty() || (npc.processPolicy()>NpcProcessPolicy::AiNormal && !probing))
+    return;
+  const uint64_t now = npc.world().tickCount();
+  const uint32_t sh  = skInst->gazeIk().shiftCount();
+
+  EyeBlink::Input in;
+  in.now      = now;
+  in.dt       = dt;
+  in.allowed  = !npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_LIE && head.view.morphWeight("S_EYESCLOSED")<0.1f;
+  in.speaking = mouth.isSpeaking(now) || npc.speechLeft()>0;
+  in.voice    = mouth.voiceLevel();
+  in.shift    = sh!=blinkShift;
+  // a frightened face blinks more, a hostile or angry stare less
+  in.rate     = 1.f + 0.6f*head.view.morphWeight("S_FRIGHTENED")
+                    - 0.3f*std::max(head.view.morphWeight("S_HOSTILE"),head.view.morphWeight("S_ANGRY"));
+  blinkShift  = sh;
+
+  uint64_t hold = 0;
+  if(blink.update(in,hold))
+    head.view.startMMAnim("R_EYESBLINK",1,now+hold,true);  // not in place of a face
+  if(probing)
+    blink.probe(EyeBlink::subjectProbe);
+  }
+
+void MdlVisual::startMMAnim(Npc& npc, std::string_view anim, std::string_view bone) {
   MdlVisual::MeshAttach* mesh[] = {&head,&sword,&shield,&bow,&ammunition,&stateItm};
   for(auto i:mesh) {
     if(i->bone!=bone && !bone.empty())
       continue;
+    // the string drawn by hand: the animation does not draw it; held by hand, the bow lets it go straight
+    if(i==&bow && skInst->bowDrawIk().string()>=0.f)
+      continue;
+    if(i==&bow && anim==BowLoose && looseAt>0 && npc.world().tickCount()<looseAt+LooseLate)
+      continue;
+    if(i==&bow && anim==BowLoose && skInst->bowDrawIk().aligned()>0.5f) {
+      i->view.startMMAnim(BowDraw::StringLoose,1,uint64_t(-1));
+      continue;
+      }
     i->view.startMMAnim(anim,1,uint64_t(-1));
     }
   }
@@ -1185,12 +1562,11 @@ void MdlVisual::updateMouth(Npc& npc, uint64_t dt) {
 
 void MdlVisual::stopDlgAnim(Npc& npc) {
   mouth.stop();
+  gestures.stop();
+  gestureSeq = nullptr;
   const uint16_t count = Gothic::inst().version().dialogGestureCount();
-  for(uint16_t i=0; i<count; i++){
-    char buf[32]={};
-    std::snprintf(buf,sizeof(buf),"T_DIALOGGESTURE_%02d",i+1);
-    skInst->stopAnim(buf);
-    }
+  for(uint16_t i=0; i<count; i++)
+    skInst->stopAnim(gestureName(uint16_t(i+1)).data());
 
   if(npc.processPolicy()<=NpcProcessPolicy::AiNormal) {
     // avoid PCI traffic on distant npc's

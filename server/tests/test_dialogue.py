@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 
 from gothic_ai import scenarios
 from gothic_ai.dialogue import DialogueManager
-from gothic_ai.llm import LLMError, LLMEvent, Message, ToolCall
+from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, ToolCall
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.persona import PersonaProvider
 from tests.fake_game import FakeGame, connected
@@ -81,6 +81,76 @@ async def test_llm_error_is_reported_to_the_game_and_history_untouched():
 
     assert dialogue.conversations[XARDAS].history == []
     assert fake.said == []
+
+
+class StallingBackend:
+    """Goes quiet on its first `stalls` calls (after `said`, if any), then answers. Counts the streams that
+    were closed: a stalled one must not be left holding its connection."""
+
+    name = "stalling"
+
+    def __init__(self, reply: str, stalls: int = 1, said: str = "") -> None:
+        self.reply, self.stalls, self.said = reply, stalls, said
+        self.calls = self.closed = 0
+
+    async def stream(
+        self, *, instructions: str, messages: list[Message], tools=None, tool_choice=None
+    ) -> AsyncIterator[LLMEvent]:
+        self.calls += 1
+        try:
+            if self.calls <= self.stalls:
+                if self.said:
+                    yield TextDelta(self.said)
+                await asyncio.sleep(3600)
+            yield TextDelta(self.reply)
+            yield Done(self.reply, (Message("assistant", self.reply),))
+        finally:
+            self.closed += 1
+
+
+async def _quick(dialogue: DialogueManager) -> DialogueManager:
+    dialogue.llm_first_s = dialogue.llm_idle_s = 0.2
+    return dialogue
+
+
+async def test_a_model_gone_quiet_is_asked_again():
+    fake = FakeGame()
+    llm = StallingBackend("Я здесь, говори.")
+    async with connected(fake) as link:
+        dialogue = await _quick(DialogueManager(link, llm, PersonaProvider(None)))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Ты тут?")
+        await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])
+
+    assert fake.said == ["Я здесь, говори."]
+    assert (llm.calls, llm.closed) == (2, 2)  # the stalled stream was closed, not left hanging
+
+
+async def test_a_model_gone_quiet_after_some_words_is_not_asked_again():
+    fake = FakeGame()
+    llm = StallingBackend("Это повтор.", said="Сейчас скажу. ")
+    async with connected(fake) as link:
+        dialogue = await _quick(DialogueManager(link, llm, PersonaProvider(None)))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Ну?")
+        await _until(lambda: fake.statuses[-1:] == ["error"])
+
+    assert llm.calls == 1  # asked again, it would say its first words twice
+    assert fake.said == ["Сейчас скажу."]
+    history = dialogue.conversations[XARDAS].history
+    assert [(m.role, m.content) for m in history] == [("user", "Ну?"), ("assistant", "Сейчас скажу.")]
+
+
+async def test_a_model_quiet_twice_gives_up():
+    fake = FakeGame()
+    llm = StallingBackend("Поздно.", stalls=2)
+    async with connected(fake) as link:
+        dialogue = await _quick(DialogueManager(link, llm, PersonaProvider(None)))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Эй")
+        await _until(lambda: fake.statuses[-1:] == ["error"])
+
+    assert (llm.calls, fake.said) == (2, [])  # one retry a turn
 
 
 async def test_m1_scenario_with_fake_llm():

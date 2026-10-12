@@ -10,9 +10,20 @@
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
 #       DECIDER_URL, or a fixed stand-in)
+#   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
+#       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
+#       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
+#       words). rescue_self: the shepherd kills the wolf himself and says a word about it
 #   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move
+#   m6: npc's know the world from the scripts' dialogs as far as the story has got: Xardas's talk of chapter 1
+#       but not chapter 3, a dialog played from the menu becomes one the hero has heard, chapter 3 opens its
+#       talk; Lobart knows his field work and what farmers say; the knowledge is in the model's request and
+#       recall gives a topic in full (model scripted with LLM=fake)
+#   see: what npc's perceive (npc_view, v11): Xardas sees the hero in front of him and not through the tower's
+#       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
+#       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
@@ -29,6 +40,13 @@
 #   rumor: Lobart catches the hero lying; the clock goes to the next morning and the rumor goes round the
 #       people that know each other (routines, shared quests) as far as the city; one there has it in mind
 #       when the hero speaks to it (stage 5)
+#   amends: the director's storylet: Lobart catches the hero lying, the rumor reaches Andre, who asks for a
+#       fine and closes joining the militia until then (model scripted with LLM=fake); the hero hears him
+#       out and pays, and the militia is open again (stage 5)
+#   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
+#       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
+#       haggling: the deal window shows the new version, Y waits right after the change, then the deal is
+#       done and Lobart answers (docs/npc-tools.md, wave 1)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)

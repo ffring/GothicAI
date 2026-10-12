@@ -25,6 +25,11 @@ constexpr uint64_t LingerMs       = 2500;
 constexpr uint64_t PttHoldMs      = 300;    // T held longer than this is push-to-talk
 constexpr uint64_t PttMaxMs       = 30000;  // the key-up may never come (focus lost)
 constexpr auto     FontName       = "font_old_20_white.tga"; // the large game font, has cyrillic in RU
+constexpr uint64_t DealSettleMs   = 1000;   // Y waits this long after the terms appear or change
+constexpr uint64_t DealFreshMs    = 4000;   // what changed stays marked this long
+constexpr auto     DealParchment  = "LETTERS.TGA";     // the game's letters are written on it
+constexpr auto     DealFont       = "font_10_book.tga"; // and in this ink
+constexpr auto     DealBigFont    = "font_20_book.tga";
 
 // GOTHIC_AI_CHAT_SCALE: extra size multiplier for the chat, on top of the game's interface scale
 // the end of `text` that fits into `width` (live transcripts grow at the end)
@@ -178,13 +183,224 @@ void ChatOverlay::tick() {
       pttRelease();
     }
   // repaint while something is on screen (cursor blink, subtitles expiring), and once after it is gone
-  const bool visible = active || recording || !partial.empty() || !status.empty() || hasVisibleContent();
+  const bool visible = active || recording || !partial.empty() || !status.empty() || hasVisibleContent() ||
+                       !deal.id.empty();
   if(visible || wasVisible)
     update();
   wasVisible = visible;
   }
 
+void ChatOverlay::showDeal(std::string id, int32_t version, std::string npc,
+                           std::vector<DealLine> npcGives, std::vector<DealLine> heroGives) {
+  if(deal.id==id && deal.version==version) {
+    deal.sent = false;  // the server answered: Y may be pressed again
+    update();
+    return;
+    }
+  // what is not in the shown version is new
+  auto mark = [&](std::vector<DealLine>& now, const std::vector<DealLine>& before) {
+    for(auto& l:now)
+      l.fresh = deal.id==id && std::none_of(before.begin(),before.end(),[&](const DealLine& b){
+        return b.text==l.text;
+        });
+    };
+  mark(npcGives, deal.npcGives);
+  mark(heroGives,deal.heroGives);
+  deal.id        = std::move(id);
+  deal.version   = version;
+  deal.npc       = std::move(npc);
+  deal.npcGives  = std::move(npcGives);
+  deal.heroGives = std::move(heroGives);
+  deal.changedAt = Application::tickCount();
+  deal.sent      = false;
+  update();
+  }
+
+void ChatOverlay::hideDeal(std::string_view id) {
+  if(deal.id.empty() || (!id.empty() && deal.id!=id))
+    return;
+  deal = Deal();
+  update();
+  }
+
+void ChatOverlay::markMissing(const std::function<bool(const DealLine&)>& lacks) {
+  for(auto& l:deal.heroGives)
+    l.missing = lacks(l);
+  }
+
+std::string ChatOverlay::declineDeal() {
+  if(deal.id.empty())
+    return "none";
+  const auto id = deal.id;
+  const auto v  = deal.version;
+  deal = Deal();  // the window goes at once; the npc may offer again
+  if(onDealDecline)
+    onDealDecline(id,v);
+  update();
+  return "declined";
+  }
+
+std::string ChatOverlay::pressDeal() {
+  if(deal.id.empty())
+    return "none";
+  if(deal.sent)
+    return "waiting";
+  for(auto& l:deal.heroGives)
+    if(l.missing)
+      return "missing";
+  if(Application::tickCount() < deal.changedAt + DealSettleMs)
+    return "changed";
+  deal.sent = true;
+  if(onDealAccept)
+    onDealAccept(deal.id,deal.version);
+  update();
+  return "sent";
+  }
+
 void ChatOverlay::paintEvent(PaintEvent& e) {
+  Painter p(e);
+  if(!deal.id.empty())
+    paintDeal(p);
+  paintChat(p);
+  }
+
+// a key on the keyboard, drawn by strokes: the game's fonts draw a Latin Y like a Cyrillic У
+static void drawKey(Painter& p, int x, int y, int size, char key, const Color& cl, int thin) {
+  p.setBrush(cl);
+  p.drawRect(x,y,size,thin);
+  p.drawRect(x,y+size-thin,size,thin);
+  p.drawRect(x,y,thin,size);
+  p.drawRect(x+size-thin,y,thin,size);
+
+  auto at = [&](float fx, float fy) { return Point(x+int(fx*float(size)),y+int(fy*float(size))); };
+  std::vector<std::pair<Point,Point>> strokes;
+  if(key=='Y')
+    strokes = {{at(0.28f,0.25f),at(0.5f,0.52f)},{at(0.72f,0.25f),at(0.5f,0.52f)},{at(0.5f,0.52f),at(0.5f,0.78f)}};
+  if(key=='N')
+    strokes = {{at(0.3f,0.78f),at(0.3f,0.24f)},{at(0.3f,0.24f),at(0.7f,0.78f)},{at(0.7f,0.78f),at(0.7f,0.24f)}};
+  p.setPen(Pen(cl,PaintDevice::Alpha,float(thin)));
+  for(auto& [a,b]:strokes)
+    for(int d=0; d<=thin; ++d) {
+      p.drawLine(a.x+d,a.y,b.x+d,b.y);
+      p.drawLine(a.x+d,a.y+1,b.x+d,b.y+1);
+      }
+  }
+
+void ChatOverlay::paintDeal(Painter& p) {
+  // a contract on the parchment of the game's letters, in their ink: what the npc gives on the left, what
+  // the hero gives on the right; what changed is marked, what he lacks is red; the keys in frames
+  const uint64_t now   = Application::tickCount();
+  const float    scale = Gothic::interfaceScale(this)*chatScale();
+  auto&          big   = Resources::font(DealBigFont,Resources::FontType::Normal,  scale);
+  auto&          ink   = Resources::font(DealBigFont,Resources::FontType::Normal,  scale);
+  auto&          small = Resources::font(DealFont,   Resources::FontType::Disabled,scale);
+  auto&          dim   = Resources::font(DealBigFont,Resources::FontType::Disabled,scale);
+  auto&          red   = Resources::font(FontName,   Resources::FontType::Red,     scale*0.5f);
+  const int      lineH = ink.pixelSize();
+  const int      gap   = std::max(2,lineH/5);
+  const int      pad   = std::max(12,lineH);
+  const int      boxW  = std::min(w()-2*pad, std::max(int(600*scale), w()*3/8));
+  const int      colW  = (boxW-3*pad)/2;
+  const int      x0    = w()-boxW-std::max(8,lineH/3);
+  const int      y0    = std::max(8,h()/6);
+  const int      thin  = std::max(1,int(scale+0.5f));
+  const Color    inkCl = Color(0.22f,0.13f,0.05f,0.9f);
+
+  static const std::string title   = TextCodec::fromUtf8("Сделка");
+  static const std::string gives   = TextCodec::fromUtf8(" дает");
+  static const std::string youGive = TextCodec::fromUtf8("Ты даешь");
+  static const std::string nothing = TextCodec::fromUtf8("ничего");
+  static const std::string accept  = TextCodec::fromUtf8("Принять");
+  static const std::string decline = TextCodec::fromUtf8("Отказаться");
+  static const std::string lacking = TextCodec::fromUtf8("не хватает");
+  static const std::string waiting = TextCodec::fromUtf8("Ждем ответа...");
+
+  const bool  missing = std::any_of(deal.heroGives.begin(),deal.heroGives.end(),[](const DealLine& l){
+    return l.missing;
+    });
+  const bool  settled = now >= deal.changedAt + DealSettleMs;
+  const float fresh   = now < deal.changedAt + DealFreshMs ?
+                        1.f - float(now-deal.changedAt)/float(DealFreshMs) : 0.f;
+  const int   noteH   = red.pixelSize();
+
+  auto lineH_ = [&](const DealLine& l) { return ink.textSize(colW,l.text).h + (l.missing ? noteH : 0); };
+  auto columnH = [&](const std::vector<DealLine>& lines) {
+    int sum = 0;
+    if(lines.empty())
+      sum += ink.textSize(colW,nothing).h + gap;
+    for(auto& l:lines)
+      sum += lineH_(l) + gap;
+    return sum;
+    };
+  const std::string npcHead = deal.npc + gives;
+  const int titleH = big.pixelSize();
+  const int headH  = std::max(small.textSize(colW,npcHead).h,small.textSize(colW,youGive).h);
+  const int bodyH  = std::max(columnH(deal.npcGives),columnH(deal.heroGives));
+  const int keyH   = lineH + gap;
+  const int total  = pad + titleH + pad/2 + headH + gap + bodyH + pad/2 + keyH + pad;
+
+  if(auto back = Resources::loadTexture(DealParchment)) {
+    p.setBrush(*back);
+    p.drawRect(x0,y0,boxW,total,0,0,back->w(),back->h());
+    } else {
+    p.setBrush(Color(0.82f,0.74f,0.55f,0.95f));
+    p.drawRect(x0,y0,boxW,total);
+    }
+
+  int y = y0 + pad;
+  big.drawText(p,x0,y+titleH,boxW,0,title,AlignHCenter);
+  // rules on both sides of the title, and between the columns
+  const int tw = big.textSize(title).w;
+  p.setBrush(Color(0.25f,0.15f,0.05f,0.45f));
+  p.drawRect(x0+pad,y+titleH*2/3,(boxW-tw)/2-pad-pad/2,thin);
+  p.drawRect(x0+(boxW+tw)/2+pad/2,y+titleH*2/3,(boxW-tw)/2-pad-pad/2,thin);
+  y += titleH + pad/2;
+
+  const int xl = x0 + pad, xr = x0 + 2*pad + colW;
+  p.drawRect(x0+pad+colW+pad/2,y,thin,headH+gap+bodyH);
+  small.drawText(p,xl,y+small.pixelSize(),colW,0,npcHead,AlignLeft);
+  small.drawText(p,xr,y+small.pixelSize(),colW,0,youGive,AlignLeft);
+  y += headH + gap;
+
+  auto column = [&](int x, const std::vector<DealLine>& lines) {
+    int yy = y;
+    if(lines.empty())
+      small.drawText(p,x,yy+lineH,colW,0,nothing,AlignLeft);
+    for(auto& l:lines) {
+      const int hh = lineH_(l);
+      if(l.missing) {
+        p.setBrush(Color(0.75f,0.1f,0.05f,0.22f));
+        p.drawRect(x-gap,yy,colW+2*gap,hh);
+        } else if(l.fresh && fresh>0.f) {
+        // a marker over what changed, fading
+        p.setBrush(Color(1.f,0.75f,0.15f,0.45f*fresh));
+        p.drawRect(x-gap,yy,colW+2*gap,hh);
+        }
+      ink.drawText(p,x,yy+lineH,colW,0,l.text,AlignLeft);
+      if(l.missing)
+        red.drawText(p,x,yy+hh,colW,0,lacking,AlignLeft);
+      yy += hh + gap;
+      }
+    };
+  column(xl,deal.npcGives);
+  column(xr,deal.heroGives);
+  y += bodyH + pad/2;
+
+  if(deal.sent) {
+    small.drawText(p,x0,y+lineH,boxW,0,waiting,AlignHCenter);
+    return;
+    }
+  // the keys, then what they do
+  auto key = [&](int x, char k, const std::string& what, bool on) {
+    const Color cl = on ? inkCl : Color(inkCl.r(),inkCl.g(),inkCl.b(),0.35f);
+    drawKey(p,x,y,keyH,k,cl,thin);
+    (on ? ink : dim).drawText(p,x+keyH+lineH/2,y+lineH-gap/2,what);
+    };
+  key(xl,'Y',accept,settled && !missing);
+  key(xr,'N',decline,true);
+  }
+
+void ChatOverlay::paintChat(Painter& p) {
   const uint64_t now = Application::tickCount();
   std::vector<const Entry*> rows;
   for(auto it=log.rbegin(); it!=log.rend(); ++it) {
@@ -197,7 +413,6 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
   if(!active && !extra && rows.empty())
     return;
 
-  Painter     p(e);
   const float scale = Gothic::interfaceScale(this)*chatScale();
   auto&       text  = Resources::font(FontName,Resources::FontType::Normal,  scale);
   auto&       name  = Resources::font(FontName,Resources::FontType::Yellow,  scale);
@@ -268,6 +483,19 @@ void ChatOverlay::keyDownEvent(KeyEvent& e) {
         pttPress('\0');  // held, it is push-to-talk right away; a short tap opens the input line
       return;
       }
+    // Y accepts the deal in the window, N declines it; while the input line is open they are letters
+    const bool dealKey = (e.key==Event::K_Y || e.key==Event::K_N) && e.modifier==Event::M_NoModifier;
+    if(dealKey && !deal.id.empty() && (!canDeal || canDeal())) {
+      e.accept();
+      if(e.key==Event::K_Y) {
+        yDown = true;
+        pressDeal();
+        } else {
+        nDown = true;
+        declineDeal();
+        }
+      return;
+      }
     e.ignore();
     return;
     }
@@ -288,7 +516,7 @@ void ChatOverlay::keyDownEvent(KeyEvent& e) {
 
 void ChatOverlay::keyRepeatEvent(KeyEvent& e) {
   if(!active) {
-    if(e.key==Event::K_T && tDown)
+    if((e.key==Event::K_T && tDown) || (e.key==Event::K_Y && yDown) || (e.key==Event::K_N && nDown))
       e.accept(); else
       e.ignore();
     return;
@@ -299,7 +527,12 @@ void ChatOverlay::keyRepeatEvent(KeyEvent& e) {
   }
 
 void ChatOverlay::keyUpEvent(KeyEvent& e) {
-  const bool ours = active || (e.key==Event::K_T && tDown);
+  const bool ours = active || (e.key==Event::K_T && tDown) || (e.key==Event::K_Y && yDown) ||
+                    (e.key==Event::K_N && nDown);
+  if(e.key==Event::K_Y)
+    yDown = false;
+  if(e.key==Event::K_N)
+    nDown = false;
   if(e.key==Event::K_T)
     pttRelease();
   if(ours)

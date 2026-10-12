@@ -2,7 +2,9 @@
 # pose of the game), to the side; the same "up" with aim off; a crossbow; on a slope (the feet stay on
 # the ground while aiming); down from three ledges and from a ship's deck steeply down; a fire bolt;
 # shoots three times up (the reload swings the arrow: the turn holds; the sheep does not live through
-# it); last leans over a gallery's edge to shoot one right at the foot of the wall
+# it); last leans over a gallery's edge to shoot one right at the foot of the wall. The game's aim: the
+# manual one (on by default) off
+manual off
 cheat god
 set time 12 0
 view clean

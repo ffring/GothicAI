@@ -45,6 +45,7 @@ float           ReachRate      = 30.f;   // 1/s, how fast the body goes down whe
 float           FloorJump      = 8.f;    // the floor moving this much faster in one frame is a step: the body stays put
 float           LegReach       = 0.98f;  // fraction of the full leg length a leg may straighten to
 float           BlendTime      = 0.25f;  // seconds, fade in/out of the whole effect
+float           AimCrouch      = 28.f;   // cm the body goes down crouched to aim a bow (knees bent, feet planted)
 constexpr float MinGroundNy    = 0.5f;   // steeper than 60 degrees is a wall, not ground
 constexpr float RayMargin      = 10.f;   // ground rays start this much above MaxRaise
 constexpr float QuadHandHeight = 0.35f;  // front paws lower than this part of the hip height: four legs
@@ -60,7 +61,7 @@ struct Param final {
   };
 
 const Param params[] = {
-  {"MaxRaise",       &MaxRaise},       {"MaxDrop",        &MaxDrop},
+  {"MaxRaise",       &MaxRaise},       {"MaxDrop",        &MaxDrop},       {"AimCrouch",      &AimCrouch},
   {"MaxStep",        &MaxStep},        {"MaxTilt",        &MaxTilt},
   {"MaxPitch",       &MaxPitch},       {"MaxRoll",        &MaxRoll},
   {"OutwardFactor",  &OutwardFactor},  {"MaxOutward",     &MaxOutward},
@@ -145,6 +146,10 @@ bool FootIk::isEnabled() {
 void FootIk::setEnabled(bool e) {
   enabled = e;
   Log::i("foot ik: ", e ? "on" : "off");
+  }
+
+float FootIk::aimCrouchDepth() {
+  return AimCrouch;
   }
 
 bool FootIk::setParam(std::string_view name, float value) {
@@ -276,6 +281,7 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
   Input in;
   in.dt     = dt;
   in.floorY = obj.at(3,1);
+  in.crouch = npc.aimCrouch()*AimCrouch*scale;
   // the test bench measures the ground with IK off too, and under a body tilted to the ground as
   // a whole (surface_align): that is the baseline
   if(!valid || (!enabled && !probing) || (alignedToGround && !probing))
@@ -435,7 +441,9 @@ bool FootIk::update(const Input& in) {
   // A creature on four legs is not tilted as a whole any more: its ends also go up, on a slope
   auto pairReach = [&](size_t p) { return std::max(legs[2*p].reach, legs[2*p+1].reach); };
   auto bodyTop    = [&](size_t p) { return quadruped ? MaxRaise+pairReach(p) : 0.f; };
-  auto bodyLow    = [&](size_t p) { return -MaxDrop-pairReach(p); };
+  // crouched to aim: the hips go down on purpose (the legs bend to the planted feet)
+  auto crouchOf   = [&](size_t p) { return p==0 && !quadruped ? in.crouch : 0.f; };
+  auto bodyLow    = [&](size_t p) { return -MaxDrop-pairReach(p)-crouchOf(p); };
   // Four legs across a slope: the body leans toward the lower side (the uphill legs would fold up),
   // what is left over the legs take. Left legs are even: they go up by side(p), right ones down
   float rollTarget = 0;
@@ -455,9 +463,10 @@ bool FootIk::update(const Input& in) {
     return (i%2==0) ? s : -s;
     };
   auto bodyTarget = [&](size_t p) {
-    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1));
+    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1)) - crouchOf(p);
     return std::clamp(h, bodyLow(p), bodyTop(p));
     };
+  crouch = in.crouch;
   // A planted foot must reach the ground: the only reason to lower the body fast
   // (not at once: a sudden dip at every step of the lower leg looks like limping).
   // At the end of a step, behind the body, it may reach it with the toes only: running up a slope
@@ -710,26 +719,14 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
   const Vec3  b   = position(tr[c.calf]);
   const Vec3  f   = position(tr[c.foot]);
   const float lab = length(b-a);
-  const float lbf = length(f-b);
-  const Vec3  at  = target-a;
-  float       lat = length(at);
-  if(lab<Eps || lbf<Eps || lat<Eps)
-    return;
-
-  const Vec3 dir = at*(1.f/lat);
-  // a straight knee has no direction and wobbles: the leg does not straighten beyond LegReach,
-  // or beyond the animation if it is straighter already (standing)
-  const float lmax = std::min(std::max((lab+lbf)*LegReach, length(f-a)), (lab+lbf)*0.999f);
-  // a paw folded up to the body looks broken (a zigzag): it had better go into the ground
-  float lmin = std::abs(lab-lbf)+Eps;
-  if(quadruped)
-    lmin = std::max(lmin, std::min((lab+lbf)*MinPawFold, length(f-a)));
-  lat = std::clamp(lat, lmin, lmax);
 
   // The knee bends in the plane of the animated leg, turned toward the target.
   // A nearly straight animated leg bends toward the toes (an elbow away from them).
   // Note: the bend must not be taken relative to the target line: at a heel strike uphill
   // the animated knee is behind that line and the knee would flip backwards.
+  // A straight knee has no direction and wobbles: the leg does not straighten beyond LegReach,
+  // or beyond the animation if it is straighter already (standing). A paw folded up to the body
+  // looks broken (a zigzag): it had better go into the ground
   Vec3 bend = b-a;
   if(c.toe!=size_t(-1)) {
     const Vec3  toe     = position(tr[c.toe]) - f;
@@ -737,26 +734,14 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
     if(footLen>Eps)
       bend += Vec3(toe.x,0,toe.z)*(0.05f*lab/footLen*c.bendSign);
     }
-  const Vec3 pole = normalize(cross(cross(f-a,bend),dir));
-  if(length(pole)<Eps)
+  TwoBone tb;
+  if(!twoBone(tr,c.thigh,c.calf,c.foot,c.thighTree,c.calfTree,target,bend,LegReach,quadruped ? MinPawFold : 0.f,tb))
     return;
-
-  const float cosA = std::clamp((lab*lab + lat*lat - lbf*lbf)/(2.f*lab*lat), -1.f, 1.f);
-  const float sinA = std::sqrt(1.f - cosA*cosA);
-  const Vec3  knee  = a + dir*(lab*cosA) + pole*(lab*sinA);
-  const Vec3  ankle = a + dir*lat;
-
-  const Mat3 r0 = rotationBetween(normalize(b-a), normalize(knee-a));
-  rotateAbout(tr,c.thighTree,r0,a);
-
-  const Vec3 b1 = position(tr[c.calf]);
-  const Vec3 f1 = position(tr[c.foot]);
-  const Mat3 r1 = rotationBetween(normalize(f1-b1), normalize(ankle-b1));
-  rotateAbout(tr,c.calfTree,r1,b1);
+  const Vec3 ankle = tb.end;
 
   // On a slope the whole leg turns outward around the hip-ankle line, like people do:
   // the ankle stays, the knee and the toes go away from the other leg
-  Mat3 legRot = mul(r1,r0);
+  Mat3 legRot = mul(tb.r1,tb.r0);
   Vec3 out    = {0,0,0};
   if(outward>0.f && length(c.outDir)>0.5f) {
     const Vec3 axis = normalize(ankle-a);
@@ -807,6 +792,7 @@ void FootIk::probe(Probe& p, const Input& in) const {
   p.weight  = weight;
   p.pelvis  = pelvis;
   p.target  = dbgTarget;
+  p.crouch  = crouch;
   p.limit   = dbgLimit;
   p.floorY  = in.floorY;
   for(size_t i=0; i<numLegs; ++i) {

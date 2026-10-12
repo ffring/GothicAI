@@ -7,6 +7,7 @@ calls (`ToolResult`). That lets the model continue after a tool without repeatin
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -92,6 +93,30 @@ class LLMError(RuntimeError):
     def __init__(self, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+
+
+async def with_deadlines(
+    events: AsyncIterator[LLMEvent], *, first_s: float, idle_s: float, name: str
+) -> AsyncIterator[LLMEvent]:
+    """A backend's events, or LLMError when the model goes quiet: nothing for `first_s` seconds from the
+    request, or for `idle_s` between events. A stalled stream would otherwise hang as long as the HTTP read
+    timeout (10 minutes in the OpenAI SDK); the backend's stream is closed and its connection released."""
+    wait, waited = first_s, "first answer"
+    try:
+        while True:
+            try:
+                async with asyncio.timeout(wait):
+                    event = await anext(events)
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                raise LLMError(f"{name}: no {waited} in {wait:g} s", retryable=True) from None
+            yield event
+            wait, waited = idle_s, "more of the answer"
+    finally:
+        close = getattr(events, "aclose", None)
+        if close is not None:
+            await close()
 
 
 class LLMBackend(Protocol):

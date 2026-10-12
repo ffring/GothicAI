@@ -60,6 +60,7 @@ Gothic AI.app (Tauri, launcher/app)
 4. Запускается игра:
    - рабочая папка — `~/.local/share/gothic-ai/game/`, туда игра пишет `Gothic.ini`, `log.txt` и сохранения;
    - флаги `-g <папка игры>` и `GOTHIC_AI_URL`;
+   - `OPENGOTHIC_TEXTURES`, если есть чёткие текстуры персонажей в `~/.local/share/gothic-ai/hd-textures/textures` (`scripts/hd-textures.sh`);
    - для «Продолжить» добавляется `-save N`, где N — самое свежее `save_slot_N.sav`;
    - `-devmode` только при включённом режиме разработчика.
 

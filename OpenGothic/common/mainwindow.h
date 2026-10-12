@@ -67,6 +67,7 @@ class MainWindow : public Tempest::Window {
 
     void paintFocus     (Tempest::Painter& p, const Focus& fc, const Tempest::Matrix4x4& vp);
     void paintFocus     (Tempest::Painter& p, Tempest::Rect rect);
+    void paintCrosshair (Tempest::Painter& p, const Tempest::Matrix4x4& vp);
 
     void drawBar(Tempest::Painter& p, const Tempest::Texture2d *bar, int x, int y, float v, Tempest::AlignFlag flg);
     void drawMsg(Tempest::Painter& p);
@@ -89,12 +90,16 @@ class MainWindow : public Tempest::Window {
     void setFullscreen(bool fs);
 
     void processMouse(Tempest::MouseEvent& event, bool enable);
+    bool mouseCaught = false; // aiming by hand in a window: the mouse is caught as in full screen
+    bool aimCatchesMouse();
     void tickMouse(uint64_t dt);
     void onSettings();
 
     void setupUi();
 
     void render() override;
+    // the test bench: the frame as the player sees it, the interface on top
+    Tempest::Attachment screenshotWithUi();
 
     uint64_t tick();
     void     updateAnimation(uint64_t dt);

@@ -27,6 +27,7 @@ class Decision:
     latency_ms: float = 0.0  # from the request leaving the planner to the answer
     target: str | None = None  # whom a fight or flight is about (the newest threat's `other`)
     args: dict[str, Any] | None = None  # a plan: the activity it chose (start_activity args)
+    own: bool = False  # the newest event is the npc's own doing (it killed the monster itself)
 
 
 class Applier(Protocol):
@@ -67,7 +68,6 @@ ACTIONS: dict[str, list[tuple[str, dict[str, Any]]]] = {
     "step_away": [("turn_away", {})],
     "tell_to_leave": [("say_svm", {"svm": "GETOUTOFHERE"})],
     "thank": [("play_ani", {"name": "T_YES"})],
-    "call_help": [("say_svm", {"svm": "HELP"})],
     "call_guards": [("say_svm", {"svm": "GUARDS"})],
     # the game's own combat and fleeing, against the threat (protocol v6)
     "fight": [("fight", {"npc": "{target}"})],
@@ -85,6 +85,7 @@ COMMENT_SVM = {
     "monster_attack": "HELP",
     "npc_attack": "HELP",
     "fight_nearby": "OHMYGODITSAFIGHT",
+    "monster_killed": "GOODMONSTERKILL",
 }
 
 
@@ -94,8 +95,12 @@ def actions_for(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
     if decision.question != "react":
         return []  # attitudes and escalations have no game action
     if decision.choice == "comment":
+        if decision.own:
+            return []  # its own kill: the scripts end a fight with a line of their own (B_Say_AttackEnd)
         svm = next((COMMENT_SVM[k] for k in decision.stimuli if k in COMMENT_SVM), None)
         return [("say_svm", {"svm": svm})] if svm else ACTIONS["look_at"]
+    if decision.choice == "call_help":
+        return call_help(decision)
     acts = ACTIONS.get(decision.choice, [])
     if any(v == "{target}" for _, args in acts for v in args.values()):
         if not decision.target:
@@ -104,6 +109,16 @@ def actions_for(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
             (a, {k: decision.target if v == "{target}" else v for k, v in args.items()}) for a, args in acts
         ]
     return acts
+
+
+def call_help(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
+    """Shouted on the move while the body gets away from the threat (the game's own fleeing): busy with it,
+    the npc is not led into a fight by its scripts. Not to the hero: an npc that comes up to him starts its
+    original dialog with him (an important info, ZS_Talk), wolf or no wolf. The flight's own shout ($RUNAWAY)
+    is dropped while this one sounds: the game plays one overlay line at a time."""
+    if not decision.target:
+        return [("say_svm", {"svm": "HELP"})]
+    return [("say_svm", {"svm": "HELP", "overlay": True}), ("flee", {"npc": decision.target})]
 
 
 class GameApplier(LogApplier):

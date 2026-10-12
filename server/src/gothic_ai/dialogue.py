@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Coroutine
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from . import executor, npc_tools
 from .budget import Budget
@@ -34,6 +34,7 @@ from .llm import (
     ToolCall,
     ToolChoice,
     ToolResult,
+    with_deadlines,
 )
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import MOOD_DELIVERY, Persona, PersonaProvider
@@ -57,11 +58,19 @@ from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
 from .tts import TtsClient, TtsError
 from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
 
+if TYPE_CHECKING:
+    from .perception import Sight
+
 log = logging.getLogger(__name__)
 
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 PREPARE_S = 3.0  # what an extension asks the game before a turn
+# a model call that goes quiet: no answer this long after the request, or no more of it this long; such a
+# step is asked again once per turn if the npc has said nothing of it yet (a stalled stream would otherwise
+# leave the npc "thinking" for the 10 minutes of the HTTP read timeout)
+LLM_FIRST_S, LLM_IDLE_S, STEP_RETRIES = 15.0, 15.0, 1
+SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
 
@@ -316,7 +325,8 @@ class Conversation:
 
 class TurnExtension(Protocol):
     """More of the world for the conversational model (the director's quests, quests.py; the scripts'
-    quests, vanilla.py): lines for the situation, tools to offer, and the handling of their calls."""
+    quests, vanilla.py; what the npc knows, knowledge.py): lines for the situation, tools to offer, and the
+    handling of their calls. One may also answer recall: `recall(npc, query) -> str | None`."""
 
     async def prepare(self, npc: str) -> None:
         """Before a turn: what the situation and the tools need from the game."""
@@ -365,12 +375,17 @@ class DialogueManager:
         self.on_body_failed: Callable[[str, str], None] | None = None
         # whether the npc is under our control (attached): only then do intents move its body directly
         self.controls: Callable[[str], bool] | None = None
+        # the intent of an npc we do not control changed (npc, old, new): who runs its body carries it out
+        self.on_free_intent: Callable[[str, Intent, Intent], None] | None = None
         # a free npc's body is needed for a commitment (give an item, follow): hold it (attach) for `why`,
         # and let it go again; without them only controlled npc's act on commitments (talk.py)
         self.take_body: Callable[[str, str], Awaitable[bool]] | None = None
         self.free_body: Callable[[str, str], None] | None = None
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
+        self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
+        # what the npc sees (perception.py), in place of the snapshot's omniscient lines
+        self.sight: Callable[[str, Snapshot | None], Sight | None] | None = None
         self.extensions: list[TurnExtension] = []
         self.llm = llm
         self.personas = personas
@@ -459,9 +474,12 @@ class DialogueManager:
         prompt = f"Прежняя сводка: {conv.memory.summary or 'нет'}\n\nНовые записи:\n{records}"
         text = ""
         try:
-            async for event in self.llm.stream(
+            events = self.llm.stream(
                 instructions=SUMMARY_INSTRUCTIONS.format(name=conv.persona.name),
                 messages=[Message("user", prompt)],
+            )
+            async for event in with_deadlines(
+                events, first_s=SUMMARY_FIRST_S, idle_s=SUMMARY_FIRST_S, name=self.llm.name
             ):
                 if isinstance(event, TextDelta):
                     text += event.text
@@ -621,14 +639,15 @@ class DialogueManager:
     ) -> asyncio.Task[None] | None:
         """A turn about something that happened (an incident): the npc may speak and change its intent.
         While a turn is running the event waits for the next one's situation instead of interrupting.
-        `tools` limits what the model is offered (an npc nobody controls cannot hand over items)."""
+        `tools` limits what the model is offered (an npc nobody controls cannot hand over items); the names
+        may be of the extensions' tools too (deals.py: an offer declined, the npc may offer again)."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return None
         if conv.reply is not None and not conv.reply.done():
             conv.pending.append(cue)
             return None
-        offered = self.tools if tools is None else [t for t in self.tools if t.name in tools]
+        offered = self.tools if tools is None else [t for t in self._offered(npc) if t.name in tools]
         conv.reply = asyncio.create_task(
             self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay, tools=offered)
         )
@@ -785,7 +804,7 @@ class DialogueManager:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here.
         # What started the turn is remembered even when the npc said nothing (it may have acted).
         self._remember(conv, trigger.role, trigger.content)
-        if text:
+        if text := text.strip():
             self._remember(conv, "assistant", text)
         self._maybe_compact(conv)
 
@@ -850,13 +869,14 @@ class DialogueManager:
             if conv.memory.entries or conv.memory.summary:
                 when = game_time(self.link.snapshots.get(conv.npc))
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
-        snap = self.link.snapshots.get(conv.npc)
-        situation_text = npc_tools.render_situation(snap, conv.intent)
         for ext in self.extensions:
             try:
                 await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
             except (GameError, TimeoutError) as err:
                 log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
+        snap = self.link.snapshots.get(conv.npc)
+        sight = self.sight(conv.npc, snap) if self.sight is not None else None
+        situation_text = npc_tools.render_situation(snap, conv.intent, sight)
         for ext in self.extensions:
             if extra := ext.situation(conv.npc):
                 situation_text += "\n" + extra
@@ -892,10 +912,22 @@ class DialogueManager:
         await self._status(conv, "thinking")
         status = "completed"
         added: list[Item] = list(request)
+        retries = STEP_RETRIES
         try:
             for step in range(MAX_STEPS):
                 st = trace.step(added, tool_choice(step))
-                done = await self._step(conv, state, request, tool_choice(step), st)
+                while True:
+                    said = state.text.strip()
+                    try:
+                        done = await self._step(conv, state, request, tool_choice(step), st)
+                        break
+                    except LLMError as err:
+                        # asked again only if nothing of this step was said: else the npc would repeat it
+                        if not err.retryable or retries <= 0 or state.text.strip() != said:
+                            raise
+                        retries -= 1
+                        log.warning("%s: %s; asking the model again", conv.npc, err)
+                        trace.event("retry", error=str(err))
                 if not state.text.strip() and state.relevant is not None and not state.relevant():
                     raise StaleTurn  # nothing said yet and the incident is over: no late intents either
                 calls = [i for i in done.items if isinstance(i, ToolCall)]
@@ -985,39 +1017,51 @@ class DialogueManager:
         if state.text and not state.text.endswith((" ", "\n")):
             state.text += " "
         try:
-            async for event in self.llm.stream(
-                instructions=conv.persona.instructions,
-                messages=request,
-                tools=state.tools,
-                tool_choice=choice,
-            ):
-                if isinstance(event, Done):
-                    done = event
-                if not isinstance(event, TextDelta):
-                    continue
-                now = time.monotonic()
-                if first is None and state.relevant is not None and not state.relevant():
-                    raise StaleTurn
-                first = first if first is not None else now - started
-                if state.first_delta is None:
-                    state.first_delta = now - state.started
-                pieces = self._spoken(state, state.moods.feed(event.text))
-                # the chat shows the reply as it is written
-                if (
-                    now - state.shown_at >= CHAT_TEXT_EVERY
-                    and (shown := to_game_text(state.text)) != state.shown
+            try:
+                events = self.llm.stream(
+                    instructions=conv.persona.instructions,
+                    messages=request,
+                    tools=state.tools,
+                    tool_choice=choice,
+                )
+                async for event in with_deadlines(
+                    events, first_s=self.llm_first_s, idle_s=self.llm_idle_s, name=self.llm.name
                 ):
-                    state.shown, state.shown_at = shown, now
-                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
-                await self._feed_lines(conv, state, pieces)
-            await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
-            for line in state.splitter.flush():
-                await self._line(conv, state, line)
+                    if isinstance(event, Done):
+                        done = event
+                    if not isinstance(event, TextDelta):
+                        continue
+                    now = time.monotonic()
+                    if first is None and state.relevant is not None and not state.relevant():
+                        raise StaleTurn
+                    first = first if first is not None else now - started
+                    if state.first_delta is None:
+                        state.first_delta = now - state.started
+                    pieces = self._spoken(state, state.moods.feed(event.text))
+                    # the chat shows the reply as it is written
+                    if (
+                        now - state.shown_at >= CHAT_TEXT_EVERY
+                        and (shown := to_game_text(state.text)) != state.shown
+                    ):
+                        state.shown, state.shown_at = shown, now
+                        await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
+                    await self._feed_lines(conv, state, pieces)
+            except LLMError:
+                if first is not None:  # the model went quiet mid-answer: what it wrote is said, as remembered
+                    await self._say_rest(conv, state)
+                raise
+            await self._say_rest(conv, state)
         finally:
             TurnTrace.finish_step(st, done, first, time.monotonic() - started)
         if done is None:
             raise LLMError(f"{self.llm.name}: the stream ended without a result", retryable=True)
         return done
+
+    async def _say_rest(self, conv: Conversation, state: TurnState) -> None:
+        """What is left of the step's text once its stream is over: the last sentence."""
+        await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
+        for line in state.splitter.flush():
+            await self._line(conv, state, line)
 
     @staticmethod
     def _spoken(state: TurnState, pieces: list[str | MoodTag]) -> list[str | MoodTag]:
@@ -1088,18 +1132,24 @@ class DialogueManager:
         return [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
 
     def _recall(self, conv: Conversation, query: str) -> str:
-        """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded)."""
+        """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded), and
+        what extensions that answer recall know of it (knowledge.py: the npc's dialogs in full)."""
         first = conv.memory.entries[0].seq if conv.memory.entries else conv.memory.summary_seq + 1
         found = self.memory.search(conv.branch, conv.npc, query, min(conv.memory.summary_seq, first - 1))
-        log.info("%s recalls %r: %d message(s)", conv.npc, query, len(found))
-        if not found:
-            return "Ничего такого не вспоминается."
-        speaker = {"user": "Герой", "assistant": "Ты", "developer": ""}
-        lines = []
-        for r in found:
-            who = speaker.get(r.role, "")
-            lines.append(f"[{r.game_time or '?'}] {who + ': ' if who else ''}{r.content}")
-        return "Ты вспоминаешь:\n" + "\n".join(lines)
+        parts = []
+        if found:
+            speaker = {"user": "Герой", "assistant": "Ты", "developer": ""}
+            lines = []
+            for r in found:
+                who = speaker.get(r.role, "")
+                lines.append(f"[{r.game_time or '?'}] {who + ': ' if who else ''}{r.content}")
+            parts.append("Ты вспоминаешь:\n" + "\n".join(lines))
+        for ext in self.extensions:
+            recall = getattr(ext, "recall", None)
+            if recall is not None and (known := recall(conv.npc, query)):
+                parts.append(known)
+        log.info("%s recalls %r: %d message(s), %d more part(s)", conv.npc, query, len(found), len(parts))
+        return "\n\n".join(parts) or "Ничего такого не вспоминается."
 
     async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
         if not await self._hold(conv, "give"):
@@ -1148,6 +1198,12 @@ class DialogueManager:
         acts = executor.intent_actions(old, intent, following)
         if old.goal == "follow_hero" and intent.goal != "follow_hero":
             self._free(conv, "follow")  # after `stop`, if it is still following (below)
+        if intent.goal in executor.INCIDENT_GOALS and not self._controlled(conv.npc):
+            # a free npc's goal of the moment (flee, fight, seek help) is carried out by whoever runs its body
+            # (the planner): held for it, the npc would be out of the scripts in the middle of the danger
+            if self.on_free_intent is not None:
+                self.on_free_intent(conv.npc, old, intent)
+            return
         if not acts:
             return
         if self.take_body is None and not self._controlled(conv.npc):

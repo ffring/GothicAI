@@ -23,7 +23,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from gothic_launcher.commands import Layout, Ports, Proc, services
+from gothic_launcher.commands import Layout, Ports, Proc, services, texture_env
 from gothic_launcher.settings import Config
 from gothic_launcher.state import STATE_DIR, SessionFile
 from gothic_launcher.supervisor import Event, Supervisor
@@ -105,6 +105,7 @@ def film(
             "OPENGOTHIC_BENCH_OUT": str(take),
             "OPENGOTHIC_BENCH_REALTIME": "1",
             "OPENGOTHIC_BENCH_ENCODER": "-c:v h264_videotoolbox -b:v 24M",  # x264 slows the game down
+            **texture_env(layout),
         },
         restart=False,
         stamp=True,

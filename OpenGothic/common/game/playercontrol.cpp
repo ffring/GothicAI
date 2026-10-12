@@ -1,6 +1,7 @@
 #include "playercontrol.h"
 
 #include <cmath>
+#include <cstring>
 
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
@@ -8,7 +9,32 @@
 #include "world/world.h"
 #include "ui/dialogmenu.h"
 #include "ui/inventorymenu.h"
+#include "physics/dynamicworld.h"
+#include "camera.h"
+#include "graphics/mesh/aim.h"
+#include "graphics/mesh/footik.h"
 #include "gothic.h"
+
+namespace {
+// the crosshair of the manual aim
+constexpr float MaxSpread   = 6.f*float(M_PI)/180.f; // wide open: the bow being raised, reloaded
+constexpr float SpreadOpen  = 0.1f;                  // seconds: it opens about twice that long...
+constexpr float SpreadClose = 0.2f;                  // ...closes
+constexpr float StanceRate  = 6.f;                   // 1/s: crouching, leaning out eases in and out
+constexpr float HeadOverHips = 70.f;                 // cm: leaning out tilts the trunk from the hips
+
+// a critically damped spring moves v toward goal, smooth seconds (about half the time it takes): it eases
+// in and out, no jerks when the goal jumps; vel is its speed
+float springTo(float v, float goal, float& vel, float smooth, float dt) {
+  const float omega = 2.f/smooth;
+  const float x     = omega*dt;
+  const float k     = 1.f/(1.f + x + 0.48f*x*x + 0.235f*x*x*x);
+  const float off   = v-goal;
+  const float push  = (vel + omega*off)*dt;
+  vel = (vel - omega*push)*k;
+  return goal + (off+push)*k;
+  }
+}
 
 PlayerControl::PlayerControl(DialogMenu& dlg, InventoryMenu &inv)
   :dlg(dlg),inv(inv) {
@@ -195,11 +221,21 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
     }
 
   if(a==Action::Walk) {
+    if(manualAiming) {
+      // aiming by hand: held, the breath is held
+      ctrl[a] = true;
+      return;
+      }
     toggleWalkMode();
     return;
     }
 
   if(a==Action::Sneak) {
+    if(manualAiming) {
+      // aiming by hand: crouch (no talent needed), stand up
+      aimCrouch = !aimCrouch;
+      return;
+      }
     toggleSneakMode();
     return;
     }
@@ -287,6 +323,17 @@ void PlayerControl::drawVobRay(DbgPainter& p) const {
   }
 
 void PlayerControl::tickFocus() {
+  if(manualAiming) {
+    // aiming by hand: the focus is under the crosshair
+    auto w = Gothic::inst().world();
+    if(auto pl = w ? w->player() : nullptr) {
+      Tempest::Vec3 at;
+      Npc*          npc = aimRayHit(*pl,at);
+      currentFocus = (npc!=nullptr && !npc->isDead()) ? Focus(*npc) : Focus();
+      setTarget(currentFocus.npc);
+      }
+    return;
+    }
   currentFocus = findFocus(&currentFocus);
   setTarget(currentFocus.npc);
 
@@ -596,7 +643,12 @@ bool PlayerControl::tickMove(uint64_t dt) {
   if(pl==nullptr)
     return true;
 
+  // implMove says if the bow is raised by hand
+  const bool wasAiming = manualAiming;
+  manualAiming = false;
   implMove(dt);
+  if(!manualAiming && (wasAiming || pl->hasManualAim() || pl->archer().isRaised()))
+    endManualAim(*pl);
 
   float runAngle = pl->runAngle();
   if(runAngle!=0.f || std::fabs(runAngleDest)>0.01f) {
@@ -696,6 +748,9 @@ void PlayerControl::implMove(uint64_t dt) {
     runAngleDest = 0;
     return;
     }
+
+  if(implManualAim(pl,dt))
+    return;
 
   int rotation = 0;
   if(allowRot) {
@@ -972,6 +1027,195 @@ void PlayerControl::implMove(uint64_t dt) {
     assignRunAngle(pl,pl.rotation(),dt);
     }
   pl.setDirection(rot);
+  }
+
+bool PlayerControl::crosshair(Tempest::Vec3& at, float& spread) const {
+  if(!manualAiming)
+    return false;
+  at     = aimAt;
+  spread = aimSpread;
+  return true;
+  }
+
+void PlayerControl::setAimOverride(bool on, const Tempest::Vec3& at) {
+  aimOverride   = on;
+  aimOverrideAt = at;
+  }
+
+Npc* PlayerControl::aimRayHit(Npc& pl, Tempest::Vec3& at) const {
+  // what the center of the screen falls on (the bones of an npc, the ground); the test bench aims at a
+  // point instead
+  static float reach = 10000.f; // cm
+  auto w = Gothic::inst().world();
+  auto c = Gothic::inst().camera();
+  Tempest::Vec3 from, dir;
+  if(aimOverride || c==nullptr) {
+    from = pl.mapHeadBone();
+    dir  = Tempest::Vec3::normalize(aimOverrideAt-from);
+    } else {
+    c->aimRay(from,dir);
+    }
+  const Tempest::Vec3 to = from + dir*reach;
+  auto r = w->physic()->rayArrow(from,to,[&pl](Npc& n, const Tempest::Vec3& a, const Tempest::Vec3& b, float& t) {
+    return &n!=&pl && n.rayHitZone(a,b,t)!=HitZones::None;
+    });
+  at = aimOverride ? aimOverrideAt : (r.hasCol ? r.v : to);
+  return r.npcHit;
+  }
+
+bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
+  // the bow aimed by hand (game/archery): the left button raises it and draws the string, letting it go
+  // shoots along the arrow; the right one lowers the bow, a step too; shift holds the breath; the sneak
+  // key crouches, the side steps lean out round a corner
+  const auto ws = pl.weaponState();
+  if(!Archery::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow) || pl.isDown() ||
+     pl.isInAir() || pl.isSwim() || pl.isDive() || pl.interactive()!=nullptr)
+    return false;
+  // the auto aim does not run: no shots on 'forward'
+  std::memset(actrl,0,sizeof(actrl));
+
+  auto&      ar     = pl.archer();
+  const bool lmb    = ctrl[KeyCodec::ActionGeneric];
+  const bool moving = wantsToMoveForward() || wantsToMoveBackward() || ctrl[Action::Jump];
+  bool raised = ar.isRaised();
+  if(!raised && lmb && !moving && pl.hasAmmunition())
+    raised = true;
+  if(raised && (ctrl[Action::Parade] || moving))
+    raised = false;
+  if(raised && !pl.hasAmmunition() && ar.stage()!=Archer::Reloading)
+    raised = false;
+  if(!raised)
+    return false;
+
+  auto camera = Gothic::inst().camera();
+  if(!ar.isRaised() && camera!=nullptr) {
+    // the aim starts at the focus, else straight ahead: the center of the screen passes over the
+    // shoulder, the hero turns so that it falls on the focus
+    float pitch = 0;
+    if(auto t = pl.target()) {
+      const Tempest::Vec3 tg = t->collosionCenter();
+      Tempest::Vec3       d  = tg - pl.position();
+      for(int i=0; i<3; ++i) {
+        const float a = std::atan2(d.z,d.x);
+        d = tg - Camera::aimShoulder(pl.position(),Tempest::Vec3(std::cos(a),0,std::sin(a)));
+        }
+      pl.setDirection(std::atan2(d.z,d.x)*180.f/float(M_PI));
+      pitch = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z))*180.f/float(M_PI);
+      }
+    camera->setAim(true,0);
+    camera->setAimPitch(pitch);
+    }
+  if(!ar.isRaised()) {
+    aimSpread    = MaxSpread;
+    aimSpreadVel = 0;
+    // sneaking, it is raised crouched
+    aimCrouch    = bool(pl.walkMode() & WalkBit::WM_Sneak);
+    }
+
+  // the stance: crouched, leaning out round a corner (held), eased
+  const float dtS  = float(dt)/1000.f;
+  const float peek = (wantsToStrafeRight() ? 1.f : 0.f) - (wantsToStrafeLeft() ? 1.f : 0.f);
+  const float ease = 1.f - std::exp(-StanceRate*dtS);
+  crouchK += ((aimCrouch ? 1.f : 0.f) - crouchK)*ease;
+  peekK   += (peek - peekK)*ease;
+  if(std::abs(crouchK-(aimCrouch ? 1.f : 0.f))<1e-3f)
+    crouchK = aimCrouch ? 1.f : 0.f;
+  if(std::abs(peekK-peek)<1e-3f)
+    peekK = peek;
+  pl.setAimStance(crouchK,peekK);
+  manualAiming = true;
+
+  // the mouse (the keys) turn the hero, the camera follows; up and down is the camera's
+  const float rspeed = 180.f*(float(dt)/1000.f);
+  float       rot    = pl.rotation() + rotMouse;
+  if(wantsToTurnLeft())
+    rot += rspeed;
+  if(wantsToTurnRight())
+    rot -= rspeed;
+  rotMouse  = 0;
+  rotMouseY = 0;
+  if(aimOverride) {
+    // the test bench aims: the hero faces it
+    const Tempest::Vec3 d = aimOverrideAt - pl.position();
+    if(d.x!=0.f || d.z!=0.f)
+      rot = std::atan2(d.z,d.x)*180.f/float(M_PI);
+    }
+  pl.setDirection(rot);
+  pl.aimBow();
+
+  Tempest::Vec3 at;
+  aimRayHit(pl,at);
+  const Tempest::Vec3 eye  = pl.position() + Tempest::Vec3(0,165,0);
+  const Tempest::Vec3 dir  = Tempest::Vec3::normalize(at-eye);
+  const float         turn = ar.isRaised() ? std::acos(std::clamp(Tempest::Vec3::dotProduct(dir,aimDirPrev),-1.f,1.f)) : 0.f;
+  aimDirPrev = dir;
+
+  const auto    st = Archery::stats(pl,pl.currentRangedWeapon());
+  // the next arrow as fast as the hands are (dexterity); set when it changes (the test bench may set its own)
+  if(st.reload!=reloadTempo) {
+    pl.setAnimSpeed(Archery::reloadAnim(st.crossbow),st.reload);
+    reloadTempo = st.reload;
+    }
+  Archer::Input in;
+  in.raised = true;
+  in.ready  = pl.isAimSteady();
+  in.draw   = lmb;
+  in.breath = ctrl[Action::Walk];
+  in.turn   = turn;
+  in.reload = pl.animProgress(Archery::reloadAnim(st.crossbow))>=0.f;
+  in.loaded = pl.isBowLoaded();
+  in.crouch = crouchK;
+  in.peek   = peekK;
+  in.dt     = dt;
+  if(ar.tick(in,st))
+    ar.onShot(pl.releaseArrow(ar.draw(),st));
+  ar.probe(Archer::playerProbe);
+  pl.setManualAim(true,at,ar.sway(),ar.tremor());
+
+  // the crosshair is where it aims; it opens as far as the arrow may go off: the sway, the trembling,
+  // the arrow not turned to it yet (a flick of the mouse), the bow being raised, the next arrow nocked.
+  // A spring, critically damped: it eases into opening and out of it, no jerks; opens faster than closes
+  const float err  = pl.aimTrackError();
+  float       goal = std::min(ar.spread() + std::max(err,0.f)*float(M_PI)/180.f, MaxSpread);
+  if(err<0.f || ar.stage()==Archer::Raising || ar.stage()==Archer::Reloading)
+    goal = MaxSpread;
+  aimSpread = springTo(aimSpread,goal,aimSpreadVel,goal>aimSpread ? SpreadOpen : SpreadClose,float(dt)/1000.f);
+  aimSpread = std::max(aimSpread,0.f);
+  aimAt     = at;
+  if(camera!=nullptr) {
+    camera->setAim(true,ar.draw());
+    // the shoulder goes down crouched, aside leaning out (as far as the body does: a wall stops it); over
+    // the left one leaning out to the left
+    const float side = std::sin(Aim::playerProbe.side*float(M_PI)/180.f)*HeadOverHips;
+    camera->setAimStance(crouchK*FootIk::aimCrouchDepth(),side,1.f-2.f*std::max(0.f,-peekK));
+    }
+  return true;
+  }
+
+void PlayerControl::endManualAim(Npc& pl) {
+  pl.setAnimSpeed(Archery::BowReload,1);
+  pl.setAnimSpeed(Archery::CBowReload,1);
+  reloadTempo = 1;
+  auto& ar = pl.archer();
+  if(ar.isRaised()) {
+    Archer::Input in;
+    in.raised = false;
+    ar.tick(in,Archery::stats(pl,pl.currentRangedWeapon()));
+    const auto ws = pl.weaponState();
+    if(!pl.isDown() && (ws==WeaponState::Bow || ws==WeaponState::CBow))
+      pl.setAnim(Npc::Anim::Idle);
+    }
+  pl.setManualAim(false);
+  pl.setAimStance(0,0);
+  aimCrouch = false;
+  crouchK   = 0;
+  peekK     = 0;
+  Archer::playerProbe = Archer::Probe();
+  ctrl[Action::Walk] = false;
+  if(auto camera = Gothic::inst().camera()) {
+    camera->setAim(false,0);
+    camera->setAimStance(0,0,1);
+    }
   }
 
 void PlayerControl::implMoveMobsi(Npc& pl, uint64_t /*dt*/) {

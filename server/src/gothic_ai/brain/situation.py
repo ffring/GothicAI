@@ -29,57 +29,52 @@ GUILD_ROLES = {
     14: "a Water Mage",
 }
 
-REACT = "What do you do right now?"
+# The wording is short on purpose: every question is read by the model in full, with the state, so its cost
+# grows with its length (the old, longer wording took 110-190 tokens a question, these 70-110). Shortened
+# in g7 (decider-service/tuning); the meaning, and so the labels, stayed the same.
+REACT = "What do you do now?"
 REACT_OPTIONS = {
-    "continue": "keep doing what you were doing",
-    "look_at": "turn and look at the hero",
-    "greet": "nod or greet the hero briefly",
-    "approach_talk": "walk up to the hero and start a conversation",
-    "comment": "say a short remark about what just happened",
+    "continue": "keep doing what you do",
+    "look_at": "look at the hero",
+    "greet": "greet the hero",
+    "approach_talk": "go talk to the hero",
+    "comment": "remark on what happened",
     "step_away": "step away from the hero",
 }
 # extra options that only make sense after a given event
 EVENT_OPTIONS = {
-    "item_given": {"thank": "thank the hero for the gift", "give_back": "give the item back to the hero"},
-    "enter_room": {"tell_to_leave": "tell the hero to get out of your house"},
-    "item_dropped": {"pick_up": "pick up the item"},
+    "item_given": {"thank": "thank the hero", "give_back": "give it back"},
+    "enter_room": {"tell_to_leave": "tell the hero to get out"},
+    "item_dropped": {"pick_up": "pick it up"},
     # threats from others: the body fights or flees with the game's own combat (npc_act fight / flee)
-    "monster_near": {"call_help": "shout for help", "flee": "run away from it", "fight": "fight it"},
-    "npc_attack": {
-        "call_help": "shout for help",
-        "flee": "run away from the attacker",
-        "fight": "fight back",
-    },
-    "fight_nearby": {
-        "call_guards": "shout for the guards",
-        "fight": "join the fight against the attacker",
-        "flee": "get away from the fight",
-    },
+    "monster_near": {"call_help": "shout for help", "flee": "run away", "fight": "fight it"},
+    "npc_attack": {"call_help": "shout for help", "flee": "run away", "fight": "fight back"},
+    "fight_nearby": {"call_guards": "call the guards", "fight": "join the fight", "flee": "get away"},
 }
 
-ATTITUDE = "How does what just happened change your attitude toward the hero?"
+# and those that only make sense when the hero did it
+BY_HERO_OPTIONS = {
+    "monster_killed": {"thank": "thank the hero"},
+}
+
+ATTITUDE = "How does this change your attitude to the hero?"
 ATTITUDE_LEVELS = [
-    "much worse (a serious offense, a threat, a crime against you)",
-    "slightly worse (rude, suspicious or annoying)",
+    "much worse: offense, threat, crime",
+    "slightly worse: rude, suspicious",
     "unchanged",
-    "slightly better (polite, a small favor, good business)",
-    "much better (saved you, a big gift, a great service)",
+    "slightly better: polite, small favor",
+    "much better: saved you, big gift",
 ]
 
 # Whether the moment deserves the large model: the npc speaking in its own words and thinking ahead. The
 # planner decides by rules whether to call it (the hero sees it, budget, cooldown); this only ranks moments.
-ESCALATE = (
-    "How much does this moment call for you to speak in your own words and think about what to do next, "
-    "beyond stock phrases and simple actions?"
-)
+ESCALATE = "How much does this call for your own words and a plan?"
 ESCALATE_LEVELS = [
-    "routine: doing nothing or a simple action is enough",
-    "a stock phrase or a gesture covers it",
-    "worth a short remark of your own, nothing more",
-    "calls for real speech in your own words: shouting, pleading, arguing, explaining, or personal business "
-    "with the hero (news, a debt, a promise, a grudge, gratitude)",
-    "a turning point for you: danger to your life, a big loss or gain, something about your goals; "
-    "you need to speak and to plan what to do next",
+    "nothing or a simple action",
+    "a stock phrase or gesture",
+    "a short remark of your own",
+    "real speech: shout, plead, argue, or personal business with the hero (news, debt, grudge, thanks)",
+    "a turning point: danger to life, big loss or gain; speak and plan",
 ]
 
 PLAN = "What do you do during the next hour?"
@@ -100,6 +95,7 @@ class NpcContext:
     traits: str | None = None  # one line of character, e.g. "Stern, loyal to the king."
     agenda: str | None = None  # what it wants from the player
     facts: tuple[str, ...] = field(default_factory=tuple)  # things it remembers about the hero
+    view: tuple[str, ...] = field(default_factory=tuple)  # what it perceives, the most telling first
 
 
 @dataclass(frozen=True)
@@ -123,6 +119,7 @@ class SituationBuilder:
             parts.append(f"It is {clock}.")
         seen = ", looking at you" if npc.in_view else ""
         parts.append(f"The hero is {npc.distance_cm / 100:.0f} m away{seen}.")
+        parts += npc.view
         parts += [s.describe(now) for s in stimuli]
         if npc.agenda:
             parts.append(f"What you want: {npc.agenda}")
@@ -131,6 +128,8 @@ class SituationBuilder:
         options = dict(REACT_OPTIONS)
         for s in stimuli:
             options.update(EVENT_OPTIONS.get(s.kind, {}))
+            if s.other == "PLAYER":
+                options.update(BY_HERO_OPTIONS.get(s.kind, {}))
         return Situation(
             " ".join(parts), {"react": {"type": "choice", "instructions": REACT, "criteria": options}}
         )

@@ -20,12 +20,17 @@
 #include <zenkit/addon/texcvt.hh>
 #include <zenkit/Texture.hh>
 
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/animation.h"
 #include "graphics/mesh/attachbinder.h"
+#include "graphics/mesh/bowdraw.h"
 #include "graphics/material.h"
 #include "dmusic/directmusic.h"
 #include "utils/fileext.h"
@@ -35,6 +40,8 @@
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
+#include <optional>
+#include <unordered_map>
 
 using namespace Tempest;
 
@@ -78,6 +85,7 @@ Resources::Resources(Tempest::Device &device)
 
   fBuff .reserve(8*1024*1024);
   ddsBuf.reserve(8*1024*1024);
+  indexHdTextures();
 
   {
   Pixmap pm(1,1,TextureFormat::RGBA8);
@@ -237,6 +245,98 @@ const char* Resources::renderer() {
   return inst->dev.properties().name;
   }
 
+// A bow's string drawn straight back (graphics/mesh/bowdraw): G2 draws the string's middle up and to the
+// side, to the arrow its animations hold high over the hand. Copies of the drawn string (S_READY) and of
+// its release (S_RELAX) where the middle goes square to the limbs, back as far, to the side only as far as
+// the arrow passes the bow; the limbs bend as they do. On a layer of their own: they blend with G2's
+static void straightenString(zenkit::MorphMesh& zmm) {
+  const zenkit::MorphAnimation* ready = nullptr;
+  const zenkit::MorphAnimation* relax = nullptr;
+  int32_t                       layer = 0;
+  for(auto& a:zmm.animations) {
+    if(a.name=="S_READY")
+      ready = &a;
+    if(a.name=="S_RELAX")
+      relax = &a;
+    layer = std::max(layer,a.layer);
+    }
+  const auto& pos = zmm.mesh.positions;
+  if(ready==nullptr || ready->vertices.empty() || ready->samples.size()<ready->vertices.size() || pos.empty())
+    return;
+
+  // the bow's axes: along the limbs (the longest), across it (the thinnest), back from the grip
+  Vec3 lo = Vec3(pos[0].x,pos[0].y,pos[0].z), hi = lo;
+  for(auto& p:pos) {
+    lo = Vec3(std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z));
+    hi = Vec3(std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z));
+    }
+  const float ext[3] = {hi.x-lo.x, hi.y-lo.y, hi.z-lo.z};
+  int along = 0, across = 0;
+  for(int i=1; i<3; ++i) {
+    if(ext[i]>ext[along])
+      along = i;
+    if(ext[i]<ext[across])
+      across = i;
+    }
+  const int back = 3-along-across;
+  if(along==across)
+    return;
+  auto comp = [](const zenkit::Vec3& v, int i) { return i==0 ? v.x : (i==1 ? v.y : v.z); };
+
+  // the string's middle: the vertices drawn the farthest
+  const size_t per  = ready->vertices.size();
+  float        peak = 0;
+  size_t       top  = 0;
+  for(size_t k=0; k<per; ++k) {
+    auto&       m = ready->samples[k];
+    const float d = std::sqrt(m.x*m.x + m.y*m.y + m.z*m.z);
+    if(d>peak) {
+      peak = d;
+      top  = k;
+      }
+    }
+  if(peak<1.f)
+    return;
+  const float drawn = comp(ready->samples[top],back);
+  const float side  = comp(ready->samples[top],across)<0.f ? -BowDraw::StringSide : BowDraw::StringSide;
+  if(std::abs(drawn)<1.f)
+    return;
+  std::unordered_map<uint32_t,float> middle;
+  for(size_t k=0; k<per; ++k) {
+    auto&       m = ready->samples[k];
+    const float d = std::sqrt(m.x*m.x + m.y*m.y + m.z*m.z)/peak;
+    const float w = std::clamp((d-0.5f)/0.3f,0.f,1.f);
+    if(w>0.f)
+      middle[ready->vertices[k]] = w*w*(3.f-2.f*w);
+    }
+
+  auto straight = [&](zenkit::MorphAnimation a, const char* name) {
+    a.name  = name;
+    a.layer = layer+1;
+    const size_t n = a.vertices.size();
+    for(size_t i=0; n>0 && i<a.samples.size(); ++i) {
+      auto it = middle.find(a.vertices[i%n]);
+      if(it==middle.end())
+        continue;
+      auto&       m  = a.samples[i];
+      const float b  = comp(m,back);
+      float       to[3] = {};
+      to[back]   = b;
+      to[across] = side*(b/drawn);
+      const float w  = it->second;
+      m.x += (to[0]-m.x)*w;
+      m.y += (to[1]-m.y)*w;
+      m.z += (to[2]-m.z)*w;
+      }
+    return a;
+    };
+  auto drawnStr = straight(*ready,BowDraw::StringDrawn);
+  auto loose    = relax!=nullptr ? std::make_optional(straight(*relax,BowDraw::StringLoose)) : std::nullopt;
+  zmm.animations.push_back(std::move(drawnStr));
+  if(loose)
+    zmm.animations.push_back(std::move(*loose));
+  }
+
 static Sampler implShadowSampler() {
   Tempest::Sampler smp;
   smp.setFiltration(Tempest::Filter::Nearest);
@@ -358,9 +458,50 @@ Tempest::Texture2d* Resources::implLoadTexture(std::string_view cname, bool forc
   return nullptr;
   }
 
+void Resources::indexHdTextures() {
+  const char* dir = std::getenv("OPENGOTHIC_TEXTURES");
+  if(dir==nullptr || dir[0]=='\0')
+    return;
+  std::error_code ec;
+  for(auto& e:std::filesystem::directory_iterator(dir,ec)) {
+    auto ext = e.path().extension().string();
+    for(auto& c:ext)
+      c = char(std::toupper(uint8_t(c)));
+    if(ext!=".DDS" && ext!=".PNG")
+      continue;
+    auto key = e.path().stem().string();
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    // DXT with mipmaps (DDS) over RGBA (PNG): a fraction of the memory
+    auto& path = hdTextures[key];
+    if(path.empty() || ext==".DDS")
+      path = e.path().string();
+    }
+  if(ec)
+    Log::e("textures: unable to read \"",dir,"\"");
+  Log::i("textures: ",hdTextures.size()," of our own from \"",dir,"\"");
+  }
+
 Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMips) {
   if(name.empty())
     return Texture2d();
+
+  // a sharper texture of our own (scripts/hd-textures.sh) instead of the game's: mipmaps from the file
+  // (DDS) or made here (PNG)
+  if(!hdTextures.empty() && FileExt::hasExt(name,"TGA")) {
+    std::string key(name.substr(0,name.size()-4));
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    if(auto it = hdTextures.find(key); it!=hdTextures.end()) {
+      try {
+        Tempest::Pixmap pm(it->second);
+        return dev.texture(pm,true);
+        }
+      catch(...) {
+        Log::e("textures: unable to load \"",it->second,"\"");
+        }
+      }
+    }
 
   if(FileExt::hasExt(name,"TGA")) {
     auto nameAlt = std::string(name);
@@ -472,9 +613,29 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
 
     if(zmm.mesh.sub_meshes.empty())
       return nullptr;
+    straightenString(zmm);
 
     PackedMesh packed(zmm.mesh,PackedMesh::PK_VisualMorph);
-    return std::unique_ptr<ProtoMesh>{new ProtoMesh(std::move(packed),zmm.animations,name)};
+    std::unique_ptr<ProtoMesh> ret{new ProtoMesh(std::move(packed),zmm.animations,name)};
+    // the vertex each morph moves the most, where it rests: the string's middle of a bow
+    for(size_t i=0; i<ret->morph.size() && i<zmm.animations.size(); ++i) {
+      auto&       a    = zmm.animations[i];
+      auto&       m    = ret->morph[i];
+      const auto  per  = a.vertices.size();
+      float       best = -1;
+      for(size_t k=0; per>0 && k<a.samples.size(); ++k) {
+        auto&       sm = a.samples[k];
+        const float d  = sm.x*sm.x + sm.y*sm.y + sm.z*sm.z;
+        const auto  id = a.vertices[k%per];
+        if(d<=best || id>=zmm.mesh.positions.size())
+          continue;
+        best       = d;
+        auto& at   = zmm.mesh.positions[id];
+        m.peakAt   = Tempest::Vec3(at.x,at.y,at.z);
+        m.peakMove = Tempest::Vec3(sm.x,sm.y,sm.z);
+        }
+      }
+    return ret;
     }
 
   if(FileExt::hasExt(name,"MDS")) {

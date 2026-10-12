@@ -22,14 +22,21 @@
 
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
+#include "game/definitions/sounddefinitions.h"
+#include "resources.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lipsync.h"
+#include "graphics/mesh/talkgestures.h"
+#include "graphics/mesh/eyeblink.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animblend.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/bowdraw.h"
+#include "graphics/mesh/hitzones.h"
+#include "game/archery.h"
 #include "graphics/mesh/flinch.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
@@ -37,6 +44,7 @@
 #include "world/objects/item.h"
 #include "world/world.h"
 #include "world/aiqueue.h"
+#include "ui/crosshair.h"
 #include "utils/keycodec.h"
 #include "camera.h"
 #include "gothic.h"
@@ -318,6 +326,35 @@ struct Canvas {
       }
     }
 
+  // a polyline stroked as the game strokes the crosshair: white over a dark edge, smooth; each pixel once
+  void stroke(const std::vector<Vec2>& pt, float alpha, const Crosshair::Pen& pen) {
+    if(pt.size()<2)
+      return;
+    float x0 = pt[0].x, y0 = pt[0].y, x1 = x0, y1 = y0;
+    for(auto& p:pt) {
+      x0 = std::min(x0,p.x); x1 = std::max(x1,p.x);
+      y0 = std::min(y0,p.y); y1 = std::max(y1,p.y);
+      }
+    const float m = pen.half+pen.edge+1.f;
+    for(int y=int(std::floor(y0-m)); y<=int(std::ceil(y1+m)); ++y)
+      for(int x=int(std::floor(x0-m)); x<=int(std::ceil(x1+m)); ++x) {
+        const Vec2 q = Vec2(float(x),float(y));
+        float      d = 1e9f;
+        for(size_t i=0; i+1<pt.size(); ++i) {
+          const Vec2  ab = pt[i+1]-pt[i];
+          const float ll = ab.x*ab.x+ab.y*ab.y;
+          const float t  = ll>0.f ? std::clamp(((q.x-pt[i].x)*ab.x+(q.y-pt[i].y)*ab.y)/ll,0.f,1.f) : 0.f;
+          d = std::min(d,(pt[i]+ab*t-q).length());
+          }
+        const float edge = std::clamp(pen.half+pen.edge+0.5f-d,0.f,1.f);
+        const float core = std::clamp(pen.half+0.5f-d,0.f,1.f);
+        if(edge>0.f)
+          blend(x,y,{0,0,0,uint8_t(255.f*alpha*pen.outline*edge)});
+        if(core>0.f)
+          blend(x,y,{255,255,255,uint8_t(255.f*alpha*core)});
+        }
+    }
+
   int text(int x, int y, std::string_view s, int sc, Rgba c) {
     rect(x-sc,y-sc,int(s.size())*4*sc+sc,7*sc,Shade);
     for(char ch:s) {
@@ -438,6 +475,7 @@ struct Bench {
   std::FILE*  csv       = nullptr;
   std::string shot;
   bool        overlay   = true;
+  bool        ui        = false;  // the interface is in the captured frame
   bool        zoom      = true;
   bool        bright    = true;  // auto exposure: forests and interiors are too dark to see the legs
   float       clip      = 0;     // > 0: everything closer to the camera than the subject minus this is clipped away
@@ -451,6 +489,24 @@ struct Bench {
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
   Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  PlayerControl* ctrl     = nullptr; // the player's input: the crosshair of the manual aim
+  // volley: shots by hand in a row - press, draw to volleyDraw, hold volleyHold, let go, wait for the
+  // next arrow
+  int         volleyLeft  = 0;
+  int         volleyPhase = 0;
+  uint64_t    volleyHold  = 0;
+  float       volleyDraw  = 1;
+  uint64_t    volleyT     = 0;
+  // aimat: the manual aim aims there instead of the mouse, every frame
+  Npc*           aimNpc   = nullptr;
+  HitZones::Zone aimZone  = HitZones::Body;
+  bool           aimFixed = false;
+  bool           aimRaw   = false; // no holding over for the drop of the arrow
+  bool           crossValid = false;
+  Vec3           crossPrev  = {}; // on the screen, -1..1
+  float          aspect     = 4.f/3.f; // of the captured frame
+  float          uiScale    = 1;       // of the game's interface
+  Vec3           aimAt    = {};
   // joints of the watched one's animated pose in the last two frames: a pop is a jump of the second difference
   std::vector<Vec3> anim1, anim2;
   // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
@@ -461,6 +517,8 @@ struct Bench {
 
   // talking (scripts/shorts)
   std::string camNpc;           // C_Shoulder, C_NpcFace, C_Two
+  std::string zonesNpc;         // showzones: the npc whose hit zones the overlay draws
+  bool        zonesOnly = false; // the overlay draws the hit zones only
   float       camSmooth = 0.12f; // share of the way to the wanted camera per frame; 1: no smoothing
   bool        smValid   = false;
   Vec3        smOrg, smTgt;
@@ -546,6 +604,7 @@ bool keyAction(std::string_view k, KeyCodec::Action& a) {
     {"turnl",  KeyCodec::RotateL}, {"turnr",KeyCodec::RotateR},   {"jump",KeyCodec::Jump},  {"walk", KeyCodec::Walk},
     {"sneak",  KeyCodec::Sneak},   {"weapon",KeyCodec::Weapon},   {"action",KeyCodec::ActionGeneric},
     {"melee",  KeyCodec::WeaponMele},{"bow",KeyCodec::WeaponBow}, {"spell",KeyCodec::WeaponMage3},
+    {"parade", KeyCodec::Parade},  {"breath",KeyCodec::Walk},
     };
   for(auto& i:keys)
     if(i.name==k) {
@@ -837,6 +896,26 @@ void updateCamera(World& w, Npc& pl) {
     }
   }
 
+// degrees between where the arrow points and the aim (sway, the turn lagging); -1 not aiming by hand
+float manualAimOff(Npc& pl) {
+  Vec3 pos, dir;
+  if(!pl.hasManualAim() || !pl.arrowRay(pos,dir))
+    return -1;
+  const Vec3 want = Vec3::normalize(pl.manualAimPoint()-pos);
+  return std::acos(std::clamp(Vec3::dotProduct(dir,want),-1.f,1.f))*180.f/float(M_PI);
+  }
+
+const char* archerStage(Archer::Stage s) {
+  switch(s) {
+    case Archer::Lowered:   return "lowered";
+    case Archer::Raising:   return "raising";
+    case Archer::Nocked:    return "nocked";
+    case Archer::Drawing:   return "drawing";
+    case Archer::Held:      return "held";
+    case Archer::Reloading: return "reloading";
+    }
+  return "?";
+  }
 // the faces a mood shows (the bridge's say.mood)
 struct FaceColumn { const char* column; const char* anim; };
 const FaceColumn FaceColumns[] = {
@@ -855,8 +934,12 @@ void writeHeader() {
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
-  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean,a_side,ik_crouch,m_crouch,m_peek");
+  std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
+  std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss,bd_follow,bd_fit,bd_offset,bd_angle,hd_hand,hd_fore,hd_arrow,bd_hold,bd_nock,rh_x,rh_y,rh_z,bd_held,bd_overgrip,bd_atmiddle,bd_nockgap,bd_square,bd_cant,bd_bowmove,bd_bowmiss");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
+  std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops,ge_nods,ge_pitch,ge_yaw,ge_roll");
+  std::fprintf(bench.csv,",bk_on,bk_w,bk_n,bk_pause,bk_shift,bk_double");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
@@ -930,12 +1013,57 @@ void writeRow(Npc& pl) {
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
                am.animYaw,am.animPitch,am.turn,am.bend,am.error);
-  std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
+  std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.2f,%.2f",int(am.steady),am.lean,am.side,FootIk::playerProbe.crouch,
+               double(pl.aimCrouch()),double(pl.aimPeek()));
+  // the manual aim: the bow's stage, the sway, how far the arrow points off the aim
+  const auto& mp = Archer::playerProbe;
+  // the crosshair: how far it is open, degrees; how far it moved on the screen since the last frame,
+  // percent of the screen's height
+  Vec3  cross;
+  float spread = 0;
+  auto  cam    = Gothic::inst().camera();
+  bool  hasCross = cam!=nullptr && bench.ctrl!=nullptr && bench.ctrl->crosshair(cross,spread);
+  float moved  = -1;
+  if(hasCross) {
+    // as the game draws it: the center of the screen, unless the bench aims elsewhere
+    float x = cross.x, y = cross.y, z = cross.z, w = 1;
+    cam->viewProj().project(x,y,z,w);
+    if(bench.ctrl->isCrosshairCentered()) {
+      x = 0;
+      y = 0;
+      w = 1;
+      }
+    hasCross = w>1e-3f;
+    const Vec3 at = hasCross ? Vec3(x/w,y/w,0) : Vec3();
+    if(hasCross && bench.crossValid)
+      moved = std::hypot((at.x-bench.crossPrev.x)*bench.aspect,at.y-bench.crossPrev.y)*50.f;
+    bench.crossPrev = at;
+    }
+  bench.crossValid = hasCross;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
+               mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl),
+               hasCross ? spread*180.f/float(M_PI) : -1.f,moved);
+  // the hand drawing the string
+  const auto& bd = BowDraw::playerProbe;
+  std::fprintf(bench.csv,",%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",bd.valid ? bd.weight : -1.f,bd.draw,bd.span,bd.travel,bd.miss,
+               bd.follow,bd.fit,bd.offset,bd.angle);
+  std::fprintf(bench.csv,",%.1f,%.1f,%.1f,%d,%.2f",bd.head,bd.fore,bd.arrow,int(bd.holding),bd.nock);
+  std::fprintf(bench.csv,",%.2f,%.2f,%.2f",bd.handAt.x,bd.handAt.y,bd.handAt.z);
+  std::fprintf(bench.csv,",%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",bd.aligned,bd.overGrip,bd.atMiddle,bd.nockGap,bd.square,bd.cant,bd.bowMove,bd.bowMiss);
   // lips of the watched one
   const auto& lp = LipSync::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
                int(lp.valid),int(lp.active),(unsigned long long)lp.time,lp.level,lp.mouth,lp.open,
                lp.shape.frame0,lp.shape.frame1,lp.shape.alpha,lp.shape.intensity,lp.picks);
+  // its hands while it speaks
+  const auto& ge = TalkGestures::subjectProbe;
+  std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),
+               unsigned(ge.mood),ge.starts,ge.cuts,ge.stops,ge.nods,double(ge.head.pitch*180.f/float(M_PI)),
+               double(ge.head.yaw*180.f/float(M_PI)),double(ge.head.roll*180.f/float(M_PI)));
+  // its blinks: how closed the eyes are now, counters
+  const auto& bk = EyeBlink::subjectProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%u,%u,%u,%u",int(bk.valid && bk.enabled),subjectOf(pl).faceWeight("R_EYESBLINK"),
+               bk.blinks,bk.pauses,bk.shifts,bk.doubles);
   // faces of the watched one, as shown (fading in and out)
   Npc& s = subjectOf(pl);
   for(auto& f:FaceColumns)
@@ -1239,8 +1367,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.zoom = on;
     else if(m=="bright")
       bench.bright = on;
+    else if(m=="zones")
+      bench.zonesOnly = on; // the hit zones only, no legs, no text
     else
       bench.overlay = (m!="off");
+    }
+  else if(c=="ui") {
+    bench.ui = !(a.size()>1 && a[1]=="off");
     }
   else if(c=="rec") {
     stopRecording();
@@ -1406,6 +1539,189 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->aiPush(AiQueue::aiGoToPoint(*wp));
     say("npcgo " + symName(w,n) + " " + a[2]);
     }
+  else if(c=="manual") {
+    // manual on|off: the hero aims a bow by hand (game/archery)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Archery::setEnabled(m=="on"); else
+      say("unknown manual command: " + line);
+    }
+  else if(c=="sfx") {
+    // sfx <name>...: the files a sound effect plays (its variants _A1.. too), whether they load
+    for(size_t k=1; k<a.size(); ++k) {
+      std::string out = "sfx " + a[k] + ":";
+      for(int v=0; v<10; ++v) {
+        const std::string name = v==0 ? a[k] : a[k]+"_A"+std::to_string(v);
+        auto& d = Gothic::sfx()[name];
+        if(d.file.empty())
+          break;
+        out += " " + d.file + (Resources::loadSoundBuffer(d.file).isEmpty() ? " (missing)" : "") +
+               " vol " + std::to_string(d.vol);
+        }
+      say(out);
+      }
+    }
+  else if(c=="animspeed") {
+    // animspeed <anim> <k>: the hero's animation of that name plays k times as fast from its next start
+    // (the reload's tempo is set by the manual aim from dexterity: this overrides it until then)
+    if(a.size()<3) {
+      say("animspeed: <anim> <k>");
+      return;
+      }
+    pl.setAnimSpeed(a[1],num(a,2,1));
+    say("animspeed " + a[1] + " " + a[2]);
+    }
+  else if(c=="bowdraw") {
+    // bowdraw on|off: the hand draws the string as far as the bow is drawn, the reload holds the aim
+    // (graphics/mesh/bowdraw)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      BowDraw::setEnabled(m=="on"); else
+      say("unknown bowdraw command: " + line);
+    }
+  else if(c=="showzones") {
+    // showzones <npc symbol>|player|off: the overlay draws the npc's hit zones (capsules on its bones: the head
+    // red, the trunk yellow, the limbs blue)
+    bench.zonesNpc = a.size()>1 && a[1]!="off" ? a[1] : "";
+    say("showzones " + (bench.zonesNpc.empty() ? std::string("off") : bench.zonesNpc));
+    }
+  else if(c=="bowgeom") {
+    // bowgeom: the bow and the bow hand in the arrow's frame, as posed now
+    say(pl.bowDump());
+    }
+  else if(c=="stats") {
+    // stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]: the hero's strength, dexterity, hit chances (the
+    // skill of the manual aim)
+    auto& h = pl.handle();
+    for(size_t i=1; i+1<a.size(); i+=2) {
+      const int v = int(num(a,i+1,0));
+      if(a[i]=="str")
+        h.attribute[ATR_STRENGTH] = v;
+      else if(a[i]=="dex")
+        h.attribute[ATR_DEXTERITY] = v;
+      else if(a[i]=="bow")
+        h.hitchance[TALENT_BOW] = v;
+      else if(a[i]=="cbow")
+        h.hitchance[TALENT_CROSSBOW] = v;
+      else
+        say("stats: unknown " + a[i]);
+      }
+    const auto  wp = pl.currentRangedWeapon();
+    const auto  st = Archery::stats(pl,wp);
+    char buf[360];
+    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg reload x%.2f",
+                  pl.attribute(ATR_STRENGTH),pl.attribute(ATR_DEXTERITY),pl.hitChance(TALENT_BOW),pl.hitChance(TALENT_CROSSBOW),
+                  wp!=nullptr ? int(wp->handle().damage_total) : -1,
+                  double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
+                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)),
+                  double(st.reload));
+    say(buf);
+    }
+  else if(c=="zones" && a.size()>2 && a[1]=="fit") {
+    // zones fit on|off: the hit zones as thick as the body's mesh, or by a guess from the bone names (the
+    // hero refitted now, the others when they change their body)
+    HitZones::setFitEnabled(a[2]=="on");
+    pl.fitHitZones();
+    say("zones fit " + a[2]);
+    }
+  else if(c=="zones") {
+    // zones <npc|nearest|player>: where its hit zones are now (the capsules on its bones), how well they
+    // cover its body
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr) {
+      say("zones: no npc " + line);
+      return;
+      }
+    Vec3 h, b;
+    n->hitZoneCenter(HitZones::Head,h);
+    n->hitZoneCenter(HitZones::Body,b);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"zones %s at %.0f %.0f %.0f: head %.0f %.0f %.0f body %.0f %.0f %.0f",symName(w,n).c_str(),
+                  n->position().x,n->position().y,n->position().z,h.x,h.y,h.z,b.x,b.y,b.z);
+    say(buf + std::string("\n") + n->hitZonesDump());
+    }
+  else if(c=="open") {
+    // open [dist cm]: how far it is open around the hero at head height and at the knees, every 15
+    // degrees from the facing (a target for the bow needs open ground)
+    const float dist = num(a,1,4000);
+    const Vec3  p0   = pl.position();
+    std::string out  = "open (yaw from the facing: head/knees m):";
+    for(int i=0; i<24; ++i) {
+      const float an = (pl.rotation()+float(i*15))*float(M_PI)/180.f;
+      const Vec3  d  = Vec3(std::cos(an),0,std::sin(an));
+      float       m[2];
+      for(int k=0; k<2; ++k) {
+        const Vec3 from = p0 + Vec3(0,k==0 ? 160.f : 40.f,0);
+        auto       r    = w.physic()->ray(from,from+d*dist);
+        m[k] = r.hasCol ? (r.v-from).length()/100.f : dist/100.f;
+        }
+      char buf[48];
+      std::snprintf(buf,sizeof(buf)," %d:%.0f/%.0f",i*15,double(m[0]),double(m[1]));
+      out += buf;
+      }
+    say(out);
+    }
+  else if(c=="volley") {
+    // volley <shots> [hold ms] [draw 0..1]: shots by hand in a row (manual on): the string drawn that far
+    // (1: full), held, let go; the scenario goes on after the last one is reloaded
+    bench.volleyLeft  = int(num(a,1,5));
+    bench.volleyHold  = uint64_t(num(a,2,300));
+    bench.volleyDraw  = num(a,3,1);
+    bench.volleyPhase = 0;
+    bench.volleyT     = bench.time;
+    say("volley " + std::to_string(bench.volleyLeft));
+    }
+  else if(c=="aimat") {
+    // aimat <npc|nearest> [head|body|limb] | aimat <x> <y> <z> | aimat ahead [dist] [height] | aimat off: the
+    // manual aim aims there
+    // instead of the mouse - the middle of a zone of the npc, every frame
+    bench.aimNpc   = nullptr;
+    bench.aimFixed = false;
+    if(a.size()>1 && a[1]=="off") {
+      ctrl.setAimOverride(false);
+      say("aimat off");
+      return;
+      }
+    if(a.size()>1 && a[1]=="ahead") {
+      // aimat ahead [dist cm 2000] [height cm 140]: a point that far ahead of the hero as it faces now
+      const Vec3 f   = facing(pl);
+      bench.aimFixed = true;
+      bench.aimAt    = pl.position() + f*num(a,2,2000) + Vec3(0,num(a,3,140),0);
+      ctrl.setAimOverride(true,bench.aimAt);
+      say("aimat ahead");
+      return;
+      }
+    if(a.size()>3 && (std::isdigit(uint8_t(a[1][0])) || a[1][0]=='-')) {
+      bench.aimFixed = true;
+      bench.aimAt    = Vec3(num(a,1,0),num(a,2,0),num(a,3,0));
+      ctrl.setAimOverride(true,bench.aimAt);
+      say("aimat " + a[1] + " " + a[2] + " " + a[3]);
+      return;
+      }
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("aimat: no npc " + line);
+      return;
+      }
+    const std::string z = a.size()>2 ? a[2] : "body";
+    bench.aimNpc  = n;
+    bench.aimZone = z=="head" ? HitZones::Head : (z=="limb" ? HitZones::Limb : HitZones::Body);
+    bench.aimRaw  = a.size()>3 && a[3]=="raw";
+    say("aimat " + symName(w,n) + " " + std::string(HitZones::name(bench.aimZone)) + (bench.aimRaw ? " raw" : ""));
+    }
+  else if(c=="immortal") {
+    // immortal <npc|nearest> on|off: arrows hit it, it does not die (counting hits)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr) {
+      say("immortal: no npc " + line);
+      return;
+      }
+    auto& h = n->handle();
+    if(a.size()>2 && a[2]=="off")
+      h.flags = zenkit::NpcFlag(uint32_t(h.flags) & ~uint32_t(zenkit::NpcFlag::IMMORTAL)); else
+      h.flags = zenkit::NpcFlag(uint32_t(h.flags) |  uint32_t(zenkit::NpcFlag::IMMORTAL));
+    say("immortal " + symName(w,n) + " " + (n->isImmortal() ? "on" : "off"));
+    }
   else if(c=="clear") {
     // clear [radius]: the npcs around the hero leave the world (rats, wolves that would join in), not the
     // watched one
@@ -1567,6 +1883,75 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say(buf);
       }
     }
+  else if(c=="corner") {
+    // corner <left|right> [count] | corner <left|right> go <i>: spots at a corner of a wall (near waypoints):
+    // a wall right in front of the head, open far ahead leaning out to that side (Aim::SideReach): where
+    // the manual aim leans out round it. Lists them (nearest first) or puts the hero at the i-th, facing
+    // along it
+    const bool  right = a.size()>1 && a[1]=="right";
+    const bool  go    = a.size()>2 && a[2]=="go";
+    const size_t pick = size_t(num(a,3,0));
+    const size_t count = size_t(num(a,2,10));
+    struct Spot { std::string name; Vec3 at; float yaw, front, from; };
+    std::vector<Spot> all;
+    const Vec3 at0 = pl.position();
+    w.findWayPoint(at0,[&](const WayPoint& wp) {
+      if((wp.pos-at0).length()>8000.f)
+        return false;
+      for(int k=0; k<16; ++k) {
+        const float y    = float(k)*22.5f*float(M_PI)/180.f;
+        const Vec3  f    = Vec3(std::cos(y),0,std::sin(y));
+        Vec3        sd   = Vec3::crossProduct(Vec3(0,1,0),f);
+        sd = Vec3::normalize(sd)*(right ? 1.f : -1.f);
+        for(float shift=-90; shift<=90; shift+=15) {
+          const Vec3  p0 = Vec3(wp.pos.x,wp.pos.y+50,wp.pos.z);
+          const Vec3  p1 = p0 + sd*shift;
+          if(w.physic()->ray(p0,p1).hasCol)
+            continue;
+          const float g  = groundY(w,p1.x,p1.z,p1.y+50);
+          if(std::isnan(g) || std::abs(g-wp.pos.y)>40)
+            continue;
+          const Vec3 head = Vec3(p1.x,g+148,p1.z);
+          auto       fr   = w.physic()->ray(head,head+f*400.f);
+          if(!fr.hasCol || (fr.v-head).length()<50.f)
+            continue; // no wall in front, or right at the face
+          const Vec3 out = head + sd*Aim::SideReach;
+          if(w.physic()->ray(head,out+sd*15.f).hasCol)
+            continue; // no room to lean out
+          if(w.physic()->ray(out,out+f*600.f).hasCol)
+            continue; // walled leaning out too
+          if(w.physic()->ray(Vec3(p1.x,g+60,p1.z),Vec3(p1.x,g+60,p1.z)+f*60.f).hasCol)
+            continue; // a low step in front: not a corner
+          all.push_back(Spot{wp.name,Vec3(p1.x,g,p1.z),float(k)*22.5f,(fr.v-head).length(),(p1-at0).length()});
+          break;
+          }
+        }
+      return false;
+      });
+    std::sort(all.begin(),all.end(),[](const Spot& x, const Spot& y) { return x.from<y.from; });
+    if(go) {
+      if(pick>=all.size()) {
+        say("corner: no spot " + std::to_string(pick));
+        return;
+        }
+      auto& sp = all[pick];
+      pl.setPosition(sp.at);
+      face(pl,Vec3(std::cos(sp.yaw*float(M_PI)/180.f),0,std::sin(sp.yaw*float(M_PI)/180.f)));
+      bench.hasPrev = false;
+      char buf[200];
+      std::snprintf(buf,sizeof(buf),"corner %s %zu: %s yaw=%.1f wall in front %.0f cm",right ? "right" : "left",pick,sp.name.c_str(),
+                    double(sp.yaw),double(sp.front));
+      say(buf);
+      return;
+      }
+    say("corners " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[200];
+      std::snprintf(buf,sizeof(buf),"corner %zu %s yaw=%.1f front=%.0f from=%.0f",i,all[i].name.c_str(),double(all[i].yaw),
+                    double(all[i].front),double(all[i].from));
+      say(buf);
+      }
+    }
   else if(c=="walls") {
     // walls [count]: spots at a wall's edge (from a waypoint, walking to where the ground falls away) with
     // the foot of the wall 2.5..10 m below, 1 m out: hidden from the head, seen leaning over (the aim's
@@ -1709,6 +2094,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->startFaceAnim(a[2],num(a,4,1),uint64_t(num(a,3,3000)));
     say("faceanim " + std::string(n->displayName()) + " " + a[2]);
     }
+  else if(c=="ani") {
+    // ani <npc|nearest|player> <anim>: it plays an animation of its model script (T_YES, T_DIALOGGESTURE_03)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || a.size()<3) {
+      say("ani: no npc or anim " + line);
+      return;
+      }
+    auto sq = n->playAnimByName(a[2],BS_STAND);
+    say("ani " + symName(w,n) + " " + a[2] + (sq==nullptr ? " failed" : ""));
+    }
   else if(c=="dialog") {
     // dialog <npc|nearest>: the hero talks to it, as with the action key (important infos start by themselves)
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
@@ -1717,7 +2112,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       return;
       }
     n->startDialog(pl);
-    say("dialog " + std::string(n->displayName()));
+    say("dialog " + symName(w,n));
     }
   else if(c=="choose") {
     // choose <n>: runs the n-th dialog choice (from 1, as listed) of the watched npc, as if the player picked it
@@ -1743,6 +2138,30 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else
       say("unknown lips command: " + line);
     }
+  else if(c=="gestures") {
+    // gestures on|off|param <name> <value>|params: the hands while one speaks (off: a random gesture per line)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      TalkGestures::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(TalkGestures::setParam(a[2],num(a,3,0)) ? "gestures param " : "gestures: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("gestures params: " + TalkGestures::paramList());
+    else
+      say("unknown gestures command: " + line);
+    }
+  else if(c=="blink") {
+    // blink on|off|param <name> <value>|params: blinking (off: nobody blinks, as OpenGothic was)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      EyeBlink::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(EyeBlink::setParam(a[2],num(a,3,0)) ? "blink param " : "blink: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("blink params: " + EyeBlink::paramList());
+    else
+      say("unknown blink command: " + line);
+    }
   else if(c=="watch") {
     // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
@@ -1750,6 +2169,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Gaze::probeNpc = bench.subject;
     LipSync::probeNpc     = n;
     LipSync::subjectProbe = LipSync::Probe();
+    TalkGestures::probeNpc     = n;
+    TalkGestures::subjectProbe = TalkGestures::Probe();
+    EyeBlink::probeNpc         = n;
+    EyeBlink::subjectProbe     = EyeBlink::Probe();
     Lean::probeNpc = bench.subject;
     Pose::probeNpc = bench.subject;
     bench.anim1.clear();
@@ -1930,6 +2353,56 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   }
 
+void tickVolley(PlayerControl& ctrl) {
+  const auto& mp = Archer::playerProbe;
+  const auto  t  = bench.time - bench.volleyT;
+  auto stop = [&](const char* why) {
+    say(std::string("volley: ") + why);
+    release(ctrl,KeyCodec::ActionGeneric);
+    bench.volleyLeft = 0;
+    };
+  switch(bench.volleyPhase) {
+    case 0:
+      press(ctrl,KeyCodec::ActionGeneric);
+      bench.volleyPhase = 1;
+      bench.volleyT     = bench.time;
+      break;
+    case 1: {
+      const bool drawn = mp.valid && (mp.stage==Archer::Held || (mp.stage==Archer::Drawing && mp.draw>=bench.volleyDraw));
+      if(drawn) {
+        bench.volleyPhase = 2;
+        bench.volleyT     = bench.time;
+        }
+      else if(t>10000)
+        stop("the string is not drawn");
+      break;
+      }
+    case 2:
+      if(t>=bench.volleyHold) {
+        if(bench.aimNpc!=nullptr) {
+          // where it aims, the middle of the zone: the log compares the arrow's flight with it
+          Vec3 c = bench.aimNpc->collosionCenter();
+          bench.aimNpc->hitZoneCenter(bench.aimZone,c);
+          char buf[160];
+          std::snprintf(buf,sizeof(buf),"aim zone %.1f %.1f %.1f",c.x,c.y,c.z);
+          say(buf);
+          }
+        release(ctrl,KeyCodec::ActionGeneric);
+        bench.volleyPhase = 3;
+        bench.volleyT     = bench.time;
+        }
+      break;
+    case 3:
+      if(mp.valid && mp.stage==Archer::Nocked && t>200) {
+        --bench.volleyLeft;
+        bench.volleyPhase = 0;
+        }
+      else if(t>8000)
+        stop("no next arrow");
+      break;
+    }
+  }
+
 // the hero's phrase is said: the talk key goes up
 void endSpeaking() {
   std::string reply;
@@ -1957,6 +2430,11 @@ bool waitingForReply() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+  if(bench.volleyLeft>0) {
+    tickVolley(ctrl);
+    if(bench.volleyLeft>0)
+      return;
+    }
   while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply) {
     if(bench.speaking) {
       if(bench.time<bench.speakUntil)
@@ -1967,7 +2445,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       return;
     if(bench.pc>=bench.prog.size())
       break;
-    if(bench.time<bench.waitUntil)
+    if(bench.time<bench.waitUntil || bench.volleyLeft>0)
       return;
     if(bench.waitArrive) {
       if(!pl.isAiQueueEmpty() && bench.time<bench.arriveEnd)
@@ -1979,7 +2457,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
     }
-  if(bench.time>=bench.waitUntil && !bench.waitArrive)
+  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0)
     finish();
   }
 
@@ -2056,15 +2534,64 @@ void autoExposure(Canvas& cv) {
     }
   }
 
+// hit zones of an npc (showzones): capsule outlines, the head red, the trunk yellow, the limbs blue
+void drawZones(Canvas& cv, Camera* cam) {
+  if(cam!=nullptr && !bench.zonesNpc.empty()) {
+    auto* w = Gothic::inst().world();
+    Npc*  n = bench.zonesNpc=="player" ? Gothic::inst().player() : (w!=nullptr ? npcBySymbol(*w,bench.zonesNpc) : nullptr);
+    if(n!=nullptr) {
+      const Matrix4x4 vp = cam->viewProj();
+      auto proj = [&](const Vec3& p, float& x, float& y) {
+        float px = p.x, py = p.y, pz = p.z, pw = 1;
+        vp.project(px,py,pz,pw);
+        if(pw<=1e-3f)
+          return false;
+        x = (0.5f*px/pw+0.5f)*float(cv.w);
+        y = (0.5f*py/pw+0.5f)*float(cv.h);
+        return true;
+        };
+      std::vector<HitZones::Posed> caps;
+      n->hitZonesPosed(caps);
+      for(auto& c:caps) {
+        const Rgba col = c.zone==HitZones::Head ? Rgba{255,60,60,230} : (c.zone==HitZones::Body ? Rgba{255,220,40,170} : Rgba{60,190,255,170});
+        float ax,ay,bx,by,ux,uy;
+        if(!proj(c.a,ax,ay) || !proj(c.b,bx,by) || !proj(c.a+Vec3(0,c.r,0),ux,uy))
+          continue;
+        const float r  = std::hypot(ux-ax,uy-ay);
+        float       vx = bx-ax, vy = by-ay;
+        const float l  = std::hypot(vx,vy);
+        for(int i=0; i<32; ++i) {
+          const float t0 = float(i)*float(M_PI)/16.f, t1 = float(i+1)*float(M_PI)/16.f;
+          cv.line(ax+r*std::cos(t0),ay+r*std::sin(t0),ax+r*std::cos(t1),ay+r*std::sin(t1),0,col);
+          if(l>0.5f)
+            cv.line(bx+r*std::cos(t0),by+r*std::sin(t0),bx+r*std::cos(t1),by+r*std::sin(t1),0,col);
+          }
+        if(l>0.5f) {
+          vx /= l;
+          vy /= l;
+          cv.line(ax-vy*r,ay+vx*r,bx-vy*r,by+vx*r,0,col);
+          cv.line(ax+vy*r,ay-vx*r,bx+vy*r,by-vx*r,0,col);
+          }
+        }
+      }
+    }
+  }
+
 void drawOverlay(Pixmap& pm) {
   Canvas cv;
   cv.px = reinterpret_cast<uint8_t*>(pm.data());
   cv.w  = int(pm.w());
   cv.h  = int(pm.h());
+  if(cv.h>0)
+    bench.aspect = float(cv.w)/float(cv.h);
   auto  cam = Gothic::inst().camera();
   auto& p   = FootIk::playerProbe;
   if(bench.bright)
     autoExposure(cv);
+  if(bench.zonesOnly) {
+    drawZones(cv,cam);
+    return;
+    }
 
   float zx = -1, zy = -1;
   if(cam!=nullptr && p.valid) {
@@ -2103,6 +2630,45 @@ void drawOverlay(Pixmap& pm) {
     if(h && proj(g.target,x2,y2)) {
       cv.line(x0,y0,x2,y2,0,{255,80,80,140});
       cv.dot(x2,y2,3,Red);
+      }
+    }
+
+  drawZones(cv,cam);
+
+  // the manual aim: the crosshair as the game draws it in its interface (not captured): a chevron at where
+  // it aims, brackets as far apart as the arrow may go off; a dot where the arrow points now (debugging)
+  auto  hero = Gothic::inst().player();
+  Vec3  cross;
+  float spread = 0;
+  if(cam!=nullptr && hero!=nullptr && bench.ctrl!=nullptr && bench.ctrl->crosshair(cross,spread)) {
+    const Matrix4x4 vp = cam->viewProj();
+    auto proj = [&](const Vec3& p, float& x, float& y) {
+      float px = p.x, py = p.y, pz = p.z, pw = 1;
+      vp.project(px,py,pz,pw);
+      if(pw<=1e-3f)
+        return false;
+      x = (0.5f*px/pw+0.5f)*float(cv.w);
+      y = (0.5f*py/pw+0.5f)*float(cv.h);
+      return true;
+      };
+    Vec3  pos, dir;
+    float x, y;
+    if(hero->arrowRay(pos,dir)) {
+      auto r = hero->world().physic()->rayArrow(pos,pos+dir*10000.f,[hero](Npc& n, const Vec3& a, const Vec3& b, float& t) {
+        return &n!=hero && n.rayHitZone(a,b,t)!=HitZones::None;
+        });
+      if(proj(r.hasCol ? r.v : pos+dir*10000.f,x,y))
+        cv.dot(x,y,1,{255,120,120,200});
+      }
+    const bool centered = bench.ctrl->isCrosshairCentered();
+    if(centered) {
+      x = 0.5f*float(cv.w);
+      y = 0.5f*float(cv.h);
+      }
+    if(centered || proj(cross,x,y)) {
+      const float r = Crosshair::radius(spread,cam->fovY(),float(cv.h),bench.uiScale);
+      for(auto& l:Crosshair::shape(x,y,r,bench.uiScale))
+        cv.stroke(l.pt,l.alpha,Crosshair::pen(bench.uiScale));
       }
     }
 
@@ -2156,9 +2722,23 @@ void drawOverlay(Pixmap& pm) {
     }
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   if(am.valid && am.active) {
-    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f",double(am.weight),double(am.error),double(am.yaw),
-                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean));
+    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f S%.0f",double(am.weight),double(am.error),double(am.yaw),
+                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean),double(am.side));
     cv.text(x,y,buf,2,{255,140,60,255});
+    y += 16;
+    }
+  const auto& mp = Archer::playerProbe;
+  if(mp.valid && bench.subject==nullptr) {
+    std::snprintf(buf,sizeof(buf),"BOW %s D%.2f H%.1f F%.2f B%.1f%s%s A%.2f",archerStage(mp.stage),double(mp.draw),double(mp.hold),
+                  double(mp.fatigue),double(mp.breath),mp.holding ? " HOLD" : "",mp.short_ ? " SHORT" : "",double(mp.amp));
+    cv.text(x,y,buf,2,{140,200,255,255});
+    y += 16;
+    }
+  const auto& bd = BowDraw::playerProbe;
+  if(bd.valid && bd.weight>0.f && bench.subject==nullptr) {
+    std::snprintf(buf,sizeof(buf),"DRAW%s W%.2f D%.2f S%.0f T%.0f M%.1f",BowDraw::isEnabled() ? "" : " OFF",double(bd.weight),
+                  double(bd.draw),double(bd.span),double(bd.travel),double(bd.miss));
+    cv.text(x,y,buf,2,{140,200,255,255});
     y += 16;
     }
   const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
@@ -2181,6 +2761,21 @@ void drawOverlay(Pixmap& pm) {
     cv.rect(x,y+1,int(float(bw)*std::clamp(lp.level,0.f,1.f)),3,{255,255,255,255});
     cv.rect(x,y+6,int(float(bw)*std::clamp(lp.open,0.f,1.f)),7,c);
     y += 20;
+    }
+  const auto& bk = EyeBlink::subjectProbe;
+  if(bk.valid && EyeBlink::probeNpc!=nullptr) {
+    std::snprintf(buf,sizeof(buf),"BLINK%s N%u P%u S%u D%u",bk.enabled ? "" : " OFF",bk.blinks,bk.pauses,bk.shifts,bk.doubles);
+    cv.text(x,y,buf,2,{200,200,255,255});
+    y += 16;
+    }
+  const auto& ge = TalkGestures::subjectProbe;
+  if(ge.valid && TalkGestures::probeNpc!=nullptr) {
+    const auto mood = TalkGestures::moodName(ge.mood);
+    std::snprintf(buf,sizeof(buf),"GEST%s %s G%02u %.*s S%u C%u X%u N%u P%.1f",ge.enabled ? "" : " OFF",ge.speaking ? "TALK" : "-",
+                  unsigned(ge.gesture),int(mood.size()),mood.data(),ge.starts,ge.cuts,ge.stops,ge.nods,
+                  double(ge.head.pitch*180.f/float(M_PI)));
+    cv.text(x,y,buf,2,{255,200,120,255});
+    y += 16;
     }
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   if(ln.valid) {
@@ -2236,6 +2831,11 @@ void writeVideo(const Pixmap& pm) {
 
 bool TestBench::isActive() {
   return scenarioPath!=nullptr;
+  }
+
+void TestBench::note(const char* text) {
+  if(scenarioPath!=nullptr && bench.started && !bench.done)
+    say(text);
   }
 
 bool TestBench::filming() {
@@ -2340,6 +2940,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       }
     }
 
+  bench.ctrl = &ctrl;
   run(*world,*player,ctrl);
   renderSound(dt);
   if(bench.done)
@@ -2360,6 +2961,19 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     bench.pinned->setPosition(bench.pinAt);
     bench.pinned->setDirection(Vec3(d.x,0,d.z));
     bench.pinned->updateTransform();
+    }
+  if(bench.aimNpc!=nullptr) {
+    Vec3 at;
+    if(!bench.aimNpc->hitZoneCenter(bench.aimZone,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
+      at = bench.aimNpc->collosionCenter();
+    if(!bench.aimRaw) {
+      // as an archer does: over it by how much the arrow drops on the way (at full draw)
+      const auto  st = Archery::stats(*player,player->currentRangedWeapon());
+      const Vec3  d  = at - player->position();
+      const float t  = std::sqrt(d.x*d.x+d.z*d.z)/std::max(st.speed,0.1f);
+      at.y += 0.5f*DynamicWorld::gravity*t*t;
+      }
+    ctrl.setAimOverride(true,at);
     }
   if(bench.orbitUntil>bench.time) {
     bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;
@@ -2386,7 +3000,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   return capture;
   }
 
-void TestBench::capture(Pixmap& frame) {
+bool TestBench::withUi() {
+  return isActive() && bench.ui;
+  }
+
+void TestBench::capture(Pixmap& frame, float uiScale) {
+  bench.uiScale = uiScale;
   Pixmap pm;
   if(frame.w()>0 && frame.format()!=TextureFormat::RGBA8)
     pm = Pixmap(frame,TextureFormat::RGBA8); else

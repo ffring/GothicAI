@@ -22,6 +22,8 @@ constexpr float TrackRate   = 16.f;      // 1/s, how fast the aim follows the ta
 constexpr float MaxTrack    = 240.f*Deg; // ...but not faster than this, per second
 constexpr float BodyRate    = 16.f;      // 1/s, how fast the upper body takes a new turn
 constexpr float MaxBody     = 180.f*Deg; // per second
+constexpr float HandRate    = 3.f;       // aimed by hand: all of it that many times faster (the mouse is
+                                         // smooth already, the crosshair has to keep up)
 constexpr float SteadyAngle = 1.5f*Deg;  // the arrow moved less than this in a frame...
 constexpr int   SteadyFrames= 4;         // ...that many frames: the bow holds still
 constexpr float LeanRate    = 6.f;       // 1/s, leaning over an edge...
@@ -56,6 +58,11 @@ Vec3 fromBody(const Vec3& v, const Vec3& f) {
 // bending forward toward where the shot goes (horizontally; straight down: where the body faces)
 Vec3 leanDir(const Vec3& want, const Vec3& forward) {
   return normalize(Vec3(want.x,0,want.z) + forward*0.25f);
+  }
+
+// leaning out sideways (+ right): the trunk tilts about where the body faces
+Mat3 sideRotation(const Vec3& forward, float angle) {
+  return axisAngle(forward,-angle);
   }
 
 Mat3 leanRotation(const Vec3& want, const Vec3& forward, float angle) {
@@ -139,6 +146,13 @@ void Aim::setSkeleton(const Skeleton* sk) {
   tree(spine,spineTree);
   tree(waist,waistTree);
   tree(chest,chestTree);
+  for(auto side:{"BIP01 L","BIP01 R"}) {
+    size_t arm = find(std::string(side)+" CLAVICLE");
+    if(arm==size_t(-1))
+      arm = find(std::string(side)+" UPPERARM");
+    if(arm!=size_t(-1) && isUnder(arm,chest))
+      tree(arm,armsTree);
+    }
   valid = true;
   }
 
@@ -151,16 +165,22 @@ bool Aim::update(const Input& in) {
   const Vec3  f       = normalize(Vec3(in.forward.x,0,in.forward.z));
   const Vec3  d       = normalize(in.dir);
   const bool  on      = in.active && enabled && length(f)>0.5f && length(d)>0.5f;
+  const float fast    = (in.manual ? HandRate : 1.f)*in.follow;
 
   if(on) {
     forward = f;
     arrow   = in.arrow;
+    if(arrowSlot!=(in.slot!=size_t(-1) ? in.slot : slot)) {
+      // the arrow lies elsewhere now: measured anew
+      arrowSlot = in.slot!=size_t(-1) ? in.slot : slot;
+      measured  = false;
+      }
     // a direction, not yaw and pitch: straight down the yaw means nothing
     const Vec3 db = toBody(d,forward);
     if(!ready) {
       wantB = db;
       } else {
-      approach(wantB,db,1.f - std::exp(-TrackRate*dt),MaxTrack*dt,changed);
+      approach(wantB,db,1.f - std::exp(-TrackRate*fast*dt),MaxTrack*fast*dt,changed);
       wantB = normalize(wantB);
       }
 
@@ -168,16 +188,17 @@ bool Aim::update(const Input& in) {
     // arrow around), kept in the body's frame; then the turn the upper body needs: the shortest one from
     // there to where the shot has to go, every frame (the target may change while reloading)
     const Vec3 a = arrow ? animArrow : forward;
-    const bool still = !arrow || (measured && std::acos(std::clamp(dot(a,prevArrow),-1.f,1.f))<SteadyAngle);
+    const bool still = !arrow || (!in.reload && measured && std::acos(std::clamp(dot(a,prevArrow),-1.f,1.f))<SteadyAngle);
     steadyFrames = still ? uint8_t(std::min(steadyFrames+1,255)) : 0;
     steady       = steadyFrames>=SteadyFrames || !arrow;
     if(steady)
       rest = toBody(a,forward);
     approach(leanAmt,in.lean,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+    approach(sideAmt,in.side,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
     if(steady || ready) {
-      // where it aims once leaned over the edge
+      // where it aims once leaned over the edge, out sideways
       const Vec3  want = fromBody(wantB,forward);
-      const Vec3  ar   = mul(leanRotation(want,forward,leanAmt),fromBody(rest,forward));
+      const Vec3  ar   = mul(sideRotation(forward,sideAmt),mul(leanRotation(want,forward,leanAmt),fromBody(rest,forward)));
       const Vec3  axis = cross(ar,want);
       const float s    = length(axis);
       const float an   = std::min(std::atan2(s,dot(ar,want)), MaxTurn);
@@ -192,10 +213,21 @@ bool Aim::update(const Input& in) {
     }
   prevArrow = animArrow;
 
-  if(!on)
+  if(!on) {
     approach(leanAmt,0.f,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+    approach(sideAmt,0.f,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+    }
+  // the sway as it is: the arms tremble faster than any smoothing would let through
+  const Tempest::Vec2 sw = on ? in.sway : Tempest::Vec2();
+  if(sw.x!=sway.x || sw.y!=sway.y)
+    changed = true;
+  sway = sw;
+  const Tempest::Vec2 tm = on ? in.tremor : Tempest::Vec2();
+  if(tm.x!=tremor.x || tm.y!=tremor.y)
+    changed = true;
+  tremor = tm;
   if(ready)
-    approach(rot,goal,1.f - std::exp(-BodyRate*dt),MaxBody*dt,changed);
+    approach(rot,goal,1.f - std::exp(-BodyRate*fast*dt),MaxBody*fast*dt,changed);
 
   // the weight fades in once the turn is known, out when the bow goes down
   const float prevW = weight;
@@ -211,14 +243,17 @@ bool Aim::update(const Input& in) {
   }
 
 Vec3 Aim::arrowOf(const Matrix4x4* tr) const {
-  // the arrow (the bolt) lies along -X of the right hand slot, the nock at the string
-  return normalize(Vec3(-tr[slot].at(0,0),-tr[slot].at(0,1),-tr[slot].at(0,2)));
+  // the arrow (the bolt) lies along -X of its slot, the nock at the string
+  const size_t s = arrowSlot!=size_t(-1) ? arrowSlot : slot;
+  return normalize(Vec3(-tr[s].at(0,0),-tr[s].at(0,1),-tr[s].at(0,2)));
   }
 
 void Aim::apply(Matrix4x4* tr, size_t numBones) {
   error = -1;
   if(!valid || spineTree.back()>=numBones || waistTree.back()>=numBones || chestTree.back()>=numBones || slot>=numBones)
     return;
+  if(arrowSlot!=size_t(-1) && arrowSlot>=numBones)
+    arrowSlot = size_t(-1);
   animArrow = arrowOf(tr);
   measured  = true;
   if(weight<=0.f)
@@ -229,6 +264,10 @@ void Aim::apply(Matrix4x4* tr, size_t numBones) {
   const float l    = leanAmt*weight;
   if(l>0.f)
     rotateAbout(tr,spineTree,leanRotation(want,forward,l),position(tr[spine]));
+  // round a corner the trunk leans out sideways from the hips
+  const float sd   = sideAmt*weight;
+  if(sd!=0.f)
+    rotateAbout(tr,spineTree,sideRotation(forward,sd),position(tr[spine]));
 
   // the upper body turns from where it aims to the target: the waist a part, the chest the rest
   const Vec3  r  = fromBody(rot,forward);
@@ -241,6 +280,19 @@ void Aim::apply(Matrix4x4* tr, size_t numBones) {
 
   const Vec3 now  = arrow ? arrowOf(tr) : (an>0.f ? mul(axisAngle(normalize(r),an),forward) : forward);
   error = std::acos(std::clamp(dot(now,want),-1.f,1.f))/Deg;
+
+  // the manual aim sways off that: the chest turns about up and bends (+ up); the arms tremble more, the
+  // head does not (both arms turn about the chest: the arrow and the bow turn together)
+  Vec3 side = cross(want,Up);
+  side = length(side)>1e-3f ? normalize(side) : normalize(cross(forward,Up));
+  if(sway.x!=0.f || sway.y!=0.f) {
+    const Mat3 rs = mul(axisAngle(Up,sway.x*weight),axisAngle(side,sway.y*weight));
+    rotateAbout(tr,chestTree,rs,position(tr[chest]));
+    }
+  if(tremor.x!=0.f || tremor.y!=0.f) {
+    const Mat3 rt = mul(axisAngle(Up,tremor.x*weight),axisAngle(side,tremor.y*weight));
+    rotateAbout(tr,armsTree.empty() ? chestTree : armsTree,rt,position(tr[chest]));
+    }
   }
 
 void Aim::probe(Probe& p) const {
@@ -259,5 +311,6 @@ void Aim::probe(Probe& p) const {
   p.turn      = rot.y*weight/Deg;   // about up, + to the right
   p.bend      = -rot.z*weight/Deg;  // about the side, + up
   p.lean      = leanAmt*weight/Deg;
+  p.side      = sideAmt*weight/Deg;
   p.error     = error;
   }

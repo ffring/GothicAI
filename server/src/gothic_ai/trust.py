@@ -6,7 +6,8 @@ situation of its quests (vanilla.py), and what it knows of the hero's honesty is
 - lied: it caught him lying (`caught`) or found a lie of his out later (`found_out`). It takes his word
   no more: a quest is accepted only on what it sees for itself (quests.py and vanilla.py enforce it);
 - heard: rumors that he lied to someone else (`rumor`): told before it, or retold by whom (social.py);
-- kept: claims of his to it that were true (`claim` with `truth`).
+- kept: claims of his to it that were true (`claim` with `truth`);
+- amended: lies he made amends for, to it or as it asked (amends.py): a lie amended does not break his word.
 
 The last two the conversational model weighs in character.
 """
@@ -34,6 +35,7 @@ class Record:
     lied: list[str] = field(default_factory=list)  # lies to it it knows of: what and how it learned
     heard: list[str] = field(default_factory=list)  # rumors: whom he lied to, about what
     kept: list[str] = field(default_factory=list)  # true claims to it
+    amended: list[str] = field(default_factory=list)  # lies he made amends for, with it
 
     @property
     def broken(self) -> bool:
@@ -51,13 +53,21 @@ class Trust:
         facts = self.chronicle.facts()
         titles = _titles(facts)
         r = Record()
+        amended = {
+            (f.get("quest"), f.get("about"))
+            for f in facts
+            if f.get("fact") == "amends" and npc in (f.get("npc"), f.get("to"))
+        }
         for f in facts:
             quest = f.get("quest", "")
             title = f.get("title") or titles.get(quest) or quest
             match f.get("fact"):
-                case "found_out" | "caught" if f.get("npc") == npc:
+                case "found_out" | "caught" if f.get("npc") == npc and (quest, npc) not in amended:
                     how = f.get("how", "")
                     r.lied.append(f"«{title}»{f' — {how}' if how else ''}")
+                case "amends" if npc in (f.get("npc"), f.get("to")):
+                    gold = int(f.get("gold", 0))
+                    r.amended.append(f"«{title}»{f' — заплатил {gold} золотых' if gold else ''}")
                 case "rumor" if f.get("to") == npc:
                     about = f.get("about_name") or f.get("name") or f.get("from", "")
                     teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None
@@ -84,6 +94,8 @@ class Trust:
             lines.append(f"- ты слышал, что он обманул других: {', '.join(r.heard)}")
         if r.kept:
             lines.append(f"- он уже говорил тебе правду: {', '.join(r.kept)}")
+        if r.amended:
+            lines.append(f"- он загладил вину за ложь: {'; '.join(r.amended)}")
         return "Что ты знаешь о честности героя:\n" + "\n".join(lines) if lines else None
 
     def tools(self, npc: str) -> list[Tool]:

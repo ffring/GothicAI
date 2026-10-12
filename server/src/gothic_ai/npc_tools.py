@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .executor import ATTITUDES, GOALS, Intent, describe_targets
 from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .protocol import ActionResult, Snapshot
+
+if TYPE_CHECKING:
+    from .perception import Sight
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +88,10 @@ TOOLS = [
     ),
     Tool(
         RECALL,
-        "Вспомнить подробности прежних встреч с героем, которых нет в сводке твоей памяти: что он "
-        "рассказывал, о чём просил, что ты обещал. Перед вызовом скажи только «Хм…» или «Дай вспомнить…», "
-        "без вопросов; ответишь, когда вспомнишь.",
+        "Вспомнить подробности: прежние встречи с героем, которых нет в сводке твоей памяти (что он "
+        "рассказывал, о чём просил, что ты обещал), и что ты знаешь о мире и своих делах — темы из "
+        "«Что ты знаешь» целиком, люди, места, слухи. Перед вызовом скажи только «Хм…» или «Дай "
+        "вспомнить…», без вопросов; ответишь, когда вспомнишь.",
         _object({"query": {"type": "string", "description": "о чём вспомнить, ключевые слова"}}),
     ),
     Tool(
@@ -175,21 +180,42 @@ def guild_name(guild: int) -> str:
     return GUILDS.get(guild, "существо")
 
 
+def light(hour: int) -> str:
+    """The part of the day, as one says it."""
+    if 5 <= hour < 10:
+        return "утро"
+    if 10 <= hour < 18:
+        return "день"
+    return "вечер" if 18 <= hour < 22 else "ночь"
+
+
 def _metres(cm: float) -> str:
     return f"{max(1, round(cm / 100))} м"
 
 
-def render_situation(snap: Snapshot | None, intent: Intent | None = None) -> str:
-    """What the npc perceives right now; sent with every turn, not kept in history."""
+def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight: Sight | None = None) -> str:
+    """What the npc perceives right now; sent with every turn, not kept in history. With `sight` (what it
+    sees, perception.py) the place, the hero and the people around are as it perceives them; without, as
+    the snapshot has them (everyone within 15 m, seen or not)."""
     if snap is None:
-        return "[Обстановка неизвестна]" + (f"\nТвоё намерение: {intent.describe()}." if intent else "")
+        if sight is None:
+            return "[Обстановка неизвестна]" + (f"\nТвоё намерение: {intent.describe()}." if intent else "")
+        # a free npc nobody asked a snapshot of: what it sees is all there is
+        seen = [sight.place, *([sight.hero] if sight.hero else []), sight.people]
+        intent_line = [f"Твоё намерение: {intent.describe()}."] if intent else []
+        return "\n".join(["[Обстановка — видна только тебе, герою её не пересказывай]", *seen, *intent_line])
     w, npc, pl = snap.world, snap.npc, snap.player
     lines = [
         "[Обстановка — видна только тебе, герою её не пересказывай]",
-        f"Время: день {w.day + 1}, {w.hour:02d}:{w.minute:02d}. "
-        f"Ты у точки {npc.waypoint or npc.nearest_waypoint or 'неизвестно где'}.",
+        f"Время: день {w.day + 1}, {w.hour:02d}:{w.minute:02d}"
+        + (f", {light(w.hour)}." if sight else ".")
+        + ("" if sight else f" Ты у точки {npc.waypoint or npc.nearest_waypoint or 'неизвестно где'}."),
     ]
-    if pl is not None:
+    if sight is not None:
+        lines.append(sight.place)
+        if sight.hero:
+            lines.append(sight.hero)
+    elif pl is not None:
         lines.append(
             f"Герой в {_metres(pl.distance)} от тебя. Гильдия героя: {guild_name(pl.guild)}. "
             f"Доспех: {pl.armor or 'нет'}. Оружие: {pl.melee or 'нет'}"
@@ -198,8 +224,11 @@ def render_situation(snap: Snapshot | None, intent: Intent | None = None) -> str
         )
     items = [f"{it.name} ({it.item}) ×{it.count}" for it in npc.inventory if not it.equipped]
     lines.append("Твой инвентарь: " + ("; ".join(items) if items else "пусто") + ".")
-    near = [f"{o.name} ({_metres(o.distance)}{', мёртв' if o.dead else ''})" for o in snap.nearby_npcs]
-    lines.append("Рядом: " + (", ".join(near) if near else "никого") + ".")
+    if sight is not None:
+        lines.append(sight.people)
+    else:
+        near = [f"{o.name} ({_metres(o.distance)}{', мёртв' if o.dead else ''})" for o in snap.nearby_npcs]
+        lines.append("Рядом: " + (", ".join(near) if near else "никого") + ".")
     lines.append("Сейчас ты идёшь за героем." if npc.following else "Сейчас ты стоишь на месте.")
     if intent is not None:
         lines.append(f"Твоё намерение: {intent.describe()}.")

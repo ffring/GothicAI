@@ -11,16 +11,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .amends import Amends
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
+from .chronicle import Fact
+from .deals import GOLD, Deals, gold_text
 from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .incidents import IncidentDesk
+from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
+from .perception import PerceptionDesk, Sight
 from .persona import PersonaProvider, habits_of
 from .protocol import (
     ActionResult,
@@ -502,10 +507,12 @@ async def m4_planner_bridge(
 
 
 class FixedDecider:
-    """A stand-in for the behavioral model: the same choice for every question that offers it, and a fixed
-    level for score questions (escalate, attitude)."""
+    """A stand-in for the behavioral model: per question the first of its choices the question offers, and a
+    fixed level for score questions (escalate, attitude)."""
 
-    def __init__(self, choices: dict[str, str], scores: dict[str, float] | None = None) -> None:
+    def __init__(
+        self, choices: dict[str, str | tuple[str, ...]], scores: dict[str, float] | None = None
+    ) -> None:
         self.choices = choices
         self.scores = scores or {}
 
@@ -515,8 +522,9 @@ class FixedDecider:
             if q["type"] == "score":
                 answers[name] = {"type": "score", "score": self.scores.get(name, 2.0), "confidence": 0.8}
                 continue
-            pick = self.choices.get(name)
-            pick = pick if pick in q["criteria"] else next(iter(q["criteria"]))
+            prefs = self.choices.get(name, ())
+            prefs = (prefs,) if isinstance(prefs, str) else prefs
+            pick = next((c for c in prefs if c in q["criteria"]), next(iter(q["criteria"])))
             answers[name] = {
                 "type": "choice",
                 "choice": pick,
@@ -867,6 +875,221 @@ async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str
         runner.cancel()
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
+    return results
+
+
+async def rescue(
+    link: GameLink,
+    npc: str = "BAU_954_MALETH",
+    planner: NpcPlanner | None = None,
+    killer: str = "hero",
+    dialogue: DialogueManager | None = None,
+) -> dict[str, str]:
+    """M5c on the game, an ordinary npc: the hero comes up to the shepherd, a wolf attacks him from behind.
+    The body reacts at once (a call for help: he runs from the wolf, shouting, and the scripts keep out of it)
+    and the conversational model speaks for him on the move. Then the wolf dies: the danger is over
+    (`monster_killed`). Killed by the hero (`killer="hero"`), the shepherd reacts to his rescuer, his attitude
+    is asked, and he speaks again; killed by the shepherd himself (`killer="npc"`), he says a word about the
+    danger he spoke of. With the server's planner (DECIDER_URL) the live models decide and the server's LLM
+    speaks; without it a fixed stand-in decides and the words are scripted."""
+    from .brain import GameApplier
+    from .incidents import FREE_NEW_REASON_S
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+    lines: list[tuple[float, LineStarted]] = []
+    link.listeners.append(
+        lambda m: lines.append((time.monotonic(), m)) if isinstance(m, LineStarted) else None
+    )
+    events: list[NpcEvent | PerceptionHeld] = []
+    link.listeners.append(
+        lambda m: events.append(m) if isinstance(m, NpcEvent | PerceptionHeld) and m.npc == npc else None
+    )
+    runner = None
+    if planner is None:
+        planner = NpcPlanner(
+            FixedDecider({"react": ("thank", "call_help", "comment")}, {"escalate": 3.6, "attitude": 4.0}),
+            GameApplier(link),
+        )
+        link.listeners.append(planner.on_message)
+        runner = asyncio.create_task(planner.run())
+        after = "Спасибо, выручил ты меня." if killer == "hero" else "Хм… а волк-то был не такой уж страшный."
+        llm = FakeBackend(script=[FakeStep("Волк! Помогите, волк!"), FakeStep(after)], delay=0)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        IncidentDesk(link, dialogue, None, Budget(), None, planner=planner)
+        await link.send(ThreatControlCmd(hold=True))
+    # the npc's lines as the server sent them: line id -> (when, text); the game reports only the id
+    texts: dict[str, tuple[float, str]] = {}
+    send = link.send
+
+    async def sending(cmd: Any) -> Any:
+        if isinstance(cmd, SayCmd) and cmd.npc.upper() == npc:
+            texts[cmd.line] = (time.monotonic(), cmd.text)
+        return await send(cmd)
+
+    link.send = sending  # type: ignore[method-assign]
+    # when the npc's turns about events began: a line sent after one begun after the kill is about the kill
+    # (a turn begins once the one before has sent its lines)
+    turns: list[float] = []
+    event_turn = dialogue.event_turn if dialogue is not None else None
+    if dialogue is not None:
+
+        def turn(who: str, *args: Any, **kwargs: Any) -> Any:
+            if who.upper() == npc:
+                turns.append(time.monotonic())
+            return event_turn(who, *args, **kwargs)
+
+        dialogue.event_turn = turn  # type: ignore[method-assign]
+    recent = getattr(planner.applier, "recent", [])
+    verdicts = getattr(planner.applier, "verdicts", [])
+    # what the npc was doing, by the roster: (when it started, activity); a weapon out is "fight", an
+    # original dialog with the hero "dialog"
+    doing: list[tuple[float, str]] = []
+
+    def track(m: GameMessage) -> None:
+        if isinstance(m, NpcRoster):
+            now = next((e.activity for e in m.npcs if e.id == npc), "away")
+            if not doing or doing[-1][1] != now:
+                doing.append((time.monotonic(), now))
+
+    link.listeners.append(track)
+    # what the behavioral model is asked about the npc, word for word (the results quote it)
+    asked: list[tuple[str, str]] = []
+    decide = planner.decider.decide
+
+    async def recording(rid, lane, priority, deadline_ms, state, questions):  # noqa: ANN001, ANN202
+        if rid.startswith(npc):
+            asked.append(("+".join(questions), state))
+        return await decide(rid, lane, priority, deadline_ms, state, questions)
+
+    planner.decider.decide = recording  # type: ignore[method-assign]
+
+    def decided(since: float, question: str, threat: bool | None = None) -> list:
+        return [
+            d
+            for d in list(recent)[since:]
+            if d.npc == npc and d.question == question and (threat is None or bool(d.target) == threat)
+        ]
+
+    async def wait(check: Callable[[], Any], timeout: float) -> Any:
+        for _ in range(int(timeout / 0.1)):
+            if found := check():
+                return found
+            await asyncio.sleep(0.1)
+        return None
+
+    try:
+        # 1. the hero next to the npc, looking at it. The npc's important dialog (the start of the game: it
+        # has not met the hero) would start as soon as the two are close and calm; lines on the move do not go
+        # over a dialog
+        await link.debug("skip_important", near=npc)
+        await link.debug("teleport", near=npc, distance=600)
+        rec = await wait(lambda: (r := planner.npcs.get(npc)) is not None and r.in_view and r, 10)
+        results["hero_next_to_npc"] = (
+            f"done ({rec.name} {rec.distance_cm / 100:.0f} m away, in view)"
+            if rec
+            else "failed (not in view)"
+        )
+        await asyncio.sleep(2.0)  # whatever the npc does about the hero coming up
+
+        # 2. a wolf from behind the npc: the body reacts at once, the words follow on the move
+        mark, t0 = len(recent), time.monotonic()
+        await link.debug("spawn", instance="WOLF", near=npc, distance=-500)
+        reaction = await wait(lambda: decided(mark, "react", threat=True), 15)
+        seen = ", ".join(dict.fromkeys(f"{e.type}:{e.kind}/{e.other}" for e in events)) or "none"
+        results["threat_reaction"] = (
+            f"done ({reaction[0].choice} {reaction[0].confidence:.2f} against {reaction[0].target}, "
+            f"{time.monotonic() - t0:.1f} s; events: {seen})"
+            if reaction
+            else f"failed (no reaction to the wolf; events: {seen}; planner: {planner.snapshot()})"
+        )
+        first = await wait(lambda: next(((t, m) for t, m in lines if m.npc == npc and t >= t0), None), 12)
+        results["words_about_the_wolf"] = (
+            f"done ({first[0] - t0:.1f} s after the wolf came: {texts.get(first[1].line, (0, '?'))[1]})"
+            if first
+            else "failed (no words)"
+        )
+        holds = {e.hold for e in events if isinstance(e, PerceptionHeld)}
+        to = [v for h, v in list(verdicts) if h in holds]
+        armed = [t for t, what in doing if what == "fight" and t >= t0]
+        took = reaction[0].choice if reaction else None
+        results["body_and_scripts"] = (
+            f"{'done' if (took == 'fight') == bool(armed) else 'failed'} ({took}: "
+            f"{to.count('server')} held from the scripts, {to.count('scripts')} given to them; "
+            f"{f'weapon out {armed[0] - t0:.1f} s after the wolf came' if armed else 'no weapon out'})"
+        )
+
+        # 3. the wolf dies: the danger is over, the npc thanks its rescuer, or says a word about the danger it
+        # beat itself. Soon, while the wolf is still after the npc (one it lost is too far for the npc to see
+        # it die), but not before words about something new may follow (asked for right after the reaction)
+        await asyncio.sleep(max(0.0, t0 + FREE_NEW_REASON_S + 1.0 - time.monotonic()))
+        # the hero runs after it: an npc that ran from the wolf is soon out of the hero's reach (the bridge
+        # reports npc's within 30 m of him) and of his hearing (20 m)
+        await link.debug("teleport", near=npc, distance=700)
+        await asyncio.sleep(1.0)  # the roster (twice a second) has him close: the npc's reaction is urgent
+        mark, t1 = len(recent), time.monotonic()
+        try:
+            # the one after the npc, not a wild one
+            await link.debug("kill", instance="WOLF", near=npc, by="PLAYER" if killer == "hero" else npc)
+            killed = f"by the {killer}"
+        except GameError as err:
+            killed = f"not by the hero ({err})"
+        ended = await wait(
+            lambda: next((e for e in events if isinstance(e, NpcEvent) and e.kind == "monster_killed"), None),
+            5,
+        )
+        results["monster_killed"] = (
+            f"done ({killed}: {ended.other} killed {ended.victim} '{ended.detail}')"
+            if ended
+            else f"failed (no monster_killed; {killed})"
+        )
+        rec = planner.npcs.get(npc)
+        threats = [s.kind for s in rec.stimuli if s.policy.threat and s.other == "WOLF"] if rec else []
+        results["threat_over"] = "done" if rec and not threats else f"failed (still: {threats})"
+        # an npc that fought the wolf itself reacts once its weapon is put away
+        # about the kill (another threat may have come meanwhile)
+        thanks = await wait(lambda: [d for d in decided(mark, "react") if "monster_killed" in d.stimuli], 15)
+        attitude = await wait(lambda: decided(mark, "attitude"), 6)
+        results["rescue_reaction"] = (
+            f"done ({thanks[0].choice} {thanks[0].confidence:.2f}"
+            f"{f', attitude {attitude[0].attitude:.1f}' if attitude else ', no attitude answer'})"
+            if thanks
+            else f"failed (nothing applied; planner: {planner.snapshot()})"
+        )
+
+        def after_kill() -> tuple[float, LineStarted] | None:
+            begun = next((t for t in turns if t >= t1), None)
+            return next(
+                (
+                    (t, m)
+                    for t, m in lines
+                    if m.npc == npc and begun and texts.get(m.line, (0.0, ""))[0] >= begun
+                ),
+                None,
+            )
+
+        second = await wait(after_kill, 20)
+        results["words_after_the_kill"] = (
+            f"done ({second[0] - t1:.1f} s after the kill: {texts.get(second[1].line, (0, '?'))[1]})"
+            if second
+            else "failed (no words)"
+        )
+        if second:
+            await asyncio.sleep(3.0)  # the rest of the turn, for the trace
+    finally:
+        planner.decider.decide = decide  # type: ignore[method-assign]
+        if dialogue is not None:
+            dialogue.event_turn = event_turn  # type: ignore[method-assign]
+        link.send = send  # type: ignore[method-assign]
+        if runner is not None:
+            await link.send(ThreatControlCmd(hold=False))
+            runner.cancel()
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
+    for question, state in dict.fromkeys(asked):
+        log.info("asked %s: %s", question, state)
+    if doing:
+        log.info("doing: %s", ", ".join(f"{what} {t - doing[0][0]:.1f} s" for t, what in doing))
     return results
 
 
@@ -1663,6 +1886,637 @@ async def rumor_spread(
             if isinstance(m, Message) and m.role == "assistant"
         ]
         check("answer", ok and bool(said), f"{other}: {said[-1] if said else ''}")
+    return _logged(results)
+
+
+ANDRE = "MIL_311_ANDRE"
+
+
+class AmendsScript:
+    """The director's model for storylets, scripted: Andre asks for a fine and closes joining the militia (the
+    first of his dealings in the brief that has it, else the first); anyone else does not care."""
+
+    name = "amends-script"
+
+    def __init__(self, npc: str = ANDRE, gold: int = 50) -> None:
+        self.npc, self.gold = npc, gold
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+        stakes = re.findall(r"^- (\S+): «([^»]*)» — (.*)$", brief, re.M)
+        if f"({self.npc})" not in brief.splitlines()[0] or not stakes:
+            args: dict[str, Any] = {"kind": "none", "reason": "не его дело"}
+        else:
+            join = [id for id, _, what in stakes if what == "принимает в гильдию"]
+            args = {
+                "kind": "amends",
+                "close": join[:1] or [stakes[0][0]],
+                "lines": [
+                    {"speaker": "npc", "text": "Слыхал я, ты Лобарта обмануть пытался."},
+                    {
+                        "speaker": "npc",
+                        "text": f"Лжецу в ополчении не место. {self.gold} золотых штрафа — тогда поговорим.",
+                    },
+                ],
+                "to": "self",
+                "gold": self.gold,
+                "description": f"Вот штраф — {self.gold} золотых.",
+                "amends_lines": [{"speaker": "npc", "text": "Ладно. Считай, забыли. Но смотри у меня."}],
+                "title": "Штраф за враньё",
+                "journal_now": (
+                    f"Андре прослышал, что я соврал Лобарту. Без штрафа ({self.gold} золотых) "
+                    "в ополчение не возьмёт."
+                ),
+                "journal_done": "Я заплатил Андре штраф.",
+                "reason": "до Андре дошёл слух, а в ополчение он берёт только честных",
+            }
+        call = ToolCall(
+            "propose_amends",
+            {
+                **{k: "" for k in ("description", "title", "journal_now", "journal_done")},
+                "close": [],
+                "lines": [],
+                "to": "self",
+                "gold": 0,
+                "amends_lines": [],
+                **args,
+            },
+            "a1",
+        )
+        yield call
+        yield Done("", (call,))
+
+
+async def _caught_by(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, giver: str, facts: Callable[..., list[Fact]]
+) -> tuple[bool, ClaimScript | None]:
+    """The hero tells `giver` the turnips are in the barn and is caught (the giver scripted; with LLM=chatgpt
+    the others are the live model)."""
+    await link.story_effect(giver, [{"do": "set", "var": RUEBEN, "value": 1}])
+    await link.debug("player_goto", to=giver, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: giver in talk.people, 20):
+        return False, None
+    name = talk.people[giver].name
+    live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+    expose = FakeStep("Врёшь! Нет у тебя никакой репы.", [ToolCall("expose_lie", {"quest": RUEBEN})])
+    script = ClaimScript(
+        said=[("репа", expose)], told=[], default="Ну, здравствуй. Чего тебе?", only=name, others=live
+    )
+    dialogue.llm = script
+    await link.debug("type", text=f"{name}, репа уже в амбаре, все двадцать штук. Давай плату.")
+    return await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("caught")), 60), script
+
+
+async def amends_storylet(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    amends: Amends,
+    giver: str = LOBART,
+    fine: int = 50,
+) -> dict[str, str]:
+    """The director's storylet of amends (stage 5), on the game. Lobart catches the hero lying; by the next
+    morning the rumor has gone round. The director's model, scripted unless LLM=chatgpt, has Andre (who has
+    dealings with Lobart) ask for a fine and close joining the militia until then; a live model decides who
+    asks and what for. The hero comes, hears the npc out, makes amends, and what was closed opens again."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = amends.chronicle.facts
+    hero = ["inst", "HERO"]
+    if isinstance(amends.model.llm, FakeBackend):
+        amends.model.llm = AmendsScript(ANDRE, fine)
+    amends.director.pacing.cooldown_s = 2.0  # no need to wait between the steps here
+
+    ok, _ = await _caught_by(link, dialogue, talk, giver, facts)
+    check("caught", ok, facts("caught")[-1:])
+    if not ok:
+        return _logged(results)
+
+    # the next morning the rumor has gone round; someone asks for amends (scripted: Andre)
+    await link.debug("time", hour=7, minute=0)
+    ok = await _until(lambda: bool(amends.storylets), 180)
+    if ok and isinstance(amends.model.llm, AmendsScript):
+        ok = await _until(lambda: any(x.npc == ANDRE for x in amends.storylets.values()), 120)
+    looked = [
+        (f.get("fact"), f.get("npc")) for f in facts() if f.get("fact") in ("amends_open", "amends_none")
+    ]
+    check("asked", ok, looked)
+    if not ok:
+        return _logged(results)
+    s = next((x for x in amends.storylets.values() if x.npc == ANDRE), next(iter(amends.storylets.values())))
+    closed = [op["node"] for op in amends.patches.ops() if op.get("op") == "disable"]
+    check("closed", bool(s.close) and set(s.close) <= set(closed), f"{s.name}: {s.close}")
+
+    # the hero comes: the npc starts the talk himself (an important dialog)
+    await link.debug("player_goto", to=s.npc, distance=250)
+    await _until(lambda: s.npc in talk.people, 20)
+    by_himself = await _until(lambda: s.stage != "open", 20)
+    if not by_himself:
+        try:
+            await link.choose_dialog(s.npc, s.talk)
+        except GameError as err:
+            log.info("amends: %s", err)
+    heard = await _until(lambda: s.stage != "open", 20)
+    check("talked", heard, f"{s.talk}{', he started it' if by_himself else ''}")
+
+    # he makes amends: what was closed is open again
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    if gold < s.gold:
+        await link.story_effect(s.npc, [{"do": "give", "item": "ITMI_GOLD", "count": s.gold - gold + 10}])
+        gold = s.gold + 10
+    if s.to != s.npc:
+        await link.debug("player_goto", to=s.to, distance=250)
+        await _until(lambda: s.to in talk.people, 20)
+    await asyncio.sleep(1)
+    try:
+        await link.choose_dialog(s.to, s.pay)
+        paid = await _until(lambda: s.stage == "done", 20)
+    except GameError as err:
+        paid = False
+        log.info("amends: %s", err)
+    await asyncio.sleep(1)
+    left = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    opened = {op["node"] for op in amends.patches.ops() if op.get("op") == "enable"}
+    check(
+        "paid",
+        paid and left == gold - s.gold and set(s.close) <= opened,
+        f"{s.description}: {gold} -> {left} gold",
+    )
+    line = Trust(amends.chronicle).situation(s.npc) or ""
+    check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
+    return _logged(results)
+    s = next(x for x in amends.storylets.values() if x.npc == ANDRE)
+    closed = [op["node"] for op in amends.patches.ops() if op.get("op") == "disable"]
+    check("closed", bool(s.close) and set(s.close) <= set(closed), s.close)
+
+    # the hero comes to Andre: Andre starts the talk himself (an important dialog)
+    await link.debug("player_goto", to=ANDRE, distance=250)
+    await _until(lambda: ANDRE in talk.people, 20)
+    by_himself = await _until(lambda: s.stage != "open", 20)
+    if not by_himself:
+        try:
+            await link.choose_dialog(ANDRE, s.talk)
+        except GameError as err:
+            log.info("amends: %s", err)
+    heard = await _until(lambda: s.stage != "open", 20)
+    check("talked", heard, f"{s.talk}{', he started it' if by_himself else ''}")
+
+    # he pays the fine: the militia is open to him again
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    if gold < s.gold:
+        await link.story_effect(ANDRE, [{"do": "give", "item": "ITMI_GOLD", "count": s.gold - gold + 10}])
+        gold = s.gold + 10
+    await asyncio.sleep(1)
+    try:
+        await link.choose_dialog(s.to, s.pay)
+        paid = await _until(lambda: s.stage == "done", 20)
+    except GameError as err:
+        paid = False
+        log.info("amends: %s", err)
+    await asyncio.sleep(1)
+    left = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    opened = {op["node"] for op in amends.patches.ops() if op.get("op") == "enable"}
+    check("paid", paid and left == gold - s.gold and set(s.close) <= opened, f"{gold} -> {left} gold")
+    line = Trust(amends.chronicle).situation(ANDRE) or ""
+    check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
+    return _logged(results)
+
+
+async def m6_knows(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    knowledge: Knowledge,
+    npc: str = "NONE_100_XARDAS",
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """M6 on the game: what an npc knows comes from the scripts' dialogs, as far as the story has got.
+    Xardas in chapter 1 knows his talk of chapters 1-2 and nothing of chapter 3. A dialog of his played from
+    the menu becomes one the hero has heard. At chapter 3 his talk of chapter 3 opens. Lobart, the hero put
+    next to him, knows his field work and what the people around the city say. The knowledge is in the
+    request to the model, and recall gives a topic in full. The conversational model is scripted: its
+    requests are checked."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    def ids(topics: Sequence[Topic]) -> set[str]:
+        return {t.node.id for t in topics}
+
+    def situation(llm: FakeBackend) -> str:
+        return next(
+            (
+                str(m.content)
+                for m in llm.calls[0][1]
+                if isinstance(m, Message) and m.role == "developer" and "Что ты знаешь" in str(m.content)
+            ),
+            "",
+        )
+
+    await link.wait_world()
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    # 1. chapter 1: his talk of chapters 1-2 (the Eye, the city), none of chapter 3
+    await knowledge.prepare(npc)
+    view = knowledge.views[npc]
+    known = ids(view.told) | ids(view.open)
+    later = sorted(known & XARDAS_CH3)
+    check(
+        "chapter_1",
+        view.state.chapter == 1 and "DIA_XARDAS_ARTEFAKT" in known and not later,
+        f"chapter {view.state.chapter}; heard {sorted(ids(view.told))}; open {len(view.open)}; later {later}",
+    )
+
+    # 2. a dialog of his played from the menu: the hero has heard it
+    offered = await link.offered_dialogs(npc)
+    pick = next((t.node.id for t in view.open if t.sure and t.node.id in offered), None)
+    if pick is None:
+        check("heard_in_menu", False, f"nothing open is offered: {' '.join(offered)}")
+    else:
+        await link.choose_dialog(npc, pick)
+
+        async def heard() -> set[str]:
+            await knowledge.prepare(npc)
+            return ids(knowledge.views[npc].told)
+
+        ok = await _until_async(heard, lambda told: pick in told, 30)
+        check("heard_in_menu", ok, pick)
+        await asyncio.sleep(3)  # the dialog's lines
+
+    # 3. a turn: the knowledge is in the request, recall gives a topic in full
+    llm = FakeBackend(
+        script=[
+            FakeStep("Хм…", [ToolCall("recall", {"query": "Глаз Инноса"}, "c1")]),
+            FakeStep("Это амулет, в нём сила самого Инноса."),
+        ],
+        delay=0,
+    )
+    dialogue.llm = llm
+    await link.debug("type", text="Ксардас, что такое Глаз Инноса?")
+    await _until(lambda: len(llm.calls) >= 2, 30)
+    result = next((i.output for c in llm.calls[1:] for i in c[1] if isinstance(i, ToolResult)), "")
+    text = situation(llm) if llm.calls else ""
+    check(
+        "in_the_turn",
+        "Что ты знаешь (сейчас глава 1" in text and "Ты знаешь:" in result and "Глаз Инноса" in result,
+        f"{len(text)} chars known, recall {len(result)} chars: {result[:120]!r}",
+    )
+    await _until(lambda: not dialogue.speaking(npc), 15)
+
+    # 4. chapter 3: his chapter 3 talk opens, that of chapters 1-2 closes (what the hero heard stays)
+    await link.story_effect(npc, [{"do": "set", "var": "KAPITEL", "value": 3}])
+    await knowledge.prepare(npc)
+    ch3 = knowledge.views[npc]
+    opened = sorted(ids(ch3.open) & XARDAS_CH3)
+    check(
+        "chapter_3",
+        ch3.state.chapter == 3
+        and "DIA_XARDAS_BACKFROMOW" in opened
+        and "DIA_XARDAS_WEAPON" not in ids(ch3.open),
+        f"open now {opened}",
+    )
+    await link.story_effect(npc, [{"do": "set", "var": "KAPITEL", "value": 1}])
+
+    # 5. Lobart on his farm: his work and what farmers say
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        check("farmer", False, f"{farmer} is not around the hero")
+        return _logged(results)
+    llm = FakeBackend("Работа есть: поле репы за амбаром.", delay=0)
+    dialogue.llm = llm
+    await link.debug("type", text="Лобарт, есть для меня работа?")
+    await _until(lambda: bool(llm.calls), 30)
+    text = situation(llm) if llm.calls else ""
+    check(
+        "farmer",
+        "Ты — житель окрестностей." in text and "«Я ищу работу.»" in text and "Что говорят вокруг" in text,
+        f"{len(text)} chars known",
+    )
+    log.info("what %s knows:\n%s", farmer, text)
+    return _logged(results)
+
+
+async def see_perception(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    perception: PerceptionDesk,
+    rumors: Rumors,
+    npc: str = "NONE_100_XARDAS",
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """What npc's perceive (wave 1 step 4), on the game, with the engine's own sight. Xardas sees the hero in
+    front of him and not through the tower's walls and floors. Lobart calls the people he knows by name and
+    the hero, whom he does not know, by his look; in militia armor the hero is a militiaman to him. The view
+    is in the conversational model's request (scripted here) and `look` answers; the nearest npc's views
+    are pushed once a second for the behavioral model."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    # 1. sight: in front of him he sees the hero; walls and floors hide him even within 20 m
+    await link.debug("teleport", near=npc, distance=300)
+    await asyncio.sleep(1)
+    view = await perception.fresh(npc)
+    front = view is not None and view.hero is not None and view.hero.seen
+    check(
+        "sees_in_front",
+        front,
+        view.hero.model_dump(include={"distance", "seen"}) if view and view.hero else "",
+    )
+    spots = []
+    for cm in (600, 900, 1200, 1500, 1800):
+        try:
+            await link.debug("player_goto", near=npc, distance=cm)
+        except GameError as err:
+            spots.append(f"{cm}: {err}")
+            continue
+        await asyncio.sleep(1)
+        view = await perception.fresh(npc)
+        if view is not None and view.hero is not None:
+            spots.append((round(view.hero.distance / 100), view.hero.seen))
+    hidden = [s for s in spots if isinstance(s, tuple) and not s[1] and s[0] < 20]
+    check("not_through_walls", bool(hidden), f"(m, seen) at the spots tried: {spots}")
+
+    # 2. Lobart: whom he knows by name, the hero by his look
+    if not await _until(lambda: rumors.social is not None, 30):
+        check("acquaintances", False, "no acquaintances: the world's people were not read")
+        return _logged(results)
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        check("farmer", False, f"{farmer} is not around the hero")
+        return _logged(results)
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    hero = sight.hero or "" if sight else ""
+    check("hero_by_look", "ты его не знаешь" in hero, hero)
+    # whom the npc's around call by name, whom by look: over the views pushed near the hero, next to
+    # Lobart and then next to the people he knows, until someone sees a person it knows
+    named: list[str] = []
+    strangers: list[str] = []
+
+    def scan() -> None:
+        for v in perception.views():
+            people = (perception.sight(v.npc) or Sight("", None, "")).people
+            for o in v.sees:
+                if o.kind != "human":
+                    continue
+                if perception.knows(v.npc, o) and o.name in people:
+                    named.append(f"{v.name} → {o.name}")
+                elif not perception.knows(v.npc, o) and "незнакомец" in people:
+                    strangers.append(f"{v.name} → {o.name}")
+
+    scan()
+    social = rumors.social
+    for tie in sorted(social.ties.get(farmer, {}) if social is not None else [])[:6]:
+        if named:
+            break
+        try:
+            await link.debug("teleport", near=tie, distance=300)
+        except GameError:
+            continue
+        await asyncio.sleep(1.5)  # a push or two
+        scan()
+    check(
+        "acquaintances", bool(named), f"by name: {sorted(set(named))}; by look: {sorted(set(strangers))[:6]}"
+    )
+    await link.debug("teleport", near=farmer, distance=300)
+    await asyncio.sleep(1)
+
+    # 3. in militia armor, to Lobart who does not know him, the hero is a militiaman
+    await link.debug("player_equip", item="ITAR_MIL_L")
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    hero = sight.hero or "" if sight else ""
+    check("fake_guild", "по виду ополченец" in hero, hero)
+
+    # 4. a turn: the view is in the request, `look` answers
+    llm = FakeBackend(
+        script=[FakeStep("Хм…", [ToolCall("look", {"who": "герой"}, "c1")]), FakeStep("Ополченец, значит?")],
+        delay=0,
+    )
+    dialogue.llm = llm
+    await link.debug("type", text="Лобарт, ты меня знаешь?")
+    await _until(lambda: len(llm.calls) >= 2, 30)
+    request = str(llm.calls[0][1]) if llm.calls else ""
+    looked = next((i.output for c in llm.calls[1:] for i in c[1] if isinstance(i, ToolResult)), "")
+    check(
+        "in_the_turn",
+        "по виду ополченец" in request and "Рядом:" not in request and looked.startswith("Герой"),
+        looked,
+    )
+
+    # 5. the nearest npc's views come by themselves once a second (the behavioral model reads these)
+    perception._views.clear()
+    pushed = await _until(lambda: perception.view(farmer) is not None, 5)
+    check("pushed", pushed, "; ".join(perception.english(farmer)))
+    return _logged(results)
+
+
+# chapter 3 dialogs of Xardas's (KAPITEL == 3 in their conditions, or waiting for one that has it)
+XARDAS_CH3 = {
+    "DIA_XARDAS_BACKFROMOW",
+    "DIA_XARDAS_DMTSINDDA",
+    "DIA_XARDAS_INNOSEYEBROKEN",
+    "DIA_XARDAS_RITUALREQUEST",
+    "DIA_XARDAS_BINGESPANNT",
+    "DIA_XARDAS_WASNUN",
+    "DIA_XARDAS_PYROWILLNICHT",
+    "DIA_XARDAS_BEREIT",
+    "DIA_XARDAS_WARUMNICHTJETZT",
+}
+
+
+async def deal_window(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, deals: Deals, seller: str = LOBART
+) -> dict[str, str]:
+    """A deal (docs/npc-tools.md, wave 1), on the game. The hero asks Lobart to sell him something he has;
+    Lobart (scripted unless LLM=chatgpt) offers it for 50 gold: Y waits, the hero lacks the gold. He declines
+    (N): the window goes, Lobart hears of it and offers it for 40; after haggling for 30 the window shows a
+    new version of that deal, Y right after the change waits. Then the deal is done: the gold and the thing
+    change hands at once, the window goes, Lobart answers."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    await link.debug("skip_important", near=seller)  # his important dialog would start as the hero comes
+    await link.debug("player_goto", to=seller, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: seller in talk.people, 20):
+        check("near", False, seller)
+        return _logged(results)
+    name = talk.people[seller].name
+
+    # something he has to sell (an apple if nothing), and 10 gold on the hero
+    snap = await link.snapshot(seller, fresh=True)
+    wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    if not wares:
+        await link.story_effect(seller, [{"do": "give", "item": "ITFO_APPLE", "count": 2, "to": "self"}])
+        snap = await link.snapshot(seller, fresh=True)
+        wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    ware = wares[0]
+    gold = await has(GOLD)
+    if gold > 10:
+        await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": gold - 10, "to": "self"}])
+    elif gold < 10:
+        await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 10 - gold}])
+    had = await has(ware.item)
+
+    if isinstance(dialogue.llm, FakeBackend):
+
+        def offer(price: int) -> ToolCall:
+            terms = {
+                "npc_gives": [{"item": ware.item, "count": 1}],
+                "hero_gives": [{"item": GOLD, "count": price}],
+            }
+            return ToolCall("propose_deal", terms, f"deal{price}")
+
+        dialogue.llm = ClaimScript(
+            said=[
+                ("продай", FakeStep(f"{ware.name}? Пятьдесят золотых.", [offer(50)])),
+                ("отказался", FakeStep("Ну, как знаешь. Сорок?", [offer(40)])),
+                ("дорого", FakeStep("Ладно, тридцать — и по рукам.", [offer(30)])),
+            ],
+            told=[],
+            default="По рукам. Хорошая вещь, не пожалеешь.",
+            only=name,
+        )
+
+    await link.debug("type", text=f"{name}, продай мне {ware.name}.")
+    ok = await _until(lambda: seller in deals.open, 30)
+    window = await link.deal_window() or {}
+    check("shown", ok and window.get("version") == 1, window)
+    if not ok:
+        return _logged(results)
+    first = deals.open[seller]
+
+    # 10 gold of 50: Y waits, the window marks the gold
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    window = await link.deal_window() or {}
+    check("waits_gold", pressed == "missing" and window.get("missing") == [GOLD], f"{pressed}, {window}")
+
+    # he declines (N): the window goes at once; Lobart hears of it and offers it for 40
+    declined = await link.decline_deal()
+    window = await link.deal_window()
+    check("declined", declined == "declined" and window is None and first.state == "declined", declined)
+    ok = await _until(lambda: seller in deals.open and deals.open[seller].id != first.id, 30)
+    window = await link.deal_window() or {}
+    check("offered_again", ok and window.get("hero_gives") == [gold_text(40)], window)
+    if not ok:
+        return _logged(results)
+    second = deals.open[seller]
+
+    # 40 gold, and he haggles it down to 30: the same window, a new version, Y waits a moment
+    await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 30}])
+    await link.debug("type", text=f"{name}, это дорого, давай за тридцать.")
+    ok = await _until(lambda: seller in deals.open and deals.open[seller].version == 2, 30)
+    window = await link.deal_window() or {}
+    check("haggled", ok and window.get("deal") == second.id and window.get("version") == 2, window)
+    pressed = await link.press_deal()
+    check("waits_change", pressed == "changed", pressed)
+
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    done = await _until(lambda: bool(deals.chronicle.facts("deal")), 20)
+    check("accepted", pressed == "sent" and done, pressed)
+    left, got = await has(GOLD), await has(ware.item)
+    check("changed_hands", left == 10 and got == had + 1, f"gold 40 -> {left}, {ware.item} {had} -> {got}")
+    window = await link.deal_window()
+    check("window_gone", window is None and seller not in deals.open, window)
+    conv = dialogue.conversations.get(seller)
+    answered = await _until(lambda: conv is not None and "assistant" == conv.memory.entries[-1].role, 30)
+    check("answered", answered, conv.memory.entries[-1].content if conv and conv.memory.entries else "")
+    return _logged(results)
+
+
+async def deal_demo(link: GameLink, deals: Deals, npc: str) -> dict[str, str]:
+    """The deal window on screen for the test bench (scripts/bench/deal.bench): the npc offers a thing it has
+    for 50 gold the hero lacks, a moment later for 30 he has; it stays a while, then the hero accepts."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(6)  # the bench sets its camera
+    npc, hero = npc.upper(), ["inst", "HERO"]
+    # a potion to sell, and gold to leave the hero 40
+    await link.attach(npc)
+    await link.act(npc, "debug_add_item", item="ITPO_HEALTH_01", count=2)
+    await link.act(npc, "debug_add_item", item=GOLD, count=100)
+    await link.detach(npc)
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", GOLD]]) or 0)
+    if gold != 40:
+        to = {"to": "self"} if gold > 40 else {}
+        await link.story_effect(npc, [{"do": "give", "item": GOLD, "count": abs(gold - 40), **to}])
+    snap = await link.snapshot(npc, fresh=True)
+    wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    check("stocked", bool(wares), [i.item for i in snap.npc.inventory])
+    if not wares:
+        return _logged(results)
+
+    def terms(price: int) -> dict[str, Any]:
+        return {
+            "npc_gives": [{"item": wares[0].item, "count": 1}],
+            "hero_gives": [{"item": GOLD, "count": price}],
+        }
+
+    name = snap.npc.name or npc
+    first = await deals.propose(npc, name, terms(50), snap)
+    check("offered", first.status == "accepted", first.output)
+    await asyncio.sleep(5)
+    second = await deals.propose(npc, name, terms(30), snap)
+    check("haggled", second.status == "accepted", second.output)
+    await asyncio.sleep(6)
+    pressed = await link.press_deal()
+    check(
+        "accepted",
+        pressed == "sent" and await _until(lambda: bool(deals.chronicle.facts("deal")), 10),
+        pressed,
+    )
+    await asyncio.sleep(3)
     return _logged(results)
 
 

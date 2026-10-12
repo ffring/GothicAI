@@ -340,6 +340,44 @@ struct DynamicWorld::NpcBodyList final {
     return ret;
     }
 
+  // the segment passes near the npc: within twice its box's reach of the box's middle (its bones may
+  // stick out of the box: a head over a short collision box); proj: how far along
+  bool nearTest(NpcBody& npc, const Tempest::Vec3& s, const Tempest::Vec3& dir, float tMax, float extR, float& proj) {
+    if(!npc.enable)
+      return false;
+    const float acos = std::cos(npc.angle), asin = std::sin(npc.angle);
+    const auto  cen  = npc.pos + npc.offsetCenter(acos, asin);
+    const float r    = 2.f*npc.maxR + extR;
+    const float t    = std::clamp(Tempest::Vec3::dotProduct(cen-s,dir), 0.f, tMax);
+    if((s+dir*t-cen).quadLength()>r*r)
+      return false;
+    proj = t;
+    return true;
+    }
+
+  // every npc the segment passes near, the nearest first, until f takes one (it looks at the bones)
+  template<class F>
+  bool rayTestAll(const Tempest::Vec3& s, const Tempest::Vec3& e, float extR, F f) {
+    auto  dir  = Tempest::Vec3::normalize(e-s);
+    auto  tMax = (e-s).length();
+    std::vector<std::pair<float,NpcBody*>> hits;
+    for(auto i:body) {
+      float proj = 0;
+      if(nearTest(*i.body, s, dir, tMax, extR, proj))
+        hits.emplace_back(proj,i.body);
+      }
+    for(auto i:frozen) {
+      float proj = 0;
+      if(i.body!=nullptr && nearTest(*i.body, s, dir, tMax, extR, proj))
+        hits.emplace_back(proj,i.body);
+      }
+    std::sort(hits.begin(),hits.end(),[](auto& a, auto& b){ return a.first<b.first; });
+    for(auto& i:hits)
+      if(f(*i.second->toNpc()))
+        return true;
+    return false;
+    }
+
   bool hasCollision(const DynamicWorld::NpcItem& obj, Tempest::Vec3& normal, Npc*& npc, float& colDepth) {
     static bool disable=false;
     if(disable)
@@ -495,8 +533,13 @@ struct DynamicWorld::BulletsList final {
     for(auto& i:body) {
       float proj = 0;
       auto  dp = i.pos - i.lastPos; // move is symetrical: move of npc and move of projectile is the same
-      if(i.cb!=nullptr && list.rayTest(npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)) {
-        if(i.cb->onCollide(*npc.toNpc()))
+      if(i.cb==nullptr)
+        continue;
+      const bool precise = i.cb->isPrecise();
+      if(precise ? list.nearTest(npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)
+                 : list.rayTest (npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)) {
+        const bool hit = precise ? i.cb->onCollidePrecise(*npc.toNpc(),i.lastPos,i.pos) : i.cb->onCollide(*npc.toNpc());
+        if(hit)
           i.cb->onStop();
         }
       }
@@ -807,6 +850,23 @@ DynamicWorld::RayQueryResult DynamicWorld::rayNpc(const Tempest::Vec3& from, con
   return r;
   }
 
+DynamicWorld::RayQueryResult DynamicWorld::rayArrow(const Tempest::Vec3& from, const Tempest::Vec3& to,
+                                                    const std::function<bool(Npc&,const Tempest::Vec3&,const Tempest::Vec3&,float&)>& hit) const {
+  RayQueryResult r;
+  static_cast<RayLandResult&>(r) = ray(from,to);
+  const Tempest::Vec3 end = r.hasCol ? r.v : to;
+  npcList->rayTestAll(from,end,0,[&](Npc& npc) {
+    float t = 0;
+    if(!hit(npc,from,end,t))
+      return false;
+    r.npcHit = &npc;
+    r.hasCol = true;
+    r.v      = from + Tempest::Vec3::normalize(end-from)*t;
+    return true;
+    });
+  return r;
+  }
+
 float DynamicWorld::soundOclusion(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
   struct CallBack:btCollisionWorld::AllHitsRayResultCallback {
     using AllHitsRayResultCallback::AllHitsRayResultCallback;
@@ -924,7 +984,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   const bool  isSpell = b.isSpell();
 
   auto  pos = b.pos;
-  auto  to  = pos + dir*dtF - Tempest::Vec3(0,(isSpell ? 0 : gravity*dtF*dtF),0);
+  auto  to  = pos + dir*dtF - Tempest::Vec3(0,(isSpell ? 0 : 0.5f*gravity*dtF*dtF),0);
 
   struct CallBack:btCollisionWorld::ClosestRayResultCallback {
     using ClosestRayResultCallback::ClosestRayResultCallback;
@@ -962,6 +1022,18 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   world->rayCast(pos, to, callback);
+
+  // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
+  // where their bones are
+  const bool precise = !isSpell && b.cb!=nullptr && b.cb->isPrecise();
+  if(precise) {
+    const float a   = callback.matId!=zenkit::MaterialGroup::NONE ? callback.m_closestHitFraction : 1.f;
+    const auto  end = pos + (to-pos)*a;
+    if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
+      b.cb->onStop();
+      return;
+      }
+    }
 
   bool stopBullet = false;
   if(callback.matId != zenkit::MaterialGroup::NONE) {
@@ -1003,7 +1075,9 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         }
       }
     } else {
-    if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr)) {
+    if(precise)
+      ; // tested above
+    else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr)) {
       if(b.cb!=nullptr)
         stopBullet |= b.cb->onCollide(*ptr->toNpc()); else
         stopBullet  = true;

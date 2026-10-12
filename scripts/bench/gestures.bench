@@ -1,0 +1,26 @@
+# The hands while one speaks: the hero talks to Xardas through the dialog window and picks the first
+# choice three times (they speak in turn, Xardas often several lines in a row). The camera in front of
+# Xardas at the chest, the hero behind it clipped away. With `gestures off` on top of a copy: the old way
+# (a random gesture with every line), for `diff`.
+cheat god
+view clean 30
+overlay on
+watch nearest
+place 120 0
+wait 300
+cam front 230 140
+cam look 125
+dialog nearest
+wait 1500
+choose 1
+rec answer1
+wait 12000
+stop
+choose 1
+rec answer2
+wait 12000
+stop
+choose 1
+rec answer3
+wait 12000
+stop

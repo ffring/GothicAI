@@ -89,7 +89,13 @@ struct Seen final {
   uint64_t         periodMs = EventPeriodMs;
   };
 
-Seen classify(Npc& self, Npc& other, Npc* victim, PercType perc) {
+Seen classify(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
+  if(victim!=nullptr && victim->isMonster() && world.script().guildAttitude(*victim,self)==ATT_HOSTILE) {
+    // a dangerous monster killed by a person (the hero, someone else, the npc itself): the danger is over.
+    // Hits on it are no news (the hero fighting a wolf is not an attack on someone), nor is a kill by another
+    // monster. Animals the npc does not fear (a sheep) are not dangers: their attackers are
+    return perc==PERC_ASSESSMURDER && !other.isMonster() ? Seen{"monster_killed",victim} : Seen{};
+    }
   if(other.isPlayer()) {
     switch(perc) {
       case PERC_DRAWWEAPON:      return Seen{"weapon_drawn"};
@@ -211,10 +217,10 @@ bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol
   }
 
 void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
-  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || &other==&self)
+  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM)
     return;
-  const Seen seen = classify(self,other,victim,perc);
-  if(seen.kind.empty())
+  const Seen seen = classify(world,self,other,victim,perc);
+  if(seen.kind.empty() || (&other==&self && seen.kind!="monster_killed"))
     return;
   Npc* pl = world.player();
   if(pl==nullptr)
@@ -233,7 +239,10 @@ void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, P
   if(seen.about!=nullptr)
     detail = seen.about->isPlayer() ? "PLAYER" : TextCodec::toUtf8(seen.about->displayName());
   const double dist = std::sqrt(double(self.qDistTo(other)));
-  emitEvent(symbol,seen.kind,otherId,dist,detail,other.isPlayer() ? "" : TextCodec::toUtf8(other.displayName()));
+  // monster_killed: `victim` is the monster's symbol, the threats from it are over
+  const auto victimId = seen.kind=="monster_killed" ? npcId(world,*seen.about) : std::string();
+  emitEvent(symbol,seen.kind,otherId,dist,detail,other.isPlayer() ? "" : TextCodec::toUtf8(other.displayName()),
+            victimId);
   }
 
 bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
@@ -244,7 +253,7 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || self.isTalk() ||
      self.isAttack())
     return false;  // already fighting by its scripts: they go on
-  if(classify(self,other,victim,perc).kind.empty())
+  if(classify(world,self,other,victim,perc).kind.empty())
     return false;
   Npc* pl = world.player();
   if(pl==nullptr || std::sqrt(self.qDistTo(*pl))>EventRadius)
@@ -268,7 +277,7 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   h.victim = victim;
   h.perc   = perc;
   h.at     = now;
-  const Seen seen = classify(self,other,victim,perc);
+  const Seen seen = classify(world,self,other,victim,perc);
   JsonWriter j("perception_held");
   j.str("hold",h.id).str("npc",symbol).str("kind",seen.kind).str("other",otherId)
    .str("other_name",TextCodec::toUtf8(other.displayName()))
@@ -357,8 +366,13 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
       }
     if(svm[0]!='$')
       svm.insert(svm.begin(),'$');
-    npc->aiPush(AiQueue::aiTurnToNpc(target));
-    npc->aiPush(AiQueue::aiOutputSvm(*target,svm,0));
+    if(JsonRead::boolean(args,"overlay",false)) {
+      // shouted on the move (AI_OutputSVM_Overlay): the body goes on with what it does
+      npc->aiPush(AiQueue::aiOutputSvmOverlay(*target,svm,0));
+      } else {
+      npc->aiPush(AiQueue::aiTurnToNpc(target));
+      npc->aiPush(AiQueue::aiOutputSvm(*target,svm,0));
+      }
     }
   else if(action=="turn_to") {
     npc->aiPush(AiQueue::aiTurnToNpc(target));
@@ -509,11 +523,14 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
   }
 
 void NpcObserver::emitEvent(std::string_view npc, std::string_view kind, std::string_view other,
-                            double distance, std::string_view detail, std::string_view otherName) {
+                            double distance, std::string_view detail, std::string_view otherName,
+                            std::string_view victim) {
   JsonWriter j("npc_event");
   j.str("npc",npc).str("kind",kind).str("other",other).num("distance",distance);
   if(!otherName.empty())
     j.str("other_name",otherName);
+  if(!victim.empty())
+    j.str("victim",victim);
   if(!detail.empty())
     j.str("detail",detail);
   emit(j.finish());
