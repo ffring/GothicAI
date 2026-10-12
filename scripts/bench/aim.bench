@@ -1,6 +1,6 @@
 # Aim: the hero draws a bow at a sheep hung at different heights (pin): level, up, steep up (another aim
 # pose of the game), to the side; the same "up" with aim off; a crossbow; on a slope (the feet stay on
-# the ground while aiming); a fire bolt; last shoots three times up (the reload swings the arrow: the
+# the ground while aiming); down from three ledges; a fire bolt; last shoots three times up (the reload swings the arrow: the
 # turn holds; the sheep does not live through it)
 cheat god
 set time 12 0
@@ -93,6 +93,41 @@ wait 2500
 release action
 wait 800
 stop
+cam follow 380 140 70
+goto NW_XARDAS_TOWER_VIEW_01      # ledges found by `ledges`: a target 4 m below, 14 m away (17 deg)
+face 157.5
+wait 500
+pin SHEEP 1400 0 -423
+wait 300
+rec down17
+press action
+wait 2500
+release action
+wait 800
+stop
+goto NW_XARDAS_TOWER_VALLEY_03_C  # 10 m below (36 deg)
+face 90
+wait 500
+pin SHEEP 1400 0 -1032
+wait 300
+rec down36
+press action
+wait 2500
+release action
+wait 800
+stop
+goto NW_XARDAS_TOWER_VALLEY_02    # 14 m below (46 deg): past 45 the game takes its aim-down pose
+face 135
+wait 500
+pin SHEEP 1400 0 -1446
+wait 300
+rec down46
+press action
+wait 2500
+release action
+wait 800
+stop
+pin off
 tap bow
 wait 1500
 equip ItRu_FireBolt

@@ -978,6 +978,61 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say(buf);
       }
     }
+  else if(c=="ledges") {
+    // ledges [min drop] [max drop] [count] [steep]: waypoints at an edge, open ground that much lower
+    // 4..14 m away and seen from there (a target below); prints the waypoint, the yaw to face
+    // (`face <yaw>`), the distance, the drop and the angle down; near first, or the steepest first
+    const float minDrop = num(a,1,300), maxDrop = num(a,2,1000);
+    const size_t count  = size_t(num(a,3,15));
+    struct Ledge { std::string name; float yaw, dist, drop, down, from; };
+    std::vector<Ledge> all;
+    const Vec3 at = pl.position();
+    w.findWayPoint(at,[&](const WayPoint& wp) {
+      const float g0 = groundY(w,wp.pos.x,wp.pos.z,wp.pos.y);
+      if(std::isnan(g0))
+        return false;
+      float an = 0, rough = 0;
+      Vec3  dn;
+      if(!slopeAt(w,Vec3(wp.pos.x,g0,wp.pos.z),an,dn,rough) || an>15)
+        return false;
+      if(w.physic()->ray({wp.pos.x,g0+200,wp.pos.z},{wp.pos.x,g0+1500,wp.pos.z}).hasCol)
+        return false; // a roof above: indoors
+      Ledge best;
+      best.down = 0;
+      for(int k=0; k<16; ++k) {
+        const float y = float(k)*22.5f*float(M_PI)/180.f;
+        for(float d:{400.f,550.f,700.f,1000.f,1400.f}) {
+          const Vec3 p = Vec3(wp.pos.x+std::cos(y)*d, g0, wp.pos.z+std::sin(y)*d);
+          auto r = w.physic()->ray({p.x,g0+200,p.z},{p.x,g0-maxDrop-100,p.z});
+          if(!r.hasCol)
+            continue;
+          const float drop = g0-r.v.y;
+          if(drop<minDrop || drop>maxDrop)
+            continue;
+          const Vec3 eye = Vec3(wp.pos.x,g0+170,wp.pos.z), tg = r.v+Vec3(0,60,0);
+          auto los = w.physic()->ray(eye,tg);
+          if(los.hasCol && (los.v-tg).length()>40)
+            continue;
+          const float down = std::atan2(drop,d)*180.f/float(M_PI);
+          if(down>best.down)
+            best = Ledge{wp.name, float(k)*22.5f, d, drop, down, (wp.pos-at).length()};
+          }
+        }
+      if(best.down>0)
+        all.push_back(best);
+      return false;
+      });
+    if(a.size()>4 && a[4]=="steep")
+      std::sort(all.begin(),all.end(),[](const Ledge& x, const Ledge& y) { return x.down>y.down; }); else
+      std::sort(all.begin(),all.end(),[](const Ledge& x, const Ledge& y) { return x.from<y.from; });
+    say("ledges " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"ledge %s yaw=%.1f dist=%.0f drop=%.0f down=%.0f from=%.0f",all[i].name.c_str(),
+                    double(all[i].yaw),double(all[i].dist),double(all[i].drop),double(all[i].down),double(all[i].from));
+      say(buf);
+      }
+    }
   else if(c=="findwp") {
     for(auto& s:findSpots(w,pl,K_Name,0,90,rest(line),40)) {
       char buf[256];
