@@ -1021,6 +1021,7 @@ async def rescue(
         # the hero runs after it: an npc that ran from the wolf is soon out of the hero's reach (the bridge
         # reports npc's within 30 m of him) and of his hearing (20 m)
         await link.debug("teleport", near=npc, distance=700)
+        await asyncio.sleep(1.0)  # the roster (twice a second) has him close: the npc's reaction is urgent
         mark, t1 = len(recent), time.monotonic()
         try:
             # the one after the npc, not a wild one
