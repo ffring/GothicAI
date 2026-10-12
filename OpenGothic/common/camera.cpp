@@ -326,12 +326,19 @@ void Camera::setAimPitch(float deg) {
   state.spin.x = deg;
   }
 
+void Camera::setAimStance(float drop, float side, float shoulder) {
+  aimDrop      = drop;
+  aimSide      = side;
+  aimShoulderK = std::clamp(shoulder,-1.f,1.f);
+  }
+
+static constexpr float ShoulderSide   = 40.f;  // cm right of the hero
+static constexpr float ShoulderHeight = 165.f; // above the feet
+
 Vec3 Camera::aimShoulder(const Vec3& feet, const Vec3& forward) {
-  static float side   = 40.f;  // cm right of the hero
-  static float height = 165.f; // above the feet
   Vec3 right = Vec3::crossProduct(Vec3(0,1,0),Vec3(forward.x,0,forward.z));
   right = right.length()>1e-3f ? Vec3::normalize(right) : Vec3();
-  return feet + Vec3(0,height,0) + right*side;
+  return feet + Vec3(0,ShoulderHeight,0) + right*ShoulderSide;
   }
 
 void Camera::aimRay(Tempest::Vec3& from, Tempest::Vec3& dir) const {
@@ -926,7 +933,11 @@ void Camera::tickThirdPerson(float dtF) {
     static float aimZoomIn = 35.f;  // closer at full draw
     Vec3 back = {0,0,1};
     mkRotMatrix(state.spin).project(back);
-    const Vec3 at = aimShoulder(aimAnchor,Vec3()-back);
+    // over the shoulder as the hero stands: crouched lower, leaning out to the side, over the left shoulder
+    // leaning out to the left
+    Vec3 right = Vec3::crossProduct(Vec3(0,1,0),Vec3(-back.x,0,-back.z));
+    right = right.length()>1e-3f ? Vec3::normalize(right) : Vec3();
+    const Vec3 at = aimAnchor + Vec3(0,ShoulderHeight-aimDrop,0) + right*(ShoulderSide*aimShoulderK + aimSide);
     float      r  = aimRange - aimZoomIn*aimZoomS;
     if(def.collision!=0)
       r = calcCameraColision(at, back, calcLookAtAngles(at+back*r, at, Vec3(), state.spin), r);

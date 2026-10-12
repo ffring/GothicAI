@@ -29,6 +29,8 @@ class Archer final {
       float    turn   = 0;     // radians the aim turned since the last tick
       bool     reload = false; // the reload animation still plays: the next arrow is not on the string yet
       bool     loaded = true;  // an arrow (a bolt) is put in: raised without one, it is put in first
+      float    crouch = 0;     // crouched 0..1: steadier
+      float    peek   = 0;     // leaning out round a corner, 0..1 either way: less steady
       uint64_t dt     = 0;
       };
 

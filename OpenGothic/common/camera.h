@@ -86,6 +86,9 @@ class Camera final {
     void setAim(bool on, float zoom);
     void setAimAnchor(const Tempest::Vec3& at); // the hero's feet: the shoulder is above
     void setAimPitch(float deg);                // the aim starts looking that far down (+) or up
+    // the stance aiming: the shoulder that much lower (crouched), that much to the right (leaning out), the
+    // camera over the right shoulder (1) .. the left one (-1)
+    void setAimStance(float drop, float side, float shoulder);
     bool isAim() const { return aimOn; }
     // The point over the shoulder the center of the screen passes while aiming: from the hero's feet and
     // the way the camera looks (horizontal)
@@ -185,6 +188,9 @@ class Camera final {
     float                 aimZoomS   = 0;   // ...smoothed
     float                 aimSaved   = 0;   // the elevation before the aim: back to it after
     Tempest::Vec3         aimAnchor  = {};
+    float                 aimDrop    = 0;
+    float                 aimSide    = 0;
+    float                 aimShoulderK = 1;
     Tempest::Vec3         aimFrom    = {};  // the shoulder point the center of the screen passes
     float                 fovK       = 1;   // of the field of view, the aim narrows it
 

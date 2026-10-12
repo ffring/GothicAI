@@ -1,0 +1,65 @@
+# Leaning out round a corner (the manual aim, stage 3): at a corner of a house in the city's harbour (`corner`: a
+# wall in front of the head, open ahead leaning out), the bow up aiming straight ahead, the side step held: the
+# trunk leans out, the camera goes with it (over the left shoulder to the left). From the game's camera and
+# from behind
+cheat god
+set time 12 0
+view clean
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 100
+stats str 60 dex 60 bow 60
+goto NW_CITY_MERCHANT_PATH_09
+wait 500
+corner right go 5
+tap bow
+wait 1500
+aimat ahead 2000 150
+cam game
+wait 300
+rec right_game
+press action
+wait 900
+hold right 3000
+wait 3300
+release action
+wait 1500
+stop
+cam follow 230 120 180
+cam look 140
+wait 300
+rec right_behind
+press action
+wait 900
+hold right 2500
+wait 2800
+release action
+wait 1500
+stop
+
+goto NW_CITY_MERCHANT_PATH_09
+wait 500
+corner left go 4
+wait 800
+aimat ahead 2000 150
+cam game
+wait 300
+rec left_game
+press action
+wait 900
+hold left 3000
+wait 3300
+release action
+wait 1500
+stop
+cam follow 230 120 180
+cam look 140
+wait 300
+rec left_behind
+press action
+wait 900
+hold left 2500
+wait 2800
+release action
+wait 1500
+stop

@@ -45,6 +45,7 @@ float           ReachRate      = 30.f;   // 1/s, how fast the body goes down whe
 float           FloorJump      = 8.f;    // the floor moving this much faster in one frame is a step: the body stays put
 float           LegReach       = 0.98f;  // fraction of the full leg length a leg may straighten to
 float           BlendTime      = 0.25f;  // seconds, fade in/out of the whole effect
+float           AimCrouch      = 28.f;   // cm the body goes down crouched to aim a bow (knees bent, feet planted)
 constexpr float MinGroundNy    = 0.5f;   // steeper than 60 degrees is a wall, not ground
 constexpr float RayMargin      = 10.f;   // ground rays start this much above MaxRaise
 constexpr float QuadHandHeight = 0.35f;  // front paws lower than this part of the hip height: four legs
@@ -60,7 +61,7 @@ struct Param final {
   };
 
 const Param params[] = {
-  {"MaxRaise",       &MaxRaise},       {"MaxDrop",        &MaxDrop},
+  {"MaxRaise",       &MaxRaise},       {"MaxDrop",        &MaxDrop},       {"AimCrouch",      &AimCrouch},
   {"MaxStep",        &MaxStep},        {"MaxTilt",        &MaxTilt},
   {"MaxPitch",       &MaxPitch},       {"MaxRoll",        &MaxRoll},
   {"OutwardFactor",  &OutwardFactor},  {"MaxOutward",     &MaxOutward},
@@ -145,6 +146,10 @@ bool FootIk::isEnabled() {
 void FootIk::setEnabled(bool e) {
   enabled = e;
   Log::i("foot ik: ", e ? "on" : "off");
+  }
+
+float FootIk::aimCrouchDepth() {
+  return AimCrouch;
   }
 
 bool FootIk::setParam(std::string_view name, float value) {
@@ -276,6 +281,7 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
   Input in;
   in.dt     = dt;
   in.floorY = obj.at(3,1);
+  in.crouch = npc.aimCrouch()*AimCrouch*scale;
   // the test bench measures the ground with IK off too, and under a body tilted to the ground as
   // a whole (surface_align): that is the baseline
   if(!valid || (!enabled && !probing) || (alignedToGround && !probing))
@@ -435,7 +441,9 @@ bool FootIk::update(const Input& in) {
   // A creature on four legs is not tilted as a whole any more: its ends also go up, on a slope
   auto pairReach = [&](size_t p) { return std::max(legs[2*p].reach, legs[2*p+1].reach); };
   auto bodyTop    = [&](size_t p) { return quadruped ? MaxRaise+pairReach(p) : 0.f; };
-  auto bodyLow    = [&](size_t p) { return -MaxDrop-pairReach(p); };
+  // crouched to aim: the hips go down on purpose (the legs bend to the planted feet)
+  auto crouchOf   = [&](size_t p) { return p==0 && !quadruped ? in.crouch : 0.f; };
+  auto bodyLow    = [&](size_t p) { return -MaxDrop-pairReach(p)-crouchOf(p); };
   // Four legs across a slope: the body leans toward the lower side (the uphill legs would fold up),
   // what is left over the legs take. Left legs are even: they go up by side(p), right ones down
   float rollTarget = 0;
@@ -455,9 +463,10 @@ bool FootIk::update(const Input& in) {
     return (i%2==0) ? s : -s;
     };
   auto bodyTarget = [&](size_t p) {
-    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1));
+    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1)) - crouchOf(p);
     return std::clamp(h, bodyLow(p), bodyTop(p));
     };
+  crouch = in.crouch;
   // A planted foot must reach the ground: the only reason to lower the body fast
   // (not at once: a sudden dip at every step of the lower leg looks like limping).
   // At the end of a step, behind the body, it may reach it with the toes only: running up a slope
@@ -783,6 +792,7 @@ void FootIk::probe(Probe& p, const Input& in) const {
   p.weight  = weight;
   p.pelvis  = pelvis;
   p.target  = dbgTarget;
+  p.crouch  = crouch;
   p.limit   = dbgLimit;
   p.floorY  = in.floorY;
   for(size_t i=0; i<numLegs; ++i) {

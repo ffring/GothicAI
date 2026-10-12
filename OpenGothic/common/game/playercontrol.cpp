@@ -11,6 +11,8 @@
 #include "ui/inventorymenu.h"
 #include "physics/dynamicworld.h"
 #include "camera.h"
+#include "graphics/mesh/aim.h"
+#include "graphics/mesh/footik.h"
 #include "gothic.h"
 
 namespace {
@@ -18,6 +20,8 @@ namespace {
 constexpr float MaxSpread   = 6.f*float(M_PI)/180.f; // wide open: the bow being raised, reloaded
 constexpr float SpreadOpen  = 0.1f;                  // seconds: it opens about twice that long...
 constexpr float SpreadClose = 0.2f;                  // ...closes
+constexpr float StanceRate  = 6.f;                   // 1/s: crouching, leaning out eases in and out
+constexpr float HeadOverHips = 70.f;                 // cm: leaning out tilts the trunk from the hips
 
 // a critically damped spring moves v toward goal, smooth seconds (about half the time it takes): it eases
 // in and out, no jerks when the goal jumps; vel is its speed
@@ -227,6 +231,11 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
     }
 
   if(a==Action::Sneak) {
+    if(manualAiming) {
+      // aiming by hand: crouch (no talent needed), stand up
+      aimCrouch = !aimCrouch;
+      return;
+      }
     toggleSneakMode();
     return;
     }
@@ -1056,7 +1065,8 @@ Npc* PlayerControl::aimRayHit(Npc& pl, Tempest::Vec3& at) const {
 
 bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   // the bow aimed by hand (game/archery): the left button raises it and draws the string, letting it go
-  // shoots along the arrow; the right one lowers the bow, a step too; shift holds the breath
+  // shoots along the arrow; the right one lowers the bow, a step too; shift holds the breath; the sneak
+  // key crouches, the side steps lean out round a corner
   const auto ws = pl.weaponState();
   if(!Archery::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow) || pl.isDown() ||
      pl.isInAir() || pl.isSwim() || pl.isDive() || pl.interactive()!=nullptr)
@@ -1066,8 +1076,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   auto&      ar     = pl.archer();
   const bool lmb    = ctrl[KeyCodec::ActionGeneric];
-  const bool moving = wantsToMoveForward() || wantsToMoveBackward() || wantsToStrafeLeft() || wantsToStrafeRight() ||
-                      ctrl[Action::Jump];
+  const bool moving = wantsToMoveForward() || wantsToMoveBackward() || ctrl[Action::Jump];
   bool raised = ar.isRaised();
   if(!raised && lmb && !moving && pl.hasAmmunition())
     raised = true;
@@ -1099,7 +1108,21 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   if(!ar.isRaised()) {
     aimSpread    = MaxSpread;
     aimSpreadVel = 0;
+    // sneaking, it is raised crouched
+    aimCrouch    = bool(pl.walkMode() & WalkBit::WM_Sneak);
     }
+
+  // the stance: crouched, leaning out round a corner (held), eased
+  const float dtS  = float(dt)/1000.f;
+  const float peek = (wantsToStrafeRight() ? 1.f : 0.f) - (wantsToStrafeLeft() ? 1.f : 0.f);
+  const float ease = 1.f - std::exp(-StanceRate*dtS);
+  crouchK += ((aimCrouch ? 1.f : 0.f) - crouchK)*ease;
+  peekK   += (peek - peekK)*ease;
+  if(std::abs(crouchK-(aimCrouch ? 1.f : 0.f))<1e-3f)
+    crouchK = aimCrouch ? 1.f : 0.f;
+  if(std::abs(peekK-peek)<1e-3f)
+    peekK = peek;
+  pl.setAimStance(crouchK,peekK);
   manualAiming = true;
 
   // the mouse (the keys) turn the hero, the camera follows; up and down is the camera's
@@ -1141,6 +1164,8 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   in.turn   = turn;
   in.reload = pl.animProgress(Archery::reloadAnim(st.crossbow))>=0.f;
   in.loaded = pl.isBowLoaded();
+  in.crouch = crouchK;
+  in.peek   = peekK;
   in.dt     = dt;
   if(ar.tick(in,st))
     ar.onShot(pl.releaseArrow(ar.draw(),st));
@@ -1157,8 +1182,13 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   aimSpread = springTo(aimSpread,goal,aimSpreadVel,goal>aimSpread ? SpreadOpen : SpreadClose,float(dt)/1000.f);
   aimSpread = std::max(aimSpread,0.f);
   aimAt     = at;
-  if(camera!=nullptr)
+  if(camera!=nullptr) {
     camera->setAim(true,ar.draw());
+    // the shoulder goes down crouched, aside leaning out (as far as the body does: a wall stops it); over
+    // the left one leaning out to the left
+    const float side = std::sin(Aim::playerProbe.side*float(M_PI)/180.f)*HeadOverHips;
+    camera->setAimStance(crouchK*FootIk::aimCrouchDepth(),side,1.f-2.f*std::max(0.f,-peekK));
+    }
   return true;
   }
 
@@ -1176,10 +1206,16 @@ void PlayerControl::endManualAim(Npc& pl) {
       pl.setAnim(Npc::Anim::Idle);
     }
   pl.setManualAim(false);
+  pl.setAimStance(0,0);
+  aimCrouch = false;
+  crouchK   = 0;
+  peekK     = 0;
   Archer::playerProbe = Archer::Probe();
   ctrl[Action::Walk] = false;
-  if(auto camera = Gothic::inst().camera())
+  if(auto camera = Gothic::inst().camera()) {
     camera->setAim(false,0);
+    camera->setAimStance(0,0,1);
+    }
   }
 
 void PlayerControl::implMoveMobsi(Npc& pl, uint64_t /*dt*/) {
