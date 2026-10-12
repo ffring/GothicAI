@@ -3,10 +3,11 @@
 #include <Tempest/Matrix4x4>
 #include <Tempest/Vec>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
-// Small math for the post-passes over world-space bone matrices (FootIk, Gaze)
+// Small math for the post-passes over world-space bone matrices (FootIk, Gaze, BowDraw)
 namespace IkMath {
 
 using Tempest::Vec3;
@@ -131,6 +132,58 @@ inline void rotateAll(Matrix4x4* tr, size_t numBones, const Mat3& r, const Vec3&
   const Matrix4x4 w = rotationMatrix(r,p);
   for(size_t i=0; i<numBones; ++i)
     tr[i] = w*tr[i];
+  }
+
+// How twoBone turned the bones: the first (r0, about its root), then the second (r1, about the middle
+// joint); where the end went
+struct TwoBone final {
+  Mat3 r0  = {};
+  Mat3 r1  = {};
+  Vec3 end = {};
+  };
+
+// Two bones root-mid-end (hip, knee, ankle; shoulder, elbow, wrist) bent so the end goes to target. The
+// middle joint bends in the plane of the bones and `bend` (where it leans), turned toward the target; the
+// reach is kept short of straight (maxReach of the bones' length, or as straight as it is already) and,
+// with minFold, from folding up tighter than that. rootTree, midTree: the bones that turn with the first
+// and the second bone. False: degenerate, nothing changed
+inline bool twoBone(Matrix4x4* tr, size_t root, size_t mid, size_t end,
+                    const std::vector<size_t>& rootTree, const std::vector<size_t>& midTree,
+                    const Vec3& target, const Vec3& bend, float maxReach, float minFold, TwoBone& out) {
+  const Vec3  a   = position(tr[root]);
+  const Vec3  b   = position(tr[mid]);
+  const Vec3  f   = position(tr[end]);
+  const float lab = length(b-a);
+  const float lbf = length(f-b);
+  const Vec3  at  = target-a;
+  float       lat = length(at);
+  if(lab<Eps || lbf<Eps || lat<Eps)
+    return false;
+
+  const Vec3  dir  = at*(1.f/lat);
+  const float lmax = std::min(std::max((lab+lbf)*maxReach, length(f-a)), (lab+lbf)*0.999f);
+  float       lmin = std::abs(lab-lbf)+Eps;
+  if(minFold>0.f)
+    lmin = std::max(lmin, std::min((lab+lbf)*minFold, length(f-a)));
+  lat = std::min(std::max(lat,lmin),lmax);
+
+  const Vec3 pole = normalize(cross(cross(f-a,bend),dir));
+  if(length(pole)<Eps)
+    return false;
+
+  const float cosA = std::min(std::max((lab*lab + lat*lat - lbf*lbf)/(2.f*lab*lat), -1.f), 1.f);
+  const float sinA = std::sqrt(1.f - cosA*cosA);
+  const Vec3  knee = a + dir*(lab*cosA) + pole*(lab*sinA);
+  out.end          = a + dir*lat;
+
+  out.r0 = rotationBetween(normalize(b-a), normalize(knee-a));
+  rotateAbout(tr,rootTree,out.r0,a);
+
+  const Vec3 b1 = position(tr[mid]);
+  const Vec3 f1 = position(tr[end]);
+  out.r1 = rotationBetween(normalize(f1-b1), normalize(out.end-b1));
+  rotateAbout(tr,midTree,out.r1,b1);
+  return true;
   }
 
 }
