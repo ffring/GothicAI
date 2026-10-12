@@ -3,6 +3,7 @@
 #include <Tempest/Matrix4x4>
 
 #include "graphics/mesh/animationsolver.h"
+#include "graphics/mesh/flinch.h"
 #include "graphics/mesh/lipsync.h"
 #include "game/constants.h"
 #include "meshobjects.h"
@@ -81,6 +82,8 @@ class MdlVisual final {
     bool                           hasGaze() const;
     bool                           updateLean(Npc& npc, uint64_t dt);
     bool                           updateAim(Npc& npc, uint64_t dt);
+    bool                           updateFlinch(Npc& npc, uint64_t dt);
+    void                           flinch(const Npc& npc, const Flinch::Hit& hit);
     bool                           updateGaze(Npc& npc, uint64_t dt);
     void                           processLayers  (World& world);
     bool                           processEvents(World& world, uint64_t &barrier, Animation::EvCount &ev);

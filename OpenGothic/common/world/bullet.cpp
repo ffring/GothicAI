@@ -119,6 +119,14 @@ void Bullet::onStop() {
   updateMatrix();
   }
 
+Tempest::Vec3 Bullet::position() const {
+  return obj!=nullptr ? obj->position() : Tempest::Vec3();
+  }
+
+Tempest::Vec3 Bullet::direction() const {
+  return obj!=nullptr ? obj->direction() : Tempest::Vec3();
+  }
+
 void Bullet::onMove() {
   updateMatrix();
   }

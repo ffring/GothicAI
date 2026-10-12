@@ -31,6 +31,11 @@ aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 
 from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
 foot of a gallery's wall in Xardas' tower, 78 degrees down: hidden from the head, so without the aim no
 focus; with it the hero leans over the edge, the focus takes it, the arrow kills it).
+Flinch: `flinch` (a frozen bandit: blows only to the flinch from the front, behind, both sides, to the
+head, off the middle, a weak one, three in a row, the same with the flinch off; an arrow in his back;
+the hero's fist from the front, behind and the side as the game deals it, with its stumble; his sword
+swung from the left, the right and straight (a swing pushes along the blade); the hero
+struck standing and while aiming a bow, where the game has no stumble; a wolf: the head only).
 Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
 with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
 the first choice: the lines of both are played the way the game plays them).
@@ -88,6 +93,9 @@ git worktree remove --force /tmp/before
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
 - orange `AIM`: weight, error `E` (where the arrow points after the turn against where the shot leaves),
   where the shot has to go `Y`, `P`, the turn `T` and the bend `B` (+ up) of the upper body, degrees;
+- red `HIT`: blows so far `#`, strength `S` and height `H` (0 the hips, 1 the head) of the last one, the
+  trunk's bend `B` away from it and where its top goes `Y` (+ to the right of the facing), the twist `T`
+  about up and the head `N` against the trunk, degrees;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
@@ -111,6 +119,8 @@ git worktree remove --force /tmp/before
 | `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
 | `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
 | `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
+| `flinch_none` | a blow, and the upper body gives way less than 1.5 degrees in the 8 frames after it |
+| `flinch_slow` | the upper body is not back 1.5 s after the last blow |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -125,7 +135,10 @@ looks and the partner, while the partner is within reach of the turn. `lean roll
 roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `aim err` is the
 angle between where the arrow points and where the shot leaves (while the bow holds still), `bend` the
 largest bend of the upper body (+ up). `lips corr` is the correlation of the voice level and the shown
-mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines).
+mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `hits, peak, back` are the
+blows the watched one took, the largest flinch (trunk bend, twist or head, degrees) and how long it took
+to come back after the last blow. `gaze_jerk` is not counted for a second after a blow: it throws the
+head on purpose.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -161,16 +174,20 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `watch <npc\|nearest\|player>` | the camera and the gaze metrics follow this npc (a script symbol, `NONE_100_XARDAS`) |
 | `talk <npc\|nearest> <ms>` | the npc and the hero talk to each other that long (no words): they look at each other |
 | `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
-| `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
+| `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it; not where no ground is found (inside a rock: it would fall through the world) |
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
+| `flinch on\|off` | the upper body giving way to blows |
+| `hit <npc\|player> <angle> [strength] [height] [twist]` | a blow from that side of it (angle from its facing, 0 in front, as `place`) to the flinch only: no damage, no stumble; strength 0..1 (1), height 0 the hips .. 1 the head (0.6), twist -1..1 about up (0) |
+| `strike <victim\|player> [attacker\|player]` | the attacker's blow lands as the game deals it (the stumble, the damage, the flinch); the victim gets its hit points back below a third |
+| `clear [radius]` | the npcs around the hero (2500 cm) leave the world, not the watched one: rats, wolves that would join in |
 | `aim on\|off` | the upper body turning to the target with a bow, a crossbow, a spell; leaning over an edge (and the focus seeing from there) |
 | `give <item> [count]`, `equip <item>` | into the hero's inventory; `equip` puts it on whatever the strength (`ItRw_Bow_L_01`, `ItRw_Arrow`, `ItRw_Crossbow_L_01`, `ItRw_Bolt`, `ItRu_FireBolt`) |
 | `put <npc\|nearest> <dist> <angle>` | the npc stands there on the ground from the hero (angle from the hero's facing), frozen |
 | `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |
 | `anims` | what the watched one (or the hero) plays, its body state, weapon and target |
 | `cansee <npc>` | can the hero see it: from the head, leaning over an edge (the aim's lean); what the rays hit; the bow's focus range |
-| `hp <npc>` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit) |
+| `hp <npc> [full]` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit); `full`: the nearest gets them all back first |
 | `walls [count]` | spots at the edge of a wall (from a waypoint walking to where the ground falls away) with its foot 2.5..10 m below, 1 m out, hidden from the head and seen leaning over: the waypoint and the yaw for `goto`, `edge` |
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
@@ -218,6 +235,6 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
 and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL loopback device in Tempest's
 `SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
-`LipSync::subjectProbe` (the mouth), `Camera::setNearClip`
+`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

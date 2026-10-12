@@ -307,6 +307,7 @@ class Npc final {
 
     bool      isAttackAnim() const;
     auto      animNames() const -> std::string; // the playing animations, for debugging
+    void      flinch(const Flinch::Hit& hit); // the upper body gives way to a blow (also the test bench)
     bool      isPrehit() const;
     bool      isImmortal() const;
 
@@ -555,6 +556,7 @@ class Npc final {
     bool      prepareTurn();
     void      stopWalkAnimation();
     void      takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell);
+    void      hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble);
     void      takeFallDamage(const Tempest::Vec3& fallSpeed);
     void      takeDrownDamage();
 

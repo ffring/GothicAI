@@ -10,6 +10,7 @@
 #include "gaze.h"
 #include "lean.h"
 #include "aim.h"
+#include "flinch.h"
 #include "resources.h"
 
 class Skeleton;
@@ -98,6 +99,8 @@ class Pose final {
     Lean&              leanIk() { return lean; }
     Aim&               aimIk() { return aim; }
     bool               updateAim(const Aim::Input& in);
+    Flinch&            flinchIk() { return flinch; }
+    bool               updateFlinch(const Flinch::Input& in);
     bool               updateLean(const Lean::Input& in);
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
     auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;
@@ -165,6 +168,7 @@ class Pose final {
     Gaze                            gaze;
     Lean                            lean;
     Aim                             aim;
+    Flinch                          flinch;
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};

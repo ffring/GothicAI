@@ -28,6 +28,7 @@
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/flinch.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -853,6 +854,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
+  std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -902,6 +904,10 @@ void writeRow(Npc& pl) {
   Npc& s = subjectOf(pl);
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%.3f",s.faceWeight(f.anim));
+  // flinch of the watched one (or the hero)
+  const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
+  std::fprintf(bench.csv,",%d,%.2f,%.1f,%.2f,%.2f,%u,%.2f,%.2f",int(fl.active),fl.bend,fl.bendYaw,fl.twist,fl.head,
+               fl.hits,fl.strength,fl.height);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -915,8 +921,9 @@ void placeHero(World& w, Npc& pl) {
   const float a   = (s.rotation()+bench.placeAngle)*float(M_PI)/180.f;
   Vec3        pos = s.position() + Vec3(std::cos(a),0,std::sin(a))*bench.placeDist;
   const float g   = groundY(w,pos.x,pos.z,pos.y+100);
-  if(!std::isnan(g))
-    pos.y = g;
+  if(std::isnan(g))
+    return; // inside a rock: the hero would fall through the world
+  pos.y = g;
   pl.setPosition(pos);
   const Vec3 d = s.position()-pos;
   pl.setDirection(Vec3(d.x,0,d.z));
@@ -1261,8 +1268,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say(buf);
     }
   else if(c=="hp") {
-    // hp <npc>: hit points of the 3 nearest npcs of that script symbol (sheep are all over the world),
-    // and how far (did the arrow hit)
+    // hp <npc> [full]: hit points of the 3 nearest npcs of that script symbol (sheep are all over the world),
+    // and how far (did the arrow hit); full: the nearest gets them all back first
     const std::string name = a.size()>1 ? a[1] : "";
     const size_t      id   = w.script().findSymbolIndex(name);
     std::vector<std::pair<float,Npc*>> list;
@@ -1270,6 +1277,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       if(Npc* n = w.npcById(i); n!=nullptr && n->instanceSymbol()==id)
         list.emplace_back((n->position()-pl.position()).length(),n);
     std::sort(list.begin(),list.end(),[](auto& x, auto& y) { return x.first<y.first; });
+    if(a.size()>2 && a[2]=="full" && !list.empty() && !list[0].second->isDown()) {
+      // the nearest gets its hit points back
+      Npc& n = *list[0].second;
+      n.changeAttribute(ATR_HITPOINTS,n.attribute(ATR_HITPOINTSMAX)-n.attribute(ATR_HITPOINTS),false);
+      }
     std::string out = "hp " + name + ":";
     for(size_t i=0; i<list.size() && i<3; ++i)
       out += " " + std::to_string(list[i].second->attribute(ATR_HITPOINTS)) + (list[i].second->isDead() ? " dead" : "") +
@@ -1355,6 +1367,65 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->setWalkMode(a.size()>3 && a[3]=="walk" ? WalkBit::WM_Walk : WalkBit::WM_Run);
     n->aiPush(AiQueue::aiGoToPoint(*wp));
     say("npcgo " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="clear") {
+    // clear [radius]: the npcs around the hero leave the world (rats, wolves that would join in), not the
+    // watched one
+    const float r = num(a,1,2500);
+    std::vector<Npc*> gone;
+    for(uint32_t i=0; i<w.npcCount(); ++i)
+      if(Npc* n = w.npcById(i); n!=nullptr && n!=&pl && n!=bench.subject && (n->position()-pl.position()).length()<r)
+        gone.push_back(n);
+    std::string out = "clear:";
+    for(auto n:gone) {
+      out += " " + symName(w,n);
+      w.removeNpc(*n);
+      }
+    say(out);
+    }
+  else if(c=="flinch") {
+    // flinch on|off: the upper body gives way to a blow (graphics/mesh/flinch)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Flinch::setEnabled(m=="on"); else
+      say("unknown flinch command: " + line);
+    }
+  else if(c=="hit") {
+    // hit <npc|player> <angle> [strength] [height] [twist]: a blow from that side of it (angle from its
+    // facing, 0 in front, as place), only the flinch: no damage, no stumble
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    if(n==nullptr) {
+      say("hit: no npc " + line);
+      return;
+      }
+    const float an = (n->rotation()+num(a,2,0))*float(M_PI)/180.f;
+    Flinch::Hit h;
+    h.dir      = Vec3(-std::cos(an),0,-std::sin(an));
+    h.strength = num(a,3,1);
+    h.height   = num(a,4,0.6f);
+    h.twist    = num(a,5,0);
+    n->flinch(h);
+    char buf[160];
+    std::snprintf(buf,sizeof(buf),"hit %s from %.0f strength %.2f height %.2f twist %.2f",symName(w,n).c_str(),
+                  double(num(a,2,0)),double(h.strength),double(h.height),double(h.twist));
+    say(buf);
+    }
+  else if(c=="strike") {
+    // strike <victim|player> [attacker|player]: the attacker's blow lands as the game deals it (melee: the
+    // stumble, the damage, the flinch); the victim gets its hit points back below a third
+    Npc* n  = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    Npc* by = findNpc(w,pl,a.size()>2 ? a[2] : "player");
+    if(n==nullptr || by==nullptr || n==by) {
+      say("strike: no npc " + line);
+      return;
+      }
+    const int32_t hp0 = n->attribute(ATR_HITPOINTS);
+    n->takeDamage(*by,nullptr);
+    const int32_t hp1 = n->attribute(ATR_HITPOINTS);
+    say("strike " + symName(w,n) + " by " + symName(w,by) + ": hp " + std::to_string(hp0) + " -> " + std::to_string(hp1) +
+        " anim " + n->animNames());
+    if(!n->isDown() && hp1*3<n->attribute(ATR_HITPOINTSMAX))
+      n->changeAttribute(ATR_HITPOINTS,n->attribute(ATR_HITPOINTSMAX)-hp1,false);
     }
   else if(c=="aim") {
     // aim on|off: the upper body turns and bends to the target with a bow, a crossbow, a spell
@@ -1633,6 +1704,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     LipSync::subjectProbe = LipSync::Probe();
     Lean::probeNpc = bench.subject;
     Aim::probeNpc  = bench.subject;
+    Flinch::probeNpc = bench.subject;
     char buf[160] = "watch nobody";
     if(n!=nullptr)
       if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
@@ -2036,6 +2108,13 @@ void drawOverlay(Pixmap& pm) {
     std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f",double(am.weight),double(am.error),double(am.yaw),
                   double(am.pitch),double(am.turn),double(am.bend),double(am.lean));
     cv.text(x,y,buf,2,{255,140,60,255});
+    y += 16;
+    }
+  const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
+  if(fl.valid && (fl.active || fl.hits>0)) {
+    std::snprintf(buf,sizeof(buf),"HIT%s #%u S%.2f H%.2f B%.1f Y%.0f T%.1f N%.1f",Flinch::isEnabled() ? "" : " OFF",fl.hits,
+                  double(fl.strength),double(fl.height),double(fl.bend),double(fl.bendYaw),double(fl.twist),double(fl.head));
+    cv.text(x,y,buf,2,{255,90,90,255});
     y += 16;
     }
   // lips: shapes and intensity, then the voice (thin bar) and the mouth as shown (thick bar)

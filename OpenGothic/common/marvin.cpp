@@ -13,6 +13,7 @@
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/flinch.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -160,6 +161,7 @@ Marvin::Marvin() {
     {"toggle lipsync",             C_ToggleLipSync},
     {"toggle lean",                C_ToggleLean},
     {"toggle aim",                 C_ToggleAim},
+    {"toggle flinch",              C_ToggleFlinch},
     };
   }
 
@@ -509,6 +511,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleAim:
       Aim::setEnabled(!Aim::isEnabled());
+      return true;
+    case C_ToggleFlinch:
+      Flinch::setEnabled(!Flinch::isEnabled());
       return true;
     }
 

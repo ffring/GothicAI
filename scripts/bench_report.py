@@ -40,6 +40,8 @@ FLAGS = {
     "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
     "lip_shut":  (0.7, "",    "the voice is loud but the mouth stays shut"),
     "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
+    "flinch_none": (1.0, "x", "a blow and the upper body hardly gave way: 1.5 degrees over the peak"),
+    "flinch_slow": (1.5, "s", "the upper body is not back this long after the last blow"),
 }
 FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
 LIPS = ("lip_open", "lip_shut")
@@ -266,6 +268,29 @@ def analyze(rows):
         cov = sum((a - ma) * (b - mb) for a, b in lips)
         if va > 0 and vb > 0:
             stats["lip_corr"] = cov / math.sqrt(va * vb)
+    # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
+    # to come back after a blow; a blow without a flinch, a flinch that does not come back
+    if rows and "f_hits" in rows[0]:
+        hits = [i for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
+        if hits:
+            stats["flinch_hits"] = len(hits)
+            stats["flinch_peak"] = max(max(r["f_bend"], abs(r["f_twist"]), r["f_head"]) for r in rows)
+            settle = 0.0
+            for k, i in enumerate(hits):
+                end = hits[k + 1] if k + 1 < len(hits) else len(rows)
+                peak = max(max(r["f_bend"], abs(r["f_twist"]), r["f_head"]) for r in rows[i:min(end, i + 8)])
+                if peak < 1.5:
+                    events.append({"flag": "flinch_none", "leg": "-", "start": int(rows[i]["frame"]),
+                                   "end": int(rows[i]["frame"]), "worst": 1.5 / max(peak, 0.01), "at": int(rows[i]["frame"])})
+                if k + 1 == len(hits):
+                    rest = next((j for j in range(i, len(rows)) if rows[j]["f_on"] == 0), None)
+                    if rest is not None:
+                        settle = max(settle, (rows[rest]["t"] - rows[i]["t"]) / 1000.0)
+                    elif len(rows) - i > 45:
+                        t = (rows[-1]["t"] - rows[i]["t"]) / 1000.0
+                        events.append({"flag": "flinch_slow", "leg": "-", "start": int(rows[i]["frame"]),
+                                       "end": int(rows[-1]["frame"]), "worst": t, "at": int(rows[-1]["frame"])})
+            stats["flinch_settle"] = settle
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -273,6 +298,11 @@ def analyze(rows):
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
     events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
+    # a blow throws the head around on purpose (the flinch, the stumble): no gaze jerk for a second after it
+    if rows and "f_hits" in rows[0]:
+        struck = [int(rows[i]["frame"]) for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
+        events = [ev for ev in events if ev["flag"] != "gaze_jerk" or
+                  not any(0 <= ev["start"] - f <= 30 for f in struck)]
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
@@ -326,8 +356,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | aim err p90 / bend deg | lips corr | events |")
-    lines.append("|" + "---|" * 14)
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | aim err p90 / bend deg | lips corr | hits, peak deg, back s | events |")
+    lines.append("|" + "---|" * 15)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -342,8 +372,10 @@ def report(out):
             f"{st['lean_roll']:.1f} / {st['lean_pitch'][0]:.1f}..{st['lean_pitch'][1]:.1f}"
         am = "-" if "aim_p90" not in st else f"{st['aim_p90']:.1f} / {st['aim_bend']:.0f}"
         lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
+        fl = "-" if "flinch_hits" not in st else \
+            f"{st['flinch_hits']}, {st['flinch_peak']:.1f}, {st['flinch_settle']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {am} | {lc} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {am} | {lc} | {fl} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

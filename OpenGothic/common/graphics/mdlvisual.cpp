@@ -539,7 +539,8 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   Gaze::Input in;
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
-  if(!npc.isDown())
+  // a blow throws the head around: the gaze lets go while one stumbles
+  if(!npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_STUMBLE)
     in.source = npc.gazeTarget(in.target);
   if(in.source!=Gaze::Source::None) {
     in.active   = true;
@@ -652,6 +653,36 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   if(changed)
     view.setPose(pos,pose);
   return changed;
+  }
+
+bool MdlVisual::updateFlinch(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& fl   = pose.flinchIk();
+  if(!fl.isValid()) {
+    if(npc.isPlayer())
+      Flinch::playerProbe = Flinch::Probe();
+    if(&npc==Flinch::probeNpc)
+      Flinch::subjectProbe = Flinch::Probe();
+    return false;
+    }
+  const float a = npc.rotationRad();
+  Flinch::Input in;
+  in.dt       = dt;
+  in.forward  = {std::cos(a), 0, std::sin(a)};
+  in.headOnly = pose.footIk().isQuadruped();
+  const bool changed = pose.updateFlinch(in);
+  if(npc.isPlayer())
+    fl.probe(Flinch::playerProbe);
+  if(&npc==Flinch::probeNpc)
+    fl.probe(Flinch::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
+void MdlVisual::flinch(const Npc& npc, const Flinch::Hit& hit) {
+  const float a = npc.rotationRad();
+  skInst->flinchIk().hit(hit,{std::cos(a), 0, std::sin(a)});
   }
 
 bool MdlVisual::hasGaze() const {

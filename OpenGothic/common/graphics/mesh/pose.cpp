@@ -152,6 +152,7 @@ void Pose::setSkeleton(const Skeleton* sk) {
   gaze.setSkeleton(skeleton);
   lean.setSkeleton(skeleton);
   aim.setSkeleton(skeleton);
+  flinch.setSkeleton(skeleton);
   trY          = skeleton->rootTr.y;
   needToUpdate = true;
   if(lay.size()>0) //TODO
@@ -442,6 +443,7 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
   ik.apply(tr,numBones,mt.at(3,1));
   aim.apply(tr,numBones);
   gaze.apply(tr,numBones);
+  flinch.apply(tr,numBones);
   }
 
 void Pose::implMkSkeleton(const Matrix4x4 &mt) {
@@ -854,6 +856,13 @@ std::string Pose::animNames() const {
     if(i.seq!=nullptr)
       s += (s.empty() ? "" : " ") + i.seq->name;
   return s;
+  }
+
+bool Pose::updateFlinch(const Flinch::Input& in) {
+  if(!flinch.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
   }
 
 bool Pose::updateAim(const Aim::Input& in) {
