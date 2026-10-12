@@ -9,6 +9,8 @@
 #      NO_BUILD=1    do not rebuild the engine first
 #      TIMEOUT=300   seconds before the game is killed
 #      KEEP=1        the game stays open after the scenario
+#      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
+#                    goes into <segment>.wav instead of the speakers
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
@@ -39,12 +41,12 @@ fi
 RUN="$OUT/run"
 mkdir -p "$RUN"
 cp "$SAVE" "$RUN/save_slot_1.sav"
-cat >"$RUN/Gothic.ini" <<'EOF'
+cat >"$RUN/Gothic.ini" <<EOF
 [INTERNAL]
 vidResIndex=2
 [SOUND]
-soundVolume=0
-musicVolume=0
+soundVolume=${SOUND:-0}
+musicVolume=${MUSIC:-0}
 EOF
 
 START=$(date +%s)

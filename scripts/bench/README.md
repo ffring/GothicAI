@@ -229,7 +229,8 @@ Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
 Every talking command writes `events.jsonl` (what was said when, in frames of the recording).
 
 Environment of `scripts/bench.sh`: `GOTHIC_DIR`, `SAVE` (default: `save_slot_1.sav` of the main
-checkout), `NO_BUILD=1`, `TIMEOUT` (seconds, default 300), `KEEP=1`.
+checkout), `NO_BUILD=1`, `TIMEOUT` (seconds, default 300), `KEEP=1`, `SOUND` and `MUSIC` (volumes 0..1,
+default 0; with `TEMPEST_AUDIO_LOOPBACK=48000` a segment's sound goes into `<segment>.wav`).
 
 Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
 clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into

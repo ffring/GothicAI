@@ -99,3 +99,25 @@ Say so in the description.
 - `cut` builds the timeline (`timeline.py`), cuts the wait between the hero's phrase and the first answer,
   mixes the hero's recordings into the game's sound, burns in the hook, captions and subtitles as images
   (Pillow; Homebrew's ffmpeg has no libass), normalizes to -14 LUFS.
+
+## Before and after (no AI)
+
+For what you see rather than hear (foot IK, the gaze, the lean): the same bench scenario filmed twice,
+the animation work off (OpenGothic as it is) and on, stacked top and bottom.
+
+```bash
+shorts/compare/film.sh bodies                                   # .shorts/compare/bodies/{off,on}/<segment>.mp4|.wav
+uv run --project shorts python shorts/compare/cut.py bodies ru  # -> .shorts/compare/bodies/short-ru.mp4 (+ .png)
+```
+
+- `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
+  time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
+  `_FLINCH`, `_ANIBLEND`, `_LIPSYNC` to 0. Frames 1080x960 (`TEMPEST_WINDOW_SIZE`), the game's sound into
+  `<segment>.wav` (`TEMPEST_AUDIO_LOOPBACK`, `SOUND`/`MUSIC` of `scripts/bench.sh`).
+- `compare/<name>.json`: the hook, the two labels, the beats in order with their trims and titles, per language.
+- `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
+  take, normalizes to -14 LUFS.
+
+Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
+cutting: a difference that does not read at phone size (a flinch on top of the game's stumble) stays out.
+
