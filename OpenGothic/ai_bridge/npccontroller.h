@@ -32,12 +32,13 @@ class NpcController final {
     void dropAll(std::string_view reason);
 
     void action(World& world, const rapidjson::Value& msg);
-    void requestSnapshot(std::string_view symbol);
+    // a snapshot of the npc now: attached ones get theirs on the next tick, free ones (v7) at once;
+    // false if there is no such npc
+    bool requestSnapshot(World& world, std::string_view symbol);
     void tick(World& world);
     void perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
 
     bool        isAttached(std::string_view symbol) const;
-    bool        isFollowing(std::string_view symbol) const;
     // attached npc, if it is still alive in this world
     Npc*        find(World& world, std::string_view symbol);
     std::string status(World* world) const;
@@ -100,6 +101,7 @@ class NpcController final {
     void emitActionResult(std::string_view id, std::string_view npc, std::string_view status,
                           std::string_view detail, double distance);
     void emitSnapshot(World& world, Controlled& c);
+    void emitSnapshot(World& world, Npc& npc, std::string_view symbol, std::string_view action, bool following);
 
     Emit                                   emit;
     std::vector<Controlled>                npcs;

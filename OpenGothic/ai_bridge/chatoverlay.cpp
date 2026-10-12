@@ -19,8 +19,8 @@ namespace {
 
 constexpr size_t   MaxInput       = 300;
 constexpr size_t   MaxLog         = 32;
-constexpr size_t   OpenRows       = 6;   // entries shown while chatting
-constexpr size_t   SubtitleRows   = 2;   // entries shown as subtitles when closed
+constexpr size_t   OpenRows       = 6;   // entries shown while the input line is open
+constexpr size_t   SubtitleRows   = 3;   // entries shown as subtitles otherwise (the hero's line and replies)
 constexpr uint64_t LingerMs       = 2500;
 constexpr uint64_t PttHoldMs      = 300;    // T held longer than this is push-to-talk
 constexpr uint64_t PttMaxMs       = 30000;  // the key-up may never come (focus lost)
@@ -52,20 +52,17 @@ float chatScale() {
 ChatOverlay::ChatOverlay() {
   }
 
-void ChatOverlay::open(std::string name) {
-  active  = true;
-  npcName = std::move(name);
+void ChatOverlay::openInput() {
+  active = true;
   input.clear();
-  cursor  = 0;
-  status.clear();
+  cursor = 0;
   update();
   }
 
-void ChatOverlay::close() {
+void ChatOverlay::closeInput() {
   active = false;
-  status.clear();
-  partial.clear();
-  pttReset();  // the server drops the recording together with the chat
+  input.clear();
+  cursor = 0;
   update();
   }
 
@@ -92,14 +89,20 @@ void ChatOverlay::pttRelease() {
   if(spoke) {
     if(onPttStop)
       onPttStop();
+    update();
     return;
     }
   if(onPttCancel)
     onPttCancel();
-  if(active && typed!='\0' && input.size()<MaxInput) {
+  if(!active) {
+    openInput();  // a short tap: type instead of speaking
+    return;
+    }
+  if(typed!='\0' && input.size()<MaxInput) {
     input.insert(cursor,1,typed);
     ++cursor;
     }
+  update();
   }
 
 void ChatOverlay::pttReset() {
@@ -141,6 +144,22 @@ void ChatOverlay::extend(std::string_view key, uint32_t showMs) {
       }
   }
 
+void ChatOverlay::cut(std::string_view key, std::string said) {
+  const uint64_t now = Application::tickCount();
+  for(auto it=log.rbegin(); it!=log.rend(); ++it) {
+    if(it->key!=key)
+      continue;
+    if(said.empty()) {
+      it->shownUntil = now;
+      } else {
+      it->text       = std::move(said) + " -";
+      it->shownUntil = now + LingerMs;
+      }
+    update();
+    return;
+    }
+  }
+
 void ChatOverlay::setStatus(std::string text) {
   status = std::move(text);
   update();
@@ -151,7 +170,7 @@ bool ChatOverlay::hasVisibleContent() const {
   }
 
 void ChatOverlay::tick() {
-  if(tDown && active) {
+  if(tDown) {
     const uint64_t held = Application::tickCount() - tDownAt;
     if(!recording && held>=PttHoldMs)
       recording = true;
@@ -159,7 +178,7 @@ void ChatOverlay::tick() {
       pttRelease();
     }
   // repaint while something is on screen (cursor blink, subtitles expiring), and once after it is gone
-  const bool visible = active || hasVisibleContent();
+  const bool visible = active || recording || !partial.empty() || !status.empty() || hasVisibleContent();
   if(visible || wasVisible)
     update();
   wasVisible = visible;
@@ -173,7 +192,9 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
       break;
     rows.insert(rows.begin(),&*it);
     }
-  if(!active && rows.empty())
+  // one line under the subtitles: the player speaking, his words being recognized, or a status
+  const bool extra = recording || !partial.empty() || !status.empty();
+  if(!active && !extra && rows.empty())
     return;
 
   Painter     p(e);
@@ -192,8 +213,11 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
   int total = pad;
   for(auto r:rows)
     total += lineH + text.textSize(textW,r->text).h + pad/2;
+  if(extra)
+    total += lineH;
   if(active)
-    total += (status.empty() && partial.empty() && !recording ? 0 : lineH) + lineH + pad;
+    total += lineH;
+  total += pad/2;
 
   int y = h() - 2*lineH - total;
   p.setBrush(Color(0.f,0.f,0.f,0.6f));
@@ -207,11 +231,9 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
     y += text.textSize(textW,r->text).h + pad/2;
     }
 
-  if(!active)
-    return;
   if(recording) {
     static const std::string label = TextCodec::fromUtf8("Запись: ");
-    static const std::string speak = TextCodec::fromUtf8("говорите... отпустите T, чтобы отправить");
+    static const std::string speak = TextCodec::fromUtf8("говорите... отпустите T, чтобы сказать");
     rec.drawText(p,x0+pad,y+lineH,label+fitTail(rec,partial.empty() ? speak : partial,textW-rec.textSize(label).w));
     y += lineH;
     }
@@ -221,9 +243,12 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
     y += lineH;
     }
   else if(!status.empty()) {
-    hint.drawText(p,x0+pad,y+lineH,status);
+    hint.drawText(p,x0+pad,y+lineH,fitTail(hint,status,textW));
     y += lineH;
     }
+
+  if(!active)
+    return;
   const std::string prompt = "> ";
   text.drawText(p,x0+pad,y+lineH,prompt+input);
   // blinking cursor
@@ -236,12 +261,11 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
 void ChatOverlay::keyDownEvent(KeyEvent& e) {
   const bool plainT = e.key==Event::K_T && e.modifier==Event::M_NoModifier;
   if(!active) {
-    if(plainT && canOpen && canOpen()) {
+    // the game keeps every key but T: the hero moves and fights while the player speaks
+    if(plainT && (tDown || (canSpeak && canSpeak()))) {
       e.accept();
-      if(onOpenRequest)
-        onOpenRequest();
-      if(active)
-        pttPress('\0');  // held, it is push-to-talk right away
+      if(!tDown)
+        pttPress('\0');  // held, it is push-to-talk right away; a short tap opens the input line
       return;
       }
     e.ignore();
@@ -264,7 +288,9 @@ void ChatOverlay::keyDownEvent(KeyEvent& e) {
 
 void ChatOverlay::keyRepeatEvent(KeyEvent& e) {
   if(!active) {
-    e.ignore();
+    if(e.key==Event::K_T && tDown)
+      e.accept(); else
+      e.ignore();
     return;
     }
   e.accept();
@@ -273,9 +299,10 @@ void ChatOverlay::keyRepeatEvent(KeyEvent& e) {
   }
 
 void ChatOverlay::keyUpEvent(KeyEvent& e) {
+  const bool ours = active || (e.key==Event::K_T && tDown);
   if(e.key==Event::K_T)
     pttRelease();
-  if(active)
+  if(ours)
     e.accept(); else
     e.ignore();
   }
@@ -283,17 +310,20 @@ void ChatOverlay::keyUpEvent(KeyEvent& e) {
 void ChatOverlay::edit(KeyEvent& e) {
   switch(e.key) {
     case Event::K_ESCAPE:
-      if(onClose)
-        onClose();
-      return;
-    case Event::K_Return:
-      if(!input.empty() && onSubmit) {
-        const std::string txt = input;
-        input.clear();
-        cursor = 0;
-        onSubmit(txt);
+      if(tDown) {
+        pttReset();
+        if(onPttCancel)
+          onPttCancel();
         }
-      break;
+      closeInput();
+      return;
+    case Event::K_Return: {
+      const std::string txt = input;
+      closeInput();
+      if(!txt.empty() && onSubmit)
+        onSubmit(txt);
+      return;
+      }
     case Event::K_Back:
       if(cursor>0)
         input.erase(--cursor,1);
@@ -330,15 +360,12 @@ void ChatOverlay::edit(KeyEvent& e) {
   update();
   }
 
+// while the line is open, clicks and the wheel stay here (no swings at the air); the mouse still turns the hero
 void ChatOverlay::mouseDownEvent(MouseEvent& e) {
   if(active) e.accept(); else e.ignore();
   }
 
 void ChatOverlay::mouseUpEvent(MouseEvent& e) {
-  if(active) e.accept(); else e.ignore();
-  }
-
-void ChatOverlay::mouseMoveEvent(MouseEvent& e) {
   if(active) e.accept(); else e.ignore();
   }
 

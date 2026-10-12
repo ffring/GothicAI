@@ -188,6 +188,8 @@ void NpcObserver::emitRoster(World& world) {
        .num("distance",double(dist))
        .boolean("in_view",inView(*pl,npc,dist))
        .str("activity",activity(npc,owner(symbol)))
+       .str("state",AiNpc::stateName(world,npc.currentState()))
+       .boolean("moving",AiNpc::isMoving(npc))
      .end();
     });
   j.endArray();
@@ -449,10 +451,7 @@ void NpcObserver::routine(World& world, const rapidjson::Value& msg) {
     emit(j.str("error","npc not found").finish());
     return;
     }
-  auto stateName = [&](ScriptFn fn) -> std::string {
-    auto sym = fn.isValid() ? world.script().findSymbol(fn.ptr) : nullptr;
-    return sym!=nullptr ? sym->name() : "";
-    };
+  auto stateName = [&](ScriptFn fn) { return AiNpc::stateName(world,fn); };
   auto hhmm = [](gtime t) {
     char buf[8];
     std::snprintf(buf,sizeof(buf),"%02d:%02d",int(t.hour()),int(t.minute()));

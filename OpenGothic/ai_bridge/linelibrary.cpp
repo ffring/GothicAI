@@ -68,6 +68,12 @@ LineLibrary::Line* LineLibrary::find(std::string_view id) {
   return nullptr;
   }
 
+void LineLibrary::hush(std::string_view npc) {
+  for(auto& l:lines)
+    if(l.npc==npc && !l.started)
+      l.hushed = true;
+  }
+
 bool LineLibrary::sound(std::string_view file, std::vector<uint8_t>& wav) const {
   if(!isExternal(file))
     return false;
@@ -75,7 +81,7 @@ bool LineLibrary::sound(std::string_view file, std::vector<uint8_t>& wav) const 
   for(auto it=lines.rbegin(); it!=lines.rend(); ++it) {
     if(it->id!=id)
       continue;
-    if(it->wav.empty())
+    if(it->wav.empty() || it->hushed)
       return false;
     wav = it->wav;
     return true;
@@ -89,6 +95,11 @@ bool LineLibrary::lookup(std::string_view id, std::string_view& text, uint32_t& 
   for(auto it=lines.rbegin(); it!=lines.rend(); ++it) {
     if(it->id!=id)
       continue;
+    if(it->hushed) {
+      text = "";
+      time = 1;
+      return true;
+      }
     text = it->text;
     time = it->voice!=nullptr ? streamedTime(*it) : it->time;
     if(!it->started) {
