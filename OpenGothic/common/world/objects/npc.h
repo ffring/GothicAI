@@ -292,6 +292,9 @@ class Npc final {
     bool      isDown() const;
     bool      isAttack() const;
     bool      isTalk() const;
+    // whom this npc talks or listens to, for a while: it looks at them (gaze)
+    void      setTalkPartner(Npc* other, uint64_t ms);
+    Npc*      talkPartner() const;
 
     bool      isAttackAnim() const;
     bool      isPrehit() const;
@@ -505,6 +508,7 @@ class Npc final {
     bool      implPointAt(const Tempest::Vec3& to);
     bool      implLookAtWp(uint64_t dt);
     bool      implLookAtNpc(uint64_t dt);
+    void      implHeadBack(uint64_t dt);
     bool      implLookAt (float dx, float dy, float dz, uint64_t dt);
     bool      implTurnAway(const Npc& oth, uint64_t dt);
     bool      implTurnToFai(const Npc& oth, uint64_t dt);
@@ -636,6 +640,8 @@ class Npc final {
 
     const WayPoint*                currentLookAt=nullptr;
     Npc*                           currentLookAtNpc=nullptr;
+    Npc*                           talkWith        =nullptr;
+    uint64_t                       talkUntil       =0;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

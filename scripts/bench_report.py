@@ -31,6 +31,8 @@ FLAGS = {
     "knee":      (25.0, "deg", "knee bends away from the animated direction"),
     "toe_twist": (12.0, "deg", "planted toes turned sideways beyond the intended outward turn"),
     "stretch":   (2.0, "cm",  "planted leg straight and still can not reach the ground"),
+    "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
+    "gaze_jerk": (8.0, "deg", "the gaze turned this much in one frame"),
 }
 
 
@@ -103,6 +105,12 @@ def frame_flags(prev2, prev, r):
         if "chest" in r and legs_of(r) == LEGS:
             jump = max(jump, abs(r["chest"] - prev["chest"]))
         out.append(("pelvis", "-", jump))
+    if "g_w" in r:
+        # within reach: the head can turn 65 degrees, with the body 110 (the goal is clamped to that)
+        if r["g_w"] > 0.99 and r["g_err"] >= 0 and abs(r["g_yawgoal"]) < 60:
+            out.append(("gaze_off", "-", r["g_err"]))
+        if prev is not None and "g_w" in prev:
+            out.append(("gaze_jerk", "-", abs(r["g_yaw"] * r["g_w"] - prev["g_yaw"] * prev["g_w"])))
     for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
@@ -200,6 +208,10 @@ def analyze(rows):
         if len(stance[a]) > 5 and len(stance[b]) > 5:
             limp = abs(sum(stance[a]) / len(stance[a]) - sum(stance[b]) / len(stance[b]))
             stats["limp"] = max(stats.get("limp", 0.0), limp)
+    gaze = sorted(r["g_err"] for r in rows if r.get("g_w", 0) > 0.99 and r.get("g_err", -1) >= 0
+                  and abs(r.get("g_yawgoal", 0)) < 60)
+    if gaze:
+        stats["gaze_p90"] = gaze[int(len(gaze) * 0.9)]
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -259,8 +271,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze err p90 deg | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -268,8 +280,9 @@ def report(out):
         contact = "-" if p90 is None else f"{p90:.1f} / {mx:.1f}"
         limp = "-" if "limp" not in st else f"{st['limp']:.1f}"
         gap = "-" if "spread" not in st else f"{st['spread']:.1f}"
+        gz = "-" if "gaze_p90" not in st else f"{st['gaze_p90']:.1f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gz} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

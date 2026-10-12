@@ -9,6 +9,7 @@
 #include "world/objects/item.h"
 #include "world/triggers/abstracttrigger.h"
 #include "graphics/mesh/footik.h"
+#include "graphics/mesh/gaze.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -152,6 +153,7 @@ Marvin::Marvin() {
     {"toggle rtsm",                C_ToggleRtsm},
     {"toggle pathtrace",           C_TogglePathtrace},
     {"toggle footik",              C_ToggleFootIk},
+    {"toggle gaze",                C_ToggleGaze},
     };
   }
 
@@ -489,6 +491,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleFootIk:
       FootIk::setEnabled(!FootIk::isEnabled());
+      return true;
+    case C_ToggleGaze:
+      Gaze::setEnabled(!Gaze::isEnabled());
       return true;
     }
 

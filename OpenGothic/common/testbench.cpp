@@ -17,6 +17,7 @@
 #include "game/playercontrol.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
+#include "graphics/mesh/gaze.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -312,6 +313,12 @@ struct Bench {
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
+  Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
+  float       placeDist  = 0;
+  float       placeAngle = 0;
+  float       orbitSpeed = 0;     // degrees per second
+  uint64_t    orbitUntil = 0;
   };
 
 Bench bench;
@@ -394,9 +401,36 @@ void finish() {
 
 Vec3 ankle(const Npc& pl, size_t leg) {
   auto& p = FootIk::playerProbe;
-  if(p.valid)
+  if(p.valid && pl.isPlayer())
     return p.leg[leg].final[2];
   return pl.position() + Vec3(0,10,0);
+  }
+
+Npc& subjectOf(Npc& pl) {
+  return bench.subject!=nullptr ? *bench.subject : pl;
+  }
+
+// "nearest": the nearest living npc but the player; else a script symbol (NONE_100_XARDAS)
+Npc* findNpc(World& w, Npc& pl, const std::string& name) {
+  if(name=="player")
+    return &pl;
+  if(name=="nearest") {
+    Npc*  best = nullptr;
+    float dist = 0;
+    for(uint32_t i=0; i<w.npcCount(); ++i) {
+      Npc* n = w.npcById(i);
+      if(n==nullptr || n==&pl || n->isDead())
+        continue;
+      const float d = (n->position()-pl.position()).quadLength();
+      if(best==nullptr || d<dist) {
+        best = n;
+        dist = d;
+        }
+      }
+    return best;
+    }
+  const size_t id = w.script().findSymbolIndex(name);
+  return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
   }
 
 // a point is hidden if something is between it and the camera (not counting the ground right at the point)
@@ -497,6 +531,7 @@ void writeHeader() {
     for(const char* j:{"hip","kneea","anka","toea","kneef","ankf","toef"})
       std::fprintf(bench.csv,",%s_%s_x,%s_%s_y,%s_%s_z",s,j,s,j,s,j);
     }
+  std::fprintf(bench.csv,",g_on,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,pg_on,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -520,10 +555,32 @@ void writeRow(Npc& pl) {
     for(auto v:pts)
       std::fprintf(bench.csv,",%.2f,%.2f,%.2f",v->x,v->y,v->z);
     }
+  // gaze of the watched npc (or the hero) and of the hero
+  const auto& g  = bench.subject!=nullptr ? Gaze::subjectProbe : Gaze::playerProbe;
+  const auto& pg = Gaze::playerProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.3f,%.2f,%.2f",
+               int(g.active),g.weight,g.error,g.yaw,g.pitch,g.yawGoal,g.pitchGoal,g.headYaw,g.chestYaw,g.waistYaw,
+               int(pg.active),pg.weight,pg.error,pg.yaw);
   std::fprintf(bench.csv,"\n");
   }
 
 void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl);
+
+// the hero stands around the watched npc, facing it
+void placeHero(World& w, Npc& pl) {
+  Npc& s = subjectOf(pl);
+  if(&s==&pl || bench.placeDist<=0)
+    return;
+  const float a   = (s.rotation()+bench.placeAngle)*float(M_PI)/180.f;
+  Vec3        pos = s.position() + Vec3(std::cos(a),0,std::sin(a))*bench.placeDist;
+  const float g   = groundY(w,pos.x,pos.z,pos.y+100);
+  if(!std::isnan(g))
+    pos.y = g;
+  pl.setPosition(pos);
+  const Vec3 d = s.position()-pos;
+  pl.setDirection(Vec3(d.x,0,d.z));
+  pl.updateTransform();
+  }
 
 // foreach slope <min deg> <max deg> <count> | foreach stairs <count> | foreach wp <name part> <count>
 // ... end: the body runs at each spot, after a teleport; $NAME, $I, $ANGLE are replaced
@@ -680,7 +737,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.camAngle  = m=="front" ? 0 : num(a,4,90);
       if(m=="auto") {
         bench.camAuto = true;
-        pickCamAngle(w,pl);
+        pickCamAngle(w,subjectOf(pl));
         }
       }
     else if(m=="world") {
@@ -789,6 +846,68 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr),
                   unsigned(pl.guild()),int(w.script().guildVal().surface_align[pl.guild()]));
     say(buf);
+    }
+  else if(c=="talk") {
+    // talk <npc|nearest> <ms>: the npc and the hero talk to each other (no words): they look at each other
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("talk: no npc " + line);
+      return;
+      }
+    const uint64_t ms = uint64_t(num(a,2,3000));
+    n->setTalkPartner(&pl,ms);
+    pl.setTalkPartner(n,ms);
+    say("talk " + std::string(n->displayName()) + " " + std::to_string(ms));
+    }
+  else if(c=="watch") {
+    // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    bench.subject  = (n==&pl) ? nullptr : n;
+    Gaze::probeNpc = bench.subject;
+    char buf[160] = "watch nobody";
+    if(n!=nullptr)
+      if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
+        std::snprintf(buf,sizeof(buf),"watch %s dist=%.0f",sym->name().c_str(),double((n->position()-pl.position()).length()));
+    say(buf);
+    }
+  else if(c=="gazeinfo") {
+    Npc& s = subjectOf(pl);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"gazeinfo partner=%d probe valid=%d active=%d w=%.2f hero partner=%d",
+                  int(s.talkPartner()!=nullptr),int(Gaze::subjectProbe.valid),int(Gaze::subjectProbe.active),
+                  double(Gaze::subjectProbe.weight),int(pl.talkPartner()!=nullptr));
+    say(buf);
+    }
+  else if(c=="freeze") {
+    // freeze <npc|nearest> [off]: it leaves what it does and stands still, like a body the AI server attaches
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("freeze: no npc " + line);
+      return;
+      }
+    if(a.size()>2 && a[2]=="off") {
+      n->setExternalControl(false);
+      say("freeze off");
+      return;
+      }
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    say("freeze " + std::string(n->displayName()));
+    }
+  else if(c=="place") {
+    // place <dist> <angle>: the hero stands that far from the watched npc, at that angle from its facing
+    bench.placeDist  = num(a,1,150);
+    bench.placeAngle = num(a,2,0);
+    placeHero(w,pl);
+    bench.hasPrev = false;
+    }
+  else if(c=="orbit") {
+    // orbit <deg> <ms>: the hero goes around the watched npc
+    const float ms = std::max(1.f,num(a,2,3000));
+    bench.orbitSpeed = num(a,1,90)*1000.f/ms;
+    bench.orbitUntil = bench.time + uint64_t(ms);
     }
   else if(c=="transform") {
     // the player becomes a creature, like the shape change spell; "transform back"
@@ -946,6 +1065,29 @@ void drawOverlay(Pixmap& pm) {
       }
     }
 
+  // gaze: where the face looks (yellow) and where the partner is (red)
+  const auto& g = bench.subject!=nullptr ? Gaze::subjectProbe : Gaze::playerProbe;
+  if(cam!=nullptr && g.valid && g.active) {
+    const Matrix4x4 vp = cam->viewProj();
+    auto proj = [&](const Vec3& p, float& x, float& y) {
+      float px = p.x, py = p.y, pz = p.z, pw = 1;
+      vp.project(px,py,pz,pw);
+      if(pw<=1e-3f)
+        return false;
+      x = (0.5f*px/pw+0.5f)*float(cv.w);
+      y = (0.5f*py/pw+0.5f)*float(cv.h);
+      return true;
+      };
+    float x0,y0,x1,y1,x2,y2;
+    const bool h = proj(g.head,x0,y0);
+    if(h && proj(g.head+g.facing*60.f,x1,y1))
+      cv.line(x0,y0,x1,y1,1,{255,230,40,255});
+    if(h && proj(g.target,x2,y2)) {
+      cv.line(x0,y0,x2,y2,0,{255,80,80,140});
+      cv.dot(x2,y2,3,Red);
+      }
+    }
+
   // zoomed copy of the feet in the bottom right corner
   if(bench.zoom && zx>=0 && zy>=0 && zx<float(cv.w) && zy<float(cv.h)) {
     const int sc = 2;
@@ -984,6 +1126,14 @@ void drawOverlay(Pixmap& pm) {
     auto& l = p.leg[i];
     std::snprintf(buf,sizeof(buf),"%s %s E%.1f K%.0f",LegName[i],l.plant>0.5f ? "PLANT" : "SWING",double(l.err),double(l.kneeDev));
     cv.text(x,y,buf,2,LegColor[i]);
+    y += 16;
+    }
+  if(g.valid && (g.active || bench.subject!=nullptr)) {
+    std::snprintf(buf,sizeof(buf),"GAZE W%.2f E%.0f Y%.0f P%.0f",double(g.weight),double(g.error),double(g.yaw),double(g.pitch));
+    cv.text(x,y,buf,2,{255,230,40,255});
+    y += 16;
+    std::snprintf(buf,sizeof(buf),"H%.0f C%.0f W%.0f",double(g.headYaw),double(g.chestYaw),double(g.waistYaw));
+    cv.text(x,y,buf,2,{255,230,40,255});
     y += 16;
     }
   if(bench.occl!=0) {
@@ -1069,6 +1219,10 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   run(*world,*player,ctrl);
   if(bench.done)
     return false;
+  if(bench.orbitUntil>bench.time) {
+    bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;
+    placeHero(*world,*player);
+    }
 
   const Vec3 pos = player->position();
   if(bench.hasPrev) {
@@ -1078,7 +1232,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   bench.prevPos = pos;
   bench.hasPrev = true;
 
-  updateCamera(*world,*player);
+  updateCamera(*world,subjectOf(*player));
 
   bool capture = !bench.shot.empty();
   if(bench.rec) {

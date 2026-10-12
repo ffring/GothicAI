@@ -19,7 +19,8 @@ Scenarios for foot IK: `ik-sweep` (12 slopes all over the world: run up, run dow
 backwards, sneak), `ik-ab` (IK off and on on the same run), `smoke` (the bench itself).
 Four legs: `quad-wolf` (the player as a wolf on 6 slopes), `quad-zoo` (molerat, shadowbeast, waran,
 lurker, giant bug, sheep on 2 slopes each). The player becomes the creature (`transform`), so the
-usual player commands drive it.
+usual player commands drive it. Gaze: `gaze` (Xardas and the hero talk; the hero stands in front,
+goes around him, behind his back and back; then Xardas at his bookstand turns the head only).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -61,6 +62,8 @@ git worktree remove --force /tmp/before
   under a planted foot, yellow under a swinging one; the short line is the ground normal;
 - bottom right: the feet zoomed in;
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
+- gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
+  weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
   leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
   if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
@@ -76,6 +79,8 @@ git worktree remove --force /tmp/before
 | `knee` | the knee bends more than 25 degrees away from the animated direction |
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
+| `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
+| `gaze_jerk` | the gaze turns more than 8 degrees in one frame |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -83,7 +88,8 @@ the threshold: a foot leaving the ground a frame early is not visible.
 Columns of the table: `contact` is the error of planted feet against a flat animation floor (only
 meaningful with IK on); `spread` is how much the height of planted feet above the ground varies (works
 for a body tilted as a whole too: compare IK off and on); `limp` is how much lower the body is on the
-steps of one leg of a pair than on the other's.
+steps of one leg of a pair than on the other's. `gaze err` is the angle between where the face looks and
+the partner, while the partner is within reach of the turn.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 
@@ -114,6 +120,11 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `ik on\|off`, `ik param <name> <value>`, `ik params` | foot IK and its parameters, without rebuilding; `ik off` on a four-legged creature brings back the old whole-body tilt |
 | `transform <instance>`, `transform back` | the player becomes a creature (`Wolf`, `Molerat`, `Shadowbeast`, `Waran`, ...), like the shape change spell |
 | `bones` | the player's skeleton to `bench.log`: index, parent, name, bind pose position |
+| `watch <npc\|nearest\|player>` | the camera and the gaze metrics follow this npc (a script symbol, `NONE_100_XARDAS`) |
+| `talk <npc\|nearest> <ms>` | the npc and the hero talk to each other that long (no words): they look at each other |
+| `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
+| `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
+| `gazeinfo` | gaze state of the watched npc to `bench.log` |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |

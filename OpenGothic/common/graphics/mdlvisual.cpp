@@ -526,6 +526,37 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
   return changed;
   }
 
+bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& gaze = pose.gazeIk();
+  if(!gaze.isValid()) {
+    if(&npc==Gaze::probeNpc)
+      Gaze::subjectProbe = Gaze::Probe();
+    return false;
+    }
+
+  Gaze::Input in;
+  in.dt = dt;
+  if(auto other = npc.talkPartner(); other!=nullptr && !npc.isUnconscious() && !npc.isDown()) {
+    const float a = npc.rotation()*float(M_PI)/180.f;
+    in.active   = true;
+    in.target   = other->mapHeadBone() + Tempest::Vec3(0,6,0); // the eyes are a bit above the head bone
+    in.forward  = {std::cos(a), 0, std::sin(a)};
+    // the hero's body is the player's; one walking or busy at a bench, a book turns the head only
+    const auto bs = npc.bodyStateMasked() & BS_MAX;
+    in.headOnly = npc.isPlayer() || npc.interactive()!=nullptr ||
+                  bs==(BS_WALK & BS_MAX) || bs==BS_RUN || bs==BS_SPRINT || bs==(BS_SNEAK & BS_MAX);
+    }
+  const bool changed = pose.updateGaze(in);
+  if(npc.isPlayer())
+    gaze.probe(Gaze::playerProbe);
+  if(&npc==Gaze::probeNpc)
+    gaze.probe(Gaze::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
 bool MdlVisual::hasQuadrupedIk() const {
   return FootIk::isEnabled() && skInst->footIk().isQuadruped();
   }

@@ -7,6 +7,7 @@
 #include "animation.h"
 #include "animationsolver.h"
 #include "footik.h"
+#include "gaze.h"
 #include "resources.h"
 
 class Skeleton;
@@ -88,6 +89,9 @@ class Pose final {
     FootIk&            footIk() { return ik; }
     const FootIk&      footIk() const { return ik; }
     bool               updateFootIk(const FootIk::Input& in);
+    Gaze&              gazeIk() { return gaze; }
+    const Gaze&        gazeIk() const { return gaze; }
+    bool               updateGaze(const Gaze::Input& in);
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
     auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;
     bool               stopItemStateAnim(const AnimationSolver &solver, uint64_t tickCount);
@@ -151,6 +155,7 @@ class Pose final {
 
     float                           headRotX = 0, headRotY = 0;
     FootIk                          ik;
+    Gaze                            gaze;
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};
