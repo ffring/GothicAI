@@ -79,3 +79,18 @@ async def test_synthesizer_levels_the_lines() -> None:
         assert len(out) / FakeProvider.rate == pytest.approx(s.audio_s)
     assert level(out, FakeProvider.rate) == pytest.approx(TARGET_LUFS, abs=0.5)
     await synth.aclose()
+
+
+async def test_a_styled_line_does_not_teach_the_voice_level() -> None:
+    leveler = Leveler()
+    synth = Synthesizer(FakeProvider(), leveler=leveler)
+
+    async def chunk(pcm: bytes, p) -> None:
+        pass
+
+    angry = Voice(XARDAS.id, XARDAS.description, style="say angrily")
+    await synth.speak("Вон отсюда!", angry, chunk)
+    assert leveler.start("fake", XARDAS.id, RATE).gain_db == pytest.approx(TARGET_LUFS - DEFAULT_LUFS)
+    await synth.speak("Драконы уже здесь.", XARDAS, chunk)
+    assert leveler.start("fake", XARDAS.id, RATE).gain_db != pytest.approx(TARGET_LUFS - DEFAULT_LUFS)
+    await synth.aclose()

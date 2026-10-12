@@ -639,6 +639,13 @@ namespace zenkit {
 		/// \param sym The symbol to unsafe_call.
 		ZKAPI void unsafe_call(DaedalusSymbol const* sym);
 		ZKAPI void unsafe_jump(uint32_t address);
+
+		/// \brief Calls an external the way the `BE` instruction does: its arguments must be on the stack,
+		///        its return value is left there. Falls back to the default external.
+		/// \return false if no external is registered for \p sym and there is no default (the arguments are
+		///         dropped, nothing is pushed).
+		/// \note Local addition (OpenGothic ai_bridge), see lib/VENDORED.md.
+		ZKAPI bool unsafe_call_external(DaedalusSymbol const* sym);
 		ZKAPI std::shared_ptr<DaedalusInstance> unsafe_get_gi();
 		ZKAPI void unsafe_set_gi(std::shared_ptr<DaedalusInstance> i);
 

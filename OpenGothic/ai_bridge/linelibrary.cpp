@@ -114,3 +114,10 @@ bool LineLibrary::lookup(std::string_view id, std::string_view& text, uint32_t& 
   time = 1;
   return true;
   }
+
+bool LineLibrary::pending() const {
+  for(auto& l:lines)
+    if(!l.started && !l.hushed)
+      return true;
+  return false;
+  }

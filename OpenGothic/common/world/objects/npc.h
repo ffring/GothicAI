@@ -179,6 +179,11 @@ class Npc final {
     bool       setAnimItem(std::string_view scheme, int state);
     void       stopAnim(std::string_view ani);
     void       startFaceAnim(std::string_view anim, float intensity, uint64_t duration);
+    float      faceWeight(std::string_view anim);  // how much of the face anim shows now, 0..1 (test bench)
+    // a voiced line starts: the mouth follows the voice (LipSync)
+    void       startSpeech(const Tempest::Sound& voice);
+    void       startSpeech(std::shared_ptr<LipSync::Track> voice);
+    void       stopSpeech();
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;
     bool       hasAnim(Anim a) const;
@@ -428,6 +433,7 @@ class Npc final {
 
     void      clearNearestEnemy();
     int32_t   lastHitSpellId() const { return lastHitSpell; }
+    Npc*      lastHitBy() const { return lastHit; }  // who hit this npc last (ai_bridge: who killed it)
 
     void      setOther(Npc* ot);
     void      setVictim(Npc* ot);

@@ -14,8 +14,8 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Coroutine
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import Any, Protocol
 
 from . import executor, npc_tools
 from .budget import Budget
@@ -36,8 +36,9 @@ from .llm import (
     ToolResult,
 )
 from .memory import Entry, MemoryStore, NpcMemory
-from .persona import Persona, PersonaProvider
+from .persona import MOOD_DELIVERY, Persona, PersonaProvider
 from .protocol import (
+    MOODS,
     ChatStatus,
     ChatStatusCmd,
     ChatTextCmd,
@@ -45,6 +46,7 @@ from .protocol import (
     HushCmd,
     LineStarted,
     MemoryCmd,
+    Mood,
     SayAudioCmd,
     SayCmd,
     SayEndCmd,
@@ -59,6 +61,7 @@ log = logging.getLogger(__name__)
 
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
+PREPARE_S = 3.0  # what an extension asks the game before a turn
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
 
@@ -181,6 +184,90 @@ class SentenceSplitter:
         return parts
 
 
+# The model starts a reply (or a sentence where the mood changes) with a tag: "[angry] Опять ты?". Russian
+# words and near synonyms are taken too: the model sometimes writes them.
+MOOD_TAG_MAX = 24  # longer text in square brackets is not a tag
+_MOOD_ALIASES: dict[str, Mood] = {
+    "calm": "neutral",
+    "спокойно": "neutral",
+    "спокойствие": "neutral",
+    "нейтрально": "neutral",
+    "happy": "friendly",
+    "smile": "friendly",
+    "дружелюбно": "friendly",
+    "приветливо": "friendly",
+    "радость": "friendly",
+    "улыбка": "friendly",
+    "anger": "angry",
+    "злость": "angry",
+    "гнев": "angry",
+    "сердито": "angry",
+    "раздражение": "angry",
+    "враждебно": "hostile",
+    "угроза": "hostile",
+    "презрение": "hostile",
+    "fear": "afraid",
+    "scared": "afraid",
+    "страх": "afraid",
+    "испуг": "afraid",
+    "испуганно": "afraid",
+    "hurt": "pain",
+    "боль": "pain",
+}
+
+
+def mood_of(tag: str) -> Mood | None:
+    t = tag.strip().lower()
+    for mood in MOODS:
+        if t == mood:
+            return mood
+    return _MOOD_ALIASES.get(t)
+
+
+@dataclass(frozen=True)
+class MoodTag:
+    mood: Mood
+
+
+class MoodTags:
+    """Takes mood tags out of the model's streamed text: the text goes on to the chat and the voice, a tag
+    becomes the mood of the lines after it. Other short text in square brackets is a stage direction and
+    is not said either. A tag split between two pieces of the stream waits for its end."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, text: str) -> list[str | MoodTag]:
+        self._buf += text
+        out: list[str | MoodTag] = []
+        while self._buf:
+            i = self._buf.find("[")
+            if i < 0:
+                out.append(self._buf)
+                self._buf = ""
+                break
+            if i > 0:
+                out.append(self._buf[:i])
+                self._buf = self._buf[i:]
+            j = self._buf.find("]")
+            if j < 0:
+                if len(self._buf) <= MOOD_TAG_MAX + 1:
+                    break  # the rest of the tag has not come yet
+                out.append("[")  # too long for a tag: plain text
+                self._buf = self._buf[1:]
+                continue
+            tag, self._buf = self._buf[1:j], self._buf[j + 1 :]
+            if len(tag) > MOOD_TAG_MAX:
+                out.append(f"[{tag}]")
+            elif (mood := mood_of(tag)) is not None:
+                out.append(MoodTag(mood))
+        return out
+
+    def flush(self) -> list[str | MoodTag]:
+        rest, self._buf = self._buf, ""
+        return [rest] if rest else []
+
+
 # --- conversation -------------------------------------------------------------------
 
 
@@ -227,6 +314,25 @@ class Conversation:
         return [t for t in (self.reply, self.compacting, self.voicing, *self.actions) if t is not None]
 
 
+class TurnExtension(Protocol):
+    """More of the world for the conversational model (the director's quests, quests.py; the scripts'
+    quests, vanilla.py): lines for the situation, tools to offer, and the handling of their calls."""
+
+    async def prepare(self, npc: str) -> None:
+        """Before a turn: what the situation and the tools need from the game."""
+        ...
+
+    def situation(self, npc: str) -> str | None: ...
+
+    def tools(self, npc: str) -> list[Tool]: ...
+
+    async def handle(
+        self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
+    ) -> ToolOutcome | None:
+        """The outcome of a call this extension knows, None for other calls."""
+        ...
+
+
 class DialogueManager:
     """Turns of the npc's conversational model. One reply in flight per npc; new player text interrupts it.
 
@@ -265,6 +371,7 @@ class DialogueManager:
         self.free_body: Callable[[str, str], None] | None = None
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
+        self.extensions: list[TurnExtension] = []
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -399,6 +506,8 @@ class DialogueManager:
         conv = self.conversations.get(npc.upper())
         if conv is None:
             raise KeyError(f"no conversation with {npc}")
+        # square brackets are remarks about what really happens: the hero's words can't pass for one
+        text = text.replace("[", "(").replace("]", ")")
         return self._start_reply(conv, text, overlay=overlay, body=body)
 
     def _cancel(self, conv: Conversation) -> None:
@@ -470,6 +579,23 @@ class DialogueManager:
             self._note(conv, f"Герой перебил тебя{f'; ты успел сказать: «{spoken}»' if spoken else ''}")
         return True
 
+    def remember(self, npc: str, name: str, text: str) -> None:
+        """A remark in the memory of any npc, also one nobody talks to (a rumor, something it saw)."""
+        self._note(self.open(npc, name), text)
+
+    def change_intent(self, npc: str, name: str, **fields: Any) -> None:
+        """Change what the npc wants or how it sees the hero, from outside a turn (a lie found out)."""
+        conv = self.open(npc, name)
+        self._change_intent(conv, replace(conv.intent, **fields), self.link.snapshots.get(conv.npc))
+
+    def after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
+        """For extensions: a body job once the npc has said its lines; its note goes into the history."""
+        self._after_speech(conv, job)
+
+    async def give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
+        """For extensions: hand an item over (give_item's checks are the caller's)."""
+        return await self._give(conv, call, snap)
+
     def overheard(self, npc: str, name: str, text: str, to_name: str | None) -> None:
         """A witness: the npc heard the hero say something to someone else (no model call, only memory)."""
         conv = self.open(npc, name)
@@ -518,7 +644,9 @@ class DialogueManager:
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
         await self.link.send(ChatStatusCmd(npc=conv.npc, status=status, detail=detail))
 
-    async def _say(self, conv: Conversation, text: str, reply: str, overlay: bool = False) -> None:
+    async def _say(
+        self, conv: Conversation, text: str, reply: str, overlay: bool = False, mood: Mood | None = None
+    ) -> None:
         text = to_game_text(text)
         if not text:
             return
@@ -531,22 +659,24 @@ class DialogueManager:
                 await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
                 conv.overlay_free_at = time.monotonic() + line_duration(text)
             await self.link.send(
-                SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None)
+                SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None, mood=mood)
             )
             return
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
-        conv.voice.put_nowait((line, text, reply, overlay))
+        conv.voice.put_nowait((line, text, reply, overlay, mood))
 
-    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str, bool]]) -> None:
+    async def _voice(
+        self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str, bool, Mood | None]]
+    ) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
         audio still goes out, silent. Lines said on the move are not ordered by the game: the next one
         waits until the previous has been said."""
         assert self.tts is not None
         while True:
-            line, text, reply, overlay = await queue.get()
+            line, text, reply, overlay, mood = await queue.get()
             started = False
             spoken_at = 0.0
             if overlay:
@@ -563,6 +693,7 @@ class DialogueManager:
                         text: str = text,
                         reply: str = reply,
                         overlay: bool = overlay,
+                        mood: Mood | None = mood,
                     ) -> None:
                         nonlocal started, spoken_at
                         if line in conv.hushed:
@@ -578,6 +709,7 @@ class DialogueManager:
                                 rate=rate,
                                 reply=reply,
                                 overlay=overlay or None,
+                                mood=mood,
                             )
                         )
 
@@ -589,7 +721,14 @@ class DialogueManager:
                         )
 
                     try:
-                        speech = await self.tts.stream(text, conv.npc, conv.persona.voice, start, chunk)
+                        speech = await self.tts.stream(
+                            text,
+                            conv.npc,
+                            conv.persona.voice,
+                            start,
+                            chunk,
+                            MOOD_DELIVERY[mood] if mood else "",
+                        )
                         await self.link.send(
                             SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
                         )
@@ -620,7 +759,14 @@ class DialogueManager:
                     if overlay:
                         conv.overlay_free_at = time.monotonic() + line_duration(text)
                     await self.link.send(
-                        SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None)
+                        SayCmd(
+                            npc=conv.npc,
+                            line=line,
+                            text=text,
+                            reply=reply,
+                            overlay=overlay or None,
+                            mood=mood,
+                        )
                     )
             except GameError:
                 pass
@@ -698,6 +844,14 @@ class DialogueManager:
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         snap = self.link.snapshots.get(conv.npc)
         situation_text = npc_tools.render_situation(snap, conv.intent)
+        for ext in self.extensions:
+            try:
+                await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
+            except (GameError, TimeoutError) as err:
+                log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
+        for ext in self.extensions:
+            if extra := ext.situation(conv.npc):
+                situation_text += "\n" + extra
         if body:
             situation_text += f"\nТвоё тело сейчас: {body} — это уже происходит, не противоречь этому."
         if conv.pending:  # events that came during the last turn
@@ -709,7 +863,7 @@ class DialogueManager:
         state = TurnState(
             relevant=relevant,
             overlay=overlay,
-            tools=self.tools if tools is None else tools,
+            tools=self._offered(conv.npc) if tools is None else tools,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
@@ -839,7 +993,7 @@ class DialogueManager:
                 first = first if first is not None else now - started
                 if state.first_delta is None:
                     state.first_delta = now - state.started
-                state.text += event.text
+                pieces = self._spoken(state, state.moods.feed(event.text))
                 # the chat shows the reply as it is written
                 if (
                     now - state.shown_at >= CHAT_TEXT_EVERY
@@ -847,8 +1001,8 @@ class DialogueManager:
                 ):
                     state.shown, state.shown_at = shown, now
                     await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
-                for line in state.splitter.feed(event.text):
-                    await self._line(conv, state, line)
+                await self._feed_lines(conv, state, pieces)
+            await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
             for line in state.splitter.flush():
                 await self._line(conv, state, line)
         finally:
@@ -857,10 +1011,37 @@ class DialogueManager:
             raise LLMError(f"{self.llm.name}: the stream ended without a result", retryable=True)
         return done
 
+    @staticmethod
+    def _spoken(state: TurnState, pieces: list[str | MoodTag]) -> list[str | MoodTag]:
+        """What the model wrote, without its tags, goes to the turn's text (what is shown and remembered)."""
+        out: list[str | MoodTag] = []
+        for p in pieces:
+            if isinstance(p, str):
+                if not state.text or state.text[-1].isspace():
+                    p = p.lstrip()  # no double space where a tag was taken out
+                if not p:
+                    continue
+                state.text += p
+            out.append(p)
+        return out
+
+    async def _feed_lines(self, conv: Conversation, state: TurnState, pieces: list[str | MoodTag]) -> None:
+        """Lines as they complete. A new mood starts a new line: what was said before the tag goes out
+        with the old mood (short sentences are not merged across it)."""
+        for p in pieces:
+            if isinstance(p, MoodTag):
+                if p.mood != state.mood:
+                    for line in state.splitter.flush():
+                        await self._line(conv, state, line)
+                    state.mood = p.mood
+                continue
+            for line in state.splitter.feed(p):
+                await self._line(conv, state, line)
+
     async def _line(self, conv: Conversation, state: TurnState, line: str) -> None:
         if state.first_line is None:
             state.first_line = time.monotonic() - state.started
-        await self._say(conv, line, state.reply, state.overlay)
+        await self._say(conv, line, state.reply, state.overlay, state.mood)
 
     async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
         """Handle a call of the model. Checks run here, against what the npc has and sees: a rejection
@@ -889,7 +1070,14 @@ class DialogueManager:
                 give = ToolCall(call.name, args, call.call_id)
                 self._after_speech(conv, lambda: self._give(conv, give, snap))
                 return ToolOutcome("Принято: отдашь после реплики.", "accepted")
+        for ext in self.extensions:
+            if (outcome := await ext.handle(self, conv, call, snap)) is not None:
+                return outcome
         return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
+
+    def _offered(self, npc: str) -> list[Tool]:
+        """The tools for a turn with the hero: the npc's own and those of the extensions."""
+        return [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
 
     def _recall(self, conv: Conversation, query: str) -> str:
         """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded)."""
@@ -1005,6 +1193,8 @@ class TurnState:
     reply: str  # chat entry id of this turn's text
     splitter: SentenceSplitter
     started: float
+    moods: MoodTags = field(default_factory=MoodTags)
+    mood: Mood | None = None  # of the lines being said (the model's last tag)
     text: str = ""  # everything said in the turn, all steps
     shown: str = ""
     shown_at: float = 0.0

@@ -3,6 +3,7 @@
 #include <Tempest/Matrix4x4>
 
 #include "graphics/mesh/animationsolver.h"
+#include "graphics/mesh/lipsync.h"
 #include "game/constants.h"
 #include "meshobjects.h"
 #include "effect.h"
@@ -102,7 +103,12 @@ class MdlVisual final {
     bool                           startAnimDialog(Npc& npc);
     void                           startMMAnim    (Npc& npc, std::string_view anim, std::string_view node);
     void                           startFaceAnim  (Npc& npc, std::string_view anim, float intensity, uint64_t duration);
+    float                          faceWeight     (std::string_view anim) { return head.view.morphWeight(anim); }
     void                           stopDlgAnim    (Npc& npc);
+    // a voiced line: the mouth follows the voice instead of the talk loop
+    void                           startSpeech    (Npc& npc, std::shared_ptr<LipSync::Track> voice);
+    void                           stopSpeech     () { mouth.stop(); }
+    void                           updateMouth    (Npc& npc, uint64_t dt);
     void                           stopAnim       (Npc& npc, std::string_view anim);
     bool                           stopItemStateAnim(Npc &npc);
     void                           stopWalkAnim   (Npc &npc);
@@ -161,6 +167,7 @@ class MdlVisual final {
     MeshObjects::Mesh              view;
 
     MeshAttach                     head, sword, bow, shield;
+    LipSync                        mouth;
     MeshAttach                     ammunition, stateItm;
     std::vector<MeshAttach>        item;
     std::vector<MeshAttach>        attach;

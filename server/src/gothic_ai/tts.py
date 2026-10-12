@@ -46,7 +46,7 @@ class TtsClient:
         self._lock = asyncio.Lock()
         self._ids = itertools.count(1)
 
-    async def speak(self, text: str, voice_id: str, description: str) -> Speech:
+    async def speak(self, text: str, voice_id: str, description: str, style: str = "") -> Speech:
         """The whole line as a WAV file."""
         pcm = bytearray()
         rate = 0
@@ -58,13 +58,20 @@ class TtsClient:
         async def chunk(data: bytes) -> None:
             pcm.extend(data)
 
-        s = await self.stream(text, voice_id, description, start, chunk)
+        s = await self.stream(text, voice_id, description, start, chunk, style)
         return Speech(_wav(bytes(pcm), rate), s.audio_s, s.provider, s.latency_s, s.first_chunk_s)
 
     async def stream(
-        self, text: str, voice_id: str, description: str, on_start: StartCallback, on_chunk: ChunkCallback
+        self,
+        text: str,
+        voice_id: str,
+        description: str,
+        on_start: StartCallback,
+        on_chunk: ChunkCallback,
+        style: str = "",
     ) -> Speech:
-        """Speak `text`, passing audio on as it is generated (`on_start` comes before the first chunk)."""
+        """Speak `text`, passing audio on as it is generated (`on_start` comes before the first chunk).
+        `style`: how to say it, in English ("say angrily"); empty for the voice's usual manner."""
         async with self._lock:
             started = time.monotonic()
             try:
@@ -72,17 +79,15 @@ class TtsClient:
                     self._ws = await connect(self.url, open_timeout=3, max_size=2**22)
                 ws = self._ws
                 req = str(next(self._ids))
-                await ws.send(
-                    json.dumps(
-                        {
-                            "type": "speak",
-                            "id": req,
-                            "text": text,
-                            "voice": {"id": voice_id, "description": description},
-                        },
-                        ensure_ascii=False,
-                    )
-                )
+                request = {
+                    "type": "speak",
+                    "id": req,
+                    "text": text,
+                    "voice": {"id": voice_id, "description": description},
+                }
+                if style:
+                    request["style"] = style
+                await ws.send(json.dumps(request, ensure_ascii=False))
                 rate, provider, size, first = 0, "", 0, 0.0
                 while True:
                     msg = await asyncio.wait_for(ws.recv(), self.timeout)
