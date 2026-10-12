@@ -230,8 +230,10 @@ bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
   current.txt     = Gothic::inst().messageByName(msg);
   current.msgTime = Gothic::inst().messageTime(msg);
   current.time    = current.msgTime + (dlgAnimation ? ANIM_TIME*2 : 0);
-  currentSnd      = soundDevice.load(Resources::loadSoundBuffer(string_frm(msg,".wav")));
+  auto voice      = Resources::loadSoundBuffer(string_frm(msg,".wav"));
+  currentSnd      = soundDevice.load(voice);
   curentIsPl      = (pl==&npc);
+  npc.startSpeech(voice);
 
   currentSnd.play();
   npc.setAiOutputBarrier(current.msgTime,false);
@@ -401,6 +403,11 @@ void DialogMenu::skipPhrase() {
       pl->setAiOutputBarrier(0,false);
     if(other!=nullptr)
       other->setAiOutputBarrier(0,false);
+    // the voice is cut off: so is the mouth
+    if(pl!=nullptr)
+      pl->stopSpeech();
+    if(other!=nullptr)
+      other->stopSpeech();
     currentSnd   = SoundEffect();
     current.time = 1;
     }

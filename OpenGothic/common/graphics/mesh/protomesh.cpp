@@ -2,6 +2,9 @@
 
 #include <Tempest/Log>
 
+#include <algorithm>
+#include <cmath>
+
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/physicmeshshape.h"
@@ -383,5 +386,20 @@ ProtoMesh::Morph ProtoMesh::mkAnimation(const zenkit::MorphAnimation& a) {
 
   if(ret.tickPerFrame==0)
     ret.tickPerFrame = 1;
+
+  // how far each frame moves the vertices on average (lip sync picks mouth shapes by it)
+  float maxStrength = 0;
+  ret.strength.resize(ret.numFrames);
+  for(size_t f=0; f<ret.numFrames && ret.samplesPerFrame>0; ++f) {
+    float sum = 0;
+    for(size_t i=0; i<ret.samplesPerFrame; ++i) {
+      auto& s = a.samples[f*ret.samplesPerFrame+i];
+      sum += std::sqrt(s.x*s.x + s.y*s.y + s.z*s.z);
+      }
+    ret.strength[f] = sum/float(ret.samplesPerFrame);
+    maxStrength     = std::max(maxStrength, ret.strength[f]);
+    }
+  for(auto& i:ret.strength)
+    i = maxStrength>0 ? i/maxStrength : 0;
   return ret;
   }

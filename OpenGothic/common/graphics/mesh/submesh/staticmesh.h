@@ -4,6 +4,8 @@
 #include <Tempest/IndexBuffer>
 #include <Tempest/Device>
 
+#include <vector>
+
 #include "graphics/material.h"
 #include "graphics/bounds.h"
 
@@ -37,6 +39,7 @@ class StaticMesh {
       uint64_t               duration        = 0;
 
       size_t                 index           = 0;
+      std::vector<float>     strength;  // per frame: how far it moves the vertices, the strongest frame is 1
       };
 
     struct MorphAnim {

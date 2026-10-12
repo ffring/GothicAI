@@ -24,3 +24,5 @@ Keep these when updating a library from upstream.
 
 - `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_BACKGROUND=1` starts the app without taking the
   focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
+- `Tempest/Engine/sound/sound.{h,cpp}`: `Sound::samples16` gives the decoded samples of a sound (lip sync
+  measures the loudness of a voice line, `common/graphics/mesh/lipsync.cpp`).

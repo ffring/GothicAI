@@ -1031,6 +1031,18 @@ void Npc::startFaceAnim(std::string_view anim, float intensity, uint64_t duratio
   visual.startFaceAnim(*this,anim,intensity,duration);
   }
 
+void Npc::startSpeech(const Tempest::Sound& voice) {
+  visual.startSpeech(*this,LipSync::Track::fromSound(voice));
+  }
+
+void Npc::startSpeech(std::shared_ptr<LipSync::Track> voice) {
+  visual.startSpeech(*this,std::move(voice));
+  }
+
+void Npc::stopSpeech() {
+  visual.stopSpeech();
+  }
+
 bool Npc::stopItemStateAnim() {
   return visual.stopItemStateAnim(*this);
   }
@@ -2352,6 +2364,7 @@ void Npc::tick(uint64_t dt) {
   assert(go2.flag!=GoToHint::GT_Enemy && go2.flag!=GoToHint::GT_EnemyG);
 
   tickAnimationTags();
+  visual.updateMouth(*this,dt);
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);

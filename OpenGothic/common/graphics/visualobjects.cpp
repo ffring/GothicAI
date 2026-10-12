@@ -1,6 +1,7 @@
 #include "visualobjects.h"
 
 #include <Tempest/Log>
+#include <algorithm>
 #include <cassert>
 
 #include "graphics/mesh/submesh/animmesh.h"
@@ -100,6 +101,11 @@ void VisualObjects::Item::setWind(zenkit::AnimationType m, float intensity) {
 void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil) {
   if(owner!=nullptr)
     owner->startMMAnim(id, anim, intensity, timeUntil);
+  }
+
+void VisualObjects::Item::setMMShape(std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
+  if(owner!=nullptr)
+    owner->setMMShape(id, anim, frame0, frame1, alpha, intensity);
   }
 
 const Material& VisualObjects::Item::material() const {
@@ -399,6 +405,7 @@ void VisualObjects::startMMAnim(size_t i, std::string_view animName, float inten
       continue;
     i.timeUntil = timeUntil;
     i.intensity = intensity;
+    i.manual    = false;
     return;
     }
 
@@ -411,6 +418,7 @@ void VisualObjects::startMMAnim(size_t i, std::string_view animName, float inten
     i.id        = id;
     i.timeUntil = timeUntil;
     i.intensity = intensity;
+    i.manual    = false;
     return;
     }
 
@@ -426,6 +434,54 @@ void VisualObjects::startMMAnim(size_t i, std::string_view animName, float inten
   ani.timeStart = scene.tickCount;
   ani.timeUntil = timeUntil;
   ani.intensity = intensity;
+  ani.manual    = false;
+  }
+
+void VisualObjects::setMMShape(size_t i, std::string_view animName, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
+  auto& obj        = objects[i];
+  auto  staticMesh = obj.bucketId->staticMesh;
+  if(staticMesh==nullptr || staticMesh->morph.anim==nullptr)
+    return;
+
+  auto&  anim = *staticMesh->morph.anim;
+  size_t id   = size_t(-1);
+  for(size_t r=0; r<anim.size(); ++r)
+    if(anim[r].name==animName) {
+      id = r;
+      break;
+      }
+  if(id==size_t(-1) || anim[id].numFrames==0)
+    return;
+
+  // the layer of the anim, or a free slot, or the oldest one
+  auto&      m    = anim[id];
+  MorphAnim* slot = nullptr;
+  for(auto& a:obj.morphAnim)
+    if(a.timeUntil>=scene.tickCount && anim[a.id].layer==m.layer) {
+      slot = &a;
+      break;
+      }
+  for(auto& a:obj.morphAnim)
+    if(slot==nullptr && a.timeUntil<scene.tickCount)
+      slot = &a;
+  if(slot==nullptr) {
+    slot = &obj.morphAnim[0];
+    for(auto& a:obj.morphAnim)
+      if(a.timeStart<slot->timeStart)
+        slot = &a;
+    }
+
+  const uint32_t last = uint32_t(m.numFrames-1);
+  if(slot->id!=id || slot->timeUntil<scene.tickCount)
+    slot->timeStart = scene.tickCount;
+  slot->id        = id;
+  slot->timeUntil = scene.tickCount + 250;  // the owner sets the shape every frame; if it stops, the shape goes
+  slot->intensity = std::clamp(intensity, 0.f, 1.f);
+  slot->manual    = true;
+  slot->frame0    = std::min(frame0, last);
+  slot->frame1    = std::min(frame1, last);
+  slot->alpha     = std::clamp(alpha, 0.f, 1.f);
+  objectsMorph.insert(i);
   }
 
 void VisualObjects::setAsGhost(size_t id, bool g) {
@@ -533,10 +589,18 @@ void VisualObjects::preFrameUpdateMorph() {
         continue;
         }
 
-      if(anim.numFrames>1)
+      if(anim.numFrames>1 || ani.manual)
         reschedule = true;
 
       const uint32_t samplesPerFrame = uint32_t(anim.samplesPerFrame);
+      if(ani.manual) {
+        data.morph[i].indexOffset = uint32_t(anim.index);
+        data.morph[i].sample0     = ani.frame0*samplesPerFrame;
+        data.morph[i].sample1     = ani.frame1*samplesPerFrame;
+        data.morph[i].alpha       = uint16_t(ani.alpha*uint16_t(-1));
+        data.morph[i].intensity   = uint16_t(intensity*uint16_t(-1));
+        continue;
+        }
       data.morph[i].indexOffset = uint32_t(anim.index);
       data.morph[i].sample0     = uint32_t((time/anim.tickPerFrame+0)%anim.numFrames)*samplesPerFrame;
       data.morph[i].sample1     = uint32_t((time/anim.tickPerFrame+1)%anim.numFrames)*samplesPerFrame;

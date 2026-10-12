@@ -42,6 +42,7 @@ class VisualObjects final {
       void     setFatness  (float f);
       void     setWind     (zenkit::AnimationType m, float intensity);
       void     startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
+      void     setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
 
       const Material&    material() const;
       const Bounds&      bounds()   const;
@@ -97,6 +98,10 @@ class VisualObjects final {
       uint64_t timeStart = 0;
       uint64_t timeUntil = 0;
       float    intensity = 0;
+      bool     manual    = false;  // frames set by the owner (setMMShape) instead of played in time
+      uint32_t frame0    = 0;
+      uint32_t frame1    = 0;
+      float    alpha     = 0;
       };
 
     struct Object {
@@ -133,6 +138,7 @@ class VisualObjects final {
     uint32_t clusterId(const DrawBuckets::Bucket& bucket, size_t firstMeshlet, size_t meshletCount, uint16_t bucketId, uint16_t commandId);
 
     void     startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil);
+    void     setMMShape (size_t i, std::string_view animName, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
     void     setAsGhost(size_t i, bool g);
 
     void     notifyTlas(const Material& m, RtScene::Category cat);

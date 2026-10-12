@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Tempest/IDevice>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -18,6 +19,9 @@ class Sound final {
 
     bool     isEmpty() const;
     uint64_t timeLength() const;
+
+    // decoded 16-bit samples, channels interleaved; nullptr for an empty or 8-bit sound
+    const int16_t* samples16(size_t& count, uint16_t& channels, uint32_t& frequency) const;
 
   private:
     struct Header;

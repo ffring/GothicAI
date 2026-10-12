@@ -1284,7 +1284,9 @@ bool GameScript::aiOutput(Npc &npc, std::string_view outputname, bool overlay) {
   string_frm name(outputname,".WAV");
   uint64_t   dt = 0;
 
-  world().addDlgSound(name, npc.mapHeadBone(), WorldSound::talkRange, dt);
+  std::shared_ptr<LipSync::Track> voice;
+  world().addDlgSound(name, npc.mapHeadBone(), WorldSound::talkRange, dt, &voice);
+  npc.startSpeech(std::move(voice));
   npc.setAiOutputBarrier(messageTime(outputname),overlay);
 
   return true;

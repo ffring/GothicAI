@@ -827,7 +827,9 @@ void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
   lines.lookup(line,text,time);  // starts it: voice stream, subtitle, line_started
   if(!l->wav.empty()) {
     uint64_t len = 0;
-    world.addDlgSound(line + ".WAV",npc->mapHeadBone(),WorldSound::talkRange,len);
+    std::shared_ptr<LipSync::Track> lips;
+    world.addDlgSound(line + ".WAV",npc->mapHeadBone(),WorldSound::talkRange,len,&lips);
+    npc->startSpeech(std::move(lips));
     }
   npc->startFaceAnim("VISEME",1,time);
   // it looks at the hero while it speaks, and the hero at it (a line in the queue does that itself)
@@ -869,6 +871,7 @@ void AiBridge::Impl::startVoice(const LineLibrary::Line& line) {
     v.effect.setMaxDistance(WorldSound::talkRange);
     v.effect.setVolume(2.f);  // as WorldSound does for dialog speech
     v.effect.play();
+    npc->startSpeech(line.voice->lipTrack());  // the mouth follows what the audio thread plays
     }
   Log::i("[ai] voice ",line.id," starts with ",line.voice->durationMs()," ms of audio",
          line.voice->isFinished() ? " (complete)" : " (streaming)");

@@ -21,6 +21,9 @@ Four legs: `quad-wolf` (the player as a wolf on 6 slopes), `quad-zoo` (molerat, 
 lurker, giant bug, sheep on 2 slopes each). The player becomes the creature (`transform`), so the
 usual player commands drive it. Gaze: `gaze` (Xardas and the hero talk; the hero stands in front,
 goes around him, behind his back and back; then Xardas at his bookstand turns the head only).
+Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
+with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
+the first choice: the lines of both are played the way the game plays them).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -62,6 +65,8 @@ git worktree remove --force /tmp/before
   under a planted foot, yellow under a swinging one; the short line is the ground normal;
 - bottom right: the feet zoomed in;
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
+- lips (under the gaze text): `F` the two mouth shapes (VISEME frames) mixed with `A`, intensity `I`;
+  the thin white bar is the voice, the thick blue one how wide the mouth is shown;
 - gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
@@ -81,6 +86,8 @@ git worktree remove --force /tmp/before
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
 | `gaze_jerk` | the gaze turns more than 8 degrees in one frame |
+| `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
+| `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -88,7 +95,8 @@ the threshold: a foot leaving the ground a frame early is not visible.
 Columns of the table: `contact` is the error of planted feet against a flat animation floor (only
 meaningful with IK on); `spread` is how much the height of planted feet above the ground varies (works
 for a body tilted as a whole too: compare IK off and on); `limp` is how much lower the body is on the
-steps of one leg of a pair than on the other's. `gaze err` is the angle between where the face looks and
+steps of one leg of a pair than on the other's. `lips corr` is the correlation of the voice level and
+the shown mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `gaze err` is the angle between where the face looks and
 the partner, while the partner is within reach of the turn.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
@@ -125,6 +133,11 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
 | `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
 | `gazeinfo` | gaze state of the watched npc to `bench.log` |
+| `cam face <dist> [angle] [height]` | close to the face of the watched one, looking at the mouth; `angle` from its facing |
+| `speak <npc\|nearest\|player> <output name>` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script |
+| `dialog <npc\|nearest>` | the hero talks to it, as with the action key: the dialog window opens |
+| `choose <n>` | runs the n-th choice (from 1) of the dialog with the watched npc, as if the player picked it |
+| `lips on\|off`, `lips param <name> <value>`, `lips params` | lip sync (off: the old talk loop) and its parameters |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
@@ -139,6 +152,6 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 ## Engine side
 
 `OpenGothic/common/testbench.cpp`, inert unless `OPENGOTHIC_BENCH` is set. Hooks: the fixed time step and
-the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `Camera::setNearClip`
+the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `LipSync::subjectProbe` (the mouth), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

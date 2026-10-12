@@ -18,6 +18,7 @@
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
+#include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -261,6 +262,7 @@ enum CamMode : uint8_t {
   C_Follow, // around the player, relative to its facing
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
+  C_Face,   // close to the face, relative to the facing of the body
   };
 
 struct Hold {
@@ -504,10 +506,18 @@ void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
   if(bench.cam==C_Game)
     return;
-  const Vec3 tgt = pl.position() + Vec3(0,bench.camLook,0);
-  Vec3       org = bench.camPos;
+  Vec3 tgt = pl.position() + Vec3(0,bench.camLook,0);
+  Vec3 org = bench.camPos;
   if(bench.cam==C_Follow || bench.cam==C_World)
     org = camOrigin(w,pl,bench.camAngle);
+  if(bench.cam==C_Face) {
+    // the mouth (a bit above the head bone), seen from the front or at an angle
+    const Vec3  f    = facing(pl);
+    const Vec3  side = {-f.z,0,f.x};
+    const float b    = bench.camAngle*float(M_PI)/180.f;
+    tgt = pl.mapHeadBone() + Vec3(0,bench.camLook,0);
+    org = tgt + (f*std::cos(b) + side*std::sin(b))*bench.camDist + Vec3(0,bench.camHeight,0);
+    }
   lookFrom(org,tgt);
   if(bench.clip>0)
     if(auto cam = Gothic::inst().camera())
@@ -532,6 +542,7 @@ void writeHeader() {
       std::fprintf(bench.csv,",%s_%s_x,%s_%s_y,%s_%s_z",s,j,s,j,s,j);
     }
   std::fprintf(bench.csv,",g_on,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,pg_on,pg_w,pg_err,pg_yaw");
+  std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -561,6 +572,11 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%.3f,%.2f,%.2f",
                int(g.active),g.weight,g.error,g.yaw,g.pitch,g.yawGoal,g.pitchGoal,g.headYaw,g.chestYaw,g.waistYaw,
                int(pg.active),pg.weight,pg.error,pg.yaw);
+  // lips of the watched one
+  const auto& lp = LipSync::subjectProbe;
+  std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
+               int(lp.valid),int(lp.active),(unsigned long long)lp.time,lp.level,lp.mouth,lp.open,
+               lp.shape.frame0,lp.shape.frame1,lp.shape.alpha,lp.shape.intensity,lp.picks);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -749,6 +765,14 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else if(m=="fixed") {
       bench.cam = C_Fixed;
       }
+    else if(m=="face") {
+      // cam face <dist> [angle] [height]: close to the face of the watched one, looking at the mouth
+      bench.cam       = C_Face;
+      bench.camDist   = num(a,2,60);
+      bench.camAngle  = num(a,3,0);
+      bench.camHeight = num(a,4,0);
+      bench.camLook   = 5;
+      }
     else if(m=="look") {
       bench.camLook = num(a,2,45);
       }
@@ -859,11 +883,58 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     pl.setTalkPartner(n,ms);
     say("talk " + std::string(n->displayName()) + " " + std::to_string(ms));
     }
+  else if(c=="speak") {
+    // speak <npc|nearest|player> <output name>: it says a voiced line of the game, like AI_Output in a script
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || a.size()<3) {
+      say("speak: no npc or line " + line);
+      return;
+      }
+    Npc& to = (n==&pl) ? subjectOf(pl) : pl;
+    n->aiPush(AiQueue::aiOutput(to,a[2],0));
+    say("speak " + std::string(n->displayName()) + " " + a[2]);
+    }
+  else if(c=="dialog") {
+    // dialog <npc|nearest>: the hero talks to it, as with the action key (important infos start by themselves)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("dialog: no npc " + line);
+      return;
+      }
+    n->startDialog(pl);
+    say("dialog " + std::string(n->displayName()));
+    }
+  else if(c=="choose") {
+    // choose <n>: runs the n-th dialog choice (from 1, as listed) of the watched npc, as if the player picked it
+    Npc&       n   = subjectOf(pl);
+    auto       chs = w.script().dialogChoices(pl.handlePtr(),n.handlePtr(),{},false);
+    std::sort(chs.begin(),chs.end(),[](const GameScript::DlgChoice& l, const GameScript::DlgChoice& r){ return l.sort<r.sort; });
+    const size_t i = size_t(num(a,1,1));
+    if(i<1 || i>chs.size()) {
+      say("choose: no choice " + std::to_string(i) + " of " + std::to_string(chs.size()));
+      return;
+      }
+    say("choose " + std::to_string(i) + " of " + std::to_string(chs.size()));
+    Gothic::inst().dialogExec(chs[i-1],pl,n);
+    }
+  else if(c=="lips") {
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      LipSync::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(LipSync::setParam(a[2],num(a,3,0)) ? "lips param " : "lips: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("lips params: " + LipSync::paramList());
+    else
+      say("unknown lips command: " + line);
+    }
   else if(c=="watch") {
     // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
     bench.subject  = (n==&pl) ? nullptr : n;
     Gaze::probeNpc = bench.subject;
+    LipSync::probeNpc     = n;
+    LipSync::subjectProbe = LipSync::Probe();
     char buf[160] = "watch nobody";
     if(n!=nullptr)
       if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
@@ -1135,6 +1206,20 @@ void drawOverlay(Pixmap& pm) {
     std::snprintf(buf,sizeof(buf),"H%.0f C%.0f W%.0f",double(g.headYaw),double(g.chestYaw),double(g.waistYaw));
     cv.text(x,y,buf,2,{255,230,40,255});
     y += 16;
+    }
+  // lips: shapes and intensity, then the voice (thin bar) and the mouth as shown (thick bar)
+  const auto& lp = LipSync::subjectProbe;
+  if(lp.valid && LipSync::probeNpc!=nullptr) {
+    const Rgba c = {120,230,255,255};
+    std::snprintf(buf,sizeof(buf),"LIPS %s F%u F%u A%.1f I%.2f",lp.active ? "ON" : "OFF",lp.shape.frame0,lp.shape.frame1,
+                  double(lp.shape.alpha),double(lp.shape.intensity));
+    cv.text(x,y,buf,2,c);
+    y += 16;
+    const int bw = 160;
+    cv.rect(x,y,bw,14,Shade);
+    cv.rect(x,y+1,int(float(bw)*std::clamp(lp.level,0.f,1.f)),3,{255,255,255,255});
+    cv.rect(x,y+6,int(float(bw)*std::clamp(lp.open,0.f,1.f)),7,c);
+    y += 20;
     }
   if(bench.occl!=0) {
     std::snprintf(buf,sizeof(buf),"HIDDEN %s%s",(bench.occl&1) ? "L" : "",(bench.occl&2) ? "R" : "");

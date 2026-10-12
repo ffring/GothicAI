@@ -178,7 +178,8 @@ class World final {
     bool                 isInSfxRange(const Tempest::Vec3& pos) const;
     bool                 isInPfxRange(const Tempest::Vec3& pos) const;
 
-    void                 addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t &timeLen);
+    void                 addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t &timeLen,
+                                     std::shared_ptr<LipSync::Track>* voice = nullptr);
 
     Sound                addWeaponHitEffect(Npc&         src, const Bullet* srcArrow, Npc&  reciver);
     Sound                addWeaponBlkEffect(ItemMaterial src, ItemMaterial          reciver, const Tempest::Matrix4x4& pos);

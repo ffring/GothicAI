@@ -10,6 +10,7 @@
 #include "world/triggers/abstracttrigger.h"
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
+#include "graphics/mesh/lipsync.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -154,6 +155,7 @@ Marvin::Marvin() {
     {"toggle pathtrace",           C_TogglePathtrace},
     {"toggle footik",              C_ToggleFootIk},
     {"toggle gaze",                C_ToggleGaze},
+    {"toggle lipsync",             C_ToggleLipSync},
     };
   }
 
@@ -494,6 +496,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleGaze:
       Gaze::setEnabled(!Gaze::isEnabled());
+      return true;
+    case C_ToggleLipSync:
+      LipSync::setEnabled(!LipSync::isEnabled());
       return true;
     }
 

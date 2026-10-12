@@ -81,6 +81,11 @@ void MeshObjects::Mesh::startMMAnim(std::string_view anim, float intensity, uint
     sub[i].startMMAnim(anim,intensity,timeUntil);
   }
 
+void MeshObjects::Mesh::setMMShape(std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
+  for(size_t i=0;i<subCount;++i)
+    sub[i].setMMShape(anim,frame0,frame1,alpha,intensity);
+  }
+
 Bounds MeshObjects::Mesh::bounds() const {
   if(subCount==0)
     return Bounds();

@@ -1009,12 +1009,39 @@ void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) 
   }
 
 void MdlVisual::startFaceAnim(Npc& npc, std::string_view anim, float intensity, uint64_t duration) {
+  // a voiced line moves the mouth itself: no talk loop over it
+  if(anim=="VISEME" && duration!=0 && mouth.isSpeaking(npc.world().tickCount()))
+    return;
   if(duration!=uint64_t(-1) && duration!=0)
     duration += npc.world().tickCount();
   head.view.startMMAnim(anim,intensity,duration);
   }
 
+void MdlVisual::startSpeech(Npc& npc, std::shared_ptr<LipSync::Track> voice) {
+  if(voice==nullptr)
+    return;
+  // the mouth shapes of the head: a head without them gets the talk loop
+  std::vector<float> shapes;
+  if(auto proto = head.view.protoMesh())
+    for(auto& m:proto->morph)
+      if(m.name=="VISEME") {
+        shapes = m.strength;
+        break;
+        }
+  mouth.setShapes(std::move(shapes));
+  mouth.start(std::move(voice),npc.world().tickCount());
+  }
+
+void MdlVisual::updateMouth(Npc& npc, uint64_t dt) {
+  LipSync::Shape s;
+  if(mouth.update(npc.world().tickCount(),dt,s))
+    head.view.setMMShape("VISEME",s.frame0,s.frame1,s.alpha,s.intensity);
+  if(&npc==LipSync::probeNpc)
+    mouth.probe(LipSync::subjectProbe);
+  }
+
 void MdlVisual::stopDlgAnim(Npc& npc) {
+  mouth.stop();
   const uint16_t count = Gothic::inst().version().dialogGestureCount();
   for(uint16_t i=0; i<count; i++){
     char buf[32]={};

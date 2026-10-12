@@ -33,7 +33,11 @@ FLAGS = {
     "stretch":   (2.0, "cm",  "planted leg straight and still can not reach the ground"),
     "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
     "gaze_jerk": (8.0, "deg", "the gaze turned this much in one frame"),
+    "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
+    "lip_shut":  (0.7, "",    "the voice is loud but the mouth stays shut"),
 }
+LIPS = ("lip_open", "lip_shut")
+LIP_FRAMES = 4  # the mouth closes and opens over a frame or two: shorter runs are not flagged
 
 
 def num(v):
@@ -111,6 +115,12 @@ def frame_flags(prev2, prev, r):
             out.append(("gaze_off", "-", r["g_err"]))
         if prev is not None and "g_w" in prev:
             out.append(("gaze_jerk", "-", abs(r["g_yaw"] * r["g_w"] - prev["g_yaw"] * prev["g_w"])))
+    if r.get("lip_on", 0) > 0:
+        # the level the mouth aims at (the voice a moment ahead) against how wide it is shown
+        if r["lip_level"] < 0.05:
+            out.append(("lip_open", "-", r["lip_open"]))
+        if r["lip_open"] < 0.1:
+            out.append(("lip_shut", "-", r["lip_level"]))
     for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
@@ -212,12 +222,24 @@ def analyze(rows):
                   and abs(r.get("g_yawgoal", 0)) < 60)
     if gaze:
         stats["gaze_p90"] = gaze[int(len(gaze) * 0.9)]
+    # lips: how well the mouth follows the voice (correlation of the voice level and the shown opening)
+    lips = [(r["lip_level"], r["lip_open"]) for r in rows if r.get("lip_on", 0) > 0]
+    if len(lips) > 10:
+        n = len(lips)
+        ma = sum(a for a, _ in lips) / n
+        mb = sum(b for _, b in lips) / n
+        va = sum((a - ma) ** 2 for a, _ in lips)
+        vb = sum((b - mb) ** 2 for _, b in lips)
+        cov = sum((a - ma) * (b - mb) for a, b in lips)
+        if va > 0 and vb > 0:
+            stats["lip_corr"] = cov / math.sqrt(va * vb)
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
     # a contact error for a single frame at the start or the end of a step is not visible
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
+    events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
@@ -271,8 +293,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze err p90 deg | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze err p90 deg | lips corr | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -281,8 +303,9 @@ def report(out):
         limp = "-" if "limp" not in st else f"{st['limp']:.1f}"
         gap = "-" if "spread" not in st else f"{st['spread']:.1f}"
         gz = "-" if "gaze_p90" not in st else f"{st['gaze_p90']:.1f}"
+        lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gz} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gz} | {lc} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
