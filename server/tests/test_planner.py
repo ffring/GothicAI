@@ -523,3 +523,53 @@ def test_an_attack_on_someone_else_is_a_fight_nearby() -> None:
     assert normalize("monster_attack", "WOLF", "Волк", "Диего") == ("fight_nearby", "Волк attacks Диего")
     assert normalize("hero_attacked", "WOLF", "Волк", "PLAYER") == ("fight_nearby", "Волк attacks the hero")
     assert normalize("weapon_drawn", "PLAYER", None, None) == ("weapon_drawn", None)
+
+
+@pytest.mark.parametrize(
+    ("choice", "confidence", "verdict"),
+    [
+        ("fight", 0.9, "server"),
+        ("flee", 0.8, "server"),
+        ("call_help", 0.9, "scripts"),
+        ("fight", 0.3, "scripts"),
+    ],
+)
+async def test_held_threats_stay_from_the_scripts_only_if_the_body_takes_them_over(
+    choice: str, confidence: float, verdict: str
+) -> None:
+    planner, decider, applier, clock = make(FakeDecider(choice, confidence))
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    held = {
+        "type": "perception_held",
+        "hold": "h1",
+        "npc": "PEPE",
+        "kind": "monster_attack",
+        "other": "WOLF",
+        "other_name": "Волк",
+        "distance": 200,
+        "detail": "you",
+    }
+    planner.on_message(parse_game_message(json.dumps(held)))
+    await step(planner, clock, 0.05)
+    assert list(applier.verdicts) == [("h1", verdict)]  # fight/flee: the body has it; else: the scripts
+    planner.on_message(parse_game_message(json.dumps({**held, "hold": "h2"})))  # a repeat right away
+    await step(planner, clock, 0.05)
+    assert ("h2", "scripts") in applier.verdicts or len(decider.calls) == 2  # merged or decided again
+
+
+async def test_a_threat_to_an_npc_the_planner_does_not_know_goes_to_the_scripts() -> None:
+    planner, _, applier, clock = make()
+    planner.on_message(
+        parse_game_message(
+            json.dumps(
+                {
+                    "type": "perception_held",
+                    "hold": "h9",
+                    "npc": "NOBODY",
+                    "kind": "monster_near",
+                    "other": "WOLF",
+                }
+            )
+        )
+    )
+    assert list(applier.verdicts) == [("h9", "scripts")]

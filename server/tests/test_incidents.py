@@ -248,3 +248,52 @@ async def test_lines_said_on_the_move_wait_for_each_other(tmp_path):
     says = [m for m in fake.received if m["type"] == "say"]
     assert all(m["overlay"] for m in says)
     assert took >= 1.5  # the second line waited for the first one to be said
+
+
+async def test_a_free_npc_speaks_on_the_move_when_the_moment_calls_for_it(tmp_path):
+    from gothic_ai.brain import LogApplier, NpcPlanner, PlannerConfig
+    from gothic_ai.protocol import RosterEntry
+
+    class Decider(FakeDecider):
+        async def decide(self, rid, lane, priority, deadline_ms, state, questions):
+            out = await super().decide(rid, lane, priority, deadline_ms, state, questions)
+            if "escalate" in questions and out.answers:
+                out.answers["escalate"] = {
+                    "type": "score",
+                    "score": 3.6,
+                    "probabilities": {},
+                    "confidence": 0.8,
+                }
+            return out
+
+    fake = FakeGame()
+    llm = FakeBackend("Волки! Эй, путник, выручай!", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        planner = NpcPlanner(Decider("flee", 0.9), LogApplier(), config=PlannerConfig(ask_attitude=False))
+        link.listeners.append(planner.on_message)
+        IncidentDesk(link, dialogue, None, Budget(), None, planner=planner)
+        planner.on_roster(
+            [RosterEntry(id="SHEPHERD", name="Пастух", guild=8, distance=900, in_view=True)], 0.0
+        )
+        await fake.send(
+            type="npc_event",
+            npc="SHEPHERD",
+            kind="monster_near",
+            other="WOLF",
+            other_name="Волк",
+            distance=600,
+        )
+        for _ in range(100):
+            planner.tick(planner.clock())
+            await asyncio.sleep(0.02)
+            if fake.said:
+                break
+
+    assert fake.said[0].startswith("Волки!")
+    says = [m for m in fake.received if m["type"] == "say"]
+    assert says and all(m["npc"] == "SHEPHERD" and m["overlay"] for m in says)  # on the move
+    _, request, tools = llm.calls[0]
+    cue = request[-1].content
+    assert "Волк идёт на тебя" in cue and "ты убегаешь" in cue  # what happened and what the body did
+    assert {t.name for t in tools} == {"set_intent", "recall"}  # a free npc cannot hand over items

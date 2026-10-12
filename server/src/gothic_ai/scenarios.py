@@ -30,10 +30,12 @@ from .protocol import (
     NpcIdle,
     NpcRoster,
     Perception,
+    PerceptionHeld,
     Saved,
     SayCmd,
     Session,
     Snapshot,
+    ThreatControlCmd,
 )
 from .trace import TraceWriter
 from .voice import VoiceInput
@@ -385,14 +387,19 @@ async def m4_planner_bridge(
 
 
 class FixedDecider:
-    """A stand-in for the behavioral model: the same choice for every question that offers it."""
+    """A stand-in for the behavioral model: the same choice for every question that offers it, and a fixed
+    level for score questions (escalate, attitude)."""
 
-    def __init__(self, choices: dict[str, str]) -> None:
+    def __init__(self, choices: dict[str, str], scores: dict[str, float] | None = None) -> None:
         self.choices = choices
+        self.scores = scores or {}
 
     async def decide(self, rid, lane, priority, deadline_ms, state, questions) -> Outcome:  # noqa: ANN001
-        answers = {}
+        answers: dict[str, dict] = {}
         for name, q in questions.items():
+            if q["type"] == "score":
+                answers[name] = {"type": "score", "score": self.scores.get(name, 2.0), "confidence": 0.8}
+                continue
             pick = self.choices.get(name)
             pick = pick if pick in q["criteria"] else next(iter(q["criteria"]))
             answers[name] = {
@@ -652,6 +659,76 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         now = (await link.routine(npc)).current
         back = now == info.entries[0].state or now != "ZS_SIT_CAMPFIRE"
         results["set_routine"] = f"{'done' if back else 'failed'} ({variant}: now {now})"
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
+    return results
+
+
+async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, str]:
+    """M5c on the game: a free npc meets a wolf. The threat is held from the npc's scripts; the behavioral
+    model (a fixed stand-in here: fight, escalate 3.6 — the live model is measured by evals) takes the body
+    over with the game's own combat; the moment calls for words, and the conversational model (scripted)
+    speaks for the npc on the move."""
+    from .brain import GameApplier
+    from .brain.planner import PlannerConfig
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+    started_lines: list[LineStarted] = []
+    link.listeners.append(lambda m: started_lines.append(m) if isinstance(m, LineStarted) else None)
+    held: list[PerceptionHeld] = []
+    link.listeners.append(lambda m: held.append(m) if isinstance(m, PerceptionHeld) else None)
+
+    applier = GameApplier(link)
+    planner = NpcPlanner(
+        FixedDecider({"react": "fight"}, {"escalate": 3.6}), applier, config=PlannerConfig(ask_attitude=False)
+    )
+    link.listeners.append(planner.on_message)
+    runner = asyncio.create_task(planner.run())
+    llm = FakeBackend("Ещё одна тварь из тьмы. Прочь, или сгоришь!", delay=0)
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+    budget = Budget()
+    IncidentDesk(link, dialogue, None, budget, None, planner=planner)
+    await link.send(ThreatControlCmd(hold=True))
+    try:
+        for _ in range(50):  # the roster brings the npc to the planner
+            if npc in planner.npcs:
+                break
+            await asyncio.sleep(0.2)
+        t0 = time.monotonic()
+        await link.debug("spawn", instance="WOLF", near=npc, distance=400)
+        decision = None
+        for _ in range(150):
+            decision = next((d for d in applier.recent if d.npc == npc and d.target), None)
+            if decision is not None:
+                break
+            await asyncio.sleep(0.1)
+        verdicts = list(applier.verdicts)
+        results["threat_held"] = (
+            f"done ({len(held)} held: {', '.join(f'{h.kind}/{h.other}' for h in held)}; verdicts {verdicts})"
+            if held and any(to == "server" for _, to in verdicts)
+            else f"failed (held {len(held)}, verdicts {verdicts})"
+        )
+        results["body_reacts"] = (
+            f"done ({decision.choice} against {decision.target}, "
+            f"{time.monotonic() - t0:.1f} s after the spawn)"
+            if decision
+            else "failed (no decision)"
+        )
+        words = None
+        for _ in range(150):
+            words = next((m for m in started_lines if m.npc == npc), None)
+            if words is not None:
+                break
+            await asyncio.sleep(0.1)
+        results["words_on_the_move"] = (
+            f"done ({time.monotonic() - t0:.1f} s after the spawn: {llm.calls[0][1][-1].content})"
+            if words and llm.calls
+            else "failed (no words)"
+        )
+    finally:
+        await link.send(ThreatControlCmd(hold=False))
+        runner.cancel()
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
     return results

@@ -9,7 +9,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Collection, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +26,7 @@ from .llm import (
     Message,
     Role,
     TextDelta,
+    Tool,
     ToolCall,
     ToolChoice,
     ToolResult,
@@ -254,6 +255,8 @@ class DialogueManager:
         self.on_player_phrase: Callable[[str, str], None] | None = None
         # something the npc's body was to do did not work (npc, what)
         self.on_body_failed: Callable[[str, str], None] | None = None
+        # whether the npc is under our control (attached): only then do intents move its body directly
+        self.controls: Callable[[str], bool] | None = None
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -423,18 +426,26 @@ class DialogueManager:
         return conv.reply
 
     def event_turn(
-        self, npc: str, cue: str, relevant: Callable[[], bool] | None = None, *, overlay: bool = False
+        self,
+        npc: str,
+        cue: str,
+        relevant: Callable[[], bool] | None = None,
+        *,
+        overlay: bool = False,
+        tools: Collection[str] | None = None,
     ) -> asyncio.Task[None] | None:
         """A turn about something that happened (an incident): the npc may speak and change its intent.
-        While a turn is running the event waits for the next one's situation instead of interrupting."""
+        While a turn is running the event waits for the next one's situation instead of interrupting.
+        `tools` limits what the model is offered (an npc nobody controls cannot hand over items)."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return None
         if conv.reply is not None and not conv.reply.done():
             conv.pending.append(cue)
             return None
+        offered = self.tools if tools is None else [t for t in self.tools if t.name in tools]
         conv.reply = asyncio.create_task(
-            self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay)
+            self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay, tools=offered)
         )
         return conv.reply
 
@@ -616,6 +627,7 @@ class DialogueManager:
         relevant: Callable[[], bool] | None = None,
         *,
         overlay: bool = False,
+        tools: list[Tool] | None = None,
     ) -> None:
         """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
         chat and the voice as it comes; tool calls are handled after their step."""
@@ -635,6 +647,7 @@ class DialogueManager:
         state = TurnState(
             relevant=relevant,
             overlay=overlay,
+            tools=self.tools if tools is None else tools,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
@@ -646,7 +659,7 @@ class DialogueManager:
             branch=conv.branch,
             trigger={"kind": kind, "text": trigger.content},
             instructions=conv.persona.instructions,
-            tools=[t.name for t in self.tools],
+            tools=[t.name for t in state.tools],
             snapshot=snap.model_dump(mode="json") if snap is not None else None,
             llm=self.llm.name,
             model=getattr(self.llm, "model", None),
@@ -744,7 +757,7 @@ class DialogueManager:
             async for event in self.llm.stream(
                 instructions=conv.persona.instructions,
                 messages=request,
-                tools=self.tools,
+                tools=state.tools,
                 tool_choice=choice,
             ):
                 if isinstance(event, Done):
@@ -848,7 +861,10 @@ class DialogueManager:
         self._send_head(conv.branch, seq)
         if self.on_intent is not None:
             self.on_intent(conv.npc, intent)
-        acts = executor.intent_actions(old, intent, snap.npc.following if snap else False)
+        controlled = self.controls is None or self.controls(conv.npc)
+        acts = (
+            executor.intent_actions(old, intent, snap.npc.following if snap else False) if controlled else []
+        )
         if acts:
             self._after_speech(conv, lambda: self._body(conv, acts))
 
@@ -898,3 +914,4 @@ class TurnState:
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
     recalled: bool = False  # recall is used once per turn
     overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it
+    tools: list[Tool] = field(default_factory=list)  # offered to the model in this turn

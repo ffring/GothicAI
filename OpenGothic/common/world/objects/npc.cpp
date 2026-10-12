@@ -4248,6 +4248,13 @@ bool Npc::perceptionProcess(Npc &pl) {
   return ret;
   }
 
+bool Npc::passPerception(Npc& other, Npc* victim, PercType perc) {
+  percPassThrough = true;
+  const bool ret = perceptionProcess(other,victim,0,perc);
+  percPassThrough = false;
+  return ret;
+  }
+
 bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc) {
   if(!aiState.started && aiState.funcIni.isValid()) {
     // avoid ugly soft-lock (ZS_MM_Attack <-> B_MM_AssessWarn) for the orks near ramp
@@ -4267,6 +4274,9 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
   if(hasPerc(perc)) {
+    auto& intercept = Gothic::inst().interceptPerception;
+    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc))
+      return true;  // taken over by an outside AI (ai_bridge); it may hand it back
     owner.script().invokeState(this,&pl,victim,perception[perc].func);
     return true;
     }

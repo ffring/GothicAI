@@ -52,6 +52,7 @@ from .protocol import (
     PlayerText,
     Saved,
     Session,
+    ThreatControlCmd,
 )
 from .replay import replay as replay_turn
 from .trace import TraceWriter, find_turn, latest
@@ -258,6 +259,10 @@ async def serve(args: argparse.Namespace) -> int:
                 return (Intent.from_json(saved).agenda or None) if saved else None
 
             planner = state.brain = NpcPlanner(decider, GameApplier(link), agenda_of=agenda_of)
+            state.incidents.follow(planner)  # free npc's speak when the moment calls for it
+            if not args.no_hold_threats:
+                # threats to free npc's: the behavioral model first, the scripts if it does not take them
+                await link.send(ThreatControlCmd(hold=True))
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
             state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(npc, intent.agenda or None)
@@ -310,6 +315,11 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5b_bridge(link, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5b: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5c":
+                results = await scenarios.m5c_free_npc(link, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5c: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
@@ -691,7 +701,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
@@ -717,6 +727,11 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
+    p.add_argument(
+        "--no-hold-threats",
+        action="store_true",
+        help="threats to free npc's go straight to the game's scripts, not to the behavioral model first",
+    )
     p.add_argument(
         "--apply-threats",
         action="store_true",

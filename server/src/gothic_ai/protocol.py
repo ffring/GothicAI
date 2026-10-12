@@ -292,6 +292,21 @@ class NpcActResult(_GameMessage):
     detail: str | None = None
 
 
+class PerceptionHeld(_GameMessage):
+    """A threat to a free npc the game holds back from its scripts for the behavioral model (v6, after
+    `threat_control{hold:true}`): a monster near or attacking, an npc attacking. Fields as in `npc_event`.
+    The server answers `hold_verdict`; without one the scripts get it after 0.6 s."""
+
+    type: Literal["perception_held"]
+    hold: str
+    npc: str
+    kind: str
+    other: str
+    other_name: str | None = None
+    distance: float | None = None
+    detail: str | None = None
+
+
 class RoutineEntry(_GameMessage):
     start: str  # "HH:MM" game time
     end: str
@@ -337,7 +352,8 @@ GameMessage = Annotated[
     | NpcEvent
     | NpcIdle
     | NpcActResult
-    | RoutineInfo,
+    | RoutineInfo
+    | PerceptionHeld,
     Field(discriminator="type"),
 ]
 
@@ -411,6 +427,22 @@ NpcActType = Literal[
     "start_activity",  # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine
     "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
 ]
+
+
+class ThreatControlCmd(_Command):
+    """Whether threats to free npc's are held from their scripts for the behavioral model (v6)."""
+
+    type: Literal["threat_control"] = "threat_control"
+    hold: bool
+
+
+class HoldVerdictCmd(_Command):
+    """What becomes of a held threat (v6): `server` — the behavioral model took the body over (fight,
+    flee), repeats of it are kept from the scripts for a while; `scripts` — they get it now."""
+
+    type: Literal["hold_verdict"] = "hold_verdict"
+    hold: str
+    to: Literal["server", "scripts"]
 
 
 class RoutineCmd(_Command):

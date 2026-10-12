@@ -232,6 +232,10 @@ AiBridge::Impl::Impl() {
   gothic.onWorldLoaded       .bind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
+  gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
+    World* world = Gothic::inst().world();
+    return connected && world!=nullptr && observer.intercept(*world,self,other,victim,perc);
+    };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
     };
@@ -307,6 +311,7 @@ AiBridge::Impl::~Impl() {
   gothic.onWorldLoaded       .ubind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.ubind(this,&Impl::onPerception);
   gothic.onObservedPerception.ubind(this,&Impl::onObservedPerception);
+  gothic.interceptPerception = nullptr;
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
   gothic.externalSoundFn   = nullptr;
@@ -346,9 +351,12 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
       case Inbound::Error:
         if(connected) {
           Log::i("[ai] disconnected: ",in.text);
-          // nobody drives the npc's anymore: hand them back to their routines
-          if(world!=nullptr)
+          // nobody drives the npc's anymore: hand them back to their routines, threats to their scripts
+          if(world!=nullptr) {
             ctrl.detachAll(*world,"server_disconnected");
+            observer.releaseAll(*world);
+            }
+          observer.setHoldThreats(false);
           }
         else if(in.kind==Inbound::Error && in.text!=lastError) {
           Log::i("[ai] connection failed: ",in.text);
@@ -506,6 +514,11 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     onDebug(doc);
     return;
     }
+  if(type=="threat_control") {
+    // the server's behavioral model decides threats to free npc's first (held from the scripts)
+    observer.setHoldThreats(JsonRead::boolean(doc,"hold",false));
+    return;
+    }
 
   if(world==nullptr) {
     if(type=="action")
@@ -540,6 +553,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="routine") {
     observer.routine(*world,doc);
+    }
+  else if(type=="hold_verdict") {
+    observer.verdict(*world,doc);
     }
   else if(type=="say") {
     onSay(*world,doc);
