@@ -167,6 +167,7 @@ class Rumor:
     known: dict[str, int] = field(default_factory=dict)  # npc -> retellings away from `about`
     since: dict[str, int] = field(default_factory=dict)  # npc -> the game day it heard it (if known)
     silent: set[str] = field(default_factory=set)  # promised the hero in a deal to tell nobody (deals.py)
+    said: bool = False  # the lie was his words (title), not a quest: seen false (sightings.py)
 
     @property
     def hops(self) -> int:
@@ -193,6 +194,8 @@ class Rumor:
         what = (
             f"взял награду за «{self.title}», а дела не сделал"
             if self.kind == "found_out"
+            else f"сказал ему «{self.title}», а это неправда"
+            if self.said
             else f"уверял, что сделал «{self.title}», а это неправда"
         )
         return f"Слух (со слов: {teller}): герой обманул человека по имени {self.about_name} — {what}"
@@ -322,6 +325,7 @@ class Rumors:
                     f.get("npc", ""),
                     f.get("name") or f.get("npc", ""),
                     f.get("title") or f.get("quest", ""),
+                    said=bool(f.get("said")),
                 )
                 r.known[r.about] = 0
                 if "day" in f:

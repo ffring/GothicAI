@@ -62,6 +62,7 @@ from .protocol import (
 )
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .sightings import Sightings
 from .social import Rumors
 from .story import StoryPatches
 from .talk import TalkDesk
@@ -108,6 +109,7 @@ HELP = """commands (npc defaults to the last attached one):
   claims            quests of the scripts the hero said were done: believed, lies, found out
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
+  seen [npc] [query]  what the npc saw itself: the hero's sightings, the people it knows (and recall)
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
@@ -155,6 +157,7 @@ class ServerState:
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
         self.perception: PerceptionDesk | None = None
+        self.sightings: Sightings | None = None
 
 
 class Console:
@@ -260,6 +263,11 @@ class Console:
                     assert sight is not None
                     print("\n".join(line for line in (sight.place, sight.hero, sight.people) if line))
                     print("\n".join(self.state.perception.english(who)))
+            case "seen" if self.state.sightings is not None:
+                who = (rest[0] if rest else npc).upper()
+                print(self.state.sightings.situation(who) or "(saw nothing)")
+                if len(rest) > 1:
+                    print(self.state.sightings.recall(who, " ".join(rest[1:])) or "(recall: nothing)")
             case "know" if self.state.knowledge is not None:
                 who = (rest[0] if rest else npc).upper()
                 await self.state.knowledge.prepare(who)
@@ -476,6 +484,11 @@ async def serve(args: argparse.Namespace) -> int:
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         talk = state.talk
+        # what each npc saw itself: where and how it saw the hero and the people it knows (wave 1 step 6)
+        state.sightings = Sightings(
+            link, memory, perception, state.chronicle, knows_hero=knows_hero, journal=journal
+        )
+        state.dialogue.extensions.append(state.sightings)
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle)
         state.dialogue.extensions.append(trust)
@@ -647,6 +660,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.see_perception(link, dialogue, talk, perception, rumors, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario see: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "seen":
+                dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
+                assert dialogue is not None and talk is not None and sightings is not None
+                results = await scenarios.seen_memory(link, dialogue, talk, sightings)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario seen: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "places":
                 # not a check: the world's points and people for the book of places (places.py)
@@ -1147,6 +1167,7 @@ def main() -> None:
             "m5e",
             "m6",
             "see",
+            "seen",
             "places",
             "graph",
             "lie",
