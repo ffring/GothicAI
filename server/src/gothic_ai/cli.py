@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import npc_tools, scenarios
+from .amends import Amends
 from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
 from .budget import Budget
@@ -105,6 +106,7 @@ HELP = """commands (npc defaults to the last attached one):
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
+  amends            the director's storylets of amends for the hero's lies, and where they stand
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -141,6 +143,7 @@ class ServerState:
         self.vanilla: VanillaQuests | None = None
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
+        self.amends: Amends | None = None
 
 
 class Console:
@@ -238,6 +241,10 @@ class Console:
                     print(f"{t.quest} {t.npc}: {t.title}; {t.reward}; {state} ({t.kind or '-'})")
             case "trust" if self.state.trust is not None:
                 print(self.state.trust.situation(rest[0] if rest else npc) or "(nothing)")
+            case "amends" if self.state.amends is not None:
+                for s in self.state.amends.storylets.values():
+                    closed = ", ".join(s.close)
+                    print(f"{s.id} {s.name}: {s.stage}; closed {closed}; {s.gold} gold to {s.to_name}")
             case "rumors" if self.state.rumors is not None:
                 print("\n".join(self.state.rumors.describe()) or "(none)")
             case "ties" if self.state.rumors is not None and self.state.rumors.social is not None:
@@ -407,7 +414,22 @@ async def serve(args: argparse.Namespace) -> int:
                 journal=journal,
                 trust=trust,
             )
-            directing = [asyncio.create_task(state.director.run()), asyncio.create_task(state.vanilla.run())]
+            # those who learn of a lie of the hero's ask him to make amends: the director's storylets
+            state.amends = Amends(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
+                llm,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
+            directing = [
+                asyncio.create_task(state.director.run()),
+                asyncio.create_task(state.vanilla.run()),
+                asyncio.create_task(state.amends.run()),
+            ]
         # rumors of the hero's lies go round the people that know each other (story graph, stage 5)
         state.rumors = Rumors(link, state.dialogue, state.chronicle, graph)
         directing.append(asyncio.create_task(state.rumors.run()))
@@ -505,6 +527,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.repair_after_death(link, state.director, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "amends":
+                dialogue, talk, amends = state.dialogue, state.talk, state.amends
+                assert dialogue is not None and talk is not None and amends is not None
+                results = await scenarios.amends_storylet(link, dialogue, talk, amends)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario amends: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "rumor":
                 dialogue, talk, rumors = state.dialogue, state.talk, state.rumors
@@ -936,6 +965,7 @@ def main() -> None:
             "vlie",
             "vcheck",
             "rumor",
+            "amends",
             "tts",
         ],
         help="run a scripted check when the game connects",

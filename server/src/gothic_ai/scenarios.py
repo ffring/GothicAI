@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .amends import Amends
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
+from .chronicle import Fact
 from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
@@ -1663,6 +1665,219 @@ async def rumor_spread(
             if isinstance(m, Message) and m.role == "assistant"
         ]
         check("answer", ok and bool(said), f"{other}: {said[-1] if said else ''}")
+    return _logged(results)
+
+
+ANDRE = "MIL_311_ANDRE"
+
+
+class AmendsScript:
+    """The director's model for storylets, scripted: Andre asks for a fine and closes joining the militia (the
+    first of his dealings in the brief that has it, else the first); anyone else does not care."""
+
+    name = "amends-script"
+
+    def __init__(self, npc: str = ANDRE, gold: int = 50) -> None:
+        self.npc, self.gold = npc, gold
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+        stakes = re.findall(r"^- (\S+): «([^»]*)» — (.*)$", brief, re.M)
+        if f"({self.npc})" not in brief.splitlines()[0] or not stakes:
+            args: dict[str, Any] = {"kind": "none", "reason": "не его дело"}
+        else:
+            join = [id for id, _, what in stakes if what == "принимает в гильдию"]
+            args = {
+                "kind": "amends",
+                "close": join[:1] or [stakes[0][0]],
+                "lines": [
+                    {"speaker": "npc", "text": "Слыхал я, ты Лобарта обмануть пытался."},
+                    {
+                        "speaker": "npc",
+                        "text": f"Лжецу в ополчении не место. {self.gold} золотых штрафа — тогда поговорим.",
+                    },
+                ],
+                "to": "self",
+                "gold": self.gold,
+                "description": f"Вот штраф — {self.gold} золотых.",
+                "amends_lines": [{"speaker": "npc", "text": "Ладно. Считай, забыли. Но смотри у меня."}],
+                "title": "Штраф за враньё",
+                "journal_now": (
+                    f"Андре прослышал, что я соврал Лобарту. Без штрафа ({self.gold} золотых) "
+                    "в ополчение не возьмёт."
+                ),
+                "journal_done": "Я заплатил Андре штраф.",
+                "reason": "до Андре дошёл слух, а в ополчение он берёт только честных",
+            }
+        call = ToolCall(
+            "propose_amends",
+            {
+                **{k: "" for k in ("description", "title", "journal_now", "journal_done")},
+                "close": [],
+                "lines": [],
+                "to": "self",
+                "gold": 0,
+                "amends_lines": [],
+                **args,
+            },
+            "a1",
+        )
+        yield call
+        yield Done("", (call,))
+
+
+async def _caught_by(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, giver: str, facts: Callable[..., list[Fact]]
+) -> tuple[bool, ClaimScript | None]:
+    """The hero tells `giver` the turnips are in the barn and is caught (the giver scripted; with LLM=chatgpt
+    the others are the live model)."""
+    await link.story_effect(giver, [{"do": "set", "var": RUEBEN, "value": 1}])
+    await link.debug("player_goto", to=giver, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: giver in talk.people, 20):
+        return False, None
+    name = talk.people[giver].name
+    live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+    expose = FakeStep("Врёшь! Нет у тебя никакой репы.", [ToolCall("expose_lie", {"quest": RUEBEN})])
+    script = ClaimScript(
+        said=[("репа", expose)], told=[], default="Ну, здравствуй. Чего тебе?", only=name, others=live
+    )
+    dialogue.llm = script
+    await link.debug("type", text=f"{name}, репа уже в амбаре, все двадцать штук. Давай плату.")
+    return await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("caught")), 60), script
+
+
+async def amends_storylet(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    amends: Amends,
+    giver: str = LOBART,
+    fine: int = 50,
+) -> dict[str, str]:
+    """The director's storylet of amends (stage 5), on the game. Lobart catches the hero lying; by the next
+    morning the rumor has gone round. The director's model, scripted unless LLM=chatgpt, has Andre (who has
+    dealings with Lobart) ask for a fine and close joining the militia until then; a live model decides who
+    asks and what for. The hero comes, hears the npc out, makes amends, and what was closed opens again."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = amends.chronicle.facts
+    hero = ["inst", "HERO"]
+    if isinstance(amends.model.llm, FakeBackend):
+        amends.model.llm = AmendsScript(ANDRE, fine)
+    amends.director.pacing.cooldown_s = 2.0  # no need to wait between the steps here
+
+    ok, _ = await _caught_by(link, dialogue, talk, giver, facts)
+    check("caught", ok, facts("caught")[-1:])
+    if not ok:
+        return _logged(results)
+
+    # the next morning the rumor has gone round; someone asks for amends (scripted: Andre)
+    await link.debug("time", hour=7, minute=0)
+    ok = await _until(lambda: bool(amends.storylets), 180)
+    if ok and isinstance(amends.model.llm, AmendsScript):
+        ok = await _until(lambda: any(x.npc == ANDRE for x in amends.storylets.values()), 120)
+    looked = [
+        (f.get("fact"), f.get("npc")) for f in facts() if f.get("fact") in ("amends_open", "amends_none")
+    ]
+    check("asked", ok, looked)
+    if not ok:
+        return _logged(results)
+    s = next((x for x in amends.storylets.values() if x.npc == ANDRE), next(iter(amends.storylets.values())))
+    closed = [op["node"] for op in amends.patches.ops() if op.get("op") == "disable"]
+    check("closed", bool(s.close) and set(s.close) <= set(closed), f"{s.name}: {s.close}")
+
+    # the hero comes: the npc starts the talk himself (an important dialog)
+    await link.debug("player_goto", to=s.npc, distance=250)
+    await _until(lambda: s.npc in talk.people, 20)
+    by_himself = await _until(lambda: s.stage != "open", 20)
+    if not by_himself:
+        try:
+            await link.choose_dialog(s.npc, s.talk)
+        except GameError as err:
+            log.info("amends: %s", err)
+    heard = await _until(lambda: s.stage != "open", 20)
+    check("talked", heard, f"{s.talk}{', he started it' if by_himself else ''}")
+
+    # he makes amends: what was closed is open again
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    if gold < s.gold:
+        await link.story_effect(s.npc, [{"do": "give", "item": "ITMI_GOLD", "count": s.gold - gold + 10}])
+        gold = s.gold + 10
+    if s.to != s.npc:
+        await link.debug("player_goto", to=s.to, distance=250)
+        await _until(lambda: s.to in talk.people, 20)
+    await asyncio.sleep(1)
+    try:
+        await link.choose_dialog(s.to, s.pay)
+        paid = await _until(lambda: s.stage == "done", 20)
+    except GameError as err:
+        paid = False
+        log.info("amends: %s", err)
+    await asyncio.sleep(1)
+    left = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    opened = {op["node"] for op in amends.patches.ops() if op.get("op") == "enable"}
+    check(
+        "paid",
+        paid and left == gold - s.gold and set(s.close) <= opened,
+        f"{s.description}: {gold} -> {left} gold",
+    )
+    line = Trust(amends.chronicle).situation(s.npc) or ""
+    check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
+    return _logged(results)
+    s = next(x for x in amends.storylets.values() if x.npc == ANDRE)
+    closed = [op["node"] for op in amends.patches.ops() if op.get("op") == "disable"]
+    check("closed", bool(s.close) and set(s.close) <= set(closed), s.close)
+
+    # the hero comes to Andre: Andre starts the talk himself (an important dialog)
+    await link.debug("player_goto", to=ANDRE, distance=250)
+    await _until(lambda: ANDRE in talk.people, 20)
+    by_himself = await _until(lambda: s.stage != "open", 20)
+    if not by_himself:
+        try:
+            await link.choose_dialog(ANDRE, s.talk)
+        except GameError as err:
+            log.info("amends: %s", err)
+    heard = await _until(lambda: s.stage != "open", 20)
+    check("talked", heard, f"{s.talk}{', he started it' if by_himself else ''}")
+
+    # he pays the fine: the militia is open to him again
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    if gold < s.gold:
+        await link.story_effect(ANDRE, [{"do": "give", "item": "ITMI_GOLD", "count": s.gold - gold + 10}])
+        gold = s.gold + 10
+    await asyncio.sleep(1)
+    try:
+        await link.choose_dialog(s.to, s.pay)
+        paid = await _until(lambda: s.stage == "done", 20)
+    except GameError as err:
+        paid = False
+        log.info("amends: %s", err)
+    await asyncio.sleep(1)
+    left = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    opened = {op["node"] for op in amends.patches.ops() if op.get("op") == "enable"}
+    check("paid", paid and left == gold - s.gold and set(s.close) <= opened, f"{gold} -> {left} gold")
+    line = Trust(amends.chronicle).situation(ANDRE) or ""
+    check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
     return _logged(results)
 
 
