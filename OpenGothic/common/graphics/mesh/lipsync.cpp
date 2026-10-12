@@ -311,6 +311,7 @@ bool LipSync::update(uint64_t now, uint64_t dt, Shape& out) {
     if(lvl>dipMin+Rise) {
       inDip  = false;
       sylMax = lvl;
+      ++syllables;
       const uint64_t t = time + uint64_t(std::max(0.f,Lead));
       pick(track!=nullptr ? track->peak(t, t+uint64_t(std::max(0.f,Look))) : lvl, now);
       }

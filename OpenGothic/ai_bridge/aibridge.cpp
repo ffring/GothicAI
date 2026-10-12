@@ -1280,13 +1280,15 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
         name = std::string(npc->displayName());
     TestBench::aiLine(line.npc,TextCodec::toUtf8(name),TextCodec::toUtf8(line.text),line.time);
   }
-  // the face while the line is said, and a moment after (v8)
-  if(auto face = moodFace(line.mood); !face.empty())
-    if(auto world = Gothic::inst().world())
-      if(auto npc = npcBySymbol(*world,line.npc)) {
+  // the face while the line is said, and a moment after (v8); the hands go with the mood too
+  if(auto world = Gothic::inst().world())
+    if(auto npc = npcBySymbol(*world,line.npc)) {
+      npc->setTalkMood(line.mood);
+      if(auto face = moodFace(line.mood); !face.empty()) {
         npc->startFaceAnim(face,1,line.time+MoodHoldMs);
         Log::i("[ai] face ",line.npc," ",face," for ",line.time+MoodHoldMs," ms");
         }
+      }
   ensureChat();
   if(!line.reply.empty()) {
     chat->extend(line.reply,line.time);  // its text is on screen already

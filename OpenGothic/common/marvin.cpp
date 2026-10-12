@@ -14,6 +14,7 @@
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/animblend.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/talkgestures.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -162,6 +163,7 @@ Marvin::Marvin() {
     {"toggle lean",                C_ToggleLean},
     {"toggle aniblend",            C_ToggleAniBlend},
     {"toggle aim",                 C_ToggleAim},
+    {"toggle gestures",            C_ToggleGestures},
     };
   }
 
@@ -514,6 +516,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleAim:
       Aim::setEnabled(!Aim::isEnabled());
+      return true;
+    case C_ToggleGestures:
+      TalkGestures::setEnabled(!TalkGestures::isEnabled());
       return true;
     }
 

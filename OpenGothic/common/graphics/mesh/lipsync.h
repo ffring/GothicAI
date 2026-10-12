@@ -90,6 +90,7 @@ class LipSync final {
     void           start(std::shared_ptr<Track> track, uint64_t now);
     void           stop();                          // the line is cut off: the mouth closes
     bool           isSpeaking(uint64_t now) const;  // a voice line moves the mouth
+    uint32_t       syllableCount() const { return syllables; }  // syllables of voices started so far
     // per frame; false: nothing to show
     bool           update(uint64_t now, uint64_t dt, Shape& out);
     void           probe(Probe& p) const;
@@ -117,6 +118,7 @@ class LipSync final {
     float                  blend     = 1;  // 0..1 from prev to cur
     uint64_t               lastPick  = 0;
     uint32_t               picks     = 0;
+    uint32_t               syllables = 0;
     uint32_t               rnd       = 1;
     Shape                  shown;
     float                  shownOpen = 0;

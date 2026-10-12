@@ -26,6 +26,7 @@
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lipsync.h"
+#include "graphics/mesh/talkgestures.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animblend.h"
@@ -856,6 +857,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
+  std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,"\n");
@@ -934,6 +936,10 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
                int(lp.valid),int(lp.active),(unsigned long long)lp.time,lp.level,lp.mouth,lp.open,
                lp.shape.frame0,lp.shape.frame1,lp.shape.alpha,lp.shape.intensity,lp.picks);
+  // its hands while it speaks
+  const auto& ge = TalkGestures::subjectProbe;
+  std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),unsigned(ge.mood),
+               ge.starts,ge.cuts,ge.stops);
   // faces of the watched one, as shown (fading in and out)
   Npc& s = subjectOf(pl);
   for(auto& f:FaceColumns)
@@ -1638,6 +1644,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->startFaceAnim(a[2],num(a,4,1),uint64_t(num(a,3,3000)));
     say("faceanim " + std::string(n->displayName()) + " " + a[2]);
     }
+  else if(c=="ani") {
+    // ani <npc|nearest|player> <anim>: it plays an animation of its model script (T_YES, T_DIALOGGESTURE_03)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || a.size()<3) {
+      say("ani: no npc or anim " + line);
+      return;
+      }
+    auto sq = n->playAnimByName(a[2],BS_STAND);
+    say("ani " + symName(w,n) + " " + a[2] + (sq==nullptr ? " failed" : ""));
+    }
   else if(c=="dialog") {
     // dialog <npc|nearest>: the hero talks to it, as with the action key (important infos start by themselves)
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
@@ -1672,6 +1688,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else
       say("unknown lips command: " + line);
     }
+  else if(c=="gestures") {
+    // gestures on|off|param <name> <value>|params: the hands while one speaks (off: a random gesture per line)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      TalkGestures::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(TalkGestures::setParam(a[2],num(a,3,0)) ? "gestures param " : "gestures: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("gestures params: " + TalkGestures::paramList());
+    else
+      say("unknown gestures command: " + line);
+    }
   else if(c=="watch") {
     // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
@@ -1679,6 +1707,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Gaze::probeNpc = bench.subject;
     LipSync::probeNpc     = n;
     LipSync::subjectProbe = LipSync::Probe();
+    TalkGestures::probeNpc     = n;
+    TalkGestures::subjectProbe = TalkGestures::Probe();
     Lean::probeNpc = bench.subject;
     Pose::probeNpc = bench.subject;
     bench.anim1.clear();
@@ -2102,6 +2132,14 @@ void drawOverlay(Pixmap& pm) {
     cv.rect(x,y+1,int(float(bw)*std::clamp(lp.level,0.f,1.f)),3,{255,255,255,255});
     cv.rect(x,y+6,int(float(bw)*std::clamp(lp.open,0.f,1.f)),7,c);
     y += 20;
+    }
+  const auto& ge = TalkGestures::subjectProbe;
+  if(ge.valid && TalkGestures::probeNpc!=nullptr) {
+    const auto mood = TalkGestures::moodName(ge.mood);
+    std::snprintf(buf,sizeof(buf),"GEST%s %s G%02u %.*s S%u C%u X%u",ge.enabled ? "" : " OFF",ge.speaking ? "TALK" : "-",
+                  unsigned(ge.gesture),int(mood.size()),mood.data(),ge.starts,ge.cuts,ge.stops);
+    cv.text(x,y,buf,2,{255,200,120,255});
+    y += 16;
     }
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   if(ln.valid) {

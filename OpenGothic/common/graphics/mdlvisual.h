@@ -4,6 +4,7 @@
 
 #include "graphics/mesh/animationsolver.h"
 #include "graphics/mesh/lipsync.h"
+#include "graphics/mesh/talkgestures.h"
 #include "game/constants.h"
 #include "meshobjects.h"
 #include "effect.h"
@@ -109,6 +110,9 @@ class MdlVisual final {
     void                           startSpeech    (Npc& npc, std::shared_ptr<LipSync::Track> voice);
     void                           stopSpeech     () { mouth.stop(); }
     void                           updateMouth    (Npc& npc, uint64_t dt);
+    // the hands while it speaks (TalkGestures)
+    void                           setTalkMood    (std::string_view mood) { gestures.setMood(TalkGestures::moodOf(mood)); }
+    void                           updateGestures (Npc& npc);
     void                           stopAnim       (Npc& npc, std::string_view anim);
     bool                           stopItemStateAnim(Npc &npc);
     void                           stopWalkAnim   (Npc &npc);
@@ -162,12 +166,16 @@ class MdlVisual final {
     template<class View>
     void rebindAttaches(Attach<View>& mesh, const Skeleton& to);
     void rebindAttaches(const Skeleton& to);
+    void setupGestures();
 
     Tempest::Matrix4x4             pos;
     MeshObjects::Mesh              view;
 
     MeshAttach                     head, sword, bow, shield;
     LipSync                        mouth;
+    TalkGestures                   gestures;
+    const Animation::Sequence*     gestureSeq = nullptr;  // the gesture started last
+    uint32_t                       gestureSyl = 0;        // syllables of the voice seen so far
     MeshAttach                     ammunition, stateItm;
     std::vector<MeshAttach>        item;
     std::vector<MeshAttach>        attach;

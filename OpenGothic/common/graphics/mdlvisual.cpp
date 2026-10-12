@@ -9,6 +9,8 @@
 #include "objvisual.h"
 #include "gothic.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 
 using namespace Tempest;
@@ -1093,7 +1095,38 @@ const Animation::Sequence* MdlVisual::startAnimSpell(Npc &npc, std::string_view 
   return nullptr;
   }
 
+namespace {
+// T_DIALOGGESTURE_01..
+std::array<char,32> gestureName(uint16_t id) {
+  std::array<char,32> name = {};
+  std::snprintf(name.data(),name.size(),"T_DIALOGGESTURE_%02d",id);
+  return name;
+  }
+}
+
+void MdlVisual::setupGestures() {
+  // how long each gesture plays; an alias of one before it (Gothic II: 11 is 01) is left out
+  const uint16_t count = Gothic::inst().version().dialogGestureCount();
+  std::vector<uint32_t>                   time(count);
+  std::vector<const Animation::AnimData*> seen;
+  for(uint16_t i=0; i<count; ++i) {
+    auto sq = solver.solveFrm(gestureName(uint16_t(i+1)).data());
+    if(sq==nullptr || sq->data==nullptr || std::find(seen.begin(),seen.end(),sq->data.get())!=seen.end())
+      continue;
+    seen.push_back(sq->data.get());
+    time[i] = uint32_t(sq->totalTime());
+    }
+  gestures.setGestures(std::move(time),Gothic::inst().version().game==2);
+  }
+
 bool MdlVisual::startAnimDialog(Npc &npc) {
+  if(TalkGestures::isEnabled()) {
+    // the gestures go with the line from now on (updateGestures)
+    setupGestures();
+    gestures.lineStart(npc.world().tickCount());
+    return true;
+    }
+
   if((npc.bodyState()&BS_FLAG_FREEHANDS)==0 || fgtMode!=WeaponState::NoWeapon)
     return true;
   if(npc.bodyStateMasked()!=BS_STAND)
@@ -1102,13 +1135,51 @@ bool MdlVisual::startAnimDialog(Npc &npc) {
   const uint16_t count = Gothic::inst().version().dialogGestureCount();
   const int      id    = std::rand()%count + 1;
 
-  char name[32]={};
-  std::snprintf(name,sizeof(name),"T_DIALOGGESTURE_%02d",id);
-
-  const Animation::Sequence *sq = solver.solveFrm(name);
-  if(skInst->startAnim(solver,sq,0,BS_STAND,Pose::NoHint,npc.world().tickCount()))
+  const Animation::Sequence *sq   = solver.solveFrm(gestureName(uint16_t(id)).data());
+  const bool                 over = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
+  if(skInst->startAnim(solver,sq,0,BS_STAND,Pose::NoHint,npc.world().tickCount())) {
+    gestureSeq = sq;
+    gestures.started(uint8_t(id),over);
     return true;
+    }
   return false;
+  }
+
+void MdlVisual::updateGestures(Npc& npc) {
+  const bool probing = &npc==TalkGestures::probeNpc;
+  if(skInst==nullptr || (gestureSeq==nullptr && gestures.isIdle() && !probing))
+    return;
+  const uint64_t now     = npc.world().tickCount();
+  const bool     playing = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
+  if(!playing)
+    gestureSeq = nullptr;
+
+  TalkGestures::Input in;
+  in.now      = now;
+  // not over an animation of the ai queue (a nod, a shrug the AI server or a script plays)
+  in.allowed  = (npc.bodyState()&BS_FLAG_FREEHANDS)!=0 && fgtMode==WeaponState::NoWeapon &&
+                npc.bodyStateMasked()==BS_STAND && !npc.isPlayingQueuedAnim();
+  in.voiced   = mouth.isSpeaking(now);
+  in.left     = npc.speechLeft();
+  in.speaking = in.voiced || in.left>0;
+  in.more     = npc.hasOutputQueued();
+  in.playing  = playing;
+  const uint32_t syl = mouth.syllableCount();
+  in.syllable = syl!=gestureSyl;
+  gestureSyl  = syl;
+
+  const auto d = gestures.update(in);
+  if(d.act==TalkGestures::Act::Start) {
+    auto sq = solver.solveFrm(gestureName(d.gesture).data());
+    if(sq!=nullptr && skInst->startAnim(solver,sq,0,BS_STAND,Pose::NoHint,now))
+      gestureSeq = sq;
+    }
+  else if(d.act==TalkGestures::Act::Stop && gestureSeq!=nullptr) {
+    skInst->stopAnim(gestureSeq->name);
+    gestureSeq = nullptr;
+    }
+  if(probing)
+    gestures.probe(TalkGestures::subjectProbe);
   }
 
 void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) {
@@ -1154,12 +1225,11 @@ void MdlVisual::updateMouth(Npc& npc, uint64_t dt) {
 
 void MdlVisual::stopDlgAnim(Npc& npc) {
   mouth.stop();
+  gestures.stop();
+  gestureSeq = nullptr;
   const uint16_t count = Gothic::inst().version().dialogGestureCount();
-  for(uint16_t i=0; i<count; i++){
-    char buf[32]={};
-    std::snprintf(buf,sizeof(buf),"T_DIALOGGESTURE_%02d",i+1);
-    skInst->stopAnim(buf);
-    }
+  for(uint16_t i=0; i<count; i++)
+    skInst->stopAnim(gestureName(uint16_t(i+1)).data());
 
   if(npc.processPolicy()<=NpcProcessPolicy::AiNormal) {
     // avoid PCI traffic on distant npc's
