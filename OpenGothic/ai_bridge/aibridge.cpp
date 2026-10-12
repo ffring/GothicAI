@@ -11,6 +11,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -36,6 +37,7 @@
 #include "storyworld.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "world/waypoint.h"
 #include "linelibrary.h"
 #include "npccontroller.h"
 #include "npcfind.h"
@@ -722,7 +724,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     return;
     }
   const auto cmd = JsonRead::str(msg,"cmd");
-  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
+  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline") {
     // world changes that are safe within the tick
@@ -944,6 +946,19 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // a line typed into the input line and sent
     sendResult(req,true,"");
     submitChat(TextCodec::fromUtf8(JsonRead::str(msg,"text")));
+    return;
+    }
+  if(cmd=="waypoints") {
+    // every waypoint and freepoint of the world: for the server's book of place names
+    std::string out = "[";
+    char        num[96];
+    world->forEachWayPoint([&](const WayPoint& w) {
+      const auto pos = w.position();
+      std::snprintf(num,sizeof(num),"\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"fp\":%s}",
+                    double(pos.x),double(pos.y),double(pos.z),w.isFreePoint() ? "true" : "false");
+      out += (out.size()>1 ? ",{\"name\":\"" : "{\"name\":\"") + w.name + num;
+      });
+    sendResult(req,true,"",out + "]");
     return;
     }
   if(cmd=="player_equip") {
