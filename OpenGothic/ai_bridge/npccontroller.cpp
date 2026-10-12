@@ -15,6 +15,7 @@
 
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "npcfind.h"
 #include "textcodec.h"
 
 namespace {
@@ -33,6 +34,7 @@ constexpr float    FollowRunFrom    = 1200;  // run instead of walking
 constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
 constexpr uint64_t FollowMaxMs      = 10*60*1000;
+constexpr uint64_t StateStartMs     = 3000;  // fight/flee: the script state must begin within this
 
 std::string upper(std::string_view s) {
   std::string r(s);
@@ -44,13 +46,8 @@ std::string upper(std::string_view s) {
 using JsonRead::str;
 using JsonRead::integer;
 
-Npc* findNpc(World& world, std::string_view name) {
-  if(name=="PLAYER" || name=="HERO")
-    return world.player();
-  const size_t id = world.script().findSymbolIndex(upper(name));
-  if(id==size_t(-1))
-    return nullptr;
-  return world.findNpcByInstance(id);
+Npc* findNpc(World& world, std::string_view name, const Npc* near = nullptr) {
+  return AiNpc::findNpc(world,name,near);
   }
 
 std::string npcId(World& world, Npc& npc) {
@@ -217,6 +214,7 @@ void NpcController::dropAll(std::string_view reason) {
 void NpcController::release(Controlled& c, bool resumeRoutine) {
   if(c.npc==nullptr)
     return;
+  c.scripted = false;
   c.npc->setExternalControl(false);
   if(resumeRoutine) {
     c.npc->clearAiQueue();
@@ -283,7 +281,8 @@ void NpcController::action(World& world, const rapidjson::Value& msg) {
     return;
     }
 
-  if(c->follow && type!="give_item" && type!="play_ani" && type!="turn_to")
+  if(c->follow && type!="give_item" && type!="play_ani" && type!="turn_to" && type!="say_svm" &&
+     type!="draw_weapon" && type!="remove_weapon")
     stopFollow(*c,"replaced");
 
   if(type=="return_to_routine") {
@@ -328,7 +327,7 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
 
   if(a.type=="go_to_npc" || a.type=="turn_to") {
     auto name   = str(args,"npc");
-    Npc* target = findNpc(world,name);
+    Npc* target = findNpc(world,name,&npc);
     if(target==nullptr || target==&npc) {
       err = "unknown target npc: " + std::string(name);
       return false;
@@ -394,14 +393,129 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     return true;
     }
 
+  if(a.type=="fight")
+    return startScriptState(world,c,a,"ZS_ATTACK",args,err);
+  if(a.type=="flee")
+    return startScriptState(world,c,a,"ZS_FLEE",args,err);
+
+  if(a.type=="draw_weapon") {
+    const auto kind = str(args,"kind");
+    a.deadline = 5000;
+    npc.aiPush(kind=="ranged" ? AiQueue::aiReadyRangedWeapon()
+                              : (kind=="melee" ? AiQueue::aiReadyMeleeWeapon() : AiQueue::aiDrawWeapon()));
+    return true;
+    }
+
+  if(a.type=="remove_weapon") {
+    a.deadline = 5000;
+    npc.aiPush(AiQueue::aiRemoveWeapon());
+    return true;
+    }
+
+  if(a.type=="say_svm") {
+    // the npc's own recorded line ("$NOTNOW"), in its voice; overlay: said on the move, not waited for
+    std::string svm = upper(str(args,"svm"));
+    Npc*        to  = findNpc(world,str(args,"npc").empty() ? "PLAYER" : str(args,"npc"),&npc);
+    if(svm.empty() || to==nullptr) {
+      err = svm.empty() ? "say_svm needs svm" : "unknown target npc";
+      return false;
+      }
+    if(svm[0]!='$')
+      svm.insert(svm.begin(),'$');
+    a.deadline = 10000;
+    if(JsonRead::boolean(args,"overlay",false)) {
+      npc.aiPush(AiQueue::aiOutputSvmOverlay(*to,svm,0));
+      } else {
+      npc.aiPush(AiQueue::aiTurnToNpc(to));
+      npc.aiPush(AiQueue::aiOutputSvm(*to,svm,0));
+      }
+    return true;
+    }
+
   err = "unknown action: " + a.type;
   return false;
+  }
+
+bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std::string_view state,
+                                     const rapidjson::Value& args, std::string& err) {
+  // the game's own fight/flee behaviour: the npc is handed to the script state for as long as it runs
+  // (states do not run under external control), then taken back
+  Npc&       npc    = *c.npc;
+  const auto fn     = AiNpc::scriptState(world,state);
+  Npc*       target = findNpc(world,str(args,"npc"),&npc);
+  if(!fn.isValid()) {
+    err = "the scripts have no " + std::string(state);
+    return false;
+    }
+  if(target==nullptr || target==&npc || target->isDead()) {
+    err = "unknown target npc: " + std::string(str(args,"npc"));
+    return false;
+    }
+  a.state     = fn;
+  a.toPlayer  = target->isPlayer();
+  a.target    = target->instanceSymbol();
+  a.targetNpc = target;
+  a.deadline = a.type=="fight" ? 60000 : 20000;
+  c.scripted = true;
+  npc.setExternalControl(false);
+  npc.setTarget(target);
+  npc.aiPush(AiQueue::aiStartState(fn,0,target,nullptr,""));
+  return true;
+  }
+
+void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now) {
+  auto& a  = *c.act;
+  Npc&  npc = *c.npc;
+  const bool in = npc.isInState(a.state);
+  if(!a.entered) {
+    if(in) {
+      a.entered = true;
+      } else {
+      if(now>a.start+StateStartMs)
+        finishAction(c,"failed","the npc did not start to " + a.type);
+      return;
+      }
+    }
+  if(in) {
+    if(now>=a.deadline)
+      finishAction(c,"timeout","");
+    return;
+    }
+  // the very npc it fought (the pointer is only compared, never followed, unless still in the world)
+  Npc* target = nullptr;
+  world.detectNpc(npc.position(),6000,[&](Npc& n) {
+    if(&n==a.targetNpc)
+      target = &n;
+    });
+  std::string_view detail;
+  if(target==nullptr)
+    detail = "target is gone"; else
+  if(target->isDead() || target->isDown())
+    detail = "target is down";
+  finishAction(c,"done",detail);
+  }
+
+void NpcController::regainControl(Controlled& c) {
+  if(!c.scripted || c.npc==nullptr)
+    return;
+  c.scripted = false;
+  Npc& npc = *c.npc;
+  npc.clearAiQueue();     // the state's fight moves too
+  npc.clearState(true);
+  npc.setTarget(nullptr);
+  npc.setExternalControl(true);
+  if(npc.weaponState()!=WeaponState::NoWeapon)
+    npc.aiPush(AiQueue::aiRemoveWeapon());
   }
 
 void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
   auto& a = *c.act;
   if(now<a.start+GraceMs)
     return;
+  if(a.state.isValid()) {
+    updateStateAction(world,c,now);
+    return;
+    }
 
   if(c.npc->haveOutput())
     a.deadline = now + a.timeout; // queued speech goes first, the clock starts after it
@@ -511,6 +625,7 @@ void NpcController::stopFollow(Controlled& c, std::string_view reason) {
 void NpcController::finishAction(Controlled& c, std::string_view status, std::string_view detail, double distance) {
   if(!c.act)
     return;
+  regainControl(c);
   emitActionResult(c.act->id,c.symbol,status,detail,distance);
   c.act.reset();
   c.nextSnapshot = 0;

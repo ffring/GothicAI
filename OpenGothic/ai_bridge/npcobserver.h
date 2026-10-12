@@ -10,13 +10,15 @@
 #include <vector>
 
 #include "game/constants.h"
+#include "game/gamescript.h"
 
 class Npc;
 class World;
 
 // NPCs that follow their routine, as seen by the AI server's planner (protocol v5):
 // - npc_roster: npc's around the player, twice a second;
-// - npc_event:  what they notice about the player (from the engine's own perceptions, which still run);
+// - npc_event:  what they notice about the player, and threats from others: monsters near or attacking,
+//               armed npc's (from the engine's own perceptions, which still run);
 // - npc_act:    "soft" actions put into the npc's AI queue the way scripts do it (AI_OutputSVM,
 //               AI_TurnToNpc, ...): when the queue runs empty, the engine resumes the routine itself;
 // - npc_idle:   such an action is done.
@@ -32,6 +34,8 @@ class NpcObserver final {
     void tick(World& world);
     void perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
     void act(World& world, const rapidjson::Value& msg);
+    // `routine`: an npc's daily routine, its routine variants and current state (v6)
+    void routine(World& world, const rapidjson::Value& msg);
     void clear();
 
   private:
@@ -40,6 +44,9 @@ class NpcObserver final {
       std::string symbol;
       size_t      instance = 0;
       uint64_t    start    = 0;
+      ScriptFn    state;            // fight/flee: done when the npc leaves this script state
+      bool        entered  = false;
+      uint64_t    maxMs    = 0;
       };
 
     void emitRoster(World& world);
@@ -47,7 +54,7 @@ class NpcObserver final {
     bool trackProximity(World& world, Npc& npc, std::string_view symbol, float dist);
     void checkRunning(World& world, uint64_t now);
     void emitEvent(std::string_view npc, std::string_view kind, std::string_view other,
-                   double distance, std::string_view detail);
+                   double distance, std::string_view detail, std::string_view otherName);
     bool throttled(std::string_view npc, std::string_view kind, uint64_t now, uint64_t periodMs);
     void reply(std::string_view id, std::string_view npc, std::string_view status, std::string_view detail);
 

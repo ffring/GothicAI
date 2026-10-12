@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -41,7 +42,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 5;
+constexpr int         ProtocolVersion = 6;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -123,6 +124,7 @@ struct Voice final {
   uint64_t                     startedAt = 0;  // world ticks
   uint64_t                     drainedAt = 0;  // app ticks
   bool                         sized     = false;  // the line got its real length
+  bool                         overlay   = false;  // said on the move: no output barrier to correct
   };
 
 struct AiBridge::Impl final {
@@ -155,6 +157,7 @@ struct AiBridge::Impl final {
   void updateSaveRecord();
   void onDebug(const rapidjson::Value& msg);
   void runDebug();
+  void runWorldDebug(const rapidjson::Value& msg);
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   // who drives the npc instead of its scripts: "dialog" (our chat), "attached", or nobody
@@ -535,6 +538,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="npc_act") {
     observer.act(*world,doc);
     }
+  else if(type=="routine") {
+    observer.routine(*world,doc);
+    }
   else if(type=="say") {
     onSay(*world,doc);
     }
@@ -584,6 +590,12 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     sendResult(req,false,"debug commands need -devmode");
     return;
     }
+  const auto cmd = JsonRead::str(msg,"cmd");
+  if(cmd=="spawn" || cmd=="player_weapon") {
+    // world changes that are safe within the tick
+    runWorldDebug(msg);
+    return;
+    }
   if(!debugReq.empty()) {
     sendResult(req,false,"another debug command is pending");
     return;
@@ -621,6 +633,50 @@ void AiBridge::Impl::runDebug() {
   else {
     sendResult(req,false,"unknown debug command: " + cmd);
     }
+  }
+
+void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
+  const auto req   = JsonRead::str(msg,"req");
+  const auto cmd   = JsonRead::str(msg,"cmd");
+  World*     world = Gothic::inst().world();
+  Npc*       pl    = world!=nullptr ? world->player() : nullptr;
+  if(world==nullptr || pl==nullptr) {
+    sendResult(req,false,"no world loaded");
+    return;
+    }
+  if(cmd=="spawn") {
+    // a creature next to an npc (or the player): monsters for tests of threats
+    std::string inst(JsonRead::str(msg,"instance"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id   = world->script().findSymbolIndex(inst);
+    const auto   near = JsonRead::str(msg,"near");
+    Npc*         at   = near.empty() ? pl : npcBySymbol(*world,near);
+    if(id==size_t(-1) || at==nullptr) {
+      sendResult(req,false,id==size_t(-1) ? "unknown instance" : "unknown npc to spawn near");
+      return;
+      }
+    // towards the player (open ground both have walked), else where the npc faces
+    const float dist = float(JsonRead::integer(msg,"distance",600));
+    auto        pos  = at->position();
+    float       dx   = std::cos(at->rotationRad()), dz = std::sin(at->rotationRad());
+    if(at!=pl) {
+      const auto  d   = pl->position()-pos;
+      const float len = std::sqrt(d.x*d.x+d.z*d.z);
+      if(len>1) {
+        dx = d.x/len;
+        dz = d.z/len;
+        }
+      }
+    pos.x += dist*dx;
+    pos.z += dist*dz;
+    sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    return;
+    }
+  // player_weapon: the player draws ("melee") or puts away ("none") a weapon
+  const auto state = JsonRead::str(msg,"state");
+  const bool ok    = state=="none" ? pl->closeWeapon(false) : pl->drawWeaponMelee();
+  sendResult(req,ok,"the player cannot switch weapons now");
   }
 
 void AiBridge::Impl::send(std::string&& text) {
@@ -697,10 +753,17 @@ AiBridge::~AiBridge() = default;
 void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
   const auto symbol = std::string(JsonRead::str(msg,"npc"));
   const auto line   = std::string(JsonRead::str(msg,"line"));
-  Npc*       npc    = ctrl.find(world,symbol);
   Npc*       pl     = world.player();
+  Npc*       npc    = ctrl.find(world,symbol);
+  if(npc==nullptr) {
+    // a free npc (v6) may speak too, unless it is in a dialog or out of action
+    npc = npcBySymbol(world,symbol);
+    if(npc!=nullptr && (npc->isPlayer() || npc->isDead() || npc->isDown() || npc->isTalk() ||
+                        Gothic::inst().isNpcInDialog(*npc)))
+      npc = nullptr;
+    }
   if(npc==nullptr || pl==nullptr || !LineLibrary::isExternal(line)) {
-    Log::e("[ai] say: npc is not attached or bad line id: ",symbol," ",line);
+    Log::e("[ai] say: npc cannot speak now or bad line id: ",symbol," ",line);
     return;
     }
   auto wav   = fromBase64(JsonRead::str(msg,"audio"));
@@ -709,7 +772,21 @@ void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
     voice = std::make_shared<VoiceBuffer>(uint32_t(JsonRead::integer(msg,"rate",24000)));
   lines.add(line,symbol,TextCodec::fromUtf8(JsonRead::str(msg,"text")),std::move(wav),std::move(voice),
             std::string(JsonRead::str(msg,"reply")));
-  npc->aiPush(AiQueue::aiOutput(*pl,line,0));
+  if(!JsonRead::boolean(msg,"overlay",false)) {
+    npc->aiPush(AiQueue::aiOutput(*pl,line,0));
+    return;
+    }
+  // on the move (v6): not queued, so the npc keeps doing what it does (running, fighting)
+  auto* l = lines.find(line);
+  l->overlay = true;
+  std::string_view text;
+  uint32_t         time = 0;
+  lines.lookup(line,text,time);  // starts it: voice stream, subtitle, line_started
+  if(!l->wav.empty()) {
+    uint64_t len = 0;
+    world.addDlgSound(line + ".WAV",npc->mapHeadBone(),WorldSound::talkRange,len);
+    }
+  npc->startFaceAnim("VISEME",1,time);
   }
 
 void AiBridge::Impl::onSayAudio(World& world, const rapidjson::Value& msg) {
@@ -738,7 +815,8 @@ void AiBridge::Impl::startVoice(const LineLibrary::Line& line) {
   v.npc       = line.npc;
   v.buf       = line.voice;
   v.startedAt = world->tickCount();
-  v.sized     = line.voice->isFinished();  // then the line already got the exact length
+  v.sized     = line.voice->isFinished() || line.overlay;  // nothing to correct then
+  v.overlay   = line.overlay;
   v.effect    = session->loadSound(VoiceBuffer::producer(line.voice));
   if(!v.effect.isEmpty()) {
     v.effect.setPosition(npc->mapHeadBone());
@@ -886,6 +964,8 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
   lastLine[line.npc] = line.id;
   if(line.voice!=nullptr)
     startVoice(line);
+  if(chat==nullptr && line.reply.empty())
+    ensureChat();  // lines of npc's nobody chats with show as subtitles too
   if(chat==nullptr)
     return;
   if(!line.reply.empty()) {
@@ -894,7 +974,7 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
     }
   std::string name = line.npc;
   if(auto world = Gothic::inst().world())
-    if(auto npc = ctrl.find(*world,line.npc))
+    if(auto npc = npcBySymbol(*world,line.npc))
       name = std::string(npc->displayName());
   chat->addLine(std::move(name),line.text,line.time);
   }

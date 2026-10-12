@@ -9,14 +9,27 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import npc_tools
+from . import executor, npc_tools
+from .budget import Budget
+from .executor import Intent
 from .game import GameError, GameLink
 from .journal import Journal
-from .llm import LLMBackend, LLMError, Message, Role, TextDelta, ToolCall
+from .llm import (
+    Done,
+    Item,
+    LLMBackend,
+    LLMError,
+    Message,
+    Role,
+    TextDelta,
+    ToolCall,
+    ToolChoice,
+    ToolResult,
+)
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import Persona, PersonaProvider
 from .protocol import (
@@ -36,7 +49,9 @@ from .protocol import (
     Session,
     Snapshot,
 )
+from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
 from .tts import TtsClient, TtsError
+from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
 
 log = logging.getLogger(__name__)
 
@@ -187,8 +202,12 @@ class Conversation:
     new_meeting: bool = True  # the next reply starts a new meeting (noted in memory)
     compacting: asyncio.Task[None] | None = None
     # lines waiting for their audio, sent to the game strictly in order (with tts)
-    voice: asyncio.Queue[tuple[str, str, str]] | None = None  # (line, text, reply)
+    voice: asyncio.Queue[tuple[str, str, str, bool]] | None = None  # (line, text, reply, overlay)
     voicing: asyncio.Task[None] | None = None
+    intent: Intent = field(default_factory=Intent)  # what the npc wants now (set by the model)
+    pending: list[str] = field(default_factory=list)  # events that came while a turn was running
+    calm: Intent | None = None  # the intent before an incident goal replaced it
+    overlay_free_at: float = 0.0  # lines said on the move: when the last one is over
 
     @property
     def history(self) -> list[Message]:
@@ -222,9 +241,19 @@ class DialogueManager:
         greet: bool = True,
         tools: bool = True,
         journal: Journal | None = None,
+        trace: TraceWriter | None = None,
+        budget: Budget | None = None,
     ) -> None:
         self.link = link
         self.journal = journal or Journal()  # lines and actions for the launcher (see journal.py)
+        self.trace = trace  # every turn as a JSON line (see trace.py)
+        self.budget = budget  # calls nobody asked for (summaries); the player's turns are only counted
+        # the npc's intent changed (e.g. for the planner: what it wants from the hero after the chat)
+        self.on_intent: Callable[[str, Intent], None] | None = None
+        # the hero said something to the npc (the body may react before the answer)
+        self.on_player_phrase: Callable[[str, str], None] | None = None
+        # something the npc's body was to do did not work (npc, what)
+        self.on_body_failed: Callable[[str, str], None] | None = None
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -316,6 +345,8 @@ class DialogueManager:
     def _maybe_compact(self, conv: Conversation) -> None:
         if len(conv.memory.entries) <= MAX_HISTORY or (conv.compacting and not conv.compacting.done()):
             return
+        if self.budget is not None and not self.budget.allow(conv.npc):
+            return  # later: the next message tries again
         conv.compacting = asyncio.create_task(self._compact(conv))
 
     async def _compact(self, conv: Conversation) -> None:
@@ -353,6 +384,8 @@ class DialogueManager:
         if conv is None:
             branch = self._current_branch()
             conv = Conversation(npc, self.personas.get(npc, name), branch, self.memory.load(branch, npc))
+            if conv.memory.intent:
+                conv.intent = Intent.from_json(conv.memory.intent)
             self.conversations[npc] = conv
             if conv.memory.entries or conv.memory.summary:
                 log.info(
@@ -381,13 +414,49 @@ class DialogueManager:
             while not conv.voice.empty():
                 conv.voice.get_nowait()
                 conv.voice.task_done()
-        conv.reply = asyncio.create_task(self._reply(conv, user_text))
+        kind = "greeting" if user_text == GREETING_CUE else "player"
+        if self.budget is not None:
+            self.budget.note(conv.npc)
+        conv.reply = asyncio.create_task(self._turn(conv, Message("user", user_text), kind))
+        if kind == "player" and self.on_player_phrase is not None:
+            self.on_player_phrase(conv.npc, user_text)
         return conv.reply
+
+    def event_turn(
+        self, npc: str, cue: str, relevant: Callable[[], bool] | None = None, *, overlay: bool = False
+    ) -> asyncio.Task[None] | None:
+        """A turn about something that happened (an incident): the npc may speak and change its intent.
+        While a turn is running the event waits for the next one's situation instead of interrupting."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None:
+            return None
+        if conv.reply is not None and not conv.reply.done():
+            conv.pending.append(cue)
+            return None
+        conv.reply = asyncio.create_task(
+            self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay)
+        )
+        return conv.reply
+
+    def note(self, npc: str, text: str) -> None:
+        """A remark in the npc's history (what happened to it)."""
+        if conv := self.conversations.get(npc.upper()):
+            self._note(conv, text)
+
+    def has_spoken(self, npc: str) -> bool:
+        """The npc's current turn has sent a line already."""
+        conv = self.conversations.get(npc.upper())
+        return conv is not None and bool(conv.last_lines)
+
+    def body_busy(self, npc: str) -> bool:
+        """A commitment is being carried out (a gesture now would cancel it)."""
+        conv = self.conversations.get(npc.upper())
+        return conv is not None and bool(conv.actions)
 
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
         await self.link.send(ChatStatusCmd(npc=conv.npc, status=status, detail=detail))
 
-    async def _say(self, conv: Conversation, text: str, reply: str) -> None:
+    async def _say(self, conv: Conversation, text: str, reply: str, overlay: bool = False) -> None:
         text = to_game_text(text)
         if not text:
             return
@@ -396,31 +465,54 @@ class DialogueManager:
         self._lines[line] = (text, None)
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
-            await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, reply=reply))
+            if overlay:  # the game does not order lines said on the move
+                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
+                conv.overlay_free_at = time.monotonic() + line_duration(text)
+            await self.link.send(
+                SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None)
+            )
             return
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
-        conv.voice.put_nowait((line, text, reply))
+        conv.voice.put_nowait((line, text, reply, overlay))
 
-    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str]]) -> None:
+    async def _voice(self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str, bool]]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
-        audio still goes out, silent."""
+        audio still goes out, silent. Lines said on the move are not ordered by the game: the next one
+        waits until the previous has been said."""
         assert self.tts is not None
         while True:
-            line, text, reply = await queue.get()
+            line, text, reply, overlay = await queue.get()
             started = False
+            spoken_at = 0.0
+            if overlay:
+                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
             try:
                 if time.monotonic() >= self._tts_paused_until:
 
                     async def start(
-                        rate: int, _provider: str, line: str = line, text: str = text, reply: str = reply
+                        rate: int,
+                        _provider: str,
+                        line: str = line,
+                        text: str = text,
+                        reply: str = reply,
+                        overlay: bool = overlay,
                     ) -> None:
-                        nonlocal started
+                        nonlocal started, spoken_at
                         started = True
+                        spoken_at = time.monotonic()
                         await self.link.send(
-                            SayCmd(npc=conv.npc, line=line, text=text, stream=True, rate=rate, reply=reply)
+                            SayCmd(
+                                npc=conv.npc,
+                                line=line,
+                                text=text,
+                                stream=True,
+                                rate=rate,
+                                reply=reply,
+                                overlay=overlay or None,
+                            )
                         )
 
                     async def chunk(pcm: bytes, line: str = line) -> None:
@@ -433,6 +525,8 @@ class DialogueManager:
                         await self.link.send(
                             SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
                         )
+                        if overlay:
+                            conv.overlay_free_at = spoken_at + speech.audio_s + 0.25
                         log.info(
                             "%s voice %s: first audio after %.2fs, %.2fs of audio in %.2fs (%s)",
                             conv.npc,
@@ -455,45 +549,51 @@ class DialogueManager:
                         if started:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started:
-                    await self.link.send(SayCmd(npc=conv.npc, line=line, text=text, reply=reply))
+                    if overlay:
+                        conv.overlay_free_at = time.monotonic() + line_duration(text)
+                    await self.link.send(
+                        SayCmd(npc=conv.npc, line=line, text=text, reply=reply, overlay=overlay or None)
+                    )
             except GameError:
                 pass
             finally:
                 queue.task_done()
 
-    def _commit(self, conv: Conversation, user: Message, text: str) -> None:
-        # one synchronous step: an interrupted reply and its replacement cannot interleave here
+    def _commit(self, conv: Conversation, trigger: Message, text: str) -> None:
+        # one synchronous step: an interrupted reply and its replacement cannot interleave here.
+        # What started the turn is remembered even when the npc said nothing (it may have acted).
+        self._remember(conv, trigger.role, trigger.content)
         if text:
-            self._remember(conv, "user", user.content)
             self._remember(conv, "assistant", text)
-            self._maybe_compact(conv)
+        self._maybe_compact(conv)
 
     def _note(self, conv: Conversation, note: str) -> None:
         if note:
             log.info("%s note: %s", conv.npc, note)
             self._remember(conv, "developer", f"[{note}]")
 
-    def _act(self, conv: Conversation, call: ToolCall) -> None:
-        """Run a tool call next to the speech; its outcome lands in the history as a note."""
-        log.info("%s calls %s %s", conv.npc, call.name, call.arguments)
-        self.journal.add(
-            "action", npc=conv.npc, name=conv.persona.name, action=call.name, arguments=call.arguments
-        )
-        snapshot = self.link.snapshots.get(conv.npc)
-
+    def _after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
+        """Run a body job once the npc has said its queued lines; the note it returns goes into the
+        history after the current turn. A failure is reported (`on_body_failed`)."""
         reply = conv.reply
 
         async def run() -> None:
             if conv.voice is not None:
                 await conv.voice.join()  # the npc says what it said before acting on it
-            outcome = await npc_tools.execute(self.link, conv.npc, call, snapshot)
-            if reply is not None and not reply.done():
+            note, ok = await job()
+            if reply is not None and not reply.done() and reply is not asyncio.current_task():
                 await asyncio.wait({reply})  # the note goes after this turn's reply in the history
-            self._note(conv, outcome.note)
+            self._note(conv, note)
+            if not ok and self.on_body_failed is not None:
+                self.on_body_failed(conv.npc, note)
 
         task = asyncio.create_task(run())
         conv.actions.add(task)
         task.add_done_callback(conv.actions.discard)
+
+    def _journal_call(self, conv: Conversation, name: str, arguments: dict[str, Any]) -> None:
+        log.info("%s calls %s %s", conv.npc, name, arguments)
+        self.journal.add("action", npc=conv.npc, name=conv.persona.name, action=name, arguments=arguments)
 
     async def _end_after_speech(self, conv: Conversation, lines: list[str]) -> None:
         """Close the chat only once the npc has said its goodbye (closing clears its speech queue)."""
@@ -508,88 +608,293 @@ class DialogueManager:
         self._note(conv, "Ты закончил разговор")
         await self.link.send(ChatEndCmd(npc=conv.npc))
 
-    async def _reply(self, conv: Conversation, user_text: str) -> None:
+    async def _turn(
+        self,
+        conv: Conversation,
+        trigger: Message,
+        kind: str,
+        relevant: Callable[[], bool] | None = None,
+        *,
+        overlay: bool = False,
+    ) -> None:
+        """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
+        chat and the voice as it comes; tool calls are handled after their step."""
         if conv.new_meeting:
             conv.new_meeting = False
             if conv.memory.entries or conv.memory.summary:
                 when = game_time(self.link.snapshots.get(conv.npc))
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
-        user = Message("user", user_text)
-        situation = Message("developer", npc_tools.render_situation(self.link.snapshots.get(conv.npc)))
-        messages = [*conv.history, situation, user]
+        snap = self.link.snapshots.get(conv.npc)
+        situation_text = npc_tools.render_situation(snap, conv.intent)
+        if conv.pending:  # events that came during the last turn
+            situation_text += "\nТолько что: " + "; ".join(c.strip("[]") for c in conv.pending) + "."
+            conv.pending = []
+        situation = Message("developer", situation_text)
+        request: list[Item] = [*conv.history, situation, trigger]
         conv.last_lines = []
+        state = TurnState(
+            relevant=relevant,
+            overlay=overlay,
+            reply=f"R{next(self._reply_ids)}",
+            # voiced, the first line is synthesized before it is heard: cut it at the first clause
+            splitter=SentenceSplitter(first_clause=self.tts is not None),
+            started=time.monotonic(),
+        )
+        trace = TurnTrace(
+            self.trace,
+            npc=conv.npc,
+            branch=conv.branch,
+            trigger={"kind": kind, "text": trigger.content},
+            instructions=conv.persona.instructions,
+            tools=[t.name for t in self.tools],
+            snapshot=snap.model_dump(mode="json") if snap is not None else None,
+            llm=self.llm.name,
+            model=getattr(self.llm, "model", None),
+        )
         await self._status(conv, "thinking")
-        # voiced, the first line is synthesized before it is heard: cut it at the first clause
-        splitter = SentenceSplitter(first_clause=self.tts is not None)
-        started = time.monotonic()
-        first_delta: float | None = None
-        first_line: float | None = None
-        text = ""
-        end_requested = False
-        reply = f"R{next(self._reply_ids)}"
-        shown, shown_at = "", 0.0
+        status = "completed"
+        added: list[Item] = list(request)
         try:
-            async for event in self.llm.stream(
-                instructions=conv.persona.instructions, messages=messages, tools=self.tools
-            ):
-                if isinstance(event, ToolCall):
-                    if event.name == npc_tools.END_CONVERSATION:
-                        end_requested = True
-                    else:
-                        self._act(conv, event)
-                    continue
-                if not isinstance(event, TextDelta):
-                    continue
-                if first_delta is None:
-                    first_delta = time.monotonic() - started
-                text += event.text
-                # the chat shows the reply as it is written; voice and animation follow line by line
-                if time.monotonic() - shown_at >= CHAT_TEXT_EVERY and (now := to_game_text(text)) != shown:
-                    shown, shown_at = now, time.monotonic()
-                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=reply, text=shown))
-                for line in splitter.feed(event.text):
-                    if first_line is None:
-                        first_line = time.monotonic() - started
-                    await self._say(conv, line, reply)
-            for line in splitter.flush():
-                if first_line is None:
-                    first_line = time.monotonic() - started
-                await self._say(conv, line, reply)
-            if text:
+            for step in range(MAX_STEPS):
+                st = trace.step(added, tool_choice(step))
+                done = await self._step(conv, state, request, tool_choice(step), st)
+                if not state.text.strip() and state.relevant is not None and not state.relevant():
+                    raise StaleTurn  # nothing said yet and the incident is over: no late intents either
+                calls = [i for i in done.items if isinstance(i, ToolCall)]
+                outcomes = [await self._tool(conv, call, state) for call in calls]
+                for call, outcome in zip(calls, outcomes, strict=True):
+                    st.calls.append(
+                        CallTrace(call.name, call.arguments, call.call_id, outcome.output, outcome.status)
+                    )
+                if not go_on(outcomes, bool(state.text.strip())):
+                    break
+                if step == MAX_STEPS - 1:
+                    status = "step_cap"
+                    break
+                results = [ToolResult(c.call_id, o.output) for c, o in zip(calls, outcomes, strict=True)]
+                added = [*done.items, *results]
+                request += added
+            if state.text:
                 await self.link.send(
-                    ChatTextCmd(npc=conv.npc, reply=reply, text=to_game_text(text), final=True)
+                    ChatTextCmd(npc=conv.npc, reply=state.reply, text=to_game_text(state.text), final=True)
                 )
         except LLMError as err:
             log.error("%s: %s", conv.npc, err)
             self.journal.add("llm_error", npc=conv.npc, name=conv.persona.name, detail=str(err))
+            if state.text:  # a turn that failed before a word was said is not remembered
+                self._commit(conv, trigger, state.text)
+            trace.close("llm_error")
             await self._status(conv, "error", str(err))
             return
+        except StaleTurn:
+            # what the turn was about is over: words now would be out of place
+            self._commit(conv, trigger, state.text)
+            trace.close("stale")
+            await self._status(conv, "idle")
+            return
         except asyncio.CancelledError:
-            self._commit(conv, user, text)  # the npc remembers what it already said
+            self._commit(conv, trigger, state.text)  # the npc remembers what it already said
+            trace.close("cancelled")
             raise
 
-        self._commit(conv, user, text)
-        total = time.monotonic() - started
-        if text:
+        self._commit(conv, trigger, state.text)
+        trace.close(status)
+        total = time.monotonic() - state.started
+        if state.text:
             self.journal.add(
                 "npc",
                 npc=conv.npc,
                 name=conv.persona.name,
-                text=to_game_text(text),
+                text=to_game_text(state.text),
                 llm=self.llm.name,
-                first_token_s=round(first_delta or 0.0, 2),
+                first_token_s=round(state.first_delta or 0.0, 2),
                 total_s=round(total, 2),
             )
         log.info(
-            "%s replied via %s: first token %.2fs, first line %.2fs, total %.2fs",
+            "%s replied via %s in %d step(s): first token %.2fs, first line %.2fs, total %.2fs",
             conv.npc,
             self.llm.name,
-            first_delta or 0.0,
-            first_line or 0.0,
+            len(trace.steps),
+            state.first_delta or 0.0,
+            state.first_line or 0.0,
             total,
         )
         await self._status(conv, "idle")
-        if end_requested:
+        if state.end_requested:
             task = asyncio.create_task(self._end_after_speech(conv, list(conv.last_lines)))
             conv.actions.add(task)
             task.add_done_callback(conv.actions.discard)
+
+    async def _step(
+        self,
+        conv: Conversation,
+        state: TurnState,
+        request: list[Item],
+        choice: ToolChoice | None,
+        st: StepTrace,
+    ) -> Done:
+        """One model call. Its text continues the turn's reply: the chat shows it as it is written, voice
+        and animation follow line by line; what is left of the last sentence is said at the end."""
+        started = time.monotonic()
+        first: float | None = None
+        done: Done | None = None
+        if state.text and not state.text.endswith((" ", "\n")):
+            state.text += " "
+        try:
+            async for event in self.llm.stream(
+                instructions=conv.persona.instructions,
+                messages=request,
+                tools=self.tools,
+                tool_choice=choice,
+            ):
+                if isinstance(event, Done):
+                    done = event
+                if not isinstance(event, TextDelta):
+                    continue
+                now = time.monotonic()
+                if first is None and state.relevant is not None and not state.relevant():
+                    raise StaleTurn
+                first = first if first is not None else now - started
+                if state.first_delta is None:
+                    state.first_delta = now - state.started
+                state.text += event.text
+                # the chat shows the reply as it is written
+                if (
+                    now - state.shown_at >= CHAT_TEXT_EVERY
+                    and (shown := to_game_text(state.text)) != state.shown
+                ):
+                    state.shown, state.shown_at = shown, now
+                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
+                for line in state.splitter.feed(event.text):
+                    await self._line(conv, state, line)
+            for line in state.splitter.flush():
+                await self._line(conv, state, line)
+        finally:
+            TurnTrace.finish_step(st, done, first, time.monotonic() - started)
+        if done is None:
+            raise LLMError(f"{self.llm.name}: the stream ended without a result", retryable=True)
+        return done
+
+    async def _line(self, conv: Conversation, state: TurnState, line: str) -> None:
+        if state.first_line is None:
+            state.first_line = time.monotonic() - state.started
+        await self._say(conv, line, state.reply, state.overlay)
+
+    async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
+        """Handle a call of the model. Checks run here, against what the npc has and sees: a rejection
+        goes back to the model at once. Accepted commitments are carried out after the npc's line."""
+        snap = self.link.snapshots.get(conv.npc)
+        match call.name:
+            case npc_tools.END_CONVERSATION:
+                state.end_requested = True
+                return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
+            case npc_tools.SET_INTENT:
+                return self._set_intent(conv, call, snap)
+            case npc_tools.RECALL:
+                if state.recalled:
+                    return ToolOutcome("Больше ничего не вспоминается.", "ignored")
+                state.recalled = True
+                return ToolOutcome(self._recall(conv, str(call.arguments.get("query", ""))), "read")
+            case npc_tools.GIVE_ITEM:
+                args, reason = executor.check_give(call.arguments, snap)
+                if args is None:
+                    return ToolOutcome(f"Отклонено: {reason}", "rejected")
+                key = (args["item"], state.reply)
+                if key in state.given:  # the same item again in this turn: already on its way
+                    return ToolOutcome("Этот предмет ты уже отдаёшь.", "accepted")
+                state.given.add(key)
+                self._journal_call(conv, call.name, args)
+                give = ToolCall(call.name, args, call.call_id)
+                self._after_speech(conv, lambda: self._give(conv, give, snap))
+                return ToolOutcome("Принято: отдашь после реплики.", "accepted")
+        return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
+
+    def _recall(self, conv: Conversation, query: str) -> str:
+        """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded)."""
+        first = conv.memory.entries[0].seq if conv.memory.entries else conv.memory.summary_seq + 1
+        found = self.memory.search(conv.branch, conv.npc, query, min(conv.memory.summary_seq, first - 1))
+        log.info("%s recalls %r: %d message(s)", conv.npc, query, len(found))
+        if not found:
+            return "Ничего такого не вспоминается."
+        speaker = {"user": "Герой", "assistant": "Ты", "developer": ""}
+        lines = []
+        for r in found:
+            who = speaker.get(r.role, "")
+            lines.append(f"[{r.game_time or '?'}] {who + ': ' if who else ''}{r.content}")
+        return "Ты вспоминаешь:\n" + "\n".join(lines)
+
+    async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
+        outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
+        return outcome.note, outcome.ok
+
+    def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
+        intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap)
+        if intent is None:
+            return ToolOutcome(f"Отклонено: {reason}", "rejected")
+        if executor.same(conv.intent, intent):
+            return ToolOutcome("Намерение не изменилось.", "accepted")
+        self._journal_call(conv, call.name, call.arguments)
+        self._change_intent(conv, intent, snap)
+        return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
+
+    def _change_intent(self, conv: Conversation, intent: Intent, snap: Snapshot | None) -> None:
+        old = conv.intent
+        if intent.goal in executor.INCIDENT_GOALS and old.goal not in executor.INCIDENT_GOALS:
+            conv.calm = old  # what to go back to when the incident is over
+        conv.intent = intent
+        seq = self.memory.set_intent(
+            conv.branch, conv.npc, intent.to_json(), game_time(self.link.snapshots.get(conv.npc))
+        )
+        self._send_head(conv.branch, seq)
+        if self.on_intent is not None:
+            self.on_intent(conv.npc, intent)
+        acts = executor.intent_actions(old, intent, snap.npc.following if snap else False)
+        if acts:
+            self._after_speech(conv, lambda: self._body(conv, acts))
+
+    def incident_over(self, npc: str) -> None:
+        """Goals that only hold while something is going on (flee, fight...) end with it: the npc goes
+        back to what it wanted before, keeping its attitude and agenda."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None or conv.intent.goal not in executor.INCIDENT_GOALS:
+            return
+        calm = conv.calm or Intent()
+        intent = Intent(calm.goal, calm.target, conv.intent.attitude, conv.intent.agenda)
+        log.info("%s: the incident is over, intent back to %s", conv.npc, intent.goal)
+        self._change_intent(conv, intent, self.link.snapshots.get(conv.npc))
+
+    async def _body(self, conv: Conversation, acts: list[executor.Action]) -> tuple[str, bool]:
+        """Game actions for an intent; only what did not work is noted."""
+        failed = []
+        for action, args in acts:
+            try:
+                res = await self.link.act(conv.npc, action, **args)  # type: ignore[arg-type]
+            except (GameError, TimeoutError) as err:
+                failed.append(f"{action}: {err}")
+                continue
+            if res.status != "done":
+                failed.append(f"{action}: {res.detail or res.status}")
+        if failed:
+            return f"Тело не выполнило намерение ({'; '.join(failed)})", False
+        return "", True
+
+
+class StaleTurn(Exception):
+    """The incident a turn was about is over before the npc said a word."""
+
+
+@dataclass
+class TurnState:
+    reply: str  # chat entry id of this turn's text
+    splitter: SentenceSplitter
+    started: float
+    text: str = ""  # everything said in the turn, all steps
+    shown: str = ""
+    shown_at: float = 0.0
+    first_delta: float | None = None
+    first_line: float | None = None
+    end_requested: bool = False
+    given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
+    relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
+    recalled: bool = False  # recall is used once per turn
+    overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it

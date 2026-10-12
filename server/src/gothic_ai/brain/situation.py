@@ -44,7 +44,8 @@ EVENT_OPTIONS = {
     "enter_room": {"tell_to_leave": "tell the hero to get out of your house"},
     "item_dropped": {"pick_up": "pick up the item"},
     "monster_near": {"call_help": "shout for help"},
-    "attacked_by": {"call_help": "shout for help"},
+    "monster_attack": {"call_help": "shout for help"},
+    "npc_attack": {"call_help": "shout for help"},
     "fight_nearby": {"call_guards": "shout for the guards"},
 }
 

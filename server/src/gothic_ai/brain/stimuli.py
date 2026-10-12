@@ -28,15 +28,19 @@ POLICIES: dict[str, EventPolicy] = {
     "player_sleeps": EventPolicy("The hero lay down to sleep nearby.", 60),
     "player_sits": EventPolicy("The hero sat down nearby.", 30),
     "weapon_drawn": EventPolicy("The hero drew a weapon near you.", 20, scripted=True),
+    "threatened": EventPolicy("The hero aims a weapon at you.", 10, scripted=True),
     "theft": EventPolicy("The hero stole {detail}.", 300, scripted=True),
     "attack": EventPolicy("The hero attacked {detail}.", 300, scripted=True),
     "magic": EventPolicy("The hero cast a spell nearby.", 30, scripted=True),
     "murder": EventPolicy("The hero killed {detail}.", 600, scripted=True),
-    # not about the hero: danger to the npc itself or a commotion around it
-    "monster_near": EventPolicy("{Detail} is coming at you.", 20, urgent=True, salient=True),
-    "attacked_by": EventPolicy("{Detail} attacked you.", 60, urgent=True, salient=True),
-    "fight_nearby": EventPolicy("A fight broke out nearby: {detail}.", 30, salient=True),
-    "cry_for_help": EventPolicy("{Detail} is shouting for help nearby.", 30, salient=True),
+    # threats from others (v6); left to the scripts for now, the behavioral model learns them (M5c/M5d)
+    "monster_near": EventPolicy("{other} is prowling nearby ({dist} away).", 20, scripted=True),
+    "monster_attack": EventPolicy("{other} attacks {detail}.", 30, scripted=True),
+    "npc_attack": EventPolicy("{other} attacks you.", 60, scripted=True),
+    "hero_attacked": EventPolicy("{other} attacks the hero.", 30, scripted=True),
+    # commotion around the npc: in the decider's training scenes (decider-service/tuning), not sent yet
+    "fight_nearby": EventPolicy("A fight broke out nearby: {detail}.", 30, scripted=True),
+    "cry_for_help": EventPolicy("{other} is shouting for help nearby.", 30, scripted=True),
 }
 DEFAULT_POLICY = EventPolicy("Something happened: {kind} ({detail}).", 15)
 
@@ -52,6 +56,7 @@ class Stimulus:
     other: str = "PLAYER"
     distance_cm: float | None = None
     detail: str | None = None
+    other_name: str | None = None  # shown name of `other` (not the player)
 
     @property
     def policy(self) -> EventPolicy:
@@ -61,12 +66,10 @@ class Stimulus:
         return now - self.at <= self.policy.ttl_s
 
     def describe(self, now: float) -> str:
-        other = "the hero" if self.other == "PLAYER" else self.other
+        other = "the hero" if self.other == "PLAYER" else (self.other_name or self.other)
         dist = f"{self.distance_cm / 100:.0f} m" if self.distance_cm is not None else "a few metres"
-        detail = self.detail or "something"
-        text = self.policy.text.format(
-            other=other, detail=detail, Detail=detail[:1].upper() + detail[1:], dist=dist, kind=self.kind
-        )
+        detail = {"you": "you", "PLAYER": "the hero"}.get(self.detail or "", self.detail or "something")
+        text = self.policy.text.format(other=other, detail=detail, dist=dist, kind=self.kind)
         ago = now - self.at
         return text if ago < 3 else f"{text} ({ago:.0f} s ago)"
 

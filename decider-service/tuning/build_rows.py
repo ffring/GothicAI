@@ -27,6 +27,17 @@ from gothic_ai.brain.stimuli import Stimulus
 HERE = Path(__file__).parent
 DATA = HERE / "data"
 
+# card events whose detail is who does it -> the planner's event kind (protocol v6), told by `other_name`
+FROM_OTHERS = {"monster_near": "monster_near", "attacked_by": "npc_attack", "cry_for_help": "cry_for_help"}
+
+
+def stimulus(e: dict, now: float, hero_cm: float) -> Stimulus:
+    kind, detail = e["kind"], e.get("detail")
+    if kind in FROM_OTHERS:
+        name = (detail or "someone").strip()
+        return Stimulus(FROM_OTHERS[kind], now, other="OTHER", other_name=name[:1].upper() + name[1:])
+    return Stimulus(kind, now, detail=detail, distance_cm=hero_cm if kind == "player_near" else None)
+
 
 def prod(card: dict, builder: SituationBuilder) -> dict:
     npc = NpcContext(
@@ -40,15 +51,7 @@ def prod(card: dict, builder: SituationBuilder) -> dict:
         facts=tuple(card.get("facts") or ()),
     )
     now = 1000.0
-    stimuli = [
-        Stimulus(
-            e["kind"],
-            now,
-            detail=e.get("detail"),
-            distance_cm=npc.distance_cm if e["kind"] == "player_near" else None,
-        )
-        for e in card["events"]
-    ]
+    stimuli = [stimulus(e, now, npc.distance_cm) for e in card["events"]]
     react = builder.react(npc, stimuli, now, clock_text(int(card["hour"]), int(card["minute"])))
     questions = {**react.questions, **builder.attitude(react).questions, **builder.escalate(react).questions}
     return {"state": react.state, "questions": questions}

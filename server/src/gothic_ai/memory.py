@@ -5,14 +5,16 @@ branches off the saved branch at the sequence number written into the save, so w
 after that save is forgotten, exactly like in the game world. Each branch holds its own copy of the
 events it inherited, which keeps reads to one branch.
 
-Events per npc: dialogue messages (`user` = the hero, `assistant` = the npc, `developer` = notes)
-and summaries that fold older messages into a short recollection.
+Events per npc: dialogue messages (`user` = the hero, `assistant` = the npc, `developer` = notes),
+summaries that fold older messages into a short recollection, and the npc's intents (JSON, see
+executor.py): the latest one is what the npc wants now.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -26,6 +28,9 @@ DEFAULT_PATH = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local" / "s
     "memory.sqlite3"
 )
 LOAD_LIMIT = 100  # newest messages read back for one npc (older ones should be summarized already)
+SEARCH_SCAN = 2000  # how far back a search looks
+STEM = 4  # a crude stem for Russian: the first letters of longer words ("драконы" ~ "дракон")
+_WORDS = re.compile(r"\w+")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS branches (
@@ -38,7 +43,7 @@ CREATE TABLE IF NOT EXISTS events (
     branch    TEXT NOT NULL,
     seq       INTEGER NOT NULL,
     npc       TEXT NOT NULL,
-    kind      TEXT NOT NULL,          -- message | summary
+    kind      TEXT NOT NULL,          -- message | summary | intent
     role      TEXT,                   -- message: user | assistant | developer
     content   TEXT NOT NULL,
     covers    INTEGER,                -- summary: messages up to this seq are folded in
@@ -60,11 +65,20 @@ class Entry:
         return Message(self.role, self.content)
 
 
+@dataclass(frozen=True)
+class Recollection:
+    seq: int
+    role: Role
+    content: str
+    game_time: str | None
+
+
 @dataclass
 class NpcMemory:
     summary: str = ""
     summary_seq: int = 0  # entries up to this seq are folded into the summary
     entries: list[Entry] = field(default_factory=list)
+    intent: str | None = None  # the latest intent, JSON
 
 
 @dataclass(frozen=True)
@@ -118,6 +132,9 @@ class MemoryStore:
     def add_summary(self, branch: str, npc: str, summary: str, covers: int) -> int:
         return self._insert(branch, npc, "summary", None, summary, covers, None)
 
+    def set_intent(self, branch: str, npc: str, intent: str, game_time: str | None = None) -> int:
+        return self._insert(branch, npc, "intent", None, intent, None, game_time)
+
     def load(self, branch: str, npc: str) -> NpcMemory:
         mem = NpcMemory()
         row = self._db.execute(
@@ -133,7 +150,45 @@ class MemoryStore:
             (branch, npc, mem.summary_seq, LOAD_LIMIT),
         ).fetchall()
         mem.entries = [Entry(int(seq), role, content) for seq, role, content in reversed(rows)]
+        mem.intent = self.intent(branch, npc)
         return mem
+
+    def intent(self, branch: str, npc: str) -> str | None:
+        """The npc's latest intent (JSON), if it ever had one in this branch."""
+        row = self._db.execute(
+            "SELECT content FROM events WHERE branch=? AND npc=? AND kind='intent' ORDER BY seq DESC LIMIT 1",
+            (branch, npc),
+        ).fetchone()
+        return row[0] if row else None
+
+    def search(
+        self, branch: str, npc: str, query: str, before_seq: int, limit: int = 6
+    ) -> list[Recollection]:
+        """Messages up to `before_seq` (older than what the npc has in mind): those sharing the most word
+        stems with `query`, topped up with the latest of them (a word search misses "как меня зовут" vs
+        "моё имя"; the model reads what comes back). Matching is done here, not in SQL: SQLite's LIKE
+        ignores case for ASCII only."""
+        if before_seq <= 0:
+            return []
+        rows = self._db.execute(
+            "SELECT seq, role, content, game_time FROM events "
+            "WHERE branch=? AND npc=? AND kind='message' AND seq<=? ORDER BY seq DESC LIMIT ?",
+            (branch, npc, before_seq, SEARCH_SCAN),
+        ).fetchall()
+        stems = _stems(query)
+        scored = []
+        for seq, role, content, game_time in rows:
+            text = content.lower()
+            score = sum(1 for stem in stems if stem in text)
+            if score:
+                scored.append((score, int(seq), Recollection(int(seq), role, content, game_time)))
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        found = {r.seq: r for _, _, r in scored[:limit]}
+        for seq, role, content, game_time in rows:  # newest first
+            if len(found) >= limit:
+                break
+            found.setdefault(int(seq), Recollection(int(seq), role, content, game_time))
+        return sorted(found.values(), key=lambda r: r.seq)
 
     def branches(self) -> list[BranchInfo]:
         rows = self._db.execute(
@@ -179,3 +234,7 @@ class _Transaction:
 
     def __exit__(self, exc_type, *_exc) -> None:
         self._db.execute("ROLLBACK" if exc_type else "COMMIT")
+
+
+def _stems(text: str) -> set[str]:
+    return {w[:STEM] for w in _WORDS.findall(text.lower()) if len(w) >= 3}

@@ -68,7 +68,8 @@ COMMENT_SVM = {
     "item_given": "NOTBAD",
     "attack": "NEVERHITMEAGAIN",
     "monster_near": "HELP",
-    "attacked_by": "HELP",
+    "monster_attack": "HELP",
+    "npc_attack": "HELP",
     "fight_nearby": "OHMYGODITSAFIGHT",
 }
 

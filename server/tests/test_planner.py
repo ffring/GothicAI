@@ -5,62 +5,10 @@ import random
 import pytest
 from websockets.asyncio.server import serve
 
-from gothic_ai.brain import DeciderClient, LogApplier, NpcPlanner, Outcome, PlannerConfig, Tier
+from gothic_ai.brain import DeciderClient, LogApplier, NpcPlanner, PlannerConfig, Tier
 from gothic_ai.brain.tiers import Placement, TierConfig, assign_tiers, raw_tier
 from gothic_ai.protocol import RosterEntry, parse_game_message
-
-
-class FakeDecider:
-    def __init__(self, choice: str = "greet", confidence: float = 0.9, kind: str = "answers") -> None:
-        self.choice, self.confidence, self.kind = choice, confidence, kind
-        self.calls: list[dict] = []
-        self.cancelled: list[str] = []
-        self.gate: asyncio.Event | None = None
-
-    async def decide(self, rid, lane, priority, deadline_ms, state, questions) -> Outcome:
-        self.calls.append(
-            {
-                "rid": rid,
-                "lane": lane,
-                "priority": priority,
-                "deadline_ms": deadline_ms,
-                "state": state,
-                "questions": questions,
-            }
-        )
-        if self.gate is not None:
-            await self.gate.wait()
-        if self.kind != "answers":
-            return Outcome(self.kind)
-        answers = {}
-        for name, q in questions.items():
-            if q["type"] == "choice":
-                pick = self.choice if self.choice in q["criteria"] else next(iter(q["criteria"]))
-                answers[name] = {
-                    "type": "choice",
-                    "choice": pick,
-                    "probabilities": {pick: self.confidence},
-                    "confidence": self.confidence,
-                }
-            elif q["type"] == "score":
-                answers[name] = {
-                    "type": "score",
-                    "score": 3.0,
-                    "probabilities": {"3": 1.0},
-                    "confidence": 0.8,
-                }
-        return Outcome("answers", answers, 1.0, 30.0)
-
-    async def cancel(self, rid: str) -> None:
-        self.cancelled.append(rid)
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.t = 1000.0
-
-    def __call__(self) -> float:
-        return self.t
+from tests.fakes import Clock, FakeDecider
 
 
 def entry(
@@ -442,7 +390,7 @@ def test_decisions_become_soft_actions() -> None:
     assert actions_for(d("comment", ("player_near", "enter_room"))) == [("say_svm", {"svm": "GETOUTOFHERE"})]
     assert actions_for(d("comment", ("player_near",))) == [("look_at", {"ms": 3000})]
     assert actions_for(d("keep_routine", question="plan")) == [] and actions_for(d("pick_up")) == []
-    assert actions_for(d("call_help", ("attacked_by",))) == [("say_svm", {"svm": "HELP"})]
+    assert actions_for(d("call_help", ("npc_attack",))) == [("say_svm", {"svm": "HELP"})]
     assert actions_for(d("comment", ("fight_nearby",))) == [("say_svm", {"svm": "OHMYGODITSAFIGHT"})]
 
 
@@ -452,9 +400,9 @@ def test_danger_to_the_npc_and_the_escalate_question() -> None:
 
     builder = SituationBuilder()
     npc = NpcContext("A", "Baltram", guild=3, distance_cm=800, in_view=True)
-    wolf = Stimulus("monster_near", 10.0, other="WOLF", detail="a wolf")
+    wolf = Stimulus("monster_near", 10.0, other="WOLF", distance_cm=800, other_name="Wolf")
     react = builder.react(npc, [wolf], 10.0, None)
-    assert "A wolf is coming at you." in react.state
+    assert "Wolf is prowling nearby (8 m away)." in react.state
     assert "call_help" in react.questions["react"]["criteria"]
     esc = builder.escalate(react)
     assert esc.state == react.state
@@ -502,3 +450,46 @@ def test_protocol_v5_messages() -> None:
         "action": "say_svm",
         "args": {"svm": "NOTNOW"},
     }
+
+
+async def test_after_a_chat_the_npc_does_not_walk_up_to_the_hero_again_at_once() -> None:
+    planner, _, applier, clock = make(FakeDecider(choice="approach_talk", confidence=0.9), ask_attitude=False)
+    planner.on_roster([entry("PABLO", 6)], clock.t)
+    planner.set_agenda("PABLO", "find the thief")
+    planner.on_message(parse_game_message(json.dumps({"type": "chat_open", "npc": "PABLO", "name": "Pablo"})))
+    planner.on_message(parse_game_message(json.dumps({"type": "chat_close", "npc": "PABLO"})))
+    await step(planner, clock, 1.6)  # the catch-up decision after the dialog
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock)
+    assert not applier.recent and planner.stats.cooldown >= 1
+
+
+async def test_a_new_npc_brings_the_agenda_its_last_conversation_left() -> None:
+    planner, decider, _, clock = make()
+    planner.agenda_of = lambda npc: "make the hero go to Lord Hagen" if npc == "XARDAS" else None
+    planner.on_roster([entry("XARDAS", 6), entry("BAUER", 8)], clock.t)
+    assert planner.npcs["XARDAS"].agenda == "make the hero go to Lord Hagen"
+    assert planner.npcs["BAUER"].agenda is None
+
+
+async def test_monster_threats_are_context_for_now() -> None:
+    planner, decider, _, clock = make()
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    msg = parse_game_message(
+        json.dumps(
+            {
+                "type": "npc_event",
+                "npc": "PEPE",
+                "kind": "monster_attack",
+                "other": "WOLF",
+                "other_name": "Волк",
+                "distance": 300,
+                "detail": "you",
+            }
+        )
+    )
+    planner.on_message(msg)
+    await step(planner, clock, 0.5)
+    assert decider.calls == [] and planner.stats.scripted_events == 1  # the scripts still react
+    (stim,) = planner.npcs["PEPE"].stimuli
+    assert stim.describe(clock.t) == "Волк attacks you."

@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 # --- game -> server -----------------------------------------------------------
 
@@ -254,14 +254,20 @@ class NpcRoster(_GameMessage):
 
 
 class NpcEvent(_GameMessage):
-    """Something an npc that is not under control noticed about the player (v5): came close, entered its
-    room, gave an item, drew a weapon, stole, cast a spell, attacked or killed (`detail`: whom). The
-    engine's own perceptions still run; this is a copy."""
+    """Something an npc that is not under control noticed (v5, threats from others since v6).
+
+    About the player: came close, entered its room, gave an item, drew a weapon (`weapon_drawn`), aimed
+    at it with a weapon (`threatened`), stole, cast a spell, attacked or killed (`detail`: whom).
+    Threats from others (`other` is their script symbol, `other_name` the shown name): a monster it
+    senses (`monster_near`), a monster attacking it or someone near (`monster_attack`, `detail`: "you"
+    or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
+    `distance` is from the npc to `other`. The engine's own perceptions still run; this is a copy."""
 
     type: Literal["npc_event"]
     npc: str
     kind: str
     other: str = "PLAYER"
+    other_name: str | None = None
     distance: float | None = None
     detail: str | None = None
 
@@ -284,6 +290,26 @@ class NpcActResult(_GameMessage):
     npc: str
     status: Literal["queued", "rejected"]
     detail: str | None = None
+
+
+class RoutineEntry(_GameMessage):
+    start: str  # "HH:MM" game time
+    end: str
+    state: str  # script state, e.g. ZS_SIT_BENCH
+    waypoint: str
+
+
+class RoutineInfo(_GameMessage):
+    """An npc's daily routine (v6), the answer to `routine`: its entries, the routine variants the scripts
+    have for it (`set_routine` names, e.g. START, GUIDE) and the script state it is in now."""
+
+    type: Literal["routine"]
+    req: str = ""
+    npc: str
+    current: str = ""
+    entries: list[RoutineEntry] = Field(default_factory=list)
+    routines: list[str] = Field(default_factory=list)
+    error: str | None = None
 
 
 GameMessage = Annotated[
@@ -310,7 +336,8 @@ GameMessage = Annotated[
     | NpcRoster
     | NpcEvent
     | NpcIdle
-    | NpcActResult,
+    | NpcActResult
+    | RoutineInfo,
     Field(discriminator="type"),
 ]
 
@@ -334,6 +361,11 @@ ActionType = Literal[
     "follow",
     "give_item",
     "return_to_routine",
+    "fight",  # v6: the game's own combat (ZS_ATTACK) against args.npc, then control comes back
+    "flee",  # v6: the game's own fleeing (ZS_FLEE) from args.npc
+    "draw_weapon",  # v6: args.kind melee|ranged (default: what the npc has)
+    "remove_weapon",  # v6
+    "say_svm",  # v6: the npc's own recorded line, args.svm; args.overlay: said on the move
     "debug_add_item",  # game must run with -devmode
 ]
 
@@ -365,7 +397,28 @@ class ActionCmd(_Command):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
-NpcActType = Literal["say_svm", "turn_to", "look_at", "play_ani", "go_to_npc", "turn_away"]
+NpcActType = Literal[
+    "say_svm",
+    "turn_to",
+    "look_at",
+    "play_ani",
+    "go_to_npc",
+    "turn_away",
+    "fight",  # v6: ZS_ATTACK against args.npc; npc_idle when the npc leaves that state
+    "flee",  # v6: ZS_FLEE from args.npc
+    "draw_weapon",  # v6
+    "remove_weapon",  # v6
+    "start_activity",  # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine
+    "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
+]
+
+
+class RoutineCmd(_Command):
+    """Ask for an npc's daily routine (v6); the game answers `routine`."""
+
+    type: Literal["routine"] = "routine"
+    req: str
+    npc: str
 
 
 class NpcActCmd(_Command):
@@ -391,7 +444,8 @@ class PingCmd(_Command):
 
 
 class SayCmd(_Command):
-    """One line (usually a sentence) for the npc to speak; shown as a subtitle. Aloud either with
+    """One line (usually a sentence) for the npc to speak, controlled or (v6) free; shown as a subtitle.
+    Aloud either with
     `audio` (base64 of a 16-bit mono WAV file, the line lasts as long as it) or `stream`: the voice
     follows in `say_audio` chunks (16-bit mono PCM at `rate`) and ends with `say_end`."""
 
@@ -403,6 +457,9 @@ class SayCmd(_Command):
     stream: bool | None = None
     rate: int | None = None
     reply: str | None = None  # the line is part of this reply, already shown with chat_text
+    # v6: said on the move, not through the npc's AI queue: it keeps running or fighting. Such lines
+    # are not ordered by the game: the server sends the next one when the previous has been said.
+    overlay: bool | None = None
 
 
 class ChatTextCmd(_Command):
@@ -470,13 +527,19 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load"]
+DebugCommand = Literal["save", "load", "spawn", "player_weapon"]
 
 
 class DebugCmd(_Command):
-    """Save or load a slot (`save_slot_<slot>.sav`) for automated checks; the game must run with -devmode."""
+    """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
+    spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
+    player draw (`state: "melee"`) or put away (`"none"`) a weapon."""
 
     type: Literal["debug"] = "debug"
     req: str
     cmd: DebugCommand
-    slot: int
+    slot: int = 0
+    instance: str | None = None
+    near: str | None = None
+    distance: int | None = None
+    state: str | None = None

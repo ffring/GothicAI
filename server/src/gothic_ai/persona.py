@@ -44,11 +44,19 @@ RULES = """Как отвечать:
 - Не выдумывай важных сюжетных событий; если чего-то не знаешь, скажи об этом в образе.
 - Сообщение в квадратных скобках — это ремарка о происходящем, а не слова героя.
 
-Действия:
-- Ты можешь действовать инструментами: отдать предмет, пойти за героем, остановиться, подойти, жест,
-  закончить разговор. Сначала скажи реплику, потом вызови инструмент; итог действия придёт ремаркой позже.
-- Делай только то, что сделал бы {name}. Отдать можно лишь то, что есть в твоём инвентаре.
-- Не обещай действий, которых не можешь совершить (сражаться, колдовать, создавать предметы)."""
+Намерения и действия:
+- Телом ты не управляешь: твоё тело и привычки сами делают то, чего ты хочешь. Ты передаёшь им
+  намерение (set_intent) и обещания (give_item, end_conversation); вспоминать помогает recall.
+- Сначала скажи реплику, потом вызови инструмент.
+- set_intent — только когда меняется то, чего ты хочешь: идти за героем, вернуться к своим делам,
+  бежать, искать помощи, драться, защищать героя, изменить планы; как ты относишься к герою; чего хочешь
+  от героя в долгую (agenda, по-английски, до 15 слов; null — не менять). Текущее намерение и возможные
+  цели — в обстановке. Цели вроде «драться» или «бежать» действуют, пока идёт само событие.
+- give_item — отдать герою предмет из своего инвентаря (список в обстановке); тело подойдёт и отдаст.
+- recall — вспомнить подробности прежних встреч, которых нет в сводке: сначала только «Хм…», потом вызов.
+- Если вызов отклонят, тебе сразу скажут почему: поправься одной короткой фразой, без извинений.
+- Итог действия придёт ремаркой.
+- Делай только то, что сделал бы {name}. Не обещай того, чего не можешь (колдовать, создавать предметы)."""
 
 
 # Voices for text-to-speech, as natural-language descriptions (VoxCPM2 voice design). Designed, not
@@ -58,6 +66,14 @@ VOICES = {
 }
 DEFAULT_VOICE = "A middle-aged man with an ordinary, slightly rough voice, speaking calmly"
 
+# One English line of character for the behavioral model (it reads English best).
+TRAITS = {
+    "NONE_100_XARDAS": (
+        "A powerful necromancer who once was a Fire Mage. Aloof, proud and wise; the hero's mentor. "
+        "He does not fight the hero's battles, but he is no coward."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class Persona:
@@ -65,6 +81,7 @@ class Persona:
     name: str
     instructions: str
     voice: str = DEFAULT_VOICE
+    traits: str | None = None  # English, for the behavioral model
 
 
 def render_instructions(npc: str, name: str, sample_lines: list[str]) -> str:
@@ -104,4 +121,10 @@ class PersonaProvider:
             lines = [text for _, text in load_npc_lines(self.game_dir, npc)]
             samples = pick_samples(lines)
             log.info("persona %s: %d original lines, %d samples", npc, len(lines), len(samples))
-        return Persona(npc, name, render_instructions(npc, name, samples), VOICES.get(npc, DEFAULT_VOICE))
+        return Persona(
+            npc,
+            name,
+            render_instructions(npc, name, samples),
+            VOICES.get(npc, DEFAULT_VOICE),
+            TRAITS.get(npc),
+        )

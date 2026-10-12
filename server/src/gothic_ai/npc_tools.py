@@ -1,7 +1,8 @@
-"""What an npc can do while talking: tools offered to the LLM and their execution in the game.
+"""Tools of the conversational model and the situation it is shown.
 
-Tool calls are fire-and-forget for the model: the game queues the action after the npc's current
-speech and the outcome is written into the conversation as a note the model sees next turn.
+The model does not drive the body (see executor.py): it sets intents and makes commitments. Checks run
+before anything reaches the game and a rejection comes back within the same turn; what passes is carried
+out after the npc's line, and its outcome is written into the conversation as a note.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from .executor import ATTITUDES, GOALS, Intent, describe_targets
 from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .protocol import ActionResult, Snapshot
@@ -38,11 +40,38 @@ def _object(properties: dict | None = None) -> dict:
     }
 
 
+SET_INTENT = "set_intent"
+GIVE_ITEM = "give_item"
+RECALL = "recall"
+
 TOOLS = [
     Tool(
-        "give_item",
-        "Отдать герою предмет из СВОЕГО инвентаря (список — в обстановке). "
-        "Если герой далеко, ты сначала подойдёшь. Не раздавай ценное без причины.",
+        SET_INTENT,
+        "Изменить своё намерение: чего ты сейчас хочешь, как относишься к герою, чего хочешь от него. "
+        "Тело и привычки выполнят его сами. Вызывай, только когда что-то меняется; текущее намерение "
+        "есть в обстановке — передавай его целиком, неизменные поля повтори.",
+        _object(
+            {
+                "goal": {"type": "string", "enum": list(GOALS), "description": "чего ты хочешь сейчас"},
+                "target": {
+                    "type": ["string", "null"],
+                    "description": "на кого или куда: id из списка целей в обстановке "
+                    "(PLAYER — герой); null — без цели",
+                },
+                "attitude": {"type": "string", "enum": list(ATTITUDES), "description": "отношение к герою"},
+                "agenda": {
+                    "type": ["string", "null"],
+                    "description": "по-английски, до 15 слов: чего ты в долгую хочешь от героя или что "
+                    "задумал; null — оставить как есть (мгновенные события его не меняют); "
+                    "пустая строка — ничего",
+                },
+            }
+        ),
+    ),
+    Tool(
+        GIVE_ITEM,
+        "Отдать герою предмет из СВОЕГО инвентаря (список — в обстановке). Тело подойдёт и отдаст после "
+        "твоей реплики. Не раздавай ценное без причины.",
         _object(
             {
                 "item": {
@@ -53,13 +82,12 @@ TOOLS = [
             }
         ),
     ),
-    Tool("follow_player", "Пойти за героем и следовать за ним, пока тебя не остановят.", _object()),
-    Tool("stop", "Остановиться: перестать следовать за героем или прервать движение.", _object()),
-    Tool("come_closer", "Подойти к герою вплотную.", _object()),
     Tool(
-        "gesture",
-        "Сделать жест во время разговора.",
-        _object({"name": {"type": "string", "enum": list(GESTURES), "description": "какой жест"}}),
+        RECALL,
+        "Вспомнить подробности прежних встреч с героем, которых нет в сводке твоей памяти: что он "
+        "рассказывал, о чём просил, что ты обещал. Перед вызовом скажи только «Хм…» или «Дай вспомнить…», "
+        "без вопросов; ответишь, когда вспомнишь.",
+        _object({"query": {"type": "string", "description": "о чём вспомнить, ключевые слова"}}),
     ),
     Tool(
         END_CONVERSATION,
@@ -151,10 +179,10 @@ def _metres(cm: float) -> str:
     return f"{max(1, round(cm / 100))} м"
 
 
-def render_situation(snap: Snapshot | None) -> str:
+def render_situation(snap: Snapshot | None, intent: Intent | None = None) -> str:
     """What the npc perceives right now; sent with every turn, not kept in history."""
     if snap is None:
-        return "[Обстановка неизвестна]"
+        return "[Обстановка неизвестна]" + (f"\nТвоё намерение: {intent.describe()}." if intent else "")
     w, npc, pl = snap.world, snap.npc, snap.player
     lines = [
         "[Обстановка — видна только тебе, герою её не пересказывай]",
@@ -173,4 +201,7 @@ def render_situation(snap: Snapshot | None) -> str:
     near = [f"{o.name} ({_metres(o.distance)}{', мёртв' if o.dead else ''})" for o in snap.nearby_npcs]
     lines.append("Рядом: " + (", ".join(near) if near else "никого") + ".")
     lines.append("Сейчас ты идёшь за героем." if npc.following else "Сейчас ты стоишь на месте.")
+    if intent is not None:
+        lines.append(f"Твоё намерение: {intent.describe()}.")
+        lines.append(f"Цели для намерения (target): {describe_targets(snap)}.")
     return "\n".join(lines)

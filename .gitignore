@@ -39,3 +39,6 @@ log.txt
 # Local agent rules (not shared)
 /AGENTS.md
 /tts-samples/
+
+# Test bench output (scripts/bench.sh)
+/.bench/

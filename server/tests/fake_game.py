@@ -11,7 +11,13 @@ from websockets.asyncio.client import ClientConnection, connect
 
 from gothic_ai.game import GameLink, GameServer
 
-KNOWN_ANIMS = {"T_GREETNOV"}
+KNOWN_ANIMS = {
+    "T_GREETNOV",
+    "T_YES",
+    "T_NO",
+    "T_DONTKNOW",
+    "T_FORGETIT",
+}  # not T_COMEOVERHERE: m0 tries it first
 WAYPOINTS = {"NW_XARDAS_TOWER_IN1_31": 0.0, "NW_XARDAS_TOWER_04": 850.0, "NW_XARDAS_STAIRS_01": 1200.0}
 
 
@@ -28,6 +34,15 @@ class FakeGame:
         self.heads: list[tuple[str, int]] = []  # memory heads the server reported
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
+        self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
+        self.hp = 999
+
+    async def perception(
+        self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
+    ):
+        """What a controlled npc noticed (the game sends these for attached npc's only)."""
+        extra = {"victim": victim} if victim else {}
+        await self.send(type="perception", npc=npc, perc=perc, other=other, distance=distance, **extra)
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -43,7 +58,7 @@ class FakeGame:
                 "name": "Ксардас",
                 "pos": [1.0, 2.0, 3.0],
                 "rot": 90.0,
-                "hp": 999,
+                "hp": self.hp,
                 "hp_max": 999,
                 "busy": False,
                 "action": None,
@@ -66,9 +81,7 @@ class FakeGame:
                 "melee": "Палка",
                 "ranged": None,
             },
-            "nearby_npcs": [
-                {"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}
-            ],
+            "nearby_npcs": self.nearby,
             "nearby_waypoints": [{"name": n, "distance": d} for n, d in WAYPOINTS.items()],
         }
 
