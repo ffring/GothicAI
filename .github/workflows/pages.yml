@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.0  # setup-uv publishes no floating major tags
       - name: Test
         run: uv run --project site pytest -q site/tests
       - name: Build
