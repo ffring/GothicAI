@@ -325,6 +325,10 @@ def analyze(rows):
             for k in ("starts", "cuts", "stops") + (("nods",) if "ge_nods" in rows[0] else ()):
                 stats["ges_" + k] = counted(rows, "ge_" + k)
             stats["ges_kinds"] = len({int(r["ge_id"]) for r in rows if r["ge_id"] > 0})
+    # listening to the hero (nods as his words come) and thinking of an answer (the eyes aside)
+    if rows and "ge_listen" in rows[0] and any(r["ge_listen"] > 0 or r["ge_think"] > 0 for r in rows):
+        stats["ges_lnods"] = counted(rows, "ge_lnods")
+        stats["ges_aside"] = max(r["ge_aside"] for r in rows)
     # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
     # to come back after a blow; a blow without a flinch, a flinch that does not come back
     if rows and "f_hits" in rows[0]:
@@ -568,6 +572,8 @@ def report(out):
         gs = "-" if "ges_talk" not in st else \
             f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})" + \
             ("" if "ges_nods" not in st else f" nods {st['ges_nods']}")
+        if "ges_lnods" in st:
+            gs = ("" if gs == "-" else gs + "; ") + f"listening: nods {st['ges_lnods']}, eyes aside {st['ges_aside']:.1f}"
         bk = "-" if "blink_rate" not in st else \
             f"{st['blink_rate']:.0f} ({st['blink_pause']}, {st['blink_shift']})"
         fl = "-" if "flinch_hits" not in st else \

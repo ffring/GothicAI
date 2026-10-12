@@ -185,6 +185,12 @@ class Npc final {
     void       startSpeech(const Tempest::Sound& voice);
     void       startSpeech(std::shared_ptr<LipSync::Track> voice);
     void       setTalkMood(std::string_view mood);  // of the line it starts to say: its gestures follow it
+    // the hero speaks to it (his voice) for the next `ms`; words of him came; it thinks of an answer for
+    // the next `ms` (0: it answers now)
+    void       listenTo(uint64_t ms);
+    void       stopListening();
+    void       heardWords();
+    void       thinkOfAnswer(uint64_t ms);
     void       stopSpeech();
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;

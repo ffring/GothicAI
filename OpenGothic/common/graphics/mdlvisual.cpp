@@ -577,6 +577,19 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   // a blow throws the head around: the gaze lets go while one stumbles
   if(!npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_STUMBLE)
     in.source = npc.gazeTarget(in.target);
+  // thinking of an answer: the eyes go aside and up from the one it talks to (TalkGestures)
+  if(const auto& as = gestures.eyesAside(); as.weight>0.f && in.source==Gaze::Source::Talk) {
+    const Vec3  head = npc.mapHeadBone();
+    const Vec3  d    = in.target - head;
+    const float len  = std::sqrt(d.x*d.x + d.z*d.z);
+    if(len>1.f) {
+      const float yaw = as.yaw*as.weight;
+      const float c = std::cos(yaw), s = std::sin(yaw);
+      // around Up, + to the left as Gaze turns
+      const Vec3 r = {d.x*c - d.z*s, 0, d.x*s + d.z*c};
+      in.target = head + Vec3(r.x, d.y + len*std::tan(as.pitch*as.weight), r.z);
+      }
+    }
   if(in.source!=Gaze::Source::None) {
     in.active   = true;
     // the hero's body is the player's; one walking or busy at a bench, a book turns the head only;
@@ -1432,7 +1445,7 @@ void MdlVisual::updateGestures(Npc& npc, uint64_t dt) {
   const uint64_t now     = npc.world().tickCount();
   const bool     voiced  = mouth.isSpeaking(now);
   const uint64_t left    = std::max(npc.speechLeft(),mouth.voiceLeft(now));
-  if(skInst==nullptr || (gestureSeq==nullptr && gestures.isIdle() && !probing && !voiced && left==0))
+  if(skInst==nullptr || (gestureSeq==nullptr && gestures.isIdle(now) && !probing && !voiced && left==0))
     return;
   const bool playing = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
   if(!playing)
@@ -1442,7 +1455,7 @@ void MdlVisual::updateGestures(Npc& npc, uint64_t dt) {
   gestureSyl = syl;
 
   // the head: Gaze turns it (updateGaze)
-  gestures.updateHead(dt,voiced || left>0,beat,mouth.syllablePeak());
+  gestures.updateHead(now,dt,voiced || left>0,beat,mouth.syllablePeak());
 
   TalkGestures::Input in;
   in.now      = now;

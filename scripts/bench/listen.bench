@@ -1,0 +1,27 @@
+# Listening and thinking: Xardas' face close up. Quiet; the hero speaks to him 6 s (his words come every
+# 0.6 s, as the bridge passes the partial transcripts of the hero's voice: Xardas listens, nods now and
+# then); he thinks of an answer 2.5 s (the eyes go aside and up, the head tilts); he answers with a line
+# of the game (the eyes come back). With `gestures off` on top of a copy: he stands still, as before.
+cheat god
+view clean 30
+watch nearest
+freeze nearest
+wait 500
+place 150 0
+cam face 45 15 1
+wait 800
+rec quiet
+wait 2500
+stop
+hear nearest 6000
+rec listen
+wait 6000
+stop
+think nearest 2500
+rec think
+wait 2500
+stop
+speak nearest DIA_Addon_Xardas_Hello_14_00
+rec answer
+wait 4000
+stop
