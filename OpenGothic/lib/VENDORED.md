@@ -24,3 +24,6 @@ Keep these when updating a library from upstream.
 
 - `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_BACKGROUND=1` starts the app without taking the
   focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
+- `ZenKit/` `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine
+  function the way the `BE` instruction does. The story graph (`ai_bridge/storygraph`) computes the AI
+  director's conditions with the engine's own functions through it.
