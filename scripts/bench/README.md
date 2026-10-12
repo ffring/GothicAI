@@ -20,7 +20,12 @@ backwards, sneak), `ik-ab` (IK off and on on the same run), `smoke` (the bench i
 Four legs: `quad-wolf` (the player as a wolf on 6 slopes), `quad-zoo` (molerat, shadowbeast, waran,
 lurker, giant bug, sheep on 2 slopes each). The player becomes the creature (`transform`), so the
 usual player commands drive it. Gaze: `gaze` (Xardas and the hero talk; the hero stands in front,
-goes around him, behind his back and back; then Xardas at his bookstand turns the head only).
+goes around him, behind his back and back; then Xardas at his bookstand turns the head only),
+`gaze-ambient` (no conversation: Rupert at the market notices the hero walking up, standing, walking,
+running and sneaking past; a script look; the hero looks at the npc in focus; a drawn weapon).
+Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
+and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
+for `bench_report.py diff`.
 Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
 with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
 the first choice: the lines of both are played the way the game plays them).
@@ -76,6 +81,8 @@ git worktree remove --force /tmp/before
   the thin white bar is the voice, the thick blue one how wide the mouth is shown;
 - gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
+- green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
+  turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
   leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
   if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
@@ -92,7 +99,7 @@ git worktree remove --force /tmp/before
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
-| `gaze_jerk` | the gaze turns more than 8 degrees in one frame |
+| `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
 | `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
 | `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
 | `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
@@ -103,11 +110,17 @@ the threshold: a foot leaving the ground a frame early is not visible.
 Columns of the table: `contact` is the error of planted feet against a flat animation floor (only
 meaningful with IK on); `spread` is how much the height of planted feet above the ground varies (works
 for a body tilted as a whole too: compare IK off and on); `limp` is how much lower the body is on the
-steps of one leg of a pair than on the other's. `lips corr` is the correlation of the voice level and
-the shown mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `gaze err` is the angle between where the face looks and
-the partner, while the partner is within reach of the turn.
+steps of one leg of a pair than on the other's. `gaze on` is the share of frames the watched one looks
+at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
+the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
+looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `lips corr` is the
+correlation of the voice level and the shown mouth opening over the frames lip sync is on (~0.8-0.9 on
+Xardas' lines).
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
+One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
+`bench.log` then says `dialog started: <npc>`. `freeze` that npc first (Lothar at the market).
 
 ## Scenario commands
 
@@ -122,7 +135,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `goto <waypoint>` | teleport |
 | `walkto <waypoint>` | walk there (AI path) |
 | `walkmode walk\|run\|sneak` | |
-| `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `turn <deg>` | turn the player at once |
+| `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `face rel <deg>`, `turn <deg>` | turn the player at once; `rel`: the watched npc's facing turned by that much (the angles of `place`) |
 | `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon action` (`left`/`right` strafe) |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
@@ -140,7 +153,11 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `talk <npc\|nearest> <ms>` | the npc and the hero talk to each other that long (no words): they look at each other |
 | `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
 | `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
-| `gazeinfo` | gaze state of the watched npc to `bench.log` |
+| `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
+| `lean on\|off` | the lean into turns and on slopes |
+| `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
+| `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
+| `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
 | `cam face <dist> [angle] [height]` | close to the face of the watched one, looking at the mouth; `angle` from its facing |
 | `speak <npc\|nearest\|player> <output name>` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script |
 | `dialog <npc\|nearest>` | the hero talks to it, as with the action key: the dialog window opens |

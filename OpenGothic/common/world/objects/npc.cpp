@@ -2402,6 +2402,9 @@ void Npc::tick(uint64_t dt) {
               hnpc->attribute[ATR_REGENERATEMANA],dt);
     }
 
+  if(visual.hasGaze())
+    attention.tick(*this,owner);
+
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
       implTurnToFai(*currentTarget,dt);
@@ -2411,8 +2414,8 @@ void Npc::tick(uint64_t dt) {
     }
 
   if(!isDown()) {
-    if(talkPartner()!=nullptr) {
-      // the gaze turns to the partner: the old turn of the head goes back
+    if(visual.hasGaze()) {
+      // the gaze turns the head and the body (gazeTarget): the old turn of the head goes back
       implHeadBack(dt);
       } else {
       implLookAtNpc(dt);
@@ -4225,6 +4228,38 @@ Npc* Npc::talkPartner() const {
   return talkWith;
   }
 
+Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
+  static const float focusDist = 800;
+  const Vec3 eyes = {0,6,0}; // the eyes are a bit above the head bone
+  if(auto other = talkPartner()) {
+    at = other->mapHeadBone() + eyes;
+    return Gaze::Source::Talk;
+    }
+  if(currentLookAtNpc!=nullptr && currentLookAtNpc!=this) {
+    at = currentLookAtNpc->mapHeadBone() + eyes;
+    return Gaze::Source::Script;
+    }
+  if(currentLookAt!=nullptr) {
+    // a waypoint is on the floor: where the eyes of one standing there would be
+    at    = currentLookAt->position();
+    at.y += mapHeadBone().y - position().y;
+    return Gaze::Source::Script;
+    }
+  if(isPlayer()) {
+    // the hero looks at the npc in focus; with a weapon the body turns to it anyway
+    auto t = currentTarget;
+    if(t==nullptr || t==this || weaponState()!=WeaponState::NoWeapon || qDistTo(*t)>focusDist*focusDist)
+      return Gaze::Source::None;
+    at = t->mapHeadBone() + eyes;
+    return Gaze::Source::Focus;
+    }
+  if(auto t = attention.target()) {
+    at = t->mapHeadBone() + eyes;
+    return Gaze::Source::Attention;
+    }
+  return Gaze::Source::None;
+  }
+
 bool Npc::isAttackAnim() const {
   return visual.pose().isAttackAnim();
   }
@@ -4916,6 +4951,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     }
 
   bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
+  syncAtt |= visual.updateLean(*this,dt);
   syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
   syncAtt |= visual.updateGaze(*this,dt);
   if(syncAtt)

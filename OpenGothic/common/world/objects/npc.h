@@ -13,6 +13,7 @@
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
+#include "world/objects/attention.h"
 #include "world/fplock.h"
 #include "world/waypath.h"
 
@@ -300,6 +301,9 @@ class Npc final {
     // whom this npc talks or listens to, for a while: it looks at them (gaze)
     void      setTalkPartner(Npc* other, uint64_t ms);
     Npc*      talkPartner() const;
+    // where the gaze looks: the partner, where a script says, the hero's focus, what caught the eye
+    auto      gazeTarget(Tempest::Vec3& at) const -> Gaze::Source;
+    Npc*      attentionTarget() const { return attention.target(); }
 
     bool      isAttackAnim() const;
     bool      isPrehit() const;
@@ -647,6 +651,7 @@ class Npc final {
     Npc*                           currentLookAtNpc=nullptr;
     Npc*                           talkWith        =nullptr;
     uint64_t                       talkUntil       =0;
+    Attention                      attention;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;
