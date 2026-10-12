@@ -26,6 +26,10 @@ running and sneaking past; a script look; the hero looks at the npc in focus; a 
 Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
 and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
 for `bench_report.py diff`.
+Transitions between animations: `anim` (the hero on a flat floor: start and stop, walk to run, turning
+on the spot, strafing, walking backwards, jumps, sneaking, fists: attacks, a combo, a block). With
+`blend off` on top of a copy it gives the old cross-fade, for `diff`; `gaze-ambient` and `quad-zoo` show
+an npc's and the creatures' transitions too.
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -71,6 +75,7 @@ git worktree remove --force /tmp/before
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
+- violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
   leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
   if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
@@ -88,6 +93,7 @@ git worktree remove --force /tmp/before
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
 | `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
+| `anim_pop` | a joint of the animated pose (before lean, IK, gaze) jumps at a switch of animations (a frame before it to 6 after): second difference over 3 frames above 20 cm; the event names the bone and the animations before and after |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -99,7 +105,11 @@ steps of one leg of a pair than on the other's. `gaze on` is the share of frames
 at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
 the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
 looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
-roll into a turn and the range of the trunk pitch (+ forward) of the watched one.
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `anim pop` is the
+second difference of the joints of the animated pose (cm, the largest joint per frame): p99 and max over
+the segment, then the number of switches of animations and the largest value next to one. Within an
+animation it is how the animation moves (a running human 11-25 cm, a running waran up to 80): compare
+the switches, with `blend off` and on.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -138,6 +148,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
+| `blend on\|off`, `blend param <name> <value>` | transitions between animations (`AnimBlend`; off: the old cross-fade); params `min`, `max`, `scale` (blend time, s), `turn` (rad/s), `move` (cm/s), `out`, `side` |
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
@@ -155,6 +166,8 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 ## Engine side
 
 `OpenGothic/common/testbench.cpp`, inert unless `OPENGOTHIC_BENCH` is set. Hooks: the fixed time step and
-the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `Camera::setNearClip`
+the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `Pose::playerProbe` (the
+animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's switches bone by
+bone), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

@@ -5,6 +5,7 @@
 
 #include "game/constants.h"
 #include "animation.h"
+#include "animblend.h"
 #include "animationsolver.h"
 #include "footik.h"
 #include "gaze.h"
@@ -101,7 +102,24 @@ class Pose final {
 
     const Tempest::Matrix4x4* transform() const;
 
+    // The animated pose for the test bench: joints in the model space, before the post-passes
+    // (lean, foot IK, gaze), and what plays
+    struct Probe final {
+      bool            valid    = false;
+      const Skeleton* skeleton = nullptr;
+      size_t          numBones = 0;
+      Tempest::Vec3   joint[Resources::MAX_NUM_SKELETAL_NODES] = {};
+      std::string     layers;  // the playing animations, 'name:blendIn/blendOut' (ms), '+' between layers
+      AnimBlend::Probe blend;
+      };
+    void               probe(Probe& p);
+    void               setBlendLog(bool l) { blend.setLog(l); }
+    static Probe       playerProbe;   // filled every frame for the hero, on the test bench
+    static Probe       subjectProbe;  // and for the npc the test bench watches
+    static const void* probeNpc;
+
   private:
+    // S_Old is only in old saves: AnimBlend does the blending now
     enum SampleStatus : uint8_t {
       S_None  = 0,
       S_Old   = 1,
@@ -111,7 +129,6 @@ class Pose final {
     struct Layer final {
       const Animation::Sequence* seq      = nullptr;
       uint64_t                   sAnim    = 0;
-      uint64_t                   sBlend   = 0;
       uint8_t                    comb     = 0;
       BodyState                  bs       = BS_NONE;
       };
@@ -129,7 +146,7 @@ class Pose final {
     void implMkSkeleton(const Tempest::Matrix4x4 &mt);
     void implMkSkeleton(const Tempest::Matrix4x4 &mt, size_t parent);
 
-    bool updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sBlend, uint64_t barrier, uint64_t sTime, uint64_t now);
+    bool updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sTime, uint64_t now);
 
     const Animation::Sequence* solveNext(const AnimationSolver& solver, const Layer& lay);
 
@@ -160,11 +177,12 @@ class Pose final {
     FootIk                          ik;
     Gaze                            gaze;
     Lean                            lean;
+    AnimBlend                       blend;
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};
-    zenkit::AnimationSample         base      [Resources::MAX_NUM_SKELETAL_NODES] = {};
-    zenkit::AnimationSample         prev      [Resources::MAX_NUM_SKELETAL_NODES] = {};
+    zenkit::AnimationSample         base      [Resources::MAX_NUM_SKELETAL_NODES] = {};  // shown: raw blended by AnimBlend
+    zenkit::AnimationSample         raw       [Resources::MAX_NUM_SKELETAL_NODES] = {};  // what the animations give
     Tempest::Matrix4x4              tr        [Resources::MAX_NUM_SKELETAL_NODES] = {};
     Tempest::Matrix4x4              pos;
   };

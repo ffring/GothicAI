@@ -11,6 +11,7 @@
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lean.h"
+#include "graphics/mesh/animblend.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -156,6 +157,7 @@ Marvin::Marvin() {
     {"toggle footik",              C_ToggleFootIk},
     {"toggle gaze",                C_ToggleGaze},
     {"toggle lean",                C_ToggleLean},
+    {"toggle aniblend",            C_ToggleAniBlend},
     };
   }
 
@@ -499,6 +501,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleLean:
       Lean::setEnabled(!Lean::isEnabled());
+      return true;
+    case C_ToggleAniBlend:
+      AnimBlend::setEnabled(!AnimBlend::isEnabled());
       return true;
     }
 
