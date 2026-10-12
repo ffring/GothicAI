@@ -3,6 +3,7 @@ title = "Bodies that react"
 summary = "Feet that stand on slopes, eyes that follow you, runners that lean into turns, blows that throw the body back: the same scenes with our animation work off and on."
 date = 2026-10-12T23:10:00+03:00
 cover = "cover.jpg"
+youtube = "cOmTczs7720"
 +++
 Characters that talk back need bodies that react too. Over the last days the people and creatures of
 Gothic II learned to stand on uneven ground, to notice you, to lean when they run and to give way when
