@@ -702,6 +702,12 @@ Bullet& World::shootBullet(const Item &itm, const Npc &npc, const Npc *target, c
   return b;
   }
 
+Bullet& World::shootArrow(const Item& itm, const Tempest::Vec3& pos, const Tempest::Vec3& dir, float speed) {
+  auto& b = wobj.shootBullet(itm, pos, dir, 0, speed);
+  b.setTarget(nullptr);
+  return b;
+  }
+
 void World::sendPassivePerc(Npc &self, Npc &other, int32_t perc) {
   wobj.sendPassivePerc(self,other,nullptr,nullptr,perc);
   }

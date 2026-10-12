@@ -726,6 +726,14 @@ class StoryStateCmd(_Command):
     items: list[str] = []
 
 
+class StoryPeopleCmd(_Command):
+    """Every person of the world, for the rumors (v8): `result.value` [{npc, name, guild, routine: [{start,
+    end (minutes of the day), state, waypoint, pos?}]}] — alive, not the hero, no monsters."""
+
+    type: Literal["story_people"] = "story_people"
+    req: str
+
+
 class StoryEvalCmd(_Command):
     """Story graph expressions computed on the live VM, self = `npc`, other = the hero (v8): what the
     director's rules ask. `result.value`: one value per expression (int, string, instance symbol, or null

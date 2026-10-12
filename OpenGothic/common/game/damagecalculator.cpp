@@ -1,9 +1,12 @@
 #include "damagecalculator.h"
 
+#include <cmath>
+
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
 #include "world/world.h"
 #include "world/bullet.h"
+#include "game/archery.h"
 #include "gothic.h"
 
 // https://forum.worldofplayers.de/forum/threads/127320-Damage-System?p=2198181#post2198181
@@ -63,7 +66,14 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
   bool  invincible = !checkDamageMask(nsrc,nother,&b);
   auto  dmg        = b.damage();
 
-  if(!b.isSpell()) {
+  if(!b.isSpell() && b.isPrecise()) {
+    // an arrow aimed by hand hit where it hit, no dice: the draw and the zone make the damage
+    const float k = Archery::damageAt(b.draw())*Archery::zoneDamage(b.hitZone());
+    for(auto& v:dmg.val)
+      v = int32_t(std::lround(float(v)*k));
+    noHit = false;
+    }
+  else if(!b.isSpell()) {
     auto& script    = nsrc.world().script();
     float hitChance = float(script.rand(100))/100.f;
     float hitCh     = 0;

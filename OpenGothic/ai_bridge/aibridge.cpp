@@ -633,6 +633,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_state") {
     sendResult(req,true,"",story.state(*world,doc));
     }
+  else if(type=="story_people") {
+    sendResult(req,true,"",story.people(*world));
+    }
   else if(type=="story_tag") {
     const int found = story.tag(*world,doc);
     sendResult(req,true,"",std::to_string(found));

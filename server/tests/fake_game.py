@@ -45,6 +45,8 @@ class FakeGame:
         self.symbols: dict[str, str] = {}
         self.in_dialog = False
         self.day = 1
+        self.hour, self.minute = 8, 0
+        self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
         self.item_names: dict[str, str] = {}
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
@@ -183,10 +185,12 @@ class FakeGame:
                     "cutscene": False,
                     "items": {i: self.item_names[i] for i in msg.get("items", []) if i in self.item_names},
                     "day": self.day,
-                    "hour": 8,
-                    "minute": 0,
+                    "hour": self.hour,
+                    "minute": self.minute,
                 }
                 await self.send(type="result", req=msg["req"], ok=True, value=value)
+            case "story_people":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.people)
             case "story_eval":
                 self.story.append(msg)
                 values = [self.evaluate(e) for e in msg["exprs"]]

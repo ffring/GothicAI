@@ -3,6 +3,8 @@
 #include <Tempest/Matrix4x4>
 
 #include "graphics/mesh/animationsolver.h"
+#include "graphics/mesh/hitzones.h"
+#include "graphics/mesh/flinch.h"
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/talkgestures.h"
 #include "game/constants.h"
@@ -82,12 +84,24 @@ class MdlVisual final {
     bool                           hasGaze() const;
     bool                           updateLean(Npc& npc, uint64_t dt);
     bool                           updateAim(Npc& npc, uint64_t dt);
+    bool                           updateFlinch(Npc& npc, uint64_t dt);
+    void                           flinch(const Npc& npc, const Flinch::Hit& hit);
     bool                           updateGaze(Npc& npc, uint64_t dt);
     void                           processLayers  (World& world);
     bool                           processEvents(World& world, uint64_t &barrier, Animation::EvCount &ev);
     auto                           mapBone(const size_t boneId) const -> Tempest::Vec3;
     auto                           mapWeaponBone() const -> Tempest::Vec3;
     auto                           mapHeadBone() const -> Tempest::Vec3;
+    // the arrow on the string as posed: its nock, where it points
+    bool                           arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // where an arrow passing from-to hits the body (its bones), t: how far from 'from'
+    auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
+    std::string                    hitZonesDump() const;
+    // the bow holds still in the aim: an arrow on the string
+    bool                           isAimSteady() const;
+    // degrees the arrow (before the sway) points off where the shot has to go, -1 not aiming
+    float                          aimTrackError() const;
 
     bool                           isStanding() const;
 
@@ -190,6 +204,7 @@ class MdlVisual final {
     PfxSlot                        hnpcVisual;
 
     const Skeleton*                skeleton=nullptr;
+    HitZones                       hitZones;
 
     WeaponState                    fgtMode=WeaponState::NoWeapon;
     AnimationSolver                solver;

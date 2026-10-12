@@ -11,9 +11,10 @@ import csv
 import json
 import math
 import os
+import re
 import subprocess
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 
 FPS = 30
 TOP_EVENTS = 12
@@ -41,6 +42,8 @@ FLAGS = {
     "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
     "lip_shut":  (0.7, "",    "the voice is loud but the mouth stays shut"),
     "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
+    "flinch_none": (1.0, "x", "a blow and the upper body hardly gave way: 1.5 degrees over the peak"),
+    "flinch_slow": (1.5, "s", "the upper body is not back this long after the last blow"),
 }
 TEXT = ("an_bone", "an_layers")  # columns that are names, not numbers
 FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
@@ -312,6 +315,29 @@ def analyze(rows):
             for k in ("starts", "cuts", "stops") + (("nods",) if "ge_nods" in rows[0] else ()):
                 stats["ges_" + k] = int(rows[-1]["ge_" + k] - rows[0]["ge_" + k])
             stats["ges_kinds"] = len({int(r["ge_id"]) for r in rows if r["ge_id"] > 0})
+    # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
+    # to come back after a blow; a blow without a flinch, a flinch that does not come back
+    if rows and "f_hits" in rows[0]:
+        hits = [i for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
+        if hits:
+            stats["flinch_hits"] = len(hits)
+            stats["flinch_peak"] = max(max(r["f_bend"], abs(r["f_twist"]), r["f_head"]) for r in rows)
+            settle = 0.0
+            for k, i in enumerate(hits):
+                end = hits[k + 1] if k + 1 < len(hits) else len(rows)
+                peak = max(max(r["f_bend"], abs(r["f_twist"]), r["f_head"]) for r in rows[i:min(end, i + 8)])
+                if peak < 1.5:
+                    events.append({"flag": "flinch_none", "leg": "-", "start": int(rows[i]["frame"]),
+                                   "end": int(rows[i]["frame"]), "worst": 1.5 / max(peak, 0.01), "at": int(rows[i]["frame"])})
+                if k + 1 == len(hits):
+                    rest = next((j for j in range(i, len(rows)) if rows[j]["f_on"] == 0), None)
+                    if rest is not None:
+                        settle = max(settle, (rows[rest]["t"] - rows[i]["t"]) / 1000.0)
+                    elif len(rows) - i > 45:
+                        t = (rows[-1]["t"] - rows[i]["t"]) / 1000.0
+                        events.append({"flag": "flinch_slow", "leg": "-", "start": int(rows[i]["frame"]),
+                                       "end": int(rows[-1]["frame"]), "worst": t, "at": int(rows[-1]["frame"])})
+            stats["flinch_settle"] = settle
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -319,9 +345,100 @@ def analyze(rows):
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
     events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
+    # a blow throws the head around on purpose (the flinch, the stumble): no gaze jerk for a second after it
+    if rows and "f_hits" in rows[0]:
+        struck = [int(rows[i]["frame"]) for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
+        events = [ev for ev in events if ev["flag"] != "gaze_jerk" or
+                  not any(0 <= ev["start"] - f <= 30 for f in struck)]
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
+
+
+ARCHER_STAGE = {0: "lowered", 1: "raising", 2: "nocked", 3: "drawing", 4: "held", 5: "reloading"}
+
+
+def arrows(out):
+    """the arrows of the manual aim per segment, from bench.log: [(zone or 'miss', draw, flew cm)]. An arrow
+    counts for the segment it was shot in: a far miss may come down when the next one runs (they come
+    down in the order they were shot)"""
+    path = os.path.join(out, "bench.log")
+    per = defaultdict(list)
+    if not os.path.exists(path):
+        return per
+    seg, shot = None, deque()
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("rec stop"):
+                seg = None
+            elif line.startswith("rec "):
+                seg = line.split()[1]
+            elif line.startswith("arrow shot"):
+                shot.append(seg)
+            elif line.startswith("arrow hit") or line.startswith("arrow missed"):
+                at = shot.popleft() if shot else seg
+                if not at:
+                    continue
+                if line.startswith("arrow hit"):
+                    body = line.split(": ", 1)[1]
+                    zone = body.split(",")[0].strip()
+                    draw = float(body.split("draw ")[1].split(",")[0])
+                    flew = float(body.split("flew ")[1].split(" ")[0])
+                    per[at].append((zone, draw, flew))
+                else:
+                    # "came down at <xyz>, flew <cm> cm" or "flew out at <xyz>, flew <cm> cm"
+                    m = re.search(r"flew (-?[0-9.]+) cm", line)
+                    per[at].append(("miss", math.nan, float(m.group(1)) if m else math.nan))
+    return per
+
+
+def manual_aim(out, segs):
+    """the manual aim: hits by zone, the sway at full draw, how long the draw takes"""
+    shots = arrows(out)
+    lines = []
+    for seg, rows in segs.items():
+        if not rows or "m_stage" not in rows[0] or not any(r["m_stage"] >= 1 for r in rows):
+            continue
+        held = [r for r in rows if r["m_stage"] == 4]
+        sway = math.sqrt(sum(r["m_sway_yaw"] ** 2 + r["m_sway_pitch"] ** 2 for r in held) / len(held)) if held else math.nan
+        offs = sorted(r["m_off"] for r in held if r["m_off"] >= 0)
+        off = f"{offs[len(offs) // 2]:.2f} / {offs[int(len(offs) * 0.9)]:.2f}" if offs else "-"
+        draws, start = [], None
+        for r in rows:
+            if r["m_stage"] == 3 and start is None:
+                start = r["t"]
+            elif r["m_stage"] != 3 and start is not None:
+                if r["m_stage"] == 4:
+                    draws.append(r["t"] - start)
+                start = None
+        draw = f"{sum(draws) / len(draws) / 1000:.2f}" if draws else "-"
+        a = shots.get(seg, [])
+        count = defaultdict(int)
+        for z, _, _ in a:
+            count[z] += 1
+        hits = " ".join(f"{z} {count[z]}" for z in ("head", "body", "limb", "miss") if count[z])
+        flew = f"{sum(x[2] for x in a) / len(a) / 100:.1f}" if a else "-"
+        # the crosshair: how open at full draw, how far it jumps in a frame (it stays where it aims)
+        spreads = sorted(r["m_spread"] for r in held if r.get("m_spread", -1) >= 0)
+        spread = f"{spreads[len(spreads) // 2]:.2f}" if spreads else "-"
+        jumps = [r["m_cross"] for r in rows if r.get("m_cross", -1) >= 0]
+        jump = f"{max(jumps):.2f}" if jumps else "-"
+        # how smooth it opens and closes: the fastest, deg/s; the largest change of that speed in a frame
+        # (a jerk: it starts moving at once)
+        rates = []
+        for p, q in zip(rows, rows[1:]):
+            if p.get("m_spread", -1) >= 0 and q.get("m_spread", -1) >= 0 and q["t"] > p["t"]:
+                rates.append((q["m_spread"] - p["m_spread"]) / (q["t"] - p["t"]) * 1000)
+        rate = f"{max(abs(v) for v in rates):.0f} / {max(abs(v - u) for u, v in zip(rates, rates[1:])):.0f}" \
+            if len(rates) > 1 else "-"
+        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {spread} | {jump} | {rate} | {draw} | "
+                     f"{max(r['m_fatigue'] for r in rows):.2f} | {'yes' if any(r['m_holding'] > 0 for r in rows) else '-'} |")
+    if not lines:
+        return []
+    return ["## Manual aim", "",
+            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | crosshair open deg (held) | crosshair jump max % screen | crosshair speed max / its step deg/s | draw s | fatigue max | breath held |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"] + lines + [""]
 
 
 def sheet(video, frames, path, cols=4, width=400):
@@ -372,8 +489,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | gestures talk / listen % (started, over one, stopped) | events |")
-    lines.append("|" + "---|" * 16)
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | gestures talk / listen % (started, over one, stopped) | events |")
+    lines.append("|" + "---|" * 17)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -394,11 +511,14 @@ def report(out):
         gs = "-" if "ges_talk" not in st else \
             f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})" + \
             ("" if "ges_nods" not in st else f" nods {st['ges_nods']}")
+        fl = "-" if "flinch_hits" not in st else \
+            f"{st['flinch_hits']}, {st['flinch_peak']:.1f}, {st['flinch_settle']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {gs} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {gs} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
+    lines += manual_aim(out, segs)
 
     all_events.sort(key=lambda e: -e["severity"])
     lines.append("## Worst events")

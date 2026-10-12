@@ -3,6 +3,7 @@
 #include <zenkit/Mesh.hh>
 
 #include <Tempest/Matrix4x4>
+#include <functional>
 #include <memory>
 #include <limits>
 
@@ -183,6 +184,9 @@ class DynamicWorld final {
       virtual void onMove(){}
       virtual void onCollide(zenkit::MaterialGroup matId){(void)matId;}
       virtual bool onCollide(Npc& other){(void)other; return true; }
+      // an arrow aimed by hand: hits an npc where it is (its bones), not its box; from-to: this step
+      virtual bool isPrecise() const { return false; }
+      virtual bool onCollidePrecise(Npc& other, const Tempest::Vec3& from, const Tempest::Vec3& to){(void)from; (void)to; return onCollide(other); }
       };
 
     struct BulletBody final {
@@ -261,6 +265,10 @@ class DynamicWorld final {
     RayLandResult  ray          (const Tempest::Vec3& from, const Tempest::Vec3& to) const;
     RayLandResult  sweep        (const Tempest::Vec3& from, const Tempest::Vec3& to, float R) const;
     RayQueryResult rayNpc       (const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const;
+    // where an arrow aimed by hand would stop flying straight from-to: the first npc 'hit' takes (it says
+    // how far along, t), else the ground; v: the point
+    RayQueryResult rayArrow     (const Tempest::Vec3& from, const Tempest::Vec3& to,
+                                 const std::function<bool(Npc&,const Tempest::Vec3&,const Tempest::Vec3&,float&)>& hit) const;
     float          soundOclusion(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
 
     NpcItem        addGhostObj  (const Skeleton* src);

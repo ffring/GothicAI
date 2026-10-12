@@ -66,6 +66,7 @@ void MdlVisual::setVisual(const Skeleton *v) {
   view.setSkeleton(v);
 
   skeleton = v;
+  hitZones.setSkeleton(v);
   setObjMatrix(pos); // invalidate obj matrix
   }
 
@@ -553,7 +554,8 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
   in.talk    = {gestures.head().pitch, gestures.head().yaw, gestures.head().roll};
-  if(!npc.isDown())
+  // a blow throws the head around: the gaze lets go while one stumbles
+  if(!npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_STUMBLE)
     in.source = npc.gazeTarget(in.target);
   if(in.source!=Gaze::Source::None) {
     in.active   = true;
@@ -622,10 +624,14 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   const auto  bs = npc.bodyStateMasked() & BS_MAX;
   const auto  ws = npc.weaponState();
   const Npc*  t  = npc.target();
+  // aimed by hand (game/archery): at the crosshair, else at the target
+  const bool  manual = npc.hasManualAim();
   Aim::Input in;
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
-  if(t!=nullptr && t!=&npc && !npc.isDown()) {
+  if((manual || (t!=nullptr && t!=&npc)) && !npc.isDown()) {
+    // only while aiming: the target may not be valid yet (a save loading)
+    auto aimAt = [&]() { return manual ? npc.manualAimPoint() : t->collosionCenter(); };
     float shoulder = 145; // human, bind pose
     if(skeleton!=nullptr) {
       const size_t sh = skeleton->findNode("BIP01 R UPPERARM");
@@ -637,11 +643,24 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
     if((ws==WeaponState::Bow || ws==WeaponState::CBow) && (bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==(BS_HIT & BS_MAX))) {
       in.active = true;
       in.arrow  = true;
-      in.dir    = World::bulletVelocity(from,t->collosionCenter());
+      if(manual) {
+        // by hand: the arrow straight at the crosshair (the archer holds over by himself), from where
+        // the arrow is (not too close: the turn moves it)
+        const Tempest::Vec3 at = aimAt();
+        Tempest::Vec3       ap, ad;
+        Tempest::Vec3       o  = from;
+        if(arrowRay(ap,ad) && (at-ap).length()>150.f)
+          o = ap;
+        in.dir    = at - o;
+        in.sway   = npc.manualAimSway();
+        in.manual = true;
+        } else {
+        in.dir  = World::bulletVelocity(from,aimAt());
+        }
       }
     else if(ws==WeaponState::Mage && bs==BS_CASTING) {
       in.active = true;
-      in.dir    = t->collosionCenter() - from;
+      in.dir    = aimAt() - from;
       }
     if(in.active) {
       // steeply down: lean over the edge, if there is room in front of the head
@@ -666,6 +685,36 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   if(changed)
     view.setPose(pos,pose);
   return changed;
+  }
+
+bool MdlVisual::updateFlinch(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& fl   = pose.flinchIk();
+  if(!fl.isValid()) {
+    if(npc.isPlayer())
+      Flinch::playerProbe = Flinch::Probe();
+    if(&npc==Flinch::probeNpc)
+      Flinch::subjectProbe = Flinch::Probe();
+    return false;
+    }
+  const float a = npc.rotationRad();
+  Flinch::Input in;
+  in.dt       = dt;
+  in.forward  = {std::cos(a), 0, std::sin(a)};
+  in.headOnly = pose.footIk().isQuadruped();
+  const bool changed = pose.updateFlinch(in);
+  if(npc.isPlayer())
+    fl.probe(Flinch::playerProbe);
+  if(&npc==Flinch::probeNpc)
+    fl.probe(Flinch::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
+void MdlVisual::flinch(const Npc& npc, const Flinch::Hit& hit) {
+  const float a = npc.rotationRad();
+  skInst->flinchIk().hit(hit,{std::cos(a), 0, std::sin(a)});
   }
 
 bool MdlVisual::hasGaze() const {
@@ -722,6 +771,47 @@ Vec3 MdlVisual::mapWeaponBone() const {
   if(fgtMode==WeaponState::Mage && skeleton!=nullptr)
     return mapBone(skeleton->findNode("ZS_RIGHTHAND"));
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
+  }
+
+bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
+  // the arrow (the bolt) lies along -X of its slot, the nock at the string (graphics/mesh/aim)
+  size_t id = ammunition.boneId;
+  if(id==size_t(-1) && skeleton!=nullptr)
+    id = skeleton->findNode("ZS_RIGHTHAND");
+  if(id==size_t(-1) || id>=skInst->boneCount())
+    return false;
+  const auto& m = skInst->bone(id);
+  p = Vec3(m.at(3,0),m.at(3,1),m.at(3,2));
+  d = Vec3::normalize(Vec3(-m.at(0,0),-m.at(0,1),-m.at(0,2)));
+  return true;
+  }
+
+HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t) const {
+  if(!hitZones.isValid()) {
+    // no bones to tell: its box was hit
+    t = 0;
+    return HitZones::Body;
+    }
+  const Vec3 sx    = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
+  const float scale = sx.length();
+  return hitZones.rayTest(skInst->transform(),skInst->boneCount(),scale>0.f ? scale : 1.f,from,to,t);
+  }
+
+bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
+  return hitZones.center(skInst->transform(),skInst->boneCount(),z,at);
+  }
+
+std::string MdlVisual::hitZonesDump() const {
+  const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
+  return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length());
+  }
+
+float MdlVisual::aimTrackError() const {
+  return skInst->aimIk().trackError();
+  }
+
+bool MdlVisual::isAimSteady() const {
+  return skInst->aimIk().isSteady();
   }
 
 Vec3 MdlVisual::mapHeadBone() const {

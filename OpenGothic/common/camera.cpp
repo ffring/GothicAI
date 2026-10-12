@@ -128,7 +128,7 @@ void Camera::changeZoom(int delta) {
 
 void Camera::setViewport(uint32_t w, uint32_t h) {
   const float fov = Gothic::options().cameraFov;
-  proj.perspective(fov, float(w)/float(h), zNear(), zFar());
+  proj.perspective(fov*fovK, float(w)/float(h), zNear(), zFar());
 
   // NOTE: usually depth bouds are from 0.95 to 1.0, resilting into ~805675 discrete values
   static float l = 0.951978f, r = 1;
@@ -142,6 +142,10 @@ void Camera::setViewport(uint32_t w, uint32_t h) {
   depthNear = 0;
   }
 
+float Camera::fovY() const {
+  return Gothic::options().cameraFov*fovK;
+  }
+
 float Camera::zNear() const {
   return nearClip;
   }
@@ -150,8 +154,12 @@ void Camera::setNearClip(float zNear) {
   if(nearClip==zNear)
     return;
   nearClip = zNear;
+  updateProj();
+  }
+
+void Camera::updateProj() {
   if(vpWidth>0 && vpHeight>0)
-    proj.perspective(Gothic::options().cameraFov, float(vpWidth)/float(vpHeight), zNear, zFar());
+    proj.perspective(Gothic::options().cameraFov*fovK, float(vpWidth)/float(vpHeight), zNear(), zFar());
   }
 
 float Camera::zFar() const {
@@ -297,6 +305,61 @@ void Camera::setLookBack(bool lb) {
   if(lbEnable==lb)
     return;
   lbEnable = lb;
+  }
+
+void Camera::setAim(bool on, float zoom) {
+  if(on && !aimOn)
+    aimSaved = state.spin.x;
+  if(!on && aimOn) {
+    // back to how it looked before
+    state.spin.x = aimSaved;
+    }
+  aimOn   = on;
+  aimZoom = on ? std::clamp(zoom,0.f,1.f) : 0.f;
+  }
+
+void Camera::setAimAnchor(const Tempest::Vec3& at) {
+  aimAnchor = at;
+  }
+
+void Camera::setAimPitch(float deg) {
+  state.spin.x = deg;
+  }
+
+Vec3 Camera::aimShoulder(const Vec3& feet, const Vec3& forward) {
+  static float side   = 40.f;  // cm right of the hero
+  static float height = 165.f; // above the feet
+  Vec3 right = Vec3::crossProduct(Vec3(0,1,0),Vec3(forward.x,0,forward.z));
+  right = right.length()>1e-3f ? Vec3::normalize(right) : Vec3();
+  return feet + Vec3(0,height,0) + right*side;
+  }
+
+void Camera::aimRay(Tempest::Vec3& from, Tempest::Vec3& dir) const {
+  const auto lp = listenerPosition();
+  dir  = lp.front;
+  from = lp.pos;
+  if(aimBlend>0.f) {
+    // what is between the camera and the shoulder (the hero) is not aimed at
+    const float k = Vec3::dotProduct(aimFrom-from,dir);
+    if(k>0.f)
+      from = from + dir*k;
+    }
+  }
+
+void Camera::tickAim(float dtF) {
+  static float blendIn  = 0.2f;  // seconds
+  static float blendOut = 0.25f;
+  static float zoomRate = 6.f;   // 1/s
+  static float fovZoom  = 0.15f; // of the field of view at full draw
+  if(dtF>0.f) {
+    aimBlend  = aimOn ? std::min(1.f,aimBlend+dtF/blendIn) : std::max(0.f,aimBlend-dtF/blendOut);
+    aimZoomS += (aimZoom*aimBlend - aimZoomS)*std::min(1.f,dtF*zoomRate);
+    }
+  const float k = 1.f - fovZoom*aimZoomS;
+  if(std::abs(k-fovK)>1e-4f) {
+    fovK = k;
+    updateProj();
+    }
   }
 
 void Camera::toggleDebug() {
@@ -709,6 +772,7 @@ void Camera::tick(uint64_t dt) {
     const auto& def = cameraDef();
     state.range = def.min_range + (def.max_range-def.min_range)*userRange;
   }
+  tickAim(dtF);
 
   // normalize angles in -180..180 range, for convinience
   // dst.spin = angleMod(dst.spin);
@@ -855,6 +919,26 @@ void Camera::tickThirdPerson(float dtF) {
 
   angles = calcLookAtAngles(origin, inter.target, inter.rotOffset, state.spin);
 
+  if(aimBlend>0.f && camMod!=Dialog) {
+    // over the shoulder: the camera looks along the spin through a point beside the head, the center of
+    // the screen is where the bow aims (PlayerControl); no lag, the aim follows the mouse
+    static float aimRange  = 150.f;
+    static float aimZoomIn = 35.f;  // closer at full draw
+    Vec3 back = {0,0,1};
+    mkRotMatrix(state.spin).project(back);
+    const Vec3 at = aimShoulder(aimAnchor,Vec3()-back);
+    float      r  = aimRange - aimZoomIn*aimZoomS;
+    if(def.collision!=0)
+      r = calcCameraColision(at, back, calcLookAtAngles(at+back*r, at, Vec3(), state.spin), r);
+    const Vec3 o = at + back*std::max(r,20.f);
+    const Vec3 a = calcLookAtAngles(o, at, Vec3(), state.spin);
+    aimFrom  = at;
+    origin   = origin + (o-origin)*aimBlend;
+    angles.x = angles.x + (a.x-angles.x)*aimBlend;
+    angles.y = angles.y + angleMod(a.y-angles.y)*aimBlend;
+    angles.z = angles.z*(1.f-aimBlend);
+    }
+
   static bool dbg = false;
   if(dbg) {
     origin = state.target + targetOffset + dir*range;
@@ -940,7 +1024,7 @@ Vec3 Camera::calcCameraColision(const Tempest::Vec3& from, const Tempest::Vec3& 
 Vec3 Camera::clampRotation(Tempest::Vec3 spin) {
   //NOTE: min elevation is zero for nomal camera. assume that it's ignored by vanilla
   float       maxElev = +85;
-  float       minElev = -60;
+  float       minElev = aimOn ? -80 : -60; // a bow aimed by hand: high up too
   float       maxAzim = +180;
   float       minAzim = -180;
 

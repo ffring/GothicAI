@@ -35,6 +35,11 @@ aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 
 from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
 foot of a gallery's wall in Xardas' tower, 78 degrees down: hidden from the head, so without the aim no
 focus; with it the hero leans over the edge, the focus takes it, the arrow kills it).
+Flinch: `flinch` (a frozen bandit: blows only to the flinch from the front, behind, both sides, to the
+head, off the middle, a weak one, three in a row, the same with the flinch off; an arrow in his back;
+the hero's fist from the front, behind and the side as the game deals it, with its stumble; his sword
+swung from the left, the right and straight (a swing pushes along the blade); the hero
+struck standing and while aiming a bow, where the game has no stumble; a wolf: the head only).
 Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
 with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
 the first choice: the lines of both are played the way the game plays them).
@@ -57,7 +62,7 @@ Output goes to `.bench/<scenario>-<time>/` (not in git):
 
 | File | What |
 |---|---|
-| `report.md` | one line per recorded segment, then the worst events with their contact sheets |
+| `report.md` | one line per recorded segment, then the worst events with their contact sheets; a "Manual aim" table when the bow was aimed by hand: shots, hits by zone, the sway at full draw, the draw time |
 | `sheets/<segment>.png` | 16 frames of a segment in a 4x4 grid |
 | `sheets/evNN-*.png` | frames around an event |
 | `<segment>.mp4` | the video, 800x600, 30 fps |
@@ -99,6 +104,9 @@ git worktree remove --force /tmp/before
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
 - orange `AIM`: weight, error `E` (where the arrow points after the turn against where the shot leaves),
   where the shot has to go `Y`, `P`, the turn `T` and the bend `B` (+ up) of the upper body, degrees;
+- red `HIT`: blows so far `#`, strength `S` and height `H` (0 the hips, 1 the head) of the last one, the
+  trunk's bend `B` away from it and where its top goes `Y` (+ to the right of the facing), the twist `T`
+  about up and the head `N` against the trunk, degrees;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
@@ -126,6 +134,8 @@ git worktree remove --force /tmp/before
 | `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
 | `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
 | `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
+| `flinch_none` | a blow, and the upper body gives way less than 1.5 degrees in the 8 frames after it |
+| `flinch_slow` | the upper body is not back 1.5 s after the last blow |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -140,10 +150,13 @@ looks and the partner, while the partner is within reach of the turn. `lean roll
 roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `aim err` is the
 angle between where the arrow points and where the shot leaves (while the bow holds still), `bend` the
 largest bend of the upper body (+ up). `lips corr` is the correlation of the voice level and the shown
-mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `anim pop` is the second difference of the joints of the animated pose (cm, the largest
-joint per frame): p99 and max over the segment, then the number of switches of animations and the
-largest value next to one. Within an animation it is how the animation moves (a running human 11-25 cm,
-a running waran up to 80): compare the switches, with `blend off` and on.
+mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `anim pop` is the second
+difference of the joints of the animated pose (cm, the largest joint per frame): p99 and max over the
+segment, then the number of switches of animations and the largest value next to one. Within an
+animation it is how the animation moves (a running human 11-25 cm, a running waran up to 80): compare
+the switches, with `blend off` and on. `hits, peak, back` are the blows the watched one took, the
+largest flinch (trunk bend, twist or head, degrees) and how long it took to come back after the last
+blow. `gaze_jerk` is not counted for a second after a blow: it throws the head on purpose.
 `gestures talk / listen %` is how much of the time the watched one speaks a gesture plays, and how much
 of the time it is quiet again (a second after its voice), then the gestures started, started over one
 that played and stopped before their end (the voice is over), and the nods on stressed syllables. The head
@@ -167,7 +180,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `walkto <waypoint>` | walk there (AI path) |
 | `walkmode walk\|run\|sneak` | |
 | `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `face rel <deg>`, `turn <deg>` | turn the player at once; `rel`: the watched npc's facing turned by that much (the angles of `place`) |
-| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it) |
+| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action parade breath` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it; in the manual aim holding `action` draws, releasing shoots, `parade` lowers the bow, `breath` (= walk) holds the breath) |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
@@ -183,17 +196,27 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `watch <npc\|nearest\|player>` | the camera and the gaze metrics follow this npc (a script symbol, `NONE_100_XARDAS`) |
 | `talk <npc\|nearest> <ms>` | the npc and the hero talk to each other that long (no words): they look at each other |
 | `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
-| `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
+| `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it; not where no ground is found (inside a rock: it would fall through the world) |
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
 | `blend on\|off`, `blend param <name> <value>` | transitions between animations (`AnimBlend`; off: the old cross-fade); params `min`, `max`, `scale` (blend time, s), `turn` (rad/s), `move` (cm/s), `out`, `side` |
+| `flinch on\|off` | the upper body giving way to blows |
+| `hit <npc\|player> <angle> [strength] [height] [twist]` | a blow from that side of it (angle from its facing, 0 in front, as `place`) to the flinch only: no damage, no stumble; strength 0..1 (1), height 0 the hips .. 1 the head (0.6), twist -1..1 about up (0) |
+| `strike <victim\|player> [attacker\|player]` | the attacker's blow lands as the game deals it (the stumble, the damage, the flinch); the victim gets its hit points back below a third |
+| `clear [radius]` | the npcs around the hero (2500 cm) leave the world, not the watched one: rats, wolves that would join in |
 | `aim on\|off` | the upper body turning to the target with a bow, a crossbow, a spell; leaning over an edge (and the focus seeing from there) |
+| `manual on\|off` | the manual aim (`game/archery`, `GAME/manualAim` in Gothic.ini, on by default; `aim.bench` turns it off to test the game's aim): the hero aims a bow by hand, no dice: the arrow hits where it flies (bones), the sway comes from the skill, strength, dexterity |
+| `stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]` | the hero's strength, dexterity, hit chances (the skill); prints what the manual aim makes of them (sway, draw, hold, arrow speed) |
+| `aimat <npc\|nearest> [head\|body\|limb] [raw]`, `aimat <x> <y> <z>`, `aimat off` | the manual aim aims at the middle of that zone of the npc (every frame) or at a point, instead of the mouse; the hero faces it. Over it by the drop of the arrow at full draw, as an archer holds over (`raw`: right at it) |
+| `open [dist cm]` | how far it is open around the hero at head height and at the knees every 15 degrees from the facing: where to put a target |
+| `volley <shots> [hold ms] [draw 0..1]` | shots by hand in a row: press `action`, draw that far (1: full), hold, release, wait for the next arrow; every arrow is in the log (`arrow hit <npc>: <zone>, hp a -> b, draw, flew` or `arrow missed`) |
+| `immortal <npc\|nearest> [off]` | arrows hit it, it does not die: counting hits |
 | `give <item> [count]`, `equip <item>` | into the hero's inventory; `equip` puts it on whatever the strength (`ItRw_Bow_L_01`, `ItRw_Arrow`, `ItRw_Crossbow_L_01`, `ItRw_Bolt`, `ItRu_FireBolt`) |
 | `put <npc\|nearest> <dist> <angle>` | the npc stands there on the ground from the hero (angle from the hero's facing), frozen |
 | `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |
 | `anims` | what the watched one (or the hero) plays, its body state, weapon and target |
 | `cansee <npc>` | can the hero see it: from the head, leaning over an edge (the aim's lean); what the rays hit; the bow's focus range |
-| `hp <npc>` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit) |
+| `hp <npc> [full]` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit); `full`: the nearest gets them all back first |
 | `walls [count]` | spots at the edge of a wall (from a waypoint walking to where the ground falls away) with its foot 2.5..10 m below, 1 m out, hidden from the head and seen leaning over: the waypoint and the yaw for `goto`, `edge` |
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
@@ -245,6 +268,6 @@ and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL 
 `SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
 `Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
 switches bone by bone),
-`LipSync::subjectProbe` (the mouth), `TalkGestures::subjectProbe` (the hands), `Camera::setNearClip`
+`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

@@ -48,6 +48,16 @@ class PlayerControl final {
     bool  tickMove(uint64_t dt);
     bool  tickCameraMove(uint64_t dt);
 
+    // the bow raised in the manual aim (game/archery): the mouse aims
+    bool  isManualAim() const { return manualAiming; }
+    // the test bench aims there instead of the center of the screen
+    void  setAimOverride(bool on, const Tempest::Vec3& at = {});
+    // the crosshair of the manual aim: where it aims, how far off the arrow may go now (radians: the
+    // crosshair opens that much); false: not aiming by hand. centered: it aims at the center of the
+    // screen (else the test bench aims elsewhere)
+    bool  crosshair(Tempest::Vec3& at, float& spread) const;
+    bool  isCrosshairCentered() const { return !aimOverride; }
+
   private:
     enum WeaponAction : uint8_t {
       WeaponClose,
@@ -156,6 +166,14 @@ class PlayerControl final {
     Npc*           threatened     = nullptr; //!< last npc the armed player aimed at (PERC_ASSESSTHREAT)
     uint64_t       threatenedAt   = 0;
 
+    bool           manualAiming   = false;   //!< the bow raised in the manual aim
+    bool           aimOverride    = false;
+    Tempest::Vec3  aimOverrideAt  = {};
+    Tempest::Vec3  aimDirPrev     = {};
+    Tempest::Vec3  aimAt          = {};      //!< where the crosshair is
+    float          aimSpread      = 0;       //!< how far it is open, radians, smoothed
+    float          aimSpreadVel   = 0;       //!< how fast it opens, radians per second
+
     DialogMenu&    dlg;
     InventoryMenu& inv;
 
@@ -180,6 +198,9 @@ class PlayerControl final {
     void           assignRunAngle(Npc& pl, float rotation, uint64_t dt);
     void           setAnimRotate (Npc& pl, float rotation, int anim, bool force, uint64_t dt);
     void           processAutoRotate(Npc& pl, float& rot, uint64_t dt);
+    bool           implManualAim(Npc& pl, uint64_t dt);
+    void           endManualAim(Npc& pl);
+    Npc*           aimRayHit(Npc& pl, Tempest::Vec3& at) const;
 
 
     //////////////////////////////////

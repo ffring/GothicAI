@@ -43,6 +43,7 @@ from .protocol import (
     StoryEffectCmd,
     StoryEvalCmd,
     StoryNearbyCmd,
+    StoryPeopleCmd,
     StorySpawnCmd,
     StoryStateCmd,
     StoryTagCmd,
@@ -66,6 +67,7 @@ _Request = (
     | StoryStateCmd
     | StoryEvalCmd
     | StoryTagCmd
+    | StoryPeopleCmd
 )
 
 Listener = Callable[[GameMessage], None]
@@ -281,6 +283,10 @@ class GameLink:
             items=list(items),
         )
         return dict((await self._request(cmd, timeout)).value or {})
+
+    async def story_people(self, timeout: float = 10.0) -> list[dict[str, Any]]:
+        """Every person of the world and its day (see StoryPeopleCmd)."""
+        return list((await self._request(StoryPeopleCmd(req=self._next_id("s")), timeout)).value or [])
 
     async def story_eval(self, npc: str, exprs: list[Any], timeout: float = 5.0) -> list[Any]:
         """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""

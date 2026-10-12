@@ -1,0 +1,183 @@
+# Flinch: blows throw the upper body away from them, the head lags behind, then they come back.
+# A bandit stands frozen; first only the flinch (hit: no damage, no stumble) from the front, behind,
+# both sides, to the head, off the middle, a weak one, three in a row, the same with the flinch off;
+# then blows as the game deals them (strike: the stumble of the game, the damage) from the front, behind,
+# the side; the hero struck while standing and while aiming a bow (no stumble there in the game);
+# a wolf (four legs: the head only)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_091   # flat open ground
+face -106                         # a rock behind, open in front
+clear 3000                        # giant rats nearby would join in
+wait 500
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L          # at once: he has a dialog for the hero that locks him
+put BDT_1013_BANDIT_L 350 0
+watch BDT_1013_BANDIT_L
+cam follow 200 120 75             # from his left side, a bit in front: a bend back and forth shows
+cam look 120
+wait 800
+
+rec front
+wait 300
+hit BDT_1013_BANDIT_L 0
+wait 1200
+rec back
+wait 300
+hit BDT_1013_BANDIT_L 180
+wait 1200
+cam follow 220 120 0              # from the front: a bend to the side shows
+wait 300
+rec left
+wait 300
+hit BDT_1013_BANDIT_L 90
+wait 1200
+rec right
+wait 300
+hit BDT_1013_BANDIT_L -90
+wait 1200
+stop
+cam follow 200 120 75
+wait 300
+rec head
+wait 300
+hit BDT_1013_BANDIT_L 0 1 1
+wait 1200
+rec twist
+wait 300
+hit BDT_1013_BANDIT_L 30 1 0.6 0.8
+wait 1200
+rec weak
+wait 300
+hit BDT_1013_BANDIT_L 0 0.35
+wait 1200
+rec combo
+wait 300
+hit BDT_1013_BANDIT_L 0 0.7
+wait 250
+hit BDT_1013_BANDIT_L 90 0.7
+wait 250
+hit BDT_1013_BANDIT_L -30 1 0.9
+wait 1500
+flinch off
+rec off
+wait 300
+hit BDT_1013_BANDIT_L 0
+wait 1200
+stop
+flinch on
+
+# an arrow from behind on his left, as the game shoots it: where it lands, how it flies
+place 700 150
+equip ItRw_Bow_L_01
+give ItRw_Arrow 20
+tap bow
+wait 1500
+cam follow 220 120 0
+press action
+wait 1500
+rec arrow
+wait 200
+tap forward
+wait 1500
+release action
+stop
+hp BDT_1013_BANDIT_L
+tap bow
+wait 1500
+
+# blows as the game deals them: the hero's fist from where it stands
+cam follow 200 120 75
+place 110 0
+wait 500
+rec strike_front
+wait 300
+strike BDT_1013_BANDIT_L player
+wait 1500
+place 110 180
+wait 500
+rec strike_back
+wait 300
+strike BDT_1013_BANDIT_L player
+wait 1500
+place 110 90
+wait 500
+rec strike_side
+wait 300
+strike BDT_1013_BANDIT_L player
+wait 1500
+stop
+
+# the hero's sword: swings from the left, from the right, straight (a swing pushes along the blade)
+place 0 0
+equip ItMw_1h_Common_01
+tap melee
+wait 1500
+place 130 0
+cam follow 220 120 0
+wait 500
+hp BDT_1013_BANDIT_L full
+rec sword_left
+press action
+tap left
+wait 1200
+release action
+hp BDT_1013_BANDIT_L full
+wait 300
+rec sword_right
+press action
+tap right
+wait 1200
+release action
+hp BDT_1013_BANDIT_L full
+wait 300
+rec sword_fwd
+press action
+tap forward
+wait 1200
+release action
+stop
+hp BDT_1013_BANDIT_L full
+tap melee
+wait 1500
+place 0 0
+
+# the hero struck by the bandit, standing and aiming a bow (no stumble while aiming)
+watch player
+put BDT_1013_BANDIT_L 110 0
+cam follow 220 120 75
+wait 800
+rec hero_stand
+wait 300
+strike player BDT_1013_BANDIT_L
+wait 1500
+stop
+tap bow
+wait 1500
+press action
+wait 1500
+rec hero_aim
+wait 300
+strike player BDT_1013_BANDIT_L
+wait 1500
+release action
+stop
+
+# four legs: the head takes it
+tap bow
+wait 1000
+goto NW_XARDAS_TOWER_VALLEY_091
+face -106
+put BDT_1013_BANDIT_L 500 90      # out of the way
+insert Wolf
+freeze Wolf
+put Wolf 300 0
+watch Wolf
+cam follow 220 90 90              # from its left side
+wait 800
+rec wolf
+wait 300
+hit Wolf 90
+wait 1200
+stop
