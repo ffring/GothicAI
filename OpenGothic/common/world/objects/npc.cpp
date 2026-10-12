@@ -4934,6 +4934,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     }
 
   bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
+  syncAtt |= visual.updateLean(*this,dt);
   syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
   syncAtt |= visual.updateGaze(*this,dt);
   if(syncAtt)

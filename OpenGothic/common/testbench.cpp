@@ -18,6 +18,7 @@
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
+#include "graphics/mesh/lean.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -552,6 +553,7 @@ void writeHeader() {
       std::fprintf(bench.csv,",%s_%s_x,%s_%s_y,%s_%s_z",s,j,s,j,s,j);
     }
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
+  std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -584,6 +586,9 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.3f,%.2f,%.2f",
                int(g.active),int(g.source),g.weight,g.error,g.yaw,g.pitch,g.yawGoal,g.pitchGoal,g.headYaw,g.chestYaw,g.waistYaw,
                g.animYaw,g.animPitch,g.hipsYaw,fyaw,fpitch,int(pg.active),int(pg.source),pg.weight,pg.error,pg.yaw);
+  // lean of the watched npc (or the hero)
+  const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
+  std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.1f,%.1f",int(ln.active),ln.roll,ln.pitch,ln.speed,ln.turn,ln.slope);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -837,6 +842,25 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="shot") {
     bench.shot = a.size()>1 ? a[1] : "shot";
     }
+  else if(c=="npcgo") {
+    // npcgo <npc|nearest> <waypoint> [walk|run]: the npc goes there (AI path), like a script sends it
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    auto wp = a.size()>2 ? w.findPoint(a[2]) : nullptr;
+    if(n==nullptr || n==&pl || wp==nullptr) {
+      say("npcgo: no npc or waypoint " + line);
+      return;
+      }
+    n->setWalkMode(a.size()>3 && a[3]=="walk" ? WalkBit::WM_Walk : WalkBit::WM_Run);
+    n->aiPush(AiQueue::aiGoToPoint(*wp));
+    say("npcgo " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="lean") {
+    // lean on|off: the lean into turns and on slopes (graphics/mesh/lean)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Lean::setEnabled(m=="on"); else
+      say("unknown lean command: " + line);
+    }
   else if(c=="ik") {
     const std::string m = a.size()>1 ? a[1] : "";
     if(m=="on" || m=="off")
@@ -892,6 +916,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
     bench.subject  = (n==&pl) ? nullptr : n;
     Gaze::probeNpc = bench.subject;
+    Lean::probeNpc = bench.subject;
     char buf[160] = "watch nobody";
     if(n!=nullptr)
       if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
@@ -1211,6 +1236,13 @@ void drawOverlay(Pixmap& pm) {
     y += 16;
     std::snprintf(buf,sizeof(buf),"H%.0f C%.0f W%.0f",double(g.headYaw),double(g.chestYaw),double(g.waistYaw));
     cv.text(x,y,buf,2,{255,230,40,255});
+    y += 16;
+    }
+  const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
+  if(ln.valid) {
+    std::snprintf(buf,sizeof(buf),"LEAN%s R%.1f P%.1f V%.0f T%.0f S%.0f",Lean::isEnabled() ? "" : " OFF",double(ln.roll),
+                  double(ln.pitch),double(ln.speed),double(ln.turn),double(ln.slope));
+    cv.text(x,y,buf,2,{120,255,160,255});
     y += 16;
     }
   if(bench.occl!=0) {

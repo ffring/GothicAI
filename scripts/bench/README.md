@@ -23,6 +23,9 @@ usual player commands drive it. Gaze: `gaze` (Xardas and the hero talk; the hero
 goes around him, behind his back and back; then Xardas at his bookstand turns the head only),
 `gaze-ambient` (no conversation: Rupert at the market notices the hero walking up, standing, walking,
 running and sneaking past; a script look; the hero looks at the npc in focus; a drawn weapon).
+Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
+and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
+for `bench_report.py diff`.
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -66,6 +69,8 @@ git worktree remove --force /tmp/before
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
 - gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
+- green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
+  turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
   leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
   if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
@@ -93,7 +98,8 @@ for a body tilted as a whole too: compare IK off and on); `limp` is how much low
 steps of one leg of a pair than on the other's. `gaze on` is the share of frames the watched one looks
 at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
 the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
-looks and the partner, while the partner is within reach of the turn.
+looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -131,6 +137,8 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
 | `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
+| `lean on\|off` | the lean into turns and on slopes |
+| `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |

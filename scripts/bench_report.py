@@ -226,6 +226,10 @@ def analyze(rows):
         stats["gaze_on"] = sum(1 for r in rows if r["g_on"] > 0) / len(rows)
         stats["gaze_looks"] = sum(1 for a, b in zip(rows, rows[1:]) if a["g_on"] == 0 and b["g_on"] > 0) + int(rows[0]["g_on"] > 0)
         stats["gaze_src"] = sorted({GAZE_SRC.get(int(r.get("g_src", 0)), "?") for r in rows if r["g_on"] > 0})
+    # lean: the largest roll into a turn, the trunk pitch range (degrees)
+    if rows and "ln_roll" in rows[0]:
+        stats["lean_roll"] = max(abs(r["ln_roll"]) for r in rows)
+        stats["lean_pitch"] = (min(r["ln_pitch"] for r in rows), max(r["ln_pitch"] for r in rows))
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -285,8 +289,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -297,8 +301,10 @@ def report(out):
         gz = "-" if "gaze_p90" not in st else f"{st['gaze_p90']:.1f}"
         gon = "-" if "gaze_on" not in st else \
             f"{st['gaze_on'] * 100:.0f} ({st['gaze_looks']}{', ' + ' '.join(st['gaze_src']) if st['gaze_src'] else ''})"
+        ln = "-" if "lean_roll" not in st else \
+            f"{st['lean_roll']:.1f} / {st['lean_pitch'][0]:.1f}..{st['lean_pitch'][1]:.1f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

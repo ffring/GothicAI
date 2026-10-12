@@ -1,0 +1,65 @@
+# Lean: running in circles (left, right), a slalom, walking in a circle (no lean), running and walking
+# up and down a 27 degree slope; an npc running a path. Behind the hero for the turns, the side for slopes
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_IN1_26   # the flat floor in Xardas' tower
+cam follow 350 120 180
+walkmode run
+wait 500
+rec left
+hold forward 4000
+hold turnl 4000
+wait 4000
+stop
+wait 800
+rec right
+hold forward 4000
+hold turnr 4000
+wait 4000
+stop
+wait 800
+rec slalom
+hold forward 4800
+hold turnl 800
+wait 800
+hold turnr 1600
+wait 1600
+hold turnl 1600
+wait 1600
+hold turnr 800
+wait 800
+stop
+wait 800
+walkmode walk
+rec walk
+hold forward 4000
+hold turnl 4000
+wait 4000
+stop
+walkmode run
+goto NW_XARDAS_TOWER_VALLEY_05
+wait 500
+face uphill
+cam follow 260 60 90
+wait 300
+rec up
+hold forward 3000
+wait 3000
+stop
+wait 500
+face downhill
+wait 300
+rec down
+hold forward 3000
+wait 3000
+stop
+walkmode walk
+goto NW_XARDAS_TOWER_VALLEY_05
+wait 500
+face uphill
+wait 300
+rec walkup
+hold forward 4000
+wait 4000
+stop

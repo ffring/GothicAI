@@ -559,6 +559,37 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   return changed;
   }
 
+bool MdlVisual::updateLean(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& lean = pose.leanIk();
+  if(!lean.isValid()) {
+    if(npc.isPlayer())
+      Lean::playerProbe = Lean::Probe();
+    if(&npc==Lean::probeNpc)
+      Lean::subjectProbe = Lean::Probe();
+    return false;
+    }
+
+  // on the ground, going somewhere; four legs turn and climb their own way (FootIk)
+  const float a  = npc.rotationRad();
+  const auto  bs = npc.bodyStateMasked() & BS_MAX;
+  Lean::Input in;
+  in.dt       = dt;
+  in.position = npc.position();
+  in.forward  = {std::cos(a), 0, std::sin(a)};
+  in.active   = (bs==(BS_WALK & BS_MAX) || bs==BS_RUN || bs==BS_SPRINT || bs==(BS_SNEAK & BS_MAX)) &&
+                !npc.isDown() && !npc.isInAir() && !npc.isSwim() && !npc.isDive() && !npc.isSlide() &&
+                npc.interactive()==nullptr && !pose.footIk().isQuadruped();
+  const bool changed = pose.updateLean(in);
+  if(npc.isPlayer())
+    lean.probe(Lean::playerProbe);
+  if(&npc==Lean::probeNpc)
+    lean.probe(Lean::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
 bool MdlVisual::hasGaze() const {
   return Gaze::isEnabled() && skInst->gazeIk().isValid();
   }
