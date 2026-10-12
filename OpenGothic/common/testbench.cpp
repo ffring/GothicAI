@@ -478,7 +478,7 @@ void updateCamera(World& w, Npc& pl) {
   }
 
 void writeHeader() {
-  std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,pelvis,floor");
+  std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,pelvis,pelvis_target,pelvis_limit,floor");
   for(const char* s:{"l","r"}) {
     std::fprintf(bench.csv,",%s_plant,%s_has,%s_gy,%s_nx,%s_ny,%s_nz,%s_toehas,%s_toey,%s_smooth,%s_err,%s_knee,%s_tilt,%s_roll,%s_yaw,%s_out,%s_slack",
                  s,s,s,s,s,s,s,s,s,s,s,s,s,s,s,s);
@@ -497,10 +497,10 @@ void writeRow(Npc& pl) {
     }
   auto&      p   = FootIk::playerProbe;
   const Vec3 pos = pl.position();
-  std::fprintf(bench.csv,"%s,%llu,%llu,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u,%u,%d,%d,%d,%.3f,%.2f,%.2f",
+  std::fprintf(bench.csv,"%s,%llu,%llu,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u,%u,%d,%d,%d,%.3f,%.2f,%.2f,%.2f,%.2f",
                bench.recName.c_str(),(unsigned long long)bench.recFrame,(unsigned long long)(bench.time-bench.recStart),
                pos.x,pos.y,pos.z,pl.rotation(),bench.speed,unsigned(pl.bodyStateMasked()),unsigned(pl.walkMode()),unsigned(bench.occl),
-               int(p.valid),int(p.enable),int(p.hardOff),p.weight,p.pelvis,p.floorY);
+               int(p.valid),int(p.enable),int(p.hardOff),p.weight,p.pelvis,p.target,p.limit,p.floorY);
   for(auto& l:p.leg) {
     std::fprintf(bench.csv,",%.3f,%d,%.2f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f",
                  l.plant,int(l.hasCol),l.groundY,l.n.x,l.n.y,l.n.z,int(l.toeCol),l.toeY,l.smoothY,l.err,l.kneeDev,l.tilt,l.roll,l.yaw,l.outward,l.slack);

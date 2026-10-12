@@ -5,6 +5,7 @@ contact sheets (frame grids) from the recorded videos, so the frames can be look
   bench_report.py <out dir>                          summary, report.md, sheets/
   bench_report.py frames <out dir> <seg> <from> <to> [step]   one sheet of the given frames
   bench_report.py compare <video a> <video b> [from] [to]      side by side video and sheet (a left, b right)
+  bench_report.py diff <out dir a> <out dir b>                 event counts per segment, before -> after
 """
 import csv
 import json
@@ -16,10 +17,11 @@ from collections import defaultdict
 
 FPS = 30
 TOP_EVENTS = 12
+CONTACT = ("float", "sink", "toe_sink")
 
 # flag: (threshold, unit, what it means)
 FLAGS = {
-    "float":     (3.0, "cm",  "planted ankle above the ground (contact error > 0)"),
+    "float":     (3.0, "cm",  "planted foot above the ground: ankle and toes (contact error > 0)"),
     "sink":      (3.0, "cm",  "planted ankle below the ground (contact error < 0)"),
     "toe_sink":  (3.0, "cm",  "toe joint lower under the ground than in the animation"),
     "pop":       (12.0, "cm", "IK correction of a joint changed abruptly (second difference over 3 frames)"),
@@ -61,6 +63,16 @@ def length(a):
     return math.sqrt(a[0] ** 2 + a[1] ** 2 + a[2] ** 2)
 
 
+def contact_err(r, leg):
+    """how far a planted foot is above (+) or below (-) the ground; standing on the toes counts"""
+    err = r[f"{leg}_err"]
+    if r[f"{leg}_toehas"] > 0 and r[f"{leg}_toey"] - r[f"{leg}_gy"] < 25:  # higher: a wall, not a step
+        toe_err = (r[f"{leg}_toef_y"] - r[f"{leg}_toey"]) - (r[f"{leg}_toea_y"] - r["floor"])
+        if err > 0:
+            return min(err, max(toe_err, 0.0))
+    return err
+
+
 def toe_yaw(r, leg):
     """horizontal turn of the toes from the animated direction, degrees, + is outward"""
     a = sub(vec(r, leg, "toea"), vec(r, leg, "anka"))
@@ -86,12 +98,15 @@ def frame_flags(prev2, prev, r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
             err = r[f"{leg}_err"]
-            out.append(("float", leg, err))
-            out.append(("sink", leg, -err))
+            toe_err = math.nan
             if r[f"{leg}_toehas"] > 0 and r[f"{leg}_toey"] - r[f"{leg}_gy"] < 25:  # higher: a wall, not a step
                 anim_clear = r[f"{leg}_toea_y"] - r["floor"]
                 clear = r[f"{leg}_toef_y"] - r[f"{leg}_toey"]
-                out.append(("toe_sink", leg, anim_clear - clear))
+                toe_err = clear - anim_clear
+                out.append(("toe_sink", leg, -toe_err))
+            # standing on the toes (end of a step) is standing too
+            out.append(("float", leg, err if math.isnan(toe_err) else min(err, toe_err)))
+            out.append(("sink", leg, -err))
             hip, knee, ank = vec(r, leg, "hip"), vec(r, leg, "kneef"), vec(r, leg, "ankf")
             full = length(sub(knee, hip)) + length(sub(ank, knee))
             if full > 0 and length(sub(ank, hip)) > 0.97 * full:
@@ -127,7 +142,7 @@ def analyze(rows):
         for leg in ("l", "r"):
             # with IK off too: that is how far the animation misses the ground
             if (r["ik_w"] > 0.99 or r["ik_w"] <= 0) and r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0:
-                errs.append(abs(r[f"{leg}_err"]))
+                errs.append(abs(contact_err(r, leg)))
         hit = set()
         for flag, leg, v in frame_flags(prev2, prev, r):
             if not (v > FLAGS[flag][0]):
@@ -150,9 +165,21 @@ def analyze(rows):
         stats["contact_p50"] = errs[len(errs) // 2]
         stats["contact_p90"] = errs[int(len(errs) * 0.9)]
         stats["contact_max"] = errs[-1]
+    # limp: the body is lower on the steps of one leg than on the other's
+    stance = {"l": [], "r": []}
+    for r in rows:
+        if r["ik_w"] > 0.99:
+            for leg, other in (("l", "r"), ("r", "l")):
+                if r[f"{leg}_plant"] > 0.99 and r[f"{other}_plant"] < 0.5:
+                    stance[leg].append(r["pelvis"])
+    if len(stance["l"]) > 5 and len(stance["r"]) > 5:
+        stats["limp"] = abs(sum(stance["l"]) / len(stance["l"]) - sum(stance["r"]) / len(stance["r"]))
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
+    # a contact error for a single frame at the start or the end of a step is not visible
+    events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
+              or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
@@ -206,15 +233,16 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | events |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | limp cm | events |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
         mx = st.get("contact_max")
         contact = "-" if p90 is None else f"{p90:.1f} / {mx:.1f}"
+        limp = "-" if "limp" not in st else f"{st['limp']:.1f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {limp} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
@@ -262,7 +290,40 @@ def compare(a, b, first=None, last=None):
     print(sheet(video, spread(0, max(0, n - 1), 8), base + ".png", cols=2, width=800) or "sheet failed")
 
 
+def diff(a, b):
+    """event counts and contact error of two runs of the same scenario"""
+    sa, sb = load(a), load(b)
+    total = defaultdict(lambda: [0, 0])
+    print("| segment | contact p90/max a | contact p90/max b | events a -> b |")
+    print("|---|---|---|---|")
+    for seg in sa:
+        if seg not in sb:
+            continue
+        res = []
+        for rows in (sa[seg], sb[seg]):
+            st, ev = analyze(rows)
+            cnt = defaultdict(int)
+            for e in ev:
+                cnt[e["flag"]] += 1
+            res.append((st, cnt))
+        flags = sorted(set(res[0][1]) | set(res[1][1]))
+        for f in flags:
+            total[f][0] += res[0][1][f]
+            total[f][1] += res[1][1][f]
+        changes = ", ".join(f"{f} {res[0][1][f]}->{res[1][1][f]}" for f in flags if res[0][1][f] != res[1][1][f])
+
+        def c(st):
+            ret = "-" if "contact_p90" not in st else f"{st['contact_p90']:.1f}/{st['contact_max']:.1f}"
+            return ret + ("" if "limp" not in st else f" limp {st['limp']:.1f}")
+        print(f"| {seg} | {c(res[0][0])} | {c(res[1][0])} | {changes or 'same'} |")
+    print()
+    print("total: " + ", ".join(f"{f} {v[0]}->{v[1]}" for f, v in sorted(total.items())))
+
+
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "diff":
+        diff(sys.argv[2], sys.argv[3])
+        return
     if len(sys.argv) >= 3 and sys.argv[1] == "compare":
         rng = [int(x) for x in sys.argv[4:6]]
         compare(sys.argv[2], sys.argv[3], *(rng if len(rng) == 2 else []))

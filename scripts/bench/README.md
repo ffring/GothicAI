@@ -11,7 +11,12 @@ NO_BUILD=1 scripts/bench.sh ik-sweep        # skip the incremental build
 
 A run takes the game start (~10 s from a save) plus the scenario time. The game window is minimized,
 does not take the focus and plays no sound, so it can run while someone works on the same Mac.
-The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats exactly.
+The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the
+random idle animations the game picks).
+
+Scenarios for foot IK: `ik-sweep` (12 slopes all over the world: run up, run down, walk across; ~2 min),
+`ik-stairs` (8 stairs: walk up and down, run up), `ik-moves` (stand, turn on the spot, strafe, walk
+backwards, sneak), `ik-ab` (IK off and on on the same run), `smoke` (the bench itself).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -33,6 +38,17 @@ scripts/bench_report.py .bench/<run>                              # report again
 ```
 
 `compare` also works across runs: the same scenario before and after a change.
+
+Before and after a change, with the same scenarios (the version before is built from `main` in a
+temporary worktree, the scenario files are taken from the current one):
+
+```bash
+git worktree add --detach /tmp/before main && (cd /tmp/before && scripts/build-engine.sh)
+W=$PWD; (cd /tmp/before && scripts/bench.sh $W/scripts/bench/ik-sweep.bench $W/.bench/before-sweep)
+scripts/bench.sh ik-sweep
+scripts/bench_report.py diff .bench/before-sweep .bench/ik-sweep-<time>   # events per segment, before -> after
+git worktree remove --force /tmp/before
+```
 
 ## Overlay
 
@@ -57,6 +73,9 @@ scripts/bench_report.py .bench/<run>                              # report again
 | `knee` | the knee bends more than 25 degrees away from the animated direction |
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
+
+Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
+the threshold: a foot leaving the ground a frame early is not visible.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 

@@ -1,0 +1,27 @@
+# Foot IK on stairs all over the world: walk and run up and down
+cheat god
+set time 12 0
+view clean
+foreach stairs 8
+  cam auto 220 40
+  face uphill
+  walkmode walk
+  wait 300
+  rec st$I_walk_up
+  hold forward 2500
+  wait 2500
+  stop
+  face downhill
+  wait 300
+  rec st$I_walk_down
+  hold forward 2500
+  wait 2500
+  stop
+  face uphill
+  walkmode run
+  wait 300
+  rec st$I_run_up
+  hold forward 2000
+  wait 2000
+  stop
+end
