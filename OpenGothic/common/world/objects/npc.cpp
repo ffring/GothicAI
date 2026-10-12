@@ -1031,6 +1031,10 @@ void Npc::startFaceAnim(std::string_view anim, float intensity, uint64_t duratio
   visual.startFaceAnim(*this,anim,intensity,duration);
   }
 
+float Npc::faceWeight(std::string_view anim) {
+  return visual.faceWeight(anim);
+  }
+
 void Npc::startSpeech(const Tempest::Sound& voice) {
   visual.startSpeech(*this,LipSync::Track::fromSound(voice));
   }

@@ -9,7 +9,7 @@ from websockets.asyncio.server import serve
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend
-from gothic_ai.persona import PersonaProvider
+from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.tts import TtsClient
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import XARDAS, _until
@@ -62,6 +62,22 @@ async def test_lines_are_voiced_in_order_and_actions_wait_for_them():
     assert chunk["line"] == say["line"] == end["line"]
     assert len(base64.b64decode(chunk["data"])) == 2 * 800 * len(say["text"])
     assert end["audio_s"] == pytest.approx(0.05 * len(say["text"]))
+
+
+async def test_the_mood_of_a_line_steers_its_voice():
+    fake = FakeGame()
+    llm = FakeBackend("[friendly] Ты вернулся. [angry] Времени мало, слушай! [neutral] Иди.", delay=0)
+    async with fake_tts() as (url, requests), connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient(url))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Привет")
+        await _until(lambda: len(fake.said) == 3)
+
+    assert [(r["text"], r.get("style")) for r in requests] == [
+        ("Ты вернулся.", MOOD_DELIVERY["friendly"]),
+        ("Времени мало, слушай!", MOOD_DELIVERY["angry"]),
+        ("Иди.", None),  # neutral: the voice's usual manner
+    ]
 
 
 async def test_without_a_tts_service_lines_go_out_silent():

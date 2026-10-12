@@ -533,6 +533,13 @@ void updateCamera(World& w, Npc& pl) {
     }
   }
 
+// the faces a mood shows (the bridge's say.mood)
+struct FaceColumn { const char* column; const char* anim; };
+const FaceColumn FaceColumns[] = {
+  {"face_neutral","S_NEUTRAL"}, {"face_friendly","S_FRIENDLY"}, {"face_angry","S_ANGRY"},
+  {"face_hostile","S_HOSTILE"}, {"face_afraid","S_FRIGHTENED"}, {"face_pain","T_HURT"},
+  };
+
 void writeHeader() {
   std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,nlegs,bad,pelvis,chest,pelvis_target,pelvis_limit,floor");
   for(const char* s:{"l","r","fl","fr"}) {
@@ -543,6 +550,8 @@ void writeHeader() {
     }
   std::fprintf(bench.csv,",g_on,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,pg_on,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
+  for(auto& f:FaceColumns)
+    std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -577,6 +586,10 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
                int(lp.valid),int(lp.active),(unsigned long long)lp.time,lp.level,lp.mouth,lp.open,
                lp.shape.frame0,lp.shape.frame1,lp.shape.alpha,lp.shape.intensity,lp.picks);
+  // faces of the watched one, as shown (fading in and out)
+  Npc& s = subjectOf(pl);
+  for(auto& f:FaceColumns)
+    std::fprintf(bench.csv,",%.3f",s.faceWeight(f.anim));
   std::fprintf(bench.csv,"\n");
   }
 
@@ -893,6 +906,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Npc& to = (n==&pl) ? subjectOf(pl) : pl;
     n->aiPush(AiQueue::aiOutput(to,a[2],0));
     say("speak " + std::string(n->displayName()) + " " + a[2]);
+    }
+  else if(c=="faceanim") {
+    // faceanim <npc|nearest|player> <anim> [ms] [intensity]: a face animation of the head (S_ANGRY, S_FRIENDLY...)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || a.size()<3) {
+      say("faceanim: no npc or anim " + line);
+      return;
+      }
+    n->startFaceAnim(a[2],num(a,4,1),uint64_t(num(a,3,3000)));
+    say("faceanim " + std::string(n->displayName()) + " " + a[2]);
     }
   else if(c=="dialog") {
     // dialog <npc|nearest>: the hero talks to it, as with the action key (important infos start by themselves)

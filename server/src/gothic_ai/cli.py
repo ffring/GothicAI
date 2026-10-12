@@ -41,8 +41,9 @@ from .llm import (
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
-from .persona import PersonaProvider, habits_of
+from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
 from .protocol import (
+    MOODS,
     Attached,
     Detached,
     GameMessage,
@@ -634,7 +635,8 @@ async def speech_test(args: argparse.Namespace) -> int:
         async def chunk(data: bytes) -> None:
             await asyncio.to_thread(player.write, data[: len(data) // 2 * 2])
 
-        speech = await tts.stream(args.text, args.npc.upper(), persona.voice, start, chunk)
+        style = MOOD_DELIVERY[args.mood] if args.mood else ""
+        speech = await tts.stream(args.text, args.npc.upper(), persona.voice, start, chunk, style)
         if player is not None:
             await asyncio.to_thread(player.stop)  # waits until the last chunk is heard
     except Exception as err:  # TtsError, or sounddevice's own errors when playing
@@ -782,6 +784,7 @@ def main() -> None:
     p.add_argument("--text", default="Я ждал тебя. Нам нужно поговорить.")
     p.add_argument("--npc", default="NONE_100_XARDAS")
     p.add_argument("--name", default="Ксардас", help="npc display name for the persona")
+    p.add_argument("--mood", choices=MOODS, help="say it in this mood (as a line with the model's tag)")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")

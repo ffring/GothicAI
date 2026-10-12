@@ -24,6 +24,13 @@ goes around him, behind his back and back; then Xardas at his bookstand turns th
 Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
 with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
 the first choice: the lines of both are played the way the game plays them).
+Faces: `faces` (the face animations of a head one after another, then two of them while Xardas speaks),
+`face-fade` (faces fade in and out, one gives way to the next, three a moment apart, the lips over a
+fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serve --scenario m1 --llm fake
+--no-tts` on a port of your own and run the bench with `GOTHIC_AI_URL=ws://127.0.0.1:<port>`; with a TTS
+service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
+`face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
+watched npc shows, 0..1.
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -88,6 +95,7 @@ git worktree remove --force /tmp/before
 | `gaze_jerk` | the gaze turns more than 8 degrees in one frame |
 | `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
 | `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
+| `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
@@ -137,6 +145,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `speak <npc\|nearest\|player> <output name>` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script |
 | `dialog <npc\|nearest>` | the hero talks to it, as with the action key: the dialog window opens |
 | `choose <n>` | runs the n-th choice (from 1) of the dialog with the watched npc, as if the player picked it |
+| `faceanim <npc\|nearest\|player> <anim> [ms] [intensity]` | a face animation of the head (`S_ANGRY`, `S_FRIENDLY`, `T_HURT`...) |
 | `lips on\|off`, `lips param <name> <value>`, `lips params` | lip sync (off: the old talk loop) and its parameters |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |

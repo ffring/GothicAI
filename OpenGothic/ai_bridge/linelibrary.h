@@ -29,6 +29,7 @@ class LineLibrary final {
       std::string reply;  // the reply this line belongs to, already shown in the chat
       bool        overlay = false;  // said on the move: not through the npc's AI queue
       bool        hushed  = false;  // cut off before it started (v7 hush): speaks nothing
+      std::string mood;             // the face while it is said (v8): neutral, friendly, angry...
       };
 
     static constexpr uint32_t VoicePauseMs = 250;  // breath between voiced lines

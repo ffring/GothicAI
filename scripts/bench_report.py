@@ -35,7 +35,9 @@ FLAGS = {
     "gaze_jerk": (8.0, "deg", "the gaze turned this much in one frame"),
     "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
     "lip_shut":  (0.7, "",    "the voice is loud but the mouth stays shut"),
+    "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
 }
+FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
 LIPS = ("lip_open", "lip_shut")
 LIP_FRAMES = 4  # the mouth closes and opens over a frame or two: shorter runs are not flagged
 
@@ -115,6 +117,8 @@ def frame_flags(prev2, prev, r):
             out.append(("gaze_off", "-", r["g_err"]))
         if prev is not None and "g_w" in prev:
             out.append(("gaze_jerk", "-", abs(r["g_yaw"] * r["g_w"] - prev["g_yaw"] * prev["g_w"])))
+    if prev is not None and FACES[0] in r and FACES[0] in prev:
+        out.append(("face_jump", "-", max(abs(r[c] - prev[c]) for c in FACES)))
     if r.get("lip_on", 0) > 0:
         # the level the mouth aims at (the voice a moment ahead) against how wide it is shown
         if r["lip_level"] < 0.05:

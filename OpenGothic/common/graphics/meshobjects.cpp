@@ -86,6 +86,13 @@ void MeshObjects::Mesh::setMMShape(std::string_view anim, uint32_t frame0, uint3
     sub[i].setMMShape(anim,frame0,frame1,alpha,intensity);
   }
 
+float MeshObjects::Mesh::morphWeight(std::string_view anim) {
+  float w = 0;
+  for(size_t i=0;i<subCount;++i)
+    w = std::max(w, sub[i].morphWeight(anim));
+  return w;
+  }
+
 Bounds MeshObjects::Mesh::bounds() const {
   if(subCount==0)
     return Bounds();

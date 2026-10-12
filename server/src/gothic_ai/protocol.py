@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 8
 
 # --- game -> server -----------------------------------------------------------
 
@@ -462,6 +462,11 @@ class PingCmd(_Command):
     req: str
 
 
+# v8: how the npc looks while it says a line (and a moment after): a face of the game's heads
+Mood = Literal["neutral", "friendly", "angry", "hostile", "afraid", "pain"]
+MOODS: tuple[Mood, ...] = ("neutral", "friendly", "angry", "hostile", "afraid", "pain")
+
+
 class SayCmd(_Command):
     """One line (usually a sentence) for the npc to speak, controlled or (v6) free; shown as a subtitle.
     Aloud either with
@@ -479,6 +484,7 @@ class SayCmd(_Command):
     # v6: said on the move, not through the npc's AI queue: it keeps running or fighting. Such lines
     # are not ordered by the game: the server sends the next one when the previous has been said.
     overlay: bool | None = None
+    mood: Mood | None = None  # v8: the face while the line is said; none: the face stays as it is
 
 
 class ChatTextCmd(_Command):

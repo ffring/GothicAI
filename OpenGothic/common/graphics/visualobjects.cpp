@@ -2,6 +2,7 @@
 
 #include <Tempest/Log>
 #include <algorithm>
+#include <cmath>
 #include <cassert>
 
 #include "graphics/mesh/submesh/animmesh.h"
@@ -106,6 +107,10 @@ void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, ui
 void VisualObjects::Item::setMMShape(std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
   if(owner!=nullptr)
     owner->setMMShape(id, anim, frame0, frame1, alpha, intensity);
+  }
+
+float VisualObjects::Item::morphWeight(std::string_view anim) {
+  return owner!=nullptr ? owner->morphWeight(id, anim) : 0.f;
   }
 
 const Material& VisualObjects::Item::material() const {
@@ -395,46 +400,105 @@ void VisualObjects::startMMAnim(size_t i, std::string_view animName, float inten
 
   objectsMorph.insert(i);
 
-  auto& m = anim[id];
+  const uint64_t now  = scene.tickCount;
+  auto&          m    = anim[id];
+  const bool     stop = timeUntil<now;  // the anim is stopped (a time of 0)
   if(timeUntil==uint64_t(-1) && m.duration>0)
-    timeUntil = scene.tickCount + m.duration;
+    timeUntil = now + m.duration;
+  // held for its time, then fades out
+  if(!stop && timeUntil!=uint64_t(-1) && m.blendOut>0)
+    timeUntil += uint64_t(1.f/m.blendOut);
 
-  // extend time of anim
-  for(auto& i:obj.morphAnim) {
-    if(i.id!=id || i.timeUntil<scene.tickCount)
+  // fades out from where it is now
+  auto fadeOut = [&](MorphAnim& a) {
+    const auto& am = anim[a.id];
+    if(a.manual || am.blendOut<=0) {
+      a.timeUntil = 0;
+      return;
+      }
+    a.timeUntil = std::min(a.timeUntil, now + uint64_t(morphWeight(obj,a)/am.blendOut));
+    };
+
+  // another anim of the layer gives way: S_ANGRY replaces S_FRIENDLY
+  if(!stop) {
+    for(auto& a:obj.morphAnim) {
+      if(a.id==id || a.timeUntil<now || a.manual || anim[a.id].layer!=m.layer)
+        continue;
+      fadeOut(a);
+      }
+    }
+
+  // the anim is on already (or still fading out): it goes on from its weight
+  for(auto& a:obj.morphAnim) {
+    if(a.id!=id || a.timeUntil<now)
       continue;
-    i.timeUntil = timeUntil;
-    i.intensity = intensity;
-    i.manual    = false;
+    if(stop) {
+      fadeOut(a);
+      return;
+      }
+    if(m.blendIn>0) {
+      const float w = a.manual ? 1.f : morphWeight(obj,a);
+      a.timeStart = now - std::min(now, uint64_t(std::ceil(w/m.blendIn)));
+      }
+    a.timeUntil = timeUntil;
+    a.intensity = intensity;
+    a.manual    = false;
     return;
     }
-
-  // find same layer
-  for(auto& i:obj.morphAnim) {
-    if(i.timeUntil<scene.tickCount)
-      continue;
-    if(anim[i.id].layer!=m.layer)
-      continue;
-    i.id        = id;
-    i.timeUntil = timeUntil;
-    i.intensity = intensity;
-    i.manual    = false;
+  if(stop)
     return;
-    }
 
-  size_t nId = 0;
-  for(size_t i=0; i<Resources::MAX_MORPH_LAYERS; ++i) {
-    if(obj.morphAnim[nId].timeStart<=obj.morphAnim[i].timeStart)
-      continue;
-    nId = i;
-    }
-
-  auto& ani = obj.morphAnim[nId];
+  auto& ani = morphSlot(obj);
   ani.id        = id;
-  ani.timeStart = scene.tickCount;
+  ani.timeStart = now;
   ani.timeUntil = timeUntil;
   ani.intensity = intensity;
   ani.manual    = false;
+  }
+
+float VisualObjects::morphWeight(Object& obj, const MorphAnim& a) {
+  const uint64_t now = scene.tickCount;
+  if(a.timeUntil<now)
+    return 0;
+  if(a.manual)
+    return 1;
+  const auto& m = (*obj.bucketId->staticMesh->morph.anim)[a.id];
+  float w = 1;
+  if(m.blendIn>0)
+    w = std::min(w, float(now-a.timeStart)*m.blendIn);
+  if(m.blendOut>0 && a.timeUntil!=uint64_t(-1))
+    w = std::min(w, float(a.timeUntil-now)*m.blendOut);
+  return std::clamp(w, 0.f, 1.f);
+  }
+
+float VisualObjects::morphWeight(size_t i, std::string_view animName) {
+  auto& obj = objects[i];
+  if(obj.isEmpty() || obj.bucketId->staticMesh==nullptr || obj.bucketId->staticMesh->morph.anim==nullptr)
+    return 0;
+  auto& anim = *obj.bucketId->staticMesh->morph.anim;
+  float w    = 0;
+  for(auto& a:obj.morphAnim)
+    if(a.id<anim.size() && anim[a.id].name==animName)
+      w = std::max(w, a.intensity*morphWeight(obj,a));
+  return w;
+  }
+
+auto VisualObjects::morphSlot(Object& obj) -> MorphAnim& {
+  // a free slot, else the faintest anim that is not set by its owner
+  MorphAnim* slot = nullptr;
+  float      best = 2;
+  for(auto& a:obj.morphAnim) {
+    if(a.timeUntil<scene.tickCount)
+      return a;
+    if(a.manual)
+      continue;
+    const float w = morphWeight(obj,a)*a.intensity;
+    if(w<best) {
+      best = w;
+      slot = &a;
+      }
+    }
+  return slot!=nullptr ? *slot : obj.morphAnim[0];
   }
 
 void VisualObjects::setMMShape(size_t i, std::string_view animName, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
@@ -453,7 +517,7 @@ void VisualObjects::setMMShape(size_t i, std::string_view animName, uint32_t fra
   if(id==size_t(-1) || anim[id].numFrames==0)
     return;
 
-  // the layer of the anim, or a free slot, or the oldest one
+  // the layer of the anim, or a free slot, or the faintest one
   auto&      m    = anim[id];
   MorphAnim* slot = nullptr;
   for(auto& a:obj.morphAnim)
@@ -461,15 +525,8 @@ void VisualObjects::setMMShape(size_t i, std::string_view animName, uint32_t fra
       slot = &a;
       break;
       }
-  for(auto& a:obj.morphAnim)
-    if(slot==nullptr && a.timeUntil<scene.tickCount)
-      slot = &a;
-  if(slot==nullptr) {
-    slot = &obj.morphAnim[0];
-    for(auto& a:obj.morphAnim)
-      if(a.timeStart<slot->timeStart)
-        slot = &a;
-    }
+  if(slot==nullptr)
+    slot = &morphSlot(obj);
 
   const uint32_t last = uint32_t(m.numFrames-1);
   if(slot->id!=id || slot->timeUntil<scene.tickCount)
@@ -582,14 +639,16 @@ void VisualObjects::preFrameUpdateMorph() {
       uint64_t time = (scene.tickCount-ani.timeStart);
 
       float    alpha     = float(time%anim.tickPerFrame)/float(anim.tickPerFrame);
-      float    intensity = ani.intensity;
+      float    intensity = ani.intensity*morphWeight(obj,ani);
 
       if(scene.tickCount>ani.timeUntil) {
         data.morph[i].intensity = 0;
         continue;
         }
 
-      if(anim.numFrames>1 || ani.manual)
+      // a still face (S_ANGRY) is watched too while it fades in, or has an end time to go at
+      const bool fadingIn = !ani.manual && anim.blendIn>0 && float(time)*anim.blendIn<1;
+      if(anim.numFrames>1 || ani.manual || ani.timeUntil!=uint64_t(-1) || fadingIn)
         reschedule = true;
 
       const uint32_t samplesPerFrame = uint32_t(anim.samplesPerFrame);

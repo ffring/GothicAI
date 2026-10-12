@@ -178,6 +178,7 @@ class Npc final {
     bool       setAnimItem(std::string_view scheme, int state);
     void       stopAnim(std::string_view ani);
     void       startFaceAnim(std::string_view anim, float intensity, uint64_t duration);
+    float      faceWeight(std::string_view anim);  // how much of the face anim shows now, 0..1 (test bench)
     // a voiced line starts: the mouth follows the voice (LipSync)
     void       startSpeech(const Tempest::Sound& voice);
     void       startSpeech(std::shared_ptr<LipSync::Track> voice);

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .brain.day import Habit
 from .gamedata.ou import load_npc_lines
+from .protocol import Mood
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,10 @@ RULES = """Как отвечать:
   на такие вопросы отвечай в образе, с недоумением.
 - Не выдумывай важных сюжетных событий; если чего-то не знаешь, скажи об этом в образе.
 - Сообщение в квадратных скобках — это ремарка о происходящем, а не слова героя.
+- Начинай каждый ответ с метки настроения в квадратных скобках. Её не слышно, её видно по твоему лицу:
+  [neutral] спокойно, [friendly] приветливо, с улыбкой, [angry] сердито, [hostile] враждебно, с угрозой,
+  [afraid] испуганно, [pain] от боли. Если настроение меняется посреди ответа, поставь новую метку
+  перед предложением. Пример: «[angry] Опять ты? [neutral] Ладно, говори, раз пришёл.»
 
 Намерения и действия:
 - Телом ты не управляешь: твоё тело и привычки сами делают то, чего ты хочешь. Ты передаёшь им
@@ -66,6 +71,17 @@ VOICES = {
     "NONE_100_XARDAS": "An old man with a deep, low, calm and wise voice, speaking slowly and gravely",
 }
 DEFAULT_VOICE = "A middle-aged man with an ordinary, slightly rough voice, speaking calmly"
+
+# How a line is said in each mood (the model's tag): the TTS steers the delivery, the voice stays the
+# npc's. English, as TTS steering wants it. Neutral: the voice's usual manner.
+MOOD_DELIVERY: dict[Mood, str] = {
+    "neutral": "",
+    "friendly": "say warmly and kindly, with a slight smile in the voice",
+    "angry": "say angrily, with irritation and force",
+    "hostile": "say coldly and menacingly, in a low threatening voice",
+    "afraid": "say fearfully, in a tense trembling voice",
+    "pain": "say through pain, strained and breathless, as if wounded",
+}
 
 # What an npc likes to do besides its routine, for the behavioral model's day plans (brain/day.py): a
 # routine state, at a waypoint (None: where its routine has it now). English.

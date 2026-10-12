@@ -42,9 +42,22 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 7;
+constexpr int         ProtocolVersion = 8;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
+
+constexpr uint32_t    MoodHoldMs      = 2000;  // the face of a line stays this long after it, then fades (a second)
+
+// the face of the game's heads for a mood of a line (v8)
+std::string_view moodFace(std::string_view mood) {
+  if(mood=="neutral")  return "S_NEUTRAL";
+  if(mood=="friendly") return "S_FRIENDLY";
+  if(mood=="angry")    return "S_ANGRY";
+  if(mood=="hostile")  return "S_HOSTILE";
+  if(mood=="afraid")   return "S_FRIGHTENED";
+  if(mood=="pain")     return "T_HURT";
+  return "";
+  }
 
 std::string lower(std::string_view s) {
   std::string r(s);
@@ -815,6 +828,7 @@ void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
     voice = std::make_shared<VoiceBuffer>(uint32_t(JsonRead::integer(msg,"rate",24000)));
   lines.add(line,symbol,TextCodec::fromUtf8(JsonRead::str(msg,"text")),std::move(wav),std::move(voice),
             std::string(JsonRead::str(msg,"reply")));
+  lines.find(line)->mood = std::string(JsonRead::str(msg,"mood"));
   if(!JsonRead::boolean(msg,"overlay",false)) {
     npc->aiPush(AiQueue::aiOutput(*pl,line,0));
     return;
@@ -1037,6 +1051,13 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
   lastLine[line.npc] = line.id;
   if(line.voice!=nullptr)
     startVoice(line);
+  // the face while the line is said, and a moment after (v8)
+  if(auto face = moodFace(line.mood); !face.empty())
+    if(auto world = Gothic::inst().world())
+      if(auto npc = npcBySymbol(*world,line.npc)) {
+        npc->startFaceAnim(face,1,line.time+MoodHoldMs);
+        Log::i("[ai] face ",line.npc," ",face," for ",line.time+MoodHoldMs," ms");
+        }
   ensureChat();
   if(!line.reply.empty()) {
     chat->extend(line.reply,line.time);  // its text is on screen already

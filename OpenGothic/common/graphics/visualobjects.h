@@ -43,6 +43,7 @@ class VisualObjects final {
       void     setWind     (zenkit::AnimationType m, float intensity);
       void     startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
       void     setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
+      float    morphWeight (std::string_view anim);  // as shown now: intensity and fade
 
       const Material&    material() const;
       const Bounds&      bounds()   const;
@@ -93,6 +94,9 @@ class VisualObjects final {
     struct MorphDesc;
     struct MorphData;
 
+    // A morph anim fades in from timeStart and out until timeUntil, at the speeds of its mesh (the original
+    // engine's blend in/out: a face comes and goes in about a second); one face replacing another on the
+    // same layer fades in while the other fades out
     struct MorphAnim {
       size_t   id        = 0;
       uint64_t timeStart = 0;
@@ -139,6 +143,9 @@ class VisualObjects final {
 
     void     startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil);
     void     setMMShape (size_t i, std::string_view animName, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
+    float    morphWeight(Object& obj, const MorphAnim& a);
+    float    morphWeight(size_t i, std::string_view animName);
+    auto     morphSlot  (Object& obj) -> MorphAnim&;
     void     setAsGhost(size_t i, bool g);
 
     void     notifyTlas(const Material& m, RtScene::Category cat);

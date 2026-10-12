@@ -1,0 +1,40 @@
+# Face animations of a head, one after another (Xardas in the default save, the camera at his face):
+# what the moods of the AI lines look like. Then two of them while he speaks (with lip sync).
+cheat god
+view clean 30
+watch nearest
+freeze nearest
+wait 500
+place 150 0
+cam face 45 15 1
+wait 800
+rec neutral
+wait 600
+faceanim nearest S_FRIENDLY 1500
+rec friendly
+wait 800
+faceanim nearest S_ANGRY 1500
+rec angry
+wait 800
+faceanim nearest S_HOSTILE 1500
+rec hostile
+wait 800
+faceanim nearest S_FRIGHTENED 1500
+rec frightened
+wait 800
+faceanim nearest T_HURT 1500
+rec hurt
+wait 800
+faceanim nearest S_EYESCLOSED 1500
+rec eyesclosed
+wait 800
+stop
+wait 800
+faceanim nearest S_ANGRY 9000
+speak nearest DIA_Addon_Xardas_Hello_14_00
+rec angry_talk
+wait 4000
+faceanim nearest S_FRIENDLY 5000
+rec friendly_talk
+wait 4000
+stop

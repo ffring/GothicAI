@@ -379,6 +379,8 @@ ProtoMesh::Morph ProtoMesh::mkAnimation(const zenkit::MorphAnimation& a) {
   ret.samplesPerFrame = a.samples.size()/a.frame_count;
   ret.layer           = a.layer;
   ret.duration        = uint64_t(a.duration>0 ? a.duration : 0);
+  ret.blendIn         = std::abs(a.blend_in);
+  ret.blendOut        = std::abs(a.blend_out);  // stored negative: the weight goes down
 
   if(a.flags&0x2 || a.duration<=0)
     ret.tickPerFrame = size_t(1.f/a.speed); else
