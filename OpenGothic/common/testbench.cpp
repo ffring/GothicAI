@@ -27,6 +27,7 @@
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/talkgestures.h"
+#include "graphics/mesh/eyeblink.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animblend.h"
@@ -931,6 +932,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops,ge_nods,ge_pitch,ge_yaw,ge_roll");
+  std::fprintf(bench.csv,",bk_on,bk_w,bk_n,bk_pause,bk_shift,bk_double");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
@@ -1043,6 +1045,10 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),
                unsigned(ge.mood),ge.starts,ge.cuts,ge.stops,ge.nods,double(ge.head.pitch*180.f/float(M_PI)),
                double(ge.head.yaw*180.f/float(M_PI)),double(ge.head.roll*180.f/float(M_PI)));
+  // its blinks: how closed the eyes are now, counters
+  const auto& bk = EyeBlink::subjectProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%u,%u,%u,%u",int(bk.valid && bk.enabled),subjectOf(pl).faceWeight("R_EYESBLINK"),
+               bk.blinks,bk.pauses,bk.shifts,bk.doubles);
   // faces of the watched one, as shown (fading in and out)
   Npc& s = subjectOf(pl);
   for(auto& f:FaceColumns)
@@ -1993,6 +1999,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else
       say("unknown gestures command: " + line);
     }
+  else if(c=="blink") {
+    // blink on|off|param <name> <value>|params: blinking (off: nobody blinks, as OpenGothic was)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      EyeBlink::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(EyeBlink::setParam(a[2],num(a,3,0)) ? "blink param " : "blink: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("blink params: " + EyeBlink::paramList());
+    else
+      say("unknown blink command: " + line);
+    }
   else if(c=="watch") {
     // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
@@ -2002,6 +2020,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     LipSync::subjectProbe = LipSync::Probe();
     TalkGestures::probeNpc     = n;
     TalkGestures::subjectProbe = TalkGestures::Probe();
+    EyeBlink::probeNpc         = n;
+    EyeBlink::subjectProbe     = EyeBlink::Probe();
     Lean::probeNpc = bench.subject;
     Pose::probeNpc = bench.subject;
     bench.anim1.clear();
@@ -2534,6 +2554,12 @@ void drawOverlay(Pixmap& pm) {
     cv.rect(x,y+1,int(float(bw)*std::clamp(lp.level,0.f,1.f)),3,{255,255,255,255});
     cv.rect(x,y+6,int(float(bw)*std::clamp(lp.open,0.f,1.f)),7,c);
     y += 20;
+    }
+  const auto& bk = EyeBlink::subjectProbe;
+  if(bk.valid && EyeBlink::probeNpc!=nullptr) {
+    std::snprintf(buf,sizeof(buf),"BLINK%s N%u P%u S%u D%u",bk.enabled ? "" : " OFF",bk.blinks,bk.pauses,bk.shifts,bk.doubles);
+    cv.text(x,y,buf,2,{200,200,255,255});
+    y += 16;
     }
   const auto& ge = TalkGestures::subjectProbe;
   if(ge.valid && TalkGestures::probeNpc!=nullptr) {

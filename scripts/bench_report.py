@@ -44,11 +44,19 @@ FLAGS = {
     "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
     "flinch_none": (1.0, "x", "a blow and the upper body hardly gave way: 1.5 degrees over the peak"),
     "flinch_slow": (1.5, "s", "the upper body is not back this long after the last blow"),
+    "blink_shut": (0.5, "",   "a blink keeps the eyes shut too long (a blink is closed for 2-4 frames)"),
 }
 TEXT = ("an_bone", "an_layers")  # columns that are names, not numbers
 FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
 LIPS = ("lip_open", "lip_shut")
+BLINK_FRAMES = 7  # the eyes half shut by a blink longer than this many frames: stuck
 LIP_FRAMES = 4  # the mouth closes and opens over a frame or two: shorter runs are not flagged
+
+
+def counted(rows, col):
+    """what a counter of the watched one added over the rows: a switch of the watched one (a new counter,
+    first read as 0) is not counted"""
+    return int(sum(d for d in (b[col] - a[col] for a, b in zip(rows, rows[1:])) if 0 < d <= 3))
 
 
 def num(v):
@@ -141,6 +149,8 @@ def frame_flags(prev2, prev, r, switch=False):
         out.append(("aim_off", "-", r["a_err"]))
     if prev is not None and FACES[0] in r and FACES[0] in prev:
         out.append(("face_jump", "-", max(abs(r[c] - prev[c]) for c in FACES)))
+    if r.get("bk_w", 0) > 0.5:
+        out.append(("blink_shut", "-", r["bk_w"]))
     if r.get("lip_on", 0) > 0:
         # the level the mouth aims at (the voice a moment ahead) against how wide it is shown
         if r["lip_level"] < 0.05:
@@ -313,7 +323,7 @@ def analyze(rows):
             stats["ges_talk"] = sum(1 for r in talk if r["ge_id"] > 0) / len(talk)
             stats["ges_listen"] = None if not quiet else sum(1 for r in quiet if r["ge_id"] > 0) / len(quiet)
             for k in ("starts", "cuts", "stops") + (("nods",) if "ge_nods" in rows[0] else ()):
-                stats["ges_" + k] = int(rows[-1]["ge_" + k] - rows[0]["ge_" + k])
+                stats["ges_" + k] = counted(rows, "ge_" + k)
             stats["ges_kinds"] = len({int(r["ge_id"]) for r in rows if r["ge_id"] > 0})
     # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
     # to come back after a blow; a blow without a flinch, a flinch that does not come back
@@ -338,6 +348,15 @@ def analyze(rows):
                         events.append({"flag": "flinch_slow", "leg": "-", "start": int(rows[i]["frame"]),
                                        "end": int(rows[-1]["frame"]), "worst": t, "at": int(rows[-1]["frame"])})
             stats["flinch_settle"] = settle
+    # blinks of the watched one: how many a minute, of them in a pause of the voice, at a shift of the eyes
+    if rows and "bk_n" in rows[0] and rows[-1]["bk_on"] > 0:
+        secs = (rows[-1]["t"] - rows[0]["t"]) / 1000.0
+        if secs > 1:
+            for k in ("pause", "shift", "double"):
+                stats["blink_" + k] = counted(rows, "bk_" + k)
+            # the blinks seen: the eyes going half shut
+            stats["blink_n"] = sum(1 for a, b in zip(rows, rows[1:]) if a["bk_w"] <= 0.3 < b["bk_w"])
+            stats["blink_rate"] = stats["blink_n"] * 60.0 / secs
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -345,6 +364,7 @@ def analyze(rows):
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
     events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
+    events = [ev for ev in events if ev["flag"] != "blink_shut" or ev["end"] - ev["start"] + 1 > BLINK_FRAMES]
     # a blow throws the head around on purpose (the flinch, the stumble): no gaze jerk for a second after it
     if rows and "f_hits" in rows[0]:
         struck = [int(rows[i]["frame"]) for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
@@ -489,8 +509,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | gestures talk / listen % (started, over one, stopped) | events |")
-    lines.append("|" + "---|" * 17)
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | gestures talk / listen % (started, over one, stopped) | blinks /min (in a pause, at a shift) | events |")
+    lines.append("|" + "---|" * 18)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -511,10 +531,12 @@ def report(out):
         gs = "-" if "ges_talk" not in st else \
             f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})" + \
             ("" if "ges_nods" not in st else f" nods {st['ges_nods']}")
+        bk = "-" if "blink_rate" not in st else \
+            f"{st['blink_rate']:.0f} ({st['blink_pause']}, {st['blink_shift']})"
         fl = "-" if "flinch_hits" not in st else \
             f"{st['flinch_hits']}, {st['flinch_peak']:.1f}, {st['flinch_settle']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {gs} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {gs} | {bk} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

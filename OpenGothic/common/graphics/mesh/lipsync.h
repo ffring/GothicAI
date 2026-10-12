@@ -93,6 +93,7 @@ class LipSync final {
     uint64_t       voiceLeft(uint64_t now) const;   // ms of the voice left, 0: none or not known yet (streaming)
     uint32_t       syllableCount() const { return syllables; }  // syllables of voices started so far
     float          syllablePeak()  const { return sylLoud; }    // how loud the latest one gets, 0..1
+    float          voiceLevel()    const { return lvl; }        // how loud the voice is now, 0..1
     // per frame; false: nothing to show
     bool           update(uint64_t now, uint64_t dt, Shape& out);
     void           probe(Probe& p) const;

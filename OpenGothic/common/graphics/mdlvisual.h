@@ -7,6 +7,7 @@
 #include "graphics/mesh/flinch.h"
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/talkgestures.h"
+#include "graphics/mesh/eyeblink.h"
 #include "game/constants.h"
 #include "meshobjects.h"
 #include "effect.h"
@@ -127,6 +128,7 @@ class MdlVisual final {
     // the hands and the head while it speaks (TalkGestures)
     void                           setTalkMood    (std::string_view mood) { gestures.setMood(TalkGestures::moodOf(mood)); }
     void                           updateGestures (Npc& npc, uint64_t dt);
+    void                           updateBlink    (Npc& npc, uint64_t dt);
     void                           stopAnim       (Npc& npc, std::string_view anim);
     bool                           stopItemStateAnim(Npc &npc);
     void                           stopWalkAnim   (Npc &npc);
@@ -190,6 +192,8 @@ class MdlVisual final {
     TalkGestures                   gestures;
     const Animation::Sequence*     gestureSeq = nullptr;  // the gesture started last
     uint32_t                       gestureSyl = 0;        // syllables of the voice seen so far
+    EyeBlink                       blink;
+    uint32_t                       blinkShift = 0;        // gaze shifts seen so far
     MeshAttach                     ammunition, stateItm;
     std::vector<MeshAttach>        item;
     std::vector<MeshAttach>        attach;

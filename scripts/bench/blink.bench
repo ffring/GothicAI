@@ -1,0 +1,40 @@
+# Blinks: Xardas' face close up. Quiet, then he says a line (more blinks, in the pauses of the voice), the
+# hero is put here and there round him (his eyes jump after him: a blink with some), a frightened face
+# (more blinks), the eyes closed (none). With `blink off` on top of a copy: nobody blinks, as before.
+cheat god
+view clean 30
+watch nearest
+freeze nearest       # he leaves his bookstand and stands still
+wait 500
+place 150 0
+cam face 36 15 1
+wait 800
+rec quiet
+wait 20000
+stop
+speak nearest DIA_Addon_Xardas_Hello_14_00
+rec speak
+wait 9500
+stop
+rec look
+place 150 50
+wait 2500
+place 150 -50
+wait 2500
+place 150 20
+wait 2500
+place 150 -30
+wait 2500
+place 150 0
+wait 2500
+stop
+faceanim nearest S_FRIGHTENED 20000
+wait 1500
+rec afraid
+wait 15000
+stop
+faceanim nearest S_EYESCLOSED 9000
+wait 1500
+rec closed
+wait 6000
+stop

@@ -60,6 +60,7 @@ class Gaze final {
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
     bool           isActive() const { return weight>0.f; }
+    uint32_t       shiftCount() const { return shifts; }  // the eyes went elsewhere: to a partner, away, a jump (a blink comes then)
 
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);
@@ -78,6 +79,8 @@ class Gaze final {
     bool                headOnly = false;
     Source              source   = Source::None;
     bool                tracking = false; // looked at the target the last update
+    uint32_t            shifts   = 0;
+    float               lastGoal = 0;     // yawGoal of the last update
 
     float               weight  = 0;
     float               yaw     = 0;  // radians, smoothed

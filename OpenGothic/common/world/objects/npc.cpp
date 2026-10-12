@@ -2420,6 +2420,7 @@ void Npc::tick(uint64_t dt) {
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
+  visual.updateBlink(*this,dt);
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);

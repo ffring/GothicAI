@@ -41,7 +41,7 @@ class VisualObjects final {
       void     setAsGhost  (bool g);
       void     setFatness  (float f);
       void     setWind     (zenkit::AnimationType m, float intensity);
-      void     startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
+      void     startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly = false);
       void     setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
       float    morphWeight (std::string_view anim);  // as shown now: intensity and fade
 
@@ -141,7 +141,7 @@ class VisualObjects final {
     uint32_t clusterId(const PackedMesh::Cluster* cx, size_t firstMeshlet, size_t meshletCount, uint16_t bucketId, uint16_t commandId);
     uint32_t clusterId(const DrawBuckets::Bucket& bucket, size_t firstMeshlet, size_t meshletCount, uint16_t bucketId, uint16_t commandId);
 
-    void     startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil);
+    void     startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil, bool freeOnly);
     void     setMMShape (size_t i, std::string_view animName, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
     float    morphWeight(Object& obj, const MorphAnim& a);
     float    morphWeight(size_t i, std::string_view animName);

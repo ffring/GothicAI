@@ -1279,6 +1279,33 @@ void MdlVisual::updateGestures(Npc& npc, uint64_t dt) {
     gestures.probe(TalkGestures::subjectProbe);
   }
 
+void MdlVisual::updateBlink(Npc& npc, uint64_t dt) {
+  const bool probing = &npc==EyeBlink::probeNpc;
+  // a far face is not seen blinking (and its morph is not worth the upload)
+  if(skInst==nullptr || head.view.isEmpty() || (npc.processPolicy()>NpcProcessPolicy::AiNormal && !probing))
+    return;
+  const uint64_t now = npc.world().tickCount();
+  const uint32_t sh  = skInst->gazeIk().shiftCount();
+
+  EyeBlink::Input in;
+  in.now      = now;
+  in.dt       = dt;
+  in.allowed  = !npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_LIE && head.view.morphWeight("S_EYESCLOSED")<0.1f;
+  in.speaking = mouth.isSpeaking(now) || npc.speechLeft()>0;
+  in.voice    = mouth.voiceLevel();
+  in.shift    = sh!=blinkShift;
+  // a frightened face blinks more, a hostile or angry stare less
+  in.rate     = 1.f + 0.6f*head.view.morphWeight("S_FRIGHTENED")
+                    - 0.3f*std::max(head.view.morphWeight("S_HOSTILE"),head.view.morphWeight("S_ANGRY"));
+  blinkShift  = sh;
+
+  uint64_t hold = 0;
+  if(blink.update(in,hold))
+    head.view.startMMAnim("R_EYESBLINK",1,now+hold,true);  // not in place of a face
+  if(probing)
+    blink.probe(EyeBlink::subjectProbe);
+  }
+
 void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) {
   MdlVisual::MeshAttach* mesh[] = {&head,&sword,&shield,&bow,&ammunition,&stateItm};
   for(auto i:mesh) {
