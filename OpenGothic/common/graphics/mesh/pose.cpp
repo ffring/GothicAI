@@ -149,6 +149,8 @@ void Pose::setSkeleton(const Skeleton* sk) {
   for(auto& i:hasSamples)
     i = S_None;
   ik.setSkeleton(skeleton);
+  gaze.setSkeleton(skeleton);
+  lean.setSkeleton(skeleton);
   trY          = skeleton->rootTr.y;
   needToUpdate = true;
   if(lay.size()>0) //TODO
@@ -435,7 +437,9 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
   if(skeleton->ordered)
     implMkSkeleton(m); else
     implMkSkeleton(m,size_t(-1));
+  lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
   ik.apply(tr,numBones,mt.at(3,1));
+  gaze.apply(tr,numBones);
   }
 
 void Pose::implMkSkeleton(const Matrix4x4 &mt) {
@@ -833,6 +837,20 @@ void Pose::setHeadRotation(float dx, float dz) {
 
 Vec2 Pose::headRotation() const {
   return Vec2(headRotX,headRotY);
+  }
+
+bool Pose::updateGaze(const Gaze::Input& in) {
+  if(!gaze.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
+  }
+
+bool Pose::updateLean(const Lean::Input& in) {
+  if(!lean.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
   }
 
 bool Pose::updateFootIk(const FootIk::Input& in) {

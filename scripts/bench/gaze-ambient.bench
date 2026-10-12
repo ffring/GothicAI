@@ -1,0 +1,69 @@
+# Gaze outside a conversation: Rupert at the market notices the hero. The hero walks up to him and
+# stands, walks and runs past, sneaks past; a script look (AI_LookAtNpc); the hero looks at the npc in
+# focus; the hero draws a weapon
+cheat god
+goto NW_CITY_MERCHANT_TRADE_04
+freeze PAL_203_LOTHAR  # he comes to the hero with an important dialog: that holds the player
+watch VLK_458_RUPERT
+view clean 60
+cam follow 380 90 90   # from his left side: his profile, the hero in front of him
+cam look 160
+walkmode walk
+place 900 -30
+wait 1500
+rec approach         # from far in front: he looks when the hero comes near
+hold forward 4000
+wait 4500
+rec stand            # the hero stands in front: he looks, loses interest, looks again later
+wait 14000
+rec pass             # walks past in front of him, 3 m away, from his right to his left
+place 420 -45
+face rel 90
+wait 300
+hold forward 6000
+wait 6000
+release all
+rec run              # runs past the other way
+walkmode run
+place 500 60
+face rel -90
+wait 300
+hold forward 3000
+wait 3000
+release all
+rec sneak            # sneaks past 3 m away: the gaze does not notice him (his scripts may)
+walkmode sneak
+place 420 -45
+face rel 90
+wait 300
+hold forward 7000
+wait 7000
+release all
+walkmode walk
+rec script           # a script makes him look (AI_LookAtNpc): no loss of interest
+place 350 -70
+lookat VLK_458_RUPERT player
+wait 8000
+lookat VLK_458_RUPERT off
+wait 2000
+stop
+place 250 30
+watch player
+cam front 260 40
+cam look 160
+turn 25
+wait 1000
+rec focus            # the hero looks at the npc in focus
+wait 4000
+stop
+watch VLK_458_RUPERT
+cam follow 380 90 90
+cam look 160
+rec weapon           # the hero draws a weapon 6 m away: he keeps looking (last: a militiaman comes to talk)
+place 600 25
+wait 500
+tap weapon
+wait 6000
+tap weapon
+wait 2500
+stop

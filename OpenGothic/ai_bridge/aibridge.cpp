@@ -1020,6 +1020,9 @@ void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
     world.addDlgSound(line + ".WAV",npc->mapHeadBone(),WorldSound::talkRange,len);
     }
   npc->startFaceAnim("VISEME",1,time);
+  // it looks at the hero while it speaks, and the hero at it (a line in the queue does that itself)
+  npc->setTalkPartner(pl,time+1000);
+  pl->setTalkPartner(npc,time+1000);
   }
 
 void AiBridge::Impl::onSayAudio(World& world, const rapidjson::Value& msg) {
@@ -1129,7 +1132,17 @@ void AiBridge::Impl::onTranscript(const rapidjson::Value& msg) {
   const auto  to  = JsonRead::str(msg,"to_name");
   if(!to.empty())
     who += " -> " + TextCodec::fromUtf8(to);
-  chat->addLine(std::move(who),text,LineLibrary::durationFor(text));
+  const auto time = LineLibrary::durationFor(text);
+  chat->addLine(std::move(who),text,time);
+
+  // the hero and the one he speaks to look at each other
+  World* world = Gothic::inst().world();
+  Npc*   pl    = world!=nullptr ? world->player() : nullptr;
+  Npc*   npc   = world!=nullptr ? npcBySymbol(*world,std::string(JsonRead::str(msg,"to"))) : nullptr;
+  if(pl!=nullptr && npc!=nullptr && npc!=pl) {
+    pl->setTalkPartner(npc,time+1000);
+    npc->setTalkPartner(pl,time+1000);
+    }
   }
 
 void AiBridge::Impl::onHush(World& world, const rapidjson::Value& msg) {

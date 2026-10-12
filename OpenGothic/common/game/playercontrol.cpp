@@ -1076,7 +1076,8 @@ void PlayerControl::assignRunAngle(Npc& pl, float rotation, uint64_t dt) {
   auto  camera = Gothic::inst().camera();
 
   float dest = 0;
-  if(camera!=nullptr && pl.walkMode()==WalkBit::WM_Run && pl.bodyState()==BS_RUN) {
+  // the lean post-pass (graphics/mesh/lean) leans into a turn from the turn itself, for npcs too
+  if(camera!=nullptr && pl.walkMode()==WalkBit::WM_Run && pl.bodyState()==BS_RUN && !Lean::isEnabled()) {
     const float az   = camera->azimuth();
     const float maxV = 14.5f;
     dest = std::min(std::abs(az), maxV)*(az>=0 ? 1 : -1);
