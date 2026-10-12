@@ -378,7 +378,7 @@ class Director:
     # --- repairing ----------------------------------------------------------------------------
 
     async def repair(self, quest: str, story: Story) -> Repair | None:
-        await self.pacing.wait(self._busy)
+        await self.pacing.wait(self.busy)
         try:
             brief = await self.brief(quest, story)
             if brief is None:
@@ -587,7 +587,7 @@ class Director:
             "effects": effects,
         }
         ops = [{"op": "add_node", "node": node}]
-        story = await self._with_symbols(story, names_in(ops))
+        story = await self.with_symbols(story, names_in(ops))
         caps = _caps([o.effect for o in ending.offers])
         errors = validate(ops, story, self.rules, repairs=brief.quest, caps=caps)
         if errors:
@@ -620,7 +620,7 @@ class Director:
             effects.append(
                 {"do": "journal", "topic": brief.title, "text": p.journal_now, "status": log_status}
             )
-        story = await self._with_symbols(story, {brief.quest})
+        story = await self.with_symbols(story, {brief.quest})
         errors = check_effects(effects, story.state.symbols, self.rules, None)
         if errors:
             return None, errors
@@ -644,7 +644,7 @@ class Director:
         except (GameError, TimeoutError) as err:
             log.warning("director: effects on %s: %s", npc, err)
 
-    async def _with_symbols(self, story: Story, names: set[str]) -> Story:
+    async def with_symbols(self, story: Story, names: set[str]) -> Story:
         """The story with what the game says of the names a change uses."""
         known = await self.world(symbols=names)
         state = story.state.merge(known)
@@ -655,7 +655,7 @@ class Director:
         n = 1 + sum(1 for id in story.patches.nodes if id.startswith(f"{DIRECTOR_PREFIX}{quest}_"))
         return f"{DIRECTOR_PREFIX}{quest}_{n}"
 
-    async def _busy(self) -> bool:
+    async def busy(self) -> bool:
         try:
             state = await self.link.story_state()
         except (GameError, TimeoutError):

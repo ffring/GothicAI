@@ -33,6 +33,9 @@
 #   rumor: Lobart catches the hero lying; the clock goes to the next morning and the rumor goes round the
 #       people that know each other (routines, shared quests) as far as the city; one there has it in mind
 #       when the hero speaks to it (stage 5)
+#   amends: the director's storylet: Lobart catches the hero lying, the rumor reaches Andre, who asks for a
+#       fine and closes joining the militia until then (model scripted with LLM=fake); the hero hears him
+#       out and pays, and the militia is open again (stage 5)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
