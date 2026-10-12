@@ -19,6 +19,7 @@ from . import npc_tools, scenarios
 from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
 from .budget import Budget
+from .chronicle import Chronicle
 from .dialogue import DialogueManager
 from .executor import Intent
 from .game import GameError, GameLink, GameServer
@@ -52,6 +53,7 @@ from .protocol import (
     Session,
     ThreatControlCmd,
 )
+from .quests import QuestBoard
 from .replay import replay as replay_turn
 from .story import StoryPatches
 from .talk import TalkDesk
@@ -88,6 +90,9 @@ HELP = """commands (npc defaults to the last attached one):
   graph cond <node> <json>    add a condition (story graph expression) to a dialog; "-" drops them
   graph add <json>            add a dialog: {"id", "npc", "description", "lines", "effects", ...}
   graph remove <id>           remove an added dialog
+  quest <instance> <n> <item> <n> <title>   the npc gives the hero a quest: kill n creatures
+                    (they appear 30 m away), the reward is an item it has
+  quests            the director's quests: paid, lied about, found out
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -118,6 +123,8 @@ class ServerState:
         self.incidents: IncidentDesk | None = None
         self.talk: TalkDesk | None = None
         self.story: StoryPatches | None = None
+        self.chronicle: Chronicle | None = None
+        self.quests: QuestBoard | None = None
 
 
 class Console:
@@ -200,6 +207,13 @@ class Console:
                     print(f"  {d.npc} {d.question}={d.choice} ({d.confidence:.2f}) {','.join(d.stimuli)}")
             case "graph" if self.state.story is not None:
                 await self.graph(rest)
+            case "quest" if len(rest) >= 5 and self.state.quests is not None:
+                await self.quest(link, npc, rest)
+            case "quests" if self.state.quests is not None:
+                board = self.state.quests
+                for q in board.quests.values():
+                    state = "found out" if q.found_out else "lied" if q.lie else "paid" if q.paid else "open"
+                    print(f"{q.id} {q.giver}: {q.title}; {q.reward()}; {state}; done {board.done(q)}")
             case "dialogs":
                 print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
             case "choose" if rest:
@@ -210,6 +224,16 @@ class Console:
                 self.state.talk.hear(" ".join(rest), npc, {"via": "console"})
             case _:
                 print(HELP)
+
+    async def quest(self, link: GameLink, npc: str, rest: list[str]) -> None:
+        """quest <instance> <count> <reward item> <reward count> <title...>: the npc gives a quest."""
+        assert self.state.quests is not None
+        instance, count, item, pay = rest[0], int(rest[1]), rest[2].upper(), int(rest[3])
+        snap = await link.snapshot(npc, fresh=True)
+        reward = next((i.name for i in snap.npc.inventory if i.item == item), item)
+        title = " ".join(rest[4:])
+        q = await self.state.quests.give(npc, snap.npc.name, title, instance, count, item, reward, pay)
+        print(f"{q.id}: {q.title} ({q.count} {q.instance} as {q.tag}), reward {q.reward()}")
 
     async def graph(self, rest: list[str]) -> None:
         story = self.state.story
@@ -291,6 +315,17 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.talk.hear, source, asr, journal=journal)
+        # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
+        state.chronicle = Chronicle(link, memory)
+        talk = state.talk
+        state.quests = QuestBoard(
+            link,
+            state.dialogue,
+            state.chronicle,
+            hero_distance=lambda npc: talk.people[npc].distance if npc in talk.people else None,
+            journal=journal,
+        )
+        lies = asyncio.create_task(state.quests.run())
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
@@ -314,6 +349,7 @@ async def serve(args: argparse.Namespace) -> int:
             await _run_scenario(link)
             await link.closed.wait()  # the session lives while the game is connected
         finally:
+            lies.cancel()
             if brain is not None:
                 brain.cancel()
 
@@ -369,6 +405,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "lie":
+                dialogue, talk, quests = state.dialogue, state.talk, state.quests
+                assert dialogue is not None and talk is not None and quests is not None
+                results = await scenarios.lie_found_out(link, dialogue, talk, quests, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario lie: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "graph":
                 assert state.story is not None
@@ -756,7 +799,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "graph", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "graph", "lie", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")

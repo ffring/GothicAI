@@ -31,6 +31,7 @@
 
 #include "chatoverlay.h"
 #include "dialoggraph.h"
+#include "storyworld.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "linelibrary.h"
@@ -234,6 +235,14 @@ struct AiBridge::Impl final {
                                        lines.add(id,npc,text);
                                        return id;
                                        }};
+  // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
+  StoryWorld                   story{[this](std::string&& s){ send(std::move(s)); },
+                                     [this](World& w, Npc& npc) {
+                                       std::string err;
+                                       const auto  symbol = npcSymbol(w,npc);
+                                       if(ctrl.isAttached(symbol))
+                                         ctrl.detach(w,symbol,"story",err);
+                                       }};
   };
 
 AiBridge::Impl::Impl() {
@@ -390,8 +399,10 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
 
   if(world!=nullptr) {
     ctrl.tick(*world);
-    if(connected)
+    if(connected) {
       observer.tick(*world);
+      story.tick(*world);
+      }
     tickVoices(*world);
     }
   ensureChat();
@@ -414,6 +425,7 @@ void AiBridge::Impl::onStartLoading() {
   observer.clear();
   Log::i("[story] ",graph.status());
   graph.clear();  // the server sends the patches of the new branch
+  story.clear();
   if(auto world = Gothic::inst().world())
     ctrl.detachAll(*world,"loading"); else
     ctrl.dropAll("loading");
@@ -581,6 +593,23 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     // any npc since v7: attached ones on the next tick, free ones at once
     if(!ctrl.requestSnapshot(*world,JsonRead::str(doc,"npc")))
       Log::e("[ai] snapshot of unknown npc: ",JsonRead::str(doc,"npc"));
+    }
+  else if(type=="story_spawn") {
+    std::string err;
+    const int   made = story.spawn(*world,doc,err);
+    sendResult(req,made>0,err,std::to_string(made));
+    }
+  else if(type=="story_watch") {
+    story.watch(doc);
+    }
+  else if(type=="story_nearby") {
+    auto list = story.nearby(*world,doc);
+    sendResult(req,!list.empty(),"no npc " + std::string(JsonRead::str(doc,"npc")),list);
+    }
+  else if(type=="story_effect") {
+    std::string err;
+    const bool  ok = story.effects(*world,doc,err);
+    sendResult(req,ok,err);
     }
   else if(type=="npc_act") {
     observer.act(*world,doc);

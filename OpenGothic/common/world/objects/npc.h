@@ -417,6 +417,7 @@ class Npc final {
 
     void      clearNearestEnemy();
     int32_t   lastHitSpellId() const { return lastHitSpell; }
+    Npc*      lastHitBy() const { return lastHit; }  // who hit this npc last (ai_bridge: who killed it)
 
     void      setOther(Npc* ot);
     void      setVictim(Npc* ot);

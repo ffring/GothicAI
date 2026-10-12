@@ -1,0 +1,225 @@
+#include "storyworld.h"
+
+#include <Tempest/Log>
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <limits>
+
+#include "world/objects/npc.h"
+#include "world/world.h"
+
+#include "jsonread.h"
+#include "jsonwriter.h"
+#include "storyeffects.h"
+#include "textcodec.h"
+
+using namespace Tempest;
+
+namespace {
+
+constexpr uint64_t ScanMs   = 500;   // how often deaths are looked for
+constexpr uint64_t ReportMs = 1000;  // how often tags are reported
+
+std::string upper(std::string_view s) {
+  std::string r(s);
+  for(auto& c:r)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  return r;
+  }
+
+std::string symbolOf(World& world, const Npc& npc) {
+  if(auto sym = world.script().findSymbol(npc.instanceSymbol()))
+    return sym->name();
+  return {};
+  }
+
+Npc* bySymbol(World& world, std::string_view symbol) {
+  const size_t id = world.script().findSymbolIndex(upper(symbol));
+  return id==size_t(-1) ? nullptr : world.findNpcByInstance(id);
+  }
+
+float distance(const Npc& a, const Npc& b) {
+  auto d = a.position()-b.position();
+  return std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);
+  }
+
+}
+
+StoryWorld::StoryWorld(std::function<void(std::string&&)> send, std::function<void(World&,Npc&)> release)
+  :send(std::move(send)), release(std::move(release)) {
+  }
+
+void StoryWorld::clear() {
+  tags.clear();
+  dead.clear();
+  primed = false;
+  }
+
+int StoryWorld::spawn(World& world, const rapidjson::Value& msg, std::string& error) {
+  Npc*       pl    = world.player();
+  const auto inst  = upper(JsonRead::str(msg,"instance"));
+  const auto tag   = std::string(JsonRead::str(msg,"tag"));
+  const auto near  = JsonRead::str(msg,"near");
+  const auto count = std::clamp<int64_t>(JsonRead::integer(msg,"count",1),1,20);
+  const size_t id  = world.script().findSymbolIndex(inst);
+  Npc*       at    = near.empty() ? pl : bySymbol(world,near);
+  if(id==size_t(-1) || at==nullptr || pl==nullptr || tag.empty()) {
+    error = tag.empty() ? "no tag" : id==size_t(-1) ? "unknown instance " + inst : "unknown npc to spawn near";
+    return 0;
+    }
+  // in a row across the way from the npc to the player, so they stand on ground both have walked
+  const float dist = float(JsonRead::integer(msg,"distance",600));
+  auto        base = at->position();
+  float       dx   = std::cos(at->rotationRad()), dz = std::sin(at->rotationRad());
+  if(at!=pl) {
+    const auto  d   = pl->position()-base;
+    const float len = std::sqrt(d.x*d.x+d.z*d.z);
+    if(len>1) {
+      dx = d.x/len;
+      dz = d.z/len;
+      }
+    }
+  int made = 0;
+  for(int64_t i=0; i<count; ++i) {
+    auto pos   = base;
+    float side = float(i-count/2)*150.f;
+    pos.x += dist*dx - side*dz;
+    pos.z += dist*dz + side*dx;
+    if(Npc* n = world.addNpc(id,pos)) {
+      tags[tag].push_back(n);
+      made++;
+      }
+    }
+  Log::i("[story] spawned ",made," ",inst," as ",tag);
+  if(made==0)
+    error = "could not spawn";
+  return made;
+  }
+
+void StoryWorld::watch(const rapidjson::Value& msg) {
+  watchers.clear();
+  auto it = msg.FindMember("npcs");
+  if(it!=msg.MemberEnd() && it->value.IsArray())
+    for(auto& v : it->value.GetArray())
+      if(v.IsString())
+        watchers.push_back(upper(std::string_view(v.GetString(),v.GetStringLength())));
+  }
+
+bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string& error) {
+  Npc* npc = bySymbol(world,JsonRead::str(msg,"npc"));
+  Npc* pl  = world.player();
+  if(npc==nullptr || pl==nullptr) {
+    error = "no npc " + std::string(JsonRead::str(msg,"npc"));
+    return false;
+    }
+  auto& vm = world.script().getVm();
+  std::vector<StoryEffect> list;
+  if(auto it = msg.FindMember("effects"); it!=msg.MemberEnd() && it->value.IsArray()) {
+    for(auto& x : it->value.GetArray()) {
+      StoryEffect e;
+      error = StoryEffect::read(x,&vm,e);
+      if(!error.empty())
+        return false;
+      list.push_back(std::move(e));
+      }
+    }
+  const auto who = symbolOf(world,*npc);
+  for(auto& e : list) {
+    if(e.kind=="attack" || e.kind=="refuse_talk")
+      release(world,*npc);  // the scripts carry these out: an npc the server holds is let go first
+    e.run(vm,*npc,*pl,who);
+    }
+  return true;
+  }
+
+std::string StoryWorld::nearby(World& world, const rapidjson::Value& msg) {
+  Npc*        at     = bySymbol(world,JsonRead::str(msg,"npc"));
+  const float radius = float(JsonRead::integer(msg,"radius",2000));
+  if(at==nullptr)
+    return {};
+  rapidjson::StringBuffer                    buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  w.StartArray();
+  for(uint32_t i=0; i<world.npcCount(); ++i) {
+    Npc* n = world.npcById(i);
+    if(n==nullptr || n==at || n->isPlayer() || n->isDead() || n->isMonster())
+      continue;
+    const float d = distance(*at,*n);
+    if(d>radius)
+      continue;
+    auto sym  = symbolOf(world,*n);
+    auto name = TextCodec::toUtf8(n->displayName());
+    w.StartObject();
+    w.Key("npc");      w.String(sym.data(),rapidjson::SizeType(sym.size()));
+    w.Key("name");     w.String(name.data(),rapidjson::SizeType(name.size()));
+    w.Key("distance"); w.Int(int(d));
+    w.Key("guild");    w.Uint(n->guild());
+    w.EndObject();
+    }
+  w.EndArray();
+  return std::string(buf.GetString(),buf.GetSize());
+  }
+
+void StoryWorld::tick(World& world) {
+  const uint64_t now = world.tickCount();
+  if(now>=nextScan) {
+    nextScan = now+ScanMs;
+    // deaths: of people (a quest giver, a witness) and of the director's creatures
+    std::unordered_set<const Npc*> tagged;
+    for(auto& [tag,list] : tags)
+      for(auto* n : list)
+        tagged.insert(n);
+    for(uint32_t i=0; i<world.npcCount(); ++i) {
+      Npc* n = world.npcById(i);
+      if(n==nullptr || !n->isDead() || n->isPlayer() || !dead.insert(n).second)
+        continue;
+      if(!primed || (n->isMonster() && !tagged.count(n)))
+        continue;
+      std::string tag;
+      for(auto& [t,list] : tags)
+        if(std::find(list.begin(),list.end(),n)!=list.end())
+          tag = t;
+      Npc* by = n->lastHitBy();
+      JsonWriter j("npc_died");
+      j.str("npc",symbolOf(world,*n)).str("name",TextCodec::toUtf8(n->displayName()));
+      if(!tag.empty())
+        j.str("tag",tag);
+      j.str("killer",by==nullptr ? std::string() : by->isPlayer() ? std::string("PLAYER") : symbolOf(world,*by));
+      send(j.finish());
+      }
+    primed = true;
+    }
+  if(!tags.empty() && now>=nextReport) {
+    nextReport = now+ReportMs;
+    report(world);
+    }
+  }
+
+void StoryWorld::report(World& world) {
+  JsonWriter j("story_world");
+  j.array("tags");
+  for(auto& [tag,list] : tags) {
+    int alive = 0;
+    for(auto* n : list)
+      alive += !n->isDead();
+    j.object().str("tag",tag).integer("alive",alive).integer("dead",int64_t(list.size())-alive);
+    j.array("near");
+    for(auto& w : watchers) {
+      Npc* who = bySymbol(world,w);
+      if(who==nullptr)
+        continue;
+      float best = std::numeric_limits<float>::max();
+      for(auto* n : list)
+        if(!n->isDead())
+          best = std::min(best,distance(*who,*n));
+      if(best<std::numeric_limits<float>::max())
+        j.object().str("npc",w).integer("distance",int64_t(best)).end();
+      }
+    j.endArray();
+    j.end();
+    }
+  j.endArray();
+  send(j.finish());
+  }

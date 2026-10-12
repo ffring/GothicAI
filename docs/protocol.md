@@ -299,6 +299,28 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 
 Консоль сервера: `graph`, `graph hide|show <node>`, `graph cond <node> <json>`, `graph add <json>`, `graph remove <id>`, `dialogs`, `choose <node>`, `eval <json>`. Консоль Marvin: `ai dialogs <npc>`, а `ai status` показывает и граф.
 
+## Руки режиссёра в мире (v8)
+
+Для поручений режиссёра и последствий лжи ([story-graph.md](story-graph.md), этап 4). В мосте — [storyworld.cpp](../OpenGothic/ai_bridge/storyworld.cpp), на сервере — [chronicle.py](../server/src/gothic_ai/chronicle.py) и [quests.py](../server/src/gothic_ai/quests.py).
+
+**Сервер → игра:**
+
+| `type` | Поля | Что делает |
+|---|---|---|
+| `story_spawn` | `req`, `instance`, `tag`, `count`=1, `near`=герой, `distance`=600 | `count` существ рядом с NPC под меткой. Ставятся рядом друг с другом, на линии от NPC к герою. `result.value` — сколько появилось |
+| `story_watch` | `npcs[]` | NPC, для которых игра сообщает расстояние до живых существ каждой метки. Список заменяет прежний |
+| `story_effect` | `req`, `npc`, `effects[]` | эффекты через функции самих скриптов, `self` — NPC, `other` — герой. Те же, что в диалогах режиссёра (`give`, `xp`, `set`, `journal`, `end`), и ещё два: `attack` — `B_Attack`, `reason` — константа `AR_*`, по умолчанию `AR_NONE`: бьёт, пока герой не упадёт, не до смерти; `refuse_talk` — `Npc_SetRefuseTalk`, `seconds`. На время этих двух мост отпускает NPC, если тот под управлением |
+| `story_nearby` | `req`, `npc`, `radius`=2000 | люди в радиусе от NPC: `result.value` = `[{npc, name, distance, guild}]` |
+
+**Игра → сервер:**
+
+| `type` | Поля | Когда |
+|---|---|---|
+| `npc_died` | `npc`, `name`, `tag?`, `killer` | умер человек или существо с меткой. `killer` — `PLAYER`, символ NPC, или пусто, если никто не бил |
+| `story_world` | `tags[]`: `{tag, alive, dead, near[]: {npc, distance}}` | раз в секунду, пока есть метки |
+
+Метки живут, пока жив мир: загрузка их сбрасывает. Существа в сохранении остаются, но мост их больше не узнаёт.
+
 ## Консоль Marvin
 
 Нужен ключ `-devmode`, консоль открывается по F2.

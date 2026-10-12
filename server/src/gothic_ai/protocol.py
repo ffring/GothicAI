@@ -228,6 +228,37 @@ class DialogChosen(_GameMessage):
     made: bool = False
 
 
+class NpcDied(_GameMessage):
+    """A person died, or a creature the director put under a tag (v8). `killer`: PLAYER, an npc's symbol,
+    or empty if nobody hit it."""
+
+    type: Literal["npc_died"]
+    npc: str
+    name: str = ""
+    tag: str | None = None
+    killer: str = ""
+
+
+class TagNear(_GameMessage):
+    npc: str
+    distance: float  # cm, to the nearest living creature of the tag
+
+
+class TagState(_GameMessage):
+    tag: str
+    alive: int
+    dead: int
+    near: list[TagNear] = Field(default_factory=list)
+
+
+class StoryWorld(_GameMessage):
+    """The director's tagged creatures, once a second while there are any (v8): how many live, and how
+    far the nearest one is from each watched npc (`story_watch`)."""
+
+    type: Literal["story_world"]
+    tags: list[TagState]
+
+
 NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
 
 
@@ -353,7 +384,9 @@ GameMessage = Annotated[
     | NpcActResult
     | RoutineInfo
     | PerceptionHeld
-    | DialogChosen,
+    | DialogChosen
+    | NpcDied
+    | StoryWorld,
     Field(discriminator="type"),
 ]
 
@@ -622,3 +655,44 @@ class GraphPatchCmd(_Command):
     req: str | None = None
     replace: bool = False
     ops: list[dict[str, Any]]
+
+
+class StorySpawnCmd(_Command):
+    """Creatures for the director (v8): `count` of `instance` `distance` cm from `near` (default the
+    player), under `tag`. The game answers `result` (`value`: how many came)."""
+
+    type: Literal["story_spawn"] = "story_spawn"
+    req: str
+    instance: str
+    tag: str
+    count: int = 1
+    near: str | None = None
+    distance: int = 600
+
+
+class StoryWatchCmd(_Command):
+    """Npc's whose distance to the living creatures of every tag the game reports (v8), replaces the list."""
+
+    type: Literal["story_watch"] = "story_watch"
+    npcs: list[str]
+
+
+class StoryEffectCmd(_Command):
+    """Effects on an npc (v8), through the scripts' own functions, the npc as self and the hero as other:
+    the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
+    constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`). An npc held by
+    the server is let go for these two. The game answers `result`."""
+
+    type: Literal["story_effect"] = "story_effect"
+    req: str
+    npc: str
+    effects: list[dict[str, Any]]
+
+
+class StoryNearbyCmd(_Command):
+    """People within `radius` cm of an npc (v8); `result.value`: [{npc, name, distance, guild}]."""
+
+    type: Literal["story_nearby"] = "story_nearby"
+    req: str
+    npc: str
+    radius: int = 2000

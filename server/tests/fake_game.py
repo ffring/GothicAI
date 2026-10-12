@@ -35,6 +35,8 @@ class FakeGame:
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
+        self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect messages
+        self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
         self.hp = 999
         self.soft: list[tuple[str, str]] = []  # npc_act's: (npc, action)
@@ -142,6 +144,16 @@ class FakeGame:
                 (self.transcripts if msg.get("final", True) else self.partials).append(msg["text"])
                 if msg.get("final", True):
                     self.heard.append(msg)
+            case "story_spawn":
+                self.story.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True, value=msg.get("count", 1))
+            case "story_watch":
+                self.story.append(msg)
+            case "story_effect":
+                self.story.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True)
+            case "story_nearby":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.people_near)
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):

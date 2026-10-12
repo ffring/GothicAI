@@ -38,6 +38,7 @@ from .protocol import (
     Snapshot,
     ThreatControlCmd,
 )
+from .quests import QuestBoard
 from .story import StoryPatches
 from .talk import TalkDesk
 from .trace import TraceWriter
@@ -1002,4 +1003,102 @@ async def m5e_talk(
 
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
+    return results
+
+
+async def lie_found_out(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    quests: QuestBoard,
+    npc: str = "NONE_100_XARDAS",
+    bystander: str = "VLK_408_JORA",
+) -> dict[str, str]:
+    """Stage 4 of the story graph on the game: lied to, paid, found out, a fight and a rumor.
+
+    Xardas gives a quest: two sheep, 30 m away, are to be killed; the reward is gold he has. The hero says
+    they are dead (they are not) and Xardas pays (the conversational model is scripted to believe him).
+    Then one of the sheep turns up next to him: he finds the lie out, turns hostile, attacks the hero
+    through the scripts, and Jora, standing by, hears about it and has it in mind when the hero speaks to
+    her."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    def notes(who: str) -> list[str]:
+        conv = dialogue.conversations.get(who)
+        return [m.content for m in conv.history if m.role == "developer"] if conv else []
+
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+    name = talk.people[npc].name
+
+    # the reward: gold he has (he gets some first; he carries next to nothing)
+    await link.attach(npc)
+    await link.act(npc, "debug_add_item", item="ITMI_GOLD", count=50)
+    await link.detach(npc)
+    snap = await link.snapshot(npc, fresh=True)
+    gold = next((i for i in snap.npc.inventory if i.item == "ITMI_GOLD" and not i.equipped), None)
+    if gold is None:
+        return _logged({"reward": f"failed ({name} has no gold: {snap.npc.inventory})"})
+    q = await quests.give(
+        npc, name, "овцы бродят у башни и мешают мне, перебей их", "SHEEP", 2, "ITMI_GOLD", gold.name, 5
+    )
+    ok = await _until(lambda: quests.chronicle.tags.get(q.tag) is not None, 5)
+    tag = quests.chronicle.tags.get(q.tag)
+    check("quest", ok and q.count == 2 and tag is not None and tag.alive == 2, f"{q.id}, {q.reward()}, {tag}")
+
+    # the lie: the hero says it is done, the giver believes him and pays
+    hero_gold = ["call", "NPC_HASITEMS", ["inst", "HERO"], ["sym", "ITMI_GOLD"]]
+    before = await link.evaluate(hero_gold)
+    dialogue.llm = FakeBackend(
+        script=[FakeStep("Хм. Ладно, держи.", [ToolCall("pay_reward", {"quest": q.id}, "c1")])], delay=0
+    )
+    await link.debug("type", text=f"{name}, я перебил твоих овец. Где награда?")
+    ok = await _until(lambda: bool(quests.chronicle.facts("lie")), 40)
+    after = await link.evaluate(hero_gold)
+    lies = quests.chronicle.facts("lie")
+    check("paid_for_a_lie", ok and after > before, f"gold {before} -> {after}; {lies}")
+
+    # someone standing by, held in place
+    await link.debug("spawn", instance=bystander, near=npc, distance=400)
+    if not await _until(lambda: bystander in talk.people, 10):
+        return _logged({**results, "bystander": f"failed ({bystander} did not come)"})
+    await link.attach(bystander)
+    other = talk.people[bystander].name
+
+    # found out: a living sheep turns up next to the giver
+    await _until(lambda: not dialogue.speaking(npc), 10)
+    await link.story_spawn("SHEEP", q.tag, 1, near=npc, distance=300)
+    ok = await _until(lambda: q.found_out and bool(quests.chronicle.facts("rumor")), 10)
+    check("found_out", ok, notes(npc)[-1:])
+    intent = dialogue.conversations[npc].intent if npc in dialogue.conversations else None
+    check("hostile", intent is not None and intent.attitude == "hostile", intent)
+    attacking = ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]]
+    ok = False
+    for _ in range(20):  # the scripts take the attack over within a few frames
+        if await link.evaluate(attacking, npc):
+            ok = True
+            break
+        await asyncio.sleep(0.25)
+    check("attack", ok)
+    check("rumor", any("Слух" in n for n in notes(bystander)), notes(bystander)[-1:])
+
+    # another npc in a conversation knows: the rumor is in front of its model
+    dialogue.llm = llm = FakeBackend("Говорят, ты обманываешь людей.", delay=0)
+    await link.debug("type", text=f"{other}, что обо мне говорят?")
+    ok = await _until(lambda: bool(llm.calls), 20)
+    seen = ok and any("Слух" in str(getattr(m, "content", "")) for m in llm.calls[0][1])
+    to = talk.last[0].id if talk.last and talk.last[0] else "-"
+    check("knows_in_talk", seen, f"{len(llm.calls)} call(s) to {to}")
+    await link.detach(bystander)
+    return _logged(results)
+
+
+def _logged(results: dict[str, str]) -> dict[str, str]:
+    for key, outcome in results.items():
+        log.info("%-15s %s", key, outcome)
     return results

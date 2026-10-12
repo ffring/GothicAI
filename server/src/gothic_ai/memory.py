@@ -29,7 +29,7 @@ DEFAULT_PATH = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local" / "s
     "memory.sqlite3"
 )
 LOAD_LIMIT = 100  # newest messages read back for one npc (older ones should be summarized already)
-PATCHES = "*"  # the "npc" of story graph patches: they belong to the branch
+PATCHES = "*"  # the "npc" of story graph patches and facts: they belong to the branch
 SEARCH_SCAN = 2000  # how far back a search looks
 STEM = 4  # a crude stem for Russian: the first letters of longer words ("драконы" ~ "дракон")
 _WORDS = re.compile(r"\w+")
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS events (
     branch    TEXT NOT NULL,
     seq       INTEGER NOT NULL,
     npc       TEXT NOT NULL,
-    kind      TEXT NOT NULL,          -- message | summary | intent | patch (npc '*': story graph, JSON)
+    kind      TEXT NOT NULL,          -- message | summary | intent | patch, fact (npc '*': JSON)
     role      TEXT,                   -- message: user | assistant | developer
     content   TEXT NOT NULL,
     covers    INTEGER,                -- summary: messages up to this seq are folded in
@@ -192,6 +192,17 @@ class MemoryStore:
             found.setdefault(int(seq), Recollection(int(seq), role, content, game_time))
         return sorted(found.values(), key=lambda r: r.seq)
 
+    def add_fact(self, branch: str, fact: str) -> int:
+        """Something that really happened on this branch (JSON, chronicle.py): what code knows as true."""
+        return self._insert(branch, PATCHES, "fact", None, fact, None, None)
+
+    def facts(self, branch: str) -> list[str]:
+        """The branch's facts, oldest first (inherited ones included)."""
+        rows = self._db.execute(
+            "SELECT content FROM events WHERE branch=? AND kind='fact' ORDER BY seq", (branch,)
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def add_patch(self, branch: str, op: str) -> int:
         """A change to the story graph (JSON of one operation) made on this branch."""
         return self._insert(branch, PATCHES, "patch", None, op, None, None)
@@ -206,7 +217,7 @@ class MemoryStore:
     def branches(self) -> list[BranchInfo]:
         rows = self._db.execute(
             "SELECT b.id, b.parent, b.parent_seq, b.created, COALESCE(MAX(e.seq), 0), "
-            "COUNT(DISTINCT CASE WHEN e.kind != 'patch' THEN e.npc END) "
+            "COUNT(DISTINCT CASE WHEN e.npc != '*' THEN e.npc END) "
             "FROM branches b LEFT JOIN events e ON e.branch=b.id GROUP BY b.id ORDER BY b.created"
         ).fetchall()
         return [BranchInfo(*row) for row in rows]

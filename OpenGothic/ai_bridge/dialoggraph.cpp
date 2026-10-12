@@ -229,33 +229,10 @@ std::string DialogGraph::readNode(const rapidjson::Value& v, Node& n) {
 
   if(auto it = v.FindMember("effects"); it!=v.MemberEnd() && it->value.IsArray()) {
     for(auto& x : it->value.GetArray()) {
-      Effect e;
-      e.kind   = str(x,"do");
-      e.item   = upper(str(x,"item"));
-      e.var    = upper(str(x,"var"));
-      e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
-      e.text   = TextCodec::fromUtf8(JsonRead::str(x,"text"));
-      e.count  = int32_t(JsonRead::integer(x,"count",JsonRead::integer(x,"amount",JsonRead::integer(x,"value",1))));
-      e.toHero = JsonRead::str(x,"to")!="self";
-      if(e.kind=="give") {
-        auto* s = dat ? dat->find_symbol_by_name(e.item) : nullptr;
-        if(dat && (s==nullptr || s->type()!=DaedalusDataType::INSTANCE))
-          return "add_node give: no item " + e.item;
-        if(e.count<=0)
-          return "add_node give: count must be positive";
-        }
-      else if(e.kind=="set") {
-        auto* s = dat ? dat->find_symbol_by_name(e.var) : nullptr;
-        if(dat && (s==nullptr || s->type()!=DaedalusDataType::INT || s->is_const() || s->is_member()))
-          return "add_node set: no variable " + e.var;
-        }
-      else if(e.kind=="journal") {
-        if(e.topic.empty() || e.text.empty())
-          return "add_node journal: needs topic and text";
-        }
-      else if(e.kind!="xp" && e.kind!="end") {
-        return "add_node: unknown effect " + e.kind;
-        }
+      StoryEffect e;
+      auto err = StoryEffect::read(x,dat,e);
+      if(!err.empty())
+        return "add_node " + err;
       n.effects.push_back(std::move(e));
       }
     }
@@ -428,43 +405,8 @@ void DialogGraph::onExec(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc
     }
   if(v==nullptr)
     return;
-  using storygraph::Value;
-  auto call = [&](const char* fn, std::vector<Value> args) {
-    std::string err;
-    auto* s = v->find_symbol_by_name(fn);
-    if(s==nullptr || !storygraph::callFunction(*v,*s,args,err))
-      Log::e("[story] ",n.id,": ",fn," failed: ",s ? err : "no such function");
-    };
-  auto constant = [&](const char* name, int32_t def) {
-    auto* s = v->find_symbol_by_name(name);
-    return s!=nullptr && s->type()==DaedalusDataType::INT ? s->get_int(0) : def;
-    };
-  for(auto& e : n.effects) {
-    if(e.kind=="give") {
-      auto* item = v->find_symbol_by_name(e.item);
-      if(item==nullptr)
-        continue;
-      auto& from = e.toHero ? npc : player;
-      auto& to   = e.toHero ? player : npc;
-      call("B_GIVEINVITEMS",{Value::instance(from.handlePtr()),Value::instance(to.handlePtr()),
-                             Value::integer(int32_t(item->index())),Value::integer(e.count)});
-      }
-    else if(e.kind=="xp") {
-      call("B_GIVEPLAYERXP",{Value::integer(e.count)});
-      }
-    else if(e.kind=="set") {
-      if(auto* s = v->find_symbol_by_name(e.var))
-        s->set_int(e.count);
-      }
-    else if(e.kind=="journal") {
-      call("LOG_CREATETOPIC",{Value::str(e.topic),Value::integer(constant("LOG_MISSION",0))});
-      call("LOG_SETTOPICSTATUS",{Value::str(e.topic),Value::integer(constant("LOG_RUNNING",1))});
-      call("B_LOGENTRY",{Value::str(e.topic),Value::str(e.text)});
-      }
-    else if(e.kind=="end") {
-      call("AI_STOPPROCESSINFOS",{Value::instance(npc.handlePtr())});
-      }
-    }
+  for(auto& e : n.effects)
+    e.run(*v,npc,player,n.id);
   }
 
 void DialogGraph::onChosen(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc) {

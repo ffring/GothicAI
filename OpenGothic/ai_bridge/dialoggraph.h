@@ -16,6 +16,7 @@
 #include "game/gamescript.h"
 
 #include "expr.h"
+#include "storyeffects.h"
 
 class Npc;
 class World;
@@ -64,12 +65,6 @@ class DialogGraph final {
       std::string id;             // an original line (DIA_..._15_00), or empty
       std::string text;           // a line of its own, game codepage
       };
-    struct Effect final {
-      std::string kind;           // give, xp, set, journal, end
-      std::string item, var, topic, text;
-      int32_t     count = 1;
-      bool        toHero = true;  // give: the npc gives to the hero, else the hero to the npc
-      };
     // a dialog made by the director
     struct Node final {
       std::string                       id;
@@ -79,7 +74,7 @@ class DialogGraph final {
       bool                              important = false, permanent = false;
       storygraph::ExprP                 condition;    // nullptr: always
       std::vector<Line>                 lines;
-      std::vector<Effect>               effects;
+      std::vector<StoryEffect>          effects;
       };
 
     void        onFilter(const zenkit::IInfo& info, bool& visible);

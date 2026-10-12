@@ -40,12 +40,19 @@ from .protocol import (
     Session,
     Snapshot,
     SnapshotCmd,
+    StoryEffectCmd,
+    StoryNearbyCmd,
+    StorySpawnCmd,
+    StoryWatchCmd,
     WorldLoaded,
     _Command,
     parse_game_message,
 )
 
 log = logging.getLogger(__name__)
+
+# requests answered with `result`
+_Request = AttachCmd | DetachCmd | DebugCmd | GraphPatchCmd | StorySpawnCmd | StoryEffectCmd | StoryNearbyCmd
 
 Listener = Callable[[GameMessage], None]
 
@@ -160,7 +167,7 @@ class GameLink:
         assert self.world is not None
         return self.world
 
-    async def _request(self, cmd: AttachCmd | DetachCmd | DebugCmd | GraphPatchCmd, timeout: float) -> Result:
+    async def _request(self, cmd: _Request, timeout: float) -> Result:
         assert cmd.req is not None
         fut: asyncio.Future[Result] = asyncio.get_running_loop().create_future()
         self._requests[cmd.req] = fut
@@ -203,6 +210,33 @@ class GameLink:
     ) -> None:
         """Change the story graph in the game (see GraphPatchCmd); GameError lists the rejected operations."""
         await self._request(GraphPatchCmd(req=self._next_id("g"), replace=replace, ops=ops), timeout)
+
+    async def story_spawn(
+        self, instance: str, tag: str, count: int = 1, near: str | None = None, distance: int = 600
+    ) -> int:
+        """Creatures under a tag for the director; how many came."""
+        cmd = StorySpawnCmd(
+            req=self._next_id("s"),
+            instance=instance.upper(),
+            tag=tag,
+            count=count,
+            near=near,
+            distance=distance,
+        )
+        return int((await self._request(cmd, 5.0)).value or 0)
+
+    async def story_watch(self, npcs: list[str]) -> None:
+        """Npc's whose distance to every tag's living creatures the game reports (story_world)."""
+        await self.send(StoryWatchCmd(npcs=[n.upper() for n in npcs]))
+
+    async def story_effect(self, npc: str, effects: list[dict[str, Any]], timeout: float = 5.0) -> None:
+        """Effects on an npc through the scripts (see StoryEffectCmd)."""
+        await self._request(StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects), timeout)
+
+    async def story_nearby(self, npc: str, radius: int = 2000) -> list[dict[str, Any]]:
+        """People within `radius` cm of an npc."""
+        res = await self._request(StoryNearbyCmd(req=self._next_id("s"), npc=npc.upper(), radius=radius), 5.0)
+        return list(res.value or [])
 
     async def offered_dialogs(self, npc: str, timeout: float = 5.0) -> list[str]:
         """The dialogs the npc offers the player now (game in -devmode)."""

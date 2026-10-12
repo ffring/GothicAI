@@ -14,6 +14,9 @@
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
+#   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
+#        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
+#        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
