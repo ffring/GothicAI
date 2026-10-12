@@ -47,8 +47,9 @@ class OpenAISpeech:
             "voice": voice.preset or self.voice,
             "response_format": "pcm",
         }
-        if voice.description and "tts" in self.model:
-            body["instructions"] = voice.description
+        instructions = ". ".join(p.strip().rstrip(".") for p in (voice.description, voice.style) if p.strip())
+        if instructions and "tts" in self.model:
+            body["instructions"] = instructions
         size = 0
         try:
             async with self._client.stream(

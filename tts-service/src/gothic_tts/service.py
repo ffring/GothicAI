@@ -1,7 +1,9 @@
 """WebSocket API of the service. It knows nothing about the game: text and a voice in, audio out.
 
     client  -> service {"type":"speak","id":"7","text":"...",
-                        "voice":{"id":"xardas","description":"...","preset":null}}
+                        "voice":{"id":"xardas","description":"...","preset":null},
+                        "style":"say angrily with force"}
+                       (`style`, optional: how to say this line, in English)
     service -> client  {"type":"start","id":"7","sample_rate":48000,"provider":"voxcpm"}
     service -> client  binary frames: 16-bit little-endian mono PCM, as it is generated
                        (at the loudness of the game's own dialogue, see loudness.py)
@@ -32,6 +34,7 @@ from .synthesizer import Synthesizer
 log = logging.getLogger(__name__)
 
 MAX_TEXT = 1000
+MAX_STYLE = 300
 
 
 class TtsService:
@@ -83,7 +86,12 @@ class TtsService:
         req = msg.get("id")
         text = str(msg.get("text", "")).strip()[:MAX_TEXT]
         v = msg.get("voice") or {}
-        voice = Voice(str(v.get("id", "default")), str(v.get("description") or ""), v.get("preset"))
+        voice = Voice(
+            str(v.get("id", "default")),
+            str(v.get("description") or ""),
+            v.get("preset"),
+            str(msg.get("style") or "")[:MAX_STYLE],
+        )
         if not text:
             await _send(conn, {"type": "error", "id": req, "detail": "empty text"})
             return
