@@ -60,6 +60,11 @@ Vec3 leanDir(const Vec3& want, const Vec3& forward) {
   return normalize(Vec3(want.x,0,want.z) + forward*0.25f);
   }
 
+// leaning out sideways (+ right): the trunk tilts about where the body faces
+Mat3 sideRotation(const Vec3& forward, float angle) {
+  return axisAngle(forward,-angle);
+  }
+
 Mat3 leanRotation(const Vec3& want, const Vec3& forward, float angle) {
   if(angle==0.f)
     return axisAngle(Up,0.f);
@@ -160,7 +165,7 @@ bool Aim::update(const Input& in) {
   const Vec3  f       = normalize(Vec3(in.forward.x,0,in.forward.z));
   const Vec3  d       = normalize(in.dir);
   const bool  on      = in.active && enabled && length(f)>0.5f && length(d)>0.5f;
-  const float fast    = in.manual ? HandRate : 1.f;
+  const float fast    = (in.manual ? HandRate : 1.f)*in.follow;
 
   if(on) {
     forward = f;
@@ -189,10 +194,11 @@ bool Aim::update(const Input& in) {
     if(steady)
       rest = toBody(a,forward);
     approach(leanAmt,in.lean,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+    approach(sideAmt,in.side,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
     if(steady || ready) {
-      // where it aims once leaned over the edge
+      // where it aims once leaned over the edge, out sideways
       const Vec3  want = fromBody(wantB,forward);
-      const Vec3  ar   = mul(leanRotation(want,forward,leanAmt),fromBody(rest,forward));
+      const Vec3  ar   = mul(sideRotation(forward,sideAmt),mul(leanRotation(want,forward,leanAmt),fromBody(rest,forward)));
       const Vec3  axis = cross(ar,want);
       const float s    = length(axis);
       const float an   = std::min(std::atan2(s,dot(ar,want)), MaxTurn);
@@ -207,8 +213,10 @@ bool Aim::update(const Input& in) {
     }
   prevArrow = animArrow;
 
-  if(!on)
+  if(!on) {
     approach(leanAmt,0.f,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+    approach(sideAmt,0.f,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+    }
   // the sway as it is: the arms tremble faster than any smoothing would let through
   const Tempest::Vec2 sw = on ? in.sway : Tempest::Vec2();
   if(sw.x!=sway.x || sw.y!=sway.y)
@@ -256,6 +264,10 @@ void Aim::apply(Matrix4x4* tr, size_t numBones) {
   const float l    = leanAmt*weight;
   if(l>0.f)
     rotateAbout(tr,spineTree,leanRotation(want,forward,l),position(tr[spine]));
+  // round a corner the trunk leans out sideways from the hips
+  const float sd   = sideAmt*weight;
+  if(sd!=0.f)
+    rotateAbout(tr,spineTree,sideRotation(forward,sd),position(tr[spine]));
 
   // the upper body turns from where it aims to the target: the waist a part, the chest the rest
   const Vec3  r  = fromBody(rot,forward);
@@ -299,5 +311,6 @@ void Aim::probe(Probe& p) const {
   p.turn      = rot.y*weight/Deg;   // about up, + to the right
   p.bend      = -rot.z*weight/Deg;  // about the side, + up
   p.lean      = leanAmt*weight/Deg;
+  p.side      = sideAmt*weight/Deg;
   p.error     = error;
   }

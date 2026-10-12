@@ -174,6 +174,9 @@ class PlayerControl final {
     float          aimSpread      = 0;       //!< how far it is open, radians, smoothed
     float          aimSpreadVel   = 0;       //!< how fast it opens, radians per second
     float          reloadTempo    = 1;       //!< how fast the reload plays (set on the hero)
+    bool           aimCrouch      = false;   //!< crouched to aim (the sneak key while the bow is up)
+    float          crouchK        = 0;       //!< crouched 0..1, smoothed
+    float          peekK          = 0;       //!< leaning out round a corner -1 (left)..1 (right), smoothed
 
     DialogMenu&    dlg;
     InventoryMenu& inv;

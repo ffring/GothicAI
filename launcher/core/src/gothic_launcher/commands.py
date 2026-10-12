@@ -20,6 +20,8 @@ from pathlib import Path
 from .settings import CONFIG_DIR, Config
 
 GAME_HOME = Path.home() / ".local" / "share" / "gothic-ai" / "game"
+# sharper textures of the characters, made from the game's own by scripts/hd-textures.sh (never in git)
+HD_TEXTURES = Path.home() / ".local" / "share" / "gothic-ai" / "hd-textures" / "textures"
 LOG_ROOT = Path.home() / "Library" / "Logs" / "GothicAI"
 KEEP_LOGS = 20
 UV_CANDIDATES = ("~/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv", "~/.cargo/bin/uv")
@@ -50,6 +52,7 @@ class Layout:
     game_bin: Path
     game_dir: Path
     game_home: Path
+    hd_textures: Path | None = None  # the game loads them instead of its own (OPENGOTHIC_TEXTURES)
 
 
 @dataclass(frozen=True)
@@ -123,7 +126,13 @@ def find_layout(config: Config) -> Layout:
         problems.append(f"{game_dir} has no Data folder: is it Gothic II?")
     if problems:
         raise LaunchError("\n".join(problems))
-    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME)
+    hd = HD_TEXTURES if HD_TEXTURES.is_dir() else None
+    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd)
+
+
+def texture_env(layout: Layout) -> dict[str, str]:
+    """The game's environment for the sharper textures, when they have been made."""
+    return {"OPENGOTHIC_TEXTURES": str(layout.hd_textures)} if layout.hd_textures is not None else {}
 
 
 def tools(config: Config) -> tuple[Path, Path]:
@@ -225,7 +234,7 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
         argv.append("-nomenu")
     if s.dev_mode:
         argv.append("-devmode")
-    env = {"GOTHIC_AI_URL": f"ws://127.0.0.1:{ports.server}"}
+    env = {"GOTHIC_AI_URL": f"ws://127.0.0.1:{ports.server}", **texture_env(layout)}
     if s.chat_scale is not None:
         env["GOTHIC_AI_CHAT_SCALE"] = f"{s.chat_scale:g}"
     return Proc("game", argv, layout.game_home, env, restart=False, stamp=True)

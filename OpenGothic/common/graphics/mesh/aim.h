@@ -21,6 +21,8 @@ class Aim final {
       Tempest::Vec3 forward = {1,0,0}; // horizontal facing of the body
       float         lean    = 0;       // radians: bend forward from the hips over an edge (leanFor), 0 if
                                        // there is no room in front of the head
+      float         side    = 0;       // radians: lean out sideways from the hips (+ right), round a corner
+      float         follow  = 1;       // the upper body follows the aim that much as fast (crouched: slower)
       Tempest::Vec2 sway    = {};      // radians, the manual aim (Archer): yaw, pitch (+ up) off where the
                                        // shot has to go, as it is: the chest
       Tempest::Vec2 tremor  = {};      // and the arms trembling (not smoothed: fast): the arms, not the head
@@ -40,6 +42,10 @@ class Aim final {
     static constexpr float LeanMax   = 55.f;
     static constexpr float LeanReach = 58.f; // cm: the head 70 cm above the hips, bent 55 degrees
     static constexpr float LeanDrop  = 28.f;
+    // Leaning out round a corner: the trunk tilts sideways from the hips up to SideMax, the head goes
+    // SideReach to the side then
+    static constexpr float SideMax   = 22.f; // degrees
+    static constexpr float SideReach = 30.f; // cm
     static float           leanFor(float down); // the lean for the angle down, radians
 
     // State for the test bench, degrees
@@ -55,6 +61,7 @@ class Aim final {
       float turn      = 0;  // the turn and the bend of the upper body
       float bend      = 0;
       float lean      = 0;  // over an edge
+      float side      = 0;  // out sideways (+ right)
       float error     = -1; // between where it aims after the turn and where the shot has to go
       };
 
@@ -91,6 +98,7 @@ class Aim final {
     bool                steady  = false;
     float               weight  = 0;
     float               leanAmt = 0;  // radians, smoothed
+    float               sideAmt = 0;  // radians, leaning out sideways, smoothed
     Tempest::Vec2       sway    = {};
     Tempest::Vec2       tremor  = {};
     Tempest::Vec3       wantB   = {}; // where the shot has to go, body's frame, smoothed
