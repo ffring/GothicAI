@@ -636,8 +636,9 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         Tempest::Vec3       o  = from;
         if(arrowRay(ap,ad) && (at-ap).length()>150.f)
           o = ap;
-        in.dir  = at - o;
-        in.sway = npc.manualAimSway();
+        in.dir    = at - o;
+        in.sway   = npc.manualAimSway();
+        in.manual = true;
         } else {
         in.dir  = World::bulletVelocity(from,aimAt());
         }
@@ -758,6 +759,10 @@ bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
 std::string MdlVisual::hitZonesDump() const {
   const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
   return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length());
+  }
+
+float MdlVisual::aimTrackError() const {
+  return skInst->aimIk().trackError();
   }
 
 bool MdlVisual::isAimSteady() const {

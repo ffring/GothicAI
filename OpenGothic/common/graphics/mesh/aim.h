@@ -23,6 +23,7 @@ class Aim final {
                                        // there is no room in front of the head
       Tempest::Vec2 sway    = {};      // radians, the manual aim (Archer): yaw, pitch (+ up) off where the
                                        // shot has to go, as it is (not smoothed: the arms tremble)
+      bool          manual  = false;   // aimed by hand: the upper body follows the mouse faster
       uint64_t      dt      = 0;
       };
 
@@ -59,6 +60,8 @@ class Aim final {
     bool           isValid() const { return valid; }
     // The bow holds still in the aim (an arrow on the string), the upper body turned to the target
     bool           isSteady() const { return steady && ready && weight>=1.f; }
+    // Degrees between where the arrow points (before the sway) and where the shot has to go, -1 not aiming
+    float          trackError() const { return weight>=1.f ? error : -1.f; }
 
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);

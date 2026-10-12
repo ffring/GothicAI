@@ -142,6 +142,10 @@ void Camera::setViewport(uint32_t w, uint32_t h) {
   depthNear = 0;
   }
 
+float Camera::fovY() const {
+  return Gothic::options().cameraFov*fovK;
+  }
+
 float Camera::zNear() const {
   return nearClip;
   }

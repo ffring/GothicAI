@@ -95,6 +95,8 @@ class MdlVisual final {
     std::string                    hitZonesDump() const;
     // the bow holds still in the aim: an arrow on the string
     bool                           isAimSteady() const;
+    // degrees the arrow (before the sway) points off where the shot has to go, -1 not aiming
+    float                          aimTrackError() const;
 
     bool                           isStanding() const;
 

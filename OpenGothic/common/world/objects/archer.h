@@ -42,6 +42,7 @@ class Archer final {
       bool  short_   = false; // out of breath: recovering
       float disturb  = 0;
       float amp      = 0;  // degrees: the sway's scale now
+      float spread   = 0;  // degrees: how far off the arrow may go (the crosshair opens that much)
       float yaw      = 0;  // degrees: the sway
       float pitch    = 0;
       float strength = 1;
@@ -59,6 +60,8 @@ class Archer final {
     bool          isRaised() const { return stg!=Lowered; }
     // Where the aim sways off to: yaw (about up), pitch (+ up), radians
     Tempest::Vec2 sway()  const { return sw; }
+    // How far off the arrow may go now, radians: the sway's reach, trembling, the release
+    float         spread() const { return spr; }
 
     void          probe(Probe& p) const;
     static Probe  playerProbe;
@@ -74,6 +77,7 @@ class Archer final {
     float         calm      = 1;   // the sway's scale by the breath, smoothed
     float         disturb   = 0;
     float         amp       = 0;
+    float         spr       = 0;
     bool          repress   = false; // the arms let the string down: the button has to be pressed again
     bool          unready   = false; // reloading: the bow moved (the next arrow is being nocked)
     float         stageTime = 0;

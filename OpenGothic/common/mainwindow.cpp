@@ -323,7 +323,7 @@ void MainWindow::mouseUpEvent(MouseEvent &event) {
 
 void MainWindow::mouseDragEvent(MouseEvent &event) {
   const bool fs = SystemApi::isFullscreen(hwnd());
-  if(player.isManualAim()) {
+  if(aimCatchesMouse()) {
     processMouse(event,true);
     return;
     }
@@ -335,7 +335,13 @@ void MainWindow::mouseDragEvent(MouseEvent &event) {
   }
 
 void MainWindow::mouseMoveEvent(MouseEvent &event) {
-  processMouse(event,SystemApi::isFullscreen(hwnd()) || player.isManualAim());
+  processMouse(event,SystemApi::isFullscreen(hwnd()) || aimCatchesMouse());
+  }
+
+bool MainWindow::aimCatchesMouse() {
+  // aiming by hand: the mouse aims, in a window too - but not a window in the background (the test bench
+  // runs one: the mouse is someone else's)
+  return player.isManualAim() && hasFocus() && !TestBench::isActive();
   }
 
 void MainWindow::processMouse(MouseEvent& event, bool enable) {
@@ -653,43 +659,41 @@ void MainWindow::paintFocus(Painter& p, const Focus& focus, const Matrix4x4& vp)
   }
 
 void MainWindow::paintCrosshair(Painter& p, const Matrix4x4& vp) {
-  // aiming by hand (game/archery): where the arrow points, swaying - not where the mouse is; it closes in
-  // as the string is drawn. The arrow drops: far off one holds over
-  auto pl = Gothic::inst().player();
-  if(pl==nullptr || !player.isManualAim() || dialogs.isActive())
+  // aiming by hand (game/archery): a chevron, its tip where it aims; the arms open as far as the arrow
+  // may go off - the sway, the trembling, the bow not turned to it yet - and close as it steadies. The
+  // arrow drops: far off one holds over
+  auto  camera = Gothic::inst().camera();
+  Vec3  at;
+  float spread = 0;
+  if(camera==nullptr || dialogs.isActive() || !player.crosshair(at,spread))
     return;
-  Vec3 pos, dir;
-  if(!pl->arrowRay(pos,dir))
-    return;
-  static float reach = 10000.f;
-  auto r  = pl->world().physic()->rayArrow(pos,pos+dir*reach,[pl](Npc& n, const Vec3& a, const Vec3& b, float& t) {
-    return &n!=pl && n.rayHitZone(a,b,t)!=HitZones::None;
-    });
-  Vec3  at = r.hasCol ? r.v : pos+dir*reach;
-  float pw = 1.f;
-  vp.project(at.x,at.y,at.z,pw);
-  if(pw<=0.f)
-    return;
-  at /= pw;
+  if(player.isCrosshairCentered()) {
+    // it aims at the center of the screen: there, this frame (the point is the last frame's)
+    at = Vec3(0,0,0);
+    } else {
+    float pw = 1.f;
+    vp.project(at.x,at.y,at.z,pw);
+    if(pw<=0.f)
+      return;
+    at /= pw;
+    }
 
   const float scale = Gothic::interfaceScale(this);
-  const float draw  = pl->archer().draw();
-  const int   x     = int((0.5f*at.x+0.5f)*float(w()));
-  const int   y     = int((0.5f*at.y+0.5f)*float(h()));
-  const int   gap   = int((3.f + 9.f*(1.f-draw))*scale);
-  const int   len   = std::max(3,int(7.f*scale));
-  const int   th    = std::max(1,int(1.5f*scale));
-  auto arms = [&](int o) {
-    p.drawRect(x-gap-len-o, y-th/2-o, len+2*o, th+2*o);
-    p.drawRect(x+gap-o,     y-th/2-o, len+2*o, th+2*o);
-    p.drawRect(x-th/2-o, y-gap-len-o, th+2*o, len+2*o);
-    p.drawRect(x-th/2-o, y+gap-o,     th+2*o, len+2*o);
-    p.drawRect(x-th/2-o, y-th/2-o,    th+2*o, th+2*o);
+  const float x     = (0.5f*at.x+0.5f)*float(w());
+  const float y     = (0.5f*at.y+0.5f)*float(h());
+  // the spread as seen: an angle at the camera
+  const float perRad = 0.5f*float(h())/std::tan(0.5f*camera->fovY()*float(M_PI)/180.f);
+  const float half   = std::clamp(std::tan(spread)*perRad, 3.f*scale, 80.f*scale);
+  const float drop   = 8.f*scale;
+  const float width  = std::max(1.5f,1.5f*scale);
+  auto chevron = [&](const Color& cl, float wd) {
+    p.setPen(Pen(cl,Painter::Alpha,wd));
+    p.drawLine(int(x),int(y),int(x-half),int(y+drop));
+    p.drawLine(int(x),int(y),int(x+half),int(y+drop));
     };
-  p.setBrush(Brush(Color(0,0,0,0.45f),Painter::Alpha));
-  arms(1);
-  p.setBrush(Brush(Color(1,1,1,0.9f),Painter::Alpha));
-  arms(0);
+  chevron(Color(0,0,0,0.5f),width+2.f);
+  chevron(Color(1,1,1,0.9f),width);
+  p.setPen(Pen());
   }
 
 void MainWindow::paintFocus(Painter& p, Rect rect) {
@@ -977,7 +981,7 @@ uint64_t MainWindow::tick() {
   player.tickMove(dt);
 
   // aiming by hand in a window: the mouse is caught as in full screen
-  const bool catchMouse = player.isManualAim() && !SystemApi::isFullscreen(hwnd());
+  const bool catchMouse = aimCatchesMouse() && !SystemApi::isFullscreen(hwnd());
   if(catchMouse!=mouseCaught) {
     mouseCaught = catchMouse;
     setCursorShape(catchMouse ? CursorShape::Hidden : CursorShape::Arrow);

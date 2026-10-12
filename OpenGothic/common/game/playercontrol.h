@@ -52,6 +52,11 @@ class PlayerControl final {
     bool  isManualAim() const { return manualAiming; }
     // the test bench aims there instead of the center of the screen
     void  setAimOverride(bool on, const Tempest::Vec3& at = {});
+    // the crosshair of the manual aim: where it aims, how far off the arrow may go now (radians: the
+    // crosshair opens that much); false: not aiming by hand. centered: it aims at the center of the
+    // screen (else the test bench aims elsewhere)
+    bool  crosshair(Tempest::Vec3& at, float& spread) const;
+    bool  isCrosshairCentered() const { return !aimOverride; }
 
   private:
     enum WeaponAction : uint8_t {
@@ -165,6 +170,8 @@ class PlayerControl final {
     bool           aimOverride    = false;
     Tempest::Vec3  aimOverrideAt  = {};
     Tempest::Vec3  aimDirPrev     = {};
+    Tempest::Vec3  aimAt          = {};      //!< where the crosshair is
+    float          aimSpread      = 0;       //!< how far it is open, radians, smoothed
 
     DialogMenu&    dlg;
     InventoryMenu& inv;

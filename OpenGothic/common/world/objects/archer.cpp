@@ -178,6 +178,7 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
 
   if(stg==Lowered) {
     amp = 0;
+    spr = 0;
     sw  = Vec2();
     return false;
     }
@@ -193,6 +194,9 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
   const float t  = float(clock);
   sw.x = amp*wander(t,0) + trem*tremor(t,0);
   sw.y = amp*wander(t,1) + br*std::sin(Pi2*BreathRate*t) + trem*tremor(t,1);
+  // how far off the arrow may go: the sway's reach (twice its RMS), the trembling, the breathing, the
+  // release
+  spr = 2.f*(amp+trem) + br + st.cone;
   return release;
   }
 
@@ -218,6 +222,7 @@ void Archer::probe(Probe& p) const {
   p.short_   = recover>0.f;
   p.disturb  = disturb;
   p.amp      = amp/Deg;
+  p.spread   = spr/Deg;
   p.yaw      = sw.x/Deg;
   p.pitch    = sw.y/Deg;
   p.strength = strength;

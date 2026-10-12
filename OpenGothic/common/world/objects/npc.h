@@ -294,6 +294,7 @@ class Npc final {
     auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
     auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
     bool      isAimSteady() const;
+    float     aimTrackError() const { return visual.aimTrackError(); }
     // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
     bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
     // lets the arrow go along the arrow: drawn that far, thrown off by the release

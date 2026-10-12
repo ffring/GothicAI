@@ -22,6 +22,8 @@ constexpr float TrackRate   = 16.f;      // 1/s, how fast the aim follows the ta
 constexpr float MaxTrack    = 240.f*Deg; // ...but not faster than this, per second
 constexpr float BodyRate    = 16.f;      // 1/s, how fast the upper body takes a new turn
 constexpr float MaxBody     = 180.f*Deg; // per second
+constexpr float HandRate    = 3.f;       // aimed by hand: all of it that many times faster (the mouse is
+                                         // smooth already, the crosshair has to keep up)
 constexpr float SteadyAngle = 1.5f*Deg;  // the arrow moved less than this in a frame...
 constexpr int   SteadyFrames= 4;         // ...that many frames: the bow holds still
 constexpr float LeanRate    = 6.f;       // 1/s, leaning over an edge...
@@ -151,6 +153,7 @@ bool Aim::update(const Input& in) {
   const Vec3  f       = normalize(Vec3(in.forward.x,0,in.forward.z));
   const Vec3  d       = normalize(in.dir);
   const bool  on      = in.active && enabled && length(f)>0.5f && length(d)>0.5f;
+  const float fast    = in.manual ? HandRate : 1.f;
 
   if(on) {
     forward = f;
@@ -160,7 +163,7 @@ bool Aim::update(const Input& in) {
     if(!ready) {
       wantB = db;
       } else {
-      approach(wantB,db,1.f - std::exp(-TrackRate*dt),MaxTrack*dt,changed);
+      approach(wantB,db,1.f - std::exp(-TrackRate*fast*dt),MaxTrack*fast*dt,changed);
       wantB = normalize(wantB);
       }
 
@@ -200,7 +203,7 @@ bool Aim::update(const Input& in) {
     changed = true;
   sway = sw;
   if(ready)
-    approach(rot,goal,1.f - std::exp(-BodyRate*dt),MaxBody*dt,changed);
+    approach(rot,goal,1.f - std::exp(-BodyRate*fast*dt),MaxBody*fast*dt,changed);
 
   // the weight fades in once the turn is known, out when the bow goes down
   const float prevW = weight;

@@ -127,6 +127,7 @@ class Camera final {
     Tempest::Vec3      originLwc() const { return origin+shake; };
 
     float              zNear() const;
+    float              fovY() const; // degrees, the vertical field of view (the aim narrows it)
     void               setNearClip(float zNear); // debug (test bench): clips away what is closer to the camera
     float              zFar()  const;
 

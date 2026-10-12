@@ -91,6 +91,7 @@ class MainWindow : public Tempest::Window {
 
     void processMouse(Tempest::MouseEvent& event, bool enable);
     bool mouseCaught = false; // aiming by hand in a window: the mouse is caught as in full screen
+    bool aimCatchesMouse();
     void tickMouse(uint64_t dt);
     void onSettings();
 

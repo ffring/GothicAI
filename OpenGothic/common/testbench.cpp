@@ -322,6 +322,7 @@ struct Bench {
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
   Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  PlayerControl* ctrl     = nullptr; // the player's input: the crosshair of the manual aim
   // volley: shots by hand in a row - press, draw to volleyDraw, hold volleyHold, let go, wait for the
   // next arrow
   int         volleyLeft  = 0;
@@ -334,6 +335,9 @@ struct Bench {
   HitZones::Zone aimZone  = HitZones::Body;
   bool           aimFixed = false;
   bool           aimRaw   = false; // no holding over for the drop of the arrow
+  bool           crossValid = false;
+  Vec3           crossPrev  = {}; // on the screen, -1..1
+  float          aspect     = 4.f/3.f; // of the captured frame
   Vec3           aimAt    = {};
   // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
   float       placeDist  = 0;
@@ -612,7 +616,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
-  std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off");
+  std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -655,8 +659,32 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
   // the manual aim: the bow's stage, the sway, how far the arrow points off the aim
   const auto& mp = Archer::playerProbe;
-  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
-               mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl));
+  // the crosshair: how far it is open, degrees; how far it moved on the screen since the last frame,
+  // percent of the screen's height
+  Vec3  cross;
+  float spread = 0;
+  auto  cam    = Gothic::inst().camera();
+  bool  hasCross = cam!=nullptr && bench.ctrl!=nullptr && bench.ctrl->crosshair(cross,spread);
+  float moved  = -1;
+  if(hasCross) {
+    // as the game draws it: the center of the screen, unless the bench aims elsewhere
+    float x = cross.x, y = cross.y, z = cross.z, w = 1;
+    cam->viewProj().project(x,y,z,w);
+    if(bench.ctrl->isCrosshairCentered()) {
+      x = 0;
+      y = 0;
+      w = 1;
+      }
+    hasCross = w>1e-3f;
+    const Vec3 at = hasCross ? Vec3(x/w,y/w,0) : Vec3();
+    if(hasCross && bench.crossValid)
+      moved = std::hypot((at.x-bench.crossPrev.x)*bench.aspect,at.y-bench.crossPrev.y)*50.f;
+    bench.crossPrev = at;
+    }
+  bench.crossValid = hasCross;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
+               mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl),
+               hasCross ? spread*180.f/float(M_PI) : -1.f,moved);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -1668,6 +1696,8 @@ void drawOverlay(Pixmap& pm) {
   cv.px = reinterpret_cast<uint8_t*>(pm.data());
   cv.w  = int(pm.w());
   cv.h  = int(pm.h());
+  if(cv.h>0)
+    bench.aspect = float(cv.w)/float(cv.h);
   auto  cam = Gothic::inst().camera();
   auto& p   = FootIk::playerProbe;
   if(bench.bright)
@@ -1713,10 +1743,12 @@ void drawOverlay(Pixmap& pm) {
       }
     }
 
-  // the manual aim: where the arrow points (a cross; the game draws it in its interface, not captured)
-  // and where it aims (a dot)
-  auto hero = Gothic::inst().player();
-  if(cam!=nullptr && hero!=nullptr && hero->hasManualAim()) {
+  // the manual aim: the crosshair as the game draws it in its interface (not captured): a chevron at where
+  // it aims, open as far as the arrow may go off; a dot where the arrow points now (debugging)
+  auto  hero = Gothic::inst().player();
+  Vec3  cross;
+  float spread = 0;
+  if(cam!=nullptr && hero!=nullptr && bench.ctrl!=nullptr && bench.ctrl->crosshair(cross,spread)) {
     const Matrix4x4 vp = cam->viewProj();
     auto proj = [&](const Vec3& p, float& x, float& y) {
       float px = p.x, py = p.y, pz = p.z, pw = 1;
@@ -1733,15 +1765,20 @@ void drawOverlay(Pixmap& pm) {
       auto r = hero->world().physic()->rayArrow(pos,pos+dir*10000.f,[hero](Npc& n, const Vec3& a, const Vec3& b, float& t) {
         return &n!=hero && n.rayHitZone(a,b,t)!=HitZones::None;
         });
-      if(proj(r.hasCol ? r.v : pos+dir*10000.f,x,y)) {
-        cv.line(x-9,y,x-3,y,1,{255,255,255,255});
-        cv.line(x+3,y,x+9,y,1,{255,255,255,255});
-        cv.line(x,y-9,x,y-3,1,{255,255,255,255});
-        cv.line(x,y+3,x,y+9,1,{255,255,255,255});
-        }
+      if(proj(r.hasCol ? r.v : pos+dir*10000.f,x,y))
+        cv.dot(x,y,1,{255,120,120,200});
       }
-    if(proj(hero->manualAimPoint(),x,y))
-      cv.dot(x,y,2,{140,200,255,255});
+    const bool centered = bench.ctrl->isCrosshairCentered();
+    if(centered) {
+      x = 0.5f*float(cv.w);
+      y = 0.5f*float(cv.h);
+      }
+    if(centered || proj(cross,x,y)) {
+      const float perRad = 0.5f*float(cv.h)/std::tan(0.5f*cam->fovY()*float(M_PI)/180.f);
+      const float half   = std::clamp(std::tan(spread)*perRad,3.f,80.f);
+      cv.line(x,y,x-half,y+8,1,{255,255,255,255});
+      cv.line(x,y,x+half,y+8,1,{255,255,255,255});
+      }
     }
 
   // zoomed copy of the feet in the bottom right corner
@@ -1898,6 +1935,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       }
     }
 
+  bench.ctrl = &ctrl;
   run(*world,*player,ctrl);
   if(bench.done)
     return false;

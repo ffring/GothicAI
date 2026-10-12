@@ -13,6 +13,13 @@
 #include "camera.h"
 #include "gothic.h"
 
+namespace {
+// the crosshair of the manual aim
+constexpr float MaxSpread   = 6.f*float(M_PI)/180.f; // wide open: the bow being raised, reloaded
+constexpr float SpreadOpen  = 0.04f;                 // seconds
+constexpr float SpreadClose = 0.12f;
+}
+
 PlayerControl::PlayerControl(DialogMenu& dlg, InventoryMenu &inv)
   :dlg(dlg),inv(inv) {
   Gothic::inst().onSettingsChanged.bind(this,&PlayerControl::setupSettings);
@@ -1001,6 +1008,14 @@ void PlayerControl::implMove(uint64_t dt) {
   pl.setDirection(rot);
   }
 
+bool PlayerControl::crosshair(Tempest::Vec3& at, float& spread) const {
+  if(!manualAiming)
+    return false;
+  at     = aimAt;
+  spread = aimSpread;
+  return true;
+  }
+
 void PlayerControl::setAimOverride(bool on, const Tempest::Vec3& at) {
   aimOverride   = on;
   aimOverrideAt = at;
@@ -1069,6 +1084,8 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     camera->setAim(true,0);
     camera->setAimPitch(pitch);
     }
+  if(!ar.isRaised())
+    aimSpread = MaxSpread;
   manualAiming = true;
 
   // the mouse (the keys) turn the hero, the camera follows; up and down is the camera's
@@ -1108,6 +1125,17 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     ar.onShot(pl.releaseArrow(ar.draw(),st));
   ar.probe(Archer::playerProbe);
   pl.setManualAim(true,at,ar.sway());
+
+  // the crosshair is where it aims; it opens as far as the arrow may go off: the sway, the trembling,
+  // the arrow not turned to it yet (a flick of the mouse), the bow being raised, the next arrow nocked.
+  // Opens at once, closes a bit slower
+  const float err  = pl.aimTrackError();
+  float       goal = std::min(ar.spread() + std::max(err,0.f)*float(M_PI)/180.f, MaxSpread);
+  if(err<0.f || ar.stage()==Archer::Raising || ar.stage()==Archer::Reloading)
+    goal = MaxSpread;
+  const float lag = goal>aimSpread ? SpreadOpen : SpreadClose;
+  aimSpread += (goal-aimSpread)*std::min(1.f,float(dt)/1000.f/lag);
+  aimAt      = at;
   if(camera!=nullptr)
     camera->setAim(true,ar.draw());
   return true;

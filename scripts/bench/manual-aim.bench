@@ -60,6 +60,19 @@ volley 5 300
 stop
 stats str 120 dex 120 bow 100
 
+# a flick: drawn at the head, the aim jumps to the legs - the crosshair opens while the upper body
+# bends after it, closes when it is there
+rec flick
+aimat BAU_904_BAUER head
+press action
+wait 1500
+aimat BAU_904_BAUER limb
+wait 1500
+release action
+wait 1500
+stop
+aimat BAU_904_BAUER body
+
 # half drawn: slower, less damage
 pin BAU_904_BAUER 1000 0 0
 wait 300

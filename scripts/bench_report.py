@@ -306,13 +306,18 @@ def manual_aim(out, segs):
             count[z] += 1
         hits = " ".join(f"{z} {count[z]}" for z in ("head", "body", "limb", "miss") if count[z])
         flew = f"{sum(x[2] for x in a) / len(a) / 100:.1f}" if a else "-"
-        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {draw} | "
+        # the crosshair: how open at full draw, how far it jumps in a frame (it stays where it aims)
+        spreads = sorted(r["m_spread"] for r in held if r.get("m_spread", -1) >= 0)
+        spread = f"{spreads[len(spreads) // 2]:.2f}" if spreads else "-"
+        jumps = [r["m_cross"] for r in rows if r.get("m_cross", -1) >= 0]
+        jump = f"{max(jumps):.2f}" if jumps else "-"
+        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {spread} | {jump} | {draw} | "
                      f"{max(r['m_fatigue'] for r in rows):.2f} | {'yes' if any(r['m_holding'] > 0 for r in rows) else '-'} |")
     if not lines:
         return []
     return ["## Manual aim", "",
-            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | draw s | fatigue max | breath held |",
-            "|---|---|---|---|---|---|---|---|---|"] + lines + [""]
+            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | crosshair open deg (held) | crosshair jump max % screen | draw s | fatigue max | breath held |",
+            "|---|---|---|---|---|---|---|---|---|---|---|"] + lines + [""]
 
 
 def sheet(video, frames, path, cols=4, width=400):
