@@ -17,6 +17,10 @@
 #   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move
+#   m6: npc's know the world from the scripts' dialogs as far as the story has got: Xardas's talk of chapter 1
+#       but not chapter 3, a dialog played from the menu becomes one the hero has heard, chapter 3 opens its
+#       talk; Lobart knows his field work and what farmers say; the knowledge is in the model's request and
+#       recall gives a topic in full (model scripted with LLM=fake)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a

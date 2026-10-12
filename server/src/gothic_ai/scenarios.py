@@ -20,6 +20,7 @@ from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .incidents import IncidentDesk
+from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
@@ -2097,6 +2098,136 @@ async def amends_storylet(
     line = Trust(amends.chronicle).situation(ANDRE) or ""
     check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
     return _logged(results)
+
+
+async def m6_knows(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    knowledge: Knowledge,
+    npc: str = "NONE_100_XARDAS",
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """M6 on the game: what an npc knows comes from the scripts' dialogs, as far as the story has got.
+    Xardas in chapter 1 knows his talk of chapters 1-2 and nothing of chapter 3. A dialog of his played from
+    the menu becomes one the hero has heard. At chapter 3 his talk of chapter 3 opens. Lobart, the hero put
+    next to him, knows his field work and what the people around the city say. The knowledge is in the
+    request to the model, and recall gives a topic in full. The conversational model is scripted: its
+    requests are checked."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    def ids(topics: Sequence[Topic]) -> set[str]:
+        return {t.node.id for t in topics}
+
+    def situation(llm: FakeBackend) -> str:
+        return next(
+            (
+                str(m.content)
+                for m in llm.calls[0][1]
+                if isinstance(m, Message) and m.role == "developer" and "Что ты знаешь" in str(m.content)
+            ),
+            "",
+        )
+
+    await link.wait_world()
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    # 1. chapter 1: his talk of chapters 1-2 (the Eye, the city), none of chapter 3
+    await knowledge.prepare(npc)
+    view = knowledge.views[npc]
+    known = ids(view.told) | ids(view.open)
+    later = sorted(known & XARDAS_CH3)
+    check(
+        "chapter_1",
+        view.state.chapter == 1 and "DIA_XARDAS_ARTEFAKT" in known and not later,
+        f"chapter {view.state.chapter}; heard {sorted(ids(view.told))}; open {len(view.open)}; later {later}",
+    )
+
+    # 2. a dialog of his played from the menu: the hero has heard it
+    offered = await link.offered_dialogs(npc)
+    pick = next((t.node.id for t in view.open if t.sure and t.node.id in offered), None)
+    if pick is None:
+        check("heard_in_menu", False, f"nothing open is offered: {' '.join(offered)}")
+    else:
+        await link.choose_dialog(npc, pick)
+
+        async def heard() -> set[str]:
+            await knowledge.prepare(npc)
+            return ids(knowledge.views[npc].told)
+
+        ok = await _until_async(heard, lambda told: pick in told, 30)
+        check("heard_in_menu", ok, pick)
+        await asyncio.sleep(3)  # the dialog's lines
+
+    # 3. a turn: the knowledge is in the request, recall gives a topic in full
+    llm = FakeBackend(
+        script=[
+            FakeStep("Хм…", [ToolCall("recall", {"query": "Глаз Инноса"}, "c1")]),
+            FakeStep("Это амулет, в нём сила самого Инноса."),
+        ],
+        delay=0,
+    )
+    dialogue.llm = llm
+    await link.debug("type", text="Ксардас, что такое Глаз Инноса?")
+    await _until(lambda: len(llm.calls) >= 2, 30)
+    result = next((i.output for c in llm.calls[1:] for i in c[1] if isinstance(i, ToolResult)), "")
+    text = situation(llm) if llm.calls else ""
+    check(
+        "in_the_turn",
+        "Что ты знаешь (сейчас глава 1" in text and "Ты знаешь:" in result and "Глаз Инноса" in result,
+        f"{len(text)} chars known, recall {len(result)} chars: {result[:120]!r}",
+    )
+    await _until(lambda: not dialogue.speaking(npc), 15)
+
+    # 4. chapter 3: his chapter 3 talk opens, that of chapters 1-2 closes (what the hero heard stays)
+    await link.story_effect(npc, [{"do": "set", "var": "KAPITEL", "value": 3}])
+    await knowledge.prepare(npc)
+    ch3 = knowledge.views[npc]
+    opened = sorted(ids(ch3.open) & XARDAS_CH3)
+    check(
+        "chapter_3",
+        ch3.state.chapter == 3
+        and "DIA_XARDAS_BACKFROMOW" in opened
+        and "DIA_XARDAS_WEAPON" not in ids(ch3.open),
+        f"open now {opened}",
+    )
+    await link.story_effect(npc, [{"do": "set", "var": "KAPITEL", "value": 1}])
+
+    # 5. Lobart on his farm: his work and what farmers say
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        check("farmer", False, f"{farmer} is not around the hero")
+        return _logged(results)
+    llm = FakeBackend("Работа есть: поле репы за амбаром.", delay=0)
+    dialogue.llm = llm
+    await link.debug("type", text="Лобарт, есть для меня работа?")
+    await _until(lambda: bool(llm.calls), 30)
+    text = situation(llm) if llm.calls else ""
+    check(
+        "farmer",
+        "Ты — житель окрестностей." in text and "«Я ищу работу.»" in text and "Что говорят вокруг" in text,
+        f"{len(text)} chars known",
+    )
+    log.info("what %s knows:\n%s", farmer, text)
+    return _logged(results)
+
+
+# chapter 3 dialogs of Xardas's (KAPITEL == 3 in their conditions, or waiting for one that has it)
+XARDAS_CH3 = {
+    "DIA_XARDAS_BACKFROMOW",
+    "DIA_XARDAS_DMTSINDDA",
+    "DIA_XARDAS_INNOSEYEBROKEN",
+    "DIA_XARDAS_RITUALREQUEST",
+    "DIA_XARDAS_BINGESPANNT",
+    "DIA_XARDAS_WASNUN",
+    "DIA_XARDAS_PYROWILLNICHT",
+    "DIA_XARDAS_BEREIT",
+    "DIA_XARDAS_WARUMNICHTJETZT",
+}
 
 
 async def _until_async(get: Callable[[], Any], ok: Callable[[Any], bool], timeout: float) -> bool:

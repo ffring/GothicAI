@@ -29,6 +29,7 @@ from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .incidents import IncidentDesk
 from .journal import Journal, print_sink
+from .knowledge import Knowledge
 from .llm import (
     BACKENDS,
     Done,
@@ -103,6 +104,7 @@ HELP = """commands (npc defaults to the last attached one):
   director          quests left without an ending and the director's repairs of them
   director look     look for such quests now and repair them
   claims            quests of the scripts the hero said were done: believed, lies, found out
+  know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
@@ -144,6 +146,7 @@ class ServerState:
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
+        self.knowledge: Knowledge | None = None
 
 
 class Console:
@@ -239,6 +242,12 @@ class Console:
                 for t in self.state.vanilla.told.values():
                     state = "found out" if t.found_out else "lie" if t.lie else "true"
                     print(f"{t.quest} {t.npc}: {t.title}; {t.reward}; {state} ({t.kind or '-'})")
+            case "know" if self.state.knowledge is not None:
+                who = (rest[0] if rest else npc).upper()
+                await self.state.knowledge.prepare(who)
+                print(self.state.knowledge.situation(who))
+                if len(rest) > 1:
+                    print(self.state.knowledge.recall(who, " ".join(rest[1:])) or "(recall: nothing)")
             case "trust" if self.state.trust is not None:
                 print(self.state.trust.situation(rest[0] if rest else npc) or "(nothing)")
             case "amends" if self.state.amends is not None:
@@ -317,7 +326,8 @@ def _story_graph(args: argparse.Namespace, game_dir: Path | None) -> storygraph.
         path = storygraph.ensure(game_dir, DEFAULT_MEMORY_DB.parent / "story.json")
     if path is None or not path.exists():
         log.warning(
-            "story director off: no story graph (build OpenGothic/ai_bridge/storygraph or --story-graph)"
+            "no story graph, so no director and no npc knowledge "
+            "(build OpenGothic/ai_bridge/storygraph or --story-graph)"
         )
         return None
     return storygraph.load(path)
@@ -355,10 +365,12 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
-    graph = None if args.no_director else _story_graph(args, game_dir)
+    graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
     log.info(
-        "story director: %s",
-        "off" if graph is None else f"{len(graph.nodes)} nodes, {len(graph.quests)} quests",
+        "story graph: %s; director %s, npc knowledge %s",
+        "none" if graph is None else f"{len(graph.nodes)} nodes, {len(graph.quests)} quests",
+        "off" if graph is None or args.no_director else "on",
+        "off" if graph is None or args.no_knowledge else "on",
     )
 
     async def on_link(link: GameLink) -> None:
@@ -383,6 +395,10 @@ async def serve(args: argparse.Namespace) -> int:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
             )
+        if graph is not None and not args.no_knowledge:
+            # what each npc knows of the world as far as the story has got: its dialogs, quests, talk (M6)
+            state.knowledge = Knowledge(link, graph)
+            state.dialogue.extensions.append(state.knowledge)
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         talk = state.talk
@@ -399,7 +415,7 @@ async def serve(args: argparse.Namespace) -> int:
         )
         lies = asyncio.create_task(state.quests.run())
         directing: list[asyncio.Task[None]] = []
-        if graph is not None:
+        if graph is not None and not args.no_director:
             # quests the hero can no longer finish get repaired (story graph, stage 5)
             state.director = Director(
                 link, graph, state.story, state.chronicle, llm, dialogue=state.dialogue, journal=journal
@@ -522,6 +538,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m6":
+                dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
+                assert dialogue is not None and talk is not None and knowledge is not None
+                results = await scenarios.m6_knows(link, dialogue, talk, knowledge, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m6: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "lie":
                 dialogue, talk, quests = state.dialogue, state.talk, state.quests
@@ -967,6 +990,7 @@ def main() -> None:
             "m5b",
             "m5c",
             "m5e",
+            "m6",
             "graph",
             "lie",
             "repair",
@@ -1003,6 +1027,9 @@ def main() -> None:
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
+    p.add_argument(
+        "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"
+    )
     p.add_argument("--story-graph", help="storygraph JSON (default: made from the game's scripts and cached)")
     p.add_argument(
         "--no-hold-threats",
