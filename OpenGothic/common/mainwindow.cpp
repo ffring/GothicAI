@@ -1120,6 +1120,22 @@ void MainWindow::loadGame(std::string_view slot) {
   update();
   }
 
+Attachment MainWindow::screenshotWithUi() {
+  // the frame of the swapchain's size, drawn as render() draws it, into an image of our own
+  device.waitIdle();
+  dispatchPaintEvent(uiLayer,atlas);
+  uiMesh[cmdId].update(device,uiLayer);
+  auto img = device.attachment(TextureFormat::RGBA8,swapchain.w(),swapchain.h());
+  CommandBuffer cmd;
+  {
+  auto enc = cmd.startEncoding(device);
+  renderer.draw(img,enc,cmdId,uiMesh[cmdId],numMesh[cmdId],inventory,video);
+  }
+  auto sync = device.submit(cmd);
+  sync.wait();
+  return img;
+  }
+
 void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   if(dialogs.isActive())
     return;
@@ -1296,7 +1312,7 @@ void MainWindow::render(){
     updateAnimation(dt);
     tickCamera(dt);
     if(TestBench::tick(dt,player)) {
-      auto   tex = renderer.screenshoot(cmdId);
+      auto   tex = TestBench::withUi() ? screenshotWithUi() : renderer.screenshoot(cmdId);
       Pixmap pm;
       if(!tex.isEmpty())
         pm = device.readPixels(textureCast<const Texture2d&>(tex));

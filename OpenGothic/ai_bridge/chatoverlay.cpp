@@ -25,6 +25,8 @@ constexpr uint64_t LingerMs       = 2500;
 constexpr uint64_t PttHoldMs      = 300;    // T held longer than this is push-to-talk
 constexpr uint64_t PttMaxMs       = 30000;  // the key-up may never come (focus lost)
 constexpr auto     FontName       = "font_old_20_white.tga"; // the large game font, has cyrillic in RU
+constexpr uint64_t DealSettleMs   = 1000;   // Y waits this long after the terms appear or change
+constexpr uint64_t DealFreshMs    = 4000;   // what changed stays highlighted this long
 
 // GOTHIC_AI_CHAT_SCALE: extra size multiplier for the chat, on top of the game's interface scale
 // the end of `text` that fits into `width` (live transcripts grow at the end)
@@ -178,13 +180,142 @@ void ChatOverlay::tick() {
       pttRelease();
     }
   // repaint while something is on screen (cursor blink, subtitles expiring), and once after it is gone
-  const bool visible = active || recording || !partial.empty() || !status.empty() || hasVisibleContent();
+  const bool visible = active || recording || !partial.empty() || !status.empty() || hasVisibleContent() ||
+                       !deal.id.empty();
   if(visible || wasVisible)
     update();
   wasVisible = visible;
   }
 
+void ChatOverlay::showDeal(std::string id, int32_t version, std::string npc,
+                           std::vector<DealLine> npcGives, std::vector<DealLine> heroGives) {
+  if(deal.id==id && deal.version==version) {
+    deal.sent = false;  // the server answered: Y may be pressed again
+    update();
+    return;
+    }
+  // what is not in the shown version is new
+  auto mark = [&](std::vector<DealLine>& now, const std::vector<DealLine>& before) {
+    for(auto& l:now)
+      l.fresh = deal.id==id && std::none_of(before.begin(),before.end(),[&](const DealLine& b){
+        return b.text==l.text;
+        });
+    };
+  mark(npcGives, deal.npcGives);
+  mark(heroGives,deal.heroGives);
+  deal.id        = std::move(id);
+  deal.version   = version;
+  deal.npc       = std::move(npc);
+  deal.npcGives  = std::move(npcGives);
+  deal.heroGives = std::move(heroGives);
+  deal.changedAt = Application::tickCount();
+  deal.sent      = false;
+  update();
+  }
+
+void ChatOverlay::hideDeal(std::string_view id) {
+  if(deal.id.empty() || (!id.empty() && deal.id!=id))
+    return;
+  deal = Deal();
+  update();
+  }
+
+void ChatOverlay::markMissing(const std::function<bool(const DealLine&)>& lacks) {
+  for(auto& l:deal.heroGives)
+    l.missing = lacks(l);
+  }
+
+std::string ChatOverlay::pressDeal() {
+  if(deal.id.empty())
+    return "none";
+  if(deal.sent)
+    return "waiting";
+  for(auto& l:deal.heroGives)
+    if(l.missing)
+      return "missing";
+  if(Application::tickCount() < deal.changedAt + DealSettleMs)
+    return "changed";
+  deal.sent = true;
+  if(onDealAccept)
+    onDealAccept(deal.id,deal.version);
+  update();
+  return "sent";
+  }
+
 void ChatOverlay::paintEvent(PaintEvent& e) {
+  Painter p(e);
+  if(!deal.id.empty())
+    paintDeal(p);
+  paintChat(p);
+  }
+
+void ChatOverlay::paintDeal(Painter& p) {
+  const uint64_t now   = Application::tickCount();
+  const float    scale = Gothic::interfaceScale(this)*chatScale();
+  auto&          text  = Resources::font(FontName,Resources::FontType::Normal,  scale);
+  auto&          name  = Resources::font(FontName,Resources::FontType::Yellow,  scale);
+  auto&          hint  = Resources::font(FontName,Resources::FontType::Disabled,scale);
+  auto&          red   = Resources::font(FontName,Resources::FontType::Red,     scale);
+  const int      lineH = text.pixelSize();
+  const int      pad   = std::max(8,lineH/2);
+  const int      boxW  = std::min(w()-2*pad, std::max(int(520*scale), w()/3));
+  const int      textW = boxW-2*pad;
+  const int      x0    = w()-boxW-pad;
+
+  static const std::string title   = TextCodec::fromUtf8("Сделка: ");
+  static const std::string gives   = TextCodec::fromUtf8(" даёт:");
+  static const std::string youGive = TextCodec::fromUtf8("Ты даёшь:");
+  static const std::string nothing = TextCodec::fromUtf8("ничего");
+  // the game's font has no square brackets
+  static const std::string accept  = TextCodec::fromUtf8("Y — принять");
+  static const std::string lacking = TextCodec::fromUtf8("Y — принять, но не хватает отмеченного");
+  static const std::string waiting = TextCodec::fromUtf8("Ждём ответа...");
+
+  struct Row final {
+    const GthFont* font;
+    std::string    str;
+    int            indent;
+    };
+  std::vector<Row> rows;
+  const bool fresh = now < deal.changedAt + DealFreshMs;
+  auto side = [&](const std::string& head, const std::vector<DealLine>& lines) {
+    rows.push_back({&hint,head,0});
+    if(lines.empty())
+      rows.push_back({&hint,nothing,pad});
+    for(auto& l:lines) {
+      const GthFont* f = l.missing ? &red : (fresh && l.fresh ? &name : &text);
+      rows.push_back({f,l.text,pad});
+      }
+    };
+  rows.push_back({&name,title+deal.npc,0});
+  side(deal.npc+gives,deal.npcGives);
+  side(youGive,deal.heroGives);
+  const bool missing = std::any_of(deal.heroGives.begin(),deal.heroGives.end(),[](const DealLine& l){
+    return l.missing;
+    });
+  if(deal.sent)
+    rows.push_back({&hint,waiting,0});
+  else if(missing)
+    rows.push_back({&hint,lacking,0});
+  else
+    rows.push_back({now < deal.changedAt + DealSettleMs ? &hint : &name,accept,0});
+
+  int total = pad;
+  for(auto& r:rows)
+    total += r.font->textSize(textW-r.indent,r.str).h + pad/4;
+  total += pad;
+
+  int y = std::max(pad,h()/5);
+  p.setBrush(Color(0.f,0.f,0.f,0.6f));
+  p.drawRect(x0,y,boxW,total);
+  y += pad;
+  for(auto& r:rows) {
+    r.font->drawText(p,x0+pad+r.indent,y+lineH,textW-r.indent,0,r.str,AlignLeft);
+    y += r.font->textSize(textW-r.indent,r.str).h + pad/4;
+    }
+  }
+
+void ChatOverlay::paintChat(Painter& p) {
   const uint64_t now = Application::tickCount();
   std::vector<const Entry*> rows;
   for(auto it=log.rbegin(); it!=log.rend(); ++it) {
@@ -197,7 +328,6 @@ void ChatOverlay::paintEvent(PaintEvent& e) {
   if(!active && !extra && rows.empty())
     return;
 
-  Painter     p(e);
   const float scale = Gothic::interfaceScale(this)*chatScale();
   auto&       text  = Resources::font(FontName,Resources::FontType::Normal,  scale);
   auto&       name  = Resources::font(FontName,Resources::FontType::Yellow,  scale);
@@ -268,6 +398,13 @@ void ChatOverlay::keyDownEvent(KeyEvent& e) {
         pttPress('\0');  // held, it is push-to-talk right away; a short tap opens the input line
       return;
       }
+    // Y accepts the deal in the window; while the input line is open it is a letter
+    if(e.key==Event::K_Y && e.modifier==Event::M_NoModifier && !deal.id.empty() && (!canDeal || canDeal())) {
+      e.accept();
+      yDown = true;
+      pressDeal();
+      return;
+      }
     e.ignore();
     return;
     }
@@ -288,7 +425,7 @@ void ChatOverlay::keyDownEvent(KeyEvent& e) {
 
 void ChatOverlay::keyRepeatEvent(KeyEvent& e) {
   if(!active) {
-    if(e.key==Event::K_T && tDown)
+    if((e.key==Event::K_T && tDown) || (e.key==Event::K_Y && yDown))
       e.accept(); else
       e.ignore();
     return;
@@ -299,7 +436,9 @@ void ChatOverlay::keyRepeatEvent(KeyEvent& e) {
   }
 
 void ChatOverlay::keyUpEvent(KeyEvent& e) {
-  const bool ours = active || (e.key==Event::K_T && tDown);
+  const bool ours = active || (e.key==Event::K_T && tDown) || (e.key==Event::K_Y && yDown);
+  if(e.key==Event::K_Y)
+    yDown = false;
   if(e.key==Event::K_T)
     pttRelease();
   if(ours)

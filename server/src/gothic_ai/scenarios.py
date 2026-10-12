@@ -16,6 +16,7 @@ from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Fact
+from .deals import GOLD, Deals
 from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
@@ -2228,6 +2229,157 @@ XARDAS_CH3 = {
     "DIA_XARDAS_BEREIT",
     "DIA_XARDAS_WARUMNICHTJETZT",
 }
+
+
+async def deal_window(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, deals: Deals, seller: str = LOBART
+) -> dict[str, str]:
+    """A deal (docs/npc-tools.md, wave 1), on the game. The hero asks Lobart to sell him something he has;
+    Lobart (scripted unless LLM=chatgpt) offers it for 50 gold, then for 30 after haggling: the window shows
+    the new version of the same deal. Y right after the change waits, Y without the gold waits; with the gold
+    the deal is done: the gold and the thing change hands at once, the window goes, Lobart answers."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    await link.debug("skip_important", near=seller)  # his important dialog would start as the hero comes
+    await link.debug("player_goto", to=seller, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: seller in talk.people, 20):
+        check("near", False, seller)
+        return _logged(results)
+    name = talk.people[seller].name
+
+    # something he has to sell (an apple if nothing), and 10 gold on the hero
+    snap = await link.snapshot(seller, fresh=True)
+    wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    if not wares:
+        await link.story_effect(seller, [{"do": "give", "item": "ITFO_APPLE", "count": 2, "to": "self"}])
+        snap = await link.snapshot(seller, fresh=True)
+        wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    ware = wares[0]
+    gold = await has(GOLD)
+    if gold > 10:
+        await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": gold - 10, "to": "self"}])
+    elif gold < 10:
+        await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 10 - gold}])
+    had = await has(ware.item)
+
+    if isinstance(dialogue.llm, FakeBackend):
+
+        def offer(price: int) -> ToolCall:
+            terms = {
+                "npc_gives": [{"item": ware.item, "count": 1}],
+                "hero_gives": [{"item": GOLD, "count": price}],
+            }
+            return ToolCall("propose_deal", terms, f"deal{price}")
+
+        dialogue.llm = ClaimScript(
+            said=[
+                ("продай", FakeStep(f"{ware.name}? Пятьдесят золотых.", [offer(50)])),
+                ("дорого", FakeStep("Ладно, тридцать — и по рукам.", [offer(30)])),
+            ],
+            told=[],
+            default="По рукам. Хорошая вещь, не пожалеешь.",
+            only=name,
+        )
+
+    await link.debug("type", text=f"{name}, продай мне {ware.name}.")
+    ok = await _until(lambda: seller in deals.open, 30)
+    window = await link.deal_window() or {}
+    check("shown", ok and window.get("version") == 1, window)
+    if not ok:
+        return _logged(results)
+    first = deals.open[seller]
+
+    # 10 gold of 50: Y waits, the window marks the gold
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    window = await link.deal_window() or {}
+    check("waits_gold", pressed == "missing" and window.get("missing") == [GOLD], f"{pressed}, {window}")
+
+    # 40 gold, and he haggles it down to 30: the same window, a new version, Y waits a moment
+    await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 30}])
+    await link.debug("type", text=f"{name}, это дорого, давай за тридцать.")
+    ok = await _until(lambda: seller in deals.open and deals.open[seller].version == 2, 30)
+    window = await link.deal_window() or {}
+    check("haggled", ok and window.get("deal") == first.id and window.get("version") == 2, window)
+    pressed = await link.press_deal()
+    check("waits_change", pressed == "changed", pressed)
+
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    done = await _until(lambda: bool(deals.chronicle.facts("deal")), 20)
+    check("accepted", pressed == "sent" and done, pressed)
+    left, got = await has(GOLD), await has(ware.item)
+    check("changed_hands", left == 10 and got == had + 1, f"gold 40 -> {left}, {ware.item} {had} -> {got}")
+    window = await link.deal_window()
+    check("window_gone", window is None and seller not in deals.open, window)
+    conv = dialogue.conversations.get(seller)
+    answered = await _until(lambda: conv is not None and "assistant" == conv.memory.entries[-1].role, 30)
+    check("answered", answered, conv.memory.entries[-1].content if conv and conv.memory.entries else "")
+    return _logged(results)
+
+
+async def deal_demo(link: GameLink, deals: Deals, npc: str) -> dict[str, str]:
+    """The deal window on screen for the test bench (scripts/bench/deal.bench): the npc offers a thing it has
+    for 50 gold the hero lacks, a moment later for 30 he has; it stays a while, then the hero accepts."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(6)  # the bench sets its camera
+    npc, hero = npc.upper(), ["inst", "HERO"]
+    # a potion to sell, and gold to leave the hero 40
+    await link.attach(npc)
+    await link.act(npc, "debug_add_item", item="ITPO_HEALTH_01", count=2)
+    await link.act(npc, "debug_add_item", item=GOLD, count=100)
+    await link.detach(npc)
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", GOLD]]) or 0)
+    if gold != 40:
+        to = {"to": "self"} if gold > 40 else {}
+        await link.story_effect(npc, [{"do": "give", "item": GOLD, "count": abs(gold - 40), **to}])
+    snap = await link.snapshot(npc, fresh=True)
+    wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    check("stocked", bool(wares), [i.item for i in snap.npc.inventory])
+    if not wares:
+        return _logged(results)
+
+    def terms(price: int) -> dict[str, Any]:
+        return {
+            "npc_gives": [{"item": wares[0].item, "count": 1}],
+            "hero_gives": [{"item": GOLD, "count": price}],
+        }
+
+    name = snap.npc.name or npc
+    first = await deals.propose(npc, name, terms(50), snap)
+    check("offered", first.status == "accepted", first.output)
+    await asyncio.sleep(5)
+    second = await deals.propose(npc, name, terms(30), snap)
+    check("haggled", second.status == "accepted", second.output)
+    await asyncio.sleep(6)
+    pressed = await link.press_deal()
+    check(
+        "accepted",
+        pressed == "sent" and await _until(lambda: bool(deals.chronicle.facts("deal")), 10),
+        pressed,
+    )
+    await asyncio.sleep(3)
+    return _logged(results)
 
 
 async def _until_async(get: Callable[[], Any], ok: Callable[[Any], bool], timeout: float) -> bool:

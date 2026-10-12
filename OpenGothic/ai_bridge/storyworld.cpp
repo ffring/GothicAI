@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <map>
 
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/addon/daedalus.hh>
@@ -195,6 +196,23 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
       if(!error.empty())
         return false;
       list.push_back(std::move(e));
+      }
+    }
+  if(JsonRead::boolean(msg,"check",false)) {
+    // all or nothing (v10, a deal): each giver must have all it gives, or nothing happens
+    std::map<std::pair<bool,std::string>,int64_t> need;  // (the hero gives, item) -> count
+    for(auto& e : list)
+      if(e.kind=="give")
+        need[{!e.toHero,e.item}] += e.count;
+    for(auto& [k,count] : need) {
+      Npc&         giver = k.first ? *pl : *npc;
+      const size_t id    = world.script().findSymbolIndex(k.second);
+      const size_t has   = id==size_t(-1) ? 0 : giver.itemCount(id);
+      if(int64_t(has)<count) {
+        error = "missing: " + std::string(k.first ? "hero " : "npc ") + k.second + " " + std::to_string(count) +
+                " (has " + std::to_string(has) + ")";
+        return false;
+        }
       }
     }
   const auto who = symbolOf(world,*npc);

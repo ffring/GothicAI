@@ -57,6 +57,9 @@ above): one line `friendly`, two `angry`. Columns `ge_on` (gestures go with its 
 line is being said), `ge_id` (the gesture playing, 1 is `T_DIALOGGESTURE_01`), `ge_mood` (0 neutral,
 1 friendly, 2 angry, 3 hostile, 4 afraid, 5 pain), `ge_starts`, `ge_cuts`, `ge_stops`, `ge_nods` (counters),
 `ge_pitch`, `ge_yaw`, `ge_roll` (degrees: how the voice turns the head, a nod is pitch down).
+Deals: `deal` (the deal window of an AI server, the interface in the frames: start `gothic-ai serve
+--scenario deal_demo --llm fake --no-tts` on a port of your own and run the bench with `GOTHIC_AI_URL`;
+Xardas offers a thing he has for 50 gold the hero lacks, then for 30, and the hero accepts).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -189,6 +192,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `overlay on\|off`, `overlay zoom on\|off`, `overlay bright on\|off` | `bright` stretches dark images (forests, interiors) |
 | `rec <name> [novideo]`, `stop` | record a segment (video and metrics, or metrics only) |
 | `shot <name>` | one PNG |
+| `ui on\|off` | the interface in the captured frames, as the player sees it: subtitles, the input line, the deal window (off by default: only the world) |
 | `label <text>` | text on the overlay |
 | `ik on\|off`, `ik param <name> <value>`, `ik params` | foot IK and its parameters, without rebuilding; `ik off` on a four-legged creature brings back the old whole-body tilt |
 | `transform <instance>`, `transform back` | the player becomes a creature (`Wolf`, `Molerat`, `Shadowbeast`, `Waran`, ...), like the shape change spell |

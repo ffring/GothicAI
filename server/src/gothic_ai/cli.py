@@ -21,6 +21,7 @@ from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Chronicle
+from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
 from .executor import Intent
@@ -109,6 +110,9 @@ HELP = """commands (npc defaults to the last attached one):
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
   amends            the director's storylets of amends for the hero's lies, and where they stand
+  deal              offers open to the hero, and what the game's deal window shows (needs -devmode)
+  deal <npc gives> / <hero gives>   the npc offers a deal, e.g. deal ITPO_HEALTH_01:2 / ITMI_GOLD:30
+  deal accept       press Y on the deal window as the player does (game needs -devmode)
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -147,6 +151,7 @@ class ServerState:
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
         self.knowledge: Knowledge | None = None
+        self.deals: Deals | None = None
 
 
 class Console:
@@ -254,6 +259,8 @@ class Console:
                 for s in self.state.amends.storylets.values():
                     closed = ", ".join(s.close)
                     print(f"{s.id} {s.name}: {s.stage}; closed {closed}; {s.gold} gold to {s.to_name}")
+            case "deal" if self.state.deals is not None:
+                await self.deal(link, npc, rest)
             case "rumors" if self.state.rumors is not None:
                 print("\n".join(self.state.rumors.describe()) or "(none)")
             case "ties" if self.state.rumors is not None and self.state.rumors.social is not None:
@@ -268,6 +275,35 @@ class Console:
                 self.state.talk.hear(" ".join(rest), npc, {"via": "console"})
             case _:
                 print(HELP)
+
+    async def deal(self, link: GameLink, npc: str, rest: list[str]) -> None:
+        """deal: the open offers; deal accept: Y on the window; deal <npc gives> / <hero gives>: an offer."""
+        deals = self.state.deals
+        assert deals is not None
+        if not rest:
+            for d in deals.open.values():
+                print(f"{d.id} v{d.version} {d.name}: {d.state}; {d.terms()}")
+            print(f"window: {json.dumps(await link.deal_window(), ensure_ascii=False)}")
+            return
+        if rest == ["accept"]:
+            print(await link.press_deal())
+            return
+        text = " ".join(rest)
+        mine, _, theirs = text.partition("/")
+
+        def gives(part: str) -> list[dict[str, object]]:
+            out = []
+            for word in part.split():
+                item, _, count = word.partition(":")
+                out.append({"item": item, "count": int(count or 1)})
+            return out
+
+        snap = await link.snapshot(npc, fresh=True)
+        name = snap.npc.name or npc
+        outcome = await deals.propose(
+            npc, name, {"npc_gives": gives(mine), "hero_gives": gives(theirs)}, snap
+        )
+        print(f"{outcome.status}: {outcome.output}")
 
     async def quest(self, link: GameLink, npc: str, rest: list[str]) -> None:
         """quest <instance> <count> <reward item> <reward count> <title...>: the npc gives a quest."""
@@ -405,6 +441,10 @@ async def serve(args: argparse.Namespace) -> int:
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle)
         state.dialogue.extensions.append(trust)
+        # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
+        state.deals = Deals(link, state.dialogue, state.chronicle, journal=journal)
+        state.dialogue.extensions.append(state.deals)
+        talk.on_talk_end.append(state.deals.end)
         state.quests = QuestBoard(
             link,
             state.dialogue,
@@ -565,6 +605,19 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.amends_storylet(link, dialogue, talk, amends)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario amends: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "deal":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.deal_window(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario deal: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "deal_demo":
+                assert state.deals is not None
+                results = await scenarios.deal_demo(link, state.deals, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario deal_demo: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "rumor":
                 dialogue, talk, rumors = state.dialogue, state.talk, state.rumors
@@ -998,6 +1051,8 @@ def main() -> None:
             "vcheck",
             "rumor",
             "amends",
+            "deal",
+            "deal_demo",
             "rescue",
             "rescue_self",
             "tts",
