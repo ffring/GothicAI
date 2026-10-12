@@ -58,6 +58,7 @@ from .protocol import (
 )
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .social import Rumors
 from .story import StoryPatches
 from .talk import TalkDesk
 from .trace import TraceWriter, find_turn, latest
@@ -102,6 +103,8 @@ HELP = """commands (npc defaults to the last attached one):
   director look     look for such quests now and repair them
   claims            quests of the scripts the hero said were done: believed, lies, found out
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
+  rumors            rumors of the hero's lies and who knows them, by retellings
+  ties [npc]        whom the npc meets by its routine (and when) and has dealings with
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -137,6 +140,7 @@ class ServerState:
         self.director: Director | None = None
         self.vanilla: VanillaQuests | None = None
         self.trust: Trust | None = None
+        self.rumors: Rumors | None = None
 
 
 class Console:
@@ -234,6 +238,10 @@ class Console:
                     print(f"{t.quest} {t.npc}: {t.title}; {t.reward}; {state} ({t.kind or '-'})")
             case "trust" if self.state.trust is not None:
                 print(self.state.trust.situation(rest[0] if rest else npc) or "(nothing)")
+            case "rumors" if self.state.rumors is not None:
+                print("\n".join(self.state.rumors.describe()) or "(none)")
+            case "ties" if self.state.rumors is not None and self.state.rumors.social is not None:
+                print("\n".join(self.state.rumors.social.describe(rest[0] if rest else npc)) or "(none)")
             case "dialogs":
                 print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
             case "choose" if rest:
@@ -400,6 +408,9 @@ async def serve(args: argparse.Namespace) -> int:
                 trust=trust,
             )
             directing = [asyncio.create_task(state.director.run()), asyncio.create_task(state.vanilla.run())]
+        # rumors of the hero's lies go round the people that know each other (story graph, stage 5)
+        state.rumors = Rumors(link, state.dialogue, state.chronicle, graph)
+        directing.append(asyncio.create_task(state.rumors.run()))
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
@@ -494,6 +505,14 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.repair_after_death(link, state.director, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "rumor":
+                dialogue, talk, rumors = state.dialogue, state.talk, state.rumors
+                assert dialogue is not None and talk is not None and rumors is not None
+                where = str(Path(args.trace_dir).parent) if args.trace_dir else None
+                results = await scenarios.rumor_spread(link, dialogue, talk, rumors, log_dir=where)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario rumor: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "vcheck":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
@@ -916,6 +935,7 @@ def main() -> None:
             "repair",
             "vlie",
             "vcheck",
+            "rumor",
             "tts",
         ],
         help="run a scripted check when the game connects",
