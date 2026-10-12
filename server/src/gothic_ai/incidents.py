@@ -155,6 +155,8 @@ class IncidentDesk:
         self.tracker = IncidentTracker(gap_s)
         self.attached: set[str] = set()
         self.reactions: list[Reaction] = []  # recent ones, for the console and tests
+        # what an npc perceives now, for the behavioral model (perception.py)
+        self.view_of: Callable[[str], tuple[str, ...]] = lambda npc: ()
         self._tasks: set[asyncio.Task[Any]] = set()
         link.listeners.append(self.on_message)
         dialogue.on_player_phrase = self.on_player_phrase
@@ -235,7 +237,7 @@ class IncidentDesk:
         traits = conv.persona.traits if conv else None
         distance = snap.player.distance if snap is not None and snap.player is not None else 0.0
         clock = clock_text(snap.world.hour, snap.world.minute) if snap is not None else None
-        return NpcContext(npc, name, -1, distance, True, traits=traits), clock
+        return NpcContext(npc, name, -1, distance, True, traits=traits, view=self.view_of(npc)), clock
 
     async def _react(self, npc: str, incident_id: int) -> None:
         assert self.reflexes is not None

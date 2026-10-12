@@ -34,6 +34,7 @@ constexpr float MaxAnimPitch = 30.f*Deg;
 constexpr float FaceAxisCos  = 0.85f;     // the axis of the face is picked when the head looks this close to forward
 constexpr float MaxFaceDown  = 0.8f;      // the face looks further down or up (a bent head): its turn is not known
 constexpr float Snap         = 0.002f;
+constexpr float ShiftJump    = 15.f*Deg;  // the target moved this far in one update: the eyes jump
 
 bool enabled = []() {
   const char* v = std::getenv("OPENGOTHIC_GAZE");
@@ -182,6 +183,10 @@ bool Gaze::update(const Input& in) {
       yaw       = std::clamp(yaw, -maxYaw, maxYaw);
       }
     }
+  // the eyes go to another place: to the partner, away from it, or the partner is elsewhere at once
+  if(on!=tracking || (on && std::abs(yawGoal-lastGoal)>ShiftJump))
+    ++shifts;
+  lastGoal = yawGoal;
   tracking = on;
 
   // the animation bends the head up and down too (down to a book): follow its slow part

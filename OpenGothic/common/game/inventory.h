@@ -112,6 +112,8 @@ class Inventory final {
 
     uint8_t currentSpellSlot() const;
     bool    hasStateItem() const;
+    // the item the npc holds for its state (a beer, a torch, a broom); nullptr if none
+    const Item* stateSlotItem() const { return stateSlot.item; }
 
     void   putCurrentToSlot(Npc& owner, std::string_view slot);
     void   putToSlot       (Npc& owner, size_t cls, std::string_view slot);

@@ -175,6 +175,7 @@ class Reflexes:
         if clock:
             parts.append(f"It is {clock}.")
         parts.append(f"You are talking with the hero, {npc.distance_cm / 100:.0f} m away.")
+        parts += npc.view
         if intent is not None:
             parts.append(intent.describe_en())
         parts += lines

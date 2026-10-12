@@ -76,9 +76,9 @@ void MeshObjects::Mesh::setWind(zenkit::AnimationType m, float intensity) {
     sub[i].setWind(m,intensity);
   }
 
-void MeshObjects::Mesh::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil) {
+void MeshObjects::Mesh::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly) {
   for(size_t i=0;i<subCount;++i)
-    sub[i].startMMAnim(anim,intensity,timeUntil);
+    sub[i].startMMAnim(anim,intensity,timeUntil,freeOnly);
   }
 
 void MeshObjects::Mesh::setMMShape(std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {

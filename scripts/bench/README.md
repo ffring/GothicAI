@@ -50,6 +50,11 @@ fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serv
 service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
 `face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
 watched npc shows, 0..1.
+Blinks: `blink` (Xardas' face close up: quiet, saying a line, his eyes jumping after the hero put here
+and there, a frightened face, the eyes closed; with `blink off` on top of a copy nobody blinks, as
+OpenGothic was). Columns `bk_on`, `bk_w` (how shut a blink keeps the eyes, 0..1), `bk_n`, `bk_pause`,
+`bk_shift`, `bk_double` (counters: blinks, of them in a pause of the voice, at a shift of the eyes, the
+second of a double one).
 Gestures: `gestures` (the hero picks the first dialog choice of Xardas three times, the camera at his
 chest: his hands while he speaks; with `gestures off` on top of a copy the old way, a random gesture
 when a line starts and none plays). For the moods, the same camera with an AI server (`mood-ai`
@@ -110,6 +115,7 @@ git worktree remove --force /tmp/before
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
+- `BLINK`: blinks `N`, of them in a pause of the voice `P`, at a shift of the eyes `S`, second ones `D`;
 - `GEST`: `TALK` while the watched one speaks, the gesture playing `G`, the mood of its line, gestures
   started `S`, started over one `C`, stopped early `X`, nods `N`, the nod now `P` (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
@@ -157,6 +163,9 @@ animation it is how the animation moves (a running human 11-25 cm, a running war
 the switches, with `blend off` and on. `hits, peak, back` are the blows the watched one took, the
 largest flinch (trunk bend, twist or head, degrees) and how long it took to come back after the last
 blow. `gaze_jerk` is not counted for a second after a blow: it throws the head on purpose.
+`blinks /min` counts the blinks seen (the eyes going half shut), with those in a pause of the voice and
+at a shift of the eyes; people blink some 15-25 times a minute, more while they speak. Flag `blink_shut`:
+a blink keeps the eyes shut longer than 7 frames.
 `gestures talk / listen %` is how much of the time the watched one speaks a gesture plays, and how much
 of the time it is quiet again (a second after its voice), then the gestures started, started over one
 that played and stopped before their end (the voice is over), and the nods on stressed syllables. The head
@@ -236,6 +245,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `faceanim <npc\|nearest\|player> <anim> [ms] [intensity]` | a face animation of the head (`S_ANGRY`, `S_FRIENDLY`, `T_HURT`...) |
 | `lips on\|off`, `lips param <name> <value>`, `lips params` | lip sync (off: the old talk loop) and its parameters |
 | `gestures on\|off`, `gestures param <name> <value>`, `gestures params` | the hands while one speaks (`TalkGestures`; off: a random gesture when a line starts) and its parameters: `Tail`, `Wait`, `MinLeft`, `Slack` (ms), `Long`, `RestScale`; the head: `Nod` (degrees), `NodHz`, `Stress`, `NodGap` (ms), `SwayYaw`, `SwayRoll` (degrees), `SwayTime`, `SwayLag` (ms) |
+| `blink on\|off`, `blink param <name> <value>`, `blink params` | blinking (`EyeBlink`; off: nobody blinks) and its parameters: `MinGap`, `RestMean`, `SpeakMean`, `MaxGap`, `Hold`, `PauseMs`, `SoonMs`, `DoubleGap` (ms), `PauseProb`, `ShiftProb`, `DoubleProb` |
 | `ani <npc\|nearest\|player> <anim>` | it plays an animation of its model script (`T_YES`, `T_DIALOGGESTURE_03`) |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
@@ -276,6 +286,6 @@ and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL 
 `SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
 `Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
 switches bone by bone),
-`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `Camera::setNearClip`
+`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `EyeBlink::subjectProbe` (blinks), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

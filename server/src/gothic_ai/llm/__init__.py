@@ -19,6 +19,7 @@ from .base import (
     ToolChoice,
     ToolResult,
     Usage,
+    with_deadlines,
 )
 from .fake import FakeBackend, FakeStep
 from .openai_compat import OpenAICompatBackend
@@ -47,6 +48,7 @@ __all__ = [
     "ToolResult",
     "Usage",
     "make_backend",
+    "with_deadlines",
 ]
 
 
