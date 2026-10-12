@@ -25,7 +25,8 @@ namespace Archery {
   static constexpr float MinDraw = 0.3f; // drawn less: the arrow is not shot, the string let down
   static constexpr float GiveUp  = 4.f;  // seconds trembling past the hold limit: the arms let it down
 
-  // Manual aim on (GAME/manualAim in Gothic.ini, Marvin: toggle manualaim): the hero aims a bow by hand
+  // Manual aim on (GAME/manualAim in Gothic.ini, on by default; Marvin: toggle manualaim): the hero aims a
+  // bow by hand
   bool  isEnabled();
   void  setEnabled(bool e);
 
