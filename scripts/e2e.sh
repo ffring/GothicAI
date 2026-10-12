@@ -47,6 +47,11 @@
 #       deal that forgives the lie for the fine, and he accepts it (docs/npc-tools.md, wave 1 step 2)
 #   debt: Lobart lends the hero 20 gold for 25 back by the end of the next day; two days on the debt is a
 #       broken word (trust) and goes round as a rumor; then the hero pays it back, late (wave 1 step 2)
+#   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
+#       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
+#       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them
+#   haggle: live only (LLM=chatgpt): the hero offers the same silver cup to Canthar (greedy by his card) and
+#       Lutero (fairer) and asks for more: the greedy one should offer less (wave 1 step 3)
 #   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
 #       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
 #       haggling: the deal window shows the new version, Y waits right after the change, then the deal is

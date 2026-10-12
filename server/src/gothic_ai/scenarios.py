@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import characters
 from .amends import Amends
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
@@ -2604,6 +2605,145 @@ async def deal_debt(
     after = await has(GOLD)
     check("repaid", ok and after == before - 25, f"{before} -> {after} gold")
     check("word_stays", Trust(deals.chronicle).broken(lender))
+    return _logged(results)
+
+
+async def write_cards(
+    link: GameLink, graph: Any, llm: LLMBackend, only: set[str] | None = None, path: Path | None = None
+) -> dict[str, str]:
+    """Character cards (docs/npc-tools.md, wave 1 step 3): the model writes them, a few npc's a call, for
+    those of `only` (GOTHIC_CARDS: symbols, comma separated) or for everyone of this world with lines of its
+    own, into gamedata/characters.json (cards there for others stay). Saved after every batch; who got no
+    card is asked about once more. Without `only`, those that have a card already are left as they are: a
+    run cut short goes on where it stopped."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    people = await link.story_people(timeout=30)
+    target = path or characters.CARDS_FILE
+    cards = characters.load(target)
+    subjects = [x for x in characters.subjects(graph, people, only) if only or x.npc not in cards]
+    check(
+        "subjects", bool(subjects) or not only, f"{len(subjects)} of {len(people)} people, {len(cards)} cards"
+    )
+    left = list(subjects)
+    for attempt in (1, 2):
+        missed = []
+        for i in range(0, len(left), characters.BATCH):
+            batch = left[i : i + characters.BATCH]
+            got, errors = await characters.write(llm, batch)
+            cards.update(got)
+            characters.save(cards, target)
+            missed += [x for x in batch if x.npc not in got]
+            log.info(
+                "cards: %d/%d written (attempt %d)%s",
+                len(got),
+                len(batch),
+                attempt,
+                f": {errors}" if errors else "",
+            )
+        left = missed
+        if not left:
+            break
+    check(
+        "written",
+        not left,
+        f"{len(subjects) - len(left)} of {len(subjects)}; none for {[x.npc for x in left]}",
+    )
+    return _logged(results)
+
+
+CANTHAR, LUTERO = "VLK_468_CANTHAR", "VLK_404_LUTERO"
+
+
+async def haggle(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    npcs: tuple[str, str] = (CANTHAR, LUTERO),
+    ware: str = "ITMI_SILVERCUP",
+) -> dict[str, str]:
+    """Character in a deal (docs/npc-tools.md, wave 1 step 3), live only (LLM=chatgpt). The hero offers the
+    same silver cup to two traders who would buy it, a greedy one and a fairer one by their character cards
+    (Canthar, Lutero), and asks for more, as a player would: he agrees in words when a price is named. What
+    each offers first and after the haggling is logged; the greedy one should offer less."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    if isinstance(dialogue.llm, FakeBackend):
+        check("live", False, "run with LLM=chatgpt")
+        return _logged(results)
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    offers: dict[str, list[int]] = {}
+
+    def buying(npc: str, version: int) -> int | None:
+        deal = deals.open.get(npc)
+        if deal is None or deal.version < version or not any(g.item == ware for g in deal.hero_gives):
+            return None
+        return sum(g.count for g in deal.npc_gives if g.item == GOLD)
+
+    for npc in npcs:
+        await link.attach(npc)
+        await link.act(npc, "debug_add_item", item=GOLD, count=300)
+        await link.act(npc, "debug_add_item", item=ware, count=1)
+        await link.detach(npc)
+        await link.story_effect(npc, [{"do": "give", "item": ware, "count": 1}])  # the cup is the hero's
+        await link.debug("skip_important", near=npc)
+        await link.debug("player_goto", to=npc, distance=250)
+        # the roster must have him close: else the words would go to the one the hero talked to before
+        if not await _until(lambda npc=npc: npc in talk.people and talk.people[npc].distance <= 600, 20):
+            check(f"{npc}_near", False)
+            continue
+        name = talk.people[npc].name
+        got: list[int] = []
+
+        async def say_until(lines: list[str], version: int, npc: str = npc) -> int | None:
+            """Say the lines one by one until the npc offers a deal of `version` or later."""
+            for line in lines:
+                await link.debug("type", text=line)
+                if await _until(lambda: buying(npc, version) is not None, 45):
+                    return buying(npc, version)
+            return None
+
+        first = await say_until(
+            [
+                f"{name}, купишь у меня серебряный кубок? Сколько дашь?",
+                f"{name}, назови цену.",
+                f"{name}, согласен, давай по рукам.",
+            ],
+            1,
+        )
+        if first is not None:
+            got.append(first)
+            version = deals.open[npc].version
+            more = await say_until(
+                [
+                    f"{name}, маловато. Кубок серебряный, накинь ещё.",
+                    f"{name}, ладно, на твою новую цену согласен.",
+                ],
+                version + 1,
+            )
+            if more is not None:
+                got.append(more)
+            await link.decline_deal()
+        offers[npc] = got
+        check(f"{npc}_offered", bool(got), got)
+        await asyncio.sleep(2)
+    cards = dialogue.personas.cards
+    greedy, generous = sorted(npcs, key=lambda n: -(cards[n].greed if n in cards else 3))
+    a, b = offers.get(greedy, []), offers.get(generous, [])
+    detail = f"{greedy} (greed {cards[greedy].greed if greedy in cards else '?'}): {a}; {generous}: {b}"
+    check("greedy_pays_less", bool(a) and bool(b) and a[0] < b[0], detail)
     return _logged(results)
 
 
