@@ -13,6 +13,7 @@
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
+#include "world/objects/attention.h"
 #include "world/fplock.h"
 #include "world/waypath.h"
 
@@ -292,6 +293,12 @@ class Npc final {
     bool      isDown() const;
     bool      isAttack() const;
     bool      isTalk() const;
+    // whom this npc talks or listens to, for a while: it looks at them (gaze)
+    void      setTalkPartner(Npc* other, uint64_t ms);
+    Npc*      talkPartner() const;
+    // where the gaze looks: the partner, where a script says, the hero's focus, what caught the eye
+    auto      gazeTarget(Tempest::Vec3& at) const -> Gaze::Source;
+    Npc*      attentionTarget() const { return attention.target(); }
 
     bool      isAttackAnim() const;
     bool      isPrehit() const;
@@ -505,6 +512,7 @@ class Npc final {
     bool      implPointAt(const Tempest::Vec3& to);
     bool      implLookAtWp(uint64_t dt);
     bool      implLookAtNpc(uint64_t dt);
+    void      implHeadBack(uint64_t dt);
     bool      implLookAt (float dx, float dy, float dz, uint64_t dt);
     bool      implTurnAway(const Npc& oth, uint64_t dt);
     bool      implTurnToFai(const Npc& oth, uint64_t dt);
@@ -636,6 +644,9 @@ class Npc final {
 
     const WayPoint*                currentLookAt=nullptr;
     Npc*                           currentLookAtNpc=nullptr;
+    Npc*                           talkWith        =nullptr;
+    uint64_t                       talkUntil       =0;
+    Attention                      attention;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

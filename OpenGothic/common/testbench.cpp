@@ -24,6 +24,8 @@
 #include "game/playercontrol.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
+#include "graphics/mesh/gaze.h"
+#include "graphics/mesh/lean.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -429,9 +431,16 @@ struct Bench {
 
   Vec3        prevPos;
   bool        hasPrev   = false;
+  bool        inDialog  = false;
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
+  Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
+  float       placeDist  = 0;
+  float       placeAngle = 0;
+  float       orbitSpeed = 0;     // degrees per second
+  uint64_t    orbitUntil = 0;
 
   // talking (scripts/shorts)
   std::string camNpc;           // C_Shoulder, C_Face, C_Two
@@ -582,9 +591,55 @@ void finish() {
 
 Vec3 ankle(const Npc& pl, size_t leg) {
   auto& p = FootIk::playerProbe;
-  if(p.valid)
+  if(p.valid && pl.isPlayer())
     return p.leg[leg].final[2];
   return pl.position() + Vec3(0,10,0);
+  }
+
+Npc& subjectOf(Npc& pl) {
+  return bench.subject!=nullptr ? *bench.subject : pl;
+  }
+
+// "nearest": the nearest living npc but the player; else a script symbol (NONE_100_XARDAS)
+Npc* findNpc(World& w, Npc& pl, const std::string& name) {
+  if(name=="player")
+    return &pl;
+  if(name=="nearest") {
+    Npc*  best = nullptr;
+    float dist = 0;
+    for(uint32_t i=0; i<w.npcCount(); ++i) {
+      Npc* n = w.npcById(i);
+      if(n==nullptr || n==&pl || n->isDead())
+        continue;
+      const float d = (n->position()-pl.position()).quadLength();
+      if(best==nullptr || d<dist) {
+        best = n;
+        dist = d;
+        }
+      }
+    return best;
+    }
+  const size_t id = w.script().findSymbolIndex(name);
+  return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
+  }
+
+std::string symName(World& w, const Npc* n) {
+  if(n==nullptr)
+    return "-";
+  if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
+    return sym->name();
+  return std::string(n->displayName());
+  }
+
+const char* gazeSource(Gaze::Source s) {
+  switch(s) {
+    case Gaze::Source::None:      return "none";
+    case Gaze::Source::Talk:      return "talk";
+    case Gaze::Source::Script:    return "script";
+    case Gaze::Source::Focus:     return "focus";
+    case Gaze::Source::Attention: return "attention";
+    }
+  return "?";
   }
 
 // a point is hidden if something is between it and the camera (not counting the ground right at the point)
@@ -702,8 +757,10 @@ void updateCamera(World& w, Npc& pl) {
   if(bench.cam==C_Game)
     return;
   if(bench.cam==C_Shoulder || bench.cam==C_Face || bench.cam==C_Two) {
+    // shots of the hero himself, also while the camera watches a subject (gaze)
+    Npc* hero = Gothic::inst().player();
     Vec3 org, tgt;
-    if(!npcShot(w,pl,org,tgt))
+    if(hero==nullptr || !npcShot(w,*hero,org,tgt))
       return;
     if(!bench.smValid) {
       bench.smOrg   = org;
@@ -746,6 +803,8 @@ void writeHeader() {
     for(const char* j:{"hip","kneea","anka","toea","kneef","ankf","toef"})
       std::fprintf(bench.csv,",%s_%s_x,%s_%s_y,%s_%s_z",s,j,s,j,s,j);
     }
+  std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
+  std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -769,10 +828,38 @@ void writeRow(Npc& pl) {
     for(auto v:pts)
       std::fprintf(bench.csv,",%.2f,%.2f,%.2f",v->x,v->y,v->z);
     }
+  // gaze of the watched npc (or the hero) and of the hero
+  const auto& g  = bench.subject!=nullptr ? Gaze::subjectProbe : Gaze::playerProbe;
+  const auto& pg = Gaze::playerProbe;
+  // where the face looks in the world: a jerk is a jump of this, whatever the body does
+  const float fyaw   = std::atan2(g.facing.z,g.facing.x)*180.f/float(M_PI);
+  const float fpitch = std::asin(std::clamp(g.facing.y,-1.f,1.f))*180.f/float(M_PI);
+  std::fprintf(bench.csv,",%d,%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.3f,%.2f,%.2f",
+               int(g.active),int(g.source),g.weight,g.error,g.yaw,g.pitch,g.yawGoal,g.pitchGoal,g.headYaw,g.chestYaw,g.waistYaw,
+               g.animYaw,g.animPitch,g.hipsYaw,fyaw,fpitch,int(pg.active),int(pg.source),pg.weight,pg.error,pg.yaw);
+  // lean of the watched npc (or the hero)
+  const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
+  std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.1f,%.1f",int(ln.active),ln.roll,ln.pitch,ln.speed,ln.turn,ln.slope);
   std::fprintf(bench.csv,"\n");
   }
 
 void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl);
+
+// the hero stands around the watched npc, facing it
+void placeHero(World& w, Npc& pl) {
+  Npc& s = subjectOf(pl);
+  if(&s==&pl || bench.placeDist<=0)
+    return;
+  const float a   = (s.rotation()+bench.placeAngle)*float(M_PI)/180.f;
+  Vec3        pos = s.position() + Vec3(std::cos(a),0,std::sin(a))*bench.placeDist;
+  const float g   = groundY(w,pos.x,pos.z,pos.y+100);
+  if(!std::isnan(g))
+    pos.y = g;
+  pl.setPosition(pos);
+  const Vec3 d = s.position()-pos;
+  pl.setDirection(Vec3(d.x,0,d.z));
+  pl.updateTransform();
+  }
 
 // foreach slope <min deg> <max deg> <count> | foreach stairs <count> | foreach wp <name part> <count>
 // ... end: the body runs at each spot, after a teleport; $NAME, $I, $ANGLE are replaced
@@ -903,6 +990,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
         face(pl,npc->position()-pl.position()); else
         say("face: no npc " + a[2]);
       }
+    else if(m=="rel") {
+      // face rel <deg>: along the facing of the watched npc turned by that much (the angles of place)
+      const float y = (subjectOf(pl).rotation()+num(a,2,0))*float(M_PI)/180.f;
+      face(pl,Vec3(std::cos(y),0,std::sin(y)));
+      }
     else {
       const float y = num(a,1,0)*float(M_PI)/180.f;
       face(pl,Vec3(std::cos(y),0,std::sin(y)));
@@ -958,7 +1050,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.camAngle  = m=="front" ? 0 : num(a,4,90);
       if(m=="auto") {
         bench.camAuto = true;
-        pickCamAngle(w,pl);
+        pickCamAngle(w,subjectOf(pl));
         }
       }
     else if(m=="world") {
@@ -1060,6 +1152,25 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="shot") {
     bench.shot = a.size()>1 ? a[1] : "shot";
     }
+  else if(c=="npcgo") {
+    // npcgo <npc|nearest> <waypoint> [walk|run]: the npc goes there (AI path), like a script sends it
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    auto wp = a.size()>2 ? w.findPoint(a[2]) : nullptr;
+    if(n==nullptr || n==&pl || wp==nullptr) {
+      say("npcgo: no npc or waypoint " + line);
+      return;
+      }
+    n->setWalkMode(a.size()>3 && a[3]=="walk" ? WalkBit::WM_Walk : WalkBit::WM_Run);
+    n->aiPush(AiQueue::aiGoToPoint(*wp));
+    say("npcgo " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="lean") {
+    // lean on|off: the lean into turns and on slopes (graphics/mesh/lean)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Lean::setEnabled(m=="on"); else
+      say("unknown lean command: " + line);
+    }
   else if(c=="ik") {
     const std::string m = a.size()>1 ? a[1] : "";
     if(m=="on" || m=="off")
@@ -1097,6 +1208,118 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr),
                   unsigned(pl.guild()),int(w.script().guildVal().surface_align[pl.guild()]));
     say(buf);
+    }
+  else if(c=="talk") {
+    // talk <npc|nearest> <ms>: the npc and the hero talk to each other (no words): they look at each other
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("talk: no npc " + line);
+      return;
+      }
+    const uint64_t ms = uint64_t(num(a,2,3000));
+    n->setTalkPartner(&pl,ms);
+    pl.setTalkPartner(n,ms);
+    say("talk " + symName(w,n) + " " + std::to_string(ms));
+    }
+  else if(c=="watch") {
+    // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    bench.subject  = (n==&pl) ? nullptr : n;
+    Gaze::probeNpc = bench.subject;
+    Lean::probeNpc = bench.subject;
+    char buf[160] = "watch nobody";
+    if(n!=nullptr)
+      if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
+        std::snprintf(buf,sizeof(buf),"watch %s dist=%.0f",sym->name().c_str(),double((n->position()-pl.position()).length()));
+    say(buf);
+    }
+  else if(c=="gazeinfo") {
+    Npc&         s = subjectOf(pl);
+    const auto&  g = &s==&pl ? Gaze::playerProbe : Gaze::subjectProbe;
+    Vec3         at;
+    const auto   src = s.gazeTarget(at);
+    char buf[300];
+    std::snprintf(buf,sizeof(buf),"gazeinfo %s source=%s partner=%s script=%s attention=%s probe valid=%d active=%d w=%.2f err=%.1f hero focus=%s",
+                  symName(w,&s).c_str(),gazeSource(src),symName(w,s.talkPartner()).c_str(),symName(w,s.lookAtTarget()).c_str(),
+                  symName(w,s.attentionTarget()).c_str(),int(g.valid),int(g.active),double(g.weight),double(g.error),
+                  symName(w,pl.target()).c_str());
+    say(buf);
+    }
+  else if(c=="nearby") {
+    // nearby [radius]: the npcs around the hero, where they look and why
+    const float r = num(a,1,1500);
+    std::vector<std::pair<float,Npc*>> list;
+    w.detectNpc(pl.position(),r,[&](Npc& n) {
+      if(&n!=&pl)
+        list.emplace_back((n.position()-pl.position()).length(),&n);
+      });
+    std::sort(list.begin(),list.end(),[](auto& x, auto& y) { return x.first<y.first; });
+    say("nearby " + std::to_string(list.size()));
+    for(auto& [d,n]:list) {
+      const Vec3  dp  = pl.position()-n->position();
+      const float ang = std::remainder(std::atan2(dp.z,dp.x)*180.f/float(M_PI) - n->rotation(), 360.f);
+      Vec3 at;
+      const auto src = n->gazeTarget(at);
+      char buf[300];
+      std::snprintf(buf,sizeof(buf),"  %-28s dist=%5.0f hero_at=%5.0f bs=%2u mob=%d look=%s at=%s",
+                    symName(w,n).c_str(),double(d),double(ang),unsigned(n->bodyStateMasked() & BS_MAX),
+                    int(n->interactive()!=nullptr),gazeSource(src),
+                    symName(w,src==Gaze::Source::Talk ? n->talkPartner() : src==Gaze::Source::Script ? n->lookAtTarget() :
+                                src==Gaze::Source::Attention ? n->attentionTarget() : nullptr).c_str());
+      say(buf);
+      }
+    }
+  else if(c=="lookat") {
+    // lookat <npc|nearest> <npc|player|off>: as the script AI_LookAtNpc, AI_StopLookAt
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("lookat: no npc " + line);
+      return;
+      }
+    const std::string t = a.size()>2 ? a[2] : "player";
+    if(t=="off") {
+      n->aiPush(AiQueue::aiStopLookAt());
+      say("lookat " + symName(w,n) + " off");
+      return;
+      }
+    Npc* o = findNpc(w,pl,t);
+    if(o==nullptr || o==n) {
+      say("lookat: no target " + line);
+      return;
+      }
+    n->aiPush(AiQueue::aiLookAtNpc(o));
+    say("lookat " + symName(w,n) + " " + symName(w,o));
+    }
+  else if(c=="freeze") {
+    // freeze <npc|nearest> [off]: it leaves what it does and stands still, like a body the AI server attaches
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("freeze: no npc " + line);
+      return;
+      }
+    if(a.size()>2 && a[2]=="off") {
+      n->setExternalControl(false);
+      say("freeze off");
+      return;
+      }
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    say("freeze " + symName(w,n));
+    }
+  else if(c=="place") {
+    // place <dist> <angle>: the hero stands that far from the watched npc, at that angle from its facing
+    bench.placeDist  = num(a,1,150);
+    bench.placeAngle = num(a,2,0);
+    placeHero(w,pl);
+    bench.hasPrev = false;
+    }
+  else if(c=="orbit") {
+    // orbit <deg> <ms>: the hero goes around the watched npc
+    const float ms = std::max(1.f,num(a,2,3000));
+    bench.orbitSpeed = num(a,1,90)*1000.f/ms;
+    bench.orbitUntil = bench.time + uint64_t(ms);
     }
   else if(c=="transform") {
     // the player becomes a creature, like the shape change spell; "transform back"
@@ -1331,6 +1554,29 @@ void drawOverlay(Pixmap& pm) {
       }
     }
 
+  // gaze: where the face looks (yellow) and where the partner is (red)
+  const auto& g = bench.subject!=nullptr ? Gaze::subjectProbe : Gaze::playerProbe;
+  if(cam!=nullptr && g.valid && g.active) {
+    const Matrix4x4 vp = cam->viewProj();
+    auto proj = [&](const Vec3& p, float& x, float& y) {
+      float px = p.x, py = p.y, pz = p.z, pw = 1;
+      vp.project(px,py,pz,pw);
+      if(pw<=1e-3f)
+        return false;
+      x = (0.5f*px/pw+0.5f)*float(cv.w);
+      y = (0.5f*py/pw+0.5f)*float(cv.h);
+      return true;
+      };
+    float x0,y0,x1,y1,x2,y2;
+    const bool h = proj(g.head,x0,y0);
+    if(h && proj(g.head+g.facing*60.f,x1,y1))
+      cv.line(x0,y0,x1,y1,1,{255,230,40,255});
+    if(h && proj(g.target,x2,y2)) {
+      cv.line(x0,y0,x2,y2,0,{255,80,80,140});
+      cv.dot(x2,y2,3,Red);
+      }
+    }
+
   // zoomed copy of the feet in the bottom right corner
   if(bench.zoom && zx>=0 && zy>=0 && zx<float(cv.w) && zy<float(cv.h)) {
     const int sc = 2;
@@ -1369,6 +1615,21 @@ void drawOverlay(Pixmap& pm) {
     auto& l = p.leg[i];
     std::snprintf(buf,sizeof(buf),"%s %s E%.1f K%.0f",LegName[i],l.plant>0.5f ? "PLANT" : "SWING",double(l.err),double(l.kneeDev));
     cv.text(x,y,buf,2,LegColor[i]);
+    y += 16;
+    }
+  if(g.valid && (g.active || bench.subject!=nullptr)) {
+    std::snprintf(buf,sizeof(buf),"GAZE W%.2f E%.0f Y%.0f P%.0f",double(g.weight),double(g.error),double(g.yaw),double(g.pitch));
+    cv.text(x,y,buf,2,{255,230,40,255});
+    y += 16;
+    std::snprintf(buf,sizeof(buf),"H%.0f C%.0f W%.0f",double(g.headYaw),double(g.chestYaw),double(g.waistYaw));
+    cv.text(x,y,buf,2,{255,230,40,255});
+    y += 16;
+    }
+  const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
+  if(ln.valid) {
+    std::snprintf(buf,sizeof(buf),"LEAN%s R%.1f P%.1f V%.0f T%.0f S%.0f",Lean::isEnabled() ? "" : " OFF",double(ln.roll),
+                  double(ln.pitch),double(ln.speed),double(ln.turn),double(ln.slope));
+    cv.text(x,y,buf,2,{120,255,160,255});
     y += 16;
     }
   if(bench.occl!=0) {
@@ -1520,6 +1781,21 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   renderSound(dt);
   if(bench.done)
     return false;
+  // a dialog (an npc with an important one comes to the hero) holds the player: say so
+  if(Gothic::inst().isInDialog()!=bench.inDialog) {
+    bench.inDialog = !bench.inDialog;
+    std::string who;
+    if(bench.inDialog)
+      world->detectNpc(player->position(),2000,[&](Npc& n) {
+        if(&n!=player && Gothic::inst().isNpcInDialog(n))
+          who += " " + symName(*world,&n);
+        });
+    say(std::string(bench.inDialog ? "dialog started:" : "dialog ended") + who);
+    }
+  if(bench.orbitUntil>bench.time) {
+    bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;
+    placeHero(*world,*player);
+    }
 
   const Vec3 pos = player->position();
   if(bench.hasPrev) {
@@ -1529,7 +1805,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   bench.prevPos = pos;
   bench.hasPrev = true;
 
-  updateCamera(*world,*player);
+  updateCamera(*world,subjectOf(*player));
 
   bool capture = !bench.shot.empty();
   if(bench.rec) {
