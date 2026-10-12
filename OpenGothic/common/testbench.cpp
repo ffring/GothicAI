@@ -28,6 +28,7 @@
 #include "world/objects/item.h"
 #include "world/world.h"
 #include "world/aiqueue.h"
+#include "ui/crosshair.h"
 #include "utils/keycodec.h"
 #include "camera.h"
 #include "gothic.h"
@@ -241,6 +242,35 @@ struct Canvas {
       }
     }
 
+  // a polyline stroked as the game strokes the crosshair: white over a dark edge, smooth; each pixel once
+  void stroke(const std::vector<Vec2>& pt, float alpha, const Crosshair::Pen& pen) {
+    if(pt.size()<2)
+      return;
+    float x0 = pt[0].x, y0 = pt[0].y, x1 = x0, y1 = y0;
+    for(auto& p:pt) {
+      x0 = std::min(x0,p.x); x1 = std::max(x1,p.x);
+      y0 = std::min(y0,p.y); y1 = std::max(y1,p.y);
+      }
+    const float m = pen.half+pen.edge+1.f;
+    for(int y=int(std::floor(y0-m)); y<=int(std::ceil(y1+m)); ++y)
+      for(int x=int(std::floor(x0-m)); x<=int(std::ceil(x1+m)); ++x) {
+        const Vec2 q = Vec2(float(x),float(y));
+        float      d = 1e9f;
+        for(size_t i=0; i+1<pt.size(); ++i) {
+          const Vec2  ab = pt[i+1]-pt[i];
+          const float ll = ab.x*ab.x+ab.y*ab.y;
+          const float t  = ll>0.f ? std::clamp(((q.x-pt[i].x)*ab.x+(q.y-pt[i].y)*ab.y)/ll,0.f,1.f) : 0.f;
+          d = std::min(d,(pt[i]+ab*t-q).length());
+          }
+        const float edge = std::clamp(pen.half+pen.edge+0.5f-d,0.f,1.f);
+        const float core = std::clamp(pen.half+0.5f-d,0.f,1.f);
+        if(edge>0.f)
+          blend(x,y,{0,0,0,uint8_t(255.f*alpha*pen.outline*edge)});
+        if(core>0.f)
+          blend(x,y,{255,255,255,uint8_t(255.f*alpha*core)});
+        }
+    }
+
   int text(int x, int y, std::string_view s, int sc, Rgba c) {
     rect(x-sc,y-sc,int(s.size())*4*sc+sc,7*sc,Shade);
     for(char ch:s) {
@@ -338,6 +368,7 @@ struct Bench {
   bool           crossValid = false;
   Vec3           crossPrev  = {}; // on the screen, -1..1
   float          aspect     = 4.f/3.f; // of the captured frame
+  float          uiScale    = 1;       // of the game's interface
   Vec3           aimAt    = {};
   // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
   float       placeDist  = 0;
@@ -1744,7 +1775,7 @@ void drawOverlay(Pixmap& pm) {
     }
 
   // the manual aim: the crosshair as the game draws it in its interface (not captured): a chevron at where
-  // it aims, open as far as the arrow may go off; a dot where the arrow points now (debugging)
+  // it aims, brackets as far apart as the arrow may go off; a dot where the arrow points now (debugging)
   auto  hero = Gothic::inst().player();
   Vec3  cross;
   float spread = 0;
@@ -1774,10 +1805,9 @@ void drawOverlay(Pixmap& pm) {
       y = 0.5f*float(cv.h);
       }
     if(centered || proj(cross,x,y)) {
-      const float perRad = 0.5f*float(cv.h)/std::tan(0.5f*cam->fovY()*float(M_PI)/180.f);
-      const float half   = std::clamp(std::tan(spread)*perRad,3.f,80.f);
-      cv.line(x,y,x-half,y+8,1,{255,255,255,255});
-      cv.line(x,y,x+half,y+8,1,{255,255,255,255});
+      const float r = Crosshair::radius(spread,cam->fovY(),float(cv.h),bench.uiScale);
+      for(auto& l:Crosshair::shape(x,y,r,bench.uiScale))
+        cv.stroke(l.pt,l.alpha,Crosshair::pen(bench.uiScale));
       }
     }
 
@@ -1994,7 +2024,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   return capture;
   }
 
-void TestBench::capture(Pixmap& frame) {
+void TestBench::capture(Pixmap& frame, float uiScale) {
+  bench.uiScale = uiScale;
   Pixmap pm;
   if(frame.w()>0 && frame.format()!=TextureFormat::RGBA8)
     pm = Pixmap(frame,TextureFormat::RGBA8); else

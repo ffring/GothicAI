@@ -13,7 +13,7 @@ import math
 import os
 import subprocess
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 
 FPS = 30
 TOP_EVENTS = 12
@@ -256,12 +256,14 @@ ARCHER_STAGE = {0: "lowered", 1: "raising", 2: "nocked", 3: "drawing", 4: "held"
 
 
 def arrows(out):
-    """the arrows of the manual aim per segment, from bench.log: [(zone or 'miss', draw, flew cm)]"""
+    """the arrows of the manual aim per segment, from bench.log: [(zone or 'miss', draw, flew cm)]. An arrow
+    counts for the segment it was shot in: a far miss may come down when the next one runs (they come
+    down in the order they were shot)"""
     path = os.path.join(out, "bench.log")
     per = defaultdict(list)
     if not os.path.exists(path):
         return per
-    seg = None
+    seg, shot = None, deque()
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -269,14 +271,20 @@ def arrows(out):
                 seg = None
             elif line.startswith("rec "):
                 seg = line.split()[1]
-            elif seg and line.startswith("arrow hit"):
-                body = line.split(": ", 1)[1]
-                zone = body.split(",")[0].strip()
-                draw = float(body.split("draw ")[1].split(",")[0])
-                flew = float(body.split("flew ")[1].split(" ")[0])
-                per[seg].append((zone, draw, flew))
-            elif seg and line.startswith("arrow missed"):
-                per[seg].append(("miss", math.nan, float(line.split("flew ")[1].split(" ")[0])))
+            elif line.startswith("arrow shot"):
+                shot.append(seg)
+            elif line.startswith("arrow hit") or line.startswith("arrow missed"):
+                at = shot.popleft() if shot else seg
+                if not at:
+                    continue
+                if line.startswith("arrow hit"):
+                    body = line.split(": ", 1)[1]
+                    zone = body.split(",")[0].strip()
+                    draw = float(body.split("draw ")[1].split(",")[0])
+                    flew = float(body.split("flew ")[1].split(" ")[0])
+                    per[at].append((zone, draw, flew))
+                else:
+                    per[at].append(("miss", math.nan, float(line.split("flew ")[1].split(" ")[0])))
     return per
 
 
@@ -311,13 +319,21 @@ def manual_aim(out, segs):
         spread = f"{spreads[len(spreads) // 2]:.2f}" if spreads else "-"
         jumps = [r["m_cross"] for r in rows if r.get("m_cross", -1) >= 0]
         jump = f"{max(jumps):.2f}" if jumps else "-"
-        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {spread} | {jump} | {draw} | "
+        # how smooth it opens and closes: the fastest, deg/s; the largest change of that speed in a frame
+        # (a jerk: it starts moving at once)
+        rates = []
+        for p, q in zip(rows, rows[1:]):
+            if p.get("m_spread", -1) >= 0 and q.get("m_spread", -1) >= 0 and q["t"] > p["t"]:
+                rates.append((q["m_spread"] - p["m_spread"]) / (q["t"] - p["t"]) * 1000)
+        rate = f"{max(abs(v) for v in rates):.0f} / {max(abs(v - u) for u, v in zip(rates, rates[1:])):.0f}" \
+            if len(rates) > 1 else "-"
+        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {spread} | {jump} | {rate} | {draw} | "
                      f"{max(r['m_fatigue'] for r in rows):.2f} | {'yes' if any(r['m_holding'] > 0 for r in rows) else '-'} |")
     if not lines:
         return []
     return ["## Manual aim", "",
-            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | crosshair open deg (held) | crosshair jump max % screen | draw s | fatigue max | breath held |",
-            "|---|---|---|---|---|---|---|---|---|---|---|"] + lines + [""]
+            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | crosshair open deg (held) | crosshair jump max % screen | crosshair speed max / its step deg/s | draw s | fatigue max | breath held |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"] + lines + [""]
 
 
 def sheet(video, frames, path, cols=4, width=400):

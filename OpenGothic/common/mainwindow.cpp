@@ -9,6 +9,7 @@
 #include <Tempest/Application>
 #include <Tempest/Log>
 
+#include "ui/crosshair.h"
 #include "ui/dialogmenu.h"
 #include "ui/menuroot.h"
 #include "ui/stacklayout.h"
@@ -659,9 +660,9 @@ void MainWindow::paintFocus(Painter& p, const Focus& focus, const Matrix4x4& vp)
   }
 
 void MainWindow::paintCrosshair(Painter& p, const Matrix4x4& vp) {
-  // aiming by hand (game/archery): a chevron, its tip where it aims; the arms open as far as the arrow
-  // may go off - the sway, the trembling, the bow not turned to it yet - and close as it steadies. The
-  // arrow drops: far off one holds over
+  // aiming by hand (game/archery): a chevron "v", its tip where it aims, brackets round it as far apart as
+  // the arrow may go off - the sway, the trembling, the bow not turned to it yet - closing in as it
+  // steadies. The arrow drops: far off one holds over
   auto  camera = Gothic::inst().camera();
   Vec3  at;
   float spread = 0;
@@ -681,19 +682,8 @@ void MainWindow::paintCrosshair(Painter& p, const Matrix4x4& vp) {
   const float scale = Gothic::interfaceScale(this);
   const float x     = (0.5f*at.x+0.5f)*float(w());
   const float y     = (0.5f*at.y+0.5f)*float(h());
-  // the spread as seen: an angle at the camera
-  const float perRad = 0.5f*float(h())/std::tan(0.5f*camera->fovY()*float(M_PI)/180.f);
-  const float half   = std::clamp(std::tan(spread)*perRad, 3.f*scale, 80.f*scale);
-  const float drop   = 8.f*scale;
-  const float width  = std::max(1.5f,1.5f*scale);
-  auto chevron = [&](const Color& cl, float wd) {
-    p.setPen(Pen(cl,Painter::Alpha,wd));
-    p.drawLine(int(x),int(y),int(x-half),int(y+drop));
-    p.drawLine(int(x),int(y),int(x+half),int(y+drop));
-    };
-  chevron(Color(0,0,0,0.5f),width+2.f);
-  chevron(Color(1,1,1,0.9f),width);
-  p.setPen(Pen());
+  const float r     = Crosshair::radius(spread,camera->fovY(),float(h()),scale);
+  Crosshair::paint(p,Crosshair::shape(x,y,r,scale),scale);
   }
 
 void MainWindow::paintFocus(Painter& p, Rect rect) {
@@ -1310,7 +1300,7 @@ void MainWindow::render(){
       Pixmap pm;
       if(!tex.isEmpty())
         pm = device.readPixels(textureCast<const Texture2d&>(tex));
-      TestBench::capture(pm);
+      TestBench::capture(pm,Gothic::interfaceScale(this));
       }
 
     auto& sync = fence[cmdId];

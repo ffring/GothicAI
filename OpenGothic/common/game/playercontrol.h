@@ -172,6 +172,7 @@ class PlayerControl final {
     Tempest::Vec3  aimDirPrev     = {};
     Tempest::Vec3  aimAt          = {};      //!< where the crosshair is
     float          aimSpread      = 0;       //!< how far it is open, radians, smoothed
+    float          aimSpreadVel   = 0;       //!< how fast it opens, radians per second
 
     DialogMenu&    dlg;
     InventoryMenu& inv;

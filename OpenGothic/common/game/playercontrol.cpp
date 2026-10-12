@@ -16,8 +16,20 @@
 namespace {
 // the crosshair of the manual aim
 constexpr float MaxSpread   = 6.f*float(M_PI)/180.f; // wide open: the bow being raised, reloaded
-constexpr float SpreadOpen  = 0.04f;                 // seconds
-constexpr float SpreadClose = 0.12f;
+constexpr float SpreadOpen  = 0.1f;                  // seconds: it opens about twice that long...
+constexpr float SpreadClose = 0.2f;                  // ...closes
+
+// a critically damped spring moves v toward goal, smooth seconds (about half the time it takes): it eases
+// in and out, no jerks when the goal jumps; vel is its speed
+float springTo(float v, float goal, float& vel, float smooth, float dt) {
+  const float omega = 2.f/smooth;
+  const float x     = omega*dt;
+  const float k     = 1.f/(1.f + x + 0.48f*x*x + 0.235f*x*x*x);
+  const float off   = v-goal;
+  const float push  = (vel + omega*off)*dt;
+  vel = (vel - omega*push)*k;
+  return goal + (off+push)*k;
+  }
 }
 
 PlayerControl::PlayerControl(DialogMenu& dlg, InventoryMenu &inv)
@@ -1084,8 +1096,10 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     camera->setAim(true,0);
     camera->setAimPitch(pitch);
     }
-  if(!ar.isRaised())
-    aimSpread = MaxSpread;
+  if(!ar.isRaised()) {
+    aimSpread    = MaxSpread;
+    aimSpreadVel = 0;
+    }
   manualAiming = true;
 
   // the mouse (the keys) turn the hero, the camera follows; up and down is the camera's
@@ -1128,14 +1142,14 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   // the crosshair is where it aims; it opens as far as the arrow may go off: the sway, the trembling,
   // the arrow not turned to it yet (a flick of the mouse), the bow being raised, the next arrow nocked.
-  // Opens at once, closes a bit slower
+  // A spring, critically damped: it eases into opening and out of it, no jerks; opens faster than closes
   const float err  = pl.aimTrackError();
   float       goal = std::min(ar.spread() + std::max(err,0.f)*float(M_PI)/180.f, MaxSpread);
   if(err<0.f || ar.stage()==Archer::Raising || ar.stage()==Archer::Reloading)
     goal = MaxSpread;
-  const float lag = goal>aimSpread ? SpreadOpen : SpreadClose;
-  aimSpread += (goal-aimSpread)*std::min(1.f,float(dt)/1000.f/lag);
-  aimAt      = at;
+  aimSpread = springTo(aimSpread,goal,aimSpreadVel,goal>aimSpread ? SpreadOpen : SpreadClose,float(dt)/1000.f);
+  aimSpread = std::max(aimSpread,0.f);
+  aimAt     = at;
   if(camera!=nullptr)
     camera->setAim(true,ar.draw());
   return true;
