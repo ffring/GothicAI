@@ -27,6 +27,7 @@ class Archer final {
       bool     draw   = false; // the button is held
       bool     breath = false; // the breath is held
       float    turn   = 0;     // radians the aim turned since the last tick
+      bool     reload = false; // the reload animation still plays: the next arrow is not on the string yet
       uint64_t dt     = 0;
       };
 
@@ -58,8 +59,12 @@ class Archer final {
     Stage         stage() const { return stg; }
     float         draw()  const { return drawAmt; }
     bool          isRaised() const { return stg!=Lowered; }
-    // Where the aim sways off to: yaw (about up), pitch (+ up), radians
-    Tempest::Vec2 sway()  const { return sw; }
+    // Reloading, the bow went down for the next arrow already (it comes up and holds still after)
+    bool          isNocking() const { return stg==Reloading && unready; }
+    // Where the aim sways off to: yaw (about up), pitch (+ up), radians. The slow part (the wander, the
+    // breathing) moves the chest; the trembling (tired, too weak for the bow) the arms
+    Tempest::Vec2 sway()   const { return sw; }
+    Tempest::Vec2 tremor() const { return trm; }
     // How far off the arrow may go now, radians: the sway's reach, trembling, the release
     float         spread() const { return spr; }
 
@@ -86,6 +91,7 @@ class Archer final {
     float         strength  = 1;
     float         skill     = 0;
     Tempest::Vec2 sw;
+    Tempest::Vec2 trm;
 
     float         wander(float t, uint32_t axis) const;
     float         tremor(float t, uint32_t axis) const;

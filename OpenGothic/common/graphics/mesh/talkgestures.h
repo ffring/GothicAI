@@ -104,7 +104,7 @@ class TalkGestures final {
     uint32_t              starts     = 0;
     uint32_t              cuts       = 0;
     uint32_t              stops      = 0;
-    uint32_t              rnd        = 1;
+    uint32_t              rnd        = 0;
 
     Head                  headNow;
     bool                  headMoves  = false;

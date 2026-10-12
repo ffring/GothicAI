@@ -22,8 +22,11 @@ class Aim final {
       float         lean    = 0;       // radians: bend forward from the hips over an edge (leanFor), 0 if
                                        // there is no room in front of the head
       Tempest::Vec2 sway    = {};      // radians, the manual aim (Archer): yaw, pitch (+ up) off where the
-                                       // shot has to go, as it is (not smoothed: the arms tremble)
+                                       // shot has to go, as it is: the chest
+      Tempest::Vec2 tremor  = {};      // and the arms trembling (not smoothed: fast): the arms, not the head
       bool          manual  = false;   // aimed by hand: the upper body follows the mouse faster
+      bool          reload  = false;   // the reload plays: the arrow is not on the string, not measured (the
+                                       // hand holds still at the quiver for a while)
       uint64_t      dt      = 0;
       };
 
@@ -77,6 +80,7 @@ class Aim final {
 
     size_t              spine = size_t(-1), waist = size_t(-1), chest = size_t(-1), slot = size_t(-1);
     std::vector<size_t> spineTree, waistTree, chestTree;
+    std::vector<size_t> armsTree; // both arms from the clavicles: they tremble
     bool                valid  = false;
 
     bool                arrow   = false;
@@ -85,6 +89,7 @@ class Aim final {
     float               weight  = 0;
     float               leanAmt = 0;  // radians, smoothed
     Tempest::Vec2       sway    = {};
+    Tempest::Vec2       tremor  = {};
     Tempest::Vec3       wantB   = {}; // where the shot has to go, body's frame, smoothed
     uint8_t             steadyFrames = 0;
     Tempest::Vec3       rest    = {}; // where the animation aims while the bow holds still, body's frame

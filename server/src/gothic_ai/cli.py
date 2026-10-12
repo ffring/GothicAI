@@ -47,6 +47,7 @@ from .llm import (
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
+from .perception import PerceptionDesk
 from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
 from .protocol import (
     MOODS,
@@ -106,6 +107,7 @@ HELP = """commands (npc defaults to the last attached one):
   director look     look for such quests now and repair them
   claims            quests of the scripts the hero said were done: believed, lies, found out
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
+  see [npc]         what the npc perceives now: in Russian for its words, in English for its body
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
@@ -152,6 +154,7 @@ class ServerState:
         self.amends: Amends | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
+        self.perception: PerceptionDesk | None = None
 
 
 class Console:
@@ -247,6 +250,16 @@ class Console:
                 for t in self.state.vanilla.told.values():
                     state = "found out" if t.found_out else "lie" if t.lie else "true"
                     print(f"{t.quest} {t.npc}: {t.title}; {t.reward}; {state} ({t.kind or '-'})")
+            case "see" if self.state.perception is not None:
+                who = (rest[0] if rest else npc).upper()
+                view = await self.state.perception.fresh(who)
+                if view is None:
+                    print("(no view)")
+                else:
+                    sight = self.state.perception.sight(who, link.snapshots.get(who))
+                    assert sight is not None
+                    print("\n".join(line for line in (sight.place, sight.hero, sight.people) if line))
+                    print("\n".join(self.state.perception.english(who)))
             case "know" if self.state.knowledge is not None:
                 who = (rest[0] if rest else npc).upper()
                 await self.state.knowledge.prepare(who)
@@ -435,6 +448,28 @@ async def serve(args: argparse.Namespace) -> int:
             # what each npc knows of the world as far as the story has got: its dialogs, quests, talk (M6)
             state.knowledge = Knowledge(link, graph)
             state.dialogue.extensions.append(state.knowledge)
+
+        def knows_hero(npc: str, dialogue: DialogueManager = state.dialogue) -> bool:
+            """It has met the hero: it remembers talks with him, or he has heard its dialogs (knowledge)."""
+            conv = dialogue.conversations.get(npc)
+            if conv is not None and (conv.memory.entries or conv.memory.summary):
+                return True
+            if dialogue.branch is not None:
+                mem = dialogue.memory.load(dialogue.branch, npc)
+                if mem.entries or mem.summary:
+                    return True
+            told = state.knowledge.views.get(npc) if state.knowledge is not None else None
+            return told is not None and bool(told.told)
+
+        # what each npc sees: names for those it knows, a look for strangers (wave 1 step 4)
+        perception = state.perception = PerceptionDesk(
+            link,
+            social=lambda: state.rumors.social if state.rumors is not None else None,
+            knows_hero=knows_hero,
+        )
+        state.dialogue.extensions.append(perception)
+        state.dialogue.sight = perception.sight
+        state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         talk = state.talk
@@ -497,7 +532,12 @@ async def serve(args: argparse.Namespace) -> int:
                 return (Intent.from_json(saved).agenda or None) if saved else None
 
             planner = state.brain = NpcPlanner(
-                decider, GameApplier(link), agenda_of=agenda_of, routine_of=link.routine, habits_of=habits_of
+                decider,
+                GameApplier(link),
+                agenda_of=agenda_of,
+                routine_of=link.routine,
+                habits_of=habits_of,
+                view_of=perception.english,
             )
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
@@ -585,6 +625,23 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m6_knows(link, dialogue, talk, knowledge, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m6: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "see":
+                dialogue, talk, perception, rumors = (
+                    state.dialogue,
+                    state.talk,
+                    state.perception,
+                    state.rumors,
+                )
+                assert (
+                    dialogue is not None
+                    and talk is not None
+                    and perception is not None
+                    and rumors is not None
+                )
+                results = await scenarios.see_perception(link, dialogue, talk, perception, rumors, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario see: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "lie":
                 dialogue, talk, quests = state.dialogue, state.talk, state.quests
@@ -1044,6 +1101,7 @@ def main() -> None:
             "m5c",
             "m5e",
             "m6",
+            "see",
             "graph",
             "lie",
             "repair",

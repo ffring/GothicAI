@@ -53,6 +53,7 @@ class FakeGame:
         # story_effect with `check`: the npc's things (the hero's are hero_items), moved by the gives
         self.npc_items: dict[str, dict[str, int]] = {}
         self.deals: list[dict[str, Any]] = []  # deal_show / deal_hide messages
+        self.views: dict[str, dict[str, Any]] = {}  # what npc_view answers: npc -> its view (NpcView)
         self.fields: dict[tuple[str, str], int] = {}  # ("SELF" | "OTHER", "GUILD") -> value; others read 0
         self.instances: dict[str, str] = {}
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
@@ -67,6 +68,10 @@ class FakeGame:
         """What a controlled npc noticed (the game sends these for attached npc's only)."""
         extra = {"victim": victim} if victim else {}
         await self.send(type="perception", npc=npc, perc=perc, other=other, distance=distance, **extra)
+
+    async def push_views(self, *views: dict[str, Any]) -> None:
+        """What the npc's nearest to the player perceive, as the game pushes it once a second (v11)."""
+        await self.send(type="npc_views", t=1000, views=list(views))
 
     async def roster(self, *people: dict[str, Any]) -> None:
         """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
@@ -197,6 +202,9 @@ class FakeGame:
                     "hour": self.hour,
                     "minute": self.minute,
                 }
+                await self.send(type="result", req=msg["req"], ok=True, value=value)
+            case "npc_view":
+                value = [self.views[n] for n in msg["npcs"] if n in self.views]
                 await self.send(type="result", req=msg["req"], ok=True, value=value)
             case "story_people":
                 await self.send(type="result", req=msg["req"], ok=True, value=self.people)

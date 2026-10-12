@@ -181,6 +181,10 @@ void MdlVisual::setAmmoItem(MeshObjects::Mesh&& a, std::string_view bone) {
   bind(ammunition,std::move(a),bone);
   }
 
+void MdlVisual::dropAmmo() {
+  ammunition.view = MeshObjects::Mesh();
+  }
+
 void MdlVisual::setMagicWeapon(Effect&& spell, World& owner) {
   auto n = std::move(pfx.view);
   n.setLooped(false);
@@ -653,7 +657,9 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
           o = ap;
         in.dir    = at - o;
         in.sway   = npc.manualAimSway();
+        in.tremor = npc.manualAimTremor();
         in.manual = true;
+        in.reload = pose.animProgress("T_BOWRELOAD",npc.world().tickCount())>=0.f;
         } else {
         in.dir  = World::bulletVelocity(from,aimAt());
         }
@@ -677,11 +683,69 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         }
       }
     }
-  const bool changed = pose.updateAim(in);
+  bool changed = pose.updateAim(in);
   if(npc.isPlayer())
     aim.probe(Aim::playerProbe);
   if(&npc==Aim::probeNpc)
     aim.probe(Aim::subjectProbe);
+
+  // a bow drawn by hand: the hand goes to the string as far as it is not drawn, the string with it (a
+  // crossbow is not drawn). The bow of G2 is drawn by its morph: S_READY holds it as the animation does,
+  // StringDrawn straight back as the bow is held by hand (graphics/mesh/bowdraw)
+  auto&          ar = npc.archer();
+  BowDraw::Input bd;
+  bd.dt     = dt;
+  bd.active = manual && in.active && ws==WeaponState::Bow;
+  bd.ready  = ar.stage()==Archer::Nocked || ar.stage()==Archer::Drawing || ar.stage()==Archer::Held;
+  bd.draw   = ar.draw();
+  bd.span   = bowSpan();
+  bd.arrow  = !ammunition.view.isEmpty() && ammunition.bone=="ZS_RIGHTHAND";
+  if(auto p = bow.view.protoMesh()) {
+    bool high = false, straight = false;
+    for(auto& m:p->morph) {
+      if(m.name==BowHeld) {
+        high          = true;
+        bd.stringHigh = m.peakMove;
+        }
+      if(m.name==BowDraw::StringDrawn) {
+        straight      = true;
+        bd.stringRest = m.peakAt;
+        bd.stringPull = m.peakMove;
+        }
+      }
+    // along the limbs: the longest way of the bow
+    const Tempest::Vec3 ext = p->bboxMesh[1]-p->bboxMesh[0];
+    bd.bowAxis   = ext.x>=ext.y && ext.x>=ext.z ? Tempest::Vec3(1,0,0) : (ext.y>=ext.z ? Tempest::Vec3(0,1,0) : Tempest::Vec3(0,0,1));
+    bd.hasString = high && straight;
+    }
+  if(ar.stage()==Archer::Reloading) {
+    // how far the reload is: not begun (the shot), the animation, over (the bow comes to rest)
+    const float p = pose.animProgress("T_BOWRELOAD",npc.world().tickCount());
+    bd.reload = p>=0.f ? p : (ar.isNocking() ? 1.f : 0.f);
+    }
+  changed  |= pose.updateBowDraw(bd);
+  // the string as drawn by hand: straight back as far as the bow is held so, else as G2 draws it
+  const float string = pose.bowDrawIk().string();
+  const float held   = pose.bowDrawIk().aligned();
+  if(string>=0.f) {
+    bow.view.setMMShape(BowHeld,0,0,0,string*(1.f-held));
+    bow.view.setMMShape(BowDraw::StringDrawn,0,0,0,string*held);
+    stringByHand = true;
+    }
+  else if(stringByHand) {
+    // let go: the string goes (the shot: it trembles at once, the animation's release is late), else the
+    // animation's morphs from here
+    bow.view.startMMAnim(BowHeld,0,0);
+    bow.view.startMMAnim(BowDraw::StringDrawn,0,0);
+    if(pose.bowDrawIk().loosed()) {
+      bow.view.startMMAnim(held>0.5f ? BowDraw::StringLoose : BowLoose,1,uint64_t(-1));
+      looseAt = npc.world().tickCount();
+      }
+    stringByHand = false;
+    }
+  if(npc.isPlayer())
+    pose.bowDrawIk().probe(BowDraw::playerProbe);
+
   if(changed)
     view.setPose(pos,pose);
   return changed;
@@ -773,6 +837,19 @@ Vec3 MdlVisual::mapWeaponBone() const {
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
   }
 
+void MdlVisual::setAnimSpeed(std::string_view name, float k) {
+  skInst->setAnimSpeed(name,k);
+  }
+
+float MdlVisual::bowSpan() const {
+  // how far the string goes from rest to held drawn: the string's middle moves the most
+  if(auto p = bow.view.protoMesh())
+    for(auto& m:p->morph)
+      if(m.name==BowHeld)
+        return m.peak;
+  return 0;
+  }
+
 bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
   // the arrow (the bolt) lies along -X of its slot, the nock at the string (graphics/mesh/aim)
   size_t id = ammunition.boneId;
@@ -799,6 +876,88 @@ HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t)
 
 bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
   return hitZones.center(skInst->transform(),skInst->boneCount(),z,at);
+  }
+
+std::string MdlVisual::bowDump() const {
+  // points of the bow and the bow hand in the frame of the arrow: x along it from the slot it sits in
+  // (forward), y up across it, z to the side
+  auto proto = bow.view.protoMesh();
+  if(proto==nullptr || skeleton==nullptr || bow.boneId>=skInst->boneCount())
+    return "bow: none";
+  const size_t aSlot = skeleton->findNode("ZS_RIGHTHAND");
+  if(aSlot>=skInst->boneCount())
+    return "bow: no arrow slot";
+  const auto& am = skInst->bone(aSlot);
+  const Vec3  o  = Vec3(am.at(3,0),am.at(3,1),am.at(3,2));
+  const Vec3  ax = Vec3::normalize(Vec3(-am.at(0,0),-am.at(0,1),-am.at(0,2)));
+  Vec3        up = Vec3(0,1,0) - ax*Vec3::dotProduct(Vec3(0,1,0),ax);
+  up             = Vec3::normalize(up);
+  const Vec3  sd = Vec3::crossProduct(ax,up);
+  const auto& bm = skInst->bone(bow.boneId);
+  std::string out;
+  char        buf[200];
+  auto put = [&](const char* name, Vec3 p) {
+    p = p - o;
+    std::snprintf(buf,sizeof(buf),"  %-14s %6.1f %6.1f %6.1f\n",name,double(Vec3::dotProduct(p,ax)),double(Vec3::dotProduct(p,up)),
+                  double(Vec3::dotProduct(p,sd)));
+    out += buf;
+    };
+  auto inBow = [&](Vec3 p) {
+    bm.project(p);
+    return p;
+    };
+  auto dirOf = [&](const Vec3& d) {
+    return Vec3(bm.at(0,0)*d.x + bm.at(1,0)*d.y + bm.at(2,0)*d.z,
+                bm.at(0,1)*d.x + bm.at(1,1)*d.y + bm.at(2,1)*d.z,
+                bm.at(0,2)*d.x + bm.at(1,2)*d.y + bm.at(2,2)*d.z);
+    };
+  const Vec3* bb = proto->bboxMesh;
+  std::snprintf(buf,sizeof(buf),"bow %s: bbox %.1f %.1f %.1f .. %.1f %.1f %.1f (mesh)\n",proto->fname.c_str(),
+                double(bb[0].x),double(bb[0].y),double(bb[0].z),double(bb[1].x),double(bb[1].y),double(bb[1].z));
+  out += buf;
+  const Vec3 mid = (bb[0]+bb[1])*0.5f;
+  for(int i=0; i<3; ++i) {
+    const Vec3 e  = i==0 ? Vec3(1,0,0)        : (i==1 ? Vec3(0,1,0)        : Vec3(0,0,1));
+    const Vec3 lo = i==0 ? Vec3(bb[0].x,mid.y,mid.z) : (i==1 ? Vec3(mid.x,bb[0].y,mid.z) : Vec3(mid.x,mid.y,bb[0].z));
+    const Vec3 hi = i==0 ? Vec3(bb[1].x,mid.y,mid.z) : (i==1 ? Vec3(mid.x,bb[1].y,mid.z) : Vec3(mid.x,mid.y,bb[1].z));
+    const Vec3 d = dirOf(e);
+    std::snprintf(buf,sizeof(buf),"  mesh axis %d in the arrow frame: %.2f %.2f %.2f\n",i,double(Vec3::dotProduct(d,ax)),
+                  double(Vec3::dotProduct(d,up)),double(Vec3::dotProduct(d,sd)));
+    out += buf;
+    char n0[16], n1[16];
+    std::snprintf(n0,sizeof(n0),"bbox-%d",i);
+    std::snprintf(n1,sizeof(n1),"bbox+%d",i);
+    put(n0,inBow(lo));
+    put(n1,inBow(hi));
+    }
+  put("grip (slot)",inBow(Vec3()));
+  put("bbox middle",inBow((bb[0]+bb[1])*0.5f));
+  for(auto& m:proto->morph) {
+    std::snprintf(buf,sizeof(buf),"  morph %s: peak %.1f at %.1f %.1f %.1f move %.1f %.1f %.1f (mesh)\n",m.name.c_str(),double(m.peak),
+                  double(m.peakAt.x),double(m.peakAt.y),double(m.peakAt.z),double(m.peakMove.x),double(m.peakMove.y),double(m.peakMove.z));
+    out += buf;
+    if(m.name==BowHeld) {
+      put("string rest",inBow(m.peakAt));
+      put("string drawn",inBow(m.peakAt+m.peakMove));
+      }
+    if(m.name==BowDraw::StringDrawn) {
+      put("straight rest",inBow(m.peakAt));
+      put("straight drawn",inBow(m.peakAt+m.peakMove));
+      }
+    }
+  for(auto name:{"BIP01 L HAND","BIP01 L FINGER0","BIP01 L FINGER1","BIP01 L FINGER2","BIP01 L FOREARM","BIP01 R HAND","BIP01 HEAD"}) {
+    const size_t id = skeleton->findNode(name);
+    if(id<skInst->boneCount()) {
+      const auto& m = skInst->bone(id);
+      put(name+6,Vec3(m.at(3,0),m.at(3,1),m.at(3,2)));
+      }
+    }
+  return out;
+  }
+
+void MdlVisual::hitZonesPosed(std::vector<HitZones::Posed>& out) const {
+  const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
+  hitZones.posed(skInst->transform(),skInst->boneCount(),sx.length(),out);
   }
 
 std::string MdlVisual::hitZonesDump() const {
@@ -1279,11 +1438,47 @@ void MdlVisual::updateGestures(Npc& npc, uint64_t dt) {
     gestures.probe(TalkGestures::subjectProbe);
   }
 
-void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) {
+void MdlVisual::updateBlink(Npc& npc, uint64_t dt) {
+  const bool probing = &npc==EyeBlink::probeNpc;
+  // a far face is not seen blinking (and its morph is not worth the upload)
+  if(skInst==nullptr || head.view.isEmpty() || (npc.processPolicy()>NpcProcessPolicy::AiNormal && !probing))
+    return;
+  const uint64_t now = npc.world().tickCount();
+  const uint32_t sh  = skInst->gazeIk().shiftCount();
+
+  EyeBlink::Input in;
+  in.now      = now;
+  in.dt       = dt;
+  in.allowed  = !npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_LIE && head.view.morphWeight("S_EYESCLOSED")<0.1f;
+  in.speaking = mouth.isSpeaking(now) || npc.speechLeft()>0;
+  in.voice    = mouth.voiceLevel();
+  in.shift    = sh!=blinkShift;
+  // a frightened face blinks more, a hostile or angry stare less
+  in.rate     = 1.f + 0.6f*head.view.morphWeight("S_FRIGHTENED")
+                    - 0.3f*std::max(head.view.morphWeight("S_HOSTILE"),head.view.morphWeight("S_ANGRY"));
+  blinkShift  = sh;
+
+  uint64_t hold = 0;
+  if(blink.update(in,hold))
+    head.view.startMMAnim("R_EYESBLINK",1,now+hold,true);  // not in place of a face
+  if(probing)
+    blink.probe(EyeBlink::subjectProbe);
+  }
+
+void MdlVisual::startMMAnim(Npc& npc, std::string_view anim, std::string_view bone) {
   MdlVisual::MeshAttach* mesh[] = {&head,&sword,&shield,&bow,&ammunition,&stateItm};
   for(auto i:mesh) {
     if(i->bone!=bone && !bone.empty())
       continue;
+    // the string drawn by hand: the animation does not draw it; held by hand, the bow lets it go straight
+    if(i==&bow && skInst->bowDrawIk().string()>=0.f)
+      continue;
+    if(i==&bow && anim==BowLoose && looseAt>0 && npc.world().tickCount()<looseAt+LooseLate)
+      continue;
+    if(i==&bow && anim==BowLoose && skInst->bowDrawIk().aligned()>0.5f) {
+      i->view.startMMAnim(BowDraw::StringLoose,1,uint64_t(-1));
+      continue;
+      }
     i->view.startMMAnim(anim,1,uint64_t(-1));
     }
   }

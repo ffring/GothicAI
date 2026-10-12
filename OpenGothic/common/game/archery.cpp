@@ -25,6 +25,8 @@ constexpr float BreathMaster   = 5.f;
 constexpr float DrawSlow       = 1.2f;  // seconds: dexterity 0..DexFull
 constexpr float DrawFast       = 0.5f;
 constexpr float DexFull        = 150.f;
+constexpr float ReloadSlow     = 0.85f; // the reload's tempo: dexterity 0..DexFull
+constexpr float ReloadFast     = 1.6f;
 constexpr float HoldWeak       = 1.5f;  // seconds: strength just half of what the bow needs...
 constexpr float HoldStrong     = 6.f;   // ...and twice
 constexpr float SpeedLight     = 5.0f;  // cm/ms: a bow of DamageLight...
@@ -91,6 +93,7 @@ Archery::Stats Archery::stats(Npc& npc, const Item* w) {
   s.holdLimit = s.crossbow ? 1e6f : lerp(HoldWeak,HoldStrong,(s.strength-0.5f)/1.5f);
   s.speed     = lerp(SpeedLight,SpeedHeavy,(dmg-DamageLight)/(DamageHeavy-DamageLight));
   s.cone      = lerp(ConeNovice,ConeMaster,s.skill)*Deg;
+  s.reload    = s.crossbow ? 1.f : lerp(ReloadSlow,ReloadFast,dexK);
   return s;
   }
 

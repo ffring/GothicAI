@@ -1,0 +1,103 @@
+# Bow draw (graphics/mesh/bowdraw): the right hand draws the string by hand, the arrow with it; the reload. Close by
+# from the side and from the front: the hand going to the string after the raise, a slow draw (a novice),
+# a quick one (a master), held, the shot, the reload; a draw let down without a shot; `bowdraw off` for
+# the animation as it is (drawn fully all the time)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 100
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1000 0 0
+aimat BAU_904_BAUER body
+tap bow
+wait 1500
+cam follow 220 150 90             # the left side: the arrow's line across the frame
+cam look 145
+wait 300
+
+stats str 15 dex 15 bow 10
+rec novice_side
+volley 2 600
+stop
+
+stats str 120 dex 120 bow 100
+rec master_side
+volley 2 600
+stop
+
+# drawn a little, let go: no shot, the string goes back
+rec letdown
+volley 1 0 0.1
+wait 800
+stop
+
+bowdraw off
+rec off_side
+volley 1 600
+stop
+bowdraw on
+
+cam follow 170 150 -50            # in front, on the right: the drawing hand
+wait 300
+rec master_front
+volley 2 600
+stop
+
+# the reload at another tempo (dexterity sets it, 0.85..1.6): the arrow in the hand, the string's morphs,
+# the sounds - each event once, in the same order (bench.log: "anim event", "anim morph")
+cam follow 220 150 60
+wait 300
+animspeed T_BOWRELOAD 0.7
+rec tempo07
+volley 2 300
+stop
+animspeed T_BOWRELOAD 1.5
+rec tempo15
+volley 2 300
+stop
+
+# held too long: past the hold limit the arms tremble (the head does not), then the shot
+animspeed T_BOWRELOAD 1
+stats str 15 dex 15 bow 10
+cam follow 150 155 -50
+wait 300
+rec tremble
+volley 1 7000
+stop
+
+# the reload slowly, from still cameras: the upper body holds the aim (the bow stays up), the hand reaches
+# over the shoulder for the arrow and brings it straight to the string, off the head
+stats str 120 dex 120 bow 100
+wait 300
+animspeed T_BOWRELOAD 0.7
+cam world 200 150 135
+cam look 140
+wait 300
+rec reload_side
+volley 1 300
+wait 600
+stop
+cam world 200 150 315
+cam look 140
+wait 300
+rec reload_back
+volley 1 300
+wait 600
+stop
+
+# as the player sees it: the game's camera over the shoulder, the master's tempo
+animspeed T_BOWRELOAD 1.45
+view full
+cam game
+wait 500
+rec game
+volley 2 300
+wait 300
+stop

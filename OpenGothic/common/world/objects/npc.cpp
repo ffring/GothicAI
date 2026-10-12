@@ -2399,6 +2399,20 @@ void Npc::tickAnimationTags() {
   if(!hasEvents)
     return;
 
+  if(isPlayer() && TestBench::isActive()) {
+    // what the hero's animations do, for the test bench (the reload at another tempo: each event once)
+    char buf[256];
+    for(auto& i:ev.timed) {
+      std::snprintf(buf,sizeof(buf),"anim event %d %.*s %.*s %.*s (reload %.2f)",int(i.def),int(i.item.size()),i.item.data(),
+                    int(i.slot[0].size()),i.slot[0].data(),int(i.slot[1].size()),i.slot[1].data(),double(animProgress("T_BOWRELOAD")));
+      TestBench::note(buf);
+      }
+    for(auto& i:ev.morph) {
+      std::snprintf(buf,sizeof(buf),"anim morph %.*s %.*s (reload %.2f)",int(i.anim.size()),i.anim.data(),int(i.node.size()),i.node.data(),
+                    double(animProgress("T_BOWRELOAD")));
+      TestBench::note(buf);
+      }
+    }
   for(auto& i:ev.morph)
     visual.startMMAnim(*this,i.anim,i.node);
   if(ev.groundSounds>0 && isPlayer() && bodyStateMasked()!=BodyState::BS_SNEAK)
@@ -2420,6 +2434,7 @@ void Npc::tick(uint64_t dt) {
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
+  visual.updateBlink(*this,dt);
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);
@@ -3208,6 +3223,11 @@ void Npc::setAiOutputBarrier(uint64_t dt, bool overlay) {
   }
 
 void Npc::emitSoundEffect(std::string_view sound, float range, bool freeSlot) {
+  if(isPlayer() && TestBench::isActive()) {
+    char buf[128];
+    std::snprintf(buf,sizeof(buf),"sound %.*s",int(sound.size()),sound.data());
+    TestBench::note(buf);
+    }
   auto sfx = ::Sound(owner,::Sound::T_Regular,sound,centerPosition(),range,freeSlot);
   sfx.play();
   }
@@ -4218,6 +4238,8 @@ bool Npc::shootBow(Interactive* focOverride) {
     return false;
 
   auto& b = owner.shootBullet(*itm,*this,currentTarget,focOverride);
+  // the arrow left the hand: the reload places the next one
+  visual.dropAmmo();
 
   invent.delItem(size_t(munition),1,*this);
   b.setOrigin(this);
@@ -4238,10 +4260,15 @@ bool Npc::shootBow(Interactive* focOverride) {
   return true;
   }
 
-void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway) {
-  manualAim   = on;
-  manualPoint = point;
-  manualSway  = on ? sway : Tempest::Vec2();
+float Npc::animProgress(std::string_view name) const {
+  return visual.pose().animProgress(name,owner.tickCount());
+  }
+
+void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway, const Tempest::Vec2& tremor) {
+  manualAim    = on;
+  manualPoint  = point;
+  manualSway   = on ? sway   : Tempest::Vec2();
+  manualTremor = on ? tremor : Tempest::Vec2();
   }
 
 bool Npc::isAimSteady() const {
@@ -4285,6 +4312,7 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
 
   const float speed = Archery::speedAt(st,draw);
   auto&       b     = owner.shootArrow(*itm,pos,dir,speed);
+  visual.dropAmmo();
   if(TestBench::isActive()) {
     char buf[200];
     std::snprintf(buf,sizeof(buf),"arrow shot: from %.1f %.1f %.1f dir %.5f %.5f %.5f speed %.3f draw %.2f",

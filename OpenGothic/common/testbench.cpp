@@ -22,15 +22,19 @@
 
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
+#include "game/definitions/sounddefinitions.h"
+#include "resources.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/talkgestures.h"
+#include "graphics/mesh/eyeblink.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animblend.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/bowdraw.h"
 #include "graphics/mesh/hitzones.h"
 #include "game/archery.h"
 #include "graphics/mesh/flinch.h"
@@ -513,6 +517,8 @@ struct Bench {
 
   // talking (scripts/shorts)
   std::string camNpc;           // C_Shoulder, C_NpcFace, C_Two
+  std::string zonesNpc;         // showzones: the npc whose hit zones the overlay draws
+  bool        zonesOnly = false; // the overlay draws the hit zones only
   float       camSmooth = 0.12f; // share of the way to the wanted camera per frame; 1: no smoothing
   bool        smValid   = false;
   Vec3        smOrg, smTgt;
@@ -930,8 +936,10 @@ void writeHeader() {
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
+  std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss,bd_follow,bd_fit,bd_offset,bd_angle,hd_hand,hd_fore,hd_arrow,bd_hold,bd_nock,rh_x,rh_y,rh_z,bd_held,bd_overgrip,bd_atmiddle,bd_nockgap,bd_square,bd_cant,bd_bowmove,bd_bowmiss");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops,ge_nods,ge_pitch,ge_yaw,ge_roll");
+  std::fprintf(bench.csv,",bk_on,bk_w,bk_n,bk_pause,bk_shift,bk_double");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
@@ -1034,6 +1042,13 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
                mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl),
                hasCross ? spread*180.f/float(M_PI) : -1.f,moved);
+  // the hand drawing the string
+  const auto& bd = BowDraw::playerProbe;
+  std::fprintf(bench.csv,",%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",bd.valid ? bd.weight : -1.f,bd.draw,bd.span,bd.travel,bd.miss,
+               bd.follow,bd.fit,bd.offset,bd.angle);
+  std::fprintf(bench.csv,",%.1f,%.1f,%.1f,%d,%.2f",bd.head,bd.fore,bd.arrow,int(bd.holding),bd.nock);
+  std::fprintf(bench.csv,",%.2f,%.2f,%.2f",bd.handAt.x,bd.handAt.y,bd.handAt.z);
+  std::fprintf(bench.csv,",%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f",bd.aligned,bd.overGrip,bd.atMiddle,bd.nockGap,bd.square,bd.cant,bd.bowMove,bd.bowMiss);
   // lips of the watched one
   const auto& lp = LipSync::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
@@ -1044,6 +1059,10 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),
                unsigned(ge.mood),ge.starts,ge.cuts,ge.stops,ge.nods,double(ge.head.pitch*180.f/float(M_PI)),
                double(ge.head.yaw*180.f/float(M_PI)),double(ge.head.roll*180.f/float(M_PI)));
+  // its blinks: how closed the eyes are now, counters
+  const auto& bk = EyeBlink::subjectProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%u,%u,%u,%u",int(bk.valid && bk.enabled),subjectOf(pl).faceWeight("R_EYESBLINK"),
+               bk.blinks,bk.pauses,bk.shifts,bk.doubles);
   // faces of the watched one, as shown (fading in and out)
   Npc& s = subjectOf(pl);
   for(auto& f:FaceColumns)
@@ -1347,6 +1366,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.zoom = on;
     else if(m=="bright")
       bench.bright = on;
+    else if(m=="zones")
+      bench.zonesOnly = on; // the hit zones only, no legs, no text
     else
       bench.overlay = (m!="off");
     }
@@ -1524,6 +1545,49 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       Archery::setEnabled(m=="on"); else
       say("unknown manual command: " + line);
     }
+  else if(c=="sfx") {
+    // sfx <name>...: the files a sound effect plays (its variants _A1.. too), whether they load
+    for(size_t k=1; k<a.size(); ++k) {
+      std::string out = "sfx " + a[k] + ":";
+      for(int v=0; v<10; ++v) {
+        const std::string name = v==0 ? a[k] : a[k]+"_A"+std::to_string(v);
+        auto& d = Gothic::sfx()[name];
+        if(d.file.empty())
+          break;
+        out += " " + d.file + (Resources::loadSoundBuffer(d.file).isEmpty() ? " (missing)" : "") +
+               " vol " + std::to_string(d.vol);
+        }
+      say(out);
+      }
+    }
+  else if(c=="animspeed") {
+    // animspeed <anim> <k>: the hero's animation of that name plays k times as fast from its next start
+    // (the reload's tempo is set by the manual aim from dexterity: this overrides it until then)
+    if(a.size()<3) {
+      say("animspeed: <anim> <k>");
+      return;
+      }
+    pl.setAnimSpeed(a[1],num(a,2,1));
+    say("animspeed " + a[1] + " " + a[2]);
+    }
+  else if(c=="bowdraw") {
+    // bowdraw on|off: the hand draws the string as far as the bow is drawn, the reload holds the aim
+    // (graphics/mesh/bowdraw)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      BowDraw::setEnabled(m=="on"); else
+      say("unknown bowdraw command: " + line);
+    }
+  else if(c=="showzones") {
+    // showzones <npc symbol>|player|off: the overlay draws the npc's hit zones (capsules on its bones: the head
+    // red, the trunk yellow, the limbs blue)
+    bench.zonesNpc = a.size()>1 && a[1]!="off" ? a[1] : "";
+    say("showzones " + (bench.zonesNpc.empty() ? std::string("off") : bench.zonesNpc));
+    }
+  else if(c=="bowgeom") {
+    // bowgeom: the bow and the bow hand in the arrow's frame, as posed now
+    say(pl.bowDump());
+    }
   else if(c=="stats") {
     // stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]: the hero's strength, dexterity, hit chances (the
     // skill of the manual aim)
@@ -1544,11 +1608,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const auto  wp = pl.currentRangedWeapon();
     const auto  st = Archery::stats(pl,wp);
     char buf[360];
-    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg",
+    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg reload x%.2f",
                   pl.attribute(ATR_STRENGTH),pl.attribute(ATR_DEXTERITY),pl.hitChance(TALENT_BOW),pl.hitChance(TALENT_CROSSBOW),
                   wp!=nullptr ? int(wp->handle().damage_total) : -1,
                   double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
-                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)));
+                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)),
+                  double(st.reload));
     say(buf);
     }
   else if(c=="zones") {
@@ -1997,6 +2062,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else
       say("unknown gestures command: " + line);
     }
+  else if(c=="blink") {
+    // blink on|off|param <name> <value>|params: blinking (off: nobody blinks, as OpenGothic was)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      EyeBlink::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(EyeBlink::setParam(a[2],num(a,3,0)) ? "blink param " : "blink: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("blink params: " + EyeBlink::paramList());
+    else
+      say("unknown blink command: " + line);
+    }
   else if(c=="watch") {
     // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
@@ -2006,6 +2083,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     LipSync::subjectProbe = LipSync::Probe();
     TalkGestures::probeNpc     = n;
     TalkGestures::subjectProbe = TalkGestures::Probe();
+    EyeBlink::probeNpc         = n;
+    EyeBlink::subjectProbe     = EyeBlink::Probe();
     Lean::probeNpc = bench.subject;
     Pose::probeNpc = bench.subject;
     bench.anim1.clear();
@@ -2367,6 +2446,49 @@ void autoExposure(Canvas& cv) {
     }
   }
 
+// hit zones of an npc (showzones): capsule outlines, the head red, the trunk yellow, the limbs blue
+void drawZones(Canvas& cv, Camera* cam) {
+  if(cam!=nullptr && !bench.zonesNpc.empty()) {
+    auto* w = Gothic::inst().world();
+    Npc*  n = bench.zonesNpc=="player" ? Gothic::inst().player() : (w!=nullptr ? npcBySymbol(*w,bench.zonesNpc) : nullptr);
+    if(n!=nullptr) {
+      const Matrix4x4 vp = cam->viewProj();
+      auto proj = [&](const Vec3& p, float& x, float& y) {
+        float px = p.x, py = p.y, pz = p.z, pw = 1;
+        vp.project(px,py,pz,pw);
+        if(pw<=1e-3f)
+          return false;
+        x = (0.5f*px/pw+0.5f)*float(cv.w);
+        y = (0.5f*py/pw+0.5f)*float(cv.h);
+        return true;
+        };
+      std::vector<HitZones::Posed> caps;
+      n->hitZonesPosed(caps);
+      for(auto& c:caps) {
+        const Rgba col = c.zone==HitZones::Head ? Rgba{255,60,60,230} : (c.zone==HitZones::Body ? Rgba{255,220,40,170} : Rgba{60,190,255,170});
+        float ax,ay,bx,by,ux,uy;
+        if(!proj(c.a,ax,ay) || !proj(c.b,bx,by) || !proj(c.a+Vec3(0,c.r,0),ux,uy))
+          continue;
+        const float r  = std::hypot(ux-ax,uy-ay);
+        float       vx = bx-ax, vy = by-ay;
+        const float l  = std::hypot(vx,vy);
+        for(int i=0; i<32; ++i) {
+          const float t0 = float(i)*float(M_PI)/16.f, t1 = float(i+1)*float(M_PI)/16.f;
+          cv.line(ax+r*std::cos(t0),ay+r*std::sin(t0),ax+r*std::cos(t1),ay+r*std::sin(t1),0,col);
+          if(l>0.5f)
+            cv.line(bx+r*std::cos(t0),by+r*std::sin(t0),bx+r*std::cos(t1),by+r*std::sin(t1),0,col);
+          }
+        if(l>0.5f) {
+          vx /= l;
+          vy /= l;
+          cv.line(ax-vy*r,ay+vx*r,bx-vy*r,by+vx*r,0,col);
+          cv.line(ax+vy*r,ay-vx*r,bx+vy*r,by-vx*r,0,col);
+          }
+        }
+      }
+    }
+  }
+
 void drawOverlay(Pixmap& pm) {
   Canvas cv;
   cv.px = reinterpret_cast<uint8_t*>(pm.data());
@@ -2378,6 +2500,10 @@ void drawOverlay(Pixmap& pm) {
   auto& p   = FootIk::playerProbe;
   if(bench.bright)
     autoExposure(cv);
+  if(bench.zonesOnly) {
+    drawZones(cv,cam);
+    return;
+    }
 
   float zx = -1, zy = -1;
   if(cam!=nullptr && p.valid) {
@@ -2418,6 +2544,8 @@ void drawOverlay(Pixmap& pm) {
       cv.dot(x2,y2,3,Red);
       }
     }
+
+  drawZones(cv,cam);
 
   // the manual aim: the crosshair as the game draws it in its interface (not captured): a chevron at where
   // it aims, brackets as far apart as the arrow may go off; a dot where the arrow points now (debugging)
@@ -2518,6 +2646,13 @@ void drawOverlay(Pixmap& pm) {
     cv.text(x,y,buf,2,{140,200,255,255});
     y += 16;
     }
+  const auto& bd = BowDraw::playerProbe;
+  if(bd.valid && bd.weight>0.f && bench.subject==nullptr) {
+    std::snprintf(buf,sizeof(buf),"DRAW%s W%.2f D%.2f S%.0f T%.0f M%.1f",BowDraw::isEnabled() ? "" : " OFF",double(bd.weight),
+                  double(bd.draw),double(bd.span),double(bd.travel),double(bd.miss));
+    cv.text(x,y,buf,2,{140,200,255,255});
+    y += 16;
+    }
   const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
   if(fl.valid && (fl.active || fl.hits>0)) {
     std::snprintf(buf,sizeof(buf),"HIT%s #%u S%.2f H%.2f B%.1f Y%.0f T%.1f N%.1f",Flinch::isEnabled() ? "" : " OFF",fl.hits,
@@ -2538,6 +2673,12 @@ void drawOverlay(Pixmap& pm) {
     cv.rect(x,y+1,int(float(bw)*std::clamp(lp.level,0.f,1.f)),3,{255,255,255,255});
     cv.rect(x,y+6,int(float(bw)*std::clamp(lp.open,0.f,1.f)),7,c);
     y += 20;
+    }
+  const auto& bk = EyeBlink::subjectProbe;
+  if(bk.valid && EyeBlink::probeNpc!=nullptr) {
+    std::snprintf(buf,sizeof(buf),"BLINK%s N%u P%u S%u D%u",bk.enabled ? "" : " OFF",bk.blinks,bk.pauses,bk.shifts,bk.doubles);
+    cv.text(x,y,buf,2,{200,200,255,255});
+    y += 16;
     }
   const auto& ge = TalkGestures::subjectProbe;
   if(ge.valid && TalkGestures::probeNpc!=nullptr) {

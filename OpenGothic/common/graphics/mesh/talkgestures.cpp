@@ -124,11 +124,6 @@ void TalkGestures::setGestures(std::vector<uint32_t> durationMs, bool gothic2) {
   }
 
 void TalkGestures::lineStart(uint64_t now) {
-  if(rnd==1) {
-    // npcs that start talking in the same order pick the same gestures each run (the test bench)
-    static uint32_t seed = 0;
-    rnd = (++seed)*2654435761u | 1u;
-    }
   if(!engaged && current==0)
     nextAt = now;  // the first gesture starts with the voice
   engaged    = true;
@@ -300,8 +295,16 @@ uint64_t TalkGestures::rest() {
   }
 
 uint32_t TalkGestures::random() {
-  rnd = rnd*1664525u + 1013904223u;
-  return rnd>>8;
+  if(rnd==0) {
+    // npcs that start talking in the same order pick the same gestures each run (the test bench)
+    static uint32_t seed = 0;
+    rnd = (++seed)*2654435761u | 1u;
+    }
+  // xorshift: an LCG stepped a few times per pick gave runs of short gaps
+  rnd ^= rnd<<13;
+  rnd ^= rnd>>17;
+  rnd ^= rnd<<5;
+  return rnd;
   }
 
 void TalkGestures::probe(Probe& p) const {

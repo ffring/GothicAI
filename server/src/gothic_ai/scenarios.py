@@ -25,6 +25,7 @@ from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
+from .perception import PerceptionDesk, Sight
 from .persona import PersonaProvider, habits_of
 from .protocol import (
     ActionResult,
@@ -2214,6 +2215,130 @@ async def m6_knows(
         f"{len(text)} chars known",
     )
     log.info("what %s knows:\n%s", farmer, text)
+    return _logged(results)
+
+
+async def see_perception(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    perception: PerceptionDesk,
+    rumors: Rumors,
+    npc: str = "NONE_100_XARDAS",
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """What npc's perceive (wave 1 step 4), on the game, with the engine's own sight. Xardas sees the hero in
+    front of him and not through the tower's walls and floors. Lobart calls the people he knows by name and
+    the hero, whom he does not know, by his look; in militia armor the hero is a militiaman to him. The view
+    is in the conversational model's request (scripted here) and `look` answers; the nearest npc's views
+    are pushed once a second for the behavioral model."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    # 1. sight: in front of him he sees the hero; walls and floors hide him even within 20 m
+    await link.debug("teleport", near=npc, distance=300)
+    await asyncio.sleep(1)
+    view = await perception.fresh(npc)
+    front = view is not None and view.hero is not None and view.hero.seen
+    check(
+        "sees_in_front",
+        front,
+        view.hero.model_dump(include={"distance", "seen"}) if view and view.hero else "",
+    )
+    spots = []
+    for cm in (600, 900, 1200, 1500, 1800):
+        try:
+            await link.debug("player_goto", near=npc, distance=cm)
+        except GameError as err:
+            spots.append(f"{cm}: {err}")
+            continue
+        await asyncio.sleep(1)
+        view = await perception.fresh(npc)
+        if view is not None and view.hero is not None:
+            spots.append((round(view.hero.distance / 100), view.hero.seen))
+    hidden = [s for s in spots if isinstance(s, tuple) and not s[1] and s[0] < 20]
+    check("not_through_walls", bool(hidden), f"(m, seen) at the spots tried: {spots}")
+
+    # 2. Lobart: whom he knows by name, the hero by his look
+    if not await _until(lambda: rumors.social is not None, 30):
+        check("acquaintances", False, "no acquaintances: the world's people were not read")
+        return _logged(results)
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        check("farmer", False, f"{farmer} is not around the hero")
+        return _logged(results)
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    hero = sight.hero or "" if sight else ""
+    check("hero_by_look", "ты его не знаешь" in hero, hero)
+    # whom the npc's around call by name, whom by look: over the views pushed near the hero, next to
+    # Lobart and then next to the people he knows, until someone sees a person it knows
+    named: list[str] = []
+    strangers: list[str] = []
+
+    def scan() -> None:
+        for v in perception.views():
+            people = (perception.sight(v.npc) or Sight("", None, "")).people
+            for o in v.sees:
+                if o.kind != "human":
+                    continue
+                if perception.knows(v.npc, o) and o.name in people:
+                    named.append(f"{v.name} → {o.name}")
+                elif not perception.knows(v.npc, o) and "незнакомец" in people:
+                    strangers.append(f"{v.name} → {o.name}")
+
+    scan()
+    social = rumors.social
+    for tie in sorted(social.ties.get(farmer, {}) if social is not None else [])[:6]:
+        if named:
+            break
+        try:
+            await link.debug("teleport", near=tie, distance=300)
+        except GameError:
+            continue
+        await asyncio.sleep(1.5)  # a push or two
+        scan()
+    check(
+        "acquaintances", bool(named), f"by name: {sorted(set(named))}; by look: {sorted(set(strangers))[:6]}"
+    )
+    await link.debug("teleport", near=farmer, distance=300)
+    await asyncio.sleep(1)
+
+    # 3. in militia armor, to Lobart who does not know him, the hero is a militiaman
+    await link.debug("player_equip", item="ITAR_MIL_L")
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    hero = sight.hero or "" if sight else ""
+    check("fake_guild", "по виду ополченец" in hero, hero)
+
+    # 4. a turn: the view is in the request, `look` answers
+    llm = FakeBackend(
+        script=[FakeStep("Хм…", [ToolCall("look", {"who": "герой"}, "c1")]), FakeStep("Ополченец, значит?")],
+        delay=0,
+    )
+    dialogue.llm = llm
+    await link.debug("type", text="Лобарт, ты меня знаешь?")
+    await _until(lambda: len(llm.calls) >= 2, 30)
+    request = str(llm.calls[0][1]) if llm.calls else ""
+    looked = next((i.output for c in llm.calls[1:] for i in c[1] if isinstance(i, ToolResult)), "")
+    check(
+        "in_the_turn",
+        "по виду ополченец" in request and "Рядом:" not in request and looked.startswith("Герой"),
+        looked,
+    )
+
+    # 5. the nearest npc's views come by themselves once a second (the behavioral model reads these)
+    perception._views.clear()
+    pushed = await _until(lambda: perception.view(farmer) is not None, 5)
+    check("pushed", pushed, "; ".join(perception.english(farmer)))
     return _logged(results)
 
 

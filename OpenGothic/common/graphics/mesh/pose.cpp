@@ -156,6 +156,7 @@ void Pose::setSkeleton(const Skeleton* sk) {
   gaze.setSkeleton(skeleton);
   lean.setSkeleton(skeleton);
   aim.setSkeleton(skeleton);
+  bowDraw.setSkeleton(skeleton);
   flinch.setSkeleton(skeleton);
   trY          = skeleton->rootTr.y;
   needToUpdate = true;
@@ -179,8 +180,8 @@ bool Pose::startAnim(const AnimationSolver& solver, const Animation::Sequence *s
   for(auto& i:lay)
     if(i.seq->layer==sq->layer) {
       const bool hasNext   = !i.seq->next.empty();
-      const bool finished  = i.seq->isFinished(tickCount,i.sAnim,combo.len()) && !hasNext && (i.seq->animCls!=Animation::Loop);
-      const bool interrupt = force || i.seq->canInterrupt(tickCount,i.sAnim,combo.len());
+      const bool finished  = i.seq->isFinished(layerTime(i,tickCount),i.sAnim,combo.len()) && !hasNext && (i.seq->animCls!=Animation::Loop);
+      const bool interrupt = force || i.seq->canInterrupt(layerTime(i,tickCount),i.sAnim,combo.len());
       if(i.seq==sq && i.comb==comb && !finished) {
         i.bs = bs;
         return true;
@@ -285,7 +286,7 @@ void Pose::processLayers(AnimationSolver& solver, uint64_t tickCount) {
   bool   doSort = false;
   for(size_t i=0; i<lay.size(); ++i) {
     auto& l = lay[i];
-    if(l.seq->animCls==Animation::Transition && l.seq->isFinished(tickCount,l.sAnim,combo.len())) {
+    if(l.seq->animCls==Animation::Transition && l.seq->isFinished(layerTime(l,tickCount),l.sAnim,combo.len())) {
       auto next = solveNext(solver,l);
       if(next!=l.seq) {
         needToUpdate = true;
@@ -346,7 +347,7 @@ bool Pose::update(uint64_t tickCount, bool force) {
       if(numFrames==1 && !needToUpdate)
         continue; //mobsi
 
-      needMkSkeleton |= updateFrame(*seq,i.bs,i.sAnim,tickCount);
+      needMkSkeleton |= updateFrame(*seq,i.bs,i.sAnim,layerTime(i,tickCount));
       }
     // switches of animations: smoothly from the pose shown
     needMkSkeleton |= blend.apply(raw,base,numBones,tickCount);
@@ -424,7 +425,9 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
     implMkSkeleton(m,size_t(-1));
   lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
   ik.apply(tr,numBones,mt.at(3,1));
+  bowDraw.hold(tr,numBones,mt);
   aim.apply(tr,numBones);
+  bowDraw.apply(tr,numBones);
   gaze.apply(tr,numBones);
   flinch.apply(tr,numBones);
   }
@@ -516,7 +519,8 @@ void Pose::addLayer(const Animation::Sequence *seq, BodyState bs, uint8_t comb, 
     });
   }
 
-void Pose::onAddLayer(const Pose::Layer& l) {
+void Pose::onAddLayer(Pose::Layer& l) {
+  l.speed = speedOf(l.seq);
   if(hasLayerEvents(l))
     hasEvents++;
   if(l.seq->isFly())
@@ -550,17 +554,17 @@ bool Pose::hasLayerEvents(const Pose::Layer& l) {
 
 void Pose::processSfx(Npc &npc, uint64_t tickCount) {
   for(auto& i:lay)
-    i.seq->processSfx(lastUpdate,i.sAnim,tickCount,&npc,nullptr);
+    i.seq->processSfx(layerTime(i,lastUpdate),i.sAnim,layerTime(i,tickCount),&npc,nullptr);
   }
 
 void Pose::processSfx(Interactive& mob, uint64_t tickCount) {
   for(auto& i:lay)
-    i.seq->processSfx(lastUpdate,i.sAnim,tickCount,nullptr,&mob);
+    i.seq->processSfx(layerTime(i,lastUpdate),i.sAnim,layerTime(i,tickCount),nullptr,&mob);
   }
 
 void Pose::processPfx(MdlVisual& visual, World& world, uint64_t tickCount) {
   for(auto& i:lay)
-    i.seq->processPfx(lastUpdate,i.sAnim,tickCount,visual,world);
+    i.seq->processPfx(layerTime(i,lastUpdate),i.sAnim,layerTime(i,tickCount),visual,world);
   }
 
 bool Pose::processEvents(uint64_t &barrier, uint64_t now, Animation::EvCount &ev) const {
@@ -570,7 +574,7 @@ bool Pose::processEvents(uint64_t &barrier, uint64_t now, Animation::EvCount &ev
     }
 
   for(auto& i:lay)
-    i.seq->processEvents(barrier,i.sAnim,now,ev);
+    i.seq->processEvents(layerTime(i,barrier),i.sAnim,layerTime(i,now),ev);
   barrier=now;
   return hasEvents>0;
   }
@@ -590,28 +594,28 @@ Tempest::Vec3 Pose::animMoveSpeed(uint64_t tickCount, uint64_t dt) const {
     auto& lx = lay[i];
     if(!lx.seq->data->hasMoveTr)
       continue;
-    return lx.seq->speed(tickCount-lx.sAnim,dt);
+    return lx.seq->speed(layerTime(lx,tickCount)-lx.sAnim,uint64_t(float(dt)*lx.speed));
     }
   return Tempest::Vec3();
   }
 
 bool Pose::isDefParWindow(uint64_t tickCount) const {
   for(auto& i:lay)
-    if(i.seq->isDefParWindow(tickCount-i.sAnim))
+    if(i.seq->isDefParWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
   return false;
   }
 
 bool Pose::isDefWindow(uint64_t tickCount) const {
   for(auto& i:lay)
-    if(i.seq->isDefWindow(tickCount-i.sAnim))
+    if(i.seq->isDefWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
   return false;
   }
 
 bool Pose::isDefence(uint64_t tickCount) const {
   for(auto& i:lay) {
-    if(i.bs==BS_PARADE && i.seq->isDefWindow(tickCount-i.sAnim))
+    if(i.bs==BS_PARADE && i.seq->isDefWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
     }
   return false;
@@ -621,7 +625,7 @@ bool Pose::isJumpBack(uint64_t tickCount) const {
   for(auto& i:lay) {
     if(i.bs==BS_PARADE && i.seq->data->defWindow.empty())
       return true;
-    if(i.bs==BS_PARADE && i.seq->isDefWindow(tickCount-i.sAnim))
+    if(i.bs==BS_PARADE && i.seq->isDefWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
     }
   return false;
@@ -658,7 +662,7 @@ bool Pose::isStanding() const {
 
 bool Pose::isPrehit(uint64_t now) const {
   for(auto& i:lay)
-    if(i.seq->isPrehit(i.sAnim,now))
+    if(i.seq->isPrehit(i.sAnim,layerTime(i,now)))
       return true;
   return false;
   }
@@ -698,7 +702,7 @@ bool Pose::hasAnim() const {
 uint64_t Pose::animationTotalTime() const {
   uint64_t ret=0;
   for(auto& i:lay)
-    ret = std::max(ret,uint64_t(i.seq->totalTime()));
+    ret = std::max(ret,uint64_t(i.seq->totalTime()/i.speed));
   return ret;
   }
 
@@ -706,7 +710,7 @@ uint64_t Pose::atkTotalTime() const {
   uint16_t comboLen = combo.len();
   uint64_t ret=0;
   for(auto& i:lay)
-    ret = std::max(ret,uint64_t(i.seq->atkTotalTime(comboLen)));
+    ret = std::max(ret,uint64_t(float(i.seq->atkTotalTime(comboLen))/i.speed));
   return ret;
   }
 
@@ -728,7 +732,7 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
     }
 
   auto&    d     = *prev->seq->data;
-  uint64_t t     = tickCount-prev->sAnim;
+  uint64_t t     = layerTime(*prev,tickCount)-prev->sAnim;
   size_t   id    = combo.len()*2;
 
   if(0==d.defWindow.size() || 0==d.defHitEnd.size()) {
@@ -842,6 +846,100 @@ bool Pose::updateFlinch(const Flinch::Input& in) {
 
 bool Pose::updateAim(const Aim::Input& in) {
   if(!aim.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
+  }
+
+uint64_t Pose::layerTime(const Layer& l, uint64_t t) {
+  if(l.speed==1.f || t<=l.sAnim)
+    return t;
+  return l.sAnim + uint64_t(double(t-l.sAnim)*double(l.speed));
+  }
+
+float Pose::speedOf(const Animation::Sequence* seq) const {
+  if(seq==nullptr)
+    return 1;
+  for(auto& i:speeds)
+    if(i.first==seq->name)
+      return i.second;
+  return 1;
+  }
+
+void Pose::setAnimSpeed(std::string_view name, float k) {
+  for(size_t i=0; i<speeds.size(); ++i)
+    if(speeds[i].first==name) {
+      if(k==1.f)
+        speeds.erase(speeds.begin()+ptrdiff_t(i)); else
+        speeds[i].second = k;
+      return;
+      }
+  if(k!=1.f)
+    speeds.emplace_back(std::string(name),k);
+  }
+
+bool Pose::animRelative(std::string_view name, float at, size_t from, size_t to, Tempest::Matrix4x4& out) const {
+  if(skeleton==nullptr || from>=skeleton->nodes.size() || to>=skeleton->nodes.size())
+    return false;
+  const Animation::Sequence* seq = nullptr;
+  for(auto& i:lay)
+    if(i.seq->name==name)
+      seq = i.seq;
+  if(seq==nullptr || seq->data==nullptr)
+    return false;
+  auto&        d      = *seq->data;
+  const size_t idSize = d.nodeIndex.size();
+  if(d.numFrames==0 || idSize==0 || d.samples.size()<size_t(d.numFrames)*idSize)
+    return false;
+  const float  f  = std::clamp(at,0.f,1.f)*float(d.numFrames-1);
+  const size_t fa = std::min(size_t(f),size_t(d.numFrames-1));
+  const size_t fb = std::min(fa+1,size_t(d.numFrames-1));
+  const float  a  = f-float(fa);
+  auto local = [&](size_t node) {
+    for(size_t i=0; i<idSize; ++i)
+      if(d.nodeIndex[i]==node)
+        return mkMatrix(mix(d.samples[fa*idSize+i],d.samples[fb*idSize+i],a));
+    return skeleton->nodes[node].tr;
+    };
+  Tempest::Matrix4x4 m;
+  m.identity();
+  for(size_t n=to; n!=from; n=skeleton->nodes[n].parent) {
+    if(n>=skeleton->nodes.size())
+      return false;
+    m = local(n)*m;
+    }
+  out = m;
+  return true;
+  }
+
+float Pose::animDuration(std::string_view name) const {
+  for(auto& i:lay)
+    if(i.seq->name==name)
+      return i.seq->totalTime()/1000.f/i.speed;
+  return 0;
+  }
+
+float Pose::animProgress(std::string_view name, uint64_t tickCount) const {
+  for(auto& i:lay)
+    if(i.seq->name==name) {
+      const float total = i.seq->totalTime();
+      if(total<=0.f)
+        return 1;
+      return std::clamp(float(layerTime(i,tickCount)-i.sAnim)/total, 0.f, 1.f);
+      }
+  return -1;
+  }
+
+bool Pose::updateBowDraw(const BowDraw::Input& input) {
+  // the reload: where the drawing hand takes the arrow (the animation at that moment), relative to the chest
+  BowDraw::Input in = input;
+  size_t chest = size_t(-1), hand = size_t(-1), elbow = size_t(-1);
+  if(in.reload>=0.f)
+    in.reloadTime = animDuration(BowDraw::ReloadAnim);
+  if(in.reload>=0.f && bowDraw.grabNodes(chest,hand,elbow))
+    in.grabKnown = animRelative(BowDraw::ReloadAnim,BowDraw::GrabAt,chest,hand,in.grabHand) &&
+                   animRelative(BowDraw::ReloadAnim,BowDraw::GrabAt,chest,elbow,in.grabElbow);
+  if(!bowDraw.update(in))
     return false;
   mkSkeleton(pos);
   return true;

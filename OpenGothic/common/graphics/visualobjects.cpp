@@ -99,9 +99,9 @@ void VisualObjects::Item::setWind(zenkit::AnimationType m, float intensity) {
     owner->objectsWind.insert(id);
   }
 
-void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil) {
+void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil, bool freeOnly) {
   if(owner!=nullptr)
-    owner->startMMAnim(id, anim, intensity, timeUntil);
+    owner->startMMAnim(id, anim, intensity, timeUntil, freeOnly);
   }
 
 void VisualObjects::Item::setMMShape(std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity) {
@@ -381,7 +381,7 @@ uint32_t VisualObjects::clusterId(const DrawBuckets::Bucket& bucket, size_t firs
   return uint32_t(ret);
   }
 
-void VisualObjects::startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil) {
+void VisualObjects::startMMAnim(size_t i, std::string_view animName, float intensity, uint64_t timeUntil, bool freeOnly) {
   auto& obj        = objects[i];
   auto  staticMesh = obj.bucketId->staticMesh;
   if(staticMesh==nullptr || staticMesh->morph.anim==nullptr)
@@ -446,6 +446,8 @@ void VisualObjects::startMMAnim(size_t i, std::string_view animName, float inten
     return;
     }
   if(stop)
+    return;
+  if(freeOnly && std::none_of(std::begin(obj.morphAnim),std::end(obj.morphAnim),[&](const MorphAnim& a){ return a.timeUntil<now; }))
     return;
 
   auto& ani = morphSlot(obj);

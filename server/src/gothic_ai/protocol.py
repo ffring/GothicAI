@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 10
+PROTOCOL_VERSION = 11  # v10: deals, v11: what npc's perceive
 
 # --- game -> server -----------------------------------------------------------
 
@@ -305,6 +305,64 @@ class NpcRoster(_GameMessage):
     minute: int | None = None
 
 
+class ItemRef(_GameMessage):
+    item: str  # script symbol
+    name: str
+
+
+class Look(_GameMessage):
+    """What an npc can tell of someone it sees (v11): who it is (shown name and guild, for the server to
+    decide whether the npc knows it), what it does and looks like."""
+
+    id: str
+    name: str
+    kind: Literal["human", "monster", "body"] = "human"
+    guild: int = 0
+    distance: float
+    state: str = ""  # its script state, e.g. ZS_SIT_BENCH
+    body: str = "stand"  # stand, walk, run, swim, sit, lie, mob, item, down, dead
+    moving: bool = False
+    weapon: str = "none"  # none, fists, melee, ranged, magic (drawn)
+    faces_you: bool = False
+    hurt: bool = False  # below half its health
+    armor: ItemRef | None = None
+    in_hands: ItemRef | None = None
+    talking_to: str | None = None
+
+
+class HeroLook(Look):
+    seen: bool = False  # in its field of view and not behind a wall; it hears him anyway
+
+
+class NpcView(_GameMessage):
+    """What an npc perceives (v11): where it is, what it does, the hero, whom it sees (the nearest first).
+    Sight is the engine's own (the head's field of view and a ray), within the npc's senses range."""
+
+    npc: str
+    name: str
+    waypoint: str | None = None
+    nearest_waypoint: str | None = None
+    indoors: bool = False
+    room_guild: int | None = None  # whose room it is in (the scripts' guilds), indoors only
+    state: str = ""
+    body: str = "stand"
+    mob: str | None = None  # what it uses: a bench, an anvil
+    weapon: str = "none"
+    in_hands: ItemRef | None = None
+    hp: int = 0
+    hp_max: int = 0
+    hero: HeroLook | None = None
+    sees: list[Look] = Field(default_factory=list)
+
+
+class NpcViews(_GameMessage):
+    """Once a second, what the npc's nearest to the player perceive (v11)."""
+
+    type: Literal["npc_views"]
+    t: int
+    views: list[NpcView]
+
+
 class NpcEvent(_GameMessage):
     """Something an npc that is not under control noticed (v5, threats from others since v6).
 
@@ -411,7 +469,8 @@ GameMessage = Annotated[
     | NpcDied
     | StoryWorld
     | DealAccept
-    | DealDecline,
+    | DealDecline
+    | NpcViews,
     Field(discriminator="type"),
 ]
 
@@ -649,6 +708,7 @@ DebugCommand = Literal[
     "deal",
     "deal_accept",
     "deal_decline",
+    "player_equip",
 ]
 
 
@@ -667,7 +727,8 @@ class DebugCmd(_Command):
     (`value`: {deal, version, npc, npc_gives, hero_gives: the lines, missing: items the hero lacks, sent},
     null without a window), `deal_accept` — Y as the player
     presses it (`value`: "sent", or why not: "none", "waiting", "missing", "changed", "blocked"),
-    `deal_decline` — N (`value`: "declined", "none", "blocked").
+    `deal_decline` — N (`value`: "declined", "none", "blocked"); give the player an `item` and put it on
+    (`player_equip`, v11).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -692,6 +753,7 @@ class DebugCmd(_Command):
     npc: str | None = None
     node: str | None = None
     expr: list[Any] | None = None
+    item: str | None = None
 
 
 class GraphPatchCmd(_Command):
@@ -824,6 +886,14 @@ class StoryTagCmd(_Command):
     type: Literal["story_tag"] = "story_tag"
     req: str
     tag: str
+    npcs: list[str]
+
+
+class NpcViewCmd(_Command):
+    """What these npc's perceive (v11); `result.value`: their views (NpcView), unknown npc's left out."""
+
+    type: Literal["npc_view"] = "npc_view"
+    req: str
     npcs: list[str]
 
 
