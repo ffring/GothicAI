@@ -6,7 +6,8 @@ after that save is forgotten, exactly like in the game world. Each branch holds 
 events it inherited, which keeps reads to one branch.
 
 Events per npc: dialogue messages (`user` = the hero, `assistant` = the npc, `developer` = notes)
-and summaries that fold older messages into a short recollection.
+and summaries that fold older messages into a short recollection. Events of the branch as a whole:
+patches of the story graph (story.py), which follow the saves the same way.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ DEFAULT_PATH = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local" / "s
     "memory.sqlite3"
 )
 LOAD_LIMIT = 100  # newest messages read back for one npc (older ones should be summarized already)
+PATCHES = "*"  # the "npc" of story graph patches: they belong to the branch
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS branches (
@@ -38,7 +40,7 @@ CREATE TABLE IF NOT EXISTS events (
     branch    TEXT NOT NULL,
     seq       INTEGER NOT NULL,
     npc       TEXT NOT NULL,
-    kind      TEXT NOT NULL,          -- message | summary
+    kind      TEXT NOT NULL,          -- message | summary | patch (npc '*', content: JSON of the operation)
     role      TEXT,                   -- message: user | assistant | developer
     content   TEXT NOT NULL,
     covers    INTEGER,                -- summary: messages up to this seq are folded in
@@ -135,9 +137,21 @@ class MemoryStore:
         mem.entries = [Entry(int(seq), role, content) for seq, role, content in reversed(rows)]
         return mem
 
+    def add_patch(self, branch: str, op: str) -> int:
+        """A change to the story graph (JSON of one operation) made on this branch."""
+        return self._insert(branch, PATCHES, "patch", None, op, None, None)
+
+    def patches(self, branch: str) -> list[str]:
+        """The story graph changes of the branch, oldest first (inherited ones included)."""
+        rows = self._db.execute(
+            "SELECT content FROM events WHERE branch=? AND kind='patch' ORDER BY seq", (branch,)
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def branches(self) -> list[BranchInfo]:
         rows = self._db.execute(
-            "SELECT b.id, b.parent, b.parent_seq, b.created, COALESCE(MAX(e.seq), 0), COUNT(DISTINCT e.npc) "
+            "SELECT b.id, b.parent, b.parent_seq, b.created, COALESCE(MAX(e.seq), 0), "
+            "COUNT(DISTINCT CASE WHEN e.kind != 'patch' THEN e.npc END) "
             "FROM branches b LEFT JOIN events e ON e.branch=b.id GROUP BY b.id ORDER BY b.created"
         ).fetchall()
         return [BranchInfo(*row) for row in rows]

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "expr.h"
+#include "predicates.h"
 
 #include <cstdint>
 #include <map>
@@ -51,14 +52,6 @@ struct Node final {
   std::set<std::string>    reads, knows, writes;
   };
 
-// A script function used by conditions (C_BEKLAUEN, C_NPCISDOWN...), lifted into an expression over its parameters.
-struct Helper final {
-  std::string name;
-  uint32_t    params = 0;
-  ExprP       body;
-  std::string notLifted;
-  };
-
 struct VarInfo final {
   std::set<std::string> readers;  // nodes whose conditions read it
   std::set<std::string> writers;  // nodes that may write it
@@ -90,6 +83,7 @@ using LineTexts = std::unordered_map<std::string,std::string>;
 Model       buildModel(zenkit::DaedalusVm& vm, const Bytecode& code, const Lifter& lifter, const LineTexts& lines);
 
 std::string toJson(const Model& m, bool pretty);
+std::string toJson(const ExprP& e);
 // readable views, UTF-8
 std::string describeNode (const Model& m, const std::string& id, int depth = 3);
 std::string describeQuest(const Model& m, const std::string& var);

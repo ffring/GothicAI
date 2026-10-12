@@ -8,6 +8,9 @@
 #   m4: what the npc planner needs from the bridge: npc roster, soft actions (npc_act) and their end
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
+#   m5: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
+#       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
+#       the game checks every script condition against its lifted form ("[story] check" in game.log)
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
@@ -86,7 +89,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|ERROR" "$LOG_DIR/server.log" || true
-grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|story|ERROR" "$LOG_DIR/server.log" || true
+grep -E "^\[(ai|story)\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

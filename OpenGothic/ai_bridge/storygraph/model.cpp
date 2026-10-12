@@ -2,6 +2,7 @@
 
 #include "bytecode.h"
 #include "lifter.h"
+#include "predicates.h"
 #include "textcodec.h"
 #include "vocab.h"
 
@@ -49,14 +50,12 @@ struct Footprint final {
 class Builder final {
   public:
     Builder(zenkit::DaedalusVm& vm, const Bytecode& code, const Lifter& lifter, const LineTexts& lines)
-      :vm(vm), dat(vm), code(code), lifter(lifter), lines(lines) {}
+      :vm(vm), dat(vm), code(code), lifter(lifter), lines(lines), predicates(vm, lifter) {}
 
     Model build();
 
   private:
     const Footprint&    footprint(const std::string& fn);
-    const Helper&       helper(const std::string& name);
-    std::string         whyNotLifted(const ExprP& e);
     void                collectReads(const ExprP& e, Node& n, std::set<std::string>& seen);
     std::vector<Effect> effects(const Lifted& l);
     Node                choiceNode(const std::string& fn);
@@ -68,8 +67,8 @@ class Builder final {
     const Bytecode&                 code;
     const Lifter&                   lifter;
     const LineTexts&                lines;
+    Predicates                      predicates;
     std::map<std::string,Footprint> footprints;
-    std::map<std::string,Helper>    helpers;
     std::set<std::string>           busy;
   };
 
@@ -108,51 +107,6 @@ const Footprint& Builder::footprint(const std::string& fn) {
   return f;
   }
 
-const Helper& Builder::helper(const std::string& fn) {
-  auto it = helpers.find(fn);
-  if(it!=helpers.end())
-    return it->second;
-  Helper h;
-  h.name = fn;
-  auto* sym = dat.find_symbol_by_name(fn);
-  if(sym==nullptr) {
-    h.body      = ex::unknown("no function " + fn);
-    h.notLifted = "no such function";
-    return helpers[fn] = h;
-    }
-  h.params = sym->count();
-  // a placeholder while the body is lifted, so recursion ends
-  helpers[fn] = Helper{fn, h.params, ex::unknown("recursive"), "recursive"};
-  h.body      = Lifter::value(lifter.lift(sym->index()));
-  h.notLifted = whyNotLifted(h.body);
-  return helpers[fn] = h;
-  }
-
-std::string Builder::whyNotLifted(const ExprP& e) {
-  std::string r;
-  std::vector<std::string> fns;
-  ex::walk(e, [&](const Expr& x) {
-    if(!r.empty())
-      return;
-    if(x.kind==Expr::Unknown)
-      r = "unknown value (" + x.text + ")";
-    else if(x.kind==Expr::Local)
-      r = "local variable";
-    else if(x.kind==Expr::Call && !vocab::PredicateExternals.count(x.name) && !vocab::PureExternals.count(x.name))
-      r = "engine call " + x.name;
-    else if(x.kind==Expr::Fn)
-      fns.push_back(x.name);
-    });
-  if(!r.empty())
-    return r;
-  for(auto& f : fns) {
-    auto& h = helper(f);
-    if(!h.notLifted.empty())
-      return "helper " + f + ": " + h.notLifted;
-    }
-  return {};
-  }
-
 void Builder::collectReads(const ExprP& e, Node& n, std::set<std::string>& seen) {
   std::vector<std::string> fns;
   ex::walk(e, [&](const Expr& x) {
@@ -165,7 +119,7 @@ void Builder::collectReads(const ExprP& e, Node& n, std::set<std::string>& seen)
     });
   for(auto& f : fns)
     if(seen.insert(f).second)
-      collectReads(helper(f).body, n, seen);
+      collectReads(predicates.helper(f).body, n, seen);
   }
 
 std::vector<Effect> Builder::effects(const Lifted& l) {
@@ -436,7 +390,7 @@ Model Builder::build() {
 
     if(info->condition!=0) {
       auto l      = lifter.lift(uint32_t(info->condition));
-      n.condition = Lifter::condition(l);
+      n.condition = predicates.condition(uint32_t(info->condition));
       // conditions may change the world too: C_BEKLAUEN stores the theft values, Npc_SetRefuseTalk...
       // (their own locals are part of the lifted value, not an effect)
       for(auto& e : effects(l))
@@ -446,7 +400,7 @@ Model Builder::build() {
       } else {
       n.condition = ex::integer(1);
       }
-    n.notLifted = whyNotLifted(n.condition);
+    n.notLifted = predicates.whyNotLifted(n.condition);
     std::set<std::string> seen;
     collectReads(n.condition, n, seen);
 
@@ -507,7 +461,7 @@ Model Builder::build() {
 
   addVars(m, dialogFns);
   addQuests(m);
-  m.helpers = helpers;
+  m.helpers = predicates.helpers();
   return m;
   }
 
@@ -771,6 +725,13 @@ std::string storygraph::toJson(const Model& m, bool pretty) {
     rapidjson::Writer<rapidjson::StringBuffer> w(buf);
     writeModel(w, m);
     }
+  return std::string(buf.GetString(), buf.GetSize());
+  }
+
+std::string storygraph::toJson(const ExprP& e) {
+  rapidjson::StringBuffer buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  writeExpr(w, e);
   return std::string(buf.GetString(), buf.GetSize());
   }
 

@@ -28,6 +28,7 @@ class FakeGame:
         self.heads: list[tuple[str, int]] = []  # memory heads the server reported
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
+        self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -109,6 +110,12 @@ class FakeGame:
                 self.heads.append((msg["branch"], msg["seq"]))
             case "transcript":
                 (self.transcripts if msg.get("final", True) else self.partials).append(msg["text"])
+            case "graph_patch":
+                self.graph.append(msg)
+                if msg.get("req"):
+                    bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
+                    errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
+                    await self.send(type="result", req=msg["req"], ok=not bad, **errors)
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})

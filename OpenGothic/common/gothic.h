@@ -196,6 +196,18 @@ class Gothic final {
     // a GameSession was created from a save (or nullptr for a new game)
     std::function<void(Serialize&)>                                     saveExtFn;
     std::function<void(Serialize*)>                                     sessionStartFn;
+    // story graph: which dialogs an npc offers. Called while the dialog menu is built and by Npc_CheckInfo,
+    // with self and other set as for the conditions.
+    // a script dialog whose condition was checked: `visible` comes in as the script's answer
+    std::function<void(const zenkit::IInfo&,bool&)>                     dialogFilterFn;
+    // a choice of a script dialog (Info_AddChoice) about to be shown: false hides it
+    std::function<bool(const zenkit::IInfo&,int32_t)>                   dialogChoiceFilterFn;
+    // dialogs made at runtime that the npc offers now; `important` ones start on their own
+    std::function<void(const zenkit::INpc&,bool,std::vector<GameScript::DlgChoice>&)> dialogExtraFn;
+    // one of those was chosen: play it
+    std::function<void(const GameScript::DlgChoice&,Npc&,Npc&)>         dialogExtraExecFn;
+    // a dialog or a choice was chosen and has run
+    Tempest::Signal<void(const GameScript::DlgChoice&,Npc&,Npc&)>       onDialogChosen;
 
     std::string_view                      messageFromSvm(std::string_view id, int voice) const;
     std::string_view                      messageByName (std::string_view id) const;

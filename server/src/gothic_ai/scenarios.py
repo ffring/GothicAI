@@ -16,6 +16,7 @@ from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider
 from .protocol import (
     ActionResult,
+    DialogChosen,
     FollowEnded,
     GameMessage,
     LineStarted,
@@ -25,9 +26,11 @@ from .protocol import (
     NpcIdle,
     NpcRoster,
     Saved,
+    SayCmd,
     Session,
     Snapshot,
 )
+from .story import StoryPatches
 from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
@@ -306,6 +309,110 @@ async def m3_memory_voice(
     await link.act(npc, "return_to_routine")
     for name, outcome in results.items():
         log.info("%-10s %s", name, outcome)
+    return results
+
+
+ORIGINAL_LINE = "DIA_XARDAS_TODO_14_01"  # Xardas: "На этот раз самим нам не справиться..."
+
+
+async def m5_story_graph(
+    link: GameLink, story: StoryPatches, npc: str = "NONE_100_XARDAS", slot: int = 8
+) -> dict[str, str]:
+    """Stage 3 check (docs/story-graph.md): the game asks the story graph which dialogs an npc offers.
+
+    First every npc of the world builds its menu and each script condition is compared with its lifted
+    form (stage 2, live). Without changes the menu is the scripts' own. A dialog can be switched off and
+    on, and get a condition; the director adds a dialog with a line of its own, an original voiced line
+    and an effect, and the hero chooses it. A change made before a save comes back after loading it, one
+    made after it does not.
+    """
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)  # the session's patches are in the game
+
+    live = await link.check_conditions()
+    check("live_check", live.get("computed", 0) > 0 and live.get("differ") == 0, str(live))
+    base = await link.offered_dialogs(npc)
+    check("vanilla", bool(base), " ".join(base))
+    if len(base) < 2:
+        return results
+    first, second = base[0], base[1]
+
+    await story.apply({"op": "disable", "node": first})
+    check("disable", first not in await link.offered_dialogs(npc), first)
+    await story.apply({"op": "enable", "node": first})
+    check("enable", first in await link.offered_dialogs(npc), first)
+
+    never = ["==", ["int", 1], ["int", 0]]
+    await story.apply({"op": "condition", "node": first, "expr": never})
+    check("condition", first not in await link.offered_dialogs(npc), first)
+    await story.apply({"op": "condition", "node": first, "expr": None})
+    check("condition_dropped", first in await link.offered_dialogs(npc), first)
+    try:
+        await story.apply({"op": "condition", "node": first, "expr": ["var", "NO_SUCH_VARIABLE"]})
+        check("bad_condition", False, "taken")
+    except GameError as err:
+        check("bad_condition", True, str(err))
+
+    node = {
+        "id": "DIR_M5_TEST",
+        "npc": npc,
+        "description": "Проверка режиссёра",
+        "nr": 50,
+        "condition": ["!", ["call", "NPC_ISDEAD", ["inst", "SELF"]]],
+        "lines": [
+            {"speaker": "other", "text": "Это проверка графа сюжета."},
+            {"speaker": "self", "line": ORIGINAL_LINE},
+        ],
+        "effects": [{"do": "xp", "amount": 10}],
+    }
+    await story.apply({"op": "add_node", "node": node})
+    check("add_node", "DIR_M5_TEST" in await link.offered_dialogs(npc))
+    exp = ["field", ["inst", "HERO"], "EXP"]
+    before = await link.evaluate(exp)
+    chosen = asyncio.ensure_future(wait_message(link, DialogChosen, lambda m: m.node == "DIR_M5_TEST", 10))
+    await link.choose_dialog(npc, "DIR_M5_TEST")
+    await chosen
+    after = await link.evaluate(exp)
+    check("effects", after == before + 10, f"exp {before} -> {after}")
+    check("told", "DIR_M5_TEST" not in await link.offered_dialogs(npc))
+
+    # an original voiced line through `say`, as the director will make an npc use its own voice
+    await attach_when_free(link, npc)
+    started = asyncio.ensure_future(wait_message(link, LineStarted, lambda m: m.line == ORIGINAL_LINE, 15))
+    await link.send(SayCmd(npc=npc, line=ORIGINAL_LINE, text=""))
+    try:
+        check("original_line", (await started).voiced, ORIGINAL_LINE)
+    except TimeoutError:
+        check("original_line", False, "did not start")
+    await link.act(npc, "return_to_routine")
+
+    await story.apply({"op": "disable", "node": second})
+    await asyncio.sleep(0.5)  # the game has the memory head of that change
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    await story.apply({"op": "disable", "node": first})  # after the save: gone with the load
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(1)
+    offered = await link.offered_dialogs(npc)
+    check(
+        "after_load",
+        second not in offered and first in offered and "DIR_M5_TEST" not in offered,
+        " ".join(offered),
+    )
+
+    for name, outcome in results.items():
+        log.info("%-18s %s", name, outcome)
     return results
 
 

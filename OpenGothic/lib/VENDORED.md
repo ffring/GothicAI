@@ -17,3 +17,11 @@ automatically; to update one, copy the needed parts of a newer upstream version 
 | `edd-dbg/`, `miniz/` | as in upstream OpenGothic | — | see the directories | — |
 
 Git metadata of the libraries (`.git`, `.github`, `.gitmodules`, `.gitignore`) was not copied.
+
+## Local changes
+
+Changes made here on top of the upstream commits above. Carry them over when updating a library.
+
+| Library | Change | Why |
+|---|---|---|
+| `ZenKit/` | `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine function the way the `BE` instruction does | the story graph (`ai_bridge/storygraph`) evaluates conditions of the AI director with the engine's own externals |

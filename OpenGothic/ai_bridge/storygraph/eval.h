@@ -48,6 +48,21 @@ class Externals {
 // Sends every engine function the VM calls to `ext`, so the VM and the Evaluator see the same engine.
 void bindExternals(zenkit::DaedalusVm& vm, Externals& ext);
 
+// Calls a script function or an engine function with these arguments, the way a script does: the values must
+// fit the parameter types (int and func: Int, instance: Inst, string: Str). nullopt and `error` if they don't.
+std::optional<Value> callFunction(zenkit::DaedalusVm& vm, const zenkit::DaedalusSymbol& fn,
+                                  const std::vector<Value>& args, std::string& error);
+
+// The engine functions registered with the VM (in the game: GameScript's), for the Evaluator.
+class VmExternals final : public Externals {
+  public:
+    explicit VmExternals(zenkit::DaedalusVm& vm) : vm(vm) {}
+    Value call(const zenkit::DaedalusSymbol& fn, const std::vector<Value>& args) override;
+
+  private:
+    zenkit::DaedalusVm& vm;
+  };
+
 // The member symbol of an instance's class (C_NPC.AIVAR for an npc and "AIVAR"), nullptr if there is none.
 zenkit::DaedalusSymbol* member(zenkit::DaedalusVm& vm, const zenkit::DaedalusInstance& inst, const std::string& name);
 

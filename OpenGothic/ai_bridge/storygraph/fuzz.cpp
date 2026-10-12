@@ -8,6 +8,7 @@
 #include "bytecode.h"
 #include "check.h"
 #include "eval.h"
+#include "exprjson.h"
 #include "model.h"
 #include "vocab.h"
 
@@ -203,8 +204,28 @@ int fuzzConditions(const char* datPath, const Model& m, uint32_t rounds, const c
     vm->call_function(init);
   world.setup = false;
 
+  // conditions go to the bridge as JSON: they must read back as they were
+  size_t roundTrips = 0, roundTripErrors = 0;
+  for(auto& n : m.nodes) {
+    if(n.choice || !n.notLifted.empty())
+      continue;
+    rapidjson::Document doc;
+    auto        text = toJson(n.condition);
+    std::string error;
+    doc.Parse(text.c_str(), text.size());
+    auto back = doc.HasParseError() ? nullptr : readExpr(doc, error);
+    roundTrips++;
+    if(back==nullptr || back->key!=n.condition->key) {
+      if(roundTripErrors++<5)
+        std::printf("JSON round trip of %s: %s\n", ident(n.id).c_str(), back ? "differs" : error.c_str());
+      }
+    }
+  std::printf("JSON round trip: %zu conditions, %zu differ\n", roundTrips, roundTripErrors);
+
+  // the model asks the engine through the VM, as the bridge does in the game
   Bytecode              code(*vm);
-  Evaluator             ev(*vm, m.helpers, world);
+  VmExternals           engine(*vm);
+  Evaluator             ev(*vm, m.helpers, engine);
   std::vector<Mismatch> found;
   size_t dialogs = 0, runs = 0, vmFaults = 0, modelFails = 0, bothTrue = 0, bothFalse = 0;
   std::map<std::string,size_t> failWhy;
@@ -324,7 +345,7 @@ int fuzzConditions(const char* datPath, const Model& m, uint32_t rounds, const c
     }
   if(found.size()>20 && !verbose)
     std::printf("... %zu more (--verbose)\n", found.size()-20);
-  return found.empty() && modelFails==0 ? 0 : 1;
+  return found.empty() && modelFails==0 && roundTripErrors==0 ? 0 : 1;
   }
 
 }

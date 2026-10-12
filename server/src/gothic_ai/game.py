@@ -26,6 +26,7 @@ from .protocol import (
     DetachCmd,
     Detached,
     GameMessage,
+    GraphPatchCmd,
     Hello,
     Loading,
     NpcActCmd,
@@ -152,7 +153,8 @@ class GameLink:
         assert self.world is not None
         return self.world
 
-    async def _request(self, cmd: AttachCmd | DetachCmd | DebugCmd, timeout: float) -> None:
+    async def _request(self, cmd: AttachCmd | DetachCmd | DebugCmd | GraphPatchCmd, timeout: float) -> Result:
+        assert cmd.req is not None
         fut: asyncio.Future[Result] = asyncio.get_running_loop().create_future()
         self._requests[cmd.req] = fut
         try:
@@ -162,6 +164,7 @@ class GameLink:
             self._requests.pop(cmd.req, None)
         if not res.ok:
             raise GameError(res.error or "request failed")
+        return res
 
     async def attach(self, npc: str, timeout: float = 5.0) -> None:
         await self._request(AttachCmd(req=self._next_id("r"), npc=npc), timeout)
@@ -172,6 +175,32 @@ class GameLink:
     async def debug(self, cmd: DebugCommand, slot: int, timeout: float = 10.0) -> None:
         """Start saving/loading `save_slot_<slot>.sav` (game in -devmode). Returns once it has started."""
         await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot), timeout)
+
+    async def patch_graph(
+        self, ops: list[dict[str, Any]], replace: bool = False, timeout: float = 5.0
+    ) -> None:
+        """Change the story graph in the game (see GraphPatchCmd); GameError lists the rejected operations."""
+        await self._request(GraphPatchCmd(req=self._next_id("g"), replace=replace, ops=ops), timeout)
+
+    async def offered_dialogs(self, npc: str, timeout: float = 5.0) -> list[str]:
+        """The dialogs the npc offers the player now (game in -devmode)."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="dialogs", npc=npc.upper()), timeout)
+        return list(res.value or [])
+
+    async def choose_dialog(self, npc: str, node: str, timeout: float = 5.0) -> None:
+        """Play a dialog the npc offers as if the player chose it (game in -devmode)."""
+        await self._request(
+            DebugCmd(req=self._next_id("r"), cmd="choose", npc=npc.upper(), node=node.upper()), timeout
+        )
+
+    async def check_conditions(self, timeout: float = 30.0) -> dict[str, Any]:
+        """Script conditions of every npc in the world against their lifted form (game in -devmode)."""
+        return dict((await self._request(DebugCmd(req=self._next_id("r"), cmd="check"), timeout)).value or {})
+
+    async def evaluate(self, expr: list[Any], npc: str | None = None, timeout: float = 5.0) -> Any:
+        """A story graph expression computed in the game, self = `npc` (game in -devmode)."""
+        cmd = DebugCmd(req=self._next_id("r"), cmd="eval", npc=npc.upper() if npc else None, expr=expr)
+        return (await self._request(cmd, timeout)).value
 
     async def act(
         self, npc: str, action: ActionType, /, *, timeout: float = 90.0, **args: Any

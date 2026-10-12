@@ -37,6 +37,7 @@ from .protocol import (
     Saved,
     Session,
 )
+from .story import StoryPatches
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
 from .voice import (
     DEFAULT_ASR_URL,
@@ -61,6 +62,14 @@ HELP = """commands (npc defaults to the last attached one):
   memory [npc]      the current save branch and what the npc remembers
   brain             what the npc planner is doing (tiers, requests, decisions)
   save <slot> | load <slot>   save_slot_<slot>.sav (game needs -devmode)
+  graph             story graph changes on this save branch (docs/story-graph.md)
+  graph hide|show <node>      switch a dialog or a choice off / on again
+  graph cond <node> <json>    add a condition (story graph expression) to a dialog; "-" drops them
+  graph add <json>            add a dialog: {"id", "npc", "description", "lines", "effects", ...}
+  graph remove <id>           remove an added dialog
+  dialogs           what the npc offers in the dialog menu now (game needs -devmode)
+  choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
+  eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
   quit"""
 
 
@@ -89,6 +98,7 @@ class ServerState:
         self.dialogue: DialogueManager | None = None
         self.voice: VoiceInput | None = None
         self.brain: NpcPlanner | None = None
+        self.story: StoryPatches | None = None
 
 
 class Console:
@@ -164,12 +174,46 @@ class Console:
                 print(self.state.brain.snapshot())
                 for d in list(self.state.brain.applier.recent)[-10:]:
                     print(f"  {d.npc} {d.question}={d.choice} ({d.confidence:.2f}) {','.join(d.stimuli)}")
+            case "graph" if self.state.story is not None:
+                await self.graph(rest)
+            case "dialogs":
+                print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
+            case "choose" if rest:
+                await link.choose_dialog(rest[1] if len(rest) > 1 else npc, rest[0])
+            case "eval" if rest:
+                print(json.dumps(await link.evaluate(json.loads(rest[0]), rest[1] if len(rest) > 1 else npc)))
             case "talk" if rest and self.state.dialogue is not None:
                 snap = await link.snapshot(npc)
                 self.state.dialogue.open(npc, snap.npc.name)
                 await self.state.dialogue.say_as_player(npc, " ".join(rest))
             case _:
                 print(HELP)
+
+    async def graph(self, rest: list[str]) -> None:
+        story = self.state.story
+        assert story is not None
+        match rest:
+            case []:
+                for op in story.ops():
+                    print(json.dumps(op, ensure_ascii=False))
+                return
+            case ["hide", node]:
+                op: dict[str, Any] = {"op": "disable", "node": node.upper()}
+            case ["show", node]:
+                op = {"op": "enable", "node": node.upper()}
+            case ["cond", node, "-"]:
+                op = {"op": "condition", "node": node.upper(), "expr": None}
+            case ["cond", node, expr]:
+                op = {"op": "condition", "node": node.upper(), "expr": json.loads(expr)}
+            case ["add", node]:
+                op = {"op": "add_node", "node": json.loads(node)}
+            case ["remove", node]:
+                op = {"op": "remove_node", "node": node.upper()}
+            case _:
+                print(HELP)
+                return
+        await story.apply(op)
+        print("ok")
 
 
 def _backend(args: argparse.Namespace) -> LLMBackend:
@@ -207,6 +251,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue = DialogueManager(
             link, llm, personas, memory=memory, tts=tts, greet=not args.no_greet, journal=journal
         )
+        state.story = StoryPatches(link, memory)
         if asr is not None and source is not None:
             state.voice = VoiceInput(link, state.dialogue, source, asr)
         brain = None
@@ -253,6 +298,12 @@ async def serve(args: argparse.Namespace) -> int:
                     if not v.startswith("rejected" if k in expected_rejects else "done")
                 }
                 log.info("scenario m4: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5":
+                assert state.story is not None
+                results = await scenarios.m5_story_graph(link, state.story, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
@@ -539,7 +590,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")

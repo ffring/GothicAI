@@ -20,23 +20,40 @@ if(PROJECT_IS_TOP_LEVEL)
   add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../lib/ZenKit ${CMAKE_CURRENT_BINARY_DIR}/zenkit)
 endif()
 
-add_library(StoryGraph STATIC
+set(STORYGRAPH_SOURCES
   bytecode.cpp bytecode.h
   eval.cpp     eval.h
   expr.cpp     expr.h
+  exprjson.cpp exprjson.h
   lifter.cpp   lifter.h
   model.cpp    model.h
+  predicates.cpp predicates.h
   vocab.h
   ../textcodec.cpp ../textcodec.h)
+if(PROJECT_IS_TOP_LEVEL)
+  add_library(StoryGraph STATIC ${STORYGRAPH_SOURCES})
+  target_link_libraries(StoryGraph PUBLIC zenkit)
+else()
+  # inside the game the objects go into ai_bridge, which gets ZenKit through the engine: linking ZenKit
+  # here again reorders the static libraries and pulls in a second copy of squish
+  add_library(StoryGraph OBJECT ${STORYGRAPH_SOURCES})
+  target_include_directories(StoryGraph PRIVATE $<TARGET_PROPERTY:zenkit,INTERFACE_INCLUDE_DIRECTORIES>)
+  target_compile_definitions(StoryGraph PRIVATE $<TARGET_PROPERTY:zenkit,INTERFACE_COMPILE_DEFINITIONS>)
+endif()
 target_include_directories(StoryGraph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # rapidjson 1.1 trips modern clang warnings; treat it as a system header
-target_include_directories(StoryGraph SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/rapidjson/include)
-target_link_libraries(StoryGraph PUBLIC zenkit)
-
-add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h)
-target_link_libraries(storygraph PRIVATE StoryGraph)
+target_include_directories(StoryGraph SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/rapidjson/include)
 
 if(NOT MSVC)
   target_compile_options(StoryGraph PRIVATE -Wall -Wconversion -Werror)
-  target_compile_options(storygraph PRIVATE -Wall -Wconversion -Werror)
+endif()
+
+# the command line tool; inside the game build (ai_bridge) only the library is needed
+option(STORYGRAPH_TOOL "build the storygraph command line tool" ${PROJECT_IS_TOP_LEVEL})
+if(STORYGRAPH_TOOL)
+  add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h)
+  target_link_libraries(storygraph PRIVATE StoryGraph)
+  if(NOT MSVC)
+    target_compile_options(storygraph PRIVATE -Wall -Wconversion -Werror)
+  endif()
 endif()

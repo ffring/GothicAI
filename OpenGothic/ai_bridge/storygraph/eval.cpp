@@ -85,6 +85,58 @@ void storygraph::bindExternals(zenkit::DaedalusVm& vm, Externals& ext) {
     });
   }
 
+std::optional<Value> storygraph::callFunction(zenkit::DaedalusVm& vm, const zenkit::DaedalusSymbol& fn,
+                                              const std::vector<Value>& args, std::string& error) {
+  if(fn.type()!=DaedalusDataType::FUNCTION) {
+    error = ident(fn.name()) + " is not a function";
+    return std::nullopt;
+    }
+  auto params = vm.find_parameters_for_function(&fn);
+  if(params.size()!=args.size()) {
+    error = ident(fn.name()) + " takes " + std::to_string(params.size()) + " arguments";
+    return std::nullopt;
+    }
+  for(size_t i=0; i<args.size(); ++i) {
+    auto t    = params[i].type();
+    auto want = t==DaedalusDataType::FLOAT    ? Value::Float :
+                t==DaedalusDataType::STRING   ? Value::Str   :
+                t==DaedalusDataType::INSTANCE ? Value::Inst  : Value::Int;
+    if(args[i].type!=want) {
+      error = "argument " + std::to_string(i) + " of " + ident(fn.name()) + " has the wrong type";
+      return std::nullopt;
+      }
+    }
+  for(auto& a : args)
+    switch(a.type) {
+      case Value::Int:   vm.push_int(a.i);         break;
+      case Value::Float: vm.push_float(a.f);       break;
+      case Value::Str:   vm.push_string(a.s);      break;
+      case Value::Inst:  vm.push_instance(a.inst); break;
+      }
+  if(fn.is_external()) {
+    if(!vm.unsafe_call_external(&fn)) {
+      error = "no engine function " + ident(fn.name());
+      return std::nullopt;
+      }
+    } else {
+    vm.unsafe_call(&fn);
+    }
+  if(!fn.has_return())
+    return Value::integer(0);
+  switch(fn.rtype()) {
+    case DaedalusDataType::FLOAT:    return Value::real(vm.pop_float());
+    case DaedalusDataType::STRING:   return Value::str(vm.pop_string());
+    case DaedalusDataType::INSTANCE: return Value::instance(vm.pop_instance());
+    default:                         return Value::integer(vm.pop_int());
+    }
+  }
+
+Value VmExternals::call(const zenkit::DaedalusSymbol& fn, const std::vector<Value>& args) {
+  std::string error;
+  auto r = callFunction(vm, fn, args, error);
+  return r ? *r : asReturned(fn.rtype(), Value());
+  }
+
 zenkit::DaedalusSymbol* storygraph::member(zenkit::DaedalusVm& vm, const zenkit::DaedalusInstance& inst,
                                            const std::string& name) {
   auto* cls = vm.find_symbol_by_index(inst.symbol_index());

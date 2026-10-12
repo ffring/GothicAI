@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 # --- game -> server -----------------------------------------------------------
 
@@ -75,6 +75,7 @@ class Result(_GameMessage):
     req: str
     ok: bool
     error: str | None = None
+    value: Any = None  # debug commands: what was asked for (dialogs, a computed expression)
 
 
 ActionStatus = Literal["done", "failed", "timeout", "cancelled", "rejected"]
@@ -229,6 +230,17 @@ class LineStarted(_GameMessage):
     voiced: bool = False
 
 
+class DialogChosen(_GameMessage):
+    """The player chose a dialog or one of its choices in the dialog menu (v6). `node` is the script
+    symbol of the dialog (C_INFO) or of the choice's function, or the id of a dialog the director added
+    (`made`)."""
+
+    type: Literal["dialog_chosen"]
+    npc: str
+    node: str
+    made: bool = False
+
+
 NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
 
 
@@ -310,7 +322,8 @@ GameMessage = Annotated[
     | NpcRoster
     | NpcEvent
     | NpcIdle
-    | NpcActResult,
+    | NpcActResult
+    | DialogChosen,
     Field(discriminator="type"),
 ]
 
@@ -470,13 +483,37 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load"]
+DebugCommand = Literal["save", "load", "dialogs", "choose", "eval", "check"]
 
 
 class DebugCmd(_Command):
-    """Save or load a slot (`save_slot_<slot>.sav`) for automated checks; the game must run with -devmode."""
+    """For automated checks; the game must run with -devmode.
+
+    - save / load: `save_slot_<slot>.sav`;
+    - dialogs: the dialogs `npc` offers the player now (`value`: their ids, as the menu would list them);
+    - choose: plays dialog `node` of `npc` as if the player chose it in the menu;
+    - eval: computes `expr` (story graph expression) with self = `npc`, other = the hero (`value`);
+    - check: every npc of the world builds its dialog menu, each script condition is compared with its
+      lifted form (`value`: {npcs, computed, differ, differences})."""
 
     type: Literal["debug"] = "debug"
     req: str
     cmd: DebugCommand
-    slot: int
+    slot: int | None = None
+    npc: str | None = None
+    node: str | None = None
+    expr: list[Any] | None = None
+
+
+class GraphPatchCmd(_Command):
+    """Changes to the story graph (v6): which dialogs npc's offer. `replace` drops the earlier ones first.
+
+    Operations (`op`): `disable` / `enable` a dialog or a choice (`node`); `condition`: add `expr` to the
+    dialog's script condition (`expr` null drops the added ones); `add_node` (`node` = {id, npc,
+    description, nr, important, permanent, condition, lines, effects}); `remove_node`; `told`: the hero
+    has chosen that added dialog. With `req`, the game answers `result` (`error` lists rejected ops)."""
+
+    type: Literal["graph_patch"] = "graph_patch"
+    req: str | None = None
+    replace: bool = False
+    ops: list[dict[str, Any]]
