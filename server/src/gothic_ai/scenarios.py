@@ -903,7 +903,7 @@ async def rescue(
     runner = None
     if planner is None:
         planner = NpcPlanner(
-            FixedDecider({"react": ("thank", "call_help")}, {"escalate": 3.6, "attitude": 4.0}),
+            FixedDecider({"react": ("thank", "call_help", "comment")}, {"escalate": 3.6, "attitude": 4.0}),
             GameApplier(link),
         )
         link.listeners.append(planner.on_message)
