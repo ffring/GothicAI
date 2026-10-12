@@ -36,8 +36,13 @@ class Bytecode final {
     // prints the instructions of a function to stdout; false if there is no such function
     bool      print(const std::string& fnName) const;
 
-  private:
+    // where the code block starting at `address` ends: the start of the next block
     uint32_t  codeEnd(uint32_t address) const;
+    static bool hasCode(const zenkit::DaedalusSymbol& sym);
+    // the script function whose code starts at `address`, nullptr if there is none
+    const zenkit::DaedalusSymbol* functionAt(uint32_t address) const;
+
+  private:
 
     const zenkit::DaedalusScript&          script;
     std::vector<uint32_t>                  starts;     // sorted start addresses of all code blocks

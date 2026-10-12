@@ -1,5 +1,7 @@
 #include "bytecode.h"
 
+#include "vocab.h"
+
 #include <zenkit/DaedalusScript.hh>
 
 #include <algorithm>
@@ -9,8 +11,9 @@ using namespace storygraph;
 using zenkit::DaedalusDataType;
 using zenkit::DaedalusOpcode;
 
+// functions, instances and prototypes are constants; variables of these types only hold references
 static bool hasCode(const zenkit::DaedalusSymbol& s) {
-  if(s.is_external() || s.address()==0)
+  if(s.is_external() || !s.is_const() || s.address()==0)
     return false;
   auto t = s.type();
   return t==DaedalusDataType::FUNCTION || t==DaedalusDataType::INSTANCE || t==DaedalusDataType::PROTOTYPE;
@@ -48,6 +51,15 @@ Bytecode::Bytecode(const zenkit::DaedalusScript& script)
 
   if(auto* c = script.find_symbol_by_name("C_INFO"))
     infoClass = c->index();
+  }
+
+bool Bytecode::hasCode(const zenkit::DaedalusSymbol& s) {
+  return ::hasCode(s);
+  }
+
+const zenkit::DaedalusSymbol* Bytecode::functionAt(uint32_t address) const {
+  auto it = fnByAddress.find(address);
+  return it==fnByAddress.end() ? nullptr : script.find_symbol_by_index(it->second);
   }
 
 uint32_t Bytecode::codeEnd(uint32_t address) const {
@@ -90,13 +102,6 @@ struct Operand final {
   };
 }
 
-// Engine functions that take an instance as a plain int (`var int`): argument positions.
-static const std::unordered_map<std::string, std::vector<uint32_t>> InstanceAsInt = {
-  {"NPC_KNOWSINFO",      {1}}, {"NPC_HASITEMS",      {1}}, {"MOB_HASITEMS", {1}}, {"HLP_ISITEM", {1}},
-  {"CREATEINVITEMS",     {1}}, {"CREATEINVITEM",     {1}}, {"NPC_REMOVEINVITEMS", {1}},
-  {"NPC_REMOVEINVITEM",  {1}}, {"WLD_INSERTITEM",    {0}}, {"WLD_INSERTNPC", {0}}, {"HLP_GETNPC", {0}},
-  };
-
 static bool isBinary(DaedalusOpcode op) {
   auto v = uint8_t(op);
   return v<=uint8_t(DaedalusOpcode::GT) || (v>=uint8_t(DaedalusOpcode::ORR) && v<=uint8_t(DaedalusOpcode::GTE));
@@ -134,19 +139,16 @@ FnSummary Bytecode::summarize(uint32_t fnSymbol) const {
     std::vector<Operand> args(callee.count());
     for(size_t i=args.size(); i>0; --i)
       args[i-1] = pop();
-    auto asInt = InstanceAsInt.find(callee.name());
     for(uint32_t i=0; i<args.size(); ++i) {
       auto* par = script.find_symbol_by_index(callee.index()+1+i);
       auto& a   = args[i];
       if(par==nullptr || (a.kind!=Operand::Imm && a.kind!=Operand::Inst))
         continue;
       auto* arg = script.find_symbol_by_index(a.kind==Operand::Imm ? uint32_t(a.value) : a.sym);
-      bool instance = par->type()==DaedalusDataType::INSTANCE ||
-                      (asInt!=InstanceAsInt.end() &&
-                       std::find(asInt->second.begin(), asInt->second.end(), i)!=asInt->second.end());
-      if(instance)
+      bool instance = par->type()==DaedalusDataType::INSTANCE || vocab::takesInstance(callee.name(), i);
+      if(instance && !(callee.name()=="INFO_ADDCHOICE" && i==2))
         addInstance(arg);
-      else if(par->type()==DaedalusDataType::FUNCTION && a.kind==Operand::Imm && callee.name()=="INFO_ADDCHOICE")
+      if(callee.name()=="INFO_ADDCHOICE" && i==2 && a.kind==Operand::Imm)
         f.choices.push_back(uint32_t(a.value));
       }
     if(callee.has_return())
@@ -166,9 +168,7 @@ FnSummary Bytecode::summarize(uint32_t fnSymbol) const {
         }
       }
     else if(op==DaedalusOpcode::BL) {
-      auto it = fnByAddress.find(in.address);
-      if(it!=fnByAddress.end()) {
-        auto* callee = script.find_symbol_by_index(it->second);
+      if(auto* callee = functionAt(in.address)) {
         f.calls.insert(callee->name());
         call(*callee);
         }

@@ -20,11 +20,19 @@ if(PROJECT_IS_TOP_LEVEL)
   add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../lib/ZenKit ${CMAKE_CURRENT_BINARY_DIR}/zenkit)
 endif()
 
-add_library(StoryGraph STATIC bytecode.cpp bytecode.h ../textcodec.cpp ../textcodec.h)
+add_library(StoryGraph STATIC
+  bytecode.cpp bytecode.h
+  expr.cpp     expr.h
+  lifter.cpp   lifter.h
+  model.cpp    model.h
+  vocab.h
+  ../textcodec.cpp ../textcodec.h)
 target_include_directories(StoryGraph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+# rapidjson 1.1 trips modern clang warnings; treat it as a system header
+target_include_directories(StoryGraph SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/rapidjson/include)
 target_link_libraries(StoryGraph PUBLIC zenkit)
 
-add_executable(storygraph main.cpp)
+add_executable(storygraph main.cpp scan.cpp)
 target_link_libraries(storygraph PRIVATE StoryGraph)
 
 if(NOT MSVC)
