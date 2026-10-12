@@ -29,6 +29,14 @@ inline const std::set<std::string> PredicateExternals = {
   "NPC_OWNEDBYNPC", "NPC_OWNEDBYGUILD", "NPC_ISNEAR", "NPC_GETNEXTTARGET", "NPC_AREWESTRONGER",
   };
 
+// Engine predicates that return TRUE or FALSE (the rest return counts, distances, instances...).
+// `pred == TRUE` is folded to `pred` for these.
+inline const std::set<std::string> BoolExternals = {
+  "NPC_KNOWSINFO", "NPC_ISDEAD", "NPC_ISINSTATE", "NPC_WASINSTATE", "NPC_ISINROUTINE", "NPC_REFUSETALK",
+  "NPC_HASEQUIPPEDARMOR", "NPC_HASEQUIPPEDMELEEWEAPON", "NPC_ISPLAYER", "HLP_ISVALIDNPC", "HLP_ISVALIDITEM",
+  "HLP_ISITEM", "HLP_STRCMP", "WLD_ISTIME", "WLD_DETECTNPC",
+  };
+
 // Engine functions without effects on the world, used for values (strings, random numbers).
 inline const std::set<std::string> PureExternals = {
   "HLP_RANDOM", "INTTOSTRING", "CONCATSTRINGS", "INTTOFLOAT", "FLOATTOINT", "HLP_GETINSTANCEID",

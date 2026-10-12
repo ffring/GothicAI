@@ -77,13 +77,13 @@ class Lifter final {
     static ExprP value(const Lifted& l);
 
   private:
-    static constexpr uint32_t MaxLocalSize = 256;  // nodes in a local's value merged from branches
+    static constexpr uint32_t MaxLocalSize = 256;  // nodes in a variable's value merged from branches
     static constexpr uint32_t MaxCondSize  = 512;  // nodes in a branch condition
     struct State;
     ExprP  resolve(const State& s, const ExprP& e) const;
     ExprP  pushVar(const State& s, const zenkit::DaedalusSymbol& sym, int32_t index) const;
     void   merge(State& into, State&& from) const;
-    ExprP  mergeValues(const Dnf& ga, const ExprP& va, const Dnf& gb, const ExprP& vb, const std::string& local) const;
+    ExprP  mergeValues(const Dnf& ga, const ExprP& va, const Dnf& gb, const ExprP& vb, const std::string& name) const;
 
     const zenkit::DaedalusScript&                script;
     const Bytecode&                              code;

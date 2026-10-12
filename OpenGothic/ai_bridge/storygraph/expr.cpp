@@ -1,6 +1,7 @@
 #include "expr.h"
 
 #include "textcodec.h"
+#include "vocab.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8,13 +9,6 @@
 #include <set>
 
 using namespace storygraph;
-
-// engine predicates that return TRUE or FALSE (the rest return counts, distances, instances...)
-static const std::set<std::string> BoolExternals = {
-  "NPC_KNOWSINFO", "NPC_ISDEAD", "NPC_ISINSTATE", "NPC_WASINSTATE", "NPC_ISINROUTINE", "NPC_REFUSETALK",
-  "NPC_HASEQUIPPEDARMOR", "NPC_HASEQUIPPEDMELEEWEAPON", "NPC_ISPLAYER", "HLP_ISVALIDNPC", "HLP_ISVALIDITEM",
-  "HLP_ISITEM", "HLP_STRCMP", "WLD_ISTIME", "WLD_DETECTNPC",
-  };
 
 static bool isComparison(const std::string& o) {
   return o=="==" || o=="!=" || o=="<" || o==">" || o=="<=" || o==">=";
@@ -77,7 +71,7 @@ bool Expr::isBool() const {
   if(kind==Op)
     return isComparison(name) || name=="&&" || name=="||" || name=="!";
   if(kind==Call)
-    return BoolExternals.count(name)>0;
+    return vocab::BoolExternals.count(name)>0;
   return false;
   }
 

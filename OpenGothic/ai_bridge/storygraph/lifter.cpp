@@ -160,10 +160,12 @@ ExprP Dnf::expr() const {
 // ---- Lifter
 
 struct Lifter::State final {
-  Dnf                          guard;
-  std::vector<ExprP>           stack;
-  std::map<std::string, ExprP> locals;
-  ExprP                        inst;  // instance for member access (GMOVI)
+  Dnf                guard;
+  std::vector<ExprP> stack;
+  // values stored on this path, by the key of the target (a local, global, member or instance variable):
+  // a read after a store sees the stored value, like `self.aivar[AIV_PASSGATE]` set and then checked
+  std::map<std::string, std::pair<ExprP,ExprP>> stored;  // key -> target, value
+  ExprP              inst;  // instance for member access (GMOVI)
   };
 
 static const char* binaryOp(DaedalusOpcode op) {
@@ -241,13 +243,22 @@ Lifter::Lifter(const zenkit::DaedalusScript& script, const Bytecode& code)
     }
   }
 
-// Daedalus locals are static: they keep their value between calls, like globals with a function's prefix.
-// A local not assigned on this path holds whatever was stored last, so it reads as a variable.
+static bool storable(const ExprP& e) {
+  return e->kind==Expr::Local || e->kind==Expr::Var || e->kind==Expr::Field || e->kind==Expr::Inst;
+  }
+
+// A variable not stored on this path. Daedalus locals are static: they keep their value between calls,
+// like globals with a function's prefix, so an unassigned local holds whatever was stored last.
+static ExprP unstored(const ExprP& e) {
+  return e->kind==Expr::Local ? ex::var(e->name) : e;
+  }
+
+// A variable read as a value: what this path stored in it, or its value before the function ran.
 ExprP Lifter::resolve(const State& s, const ExprP& e) const {
-  if(e->kind!=Expr::Local)
+  if(!storable(e))
     return e;
-  auto it = s.locals.find(e->name);
-  return it!=s.locals.end() ? it->second : ex::var(e->name);
+  auto it = s.stored.find(e->key);
+  return it!=s.stored.end() ? it->second.second : unstored(e);
   }
 
 ExprP Lifter::pushVar(const State& s, const zenkit::DaedalusSymbol& sym, int32_t index) const {
@@ -296,25 +307,26 @@ void Lifter::merge(State& a, State&& b) const {
     st[i] = x->key==y->key ? x : ex::unknown("value differs between branches");
     }
   a.stack = std::move(st);
-  // a local assigned differently on the two branches: the value of the branch that ran.
-  // Not assigned on a branch, it holds what was stored before (locals are static).
+  // a variable stored differently on the two branches: the value of the branch that ran.
+  // Not stored on a branch, it holds what it held before.
   std::set<std::string> keys;
-  for(auto& [k,v] : a.locals) keys.insert(k);
-  for(auto& [k,v] : b.locals) keys.insert(k);
+  for(auto& [k,v] : a.stored) keys.insert(k);
+  for(auto& [k,v] : b.stored) keys.insert(k);
   for(auto& k : keys) {
-    auto ia = a.locals.find(k);
-    auto ib = b.locals.find(k);
-    auto va = ia!=a.locals.end() ? ia->second : ex::var(k);
-    auto vb = ib!=b.locals.end() ? ib->second : ex::var(k);
+    auto ia = a.stored.find(k);
+    auto ib = b.stored.find(k);
+    auto t  = ia!=a.stored.end() ? ia->second.first : ib->second.first;
+    auto va = ia!=a.stored.end() ? ia->second.second : unstored(t);
+    auto vb = ib!=b.stored.end() ? ib->second.second : unstored(t);
     if(va->key==vb->key)
       continue;
-    a.locals[k] = mergeValues(ga, va, b.guard, vb, k);
+    a.stored[k] = {t, mergeValues(ga, va, b.guard, vb, t->str())};
     }
   if(a.inst==nullptr || b.inst==nullptr || a.inst->key!=b.inst->key)
     a.inst = (a.inst==nullptr && b.inst==nullptr) ? nullptr : ex::unknown("instance differs between branches");
   }
 
-// The value of a local after two branches meet. A counter (`x = x + 1` on one branch) stays linear:
+// The value of a variable after two branches meet. A counter (`x = x + 1` on one branch) stays linear:
 // x + (case guard -> 1), instead of doubling the tree at every if.
 ExprP Lifter::mergeValues(const Dnf& ga, const ExprP& va, const Dnf& gb, const ExprP& vb, const std::string& k) const {
   auto step = [](const ExprP& base, const ExprP& v) -> ExprP {
@@ -332,7 +344,7 @@ ExprP Lifter::mergeValues(const Dnf& ga, const ExprP& va, const Dnf& gb, const E
   else
     v = ex::cases({ga.expr(), va, gb.expr(), vb});
   // every merge can double the tree (a value that differs under five ifs has 2^5 leaves)
-  return v->size<=MaxLocalSize ? v : ex::unknown("local " + k + " too complex");
+  return v->size<=MaxLocalSize ? v : ex::unknown(k + " too complex");
   }
 
 Lifted Lifter::lift(uint32_t fnSymbol) const {
@@ -411,8 +423,8 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
       auto v      = resolve(s, pop());
       if(sop!=nullptr)
         v = ex::op(sop, {resolve(s, target), v});
-      if(target->kind==Expr::Local)
-        s.locals[target->name] = v;
+      if(storable(target))
+        s.stored[target->key] = {target, v};
       {
         Event e;
         e.kind   = Event::Store;
@@ -460,10 +472,8 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
       case DaedalusOpcode::GMOVI:
         if(sym==nullptr)
           s.inst = ex::unknown("bad symbol");
-        else if(isLocal(*sym))
-          s.inst = resolve(s, ex::local(sym->name()));
         else
-          s.inst = ex::inst(sym->name());
+          s.inst = resolve(s, isLocal(*sym) ? ex::local(sym->name()) : ex::inst(sym->name()));
         break;
       case DaedalusOpcode::BE:
       case DaedalusOpcode::BL: {

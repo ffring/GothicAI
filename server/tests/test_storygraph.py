@@ -11,6 +11,8 @@ REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
 GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/shared/projects/Gothic II"))
 DAT = GAME_DIR / "_work" / "Data" / "Scripts" / "_compiled" / "GOTHIC.DAT"
+# original-format saves (ZenGin), one folder each; see docs/story-graph.md, stage 2
+SAVES = Path(os.environ.get("GOTHIC_SAVES", Path.home() / ".local/share/gothic-ai/saves/original"))
 
 KAPITEL_LT_3 = ["<", ["var", "KAPITEL"], ["int", 3]]
 RUEBEN_RUNNING = ["==", ["var", "MIS_LOBART_RUEBEN"], ["int", 1, "LOG_RUNNING"]]
@@ -175,3 +177,27 @@ def test_the_real_game(tmp_path):
     assert graph.npc("HILDA") == "BAU_951_HILDA"
     # Franco's death makes two quests obsolete in ZS_Dead, outside any dialog
     assert "ZS_DEAD" in graph.vars["MIS_HLPLOGAN"].others
+    # the gate guard stores AIV_PASSGATE and then checks it: the check sees the store (found by the VM check)
+    assert "PAL_205_SCHONMALREINGELASSEN" in variables(graph.node("DIA_PAL_205_TORWACHE_FIRSTWARN").condition)
+
+
+def _run(*args):
+    return subprocess.run([str(TOOL), str(DAT), *args], capture_output=True, text=True, errors="replace")
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_conditions_match_the_vm_in_random_states():
+    r = _run("--fuzz", "200")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER in 0 dialogs" in r.stdout
+
+
+def _saves():
+    return sorted(p for p in SAVES.iterdir() if (p / "SAVEDAT.SAV").exists()) if SAVES.is_dir() else []
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists() and _saves()), reason="needs the tool, game, saves")
+def test_conditions_match_the_vm_on_original_saves():
+    r = _run(*[a for s in _saves() for a in ("--check", str(s))])
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert ", DIFFER 0;" in r.stdout.splitlines()[-1]

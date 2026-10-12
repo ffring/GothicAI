@@ -6,10 +6,16 @@
 //   storygraph <GOTHIC.DAT> --quest MIS_LOBART_RUEBEN
 //   storygraph <GOTHIC.DAT> --scan [--tsv dialogs.tsv] [--top N]   first measurement, per dialog bytecode summary
 //   storygraph <GOTHIC.DAT> --disasm DIA_LOBART_RUEBENRUNNING_INFO
+//   storygraph <GOTHIC.DAT> --check <save dir> [--check <save dir>...] [--node ID] [--verbose]
+//                                  every lifted condition against the VM on original saves (stage 2);
+//                                  with --node, both computations of that dialog are traced
+//   storygraph <GOTHIC.DAT> --fuzz N [--node ID] [--verbose]
+//                                  the same in N random states per dialog
 //
 // Subtitles come from OU.BIN next to the scripts (_work/Data/Scripts/Content/Cutscene/OU.BIN), or --ou <path>.
 
 #include "bytecode.h"
+#include "check.h"
 #include "lifter.h"
 #include "model.h"
 #include "vocab.h"
@@ -136,7 +142,10 @@ int main(int argc, char** argv) {
   const char* disasm  = nullptr;
   bool        pretty  = false;
   bool        scan    = false;
+  bool        verbose = false;
   size_t      top     = 0;
+  uint32_t    fuzz    = 0;
+  std::vector<std::string> saves;
   for(int i=1; i<argc; ++i) {
     auto opt = [&](const char* name) { return std::strcmp(argv[i],name)==0 && i+1<argc; };
     if(opt("--ou"))
@@ -155,14 +164,21 @@ int main(int argc, char** argv) {
       top = size_t(std::strtoul(argv[++i],nullptr,10));
     else if(std::strcmp(argv[i],"--pretty")==0)
       pretty = true;
+    else if(opt("--check"))
+      saves.push_back(argv[++i]);
+    else if(opt("--fuzz"))
+      fuzz = uint32_t(std::strtoul(argv[++i],nullptr,10));
     else if(std::strcmp(argv[i],"--scan")==0)
       scan = true;
+    else if(std::strcmp(argv[i],"--verbose")==0)
+      verbose = true;
     else
       datPath = argv[i];
     }
   if(datPath==nullptr) {
     std::fprintf(stderr, "usage: storygraph <GOTHIC.DAT> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
-                         "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN]\n");
+                         "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN] "
+                         "[--check <save dir>... [--verbose]] [--fuzz N]\n");
     return 2;
     }
 
@@ -196,6 +212,15 @@ int main(int argc, char** argv) {
   Lifter lifter(dat, code);
   Model  m = buildModel(vm, code, lifter, lines);
 
+  if(!saves.empty() || fuzz>0) {
+    auto id = node ? upper(node) : std::string();
+    int  r  = 0;
+    if(!saves.empty())
+      r |= checkSaves(datPath, m, saves, node ? id.c_str() : nullptr, verbose);
+    if(fuzz>0)
+      r |= fuzzConditions(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
+    return r;
+    }
   if(node!=nullptr) {
     std::fputs(describeNode(m, upper(node)).c_str(), stdout);
     return 0;

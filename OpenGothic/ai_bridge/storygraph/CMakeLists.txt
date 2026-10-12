@@ -22,6 +22,7 @@ endif()
 
 add_library(StoryGraph STATIC
   bytecode.cpp bytecode.h
+  eval.cpp     eval.h
   expr.cpp     expr.h
   lifter.cpp   lifter.h
   model.cpp    model.h
@@ -32,7 +33,7 @@ target_include_directories(StoryGraph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE
 target_include_directories(StoryGraph SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/rapidjson/include)
 target_link_libraries(StoryGraph PUBLIC zenkit)
 
-add_executable(storygraph main.cpp scan.cpp)
+add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h)
 target_link_libraries(storygraph PRIVATE StoryGraph)
 
 if(NOT MSVC)
