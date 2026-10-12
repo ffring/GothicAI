@@ -295,10 +295,16 @@ class Npc final {
 
     // the bow aimed by hand (game/archery): the hero's input drives it (PlayerControl)
     Archer&   archer() { return arch; }
-    void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {});
+    void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {},
+                           const Tempest::Vec2& tremor = {});
     bool      hasManualAim() const { return manualAim; }
+    // the animation of that name plays k times as fast from its next start (the reload by dexterity)
+    void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
+    // how far the animation of that name has played, 0..1; -1: it does not play
+    float     animProgress(std::string_view name) const;
     auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
     auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
+    auto      manualAimTremor() const -> Tempest::Vec2 { return manualTremor; }
     bool      isAimSteady() const;
     float     aimTrackError() const { return visual.aimTrackError(); }
     // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
@@ -309,6 +315,8 @@ class Npc final {
     auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string hitZonesDump() const { return visual.hitZonesDump(); }
+    void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
+    std::string bowDump() const { return visual.bowDump(); }
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
@@ -685,6 +693,7 @@ class Npc final {
     bool                           manualAim   = false;
     Tempest::Vec3                  manualPoint = {};
     Tempest::Vec2                  manualSway  = {};
+    Tempest::Vec2                  manualTremor = {};
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

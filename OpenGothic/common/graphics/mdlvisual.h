@@ -55,6 +55,9 @@ class MdlVisual final {
     void                           setRangedWeapon(MeshObjects::Mesh&& bow);
     void                           setShield     (MeshObjects::Mesh&& shield);
     void                           setAmmoItem   (MeshObjects::Mesh&& ammo, std::string_view bone);
+    // the arrow (the bolt) has left: not shown in the hand till the next one is placed (the slot is kept:
+    // the shot leaves from there)
+    void                           dropAmmo();
     void                           setSlotItem   (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           setStateItem  (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           clearSlotItem (std::string_view bone);
@@ -79,6 +82,8 @@ class MdlVisual final {
     bool                           isUsingTorch() const;
 
     const Pose&                    pose() const { return *skInst; }
+    // the animation of that name plays k times as fast from its next start (1: as it is)
+    void                           setAnimSpeed(std::string_view name, float k);
     bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force);
     bool                           updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedToGround);
     bool                           hasQuadrupedIk() const;
@@ -99,6 +104,11 @@ class MdlVisual final {
     auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
     bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string                    hitZonesDump() const;
+    void                           hitZonesPosed(std::vector<HitZones::Posed>& out) const;
+    // the bow in the hand, in the arrow's frame (the test bench)
+    std::string                    bowDump() const;
+    // cm the bow's string goes from rest to drawn as held in the aim (its morph), 0: not known
+    float                          bowSpan() const;
     // the bow holds still in the aim: an arrow on the string
     bool                           isAimSteady() const;
     // degrees the arrow (before the sway) points off where the shot has to go, -1 not aiming
@@ -147,6 +157,11 @@ class MdlVisual final {
     Bounds                         bounds() const;
 
   private:
+    // the bow's morph that holds it drawn as the aim animation does (G2)
+    static constexpr const char* BowHeld = "S_READY";
+    static constexpr const char* BowLoose = "S_RELAX";
+    static constexpr uint64_t    LooseLate = 1000; // ms: the animation's release after the hand let go is the same
+
     template<class View>
     struct Attach {
       size_t           boneId=size_t(-1);
@@ -209,6 +224,8 @@ class MdlVisual final {
 
     const Skeleton*                skeleton=nullptr;
     HitZones                       hitZones;
+    bool                           stringByHand = false; // the bow's string was set by the hand last frame
+    uint64_t                       looseAt      = 0;     // when the hand let the string go (a shot)
 
     WeaponState                    fgtMode=WeaponState::NoWeapon;
     AnimationSolver                solver;

@@ -106,7 +106,7 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
         // the next arrow: the bow moves, then holds still again
         if(!in.ready)
           unready = true;
-        if((unready && in.ready) || stageTime>=ReloadMax) {
+        if((unready && in.ready && !in.reload) || stageTime>=ReloadMax) {
           setStage(Nocked);
           disturb = std::max(disturb,NockDisturb);
           }
@@ -180,6 +180,7 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
     amp = 0;
     spr = 0;
     sw  = Vec2();
+    trm = Vec2();
     return false;
     }
 
@@ -192,8 +193,10 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
   trem *= st.sway;
   const float br = st.sway*BreathAmp*std::clamp(calm,0.f,1.f);
   const float t  = float(clock);
-  sw.x = amp*wander(t,0) + trem*tremor(t,0);
-  sw.y = amp*wander(t,1) + br*std::sin(Pi2*BreathRate*t) + trem*tremor(t,1);
+  sw.x  = amp*wander(t,0);
+  sw.y  = amp*wander(t,1) + br*std::sin(Pi2*BreathRate*t);
+  trm.x = trem*tremor(t,0);
+  trm.y = trem*tremor(t,1);
   // how far off the arrow may go: the sway's reach (twice its RMS), the trembling, the breathing, the
   // release
   spr = 2.f*(amp+trem) + br + st.cone;
@@ -223,8 +226,8 @@ void Archer::probe(Probe& p) const {
   p.disturb  = disturb;
   p.amp      = amp/Deg;
   p.spread   = spr/Deg;
-  p.yaw      = sw.x/Deg;
-  p.pitch    = sw.y/Deg;
+  p.yaw      = (sw.x+trm.x)/Deg;
+  p.pitch    = (sw.y+trm.y)/Deg;
   p.strength = strength;
   p.skill    = skill;
   }

@@ -268,6 +268,15 @@ bool HitZones::center(const Matrix4x4* tr, size_t numBones, Zone z, Vec3& at) co
   return true;
   }
 
+void HitZones::posed(const Matrix4x4* tr, size_t numBones, float scale, std::vector<Posed>& out) const {
+  out.clear();
+  for(auto& c:caps) {
+    if(c.a.bone>=numBones || c.b.bone>=numBones)
+      continue;
+    out.push_back({point(tr,c.a),point(tr,c.b),c.r*scale,c.zone});
+    }
+  }
+
 std::string HitZones::dump(const Matrix4x4* tr, size_t numBones, float scale) const {
   std::string out;
   for(auto& c:caps) {

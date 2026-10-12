@@ -173,6 +173,7 @@ class PlayerControl final {
     Tempest::Vec3  aimAt          = {};      //!< where the crosshair is
     float          aimSpread      = 0;       //!< how far it is open, radians, smoothed
     float          aimSpreadVel   = 0;       //!< how fast it opens, radians per second
+    float          reloadTempo    = 1;       //!< how fast the reload plays (set on the hero)
 
     DialogMenu&    dlg;
     InventoryMenu& inv;

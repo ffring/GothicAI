@@ -1128,17 +1128,23 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   aimDirPrev = dir;
 
   const auto    st = Archery::stats(pl,pl.currentRangedWeapon());
+  // the next arrow as fast as the hands are (dexterity); set when it changes (the test bench may set its own)
+  if(st.reload!=reloadTempo) {
+    pl.setAnimSpeed(Archery::BowReload,st.reload);
+    reloadTempo = st.reload;
+    }
   Archer::Input in;
   in.raised = true;
   in.ready  = pl.isAimSteady();
   in.draw   = lmb;
   in.breath = ctrl[Action::Walk];
   in.turn   = turn;
+  in.reload = pl.animProgress(Archery::BowReload)>=0.f;
   in.dt     = dt;
   if(ar.tick(in,st))
     ar.onShot(pl.releaseArrow(ar.draw(),st));
   ar.probe(Archer::playerProbe);
-  pl.setManualAim(true,at,ar.sway());
+  pl.setManualAim(true,at,ar.sway(),ar.tremor());
 
   // the crosshair is where it aims; it opens as far as the arrow may go off: the sway, the trembling,
   // the arrow not turned to it yet (a flick of the mouse), the bow being raised, the next arrow nocked.
@@ -1156,6 +1162,8 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   }
 
 void PlayerControl::endManualAim(Npc& pl) {
+  pl.setAnimSpeed(Archery::BowReload,1);
+  reloadTempo = 1;
   auto& ar = pl.archer();
   if(ar.isRaised()) {
     Archer::Input in;

@@ -710,26 +710,14 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
   const Vec3  b   = position(tr[c.calf]);
   const Vec3  f   = position(tr[c.foot]);
   const float lab = length(b-a);
-  const float lbf = length(f-b);
-  const Vec3  at  = target-a;
-  float       lat = length(at);
-  if(lab<Eps || lbf<Eps || lat<Eps)
-    return;
-
-  const Vec3 dir = at*(1.f/lat);
-  // a straight knee has no direction and wobbles: the leg does not straighten beyond LegReach,
-  // or beyond the animation if it is straighter already (standing)
-  const float lmax = std::min(std::max((lab+lbf)*LegReach, length(f-a)), (lab+lbf)*0.999f);
-  // a paw folded up to the body looks broken (a zigzag): it had better go into the ground
-  float lmin = std::abs(lab-lbf)+Eps;
-  if(quadruped)
-    lmin = std::max(lmin, std::min((lab+lbf)*MinPawFold, length(f-a)));
-  lat = std::clamp(lat, lmin, lmax);
 
   // The knee bends in the plane of the animated leg, turned toward the target.
   // A nearly straight animated leg bends toward the toes (an elbow away from them).
   // Note: the bend must not be taken relative to the target line: at a heel strike uphill
   // the animated knee is behind that line and the knee would flip backwards.
+  // A straight knee has no direction and wobbles: the leg does not straighten beyond LegReach,
+  // or beyond the animation if it is straighter already (standing). A paw folded up to the body
+  // looks broken (a zigzag): it had better go into the ground
   Vec3 bend = b-a;
   if(c.toe!=size_t(-1)) {
     const Vec3  toe     = position(tr[c.toe]) - f;
@@ -737,26 +725,14 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
     if(footLen>Eps)
       bend += Vec3(toe.x,0,toe.z)*(0.05f*lab/footLen*c.bendSign);
     }
-  const Vec3 pole = normalize(cross(cross(f-a,bend),dir));
-  if(length(pole)<Eps)
+  TwoBone tb;
+  if(!twoBone(tr,c.thigh,c.calf,c.foot,c.thighTree,c.calfTree,target,bend,LegReach,quadruped ? MinPawFold : 0.f,tb))
     return;
-
-  const float cosA = std::clamp((lab*lab + lat*lat - lbf*lbf)/(2.f*lab*lat), -1.f, 1.f);
-  const float sinA = std::sqrt(1.f - cosA*cosA);
-  const Vec3  knee  = a + dir*(lab*cosA) + pole*(lab*sinA);
-  const Vec3  ankle = a + dir*lat;
-
-  const Mat3 r0 = rotationBetween(normalize(b-a), normalize(knee-a));
-  rotateAbout(tr,c.thighTree,r0,a);
-
-  const Vec3 b1 = position(tr[c.calf]);
-  const Vec3 f1 = position(tr[c.foot]);
-  const Mat3 r1 = rotationBetween(normalize(f1-b1), normalize(ankle-b1));
-  rotateAbout(tr,c.calfTree,r1,b1);
+  const Vec3 ankle = tb.end;
 
   // On a slope the whole leg turns outward around the hip-ankle line, like people do:
   // the ankle stays, the knee and the toes go away from the other leg
-  Mat3 legRot = mul(r1,r0);
+  Mat3 legRot = mul(tb.r1,tb.r0);
   Vec3 out    = {0,0,0};
   if(outward>0.f && length(c.outDir)>0.5f) {
     const Vec3 axis = normalize(ankle-a);
