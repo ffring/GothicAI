@@ -323,6 +323,14 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5c: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario in ("rescue", "rescue_self"):
+                killer = "hero" if args.scenario == "rescue" else "npc"
+                results = await scenarios.rescue(
+                    link, planner=state.brain, killer=killer, dialogue=state.dialogue if state.brain else None
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -703,7 +711,7 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "rescue", "rescue_self", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")

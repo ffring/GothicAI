@@ -297,3 +297,205 @@ async def test_a_free_npc_speaks_on_the_move_when_the_moment_calls_for_it(tmp_pa
     cue = request[-1].content
     assert "Волк идёт на тебя" in cue and "ты убегаешь" in cue  # what happened and what the body did
     assert {t.name for t in tools} == {"set_intent", "recall"}  # a free npc cannot hand over items
+
+
+async def test_the_hero_saves_a_free_npc_and_it_thanks_him(tmp_path):
+    """A wolf attacks the shepherd: words about the wolf. The hero kills it: words of thanks soon after,
+    though the cooldown for the same reason is longer. Nothing more while nothing new happens."""
+    from gothic_ai.brain import LogApplier, NpcPlanner
+    from gothic_ai.protocol import RosterEntry
+
+    class Decider(FakeDecider):
+        async def decide(self, rid, lane, priority, deadline_ms, state, questions):
+            out = await super().decide(rid, lane, priority, deadline_ms, state, questions)
+            if "escalate" in questions and out.answers:
+                out.answers["escalate"] = {
+                    "type": "score",
+                    "score": 3.4,
+                    "probabilities": {},
+                    "confidence": 0.8,
+                }
+            return out
+
+    fake, clock = FakeGame(), Clock()
+    llm = FakeBackend(script=[FakeStep("Волк! Помогите!"), FakeStep("Спасибо, путник, выручил.")], delay=0)
+
+    async def turns(n: int) -> None:
+        for _ in range(100):
+            planner.tick(clock.t)
+            await asyncio.sleep(0.02)
+            if len(fake.said) >= n:
+                break
+
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        planner = NpcPlanner(Decider("call_help", 0.9), LogApplier(), clock=clock)
+        link.listeners.append(planner.on_message)
+        IncidentDesk(link, dialogue, None, Budget(), None, clock=clock, planner=planner)
+        planner.on_roster([RosterEntry(id="MALETH", name="Малет", guild=8, distance=700, in_view=True)], 0.0)
+        wolf = {"type": "npc_event", "npc": "MALETH", "other_name": "Волк", "distance": 300}
+        await fake.send(**wolf, kind="monster_attack", other="WOLF", detail="you")
+        await turns(1)
+        clock.t += 10
+        killed = {"type": "npc_event", "npc": "MALETH", "kind": "monster_killed", "other": "PLAYER"}
+        await fake.send(**killed, victim="WOLF", detail="Волк", distance=200)
+        await turns(2)
+        clock.t += 6
+        await fake.send(**killed, victim="WOLF", detail="Волк", distance=200)  # nothing new
+        await turns(3)
+
+    assert fake.said == ["Волк! Помогите!", "Спасибо, путник, выручил."]
+    first, second = (request[-1].content for _, request, _ in llm.calls)
+    assert "Волк напал на тебя" in first and "ты зовёшь на помощь" in first
+    assert "герой расправился с монстром (Волк), опасность миновала" in second
+    assert "напал" not in second  # the threat is over
+
+
+class Escalates(FakeDecider):
+    """Escalate levels in turn (the last one repeats)."""
+
+    def __init__(self, choice: str, levels: list[float]) -> None:
+        super().__init__(choice, 0.9)
+        self.levels = levels
+
+    async def decide(self, rid, lane, priority, deadline_ms, state, questions):
+        out = await super().decide(rid, lane, priority, deadline_ms, state, questions)
+        if "escalate" in questions and out.answers:
+            level = self.levels.pop(0) if len(self.levels) > 1 else self.levels[0]
+            out.answers["escalate"] = {
+                "type": "score",
+                "score": level,
+                "probabilities": {},
+                "confidence": 0.8,
+            }
+        return out
+
+
+async def test_a_free_npc_that_feared_the_wolf_and_killed_it_says_so(tmp_path):
+    """The shepherd shouts that he cannot cope with the wolf, and kills it himself while still saying so: the
+    moment alone does not call for words (1.7), but the danger he spoke about is over, so one short line more
+    once he is done. An npc that said nothing about its wolf stays quiet."""
+    from gothic_ai.brain import LogApplier, NpcPlanner
+    from gothic_ai.protocol import RosterEntry
+
+    fake, clock = FakeGame(), Clock()
+    llm = FakeBackend(
+        script=[FakeStep("Волк! Я с ним не справлюсь!"), FakeStep("Хм… а волк-то был не такой уж страшный.")],
+        delay=0.05,
+    )
+
+    async def turns(n: int) -> None:
+        for _ in range(100):
+            planner.tick(clock.t)
+            await asyncio.sleep(0.02)
+            if len(fake.said) >= n:
+                break
+
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        planner = NpcPlanner(Escalates("call_help", [3.6, 1.7]), LogApplier(), clock=clock)
+        link.listeners.append(planner.on_message)
+        IncidentDesk(link, dialogue, None, Budget(), None, clock=clock, planner=planner)
+        planner.on_roster(
+            [
+                RosterEntry(id="MALETH", name="Малет", guild=12, distance=700, in_view=True),
+                RosterEntry(id="BAUER", name="Крестьянин", guild=12, distance=800, in_view=True),
+            ],
+            0.0,
+        )
+        wolf = {"type": "npc_event", "npc": "MALETH", "other_name": "Волк", "distance": 300}
+        await fake.send(**wolf, kind="monster_near", other="WOLF")
+        for _ in range(100):
+            planner.tick(clock.t)
+            await asyncio.sleep(0.02)
+            if llm.calls:
+                break
+        assert not fake.said  # he is still speaking
+        clock.t += 8
+        killed = {"type": "npc_event", "kind": "monster_killed", "victim": "WOLF", "detail": "Волк"}
+        await fake.send(**killed, npc="MALETH", other="MALETH", other_name="Малет", distance=0)
+        await turns(2)
+        await fake.send(**killed, npc="BAUER", other="BAUER", other_name="Крестьянин", distance=0)
+        await turns(3)
+
+    assert fake.said == ["Волк! Я с ним не справлюсь!", "Хм… а волк-то был не такой уж страшный."]
+    second = llm.calls[1][1][-1].content
+    assert "ты сам расправился с монстром (Волк), опасность миновала" in second
+    assert "одной короткой фразой" in second and "Твоё тело" not in second  # nothing of ours was done
+
+
+async def test_a_free_npcs_words_and_body_agree(tmp_path):
+    """The conversational model has the shepherd run: his body runs from the wolf (the planner's flee), and
+    when nothing threatens him any more, his intent goes back to what it was."""
+    from gothic_ai.brain import LogApplier, NpcPlanner
+    from gothic_ai.protocol import RosterEntry
+
+    fake, clock = FakeGame(), Clock()
+    flee = {"goal": "flee", "target": None, "attitude": "neutral", "agenda": None}
+    llm = FakeBackend(script=[FakeStep("Волк! Бежать!", [ToolCall("set_intent", flee)])], delay=0)
+    applier = LogApplier()
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        planner = NpcPlanner(Escalates("continue", [3.6]), applier, clock=clock)
+        link.listeners.append(planner.on_message)
+        desk = IncidentDesk(link, dialogue, None, Budget(), None, clock=clock, planner=planner)
+        desk.calm_poll_s = 0.02
+        planner.on_roster([RosterEntry(id="MALETH", name="Малет", guild=12, distance=700, in_view=True)], 0.0)
+        await fake.send(
+            type="npc_event", npc="MALETH", kind="monster_near", other="WOLF", other_name="Волк", distance=300
+        )
+        for _ in range(100):
+            planner.tick(clock.t)
+            await asyncio.sleep(0.02)
+            if any(d.choice == "flee" for d in applier.recent):
+                break
+        conv = dialogue.conversations["MALETH"]
+        assert conv.intent.goal == "flee"
+        clock.t += 60  # the wolf is long gone
+        await _until(lambda: conv.intent.goal == "none", timeout=2)
+
+    body = [(d.choice, d.target) for d in applier.recent if d.question == "react"]
+    assert body == [("flee", "WOLF")]
+
+
+async def test_a_stuck_turn_gives_way_to_the_end_of_the_danger(tmp_path, monkeypatch):
+    """The LLM hangs on the words about the wolf; the wolf is killed: the stuck turn is dropped and the words
+    about the end of the danger come."""
+    import gothic_ai.incidents as incidents
+    from gothic_ai.brain import LogApplier, NpcPlanner
+    from gothic_ai.llm import Done, TextDelta
+    from gothic_ai.protocol import RosterEntry
+
+    class Hangs(FakeBackend):
+        async def stream(self, *, instructions, messages, tools=None, tool_choice=None):
+            self.calls.append((instructions, list(messages), list(tools or [])))
+            if len(self.calls) == 1:
+                await asyncio.Event().wait()  # never answers
+            yield TextDelta("Спасибо, выручил.")
+            yield Done("Спасибо, выручил.", ())
+
+    monkeypatch.setattr(incidents, "FREE_TURN_WAIT_S", 0.2)
+    fake, clock = FakeGame(), Clock()
+    llm = Hangs(delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        planner = NpcPlanner(Escalates("continue", [3.6, 3.0]), LogApplier(), clock=clock)
+        link.listeners.append(planner.on_message)
+        IncidentDesk(link, dialogue, None, Budget(), None, clock=clock, planner=planner)
+        planner.on_roster([RosterEntry(id="MALETH", name="Малет", guild=12, distance=700, in_view=True)], 0.0)
+        wolf = {"type": "npc_event", "npc": "MALETH", "other": "WOLF", "other_name": "Волк", "distance": 300}
+        await fake.send(**wolf, kind="monster_near")
+        for _ in range(100):
+            planner.tick(clock.t)
+            await asyncio.sleep(0.02)
+            if llm.calls:
+                break
+        clock.t += 8
+        await fake.send(**wolf, kind="monster_killed", victim="WOLF", detail="Волк")
+        for _ in range(100):
+            planner.tick(clock.t)
+            await asyncio.sleep(0.02)
+            if fake.said:
+                break
+
+    assert fake.said == ["Спасибо, выручил."] and len(llm.calls) == 2

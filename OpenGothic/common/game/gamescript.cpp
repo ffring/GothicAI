@@ -1310,6 +1310,12 @@ bool GameScript::isUnconscious(const Npc &pl) {
   return pl.isInState(ZS_Unconscious);
   }
 
+void GameScript::skipImportantInfos(Npc& npc, Npc& pl) {
+  for(auto& info:dialogsInfo)
+    if(info->npc==int32_t(npc.handle().symbol_index()) && info->important && !info->permanent)
+      setNpcInfoKnown(pl.handle(),*info);
+  }
+
 bool GameScript::isTalk(const Npc &pl) {
   return pl.isInState(ZS_Talk);
   }

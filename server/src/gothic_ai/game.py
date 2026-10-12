@@ -192,7 +192,8 @@ class GameLink:
 
     async def debug(self, cmd: DebugCommand, slot: int = 0, timeout: float = 10.0, **args: Any) -> None:
         """A test helper (game in -devmode): saving/loading `save_slot_<slot>.sav` (returns once it has
-        started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none")."""
+        started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none"),
+        `teleport` (near=, distance=), `kill` (instance=, near=)."""
         await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot, **args), timeout)
 
     async def act(

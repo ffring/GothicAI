@@ -261,6 +261,8 @@ class NpcEvent(_GameMessage):
     Threats from others (`other` is their script symbol, `other_name` the shown name): a monster it
     senses (`monster_near`), a monster attacking it or someone near (`monster_attack`, `detail`: "you"
     or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
+    The end of it: a monster killed (`monster_killed`; `other` is the killer, the npc itself too, `victim`
+    the monster's symbol, `detail` its name).
     `distance` is from the npc to `other`. The engine's own perceptions still run; this is a copy."""
 
     type: Literal["npc_event"]
@@ -270,6 +272,7 @@ class NpcEvent(_GameMessage):
     other_name: str | None = None
     distance: float | None = None
     detail: str | None = None
+    victim: str | None = None  # monster_killed: the dead monster's symbol
 
 
 class NpcIdle(_GameMessage):
@@ -559,13 +562,17 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load", "spawn", "player_weapon"]
+DebugCommand = Literal["save", "load", "spawn", "player_weapon", "teleport", "kill", "skip_important"]
 
 
 class DebugCmd(_Command):
     """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
     spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
-    player draw (`state: "melee"`) or put away (`"none"`) a weapon."""
+    player draw (`state: "melee"`) or put away (`"none"`) a weapon; put the player `distance` cm in front of
+    an npc (`teleport`, `near`), facing it; kill the living creature of an `instance` closest to `near`
+    (default the player) by the hand of `by` (`kill`, default the player: npc's around and the killer
+    perceive it like a deadly hit); make an npc's important dialogs count as told (`skip_important`, `near`:
+    it will not stop the player to talk)."""
 
     type: Literal["debug"] = "debug"
     req: str
@@ -573,5 +580,6 @@ class DebugCmd(_Command):
     slot: int = 0
     instance: str | None = None
     near: str | None = None
+    by: str | None = None
     distance: int | None = None
     state: str | None = None

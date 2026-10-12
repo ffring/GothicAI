@@ -25,9 +25,10 @@ from .brain.incident import INCIDENT_GAP_S, IncidentEvent, IncidentTracker, esca
 from .brain.planner import Flight, NpcPlanner
 from .brain.reflex import REACT_OPTIONS, Reaction, Reflexes
 from .brain.situation import NpcContext, clock_text
-from .brain.stimuli import Stimulus
+from .brain.stimuli import Stimulus, policy
 from .budget import Budget
 from .dialogue import DialogueManager
+from .executor import Intent
 from .game import GameError, GameLink
 from .protocol import (
     Attached,
@@ -45,8 +46,18 @@ log = logging.getLogger(__name__)
 
 SECOND_HIT_S = 10.0
 FREE_HEARING_CM = 2000.0  # a free npc's words are worth the call if the hero is this close (or sees it)
-FREE_COOLDOWN_S = 30.0  # one call per free npc at most this often
+FREE_COOLDOWN_S = 30.0  # one call per free npc at most this often about the same thing
+FREE_NEW_REASON_S = 5.0  # a new reason (the wolf it shouted about is dead) may follow sooner
 FREE_TOOLS = ("set_intent", "recall")  # an npc nobody controls cannot hand over items or end a chat
+# the danger a free npc spoke about ends within this (the monster is dead, whoever killed it): one more short
+# line about that, though the moment alone would not call for words ("the wolf was not so scary after all")
+FREE_SETTLE_S = 60.0
+FREE_TURN_WAIT_S = 12.0  # a turn of a free npc still running this long is stuck (the LLM hangs): dropped
+ENDS_DANGER = frozenset({"monster_killed"})
+# a free npc's goals of the moment, carried out by its body through the planner: goal -> the planner's choice.
+# Seeking help is running from the danger, shouting (its words ask for help): an npc that comes up to the hero
+# starts its original dialog with him (an important info), wolf or no wolf
+INTENT_BODY = {"flee": "flee", "fight": "fight", "seek_help": "flee"}
 
 # a free npc's stimuli, for the conversational model (Russian); the rest are told in English
 EVENTS_RU = {
@@ -59,6 +70,7 @@ EVENTS_RU = {
     "enter_room": "герой вошёл в твой дом",
     "item_given": "герой отдал тебе {detail}",
     "item_dropped": "герой бросил рядом {detail}",
+    "monster_killed": "{other} расправился с монстром ({detail}), опасность миновала",
 }
 # what the body already did, by the behavioral model's choice
 REACTIONS_RU = {
@@ -80,8 +92,18 @@ def describe_ru(stim: Stimulus) -> str:
     template = EVENTS_RU.get(stim.kind)
     if template is None:
         return stim.describe(stim.at)
-    other = "герой" if stim.other == "PLAYER" else (stim.other_name or stim.other)
+    if stim.other == "PLAYER":
+        other = "герой"
+    elif stim.other_name == "you":
+        other = "ты сам"  # e.g. a scared shepherd who killed the wolf: news to him too
+    else:
+        other = stim.other_name or stim.other
     return template.format(other=other, detail=stim.detail or "")
+
+
+def reasons(stimuli: list[Stimulus]) -> frozenset[tuple[str, str]]:
+    """What a free npc's words would be about: its salient events and who caused them."""
+    return frozenset((s.kind, s.other) for s in stimuli if s.policy.salient)
 
 
 LOW_HEALTH = 0.5
@@ -139,8 +161,12 @@ class IncidentDesk:
         dialogue.on_player_phrase = self.on_player_phrase
         dialogue.on_body_failed = self.on_body_failed
         dialogue.controls = lambda npc: npc.upper() in self.attached
+        dialogue.on_free_intent = self.on_free_intent
         self.planner: NpcPlanner | None = None
-        self._spoke_at: dict[str, float] = {}
+        # free npc -> when its words were last asked for, and what about
+        self._spoke: dict[str, tuple[float, frozenset[tuple[str, str]]]] = {}
+        self._calming: set[str] = set()  # free npc's waiting for their moment to pass
+        self.calm_poll_s = 1.0
         if planner is not None:
             self.follow(planner)
 
@@ -315,34 +341,100 @@ class IncidentDesk:
         planner.on_escalate = self.on_planner_escalate
 
     def on_planner_escalate(self, npc: str, level: float, reaction: Decision | None, flight: Flight) -> None:
-        """The behavioral model says a free npc's moment calls for its own words: the conversational model
-        speaks for it, on the move, if the hero hears it, not too often and within the budget."""
+        """The behavioral model says how much a free npc's moment calls for its own words: from the planner's
+        `escalate_level` on, or when the danger it spoke about is over, the conversational model speaks for
+        it, on the move, if the hero hears it, not too often and within the budget."""
         assert self.planner is not None
         npc = npc.upper()
         rec = self.planner.npcs.get(npc)
         if rec is None or npc in self.attached:  # a controlled npc's incidents are handled above
             return
-        hears = rec.distance_cm <= FREE_HEARING_CM or (rec.in_view and rec.distance_cm <= 3000)
         now = self.clock()
-        if not hears or now - self._spoke_at.get(npc, float("-inf")) < FREE_COOLDOWN_S:
+        alive = [s for s in rec.stimuli if s.alive(self.planner.clock())]
+        about = reasons(alive)
+        spoke_at, spoke_about = self._spoke.get(npc, (float("-inf"), frozenset()))
+        new = about - spoke_about
+        settles = (
+            now - spoke_at <= FREE_SETTLE_S
+            and any(kind in ENDS_DANGER for kind, _ in new)
+            and any(policy(kind).threat for kind, _ in spoke_about)
+        )
+        if level < self.planner.cfg.escalate_level and not settles:
+            return
+        hears = rec.distance_cm <= FREE_HEARING_CM or (rec.in_view and rec.distance_cm <= 3000)
+        gap = FREE_NEW_REASON_S if new else FREE_COOLDOWN_S
+        if not hears or now - spoke_at < gap:
             return
         if not self.budget.allow(npc):
             log.info("%s: no budget for words (escalate %.1f)", npc, level)
             return
-        self._spoke_at[npc] = now
-        alive = [s for s in rec.stimuli if s.alive(self.planner.clock())]
+        self._spoke[npc] = (now, about)
         happened = "; ".join(describe_ru(s) for s in alive) or "что-то случилось"
-        did = REACTIONS_RU.get(reaction.choice, "") if reaction is not None else ""
+        # its own kill: the scripts already ended the fight with a stock line, nothing of ours was done
+        did = REACTIONS_RU.get(reaction.choice, "") if reaction is not None and not reaction.own else ""
         done = f" Твоё тело уже среагировало: {did} — это уже случилось, не противоречь этому." if did else ""
+        after = (
+            " Опасность, о которой ты только что говорил, позади: отзовись на это одной короткой фразой,"
+            " помня свои прежние слова."
+            if settles
+            else ""
+        )
         self.dialogue.open(npc, rec.name)
-        log.info("%s: escalate %.1f, the conversational model speaks for it", npc, level)
+        log.info(
+            "%s: escalate %.1f%s, the conversational model speaks for it",
+            npc,
+            level,
+            ", the danger is over" if settles else "",
+        )
+        self._spawn(self._free_turn(npc, f"[Событие: {happened}.{done}{after}]"))
+        if npc not in self._calming:
+            self._spawn(self._calm_later(npc))
+
+    async def _free_turn(self, npc: str, cue: str) -> None:
+        """A free npc's words on the move. A turn of its still running is let finish first: an event that
+        comes meanwhile would wait for the npc's next turn, and nobody else starts one for a free npc. One
+        that does not finish in time is dropped for the newer event."""
+        conv = self.dialogue.conversations.get(npc)
+        if conv is not None and conv.reply is not None and not conv.reply.done():
+            _, running = await asyncio.wait([conv.reply], timeout=FREE_TURN_WAIT_S)
+            if running:
+                log.info("%s: the turn before is stuck, dropped for the new event", npc)
+                conv.reply.cancel()
+                await asyncio.wait([conv.reply])
         self.dialogue.event_turn(
             npc,
-            f"[Событие: {happened}.{done}]",
+            cue,
             relevant=lambda: self.planner is not None and self.planner.stirred(npc),
             overlay=True,
             tools=FREE_TOOLS,
         )
+
+    def on_free_intent(self, npc: str, old: Intent, new: Intent) -> None:
+        """A free npc's goal of the moment (flee, fight, seek help) is carried out by its body, through the
+        planner, so that its words and deeds agree; the npc's routine is the planner's business otherwise."""
+        choice = INTENT_BODY.get(new.goal)
+        if self.planner is None or choice is None or (new.goal, new.target) == (old.goal, old.target):
+            return
+        decision = self.planner.take_body(npc, choice)
+        log.info(
+            "%s: intent %s moves the body: %s",
+            npc,
+            new.goal,
+            decision.choice if decision else "nothing to do",
+        )
+
+    async def _calm_later(self, npc: str) -> None:
+        """A free npc's goals of the moment end with it: once nothing threatens it any more, its intent goes
+        back to what it was (as a controlled npc's does when its incident is over)."""
+        self._calming.add(npc)
+        try:
+            while True:
+                if self.planner is None or not self.planner.stirred(npc):
+                    break
+                await asyncio.sleep(self.calm_poll_s)
+            self.dialogue.incident_over(npc)
+        finally:
+            self._calming.discard(npc)
 
     # --- helpers ----------------------------------------------------------------------------
 

@@ -391,6 +391,13 @@ def test_decisions_become_soft_actions() -> None:
     assert actions_for(d("comment", ("player_near",))) == [("look_at", {"ms": 3000})]
     assert actions_for(d("keep_routine", question="plan")) == [] and actions_for(d("pick_up")) == []
     assert actions_for(d("call_help", ("npc_attack",))) == [("say_svm", {"svm": "HELP"})]
+    # a call for help is shouted on the move, running away from the threat
+    help_ = Decision("A", "react", "call_help", 0.9, {}, ("npc_attack",), target="WOLF")
+    assert actions_for(help_) == [("say_svm", {"svm": "HELP", "overlay": True}), ("flee", {"npc": "WOLF"})]
+    # a monster killed: a stock line, unless the npc killed it itself (its scripts end the fight with one)
+    killed = Decision("A", "react", "comment", 0.9, {}, ("monster_killed",))
+    assert actions_for(killed) == [("say_svm", {"svm": "GOODMONSTERKILL"})]
+    assert actions_for(Decision("A", "react", "comment", 0.9, {}, ("monster_killed",), own=True)) == []
     assert actions_for(d("comment", ("fight_nearby",))) == [("say_svm", {"svm": "OHMYGODITSAFIGHT"})]
 
 
@@ -530,7 +537,8 @@ def test_an_attack_on_someone_else_is_a_fight_nearby() -> None:
     [
         ("fight", 0.9, "server"),
         ("flee", 0.8, "server"),
-        ("call_help", 0.9, "scripts"),
+        ("call_help", 0.9, "server"),
+        ("comment", 0.9, "scripts"),
         ("fight", 0.3, "scripts"),
     ],
 )
@@ -551,10 +559,74 @@ async def test_held_threats_stay_from_the_scripts_only_if_the_body_takes_them_ov
     }
     planner.on_message(parse_game_message(json.dumps(held)))
     await step(planner, clock, 0.05)
-    assert list(applier.verdicts) == [("h1", verdict)]  # fight/flee: the body has it; else: the scripts
+    assert list(applier.verdicts) == [("h1", verdict)]  # fight/flee/help: the body has it; else: the scripts
     planner.on_message(parse_game_message(json.dumps({**held, "hold": "h2"})))  # a repeat right away
     await step(planner, clock, 0.05)
     assert ("h2", "scripts") in applier.verdicts or len(decider.calls) == 2  # merged or decided again
+
+
+async def test_while_the_body_runs_for_help_threats_stay_from_the_scripts() -> None:
+    """An unsure answer while the npc runs from the wolf, shouting for help, lets it run on; once it stops
+    (npc_idle), new threats go to the scripts again."""
+    decider = FakeDecider("call_help", 0.9)
+    planner, _, applier, clock = make(decider)
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    held = {
+        "type": "perception_held",
+        "npc": "PEPE",
+        "kind": "monster_near",
+        "other": "WOLF",
+        "distance": 400,
+    }
+    planner.on_message(parse_game_message(json.dumps({**held, "hold": "h1"})))
+    await step(planner, clock, 0.05)
+    assert applier.recent[-1].choice == "call_help"
+    decider.choice, decider.confidence = "fight", 0.3  # unsure now
+    await step(planner, clock, 6)
+    planner.on_message(
+        parse_game_message(json.dumps({**held, "kind": "npc_attack", "detail": "you", "hold": "h2"}))
+    )
+    await step(planner, clock, 0.05)
+    planner.on_message(parse_game_message(json.dumps({"type": "npc_idle", "npc": "PEPE", "act": "n1"})))
+    await step(planner, clock, 6)
+    planner.on_message(
+        parse_game_message(json.dumps({**held, "kind": "npc_attack", "detail": "you", "hold": "h3"}))
+    )
+    await step(planner, clock, 0.05)
+    assert list(applier.verdicts) == [("h1", "server"), ("h2", "server"), ("h3", "scripts")]
+    # a new threat right after: a call for help again, the cooldown is per threat
+    decider.choice, decider.confidence = "call_help", 0.9
+    fly = {**held, "kind": "npc_attack", "other": "BLOODFLY", "detail": "you", "hold": "h4"}
+    planner.on_message(parse_game_message(json.dumps(fly)))
+    await step(planner, clock, 0.05)
+    assert (applier.recent[-1].choice, applier.recent[-1].target) == ("call_help", "BLOODFLY")
+    assert list(applier.verdicts)[-1] == ("h4", "server")
+
+
+async def test_the_conversational_models_intent_moves_a_free_npcs_body() -> None:
+    from gothic_ai.brain.apply import actions_for
+
+    decider = FakeDecider("fight", 0.9)
+    decider.gate = asyncio.Event()
+    planner, _, applier, clock = make(decider)
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    held = {"type": "perception_held", "hold": "h1", "npc": "PEPE", "kind": "monster_near", "other": "WOLF"}
+    planner.on_message(parse_game_message(json.dumps(held)))
+    await step(planner, clock, 0.05)  # the fast model is thinking
+    flee = planner.take_body("PEPE", "flee")  # the npc said it runs: it runs
+    assert flee is not None and (flee.choice, flee.target) == ("flee", "WOLF")
+    assert list(applier.verdicts) == [("h1", "server")]
+    decider.gate.set()
+    await step(planner, clock, 0.05)
+    assert [d.choice for d in applier.recent] == [
+        "flee"
+    ] and planner.stats.discarded == 1  # "fight" came late
+    fight = planner.take_body("PEPE", "fight")
+    assert fight is not None and actions_for(fight) == [("fight", {"npc": "WOLF"})]
+    await step(planner, clock, 30)
+    assert planner.take_body("PEPE", "flee") is None  # the danger is over: an intent about it is moot
+    planner.on_roster([entry("CALM", 5)], clock.t)
+    assert planner.take_body("CALM", "fight") is None  # nothing to fight
 
 
 async def test_a_threat_to_an_npc_the_planner_does_not_know_goes_to_the_scripts() -> None:
@@ -611,3 +683,102 @@ async def test_a_quiet_npc_plans_its_next_hour_from_its_own_day() -> None:
     assert actions_for(decision) == [
         ("start_activity", {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60})
     ]
+
+
+async def test_the_hero_kills_the_monster_the_danger_is_over() -> None:
+    planner, decider, applier, clock = make(FakeDecider("thank", 0.8))
+    planner.on_roster([entry("MALETH", 6, in_view=True), entry("VINO", 9)], clock.t)
+
+    def event(npc: str, kind: str, other: str, **fields) -> None:
+        msg = {"type": "npc_event", "npc": npc, "kind": kind, "other": other, "distance": 300, **fields}
+        planner.on_message(parse_game_message(json.dumps(msg)))
+
+    # a threat from another monster stays
+    event("VINO", "monster_near", "WOLF", other_name="Волк")
+    event("VINO", "monster_near", "BANDIT", other_name="Бандит")
+    event("VINO", "monster_killed", "PLAYER", victim="WOLF", detail="Волк")
+    assert {(s.kind, s.other) for s in planner.npcs["VINO"].stimuli} == {
+        ("monster_killed", "PLAYER"),
+        ("monster_near", "BANDIT"),
+    }
+
+    event("MALETH", "monster_attack", "WOLF", other_name="Волк", detail="you")
+    await step(planner, clock, 0.05)
+    decider.calls.clear()
+    clock.t += 2
+    event("MALETH", "monster_killed", "PLAYER", victim="WOLF", detail="Волк")
+    await step(planner, clock, 0.05)
+    assert [s.kind for s in planner.npcs["MALETH"].stimuli] == ["monster_killed"]
+    react, attitude = [c for c in decider.calls if c["rid"].startswith("MALETH")]
+    assert react["lane"] == "urgent"
+    assert "The hero killed Волк, which attacked you; the danger is over." in react["state"]  # a rescue
+    assert react["questions"]["react"]["criteria"]["thank"] == "thank the hero"
+    assert "attitude" in attitude["questions"]  # about the hero again: how the npc sees him now
+    assert [d.choice for d in applier.recent if d.npc == "MALETH" and d.question == "react"][-1] == "thank"
+
+
+async def test_a_monster_killed_by_someone_else_or_by_the_npc_itself() -> None:
+    planner, decider, _, clock = make(FakeDecider("continue", 0.8))
+    planner.on_roster([entry("MALETH", 6), entry("LOBART", 8)], clock.t)
+    planner.on_event(
+        "MALETH",
+        "monster_killed",
+        clock.t,
+        other="BAU_950_LOBART",
+        other_name="Лобарт",
+        victim="WOLF",
+        detail="Волк",
+    )
+    planner.on_event(
+        "LOBART", "monster_killed", clock.t, other="LOBART", other_name="Лобарт", victim="WOLF", detail="Волк"
+    )
+    await step(planner, clock, 0.05)
+    states = {c["rid"].split("#")[0]: c for c in decider.calls if "react" in c["questions"]}
+    assert "Лобарт killed Волк; the danger is over." in states["MALETH"]["state"]
+    assert "thank" not in states["MALETH"]["questions"]["react"]["criteria"]  # only when the hero did it
+    assert "You killed Волк; the danger is over." in states["LOBART"]["state"]
+
+
+def test_a_killed_monster_brings_a_line_and_its_symbol() -> None:
+    from gothic_ai.brain.apply import Decision, actions_for
+    from gothic_ai.protocol import NpcEvent
+
+    d = Decision("A", "react", "comment", 0.9, {}, ("monster_killed",))
+    assert actions_for(d) == [("say_svm", {"svm": "GOODMONSTERKILL"})]
+    e = parse_game_message(
+        '{"type":"npc_event","npc":"A","kind":"monster_killed","other":"PLAYER","victim":"WOLF","detail":"Волк"}'
+    )
+    assert isinstance(e, NpcEvent) and (e.victim, e.detail) == ("WOLF", "Волк")
+
+
+async def test_what_happens_during_a_fight_is_reacted_to_after_it() -> None:
+    planner, decider, applier, clock = make(FakeDecider("thank", 0.8))
+    planner.on_roster([entry("MALETH", 6, in_view=True, activity="fight")], clock.t)
+    assert planner.npcs["MALETH"].tier is Tier.OFF  # its weapon is out: the scripts' fight, not ours
+    planner.on_event("MALETH", "monster_killed", clock.t, victim="WOLF", detail="Волк")
+    await step(planner, clock, 0.05)
+    assert not decider.calls and planner.npcs["MALETH"].stimuli[0].kind == "monster_killed"
+    clock.t += 3  # the weapon is put away
+    planner.on_roster([entry("MALETH", 6, in_view=True)], clock.t)
+    await step(planner, clock, 0.05)
+    react = decider.calls[0]
+    assert react["lane"] == "urgent" and "The hero killed Волк; the danger is over." in react["state"]
+    assert applier.recent[0].choice == "thank"
+    # events during a chat stay the conversation's business
+    planner.on_roster([entry("MALETH", 6, in_view=True, activity="dialog")], clock.t)
+    planner.on_event("MALETH", "monster_killed", clock.t, victim="WOLF", detail="Волк")
+    assert planner.stats.events == 1
+
+
+async def test_attitude_and_escalate_go_in_one_request() -> None:
+    planner, decider, applier, clock = make(FakeDecider("tell_to_leave", 0.8))
+    told: list[tuple[str, float]] = []
+    planner.on_escalate = lambda npc, level, reaction, flight: told.append((npc, level))
+    planner.on_roster([entry("BOSPER", 4, in_view=True)], clock.t)
+    planner.on_event("BOSPER", "enter_room", clock.t)
+    await step(planner, clock, 0.05)
+    react, after = decider.calls  # the body's question alone (urgent), then both the others at once
+    assert set(react["questions"]) == {"react"} and react["lane"] == "urgent"
+    assert set(after["questions"]) == {"attitude", "escalate"} and after["lane"] == "background"
+    assert after["state"] == react["state"]  # one state for both: the decider reads it once
+    assert [d.question for d in applier.recent] == ["react", "attitude"] and told == [("BOSPER", 3.0)]

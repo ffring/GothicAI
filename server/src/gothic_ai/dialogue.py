@@ -257,6 +257,8 @@ class DialogueManager:
         self.on_body_failed: Callable[[str, str], None] | None = None
         # whether the npc is under our control (attached): only then do intents move its body directly
         self.controls: Callable[[str], bool] | None = None
+        # the intent of an npc we do not control changed (npc, old, new): who runs its body carries it out
+        self.on_free_intent: Callable[[str, Intent, Intent], None] | None = None
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -862,9 +864,11 @@ class DialogueManager:
         if self.on_intent is not None:
             self.on_intent(conv.npc, intent)
         controlled = self.controls is None or self.controls(conv.npc)
-        acts = (
-            executor.intent_actions(old, intent, snap.npc.following if snap else False) if controlled else []
-        )
+        if not controlled:
+            if self.on_free_intent is not None:
+                self.on_free_intent(conv.npc, old, intent)
+            return
+        acts = executor.intent_actions(old, intent, snap.npc.following if snap else False)
         if acts:
             self._after_speech(conv, lambda: self._body(conv, acts))
 

@@ -10,6 +10,10 @@
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
 #       DECIDER_URL, or a fixed stand-in)
+#   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
+#       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
+#       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
+#       words). rescue_self: the shepherd kills the wolf himself and says a word about it
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,

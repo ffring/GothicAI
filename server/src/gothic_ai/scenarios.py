@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
@@ -387,10 +388,12 @@ async def m4_planner_bridge(
 
 
 class FixedDecider:
-    """A stand-in for the behavioral model: the same choice for every question that offers it, and a fixed
-    level for score questions (escalate, attitude)."""
+    """A stand-in for the behavioral model: per question the first of its choices the question offers, and a
+    fixed level for score questions (escalate, attitude)."""
 
-    def __init__(self, choices: dict[str, str], scores: dict[str, float] | None = None) -> None:
+    def __init__(
+        self, choices: dict[str, str | tuple[str, ...]], scores: dict[str, float] | None = None
+    ) -> None:
         self.choices = choices
         self.scores = scores or {}
 
@@ -400,8 +403,9 @@ class FixedDecider:
             if q["type"] == "score":
                 answers[name] = {"type": "score", "score": self.scores.get(name, 2.0), "confidence": 0.8}
                 continue
-            pick = self.choices.get(name)
-            pick = pick if pick in q["criteria"] else next(iter(q["criteria"]))
+            prefs = self.choices.get(name, ())
+            prefs = (prefs,) if isinstance(prefs, str) else prefs
+            pick = next((c for c in prefs if c in q["criteria"]), next(iter(q["criteria"])))
             answers[name] = {
                 "type": "choice",
                 "choice": pick,
@@ -752,4 +756,218 @@ async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str
         runner.cancel()
     for name, outcome in results.items():
         log.info("%-24s %s", name, outcome)
+    return results
+
+
+async def rescue(
+    link: GameLink,
+    npc: str = "BAU_954_MALETH",
+    planner: NpcPlanner | None = None,
+    killer: str = "hero",
+    dialogue: DialogueManager | None = None,
+) -> dict[str, str]:
+    """M5c on the game, an ordinary npc: the hero comes up to the shepherd, a wolf attacks him from behind.
+    The body reacts at once (a call for help: he runs from the wolf, shouting, and the scripts keep out of it)
+    and the conversational model speaks for him on the move. Then the wolf dies: the danger is over
+    (`monster_killed`). Killed by the hero (`killer="hero"`), the shepherd reacts to his rescuer, his attitude
+    is asked, and he speaks again; killed by the shepherd himself (`killer="npc"`), he says a word about the
+    danger he spoke of. With the server's planner (DECIDER_URL) the live models decide and the server's LLM
+    speaks; without it a fixed stand-in decides and the words are scripted."""
+    from .brain import GameApplier
+    from .incidents import FREE_NEW_REASON_S
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+    lines: list[tuple[float, LineStarted]] = []
+    link.listeners.append(
+        lambda m: lines.append((time.monotonic(), m)) if isinstance(m, LineStarted) else None
+    )
+    events: list[NpcEvent | PerceptionHeld] = []
+    link.listeners.append(
+        lambda m: events.append(m) if isinstance(m, NpcEvent | PerceptionHeld) and m.npc == npc else None
+    )
+    runner = None
+    if planner is None:
+        planner = NpcPlanner(
+            FixedDecider({"react": ("thank", "call_help")}, {"escalate": 3.6, "attitude": 4.0}),
+            GameApplier(link),
+        )
+        link.listeners.append(planner.on_message)
+        runner = asyncio.create_task(planner.run())
+        after = "Спасибо, выручил ты меня." if killer == "hero" else "Хм… а волк-то был не такой уж страшный."
+        llm = FakeBackend(script=[FakeStep("Волк! Помогите, волк!"), FakeStep(after)], delay=0)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        IncidentDesk(link, dialogue, None, Budget(), None, planner=planner)
+        await link.send(ThreatControlCmd(hold=True))
+    # the npc's lines as the server sent them: line id -> (when, text); the game reports only the id
+    texts: dict[str, tuple[float, str]] = {}
+    send = link.send
+
+    async def sending(cmd: Any) -> Any:
+        if isinstance(cmd, SayCmd) and cmd.npc.upper() == npc:
+            texts[cmd.line] = (time.monotonic(), cmd.text)
+        return await send(cmd)
+
+    link.send = sending  # type: ignore[method-assign]
+    # when the npc's turns about events began: a line sent after one begun after the kill is about the kill
+    # (a turn begins once the one before has sent its lines)
+    turns: list[float] = []
+    event_turn = dialogue.event_turn if dialogue is not None else None
+    if dialogue is not None:
+
+        def turn(who: str, *args: Any, **kwargs: Any) -> Any:
+            if who.upper() == npc:
+                turns.append(time.monotonic())
+            return event_turn(who, *args, **kwargs)
+
+        dialogue.event_turn = turn  # type: ignore[method-assign]
+    recent = getattr(planner.applier, "recent", [])
+    verdicts = getattr(planner.applier, "verdicts", [])
+    # what the npc was doing, by the roster: (when it started, activity); a weapon out is "fight", an
+    # original dialog with the hero "dialog"
+    doing: list[tuple[float, str]] = []
+
+    def track(m: GameMessage) -> None:
+        if isinstance(m, NpcRoster):
+            now = next((e.activity for e in m.npcs if e.id == npc), "away")
+            if not doing or doing[-1][1] != now:
+                doing.append((time.monotonic(), now))
+
+    link.listeners.append(track)
+    # what the behavioral model is asked about the npc, word for word (the results quote it)
+    asked: list[tuple[str, str]] = []
+    decide = planner.decider.decide
+
+    async def recording(rid, lane, priority, deadline_ms, state, questions):  # noqa: ANN001, ANN202
+        if rid.startswith(npc):
+            asked.append(("+".join(questions), state))
+        return await decide(rid, lane, priority, deadline_ms, state, questions)
+
+    planner.decider.decide = recording  # type: ignore[method-assign]
+
+    def decided(since: float, question: str, threat: bool | None = None) -> list:
+        return [
+            d
+            for d in list(recent)[since:]
+            if d.npc == npc and d.question == question and (threat is None or bool(d.target) == threat)
+        ]
+
+    async def wait(check: Callable[[], Any], timeout: float) -> Any:
+        for _ in range(int(timeout / 0.1)):
+            if found := check():
+                return found
+            await asyncio.sleep(0.1)
+        return None
+
+    try:
+        # 1. the hero next to the npc, looking at it. The npc's important dialog (the start of the game: it
+        # has not met the hero) would start as soon as the two are close and calm; lines on the move do not go
+        # over a dialog
+        await link.debug("skip_important", near=npc)
+        await link.debug("teleport", near=npc, distance=600)
+        rec = await wait(lambda: (r := planner.npcs.get(npc)) is not None and r.in_view and r, 10)
+        results["hero_next_to_npc"] = (
+            f"done ({rec.name} {rec.distance_cm / 100:.0f} m away, in view)"
+            if rec
+            else "failed (not in view)"
+        )
+        await asyncio.sleep(2.0)  # whatever the npc does about the hero coming up
+
+        # 2. a wolf from behind the npc: the body reacts at once, the words follow on the move
+        mark, t0 = len(recent), time.monotonic()
+        await link.debug("spawn", instance="WOLF", near=npc, distance=-500)
+        reaction = await wait(lambda: decided(mark, "react", threat=True), 15)
+        seen = ", ".join(dict.fromkeys(f"{e.type}:{e.kind}/{e.other}" for e in events)) or "none"
+        results["threat_reaction"] = (
+            f"done ({reaction[0].choice} {reaction[0].confidence:.2f} against {reaction[0].target}, "
+            f"{time.monotonic() - t0:.1f} s; events: {seen})"
+            if reaction
+            else f"failed (no reaction to the wolf; events: {seen}; planner: {planner.snapshot()})"
+        )
+        first = await wait(lambda: next(((t, m) for t, m in lines if m.npc == npc and t >= t0), None), 12)
+        results["words_about_the_wolf"] = (
+            f"done ({first[0] - t0:.1f} s after the wolf came: {texts.get(first[1].line, (0, '?'))[1]})"
+            if first
+            else "failed (no words)"
+        )
+        holds = {e.hold for e in events if isinstance(e, PerceptionHeld)}
+        to = [v for h, v in list(verdicts) if h in holds]
+        armed = [t for t, what in doing if what == "fight" and t >= t0]
+        took = reaction[0].choice if reaction else None
+        results["body_and_scripts"] = (
+            f"{'done' if (took == 'fight') == bool(armed) else 'failed'} ({took}: "
+            f"{to.count('server')} held from the scripts, {to.count('scripts')} given to them; "
+            f"{f'weapon out {armed[0] - t0:.1f} s after the wolf came' if armed else 'no weapon out'})"
+        )
+
+        # 3. the wolf dies: the danger is over, the npc thanks its rescuer, or says a word about the danger it
+        # beat itself. Soon, while the wolf is still after the npc (one it lost is too far for the npc to see
+        # it die), but not before words about something new may follow (asked for right after the reaction)
+        await asyncio.sleep(max(0.0, t0 + FREE_NEW_REASON_S + 1.0 - time.monotonic()))
+        # the hero runs after it: an npc that ran from the wolf is soon out of the hero's reach (the bridge
+        # reports npc's within 30 m of him) and of his hearing (20 m)
+        await link.debug("teleport", near=npc, distance=700)
+        mark, t1 = len(recent), time.monotonic()
+        try:
+            # the one after the npc, not a wild one
+            await link.debug("kill", instance="WOLF", near=npc, by="PLAYER" if killer == "hero" else npc)
+            killed = f"by the {killer}"
+        except GameError as err:
+            killed = f"not by the hero ({err})"
+        ended = await wait(
+            lambda: next((e for e in events if isinstance(e, NpcEvent) and e.kind == "monster_killed"), None),
+            5,
+        )
+        results["monster_killed"] = (
+            f"done ({killed}: {ended.other} killed {ended.victim} '{ended.detail}')"
+            if ended
+            else f"failed (no monster_killed; {killed})"
+        )
+        rec = planner.npcs.get(npc)
+        threats = [s.kind for s in rec.stimuli if s.policy.threat and s.other == "WOLF"] if rec else []
+        results["threat_over"] = "done" if rec and not threats else f"failed (still: {threats})"
+        # an npc that fought the wolf itself reacts once its weapon is put away
+        # about the kill (another threat may have come meanwhile)
+        thanks = await wait(lambda: [d for d in decided(mark, "react") if "monster_killed" in d.stimuli], 15)
+        attitude = await wait(lambda: decided(mark, "attitude"), 6)
+        results["rescue_reaction"] = (
+            f"done ({thanks[0].choice} {thanks[0].confidence:.2f}"
+            f"{f', attitude {attitude[0].attitude:.1f}' if attitude else ', no attitude answer'})"
+            if thanks
+            else f"failed (nothing applied; planner: {planner.snapshot()})"
+        )
+
+        def after_kill() -> tuple[float, LineStarted] | None:
+            begun = next((t for t in turns if t >= t1), None)
+            return next(
+                (
+                    (t, m)
+                    for t, m in lines
+                    if m.npc == npc and begun and texts.get(m.line, (0.0, ""))[0] >= begun
+                ),
+                None,
+            )
+
+        second = await wait(after_kill, 20)
+        results["words_after_the_kill"] = (
+            f"done ({second[0] - t1:.1f} s after the kill: {texts.get(second[1].line, (0, '?'))[1]})"
+            if second
+            else "failed (no words)"
+        )
+        if second:
+            await asyncio.sleep(3.0)  # the rest of the turn, for the trace
+    finally:
+        planner.decider.decide = decide  # type: ignore[method-assign]
+        if dialogue is not None:
+            dialogue.event_turn = event_turn  # type: ignore[method-assign]
+        link.send = send  # type: ignore[method-assign]
+        if runner is not None:
+            await link.send(ThreatControlCmd(hold=False))
+            runner.cancel()
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
+    for question, state in dict.fromkeys(asked):
+        log.info("asked %s: %s", question, state)
+    if doing:
+        log.info("doing: %s", ", ".join(f"{what} {t - doing[0][0]:.1f} s" for t, what in doing))
     return results
