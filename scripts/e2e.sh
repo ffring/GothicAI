@@ -23,6 +23,12 @@
 #   vlie: a lie about a quest of the scripts: the hero tells Lobart the turnips are in the barn, Lobart's
 #       model (scripted with LLM=fake) believes him and his own ending plays; the next morning he misses the
 #       turnips, turns against the hero, and the people around hear it (story graph, stage 5)
+#   vcheck: lies as a mechanic: the hero tells Lobart he killed the raiders on his field; Lobart goes to see
+#       for himself, sees them alive and catches the lie; then he takes no lie on the hero's word; once the
+#       raiders are really dead he goes to see again and pays (model scripted with LLM=fake; stage 5)
+#   rumor: Lobart catches the hero lying; the clock goes to the next morning and the rumor goes round the
+#       people that know each other (routines, shared quests) as far as the city; one there has it in mind
+#       when the hero speaks to it (stage 5)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)

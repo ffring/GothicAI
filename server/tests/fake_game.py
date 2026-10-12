@@ -37,13 +37,16 @@ class FakeGame:
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect messages
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
-        # what story_state answers: globals, npc's ({"state", "name"}), dialogs the hero heard, script names
+        # what story_state answers: globals, npc's ({"state", "name", "distance" from `near`}), dialogs the
+        # hero heard, script names
         self.vars: dict[str, int] = {}
-        self.npc_states: dict[str, dict[str, str]] = {}
+        self.npc_states: dict[str, dict[str, Any]] = {}
         self.known: set[str] = set()
         self.symbols: dict[str, str] = {}
         self.in_dialog = False
         self.day = 1
+        self.hour, self.minute = 8, 0
+        self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
         self.item_names: dict[str, str] = {}
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
@@ -168,17 +171,26 @@ class FakeGame:
             case "story_state":
                 value = {
                     "vars": {v: self.vars[v] for v in msg.get("vars", []) if v in self.vars},
-                    "npcs": {n: self.npc_states.get(n, {"state": "absent"}) for n in msg.get("npcs", [])},
+                    "npcs": {
+                        n: {
+                            k: v
+                            for k, v in self.npc_states.get(n, {"state": "absent"}).items()
+                            if k != "distance" or msg.get("near")
+                        }
+                        for n in msg.get("npcs", [])
+                    },
                     "knows": {k: k in self.known for k in msg.get("knows", [])},
                     "symbols": {n: self.symbols[n] for n in msg.get("symbols", []) if n in self.symbols},
                     "dialog": self.in_dialog,
                     "cutscene": False,
                     "items": {i: self.item_names[i] for i in msg.get("items", []) if i in self.item_names},
                     "day": self.day,
-                    "hour": 8,
-                    "minute": 0,
+                    "hour": self.hour,
+                    "minute": self.minute,
                 }
                 await self.send(type="result", req=msg["req"], ok=True, value=value)
+            case "story_people":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.people)
             case "story_eval":
                 self.story.append(msg)
                 values = [self.evaluate(e) for e in msg["exprs"]]
@@ -239,6 +251,9 @@ class FakeGame:
             status, detail = "rejected", "unknown animation"
         elif action == "go_to_waypoint" and args.get("waypoint") not in WAYPOINTS:
             status, detail = "rejected", "unknown waypoint"
+        elif action == "go_to_npc" and args.get("npc") in self.npc_states:
+            # it gets there: the target is as far from it as it was to stop
+            self.npc_states[args["npc"]]["distance"] = args.get("radius", 400)
         await self.send(
             type="action_result",
             id=msg["id"],

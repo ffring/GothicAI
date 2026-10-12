@@ -26,6 +26,10 @@ running and sneaking past; a script look; the hero looks at the npc in focus; a 
 Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
 and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
 for `bench_report.py diff`.
+Transitions between animations: `anim` (the hero on a flat floor: start and stop, walk to run, turning
+on the spot, strafing, walking backwards, jumps, sneaking, fists: attacks, a combo, a block). With
+`blend off` on top of a copy it gives the old cross-fade, for `diff`; `gaze-ambient` and `quad-zoo` show
+an npc's and the creatures' transitions too.
 Aim: `aim` (the hero draws a bow at a sheep hung level, above, steeply above, to the side; the same with
 aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 and 46 degrees, and
 from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
@@ -98,6 +102,7 @@ git worktree remove --force /tmp/before
   about up and the head `N` against the trunk, degrees;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
+- violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
   leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
   if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
@@ -116,6 +121,7 @@ git worktree remove --force /tmp/before
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
 | `aim_off` | while the bow holds still, the arrow points more than 3 degrees past where the shot leaves although the turn could reach it |
 | `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
+| `anim_pop` | a joint of the animated pose (before lean, IK, gaze) jumps at a switch of animations (a frame before it to 6 after): second difference over 3 frames above 20 cm; the event names the bone and the animations before and after |
 | `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
 | `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
 | `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
@@ -135,10 +141,13 @@ looks and the partner, while the partner is within reach of the turn. `lean roll
 roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `aim err` is the
 angle between where the arrow points and where the shot leaves (while the bow holds still), `bend` the
 largest bend of the upper body (+ up). `lips corr` is the correlation of the voice level and the shown
-mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `hits, peak, back` are the
-blows the watched one took, the largest flinch (trunk bend, twist or head, degrees) and how long it took
-to come back after the last blow. `gaze_jerk` is not counted for a second after a blow: it throws the
-head on purpose.
+mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `anim pop` is the second
+difference of the joints of the animated pose (cm, the largest joint per frame): p99 and max over the
+segment, then the number of switches of animations and the largest value next to one. Within an
+animation it is how the animation moves (a running human 11-25 cm, a running waran up to 80): compare
+the switches, with `blend off` and on. `hits, peak, back` are the blows the watched one took, the
+largest flinch (trunk bend, twist or head, degrees) and how long it took to come back after the last
+blow. `gaze_jerk` is not counted for a second after a blow: it throws the head on purpose.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -177,6 +186,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it; not where no ground is found (inside a rock: it would fall through the world) |
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
+| `blend on\|off`, `blend param <name> <value>` | transitions between animations (`AnimBlend`; off: the old cross-fade); params `min`, `max`, `scale` (blend time, s), `turn` (rad/s), `move` (cm/s), `out`, `side` |
 | `flinch on\|off` | the upper body giving way to blows |
 | `hit <npc\|player> <angle> [strength] [height] [twist]` | a blow from that side of it (angle from its facing, 0 in front, as `place`) to the flinch only: no damage, no stumble; strength 0..1 (1), height 0 the hips .. 1 the head (0.6), twist -1..1 about up (0) |
 | `strike <victim\|player> [attacker\|player]` | the attacker's blow lands as the game deals it (the stumble, the damage, the flinch); the victim gets its hit points back below a third |
@@ -235,6 +245,8 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
 and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL loopback device in Tempest's
 `SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
+`Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
+switches bone by bone),
 `LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

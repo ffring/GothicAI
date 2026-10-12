@@ -674,7 +674,8 @@ class GraphPatchCmd(_Command):
 
 class StorySpawnCmd(_Command):
     """Creatures for the director (v8): `count` of `instance` `distance` cm from `near` (default the
-    player), under `tag`. The game answers `result` (`value`: how many came)."""
+    player), or at `waypoint` as the scripts insert them, under `tag`. The game answers `result` (`value`:
+    how many came)."""
 
     type: Literal["story_spawn"] = "story_spawn"
     req: str
@@ -683,6 +684,7 @@ class StorySpawnCmd(_Command):
     count: int = 1
     near: str | None = None
     distance: int = 600
+    waypoint: str | None = None
 
 
 class StoryWatchCmd(_Command):
@@ -697,8 +699,9 @@ class StoryWatchCmd(_Command):
 class StoryEffectCmd(_Command):
     """Effects on an npc (v8), through the scripts' own functions, the npc as self and the hero as other:
     the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
-    constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`). An npc held by
-    the server is let go for these two. The game answers `result`."""
+    constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`) — an npc held by
+    the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
+    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`."""
 
     type: Literal["story_effect"] = "story_effect"
     req: str
@@ -708,18 +711,27 @@ class StoryEffectCmd(_Command):
 
 class StoryStateCmd(_Command):
     """What the director's rules read (v8, stage 5). `result.value`: {"vars": {name: int}, "npcs": {symbol:
-    {"state": "alive" | "dead" | "absent", "name"}}, "knows": {dialog: bool} (the hero has heard it),
-    "symbols": {name: "npc" | "item" | "info" | "var" | "const" | "func" | "other"} (unknown names are
-    left out), "items": {instance: name in the game}, "dialog": bool, "cutscene": bool, "day", "hour",
-    "minute": the game time}."""
+    {"state": "alive" | "dead" | "absent", "name", "distance": cm from `near`, alive or dead, if given}},
+    "knows": {dialog: bool} (the hero has heard it), "symbols": {name: "npc" | "item" | "info" | "var" |
+    "const" | "func" | "other"} (unknown names are left out), "items": {instance: name in the game},
+    "dialog": bool, "cutscene": bool, "day", "hour", "minute": the game time}."""
 
     type: Literal["story_state"] = "story_state"
     req: str
     vars: list[str] = []
     npcs: list[str] = []
+    near: str | None = None
     knows: list[str] = []
     symbols: list[str] = []
     items: list[str] = []
+
+
+class StoryPeopleCmd(_Command):
+    """Every person of the world, for the rumors (v8): `result.value` [{npc, name, guild, routine: [{start,
+    end (minutes of the day), state, waypoint, pos?}]}] — alive, not the hero, no monsters."""
+
+    type: Literal["story_people"] = "story_people"
+    req: str
 
 
 class StoryEvalCmd(_Command):

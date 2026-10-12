@@ -16,6 +16,7 @@
 #include "eval.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "npcfind.h"
 #include "storyeffects.h"
 #include "textcodec.h"
 
@@ -108,6 +109,23 @@ int StoryWorld::spawn(World& world, const rapidjson::Value& msg, std::string& er
   if(id==size_t(-1) || at==nullptr || pl==nullptr || tag.empty()) {
     error = tag.empty() ? "no tag" : id==size_t(-1) ? "unknown instance " + inst : "unknown npc to spawn near";
     return 0;
+    }
+  if(auto name = JsonRead::str(msg,"waypoint"); !name.empty()) {
+    // where the scripts would put them, as Wld_InsertNpc does
+    if(world.findPoint(name)==nullptr) {
+      error = "unknown waypoint " + std::string(name);
+      return 0;
+      }
+    int made = 0;
+    for(int64_t i=0; i<count; ++i)
+      if(Npc* n = world.addNpc(id,name)) {
+        tags[tag].push_back(n);
+        made++;
+        }
+    Log::i("[story] spawned ",made," ",inst," at ",name," as ",tag);
+    if(made==0)
+      error = "could not spawn";
+    return made;
     }
   // in a row across the way from the npc to the player, so they stand on ground both have walked
   const float dist = float(JsonRead::integer(msg,"distance",600));
@@ -238,6 +256,7 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
 
   w.Key("npcs");
   w.StartObject();
+  Npc* near = bySymbol(world,JsonRead::str(msg,"near"));
   eachString(msg,"npcs",[&](const std::string& name) {
     Npc* n = bySymbol(world,name);
     key(name);
@@ -248,6 +267,11 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
       auto display = TextCodec::toUtf8(n->displayName());
       w.Key("name");
       w.String(display.data(),rapidjson::SizeType(display.size()));
+      }
+    if(n!=nullptr && near!=nullptr) {
+      // alive or dead: how far an npc would go to see for itself
+      w.Key("distance");
+      w.Int(int(distance(*near,*n)));
       }
     w.EndObject();
     });
@@ -308,6 +332,43 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
   w.Key("hour");     w.Int64(now.hour());
   w.Key("minute");   w.Int64(now.minute());
   w.EndObject();
+  return std::string(buf.GetString(),buf.GetSize());
+  }
+
+std::string StoryWorld::people(World& world) {
+  rapidjson::StringBuffer                    buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  auto str = [&](std::string_view v) { w.String(v.data(),rapidjson::SizeType(v.size())); };
+  w.StartArray();
+  for(uint32_t i=0; i<world.npcCount(); ++i) {
+    Npc* n = world.npcById(i);
+    if(n==nullptr || n->isPlayer() || n->isDead() || n->isMonster())
+      continue;
+    auto sym  = symbolOf(world,*n);
+    auto name = TextCodec::toUtf8(n->displayName());
+    w.StartObject();
+    w.Key("npc");   str(sym);
+    w.Key("name");  str(name);
+    w.Key("guild"); w.Uint(n->guild());
+    w.Key("routine");
+    w.StartArray();
+    n->forEachRoutine([&](const Npc::RoutineInfo& r) {
+      w.StartObject();
+      w.Key("start");    w.Int(int(r.start.hour()*60+r.start.minute()));
+      w.Key("end");      w.Int(int(r.end.hour()*60+r.end.minute()));
+      w.Key("state");    str(AiNpc::stateName(world,r.state));
+      w.Key("waypoint"); str(r.point);
+      if(auto* wp = world.findPoint(r.point,false)) {
+        auto p = wp->position();
+        w.Key("pos");
+        w.StartArray(); w.Int(int(p.x)); w.Int(int(p.y)); w.Int(int(p.z)); w.EndArray();
+        }
+      w.EndObject();
+      });
+    w.EndArray();
+    w.EndObject();
+    }
+  w.EndArray();
   return std::string(buf.GetString(),buf.GetSize());
   }
 

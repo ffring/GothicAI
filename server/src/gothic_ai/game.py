@@ -43,6 +43,7 @@ from .protocol import (
     StoryEffectCmd,
     StoryEvalCmd,
     StoryNearbyCmd,
+    StoryPeopleCmd,
     StorySpawnCmd,
     StoryStateCmd,
     StoryTagCmd,
@@ -66,6 +67,7 @@ _Request = (
     | StoryStateCmd
     | StoryEvalCmd
     | StoryTagCmd
+    | StoryPeopleCmd
 )
 
 Listener = Callable[[GameMessage], None]
@@ -226,9 +228,15 @@ class GameLink:
         await self._request(GraphPatchCmd(req=self._next_id("g"), replace=replace, ops=ops), timeout)
 
     async def story_spawn(
-        self, instance: str, tag: str, count: int = 1, near: str | None = None, distance: int = 600
+        self,
+        instance: str,
+        tag: str,
+        count: int = 1,
+        near: str | None = None,
+        distance: int = 600,
+        waypoint: str | None = None,
     ) -> int:
-        """Creatures under a tag for the director; how many came."""
+        """Creatures under a tag for the director (near an npc, or at a waypoint); how many came."""
         cmd = StorySpawnCmd(
             req=self._next_id("s"),
             instance=instance.upper(),
@@ -236,6 +244,7 @@ class GameLink:
             count=count,
             near=near,
             distance=distance,
+            waypoint=waypoint,
         )
         return int((await self._request(cmd, 5.0)).value or 0)
 
@@ -260,18 +269,24 @@ class GameLink:
         knows: Iterable[str] = (),
         symbols: Iterable[str] = (),
         items: Iterable[str] = (),
+        near: str | None = None,
         timeout: float = 5.0,
     ) -> dict[str, Any]:
-        """What the director's rules read (see StoryStateCmd)."""
+        """What the director's rules read (see StoryStateCmd); with `near`, how far each npc is from it."""
         cmd = StoryStateCmd(
             req=self._next_id("s"),
             vars=list(vars),
             npcs=[n.upper() for n in npcs],
+            near=near.upper() if near else None,
             knows=list(knows),
             symbols=list(symbols),
             items=list(items),
         )
         return dict((await self._request(cmd, timeout)).value or {})
+
+    async def story_people(self, timeout: float = 10.0) -> list[dict[str, Any]]:
+        """Every person of the world and its day (see StoryPeopleCmd)."""
+        return list((await self._request(StoryPeopleCmd(req=self._next_id("s")), timeout)).value or [])
 
     async def story_eval(self, npc: str, exprs: list[Any], timeout: float = 5.0) -> list[Any]:
         """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""

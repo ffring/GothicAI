@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .brain import Decider, NpcPlanner, Outcome
@@ -17,7 +18,7 @@ from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .incidents import IncidentDesk
-from .llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
+from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider, habits_of
@@ -41,11 +42,13 @@ from .protocol import (
     Snapshot,
     ThreatControlCmd,
 )
-from .quests import QuestBoard
+from .quests import SEE_CM, QuestBoard
+from .social import TICK_S, Rumors
 from .story import StoryPatches
 from .talk import TalkDesk
 from .trace import TraceWriter
-from .vanilla import VanillaQuests
+from .trust import Trust
+from .vanilla import CHECK_CM, VanillaQuests
 from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
@@ -1354,6 +1357,312 @@ async def vanilla_lie(
     check("refuses_talk", bool(refuses), refuses)
     check("rumor", ok, [f for f in facts("rumor") if f.get("quest") == RUEBEN][-1:])
     await link.detach(bystander)
+    return _logged(results)
+
+
+BUGS = "MIS_LOBARTKILLBUGS"
+# Lobart's field raiders where Andre's dialog puts them (DIA_Andre_HilfBauerLobart)
+FIELD = [
+    "NW_FARM1_FIELD_06",
+    "NW_FARM1_FIELD_06",
+    "NW_FARM1_FIELD_05",
+    "NW_FARM1_FIELD_05",
+    "NW_FARM1_FIELD_04",
+    "NW_FARM1_FIELD_04",
+    "NW_FARM1_FIELD_03",
+]
+
+
+class ClaimScript:
+    """A giver's conversational model, scripted by what it hears: the step for a phrase in the hero's words
+    or the cue (`said`), or in the outcome of its last tool call (`told`); else a plain reply."""
+
+    name = "claim-script"
+
+    def __init__(
+        self,
+        said: list[tuple[str, FakeStep]],
+        told: list[tuple[str, FakeStep]],
+        default: str = "Ну?",
+        only: str | None = None,
+        others: LLMBackend | None = None,
+    ) -> None:
+        """`only`: the scripted npc's name; the other npc's turns go to `others` (the live model)."""
+        self.said, self.told, self.default = said, told, default
+        self.only, self.others = only, others
+        self.calls: list[tuple[str, list[Item], list[Tool]]] = []
+        self.outputs: list[str] = []  # what came of its tool calls
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        if self.others is not None and self.only is not None and f"по имени {self.only}" not in instructions:
+            async for event in self.others.stream(
+                instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+            ):
+                yield event
+            return
+        self.calls.append((instructions, list(messages), list(tools or [])))
+        last = messages[-1] if messages else None
+        if isinstance(last, ToolResult):
+            self.outputs.append(last.output)
+            rules, text = self.told, last.output
+        else:
+            rules, text = self.said, last.content if isinstance(last, Message) else ""
+        step = next((s for k, s in rules if k in text), FakeStep(self.default))
+        fake = FakeBackend(script=[step], delay=0)
+        async for event in fake.stream(
+            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+        ):
+            yield event
+
+
+async def vanilla_check(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, vanilla: VanillaQuests, giver: str = LOBART
+) -> dict[str, str]:
+    """Lies as a mechanic the player can read (stage 5), on the game: Lobart's field raiders, where Andre's
+    dialog puts them, and his turnips. The model is scripted unless LLM=chatgpt.
+    1. The hero says he killed the raiders. Lobart can't see the field from where he stands, but it is a short
+       walk: he goes to see (check_claim), sees them alive and catches the lie — no reward, he is wary of the
+       hero, the people around hear it.
+    2. The hero says the turnips are in the barn: Lobart takes his word no more (the code refuses it).
+    3. The raiders are killed and the hero says so: Lobart goes to see again, sees them dead and pays; the
+       scripts' ending plays (gold, the quest, the farmhands back to work)."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = vanilla.chronicle.facts
+    hero = ["inst", "HERO"]
+    bugs = [f"LOBARTS_GIANT_BUG{i + 1}" for i in range(len(FIELD))]
+
+    async def var(name: str) -> int | None:
+        return (await link.story_state(vars=[name])).get("vars", {}).get(name)
+
+    async def gold() -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+
+    async def say(text: str) -> None:
+        """The hero, next to Lobart, says it; until Lobart's turn about it is over."""
+        await link.debug("player_goto", to=giver, distance=250)
+        await _until(lambda: giver in talk.people and talk.people[giver].distance < 600, 10)
+        conv = dialogue.conversations.get(giver)
+        before = conv.reply if conv else None
+        await link.debug("type", text=text)
+
+        def answered() -> bool:
+            c = dialogue.conversations.get(giver)
+            return c is not None and c.reply is not None and c.reply is not before and c.reply.done()
+
+        await _until(answered, 60)
+
+    async def settled() -> None:
+        """Lobart is back from seeing for himself and has said his say."""
+        await _until(lambda: giver not in vanilla.checking, 90)
+        await asyncio.sleep(1)
+        conv = dialogue.conversations.get(giver)
+        await _until(lambda: conv is None or conv.reply is None or conv.reply.done(), 30)
+
+    # the quests, as Andre's and Lobart's dialogs start them, and the raiders on his field
+    await link.story_effect(
+        giver, [{"do": "set", "var": BUGS, "value": 1}, {"do": "set", "var": RUEBEN, "value": 1}]
+    )
+    for bug, wp in zip(bugs, FIELD, strict=True):
+        await link.story_spawn(bug, "LOBART_BUGS", 1, waypoint=wp)
+    await link.debug("player_goto", to=giver, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: giver in talk.people, 20):
+        return _logged({"roster": f"failed ({giver} is not around the hero)"})
+    name = talk.people[giver].name
+    field = (await link.story_state(npcs=bugs, near=giver)).get("npcs", {})
+    ds = sorted(round(p.get("distance", 0) / 100) for p in field.values() if "distance" in p)
+    check("field", bool(ds) and SEE_CM / 100 < ds[0] <= CHECK_CM / 100, f"{len(ds)} raiders, {ds} m")
+    script = None
+    if isinstance(dialogue.llm, FakeBackend):
+        script = ClaimScript(
+            said=[
+                ("правда перебил", FakeStep("Посмотрим.", [ToolCall("accept_quest", {"quest": BUGS})])),
+                (
+                    "перебил всех",
+                    FakeStep("Перебил, говоришь? Сам посмотрю.", [ToolCall("check_claim", {"quest": BUGS})]),
+                ),
+                ("репа", FakeStep("В амбаре?", [ToolCall("accept_quest", {"quest": RUEBEN})])),
+                ("Он тебе солгал", FakeStep("Ах ты брехун! Они живы, все до одного!")),
+                ("он сказал правду", FakeStep("И правда. Держи, заслужил.")),
+            ],
+            told=[
+                ("Можешь сходить", FakeStep("Сам посмотрю.", [ToolCall("check_claim", {"quest": BUGS})])),
+                ("он уже лгал тебе", FakeStep("Нет уж. Тебе я на слово больше не верю. Неси репу сюда.")),
+            ],
+        )
+        dialogue.llm = script
+    gold0 = await gold()
+
+    # 1. the lie: he goes to see for himself and catches it
+    await say(f"{name}, я перебил всех полевых хищников на твоём поле. Плати.")
+    ok = await _until(lambda: any(f.get("quest") == BUGS for f in facts("caught")), 90)
+    got = next((f for f in facts("caught") if f.get("quest") == BUGS), None)
+    check("caught", ok and got is not None and "сходил проверить" in got.get("how", ""), got)
+    if script is not None:
+        tools = [t.name for t in script.calls[0][2]] if script.calls else []
+        check("check_offered", "check_claim" in tools, tools)
+    check("no_reward", (await var(BUGS), await gold()) == (1, gold0))
+    conv = dialogue.conversations.get(giver)
+    check("wary", conv is not None and conv.intent.attitude in ("wary", "hostile"), conv and conv.intent)
+    await settled()  # back to the hero, he says what he thinks of it
+
+    # 2. a lie he can't check: not on his word any more
+    await say(f"{name}, репа уже в амбаре, все двадцать штук. Давай плату.")
+    await asyncio.sleep(2)
+    check("not_on_word", not any(f.get("quest") == RUEBEN for f in facts("claim")), facts("claim")[-1:])
+    if script is not None:
+        check("refused", any("он уже лгал тебе" in o for o in script.outputs), script.outputs[-1:])
+
+    # 3. the truth: he goes to see again, and pays
+    for bug in bugs:
+        await link.debug("kill", npc=bug)
+    await say(f"{name}, вот теперь я правда перебил всех хищников. Сходи посмотри сам.")
+    ok = await _until(lambda: any(f.get("quest") == BUGS for f in facts("claim")), 90)
+    claim = next((f for f in facts("claim") if f.get("quest") == BUGS), None)
+    check("paid_after_check", ok and claim is not None and claim.get("truth") and claim.get("checked"), claim)
+    await settled()
+    check("ending_played", (await var(BUGS), await gold() >= gold0 + 20) == (2, True))
+    kept = vanilla.trust.situation(giver) or ""
+    check("kept_word", "он уже говорил тебе правду" in kept and "он уже лгал тебе" in kept, kept)
+    return _logged(results)
+
+
+async def rumor_spread(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    rumors: Rumors,
+    giver: str = LOBART,
+    log_dir: str | None = None,
+) -> dict[str, str]:
+    """Rumors among acquaintances (stage 5), on the game. Lobart catches the hero lying about the turnips (the
+    model scripted unless LLM=chatgpt); the people of the world and their days make who knows whom (Hilda on
+    the farm, Andre through the quest that sends the hero to Lobart's field). The clock goes to the next
+    morning: the rumor goes round, in the order of the meetings, to people that never stood by Lobart, also
+    in the city. The hero, put next to one of them, speaks to it: it has the rumor in mind."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = rumors.chronicle.facts
+
+    # who knows whom, from the routines of the world's people and the quests of the scripts
+    if not await _until(lambda: rumors.social is not None, 30):
+        return _logged({"social": "failed (no people)"})
+    social = rumors.social
+    assert social is not None
+    if log_dir:
+        text = "\n".join(f"{n}: {'; '.join(social.describe(n))}" for n in sorted(social.names))
+        await asyncio.to_thread(Path(log_dir, "ties.txt").write_text, text, encoding="utf-8")
+    ties = social.ties.get(giver, {})
+    check(
+        "ties",
+        HILDA in ties and bool(ties[HILDA].meets) and "MIL_311_ANDRE" in ties,
+        f"{len(social.names)} people; {giver}: {', '.join(sorted(social.names.get(n, n) for n in ties))}",
+    )
+
+    # Lobart catches the lie: the turnips in the barn, and the hero has none on him
+    await link.story_effect(giver, [{"do": "set", "var": RUEBEN, "value": 1}])
+    await link.debug("player_goto", to=giver, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: giver in talk.people, 20):
+        return _logged({**results, "roster": f"failed ({giver} is not around the hero)"})
+    name = talk.people[giver].name
+    # Lobart is scripted (the lie must be caught); with LLM=chatgpt the others are the live model
+    live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+    expose = FakeStep("Врёшь! Нет у тебя никакой репы.", [ToolCall("expose_lie", {"quest": RUEBEN})])
+    script = ClaimScript(
+        said=[("репа", expose)], told=[], default="Ну, здравствуй. Чего тебе?", only=name, others=live
+    )
+    dialogue.llm = script
+    await link.debug("type", text=f"{name}, репа уже в амбаре, все двадцать штук. Давай плату.")
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("caught")), 60)
+    check("caught", ok, facts("caught")[-1:])
+    if not ok:
+        return _logged(results)
+    before = {f["to"] for f in facts("rumor")}
+
+    # the next morning: the meetings in between
+    await link.debug("time", hour=7, minute=0)
+    await _until(lambda: any(int(f.get("hops", 1)) >= 2 for f in facts("rumor")), 30)
+    await asyncio.sleep(TICK_S + 1)
+    heard = [f for f in facts("rumor") if f.get("quest") == RUEBEN]
+    hops = sorted({int(f.get("hops", 1)) for f in heard})
+    check(
+        "went_round",
+        len(heard) > len(before) and max(hops, default=0) >= 2,
+        f"{len(heard)} people, hops {hops}",
+    )
+    knowers = sorted({f["to"] for f in heard} - before)
+    where = (await link.story_state(npcs=knowers, near=giver)).get("npcs", {})
+    far = sorted(
+        (n for n in knowers if (where.get(n) or {}).get("state") == "alive"),
+        key=lambda n: -float((where.get(n) or {}).get("distance", 0)),
+    )
+    farthest = far[0] if far else None
+    d = float((where.get(farthest) or {}).get("distance", 0)) / 100 if farthest else 0
+    check(
+        "far_away",
+        farthest is not None and d > 100,
+        f"{social.names.get(farthest or '', farthest)}, {d:.0f} m",
+    )
+    if farthest is None:
+        return _logged(results)
+
+    # the hero speaks to it: the rumor is in its mind
+    told = next(f for f in heard if f["to"] == farthest)
+    line = Trust(rumors.chronicle).situation(farthest) or ""
+    check("in_mind", "ты слышал, что он обманул других" in line and "Лобарт" in line, line.splitlines()[-1:])
+    await link.debug("player_goto", to=farthest, distance=250)
+    if not await _until(lambda: farthest in talk.people, 20):
+        return _logged({**results, "roster2": f"failed ({farthest} is not around the hero)"})
+    other = talk.people[farthest].name
+    calls = len(script.calls)
+    await link.debug("type", text=f"{other}, здравствуй. Не одолжишь мне пару монет? Верну завтра.")
+
+    def answered() -> bool:
+        conv = dialogue.conversations.get(farthest)
+        return conv is not None and conv.reply is not None and conv.reply.done()
+
+    ok = await _until(answered, 60)
+    if live is None:
+        request = " ".join(str(m) for _, items, _ in script.calls[calls:] for m in items)
+        check(
+            "in_request",
+            ok and "со слов: " in request and "Лобарт" in request,
+            f"heard from {told.get('from_name')}",
+        )
+    else:
+        conv = dialogue.conversations.get(farthest)
+        said = [
+            m.content
+            for m in (conv.history if conv else [])
+            if isinstance(m, Message) and m.role == "assistant"
+        ]
+        check("answer", ok and bool(said), f"{other}: {said[-1] if said else ''}")
     return _logged(results)
 
 

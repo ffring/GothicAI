@@ -71,6 +71,7 @@ class Marvin {
       C_ToggleGaze,
       C_ToggleLipSync,
       C_ToggleLean,
+      C_ToggleAniBlend,
       C_ToggleAim,
       C_ToggleFlinch,
       };

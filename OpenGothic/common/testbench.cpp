@@ -27,6 +27,8 @@
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/lean.h"
+#include "graphics/mesh/pose.h"
+#include "graphics/mesh/animblend.h"
 #include "graphics/mesh/aim.h"
 #include "graphics/mesh/flinch.h"
 #include "graphics/mesh/skeleton.h"
@@ -449,6 +451,8 @@ struct Bench {
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
   Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  // joints of the watched one's animated pose in the last two frames: a pop is a jump of the second difference
+  std::vector<Vec3> anim1, anim2;
   // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
   float       placeDist  = 0;
   float       placeAngle = 0;
@@ -850,12 +854,43 @@ void writeHeader() {
     }
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
+  std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,"\n");
+  }
+
+// the animated pose of the watched one (or the hero): the largest second difference of a joint over
+// three frames (cm; a pop), which joint, the fastest joint (cm/s) and the playing animations
+void writeAnim() {
+  const auto&  a    = bench.subject!=nullptr ? Pose::subjectProbe : Pose::playerProbe;
+  const size_t n    = a.valid ? a.numBones : 0;
+  float        pop  = 0, speed = 0;
+  size_t       bone = size_t(-1);
+  if(bench.anim2.size()==n && bench.anim1.size()==n) {
+    for(size_t i=0; i<n; ++i) {
+      const float d2 = (a.joint[i] - bench.anim1[i]*2.f + bench.anim2[i]).length();
+      if(d2>pop) {
+        pop  = d2;
+        bone = i;
+        }
+      speed = std::max(speed,(a.joint[i] - bench.anim1[i]).length()*float(Fps));
+      }
+    }
+  bench.anim2 = std::move(bench.anim1);
+  bench.anim1.assign(a.joint,a.joint+n);
+
+  std::string name = "-";
+  if(bone!=size_t(-1) && a.skeleton!=nullptr && bone<a.skeleton->nodes.size())
+    name = a.skeleton->nodes[bone].name;
+  for(auto& c:name)
+    if(c==' ' || c==',')
+      c = '_';
+  std::fprintf(bench.csv,",%.2f,%s,%.0f,%s",pop,name.c_str(),speed,a.layers.empty() ? "-" : a.layers.c_str());
+  std::fprintf(bench.csv,",%d,%u,%u,%.1f,%.3f",int(AnimBlend::isEnabled()),a.blend.active,a.blend.started,a.blend.angle,a.blend.time);
   }
 
 void writeRow(Npc& pl) {
@@ -890,6 +925,7 @@ void writeRow(Npc& pl) {
   // lean of the watched npc (or the hero)
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.1f,%.1f",int(ln.active),ln.roll,ln.pitch,ln.speed,ln.turn,ln.slope);
+  writeAnim();
   // aim of the watched npc (or the hero)
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
@@ -1213,6 +1249,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.recName  = a.size()>1 ? a[1] : "rec";
     bench.recFrame = 0;
     bench.recStart = bench.time;
+    bench.anim1.clear();
+    bench.anim2.clear();
     bench.recWall  = std::chrono::steady_clock::now();
     if(bench.recVideo && SoundDevice::loopbackRate()>0) {
       bench.audio       = std::fopen((outDir+"/"+bench.recName+".wav").c_str(),"wb");
@@ -1440,6 +1478,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(m=="on" || m=="off")
       Lean::setEnabled(m=="on"); else
       say("unknown lean command: " + line);
+    }
+  else if(c=="blend") {
+    // blend on|off, blend param <min|scale|max> <value>: transitions between animations (AnimBlend)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      AnimBlend::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(AnimBlend::setParam(a[2],num(a,3,0)) ? "blend param " : "blend: unknown param ") + a[2] + " " + a[3]);
+    else
+      say("unknown blend command: " + line);
     }
   else if(c=="ik") {
     const std::string m = a.size()>1 ? a[1] : "";
@@ -1703,6 +1751,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     LipSync::probeNpc     = n;
     LipSync::subjectProbe = LipSync::Probe();
     Lean::probeNpc = bench.subject;
+    Pose::probeNpc = bench.subject;
+    bench.anim1.clear();
+    bench.anim2.clear();
     Aim::probeNpc  = bench.subject;
     Flinch::probeNpc = bench.subject;
     char buf[160] = "watch nobody";
@@ -2136,6 +2187,12 @@ void drawOverlay(Pixmap& pm) {
     std::snprintf(buf,sizeof(buf),"LEAN%s R%.1f P%.1f V%.0f T%.0f S%.0f",Lean::isEnabled() ? "" : " OFF",double(ln.roll),
                   double(ln.pitch),double(ln.speed),double(ln.turn),double(ln.slope));
     cv.text(x,y,buf,2,{120,255,160,255});
+    y += 16;
+    }
+  const auto& an = bench.subject!=nullptr ? Pose::subjectProbe : Pose::playerProbe;
+  if(an.valid) {
+    std::snprintf(buf,sizeof(buf),"BLEND%s N%u A%.0f",AnimBlend::isEnabled() ? "" : " OFF",an.blend.active,double(an.blend.angle));
+    cv.text(x,y,buf,2,{200,160,255,255});
     y += 16;
     }
   if(bench.occl!=0) {

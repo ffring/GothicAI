@@ -9,6 +9,8 @@
 #include "objvisual.h"
 #include "gothic.h"
 
+#include <cstdlib>
+
 using namespace Tempest;
 
 MdlVisual::MdlVisual()
@@ -520,6 +522,15 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
   solver.update(tickCount);
   pose.setObjectMatrix(pos,false);
   const bool changed = pose.update(tickCount, force);
+  if(npc!=nullptr && npc->isPlayer()) {
+    static const bool log = std::getenv("OPENGOTHIC_ANIBLEND_LOG")!=nullptr;
+    pose.setBlendLog(log);
+    }
+  // the animated pose for the test bench (it probes the feet too)
+  if(npc!=nullptr && npc->isPlayer() && FootIk::isProbing())
+    pose.probe(Pose::playerProbe);
+  if(npc!=nullptr && npc==Pose::probeNpc)
+    pose.probe(Pose::subjectProbe);
 
   if(changed)
     view.setPose(pos,pose);
