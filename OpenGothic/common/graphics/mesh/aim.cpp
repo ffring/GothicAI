@@ -141,6 +141,13 @@ void Aim::setSkeleton(const Skeleton* sk) {
   tree(spine,spineTree);
   tree(waist,waistTree);
   tree(chest,chestTree);
+  for(auto side:{"BIP01 L","BIP01 R"}) {
+    size_t arm = find(std::string(side)+" CLAVICLE");
+    if(arm==size_t(-1))
+      arm = find(std::string(side)+" UPPERARM");
+    if(arm!=size_t(-1) && isUnder(arm,chest))
+      tree(arm,armsTree);
+    }
   valid = true;
   }
 
@@ -202,6 +209,10 @@ bool Aim::update(const Input& in) {
   if(sw.x!=sway.x || sw.y!=sway.y)
     changed = true;
   sway = sw;
+  const Tempest::Vec2 tm = on ? in.tremor : Tempest::Vec2();
+  if(tm.x!=tremor.x || tm.y!=tremor.y)
+    changed = true;
+  tremor = tm;
   if(ready)
     approach(rot,goal,1.f - std::exp(-BodyRate*fast*dt),MaxBody*fast*dt,changed);
 
@@ -250,12 +261,17 @@ void Aim::apply(Matrix4x4* tr, size_t numBones) {
   const Vec3 now  = arrow ? arrowOf(tr) : (an>0.f ? mul(axisAngle(normalize(r),an),forward) : forward);
   error = std::acos(std::clamp(dot(now,want),-1.f,1.f))/Deg;
 
-  // the manual aim sways off that: the chest turns about up and bends (+ up)
+  // the manual aim sways off that: the chest turns about up and bends (+ up); the arms tremble more, the
+  // head does not (both arms turn about the chest: the arrow and the bow turn together)
+  Vec3 side = cross(want,Up);
+  side = length(side)>1e-3f ? normalize(side) : normalize(cross(forward,Up));
   if(sway.x!=0.f || sway.y!=0.f) {
-    Vec3 side = cross(want,Up);
-    side = length(side)>1e-3f ? normalize(side) : normalize(cross(forward,Up));
     const Mat3 rs = mul(axisAngle(Up,sway.x*weight),axisAngle(side,sway.y*weight));
     rotateAbout(tr,chestTree,rs,position(tr[chest]));
+    }
+  if(tremor.x!=0.f || tremor.y!=0.f) {
+    const Mat3 rt = mul(axisAngle(Up,tremor.x*weight),axisAngle(side,tremor.y*weight));
+    rotateAbout(tr,armsTree.empty() ? chestTree : armsTree,rt,position(tr[chest]));
     }
   }
 

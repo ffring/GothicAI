@@ -3203,6 +3203,11 @@ void Npc::setAiOutputBarrier(uint64_t dt, bool overlay) {
   }
 
 void Npc::emitSoundEffect(std::string_view sound, float range, bool freeSlot) {
+  if(isPlayer() && TestBench::isActive()) {
+    char buf[128];
+    std::snprintf(buf,sizeof(buf),"sound %.*s",int(sound.size()),sound.data());
+    TestBench::note(buf);
+    }
   auto sfx = ::Sound(owner,::Sound::T_Regular,sound,centerPosition(),range,freeSlot);
   sfx.play();
   }
@@ -4233,10 +4238,11 @@ bool Npc::shootBow(Interactive* focOverride) {
   return true;
   }
 
-void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway) {
-  manualAim   = on;
-  manualPoint = point;
-  manualSway  = on ? sway : Tempest::Vec2();
+void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway, const Tempest::Vec2& tremor) {
+  manualAim    = on;
+  manualPoint  = point;
+  manualSway   = on ? sway   : Tempest::Vec2();
+  manualTremor = on ? tremor : Tempest::Vec2();
   }
 
 bool Npc::isAimSteady() const {

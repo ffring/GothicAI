@@ -23,6 +23,9 @@ constexpr float Comfort  = 0.92f; // ...nor reaches for the string further: a st
 constexpr float BlendIn  = 0.15f; // seconds: the hand goes to the string...
 constexpr float BlendOut = 0.15f; // ...and back to the animation
 constexpr float LetDown  = 3.f;   // 1/s: the string let down without a shot goes back that fast
+constexpr float MinShot  = 0.3f;  // drawn that far the string let go is a shot (Archery::MinDraw)
+constexpr float Follow   = 6.f;   // cm the hand flies back past the face as the string goes...
+constexpr float FollowT  = 0.3f;  // ...for that long, there and back (smooth at both ends)
 
 bool enabled = []() {
   const char* v = std::getenv("OPENGOTHIC_BOWDRAW");
@@ -90,7 +93,15 @@ bool BowDraw::update(const Input& in) {
   const bool  on   = in.active && in.ready && enabled;
   const float prev     = weight;
   const float prevDraw = draw;
+  const float prevBack = follow;
   given = in.span;
+  // the shot: the string held drawn goes (not held still any more, not let down): the hand follows through
+  if(in.active && wasReady && !in.ready && draw>=MinShot && weight>0.f)
+    followT = 0;
+  wasReady = in.active && in.ready;
+  followT  = std::min(FollowT, followT+dt);
+  const float bump = std::sin(float(M_PI)*followT/FollowT);
+  follow   = followT<FollowT ? Follow*bump*bump : 0.f;
   if(on) {
     weight = std::min(1.f, weight + dt/BlendIn);
     // drawn as it is; let down (no shot) back a bit slower
@@ -107,7 +118,7 @@ bool BowDraw::update(const Input& in) {
     if(weight<=0.f && in.active && in.nock>=0.f)
       draw = 0;
     }
-  return weight!=prev || (weight>0.f && draw!=prevDraw);
+  return weight!=prev || (weight>0.f && draw!=prevDraw) || follow!=prevBack;
   }
 
 void BowDraw::apply(Matrix4x4* tr, size_t numBones) {
@@ -128,7 +139,7 @@ void BowDraw::apply(Matrix4x4* tr, size_t numBones) {
     span = 0;
     return;
     }
-  if(weight<=0.f)
+  if(weight<=0.f && follow<=0.f)
     return;
 
   // forward along the arrow, as far as the arm reaches: |hand + axis*t - shoulder| <= Comfort*arm
@@ -140,9 +151,11 @@ void BowDraw::apply(Matrix4x4* tr, size_t numBones) {
   const float reach = disc>0.f ? std::max(0.f, -pa + std::sqrt(disc)) : 0.f;
   // the whole draw over what the arm reaches: the hand moves all the way, the string with it
   travel = std::min(span,reach)*(1.f-draw)*weight;
-  if(travel<0.01f)
+  // the follow through: back past the face
+  const float move = travel - follow;
+  if(std::abs(move)<0.01f)
     return;
-  const Vec3 target = h0 + axis*travel;
+  const Vec3 target = h0 + axis*move;
   // the elbow bends in the plane it is animated in
   const Vec3 bend   = position(tr[fore]) - position(tr[upper]);
   TwoBone    tb;
@@ -160,4 +173,5 @@ void BowDraw::probe(Probe& p) const {
   p.span   = span;
   p.travel = travel;
   p.miss   = miss;
+  p.follow = follow;
   }

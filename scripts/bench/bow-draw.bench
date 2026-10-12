@@ -62,3 +62,12 @@ animspeed T_BOWRELOAD 1.5
 rec tempo15
 volley 2 300
 stop
+
+# held too long: past the hold limit the arms tremble (the head does not), then the shot
+animspeed T_BOWRELOAD 1
+stats str 15 dex 15 bow 10
+cam follow 150 155 -50
+wait 300
+rec tremble
+volley 1 7000
+stop

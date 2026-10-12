@@ -650,6 +650,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
           o = ap;
         in.dir    = at - o;
         in.sway   = npc.manualAimSway();
+        in.tremor = npc.manualAimTremor();
         in.manual = true;
         } else {
         in.dir  = World::bulletVelocity(from,aimAt());

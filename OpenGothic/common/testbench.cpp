@@ -22,6 +22,8 @@
 
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
+#include "game/definitions/sounddefinitions.h"
+#include "resources.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
@@ -929,7 +931,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
-  std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss");
+  std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss,bd_follow");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
@@ -1035,7 +1037,7 @@ void writeRow(Npc& pl) {
                hasCross ? spread*180.f/float(M_PI) : -1.f,moved);
   // the hand drawing the string
   const auto& bd = BowDraw::playerProbe;
-  std::fprintf(bench.csv,",%.3f,%.3f,%.1f,%.1f,%.1f",bd.valid ? bd.weight : -1.f,bd.draw,bd.span,bd.travel,bd.miss);
+  std::fprintf(bench.csv,",%.3f,%.3f,%.1f,%.1f,%.1f,%.1f",bd.valid ? bd.weight : -1.f,bd.draw,bd.span,bd.travel,bd.miss,bd.follow);
   // lips of the watched one
   const auto& lp = LipSync::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
@@ -1517,6 +1519,21 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(m=="on" || m=="off")
       Archery::setEnabled(m=="on"); else
       say("unknown manual command: " + line);
+    }
+  else if(c=="sfx") {
+    // sfx <name>...: the files a sound effect plays (its variants _A1.. too), whether they load
+    for(size_t k=1; k<a.size(); ++k) {
+      std::string out = "sfx " + a[k] + ":";
+      for(int v=0; v<10; ++v) {
+        const std::string name = v==0 ? a[k] : a[k]+"_A"+std::to_string(v);
+        auto& d = Gothic::sfx()[name];
+        if(d.file.empty())
+          break;
+        out += " " + d.file + (Resources::loadSoundBuffer(d.file).isEmpty() ? " (missing)" : "") +
+               " vol " + std::to_string(d.vol);
+        }
+      say(out);
+      }
     }
   else if(c=="animspeed") {
     // animspeed <anim> <k>: the hero's animation of that name plays k times as fast from its next start

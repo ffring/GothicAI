@@ -1143,7 +1143,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   if(ar.tick(in,st))
     ar.onShot(pl.releaseArrow(ar.draw(),st));
   ar.probe(Archer::playerProbe);
-  pl.setManualAim(true,at,ar.sway());
+  pl.setManualAim(true,at,ar.sway(),ar.tremor());
 
   // the crosshair is where it aims; it opens as far as the arrow may go off: the sway, the trembling,
   // the arrow not turned to it yet (a flick of the mouse), the bow being raised, the next arrow nocked.

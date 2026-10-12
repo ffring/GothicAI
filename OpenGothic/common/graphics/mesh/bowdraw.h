@@ -32,6 +32,7 @@ class BowDraw final {
       float span   = 0;  // cm: from the nock at full draw to the string at rest
       float travel = 0;  // cm the hand goes forward from the animation now (not further than the arm reaches)
       float miss   = 0;  // cm between the hand and where it has to go (the arm does not reach)
+      float follow = 0;  // cm back past the face after the shot
       };
 
     static bool    isEnabled();
@@ -40,8 +41,8 @@ class BowDraw final {
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
     // How far the bow's string is drawn as the hand holds it now, 0..1 of the animation's draw; -1: the
-    // hand is not drawing it (the animation does)
-    float          string() const { return weight<=0.f ? -1.f : (span>0.f ? 1.f-travel/span : 1.f-(1.f-draw)*weight); }
+    // hand is not drawing it (the animation does: after the shot too)
+    float          string() const { return weight<=0.f || follow>0.f ? -1.f : (span>0.f ? 1.f-travel/span : 1.f-(1.f-draw)*weight); }
 
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);
@@ -58,6 +59,9 @@ class BowDraw final {
     float               weight = 0;
     float               draw   = 1;
     float               given  = 0;  // the span from the input
+    bool                wasReady = false;
+    float               followT  = 1;  // seconds since the shot (the follow through)
+    float               follow   = 0;  // cm the hand is back past the face now
 
     // from the last pose
     float               span   = 0;

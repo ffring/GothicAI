@@ -60,8 +60,10 @@ class Archer final {
     bool          isRaised() const { return stg!=Lowered; }
     // Reloading, the bow went down for the next arrow already (it comes up and holds still after)
     bool          isNocking() const { return stg==Reloading && unready; }
-    // Where the aim sways off to: yaw (about up), pitch (+ up), radians
-    Tempest::Vec2 sway()  const { return sw; }
+    // Where the aim sways off to: yaw (about up), pitch (+ up), radians. The slow part (the wander, the
+    // breathing) moves the chest; the trembling (tired, too weak for the bow) the arms
+    Tempest::Vec2 sway()   const { return sw; }
+    Tempest::Vec2 tremor() const { return trm; }
     // How far off the arrow may go now, radians: the sway's reach, trembling, the release
     float         spread() const { return spr; }
 
@@ -88,6 +90,7 @@ class Archer final {
     float         strength  = 1;
     float         skill     = 0;
     Tempest::Vec2 sw;
+    Tempest::Vec2 trm;
 
     float         wander(float t, uint32_t axis) const;
     float         tremor(float t, uint32_t axis) const;
