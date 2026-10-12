@@ -189,7 +189,7 @@ class FakeGame:
                         n: {
                             k: v
                             for k, v in self.npc_states.get(n, {"state": "absent"}).items()
-                            if k != "distance" or msg.get("near")
+                            if k not in ("distance", "seen") or msg.get("near")
                         }
                         for n in msg.get("npcs", [])
                     },
@@ -289,8 +289,10 @@ class FakeGame:
         elif action == "go_to_waypoint" and args.get("waypoint") not in WAYPOINTS:
             status, detail = "rejected", "unknown waypoint"
         elif action == "go_to_npc" and args.get("npc") in self.npc_states:
-            # it gets there: the target is as far from it as it was to stop
+            # it gets there: the target is as far from it as it was to stop, and in sight
             self.npc_states[args["npc"]]["distance"] = args.get("radius", 400)
+            if "seen" in self.npc_states[args["npc"]]:
+                self.npc_states[args["npc"]]["seen"] = True
         await self.send(
             type="action_result",
             id=msg["id"],

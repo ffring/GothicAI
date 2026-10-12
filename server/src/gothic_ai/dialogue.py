@@ -308,6 +308,7 @@ class Conversation:
     reply_id: str = ""  # the latest turn's reply (its subtitle entry)
     hushed: set[str] = field(default_factory=set)  # lines cut off by the hero: never sent
     cut: str | None = None  # the hero interrupted the running turn: what the npc had said of it
+    trigger: Message | None = None  # what started the running turn (remembered when it ends)
 
     @property
     def history(self) -> list[Message]:
@@ -864,6 +865,7 @@ class DialogueManager:
         """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
         subtitles and the voice as it comes; tool calls are handled after their step. `body`: what the
         npc's body does meanwhile (the behavioral model's choice)."""
+        conv.trigger = trigger
         if conv.new_meeting:
             conv.new_meeting = False
             if conv.memory.entries or conv.memory.summary:

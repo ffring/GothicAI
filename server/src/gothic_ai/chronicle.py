@@ -7,8 +7,9 @@ exactly what had happened before that save. Each has a `fact` kind:
 - `spawned`: the director put `count` creatures of `instance` into the world under `tag`;
 - the quests (quests.py) add `quest`, `paid`, `belief`, `lie`, `found_out`, `rumor`.
 
-The game also reports, once a second, how many of each tag still live and how far the nearest one is
-from the npc's being watched (`story_world`): the rules that find lies out look at that.
+The game also reports, once a second, how many of each tag still live, how far the nearest one is from
+the npc's being watched and how far the nearest one it sees (`story_world`, the engine's own sight since
+v12): the rules that find lies out look at that.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ class Tag:
     alive: int = 0
     dead: int = 0
     near: dict[str, float] = field(default_factory=dict)  # watched npc -> cm to the nearest living one
+    seen: dict[str, float] = field(default_factory=dict)  # watched npc -> cm to the nearest one it sees
 
 
 class Chronicle:
@@ -78,6 +80,12 @@ class Chronicle:
         state = self.tags.get(tag)
         return state.near.get(npc.upper()) if state else None
 
+    def seen(self, tag: str, npc: str) -> float | None:
+        """cm from the npc to the nearest living creature of the tag it sees now (not behind a wall); None:
+        it sees none."""
+        state = self.tags.get(tag)
+        return state.seen.get(npc.upper()) if state else None
+
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
             case Session():
@@ -88,7 +96,13 @@ class Chronicle:
                 )
             case StoryWorld():
                 self.tags = {
-                    t.tag: Tag(t.alive, t.dead, {n.npc.upper(): n.distance for n in t.near}) for t in msg.tags
+                    t.tag: Tag(
+                        t.alive,
+                        t.dead,
+                        {n.npc.upper(): n.distance for n in t.near},
+                        {n.npc.upper(): n.seen for n in t.near if n.seen is not None},
+                    )
+                    for t in msg.tags
                 }
 
     def _on_session(self, session: Session) -> None:

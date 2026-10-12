@@ -18,6 +18,7 @@
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "npcfind.h"
+#include "npcview.h"
 #include "storyeffects.h"
 #include "textcodec.h"
 
@@ -287,9 +288,11 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
       w.String(display.data(),rapidjson::SizeType(display.size()));
       }
     if(n!=nullptr && near!=nullptr) {
-      // alive or dead: how far an npc would go to see for itself
+      // alive or dead: how far an npc would go to see for itself, and whether it sees it from here (v12)
       w.Key("distance");
       w.Int(int(distance(*near,*n)));
+      w.Key("seen");
+      w.Bool(near!=n && npcSees(*near,*n));
       }
     w.EndObject();
     });
@@ -441,12 +444,21 @@ void StoryWorld::report(World& world) {
       Npc* who = bySymbol(world,w);
       if(who==nullptr)
         continue;
-      float best = std::numeric_limits<float>::max();
+      // the nearest living one, and the nearest it sees (v12)
+      float best = std::numeric_limits<float>::max(), seen = best;
       for(auto* n : list)
-        if(!n->isDead())
-          best = std::min(best,distance(*who,*n));
-      if(best<std::numeric_limits<float>::max())
-        j.object().str("npc",w).integer("distance",int64_t(best)).end();
+        if(!n->isDead()) {
+          const float d = distance(*who,*n);
+          best = std::min(best,d);
+          if(d<seen && npcSees(*who,*n))
+            seen = d;
+          }
+      if(best<std::numeric_limits<float>::max()) {
+        j.object().str("npc",w).integer("distance",int64_t(best));
+        if(seen<std::numeric_limits<float>::max())
+          j.integer("seen",int64_t(seen));
+        j.end();
+        }
       }
     j.endArray();
     j.end();

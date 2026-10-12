@@ -25,6 +25,10 @@
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
 #       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
 #       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#   seen: what npc's saw (v12): Lobart keeps when, where and how he saw the hero on his farm; the hero goes to
+#       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
+#       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
+#       story_state's `seen` (check_claim) is the engine's sight
 #   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
 #       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
@@ -50,6 +54,11 @@
 #       deal that forgives the lie for the fine, and he accepts it (docs/npc-tools.md, wave 1 step 2)
 #   debt: Lobart lends the hero 20 gold for 25 back by the end of the next day; two days on the debt is a
 #       broken word (trust) and goes round as a rumor; then the hero pays it back, late (wave 1 step 2)
+#   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
+#       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
+#       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them
+#   haggle: live only (LLM=chatgpt): the hero offers the same silver cup to Canthar (greedy by his card) and
+#       Lutero (fairer) and asks for more: the greedy one should offer less (wave 1 step 3)
 #   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
 #       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
 #       haggling: the deal window shows the new version, Y waits right after the change, then the deal is

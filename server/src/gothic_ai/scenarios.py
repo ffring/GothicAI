@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import characters
 from .amends import Amends
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
@@ -48,6 +49,7 @@ from .protocol import (
     ThreatControlCmd,
 )
 from .quests import SEE_CM, QuestBoard
+from .sightings import Sightings
 from .social import TICK_S, Rumors
 from .story import StoryPatches
 from .talk import TalkDesk
@@ -2384,6 +2386,179 @@ async def see_perception(
     return _logged(results)
 
 
+TOWNSFOLK = ("MIL_319_PABLO", "VLK_417_CONSTANTINO", "VLK_424_ALWIN")  # in the street by Harad's smithy
+
+
+async def seen_memory(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    farmer: str = LOBART,
+    smith: str = "VLK_412_HARAD",
+    slot: int = 7,
+) -> dict[str, str]:
+    """What npc's saw (wave 1 step 6), on the game. At eight in the morning the hero stands before Lobart on
+    his farm: Lobart keeps the sighting — when, where by name, how the hero looked. The hero goes to the city
+    (Harad sees him there), an hour passes, he comes back and tells Lobart he was in the city all morning:
+    Lobart saw him on the farm an hour ago and catches the lie (`catch_lie`; the model scripted unless
+    LLM=chatgpt) — his trust, wariness, a rumor. The memory follows the save. The sight of check_claim is the
+    engine's: what story_state says the townsman sees is what his view sees."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    desk = sightings.desk
+    chronicle = sightings.chronicle
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+
+    # 1. the morning on the farm: Lobart sees the hero
+    await link.debug("time", hour=8, minute=0)
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        return _logged({"farmer": f"failed ({farmer} is not around the hero)"})
+    await asyncio.sleep(2)
+    view = await desk.fresh(farmer)
+    hero = view.hero if view is not None else None
+    check(
+        "time_in_view",
+        view is not None and view.time is not None and hero is not None and hero.waypoint is not None,
+        f"time {view.time if view else None}, hero at {hero.waypoint if hero else None}",
+    )
+    seen = await _until(lambda: bool(sightings.hero_trail(farmer)), 5)
+    first = sightings.hero_trail(farmer)[0] if seen else None
+    check(
+        "sighting",
+        first is not None and not first.places[0].startswith("у точки"),
+        sightings.words(first) if first else "Lobart kept nothing",
+    )
+
+    # 2. to the city: someone there turns to the man who came up and sees him; Lobart's sighting is over
+    tried, who = [], []
+    for townsman in (smith, *TOWNSFOLK):
+        try:
+            # not stopped for a scripted talk (Pablo's «you are wanted»): it would hold the game from saving
+            await link.debug("skip_important", near=townsman)
+            await link.debug("teleport", near=townsman, distance=300)
+        except GameError as err:
+            tried.append(f"{townsman}: {err}")
+            continue
+        await asyncio.sleep(1)
+        await link.npc_act(townsman, "turn_to")
+        await _until(lambda: [n for n in sightings.witnesses() if n != farmer.upper()], 4)
+        view = await desk.fresh(townsman)
+        tried.append(f"{townsman} {view.state if view else '?'}/{view.body if view else '?'}")
+        who = [n for n in sightings.witnesses() if n != farmer.upper()]
+        if who:
+            smith = townsman
+            break
+    check(
+        "elsewhere",
+        bool(who) and all(not sightings.hero_trail(n)[0].places[0].startswith("у точки") for n in who),
+        "; ".join(f"{n}: {sightings.words(sightings.hero_trail(n)[0])}" for n in who[:3])
+        or f"nobody saw him ({', '.join(tried)})",
+    )
+    # check_claim's sight is the engine's: story_state `seen` agrees with what that one's view sees
+    view = await desk.fresh(smith)
+    near = [o.id for o in (view.sees if view else []) if o.kind == "human"][:3]
+    around = [p["npc"] for p in await link.story_nearby(smith, 2000)]
+    unseen = [n for n in around if n not in near and n.upper() != smith.upper()][:3]
+    far = "NONE_100_XARDAS"
+    asked = [*near, *unseen, far]
+    state = await link.story_state(npcs=asked, near=smith)
+    said = {n: (state.get("npcs", {}).get(n) or {}).get("seen") for n in asked}
+    agree = (
+        bool(near)
+        and sum(1 for n in near if said[n]) >= len(near) - 1  # one may have moved meanwhile
+        and sum(1 for n in unseen if said[n] is False) >= len(unseen) - 1
+        and said[far] is False
+    )
+    check("story_state_sight", agree, f"in the view {near}, not {unseen}: {said}")
+
+    # 3. an hour later, back on the farm
+    morning = first.end if first is not None else 0
+    hour, minute = divmod(morning % 1440 + 60, 60)
+    await link.debug("time", hour=hour, minute=minute)
+    await asyncio.sleep(2)  # the pushes in the city carry the new time: Lobart's sighting is over
+    await link.debug("teleport", near=farmer, distance=300)
+    back = await _until(lambda: len(sightings.hero_trail(farmer)) >= 2, 10)
+    # whom he talks to is who is before him now (the roster comes once a second)
+    await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 10)
+    await asyncio.sleep(1.5)
+    trail = sightings.hero_trail(farmer)
+    check(
+        "back",
+        back and trail[0].start - trail[1].end >= 55,
+        " | ".join(
+            f"{s.start % 1440 // 60:02d}:{s.start % 60:02d}–{s.end % 1440 // 60:02d}:{s.end % 60:02d}"
+            for s in trail[:3]
+        ),
+    )
+
+    # 4. the lie: «I was in the city all morning»
+    name = talk.people[farmer].name if farmer in talk.people else "Лобарт"
+    await desk.fresh(farmer)
+    situation = sightings.situation(farmer) or ""
+    sid = next((m.group(1) for m in re.finditer(r"- (В\d): [^\n]*около часа назад", situation)), "В2")
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    script = None
+    if isinstance(dialogue.llm, FakeBackend):
+        catch = FakeStep(
+            "Врёшь! Я тебя час назад здесь, на ферме, видел.",
+            [ToolCall("catch_lie", {"said": "всё утро был в городе", "seen": sid})],
+        )
+        dialogue.llm = script = ClaimScript(said=[("город", catch)], told=[], default="Ну?", only=name)
+    await link.debug("type", text=f"{name}, я всё утро был в городе, только что оттуда.")
+    caught = await _until(lambda: any(f.get("said") for f in chronicle.facts("caught")), 60)
+    if script is not None:
+        request = str(script.calls[0][1]) if script.calls else ""
+        check(
+            "in_the_turn",
+            "Что ты видел сам" in request and f"{sid}: сегодня" in request and "около часа назад" in request,
+            next((line for line in situation.splitlines() if line.startswith(f"- {sid}")), situation[:200]),
+        )
+    fact = next((f for f in chronicle.facts("caught") if f.get("said")), None)
+    conv = dialogue.conversations.get(farmer)
+    replies = [e.content for e in conv.memory.entries if e.role == "assistant"][-2:] if conv else []
+    check("caught", caught, f"{fact.get('title')!r}: {fact.get('how')}; said {replies}" if fact else replies)
+    check(
+        "wary", conv is not None and conv.intent.attitude in ("wary", "hostile"), conv.intent if conv else ""
+    )
+    lied = Trust(chronicle).of(farmer).lied
+    check("trust", bool(lied), lied)
+
+    # 5. the memory follows the save
+    head = sightings.memory.head(link.session.branch) if link.session else 0
+    await asyncio.sleep(0.5)  # the game has the head by now
+    for attempt in range(30):
+        try:
+            saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+            await link.debug("save", slot)
+            break
+        except GameError as err:
+            saving.cancel()
+            if attempt == 29:
+                raise
+            log.info("save refused (%s), retrying", err)
+            await asyncio.sleep(2)
+    saved = await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    session = await loaded
+    await link.wait_world()
+    trail = sightings.hero_trail(farmer)
+    check(
+        "follows_the_save",
+        saved.seq >= head and session.branch != saved.branch and len(trail) >= 2,
+        f"{session.branch} from {session.parent}@{session.parent_seq}: {len(trail)} sighting(s) of the hero",
+    )
+
+    return _logged(results)
+
+
 # chapter 3 dialogs of Xardas's (KAPITEL == 3 in their conditions, or waiting for one that has it)
 XARDAS_CH3 = {
     "DIA_XARDAS_BACKFROMOW",
@@ -2623,6 +2798,145 @@ async def deal_debt(
     after = await has(GOLD)
     check("repaid", ok and after == before - 25, f"{before} -> {after} gold")
     check("word_stays", Trust(deals.chronicle).broken(lender))
+    return _logged(results)
+
+
+async def write_cards(
+    link: GameLink, graph: Any, llm: LLMBackend, only: set[str] | None = None, path: Path | None = None
+) -> dict[str, str]:
+    """Character cards (docs/npc-tools.md, wave 1 step 3): the model writes them, a few npc's a call, for
+    those of `only` (GOTHIC_CARDS: symbols, comma separated) or for everyone of this world with lines of its
+    own, into gamedata/characters.json (cards there for others stay). Saved after every batch; who got no
+    card is asked about once more. Without `only`, those that have a card already are left as they are: a
+    run cut short goes on where it stopped."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    people = await link.story_people(timeout=30)
+    target = path or characters.CARDS_FILE
+    cards = characters.load(target)
+    subjects = [x for x in characters.subjects(graph, people, only) if only or x.npc not in cards]
+    check(
+        "subjects", bool(subjects) or not only, f"{len(subjects)} of {len(people)} people, {len(cards)} cards"
+    )
+    left = list(subjects)
+    for attempt in (1, 2):
+        missed = []
+        for i in range(0, len(left), characters.BATCH):
+            batch = left[i : i + characters.BATCH]
+            got, errors = await characters.write(llm, batch)
+            cards.update(got)
+            characters.save(cards, target)
+            missed += [x for x in batch if x.npc not in got]
+            log.info(
+                "cards: %d/%d written (attempt %d)%s",
+                len(got),
+                len(batch),
+                attempt,
+                f": {errors}" if errors else "",
+            )
+        left = missed
+        if not left:
+            break
+    check(
+        "written",
+        not left,
+        f"{len(subjects) - len(left)} of {len(subjects)}; none for {[x.npc for x in left]}",
+    )
+    return _logged(results)
+
+
+CANTHAR, LUTERO = "VLK_468_CANTHAR", "VLK_404_LUTERO"
+
+
+async def haggle(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    npcs: tuple[str, str] = (CANTHAR, LUTERO),
+    ware: str = "ITMI_SILVERCUP",
+) -> dict[str, str]:
+    """Character in a deal (docs/npc-tools.md, wave 1 step 3), live only (LLM=chatgpt). The hero offers the
+    same silver cup to two traders who would buy it, a greedy one and a fairer one by their character cards
+    (Canthar, Lutero), and asks for more, as a player would: he agrees in words when a price is named. What
+    each offers first and after the haggling is logged; the greedy one should offer less."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    if isinstance(dialogue.llm, FakeBackend):
+        check("live", False, "run with LLM=chatgpt")
+        return _logged(results)
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    offers: dict[str, list[int]] = {}
+
+    def buying(npc: str, version: int) -> int | None:
+        deal = deals.open.get(npc)
+        if deal is None or deal.version < version or not any(g.item == ware for g in deal.hero_gives):
+            return None
+        return sum(g.count for g in deal.npc_gives if g.item == GOLD)
+
+    for npc in npcs:
+        await link.attach(npc)
+        await link.act(npc, "debug_add_item", item=GOLD, count=300)
+        await link.act(npc, "debug_add_item", item=ware, count=1)
+        await link.detach(npc)
+        await link.story_effect(npc, [{"do": "give", "item": ware, "count": 1}])  # the cup is the hero's
+        await link.debug("skip_important", near=npc)
+        await link.debug("player_goto", to=npc, distance=250)
+        # the roster must have him close: else the words would go to the one the hero talked to before
+        if not await _until(lambda npc=npc: npc in talk.people and talk.people[npc].distance <= 600, 20):
+            check(f"{npc}_near", False)
+            continue
+        name = talk.people[npc].name
+        got: list[int] = []
+
+        async def say_until(lines: list[str], version: int, npc: str = npc) -> int | None:
+            """Say the lines one by one until the npc offers a deal of `version` or later."""
+            for line in lines:
+                await link.debug("type", text=line)
+                if await _until(lambda: buying(npc, version) is not None, 45):
+                    return buying(npc, version)
+            return None
+
+        first = await say_until(
+            [
+                f"{name}, купишь у меня серебряный кубок? Сколько дашь?",
+                f"{name}, назови цену.",
+                f"{name}, согласен, давай по рукам.",
+            ],
+            1,
+        )
+        if first is not None:
+            got.append(first)
+            version = deals.open[npc].version
+            more = await say_until(
+                [
+                    f"{name}, маловато. Кубок серебряный, накинь ещё.",
+                    f"{name}, ладно, на твою новую цену согласен.",
+                ],
+                version + 1,
+            )
+            if more is not None:
+                got.append(more)
+            await link.decline_deal()
+        offers[npc] = got
+        check(f"{npc}_offered", bool(got), got)
+        await asyncio.sleep(2)
+    cards = dialogue.personas.cards
+    greedy, generous = sorted(npcs, key=lambda n: -(cards[n].greed if n in cards else 3))
+    a, b = offers.get(greedy, []), offers.get(generous, [])
+    detail = f"{greedy} (greed {cards[greedy].greed if greedy in cards else '?'}): {a}; {generous}: {b}"
+    check("greedy_pays_less", bool(a) and bool(b) and a[0] < b[0], detail)
     return _logged(results)
 
 

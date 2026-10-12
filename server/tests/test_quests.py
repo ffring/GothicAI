@@ -49,11 +49,16 @@ async def test_a_lie_is_paid_found_out_and_spread():
         assert "Ты поверил герою" in board.situation(XARDAS)
         assert "pay_reward" not in [t.name for t in dialogue._offered(XARDAS)]  # paid already
 
-        # a wolf that lives turns up 8 m from the giver: the lie is found out
+        # a wolf that lives turns up 8 m from the giver, behind a wall: nothing yet
         fake.people_near = [{"npc": "PC_THIEF", "name": "Диего", "distance": 500, "guild": 0}]
         near = [{"npc": XARDAS, "distance": 800}]
         await fake.send(type="story_world", tags=[{"tag": q.tag, "alive": 1, "dead": 1, "near": near}])
         run = asyncio.create_task(board.run())
+        await asyncio.sleep(1.5)
+        assert chronicle.facts("found_out") == []
+        # it comes out where the giver sees it: the lie is found out
+        near = [{"npc": XARDAS, "distance": 800, "seen": 800}]
+        await fake.send(type="story_world", tags=[{"tag": q.tag, "alive": 1, "dead": 1, "near": near}])
         await _until(lambda: chronicle.facts("rumor") != [], 5)  # the last of the consequences
         run.cancel()
         await _until(lambda: any(m["type"] == "story_effect" for m in fake.story))
