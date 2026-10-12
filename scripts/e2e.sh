@@ -10,6 +10,10 @@
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
 #       DECIDER_URL, or a fixed stand-in)
+#   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
+#       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
+#       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
+#       words). rescue_self: the shepherd kills the wolf himself and says a word about it
 #   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move

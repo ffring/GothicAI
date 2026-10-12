@@ -10,6 +10,8 @@ Npc's of the eval set (evals/npc-decisions) never appear, so the eval stays held
     uv run --project ../../server python gen_cards.py --calls 40 [--per-call 8] [--jobs 3]
     uv run --project ../../server python gen_cards.py --calls 19 --emergency   # danger around the npc
     uv run --project ../../server python gen_cards.py --calls 10 --personal    # business with the hero
+    uv run --project ../../server python gen_cards.py --calls 10 --danger      # a creature goes for the npc
+    uv run --project ../../server python gen_cards.py --calls 15 --rescue      # ... and is killed
 
 Appends to data/cards.jsonl; rerunning continues with new seeds.
 """
@@ -36,7 +38,7 @@ GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/shared/projects/Gothic II
 EVENT_KINDS = [
     "player_near", "player_speech", "enter_room", "item_given", "item_dropped", "player_sits",
     "player_sleeps", "weapon_drawn", "theft", "attack", "magic", "murder",
-    "monster_near", "attacked_by", "fight_nearby", "cry_for_help",
+    "monster_near", "attacked_by", "fight_nearby", "cry_for_help", "monster_killed",
 ]  # fmt: skip
 
 SETTINGS = [
@@ -87,6 +89,52 @@ EMERGENCY_NOTE = (
     "sometimes busy elsewhere, sometimes able to help. Use the events monster_near, attacked_by, "
     "fight_nearby and cry_for_help (a hero event may be added as a second one). Vary how dangerous it is: "
     "from harmless to deadly, and from a npc used to fighting to a frightened commoner."
+)
+
+# creatures as the Russian release names them (the bridge sends these names): English = Russian
+MONSTERS_RU = {
+    "wolf": "Волк", "young wolf": "Молодой волк", "black wolf": "Черный волк", "warg": "Варг",
+    "scavenger": "Падальщик", "meadow scavenger": "Луговой падальщик", "giant rat": "Гигантская крыса",
+    "young giant rat": "Молодая гигантская крыса", "swamp rat": "Болотная крыса", "molerat": "Крысокрот",
+    "bloodfly": "Кровавая муха", "meatbug": "Мясной жук", "lurker": "Луркер", "shadowbeast": "Мракорис",
+    "snapper": "Снеппер", "field raider": "Полевой хищник", "goblin": "Гоблин",
+    "black goblin": "Черный гоблин", "skeleton": "Скелет", "zombie": "Зомби", "orc": "Орк",
+    "orc warrior": "Орк-воин", "orc scout": "Орк-разведчик",
+    "swampshark": "Болотная акула", "harpy": "Гарпия", "troll": "Тролль", "cave troll": "Пещерный тролль",
+}  # fmt: skip
+
+# a creature goes for the npc while the hero is close: how the game reports it (monster_near, attacked_by)
+DANGER = [
+    "a dangerous creature (wolf, warg, shadowbeast, orc, lurker, snapper...) runs at the npc",
+    "a creature attacks the npc and bites or hits it",
+    "a weak or harmless creature (meatbug, young giant rat, molerat, bloodfly...) comes at the npc",
+    "a creature goes for the npc while it works, eats, sleeps or guards something",
+]
+# ... and is killed: by the hero (mostly), by someone else or by the npc itself
+RESCUE = [
+    "a creature ran at or attacked the npc, and the hero has just killed it",
+    "a creature attacked the npc, and the hero killed it at the last moment",
+    "a creature went for the npc, and a militiaman, hunter or mercenary nearby killed it",
+    "a creature went for the npc, and the npc killed it itself",
+    "the hero killed a creature nearby that was no danger to this npc (it attacked someone else or just "
+    "prowled around)",
+]
+MONSTER_NOTE = (
+    " The hero is close (1-15 m), mostly watching. Vary the npc (from a frightened commoner or old woman "
+    "to a seasoned fighter), how dangerous the creature is and how close the npc came to harm. Name the "
+    "creature with one of these, English = Russian release: {monsters}. Every monster event also gets "
+    '"detail_ru": the creature\'s Russian name from this list, and every card "npc_ru": the npc\'s name '
+    "as the Russian release spells it (Cyrillic)."
+)
+DANGER_NOTE = (
+    " Use the events monster_near (it is coming at the npc) or attacked_by (it attacks the npc), with "
+    "detail the creature; a hero event (player_near, player_speech) may be added as a second one."
+    + MONSTER_NOTE
+)
+RESCUE_NOTE = (
+    " Events in order: first the threat (monster_near or attacked_by, detail the creature), then "
+    'monster_killed (detail the same creature, "by": "hero", "self" or who killed it, e.g. '
+    '"a militiaman"); the scene is the moment right after the kill.' + MONSTER_NOTE
 )
 
 # the npc has its own reason to talk to the hero when he shows up
@@ -140,7 +188,8 @@ Events: player_speech detail = what the hero said, in Russian (keep it in Russia
 item_given / item_dropped / theft detail = the item in English ("a bottle of wine"); attack / murder
 detail = the victim ("Edda the cook", "a sheep"); monster_near / attacked_by detail = the attacker ("a wolf",
 "two bandits"); fight_nearby detail = who fights ("two drunk sailors"); cry_for_help detail = who shouts
-("a farmer by the field"); other kinds: detail null.
+("a farmer by the field"); monster_killed detail = the creature, plus "by" = "hero", "self" (the npc killed
+it) or who killed it; other kinds: detail null.
 Menu: 4-7 options for this npc in this moment. Always include "continue" (keep doing what you were
 doing). Mix sensible and wrong options, each a short plain action (under 12 words) in the same neutral
 tone: never hint in the wording whether an option is right ("solely", "immediately", "for no reason").
@@ -198,6 +247,10 @@ def prompt(
         themes, note = rnd.sample(EMERGENCY, 2), EMERGENCY_NOTE
     elif focus == "personal":
         themes, note = rnd.sample(PERSONAL, 2), PERSONAL_NOTE
+    elif focus in ("danger", "rescue"):
+        pool, note = (DANGER, DANGER_NOTE) if focus == "danger" else (RESCUE, RESCUE_NOTE)
+        themes = rnd.sample(pool, 2)
+        note = note.format(monsters=", ".join(f"{k} = {v}" for k, v in MONSTERS_RU.items()))
     elif rnd.random() < quiet:
         themes = [QUIET, rnd.choice(THEMES[9:11])]
     else:
@@ -225,6 +278,10 @@ def valid(card: dict, excluded: set[str], catalogue: dict[str, str]) -> str | No
             return "guild"
         if not card["events"] or any(e["kind"] not in EVENT_KINDS for e in card["events"]):
             return "events"
+        if any(e["kind"] == "monster_killed" and not e.get("by") for e in card["events"]):
+            return "monster_killed without by"
+        if any(e.get("detail_ru") and e["detail_ru"] not in MONSTERS_RU.values() for e in card["events"]):
+            return "unknown creature"
         menu = card["menu"]
         if "continue" not in menu or not 3 <= len(menu) <= 8:
             return "menu"
@@ -258,6 +315,20 @@ async def main() -> None:
         dest="focus",
         const="personal",
         help="only npc's with personal business with the hero",
+    )
+    ap.add_argument(
+        "--danger",
+        action="store_const",
+        dest="focus",
+        const="danger",
+        help="only creatures going for the npc",
+    )
+    ap.add_argument(
+        "--rescue",
+        action="store_const",
+        dest="focus",
+        const="rescue",
+        help="only creatures that went for the npc and were killed",
     )
     args = ap.parse_args()
 

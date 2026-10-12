@@ -18,7 +18,8 @@ class World;
 // NPCs that follow their routine, as seen by the AI server's planner (protocol v5):
 // - npc_roster: npc's around the player, twice a second;
 // - npc_event:  what they notice about the player, and threats from others: monsters near or attacking,
-//               armed npc's (from the engine's own perceptions, which still run);
+//               armed npc's (from the engine's own perceptions, which still run); a monster killed
+//               (`monster_killed`: the danger is over);
 // - npc_act:    "soft" actions put into the npc's AI queue the way scripts do it (AI_OutputSVM,
 //               AI_TurnToNpc, ...): when the queue runs empty, the engine resumes the routine itself;
 // - npc_idle:   such an action is done.
@@ -61,7 +62,8 @@ class NpcObserver final {
     bool trackProximity(World& world, Npc& npc, std::string_view symbol, float dist);
     void checkRunning(World& world, uint64_t now);
     void emitEvent(std::string_view npc, std::string_view kind, std::string_view other,
-                   double distance, std::string_view detail, std::string_view otherName);
+                   double distance, std::string_view detail, std::string_view otherName,
+                   std::string_view victim = {});
     bool throttled(std::string_view npc, std::string_view kind, uint64_t now, uint64_t periodMs);
     void reply(std::string_view id, std::string_view npc, std::string_view status, std::string_view detail);
 
