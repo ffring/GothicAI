@@ -15,7 +15,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Coroutine
 from dataclasses import dataclass, field, replace
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from . import executor, npc_tools
 from .budget import Budget
@@ -57,6 +57,9 @@ from .protocol import (
 from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
 from .tts import TtsClient, TtsError
 from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
+
+if TYPE_CHECKING:
+    from .perception import Sight
 
 log = logging.getLogger(__name__)
 
@@ -381,6 +384,8 @@ class DialogueManager:
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
         self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
+        # what the npc sees (perception.py), in place of the snapshot's omniscient lines
+        self.sight: Callable[[str, Snapshot | None], Sight | None] | None = None
         self.extensions: list[TurnExtension] = []
         self.llm = llm
         self.personas = personas
@@ -634,14 +639,15 @@ class DialogueManager:
     ) -> asyncio.Task[None] | None:
         """A turn about something that happened (an incident): the npc may speak and change its intent.
         While a turn is running the event waits for the next one's situation instead of interrupting.
-        `tools` limits what the model is offered (an npc nobody controls cannot hand over items)."""
+        `tools` limits what the model is offered (an npc nobody controls cannot hand over items); the names
+        may be of the extensions' tools too (deals.py: an offer declined, the npc may offer again)."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return None
         if conv.reply is not None and not conv.reply.done():
             conv.pending.append(cue)
             return None
-        offered = self.tools if tools is None else [t for t in self.tools if t.name in tools]
+        offered = self.tools if tools is None else [t for t in self._offered(npc) if t.name in tools]
         conv.reply = asyncio.create_task(
             self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay, tools=offered)
         )
@@ -863,13 +869,14 @@ class DialogueManager:
             if conv.memory.entries or conv.memory.summary:
                 when = game_time(self.link.snapshots.get(conv.npc))
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
-        snap = self.link.snapshots.get(conv.npc)
-        situation_text = npc_tools.render_situation(snap, conv.intent)
         for ext in self.extensions:
             try:
                 await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
             except (GameError, TimeoutError) as err:
                 log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
+        snap = self.link.snapshots.get(conv.npc)
+        sight = self.sight(conv.npc, snap) if self.sight is not None else None
+        situation_text = npc_tools.render_situation(snap, conv.intent, sight)
         for ext in self.extensions:
             if extra := ext.situation(conv.npc):
                 situation_text += "\n" + extra

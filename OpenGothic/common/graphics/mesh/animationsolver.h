@@ -64,6 +64,7 @@ class AnimationSolver final {
       StumbleA,
       StumbleB,
       AimBow,
+      ReloadBow, // the next arrow, bolt: the weapon was lowered before the reload put it in
       PointAt,
 
       ItmGet,

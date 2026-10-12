@@ -292,6 +292,8 @@ class Npc final {
     bool      aimBow();
     bool      shootBow(Interactive* focOverride = nullptr);
     bool      hasAmmunition() const;
+    // an arrow (a bolt) is put in, ready to shoot
+    bool      isBowLoaded() const;
 
     // the bow aimed by hand (game/archery): the hero's input drives it (PlayerControl)
     Archer&   archer() { return arch; }
@@ -316,6 +318,7 @@ class Npc final {
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string hitZonesDump() const { return visual.hitZonesDump(); }
     void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
+    void        fitHitZones() { visual.fitHitZones(); }
     std::string bowDump() const { return visual.bowDump(); }
 
     bool      isEnemy(const Npc& other) const;

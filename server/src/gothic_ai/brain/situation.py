@@ -95,6 +95,7 @@ class NpcContext:
     traits: str | None = None  # one line of character, e.g. "Stern, loyal to the king."
     agenda: str | None = None  # what it wants from the player
     facts: tuple[str, ...] = field(default_factory=tuple)  # things it remembers about the hero
+    view: tuple[str, ...] = field(default_factory=tuple)  # what it perceives, the most telling first
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ class SituationBuilder:
             parts.append(f"It is {clock}.")
         seen = ", looking at you" if npc.in_view else ""
         parts.append(f"The hero is {npc.distance_cm / 100:.0f} m away{seen}.")
+        parts += npc.view
         parts += [s.describe(now) for s in stimuli]
         if npc.agenda:
             parts.append(f"What you want: {npc.agenda}")

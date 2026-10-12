@@ -20,12 +20,13 @@ namespace Archery {
     float holdLimit = 0; // seconds at full draw before the arms tremble
     float speed     = 0; // cm/ms: the arrow at full draw
     float cone      = 0; // radians: the release throws the arrow off by up to that
-    float reload    = 1; // the reload plays that many times as fast (dexterity; a crossbow: 1 yet)
+    float reload    = 1; // the reload plays that many times as fast (dexterity; a crossbow: strength)
     };
 
   // the animation of the reload: the next arrow, the next bolt
   static constexpr const char* BowReload  = "T_BOWRELOAD";
   static constexpr const char* CBowReload = "T_CBOWRELOAD";
+  inline const char* reloadAnim(bool crossbow) { return crossbow ? CBowReload : BowReload; }
 
   static constexpr float MinDraw = 0.3f; // drawn less: the arrow is not shot, the string let down
   static constexpr float GiveUp  = 4.f;  // seconds trembling past the hold limit: the arms let it down

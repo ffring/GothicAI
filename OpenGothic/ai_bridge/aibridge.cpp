@@ -40,6 +40,7 @@
 #include "npccontroller.h"
 #include "npcfind.h"
 #include "npcobserver.h"
+#include "npcview.h"
 #include "textcodec.h"
 #include "voicebuffer.h"
 #include "testbench.h"
@@ -48,7 +49,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 9;
+constexpr int         ProtocolVersion = 11;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -199,6 +200,10 @@ struct AiBridge::Impl final {
   // the server decides whom the hero speaks to
   void ensureChat();
   bool canSpeak();
+  // v10: an npc's offer of a deal in a window beside the game (docs/npc-tools.md); Y accepts it
+  void onDealShow(World& world, const rapidjson::Value& msg);
+  void tickDeal(World& world);
+  std::string dealJson();
   // the npc the hero looks at (his focus), empty if none
   std::string focusSymbol(World& world);
   void submitChat(const std::string& text);
@@ -226,6 +231,7 @@ struct AiBridge::Impl final {
   NpcController        ctrl{[this](std::string&& s){ send(std::move(s)); }};
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
                                 [this](std::string_view symbol){ return npcOwner(symbol); }};
+  NpcView              view{[this](std::string&& s){ send(std::move(s)); }};
 
   Session              session;
   bool                 saving = false;  // a save is in progress: the same world comes back
@@ -410,6 +416,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
             observer.releaseAll(*world);
             }
           observer.setHoldThreats(false);
+          if(chat!=nullptr)
+            chat->hideDeal("");  // nobody is there to carry it out
           }
         else if(in.kind==Inbound::Error && in.text!=lastError) {
           Log::i("[ai] connection failed: ",in.text);
@@ -428,9 +436,11 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
     ctrl.tick(*world);
     if(connected) {
       observer.tick(*world);
+      view.tick(*world);
       story.tick(*world);
       }
     tickVoices(*world);
+    tickDeal(*world);
     }
   ensureChat();
   chat->tick();
@@ -443,8 +453,10 @@ void AiBridge::Impl::onStartLoading() {
     return;
     }
   saving = false;
-  if(chat!=nullptr)
+  if(chat!=nullptr) {
     chat->closeInput();
+    chat->hideDeal("");
+    }
   voices.clear();  // the world and its sound device are about to go
   lastLine.clear();
   originalLines.clear();
@@ -654,6 +666,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="npc_act") {
     observer.act(*world,doc);
     }
+  else if(type=="npc_view") {
+    auto it = doc.FindMember("npcs");
+    if(it==doc.MemberEnd())
+      sendResult(req,false,"no npcs"); else
+      sendResult(req,true,"",view.views(*world,it->value));
+    }
   else if(type=="routine") {
     observer.routine(*world,doc);
     }
@@ -685,6 +703,13 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="hush") {
     onHush(*world,doc);
     }
+  else if(type=="deal_show") {
+    onDealShow(*world,doc);
+    }
+  else if(type=="deal_hide") {
+    if(chat!=nullptr)
+      chat->hideDeal(JsonRead::str(doc,"deal"));
+    }
   else {
     sendResult(req,false,"unknown message type: " + std::string(type));
     }
@@ -697,8 +722,9 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     return;
     }
   const auto cmd = JsonRead::str(msg,"cmd");
-  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
-     cmd=="time" || cmd=="teleport" || cmd=="skip_important") {
+  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
+     cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
+     cmd=="deal_decline") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -815,6 +841,25 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,true,"");
     return;
     }
+  if(cmd=="deal") {
+    // what the deal window shows
+    sendResult(req,true,"",dealJson());
+    return;
+    }
+  if(cmd=="deal_accept") {
+    // Y as the player presses it
+    ensureChat();
+    const std::string r = chat->canDeal() ? chat->pressDeal() : "blocked";
+    sendResult(req,true,"","\"" + r + "\"");
+    return;
+    }
+  if(cmd=="deal_decline") {
+    // N as the player presses it
+    ensureChat();
+    const std::string r = chat->canDeal() ? chat->declineDeal() : "blocked";
+    sendResult(req,true,"","\"" + r + "\"");
+    return;
+    }
   if(cmd=="time") {
     // the clock goes to `hour`:`minute`, the next day if that is earlier than now (like sleeping)
     world->setDayTime(int32_t(JsonRead::integer(msg,"hour",8)),int32_t(JsonRead::integer(msg,"minute",0)));
@@ -899,6 +944,22 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // a line typed into the input line and sent
     sendResult(req,true,"");
     submitChat(TextCodec::fromUtf8(JsonRead::str(msg,"text")));
+    return;
+    }
+  if(cmd=="player_equip") {
+    // the player gets an item and puts it on (armor of another guild, for the npc's eyes)
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    if(!pl->inventory().itemCount(id))
+      pl->addItem(id,1);
+    pl->useItem(id);
+    sendResult(req,true,"");
     return;
     }
   // player_weapon: the player draws ("melee") or puts away ("none") a weapon
@@ -1284,7 +1345,74 @@ void AiBridge::Impl::ensureChat() {
     chat->setStatus(TextCodec::fromUtf8("Распознаю речь..."));
     };
   chat->onPttCancel = [this]() { sendPtt("ptt_cancel"); };
+  chat->canDeal     = [this]() {
+    auto&  gothic = Gothic::inst();
+    World* world  = gothic.world();
+    return connected && world!=nullptr && world->player()!=nullptr && !gothic.isPause();
+    };
+  chat->onDealAccept = [this](const std::string& deal, int32_t version) {
+    send(JsonWriter("deal_accept").str("deal",deal).integer("version",version).finish());
+    };
+  chat->onDealDecline = [this](const std::string& deal, int32_t version) {
+    send(JsonWriter("deal_decline").str("deal",deal).integer("version",version).finish());
+    };
   SystemApi::addOverlay(chat.get());
+  }
+
+void AiBridge::Impl::onDealShow(World& world, const rapidjson::Value& msg) {
+  ensureChat();
+  auto lines = [](const rapidjson::Value& m, const char* key) {
+    std::vector<ChatOverlay::DealLine> out;
+    if(auto it = m.FindMember(key); it!=m.MemberEnd() && it->value.IsArray())
+      for(auto& x : it->value.GetArray()) {
+        ChatOverlay::DealLine l;
+        l.item  = std::string(JsonRead::str(x,"item"));
+        l.count = int32_t(JsonRead::integer(x,"count",1));
+        l.text  = TextCodec::fromUtf8(JsonRead::str(x,"text"));
+        out.push_back(std::move(l));
+        }
+    return out;
+    };
+  const auto symbol = JsonRead::str(msg,"npc");
+  Npc*       npc    = npcBySymbol(world,symbol);
+  chat->showDeal(std::string(JsonRead::str(msg,"deal")),int32_t(JsonRead::integer(msg,"version",1)),
+                 npc!=nullptr ? std::string(npc->displayName()) : std::string(symbol),
+                 lines(msg,"npc_gives"),lines(msg,"hero_gives"));
+  tickDeal(world);
+  }
+
+void AiBridge::Impl::tickDeal(World& world) {
+  // what the hero lacks of what he gives: the window marks it and Y waits
+  Npc* pl = world.player();
+  if(chat==nullptr || chat->shownDeal().id.empty() || pl==nullptr)
+    return;
+  chat->markMissing([&](const ChatOverlay::DealLine& l) {
+    const size_t id = world.script().findSymbolIndex(l.item);
+    return id==size_t(-1) || pl->itemCount(id) < size_t(std::max(0,l.count));
+    });
+  }
+
+std::string AiBridge::Impl::dealJson() {
+  if(chat==nullptr || chat->shownDeal().id.empty())
+    return "null";
+  auto&      d = chat->shownDeal();
+  JsonWriter j("deal_window");
+  j.str("deal",d.id).integer("version",d.version).str("npc",TextCodec::toUtf8(d.npc));
+  j.array("missing");
+  for(auto& l:d.heroGives)
+    if(l.missing)
+      j.item(l.item);
+  j.endArray();
+  j.array("npc_gives");
+  for(auto& l:d.npcGives)
+    j.item(TextCodec::toUtf8(l.text));
+  j.endArray();
+  j.array("hero_gives");
+  for(auto& l:d.heroGives)
+    j.item(TextCodec::toUtf8(l.text));
+  j.endArray();
+  j.boolean("sent",d.sent);
+  return j.finish();
   }
 
 bool AiBridge::Impl::canSpeak() {

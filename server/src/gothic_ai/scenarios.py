@@ -16,6 +16,7 @@ from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Fact
+from .deals import GOLD, Deals, gold_text
 from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
@@ -24,6 +25,7 @@ from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
+from .perception import PerceptionDesk, Sight
 from .persona import PersonaProvider, habits_of
 from .protocol import (
     ActionResult,
@@ -2216,6 +2218,130 @@ async def m6_knows(
     return _logged(results)
 
 
+async def see_perception(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    perception: PerceptionDesk,
+    rumors: Rumors,
+    npc: str = "NONE_100_XARDAS",
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """What npc's perceive (wave 1 step 4), on the game, with the engine's own sight. Xardas sees the hero in
+    front of him and not through the tower's walls and floors. Lobart calls the people he knows by name and
+    the hero, whom he does not know, by his look; in militia armor the hero is a militiaman to him. The view
+    is in the conversational model's request (scripted here) and `look` answers; the nearest npc's views
+    are pushed once a second for the behavioral model."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    # 1. sight: in front of him he sees the hero; walls and floors hide him even within 20 m
+    await link.debug("teleport", near=npc, distance=300)
+    await asyncio.sleep(1)
+    view = await perception.fresh(npc)
+    front = view is not None and view.hero is not None and view.hero.seen
+    check(
+        "sees_in_front",
+        front,
+        view.hero.model_dump(include={"distance", "seen"}) if view and view.hero else "",
+    )
+    spots = []
+    for cm in (600, 900, 1200, 1500, 1800):
+        try:
+            await link.debug("player_goto", near=npc, distance=cm)
+        except GameError as err:
+            spots.append(f"{cm}: {err}")
+            continue
+        await asyncio.sleep(1)
+        view = await perception.fresh(npc)
+        if view is not None and view.hero is not None:
+            spots.append((round(view.hero.distance / 100), view.hero.seen))
+    hidden = [s for s in spots if isinstance(s, tuple) and not s[1] and s[0] < 20]
+    check("not_through_walls", bool(hidden), f"(m, seen) at the spots tried: {spots}")
+
+    # 2. Lobart: whom he knows by name, the hero by his look
+    if not await _until(lambda: rumors.social is not None, 30):
+        check("acquaintances", False, "no acquaintances: the world's people were not read")
+        return _logged(results)
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        check("farmer", False, f"{farmer} is not around the hero")
+        return _logged(results)
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    hero = sight.hero or "" if sight else ""
+    check("hero_by_look", "ты его не знаешь" in hero, hero)
+    # whom the npc's around call by name, whom by look: over the views pushed near the hero, next to
+    # Lobart and then next to the people he knows, until someone sees a person it knows
+    named: list[str] = []
+    strangers: list[str] = []
+
+    def scan() -> None:
+        for v in perception.views():
+            people = (perception.sight(v.npc) or Sight("", None, "")).people
+            for o in v.sees:
+                if o.kind != "human":
+                    continue
+                if perception.knows(v.npc, o) and o.name in people:
+                    named.append(f"{v.name} → {o.name}")
+                elif not perception.knows(v.npc, o) and "незнакомец" in people:
+                    strangers.append(f"{v.name} → {o.name}")
+
+    scan()
+    social = rumors.social
+    for tie in sorted(social.ties.get(farmer, {}) if social is not None else [])[:6]:
+        if named:
+            break
+        try:
+            await link.debug("teleport", near=tie, distance=300)
+        except GameError:
+            continue
+        await asyncio.sleep(1.5)  # a push or two
+        scan()
+    check(
+        "acquaintances", bool(named), f"by name: {sorted(set(named))}; by look: {sorted(set(strangers))[:6]}"
+    )
+    await link.debug("teleport", near=farmer, distance=300)
+    await asyncio.sleep(1)
+
+    # 3. in militia armor, to Lobart who does not know him, the hero is a militiaman
+    await link.debug("player_equip", item="ITAR_MIL_L")
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    hero = sight.hero or "" if sight else ""
+    check("fake_guild", "по виду ополченец" in hero, hero)
+
+    # 4. a turn: the view is in the request, `look` answers
+    llm = FakeBackend(
+        script=[FakeStep("Хм…", [ToolCall("look", {"who": "герой"}, "c1")]), FakeStep("Ополченец, значит?")],
+        delay=0,
+    )
+    dialogue.llm = llm
+    await link.debug("type", text="Лобарт, ты меня знаешь?")
+    await _until(lambda: len(llm.calls) >= 2, 30)
+    request = str(llm.calls[0][1]) if llm.calls else ""
+    looked = next((i.output for c in llm.calls[1:] for i in c[1] if isinstance(i, ToolResult)), "")
+    check(
+        "in_the_turn",
+        "по виду ополченец" in request and "Рядом:" not in request and looked.startswith("Герой"),
+        looked,
+    )
+
+    # 5. the nearest npc's views come by themselves once a second (the behavioral model reads these)
+    perception._views.clear()
+    pushed = await _until(lambda: perception.view(farmer) is not None, 5)
+    check("pushed", pushed, "; ".join(perception.english(farmer)))
+    return _logged(results)
+
+
 # chapter 3 dialogs of Xardas's (KAPITEL == 3 in their conditions, or waiting for one that has it)
 XARDAS_CH3 = {
     "DIA_XARDAS_BACKFROMOW",
@@ -2228,6 +2354,170 @@ XARDAS_CH3 = {
     "DIA_XARDAS_BEREIT",
     "DIA_XARDAS_WARUMNICHTJETZT",
 }
+
+
+async def deal_window(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, deals: Deals, seller: str = LOBART
+) -> dict[str, str]:
+    """A deal (docs/npc-tools.md, wave 1), on the game. The hero asks Lobart to sell him something he has;
+    Lobart (scripted unless LLM=chatgpt) offers it for 50 gold: Y waits, the hero lacks the gold. He declines
+    (N): the window goes, Lobart hears of it and offers it for 40; after haggling for 30 the window shows a
+    new version of that deal, Y right after the change waits. Then the deal is done: the gold and the thing
+    change hands at once, the window goes, Lobart answers."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    await link.debug("skip_important", near=seller)  # his important dialog would start as the hero comes
+    await link.debug("player_goto", to=seller, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: seller in talk.people, 20):
+        check("near", False, seller)
+        return _logged(results)
+    name = talk.people[seller].name
+
+    # something he has to sell (an apple if nothing), and 10 gold on the hero
+    snap = await link.snapshot(seller, fresh=True)
+    wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    if not wares:
+        await link.story_effect(seller, [{"do": "give", "item": "ITFO_APPLE", "count": 2, "to": "self"}])
+        snap = await link.snapshot(seller, fresh=True)
+        wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    ware = wares[0]
+    gold = await has(GOLD)
+    if gold > 10:
+        await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": gold - 10, "to": "self"}])
+    elif gold < 10:
+        await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 10 - gold}])
+    had = await has(ware.item)
+
+    if isinstance(dialogue.llm, FakeBackend):
+
+        def offer(price: int) -> ToolCall:
+            terms = {
+                "npc_gives": [{"item": ware.item, "count": 1}],
+                "hero_gives": [{"item": GOLD, "count": price}],
+            }
+            return ToolCall("propose_deal", terms, f"deal{price}")
+
+        dialogue.llm = ClaimScript(
+            said=[
+                ("продай", FakeStep(f"{ware.name}? Пятьдесят золотых.", [offer(50)])),
+                ("отказался", FakeStep("Ну, как знаешь. Сорок?", [offer(40)])),
+                ("дорого", FakeStep("Ладно, тридцать — и по рукам.", [offer(30)])),
+            ],
+            told=[],
+            default="По рукам. Хорошая вещь, не пожалеешь.",
+            only=name,
+        )
+
+    await link.debug("type", text=f"{name}, продай мне {ware.name}.")
+    ok = await _until(lambda: seller in deals.open, 30)
+    window = await link.deal_window() or {}
+    check("shown", ok and window.get("version") == 1, window)
+    if not ok:
+        return _logged(results)
+    first = deals.open[seller]
+
+    # 10 gold of 50: Y waits, the window marks the gold
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    window = await link.deal_window() or {}
+    check("waits_gold", pressed == "missing" and window.get("missing") == [GOLD], f"{pressed}, {window}")
+
+    # he declines (N): the window goes at once; Lobart hears of it and offers it for 40
+    declined = await link.decline_deal()
+    window = await link.deal_window()
+    check("declined", declined == "declined" and window is None and first.state == "declined", declined)
+    ok = await _until(lambda: seller in deals.open and deals.open[seller].id != first.id, 30)
+    window = await link.deal_window() or {}
+    check("offered_again", ok and window.get("hero_gives") == [gold_text(40)], window)
+    if not ok:
+        return _logged(results)
+    second = deals.open[seller]
+
+    # 40 gold, and he haggles it down to 30: the same window, a new version, Y waits a moment
+    await link.story_effect(seller, [{"do": "give", "item": GOLD, "count": 30}])
+    await link.debug("type", text=f"{name}, это дорого, давай за тридцать.")
+    ok = await _until(lambda: seller in deals.open and deals.open[seller].version == 2, 30)
+    window = await link.deal_window() or {}
+    check("haggled", ok and window.get("deal") == second.id and window.get("version") == 2, window)
+    pressed = await link.press_deal()
+    check("waits_change", pressed == "changed", pressed)
+
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    done = await _until(lambda: bool(deals.chronicle.facts("deal")), 20)
+    check("accepted", pressed == "sent" and done, pressed)
+    left, got = await has(GOLD), await has(ware.item)
+    check("changed_hands", left == 10 and got == had + 1, f"gold 40 -> {left}, {ware.item} {had} -> {got}")
+    window = await link.deal_window()
+    check("window_gone", window is None and seller not in deals.open, window)
+    conv = dialogue.conversations.get(seller)
+    answered = await _until(lambda: conv is not None and "assistant" == conv.memory.entries[-1].role, 30)
+    check("answered", answered, conv.memory.entries[-1].content if conv and conv.memory.entries else "")
+    return _logged(results)
+
+
+async def deal_demo(link: GameLink, deals: Deals, npc: str) -> dict[str, str]:
+    """The deal window on screen for the test bench (scripts/bench/deal.bench): the npc offers a thing it has
+    for 50 gold the hero lacks, a moment later for 30 he has; it stays a while, then the hero accepts."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(6)  # the bench sets its camera
+    npc, hero = npc.upper(), ["inst", "HERO"]
+    # a potion to sell, and gold to leave the hero 40
+    await link.attach(npc)
+    await link.act(npc, "debug_add_item", item="ITPO_HEALTH_01", count=2)
+    await link.act(npc, "debug_add_item", item=GOLD, count=100)
+    await link.detach(npc)
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", GOLD]]) or 0)
+    if gold != 40:
+        to = {"to": "self"} if gold > 40 else {}
+        await link.story_effect(npc, [{"do": "give", "item": GOLD, "count": abs(gold - 40), **to}])
+    snap = await link.snapshot(npc, fresh=True)
+    wares = [i for i in snap.npc.inventory if not i.equipped and i.item != GOLD and i.count > 0]
+    check("stocked", bool(wares), [i.item for i in snap.npc.inventory])
+    if not wares:
+        return _logged(results)
+
+    def terms(price: int) -> dict[str, Any]:
+        return {
+            "npc_gives": [{"item": wares[0].item, "count": 1}],
+            "hero_gives": [{"item": GOLD, "count": price}],
+        }
+
+    name = snap.npc.name or npc
+    first = await deals.propose(npc, name, terms(50), snap)
+    check("offered", first.status == "accepted", first.output)
+    await asyncio.sleep(5)
+    second = await deals.propose(npc, name, terms(30), snap)
+    check("haggled", second.status == "accepted", second.output)
+    await asyncio.sleep(6)
+    pressed = await link.press_deal()
+    check(
+        "accepted",
+        pressed == "sent" and await _until(lambda: bool(deals.chronicle.facts("deal")), 10),
+        pressed,
+    )
+    await asyncio.sleep(3)
+    return _logged(results)
 
 
 async def _until_async(get: Callable[[], Any], ok: Callable[[Any], bool], timeout: float) -> bool:

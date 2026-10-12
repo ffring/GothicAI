@@ -1,0 +1,60 @@
+# The crossbow by hand (game/archery): no draw, the button raises and aims, letting it go shoots; a weak and a strong
+# shooter (the reload by strength, the sway by the weight); lowered loaded and raised again; lowered right after
+# a shot and raised again (the next bolt is put in first)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+manual on
+equip ItRw_Crossbow_L_01
+give ItRw_Bolt 100
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1500 0 0
+aimat BAU_904_BAUER body
+stats str 30 dex 30 cbow 30
+tap bow
+wait 1500
+cam follow 220 150 80
+cam look 150
+wait 300
+rec weak
+volley 3 300
+stop
+stats str 120 dex 60 cbow 80
+rec strong
+volley 3 300
+stop
+rec lower_loaded
+press action
+wait 800
+press parade
+wait 200
+release parade
+wait 1500
+release action
+wait 300
+press action
+wait 1200
+release action
+wait 2500
+stop
+# shot, lowered at once (before the reload put the next bolt in), raised again: the bolt is put in first
+rec lower_empty
+press action
+wait 700
+release action
+wait 100
+press parade
+wait 150
+release parade
+wait 600
+say RAISE-EMPTY
+press action
+wait 2500
+release action
+wait 2500
+stop

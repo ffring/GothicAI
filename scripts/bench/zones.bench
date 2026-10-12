@@ -1,0 +1,623 @@
+# Hit zones on the creatures (graphics/mesh/hitzones): the hero turns into each (transform) and the zones are
+# measured against its body: with the guess by the bone names (zones fit off), then fitted to the mesh (on), shot
+# from the side and from the front quarter with the capsules drawn (overlay zones). The report: "Hit zones"
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+overlay zones
+showzones player
+zones fit off
+wait 200
+say == Hero off
+zones player
+transform Wolf
+wait 600
+say == Wolf off
+zones player
+transform back
+wait 300
+transform Warg
+wait 600
+say == Warg off
+zones player
+transform back
+wait 300
+transform Shadowbeast
+wait 600
+say == Shadowbeast off
+zones player
+transform back
+wait 300
+transform Keiler
+wait 600
+say == Keiler off
+zones player
+transform back
+wait 300
+transform Sheep
+wait 600
+say == Sheep off
+zones player
+transform back
+wait 300
+transform Molerat
+wait 600
+say == Molerat off
+zones player
+transform back
+wait 300
+transform Giant_Rat
+wait 600
+say == Giant_Rat off
+zones player
+transform back
+wait 300
+transform Waran
+wait 600
+say == Waran off
+zones player
+transform back
+wait 300
+transform FireWaran
+wait 600
+say == FireWaran off
+zones player
+transform back
+wait 300
+transform Lurker
+wait 600
+say == Lurker off
+zones player
+transform back
+wait 300
+transform Snapper
+wait 600
+say == Snapper off
+zones player
+transform back
+wait 300
+transform Scavenger
+wait 600
+say == Scavenger off
+zones player
+transform back
+wait 300
+transform Bloodhound
+wait 600
+say == Bloodhound off
+zones player
+transform back
+wait 300
+transform Swamprat
+wait 600
+say == Swamprat off
+zones player
+transform back
+wait 300
+transform Troll
+wait 600
+say == Troll off
+zones player
+transform back
+wait 300
+transform Giant_Bug
+wait 600
+say == Giant_Bug off
+zones player
+transform back
+wait 300
+transform MineCrawler
+wait 600
+say == MineCrawler off
+zones player
+transform back
+wait 300
+transform OrcBiter
+wait 600
+say == OrcBiter off
+zones player
+transform back
+wait 300
+transform Alligator
+wait 600
+say == Alligator off
+zones player
+transform back
+wait 300
+transform Gobbo_Green
+wait 600
+say == Gobbo_Green off
+zones player
+transform back
+wait 300
+transform Bloodfly
+wait 600
+say == Bloodfly off
+zones player
+transform back
+wait 300
+transform Razor
+wait 600
+say == Razor off
+zones player
+transform back
+wait 300
+transform DragonSnapper
+wait 600
+say == DragonSnapper off
+zones player
+transform back
+wait 300
+transform Meatbug
+wait 600
+say == Meatbug off
+zones player
+transform back
+wait 300
+transform Zombie01
+wait 600
+say == Zombie01 off
+zones player
+transform back
+wait 300
+transform Skeleton
+wait 600
+say == Skeleton off
+zones player
+transform back
+wait 300
+transform StoneGolem
+wait 600
+say == StoneGolem off
+zones player
+transform back
+wait 300
+transform Harpie
+wait 600
+say == Harpie off
+zones player
+transform back
+wait 300
+transform Demon
+wait 600
+say == Demon off
+zones player
+transform back
+wait 300
+transform OrcWarrior_Roam
+wait 600
+say == OrcWarrior_Roam off
+zones player
+transform back
+wait 300
+zones fit on
+wait 200
+say == Hero on
+zones player
+cam follow 260 30 90
+wait 300
+shot zones_Hero_side
+wait 100
+transform Wolf
+wait 600
+say == Wolf on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Wolf_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Wolf_front
+wait 100
+transform back
+wait 300
+transform Warg
+wait 600
+say == Warg on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Warg_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Warg_front
+wait 100
+transform back
+wait 300
+transform Shadowbeast
+wait 600
+say == Shadowbeast on
+zones player
+cam follow 650 30 90
+wait 300
+shot zones_Shadowbeast_side
+wait 100
+cam follow 650 30 30
+wait 300
+shot zones_Shadowbeast_front
+wait 100
+transform back
+wait 300
+transform Keiler
+wait 600
+say == Keiler on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Keiler_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Keiler_front
+wait 100
+transform back
+wait 300
+transform Sheep
+wait 600
+say == Sheep on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Sheep_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Sheep_front
+wait 100
+transform back
+wait 300
+transform Molerat
+wait 600
+say == Molerat on
+zones player
+cam follow 220 30 90
+wait 300
+shot zones_Molerat_side
+wait 100
+cam follow 220 30 30
+wait 300
+shot zones_Molerat_front
+wait 100
+transform back
+wait 300
+transform Giant_Rat
+wait 600
+say == Giant_Rat on
+zones player
+cam follow 200 30 90
+wait 300
+shot zones_Giant_Rat_side
+wait 100
+cam follow 200 30 30
+wait 300
+shot zones_Giant_Rat_front
+wait 100
+transform back
+wait 300
+transform Waran
+wait 600
+say == Waran on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Waran_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Waran_front
+wait 100
+transform back
+wait 300
+transform FireWaran
+wait 600
+say == FireWaran on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_FireWaran_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_FireWaran_front
+wait 100
+transform back
+wait 300
+transform Lurker
+wait 600
+say == Lurker on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Lurker_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Lurker_front
+wait 100
+transform back
+wait 300
+transform Snapper
+wait 600
+say == Snapper on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Snapper_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Snapper_front
+wait 100
+transform back
+wait 300
+transform Scavenger
+wait 600
+say == Scavenger on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Scavenger_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Scavenger_front
+wait 100
+transform back
+wait 300
+transform Bloodhound
+wait 600
+say == Bloodhound on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Bloodhound_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Bloodhound_front
+wait 100
+transform back
+wait 300
+transform Swamprat
+wait 600
+say == Swamprat on
+zones player
+cam follow 220 30 90
+wait 300
+shot zones_Swamprat_side
+wait 100
+cam follow 220 30 30
+wait 300
+shot zones_Swamprat_front
+wait 100
+transform back
+wait 300
+transform Troll
+wait 600
+say == Troll on
+zones player
+cam follow 900 30 90
+wait 300
+shot zones_Troll_side
+wait 100
+cam follow 900 30 30
+wait 300
+shot zones_Troll_front
+wait 100
+transform back
+wait 300
+transform Giant_Bug
+wait 600
+say == Giant_Bug on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Giant_Bug_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Giant_Bug_front
+wait 100
+transform back
+wait 300
+transform MineCrawler
+wait 600
+say == MineCrawler on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_MineCrawler_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_MineCrawler_front
+wait 100
+transform back
+wait 300
+transform OrcBiter
+wait 600
+say == OrcBiter on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_OrcBiter_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_OrcBiter_front
+wait 100
+transform back
+wait 300
+transform Alligator
+wait 600
+say == Alligator on
+zones player
+cam follow 650 30 90
+wait 300
+shot zones_Alligator_side
+wait 100
+cam follow 650 30 30
+wait 300
+shot zones_Alligator_front
+wait 100
+transform back
+wait 300
+transform Gobbo_Green
+wait 600
+say == Gobbo_Green on
+zones player
+cam follow 260 30 90
+wait 300
+shot zones_Gobbo_Green_side
+wait 100
+cam follow 260 30 30
+wait 300
+shot zones_Gobbo_Green_front
+wait 100
+transform back
+wait 300
+transform Bloodfly
+wait 600
+say == Bloodfly on
+zones player
+cam follow 200 30 90
+wait 300
+shot zones_Bloodfly_side
+wait 100
+cam follow 200 30 30
+wait 300
+shot zones_Bloodfly_front
+wait 100
+transform back
+wait 300
+transform Razor
+wait 600
+say == Razor on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Razor_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Razor_front
+wait 100
+transform back
+wait 300
+transform DragonSnapper
+wait 600
+say == DragonSnapper on
+zones player
+cam follow 650 30 90
+wait 300
+shot zones_DragonSnapper_side
+wait 100
+cam follow 650 30 30
+wait 300
+shot zones_DragonSnapper_front
+wait 100
+transform back
+wait 300
+transform Meatbug
+wait 600
+say == Meatbug on
+zones player
+cam follow 120 30 90
+wait 300
+shot zones_Meatbug_side
+wait 100
+cam follow 120 30 30
+wait 300
+shot zones_Meatbug_front
+wait 100
+transform back
+wait 300
+transform Zombie01
+wait 600
+say == Zombie01 on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Zombie01_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Zombie01_front
+wait 100
+transform back
+wait 300
+transform Skeleton
+wait 600
+say == Skeleton on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_Skeleton_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_Skeleton_front
+wait 100
+transform back
+wait 300
+transform StoneGolem
+wait 600
+say == StoneGolem on
+zones player
+cam follow 700 30 90
+wait 300
+shot zones_StoneGolem_side
+wait 100
+cam follow 700 30 30
+wait 300
+shot zones_StoneGolem_front
+wait 100
+transform back
+wait 300
+transform Harpie
+wait 600
+say == Harpie on
+zones player
+cam follow 320 30 90
+wait 300
+shot zones_Harpie_side
+wait 100
+cam follow 320 30 30
+wait 300
+shot zones_Harpie_front
+wait 100
+transform back
+wait 300
+transform Demon
+wait 600
+say == Demon on
+zones player
+cam follow 700 30 90
+wait 300
+shot zones_Demon_side
+wait 100
+cam follow 700 30 30
+wait 300
+shot zones_Demon_front
+wait 100
+transform back
+wait 300
+transform OrcWarrior_Roam
+wait 600
+say == OrcWarrior_Roam on
+zones player
+cam follow 380 30 90
+wait 300
+shot zones_OrcWarrior_Roam_side
+wait 100
+cam follow 380 30 30
+wait 300
+shot zones_OrcWarrior_Roam_front
+wait 100
+transform back
+wait 300

@@ -14,10 +14,33 @@ using namespace Tempest;
 ProtoMesh::Attach::~Attach() {
   }
 
+// points of a mesh for the hit zones, MaxPoints at most (evenly picked); the empty vertices the meshlets
+// are padded with (at the origin) are not
+static constexpr size_t MaxPoints = 400;
+
+static void thin(std::vector<Tempest::Vec3>& pt, size_t maxN) {
+  if(pt.size()<=maxN)
+    return;
+  std::vector<Tempest::Vec3> out(maxN);
+  for(size_t i=0; i<maxN; ++i)
+    out[i] = pt[i*pt.size()/maxN];
+  pt = std::move(out);
+  }
+
+static std::vector<Tempest::Vec3> pointsOf(const PackedMesh& pm) {
+  std::vector<Tempest::Vec3> pt;
+  for(auto& v:pm.vertices)
+    if(v.pos[0]!=0.f || v.pos[1]!=0.f || v.pos[2]!=0.f)
+      pt.emplace_back(v.pos[0],v.pos[1],v.pos[2]);
+  thin(pt,MaxPoints);
+  return pt;
+  }
+
 ProtoMesh::ProtoMesh(PackedMesh&& pm, std::string_view fname)
   :fname(fname) {
   attach.emplace_back(pm);
   submeshId.resize(attach[0].sub.size());
+  points = pointsOf(pm);
   auto&  att   = attach[0];
   att.shape.reset(PhysicMeshShape::load(std::move(pm)));
 
@@ -90,8 +113,10 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>&
 
 ProtoMesh::ProtoMesh(const zenkit::Model& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
   :skeleton(std::move(sk)), fname(fname) {
+  std::vector<std::vector<Tempest::Vec3>> attachPoints;
   for(auto& m:library.mesh.attachments) {
     PackedMesh pack(m.second,PackedMesh::PK_Visual);
+    attachPoints.push_back(pointsOf(pack));
     attach.emplace_back(pack);
     auto& att = attach.back();
     att.name = m.first;
@@ -146,11 +171,15 @@ ProtoMesh::ProtoMesh(const zenkit::Model& library, std::unique_ptr<Skeleton>&& s
     }
   submeshId.resize(subCount);
 
+  shapeOfAttach(attachPoints);
   for(size_t i=0;i<library.mesh.meshes.size();++i){
     auto& mesh = library.mesh.meshes[i];
     PackedMesh pkg(mesh);
+    shapeOfSkin(pkg);
     skined.emplace_back(pkg);
     }
+  for(auto& n:nodePoints)
+    thin(n,MaxPoints);
 
   if(skeleton!=nullptr) {
     for(size_t i=0;i<skeleton->nodes.size();++i) {
@@ -205,8 +234,10 @@ ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& library, std::unique_ptr<Skel
 
 ProtoMesh::ProtoMesh(const zenkit::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
   :skeleton(std::move(sk)), fname(fname){
+  std::vector<std::vector<Tempest::Vec3>> attachPoints;
   for(auto& m:library.attachments) {
     PackedMesh pack(m.second,PackedMesh::PK_Visual);
+    attachPoints.push_back(pointsOf(pack));
     attach.emplace_back(pack);
     auto& att = attach.back();
     att.name = m.first;
@@ -261,13 +292,17 @@ ProtoMesh::ProtoMesh(const zenkit::ModelMesh& library, std::unique_ptr<Skeleton>
     }
   submeshId.resize(subCount);
 
+  shapeOfAttach(attachPoints);
   for(const auto &i : library.meshes) {
     if(i.weights.size()<i.mesh.positions.size()){
       Log::e("Vertex stream for skin-mesh \"", fname, "\" is too small");
       }
     PackedMesh pkg(i);
+    shapeOfSkin(pkg);
     skined.emplace_back(pkg);
     }
+  for(auto& n:nodePoints)
+    thin(n,MaxPoints);
 
   if(skeleton!=nullptr) {
     for(size_t i=0;i<skeleton->nodes.size();++i) {
@@ -312,6 +347,31 @@ ProtoMesh::ProtoMesh(const Material& mat, std::vector<Resources::Vertex> vbo, st
   }
 
 ProtoMesh::~ProtoMesh() {
+  }
+
+void ProtoMesh::shapeOfAttach(const std::vector<std::vector<Tempest::Vec3>>& pt) {
+  // the shape for the hit zones: a rigid part at its bone...
+  attachPoints = pt;
+  nodePoints.resize(nodes.size());
+  for(size_t i=0; i<nodes.size(); ++i)
+    if(nodes[i].attachId<attachPoints.size())
+      nodePoints[i] = attachPoints[nodes[i].attachId];
+  }
+
+void ProtoMesh::shapeOfSkin(const PackedMesh& pkg) {
+  // ...a skinned vertex at the bone it follows the most, in that bone's frame
+  for(auto& v:pkg.verticesA) {
+    int best = -1;
+    for(int r=0; r<4; ++r)
+      if(v.weights[r]>0.f && (best<0 || v.weights[r]>v.weights[best]))
+        best = r;
+    if(best<0)
+      continue;
+    // the bones of the skeleton it is put on (a body mesh comes without its own)
+    if(v.boneId[best]>=nodePoints.size())
+      nodePoints.resize(v.boneId[best]+1u);
+    nodePoints[v.boneId[best]].emplace_back(v.pos[best][0],v.pos[best][1],v.pos[best][2]);
+    }
   }
 
 size_t ProtoMesh::skinedNodesCount() const {
