@@ -224,6 +224,14 @@ uint64_t LipSync::lineTime(uint64_t now) const {
   return now>startTick ? now-startTick : 0;
   }
 
+uint64_t LipSync::voiceLeft(uint64_t now) const {
+  if(track==nullptr || !track->isFinished())
+    return 0;
+  const uint64_t t   = lineTime(now);
+  const uint64_t len = track->durationMs();
+  return len>t ? len-t : 0;
+  }
+
 bool LipSync::isSpeaking(uint64_t now) const {
   if(track==nullptr)
     return false;
@@ -311,8 +319,10 @@ bool LipSync::update(uint64_t now, uint64_t dt, Shape& out) {
     if(lvl>dipMin+Rise) {
       inDip  = false;
       sylMax = lvl;
+      ++syllables;
       const uint64_t t = time + uint64_t(std::max(0.f,Lead));
-      pick(track!=nullptr ? track->peak(t, t+uint64_t(std::max(0.f,Look))) : lvl, now);
+      sylLoud = track!=nullptr ? track->peak(t, t+uint64_t(std::max(0.f,Look))) : lvl;
+      pick(sylLoud, now);
       }
     }
 

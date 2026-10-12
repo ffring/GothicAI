@@ -316,7 +316,8 @@ class Conversation:
 
 class TurnExtension(Protocol):
     """More of the world for the conversational model (the director's quests, quests.py; the scripts'
-    quests, vanilla.py): lines for the situation, tools to offer, and the handling of their calls."""
+    quests, vanilla.py; what the npc knows, knowledge.py): lines for the situation, tools to offer, and the
+    handling of their calls. One may also answer recall: `recall(npc, query) -> str | None`."""
 
     async def prepare(self, npc: str) -> None:
         """Before a turn: what the situation and the tools need from the game."""
@@ -365,6 +366,8 @@ class DialogueManager:
         self.on_body_failed: Callable[[str, str], None] | None = None
         # whether the npc is under our control (attached): only then do intents move its body directly
         self.controls: Callable[[str], bool] | None = None
+        # the intent of an npc we do not control changed (npc, old, new): who runs its body carries it out
+        self.on_free_intent: Callable[[str, Intent, Intent], None] | None = None
         # a free npc's body is needed for a commitment (give an item, follow): hold it (attach) for `why`,
         # and let it go again; without them only controlled npc's act on commitments (talk.py)
         self.take_body: Callable[[str, str], Awaitable[bool]] | None = None
@@ -1088,18 +1091,24 @@ class DialogueManager:
         return [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
 
     def _recall(self, conv: Conversation, query: str) -> str:
-        """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded)."""
+        """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded), and
+        what extensions that answer recall know of it (knowledge.py: the npc's dialogs in full)."""
         first = conv.memory.entries[0].seq if conv.memory.entries else conv.memory.summary_seq + 1
         found = self.memory.search(conv.branch, conv.npc, query, min(conv.memory.summary_seq, first - 1))
-        log.info("%s recalls %r: %d message(s)", conv.npc, query, len(found))
-        if not found:
-            return "Ничего такого не вспоминается."
-        speaker = {"user": "Герой", "assistant": "Ты", "developer": ""}
-        lines = []
-        for r in found:
-            who = speaker.get(r.role, "")
-            lines.append(f"[{r.game_time or '?'}] {who + ': ' if who else ''}{r.content}")
-        return "Ты вспоминаешь:\n" + "\n".join(lines)
+        parts = []
+        if found:
+            speaker = {"user": "Герой", "assistant": "Ты", "developer": ""}
+            lines = []
+            for r in found:
+                who = speaker.get(r.role, "")
+                lines.append(f"[{r.game_time or '?'}] {who + ': ' if who else ''}{r.content}")
+            parts.append("Ты вспоминаешь:\n" + "\n".join(lines))
+        for ext in self.extensions:
+            recall = getattr(ext, "recall", None)
+            if recall is not None and (known := recall(conv.npc, query)):
+                parts.append(known)
+        log.info("%s recalls %r: %d message(s), %d more part(s)", conv.npc, query, len(found), len(parts))
+        return "\n\n".join(parts) or "Ничего такого не вспоминается."
 
     async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
         if not await self._hold(conv, "give"):
@@ -1148,6 +1157,12 @@ class DialogueManager:
         acts = executor.intent_actions(old, intent, following)
         if old.goal == "follow_hero" and intent.goal != "follow_hero":
             self._free(conv, "follow")  # after `stop`, if it is still following (below)
+        if intent.goal in executor.INCIDENT_GOALS and not self._controlled(conv.npc):
+            # a free npc's goal of the moment (flee, fight, seek help) is carried out by whoever runs its body
+            # (the planner): held for it, the npc would be out of the scripts in the middle of the danger
+            if self.on_free_intent is not None:
+                self.on_free_intent(conv.npc, old, intent)
+            return
         if not acts:
             return
         if self.take_body is None and not self._controlled(conv.npc):

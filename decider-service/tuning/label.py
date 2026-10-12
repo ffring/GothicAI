@@ -13,6 +13,10 @@ just that question of rows labelled before (it did not exist yet, or its wording
 data/labels_<pass>_<question>.jsonl, which takes precedence over the answers in other files:
 
     uv run --project ../../server python label.py A --only escalate --batch 12
+
+`--ids FILE` limits it to the rows listed there, e.g. the ones build_rows.py found worded differently:
+
+    uv run --project ../../server python label.py A --only react --ids data/changed_g6.txt --batch 12
 """
 
 from __future__ import annotations
@@ -52,6 +56,11 @@ def answered(pass_: str) -> dict[str, set[str]]:
     return out
 
 
+def listed(path: str) -> set[str]:
+    with open(path) as f:
+        return {line.strip() for line in f if line.strip()}
+
+
 def parse(row: dict, got: dict) -> dict | None:
     """The answers of one row, or None if any is missing or invalid."""
     out = {}
@@ -78,9 +87,13 @@ async def main() -> None:
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--effort", default="low")
     ap.add_argument("--only", help="label just this question, for rows labelled before it existed")
+    ap.add_argument("--ids", help="only the rows listed in this file")
     args = ap.parse_args()
 
     rows = [json.loads(line) for line in (DATA / "rows.jsonl").open()]
+    if args.ids:
+        wanted = listed(args.ids)
+        rows = [r for r in rows if r["id"] in wanted]
     if args.only:
         # its own file overrides older answers to the question (make_train.py merges files in name order)
         out_path = DATA / f"labels_{args.pass_}_{args.only}.jsonl"

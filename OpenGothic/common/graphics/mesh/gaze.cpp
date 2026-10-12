@@ -149,6 +149,10 @@ bool Gaze::update(const Input& in) {
   bool        changed = false;
   bool        on      = in.active && enabled;
   headOnly = in.headOnly;
+  if(in.talk.x!=talk.x || in.talk.y!=talk.y || in.talk.z!=talk.z) {
+    talk    = in.talk;
+    changed = true;
+    }
   if(on)
     source = in.source;
 
@@ -290,6 +294,22 @@ void Gaze::apply(Matrix4x4* tr, size_t numBones) {
     parts[0] = hy;
     parts[1] = cy;
     parts[2] = wy;
+    }
+
+  // the head moving with the voice (TalkGestures): around the neck, after the turn to the partner
+  if(talk.x!=0.f || talk.y!=0.f || talk.z!=0.f) {
+    const Vec3 body = length(forward)>0.5f ? forward : npcForward;
+    if(length(body)>0.5f) {
+      const Vec3 f   = mul(axisAngle(Up,yaw*weight),body);
+      const Vec3 lat = normalize(cross(f,Up));
+      const Vec3 at  = position(tr[head]);
+      if(talk.y!=0.f)
+        rotateAbout(tr,headTree,axisAngle(Up,talk.y),at);
+      if(talk.x!=0.f)
+        rotateAbout(tr,headTree,axisAngle(lat,talk.x),at);
+      if(talk.z!=0.f)
+        rotateAbout(tr,headTree,axisAngle(f,talk.z),at);
+      }
     }
 
   if(faceAxis>=0) {

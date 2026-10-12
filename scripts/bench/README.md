@@ -50,6 +50,13 @@ fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serv
 service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
 `face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
 watched npc shows, 0..1.
+Gestures: `gestures` (the hero picks the first dialog choice of Xardas three times, the camera at his
+chest: his hands while he speaks; with `gestures off` on top of a copy the old way, a random gesture
+when a line starts and none plays). For the moods, the same camera with an AI server (`mood-ai`
+above): one line `friendly`, two `angry`. Columns `ge_on` (gestures go with its lines), `ge_talk` (its
+line is being said), `ge_id` (the gesture playing, 1 is `T_DIALOGGESTURE_01`), `ge_mood` (0 neutral,
+1 friendly, 2 angry, 3 hostile, 4 afraid, 5 pain), `ge_starts`, `ge_cuts`, `ge_stops`, `ge_nods` (counters),
+`ge_pitch`, `ge_yaw`, `ge_roll` (degrees: how the voice turns the head, a nod is pitch down).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -103,6 +110,8 @@ git worktree remove --force /tmp/before
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
+- `GEST`: `TALK` while the watched one speaks, the gesture playing `G`, the mood of its line, gestures
+  started `S`, started over one `C`, stopped early `X`, nods `N`, the nod now `P` (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
   leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
   if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
@@ -148,6 +157,10 @@ animation it is how the animation moves (a running human 11-25 cm, a running war
 the switches, with `blend off` and on. `hits, peak, back` are the blows the watched one took, the
 largest flinch (trunk bend, twist or head, degrees) and how long it took to come back after the last
 blow. `gaze_jerk` is not counted for a second after a blow: it throws the head on purpose.
+`gestures talk / listen %` is how much of the time the watched one speaks a gesture plays, and how much
+of the time it is quiet again (a second after its voice), then the gestures started, started over one
+that played and stopped before their end (the voice is over), and the nods on stressed syllables. The head
+moving with the voice adds a few degrees to `gaze err` while one speaks.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -217,6 +230,8 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `choose <n>` | runs the n-th choice (from 1) of the dialog with the watched npc, as if the player picked it |
 | `faceanim <npc\|nearest\|player> <anim> [ms] [intensity]` | a face animation of the head (`S_ANGRY`, `S_FRIENDLY`, `T_HURT`...) |
 | `lips on\|off`, `lips param <name> <value>`, `lips params` | lip sync (off: the old talk loop) and its parameters |
+| `gestures on\|off`, `gestures param <name> <value>`, `gestures params` | the hands while one speaks (`TalkGestures`; off: a random gesture when a line starts) and its parameters: `Tail`, `Wait`, `MinLeft`, `Slack` (ms), `Long`, `RestScale`; the head: `Nod` (degrees), `NodHz`, `Stress`, `NodGap` (ms), `SwayYaw`, `SwayRoll` (degrees), `SwayTime`, `SwayLag` (ms) |
+| `ani <npc\|nearest\|player> <anim>` | it plays an animation of its model script (`T_YES`, `T_DIALOGGESTURE_03`) |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
@@ -256,6 +271,6 @@ and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL 
 `SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
 `Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
 switches bone by bone),
-`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `Camera::setNearClip`
+`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `Camera::setNearClip`
 (`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
 `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

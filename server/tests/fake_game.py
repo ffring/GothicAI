@@ -50,6 +50,7 @@ class FakeGame:
         self.item_names: dict[str, str] = {}
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
+        self.fields: dict[tuple[str, str], int] = {}  # ("SELF" | "OTHER", "GUILD") -> value; others read 0
         self.instances: dict[str, str] = {}
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
         self.hp = 999
@@ -221,6 +222,8 @@ class FakeGame:
                 return v
             case ["var", name]:
                 return self.vars.get(name, 0)
+            case ["field", ["inst", who], name]:
+                return self.fields.get((who, name), 0)
             case ["field", *_]:
                 return 0
             case ["!", a]:

@@ -47,6 +47,15 @@
 | tuned-g5 | en | 97% | 87% | 49% / 100% | 57% (24/24, 33/52) | 87% | 96% | 5/6 |
 | tuned-g5 | ru | 95% | 84% | 47% / 100% | 57% (24/24, 33/52) | 87% | 96% | 5/6 |
 | tuned-g5 | en_rev | 97% | 88% | 43% / 100% | 57% (24/24, 33/52) | 87% | 96% | 5/6 |
+| tuned-g6 | en | 93% | 84% | 34% / 100% | 58% (23/24, 31/52) | 86% | 97% | 5/6 |
+| tuned-g6 | ru | 95% | 84% | 30% / 100% | 54% (22/24, 33/52) | 91% | 97% | 6/6 |
+| tuned-g6 | en_rev | 93% | 84% | 30% / 100% | 58% (23/24, 31/52) | 86% | 97% | 6/6 |
+| tuned-g6c | en | 96% | 84% | 58% / 98% | 55% (23/24, 33/52) | 87% | 97% | 5/6 |
+| tuned-g6c | ru | 96% | 87% | 47% / 100% | 53% (22/24, 34/52) | 88% | 99% | 5/6 |
+| tuned-g6c | en_rev | 95% | 84% | 54% / 100% | 55% (23/24, 33/52) | 87% | 97% | 5/6 |
+| tuned-g7 | en | 96% | 86% | 55% / 100% | 55% (24/24, 34/52) | 83% | 95% | 6/6 |
+| tuned-g7 | ru | 96% | 84% | 43% / 100% | 58% (24/24, 32/52) | 84% | 95% | 6/6 |
+| tuned-g7 | en_rev | 96% | 86% | 54% / 100% | 55% (24/24, 34/52) | 83% | 95% | 6/6 |
 
 ## Порог уверенности для react (условие en)
 
@@ -68,6 +77,9 @@
 | tuned-g3 | 99% / 93% / 93% | 88% / 96% / 86% | 82% / 97% / 82% | 55% / 100% / 63% |
 | tuned-g4 | 97% / 96% / 93% | 80% / 98% / 80% | 68% / 100% / 72% | 34% / 100% / 50% |
 | tuned-g5 | 100% / 97% / 97% | 89% / 99% / 89% | 75% / 98% / 75% | 49% / 100% / 62% |
+| tuned-g6 | 97% / 93% / 91% | 86% / 97% / 84% | 63% / 100% / 67% | 34% / 100% / 50% |
+| tuned-g6c | 99% / 97% / 96% | 92% / 99% / 93% | 80% / 98% / 83% | 58% / 98% / 68% |
+| tuned-g7 | 100% / 96% / 96% | 88% / 97% / 86% | 80% / 98% / 80% | 55% / 100% / 64% |
 
 ## think: можно ли подобрать порог (условие en)
 
@@ -89,6 +101,9 @@ AUROC — насколько вероятность «да» отделяет н
 | tuned-g3 | 0.71 | 0.900 | 76% |
 | tuned-g4 | 0.70 | 0.957 | 75% |
 | tuned-g5 | 0.78 | 0.958 | 78% |
+| tuned-g6 | 0.75 | 0.957 | 76% |
+| tuned-g6c | 0.76 | 0.961 | 75% |
+| tuned-g7 | 0.78 | 0.921 | 76% |
 
 ## Порядок вариантов
 
@@ -110,6 +125,9 @@ AUROC — насколько вероятность «да» отделяет н
 | tuned-g3 | 97% |
 | tuned-g4 | 95% |
 | tuned-g5 | 96% |
+| tuned-g6 | 97% |
+| tuned-g6c | 97% |
+| tuned-g7 | 97% |
 
 ## react ✓ по типам ситуаций (условие en)
 
@@ -130,6 +148,9 @@ AUROC — насколько вероятность «да» отделяет н
 | tuned-g3 | 100% | 100% | 100% | 100% | 100% | 100% | 93% | 100% | 82% | 100% | 86% |
 | tuned-g4 | 100% | 100% | 100% | 100% | 100% | 100% | 93% | 100% | 82% | 100% | 100% |
 | tuned-g5 | 100% | 100% | 100% | 100% | 100% | 100% | 97% | 100% | 91% | 100% | 100% |
+| tuned-g6 | 100% | 100% | 100% | 100% | 100% | 100% | 90% | 100% | 73% | 88% | 100% |
+| tuned-g6c | 100% | 100% | 92% | 100% | 91% | 100% | 97% | 100% | 91% | 100% | 100% |
+| tuned-g7 | 100% | 100% | 100% | 100% | 100% | 100% | 93% | 100% | 91% | 88% | 100% |
 
 ## Задержка и память
 
@@ -148,52 +169,55 @@ AUROC — насколько вероятность «да» отделяет н
 | tuned-g3 | 87.7 мс | 99.9 мс | 3.88 ГБ | 8.6 с |
 | tuned-g4 | 88.4 мс | 99.8 мс | 3.88 ГБ | 8.8 с |
 | tuned-g5 | 85.0 мс | 97.2 мс | 3.88 ГБ | 8.5 с |
+| tuned-g6 | 98.1 мс | 113.9 мс | 3.93 ГБ | 4.4 с |
+| tuned-g6c | 98.5 мс | 114.4 мс | 3.93 ГБ | 4.5 с |
+| tuned-g7 | 100.8 мс | 117.7 мс | 3.93 ГБ | 4.7 с |
 
 ## Ошибки react (условие en)
 
-| ситуация | эталон | gpt-6.1-sol-low | laya | openjev-2b | openjev-4b | service-g5 | service-v1-2610 | strands | strands-fast | strands-v1-2610 | strands-v21 | tuned-g1 | tuned-g2 | tuned-g3 | tuned-g4 | tuned-g5 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lothar_weapon_drawn | svm_weapon_down | svm_weapon_down | **continue** | **continue** | svm_weapon_down | **continue** | **continue** | **continue** | **continue** | **continue** | **continue** | svm_weapon_down | **continue** | **continue** | **continue** | **continue** |
-| lothar_weapon_ignored_warnings | attack | attack | **warn_again** | **warn_again** | **warn_again** | attack | **warn_again** | **warn_again** | **warn_again** | **warn_again** | **warn_again** | attack | **warn_again** | **warn_again** | **warn_again** | attack |
-| coragon_robbery | call_guards/flee | call_guards | **attack** | **give_gold** | **give_gold** | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards |
-| harad_theft_witnessed | attack/call_guards | attack | **continue** | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack |
-| lobart_sheep_beaten | svm_sheepkiller/call_farmhands | svm_sheepkiller | **continue** | call_farmhands | **continue** | svm_sheepkiller | call_farmhands | svm_sheepkiller | svm_sheepkiller | call_farmhands | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller |
-| lobart_sheep_killed | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | **svm_sheepkiller** | svm_sheepkiller_crime | svm_sheepkiller_crime | **svm_sheepkiller** | **svm_sheepkiller** | **svm_sheepkiller** | **svm_sheepkiller** | **svm_sheepkiller** | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime |
-| valentino_bedroom_night | call_guards/svm_get_out | call_guards | svm_get_out | **attack** | **attack** | svm_get_out | **attack** | **attack** | **attack** | **attack** | **attack** | svm_get_out | svm_get_out | svm_get_out | svm_get_out | svm_get_out |
-| vatras_magic_in_crowd | svm_stop_magic | svm_stop_magic | **continue** | **continue** | **continue** | svm_stop_magic | svm_stop_magic | **continue** | **continue** | svm_stop_magic | **continue** | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic |
-| edda_market_fight | svm_its_a_fight/flee | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | **continue** | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | **continue** | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight |
-| sylvio_militia_on_farm | threaten/svm_mock | svm_mock | **continue** | svm_mock | svm_mock | threaten | svm_mock | svm_mock | svm_mock | svm_mock | svm_mock | svm_mock | threaten | threaten | svm_mock | threaten |
-| bandit_wanted_man | attack | **question** | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack |
-| gate_guard_ragged_stranger | block_and_question | block_and_question | **attack** | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question |
-| zuris_passerby_customer | call_out_offer | call_out_offer | **greet** | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer |
-| citizen_way_to_market | svm_galgen_2_markt | svm_galgen_2_markt | **continue** | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt |
-| citizen_way_to_barracks | svm_galgen_2_kaserne | svm_galgen_2_kaserne | **continue** | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne |
-| pepe_wolves | ask_help | ask_help | **greet** | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help |
-| milten_friend_returns | greet_and_talk | greet_and_talk | **continue** | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk |
-| lehmar_debt_overdue | demand_money/send_thugs | demand_money | **greet** | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money |
-| halvor_fence | buy_stolen | buy_stolen | **continue** | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen |
-| xardas_hero_back_from_valley | ask_report | ask_report | **svm_not_now** | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report |
-| farmhand_sleeping | continue | continue | continue | **wake_and_check** | **wake_and_check** | continue | **wake_and_check** | continue | continue | **wake_and_check** | continue | continue | continue | continue | continue | continue |
-| patrol_hero_sleeping | continue | continue | continue | **wake_hero** | continue | continue | **wake_hero** | continue | continue | **wake_hero** | **wake_hero** | continue | continue | continue | continue | continue |
-| matteo_after_trade | continue | continue | continue | **approach_talk** | continue | continue | continue | continue | continue | continue | **approach_talk** | continue | continue | continue | continue | continue |
-| kardif_drunk_hero | continue | continue | continue | continue | continue | continue | **throw_out** | **throw_out** | **throw_out** | **throw_out** | continue | continue | continue | continue | continue | continue |
-| citizen_polite_greeting | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | **continue** | **continue** | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back |
-| bosper_thief_returns | svm_you_again/refuse_service | svm_you_again | svm_you_again | **greet** | **greet** | refuse_service | **greet** | refuse_service | refuse_service | **greet** | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service |
-| akil_rescuer_arrives | thank_warmly | thank_warmly | **greet** | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | **greet** | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly |
-| sekob_beaten_yesterday | svm_not_now/flee | flee | **attack** | **attack** | flee | flee | svm_not_now | **attack** | **attack** | svm_not_now | **attack** | flee | flee | flee | flee | flee |
-| diego_promised_reward | approach_pay | approach_pay | **svm_not_now** | **continue** | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay |
-| guard_insulted | svm_want_more/attack | svm_want_more | attack | attack | **continue** | attack | attack | attack | attack | attack | attack | attack | attack | svm_want_more | attack | attack |
-| thekla_compliment | thank_smile/give_more | thank_smile | **continue** | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile |
-| jora_threatened | call_guards | call_guards | **give_gold** | **give_gold** | **give_gold** | call_guards | **give_gold** | **give_gold** | **give_gold** | **give_gold** | **give_gold** | call_guards | call_guards | call_guards | call_guards | call_guards |
-| bosper_apprentice_request | discuss_apprenticeship | discuss_apprenticeship | **svm_not_now** | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship |
-| edda_gift | accept_thank | accept_thank | accept_thank | accept_thank | **continue** | **refuse** | accept_thank | accept_thank | accept_thank | accept_thank | accept_thank | **refuse** | **refuse** | **refuse** | **refuse** | **refuse** |
-| gate_guard_false_envoy | question_doubt/laugh_off | question_doubt | **attack** | **let_pass** | **let_pass** | question_doubt | question_doubt | **let_pass** | **let_pass** | question_doubt | **let_pass** | question_doubt | question_doubt | question_doubt | question_doubt | question_doubt |
-| zuris_lowball | refuse_haggle | refuse_haggle | **sell_cheap** | **sell_cheap** | refuse_haggle | refuse_haggle | **sell_cheap** | **sell_cheap** | **sell_cheap** | **sell_cheap** | **sell_cheap** | refuse_haggle | refuse_haggle | refuse_haggle | refuse_haggle | refuse_haggle |
-| hagen_dragon_report | question_report | question_report | **svm_not_now** | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report |
-| wulfgar_overheard_insult | confront/svm_want_more | confront | **attack** | confront | **continue** | confront | **continue** | confront | confront | **continue** | confront | **continue** | **continue** | **continue** | **continue** | confront |
-| lothar_fake_paladin | question | question | **svm_pal_greet** | question | question | question | question | question | question | question | question | question | question | **svm_pal_greet** | question | question |
-| bengar_sheep_dead_news | shock_ask | shock_ask | **attack** | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask |
-| rengaru_dropped_purse | take_purse | take_purse | **call_out** | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse |
-| gorn_join_request | agree_follow/discuss_first | agree_follow | **refuse** | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow |
-| edda_sees_pickpocket | call_for_help | call_for_help | **flee** | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help |
-| coragon_strong_drink | serve_drink | serve_drink | **svm_not_now** | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink |
+| ситуация | эталон | gpt-6.1-sol-low | laya | openjev-2b | openjev-4b | service-g5 | service-v1-2610 | strands | strands-fast | strands-v1-2610 | strands-v21 | tuned-g1 | tuned-g2 | tuned-g3 | tuned-g4 | tuned-g5 | tuned-g6 | tuned-g6c | tuned-g7 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| lothar_weapon_drawn | svm_weapon_down | svm_weapon_down | **continue** | **continue** | svm_weapon_down | **continue** | **continue** | **continue** | **continue** | **continue** | **continue** | svm_weapon_down | **continue** | **continue** | **continue** | **continue** | **continue** | svm_weapon_down | **continue** |
+| lothar_weapon_ignored_warnings | attack | attack | **warn_again** | **warn_again** | **warn_again** | attack | **warn_again** | **warn_again** | **warn_again** | **warn_again** | **warn_again** | attack | **warn_again** | **warn_again** | **warn_again** | attack | **warn_again** | attack | attack |
+| coragon_robbery | call_guards/flee | call_guards | **attack** | **give_gold** | **give_gold** | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards | call_guards |
+| harad_theft_witnessed | attack/call_guards | attack | **continue** | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack |
+| lobart_sheep_beaten | svm_sheepkiller/call_farmhands | svm_sheepkiller | **continue** | call_farmhands | **continue** | svm_sheepkiller | call_farmhands | svm_sheepkiller | svm_sheepkiller | call_farmhands | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller | svm_sheepkiller |
+| lobart_sheep_killed | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | **svm_sheepkiller** | svm_sheepkiller_crime | svm_sheepkiller_crime | **svm_sheepkiller** | **svm_sheepkiller** | **svm_sheepkiller** | **svm_sheepkiller** | **svm_sheepkiller** | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime | svm_sheepkiller_crime |
+| valentino_bedroom_night | call_guards/svm_get_out | call_guards | svm_get_out | **attack** | **attack** | svm_get_out | **attack** | **attack** | **attack** | **attack** | **attack** | svm_get_out | svm_get_out | svm_get_out | svm_get_out | svm_get_out | svm_get_out | svm_get_out | svm_get_out |
+| vatras_magic_in_crowd | svm_stop_magic | svm_stop_magic | **continue** | **continue** | **continue** | svm_stop_magic | svm_stop_magic | **continue** | **continue** | svm_stop_magic | **continue** | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic | svm_stop_magic |
+| edda_market_fight | svm_its_a_fight/flee | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | **continue** | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | **continue** | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | svm_its_a_fight | flee | svm_its_a_fight |
+| sylvio_militia_on_farm | threaten/svm_mock | svm_mock | **continue** | svm_mock | svm_mock | threaten | svm_mock | svm_mock | svm_mock | svm_mock | svm_mock | svm_mock | threaten | threaten | svm_mock | threaten | threaten | **attack** | svm_mock |
+| bandit_wanted_man | attack | **question** | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack | attack |
+| gate_guard_ragged_stranger | block_and_question | block_and_question | **attack** | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question | block_and_question |
+| zuris_passerby_customer | call_out_offer | call_out_offer | **greet** | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer | call_out_offer |
+| citizen_way_to_market | svm_galgen_2_markt | svm_galgen_2_markt | **continue** | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt | svm_galgen_2_markt |
+| citizen_way_to_barracks | svm_galgen_2_kaserne | svm_galgen_2_kaserne | **continue** | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne | svm_galgen_2_kaserne |
+| pepe_wolves | ask_help | ask_help | **greet** | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help | ask_help |
+| milten_friend_returns | greet_and_talk | greet_and_talk | **continue** | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk | greet_and_talk |
+| lehmar_debt_overdue | demand_money/send_thugs | demand_money | **greet** | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money | demand_money |
+| halvor_fence | buy_stolen | buy_stolen | **continue** | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen | buy_stolen |
+| xardas_hero_back_from_valley | ask_report | ask_report | **svm_not_now** | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report | ask_report |
+| farmhand_sleeping | continue | continue | continue | **wake_and_check** | **wake_and_check** | continue | **wake_and_check** | continue | continue | **wake_and_check** | continue | continue | continue | continue | continue | continue | continue | **wake_and_check** | continue |
+| patrol_hero_sleeping | continue | continue | continue | **wake_hero** | continue | continue | **wake_hero** | continue | continue | **wake_hero** | **wake_hero** | continue | continue | continue | continue | continue | continue | continue | continue |
+| matteo_after_trade | continue | continue | continue | **approach_talk** | continue | continue | continue | continue | continue | continue | **approach_talk** | continue | continue | continue | continue | continue | continue | continue | continue |
+| kardif_drunk_hero | continue | continue | continue | continue | continue | continue | **throw_out** | **throw_out** | **throw_out** | **throw_out** | continue | continue | continue | continue | continue | continue | continue | continue | continue |
+| citizen_polite_greeting | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | **continue** | **continue** | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back | greet_back |
+| bosper_thief_returns | svm_you_again/refuse_service | svm_you_again | svm_you_again | **greet** | **greet** | refuse_service | **greet** | refuse_service | refuse_service | **greet** | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service | refuse_service |
+| akil_rescuer_arrives | thank_warmly | thank_warmly | **greet** | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | **greet** | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly | thank_warmly |
+| sekob_beaten_yesterday | svm_not_now/flee | flee | **attack** | **attack** | flee | flee | svm_not_now | **attack** | **attack** | svm_not_now | **attack** | flee | flee | flee | flee | flee | flee | flee | flee |
+| diego_promised_reward | approach_pay | approach_pay | **svm_not_now** | **continue** | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay | approach_pay |
+| guard_insulted | svm_want_more/attack | svm_want_more | attack | attack | **continue** | attack | attack | attack | attack | attack | attack | attack | attack | svm_want_more | attack | attack | svm_want_more | attack | svm_want_more |
+| thekla_compliment | thank_smile/give_more | thank_smile | **continue** | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile | thank_smile |
+| jora_threatened | call_guards | call_guards | **give_gold** | **give_gold** | **give_gold** | call_guards | **give_gold** | **give_gold** | **give_gold** | **give_gold** | **give_gold** | call_guards | call_guards | call_guards | call_guards | call_guards | **give_gold** | call_guards | call_guards |
+| bosper_apprentice_request | discuss_apprenticeship | discuss_apprenticeship | **svm_not_now** | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship | discuss_apprenticeship |
+| edda_gift | accept_thank | accept_thank | accept_thank | accept_thank | **continue** | **refuse** | accept_thank | accept_thank | accept_thank | accept_thank | accept_thank | **refuse** | **refuse** | **refuse** | **refuse** | **refuse** | **refuse** | **refuse** | **refuse** |
+| gate_guard_false_envoy | question_doubt/laugh_off | question_doubt | **attack** | **let_pass** | **let_pass** | question_doubt | question_doubt | **let_pass** | **let_pass** | question_doubt | **let_pass** | question_doubt | question_doubt | question_doubt | question_doubt | question_doubt | question_doubt | question_doubt | question_doubt |
+| zuris_lowball | refuse_haggle | refuse_haggle | **sell_cheap** | **sell_cheap** | refuse_haggle | refuse_haggle | **sell_cheap** | **sell_cheap** | **sell_cheap** | **sell_cheap** | **sell_cheap** | refuse_haggle | refuse_haggle | refuse_haggle | refuse_haggle | refuse_haggle | **sell_cheap** | refuse_haggle | **sell_cheap** |
+| hagen_dragon_report | question_report | question_report | **svm_not_now** | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report | question_report |
+| wulfgar_overheard_insult | confront/svm_want_more | confront | **attack** | confront | **continue** | confront | **continue** | confront | confront | **continue** | confront | **continue** | **continue** | **continue** | **continue** | confront | confront | confront | confront |
+| lothar_fake_paladin | question | question | **svm_pal_greet** | question | question | question | question | question | question | question | question | question | question | **svm_pal_greet** | question | question | question | question | question |
+| bengar_sheep_dead_news | shock_ask | shock_ask | **attack** | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask | shock_ask |
+| rengaru_dropped_purse | take_purse | take_purse | **call_out** | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse | take_purse |
+| gorn_join_request | agree_follow/discuss_first | agree_follow | **refuse** | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow | agree_follow |
+| edda_sees_pickpocket | call_for_help | call_for_help | **flee** | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help | call_for_help |
+| coragon_strong_drink | serve_drink | serve_drink | **svm_not_now** | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink | serve_drink |

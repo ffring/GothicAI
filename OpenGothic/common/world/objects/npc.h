@@ -184,6 +184,7 @@ class Npc final {
     // a voiced line starts: the mouth follows the voice (LipSync)
     void       startSpeech(const Tempest::Sound& voice);
     void       startSpeech(std::shared_ptr<LipSync::Track> voice);
+    void       setTalkMood(std::string_view mood);  // of the line it starts to say: its gestures follow it
     void       stopSpeech();
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;
@@ -464,6 +465,9 @@ class Npc final {
     void      setVictim(Npc* ot);
 
     bool      haveOutput() const;
+    uint64_t  speechLeft() const;      // ms of the line it says now (0: none)
+    bool      hasOutputQueued() const; // a line waits in its ai queue
+    bool      isPlayingQueuedAnim() const; // AI_PlayAni: a nod, a shrug...
     void      setAiOutputBarrier(uint64_t dt, bool overlay);
 
     bool      doAttack(Anim anim, BodyState bs);

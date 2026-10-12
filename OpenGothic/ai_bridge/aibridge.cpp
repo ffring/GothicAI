@@ -23,7 +23,9 @@
 
 #include "game/gamescript.h"
 #include "game/serialize.h"
+#include "camera.h"
 #include "commandline.h"
+#include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "world/worldsound.h"
@@ -36,6 +38,7 @@
 #include "jsonwriter.h"
 #include "linelibrary.h"
 #include "npccontroller.h"
+#include "npcfind.h"
 #include "npcobserver.h"
 #include "textcodec.h"
 #include "voicebuffer.h"
@@ -695,7 +698,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     }
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
-     cmd=="time") {
+     cmd=="time" || cmd=="teleport" || cmd=="skip_important") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -777,6 +780,41 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
     return;
     }
+  if(cmd=="teleport") {
+    // the player `distance` cm in front of an npc, facing it: the npc is in view
+    Npc* at = npcBySymbol(*world,JsonRead::str(msg,"near"));
+    if(at==nullptr || at==pl || !pl->setInteraction(nullptr)) {
+      sendResult(req,false,at==nullptr || at==pl ? "unknown npc to teleport to" : "the player is busy");
+      return;
+      }
+    const float dist = float(JsonRead::integer(msg,"distance",600));
+    auto        pos  = at->position();
+    pos.x += dist*std::cos(at->rotationRad());
+    pos.z += dist*std::sin(at->rotationRad());
+    // on the ground there: on a slope the npc's own height would bury the player or drop him
+    const auto land = world->physic()->landRay(pos+Tempest::Vec3(0,500,0),1500);
+    if(land.hasCol)
+      pos.y = land.v.y;
+    pl->setPosition(pos);
+    pl->setDirection(at->position()-pos);
+    pl->updateTransform();
+    if(auto c = Gothic::inst().camera())
+      c->reset(pl);
+    sendResult(req,true,"");
+    return;
+    }
+  if(cmd=="skip_important") {
+    // an npc's important dialogs count as told: it does not stop the hero to talk (the start of the game:
+    // most npc's have one, and a test scene with them near the hero would end in it)
+    Npc* npc = npcBySymbol(*world,JsonRead::str(msg,"near"));
+    if(npc==nullptr || npc==pl) {
+      sendResult(req,false,"unknown npc");
+      return;
+      }
+    world->script().skipImportantInfos(*npc,*pl);
+    sendResult(req,true,"");
+    return;
+    }
   if(cmd=="time") {
     // the clock goes to `hour`:`minute`, the next day if that is earlier than now (like sleeping)
     world->setDayTime(int32_t(JsonRead::integer(msg,"hour",8)),int32_t(JsonRead::integer(msg,"minute",0)));
@@ -784,14 +822,36 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     return;
     }
   if(cmd=="kill") {
-    // an npc dies, killed by no one (a quest giver for the director's repairs)
-    Npc* npc = npcBySymbol(*world,JsonRead::str(msg,"npc"));
-    if(npc==nullptr || npc->isDead() || npc->isPlayer()) {
-      sendResult(req,false,npc==nullptr ? "no such npc" : "it can't die now");
+    // `npc`: that npc dies, killed by no one (a quest giver for the director's repairs).
+    // `instance`: the living creature of that instance (WOLF) closest to an npc (`near`, default the player)
+    // dies by the hand of `by` (default the player), the way a deadly hit ends it (Npc::takeDamage): in melee,
+    // right in front of the killer; npc's around, the killer too, perceive it (ASSESSMURDER)
+    if(auto name = JsonRead::str(msg,"npc"); !name.empty()) {
+      Npc* npc = npcBySymbol(*world,name);
+      if(npc==nullptr || npc->isDead() || npc->isPlayer()) {
+        sendResult(req,false,npc==nullptr ? "no such npc" : "it can't die now");
+        return;
+        }
+      npc->changeAttribute(ATR_HITPOINTS,-npc->attribute(ATR_HITPOINTSMAX)-1,false);
+      sendResult(req,npc->isDead(),"it did not die (immortal?)");
       return;
       }
-    npc->changeAttribute(ATR_HITPOINTS,-npc->attribute(ATR_HITPOINTSMAX)-1,false);
-    sendResult(req,npc->isDead(),"it did not die (immortal?)");
+    const auto near   = JsonRead::str(msg,"near");
+    const auto byName = JsonRead::str(msg,"by");
+    Npc*       at     = near.empty() ? pl : npcBySymbol(*world,near);
+    Npc*       by     = byName.empty() || byName=="PLAYER" ? pl : npcBySymbol(*world,byName);
+    Npc*       victim = at!=nullptr ? AiNpc::findNpc(*world,JsonRead::str(msg,"instance"),at) : nullptr;
+    if(victim==nullptr || victim==pl || victim->isDead() || by==nullptr || by==victim) {
+      sendResult(req,false,by==nullptr ? "no such killer" : "no such creature alive");
+      return;
+      }
+    auto at1 = by->position();
+    at1.x += 150*std::cos(by->rotationRad());
+    at1.z += 150*std::sin(by->rotationRad());
+    victim->setPosition(at1);
+    victim->changeAttribute(ATR_HITPOINTS,-victim->attribute(ATR_HITPOINTS),false);
+    world->sendPassivePerc(*victim,*by,*victim,PERC_ASSESSMURDER);
+    sendResult(req,victim->isDead(),"it did not die");
     return;
     }
   if(cmd=="player_goto") {
@@ -1283,13 +1343,15 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
         name = std::string(npc->displayName());
     TestBench::aiLine(line.npc,TextCodec::toUtf8(name),TextCodec::toUtf8(line.text),line.time);
   }
-  // the face while the line is said, and a moment after (v8)
-  if(auto face = moodFace(line.mood); !face.empty())
-    if(auto world = Gothic::inst().world())
-      if(auto npc = npcBySymbol(*world,line.npc)) {
+  // the face while the line is said, and a moment after (v8); the hands go with the mood too
+  if(auto world = Gothic::inst().world())
+    if(auto npc = npcBySymbol(*world,line.npc)) {
+      npc->setTalkMood(line.mood);
+      if(auto face = moodFace(line.mood); !face.empty()) {
         npc->startFaceAnim(face,1,line.time+MoodHoldMs);
         Log::i("[ai] face ",line.npc," ",face," for ",line.time+MoodHoldMs," ms");
         }
+      }
   ensureChat();
   if(!line.reply.empty()) {
     chat->extend(line.reply,line.time);  // its text is on screen already

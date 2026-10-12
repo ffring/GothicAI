@@ -1046,6 +1046,10 @@ void Npc::startSpeech(std::shared_ptr<LipSync::Track> voice) {
   visual.startSpeech(*this,std::move(voice));
   }
 
+void Npc::setTalkMood(std::string_view mood) {
+  visual.setTalkMood(mood);
+  }
+
 void Npc::stopSpeech() {
   visual.stopSpeech();
   }
@@ -2429,6 +2433,7 @@ void Npc::tick(uint64_t dt) {
 
   tickAnimationTags();
   visual.updateMouth(*this,dt);
+  visual.updateGestures(*this,dt);
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);
@@ -3195,6 +3200,19 @@ bool Npc::haveOutput() const {
   if(owner.tickCount()<aiOutputBarrier)
     return true;
   return aiOutputOrderId()!=std::numeric_limits<int>::max();
+  }
+
+uint64_t Npc::speechLeft() const {
+  const uint64_t now = owner.tickCount();
+  return aiOutputBarrier>now ? aiOutputBarrier-now : 0;
+  }
+
+bool Npc::hasOutputQueued() const {
+  return aiOutputOrderId()!=std::numeric_limits<int>::max();
+  }
+
+bool Npc::isPlayingQueuedAnim() const {
+  return aniWaitTime>=owner.tickCount();
   }
 
 void Npc::setAiOutputBarrier(uint64_t dt, bool overlay) {

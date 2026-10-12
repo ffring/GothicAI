@@ -300,6 +300,21 @@ def analyze(rows):
         cov = sum((a - ma) * (b - mb) for a, b in lips)
         if va > 0 and vb > 0:
             stats["lip_corr"] = cov / math.sqrt(va * vb)
+    # hands while it speaks: how much of the talk has a gesture, how much of the listening after it
+    # (a second after the voice), gestures started, started over a playing one, stopped early
+    if rows and "ge_talk" in rows[0]:
+        talk = [r for r in rows if r["ge_talk"] > 0]
+        quiet, since = [], None
+        for i, r in enumerate(rows):
+            since = i if r["ge_talk"] > 0 else since
+            if r["ge_talk"] == 0 and since is not None and i - since > FPS:
+                quiet.append(r)
+        if talk:
+            stats["ges_talk"] = sum(1 for r in talk if r["ge_id"] > 0) / len(talk)
+            stats["ges_listen"] = None if not quiet else sum(1 for r in quiet if r["ge_id"] > 0) / len(quiet)
+            for k in ("starts", "cuts", "stops") + (("nods",) if "ge_nods" in rows[0] else ()):
+                stats["ges_" + k] = int(rows[-1]["ge_" + k] - rows[0]["ge_" + k])
+            stats["ges_kinds"] = len({int(r["ge_id"]) for r in rows if r["ge_id"] > 0})
     # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
     # to come back after a blow; a blow without a flinch, a flinch that does not come back
     if rows and "f_hits" in rows[0]:
@@ -352,7 +367,7 @@ def arrows(out):
     if not os.path.exists(path):
         return per
     seg, shot = None, deque()
-    with open(path) as f:
+    with open(path, errors="replace") as f:  # names of the game's npcs come in its codepage
         for line in f:
             line = line.strip()
             if line.startswith("rec stop"):
@@ -474,8 +489,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | events |")
-    lines.append("|" + "---|" * 16)
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | gestures talk / listen % (started, over one, stopped) | events |")
+    lines.append("|" + "---|" * 17)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -492,10 +507,14 @@ def report(out):
             f"{st['anim_p99']:.1f} / {st['anim_max']:.1f} ({st['anim_switches']}, {st['anim_switch_max']:.1f})"
         am = "-" if "aim_p90" not in st else f"{st['aim_p90']:.1f} / {st['aim_bend']:.0f}"
         lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
+        gl = "-" if st.get("ges_listen") is None else f"{st['ges_listen'] * 100:.0f}"
+        gs = "-" if "ges_talk" not in st else \
+            f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})" + \
+            ("" if "ges_nods" not in st else f" nods {st['ges_nods']}")
         fl = "-" if "flinch_hits" not in st else \
             f"{st['flinch_hits']}, {st['flinch_peak']:.1f}, {st['flinch_settle']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {gs} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
@@ -572,6 +591,9 @@ def diff(a, b):
             ret += "" if "spread" not in st else f" spread {st['spread']:.1f}"
             ret += "" if "anim_p99" not in st else \
                 f" pop {st['anim_p99']:.1f}/{st['anim_max']:.1f} sw {st['anim_switch_max']:.1f}"
+            ret += "" if "ges_talk" not in st else \
+                f" gest {st['ges_talk'] * 100:.0f}/{'-' if st['ges_listen'] is None else round(st['ges_listen'] * 100)}%" \
+                f" n{st['ges_starts']} over{st['ges_cuts']}"
             return ret + ("" if "limp" not in st else f" limp {st['limp']:.1f}")
         print(f"| {seg} | {c(res[0][0])} | {c(res[1][0])} | {changes or 'same'} |")
     print()
