@@ -53,6 +53,14 @@ std::string npcId(World& world, Npc& npc) {
   return symbolOf(world,npc.instanceSymbol());
   }
 
+// what a mob is called in the game: its focus name is a script string (MOBNAME_BOOKSBOARD), shown by value
+std::string mobName(World& world, std::string_view focus) {
+  auto sym = world.script().findSymbol(focus);
+  if(sym!=nullptr && sym->type()==zenkit::DaedalusDataType::STRING)
+    return sym->get_string();
+  return std::string(focus);
+  }
+
 std::string_view weapon(const Npc& npc) {
   switch(npc.weaponState()) {
     case WeaponState::NoWeapon: return "none";
@@ -147,7 +155,7 @@ void writeView(Writer& w, World& world, Npc& npc) {
   str(w,"state",AiNpc::stateName(world,npc.currentState()));
   str(w,"body",body(npc));
   if(auto mob = npc.interactive())
-    utf8(w,"mob",mob->focusName());
+    utf8(w,"mob",mobName(world,mob->focusName()));
   str(w,"weapon",weapon(npc));
   writeItem(w,world,"in_hands",npc.inventory().stateSlotItem());
   w.Key("hp");     w.Int(npc.attribute(ATR_HITPOINTS));
