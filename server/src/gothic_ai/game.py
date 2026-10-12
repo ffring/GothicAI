@@ -32,6 +32,8 @@ from .protocol import (
     NpcActCmd,
     NpcActResult,
     NpcActType,
+    NpcView,
+    NpcViewCmd,
     PingCmd,
     Pong,
     Result,
@@ -257,6 +259,11 @@ class GameLink:
     async def story_effect(self, npc: str, effects: list[dict[str, Any]], timeout: float = 5.0) -> None:
         """Effects on an npc through the scripts (see StoryEffectCmd)."""
         await self._request(StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects), timeout)
+
+    async def npc_view(self, npcs: list[str], timeout: float = 3.0) -> list[NpcView]:
+        """What these npc's perceive now (see NpcViewCmd)."""
+        res = await self._request(NpcViewCmd(req=self._next_id("v"), npcs=[n.upper() for n in npcs]), timeout)
+        return [NpcView.model_validate(v) for v in res.value or []]
 
     async def story_nearby(self, npc: str, radius: int = 2000) -> list[dict[str, Any]]:
         """People within `radius` cm of an npc."""

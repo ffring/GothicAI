@@ -202,8 +202,11 @@ class NpcPlanner:
         agenda_of: Callable[[str], str | None] | None = None,
         routine_of: Callable[[str], Awaitable[Any]] | None = None,
         habits_of: Callable[[str], list[Habit]] | None = None,
+        view_of: Callable[[str], tuple[str, ...]] | None = None,
     ) -> None:
         self.decider = decider
+        # what the npc perceives now (perception.py), a few English lines
+        self.view_of = view_of
         # what an npc wants from the hero, as its last conversation left it (memory); read when it appears
         self.agenda_of = agenda_of
         # the npc's daily routine from the game (`routine`, protocol v6) and its habits: the plan's menu
@@ -579,7 +582,10 @@ class NpcPlanner:
         assert pend is not None
         rec.pending = None
         rec.stimuli = [s for s in rec.stimuli if s.alive(now)]
-        ctx = NpcContext(rec.id, rec.name, rec.guild, rec.distance_cm, rec.in_view, agenda=rec.agenda)
+        view = self.view_of(rec.id) if self.view_of is not None else ()
+        ctx = NpcContext(
+            rec.id, rec.name, rec.guild, rec.distance_cm, rec.in_view, agenda=rec.agenda, view=view
+        )
         clock = clock_text(*self.game_time) if self.game_time else None
         plan_args: dict[str, dict] = {}
         if pend.purpose == "plan":

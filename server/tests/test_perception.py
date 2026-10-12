@@ -1,0 +1,169 @@
+from dataclasses import dataclass, field
+
+from gothic_ai.brain.situation import NpcContext, SituationBuilder
+from gothic_ai.dialogue import DialogueManager
+from gothic_ai.llm import ToolCall, ToolResult
+from gothic_ai.llm.fake import FakeBackend, FakeStep
+from gothic_ai.npc_tools import render_situation
+from gothic_ai.perception import PerceptionDesk
+from gothic_ai.persona import PersonaProvider
+from gothic_ai.protocol import NpcView
+from gothic_ai.protocol import Snapshot as NpcSnapshot
+from tests.fake_game import FakeGame, connected
+from tests.fakes import Clock
+from tests.test_dialogue import _until
+
+LOBART, HILDA, MALETH = "BAU_950_LOBART", "BAU_951_HILDA", "BAU_954_MALETH"
+GIL_OUT, GIL_SLD = 12, 7
+
+
+@dataclass
+class Social:
+    """Who knows whom (social.py's shape): Lobart meets Hilda and Maleth on the farm."""
+
+    ties: dict[str, dict[str, object]] = field(
+        default_factory=lambda: {LOBART: {HILDA: object(), MALETH: object()}}
+    )
+    guilds: dict[str, int] = field(default_factory=lambda: {LOBART: GIL_OUT, HILDA: GIL_OUT})
+
+
+def armor(item: str, name: str) -> dict:
+    return {"item": item, "name": name}
+
+
+def look(id: str, name: str, metres: float, **extra) -> dict:
+    return {"id": id, "name": name, "distance": metres * 100, **extra}
+
+
+def lobarts_view(hero: dict | None = None, *sees: dict) -> dict:
+    hero = hero or look(
+        "PLAYER", "Я", 4, seen=True, faces_you=True, armor=armor("ITAR_MIL_L", "Лёгкий доспех ополчения")
+    )
+    return {
+        "npc": LOBART,
+        "name": "Лобарт",
+        "waypoint": "NW_FARM1_OUT_01",
+        "indoors": False,
+        "state": "ZS_STAND_ARMSCROSSED",
+        "hero": hero,
+        "sees": list(sees)
+        or [
+            look(HILDA, "Хильда", 6, guild=GIL_OUT, state="ZS_COOK_CAULDRON"),
+            look(
+                "SLD_800_X", "Наёмник", 15, guild=GIL_SLD, weapon="melee", armor=armor("ITAR_SLD_L", "Доспех")
+            ),
+            look("WOLF", "Волк", 18, kind="monster", guild=36, moving=True, body="run"),
+            look(MALETH, "Малет", 10, kind="body", guild=GIL_OUT, body="dead"),
+        ],
+    }
+
+
+def desk(views: list[dict], knows_hero: bool = False, clock: Clock | None = None) -> PerceptionDesk:
+    class Link:
+        listeners: list = []
+
+    d = PerceptionDesk(Link(), social=Social, knows_hero=lambda npc: knows_hero, clock=clock or Clock())  # type: ignore[arg-type]
+    for v in views:
+        d._views[v["npc"]] = (d.clock(), NpcView.model_validate(v))
+    return d
+
+
+def test_lobart_sees_whom_it_knows_by_name_and_strangers_by_their_look():
+    sight = desk([lobarts_view()]).sight(LOBART)
+    assert sight is not None
+    assert sight.place == "Ты под открытым небом, у точки NW_FARM1_OUT_01. Ты стоишь, скрестив руки."
+    # the hero in militia armor, to one that does not know him, is a militiaman
+    assert sight.hero == (
+        "Герой в 4 м, смотрит на тебя: ты его не знаешь, по виду ополченец; на нём: Лёгкий доспех ополчения."
+    )
+    assert sight.people == (
+        "Видишь: Хильда (6 м), готовит у котла; незнакомец, по виду наёмник (15 м), оружие наголо; "
+        "Волк (18 м), бежит; тело (Малет, 10 м)."
+    )
+
+
+def test_the_hero_it_knows_and_the_hero_it_only_hears():
+    known = desk([lobarts_view()], knows_hero=True).sight(LOBART)
+    assert known is not None and known.hero is not None and "не знаешь" not in known.hero
+    unseen = lobarts_view(look("PLAYER", "Я", 9, seen=False))
+    sight = desk([unseen]).sight(LOBART)
+    assert sight is not None and sight.hero == "Героя ты сейчас не видишь, но слышишь: он в 9 м."
+
+
+def test_the_view_replaces_the_omniscient_lines_of_the_situation():
+    fake = FakeGame()
+    snap = NpcSnapshot.model_validate(fake.snapshot(LOBART))
+    sight = desk([lobarts_view()]).sight(LOBART, None)
+    text = render_situation(snap, None, sight)
+    assert "Рядом:" not in text and "Гильдия героя" not in text and "Ты у точки" not in text.split("\n")[1]
+    assert "Видишь: Хильда" in text and text.split("\n")[1].endswith(", утро.")
+    assert "Твой инвентарь:" in text  # what it has, as before
+    # a free npc nobody asked a snapshot of: what it sees is all there is
+    assert "Видишь: Хильда" in render_situation(None, None, sight)
+
+
+def test_look_tells_only_what_is_seen():
+    d = desk([lobarts_view()])
+    assert d.look(LOBART, "герой") == ("Герой, 4 м: на нём: Лёгкий доспех ополчения.")
+    assert d.look(LOBART, "Хильда").startswith("Хильда, 6 м: готовит у котла; без доспеха")
+    assert d.look(LOBART, "незнакомец, по виду наёмник").startswith("незнакомец, по виду наёмник, 15 м")
+    assert d.look(LOBART, "Вино") == "Не видно: Вино."
+
+
+def test_english_lines_for_the_behavioral_model_danger_first():
+    lines = desk([lobarts_view()]).english(LOBART)
+    assert lines[0] == "The hero: you do not know him, he looks like a militiaman."
+    assert lines[1:] == (
+        "A stranger who looks like a mercenary, is 15 m away, with a weapon drawn.",  # the armed first
+        "Волк is 18 m away.",
+        "Хильда, whom you know, is 6 m away.",
+    )
+    state = SituationBuilder().react(
+        NpcContext(LOBART, "Лобарт", GIL_OUT, 400, True, view=lines), [], 0, None
+    )
+    assert "The hero is 4 m away, looking at you. The hero: you do not know him" in state.state
+
+
+def test_pushed_views_age_out():
+    clock = Clock()
+    d = desk([lobarts_view()], clock=clock)
+    assert d.view(LOBART) is not None
+    clock.t += 5
+    assert d.view(LOBART) is None and d.english(LOBART) == ()
+
+
+async def test_in_a_turn_the_npc_sees_and_can_look_closer():
+    fake = FakeGame()
+    fake.views = {"NONE_100_XARDAS": {**lobarts_view(), "npc": "NONE_100_XARDAS", "name": "Ксардас"}}
+    llm = FakeBackend(
+        script=[
+            FakeStep("Хм…", [ToolCall("look", {"who": "герой"}, "c1")]),
+            FakeStep("Ты в доспехе ополчения?"),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        perception = PerceptionDesk(link, social=Social)
+        dialogue.extensions.append(perception)
+        dialogue.sight = perception.sight
+        dialogue.open("NONE_100_XARDAS", "Ксардас")
+        await dialogue.say_as_player("NONE_100_XARDAS", "Узнаёшь меня?")
+        await _until(lambda: len(llm.calls) == 2)
+        await fake.push_views(lobarts_view())  # the once-a-second push
+        await _until(lambda: perception.view(LOBART) is not None)
+
+    situation = str(llm.calls[0][1][-2].content)
+    assert "ты его не знаешь, по виду ополченец" in situation and "Видишь: Хильда" not in situation  # no ties
+    assert "look" in [t.name for t in llm.calls[0][2]]
+    result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert result.output.startswith("Герой, 4 м")
+
+
+def test_a_herd_is_told_once_and_creatures_draw_no_weapons():
+    sheep = [look("SHEEP", "Овца", m, kind="monster", guild=40, weapon="fists") for m in (6, 9, 14)]
+    sight = desk([lobarts_view(None, *sheep)]).sight(LOBART)
+    assert sight is not None and sight.people == "Видишь: Овца ×3 (6–14 м)."
+    bare = lobarts_view(look("PLAYER", "Я", 3, seen=True))
+    sight = desk([bare]).sight(LOBART)
+    assert sight is not None and sight.hero == "Герой в 3 м: ты его не знаешь; без доспеха."
