@@ -179,6 +179,7 @@ struct AiBridge::Impl final {
 
   void onTick(uint64_t dt);
   void onStartLoading();
+  void onSessionUnload() { voices.clear(); }
   void onWorldLoaded();
   void takePendingSession();
   void startBranch(std::string parent, int64_t parentSeq, std::string_view reason);
@@ -296,6 +297,8 @@ AiBridge::Impl::Impl() {
   auto& gothic = Gothic::inst();
   gothic.onTick              .bind(this,&Impl::onTick);
   gothic.onStartLoading      .bind(this,&Impl::onStartLoading);
+  // the voices play on the session's sound device: let them go before it (quitting the game, back to the menu)
+  gothic.onSessionUnload     .bind(this,&Impl::onSessionUnload);
   gothic.onWorldLoaded       .bind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
