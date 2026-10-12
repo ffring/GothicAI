@@ -19,9 +19,11 @@
 #include "graphics/mesh/footik.h"
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lean.h"
+#include "graphics/mesh/aim.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
+#include "world/objects/item.h"
 #include "world/world.h"
 #include "world/aiqueue.h"
 #include "utils/keycodec.h"
@@ -312,6 +314,8 @@ struct Bench {
   Vec3        prevPos;
   bool        hasPrev   = false;
   bool        inDialog  = false;
+  Npc*        pinned    = nullptr;  // pin: held there every frame
+  Vec3        pinAt     = {};
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
@@ -358,6 +362,7 @@ bool keyAction(std::string_view k, KeyCodec::Action& a) {
     {"forward",KeyCodec::Forward}, {"back",KeyCodec::Back},       {"left",KeyCodec::Left},  {"right",KeyCodec::Right},
     {"turnl",  KeyCodec::RotateL}, {"turnr",KeyCodec::RotateR},   {"jump",KeyCodec::Jump},  {"walk", KeyCodec::Walk},
     {"sneak",  KeyCodec::Sneak},   {"weapon",KeyCodec::Weapon},   {"action",KeyCodec::ActionGeneric},
+    {"melee",  KeyCodec::WeaponMele},{"bow",KeyCodec::WeaponBow}, {"spell",KeyCodec::WeaponMage3},
     };
   for(auto& i:keys)
     if(i.name==k) {
@@ -554,6 +559,7 @@ void writeHeader() {
     }
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -589,6 +595,11 @@ void writeRow(Npc& pl) {
   // lean of the watched npc (or the hero)
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.1f,%.1f",int(ln.active),ln.roll,ln.pitch,ln.speed,ln.turn,ln.slope);
+  // aim of the watched npc (or the hero)
+  const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
+               am.animYaw,am.animPitch,am.turn,am.bend,am.error);
+  std::fprintf(bench.csv,",%d",int(am.steady));
   std::fprintf(bench.csv,"\n");
   }
 
@@ -842,6 +853,82 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="shot") {
     bench.shot = a.size()>1 ? a[1] : "shot";
     }
+  else if(c=="anims") {
+    // anims: what the watched one (or the hero) plays, its body state, weapon and target
+    Npc& s = subjectOf(pl);
+    char buf[160];
+    std::snprintf(buf,sizeof(buf),"anims %s bs=%u ws=%d target=%s: ",symName(w,&s).c_str(),unsigned(s.bodyStateMasked() & BS_MAX),
+                  int(s.weaponState()),symName(w,s.target()).c_str());
+    say(buf + s.animNames());
+    }
+  else if(c=="give" || c=="equip") {
+    // give <item> [count]: into the hero's inventory; equip <item>: give one and put it on (a bow, a rune)
+    const std::string name = a.size()>1 ? a[1] : "";
+    const size_t      id   = w.script().findSymbolIndex(name);
+    if(id==size_t(-1)) {
+      say(c + ": no item " + name);
+      return;
+      }
+    pl.addItem(id,size_t(c=="give" ? num(a,2,1) : 1));
+    if(c=="equip")
+      pl.useItem(id,Item::NSLOT,true); // whatever the hero's strength
+    say(c + " " + name);
+    }
+  else if(c=="put") {
+    // put <npc|nearest> <dist> <angle> [dy]: the npc stands there from the hero (angle from the hero's
+    // facing, 0 in front), on the ground, frozen, facing the hero
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("put: no npc " + line);
+      return;
+      }
+    const float d   = num(a,2,500);
+    const float an  = (pl.rotation()+num(a,3,0))*float(M_PI)/180.f;
+    Vec3        pos = pl.position() + Vec3(std::cos(an),0,std::sin(an))*d;
+    // the ground there may be far above or below (a slope): the first one from above, by short rays
+    // (a long one misses the landscape)
+    DynamicWorld::RayLandResult r;
+    for(float y=pos.y+num(a,4,0)+1500; y>pos.y-1500 && !r.hasCol; y-=400)
+      r = w.physic()->ray({pos.x,y,pos.z},{pos.x,y-450,pos.z});
+    if(r.hasCol)
+      pos.y = r.v.y;
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    n->setPosition(pos);
+    const Vec3 dir = pl.position()-pos;
+    n->setDirection(Vec3(dir.x,0,dir.z));
+    n->updateTransform();
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"put %s at %.0f %.0f %.0f (%.0f above the hero%s)",symName(w,n).c_str(),pos.x,pos.y,pos.z,
+                  pos.y-pl.position().y,r.hasCol ? "" : ", no ground found");
+    say(buf);
+    }
+  else if(c=="pin") {
+    // pin <npc|nearest> <dist> <angle> <height> | pin off: the npc hangs there from the hero (angle from
+    // the hero's facing, height above the hero's feet), frozen, every frame: a target above or below
+    if(a.size()>1 && a[1]=="off") {
+      bench.pinned = nullptr;
+      say("pin off");
+      return;
+      }
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("pin: no npc " + line);
+      return;
+      }
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    const float an = (pl.rotation()+num(a,3,0))*float(M_PI)/180.f;
+    bench.pinned   = n;
+    bench.pinAt    = pl.position() + Vec3(std::cos(an)*num(a,2,800),num(a,4,0),std::sin(an)*num(a,2,800));
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"pin %s at %.0f %.0f %.0f",symName(w,n).c_str(),bench.pinAt.x,bench.pinAt.y,bench.pinAt.z);
+    say(buf);
+    }
   else if(c=="npcgo") {
     // npcgo <npc|nearest> <waypoint> [walk|run]: the npc goes there (AI path), like a script sends it
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
@@ -853,6 +940,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->setWalkMode(a.size()>3 && a[3]=="walk" ? WalkBit::WM_Walk : WalkBit::WM_Run);
     n->aiPush(AiQueue::aiGoToPoint(*wp));
     say("npcgo " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="aim") {
+    // aim on|off: the upper body turns and bends to the target with a bow, a crossbow, a spell
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Aim::setEnabled(m=="on"); else
+      say("unknown aim command: " + line);
     }
   else if(c=="lean") {
     // lean on|off: the lean into turns and on slopes (graphics/mesh/lean)
@@ -917,6 +1011,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.subject  = (n==&pl) ? nullptr : n;
     Gaze::probeNpc = bench.subject;
     Lean::probeNpc = bench.subject;
+    Aim::probeNpc  = bench.subject;
     char buf[160] = "watch nobody";
     if(n!=nullptr)
       if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
@@ -1238,6 +1333,13 @@ void drawOverlay(Pixmap& pm) {
     cv.text(x,y,buf,2,{255,230,40,255});
     y += 16;
     }
+  const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
+  if(am.valid && am.active) {
+    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f",double(am.weight),double(am.error),double(am.yaw),
+                  double(am.pitch),double(am.turn),double(am.bend));
+    cv.text(x,y,buf,2,{255,140,60,255});
+    y += 16;
+    }
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   if(ln.valid) {
     std::snprintf(buf,sizeof(buf),"LEAN%s R%.1f P%.1f V%.0f T%.0f S%.0f",Lean::isEnabled() ? "" : " OFF",double(ln.roll),
@@ -1338,6 +1440,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           who += " " + symName(*world,&n);
         });
     say(std::string(bench.inDialog ? "dialog started:" : "dialog ended") + who);
+    }
+  if(bench.pinned!=nullptr) {
+    const Vec3 d = player->position()-bench.pinAt;
+    bench.pinned->setPosition(bench.pinAt);
+    bench.pinned->setDirection(Vec3(d.x,0,d.z));
+    bench.pinned->updateTransform();
     }
   if(bench.orbitUntil>bench.time) {
     bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;

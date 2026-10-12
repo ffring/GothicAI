@@ -26,6 +26,8 @@ running and sneaking past; a script look; the hero looks at the npc in focus; a 
 Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
 and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
 for `bench_report.py diff`.
+Aim: `aim` (the hero draws a bow at a sheep hung level, above, steeply above, to the side; the same with
+aim off; a crossbow; a slope; a fire bolt; three shots in a row).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -69,6 +71,8 @@ git worktree remove --force /tmp/before
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
 - gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
+- orange `AIM`: weight, error `E` (where the arrow points after the turn against where the shot leaves),
+  where the shot has to go `Y`, `P`, the turn `T` and the bend `B` (+ up) of the upper body, degrees;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
@@ -87,6 +91,7 @@ git worktree remove --force /tmp/before
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
+| `aim_off` | while the bow holds still, the arrow points more than 3 degrees past where the shot leaves although the turn could reach it |
 | `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
@@ -99,7 +104,9 @@ steps of one leg of a pair than on the other's. `gaze on` is the share of frames
 at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
 the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
 looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
-roll into a turn and the range of the trunk pitch (+ forward) of the watched one.
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `aim err` is the
+angle between where the arrow points and where the shot leaves (while the bow holds still), `bend` the
+largest bend of the upper body (+ up).
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -119,7 +126,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `walkto <waypoint>` | walk there (AI path) |
 | `walkmode walk\|run\|sneak` | |
 | `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `face rel <deg>`, `turn <deg>` | turn the player at once; `rel`: the watched npc's facing turned by that much (the angles of `place`) |
-| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon action` (`left`/`right` strafe) |
+| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it) |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
@@ -138,6 +145,11 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it |
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
+| `aim on\|off` | the upper body turning to the target with a bow, a crossbow, a spell |
+| `give <item> [count]`, `equip <item>` | into the hero's inventory; `equip` puts it on whatever the strength (`ItRw_Bow_L_01`, `ItRw_Arrow`, `ItRw_Crossbow_L_01`, `ItRw_Bolt`, `ItRu_FireBolt`) |
+| `put <npc\|nearest> <dist> <angle>` | the npc stands there on the ground from the hero (angle from the hero's facing), frozen |
+| `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |
+| `anims` | what the watched one (or the hero) plays, its body state, weapon and target |
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |

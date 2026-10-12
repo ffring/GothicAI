@@ -590,6 +590,47 @@ bool MdlVisual::updateLean(Npc& npc, uint64_t dt) {
   return changed;
   }
 
+bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& aim  = pose.aimIk();
+  if(!aim.isValid()) {
+    if(npc.isPlayer())
+      Aim::playerProbe = Aim::Probe();
+    if(&npc==Aim::probeNpc)
+      Aim::subjectProbe = Aim::Probe();
+    return false;
+    }
+
+  // drawing the bow at the target (a crossbow, a spell): where the shot leaves to, as World shoots it
+  const float a  = npc.rotationRad();
+  const auto  bs = npc.bodyStateMasked() & BS_MAX;
+  const auto  ws = npc.weaponState();
+  const Npc*  t  = npc.target();
+  Aim::Input in;
+  in.dt      = dt;
+  in.forward = {std::cos(a), 0, std::sin(a)};
+  if(t!=nullptr && t!=&npc && !npc.isDown()) {
+    // a shot is a frame of BS_HIT, the reload goes on aiming
+    if((ws==WeaponState::Bow || ws==WeaponState::CBow) && (bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==(BS_HIT & BS_MAX))) {
+      in.active = true;
+      in.arrow  = true;
+      in.dir    = World::bulletVelocity(mapWeaponBone(),t->collosionCenter());
+      }
+    else if(ws==WeaponState::Mage && bs==BS_CASTING) {
+      in.active = true;
+      in.dir    = t->collosionCenter() - mapWeaponBone();
+      }
+    }
+  const bool changed = pose.updateAim(in);
+  if(npc.isPlayer())
+    aim.probe(Aim::playerProbe);
+  if(&npc==Aim::probeNpc)
+    aim.probe(Aim::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
 bool MdlVisual::hasGaze() const {
   return Gaze::isEnabled() && skInst->gazeIk().isValid();
   }

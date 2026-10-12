@@ -670,30 +670,27 @@ Bullet& World::shootSpell(const Item &itm, const Npc &npc, const Npc *target) {
   return b;
   }
 
+Tempest::Vec3 World::bulletVelocity(const Tempest::Vec3& from, const Tempest::Vec3& to) {
+  Tempest::Vec3 dir = to - from;
+
+  float lxz   = std::sqrt(dir.x*dir.x+0*0+dir.z*dir.z);
+  float speed = DynamicWorld::bulletSpeed;
+  float t     = lxz/speed;
+
+  dir/=t;
+  dir.y += 0.5f*DynamicWorld::gravity*t;
+  return dir;
+  }
+
 Bullet& World::shootBullet(const Item &itm, const Npc &npc, const Npc *target, const Interactive* inter) {
   Tempest::Vec3 dir = {1.f,0.f,0.f};
   auto          pos = npc.mapWeaponBone();
 
   if(target!=nullptr) {
-    dir = target->collosionCenter() - pos;
-
-    float lxz   = std::sqrt(dir.x*dir.x+0*0+dir.z*dir.z);
-    float speed = DynamicWorld::bulletSpeed;
-    float t     = lxz/speed;
-
-    dir/=t;
-    dir.y += 0.5f*DynamicWorld::gravity*t;
+    dir = bulletVelocity(pos,target->collosionCenter());
     } else
   if(inter!=nullptr) {
-    auto  tgPos = inter->position();
-    dir = tgPos-pos;
-
-    float lxz   = std::sqrt(dir.x*dir.x+0*0+dir.z*dir.z);
-    float speed = DynamicWorld::bulletSpeed;
-    float t     = lxz/speed;
-
-    dir/=t;
-    dir.y += 0.5f*DynamicWorld::gravity*t;
+    dir = bulletVelocity(pos,inter->position());
     } else {
     float a = npc.rotationRad();
     dir.x = std::cos(a);

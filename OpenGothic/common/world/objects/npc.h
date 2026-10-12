@@ -301,6 +301,7 @@ class Npc final {
     Npc*      attentionTarget() const { return attention.target(); }
 
     bool      isAttackAnim() const;
+    auto      animNames() const -> std::string; // the playing animations, for debugging
     bool      isPrehit() const;
     bool      isImmortal() const;
 

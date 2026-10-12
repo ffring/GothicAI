@@ -1,0 +1,135 @@
+# Aim: the hero draws a bow at a sheep hung at different heights (pin): level, up, steep up (another aim
+# pose of the game), to the side; the same "up" with aim off; a crossbow; on a slope (the feet stay on
+# the ground while aiming); a fire bolt; last shoots three times up (the reload swings the arrow: the
+# turn holds; the sheep does not live through it)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_091   # flat open ground
+face -106                         # a rock behind, open in front
+wait 500
+equip ItRw_Bow_L_01
+give ItRw_Arrow 50
+insert Sheep
+wait 300
+tap bow
+wait 1500
+cam follow 380 110 75
+cam look 120
+pin SHEEP 1200 0 0
+wait 300
+rec level
+press action
+wait 2500
+release action
+wait 800
+pin SHEEP 1000 0 550
+wait 300
+rec up
+press action
+wait 2500
+release action
+wait 800
+pin SHEEP 500 0 750
+wait 300
+rec steep
+press action
+wait 2500
+release action
+wait 800
+pin SHEEP 1000 25 300
+wait 300
+rec side
+press action
+wait 2500
+release action
+wait 800
+pin SHEEP 1000 0 550
+wait 300
+aim off
+rec up_off
+press action
+wait 2500
+release action
+wait 800
+stop
+aim on
+tap bow
+wait 1500
+equip ItRw_Crossbow_L_01
+give ItRw_Bolt 50
+tap bow
+wait 2000
+goto NW_XARDAS_TOWER_VALLEY_091
+face -106
+wait 500
+pin SHEEP 1000 0 550
+wait 300
+rec cbow
+press action
+wait 600
+anims
+wait 2500
+release action
+wait 800
+stop
+tap bow
+wait 1500
+equip ItRw_Bow_L_01
+pin off
+goto NW_FOREST_PATH_16              # a 21 degree slope
+wait 500
+face across
+tap bow
+wait 1500
+cam follow 300 60 90
+pin SHEEP 1000 0 300
+wait 300
+rec slope
+press action
+wait 600
+anims
+wait 2500
+release action
+wait 800
+stop
+tap bow
+wait 1500
+equip ItRu_FireBolt
+tap spell
+wait 1500
+goto NW_XARDAS_TOWER_VALLEY_091
+face -106
+cam follow 380 110 75
+wait 500
+pin SHEEP 1000 0 550
+wait 300
+rec spell            # a fire bolt up: the upper body bends while casting
+press action
+wait 900
+tap forward
+wait 1800
+release action
+wait 800
+stop
+tap spell
+wait 1500
+tap bow
+wait 1500
+goto NW_XARDAS_TOWER_VALLEY_091
+face -106
+wait 500
+pin SHEEP 1000 0 550
+wait 300
+rec shoot
+press action
+wait 1200
+tap forward
+wait 1200
+tap forward
+wait 1200
+tap forward
+wait 1200
+release action
+wait 800
+stop

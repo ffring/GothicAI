@@ -35,6 +35,7 @@ FLAGS = {
     "toe_twist": (12.0, "deg", "planted toes turned sideways beyond the intended outward turn"),
     "stretch":   (2.0, "cm",  "planted leg straight and still can not reach the ground"),
     "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
+    "aim_off":   (3.0, "deg", "the bow (the spell) aims past where the shot leaves, although the turn could reach it"),
     "gaze_jerk": (10.0, "deg", "the face turned this much in one frame (a turn to the partner goes up to 9)"),
 }
 
@@ -120,6 +121,9 @@ def frame_flags(prev2, prev, r):
                 out.append(("gaze_jerk", "-", math.hypot(dy, r["g_fpitch"] - prev["g_fpitch"])))
         elif prev is not None and "g_w" in prev:
             out.append(("gaze_jerk", "-", abs(r["g_yaw"] * r["g_w"] - prev["g_yaw"] * prev["g_w"])))
+    if "a_w" in r and r["a_w"] > 0.99 and r.get("a_steady", 1) > 0 and r["a_err"] >= 0 and abs(r["a_yaw"]) < 40 \
+            and -45 < r["a_pitch"] < 55:
+        out.append(("aim_off", "-", r["a_err"]))
     for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
@@ -226,6 +230,13 @@ def analyze(rows):
         stats["gaze_on"] = sum(1 for r in rows if r["g_on"] > 0) / len(rows)
         stats["gaze_looks"] = sum(1 for a, b in zip(rows, rows[1:]) if a["g_on"] == 0 and b["g_on"] > 0) + int(rows[0]["g_on"] > 0)
         stats["gaze_src"] = sorted({GAZE_SRC.get(int(r.get("g_src", 0)), "?") for r in rows if r["g_on"] > 0})
+    # aim: how far off the shot direction while aiming, how far the upper body bends
+    # (only while the bow holds still: reloading swings the arrow around on purpose)
+    aims = sorted(r["a_err"] for r in rows if r.get("a_w", 0) > 0.99 and r.get("a_err", -1) >= 0
+                  and r.get("a_steady", 1) > 0)
+    if aims:
+        stats["aim_p90"] = aims[int(len(aims) * 0.9)]
+        stats["aim_bend"] = max((r["a_bend"] for r in rows if r.get("a_w", 0) > 0.99), key=abs)
     # lean: the largest roll into a turn, the trunk pitch range (degrees)
     if rows and "ln_roll" in rows[0]:
         stats["lean_roll"] = max(abs(r["ln_roll"]) for r in rows)
@@ -289,8 +300,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | aim err p90 / bend deg | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -303,8 +314,9 @@ def report(out):
             f"{st['gaze_on'] * 100:.0f} ({st['gaze_looks']}{', ' + ' '.join(st['gaze_src']) if st['gaze_src'] else ''})"
         ln = "-" if "lean_roll" not in st else \
             f"{st['lean_roll']:.1f} / {st['lean_pitch'][0]:.1f}..{st['lean_pitch'][1]:.1f}"
+        am = "-" if "aim_p90" not in st else f"{st['aim_p90']:.1f} / {st['aim_bend']:.0f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {am} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

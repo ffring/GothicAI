@@ -293,9 +293,13 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
     in.hardOff = true;
     return in;
     }
-  // Two legs: standing and locomotion; other animations (attacks, items, ...) fade out.
+  // Two legs: standing, locomotion, aiming a bow (a shot is a frame of BS_HIT) and casting a spell, the
+  // feet stand still there; other animations (attacks, items, ...) fade out.
   // Four legs keep it: a beast attacks standing on the ground, and is not tilted to it otherwise
-  if(!quadruped && bs!=BS_NONE && bs!=(BS_WALK & BS_MAX) && bs!=(BS_SNEAK & BS_MAX) && bs!=BS_RUN && bs!=BS_SPRINT)
+  const auto ws    = npc.weaponState();
+  const bool bow   = ws==WeaponState::Bow || ws==WeaponState::CBow;
+  const bool stand = bs==BS_NONE || bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==BS_CASTING || (bow && bs==(BS_HIT & BS_MAX));
+  if(!quadruped && !stand && bs!=(BS_WALK & BS_MAX) && bs!=(BS_SNEAK & BS_MAX) && bs!=BS_RUN && bs!=BS_SPRINT)
     return in;
 
   const Vec3 pos = position(obj);

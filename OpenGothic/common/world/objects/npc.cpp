@@ -4243,6 +4243,10 @@ Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
   return Gaze::Source::None;
   }
 
+std::string Npc::animNames() const {
+  return visual.pose().animNames();
+  }
+
 bool Npc::isAttackAnim() const {
   return visual.pose().isAttackAnim();
   }
@@ -4936,6 +4940,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
   syncAtt |= visual.updateLean(*this,dt);
   syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
+  syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   if(syncAtt)
     visual.syncAttaches();
