@@ -1,0 +1,259 @@
+// storygraph: reads the story layer out of a compiled GOTHIC.DAT.
+//
+// For now it measures how much of the dialog layer (C_INFO) can be lifted into a graph automatically:
+// what the condition functions depend on and what the information functions do.
+//
+//   storygraph <GOTHIC.DAT> [--tsv dialogs.tsv] [--top N]
+//   storygraph <GOTHIC.DAT> --disasm DIA_LOBART_RUEBEN_INFO
+
+#include "bytecode.h"
+#include "textcodec.h"
+
+#include <zenkit/DaedalusVm.hh>
+#include <zenkit/Stream.hh>
+#include <zenkit/addon/daedalus.hh>
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <vector>
+
+using namespace storygraph;
+
+// Engine functions a condition may call and still be a plain predicate over the world state.
+static const std::set<std::string> PredicateExternals = {
+  "NPC_KNOWSINFO", "NPC_HASITEMS", "NPC_ISDEAD", "NPC_ISINSTATE", "NPC_WASINSTATE", "NPC_ISINROUTINE",
+  "NPC_GETDISTTOWP", "NPC_GETNEARESTWP", "NPC_GETDISTTONPC", "HLP_STRCMP", "NPC_GETTALENTSKILL",
+  "NPC_REFUSETALK", "NPC_GETTRUEGUILD", "NPC_GETEQUIPPEDARMOR", "NPC_GETBODYSTATE", "MOB_HASITEMS",
+  "WLD_GETDAY", "WLD_ISTIME", "HLP_GETNPC", "HLP_ISVALIDNPC", "HLP_ISITEM",
+  };
+// Script helpers used in conditions that are themselves generic predicates (pickpocketing, crime level).
+static const std::set<std::string> PredicateHelpers = {
+  "C_BEKLAUEN", "C_NPCISDOWN", "B_GETGREATESTPETZCRIME", "B_GETPLAYERCRIME", "B_GETDAYPLUS",
+  "B_GETCURRENTABSOLUTIONLEVEL",
+  };
+// Effects of information functions with a known meaning: lines, journal, items, xp, routines, choices,
+// teaching and trading. Information functions also branch on the predicates above. Anything else is
+// story-specific code.
+static const std::set<std::string> StandardExternals = {
+  "AI_OUTPUT", "AI_STOPPROCESSINFOS", "INFO_ADDCHOICE", "INFO_CLEARCHOICES", "LOG_CREATETOPIC",
+  "LOG_SETTOPICSTATUS", "LOG_ADDENTRY", "NPC_EXCHANGEROUTINE", "CREATEINVITEMS", "CREATEINVITEM",
+  "NPC_REMOVEINVITEMS", "NPC_REMOVEINVITEM", "WLD_INSERTNPC", "WLD_INSERTITEM", "NPC_SETREFUSETALK",
+  "AI_PLAYANI", "AI_TURNTONPC", "AI_GOTOWP", "AI_TELEPORT", "AI_STANDUP", "AI_CONTINUEROUTINE",
+  "AI_EQUIPARMOR", "SND_PLAY", "PRINT", "PRINTSCREEN", "AI_PRINTSCREEN", "CONCATSTRINGS", "INTTOSTRING",
+  "HLP_RANDOM",
+  };
+static const std::set<std::string> StandardHelpers = {
+  "B_LOGENTRY", "B_GIVEINVITEMS", "B_GIVEPLAYERXP", "B_STARTOTHERROUTINE", "B_ATTACK", "B_SAY", "B_SAY_GOLD",
+  "B_CHECKLOG", "B_GIVETRADEINV", "B_BEKLAUEN", "B_USEITEM", "B_TURNTONPC", "B_ENDPRODUCTIONDIALOG",
+  "B_BUILDLEARNSTRING", "B_GETLEARNCOSTTALENT", "B_GETLEARNCOSTATTRIBUTE", "B_TEACHATTRIBUTEPOINTS",
+  "B_TEACHFIGHTTALENTPERCENT", "B_TEACHTHIEFTALENT", "B_TEACHMAGICCIRCLE", "B_TEACHPLAYERTALENTRUNES",
+  "B_TEACHPLAYERTALENTALCHEMY", "B_TEACHPLAYERTALENTSMITH", "B_TEACHPLAYERTALENTTAKEANIMALTROPHY",
+  "B_TEACHPLAYERTALENTFOREIGNLANGUAGE", "B_RAISEATTRIBUTE", "B_UPGRADE_HERO_HACKCHANCE", "B_GIVETHIEFXP",
+  "B_RESETTHIEFLEVEL", "B_GETGREATESTPETZCRIME", "B_GETTOTALPETZCOUNTER", "B_GRANTABSOLUTION",
+  "B_NPC_ISALIVECHECK", "B_GETDAYPLUS", "C_NPCISDOWN",
+  };
+
+static bool subsetOf(const std::set<std::string>& a, const std::set<std::string>& b,
+                     const std::set<std::string>& c = {}) {
+  return std::all_of(a.begin(), a.end(), [&](const std::string& x){ return b.count(x)>0 || c.count(x)>0; });
+  }
+
+// Symbol names are Windows-1252 (a few German ones have an 'ß'), not the localization's codepage.
+static std::string ident(std::string_view name) {
+  std::string r;
+  for(char ch : name) {
+    auto c = uint8_t(ch);
+    if(c<0x80) {
+      r += ch;
+      } else {
+      r += char(0xC0 | (c>>6));
+      r += char(0x80 | (c&0x3F));
+      }
+    }
+  return r;
+  }
+
+static std::string join(const std::set<std::string>& v) {
+  std::string r;
+  for(auto& x : v) {
+    if(!r.empty())
+      r += ',';
+    r += ident(x);
+    }
+  return r;
+  }
+
+static double pct(size_t a, size_t b) { return b==0 ? 0.0 : 100.0*double(a)/double(b); }
+
+static void printTop(const char* title, const std::map<std::string,size_t>& m, size_t n) {
+  std::vector<std::pair<size_t,std::string>> v;
+  for(auto& [k,c] : m)
+    v.emplace_back(c,k);
+  std::sort(v.rbegin(), v.rend());
+  std::printf("\n%s (%zu distinct)\n", title, v.size());
+  for(size_t i=0; i<v.size() && i<n; ++i)
+    std::printf("  %6zu  %s\n", v[i].first, ident(v[i].second).c_str());
+  }
+
+int main(int argc, char** argv) {
+  const char* datPath = nullptr;
+  const char* tsvPath = nullptr;
+  const char* disasm  = nullptr;
+  size_t      top     = 0;
+  for(int i=1; i<argc; ++i) {
+    if(std::strcmp(argv[i],"--tsv")==0 && i+1<argc)
+      tsvPath = argv[++i];
+    else if(std::strcmp(argv[i],"--disasm")==0 && i+1<argc)
+      disasm = argv[++i];
+    else if(std::strcmp(argv[i],"--top")==0 && i+1<argc)
+      top = size_t(std::strtoul(argv[++i],nullptr,10));
+    else
+      datPath = argv[i];
+    }
+  if(datPath==nullptr) {
+    std::fprintf(stderr, "usage: storygraph <GOTHIC.DAT> [--tsv dialogs.tsv] [--top N]\n");
+    return 2;
+    }
+
+  zenkit::DaedalusScript script;
+  {
+  auto r = zenkit::Read::from(std::filesystem::path(datPath));
+  if(r==nullptr) {
+    std::fprintf(stderr, "can't open %s\n", datPath);
+    return 1;
+    }
+  script.load(r.get());
+  }
+  zenkit::register_all_script_classes(script);
+  zenkit::DaedalusVm vm(std::move(script), zenkit::DaedalusVmExecutionFlag::ALLOW_NULL_INSTANCE_ACCESS);
+  vm.register_default_external([](const zenkit::DaedalusSymbol&){});
+  const zenkit::DaedalusScript& dat = vm;
+  Bytecode code(dat);
+  if(disasm!=nullptr)
+    return code.print(disasm) ? 0 : 1;
+
+  std::vector<std::shared_ptr<zenkit::IInfo>> infos;
+  vm.enumerate_instances_by_class_name("C_INFO", [&](zenkit::DaedalusSymbol& sym){
+    infos.push_back(vm.init_instance<zenkit::IInfo>(&sym));
+    });
+
+  FILE* tsv = tsvPath ? std::fopen(tsvPath,"w") : nullptr;
+  if(tsv)
+    std::fprintf(tsv, "info\tnpc\timportant\tpermanent\ttrade\tdescription\tcond_externals\tcond_calls\t"
+                      "cond_reads\tcond_members\tcond_knows\tinfo_externals\tinfo_calls\tinfo_writes\toutputs\tchoices\n");
+
+  std::map<std::string,size_t> condExternals, condCalls, condMembers, infoExternals, infoCalls;
+  std::set<int32_t>     npcs;
+  std::set<std::string> condReads, infoWrites;
+  std::set<uint32_t>    choiceFns;
+  size_t important=0, permanent=0, trade=0, withChoices=0, outputs=0, writing=0, knowsEdges=0;
+  size_t plain=0, withHelpers=0, effectsStandard=0, effectsBespoke=0, chapterChange=0;
+  std::map<std::string,size_t> bespoke;
+
+  for(auto& info : infos) {
+    npcs.insert(info->npc);
+    important += info->important!=0;
+    permanent += info->permanent!=0;
+    trade     += info->trade!=0;
+
+    FnSummary c = code.summarize(uint32_t(info->condition));
+    FnSummary e = code.summarize(uint32_t(info->information));
+    // the choices an information function offers, and the choices those offer
+    std::vector<uint32_t> todo = e.choices;
+    std::set<uint32_t>    seen;
+    while(!todo.empty()) {
+      uint32_t fn = todo.back();
+      todo.pop_back();
+      if(!seen.insert(fn).second)
+        continue;
+      FnSummary ch = code.summarize(fn);
+      e.outputs += ch.outputs;
+      e.externals.insert(ch.externals.begin(), ch.externals.end());
+      e.calls.insert(ch.calls.begin(), ch.calls.end());
+      e.writes.insert(ch.writes.begin(), ch.writes.end());
+      todo.insert(todo.end(), ch.choices.begin(), ch.choices.end());
+      }
+    choiceFns.insert(seen.begin(), seen.end());
+    withChoices += !seen.empty();
+    outputs     += e.outputs;
+    writing     += !e.writes.empty();
+    knowsEdges  += c.infos.size();
+
+    bool condPlain = subsetOf(c.externals, PredicateExternals);
+    plain       += condPlain && c.calls.empty();
+    withHelpers += condPlain && subsetOf(c.calls, PredicateHelpers);
+    bool std     = subsetOf(e.externals, StandardExternals, PredicateExternals) &&
+                   subsetOf(e.calls, StandardHelpers, PredicateHelpers);
+    effectsStandard += std;
+    chapterChange   += e.calls.count("B_KAPITELWECHSEL");
+    if(!std) {
+      effectsBespoke++;
+      for(auto& x : e.calls)
+        if(!StandardHelpers.count(x) && !PredicateHelpers.count(x))
+          bespoke[x]++;
+      }
+
+    for(auto& x : c.externals) condExternals[x]++;
+    for(auto& x : c.calls)     condCalls[x]++;
+    for(auto& x : c.members)   condMembers[x]++;
+    for(auto& x : e.externals) infoExternals[x]++;
+    for(auto& x : e.calls)     infoCalls[x]++;
+    condReads.insert(c.reads.begin(), c.reads.end());
+    infoWrites.insert(e.writes.begin(), e.writes.end());
+
+    if(tsv) {
+      auto* self = dat.find_symbol_by_index(info->symbol_index());
+      auto* npc  = dat.find_symbol_by_index(uint32_t(info->npc));
+      std::fprintf(tsv, "%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%u\t%zu\n",
+                   self ? ident(self->name()).c_str() : "?", npc ? ident(npc->name()).c_str() : "?",
+                   info->important, info->permanent, info->trade, TextCodec::toUtf8(info->description).c_str(),
+                   join(c.externals).c_str(), join(c.calls).c_str(), join(c.reads).c_str(), join(c.members).c_str(),
+                   join(c.infos).c_str(), join(e.externals).c_str(), join(e.calls).c_str(), join(e.writes).c_str(),
+                   e.outputs, seen.size());
+      }
+    }
+  if(tsv)
+    std::fclose(tsv);
+
+  std::set<std::string> storyVars;
+  for(auto& v : infoWrites)
+    if(condReads.count(v))
+      storyVars.insert(v);
+  auto mis = [](const std::set<std::string>& s){
+    return size_t(std::count_if(s.begin(), s.end(), [](const std::string& x){ return x.rfind("MIS_",0)==0; }));
+    };
+
+  size_t n = infos.size();
+  std::printf("dialogs (C_INFO):            %zu, npcs with dialogs %zu\n", n, npcs.size());
+  std::printf("  important / permanent / trade: %zu / %zu / %zu\n", important, permanent, trade);
+  std::printf("  with Info_AddChoice:       %zu (%zu choice functions)\n", withChoices, choiceFns.size());
+  std::printf("  AI_Output lines:           %zu\n", outputs);
+  std::printf("conditions\n");
+  std::printf("  plain predicates only:     %zu (%.1f%%)\n", plain, pct(plain,n));
+  std::printf("  + generic helpers:         %zu (%.1f%%)\n", withHelpers, pct(withHelpers,n));
+  std::printf("  Npc_KnowsInfo edges:       %zu\n", knowsEdges);
+  std::printf("information functions\n");
+  std::printf("  standard effects only:     %zu (%.1f%%)\n", effectsStandard, pct(effectsStandard,n));
+  std::printf("  story-specific code:       %zu dialogs, %zu distinct script functions\n", effectsBespoke, bespoke.size());
+  std::printf("  change the chapter:        %zu\n", chapterChange);
+  std::printf("  write globals:             %zu\n", writing);
+  std::printf("story state\n");
+  std::printf("  globals read by conditions:    %zu (MIS_* %zu)\n", condReads.size(), mis(condReads));
+  std::printf("  globals written by dialogs:    %zu (MIS_* %zu)\n", infoWrites.size(), mis(infoWrites));
+  std::printf("  both (dialog-to-dialog state): %zu (MIS_* %zu)\n", storyVars.size(), mis(storyVars));
+
+  if(top>0) {
+    printTop("condition externals",   condExternals, top);
+    printTop("condition script calls", condCalls,    top);
+    printTop("condition members",     condMembers,   top);
+    printTop("information externals", infoExternals, top);
+    printTop("information script calls", infoCalls,  top);
+    printTop("story-specific script calls", bespoke, top);
+    }
+  return 0;
+  }
