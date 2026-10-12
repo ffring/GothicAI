@@ -1955,7 +1955,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       return;
       }
     n->startDialog(pl);
-    say("dialog " + std::string(n->displayName()));
+    say("dialog " + symName(w,n));
     }
   else if(c=="choose") {
     // choose <n>: runs the n-th dialog choice (from 1, as listed) of the watched npc, as if the player picked it

@@ -367,7 +367,7 @@ def arrows(out):
     if not os.path.exists(path):
         return per
     seg, shot = None, deque()
-    with open(path) as f:
+    with open(path, errors="replace") as f:  # names of the game's npcs come in its codepage
         for line in f:
             line = line.strip()
             if line.startswith("rec stop"):
