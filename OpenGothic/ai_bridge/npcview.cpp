@@ -136,6 +136,11 @@ void writeLook(Writer& w, World& world, Npc& self, Npc& other, float dist) {
     }
   if(auto partner = other.talkPartner())
     str(w,"talking_to",npcId(world,*partner));
+  if(other.guild()<GIL_SEPERATOR_HUM) {
+    // where a person is: what the server remembers it was seen at (v12)
+    if(auto wp = world.findWayPoint(other.position()))
+      str(w,"waypoint",wp->name);
+    }
   }
 
 void writeView(Writer& w, World& world, Npc& npc) {
@@ -160,6 +165,8 @@ void writeView(Writer& w, World& world, Npc& npc) {
   writeItem(w,world,"in_hands",npc.inventory().stateSlotItem());
   w.Key("hp");     w.Int(npc.attribute(ATR_HITPOINTS));
   w.Key("hp_max"); w.Int(npc.attribute(ATR_HITPOINTSMAX));
+  const auto now = world.time();  // the game's clock, in minutes since the first day began (v12)
+  w.Key("time");   w.Int64(int64_t(now.day())*24*60+now.hour()*60+now.minute());
 
   // the player: always there (it hears him if he speaks), seen or not
   if(pl!=nullptr && pl!=&npc) {
@@ -167,7 +174,7 @@ void writeView(Writer& w, World& world, Npc& npc) {
     key(w,"hero");
     w.StartObject();
     writeLook(w,world,npc,*pl,dist);
-    w.Key("seen"); w.Bool(dist<=SightMax && npc.canSeeNpc(*pl,false));
+    w.Key("seen"); w.Bool(npcSees(npc,*pl));
     w.EndObject();
     }
 
@@ -196,6 +203,10 @@ void writeView(Writer& w, World& world, Npc& npc) {
   }
 
 }
+
+bool npcSees(const Npc& self, const Npc& other) {
+  return self.qDistTo(other)<=SightMax*SightMax && self.canSeeNpc(other,false);
+  }
 
 NpcView::NpcView(Emit emit):emit(std::move(emit)) {
   }

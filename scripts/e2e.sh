@@ -25,6 +25,10 @@
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
 #       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
 #       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#   seen: what npc's saw (v12): Lobart keeps when, where and how he saw the hero on his farm; the hero goes to
+#       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
+#       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
+#       story_state's `seen` (check_claim) is the engine's sight
 #   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
 #       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud

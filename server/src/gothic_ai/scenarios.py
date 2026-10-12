@@ -49,6 +49,7 @@ from .protocol import (
     ThreatControlCmd,
 )
 from .quests import SEE_CM, QuestBoard
+from .sightings import Sightings
 from .social import TICK_S, Rumors
 from .story import StoryPatches
 from .talk import TalkDesk
@@ -2382,6 +2383,179 @@ async def see_perception(
         said.append(f"{who}: {sight.place if sight else '(no view)'}" + ("" if place else " [no name]"))
     named = [line for line in said if "[no name]" not in line and "(no view)" not in line and ": " in line]
     check("places", len(named) == 4, " | ".join(said))
+    return _logged(results)
+
+
+TOWNSFOLK = ("MIL_319_PABLO", "VLK_417_CONSTANTINO", "VLK_424_ALWIN")  # in the street by Harad's smithy
+
+
+async def seen_memory(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    farmer: str = LOBART,
+    smith: str = "VLK_412_HARAD",
+    slot: int = 7,
+) -> dict[str, str]:
+    """What npc's saw (wave 1 step 6), on the game. At eight in the morning the hero stands before Lobart on
+    his farm: Lobart keeps the sighting — when, where by name, how the hero looked. The hero goes to the city
+    (Harad sees him there), an hour passes, he comes back and tells Lobart he was in the city all morning:
+    Lobart saw him on the farm an hour ago and catches the lie (`catch_lie`; the model scripted unless
+    LLM=chatgpt) — his trust, wariness, a rumor. The memory follows the save. The sight of check_claim is the
+    engine's: what story_state says the townsman sees is what his view sees."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    desk = sightings.desk
+    chronicle = sightings.chronicle
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+
+    # 1. the morning on the farm: Lobart sees the hero
+    await link.debug("time", hour=8, minute=0)
+    await link.debug("teleport", near=farmer, distance=300)
+    if not await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 20):
+        return _logged({"farmer": f"failed ({farmer} is not around the hero)"})
+    await asyncio.sleep(2)
+    view = await desk.fresh(farmer)
+    hero = view.hero if view is not None else None
+    check(
+        "time_in_view",
+        view is not None and view.time is not None and hero is not None and hero.waypoint is not None,
+        f"time {view.time if view else None}, hero at {hero.waypoint if hero else None}",
+    )
+    seen = await _until(lambda: bool(sightings.hero_trail(farmer)), 5)
+    first = sightings.hero_trail(farmer)[0] if seen else None
+    check(
+        "sighting",
+        first is not None and not first.places[0].startswith("у точки"),
+        sightings.words(first) if first else "Lobart kept nothing",
+    )
+
+    # 2. to the city: someone there turns to the man who came up and sees him; Lobart's sighting is over
+    tried, who = [], []
+    for townsman in (smith, *TOWNSFOLK):
+        try:
+            # not stopped for a scripted talk (Pablo's «you are wanted»): it would hold the game from saving
+            await link.debug("skip_important", near=townsman)
+            await link.debug("teleport", near=townsman, distance=300)
+        except GameError as err:
+            tried.append(f"{townsman}: {err}")
+            continue
+        await asyncio.sleep(1)
+        await link.npc_act(townsman, "turn_to")
+        await _until(lambda: [n for n in sightings.witnesses() if n != farmer.upper()], 4)
+        view = await desk.fresh(townsman)
+        tried.append(f"{townsman} {view.state if view else '?'}/{view.body if view else '?'}")
+        who = [n for n in sightings.witnesses() if n != farmer.upper()]
+        if who:
+            smith = townsman
+            break
+    check(
+        "elsewhere",
+        bool(who) and all(not sightings.hero_trail(n)[0].places[0].startswith("у точки") for n in who),
+        "; ".join(f"{n}: {sightings.words(sightings.hero_trail(n)[0])}" for n in who[:3])
+        or f"nobody saw him ({', '.join(tried)})",
+    )
+    # check_claim's sight is the engine's: story_state `seen` agrees with what that one's view sees
+    view = await desk.fresh(smith)
+    near = [o.id for o in (view.sees if view else []) if o.kind == "human"][:3]
+    around = [p["npc"] for p in await link.story_nearby(smith, 2000)]
+    unseen = [n for n in around if n not in near and n.upper() != smith.upper()][:3]
+    far = "NONE_100_XARDAS"
+    asked = [*near, *unseen, far]
+    state = await link.story_state(npcs=asked, near=smith)
+    said = {n: (state.get("npcs", {}).get(n) or {}).get("seen") for n in asked}
+    agree = (
+        bool(near)
+        and sum(1 for n in near if said[n]) >= len(near) - 1  # one may have moved meanwhile
+        and sum(1 for n in unseen if said[n] is False) >= len(unseen) - 1
+        and said[far] is False
+    )
+    check("story_state_sight", agree, f"in the view {near}, not {unseen}: {said}")
+
+    # 3. an hour later, back on the farm
+    morning = first.end if first is not None else 0
+    hour, minute = divmod(morning % 1440 + 60, 60)
+    await link.debug("time", hour=hour, minute=minute)
+    await asyncio.sleep(2)  # the pushes in the city carry the new time: Lobart's sighting is over
+    await link.debug("teleport", near=farmer, distance=300)
+    back = await _until(lambda: len(sightings.hero_trail(farmer)) >= 2, 10)
+    # whom he talks to is who is before him now (the roster comes once a second)
+    await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 10)
+    await asyncio.sleep(1.5)
+    trail = sightings.hero_trail(farmer)
+    check(
+        "back",
+        back and trail[0].start - trail[1].end >= 55,
+        " | ".join(
+            f"{s.start % 1440 // 60:02d}:{s.start % 60:02d}–{s.end % 1440 // 60:02d}:{s.end % 60:02d}"
+            for s in trail[:3]
+        ),
+    )
+
+    # 4. the lie: «I was in the city all morning»
+    name = talk.people[farmer].name if farmer in talk.people else "Лобарт"
+    await desk.fresh(farmer)
+    situation = sightings.situation(farmer) or ""
+    sid = next((m.group(1) for m in re.finditer(r"- (В\d): [^\n]*около часа назад", situation)), "В2")
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    script = None
+    if isinstance(dialogue.llm, FakeBackend):
+        catch = FakeStep(
+            "Врёшь! Я тебя час назад здесь, на ферме, видел.",
+            [ToolCall("catch_lie", {"said": "всё утро был в городе", "seen": sid})],
+        )
+        dialogue.llm = script = ClaimScript(said=[("город", catch)], told=[], default="Ну?", only=name)
+    await link.debug("type", text=f"{name}, я всё утро был в городе, только что оттуда.")
+    caught = await _until(lambda: any(f.get("said") for f in chronicle.facts("caught")), 60)
+    if script is not None:
+        request = str(script.calls[0][1]) if script.calls else ""
+        check(
+            "in_the_turn",
+            "Что ты видел сам" in request and f"{sid}: сегодня" in request and "около часа назад" in request,
+            next((line for line in situation.splitlines() if line.startswith(f"- {sid}")), situation[:200]),
+        )
+    fact = next((f for f in chronicle.facts("caught") if f.get("said")), None)
+    conv = dialogue.conversations.get(farmer)
+    replies = [e.content for e in conv.memory.entries if e.role == "assistant"][-2:] if conv else []
+    check("caught", caught, f"{fact.get('title')!r}: {fact.get('how')}; said {replies}" if fact else replies)
+    check(
+        "wary", conv is not None and conv.intent.attitude in ("wary", "hostile"), conv.intent if conv else ""
+    )
+    lied = Trust(chronicle).of(farmer).lied
+    check("trust", bool(lied), lied)
+
+    # 5. the memory follows the save
+    head = sightings.memory.head(link.session.branch) if link.session else 0
+    await asyncio.sleep(0.5)  # the game has the head by now
+    for attempt in range(30):
+        try:
+            saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+            await link.debug("save", slot)
+            break
+        except GameError as err:
+            saving.cancel()
+            if attempt == 29:
+                raise
+            log.info("save refused (%s), retrying", err)
+            await asyncio.sleep(2)
+    saved = await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    session = await loaded
+    await link.wait_world()
+    trail = sightings.hero_trail(farmer)
+    check(
+        "follows_the_save",
+        saved.seq >= head and session.branch != saved.branch and len(trail) >= 2,
+        f"{session.branch} from {session.parent}@{session.parent_seq}: {len(trail)} sighting(s) of the hero",
+    )
+
     return _logged(results)
 
 

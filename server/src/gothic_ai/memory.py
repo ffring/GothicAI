@@ -6,9 +6,9 @@ after that save is forgotten, exactly like in the game world. Each branch holds 
 events it inherited, which keeps reads to one branch.
 
 Events per npc: dialogue messages (`user` = the hero, `assistant` = the npc, `developer` = notes),
-summaries that fold older messages into a short recollection, and the npc's intents (JSON, see
-executor.py): the latest one is what the npc wants now. Events of the branch as a whole: patches of the
-story graph (story.py), which follow the saves the same way.
+summaries that fold older messages into a short recollection, the npc's intents (JSON, see
+executor.py): the latest one is what the npc wants now, and what it saw (JSON, sightings.py). Events of
+the branch as a whole: patches of the story graph (story.py), which follow the saves the same way.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS events (
     branch    TEXT NOT NULL,
     seq       INTEGER NOT NULL,
     npc       TEXT NOT NULL,
-    kind      TEXT NOT NULL,          -- message | summary | intent | patch, fact (npc '*': JSON)
+    kind      TEXT NOT NULL,          -- message | summary | intent | seen | patch, fact (npc '*': JSON)
     role      TEXT,                   -- message: user | assistant | developer
     content   TEXT NOT NULL,
     covers    INTEGER,                -- summary: messages up to this seq are folded in
@@ -191,6 +191,17 @@ class MemoryStore:
                 break
             found.setdefault(int(seq), Recollection(int(seq), role, content, game_time))
         return sorted(found.values(), key=lambda r: r.seq)
+
+    def add_seen(self, branch: str, npc: str, sighting: str) -> int:
+        """Something the npc saw itself (JSON, sightings.py); a later record of the same sighting wins."""
+        return self._insert(branch, npc, "seen", None, sighting, None, None)
+
+    def seen(self, branch: str, npc: str) -> list[str]:
+        """What the npc saw, oldest first (inherited records included)."""
+        rows = self._db.execute(
+            "SELECT content FROM events WHERE branch=? AND npc=? AND kind='seen' ORDER BY seq", (branch, npc)
+        ).fetchall()
+        return [row[0] for row in rows]
 
     def add_fact(self, branch: str, fact: str) -> int:
         """Something that really happened on this branch (JSON, chronicle.py): what code knows as true."""
