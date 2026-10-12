@@ -204,6 +204,7 @@ class PerceptionDesk:
         self.places = places  # the book of place names (places.py); without it, waypoints
         self.clock = clock
         self._views: dict[str, tuple[float, NpcView]] = {}
+        self.on_view: list[Callable[[NpcView], None]] = []  # every view that comes, pushed or asked
         link.listeners.append(self._on_message)
 
     def _on_message(self, msg: GameMessage) -> None:
@@ -212,6 +213,7 @@ class PerceptionDesk:
                 now = self.clock()
                 for v in msg.views:
                     self._views[v.npc.upper()] = (now, v)
+                    self._seen(v)
             case Session() | Loading():
                 self._views.clear()
 
@@ -230,7 +232,15 @@ class PerceptionDesk:
         views = await self.link.npc_view([npc])
         for v in views:
             self._views[v.npc.upper()] = (self.clock(), v)
+            self._seen(v)
         return self.view(npc)
+
+    def _seen(self, view: NpcView) -> None:
+        for listener in self.on_view:
+            try:
+                listener(view)
+            except Exception:
+                log.exception("a view listener failed")
 
     # --- who is who ------------------------------------------------------------------------------
 

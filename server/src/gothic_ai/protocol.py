@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 12  # v10: deals, v11: what npc's perceive, v12: fillers
+PROTOCOL_VERSION = 13  # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: fillers
 
 # --- game -> server -----------------------------------------------------------
 
@@ -245,6 +245,7 @@ class NpcDied(_GameMessage):
 class TagNear(_GameMessage):
     npc: str
     distance: float  # cm, to the nearest living creature of the tag
+    seen: float | None = None  # cm, to the nearest living one the npc sees (v12); None: it sees none
 
 
 class TagState(_GameMessage):
@@ -328,6 +329,7 @@ class Look(_GameMessage):
     armor: ItemRef | None = None
     in_hands: ItemRef | None = None
     talking_to: str | None = None
+    waypoint: str | None = None  # a person's nearest waypoint (v12): where it was seen
 
 
 class HeroLook(Look):
@@ -351,6 +353,7 @@ class NpcView(_GameMessage):
     in_hands: ItemRef | None = None
     hp: int = 0
     hp_max: int = 0
+    time: int | None = None  # the game's clock (v12): minutes since the first day began
     hero: HeroLook | None = None
     sees: list[Look] = Field(default_factory=list)
 
@@ -848,10 +851,11 @@ class DealHideCmd(_Command):
 
 class StoryStateCmd(_Command):
     """What the director's rules read (v8, stage 5). `result.value`: {"vars": {name: int}, "npcs": {symbol:
-    {"state": "alive" | "dead" | "absent", "name", "distance": cm from `near`, alive or dead, if given}},
-    "knows": {dialog: bool} (the hero has heard it), "symbols": {name: "npc" | "item" | "info" | "var" |
-    "const" | "func" | "other"} (unknown names are left out), "items": {instance: name in the game},
-    "dialog": bool, "cutscene": bool, "day", "hour", "minute": the game time}."""
+    {"state": "alive" | "dead" | "absent", "name", "distance": cm from `near`, alive or dead, and "seen":
+    `near` sees it now (v12), if given}}, "knows": {dialog: bool} (the hero has heard it), "symbols": {name:
+    "npc" | "item" | "info" | "var" | "const" | "func" | "other"} (unknown names are left out), "items":
+    {instance: name in the game}, "dialog": bool, "cutscene": bool, "day", "hour", "minute": the game
+    time}."""
 
     type: Literal["story_state"] = "story_state"
     req: str

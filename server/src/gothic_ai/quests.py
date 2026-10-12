@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PAY_REWARD = "pay_reward"
-SEE_CM = 2000  # the giver sees living creatures of the quest this close
+SEE_CM = 2000  # the giver sees living creatures of the quest this close (and not behind a wall)
 ATTACK_CM = 1500  # it goes for the hero if he is this close when it finds out
 RUMOR_CM = 2000  # who hears the giver's anger
 REFUSE_TALK_S = 300  # how long it won't talk in the game's own dialogs
@@ -204,7 +204,7 @@ class QuestBoard:
         if q.paid:
             return ToolOutcome("Отклонено: за это ты уже заплатил.", "rejected")
         # what it sees for itself, it does not take on his word
-        d = self.chronicle.near(q.tag, q.giver)
+        d = self.chronicle.seen(q.tag, q.giver)
         if d is not None and d <= SEE_CM:
             return ToolOutcome(f"Отклонено: одно из них живо — у тебя на глазах, в {_m(d)} м.", "rejected")
         if self.trust.broken(q.giver) and not self.done(q):
@@ -252,7 +252,7 @@ class QuestBoard:
             await asyncio.sleep(CHECK_EVERY_S)
             for q in list(self.quests.values()):
                 if q.lie and not q.found_out:
-                    d = self.chronicle.near(q.tag, q.giver)
+                    d = self.chronicle.seen(q.tag, q.giver)
                     if d is not None and d <= SEE_CM:
                         await self.found_out(q, f"увидел их живыми в {_m(d)} м от себя")
 
@@ -276,13 +276,18 @@ class QuestBoard:
 
 @dataclass
 class Lie:
-    """A lie about a quest that is found out."""
+    """A lie about a quest that is found out, or his words that the npc saw were false (sightings.py)."""
 
-    quest: str  # its id: Q1 for the director's, MIS_* for the scripts'
+    quest: str  # its id: Q1 for the director's, MIS_* for the scripts', SAID_* for words
     giver: str
     giver_name: str
-    title: str
+    title: str  # the quest's title; his words, for words
     reward: str  # what the hero took for it
+    said: bool = False  # the lie is his words, not a quest
+
+    def claim(self) -> str:
+        """What he claimed, as one says it after «он»: «уверял, что сделал «…»» or «сказал «…»»."""
+        return f"сказал «{self.title}»" if self.said else f"уверял, что сделал «{self.title}»"
 
 
 async def unmask(
@@ -355,6 +360,7 @@ async def caught(
             "name": lie.giver_name,
             "title": lie.title,
             "how": how,
+            **({"said": True} if lie.said else {}),
             **day,
         }
     )
@@ -364,8 +370,7 @@ async def caught(
     dialogue.remember(
         lie.giver,
         lie.giver_name,
-        f"Ты уличил героя во лжи: он уверял, что сделал «{lie.title}», а ты {how}. На слово ты ему больше "
-        "не веришь",
+        f"Ты уличил героя во лжи: он {lie.claim()}, а ты {how}. На слово ты ему больше не веришь",
     )
     conv = dialogue.open(lie.giver, lie.giver_name)
     if conv.intent.attitude != "hostile":
@@ -376,10 +381,7 @@ async def caught(
     except (GameError, TimeoutError) as err:
         log.warning("lie %s: rumor: %s", lie.quest, err)
         people = []
-    rumor = (
-        f"Слух: {lie.giver_name} при тебе уличил героя во лжи — тот уверял, что сделал «{lie.title}», "
-        "а это неправда"
-    )
+    rumor = f"Слух: {lie.giver_name} при тебе уличил героя во лжи — тот {lie.claim()}, а это неправда"
     _tell(dialogue, chronicle, lie, "caught", rumor, people, day)
 
 
@@ -403,6 +405,7 @@ def _tell(
                 "about": lie.giver,
                 "about_name": lie.giver_name,
                 "title": lie.title,
+                **({"said": True} if lie.said else {}),
                 "from": lie.giver,
                 "from_name": lie.giver_name,
                 "to": p["npc"],

@@ -127,6 +127,7 @@ class Lie:
     victim_name: str
     title: str
     reward: str = ""
+    said: bool = False  # the lie was his words (title), seen false (sightings.py), not a quest
 
     @property
     def key(self) -> str:
@@ -136,6 +137,8 @@ class Lie:
         who = f"обманул человека по имени {self.victim_name}"
         if self.kind == "found_out":
             return f"{who}: взял награду ({self.reward or 'какую-то'}) за «{self.title}», а дела не сделал"
+        if self.said:
+            return f"{who}: сказал ему «{self.title}», а тот своими глазами видел, что это неправда"
         return f"{who}: уверял, что сделал «{self.title}», а это неправда; награды не получил"
 
 
@@ -296,6 +299,7 @@ class Amends:
                     f.get("name") or f.get("npc", ""),
                     f.get("title") or f.get("quest", ""),
                     self._reward(f.get("quest", "")),
+                    said=bool(f.get("said")),
                 )
                 self.lies.setdefault(lie.key, lie)
                 self._queue.put_nowait((lie.key, lie.victim, "lied"))
@@ -566,6 +570,7 @@ class Amends:
                         f.get("name") or f.get("npc", ""),
                         f.get("title") or f.get("quest", ""),
                         self._reward(f.get("quest", "")),
+                        said=bool(f.get("said")),
                     )
                     self.lies.setdefault(lie.key, lie)
                 case "amends_open":

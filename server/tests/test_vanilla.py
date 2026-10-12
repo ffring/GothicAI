@@ -207,7 +207,13 @@ async def test_a_lie_about_a_killing_is_found_out_when_the_victim_turns_up(graph
         assert (watch["npcs"], watch["owner"]) == ([LOBART], "vanilla")
 
         run = asyncio.create_task(vanilla.run())
-        near = [{"npc": LOBART, "distance": 900}]
+        near = [{"npc": LOBART, "distance": 900}]  # behind a wall: Lobart does not see him
+        await fake.send(
+            type="story_world", tags=[{"tag": f"{KILL}_ALIVE", "alive": 1, "dead": 0, "near": near}]
+        )
+        await asyncio.sleep(1.5)
+        assert chronicle.facts("found_out") == []
+        near = [{"npc": LOBART, "distance": 900, "seen": 900}]
         await fake.send(
             type="story_world", tags=[{"tag": f"{KILL}_ALIVE", "alive": 1, "dead": 0, "near": near}]
         )
@@ -290,7 +296,7 @@ async def test_someone_alive_before_its_eyes_is_not_taken_on_word(graph):
     try:
         dialogue.open(LOBART, "Лобарт")
         await vanilla.prepare(LOBART)
-        assert "у тебя на глазах (до 20 м): Бандит — жив" in vanilla.situation(LOBART)
+        assert "у тебя на глазах: Бандит — жив" in vanilla.situation(LOBART)
         assert [t.name for t in vanilla.tools(LOBART)] == ["accept_quest", "expose_lie"]
 
         await dialogue.say_as_player(LOBART, "Бандит мёртв, я его убил.")
@@ -342,6 +348,34 @@ async def test_the_npc_goes_to_see_and_catches_the_lie(graph):
         await _until(lambda: len(llm.calls) >= 2)  # he says what he thinks of it
         assert "Он тебе солгал" in str(llm.calls[-1][1])
         assert chronicle.facts("claim") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_behind_a_wall_is_not_before_its_eyes(graph):
+    """The bandit is 10 m from Lobart, behind the barn: Lobart does not see him (the engine's sight), so he
+    can neither call it a lie to his face nor refuse on what he sees; he goes, looks that way, and sees."""
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    check = FakeStep("Пойду гляну.", [ToolCall("check_claim", {"quest": KILL}, "c1")])
+    llm = FakeBackend(script=[check, FakeStep("Ах ты лжец!")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "alive", "name": "Бандит", "distance": 1000, "seen": False}
+    try:
+        await vanilla.link.attach(LOBART)
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        situation = vanilla.situation(LOBART) or ""
+        assert "на глазах" not in situation
+        assert "Бандит — в 10 м, отсюда не видно: можешь сходить и посмотреть сам" in situation
+        assert "check_claim" in [t.name for t in vanilla.tools(LOBART)]
+
+        await dialogue.say_as_player(LOBART, "Бандит мёртв.")
+        await _until(lambda: chronicle.facts("caught") != [])
+        acts = [(m["action"], m["args"].get("npc")) for m in fake.received if m["type"] == "action"]
+        assert acts[:2] == [("go_to_npc", BANDIT), ("turn_to", BANDIT)]  # there, and looks that way
+        assert "сходил проверить и увидел: Бандит жив, в 18 м" in chronicle.facts("caught")[0]["how"]
     finally:
         await link_cm.__aexit__(None, None, None)
 

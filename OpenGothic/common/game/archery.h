@@ -37,6 +37,9 @@ namespace Archery {
   void  setEnabled(bool e);
 
   Stats stats(Npc& npc, const Item* weapon);
+  // the bow canted for a quick shot (k 0..1): drawn short and fast, no anchor at the face, the eye not over
+  // the arrow - quick to come to the aim, loose far off; a crossbow is not canted
+  Stats canted(const Stats& s, float k);
   // the arrow's speed and damage at a part of the full draw
   float speedAt(const Stats& s, float draw);
   float damageAt(float draw);

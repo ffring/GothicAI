@@ -10,7 +10,8 @@ does not have are not, and that is a lie, written down with the truth.
 Whether the npc believes him is up to its model, in character, but on what the code shows it, so the player
 can read and play it:
 - what it sees for itself: the items he has on him (he hands them over, the rest is his word), the people
-  that must be dead — before its eyes (20 m), a short walk away (60 m), or too far to check;
+  that must be dead — before its eyes (the engine's own sight: not behind a wall), a short walk away (60 m),
+  or too far to check;
 - what it knows of his word (trust.py): lies of his it knows of, rumors, claims of his that were true.
 What it sees it does not take on his word: with someone alive before its eyes, or once he lied to it and
 it does not see the claim true, `accept_quest` is refused. It may go and see for itself (`check_claim`):
@@ -19,7 +20,7 @@ when it sees the claim false (`expose_lie`). A lie seen through before it pays c
 rumor (quests.caught); a lie believed is found out later by a rule:
 - fetch (bring items): the next morning the npc misses what he did not bring, unless a later step of the
   quest got it;
-- kill (someone must be dead): the npc sees them alive within 20 m;
+- kill (someone must be dead): the npc sees them alive within 20 m (and not behind a wall);
 - other claims (talked to someone, a variable) are not found out by a rule yet.
 Then the same happens as with the director's quests (quests.unmask): memory, hostility, the scripts, rumors.
 """
@@ -138,10 +139,18 @@ class Target:
     name: str
     alive: bool
     distance: float | None  # cm from the npc; None: not in this world
+    visible: bool | None = None  # the npc sees it now (the engine's sight); None: unknown, by distance
 
     @property
     def seen(self) -> bool:
-        return self.distance is not None and self.distance <= SEE_CM
+        if self.distance is None:
+            return False
+        return self.visible if self.visible is not None else self.distance <= SEE_CM
+
+    @property
+    def walk(self) -> bool:
+        """Not seen from here, but a short walk away."""
+        return not self.seen and self.distance is not None and self.distance <= CHECK_CM
 
 
 @dataclass
@@ -199,7 +208,7 @@ class Offer:
         """The nearest of the claim's people the npc does not see from here but could go and see."""
         if self.seen_false() is not None:
             return None
-        near = [t for t in self.targets if t.distance is not None and SEE_CM < t.distance <= CHECK_CM]
+        near = [t for t in self.targets if t.walk]
         return min(near, key=lambda t: t.distance or 0) if near else None
 
     def evidence(self) -> str | None:
@@ -225,15 +234,15 @@ class Offer:
                 )
                 if group
             )
-            parts.append(f"у тебя на глазах (до {_m(SEE_CM)} м): {what}")
-        near = [t for t in self.targets if t.distance is not None and SEE_CM < t.distance <= CHECK_CM]
+            parts.append(f"у тебя на глазах: {what}")
+        near = [t for t in self.targets if t.walk]
         if near:
             ds = sorted(_m(t.distance or 0) for t in near)
             span = f"{ds[0]}–{ds[-1]}" if ds[0] != ds[-1] else f"{ds[0]}"
             parts.append(
                 f"{_names(near)} — в {span} м, отсюда не видно: можешь сходить и посмотреть сам ({CHECK})"
             )
-        far = [t for t in self.targets if t.distance is None or t.distance > CHECK_CM]
+        far = [t for t in self.targets if not t.seen and not t.walk]
         if far:
             parts.append(f"{_names(far)} — далеко, проверить сам не можешь")
         return "; ".join(parts) or None
@@ -610,6 +619,8 @@ class VanillaQuests:
         held = await self.dialogue.borrow_body(conv, "check")
         try:
             walked = await self._go(conv, target.npc, LOOK_CM) if held else "ты был занят"
+            if held and not walked:
+                await self._face(conv, target.npc)  # to see it, it looks that way
             try:
                 people = (await self.link.story_state(npcs=offer.claim.dead, near=offer.npc)).get("npcs", {})
             except (GameError, TimeoutError) as err:
@@ -648,6 +659,12 @@ class VanillaQuests:
         except (GameError, TimeoutError) as err:
             return str(err) or type(err).__name__
 
+    async def _face(self, conv: Conversation, npc: str) -> None:
+        try:
+            await self.link.act(conv.npc, "turn_to", timeout=10.0, npc=npc)
+        except (GameError, TimeoutError) as err:
+            log.info("vanilla: %s does not turn to %s: %s", conv.npc, npc, err)
+
     def _react(self, conv: Conversation, cue: str) -> None:
         """The npc may say what it thinks of what it saw (the consequences are done already)."""
         self.dialogue.event_turn(conv.npc, f"[{cue}]", tools=("set_intent",))
@@ -661,7 +678,7 @@ class VanillaQuests:
             await asyncio.sleep(CHECK_EVERY_S)
             for t in list(self.told.values()):
                 if t.lie and not t.found_out and t.tag:
-                    d = self.chronicle.near(t.tag, t.npc)
+                    d = self.chronicle.seen(t.tag, t.npc)
                     if d is not None and d <= SEE_CM:
                         await self.found_out(
                             t,
@@ -884,9 +901,13 @@ def _takes(effects: list[dict[str, Any]], have: dict[str, int], truth: bool) -> 
 
 
 def _target(npc: str, state: dict[str, Any]) -> Target:
-    d = state.get("distance")
+    d, seen = state.get("distance"), state.get("seen")
     return Target(
-        npc, state.get("name") or npc, state.get("state") == "alive", None if d is None else float(d)
+        npc,
+        state.get("name") or npc,
+        state.get("state") == "alive",
+        None if d is None else float(d),
+        None if seen is None else bool(seen),
     )
 
 
