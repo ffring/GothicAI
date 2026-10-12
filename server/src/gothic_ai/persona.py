@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
+from . import characters
 from .brain.day import Habit
+from .characters import Card
 from .gamedata.ou import load_npc_lines
 from .protocol import Mood
 
@@ -67,6 +69,10 @@ RULES = """Как отвечать:
   цели — в обстановке. Цели вроде «драться» или «бежать» действуют, пока идёт само событие.
 - give_item — отдать герою предмет из своего инвентаря (список в обстановке); тело подойдёт и отдаст.
 - recall — вспомнить подробности прежних встреч и того, что знаешь: сначала только «Хм…», потом вызов.
+- Купить, продать, взять плату или штраф, простить за плату, дать в долг — это сделка (propose_deal): так
+  герой выкладывает свои вещи и деньги, а ты — свои. Осматривать его товар или пересчитывать монеты заранее
+  не нужно: если у героя нет того, что он отдаёт, сделка просто не состоится. Сошлись в цене — сразу
+  предлагай сделку, не тяни.
 - Если вызов отклонят, тебе сразу скажут почему: поправься одной короткой фразой, без извинений.
 - Итог действия придёт ремаркой.
 - Делай только то, что сделал бы {name}. Не обещай того, чего не можешь (колдовать, создавать предметы)."""
@@ -121,8 +127,13 @@ class Persona:
     traits: str | None = None  # English, for the behavioral model
 
 
-def render_instructions(npc: str, name: str, sample_lines: list[str]) -> str:
-    bio = BIOGRAPHIES.get(npc.upper(), f"Ты — {name}, житель острова Хоринис.")
+def render_instructions(npc: str, name: str, sample_lines: list[str], card: Card | None = None) -> str:
+    """Who the npc is: a hand-written biography, else its character card (characters.py), else its name."""
+    bio = BIOGRAPHIES.get(npc.upper())
+    if bio is None:
+        bio = (
+            f"{card.ru}\n{card.traits_ru()}" if card is not None else f"Ты — {name}, житель острова Хоринис."
+        )
     parts = [
         f"Ты играешь персонажа по имени {name} в мире Gothic 2: Ночь Ворона (остров Хоринис). "
         "С тобой говорит главный герой — безымянный герой.",
@@ -145,8 +156,9 @@ def pick_samples(lines: list[str], n: int = SAMPLE_LINES) -> list[str]:
 
 
 class PersonaProvider:
-    def __init__(self, game_dir: Path | None) -> None:
+    def __init__(self, game_dir: Path | None, cards: dict[str, Card] | None = None) -> None:
         self.game_dir = game_dir
+        self.cards = characters.load() if cards is None else cards  # gamedata/characters.json
 
     def get(self, npc: str, name: str) -> Persona:
         return self._get(npc.upper(), name)
@@ -158,10 +170,11 @@ class PersonaProvider:
             lines = [text for _, text in load_npc_lines(self.game_dir, npc)]
             samples = pick_samples(lines)
             log.info("persona %s: %d original lines, %d samples", npc, len(lines), len(samples))
+        card = self.cards.get(npc)
         return Persona(
             npc,
             name,
-            render_instructions(npc, name, samples),
+            render_instructions(npc, name, samples, card),
             VOICES.get(npc, DEFAULT_VOICE),
-            TRAITS.get(npc),
+            TRAITS.get(npc) or (card.en if card else None),
         )

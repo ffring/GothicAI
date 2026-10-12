@@ -19,6 +19,7 @@ from . import npc_tools, places, scenarios
 from .amends import Amends
 from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
+from .brain.situation import SituationBuilder
 from .budget import Budget
 from .chronicle import Chronicle
 from .deals import Deals
@@ -555,6 +556,8 @@ async def serve(args: argparse.Namespace) -> int:
                 routine_of=link.routine,
                 habits_of=habits_of,
                 view_of=perception.english,
+                # each npc's character, from its card (characters.py)
+                builder=SituationBuilder(traits={npc: card.en for npc, card in personas.cards.items()}),
             )
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
@@ -704,6 +707,21 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.deal_window(link, dialogue, talk, deals)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario deal: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "cards":
+                if graph is None:
+                    raise SystemExit("cards need the story graph")
+                only = {n.strip().upper() for n in os.environ.get("GOTHIC_CARDS", "").split(",") if n.strip()}
+                results = await scenarios.write_cards(link, graph, llm, only or None)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario cards: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "haggle":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.haggle(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario haggle: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "debt":
                 dialogue, talk, deals = state.dialogue, state.talk, state.deals
@@ -1180,6 +1198,8 @@ def main() -> None:
             "deal_demo",
             "debt",
             "amends_deal",
+            "cards",
+            "haggle",
             "rescue",
             "rescue_self",
             "tts",
