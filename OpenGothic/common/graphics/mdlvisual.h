@@ -97,6 +97,8 @@ class MdlVisual final {
     auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
     bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string                    hitZonesDump() const;
+    // cm the bow's string goes from rest to drawn as held in the aim (its morph), 0: not known
+    float                          bowSpan() const;
     // the bow holds still in the aim: an arrow on the string
     bool                           isAimSteady() const;
     // degrees the arrow (before the sway) points off where the shot has to go, -1 not aiming
@@ -141,6 +143,11 @@ class MdlVisual final {
     Bounds                         bounds() const;
 
   private:
+    // the bow's morph that holds it drawn as the aim animation does (G2)
+    static constexpr const char* BowHeld = "S_READY";
+    // the reload brings the arrow to the string from this part of it on
+    static constexpr float       NockFrom = 0.7f;
+
     template<class View>
     struct Attach {
       size_t           boneId=size_t(-1);

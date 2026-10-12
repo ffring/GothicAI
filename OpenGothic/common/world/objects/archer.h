@@ -58,6 +58,8 @@ class Archer final {
     Stage         stage() const { return stg; }
     float         draw()  const { return drawAmt; }
     bool          isRaised() const { return stg!=Lowered; }
+    // Reloading, the bow went down for the next arrow already (it comes up and holds still after)
+    bool          isNocking() const { return stg==Reloading && unready; }
     // Where the aim sways off to: yaw (about up), pitch (+ up), radians
     Tempest::Vec2 sway()  const { return sw; }
     // How far off the arrow may go now, radians: the sway's reach, trembling, the release

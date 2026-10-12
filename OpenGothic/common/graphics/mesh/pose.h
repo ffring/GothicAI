@@ -11,6 +11,7 @@
 #include "gaze.h"
 #include "lean.h"
 #include "aim.h"
+#include "bowdraw.h"
 #include "flinch.h"
 #include "resources.h"
 
@@ -101,6 +102,10 @@ class Pose final {
     Aim&               aimIk() { return aim; }
     const Aim&         aimIk() const { return aim; }
     bool               updateAim(const Aim::Input& in);
+    // How far the animation of that name has played, 0..1; -1: it does not play
+    float              animProgress(std::string_view name, uint64_t tickCount) const;
+    BowDraw&           bowDrawIk() { return bowDraw; }
+    bool               updateBowDraw(const BowDraw::Input& in);
     Flinch&            flinchIk() { return flinch; }
     bool               updateFlinch(const Flinch::Input& in);
     bool               updateLean(const Lean::Input& in);
@@ -187,6 +192,7 @@ class Pose final {
     Lean                            lean;
     AnimBlend                       blend;
     Aim                             aim;
+    BowDraw                         bowDraw;
     Flinch                          flinch;
 
     size_t                          numBones = 0;

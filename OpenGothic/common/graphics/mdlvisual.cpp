@@ -674,11 +674,33 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         }
       }
     }
-  const bool changed = pose.updateAim(in);
+  bool changed = pose.updateAim(in);
   if(npc.isPlayer())
     aim.probe(Aim::playerProbe);
   if(&npc==Aim::probeNpc)
     aim.probe(Aim::subjectProbe);
+
+  // a bow drawn by hand: the hand goes to the string as far as it is not drawn, the string with it (a
+  // crossbow is not drawn). The bow of G2 is drawn by its morph: S_READY holds it as the animation does
+  auto&          ar = npc.archer();
+  BowDraw::Input bd;
+  bd.dt     = dt;
+  bd.active = manual && in.active && ws==WeaponState::Bow;
+  bd.ready  = ar.stage()==Archer::Nocked || ar.stage()==Archer::Drawing || ar.stage()==Archer::Held;
+  bd.draw   = ar.draw();
+  bd.span   = bowSpan();
+  if(ar.isNocking()) {
+    // the arrow is brought to the string in the last part of the reload, the bow held still after it
+    const float p = pose.animProgress("T_BOWRELOAD",npc.world().tickCount());
+    bd.nock = p<0.f ? 1.f : std::clamp((p-NockFrom)/(1.f-NockFrom),0.f,1.f);
+    }
+  changed  |= pose.updateBowDraw(bd);
+  const float string = pose.bowDrawIk().string();
+  if(string>=0.f)
+    bow.view.setMMShape(BowHeld,0,0,0,string);
+  if(npc.isPlayer())
+    pose.bowDrawIk().probe(BowDraw::playerProbe);
+
   if(changed)
     view.setPose(pos,pose);
   return changed;
@@ -768,6 +790,15 @@ Vec3 MdlVisual::mapWeaponBone() const {
   if(fgtMode==WeaponState::Mage && skeleton!=nullptr)
     return mapBone(skeleton->findNode("ZS_RIGHTHAND"));
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
+  }
+
+float MdlVisual::bowSpan() const {
+  // how far the string goes from rest to held drawn: the string's middle moves the most
+  if(auto p = bow.view.protoMesh())
+    for(auto& m:p->morph)
+      if(m.name==BowHeld)
+        return m.peak;
+  return 0;
   }
 
 bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
@@ -1205,6 +1236,9 @@ void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) 
   MdlVisual::MeshAttach* mesh[] = {&head,&sword,&shield,&bow,&ammunition,&stateItm};
   for(auto i:mesh) {
     if(i->bone!=bone && !bone.empty())
+      continue;
+    // the string drawn by hand: the animation does not draw it
+    if(i==&bow && skInst->bowDrawIk().string()>=0.f)
       continue;
     i->view.startMMAnim(anim,1,uint64_t(-1));
     }

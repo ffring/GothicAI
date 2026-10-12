@@ -42,6 +42,7 @@ class StaticMesh {
 
       size_t                 index           = 0;
       std::vector<float>     strength;  // per frame: how far it moves the vertices, the strongest frame is 1
+      float                  peak            = 0;  // the farthest any vertex goes, in the mesh's units
       };
 
     struct MorphAnim {

@@ -1,0 +1,51 @@
+# Bow draw (graphics/mesh/bowdraw): the right hand draws the string by hand, the arrow with it. Close by
+# from the side and from the front: the hand going to the string after the raise, a slow draw (a novice),
+# a quick one (a master), held, the shot, the reload; a draw let down without a shot; `bowdraw off` for
+# the animation as it is (drawn fully all the time)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 100
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1000 0 0
+aimat BAU_904_BAUER body
+tap bow
+wait 1500
+cam follow 220 150 90             # the left side: the arrow's line across the frame
+cam look 145
+wait 300
+
+stats str 15 dex 15 bow 10
+rec novice_side
+volley 2 600
+stop
+
+stats str 120 dex 120 bow 100
+rec master_side
+volley 2 600
+stop
+
+# drawn a little, let go: no shot, the string goes back
+rec letdown
+volley 1 0 0.1
+wait 800
+stop
+
+bowdraw off
+rec off_side
+volley 1 600
+stop
+bowdraw on
+
+cam follow 170 150 -50            # in front, on the right: the drawing hand
+wait 300
+rec master_front
+volley 2 600
+stop

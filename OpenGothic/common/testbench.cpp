@@ -30,6 +30,7 @@
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animblend.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/bowdraw.h"
 #include "graphics/mesh/hitzones.h"
 #include "game/archery.h"
 #include "graphics/mesh/flinch.h"
@@ -928,6 +929,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
+  std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
@@ -1031,6 +1033,9 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
                mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl),
                hasCross ? spread*180.f/float(M_PI) : -1.f,moved);
+  // the hand drawing the string
+  const auto& bd = BowDraw::playerProbe;
+  std::fprintf(bench.csv,",%.3f,%.3f,%.1f,%.1f,%.1f",bd.valid ? bd.weight : -1.f,bd.draw,bd.span,bd.travel,bd.miss);
   // lips of the watched one
   const auto& lp = LipSync::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
@@ -1512,6 +1517,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(m=="on" || m=="off")
       Archery::setEnabled(m=="on"); else
       say("unknown manual command: " + line);
+    }
+  else if(c=="bowdraw") {
+    // bowdraw on|off: the hand draws the string as far as the bow is drawn (graphics/mesh/bowdraw)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      BowDraw::setEnabled(m=="on"); else
+      say("unknown bowdraw command: " + line);
     }
   else if(c=="stats") {
     // stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]: the hero's strength, dexterity, hit chances (the
@@ -2480,6 +2492,13 @@ void drawOverlay(Pixmap& pm) {
   if(mp.valid && bench.subject==nullptr) {
     std::snprintf(buf,sizeof(buf),"BOW %s D%.2f H%.1f F%.2f B%.1f%s%s A%.2f",archerStage(mp.stage),double(mp.draw),double(mp.hold),
                   double(mp.fatigue),double(mp.breath),mp.holding ? " HOLD" : "",mp.short_ ? " SHORT" : "",double(mp.amp));
+    cv.text(x,y,buf,2,{140,200,255,255});
+    y += 16;
+    }
+  const auto& bd = BowDraw::playerProbe;
+  if(bd.valid && bd.weight>0.f && bench.subject==nullptr) {
+    std::snprintf(buf,sizeof(buf),"DRAW%s W%.2f D%.2f S%.0f T%.0f M%.1f",BowDraw::isEnabled() ? "" : " OFF",double(bd.weight),
+                  double(bd.draw),double(bd.span),double(bd.travel),double(bd.miss));
     cv.text(x,y,buf,2,{140,200,255,255});
     y += 16;
     }

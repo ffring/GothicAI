@@ -156,6 +156,7 @@ void Pose::setSkeleton(const Skeleton* sk) {
   gaze.setSkeleton(skeleton);
   lean.setSkeleton(skeleton);
   aim.setSkeleton(skeleton);
+  bowDraw.setSkeleton(skeleton);
   flinch.setSkeleton(skeleton);
   trY          = skeleton->rootTr.y;
   needToUpdate = true;
@@ -425,6 +426,7 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
   lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
   ik.apply(tr,numBones,mt.at(3,1));
   aim.apply(tr,numBones);
+  bowDraw.apply(tr,numBones);
   gaze.apply(tr,numBones);
   flinch.apply(tr,numBones);
   }
@@ -842,6 +844,24 @@ bool Pose::updateFlinch(const Flinch::Input& in) {
 
 bool Pose::updateAim(const Aim::Input& in) {
   if(!aim.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
+  }
+
+float Pose::animProgress(std::string_view name, uint64_t tickCount) const {
+  for(auto& i:lay)
+    if(i.seq->name==name) {
+      const float total = i.seq->totalTime();
+      if(total<=0.f)
+        return 1;
+      return std::clamp(float(tickCount-i.sAnim)/total, 0.f, 1.f);
+      }
+  return -1;
+  }
+
+bool Pose::updateBowDraw(const BowDraw::Input& in) {
+  if(!bowDraw.update(in))
     return false;
   mkSkeleton(pos);
   return true;
