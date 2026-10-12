@@ -25,15 +25,26 @@ class Decision:
     stimuli: tuple[str, ...] = field(default_factory=tuple)  # kinds that led to it
     attitude: float | None = None  # expected level 0..4 when it was asked
     latency_ms: float = 0.0  # from the request leaving the planner to the answer
+    target: str | None = None  # whom a fight or flight is about (the newest threat's `other`)
+    args: dict[str, Any] | None = None  # a plan: the activity it chose (start_activity args)
 
 
 class Applier(Protocol):
     def apply(self, decision: Decision) -> None: ...
 
+    def verdict(self, hold: str, to: str) -> None:
+        """A held threat: `server` (the model took the body over) or `scripts` (they get it now)."""
+        ...
+
 
 class LogApplier:
     def __init__(self, keep: int = 200) -> None:
         self.recent: deque[Decision] = deque(maxlen=keep)
+        self.verdicts: deque[tuple[str, str]] = deque(maxlen=keep)
+
+    def verdict(self, hold: str, to: str) -> None:
+        self.verdicts.append((hold, to))
+        log.info("held threat %s -> %s", hold, to)
 
     def apply(self, decision: Decision) -> None:
         self.recent.append(decision)
@@ -56,6 +67,11 @@ ACTIONS: dict[str, list[tuple[str, dict[str, Any]]]] = {
     "step_away": [("turn_away", {})],
     "tell_to_leave": [("say_svm", {"svm": "GETOUTOFHERE"})],
     "thank": [("play_ani", {"name": "T_YES"})],
+    "call_help": [("say_svm", {"svm": "HELP"})],
+    "call_guards": [("say_svm", {"svm": "GUARDS"})],
+    # the game's own combat and fleeing, against the threat (protocol v6)
+    "fight": [("fight", {"npc": "{target}"})],
+    "flee": [("flee", {"npc": "{target}"})],
 }
 # "comment": the line fitting the newest event; without one the npc just looks at the player
 COMMENT_SVM = {
@@ -65,16 +81,29 @@ COMMENT_SVM = {
     "magic": "STOPMAGIC",
     "item_given": "NOTBAD",
     "attack": "NEVERHITMEAGAIN",
+    "monster_near": "HELP",
+    "monster_attack": "HELP",
+    "npc_attack": "HELP",
+    "fight_nearby": "OHMYGODITSAFIGHT",
 }
 
 
 def actions_for(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
+    if decision.question == "plan":
+        return [("start_activity", dict(decision.args))] if decision.args else []
     if decision.question != "react":
-        return []  # plans and attitudes have no game action yet
+        return []  # attitudes and escalations have no game action
     if decision.choice == "comment":
         svm = next((COMMENT_SVM[k] for k in decision.stimuli if k in COMMENT_SVM), None)
         return [("say_svm", {"svm": svm})] if svm else ACTIONS["look_at"]
-    return ACTIONS.get(decision.choice, [])
+    acts = ACTIONS.get(decision.choice, [])
+    if any(v == "{target}" for _, args in acts for v in args.values()):
+        if not decision.target:
+            return []  # a fight or flight without someone to fight or flee from
+        acts = [
+            (a, {k: decision.target if v == "{target}" else v for k, v in args.items()}) for a, args in acts
+        ]
+    return acts
 
 
 class GameApplier(LogApplier):
@@ -92,6 +121,20 @@ class GameApplier(LogApplier):
             task = asyncio.get_running_loop().create_task(self._send(decision.npc, acts))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
+
+    def verdict(self, hold: str, to: str) -> None:
+        super().verdict(hold, to)
+        from ..protocol import HoldVerdictCmd
+
+        task = asyncio.get_running_loop().create_task(self._verdict(HoldVerdictCmd(hold=hold, to=to)))  # type: ignore[arg-type]
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _verdict(self, cmd: Any) -> None:
+        try:
+            await self.link.send(cmd)
+        except Exception as err:  # the game went away: it hands held threats to the scripts itself
+            log.debug("hold_verdict failed: %s", err)
 
     async def _send(self, npc: str, acts: list[tuple[str, dict[str, Any]]]) -> None:
         try:

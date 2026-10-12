@@ -1,10 +1,12 @@
 """The body's instant reactions for an npc we control (in a chat with the hero or following him), chosen
 by the behavioral model in ~0.1 s, while the conversational model may still be thinking.
 
-Two questions:
+Three questions:
 - `react` — an incident (attacked, the hero attacked, a murder nearby...): what the body does now. The
   menu is narrowed by the npc's intent (an npc that means to flee is not offered to fight);
-- `gesture` — the hero just spoke: a gesture in the pause before the npc answers, if any.
+- `gesture` — the hero just spoke: a gesture in the pause before the npc answers, if any;
+- `posture` — the hero speaks to a free npc (M5e, talk.py): does it stop and listen, keep working, walk
+  along or turn away. talk.py carries the choice out.
 
 Fighting and fleeing are carried out by the game's own script states (the bridge hands the npc over
 and takes it back). Until the model is trained on threats they are answered in *shadow* — traced, not
@@ -27,6 +29,8 @@ from .situation import NpcContext, SituationBuilder
 
 REACT = "What do you do right now?"
 GESTURE = "The hero is talking to you. What gesture do you make while you think of an answer?"
+POSTURE = "The hero is talking to you. What does your body do while you answer him?"
+INSTRUCTIONS = {"react": REACT, "gesture": GESTURE, "posture": POSTURE}
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,25 @@ GESTURE_OPTIONS: dict[str, Option] = {
     "dismiss": Option("wave it off dismissively", (("play_ani", {"name": "T_FORGETIT"}),)),
 }
 GESTURE_COOLDOWN_S = 10.0
+# carried out by talk.py (holding the body, following); `ru` goes into the conversational model's situation
+POSTURE_OPTIONS: dict[str, Option] = {
+    "listen": Option(
+        "stop what you are doing, turn to the hero and listen",
+        threshold=0.4,
+        ru="ты остановился, повернулся к герою и слушаешь",
+    ),
+    "keep_working": Option(
+        "keep doing what you are doing and answer without stopping",
+        threshold=0.4,
+        ru="ты не прерываешь своё занятие и отвечаешь, не останавливаясь",
+    ),
+    "walk_with": Option(
+        "walk along with the hero while you talk", threshold=0.6, ru="ты идёшь рядом с героем"
+    ),
+    "leave": Option(
+        "turn away and go about your business", threshold=0.6, ru="ты отвернулся и уходишь по своим делам"
+    ),
+}
 
 
 def react_menu(intent: Intent | None, other: str | None) -> list[str]:
@@ -134,6 +157,19 @@ class Reflexes:
         self._ids = itertools.count(1)
         self._last_gesture: dict[str, float] = {}
 
+    async def posture(
+        self,
+        npc: NpcContext,
+        words: str,
+        doing: str,
+        intent: Intent | None,
+        clock: str | None = None,
+    ) -> Reaction | None:
+        """The hero speaks to a free npc that is `doing` something (English): what its body does now."""
+        criteria = {k: o.text for k, o in POSTURE_OPTIONS.items()}
+        state = self._state(npc, intent, clock, [f"Right now you {doing}.", f'The hero says: "{words}"'])
+        return await self._ask(npc.id, "posture", state, criteria, POSTURE_OPTIONS, {})
+
     def _state(self, npc: NpcContext, intent: Intent | None, clock: str | None, lines: list[str]) -> str:
         parts = [f"You are {npc.name}. {npc.traits}" if npc.traits else self.builder.who(npc)]
         if clock:
@@ -185,7 +221,7 @@ class Reflexes:
         q = {
             question: {
                 "type": "choice",
-                "instructions": REACT if question == "react" else GESTURE,
+                "instructions": INSTRUCTIONS[question],
                 "criteria": criteria,
             }
         }

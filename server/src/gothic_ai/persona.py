@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
+from .brain.day import Habit
 from .gamedata.ou import load_npc_lines
 
 log = logging.getLogger(__name__)
@@ -65,6 +66,19 @@ VOICES = {
     "NONE_100_XARDAS": "An old man with a deep, low, calm and wise voice, speaking slowly and gravely",
 }
 DEFAULT_VOICE = "A middle-aged man with an ordinary, slightly rough voice, speaking calmly"
+
+# What an npc likes to do besides its routine, for the behavioral model's day plans (brain/day.py): a
+# routine state, at a waypoint (None: where its routine has it now). English.
+HABITS: dict[str, list[Habit]] = {
+    "NONE_100_XARDAS": [
+        Habit("stand and brood over the coming dragons, arms crossed", "ZS_STAND_ARMSCROSSED"),
+    ],
+}
+
+
+def habits_of(npc: str) -> list[Habit]:
+    return HABITS.get(npc.upper(), [])
+
 
 # One English line of character for the behavioral model (it reads English best).
 TRAITS = {

@@ -49,4 +49,16 @@ inline ScriptFn scriptState(World& world, std::string_view name) {
   return id==size_t(-1) ? ScriptFn() : ScriptFn(id);
   }
 
+// the name of a script state function, empty if none
+inline std::string stateName(World& world, ScriptFn fn) {
+  auto sym = fn.isValid() ? world.script().findSymbol(fn.ptr) : nullptr;
+  return sym!=nullptr ? sym->name() : "";
+  }
+
+// walking, running: anything but standing at its place or doing something there
+inline bool isMoving(const Npc& npc) {
+  const auto bs = npc.bodyStateMasked();
+  return bs==BS_WALK || bs==BS_SNEAK || bs==BS_RUN || bs==BS_SPRINT;
+  }
+
 }

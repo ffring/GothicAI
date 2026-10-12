@@ -63,7 +63,7 @@ async def _turn(
     llm: FakeBackend, fake: FakeGame, store: MemoryStore | None = None, text: str = "Дай мне что-нибудь"
 ):
     async with connected(fake) as link:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False, memory=store)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store)
         changed: list[Intent] = []
         dialogue.on_intent = lambda npc, intent: changed.append(intent)
         await link.attach(XARDAS)

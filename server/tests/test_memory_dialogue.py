@@ -3,6 +3,7 @@ from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
+from gothic_ai.talk import TalkDesk
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import XARDAS, _until
 
@@ -12,7 +13,7 @@ async def test_memories_follow_save_and_load():
     fake = FakeGame(branch="A")
     async with connected(fake) as link:
         dialogue = DialogueManager(
-            link, FakeBackend("Запомню тебя.", delay=0), PersonaProvider(None), memory=store, greet=False
+            link, FakeBackend("Запомню тебя.", delay=0), PersonaProvider(None), memory=store
         )
         assert dialogue.branch == "A"
         dialogue.open(XARDAS, "Ксардас")
@@ -31,27 +32,32 @@ async def test_memories_follow_save_and_load():
     # a reconnect (new link, same branch) reads the same memories back
     fake2 = FakeGame(branch="B")
     async with connected(fake2) as link:
-        again = DialogueManager(link, FakeBackend(delay=0), PersonaProvider(None), memory=store, greet=False)
+        again = DialogueManager(link, FakeBackend(delay=0), PersonaProvider(None), memory=store)
         assert len(again.open(XARDAS, "Ксардас").history) == 2
 
 
-async def test_a_new_meeting_is_noted_and_greeting_only_once():
+async def test_a_new_conversation_is_noted_as_a_new_meeting():
     fake = FakeGame()
     llm = FakeBackend("Опять ты.", delay=0)
+    xardas = {"id": XARDAS, "name": "Ксардас", "distance": 300.0, "in_view": True}
     async with connected(fake) as link:
         dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        talk = TalkDesk(link, dialogue, end_silence_s=0)
         await link.snapshot(XARDAS)  # game time for the note
-        await fake.send(type="chat_open", npc=XARDAS, name="Ксардас")
-        await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])  # first meeting: he greets
-        await fake.send(type="chat_close", npc=XARDAS)
-        await fake.send(type="chat_open", npc=XARDAS, name="Ксардас")
-        await fake.send(type="player_text", npc=XARDAS, text="Это снова я")
+        await fake.roster(xardas)
+        await fake.send(type="player_text", text="Привет", focus=XARDAS)
+        await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])
+        await fake.roster({**xardas, "distance": 1500.0})  # the hero walks off mid-line: it is over
+        await _until(lambda: talk.partner is None)
+        await fake.roster(xardas)
+        await fake.send(type="player_text", text="Это снова я", focus=XARDAS)
         await _until(lambda: len(llm.calls) == 2 and fake.statuses[-1] == "idle")
 
     contents = [m.content for m in dialogue.conversations[XARDAS].history]
-    assert contents[2] == "[Новая встреча с героем, день 1, 08:00]"
-    assert contents[3:] == ["Это снова я", "Опять ты."]
-    assert len(llm.calls) == 2  # no second greeting
+    assert contents[:2] == ["Привет", "Опять ты."]
+    assert contents[2] == "[Герой ушёл, не дослушав тебя]"
+    assert contents[3] == "[Новая встреча с героем, день 1, 08:00]"
+    assert contents[4:] == ["Это снова я", "Опять ты."]
 
 
 async def test_old_messages_are_folded_into_a_summary(monkeypatch):
@@ -60,7 +66,7 @@ async def test_old_messages_are_folded_into_a_summary(monkeypatch):
     store = MemoryStore(":memory:")
     llm = FakeBackend("Герой много спрашивал о драконах.", delay=0)
     async with connected(FakeGame()) as link:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store, greet=False)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store)
         conv = dialogue.open(XARDAS, "Ксардас")
         for i in range(4):
             await dialogue.say_as_player(XARDAS, f"Вопрос {i}")
@@ -78,7 +84,7 @@ async def test_old_messages_are_folded_into_a_summary(monkeypatch):
 
 async def test_game_without_sessions_still_works():
     async with connected(FakeGame(branch=None)) as link:
-        dialogue = DialogueManager(link, FakeBackend("Да.", delay=0), PersonaProvider(None), greet=False)
+        dialogue = DialogueManager(link, FakeBackend("Да.", delay=0), PersonaProvider(None))
         dialogue.open(XARDAS, "Ксардас")
         await dialogue.say_as_player(XARDAS, "Привет")
         assert dialogue.branch is not None and dialogue.branch.startswith("unsaved-")

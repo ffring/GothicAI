@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 
 # --- game -> server -----------------------------------------------------------
 
@@ -171,31 +171,18 @@ class Pong(_GameMessage):
     req: str = ""
 
 
-class ChatOpen(_GameMessage):
-    """The player opened the chat with the npc they look at (the game has already attached it)."""
-
-    type: Literal["chat_open"]
-    npc: str
-    name: str
-
-
 class PlayerText(_GameMessage):
+    """A line the player typed (v7: into the input line, to nobody in particular). `focus` is the npc he
+    looks at, if any; the server decides whom it is said to (talk.py)."""
+
     type: Literal["player_text"]
-    npc: str
     text: str
-
-
-class ChatClose(_GameMessage):
-    """The player closed the chat; the game hands the npc back to its routine."""
-
-    type: Literal["chat_close"]
-    npc: str
+    focus: str | None = None
 
 
 class FollowEnded(_GameMessage):
     """The npc stopped following: `stopped`/`replaced` by a command, or on its own
-    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine
-    unless the chat is open."""
+    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine."""
 
     type: Literal["follow_ended"]
     npc: str
@@ -203,21 +190,21 @@ class FollowEnded(_GameMessage):
 
 
 class PttStart(_GameMessage):
-    """The player pressed the push-to-talk key in the chat with `npc`: start recording.
-    Followed by `ptt_stop` (recognize what was said) or `ptt_cancel` (it was a short tap)."""
+    """The player pressed the push-to-talk key, anywhere (v7): start recording. Followed by `ptt_stop`
+    (recognize what was said) or `ptt_cancel` (it was a short tap). `focus`: the npc he looks at."""
 
     type: Literal["ptt_start"]
-    npc: str
+    focus: str | None = None
 
 
 class PttStop(_GameMessage):
     type: Literal["ptt_stop"]
-    npc: str
+    focus: str | None = None
 
 
 class PttCancel(_GameMessage):
     type: Literal["ptt_cancel"]
-    npc: str
+    focus: str | None = None
 
 
 class LineStarted(_GameMessage):
@@ -239,6 +226,8 @@ class RosterEntry(_GameMessage):
     distance: float  # to the player, cm
     in_view: bool = False  # on the player's screen
     activity: NpcActivity = "routine"
+    state: str = ""  # v7: the script state it is in, e.g. ZS_SIT_BENCH
+    moving: bool = False  # v7: walking or running
 
 
 class NpcRoster(_GameMessage):
@@ -292,6 +281,21 @@ class NpcActResult(_GameMessage):
     detail: str | None = None
 
 
+class PerceptionHeld(_GameMessage):
+    """A threat to a free npc the game holds back from its scripts for the behavioral model (v6, after
+    `threat_control{hold:true}`): a monster near or attacking, an npc attacking. Fields as in `npc_event`.
+    The server answers `hold_verdict`; without one the scripts get it after 0.6 s."""
+
+    type: Literal["perception_held"]
+    hold: str
+    npc: str
+    kind: str
+    other: str
+    other_name: str | None = None
+    distance: float | None = None
+    detail: str | None = None
+
+
 class RoutineEntry(_GameMessage):
     start: str  # "HH:MM" game time
     end: str
@@ -325,9 +329,7 @@ GameMessage = Annotated[
     | Snapshot
     | Perception
     | Pong
-    | ChatOpen
     | PlayerText
-    | ChatClose
     | FollowEnded
     | PttStart
     | PttStop
@@ -337,7 +339,8 @@ GameMessage = Annotated[
     | NpcEvent
     | NpcIdle
     | NpcActResult
-    | RoutineInfo,
+    | RoutineInfo
+    | PerceptionHeld,
     Field(discriminator="type"),
 ]
 
@@ -413,6 +416,22 @@ NpcActType = Literal[
 ]
 
 
+class ThreatControlCmd(_Command):
+    """Whether threats to free npc's are held from their scripts for the behavioral model (v6)."""
+
+    type: Literal["threat_control"] = "threat_control"
+    hold: bool
+
+
+class HoldVerdictCmd(_Command):
+    """What becomes of a held threat (v6): `server` — the behavioral model took the body over (fight,
+    flee), repeats of it are kept from the scripts for a while; `scripts` — they get it now."""
+
+    type: Literal["hold_verdict"] = "hold_verdict"
+    hold: str
+    to: Literal["server", "scripts"]
+
+
 class RoutineCmd(_Command):
     """Ask for an npc's daily routine (v6); the game answers `routine`."""
 
@@ -463,7 +482,7 @@ class SayCmd(_Command):
 
 
 class ChatTextCmd(_Command):
-    """The npc's reply as it is generated (`text` so far), for the chat window; its lines (`say`
+    """The npc's reply as it is generated (`text` so far), shown as its subtitle; its lines (`say`
     with the same `reply`) then voice and animate it without showing the text again."""
 
     type: Literal["chat_text"] = "chat_text"
@@ -496,27 +515,34 @@ ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # no
 
 
 class ChatStatusCmd(_Command):
+    """A status line under the subtitles: `thinking` names the npc, the others are about the player's
+    voice (`npc` empty)."""
+
     type: Literal["chat_status"] = "chat_status"
-    npc: str
+    npc: str = ""
     status: ChatStatus
     detail: str | None = None
 
 
-class ChatEndCmd(_Command):
-    """The npc ends the conversation: the game closes the chat and releases the npc (unless it follows)."""
-
-    type: Literal["chat_end"] = "chat_end"
-    npc: str
-
-
 class TranscriptCmd(_Command):
-    """What the player says (push-to-talk). Partial (`final=false`) while speaking: text so far;
-    the final one is shown in the chat as the hero's line."""
+    """What the player says. Partial (`final=false`) while he speaks: text so far; the final one is his
+    line, shown as "Ты -> `to_name`: ..." (v7: whom it is said to, decided by the server; none: to nobody)."""
 
     type: Literal["transcript"] = "transcript"
-    npc: str
     text: str
     final: bool = True
+    to: str | None = None
+    to_name: str | None = None
+
+
+class HushCmd(_Command):
+    """The npc is interrupted (v7): its voice stops, its lines that have not started yet are dropped,
+    its reply's subtitle keeps only what it `said`."""
+
+    type: Literal["hush"] = "hush"
+    npc: str
+    reply: str | None = None
+    said: str | None = None
 
 
 class MemoryCmd(_Command):
@@ -527,13 +553,16 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load", "spawn", "player_weapon"]
+DebugCommand = Literal["save", "load", "spawn", "player_weapon", "player_goto", "ptt", "type"]
 
 
 class DebugCmd(_Command):
     """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
     spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
-    player draw (`state: "melee"`) or put away (`"none"`) a weapon."""
+    player draw (`state: "melee"`) or put away (`"none"`) a weapon; move the player to a `waypoint` (or to
+    the nearest one at least `distance` cm from `near`);
+    press the talk key as the player does (`ptt`, `state`: start, stop, cancel; with the hero's own focus)
+    or send a typed line (`type`, `text`)."""
 
     type: Literal["debug"] = "debug"
     req: str
@@ -543,3 +572,5 @@ class DebugCmd(_Command):
     near: str | None = None
     distance: int | None = None
     state: str | None = None
+    waypoint: str | None = None
+    text: str | None = None

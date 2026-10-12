@@ -28,6 +28,7 @@ class LineLibrary final {
       std::shared_ptr<VoiceBuffer> voice;  // streamed audio (instead of `wav`)
       std::string reply;  // the reply this line belongs to, already shown in the chat
       bool        overlay = false;  // said on the move: not through the npc's AI queue
+      bool        hushed  = false;  // cut off before it started (v7 hush): speaks nothing
       };
 
     static constexpr uint32_t VoicePauseMs = 250;  // breath between voiced lines
@@ -44,6 +45,8 @@ class LineLibrary final {
     // `file` is the sound name the engine looks for, "<id>.WAV"
     bool        sound(std::string_view file, std::vector<uint8_t>& wav) const;
     void        clear() { lines.clear(); }
+    // the npc was interrupted: its lines that have not started yet speak nothing when their turn comes
+    void        hush(std::string_view npc);
 
     std::function<void(const Line&)> onStart;
 

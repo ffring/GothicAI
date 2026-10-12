@@ -187,6 +187,9 @@ class Gothic final {
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onExternalPerception;
     // perceptions of npc's that follow their scripts (seen, not consumed): ai_bridge watches them
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onObservedPerception;
+    // a perception the scripts would handle may be taken over (true: the scripts do not get it now);
+    // the taker decides and hands it back with Npc::passPerception if it does not act on it
+    std::function<bool(Npc&,Npc&,Npc*,PercType)>                         interceptPerception;
     std::function<bool(std::string_view,std::string&)>                  consoleCommandFn;
     // runtime dialog lines: id -> subtitle text and duration (ms); false if the id is not external
     std::function<bool(std::string_view,std::string_view&,uint32_t&)>   externalMessageFn;

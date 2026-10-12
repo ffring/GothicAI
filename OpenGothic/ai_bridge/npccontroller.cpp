@@ -123,11 +123,6 @@ bool NpcController::isAttached(std::string_view symbol) const {
   return find(symbol)!=nullptr;
   }
 
-bool NpcController::isFollowing(std::string_view symbol) const {
-  auto c = find(symbol);
-  return c!=nullptr && c->follow.has_value();
-  }
-
 Npc* NpcController::find(World& world, std::string_view symbol) {
   auto c = find(symbol);
   if(c==nullptr || world.findNpcByInstance(c->instance)!=c->npc)
@@ -631,9 +626,16 @@ void NpcController::finishAction(Controlled& c, std::string_view status, std::st
   c.nextSnapshot = 0;
   }
 
-void NpcController::requestSnapshot(std::string_view symbol) {
-  if(auto c = find(symbol))
+bool NpcController::requestSnapshot(World& world, std::string_view symbol) {
+  if(auto c = find(symbol)) {
     c->nextSnapshot = 0;
+    return true;
+    }
+  Npc* npc = AiNpc::findNpc(world,symbol);
+  if(npc==nullptr || npc->isPlayer())
+    return false;
+  emitSnapshot(world,*npc,AiNpc::upper(symbol),"",false);
+  return true;
   }
 
 void NpcController::tick(World& world) {
@@ -731,7 +733,11 @@ void NpcController::emitActionResult(std::string_view id, std::string_view npc, 
   }
 
 void NpcController::emitSnapshot(World& world, Controlled& c) {
-  Npc&       npc  = *c.npc;
+  emitSnapshot(world,*c.npc,c.symbol,c.act ? std::string_view(c.act->type) : std::string_view(),c.follow.has_value());
+  }
+
+void NpcController::emitSnapshot(World& world, Npc& npc, std::string_view symbol, std::string_view action,
+                                 bool following) {
   const auto pos  = npc.position();
   const auto time = world.time();
 
@@ -746,17 +752,17 @@ void NpcController::emitSnapshot(World& world, Controlled& c) {
    .end();
 
   j.object("npc")
-     .str("id",c.symbol)
+     .str("id",symbol)
      .str("name",TextCodec::toUtf8(npc.displayName()));
   writePos(j,"pos",pos);
   j.num("rot",double(npc.rotation()))
    .integer("hp",npc.attribute(ATR_HITPOINTS))
    .integer("hp_max",npc.attribute(ATR_HITPOINTSMAX))
    .boolean("busy",npc.isAiBusy());
-  if(c.act)
-    j.str("action",c.act->type); else
+  if(!action.empty())
+    j.str("action",action); else
     j.null("action");
-  j.boolean("following",c.follow.has_value());
+  j.boolean("following",following);
   if(auto wp = npc.currentWayPoint())
     j.str("waypoint",wp->name); else
     j.null("waypoint");

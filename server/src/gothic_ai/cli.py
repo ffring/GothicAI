@@ -41,19 +41,19 @@ from .llm import (
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
-from .persona import PersonaProvider
+from .persona import PersonaProvider, habits_of
 from .protocol import (
     Attached,
-    ChatClose,
-    ChatOpen,
     Detached,
     GameMessage,
     Perception,
     PlayerText,
     Saved,
     Session,
+    ThreatControlCmd,
 )
 from .replay import replay as replay_turn
+from .talk import TalkDesk
 from .trace import TraceWriter, find_turn, latest
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
 from .voice import (
@@ -77,7 +77,7 @@ HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping
   goto <waypoint> | come | turn | ani <name> | wait <ms> | stop | routine
   schedule [npc]    the npc's daily routine, its variants and current script state
-  talk <text>       speak to the npc as the player (opens a conversation)
+  talk <text>       say it as the hero, looking at the npc (talk.py decides whom it is said to)
   additem <item> [n] put an item into the npc's inventory (game needs -devmode)
   memory [npc]      the current save branch and what the npc remembers
   brain             what the npc planner is doing (tiers, requests, decisions)
@@ -93,12 +93,8 @@ def print_event(msg: GameMessage) -> None:
             log.info("detached %s: %s", msg.npc, msg.reason)
         case Perception():
             log.debug("perception %s: %s from %s at %.0fcm", msg.npc, msg.perc, msg.other, msg.distance)
-        case ChatOpen():
-            log.info("chat opened with %s", msg.npc)
         case PlayerText():
-            log.info("player -> %s: %s", msg.npc, msg.text)
-        case ChatClose():
-            log.info("chat closed with %s", msg.npc)
+            log.info("player typed (focus %s): %s", msg.focus or "-", msg.text)
         case Saved():
             log.info("game saved at memory %s@%d", msg.branch, msg.seq)
         case Session():
@@ -111,6 +107,7 @@ class ServerState:
         self.voice: VoiceInput | None = None
         self.brain: NpcPlanner | None = None
         self.incidents: IncidentDesk | None = None
+        self.talk: TalkDesk | None = None
 
 
 class Console:
@@ -191,10 +188,8 @@ class Console:
                 print(self.state.brain.snapshot())
                 for d in list(self.state.brain.applier.recent)[-10:]:
                     print(f"  {d.npc} {d.question}={d.choice} ({d.confidence:.2f}) {','.join(d.stimuli)}")
-            case "talk" if rest and self.state.dialogue is not None:
-                snap = await link.snapshot(npc)
-                self.state.dialogue.open(npc, snap.npc.name)
-                await self.state.dialogue.say_as_player(npc, " ".join(rest))
+            case "talk" if rest and self.state.talk is not None:
+                self.state.talk.hear(" ".join(rest), npc, {"via": "console"})
             case _:
                 print(HELP)
 
@@ -240,7 +235,6 @@ async def serve(args: argparse.Namespace) -> int:
             personas,
             memory=memory,
             tts=tts,
-            greet=not args.no_greet,
             journal=journal,
             trace=trace,
             budget=budget,
@@ -248,8 +242,10 @@ async def serve(args: argparse.Namespace) -> int:
         # npc's we control: the body's instant reactions (behavioral model) and words for incidents
         reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
         state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
+        # the hero talks to the world: whom he speaks to, the conversation, the body meanwhile (M5e)
+        state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
         if asr is not None and source is not None:
-            state.voice = VoiceInput(link, state.dialogue, source, asr)
+            state.voice = VoiceInput(link, state.talk.hear, source, asr, journal=journal)
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
@@ -257,7 +253,14 @@ async def serve(args: argparse.Namespace) -> int:
                 saved = memory.intent(dialogue.branch, npc) if dialogue.branch else None
                 return (Intent.from_json(saved).agenda or None) if saved else None
 
-            planner = state.brain = NpcPlanner(decider, GameApplier(link), agenda_of=agenda_of)
+            planner = state.brain = NpcPlanner(
+                decider, GameApplier(link), agenda_of=agenda_of, routine_of=link.routine, habits_of=habits_of
+            )
+            state.incidents.follow(planner)  # free npc's speak when the moment calls for it
+            state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
+            if not args.no_hold_threats:
+                # threats to free npc's: the behavioral model first, the scripts if it does not take them
+                await link.send(ThreatControlCmd(hold=True))
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
             state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(npc, intent.agenda or None)
@@ -310,6 +313,17 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5b_bridge(link, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5b: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5c":
+                results = await scenarios.m5c_free_npc(link, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5c: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "m5e":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
@@ -691,12 +705,11 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "tts"],
+        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "tts"],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
-    p.add_argument("--no-greet", action="store_true", help="npc does not greet when the chat opens")
     p.add_argument("--memory-db", default=str(DEFAULT_MEMORY_DB), help="SQLite file with npc memories")
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
@@ -717,6 +730,11 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
+    p.add_argument(
+        "--no-hold-threats",
+        action="store_true",
+        help="threats to free npc's go straight to the game's scripts, not to the behavioral model first",
+    )
     p.add_argument(
         "--apply-threats",
         action="store_true",

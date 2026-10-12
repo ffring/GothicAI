@@ -303,6 +303,8 @@ class Npc final {
 
     bool      perceptionProcess(Npc& pl);
     bool      perceptionProcess(Npc& pl, Npc *victim, float quadDist, PercType perc);
+    // a perception held back by Gothic::interceptPerception, given to the scripts after all
+    bool      passPerception(Npc& other, Npc* victim, PercType perc);
     bool      hasPerc(PercType perc) const;
     uint64_t  percNextTime() const;
 
@@ -625,6 +627,7 @@ class Npc final {
     AiQueue                        aiQueue;
     AiQueue                        aiQueueOverlay;
     bool                           externalCtrl=false; // transient, not serialized
+    bool                           percPassThrough=false; // passPerception: no interception
     std::vector<Routine>           routines;
 
     Interactive*                   currentInteract=nullptr;

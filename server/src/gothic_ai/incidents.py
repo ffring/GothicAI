@@ -1,4 +1,4 @@
-"""The two loops together, for the npc's we control (in a chat with the hero, or following him).
+"""The two loops together, for the npc's we control (held for a conversation with the hero, or following him).
 
 Something happens to the npc → an incident (brain/incident.py). At once, without waiting:
 - the **behavioral model** picks the body's reaction (brain/reflex.py) — in ~0.1 s;
@@ -20,15 +20,17 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from .brain.apply import Decision
 from .brain.incident import INCIDENT_GAP_S, IncidentEvent, IncidentTracker, escalation_reason
+from .brain.planner import Flight, NpcPlanner
 from .brain.reflex import REACT_OPTIONS, Reaction, Reflexes
 from .brain.situation import NpcContext, clock_text
+from .brain.stimuli import Stimulus
 from .budget import Budget
 from .dialogue import DialogueManager
 from .game import GameError, GameLink
 from .protocol import (
     Attached,
-    ChatEndCmd,
     Detached,
     FollowEnded,
     GameMessage,
@@ -41,6 +43,46 @@ from .trace import TraceWriter
 log = logging.getLogger(__name__)
 
 SECOND_HIT_S = 10.0
+FREE_HEARING_CM = 2000.0  # a free npc's words are worth the call if the hero is this close (or sees it)
+FREE_COOLDOWN_S = 30.0  # one call per free npc at most this often
+FREE_TOOLS = ("set_intent", "recall")  # an npc nobody controls cannot hand over items or end a chat
+
+# a free npc's stimuli, for the conversational model (Russian); the rest are told in English
+EVENTS_RU = {
+    "monster_near": "{other} идёт на тебя",
+    "npc_attack": "{other} напал на тебя",
+    "fight_nearby": "рядом драка: {detail}",
+    "cry_for_help": "{other} зовёт на помощь",
+    "player_near": "герой подошёл к тебе",
+    "player_speech": "герой сказал рядом: «{detail}»",
+    "enter_room": "герой вошёл в твой дом",
+    "item_given": "герой отдал тебе {detail}",
+    "item_dropped": "герой бросил рядом {detail}",
+}
+# what the body already did, by the behavioral model's choice
+REACTIONS_RU = {
+    "fight": "ты вступил в бой",
+    "flee": "ты убегаешь",
+    "call_help": "ты зовёшь на помощь",
+    "call_guards": "ты зовёшь стражу",
+    "comment": "ты вскрикнул",
+    "look_at": "ты смотришь на героя",
+    "greet": "ты кивнул герою",
+    "approach_talk": "ты идёшь к герою",
+    "step_away": "ты отвернулся",
+    "tell_to_leave": "ты велел герою убираться",
+    "thank": "ты кивнул в знак благодарности",
+}
+
+
+def describe_ru(stim: Stimulus) -> str:
+    template = EVENTS_RU.get(stim.kind)
+    if template is None:
+        return stim.describe(stim.at)
+    other = "герой" if stim.other == "PLAYER" else (stim.other_name or stim.other)
+    return template.format(other=other, detail=stim.detail or "")
+
+
 LOW_HEALTH = 0.5
 SETTLE_S = 0.5  # events this close together go to the conversational model as one
 
@@ -79,6 +121,7 @@ class IncidentDesk:
         clock: Callable[[], float] = time.monotonic,
         settle_s: float = SETTLE_S,
         gap_s: float = INCIDENT_GAP_S,
+        planner: NpcPlanner | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -94,6 +137,11 @@ class IncidentDesk:
         link.listeners.append(self.on_message)
         dialogue.on_player_phrase = self.on_player_phrase
         dialogue.on_body_failed = self.on_body_failed
+        dialogue.controls = lambda npc: npc.upper() in self.attached
+        self.planner: NpcPlanner | None = None
+        self._spoke_at: dict[str, float] = {}
+        if planner is not None:
+            self.follow(planner)
 
     # --- events ---------------------------------------------------------------------------
 
@@ -216,7 +264,6 @@ class IncidentDesk:
         self.tracker.close(npc)
         self.dialogue.note(npc, f"{event.describe_ru()}. Ты прервал разговор и защищаешься")
         try:
-            await self.link.send(ChatEndCmd(npc=npc))
             await self.link.act(npc, "return_to_routine", timeout=10)
         except (GameError, TimeoutError) as err:
             log.info("%s: release failed: %s", npc, err)
@@ -256,6 +303,43 @@ class IncidentDesk:
             cue,
             relevant=lambda: self.tracker.is_current(npc, incident_id, self.clock()),
             overlay=inc.urgent,  # shouted on the move: the body keeps running or fighting
+        )
+
+    # --- free npc's -------------------------------------------------------------------------
+
+    def follow(self, planner: NpcPlanner) -> None:
+        """Free npc's: the planner's fast loop reacts; when the moment calls for words, they come here."""
+        self.planner = planner
+        planner.on_escalate = self.on_planner_escalate
+
+    def on_planner_escalate(self, npc: str, level: float, reaction: Decision | None, flight: Flight) -> None:
+        """The behavioral model says a free npc's moment calls for its own words: the conversational model
+        speaks for it, on the move, if the hero hears it, not too often and within the budget."""
+        assert self.planner is not None
+        npc = npc.upper()
+        rec = self.planner.npcs.get(npc)
+        if rec is None or npc in self.attached:  # a controlled npc's incidents are handled above
+            return
+        hears = rec.distance_cm <= FREE_HEARING_CM or (rec.in_view and rec.distance_cm <= 3000)
+        now = self.clock()
+        if not hears or now - self._spoke_at.get(npc, float("-inf")) < FREE_COOLDOWN_S:
+            return
+        if not self.budget.allow(npc):
+            log.info("%s: no budget for words (escalate %.1f)", npc, level)
+            return
+        self._spoke_at[npc] = now
+        alive = [s for s in rec.stimuli if s.alive(self.planner.clock())]
+        happened = "; ".join(describe_ru(s) for s in alive) or "что-то случилось"
+        did = REACTIONS_RU.get(reaction.choice, "") if reaction is not None else ""
+        done = f" Твоё тело уже среагировало: {did} — это уже случилось, не противоречь этому." if did else ""
+        self.dialogue.open(npc, rec.name)
+        log.info("%s: escalate %.1f, the conversational model speaks for it", npc, level)
+        self.dialogue.event_turn(
+            npc,
+            f"[Событие: {happened}.{done}]",
+            relevant=lambda: self.planner is not None and self.planner.stirred(npc),
+            overlay=True,
+            tools=FREE_TOOLS,
         )
 
     # --- helpers ----------------------------------------------------------------------------

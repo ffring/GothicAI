@@ -26,31 +26,33 @@ import itertools
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..protocol import (
     Attached,
-    ChatClose,
-    ChatOpen,
     Detached,
     GameMessage,
     Loading,
     NpcEvent,
     NpcIdle,
     NpcRoster,
-    PlayerText,
+    PerceptionHeld,
     RosterEntry,
 )
 from .apply import Applier, Decision
+from .day import Habit, plan_options
 from .decider import Decider, Lane, Outcome
 from .situation import NpcContext, Situation, SituationBuilder, clock_text
-from .stimuli import Stimulus, merge, policy
+from .stimuli import Stimulus, merge, normalize, policy
 from .tiers import Placement, Tier, TierConfig, assign_tiers, importance
 
 log = logging.getLogger(__name__)
 
 NO_ACTION = {"continue", "keep_routine"}
+# choices that take a held threat over: the body fights or flees, the scripts must not react too
+TAKES_BODY = {"fight", "flee"}
 OVERHEAR_CM = 1000  # npc's this close hear what the player says to someone else
 
 
@@ -67,13 +69,26 @@ class PlannerConfig:
         default_factory=lambda: {Tier.NEAR: 2.0, Tier.MID: 10.0, Tier.FAR: 60.0}
     )
     deadline_ms: dict[str, int] = field(
-        default_factory=lambda: {"urgent": 300, "near": 1000, "mid": 5000, "far": 30000, "attitude": 5000}
+        default_factory=lambda: {
+            "urgent": 300,
+            "near": 1000,
+            "mid": 5000,
+            "far": 30000,
+            "attitude": 5000,
+            "escalate": 2000,
+        }
     )
     react_threshold: float = 0.5  # below it the npc keeps its routine
     plan_threshold: float = 0.5
     # per-option thresholds: harmless gestures need less certainty than walking up to the player
     option_threshold: dict[str, float] = field(
-        default_factory=lambda: {"look_at": 0.25, "greet": 0.3, "approach_talk": 0.6, "give_back": 0.6}
+        default_factory=lambda: {
+            "look_at": 0.25,
+            "greet": 0.3,
+            "approach_talk": 0.6,
+            "give_back": 0.6,
+            "fight": 0.6,  # a fight is not taken back: surer than for a gesture
+        }
     )
     # the same action is not repeated by one npc within this time (walking up to the player twice a minute
     # is pestering, not liveliness)
@@ -90,6 +105,11 @@ class PlannerConfig:
     )
     default_cooldown_s: float = 10.0
     ask_attitude: bool = True  # after an urgent reaction, ask in the background how the attitude changed
+    # after an urgent reaction or a threat, ask how much the moment calls for the npc's own words (0-4); from
+    # this level on `on_escalate` is told (whoever listens decides by its rules: the hero hears it, budget)
+    escalate_level: float = 3.0
+    # NEAR/MID npc's with nothing to react to think about their next hour this often (a game hour ~4 min)
+    plan_period_s: float = 240.0
     max_inflight: int = 48
     bg_rate: float = 20.0  # background requests per second
     tick_s: float = 0.05
@@ -113,6 +133,8 @@ class Flight:
     sent: float
     stimuli: tuple[str, ...]
     situation: Situation
+    target: str | None = None  # the newest threat's source: whom a fight or flight is about
+    plan_args: dict[str, dict] = field(default_factory=dict)  # plan option -> start_activity args
 
 
 @dataclass
@@ -134,6 +156,9 @@ class NpcRecord:
     last_applied: dict[str, float] = field(default_factory=dict)  # action -> when it was last done
     pending: Pending | None = None
     flight: Flight | None = None
+    holds: list[tuple[str, float]] = field(default_factory=list)  # threats held from the scripts, (id, when)
+    last_plan: float | None = None
+    talking: bool = False  # in a conversation with the hero (talk.py has its body): threats only
 
 
 @dataclass
@@ -162,10 +187,18 @@ class NpcPlanner:
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
         agenda_of: Callable[[str], str | None] | None = None,
+        routine_of: Callable[[str], Awaitable[Any]] | None = None,
+        habits_of: Callable[[str], list[Habit]] | None = None,
     ) -> None:
         self.decider = decider
         # what an npc wants from the hero, as its last conversation left it (memory); read when it appears
         self.agenda_of = agenda_of
+        # the npc's daily routine from the game (`routine`, protocol v6) and its habits: the plan's menu
+        self.routine_of = routine_of
+        self.habits_of = habits_of
+        self.routines: dict[str, Any] = {}  # npc -> RoutineInfo (None: the game could not tell)
+        # the moment calls for the npc's own words: (npc, level, the reaction applied or None, flight)
+        self.on_escalate: Callable[[str, float, Decision | None, Flight], None] | None = None
         self.applier = applier
         self.builder = builder or SituationBuilder()
         self.cfg = config or PlannerConfig()
@@ -202,13 +235,10 @@ class NpcPlanner:
                 )
             case NpcIdle():
                 self.on_idle(msg.npc, now)
-            case PlayerText():
-                self.on_player_text(msg.npc, msg.text, now)
-            case ChatOpen() | Attached():
-                self._set_activity(msg.npc, "dialog" if isinstance(msg, ChatOpen) else "attached")
-            case ChatClose():
-                self._after_chat(msg.npc, now)
-                self._set_activity(msg.npc, "routine")
+            case PerceptionHeld():
+                self.on_held(msg, now)
+            case Attached():
+                self._set_activity(msg.npc, "attached")
             case Detached():
                 self._set_activity(msg.npc, "routine")
             case Loading():
@@ -253,6 +283,7 @@ class NpcPlanner:
         if rec is None or rec.tier is Tier.OFF:
             return
         self.stats.events += 1
+        kind, detail = normalize(kind, other, other_name, detail)
         stim = Stimulus(kind, now, other, distance_cm, detail, other_name)
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
@@ -261,6 +292,8 @@ class NpcPlanner:
         if p.scripted:  # the game's scripts react; it stays as context for later decisions
             self.stats.scripted_events += 1
             return
+        if rec.talking and not p.threat:
+            return  # its body is in a conversation (talk.py); threats are still ours
         if rec.tier is Tier.FAR or (rec.tier is Tier.MID and not p.salient):
             return
         rec.version += 1
@@ -269,9 +302,39 @@ class NpcPlanner:
         if urgent and rec.flight is not None:
             self._spawn(self.decider.cancel(rec.flight.rid))  # its answer is outdated now
 
+    def on_held(self, msg: PerceptionHeld, now: float) -> None:
+        """A threat the game holds from the npc's scripts until the model decides (or 0.6 s pass)."""
+        rec = self.npcs.get(msg.npc.upper())
+        if rec is None or rec.tier is Tier.OFF:
+            self.applier.verdict(msg.hold, "scripts")
+            return
+        rec.holds.append((msg.hold, now))
+        self.on_event(
+            msg.npc,
+            msg.kind,
+            now,
+            other=msg.other,
+            distance_cm=msg.distance,
+            detail=msg.detail,
+            other_name=msg.other_name,
+        )
+        if rec.pending is None and rec.flight is None:  # merged into nothing (a repeat): give it back
+            self._settle_holds(rec, now, None)
+
+    def _settle_holds(self, rec: NpcRecord, upto: float, decision: Decision | None) -> None:
+        """Held threats up to `upto`: kept from the scripts only if the body took them over."""
+        to = "server" if decision is not None and decision.choice in TAKES_BODY else "scripts"
+        keep = []
+        for hold, at in rec.holds:
+            if at <= upto:
+                self.applier.verdict(hold, to)
+            else:
+                keep.append((hold, at))
+        rec.holds = keep
+
     def on_idle(self, npc: str, now: float) -> None:
         rec = self.npcs.get(npc.upper())
-        if rec is None or rec.tier is not Tier.NEAR:
+        if rec is None or rec.tier is not Tier.NEAR or rec.talking:
             return
         if not self._has_reason(rec, now):
             self.stats.quiet += 1
@@ -280,11 +343,29 @@ class NpcPlanner:
         self._want(rec, "react", False, now, not_before=earliest)
 
     def on_player_text(self, partner: str, text: str, now: float) -> None:
-        """The player said something in the chat with `partner`: npc's close by overhear it."""
+        """The player said something to `partner` (talk.py; "" — to nobody): npc's close by overhear it."""
         partner = partner.upper()
         for rec in list(self.npcs.values()):
             if rec.id != partner and rec.distance_cm <= OVERHEAR_CM:
                 self.on_event(rec.id, "player_speech", now, distance_cm=rec.distance_cm, detail=text)
+
+    def talking(self, npc: str, on: bool) -> None:
+        """The npc is in a conversation with the hero (talk.py decides its body) or no longer is."""
+        rec = self.npcs.get(npc.upper())
+        if rec is None or rec.talking == on:
+            return
+        rec.talking = on
+        rec.version += 1  # an answer asked before is moot
+        if not on:
+            self._after_chat(rec.id, self.clock())
+
+    def stirred(self, npc: str, now: float | None = None) -> bool:
+        """The npc still has something urgent or threatening going on (its stimuli have not expired)."""
+        rec = self.npcs.get(npc.upper())
+        now = self.clock() if now is None else now
+        return rec is not None and any(
+            s.alive(now) and (s.policy.urgent or s.policy.threat) for s in rec.stimuli
+        )
 
     def set_agenda(self, npc: str, agenda: str | None) -> None:
         """What the npc wants from the player (from memory or the big model's plan); None clears it."""
@@ -299,9 +380,14 @@ class NpcPlanner:
         """Turn due timers into requests and send what the budget allows."""
         self._refill(now)
         for rec in self.npcs.values():
-            if rec.tier is Tier.OFF or rec.pending or rec.flight or rec.next_check > now:
+            if rec.tier is Tier.OFF or rec.talking or rec.pending or rec.flight or rec.next_check > now:
                 continue
             if rec.tier is not Tier.FAR and not self._has_reason(rec, now):
+                if self.routine_of is not None and now - (rec.last_plan or now) >= self.cfg.plan_period_s:
+                    self._want(rec, "plan", False, now, not_before=now)  # quiet: time to think of the day
+                    continue
+                if rec.last_plan is None:
+                    rec.last_plan = now  # the first plan comes a period after the npc appears
                 self.stats.quiet += 1
                 self._schedule(rec, now)
                 continue
@@ -429,8 +515,22 @@ class NpcPlanner:
         rec.stimuli = [s for s in rec.stimuli if s.alive(now)]
         ctx = NpcContext(rec.id, rec.name, rec.guild, rec.distance_cm, rec.in_view, agenda=rec.agenda)
         clock = clock_text(*self.game_time) if self.game_time else None
+        plan_args: dict[str, dict] = {}
         if pend.purpose == "plan":
-            sit = self.builder.plan(ctx, clock)
+            routine = self._routine(rec.id)
+            habits = self.habits_of(rec.id) if self.habits_of else []
+            if self.routine_of is not None:
+                if routine is None or not self.game_time:
+                    rec.next_check = now + 1.0  # being asked from the game: plan once it is known
+                    return
+                criteria, plan_args = plan_options(routine.entries, habits, *self.game_time)
+                if not plan_args:
+                    self._schedule(rec, now)  # nothing to choose between: the routine goes on
+                    return
+                sit = self.builder.plan(ctx, clock, criteria)
+            else:
+                sit = self.builder.plan(ctx, clock)
+            rec.last_plan = now
             deadline = self.cfg.deadline_ms["far"]
         else:
             sit = self.builder.react(ctx, rec.stimuli, now, clock)
@@ -445,10 +545,28 @@ class NpcPlanner:
             now,
             tuple(s.kind for s in rec.stimuli),
             sit,
+            next((s.other for s in sorted(rec.stimuli, key=lambda s: -s.at) if s.policy.threat), None),
+            plan_args,
         )
         rec.flight = flight
         self.stats.sent[lane] += 1
         self._spawn(self._ask(rec.id, flight, lane, rec.importance, deadline))
+
+    def _routine(self, npc: str) -> Any | None:
+        """The npc's routine if known; asked from the game in the background the first time."""
+        if npc in self.routines or self.routine_of is None:
+            return self.routines.get(npc)
+        self.routines[npc] = None
+
+        async def fetch() -> None:
+            assert self.routine_of is not None
+            try:
+                self.routines[npc] = await self.routine_of(npc)
+            except Exception as err:  # the game could not tell: plans stay generic for this npc
+                log.debug("routine of %s: %s", npc, err)
+
+        self._spawn(fetch())
+        return None
 
     async def _ask(self, npc: str, flight: Flight, lane: Lane, priority: float, deadline_ms: int) -> None:
         sit = flight.situation
@@ -467,6 +585,7 @@ class NpcPlanner:
             return
         rec.flight = None
         if outcome.kind != "answers" or not outcome.answers:
+            self._settle_holds(rec, flight.sent, None)
             self._schedule(rec, now)
             return
         if rec.tier is Tier.OFF or rec.version != flight.version:
@@ -478,7 +597,17 @@ class NpcPlanner:
         self._schedule(rec, now)
         answer = outcome.answers.get(flight.purpose)
         if not answer:
+            self._settle_holds(rec, flight.sent, None)
             return
+        decision = self._react_outcome(rec, flight, answer, now)
+        if flight.purpose == "react":
+            self._settle_holds(rec, flight.sent, decision)
+        if self.on_escalate is not None and flight.purpose == "react" and (flight.urgent or flight.target):
+            self._spawn(self._ask_escalate(npc, flight, decision))
+
+    def _react_outcome(self, rec: NpcRecord, flight: Flight, answer: dict, now: float) -> Decision | None:
+        """Apply an answer if it is sure enough and not a repeat; the decision, if one was applied."""
+        npc = rec.id
         choice, conf = answer["choice"], float(answer["confidence"])
         if flight.purpose == "plan":
             threshold = self.cfg.plan_threshold
@@ -486,15 +615,15 @@ class NpcPlanner:
             threshold = self.cfg.option_threshold.get(choice, self.cfg.react_threshold)
         if conf < threshold:
             self.stats.unsure += 1
-            return
+            return None
         if choice in NO_ACTION:
             self.stats.no_action += 1
-            return
+            return None
         if now - rec.last_applied.get(choice, float("-inf")) < self.cfg.cooldown_s.get(
             choice, self.cfg.default_cooldown_s
         ):
             self.stats.cooldown += 1
-            return
+            return None
         rec.last_applied[choice] = now
         self.stats.applied += 1
         decision = Decision(
@@ -505,10 +634,27 @@ class NpcPlanner:
             answer.get("probabilities", {}),
             flight.stimuli,
             latency_ms=(now - flight.sent) * 1000,
+            target=flight.target,
+            args=flight.plan_args.get(choice),
         )
         self.applier.apply(decision)
-        if flight.urgent and self.cfg.ask_attitude:  # urgent events are about the player
+        about_hero = flight.target is None  # threats from others say nothing about the hero
+        if flight.urgent and self.cfg.ask_attitude and about_hero:  # urgent events are about the player
             self._spawn(self._ask_attitude(npc, flight))
+        return decision
+
+    async def _ask_escalate(self, npc: str, flight: Flight, reaction: Decision | None) -> None:
+        sit = self.builder.escalate(flight.situation)
+        out = await self.decider.decide(
+            f"{flight.rid}e", "background", 0.0, self.cfg.deadline_ms["escalate"], sit.state, sit.questions
+        )
+        if out.kind != "answers" or not out.answers or "escalate" not in out.answers:
+            return
+        a = out.answers["escalate"]
+        level = float(a["score"])
+        log.info("escalate %s %.1f after %s", npc, level, ",".join(flight.stimuli))
+        if level >= self.cfg.escalate_level and self.on_escalate is not None:
+            self.on_escalate(npc, level, reaction, flight)
 
     async def _ask_attitude(self, npc: str, flight: Flight) -> None:
         sit = self.builder.attitude(flight.situation)

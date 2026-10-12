@@ -32,6 +32,8 @@ constexpr uint64_t ActGraceMs     = 200;   // let the npc take the action from i
 constexpr uint64_t StateMaxMs     = 120000; // fight/flee: npc_idle at the latest after this
 constexpr uint64_t StateStartMs   = 3000;
 constexpr uint64_t ActivityMaxMs  = 10*60*1000;
+constexpr uint64_t HoldMs         = 600;    // a held threat goes to the scripts if the server has not decided
+constexpr uint64_t VerdictMs      = 5000;   // a verdict covers repeats of the same pair this long
 
 std::string upper(std::string_view s) {
   std::string r(s);
@@ -110,7 +112,8 @@ Seen classify(Npc& self, Npc& other, Npc* victim, PercType perc) {
     return Seen{};
   switch(perc) {
     case PERC_ASSESSENEMY:
-      // an enemy the npc senses; repeats every perception tick, so reported seldom
+    case PERC_ASSESSWARN:
+      // an enemy the npc senses, or a monster growling at it; repeats every perception tick: reported seldom
       return other.isMonster() ? Seen{"monster_near",nullptr,MonsterNearPeriodMs} : Seen{};
     case PERC_ASSESSDAMAGE:
       return Seen{other.isMonster() ? "monster_attack" : "npc_attack",&self};
@@ -134,12 +137,22 @@ void NpcObserver::clear() {
   close.clear();
   lastEvent.clear();
   running.clear();
+  held.clear();
+  verdicts.clear();
   nextRoster = 0;
   }
 
 void NpcObserver::tick(World& world) {
   const uint64_t now = world.tickCount();
   checkRunning(world,now);
+  for(size_t i=0; i<held.size();) {
+    if(now<held[i].at+HoldMs) {
+      ++i;
+      continue;
+      }
+    releaseHeld(world,held[i]);  // no verdict in time: the scripts react as they would have
+    held.erase(held.begin()+ptrdiff_t(i));
+    }
   if(now<nextRoster)
     return;
   nextRoster = now+RosterPeriodMs;
@@ -175,6 +188,8 @@ void NpcObserver::emitRoster(World& world) {
        .num("distance",double(dist))
        .boolean("in_view",inView(*pl,npc,dist))
        .str("activity",activity(npc,owner(symbol)))
+       .str("state",AiNpc::stateName(world,npc.currentState()))
+       .boolean("moving",AiNpc::isMoving(npc))
      .end();
     });
   j.endArray();
@@ -219,6 +234,87 @@ void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, P
     detail = seen.about->isPlayer() ? "PLAYER" : TextCodec::toUtf8(seen.about->displayName());
   const double dist = std::sqrt(double(self.qDistTo(other)));
   emitEvent(symbol,seen.kind,otherId,dist,detail,other.isPlayer() ? "" : TextCodec::toUtf8(other.displayName()));
+  }
+
+bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
+  if(!holdThreats || other.isPlayer() || &other==&self)
+    return false;  // the hero's doings stay with the scripts (crimes, guards)
+  if(perc!=PERC_ASSESSENEMY && perc!=PERC_ASSESSWARN && perc!=PERC_ASSESSDAMAGE && perc!=PERC_ASSESSOTHERSDAMAGE)
+    return false;
+  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || self.isTalk() ||
+     self.isAttack())
+    return false;  // already fighting by its scripts: they go on
+  if(classify(self,other,victim,perc).kind.empty())
+    return false;
+  Npc* pl = world.player();
+  if(pl==nullptr || std::sqrt(self.qDistTo(*pl))>EventRadius)
+    return false;
+  const auto symbol  = npcId(world,self);
+  const auto otherId = npcId(world,other);
+  if(symbol.empty() || otherId.empty() || !owner(symbol).empty())
+    return false;
+
+  const uint64_t now = world.tickCount();
+  const auto     key = symbol + "/" + otherId;
+  if(auto v = verdicts.find(key); v!=verdicts.end() && now<v->second.until)
+    return v->second.server;  // decided a moment ago: the server acts, or the scripts take it
+  verdicts[key] = Verdict{true,now+HoldMs};  // repeats while it is being decided are held too
+
+  Held h;
+  h.id     = "h" + std::to_string(nextHold++);
+  h.key    = key;
+  h.self   = &self;
+  h.other  = &other;
+  h.victim = victim;
+  h.perc   = perc;
+  h.at     = now;
+  const Seen seen = classify(self,other,victim,perc);
+  JsonWriter j("perception_held");
+  j.str("hold",h.id).str("npc",symbol).str("kind",seen.kind).str("other",otherId)
+   .str("other_name",TextCodec::toUtf8(other.displayName()))
+   .num("distance",std::sqrt(double(self.qDistTo(other))));
+  if(seen.about==&self)
+    j.str("detail","you"); else
+  if(seen.about!=nullptr)
+    j.str("detail",seen.about->isPlayer() ? "PLAYER" : TextCodec::toUtf8(seen.about->displayName()));
+  emit(j.finish());
+  held.push_back(std::move(h));
+  return true;
+  }
+
+void NpcObserver::verdict(World& world, const rapidjson::Value& msg) {
+  const auto id = JsonRead::str(msg,"hold");
+  auto it = std::find_if(held.begin(),held.end(),[&](const Held& h){ return h.id==id; });
+  if(it==held.end())
+    return;  // released already (too late)
+  const bool server = JsonRead::str(msg,"to")=="server";
+  verdicts[it->key] = Verdict{server,world.tickCount()+VerdictMs};
+  if(!server)
+    releaseHeld(world,*it);
+  held.erase(it);
+  }
+
+void NpcObserver::releaseAll(World& world) {
+  for(auto& h:held)
+    releaseHeld(world,h);
+  held.clear();
+  verdicts.clear();
+  }
+
+void NpcObserver::releaseHeld(World& world, Held& h) {
+  // the npc's pointers are only trusted if they still belong to the world
+  Npc *self = nullptr, *other = nullptr, *victim = nullptr;
+  if(Npc* pl = world.player())
+    world.detectNpc(pl->position(),RosterRadius,[&](Npc& n) {
+      if(&n==h.self)   self   = &n;
+      if(&n==h.other)  other  = &n;
+      if(&n==h.victim) victim = &n;
+      });
+  if(self==nullptr || other==nullptr || self->isDead() || self->isDown() || other->isDead())
+    return;
+  if(auto v = verdicts.find(h.key); v!=verdicts.end())
+    v->second = Verdict{false,world.tickCount()+VerdictMs};
+  self->passPerception(*other,h.victim!=nullptr ? victim : nullptr,h.perc);
   }
 
 void NpcObserver::act(World& world, const rapidjson::Value& msg) {
@@ -355,10 +451,7 @@ void NpcObserver::routine(World& world, const rapidjson::Value& msg) {
     emit(j.str("error","npc not found").finish());
     return;
     }
-  auto stateName = [&](ScriptFn fn) -> std::string {
-    auto sym = fn.isValid() ? world.script().findSymbol(fn.ptr) : nullptr;
-    return sym!=nullptr ? sym->name() : "";
-    };
+  auto stateName = [&](ScriptFn fn) { return AiNpc::stateName(world,fn); };
   auto hhmm = [](gtime t) {
     char buf[8];
     std::snprintf(buf,sizeof(buf),"%02d:%02d",int(t.hour()),int(t.minute()));

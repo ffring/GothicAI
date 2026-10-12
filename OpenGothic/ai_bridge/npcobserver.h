@@ -34,6 +34,13 @@ class NpcObserver final {
     void tick(World& world);
     void perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
     void act(World& world, const rapidjson::Value& msg);
+    // threats to free npc's (monsters near or attacking, attacks by npc's) are held back from the scripts
+    // for the server's behavioral model; it answers with a verdict, or the scripts get them after HoldMs
+    bool intercept(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
+    void verdict(World& world, const rapidjson::Value& msg);
+    void setHoldThreats(bool on) { holdThreats = on; }
+    // the server is gone: every held threat goes to the scripts now
+    void releaseAll(World& world);
     // `routine`: an npc's daily routine, its routine variants and current state (v6)
     void routine(World& world, const rapidjson::Value& msg);
     void clear();
@@ -64,4 +71,24 @@ class NpcObserver final {
     std::unordered_map<std::string,bool>  close;      // npc -> the player is within reach
     std::unordered_map<std::string,uint64_t> lastEvent;  // "npc/kind" -> time
     std::vector<Running>                  running;
+
+    struct Held final {
+      std::string id;
+      std::string key;     // "npc/other": a verdict covers that pair for a while
+      const Npc*  self   = nullptr;
+      const Npc*  other  = nullptr;
+      const Npc*  victim = nullptr;
+      PercType    perc   = PERC_None;
+      uint64_t    at     = 0;
+      };
+    struct Verdict final {
+      bool     server = false;  // the server acts on it (swallow repeats); false: the scripts get them
+      uint64_t until  = 0;
+      };
+    void releaseHeld(World& world, Held& h);
+
+    bool                                     holdThreats = false;
+    uint64_t                                 nextHold    = 1;
+    std::vector<Held>                        held;
+    std::unordered_map<std::string,Verdict>  verdicts;
   };
