@@ -26,6 +26,7 @@
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/animation.h"
 #include "graphics/mesh/attachbinder.h"
+#include "graphics/mesh/bowdraw.h"
 #include "graphics/material.h"
 #include "dmusic/directmusic.h"
 #include "utils/fileext.h"
@@ -35,6 +36,8 @@
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
+#include <optional>
+#include <unordered_map>
 
 using namespace Tempest;
 
@@ -235,6 +238,98 @@ std::unique_ptr<zenkit::ReadArchive> Resources::openReader(std::string_view name
 
 const char* Resources::renderer() {
   return inst->dev.properties().name;
+  }
+
+// A bow's string drawn straight back (graphics/mesh/bowdraw): G2 draws the string's middle up and to the
+// side, to the arrow its animations hold high over the hand. Copies of the drawn string (S_READY) and of
+// its release (S_RELAX) where the middle goes square to the limbs, back as far, to the side only as far as
+// the arrow passes the bow; the limbs bend as they do. On a layer of their own: they blend with G2's
+static void straightenString(zenkit::MorphMesh& zmm) {
+  const zenkit::MorphAnimation* ready = nullptr;
+  const zenkit::MorphAnimation* relax = nullptr;
+  int32_t                       layer = 0;
+  for(auto& a:zmm.animations) {
+    if(a.name=="S_READY")
+      ready = &a;
+    if(a.name=="S_RELAX")
+      relax = &a;
+    layer = std::max(layer,a.layer);
+    }
+  const auto& pos = zmm.mesh.positions;
+  if(ready==nullptr || ready->vertices.empty() || ready->samples.size()<ready->vertices.size() || pos.empty())
+    return;
+
+  // the bow's axes: along the limbs (the longest), across it (the thinnest), back from the grip
+  Vec3 lo = Vec3(pos[0].x,pos[0].y,pos[0].z), hi = lo;
+  for(auto& p:pos) {
+    lo = Vec3(std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z));
+    hi = Vec3(std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z));
+    }
+  const float ext[3] = {hi.x-lo.x, hi.y-lo.y, hi.z-lo.z};
+  int along = 0, across = 0;
+  for(int i=1; i<3; ++i) {
+    if(ext[i]>ext[along])
+      along = i;
+    if(ext[i]<ext[across])
+      across = i;
+    }
+  const int back = 3-along-across;
+  if(along==across)
+    return;
+  auto comp = [](const zenkit::Vec3& v, int i) { return i==0 ? v.x : (i==1 ? v.y : v.z); };
+
+  // the string's middle: the vertices drawn the farthest
+  const size_t per  = ready->vertices.size();
+  float        peak = 0;
+  size_t       top  = 0;
+  for(size_t k=0; k<per; ++k) {
+    auto&       m = ready->samples[k];
+    const float d = std::sqrt(m.x*m.x + m.y*m.y + m.z*m.z);
+    if(d>peak) {
+      peak = d;
+      top  = k;
+      }
+    }
+  if(peak<1.f)
+    return;
+  const float drawn = comp(ready->samples[top],back);
+  const float side  = comp(ready->samples[top],across)<0.f ? -BowDraw::StringSide : BowDraw::StringSide;
+  if(std::abs(drawn)<1.f)
+    return;
+  std::unordered_map<uint32_t,float> middle;
+  for(size_t k=0; k<per; ++k) {
+    auto&       m = ready->samples[k];
+    const float d = std::sqrt(m.x*m.x + m.y*m.y + m.z*m.z)/peak;
+    const float w = std::clamp((d-0.5f)/0.3f,0.f,1.f);
+    if(w>0.f)
+      middle[ready->vertices[k]] = w*w*(3.f-2.f*w);
+    }
+
+  auto straight = [&](zenkit::MorphAnimation a, const char* name) {
+    a.name  = name;
+    a.layer = layer+1;
+    const size_t n = a.vertices.size();
+    for(size_t i=0; n>0 && i<a.samples.size(); ++i) {
+      auto it = middle.find(a.vertices[i%n]);
+      if(it==middle.end())
+        continue;
+      auto&       m  = a.samples[i];
+      const float b  = comp(m,back);
+      float       to[3] = {};
+      to[back]   = b;
+      to[across] = side*(b/drawn);
+      const float w  = it->second;
+      m.x += (to[0]-m.x)*w;
+      m.y += (to[1]-m.y)*w;
+      m.z += (to[2]-m.z)*w;
+      }
+    return a;
+    };
+  auto drawnStr = straight(*ready,BowDraw::StringDrawn);
+  auto loose    = relax!=nullptr ? std::make_optional(straight(*relax,BowDraw::StringLoose)) : std::nullopt;
+  zmm.animations.push_back(std::move(drawnStr));
+  if(loose)
+    zmm.animations.push_back(std::move(*loose));
   }
 
 static Sampler implShadowSampler() {
@@ -472,6 +567,7 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
 
     if(zmm.mesh.sub_meshes.empty())
       return nullptr;
+    straightenString(zmm);
 
     PackedMesh packed(zmm.mesh,PackedMesh::PK_VisualMorph);
     std::unique_ptr<ProtoMesh> ret{new ProtoMesh(std::move(packed),zmm.animations,name)};

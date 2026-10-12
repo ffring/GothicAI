@@ -315,6 +315,8 @@ class Npc final {
     auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string hitZonesDump() const { return visual.hitZonesDump(); }
+    void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
+    std::string bowDump() const { return visual.bowDump(); }
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;

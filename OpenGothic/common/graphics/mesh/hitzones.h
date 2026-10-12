@@ -32,6 +32,14 @@ class HitZones final {
     // The middle of a zone: the test bench aims there
     bool             center(const Tempest::Matrix4x4* tr, size_t numBones, Zone z, Tempest::Vec3& at) const;
 
+    struct Posed final {
+      Tempest::Vec3 a, b;
+      float         r    = 0;
+      Zone          zone = None;
+      };
+    // the capsules as posed (the test bench draws them)
+    void             posed(const Tempest::Matrix4x4* tr, size_t numBones, float scale, std::vector<Posed>& out) const;
+
     static std::string_view name(Zone z);
     // the capsules as posed, for debugging: (a, b, radius, zone)
     std::string      dump(const Tempest::Matrix4x4* tr, size_t numBones, float scale) const;

@@ -4237,6 +4237,8 @@ bool Npc::shootBow(Interactive* focOverride) {
     return false;
 
   auto& b = owner.shootBullet(*itm,*this,currentTarget,focOverride);
+  // the arrow left the hand: the reload places the next one
+  visual.dropAmmo();
 
   invent.delItem(size_t(munition),1,*this);
   b.setOrigin(this);
@@ -4309,6 +4311,7 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
 
   const float speed = Archery::speedAt(st,draw);
   auto&       b     = owner.shootArrow(*itm,pos,dir,speed);
+  visual.dropAmmo();
   if(TestBench::isActive()) {
     char buf[200];
     std::snprintf(buf,sizeof(buf),"arrow shot: from %.1f %.1f %.1f dir %.5f %.5f %.5f speed %.3f draw %.2f",
