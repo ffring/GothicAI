@@ -6,7 +6,7 @@ import asyncio
 import itertools
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from http import HTTPStatus
 from typing import Any
 
@@ -26,6 +26,7 @@ from .protocol import (
     DetachCmd,
     Detached,
     GameMessage,
+    GraphPatchCmd,
     Hello,
     Loading,
     NpcActCmd,
@@ -39,12 +40,35 @@ from .protocol import (
     Session,
     Snapshot,
     SnapshotCmd,
+    StoryEffectCmd,
+    StoryEvalCmd,
+    StoryNearbyCmd,
+    StoryPeopleCmd,
+    StorySpawnCmd,
+    StoryStateCmd,
+    StoryTagCmd,
+    StoryWatchCmd,
     WorldLoaded,
     _Command,
     parse_game_message,
 )
 
 log = logging.getLogger(__name__)
+
+# requests answered with `result`
+_Request = (
+    AttachCmd
+    | DetachCmd
+    | DebugCmd
+    | GraphPatchCmd
+    | StorySpawnCmd
+    | StoryEffectCmd
+    | StoryNearbyCmd
+    | StoryStateCmd
+    | StoryEvalCmd
+    | StoryTagCmd
+    | StoryPeopleCmd
+)
 
 Listener = Callable[[GameMessage], None]
 
@@ -159,7 +183,8 @@ class GameLink:
         assert self.world is not None
         return self.world
 
-    async def _request(self, cmd: AttachCmd | DetachCmd | DebugCmd, timeout: float) -> None:
+    async def _request(self, cmd: _Request, timeout: float) -> Result:
+        assert cmd.req is not None
         fut: asyncio.Future[Result] = asyncio.get_running_loop().create_future()
         self._requests[cmd.req] = fut
         try:
@@ -169,6 +194,7 @@ class GameLink:
             self._requests.pop(cmd.req, None)
         if not res.ok:
             raise GameError(res.error or "request failed")
+        return res
 
     async def attach(self, npc: str, timeout: float = 5.0) -> None:
         await self._request(AttachCmd(req=self._next_id("r"), npc=npc), timeout)
@@ -194,6 +220,103 @@ class GameLink:
         """A test helper (game in -devmode): saving/loading `save_slot_<slot>.sav` (returns once it has
         started), `spawn` (instance=, near=, distance=), `player_weapon` (state="melee"|"none")."""
         await self._request(DebugCmd(req=self._next_id("r"), cmd=cmd, slot=slot, **args), timeout)
+
+    async def patch_graph(
+        self, ops: list[dict[str, Any]], replace: bool = False, timeout: float = 5.0
+    ) -> None:
+        """Change the story graph in the game (see GraphPatchCmd); GameError lists the rejected operations."""
+        await self._request(GraphPatchCmd(req=self._next_id("g"), replace=replace, ops=ops), timeout)
+
+    async def story_spawn(
+        self,
+        instance: str,
+        tag: str,
+        count: int = 1,
+        near: str | None = None,
+        distance: int = 600,
+        waypoint: str | None = None,
+    ) -> int:
+        """Creatures under a tag for the director (near an npc, or at a waypoint); how many came."""
+        cmd = StorySpawnCmd(
+            req=self._next_id("s"),
+            instance=instance.upper(),
+            tag=tag,
+            count=count,
+            near=near,
+            distance=distance,
+            waypoint=waypoint,
+        )
+        return int((await self._request(cmd, 5.0)).value or 0)
+
+    async def story_watch(self, npcs: list[str], owner: str = "") -> None:
+        """Npc's whose distance to every tag's living creatures the game reports (story_world); each owner
+        keeps its own list."""
+        await self.send(StoryWatchCmd(npcs=[n.upper() for n in npcs], owner=owner))
+
+    async def story_effect(self, npc: str, effects: list[dict[str, Any]], timeout: float = 5.0) -> None:
+        """Effects on an npc through the scripts (see StoryEffectCmd)."""
+        await self._request(StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects), timeout)
+
+    async def story_nearby(self, npc: str, radius: int = 2000) -> list[dict[str, Any]]:
+        """People within `radius` cm of an npc."""
+        res = await self._request(StoryNearbyCmd(req=self._next_id("s"), npc=npc.upper(), radius=radius), 5.0)
+        return list(res.value or [])
+
+    async def story_state(
+        self,
+        vars: Iterable[str] = (),
+        npcs: Iterable[str] = (),
+        knows: Iterable[str] = (),
+        symbols: Iterable[str] = (),
+        items: Iterable[str] = (),
+        near: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
+        """What the director's rules read (see StoryStateCmd); with `near`, how far each npc is from it."""
+        cmd = StoryStateCmd(
+            req=self._next_id("s"),
+            vars=list(vars),
+            npcs=[n.upper() for n in npcs],
+            near=near.upper() if near else None,
+            knows=list(knows),
+            symbols=list(symbols),
+            items=list(items),
+        )
+        return dict((await self._request(cmd, timeout)).value or {})
+
+    async def story_people(self, timeout: float = 10.0) -> list[dict[str, Any]]:
+        """Every person of the world and its day (see StoryPeopleCmd)."""
+        return list((await self._request(StoryPeopleCmd(req=self._next_id("s")), timeout)).value or [])
+
+    async def story_eval(self, npc: str, exprs: list[Any], timeout: float = 5.0) -> list[Any]:
+        """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""
+        cmd = StoryEvalCmd(req=self._next_id("s"), npc=npc.upper(), exprs=exprs)
+        return list((await self._request(cmd, timeout)).value or [])
+
+    async def story_tag(self, tag: str, npcs: list[str], timeout: float = 5.0) -> int:
+        """Npc's of the world watched under a tag (see StoryTagCmd); how many were found."""
+        cmd = StoryTagCmd(req=self._next_id("s"), tag=tag, npcs=[n.upper() for n in npcs])
+        return int((await self._request(cmd, timeout)).value or 0)
+
+    async def offered_dialogs(self, npc: str, timeout: float = 5.0) -> list[str]:
+        """The dialogs the npc offers the player now (game in -devmode)."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="dialogs", npc=npc.upper()), timeout)
+        return list(res.value or [])
+
+    async def choose_dialog(self, npc: str, node: str, timeout: float = 5.0) -> None:
+        """Play a dialog the npc offers as if the player chose it (game in -devmode)."""
+        await self._request(
+            DebugCmd(req=self._next_id("r"), cmd="choose", npc=npc.upper(), node=node.upper()), timeout
+        )
+
+    async def check_conditions(self, timeout: float = 30.0) -> dict[str, Any]:
+        """Script conditions of every npc in the world against their lifted form (game in -devmode)."""
+        return dict((await self._request(DebugCmd(req=self._next_id("r"), cmd="check"), timeout)).value or {})
+
+    async def evaluate(self, expr: list[Any], npc: str | None = None, timeout: float = 5.0) -> Any:
+        """A story graph expression computed in the game, self = `npc` (game in -devmode)."""
+        cmd = DebugCmd(req=self._next_id("r"), cmd="eval", npc=npc.upper() if npc else None, expr=expr)
+        return (await self._request(cmd, timeout)).value
 
     async def act(
         self, npc: str, action: ActionType, /, *, timeout: float = 90.0, **args: Any

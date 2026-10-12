@@ -810,8 +810,9 @@ bool World::isInPfxRange(const Tempest::Vec3& p) const {
   return wview->isInPfxRange(p);
   }
 
-void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen) {
-  auto sfx = wsound.addDlgSound(s,pos,range,timeLen);
+void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen,
+                        std::shared_ptr<LipSync::Track>* voice) {
+  auto sfx = wsound.addDlgSound(s,pos,range,timeLen,voice);
   sfx.play();
   }
 

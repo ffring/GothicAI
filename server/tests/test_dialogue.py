@@ -151,3 +151,50 @@ async def test_reply_text_streams_to_the_chat_before_its_lines():
     # the first words were on screen before the first line was complete
     first_text = fake.received.index(texts[0])
     assert first_text < fake.received.index(says[0]) and len(texts[0]["text"]) < len(says[0]["text"])
+
+
+async def test_mood_tags_set_the_face_of_the_lines_and_are_not_said():
+    fake = FakeGame()
+    llm = FakeBackend(
+        "[angry] Опять ты здесь? Чего тебе нужно? [friendly] Ладно, проходи, раз уж пришёл.", delay=0
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Привет")
+        await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])
+
+    says = [m for m in fake.received if m["type"] == "say"]
+    assert [(s["text"], s.get("mood")) for s in says] == [
+        ("Опять ты здесь? Чего тебе нужно?", "angry"),
+        ("Ладно, проходи, раз уж пришёл.", "friendly"),
+    ]
+    final = [m for m in fake.received if m["type"] == "chat_text"][-1]
+    assert final["text"] == "Опять ты здесь? Чего тебе нужно? Ладно, проходи, раз уж пришёл."
+    assert dialogue.conversations[XARDAS].history[-1].content == final["text"]
+    instructions, _, _ = llm.calls[-1]
+    assert "[angry]" in instructions  # the model is told how to tag
+
+
+async def test_lines_without_a_tag_have_no_mood():
+    fake = FakeGame()
+    llm = FakeBackend("Ты наконец вернулся из храма. Хорошо, теперь слушай меня внимательно.", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Привет")
+        await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])
+    assert all(m.get("mood") is None for m in fake.received if m["type"] == "say")
+
+
+async def test_a_new_mood_starts_a_new_line():
+    fake = FakeGame()
+    llm = FakeBackend("[friendly] Ты вернулся. [angry] Времени мало, слушай внимательно.", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Привет")
+        await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])
+    # "Ты вернулся." is short and would be merged with the next sentence, but its mood is another
+    says = [(m["text"], m.get("mood")) for m in fake.received if m["type"] == "say"]
+    assert says == [("Ты вернулся.", "friendly"), ("Времени мало, слушай внимательно.", "angry")]

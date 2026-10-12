@@ -41,17 +41,15 @@ class VoxCPM:
             try:
                 ws = await self._connection()
                 req = str(next(self._ids))
-                await ws.send(
-                    json.dumps(
-                        {
-                            "type": "speak",
-                            "id": req,
-                            "text": text,
-                            "voice": {"id": voice.id, "description": voice.description},
-                        },
-                        ensure_ascii=False,
-                    )
-                )
+                request = {
+                    "type": "speak",
+                    "id": req,
+                    "text": text,
+                    "voice": {"id": voice.id, "description": voice.description},
+                }
+                if voice.style:
+                    request["style"] = voice.style
+                await ws.send(json.dumps(request, ensure_ascii=False))
                 while True:
                     msg = await asyncio.wait_for(ws.recv(), self.timeout)
                     if isinstance(msg, bytes):

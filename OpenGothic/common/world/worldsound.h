@@ -10,6 +10,7 @@
 #include <mutex>
 
 #include "gamemusic.h"
+#include "graphics/mesh/lipsync.h"
 
 class GameSession;
 class TriggerEvent;
@@ -27,7 +28,9 @@ class WorldSound final {
     void    addZone       (const zenkit::VZoneMusic& vob);
     void    addSound      (const zenkit::VSound&     vob);
 
-    Sound   addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t &timeLen);
+    // `voice`: the loudness of the line, for lip sync
+    Sound   addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t &timeLen,
+                        std::shared_ptr<LipSync::Track>* voice = nullptr);
 
     void    aiOutput(const Tempest::Vec3& pos, std::string_view outputname);
 

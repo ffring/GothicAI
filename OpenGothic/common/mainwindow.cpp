@@ -1301,6 +1301,12 @@ void MainWindow::render(){
       if(!tex.isEmpty())
         pm = device.readPixels(textureCast<const Texture2d&>(tex));
       TestBench::capture(pm,Gothic::interfaceScale(this));
+      if(TestBench::filming() && !tex.isEmpty()) {
+        // nobody watches the window: the captured frame is the frame (the GPU is idle after the capture)
+        Resources::resetRecycled(cmdId);
+        cmdId = (cmdId+1u)%Resources::MaxFramesInFlight;
+        return;
+        }
       }
 
     auto& sync = fence[cmdId];

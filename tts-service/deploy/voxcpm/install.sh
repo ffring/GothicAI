@@ -7,8 +7,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 UV="${UV:-$HOME/.local/bin/uv}"
 
-"$UV" venv --python 3.12 .venv
-"$UV" pip install --python .venv/bin/python -U voxcpm websockets soundfile --torch-backend=auto
+[ -x .venv/bin/python ] || "$UV" venv --python 3.12 .venv  # a redeploy keeps it (and its torch)
+# torch, torchaudio and torchcodec must be of one CUDA build: a redeploy upgrades voxcpm only (`-U` once
+# moved torch to a newer CUDA build and left torchaudio behind, and the server did not start)
+"$UV" pip install --python .venv/bin/python voxcpm websockets soundfile --upgrade-package voxcpm --torch-backend=auto
 
 mkdir -p ~/.config/systemd/user
 cp gothic-voxcpm.service ~/.config/systemd/user/

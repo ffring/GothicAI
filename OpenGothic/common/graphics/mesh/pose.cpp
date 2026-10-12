@@ -49,7 +49,7 @@ void Pose::save(Serialize &fout) {
   uint8_t sz=uint8_t(lay.size());
   fout.write(sz);
   for(auto& i:lay) {
-    fout.write(i.seq->name,i.sAnim,i.bs,i.sBlend);
+    fout.write(i.seq->name,i.sAnim,i.bs,uint64_t(0)); // was the start of a blend
     }
   fout.write(lastUpdate);
   fout.write(combo.bits);
@@ -61,7 +61,7 @@ void Pose::save(Serialize &fout) {
     fout.write(uint8_t(i));
   for(auto& i:base)
     fout.write(i);
-  for(auto& i:prev)
+  for(auto& i:raw)
     fout.write(i);
   for(auto& i:tr)
     fout.write(i);
@@ -75,8 +75,10 @@ void Pose::load(Serialize &fin, const AnimationSolver& solver) {
   lay.resize(sz);
   for(auto& i:lay) {
     fin.read(name,i.sAnim,i.bs);
-    if(fin.version()>43)
-      fin.read(i.sBlend);
+    if(fin.version()>43) {
+      uint64_t sBlend = 0;
+      fin.read(sBlend);
+      }
     i.seq = solver.solveFrm(name);
     }
   fin.read(lastUpdate);
@@ -103,10 +105,11 @@ void Pose::load(Serialize &fin, const AnimationSolver& solver) {
     fin.read(reinterpret_cast<uint8_t&>(i));
   for(auto& i:base)
     fin.read(i);
-  for(auto& i:prev)
+  for(auto& i:raw)
     fin.read(i);
   for(auto& i:tr)
     fin.read(i);
+  blend.reset(numBones);
   }
 
 void Pose::setFlags(Pose::Flags f) {
@@ -148,10 +151,12 @@ void Pose::setSkeleton(const Skeleton* sk) {
     }
   for(auto& i:hasSamples)
     i = S_None;
+  blend.reset(numBones);
   ik.setSkeleton(skeleton);
   gaze.setSkeleton(skeleton);
   lean.setSkeleton(skeleton);
   aim.setSkeleton(skeleton);
+  flinch.setSkeleton(skeleton);
   trY          = skeleton->rootTr.y;
   needToUpdate = true;
   if(lay.size()>0) //TODO
@@ -205,7 +210,6 @@ bool Pose::startAnim(const AnimationSolver& solver, const Animation::Sequence *s
       onRemoveLayer(i);
       i.seq      = tr ? tr : sq;
       i.sAnim    = tickCount;
-      i.sBlend   = 0;
       i.comb     = comb;
       i.bs       = bs;
       onAddLayer(i);
@@ -342,8 +346,10 @@ bool Pose::update(uint64_t tickCount, bool force) {
       if(numFrames==1 && !needToUpdate)
         continue; //mobsi
 
-      needMkSkeleton |= updateFrame(*seq,i.bs,i.sBlend,lastUpdate,i.sAnim,tickCount);
+      needMkSkeleton |= updateFrame(*seq,i.bs,i.sAnim,tickCount);
       }
+    // switches of animations: smoothly from the pose shown
+    needMkSkeleton |= blend.apply(raw,base,numBones,tickCount);
     lastUpdate   = tickCount;
     needToUpdate = needMkSkeleton;
     }
@@ -355,15 +361,13 @@ bool Pose::update(uint64_t tickCount, bool force) {
   return false;
   }
 
-bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sBlend,
-                       uint64_t barrier, uint64_t sTime, uint64_t now) {
+bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sTime, uint64_t now) {
   auto&        d         = *s.data;
   const size_t idSize    = d.nodeIndex.size();
   const size_t numFrames = d.numFrames;
   if(numFrames==0 || idSize==0 || d.samples.size()%idSize!=0)
     return false; // error
 
-  (void)barrier;
   now = now-sTime;
 
   float    fpsRate = d.fpsRate;
@@ -389,9 +393,6 @@ bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sBle
   auto* sampleA = &d.samples[size_t(frameA*idSize)];
   auto* sampleB = &d.samples[size_t(frameB*idSize)];
 
-  const uint64_t blendMax = std::max(s.blendOut,s.blendIn);
-  const uint64_t blend    = std::max<uint64_t>(0, now-sBlend);
-
   for(size_t i=0; i<idSize; ++i) {
     size_t idx = d.nodeIndex[i];
     if(idx>=numBones)
@@ -406,26 +407,9 @@ bool Pose::updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sBle
         smp.position.y = trY;
       }
 
-    switch(hasSamples[idx]) {
-      case S_None:
-        hasSamples[idx] = S_Old;
-        base      [idx] = smp;
-        break;
-      case S_Old:
-        hasSamples[idx] = S_Valid;
-        prev      [idx] = base[idx];
-        [[fallthrough]];
-      case S_Valid:
-        if(blend < blendMax) {
-          float a2 = float(blend)/float(blendMax);
-          assert(0.f<=a2 && a2<=1.f);
-          base[idx] = mix(prev[idx],smp,a2);
-          } else {
-          prev[idx] = smp;
-          base[idx] = smp;
-          }
-        break;
-      }
+    hasSamples[idx] = S_Valid;
+    raw       [idx] = smp;
+    blend.drive(idx,s,sTime,sampleA[i],sampleB[i],fpsRate);
     }
   return true;
   }
@@ -442,6 +426,7 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt) {
   ik.apply(tr,numBones,mt.at(3,1));
   aim.apply(tr,numBones);
   gaze.apply(tr,numBones);
+  flinch.apply(tr,numBones);
   }
 
 void Pose::implMkSkeleton(const Matrix4x4 &mt) {
@@ -550,16 +535,8 @@ void Pose::onRemoveLayer(const Pose::Layer &l) {
     hasTransitions--;
   if(l.seq->isFly())
     isFlyCombined--;
-
-  for(auto id:l.seq->data->nodeIndex)
-    if(hasSamples[id]==S_Valid)
-      hasSamples[id] = S_Old;
-
-  for(auto& lx : lay) {
-    if(&lx==&l)
-      break;
-    lx.sBlend = lastUpdate-lx.sAnim;
-    }
+  // the layers under it take the bones back (AnimBlend sees the switch): even a still one
+  needToUpdate = true;
   }
 
 bool Pose::hasLayerEvents(const Pose::Layer& l) {
@@ -856,6 +833,13 @@ std::string Pose::animNames() const {
   return s;
   }
 
+bool Pose::updateFlinch(const Flinch::Input& in) {
+  if(!flinch.update(in))
+    return false;
+  mkSkeleton(pos);
+  return true;
+  }
+
 bool Pose::updateAim(const Aim::Input& in) {
   if(!aim.update(in))
     return false;
@@ -941,6 +925,51 @@ bool Pose::stopItemStateAnim(const AnimationSolver& solver, uint64_t tickCount) 
 
 const Matrix4x4* Pose::transform() const {
   return tr;
+  }
+
+Pose::Probe Pose::playerProbe;
+Pose::Probe Pose::subjectProbe;
+const void* Pose::probeNpc = nullptr;
+
+void Pose::probe(Probe& p) {
+  p.layers.clear();
+  for(auto& i:lay) {
+    if(!p.layers.empty())
+      p.layers += '+';
+    p.layers += i.seq->name;
+    p.layers += ':' + std::to_string(i.seq->blendIn) + '/' + std::to_string(i.seq->blendOut);
+    }
+  blend.probe(p.blend);
+  p.valid    = skeleton!=nullptr;
+  p.skeleton = skeleton;
+  p.numBones = skeleton!=nullptr ? std::min(numBones,skeleton->nodes.size()) : 0;
+  if(!p.valid)
+    return;
+
+  // the bones as the animation has them, without the object matrix, the root moved to x=z=0
+  // like mkSkeleton does
+  auto&     nodes = skeleton->nodes;
+  Matrix4x4 m[Resources::MAX_NUM_SKELETAL_NODES];
+  bool      done[Resources::MAX_NUM_SKELETAL_NODES] = {};
+  const Matrix4x4 root = rootNode();
+  Matrix4x4 org = Matrix4x4::mkIdentity();
+  org.translate(Vec3(-root.at(3,0),0,-root.at(3,2)));
+
+  for(size_t i=0; i<p.numBones; ++i) {
+    // parents first, whatever the order of the nodes
+    size_t chain[Resources::MAX_NUM_SKELETAL_NODES];
+    size_t n = 0;
+    for(size_t b=i; b<p.numBones && !done[b] && n<p.numBones; b=nodes[b].parent)
+      chain[n++] = b;
+    while(n>0) {
+      const size_t b      = chain[--n];
+      const size_t parent = nodes[b].parent;
+      const auto   mat    = hasSamples[b] ? mkMatrix(base[b]) : nodes[b].tr;
+      m[b]    = (parent<p.numBones ? m[parent] : org)*mat;
+      done[b] = true;
+      }
+    p.joint[i] = Vec3(m[i].at(3,0),m[i].at(3,1),m[i].at(3,2));
+    }
   }
 
 Vec3 Pose::mkBaseTranslation() {

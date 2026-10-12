@@ -1034,6 +1034,22 @@ void Npc::startFaceAnim(std::string_view anim, float intensity, uint64_t duratio
   visual.startFaceAnim(*this,anim,intensity,duration);
   }
 
+float Npc::faceWeight(std::string_view anim) {
+  return visual.faceWeight(anim);
+  }
+
+void Npc::startSpeech(const Tempest::Sound& voice) {
+  visual.startSpeech(*this,LipSync::Track::fromSound(voice));
+  }
+
+void Npc::startSpeech(std::shared_ptr<LipSync::Track> voice) {
+  visual.startSpeech(*this,std::move(voice));
+  }
+
+void Npc::stopSpeech() {
+  visual.stopSpeech();
+  }
+
 bool Npc::stopItemStateAnim() {
   return visual.stopItemStateAnim(*this);
   }
@@ -2103,7 +2119,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(hitResult.hasHit) {
-    auto state = bodyStateMasked();
+    auto state   = bodyStateMasked();
+    bool stumble = false;
     if(interactive()==nullptr && ((state&BS_FLAG_INTERRUPTABLE)!=BS_NONE || state==BS_RUN || state==BS_NONE)) {
       //NONE/RUN requires for monsters like waran
       const bool noInter = (hnpc->bodystate_interruptable_override!=0);
@@ -2114,8 +2131,10 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
 
       if((damageType & (1<<zenkit::DamageType::FLY))==0)
-        setAnimAngGet(lastHitType=='A' ? Anim::StumbleA  : Anim::StumbleB);
+        stumble = setAnimAngGet(lastHitType=='A' ? Anim::StumbleA  : Anim::StumbleB)!=nullptr;
       }
+    if((damageType & (1<<zenkit::DamageType::FLY))==0)
+      hitReaction(other,b,hitResult.value,stumble);
     }
 
   // throw enemy
@@ -2142,6 +2161,46 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
       }
     }
+  }
+
+void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble) {
+  // the upper body gives way to the blow (graphics/mesh/flinch), on top of the stumble if one plays
+  const Vec3  feet   = position();
+  const Vec3  center = collosionCenter();
+  const float top    = std::max(mapHeadBone().y - feet.y, 50.f);
+  Flinch::Hit hit;
+  Vec3        at; // where it lands
+  if(b!=nullptr && Vec3(b->direction().x,0,b->direction().z).length()>1e-3f) {
+    hit.dir = b->direction();
+    at      = b->position();
+    } else {
+    // a weapon swung sideways pushes along the swing too and lands on the side it comes from
+    Vec3 to = feet - other.position();
+    to.y = 0;
+    to   = to.length()>1e-3f ? Vec3::normalize(to) : Vec3(-std::cos(rotationRad()),0,-std::sin(rotationRad()));
+    const auto  anim  = other.animNames();
+    const float swing = anim.find("ATTACKL")!=std::string::npos ? 1.f : (anim.find("ATTACKR")!=std::string::npos ? -1.f : 0.f);
+    const float oa    = other.rotationRad();
+    const Vec3  left  = Vec3::crossProduct(Vec3(std::cos(oa),0,std::sin(oa)),Vec3(0,1,0)); // of the one who strikes
+    hit.dir = to + left*(0.6f*swing);
+    at      = center - left*(20.f*swing) - to*20.f;
+    at.y    = feet.y + top*(other.isMonster() ? 0.6f : 0.85f);
+    }
+  // 0 the hips (half the height to the head), 1 the head
+  hit.height = std::clamp((at.y - feet.y)/top*2.f - 1.f, 0.f, 1.f);
+  // off the middle the blow turns the trunk: about up, by the lever
+  Vec3 r = at - center;
+  r.y = 0;
+  Vec3 d = Vec3(hit.dir.x,0,hit.dir.z);
+  if(d.length()>1e-3f) {
+    d = Vec3::normalize(d);
+    hit.twist = std::clamp(Vec3::crossProduct(r,d).y/25.f, -1.f, 1.f);
+    }
+  const int32_t hpMax = std::max(attribute(ATR_HITPOINTSMAX),1);
+  hit.strength = std::clamp(0.35f + 2.5f*float(std::max(damage,0))/float(hpMax), 0.35f, 1.f);
+  if(stumble)
+    hit.strength *= 0.6f; // the stumble throws the body already
+  flinch(hit);
   }
 
 void Npc::takeFallDamage(const Vec3& fallSpeed) {
@@ -2355,6 +2414,7 @@ void Npc::tick(uint64_t dt) {
   assert(go2.flag!=GoToHint::GT_Enemy && go2.flag!=GoToHint::GT_EnemyG);
 
   tickAnimationTags();
+  visual.updateMouth(*this,dt);
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);
@@ -4314,6 +4374,10 @@ Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
   return Gaze::Source::None;
   }
 
+void Npc::flinch(const Flinch::Hit& hit) {
+  visual.flinch(*this,hit);
+  }
+
 std::string Npc::animNames() const {
   return visual.pose().animNames();
   }
@@ -5034,6 +5098,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
   syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
+  syncAtt |= visual.updateFlinch(*this,dt);
   if(syncAtt)
     visual.syncAttaches();
   }

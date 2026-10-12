@@ -29,6 +29,7 @@ class LineLibrary final {
       std::string reply;  // the reply this line belongs to, already shown in the chat
       bool        overlay = false;  // said on the move: not through the npc's AI queue
       bool        hushed  = false;  // cut off before it started (v7 hush): speaks nothing
+      std::string mood;             // the face while it is said (v8): neutral, friendly, angry...
       };
 
     static constexpr uint32_t VoicePauseMs = 250;  // breath between voiced lines
@@ -47,6 +48,8 @@ class LineLibrary final {
     void        clear() { lines.clear(); }
     // the npc was interrupted: its lines that have not started yet speak nothing when their turn comes
     void        hush(std::string_view npc);
+    // a line was added that has not started yet (and will speak)
+    bool        pending() const;
 
     std::function<void(const Line&)> onStart;
 

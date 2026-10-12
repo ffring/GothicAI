@@ -9,6 +9,8 @@
 #include "objvisual.h"
 #include "gothic.h"
 
+#include <cstdlib>
+
 using namespace Tempest;
 
 MdlVisual::MdlVisual()
@@ -521,6 +523,15 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
   solver.update(tickCount);
   pose.setObjectMatrix(pos,false);
   const bool changed = pose.update(tickCount, force);
+  if(npc!=nullptr && npc->isPlayer()) {
+    static const bool log = std::getenv("OPENGOTHIC_ANIBLEND_LOG")!=nullptr;
+    pose.setBlendLog(log);
+    }
+  // the animated pose for the test bench (it probes the feet too)
+  if(npc!=nullptr && npc->isPlayer() && FootIk::isProbing())
+    pose.probe(Pose::playerProbe);
+  if(npc!=nullptr && npc==Pose::probeNpc)
+    pose.probe(Pose::subjectProbe);
 
   if(changed)
     view.setPose(pos,pose);
@@ -540,7 +551,8 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   Gaze::Input in;
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
-  if(!npc.isDown())
+  // a blow throws the head around: the gaze lets go while one stumbles
+  if(!npc.isDown() && (npc.bodyStateMasked() & BS_MAX)!=BS_STUMBLE)
     in.source = npc.gazeTarget(in.target);
   if(in.source!=Gaze::Source::None) {
     in.active   = true;
@@ -670,6 +682,36 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   if(changed)
     view.setPose(pos,pose);
   return changed;
+  }
+
+bool MdlVisual::updateFlinch(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& fl   = pose.flinchIk();
+  if(!fl.isValid()) {
+    if(npc.isPlayer())
+      Flinch::playerProbe = Flinch::Probe();
+    if(&npc==Flinch::probeNpc)
+      Flinch::subjectProbe = Flinch::Probe();
+    return false;
+    }
+  const float a = npc.rotationRad();
+  Flinch::Input in;
+  in.dt       = dt;
+  in.forward  = {std::cos(a), 0, std::sin(a)};
+  in.headOnly = pose.footIk().isQuadruped();
+  const bool changed = pose.updateFlinch(in);
+  if(npc.isPlayer())
+    fl.probe(Flinch::playerProbe);
+  if(&npc==Flinch::probeNpc)
+    fl.probe(Flinch::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
+void MdlVisual::flinch(const Npc& npc, const Flinch::Hit& hit) {
+  const float a = npc.rotationRad();
+  skInst->flinchIk().hit(hit,{std::cos(a), 0, std::sin(a)});
   }
 
 bool MdlVisual::hasGaze() const {
@@ -1169,12 +1211,39 @@ void MdlVisual::startMMAnim(Npc&, std::string_view anim, std::string_view bone) 
   }
 
 void MdlVisual::startFaceAnim(Npc& npc, std::string_view anim, float intensity, uint64_t duration) {
+  // a voiced line moves the mouth itself: no talk loop over it
+  if(anim=="VISEME" && duration!=0 && mouth.isSpeaking(npc.world().tickCount()))
+    return;
   if(duration!=uint64_t(-1) && duration!=0)
     duration += npc.world().tickCount();
   head.view.startMMAnim(anim,intensity,duration);
   }
 
+void MdlVisual::startSpeech(Npc& npc, std::shared_ptr<LipSync::Track> voice) {
+  if(voice==nullptr)
+    return;
+  // the mouth shapes of the head: a head without them gets the talk loop
+  std::vector<float> shapes;
+  if(auto proto = head.view.protoMesh())
+    for(auto& m:proto->morph)
+      if(m.name=="VISEME") {
+        shapes = m.strength;
+        break;
+        }
+  mouth.setShapes(std::move(shapes));
+  mouth.start(std::move(voice),npc.world().tickCount());
+  }
+
+void MdlVisual::updateMouth(Npc& npc, uint64_t dt) {
+  LipSync::Shape s;
+  if(mouth.update(npc.world().tickCount(),dt,s))
+    head.view.setMMShape("VISEME",s.frame0,s.frame1,s.alpha,s.intensity);
+  if(&npc==LipSync::probeNpc)
+    mouth.probe(LipSync::subjectProbe);
+  }
+
 void MdlVisual::stopDlgAnim(Npc& npc) {
+  mouth.stop();
   const uint16_t count = Gothic::inst().version().dialogGestureCount();
   for(uint16_t i=0; i<count; i++){
     char buf[32]={};

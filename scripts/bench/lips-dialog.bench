@@ -1,0 +1,14 @@
+# Lip sync in a real dialog (the dialog window plays the lines): the hero talks to Xardas, he and the
+# hero speak in turn. The camera close to Xardas' face, then to the hero's.
+cheat god
+view clean 30
+watch nearest
+place 120 0
+wait 300
+dialog nearest
+cam face 40 20 1
+rec xardas
+wait 12000
+choose 1
+wait 9000
+stop

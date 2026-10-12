@@ -37,7 +37,17 @@ FLAGS = {
     "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
     "aim_off":   (3.0, "deg", "the bow (the spell) aims past where the shot leaves, although the turn could reach it"),
     "gaze_jerk": (10.0, "deg", "the face turned this much in one frame (a turn to the partner goes up to 9)"),
+    "anim_pop":  (20.0, "cm", "a joint of the animated pose (before lean, IK, gaze) jumped at a switch of animations: second difference over 3 frames"),
+    "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
+    "lip_shut":  (0.7, "",    "the voice is loud but the mouth stays shut"),
+    "face_jump": (0.5, "",    "a face came or went at once (it fades in about a second; T_HURT in 0.1 s)"),
+    "flinch_none": (1.0, "x", "a blow and the upper body hardly gave way: 1.5 degrees over the peak"),
+    "flinch_slow": (1.5, "s", "the upper body is not back this long after the last blow"),
 }
+TEXT = ("an_bone", "an_layers")  # columns that are names, not numbers
+FACES = ("face_neutral", "face_friendly", "face_angry", "face_hostile", "face_afraid", "face_pain")
+LIPS = ("lip_open", "lip_shut")
+LIP_FRAMES = 4  # the mouth closes and opens over a frame or two: shorter runs are not flagged
 
 
 def num(v):
@@ -55,7 +65,7 @@ def load(out):
     with open(path) as f:
         for row in csv.DictReader(f):
             seg = row.pop("seg")
-            segs[seg].append({k: num(v) for k, v in row.items()})
+            segs[seg].append({k: (v if k in TEXT else num(v)) for k, v in row.items()})
     return segs
 
 
@@ -100,8 +110,8 @@ def toe_yaw(r, leg):
     return ang if grow >= 0 else -ang
 
 
-def frame_flags(prev2, prev, r):
-    """flags of one frame: list of (flag, leg, value)"""
+def frame_flags(prev2, prev, r, switch=False):
+    """flags of one frame: list of (flag, leg, value); switch: next to a switch of animations"""
     out = []
     on = r["ik_valid"] > 0 and r["ik_w"] > 0.99
     if prev is not None and on and prev["ik_w"] > 0.99:
@@ -121,9 +131,21 @@ def frame_flags(prev2, prev, r):
                 out.append(("gaze_jerk", "-", math.hypot(dy, r["g_fpitch"] - prev["g_fpitch"])))
         elif prev is not None and "g_w" in prev:
             out.append(("gaze_jerk", "-", abs(r["g_yaw"] * r["g_w"] - prev["g_yaw"] * prev["g_w"])))
+    # the bench starts the history of the pose with the segment: two frames before the first difference.
+    # Only at a switch: within an animation it is how the animation moves (a running waran: 80 cm)
+    if "an_pop" in r and r["frame"] >= 2 and switch:
+        out.append(("anim_pop", r.get("an_bone", "-"), r["an_pop"]))
     if "a_w" in r and r["a_w"] > 0.99 and r.get("a_steady", 1) > 0 and r["a_err"] >= 0 and abs(r["a_yaw"]) < 40 \
             and -45 < r["a_pitch"] < 55:
         out.append(("aim_off", "-", r["a_err"]))
+    if prev is not None and FACES[0] in r and FACES[0] in prev:
+        out.append(("face_jump", "-", max(abs(r[c] - prev[c]) for c in FACES)))
+    if r.get("lip_on", 0) > 0:
+        # the level the mouth aims at (the voice a moment ahead) against how wide it is shown
+        if r["lip_level"] < 0.05:
+            out.append(("lip_open", "-", r["lip_open"]))
+        if r["lip_open"] < 0.1:
+            out.append(("lip_shut", "-", r["lip_level"]))
     for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
@@ -155,6 +177,17 @@ def frame_flags(prev2, prev, r):
     return out
 
 
+def switches(rows):
+    """frames where the animations switch: another one plays, or one restarts (AnimBlend saw it)"""
+    return [i for i in range(1, len(rows)) if rows[i].get("an_layers") != rows[i - 1].get("an_layers")
+            or rows[i].get("bl_started", 0) > 0]
+
+
+def switch_frames(rows):
+    """frames a switch can show in: the one before it (it is seen a frame late) to 6 after"""
+    return {j for i in switches(rows) for j in range(max(0, i - 1), min(len(rows), i + 7))}
+
+
 def analyze(rows):
     """per-segment stats and events (runs of flagged frames)"""
     stats = {"frames": len(rows)}
@@ -164,7 +197,8 @@ def analyze(rows):
     current = {}   # (flag, leg) -> event being built
     events = []
     prev2 = prev = None
-    for r in rows:
+    near = switch_frames(rows)
+    for idx, r in enumerate(rows):
         if r["ik_w"] > 0.99:
             on += 1
         if r["occl"] > 0:
@@ -174,7 +208,7 @@ def analyze(rows):
             if (r["ik_w"] > 0.99 or r["ik_w"] <= 0) and r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0:
                 errs.append(abs(contact_err(r, leg)))
         hit = set()
-        for flag, leg, v in frame_flags(prev2, prev, r):
+        for flag, leg, v in frame_flags(prev2, prev, r, idx in near):
             if not (v > FLAGS[flag][0]):
                 continue
             key = (flag, leg)
@@ -187,6 +221,11 @@ def analyze(rows):
             else:
                 ev = {"flag": flag, "leg": leg, "start": int(r["frame"]), "end": int(r["frame"]),
                       "worst": v, "at": int(r["frame"])}
+                if flag == "anim_pop":
+                    # what played a few frames before and what plays now: a pop at a switch is a transition
+                    before = rows[max(0, idx - 3)].get("an_layers", "-")
+                    ev["layers"] = r.get("an_layers", "-") if before == r.get("an_layers") else \
+                        f"{before} -> {r.get('an_layers', '-')}"
                 current[key] = ev
                 events.append(ev)
         prev2, prev = prev, r
@@ -241,12 +280,60 @@ def analyze(rows):
     if rows and "ln_roll" in rows[0]:
         stats["lean_roll"] = max(abs(r["ln_roll"]) for r in rows)
         stats["lean_pitch"] = (min(r["ln_pitch"] for r in rows), max(r["ln_pitch"] for r in rows))
+    # the animated pose: pops (second difference of a joint) overall and next to a switch of animations
+    if rows and "an_pop" in rows[0]:
+        pops = sorted(r["an_pop"] for r in rows[2:] if not math.isnan(r["an_pop"]))
+        if pops:
+            stats["anim_p99"] = pops[min(len(pops) - 1, int(len(pops) * 0.99))]
+            stats["anim_max"] = pops[-1]
+        stats["anim_switches"] = len(switches(rows))
+        stats["anim_switch_max"] = max([rows[j]["an_pop"] for j in near if j >= 2] or [0.0])
+    # lips: how well the mouth follows the voice (correlation of the voice level and the shown opening)
+    lips = [(r["lip_level"], r["lip_open"]) for r in rows if r.get("lip_on", 0) > 0]
+    if len(lips) > 10:
+        n = len(lips)
+        ma = sum(a for a, _ in lips) / n
+        mb = sum(b for _, b in lips) / n
+        va = sum((a - ma) ** 2 for a, _ in lips)
+        vb = sum((b - mb) ** 2 for _, b in lips)
+        cov = sum((a - ma) * (b - mb) for a, b in lips)
+        if va > 0 and vb > 0:
+            stats["lip_corr"] = cov / math.sqrt(va * vb)
+    # flinch: blows, how far the upper body gives way at most (trunk bend, twist, head), how long it takes
+    # to come back after a blow; a blow without a flinch, a flinch that does not come back
+    if rows and "f_hits" in rows[0]:
+        hits = [i for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
+        if hits:
+            stats["flinch_hits"] = len(hits)
+            stats["flinch_peak"] = max(max(r["f_bend"], abs(r["f_twist"]), r["f_head"]) for r in rows)
+            settle = 0.0
+            for k, i in enumerate(hits):
+                end = hits[k + 1] if k + 1 < len(hits) else len(rows)
+                peak = max(max(r["f_bend"], abs(r["f_twist"]), r["f_head"]) for r in rows[i:min(end, i + 8)])
+                if peak < 1.5:
+                    events.append({"flag": "flinch_none", "leg": "-", "start": int(rows[i]["frame"]),
+                                   "end": int(rows[i]["frame"]), "worst": 1.5 / max(peak, 0.01), "at": int(rows[i]["frame"])})
+                if k + 1 == len(hits):
+                    rest = next((j for j in range(i, len(rows)) if rows[j]["f_on"] == 0), None)
+                    if rest is not None:
+                        settle = max(settle, (rows[rest]["t"] - rows[i]["t"]) / 1000.0)
+                    elif len(rows) - i > 45:
+                        t = (rows[-1]["t"] - rows[i]["t"]) / 1000.0
+                        events.append({"flag": "flinch_slow", "leg": "-", "start": int(rows[i]["frame"]),
+                                       "end": int(rows[-1]["frame"]), "worst": t, "at": int(rows[-1]["frame"])})
+            stats["flinch_settle"] = settle
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
     # a contact error for a single frame at the start or the end of a step is not visible
     events = [ev for ev in events if ev["flag"] not in CONTACT or ev["end"] > ev["start"]
               or ev["worst"] >= 2 * FLAGS[ev["flag"]][0]]
+    events = [ev for ev in events if ev["flag"] not in LIPS or ev["end"] - ev["start"] + 1 >= LIP_FRAMES]
+    # a blow throws the head around on purpose (the flinch, the stumble): no gaze jerk for a second after it
+    if rows and "f_hits" in rows[0]:
+        struck = [int(rows[i]["frame"]) for i in range(1, len(rows)) if rows[i]["f_hits"] > rows[i - 1]["f_hits"]]
+        events = [ev for ev in events if ev["flag"] != "gaze_jerk" or
+                  not any(0 <= ev["start"] - f <= 30 for f in struck)]
     for ev in events:
         ev["severity"] = ev["worst"] / FLAGS[ev["flag"]][0]
     return stats, events
@@ -384,8 +471,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | aim err p90 / bend deg | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | hits, peak deg, back s | events |")
+    lines.append("|" + "---|" * 16)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -398,9 +485,14 @@ def report(out):
             f"{st['gaze_on'] * 100:.0f} ({st['gaze_looks']}{', ' + ' '.join(st['gaze_src']) if st['gaze_src'] else ''})"
         ln = "-" if "lean_roll" not in st else \
             f"{st['lean_roll']:.1f} / {st['lean_pitch'][0]:.1f}..{st['lean_pitch'][1]:.1f}"
+        an = "-" if "anim_p99" not in st else \
+            f"{st['anim_p99']:.1f} / {st['anim_max']:.1f} ({st['anim_switches']}, {st['anim_switch_max']:.1f})"
         am = "-" if "aim_p90" not in st else f"{st['aim_p90']:.1f} / {st['aim_bend']:.0f}"
+        lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
+        fl = "-" if "flinch_hits" not in st else \
+            f"{st['flinch_hits']}, {st['flinch_peak']:.1f}, {st['flinch_settle']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {am} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {fl} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
@@ -416,7 +508,8 @@ def report(out):
             frames = spread(max(0, ev["start"] - 6), ev["end"] + 6, 16)
             path = sheet(video, frames, os.path.join(out, "sheets", f"ev{i:02d}-{ev['seg']}-{ev['flag']}-{ev['at']}.png"))
         ev["sheet"] = path
-        lines.append(f"{i:2d}. {ev['seg']} {ev['flag']} leg={ev['leg']} frames {ev['start']}-{ev['end']} "
+        where = f"bone={ev['leg']} [{ev.get('layers', '-')}]" if ev["flag"] == "anim_pop" else f"leg={ev['leg']}"
+        lines.append(f"{i:2d}. {ev['seg']} {ev['flag']} {where} frames {ev['start']}-{ev['end']} "
                      f"worst {ev['worst']:.1f} {unit} at {ev['at']} ({what})" + (f"\n    {path}" if path else ""))
     if not all_events:
         lines.append("none")
@@ -474,6 +567,8 @@ def diff(a, b):
         def c(st):
             ret = "-" if "contact_p90" not in st else f"{st['contact_p90']:.1f}/{st['contact_max']:.1f}"
             ret += "" if "spread" not in st else f" spread {st['spread']:.1f}"
+            ret += "" if "anim_p99" not in st else \
+                f" pop {st['anim_p99']:.1f}/{st['anim_max']:.1f} sw {st['anim_switch_max']:.1f}"
             return ret + ("" if "limp" not in st else f" limp {st['limp']:.1f}")
         print(f"| {seg} | {c(res[0][0])} | {c(res[1][0])} | {changes or 'same'} |")
     print()

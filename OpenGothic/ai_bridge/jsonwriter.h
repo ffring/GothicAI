@@ -20,6 +20,12 @@ class JsonWriter final {
     JsonWriter& integer(std::string_view key, int64_t v)      { name(key); wr.Int64(v); return *this; }
     JsonWriter& boolean(std::string_view key, bool v)         { name(key); wr.Bool(v); return *this; }
     JsonWriter& null(std::string_view key)                    { name(key); wr.Null(); return *this; }
+    // a value that is JSON already
+    JsonWriter& raw(std::string_view key, std::string_view json) {
+      name(key);
+      wr.RawValue(json.data(),json.size(),rapidjson::kObjectType);
+      return *this;
+      }
 
     JsonWriter& object(std::string_view key) { name(key); wr.StartObject(); return *this; }
     JsonWriter& array (std::string_view key) { name(key); wr.StartArray();  return *this; }

@@ -174,7 +174,7 @@
 - `graphics/mesh/hitzones` — капсулы на костях;
 - ручная ветка в `PlayerControl`, камера из-за плеча в `Camera`, перекрестие в `MainWindow`;
 - точные стрелы в `DynamicWorld` и `Bullet`, урон без кубика в `DamageCalculator`;
-- стенд: `manual`, `stats`, `aimat`, `volley`, `immortal`, `zones`, `clear`, таблица «Manual aim» в отчёте, сценарий `manual-aim.bench`.
+- стенд: `manual`, `stats`, `aimat`, `volley`, `immortal`, `zones`, `open` (было `clear`, в main это имя занято уборкой NPC), таблица «Manual aim» в отчёте, сценарий `manual-aim.bench`.
 
 **Что выяснилось по ходу:**
 - **Голова и грубая проверка.** Грубая проверка NPC для стрел — сфера вокруг ног радиусом с коробку столкновений, и голова человека в неё не попадает. Для точных стрел своя проверка: отрезок проходит в двух радиусах коробки от её середины. Дальше решают кости.

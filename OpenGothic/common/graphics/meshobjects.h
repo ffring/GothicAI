@@ -58,6 +58,8 @@ class MeshObjects final {
         void   setFatness  (float f);
         void   setWind     (zenkit::AnimationType m, float intensity);
         void   startMMAnim (std::string_view anim, float intensity, uint64_t timeUntil);
+        void   setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
+        float  morphWeight (std::string_view anim);
 
         bool   isEmpty()    const { return subCount==0; }
         size_t nodesCount() const { return subCount;    }

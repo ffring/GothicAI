@@ -30,6 +30,8 @@ class Bullet final : public DynamicWorld::BulletCallback {
     void     setPosition  (float x,float y,float z);
 
     void     setDirection (const Tempest::Vec3& dir);
+    auto     position()  const -> Tempest::Vec3;
+    auto     direction() const -> Tempest::Vec3;
     void     setTargetRange(float tgRange);
 
     void     setView      (MeshObjects::Mesh&&   m);
