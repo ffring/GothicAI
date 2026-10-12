@@ -109,6 +109,23 @@ int StoryWorld::spawn(World& world, const rapidjson::Value& msg, std::string& er
     error = tag.empty() ? "no tag" : id==size_t(-1) ? "unknown instance " + inst : "unknown npc to spawn near";
     return 0;
     }
+  if(auto name = JsonRead::str(msg,"waypoint"); !name.empty()) {
+    // where the scripts would put them, as Wld_InsertNpc does
+    if(world.findPoint(name)==nullptr) {
+      error = "unknown waypoint " + std::string(name);
+      return 0;
+      }
+    int made = 0;
+    for(int64_t i=0; i<count; ++i)
+      if(Npc* n = world.addNpc(id,name)) {
+        tags[tag].push_back(n);
+        made++;
+        }
+    Log::i("[story] spawned ",made," ",inst," at ",name," as ",tag);
+    if(made==0)
+      error = "could not spawn";
+    return made;
+    }
   // in a row across the way from the npc to the player, so they stand on ground both have walked
   const float dist = float(JsonRead::integer(msg,"distance",600));
   auto        base = at->position();
@@ -238,6 +255,7 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
 
   w.Key("npcs");
   w.StartObject();
+  Npc* near = bySymbol(world,JsonRead::str(msg,"near"));
   eachString(msg,"npcs",[&](const std::string& name) {
     Npc* n = bySymbol(world,name);
     key(name);
@@ -248,6 +266,11 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
       auto display = TextCodec::toUtf8(n->displayName());
       w.Key("name");
       w.String(display.data(),rapidjson::SizeType(display.size()));
+      }
+    if(n!=nullptr && near!=nullptr) {
+      // alive or dead: how far an npc would go to see for itself
+      w.Key("distance");
+      w.Int(int(distance(*near,*n)));
       }
     w.EndObject();
     });

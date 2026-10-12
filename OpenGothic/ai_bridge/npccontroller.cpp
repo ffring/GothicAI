@@ -514,6 +514,14 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
 
   if(c.npc->haveOutput())
     a.deadline = now + a.timeout; // queued speech goes first, the clock starts after it
+  if(a.type=="go_to_npc" && c.npc->isAiBusy() && !c.npc->haveOutput()) {
+    // it stops within the radius: to see someone, it need not walk right up to them
+    Npc* target = a.toPlayer ? world.player() : world.findNpcByInstance(a.target);
+    if(target!=nullptr && c.npc->qDistTo(*target)<=a.radius*a.radius) {
+      c.npc->clearAiQueue();
+      c.npc->clearGoTo();
+      }
+    }
   if(c.npc->isAiBusy()) {
     if(now>=a.deadline) {
       c.npc->clearAiQueue();

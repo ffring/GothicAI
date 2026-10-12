@@ -596,6 +596,14 @@ class DialogueManager:
         """For extensions: hand an item over (give_item's checks are the caller's)."""
         return await self._give(conv, call, snap)
 
+    async def borrow_body(self, conv: Conversation, why: str) -> bool:
+        """For extensions: the npc's body for a job of theirs (going somewhere); give it back with
+        return_body."""
+        return await self._hold(conv, why)
+
+    def return_body(self, conv: Conversation, why: str) -> None:
+        self._free(conv, why)
+
     def overheard(self, npc: str, name: str, text: str, to_name: str | None) -> None:
         """A witness: the npc heard the hero say something to someone else (no model call, only memory)."""
         conv = self.open(npc, name)

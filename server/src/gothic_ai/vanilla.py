@@ -7,8 +7,18 @@ the ending as the scripts would in a world where his claim is true — he has th
 the experience, the reward (the first choice that pays), the journal. Items he really has are taken; items he
 does not have are not, and that is a lie, written down with the truth.
 
-How a lie is found out depends on the claim:
-- fetch (bring items): the next morning the npc misses them, unless a later step of the quest got them;
+Whether the npc believes him is up to its model, in character, but on what the code shows it, so the player
+can read and play it:
+- what it sees for itself: the items he has on him (he hands them over, the rest is his word), the people
+  that must be dead — before its eyes (20 m), a short walk away (60 m), or too far to check;
+- what it knows of his word (trust.py): lies of his it knows of, rumors, claims of his that were true.
+What it sees it does not take on his word: with someone alive before its eyes, or once he lied to it and
+it does not see the claim true, `accept_quest` is refused. It may go and see for itself (`check_claim`):
+it walks there, and what it sees decides — he lied (caught) or it pays. It may call him a liar to his face
+when it sees the claim false (`expose_lie`). A lie seen through before it pays costs him its trust and a
+rumor (quests.caught); a lie believed is found out later by a rule:
+- fetch (bring items): the next morning the npc misses what he did not bring, unless a later step of the
+  quest got it;
 - kill (someone must be dead): the npc sees them alive within 20 m;
 - other claims (talked to someone, a variable) are not found out by a rule yet.
 Then the same happens as with the director's quests (quests.unmask): memory, hostility, the scripts, rumors.
@@ -18,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -29,7 +40,8 @@ from .gamedata.storygraph import Expr, Node, StoryGraph, walk
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .protocol import GameMessage, Session, Snapshot
-from .quests import SEE_CM, Lie, unmask
+from .quests import SEE_CM, Lie, caught, unmask
+from .trust import WORD_BROKEN, Trust
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -38,6 +50,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 ACCEPT = "accept_quest"
+CHECK = "check_claim"
+EXPOSE = "expose_lie"
+CHECK_CM = 6000  # how far an npc goes to see for itself
+LOOK_CM = 1800  # how close it comes to what it goes to see
+BACK_CM = 300  # how close it comes back to the hero to tell him
 LOG_RUNNING, LOG_SUCCESS = 1, 2
 STATUS = {1: "LOG_RUNNING", 2: "LOG_SUCCESS", 3: "LOG_FAILED", 4: "LOG_OBSOLETE"}
 CHECK_EVERY_S = 1.0
@@ -46,20 +63,34 @@ HERO = (["inst", "OTHER"], ["inst", "HERO"])
 # engine calls in an ending that only show something: they don't keep the ending from being played
 COSMETIC_CALLS = ("AI_", "PRINT", "SND_", "WLD_PLAYEFFECT", "MDL_", "B_SAY", "B_ENDPRODUCTIONDIALOG")
 
+_QUEST_ARG = {
+    "type": "object",
+    "properties": {
+        "quest": {"type": "string", "description": "id из обстановки, например MIS_LOBART_RUEBEN"}
+    },
+    "required": ["quest"],
+    "additionalProperties": False,
+}
 ACCEPT_TOOL = Tool(
     ACCEPT,
     "Засчитать герою дело, которого ты от него ждёшь (список — в обстановке), и отдать обещанную награду. "
-    "Вызывай, только если веришь, что он его сделал. Принесённые вещи, если они у него с собой, перейдут к "
-    "тебе; если он говорит, что оставил их где-то ещё или уже отдал, решай, веришь ли. Тело всё сделает "
-    "после реплики.",
-    {
-        "type": "object",
-        "properties": {
-            "quest": {"type": "string", "description": "id из обстановки, например MIS_LOBART_RUEBEN"}
-        },
-        "required": ["quest"],
-        "additionalProperties": False,
-    },
+    "Вызывай, только если веришь, что он его сделал. Что из принесённого у него с собой, перейдёт к тебе; "
+    "если он говорит, что остальное оставил где-то ещё, решай, веришь ли. Тело всё сделает после реплики.",
+    _QUEST_ARG,
+)
+CHECK_TOOL = Tool(
+    CHECK,
+    "Сходить и посмотреть своими глазами, прежде чем засчитать дело, — когда в обстановке сказано, что "
+    "можно сходить. После реплики ты пойдёшь туда; что увидишь, придёт ремаркой: солгал он — уличишь, "
+    "сказал правду — отдашь награду.",
+    _QUEST_ARG,
+)
+EXPOSE_TOOL = Tool(
+    EXPOSE,
+    "Уличить героя во лжи: он уверяет, что сделал дело, а ты своими глазами видишь, что это не так (что "
+    "ты видишь сам — в обстановке). Только если он сам сказал, что сделал. Ты это запомнишь, люди вокруг "
+    "услышат.",
+    _QUEST_ARG,
 )
 
 
@@ -100,8 +131,23 @@ class Claim:
 
 
 @dataclass
+class Target:
+    """Someone the claim says is dead, where the npc could see it."""
+
+    npc: str
+    name: str
+    alive: bool
+    distance: float | None  # cm from the npc; None: not in this world
+
+    @property
+    def seen(self) -> bool:
+        return self.distance is not None and self.distance <= SEE_CM
+
+
+@dataclass
 class Offer:
-    """A quest in progress that the npc can accept as done, and what accepting it does."""
+    """A quest in progress that the npc can accept as done, what accepting it does, and what of the hero's
+    claim the npc can see for itself."""
 
     quest: str
     title: str
@@ -112,7 +158,85 @@ class Offer:
     effects: list[dict[str, Any]]  # what the ending does in the claimed world; takes marked "take"
     reward: str
     needs: str
-    items: str  # fetch: what he is to bring, in the game's words
+    names: dict[str, str]  # item instance -> name in the game
+    have: dict[str, int] = field(default_factory=dict)  # fetch: what of it the hero has on him
+    targets: list[Target] = field(default_factory=list)  # kill: where they are
+
+    def items(self, counts: dict[str, int] | None = None) -> str:
+        """The items of the claim in the game's words (with other counts: what is missing...)."""
+        counts = self.claim.items if counts is None else counts
+        return ", ".join(f"{self.names.get(i, i)} ×{n}" for i, n in counts.items() if n > 0)
+
+    def missing(self) -> dict[str, int]:
+        return {i: n - min(n, self.have.get(i, 0)) for i, n in self.claim.items.items()}
+
+    def on_him(self) -> str:
+        """What of the items he has on him: «Репа ×5 из 20»."""
+        return ", ".join(
+            f"{self.names.get(i, i)} ×{self.have.get(i, 0)} из {n}" for i, n in self.claim.items.items()
+        )
+
+    def alive_in_view(self) -> Target | None:
+        alive = [t for t in self.targets if t.alive and t.seen]
+        return min(alive, key=lambda t: t.distance or 0) if alive else None
+
+    def seen_false(self) -> str | None:
+        """What the npc sees for itself that says the claim is false; None if it sees nothing of the kind."""
+        if any(self.missing().values()):
+            return f"у героя с собой только {self.on_him()}"
+        if (t := self.alive_in_view()) is not None:
+            return f"{t.name} жив — у тебя на глазах, в {_m(t.distance or 0)} м"
+        return None
+
+    def seen_true(self) -> bool:
+        """The npc sees for itself all the claim says: the items on him, the dead before its eyes."""
+        visible = bool(self.claim.items or self.claim.dead)
+        return (
+            visible and not any(self.missing().values()) and all(not t.alive and t.seen for t in self.targets)
+        )
+
+    def reachable(self) -> Target | None:
+        """The nearest of the claim's people the npc does not see from here but could go and see."""
+        if self.seen_false() is not None:
+            return None
+        near = [t for t in self.targets if t.distance is not None and SEE_CM < t.distance <= CHECK_CM]
+        return min(near, key=lambda t: t.distance or 0) if near else None
+
+    def evidence(self) -> str | None:
+        """What the npc sees for itself, in words for its model."""
+        parts = []
+        if self.claim.items:
+            if not any(self.missing().values()):
+                parts.append(f"у героя с собой всё это: {self.items()} — отдаст, и дело сделано")
+            else:
+                parts.append(
+                    f"у героя с собой {self.on_him()} — это он отдаст тебе сразу; "
+                    "где остальное, знаешь только с его слов"
+                )
+        seen = [t for t in self.targets if t.seen]
+        if seen:
+            alive = [t for t in seen if t.alive]
+            dead = [t for t in seen if not t.alive]
+            what = "; ".join(
+                f"{_names(group)} — {state}"
+                for group, state in (
+                    (alive, "жив" if len(alive) == 1 else "живы"),
+                    (dead, "мёртв" if len(dead) == 1 else "мертвы"),
+                )
+                if group
+            )
+            parts.append(f"у тебя на глазах (до {_m(SEE_CM)} м): {what}")
+        near = [t for t in self.targets if t.distance is not None and SEE_CM < t.distance <= CHECK_CM]
+        if near:
+            ds = sorted(_m(t.distance or 0) for t in near)
+            span = f"{ds[0]}–{ds[-1]}" if ds[0] != ds[-1] else f"{ds[0]}"
+            parts.append(
+                f"{_names(near)} — в {span} м, отсюда не видно: можешь сходить и посмотреть сам ({CHECK})"
+            )
+        far = [t for t in self.targets if t.distance is None or t.distance > CHECK_CM]
+        if far:
+            parts.append(f"{_names(far)} — далеко, проверить сам не можешь")
+        return "; ".join(parts) or None
 
 
 @dataclass
@@ -129,7 +253,7 @@ class Told:
     day: int = 0
     tag: str = ""  # kill: the people that must be dead, watched under this tag
     targets: list[str] = field(default_factory=list)
-    items: str = ""  # fetch: what he claimed to have brought, as words
+    items: str = ""  # fetch: what he claimed to have brought and did not, as words
     follow: list[str] = field(default_factory=list)  # fetch: later steps that would have got the items
     found_out: bool = False
 
@@ -146,6 +270,7 @@ class VanillaQuests:
         *,
         hero_distance: Callable[[str], float | None] | None = None,
         journal: Journal | None = None,
+        trust: Trust | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -153,8 +278,11 @@ class VanillaQuests:
         self.graph = graph
         self.hero_distance = hero_distance or (lambda _npc: None)
         self.journal = journal or dialogue.journal
+        self.trust = trust or Trust(chronicle)
         self.titles = topic_titles(graph)
+        self._topic_uses = Counter(t for q in graph.quests.values() for t in q.topics)
         self.offers: dict[str, dict[str, Offer]] = {}  # npc -> quest -> offer, as of its last turn
+        self.checking: set[str] = set()  # npc's gone to see for themselves
         self.told: dict[str, Told] = {}
         self._endings: dict[str, list[Node]] = {}  # npc -> dialogs of its that end a quest with success
         for q in graph.quests.values():
@@ -183,18 +311,47 @@ class VanillaQuests:
             for quest in _ends(node):
                 if state.get("vars", {}).get(quest) != LOG_RUNNING or quest in offers or quest in self.told:
                     continue
+                if any(o.ending == node.id for o in offers.values()):
+                    continue  # one ending of two quests (Andre's and Lobart's bugs): offered once
                 offer = await self._offer(node, quest, npc, names)
                 if offer is not None:
                     offers[quest] = offer
+        await self._evidence(npc, list(offers.values()))
         self.offers[npc] = offers
+
+    async def _evidence(self, npc: str, offers: list[Offer]) -> None:
+        """What of each claim the npc can see for itself: the items the hero has on him, where the people
+        that must be dead are."""
+        items = sorted({i for o in offers for i in o.claim.items})
+        dead = sorted({d for o in offers for d in o.claim.dead})
+        have = (
+            await self.link.story_eval(
+                npc, [["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", i]] for i in items]
+            )
+            if items
+            else []
+        )
+        counts = {i: int(v or 0) for i, v in zip(items, have, strict=False)}
+        people = (await self.link.story_state(npcs=dead, near=npc)).get("npcs", {}) if dead else {}
+        for o in offers:
+            o.have = {i: counts.get(i, 0) for i in o.claim.items}
+            o.targets = [_target(d, people.get(d) or {}) for d in o.claim.dead]
+            if o.targets:
+                o.needs = f"будут мертвы: {_names(o.targets)}"
 
     def situation(self, npc: str) -> str | None:
         npc = npc.upper()
         lines = []
         for o in self.offers.get(npc, {}).values():
+            seen = o.evidence()
             lines.append(
                 f"Ты ждёшь от героя: «{o.title}» (id {o.quest}). Засчитать можно, когда {o.needs}. "
-                f"Награда, как обещано: {o.reward}. Сделал ли он это — своими глазами ты не видел."
+                f"Награда, как обещано: {o.reward}. "
+                + (
+                    f"Что ты видишь сам: {seen}."
+                    if seen
+                    else "Сделал ли он это — своими глазами ты не видел."
+                )
             )
         for t in self.told.values():
             if t.npc != npc:
@@ -206,23 +363,78 @@ class VanillaQuests:
         return "\n".join(lines) or None
 
     def tools(self, npc: str) -> list[Tool]:
-        return [ACCEPT_TOOL] if self.offers.get(npc.upper()) else []
+        offers = list(self.offers.get(npc.upper(), {}).values())
+        tools = [ACCEPT_TOOL] if offers else []
+        if any(o.reachable() for o in offers):
+            tools.append(CHECK_TOOL)
+        if any(o.seen_false() for o in offers):
+            tools.append(EXPOSE_TOOL)
+        return tools
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
     ) -> ToolOutcome | None:
-        if call.name != ACCEPT:
+        if call.name not in (ACCEPT, CHECK, EXPOSE):
             return None
         quest = str(call.arguments.get("quest", "")).upper()
-        offer = self.offers.get(conv.npc, {}).pop(quest, None)
+        offers = self.offers.get(conv.npc, {})
+        offer = offers.get(quest)
         if offer is None:
             return ToolOutcome("Отклонено: такого дела ты от героя не ждёшь.", "rejected")
+        if call.name == CHECK:
+            return self._go_check(conv, offer)
+        if call.name == EXPOSE:
+            return self._expose(conv, offer)
+        # what it sees for itself, it does not take on his word
+        if (t := offer.alive_in_view()) is not None:
+            return ToolOutcome(
+                f"Отклонено: {t.name} жив — у тебя на глазах, в {_m(t.distance or 0)} м. Своим глазам ты "
+                "веришь больше, чем его словам.",
+                "rejected",
+            )
+        if self.trust.broken(conv.npc) and not offer.seen_true():
+            hint = f" Можешь сходить и посмотреть сам ({CHECK})." if offer.reachable() else ""
+            return ToolOutcome(f"Отклонено: он уже лгал тебе. {WORD_BROKEN}{hint}", "rejected")
+        offers.pop(quest)
 
         async def job() -> tuple[str, bool]:
             return await self._accept(offer, conv)
 
         dialogue.after_speech(conv, job)
         return ToolOutcome("Принято: засчитаешь и отдашь награду после реплики.", "accepted")
+
+    def _go_check(self, conv: Conversation, offer: Offer) -> ToolOutcome:
+        target = offer.reachable()
+        if target is None:
+            why = (
+                "ты и так видишь, что он лжёт" if offer.seen_false() else "отсюда не дойти, чтобы посмотреть"
+            )
+            return ToolOutcome(f"Отклонено: {why}.", "rejected")
+        self.offers[conv.npc].pop(offer.quest)
+
+        async def job() -> tuple[str, bool]:
+            return await self._check(offer, target, conv)
+
+        self.dialogue.after_speech(conv, job)
+        return ToolOutcome(f"Принято: после реплики пойдёшь смотреть сам ({target.name}).", "accepted")
+
+    def _expose(self, conv: Conversation, offer: Offer) -> ToolOutcome:
+        seen = offer.seen_false()
+        if seen is None:
+            return ToolOutcome(
+                "Отклонено: уличить его тебе нечем — своими глазами ты не видишь, что он лжёт. Можешь не "
+                "верить ему на слово.",
+                "rejected",
+            )
+        self.offers[conv.npc].pop(offer.quest)
+        lie = Lie(offer.quest, offer.npc, conv.persona.name, offer.title, offer.reward)
+
+        async def job() -> tuple[str, bool]:
+            await caught(self.link, self.dialogue, self.chronicle, self.journal, lie, f"видел сам: {seen}")
+            return f"Ты уличил героя во лжи о деле «{offer.title}»", True
+
+        self.dialogue.after_speech(conv, job)
+        return ToolOutcome("Принято: ты уличил его; ты это запомнишь, люди вокруг услышат.", "accepted")
 
     # --- the ending -------------------------------------------------------------------------
 
@@ -273,7 +485,7 @@ class VanillaQuests:
         reward = _reward(played, names)
         return Offer(
             quest,
-            self._title(quest),
+            self._title(quest, node.id),
             npc,
             node.id,
             claim,
@@ -281,7 +493,7 @@ class VanillaQuests:
             played,
             reward,
             _needs(claim, names, self.graph, node),
-            ", ".join(f"{names.get(i, i)} ×{n}" for i, n in claim.items.items()),
+            names,
         )
 
     def _play(self, node: Node, quest: str, fired: set[int], out: list[dict[str, Any]]) -> bool:
@@ -296,7 +508,7 @@ class VanillaQuests:
                 "journal_topic",
             ):
                 continue
-            made = _bridge(e, self.titles)
+            made = _bridge(e, self.titles, self.graph)
             if made is None:
                 if e["do"] == "call" and str(e.get("fn", "")).startswith(COSMETIC_CALLS):
                     continue
@@ -307,23 +519,18 @@ class VanillaQuests:
             out.append(made)
         return True
 
-    async def _accept(self, offer: Offer, conv: Conversation) -> tuple[str, bool]:
-        """The npc accepts: the ending plays; what the hero does not have is not taken, and that is a lie."""
+    async def _accept(self, offer: Offer, conv: Conversation, checked: bool = False) -> tuple[str, bool]:
+        """The npc accepts: the ending plays; what the hero has of the items is taken, what he does not have
+        is not, and that is a lie."""
         try:
             truth = (await self.link.story_eval(offer.npc, [offer.truth]))[0]
             have = await self.link.story_eval(
                 offer.npc,
                 [["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", i]] for i in offer.claim.items],
             )
+            counts = {i: int(v or 0) for i, v in zip(offer.claim.items, have, strict=False)}
             state = await self.link.story_state()
-            await self.link.story_effect(
-                offer.npc,
-                [
-                    {k: v for k, v in e.items() if k != "take"}
-                    for e in offer.effects
-                    if truth or not e.get("take")
-                ],
-            )
+            await self.link.story_effect(offer.npc, _takes(offer.effects, counts, bool(truth)))
         except (GameError, TimeoutError) as err:
             log.warning("vanilla: %s not accepted: %s", offer.quest, err)
             return f"Ты не смог засчитать «{offer.title}»: {err}", False
@@ -344,9 +551,10 @@ class VanillaQuests:
             "quest": offer.quest,
             "npc": offer.npc,
             "name": name,
+            "title": offer.title,
             "reward": offer.reward,
         }
-        self.chronicle.record({**claim, "believed": True, "truth": bool(truth)})
+        self.chronicle.record({**claim, "believed": True, "truth": bool(truth), "checked": checked})
         self.chronicle.record(
             {
                 "fact": "belief",
@@ -358,7 +566,8 @@ class VanillaQuests:
             }
         )
         if lie:
-            told.items = offer.items
+            offer.have = counts
+            told.items = offer.items(offer.missing())
             told.targets = list(offer.claim.dead)
             told.tag = f"{offer.quest}_ALIVE" if told.targets else ""
             told.follow = sorted(
@@ -393,6 +602,55 @@ class VanillaQuests:
         self.told[offer.quest] = told
         await self._watch()
         return f"Ты засчитал герою «{offer.title}» и отдал награду: {offer.reward}", True
+
+    async def _check(self, offer: Offer, target: Target, conv: Conversation) -> tuple[str, bool]:
+        """The npc goes to see for itself, then comes back to the hero to say what it saw: he lied to it, or
+        it pays."""
+        self.checking.add(conv.npc)
+        held = await self.dialogue.borrow_body(conv, "check")
+        try:
+            walked = await self._go(conv, target.npc, LOOK_CM) if held else "ты был занят"
+            try:
+                people = (await self.link.story_state(npcs=offer.claim.dead, near=offer.npc)).get("npcs", {})
+            except (GameError, TimeoutError) as err:
+                return f"Ты не смог проверить: {err}", False
+            seen = [t for t in (_target(d, people.get(d) or {}) for d in offer.claim.dead) if t.seen]
+            alive = sorted((t for t in seen if t.alive), key=lambda t: t.distance or 0)
+            if alive:
+                t = alive[0]
+                how = f"сходил проверить и увидел: {t.name} жив, в {_m(t.distance or 0)} м от тебя"
+                lie = Lie(offer.quest, offer.npc, conv.persona.name, offer.title, offer.reward)
+                await caught(self.link, self.dialogue, self.chronicle, self.journal, lie, how)
+                note, ok = f"Ты {how}", True
+                cue = f"Ты сходил проверить слова героя о деле «{offer.title}»: {t.name} жив. Он тебе солгал"
+            elif not seen:
+                return f"Ты не дошёл, чтобы посмотреть самому{f' ({walked})' if walked else ''}", False
+            else:
+                paid, ok = await self._accept(offer, conv, checked=True)
+                dead = f"{_names(seen)} — {'мёртв' if len(seen) == 1 else 'мертвы'}"
+                note = f"Ты сходил проверить: {dead}. {paid}"
+                cue = f"Ты сходил проверить слова героя о деле «{offer.title}»: {dead}, он сказал правду"
+                cue += f". {paid}"
+            if held:
+                await self._go(conv, "PLAYER", BACK_CM)  # to say it to his face
+        finally:
+            if held:
+                self.dialogue.return_body(conv, "check")
+            self.checking.discard(conv.npc)
+        self._react(conv, cue)
+        return note, ok
+
+    async def _go(self, conv: Conversation, npc: str, radius: int) -> str:
+        """The npc's body walks until it is `radius` cm from someone; what went wrong, or ''."""
+        try:
+            res = await self.link.act(conv.npc, "go_to_npc", npc=npc, radius=radius)
+            return "" if res.status == "done" else res.detail or res.status
+        except (GameError, TimeoutError) as err:
+            return str(err) or type(err).__name__
+
+    def _react(self, conv: Conversation, cue: str) -> None:
+        """The npc may say what it thinks of what it saw (the consequences are done already)."""
+        self.dialogue.event_turn(conv.npc, f"[{cue}]", tools=("set_intent",))
 
     # --- finding out --------------------------------------------------------------------------
 
@@ -490,9 +748,20 @@ class VanillaQuests:
             self._background.add(task)
             task.add_done_callback(self._background.discard)
 
-    def _title(self, quest: str) -> str:
-        q = self.graph.quests.get(quest)
-        return (next(iter(q.topics.values()), "") if q else "") or quest
+    def _title(self, quest: str, ending: str | None = None) -> str:
+        """The quest's name in the hero's journal: its least shared topic. A topic many quests write to (the
+        militia's) gives way to that of another quest the same ending closes (Lobart's field raiders)."""
+        quests = [quest]
+        if ending in self.graph.nodes:
+            quests += [q for q in _ends(self.graph.nodes[ending]) if q != quest]
+        titles = [
+            (self._topic_uses.get(topic, 0), i, title)
+            for i, q in enumerate(quests)
+            if q in self.graph.quests
+            for topic, title in self.graph.quests[q].topics.items()
+            if title
+        ]
+        return min(titles)[2] if titles else quest
 
 
 # --- the lifted ending, in words the bridge plays ------------------------------------------------
@@ -555,9 +824,13 @@ def _claim(guard: Expr | None, condition: Expr | None, graph: StoryGraph) -> Cla
     return c
 
 
-def _bridge(e: dict[str, Any], titles: dict[str, str]) -> dict[str, Any] | None:
+def _bridge(e: dict[str, Any], titles: dict[str, str], graph: StoryGraph) -> dict[str, Any] | None:
     """One lifted effect as the bridge plays it; None if it can't."""
     match e["do"]:
+        case "routine" if e.get("routine") and e.get("npc") == ["inst", "SELF"]:
+            return {"do": "routine", "routine": str(e["routine"]).upper()}
+        case "routine" if e.get("routine") and (who := _npc(e.get("npc"), graph)):
+            return {"do": "routine", "npc": who, "routine": str(e["routine"]).upper()}
         case "set" if _int(e.get("value")) is not None:
             return {"do": "set", "var": e["var"], "value": _int(e["value"])}
         case "xp" if _int(e.get("amount")) is not None:
@@ -592,6 +865,37 @@ def _bridge(e: dict[str, Any], titles: dict[str, str]) -> dict[str, Any] | None:
                 "status": STATUS[_int(e["status"]) or 1],
             }
     return None
+
+
+def _takes(effects: list[dict[str, Any]], have: dict[str, int], truth: bool) -> list[dict[str, Any]]:
+    """The ending's effects as they play: of the items it takes, what the hero has (all, if he did it)."""
+    left = dict(have)
+    out = []
+    for e in effects:
+        e = {k: v for k, v in e.items() if k != "take"}
+        if e["do"] == "give" and e.get("to") == "self" and not truth:
+            n = min(int(e["count"]), left.get(e["item"], 0))
+            if n <= 0:
+                continue
+            left[e["item"]] -= n
+            e["count"] = n
+        out.append(e)
+    return out
+
+
+def _target(npc: str, state: dict[str, Any]) -> Target:
+    d = state.get("distance")
+    return Target(
+        npc, state.get("name") or npc, state.get("state") == "alive", None if d is None else float(d)
+    )
+
+
+def _names(targets: list[Target]) -> str:
+    """Their names, grouped: «Полевой хищник ×3, Бандит»."""
+    counts: dict[str, int] = {}
+    for t in targets:
+        counts[t.name] = counts.get(t.name, 0) + 1
+    return ", ".join(f"{n} ×{c}" if c > 1 else n for n, c in counts.items())
 
 
 def _pays(effects: list[dict[str, Any]]) -> bool:

@@ -61,6 +61,7 @@ from .replay import replay as replay_turn
 from .story import StoryPatches
 from .talk import TalkDesk
 from .trace import TraceWriter, find_turn, latest
+from .trust import Trust
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
 from .vanilla import VanillaQuests
 from .voice import (
@@ -100,6 +101,7 @@ HELP = """commands (npc defaults to the last attached one):
   director          quests left without an ending and the director's repairs of them
   director look     look for such quests now and repair them
   claims            quests of the scripts the hero said were done: believed, lies, found out
+  trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -134,6 +136,7 @@ class ServerState:
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.vanilla: VanillaQuests | None = None
+        self.trust: Trust | None = None
 
 
 class Console:
@@ -229,6 +232,8 @@ class Console:
                 for t in self.state.vanilla.told.values():
                     state = "found out" if t.found_out else "lie" if t.lie else "true"
                     print(f"{t.quest} {t.npc}: {t.title}; {t.reward}; {state} ({t.kind or '-'})")
+            case "trust" if self.state.trust is not None:
+                print(self.state.trust.situation(rest[0] if rest else npc) or "(nothing)")
             case "dialogs":
                 print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
             case "choose" if rest:
@@ -366,12 +371,16 @@ async def serve(args: argparse.Namespace) -> int:
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         talk = state.talk
+        # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
+        trust = state.trust = Trust(state.chronicle)
+        state.dialogue.extensions.append(trust)
         state.quests = QuestBoard(
             link,
             state.dialogue,
             state.chronicle,
             hero_distance=lambda npc: talk.people[npc].distance if npc in talk.people else None,
             journal=journal,
+            trust=trust,
         )
         lies = asyncio.create_task(state.quests.run())
         directing: list[asyncio.Task[None]] = []
@@ -388,6 +397,7 @@ async def serve(args: argparse.Namespace) -> int:
                 graph,
                 hero_distance=lambda npc: talk.people[npc].distance if npc in talk.people else None,
                 journal=journal,
+                trust=trust,
             )
             directing = [asyncio.create_task(state.director.run()), asyncio.create_task(state.vanilla.run())]
         brain = None
@@ -484,6 +494,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.repair_after_death(link, state.director, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "vcheck":
+                dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
+                assert dialogue is not None and talk is not None and vanilla is not None
+                results = await scenarios.vanilla_check(link, dialogue, talk, vanilla)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario vcheck: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "vlie":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
@@ -898,6 +915,7 @@ def main() -> None:
             "lie",
             "repair",
             "vlie",
+            "vcheck",
             "tts",
         ],
         help="run a scripted check when the game connects",
