@@ -38,7 +38,7 @@ from .tts import TtsClient, TtsError
 log = logging.getLogger(__name__)
 
 DEFAULT_CACHE = Path.home() / ".local" / "share" / "gothic-ai" / "fillers"
-MIN_GAP_S = 6.0  # an npc makes such sounds at most this often
+CALM_GAP_S = 6.0  # a calm sound ("Хм...") not this soon after the last sound: it would grow tiresome
 
 
 @dataclass(frozen=True)
@@ -47,13 +47,14 @@ class Kind:
     chance: float  # how often one is said (each time would grow tiresome)
     style: str = ""  # how the TTS says it, English; empty: the voice's usual manner
     mood: Mood | None = None  # the npc's face meanwhile
+    calm: bool = False  # said to anything (not to news, an insult, a boast): not soon after another sound
 
 
 # by the behavioral model's choices (VOICE_OPTIONS in brain/reflex.py)
 KINDS: dict[str, Kind] = {
-    "think": Kind(("Хм...", "М-м...", "Так..."), 0.7, "say slowly and thoughtfully, pondering"),
+    "think": Kind(("Хм...", "М-м...", "Так..."), 0.7, "say slowly and thoughtfully, pondering", calm=True),
     # news or a report: the model tells them apart badly, so sounds that fit either
-    "ack": Kind(("Вот как.", "Хм.", "Так..."), 0.5),
+    "ack": Kind(("Вот как.", "Хм.", "Так..."), 0.5, calm=True),
     "surprise": Kind(("Что?!", "Как?!", "Вот как?!"), 1.0, "exclaim in sudden surprise and alarm"),
     "displeasure": Kind(("Хм!", "Тьфу!", "Ишь ты!"), 1.0, "say with irritation and contempt", "angry"),
     "doubt": Kind(("Ой ли?", "Неужто?", "Ну-ну..."), 0.9, "say skeptically, with mocking doubt"),
@@ -167,7 +168,8 @@ class Fillers:
     def pick(self, npc: str, phrase: str, kind: str | None) -> Sound | None:
         """What the npc says at once to the hero's `phrase`: now and then a sound of `kind` (the behavioral
         model's choice, "none": nothing; None: no choice — a question gets "Хм...", anything else
-        nothing). Nothing to a greeting or a word or two, whatever the choice."""
+        nothing). Nothing to a greeting or a word or two, whatever the choice. "Что?!" to news follows
+        "Хм..." to the question before as it would in life, another "Хм..." does not."""
         if trivial(phrase):
             return None
         if kind is None:
@@ -175,8 +177,8 @@ class Fillers:
         k = KINDS.get(kind)
         if k is None:
             return None
-        last, at = self._last.get(npc, ("", -MIN_GAP_S))
-        if self.clock() - at < MIN_GAP_S or self.rng.random() >= k.chance:
+        last, at = self._last.get(npc, ("", float("-inf")))
+        if (k.calm and self.clock() - at < CALM_GAP_S) or self.rng.random() >= k.chance:
             return None
         return Sound(kind, self.rng.choice([t for t in k.lines if t != last]))
 

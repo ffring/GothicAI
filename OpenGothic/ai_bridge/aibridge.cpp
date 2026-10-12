@@ -340,6 +340,9 @@ AiBridge::Impl::Impl() {
       for(auto& v:voices)
         if(v.drainedAt==0)
           return true;
+      // still thinking of the answer: the "Хм..." said at once was not it
+      if(auto w = Gothic::inst().world(); w!=nullptr && !thinker.empty() && w->tickCount()<thinkUntil)
+        return true;
       return lines.pending();
       };
   lines.onStart   = [this](const LineLibrary::Line& l) { onLineStarted(l); };

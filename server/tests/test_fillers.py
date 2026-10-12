@@ -69,6 +69,8 @@ def test_not_every_time_and_never_the_same_twice():
     f.said(XARDAS, first)
     now[0] += 1.0
     assert f.pick(XARDAS, "А где щит?", "think") is None  # too soon after the last one
+    # a strong reaction is no repetition: "Что?!" to news right after "Хм..." to a question
+    assert f.pick(XARDAS, "Орки напали на город!", "surprise") is not None
     now[0] += 10.0
     second = f.pick(XARDAS, "А где щит?", "think")
     assert second is not None and second != first
