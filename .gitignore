@@ -42,3 +42,6 @@ log.txt
 
 # Test bench output (scripts/bench.sh)
 /.bench/
+
+# Shorts: takes and voiced lines (gothic-shorts)
+/.shorts/
