@@ -48,6 +48,8 @@ class LineLibrary final {
     void        clear() { lines.clear(); }
     // the npc was interrupted: its lines that have not started yet speak nothing when their turn comes
     void        hush(std::string_view npc);
+    // a line was added that has not started yet (and will speak)
+    bool        pending() const;
 
     std::function<void(const Line&)> onStart;
 

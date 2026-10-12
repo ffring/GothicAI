@@ -196,6 +196,9 @@ class PttStart(_GameMessage):
 
     type: Literal["ptt_start"]
     focus: str | None = None
+    # the test bench: the hero says this recording (a 16-bit mono wav on the server's machine) instead
+    # of the microphone; the server takes it only when started with --voice-files
+    audio: str | None = None
 
 
 class PttStop(_GameMessage):

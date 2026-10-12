@@ -360,7 +360,9 @@ async def serve(args: argparse.Namespace) -> int:
         # the hero talks to the world: whom he speaks to, the conversation, the body meanwhile (M5e)
         state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
         if asr is not None and source is not None:
-            state.voice = VoiceInput(link, state.talk.hear, source, asr, journal=journal)
+            state.voice = VoiceInput(
+                link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
+            )
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         talk = state.talk
@@ -856,6 +858,11 @@ def _add_voice_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--asr-url", default=os.environ.get("GOTHIC_ASR_URL", DEFAULT_ASR_URL))
     p.add_argument("--mic-device", help="input device name or index (default: system input)")
     p.add_argument("--voice-file", help="use this 16-bit mono wav instead of the microphone (tests)")
+    p.add_argument(
+        "--voice-files",
+        action="store_true",
+        help="the game may name a wav the hero says instead of the microphone (the test bench, shorts/)",
+    )
 
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:

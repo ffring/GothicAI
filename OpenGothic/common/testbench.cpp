@@ -1,16 +1,23 @@
 #include "testbench.h"
 
 #include <Tempest/Pixmap>
+#include <Tempest/SoundDevice>
 #include <Tempest/SystemApi>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "game/gamescript.h"
@@ -43,6 +50,9 @@ const char*       scenarioPath = envStr("OPENGOTHIC_BENCH");
 const std::string outDir       = envStr("OPENGOTHIC_BENCH_OUT") ? envStr("OPENGOTHIC_BENCH_OUT") : ".";
 const bool        keepRunning  = envStr("OPENGOTHIC_BENCH_KEEP")!=nullptr;
 constexpr int     Fps          = 30;
+// the fixed steps keep to the wall clock (never faster): the AI server and its voices live in real time
+const bool        realtime     = envStr("OPENGOTHIC_BENCH_REALTIME")!=nullptr;
+constexpr uint64_t SpeakTailMs = 400;  // the talk key is held this long after the recording ends
 
 std::FILE* logFile = nullptr;
 
@@ -77,6 +87,12 @@ float num(const std::vector<std::string>& a, size_t i, float def) {
   return i<a.size() ? std::strtof(a[i].c_str(),nullptr) : def;
   }
 
+bool isNumber(const std::string& s) {
+  char* end = nullptr;
+  std::strtof(s.c_str(),&end);
+  return end!=s.c_str() && *end=='\0';
+  }
+
 std::string rest(const std::string& line) {
   const size_t sp = line.find(' ');
   return sp==std::string::npos ? "" : line.substr(sp+1);
@@ -85,6 +101,65 @@ std::string rest(const std::string& line) {
 void replaceAll(std::string& s, std::string_view from, std::string_view to) {
   for(size_t p=s.find(from); p!=std::string::npos; p=s.find(from,p+to.size()))
     s.replace(p,from.size(),to);
+  }
+
+std::string jsonStr(std::string_view s) {
+  std::string r = "\"";
+  for(char ch:s) {
+    switch(ch) {
+      case '"':  r += "\\\""; break;
+      case '\\': r += "\\\\"; break;
+      case '\n': r += "\\n"; break;
+      case '\r': r += "\\r"; break;
+      case '\t': r += "\\t"; break;
+      default:
+        if(uint8_t(ch)<0x20) {
+          char buf[8];
+          std::snprintf(buf,sizeof(buf),"\\u%04x",unsigned(uint8_t(ch)));
+          r += buf;
+          } else {
+          r += ch;
+          }
+      }
+    }
+  return r + "\"";
+  }
+
+// length of a 16-bit PCM wav in ms, 0 if it is not one
+uint64_t wavMs(const std::string& path) {
+  std::ifstream f(path,std::ios::binary);
+  char riff[12];
+  if(!f.read(riff,12) || std::memcmp(riff,"RIFF",4)!=0 || std::memcmp(riff+8,"WAVE",4)!=0)
+    return 0;
+  uint32_t byteRate = 0;
+  char     hdr[8];
+  while(f.read(hdr,8)) {
+    uint32_t size = 0;
+    std::memcpy(&size,hdr+4,4);
+    if(std::memcmp(hdr,"fmt ",4)==0) {
+      std::vector<char> fmt(size);
+      if(!f.read(fmt.data(),size) || size<16)
+        return 0;
+      std::memcpy(&byteRate,fmt.data()+8,4);
+      }
+    else if(std::memcmp(hdr,"data",4)==0) {
+      return byteRate>0 ? uint64_t(size)*1000/byteRate : 0;
+      }
+    else {
+      f.seekg(size + (size&1),std::ios::cur);
+      }
+    }
+  return 0;
+  }
+
+void writeWavHeader(std::FILE* f, uint32_t rate, uint64_t frames) {
+  const uint32_t data = uint32_t(frames*4), riff = 36+data, fmtSize = 16, byteRate = rate*4;
+  const uint16_t pcm = 1, channels = 2, align = 4, bits = 16;
+  std::fseek(f,0,SEEK_SET);
+  std::fwrite("RIFF",1,4,f); std::fwrite(&riff,4,1,f); std::fwrite("WAVE",1,4,f);
+  std::fwrite("fmt ",1,4,f); std::fwrite(&fmtSize,4,1,f); std::fwrite(&pcm,2,1,f); std::fwrite(&channels,2,1,f);
+  std::fwrite(&rate,4,1,f); std::fwrite(&byteRate,4,1,f); std::fwrite(&align,2,1,f); std::fwrite(&bits,2,1,f);
+  std::fwrite("data",1,4,f); std::fwrite(&data,4,1,f);
   }
 
 float groundY(World& w, float x, float z, float y) {
@@ -256,6 +331,54 @@ struct Canvas {
     }
   };
 
+// frames go to ffmpeg from a thread of their own: the game goes on while a frame is written
+class VideoPipe final {
+  public:
+    explicit VideoPipe(std::FILE* f):f(f),th([this]{ loop(); }) {}
+    ~VideoPipe() {
+      {
+        std::lock_guard<std::mutex> g(sync);
+        done = true;
+      }
+      cv.notify_all();
+      th.join();
+      pclose(f);
+      }
+
+    void push(std::vector<uint8_t>&& frame) {
+      std::unique_lock<std::mutex> g(sync);
+      cv.wait(g,[this]{ return queue.size()<MaxQueued; });
+      queue.push_back(std::move(frame));
+      cv.notify_all();
+      }
+
+  private:
+    static constexpr size_t MaxQueued = 4;
+
+    void loop() {
+      for(;;) {
+        std::vector<uint8_t> frame;
+        {
+          std::unique_lock<std::mutex> g(sync);
+          cv.wait(g,[this]{ return done || !queue.empty(); });
+          if(queue.empty())
+            return;
+          frame = std::move(queue.front());
+          queue.pop_front();
+        }
+        cv.notify_all();
+        std::fwrite(frame.data(),1,frame.size(),f);
+        }
+      }
+
+    std::FILE*                       f;
+    std::mutex                       sync;
+    std::condition_variable          cv;
+    std::deque<std::vector<uint8_t>> queue;
+    bool                             done = false;
+    std::thread                      th;
+  };
+
 // --- the bench ---------------------------------------------------------------------------------------
 
 enum CamMode : uint8_t {
@@ -264,6 +387,9 @@ enum CamMode : uint8_t {
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
   C_Face,   // close to the face, relative to the facing of the body
+  C_Shoulder, // over the hero's shoulder at an npc (camNpc)
+  C_NpcFace,  // the npc's face, from the hero's side
+  C_Two,      // the hero and the npc from the side
   };
 
 struct Hold {
@@ -301,7 +427,7 @@ struct Bench {
   std::string recName;
   uint64_t    recFrame  = 0;
   uint64_t    recStart  = 0;
-  std::FILE*  video     = nullptr;
+  std::unique_ptr<VideoPipe> video;
   uint32_t    videoW    = 0;
   uint32_t    videoH    = 0;
   std::FILE*  csv       = nullptr;
@@ -323,9 +449,59 @@ struct Bench {
   float       placeAngle = 0;
   float       orbitSpeed = 0;     // degrees per second
   uint64_t    orbitUntil = 0;
+
+  // talking (scripts/shorts)
+  std::string camNpc;           // C_Shoulder, C_NpcFace, C_Two
+  float       camSmooth = 0.12f; // share of the way to the wanted camera per frame; 1: no smoothing
+  bool        smValid   = false;
+  Vec3        smOrg, smTgt;
+  bool        speaking  = false;  // the talk key is held while a recording is said
+  uint64_t    speakUntil = 0;
+  uint64_t    heroEndAt = 0;      // the hero's last phrase ended
+  uint64_t    lastLineAt = 0;     // an npc line of the AI started
+  uint64_t    busyAt    = 0;      // an npc of the AI spoke (or had a line waiting)
+  bool        waitReply = false;
+  bool        replyNeed = false;  // a line has to start after replyFrom first
+  uint64_t    replyFrom = 0;
+  uint64_t    replyEnd  = 0;
+  uint64_t    replyQuiet = 0;
+  std::FILE*  events    = nullptr;
+
+  // sound: the mix of the game (Tempest loopback), recorded with the video
+  std::FILE*  audio     = nullptr;
+  uint64_t    audioFrames = 0;
+  uint64_t    audioAcc  = 0;
+  std::vector<int16_t> mix;
+
+  std::chrono::steady_clock::time_point wallStart;
+  std::chrono::steady_clock::time_point recWall;  // when the recording started
+  int64_t     lagMs     = 0;      // how far the game fell behind the wall clock (realtime)
   };
 
 Bench bench;
+
+// a line of events.jsonl: what happened when, in the recording's frames (the cut of a short lines up its
+// subtitles and sound by them); `fields` are more json members, without braces
+void event(std::string_view kind, const std::string& fields = {}) {
+  if(bench.events==nullptr)
+    bench.events = std::fopen((outDir+"/events.jsonl").c_str(),"w");
+  if(bench.events==nullptr)
+    return;
+  std::fprintf(bench.events,"{\"t\":%llu,\"seg\":%s,\"frame\":%lld,\"kind\":%s%s%s}\n",
+               (unsigned long long)bench.time,jsonStr(bench.rec ? bench.recName : "").c_str(),
+               bench.rec ? (long long)bench.recFrame : -1LL,jsonStr(kind).c_str(),fields.empty() ? "" : ",",fields.c_str());
+  std::fflush(bench.events);
+  }
+
+Npc* npcBySymbol(World& w, std::string_view symbol) {
+  const size_t id = w.script().findSymbolIndex(symbol);
+  return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
+  }
+
+bool aiCommand(const std::string& cmd, std::string& reply) {
+  auto& fn = Gothic::inst().consoleCommandFn;
+  return fn && fn(cmd,reply);
+  }
 
 void loadScenario() {
   bench.loaded = true;
@@ -380,18 +556,37 @@ void release(PlayerControl& ctrl, KeyCodec::Action a) {
 void stopRecording() {
   if(!bench.rec)
     return;
-  if(bench.video!=nullptr)
-    pclose(bench.video);
-  bench.video = nullptr;
-  say("rec stop " + bench.recName + " frames=" + std::to_string(bench.recFrame));
+  bench.video.reset();  // waits for the frames still queued
+  if(bench.audio!=nullptr) {
+    writeWavHeader(bench.audio,SoundDevice::loopbackRate(),bench.audioFrames);
+    std::fclose(bench.audio);
+    }
+  bench.audio = nullptr;
+  // how fast the game ran against the wall clock while recording (the AI server keeps to the wall clock)
+  const auto wall  = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-bench.recWall).count();
+  const int  speed = wall>0 ? int((bench.time-bench.recStart)*100/uint64_t(wall)) : 100;
+  event("rec_stop","\"frames\":" + std::to_string(bench.recFrame) + ",\"speed\":" + std::to_string(speed));
+  say("rec stop " + bench.recName + " frames=" + std::to_string(bench.recFrame) +
+      (realtime ? " speed=" + std::to_string(speed) + "%" : std::string()));
   bench.rec = false;
   }
 
 void finish() {
+  if(bench.speaking) {
+    std::string reply;
+    aiCommand("ai ptt cancel",reply);
+    bench.speaking = false;
+    }
   stopRecording();
   if(bench.csv!=nullptr)
     std::fclose(bench.csv);
   bench.csv  = nullptr;
+  if(bench.events!=nullptr)
+    std::fclose(bench.events);
+  bench.events = nullptr;
+  if(realtime)
+    say("realtime: " + std::string(bench.lagMs>200 ? "fell behind the wall clock by " + std::to_string(bench.lagMs) + " ms"
+                                                   : "kept to the wall clock"));
   bench.done = true;
   DrawCommands::hiddenTypes = 0;
   if(auto c = Gothic::inst().camera()) {
@@ -523,10 +718,73 @@ void lookFrom(const Vec3& org, const Vec3& tgt) {
   bench.camPos = org;
   }
 
+Vec3 rotY(const Vec3& v, float deg) {
+  const float a = deg*float(M_PI)/180.f, c = std::cos(a), s = std::sin(a);
+  return {v.x*c - v.z*s, v.y, v.x*s + v.z*c};
+  }
+
+// a shot of the hero and camNpc; false if the npc is not there
+bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
+  Npc* npc = npcBySymbol(w,bench.camNpc);
+  if(npc==nullptr)
+    return false;
+  const Vec3 hero  = pl.mapHeadBone();
+  const Vec3 other = npc->mapHeadBone();
+  Vec3 d = other-hero;
+  d.y = 0;
+  const float len = d.length();
+  d = len>1 ? d/len : facing(pl);
+  const Vec3 side = {-d.z,0,d.x};
+  const Vec3 up   = {0,1,0};
+  if(bench.cam==C_Shoulder) {
+    // behind the hero, off his shoulder (camAngle: +1 or -1 picks the shoulder), at the npc's face
+    org = hero - d*bench.camDist + side*(40.f*bench.camAngle) + up*bench.camHeight;
+    tgt = other - up*8.f;
+    }
+  else if(bench.cam==C_NpcFace) {
+    // in front of the npc's face (where it looks), turned camAngle degrees towards the hero's side
+    const Vec3 f  = facing(*npc);
+    const Vec3 c0 = rotY(f, bench.camAngle), c1 = rotY(f,-bench.camAngle);
+    const Vec3 c  = (c0.x*-d.x + c0.z*-d.z) >= (c1.x*-d.x + c1.z*-d.z) ? c0 : c1;  // the turn towards the hero
+    org = other + c*bench.camDist + up*bench.camHeight;
+    tgt = other - up*8.f;
+    }
+  else {
+    const Vec3  mid  = (hero+other)*0.5f;
+    const float dist = std::max(bench.camDist,len*1.2f);
+    org = mid + side*(dist*(bench.camAngle<0 ? -1.f : 1.f)) + up*bench.camHeight;
+    tgt = mid - up*15.f;
+    }
+  const float g = groundY(w,org.x,org.z,org.y+200);
+  if(!std::isnan(g) && org.y<g+25)
+    org.y = g+25;
+  return true;
+  }
+
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
   if(bench.cam==C_Game)
     return;
+  if(bench.cam==C_Shoulder || bench.cam==C_NpcFace || bench.cam==C_Two) {
+    // shots of the hero himself, also while the camera watches a subject (gaze)
+    Npc* hero = Gothic::inst().player();
+    Vec3 org, tgt;
+    if(hero==nullptr || !npcShot(w,*hero,org,tgt))
+      return;
+    if(!bench.smValid) {
+      bench.smOrg   = org;
+      bench.smTgt   = tgt;
+      bench.smValid = true;
+      } else {
+      bench.smOrg += (org-bench.smOrg)*bench.camSmooth;
+      bench.smTgt += (tgt-bench.smTgt)*bench.camSmooth;
+      }
+    lookFrom(bench.smOrg,bench.smTgt);
+    if(bench.clip>0)
+      if(auto cam = Gothic::inst().camera())
+        cam->setNearClip(std::max(10.f, (bench.smOrg-bench.smTgt).length() - bench.clip));
+    return;
+    }
   Vec3 tgt = pl.position() + Vec3(0,bench.camLook,0);
   Vec3 org = bench.camPos;
   if(bench.cam==C_Follow || bench.cam==C_World)
@@ -725,6 +983,28 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       pl.aiPush(AiQueue::aiGoToPoint(*wp));
     say(std::string(wp ? "walkto " : "walkto: no waypoint ") + rest(line));
     }
+  else if(c=="near") {
+    // near <npc> [dist cm 170] [degrees off the npc's facing 0]: the hero stands in front of the npc, facing it
+    Npc* npc = a.size()>1 ? npcBySymbol(w,a[1]) : nullptr;
+    if(npc==nullptr) {
+      say("near: no npc " + (a.size()>1 ? a[1] : std::string()));
+      return;
+      }
+    Vec3 at = npc->position() + rotY(facing(*npc),num(a,3,0))*num(a,2,170);
+    const float g = groundY(w,at.x,at.z,at.y+100);
+    if(!std::isnan(g))
+      at.y = g;
+    pl.setPosition(at);
+    face(pl,npc->position()-at);
+    bench.hasPrev = false;
+    say("near " + a[1]);
+    }
+  else if(c=="approach") {
+    // approach <npc>: walk up to the npc (AI path), then waitarrive
+    if(Npc* npc = a.size()>1 ? npcBySymbol(w,a[1]) : nullptr)
+      pl.aiPush(AiQueue::aiGoToNpc(npc)); else
+      say("approach: no npc " + (a.size()>1 ? a[1] : std::string()));
+    }
   else if(c=="walkmode") {
     const std::string m = a.size()>1 ? a[1] : "run";
     pl.setWalkMode(m=="walk" ? WalkBit::WM_Walk : m=="sneak" ? WalkBit::WM_Sneak : WalkBit::WM_Run);
@@ -740,6 +1020,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else if(m=="wp" && a.size()>2) {
       if(auto wp = w.findPoint(a[2]))
         face(pl,wp->pos-pl.position());
+      }
+    else if(m=="npc" && a.size()>2) {
+      if(auto npc = npcBySymbol(w,a[2]))
+        face(pl,npc->position()-pl.position()); else
+        say("face: no npc " + a[2]);
       }
     else if(m=="rel") {
       // face rel <deg>: along the facing of the watched npc turned by that much (the angles of place)
@@ -787,6 +1072,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="cam") {
     const std::string m = a.size()>1 ? a[1] : "";
     bench.camAuto = false;
+    if(m!="shoulder" && m!="face" && m!="two" && m!="smooth")
+      bench.smValid = false;
     if(m=="game") {
       bench.cam = C_Game;
       if(auto cam = Gothic::inst().camera())
@@ -810,6 +1097,28 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     else if(m=="fixed") {
       bench.cam = C_Fixed;
+      }
+    else if(m=="shoulder" || m=="two" || (m=="face" && a.size()>2 && !isNumber(a[2]))) {
+      // cam shoulder <npc> [dist 120] [height 15] [shoulder 1|-1]
+      // cam face <npc> [dist 140] [height 0] [degrees from the hero 30]
+      // cam two <npc> [dist 250] [height 10] [side 1|-1]
+      if(a.size()<3) {
+        say("cam " + m + ": no npc");
+        return;
+        }
+      bench.cam       = m=="shoulder" ? C_Shoulder : (m=="face" ? C_NpcFace : C_Two);
+      bench.camNpc    = a[2];
+      bench.camDist   = num(a,3,m=="shoulder" ? 120 : (m=="face" ? 140 : 250));
+      bench.camHeight = num(a,4,m=="shoulder" ? 15 : (m=="face" ? 0 : 10));
+      bench.camAngle  = num(a,5,m=="face" ? 30 : 1);
+      if(npcBySymbol(w,bench.camNpc)==nullptr)
+        say("cam " + m + ": no npc " + bench.camNpc);
+      }
+    else if(m=="cut") {
+      bench.smValid = false;  // the next shot starts where it is, without moving there
+      }
+    else if(m=="smooth") {
+      bench.camSmooth = std::clamp(num(a,2,0.12f),0.01f,1.f);
       }
     else if(m=="face") {
       // cam face <dist> [angle] [height]: close to the face of the watched one, looking at the mouth
@@ -871,7 +1180,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.recName  = a.size()>1 ? a[1] : "rec";
     bench.recFrame = 0;
     bench.recStart = bench.time;
-    say("rec " + bench.recName + (bench.recVideo ? "" : " (metrics only)"));
+    bench.recWall  = std::chrono::steady_clock::now();
+    if(bench.recVideo && SoundDevice::loopbackRate()>0) {
+      bench.audio       = std::fopen((outDir+"/"+bench.recName+".wav").c_str(),"wb");
+      bench.audioFrames = 0;
+      if(bench.audio!=nullptr)
+        writeWavHeader(bench.audio,SoundDevice::loopbackRate(),0);
+      }
+    event("rec","\"fps\":" + std::to_string(Fps) + ",\"audio\":" + (bench.audio!=nullptr ? "true" : "false"));
+    say("rec " + bench.recName + (bench.recVideo ? "" : " (metrics only)") + (bench.audio!=nullptr ? " with sound" : ""));
     }
   else if(c=="stop") {
     stopRecording();
@@ -1134,6 +1451,48 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say(buf);
       }
     }
+  else if(c=="ptt") {
+    // ptt <wav> [text]: the hero holds the talk key while the recording is said; the AI server takes the
+    // file instead of the microphone (--voice-files), the npc's hear it through speech recognition.
+    // The text only goes into events.jsonl (subtitles)
+    const std::string wav = a.size()>1 ? a[1] : "";
+    const uint64_t    ms  = wavMs(wav);
+    if(ms==0) {
+      say("ptt: not a 16-bit wav: " + wav);
+      return;
+      }
+    std::string reply;
+    if(!aiCommand("ai ptt start " + wav,reply)) {
+      say("ptt: no AI bridge");
+      return;
+      }
+    const std::string text = rest(rest(line));
+    bench.speaking   = true;
+    bench.speakUntil = bench.time + ms + SpeakTailMs;
+    event("hero","\"wav\":" + jsonStr(wav) + ",\"ms\":" + std::to_string(ms) + ",\"text\":" + jsonStr(text));
+    say("ptt " + std::to_string(ms) + " ms: " + text + " (" + reply + ")");
+    }
+  else if(c=="waitreply" || c=="waitquiet") {
+    // waitreply [timeout ms 30000] [quiet ms 1200]: until an npc of the AI has answered the hero's last
+    // phrase and has been quiet that long; waitquiet [quiet ms 1200] [timeout ms 30000]: only the quiet
+    const bool reply = c=="waitreply";
+    bench.waitReply  = true;
+    bench.replyNeed  = reply;
+    bench.replyFrom  = bench.heroEndAt>0 ? bench.heroEndAt : bench.time;
+    bench.replyEnd   = bench.time + uint64_t(num(a,reply ? 1 : 2,30000));
+    bench.replyQuiet = uint64_t(num(a,reply ? 2 : 1,1200));
+    }
+  else if(c=="caption") {
+    // text on the screen of a short from here (scripts/shorts cut): caption <text>, caption off
+    event("caption","\"text\":" + jsonStr(rest(line)=="off" ? "" : rest(line)));
+    }
+  else if(c=="mark") {
+    event("mark","\"text\":" + jsonStr(rest(line)));
+    }
+  else if(c=="ai") {
+    std::string reply;
+    say(std::string(aiCommand(line,reply) ? "" : "no AI bridge: ") + line + " -> " + reply);
+    }
   else if(c=="quit") {
     bench.pc = bench.prog.size();
     }
@@ -1143,8 +1502,43 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   }
 
+// the hero's phrase is said: the talk key goes up
+void endSpeaking() {
+  std::string reply;
+  aiCommand("ai ptt stop",reply);
+  bench.speaking  = false;
+  bench.heroEndAt = bench.time;
+  event("hero_end");
+  }
+
+bool waitingForReply() {
+  if(!bench.waitReply)
+    return false;
+  const bool replied = !bench.replyNeed || bench.lastLineAt>bench.replyFrom;
+  const bool quiet   = bench.time>=bench.busyAt+bench.replyQuiet;
+  if(replied && quiet) {
+    bench.waitReply = false;
+    return false;
+    }
+  if(bench.time<bench.replyEnd)
+    return true;
+  say(std::string(bench.replyNeed ? "waitreply" : "waitquiet") + ": timeout" + (replied ? "" : ", nobody answered"));
+  event("timeout");
+  bench.waitReply = false;
+  return false;
+  }
+
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
-  while(bench.pc<bench.prog.size()) {
+  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply) {
+    if(bench.speaking) {
+      if(bench.time<bench.speakUntil)
+        return;
+      endSpeaking();
+      }
+    if(waitingForReply())
+      return;
+    if(bench.pc>=bench.prog.size())
+      break;
     if(bench.time<bench.waitUntil)
       return;
     if(bench.waitArrive) {
@@ -1365,27 +1759,29 @@ void writeVideo(const Pixmap& pm) {
     bench.videoH = pm.h() & ~1u;
     const char* ff = envStr("OPENGOTHIC_BENCH_FFMPEG") ? envStr("OPENGOTHIC_BENCH_FFMPEG") : "ffmpeg";
     char cmd[2048];
+    // OPENGOTHIC_BENCH_ENCODER: ffmpeg's video encoder options instead of x264 (the hardware encoder keeps
+    // a large frame in real time: "-c:v h264_videotoolbox -b:v 24M")
+    const char* enc = envStr("OPENGOTHIC_BENCH_ENCODER") ? envStr("OPENGOTHIC_BENCH_ENCODER") : "-c:v libx264 -preset veryfast -crf 18";
     std::snprintf(cmd,sizeof(cmd),
                   "\"%s\" -loglevel error -y -f rawvideo -pix_fmt rgba -s %ux%u -framerate %d -i - "
-                  "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p \"%s/%s.mp4\"",
-                  ff,bench.videoW,bench.videoH,Fps,outDir.c_str(),bench.recName.c_str());
-    bench.video = popen(cmd,"w");
-    if(bench.video==nullptr) {
+                  "%s -pix_fmt yuv420p \"%s/%s.mp4\"",
+                  ff,bench.videoW,bench.videoH,Fps,enc,outDir.c_str(),bench.recName.c_str());
+    std::FILE* f = popen(cmd,"w");
+    if(f==nullptr) {
       say("can not start ffmpeg");
       bench.recVideo = false;
       return;
       }
+    bench.video = std::make_unique<VideoPipe>(f);
     }
   const size_t row = size_t(bench.videoW)*4;
-  std::vector<uint8_t> black;
-  if(pm.w()<bench.videoW || pm.h()<bench.videoH || pm.data()==nullptr) {
-    black.resize(row*bench.videoH,0);
-    std::fwrite(black.data(),1,black.size(),bench.video);
-    return;
+  std::vector<uint8_t> frame(row*bench.videoH,0);
+  if(pm.w()>=bench.videoW && pm.h()>=bench.videoH && pm.data()!=nullptr) {
+    auto px = reinterpret_cast<const uint8_t*>(pm.data());
+    for(uint32_t j=0; j<bench.videoH; ++j)
+      std::memcpy(frame.data() + j*row, px + size_t(j)*size_t(pm.w())*4, row);
     }
-  auto px = reinterpret_cast<const uint8_t*>(pm.data());
-  for(uint32_t j=0; j<bench.videoH; ++j)
-    std::fwrite(px + size_t(j)*size_t(pm.w())*4, 1, row, bench.video);
+  bench.video->push(std::move(frame));
   }
 
 }
@@ -1394,11 +1790,69 @@ bool TestBench::isActive() {
   return scenarioPath!=nullptr;
   }
 
+bool TestBench::filming() {
+  return scenarioPath!=nullptr && realtime;
+  }
+
 uint64_t TestBench::frameDt(uint64_t dt) {
   if(!bench.started || bench.done)
     return dt;
   ++bench.step;
+  if(realtime) {
+    using namespace std::chrono;
+    const auto now = steady_clock::now();
+    if(bench.step==1)
+      bench.wallStart = now;
+    const auto due = bench.wallStart + microseconds(int64_t(bench.step)*1000000/Fps);
+    if(now<due)
+      std::this_thread::sleep_until(due); else
+      bench.lagMs = std::max<int64_t>(bench.lagMs,duration_cast<milliseconds>(now-due).count());
+    }
   return (bench.step*1000)/Fps - ((bench.step-1)*1000)/Fps;
+  }
+
+namespace {
+// the game's sound for `dt` ms of game time, into the recording when there is one
+void renderSound(uint64_t dt) {
+  const uint32_t rate = SoundDevice::loopbackRate();
+  if(rate==0 || dt==0)
+    return;
+  bench.audioAcc += uint64_t(rate)*dt;
+  const size_t n = size_t(bench.audioAcc/1000);
+  bench.audioAcc -= uint64_t(n)*1000;
+  bench.mix.resize(n*2);
+  SoundDevice::renderLoopback(bench.mix.data(),n);
+  if(bench.audio!=nullptr) {
+    std::fwrite(bench.mix.data(),sizeof(int16_t),bench.mix.size(),bench.audio);
+    bench.audioFrames += n;
+    }
+  }
+}
+
+std::function<bool()> TestBench::aiBusy;
+
+void TestBench::aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms) {
+  if(scenarioPath==nullptr)
+    return;
+  bench.lastLineAt = std::max<uint64_t>(bench.time,1);
+  bench.busyAt     = bench.time;
+  event("npc_line","\"npc\":" + jsonStr(npc) + ",\"name\":" + jsonStr(name) + ",\"text\":" + jsonStr(text) +
+                   ",\"ms\":" + std::to_string(ms));
+  say("npc line " + std::string(npc) + ": " + std::string(text));
+  }
+
+void TestBench::aiVoiceEnd(std::string_view npc, uint64_t ms) {
+  if(scenarioPath==nullptr)
+    return;
+  bench.busyAt = bench.time;
+  event("npc_voice_end","\"npc\":" + jsonStr(npc) + ",\"ms\":" + std::to_string(ms));
+  }
+
+void TestBench::aiHeard(std::string_view text, std::string_view to) {
+  if(scenarioPath==nullptr)
+    return;
+  event("heard","\"text\":" + jsonStr(text) + ",\"to\":" + jsonStr(to));
+  say("heard: " + std::string(text) + " -> " + std::string(to));
   }
 
 bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
@@ -1409,17 +1863,22 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
 
   auto world  = Gothic::inst().world();
   auto player = Gothic::inst().player();
-  if(world==nullptr || player==nullptr || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle)
+  if(world==nullptr || player==nullptr || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) {
+    renderSound(dt);
     return false;
+    }
   if(!bench.started) {
     bench.started = true;
     FootIk::setProbing(true);
     say("start");
+    renderSound(dt);
     return false;
     }
   if(dt==0)
     return false;
   bench.time += dt;
+  if(aiBusy && aiBusy())
+    bench.busyAt = bench.time;
 
   for(auto k:bench.taps)
     release(ctrl,k);
@@ -1434,6 +1893,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
 
   run(*world,*player,ctrl);
+  renderSound(dt);
   if(bench.done)
     return false;
   // a dialog (an npc with an important one comes to the hero) holds the player: say so
