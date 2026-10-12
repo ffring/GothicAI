@@ -33,6 +33,6 @@ def test_auth_url_asks_offline_with_pkce():
 
 
 def test_upload_only_to_the_projects_channel():
-    youtube.check_channel("gothic ai", "Gothic AI")
+    youtube.check_channel("UC1", "GothicAI", "UC1")
     with pytest.raises(youtube.YouTubeError):
-        youtube.check_channel("Kaifat", "Gothic AI")
+        youtube.check_channel("UC2", "Kaifat", "UC1")

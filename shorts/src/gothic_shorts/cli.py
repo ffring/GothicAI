@@ -103,7 +103,7 @@ def cmd_upload(args: argparse.Namespace) -> int:
     meta.privacy = args.privacy
     token = youtube.access_token()
     cid, title = youtube.channel(token)
-    youtube.check_channel(title, args.channel)
+    youtube.check_channel(cid, title, args.channel)
     print(f"channel: {title} ({cid})")
     print(f"video:   {video} ({video.stat().st_size / 1e6:.1f} MB)")
     print(f"title:   {meta.title}")
@@ -180,7 +180,7 @@ def main() -> None:
     s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
                    help="an API project without YouTube's audit can upload private only")
     s.add_argument("--channel", default=youtube.CHANNEL,
-                   help="upload only when signed in to this channel (GOTHIC_YOUTUBE_CHANNEL, Gothic AI)")
+                   help="upload only to this channel id (GOTHIC_YOUTUBE_CHANNEL, the project's GothicAI)")
     s.add_argument("--yes", action="store_true", help="do not ask before uploading")
     s.set_defaults(fn=cmd_upload)
 

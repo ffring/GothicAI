@@ -33,8 +33,8 @@ SCOPES = (
 API = "https://www.googleapis.com/youtube/v3"
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 CHUNK = 8 * 1024 * 1024
-# the project's channel: nothing is uploaded anywhere else
-CHANNEL = os.environ.get("GOTHIC_YOUTUBE_CHANNEL", "Gothic AI")
+# the project's channel (GothicAI), by its id: nothing is uploaded anywhere else
+CHANNEL = os.environ.get("GOTHIC_YOUTUBE_CHANNEL", "UCbeAoPh3V7yFVpiuWNI-wkw")
 GAMING = "20"
 
 
@@ -195,10 +195,10 @@ def channel(token: str) -> tuple[str, str]:
     return items[0]["id"], items[0]["snippet"]["title"]
 
 
-def check_channel(title: str, expected: str = CHANNEL) -> None:
-    if title.strip().casefold() != expected.strip().casefold():
-        raise YouTubeError(f"signed in to the channel {title!r}, not {expected!r}: delete {TOKEN} and "
-                           f"gothic-shorts youtube login, then pick {expected!r} in Google's window")
+def check_channel(cid: str, title: str, expected: str = CHANNEL) -> None:
+    if cid != expected:
+        raise YouTubeError(f"signed in to the channel {title!r} ({cid}), not {expected}: delete {TOKEN}, "
+                           f"gothic-shorts youtube login, then pick the project's channel in Google's window")
 
 
 def upload(video: Path, meta: Meta, token: str) -> str:
