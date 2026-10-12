@@ -11,6 +11,7 @@ import csv
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict, deque
@@ -371,7 +372,9 @@ def arrows(out):
                     flew = float(body.split("flew ")[1].split(" ")[0])
                     per[at].append((zone, draw, flew))
                 else:
-                    per[at].append(("miss", math.nan, float(line.split("flew ")[1].split(" ")[0])))
+                    # "came down at <xyz>, flew <cm> cm" or "flew out at <xyz>, flew <cm> cm"
+                    m = re.search(r"flew (-?[0-9.]+) cm", line)
+                    per[at].append(("miss", math.nan, float(m.group(1)) if m else math.nan))
     return per
 
 
