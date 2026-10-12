@@ -27,6 +27,12 @@ constexpr float ChestPitch   = 0.25f;     // part of looking up or down the ches
 constexpr float TurnRate     = 6.f;       // 1/s, how fast the turn follows the partner
 constexpr float BlendTime    = 0.4f;      // seconds, turning to the partner and back...
 constexpr float MaxTurnSpeed = 180.f*Deg; // ...but not faster than this: a large turn takes longer
+constexpr float MaxTrackSpeed= 270.f*Deg; // following the partner, or turning to another one
+constexpr float MaxAnimYaw   = 50.f*Deg;  // the turn of the head the animation does, the gaze takes out
+constexpr float AnimLag      = 0.12f;     // seconds: of the head up and down only the slow part (a nod stays)
+constexpr float MaxAnimPitch = 30.f*Deg;
+constexpr float FaceAxisCos  = 0.85f;     // the axis of the face is picked when the head looks this close to forward
+constexpr float MaxFaceDown  = 0.8f;      // the face looks further down or up (a bent head): its turn is not known
 constexpr float Snap         = 0.002f;
 
 bool enabled = []() {
@@ -34,8 +40,8 @@ bool enabled = []() {
   return v==nullptr || v[0]!='0';
   }();
 
-void approach(float& v, float target, float k, bool& changed) {
-  float nv = v + (target-v)*k;
+void approach(float& v, float target, float k, float maxStep, bool& changed) {
+  float nv = v + std::clamp((target-v)*k, -maxStep, maxStep);
   if(std::abs(target-nv)<Snap)
     nv = target;
   if(nv!=v)
@@ -45,6 +51,12 @@ void approach(float& v, float target, float k, bool& changed) {
 
 Vec3 axis(const Matrix4x4& m, int k) {
   return normalize(Vec3(m.at(k,0), m.at(k,1), m.at(k,2)));
+  }
+
+// where the body faces, from the hip joints: y up, the left hip on the left
+Vec3 hipsForward(const Vec3& left, const Vec3& right) {
+  const Vec3 f = cross(Up,left-right);
+  return Vec3(f.x,0,f.z);
   }
 
 // angle around Up that turns horizontal unit vector a toward b
@@ -91,6 +103,8 @@ void Gaze::setSkeleton(const Skeleton* sk) {
         out.push_back(i);
     };
 
+  lthigh = find("BIP01 L THIGH");
+  rthigh = find("BIP01 R THIGH");
   head  = find("BIP01 HEAD");
   chest = find("BIP01 SPINE2");
   waist = find("BIP01 SPINE1");
@@ -103,6 +117,27 @@ void Gaze::setSkeleton(const Skeleton* sk) {
   tree(head, headTree);
   tree(chest,chestTree);
   tree(waist,waistTree);
+
+  // the face looks along the axis of the head bone closest to the facing of the bind pose, where the
+  // head is upright (an npc may be bent over a cauldron all the time)
+  if(lthigh!=size_t(-1) && rthigh!=size_t(-1) && sk->tr.size()==nodes.size()) {
+    const Vec3 f = hipsForward(position(sk->tr[lthigh]),position(sk->tr[rthigh]));
+    if(length(f)>1.f) {
+      const Vec3 fn   = normalize(Vec3(f.x,0,f.z));
+      float      best = 0;
+      for(int k=0; k<3; ++k) {
+        const float c = dot(axis(sk->tr[head],k),fn);
+        if(std::abs(c)>std::abs(best)) {
+          best     = c;
+          faceAxis = k;
+          faceSign = c>0 ? 1.f : -1.f;
+          }
+        }
+      faceFixed = std::abs(best)>FaceAxisCos;
+      if(!faceFixed)
+        faceAxis = -1;
+      }
+    }
   valid = true;
   }
 
@@ -114,9 +149,22 @@ bool Gaze::update(const Input& in) {
   bool        changed = false;
   bool        on      = in.active && enabled;
   headOnly = in.headOnly;
+  if(on)
+    source = in.source;
 
+  npcForward = normalize(Vec3(in.forward.x,0,in.forward.z));
   if(on) {
-    forward = normalize(Vec3(in.forward.x,0,in.forward.z));
+    // the body facing: the hips as animated (at a mob the animation may turn the whole body), or the npc's
+    const Vec3 f = length(hips)>0.5f ? hips : npcForward;
+    if(tracking && weight>0.f && length(f)>0.5f && length(forward)>0.5f) {
+      // the body turns under the head (to the one it looks at, say): the head keeps looking there
+      const float turn = yawBetween(forward,f);
+      if(turn!=0.f) {
+        yaw    -= turn;
+        changed = true;
+        }
+      }
+    forward = f;
     target  = in.target;
     const Vec3 d  = target - headPos;
     const Vec3 dh = Vec3(d.x,0,d.z);
@@ -127,8 +175,16 @@ bool Gaze::update(const Input& in) {
       const float maxYaw = headOnly ? MaxHeadYaw : MaxHeadYaw+MaxChestYaw+MaxWaistYaw;
       yawGoal   = std::clamp(y, -maxYaw, maxYaw);
       pitchGoal = std::clamp(std::atan2(d.y,length(dh)), -MaxPitchDown, MaxPitchUp);
+      yaw       = std::clamp(yaw, -maxYaw, maxYaw);
       }
     }
+  tracking = on;
+
+  // the animation bends the head up and down too (down to a book): follow its slow part
+  const float prevAp = animPitchLp;
+  animPitchLp += (animPitch-animPitchLp)*(1.f - std::exp(-dt/AnimLag));
+  if(weight>0.f && std::abs(animPitchLp-prevAp)>Snap*0.1f)
+    changed = true;
 
   const float prevW = weight;
   const float angle = std::max(std::abs(on && prevW<=0.f ? yawGoal : yaw), Snap);
@@ -139,8 +195,9 @@ bool Gaze::update(const Input& in) {
   if(weight!=prevW)
     changed = true;
   if(weight<=0.f) {
-    yaw   = 0;
-    pitch = 0;
+    yaw    = 0;
+    pitch  = 0;
+    source = Source::None;
     return changed;
     }
   if(prevW<=0.f) {
@@ -151,8 +208,8 @@ bool Gaze::update(const Input& in) {
     }
   if(on) {
     const float k = 1.f - std::exp(-TurnRate*dt);
-    approach(yaw,  yawGoal,  k,changed);
-    approach(pitch,pitchGoal,k,changed);
+    approach(yaw,  yawGoal,  k,MaxTrackSpeed*dt,changed);
+    approach(pitch,pitchGoal,k,MaxTrackSpeed*dt,changed);
     }
   return changed;
   }
@@ -162,18 +219,37 @@ void Gaze::apply(Matrix4x4* tr, size_t numBones) {
      (!chestTree.empty() && chestTree.back()>=numBones) || (!waistTree.empty() && waistTree.back()>=numBones))
     return;
   headPos = position(tr[head]);
+  hips    = {};
+  if(lthigh<numBones && rthigh<numBones) {
+    const Vec3 f = hipsForward(position(tr[lthigh]),position(tr[rthigh]));
+    if(length(f)>1.f)
+      hips = normalize(f);
+    }
 
-  // the axis of the head bone the face looks along: the one closest to the body facing, as animated
-  if(length(forward)>0.5f) {
+  // without a bind pose to tell: the axis of the head bone closest to the body facing, as animated;
+  // kept while the animation turns the head far (into a turn), another axis would come closer then
+  if(!faceFixed && length(forward)>0.5f) {
     float best = 0;
+    int   ax   = -1;
     for(int k=0; k<3; ++k) {
       const float c = dot(axis(tr[head],k),forward);
       if(std::abs(c)>std::abs(best)) {
-        best     = c;
-        faceAxis = k;
-        faceSign = c>0 ? 1.f : -1.f;
+        best = c;
+        ax   = k;
         }
       }
+    if(faceAxis<0 || std::abs(best)>FaceAxisCos) {
+      faceAxis = ax;
+      faceSign = best>0 ? 1.f : -1.f;
+      }
+    }
+
+  // the facing of the head as animated, from the body facing
+  if(faceAxis>=0 && length(forward)>0.5f) {
+    const Vec3 fa = axis(tr[head],faceAxis)*faceSign;
+    const Vec3 fh = Vec3(fa.x,0,fa.z);
+    animYaw   = std::abs(fa.y)<MaxFaceDown ? yawBetween(forward,normalize(fh)) : 0.f;
+    animPitch = std::asin(std::clamp(fa.y,-1.f,1.f));
     }
 
   parts[0] = parts[1] = parts[2] = 0;
@@ -181,6 +257,9 @@ void Gaze::apply(Matrix4x4* tr, size_t numBones) {
   if(weight>0.f) {
     const float y = yaw*weight;
     const float p = pitch*weight;
+    // the head takes out what the animation turned it by, so it looks at the partner
+    const float ay = std::clamp(animYaw,    -MaxAnimYaw,  MaxAnimYaw  )*weight;
+    const float ap = std::clamp(animPitchLp,-MaxAnimPitch,MaxAnimPitch)*weight;
     // the head turns first, the chest and the waist take what is left (not with the head only)
     float hy = std::clamp(y*(headOnly || chest==size_t(-1) ? 1.f : HeadShare), -MaxHeadYaw, MaxHeadYaw);
     float cy = 0, wy = 0;
@@ -194,6 +273,7 @@ void Gaze::apply(Matrix4x4* tr, size_t numBones) {
       rotateAbout(tr,waistTree,axisAngle(Up,wy),position(tr[waist]));
     if(cy!=0.f)
       rotateAbout(tr,chestTree,axisAngle(Up,cy),position(tr[chest]));
+    hy -= ay;
     if(hy!=0.f)
       rotateAbout(tr,headTree, axisAngle(Up,hy),position(tr[head]));
 
@@ -201,7 +281,7 @@ void Gaze::apply(Matrix4x4* tr, size_t numBones) {
     const Vec3  f   = mul(axisAngle(Up,y),forward);
     const Vec3  lat = normalize(cross(f,Up));
     const float cp  = (headOnly || chest==size_t(-1)) ? 0.f : p*ChestPitch;
-    const float hp  = p - cp;
+    const float hp  = p - cp - ap;
     if(cp!=0.f)
       rotateAbout(tr,chestTree,axisAngle(lat,cp),position(tr[chest]));
     if(hp!=0.f)
@@ -223,6 +303,7 @@ void Gaze::apply(Matrix4x4* tr, size_t numBones) {
 void Gaze::probe(Probe& p) const {
   p.valid     = valid;
   p.active    = weight>0.f;
+  p.source    = source;
   p.weight    = weight;
   p.yaw       = yaw/Deg;
   p.pitch     = pitch/Deg;
@@ -232,6 +313,9 @@ void Gaze::probe(Probe& p) const {
   p.headYaw   = parts[0]/Deg;
   p.chestYaw  = parts[1]/Deg;
   p.waistYaw  = parts[2]/Deg;
+  p.animYaw   = animYaw/Deg;
+  p.animPitch = animPitch/Deg;
+  p.hipsYaw   = length(hips)>0.5f && length(npcForward)>0.5f ? yawBetween(npcForward,hips)/Deg : 0.f;
   p.head      = headPos;
   p.facing    = facing;
   p.target    = target;

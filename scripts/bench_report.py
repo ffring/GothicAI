@@ -22,6 +22,9 @@ OTHER = {"l": "r", "r": "l", "fl": "fr", "fr": "fl"}
 CONTACT = ("float", "sink", "toe_sink")
 
 # flag: (threshold, unit, what it means)
+# Gaze::Source
+GAZE_SRC = {0: "none", 1: "talk", 2: "script", 3: "focus", 4: "attention"}
+
 FLAGS = {
     "float":     (3.0, "cm",  "planted foot above the ground: ankle and toes (contact error > 0)"),
     "sink":      (3.0, "cm",  "planted ankle below the ground (contact error < 0)"),
@@ -32,7 +35,7 @@ FLAGS = {
     "toe_twist": (12.0, "deg", "planted toes turned sideways beyond the intended outward turn"),
     "stretch":   (2.0, "cm",  "planted leg straight and still can not reach the ground"),
     "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
-    "gaze_jerk": (8.0, "deg", "the gaze turned this much in one frame"),
+    "gaze_jerk": (10.0, "deg", "the face turned this much in one frame (a turn to the partner goes up to 9)"),
 }
 
 
@@ -109,7 +112,13 @@ def frame_flags(prev2, prev, r):
         # within reach: the head can turn 65 degrees, with the body 110 (the goal is clamped to that)
         if r["g_w"] > 0.99 and r["g_err"] >= 0 and abs(r["g_yawgoal"]) < 60:
             out.append(("gaze_off", "-", r["g_err"]))
-        if prev is not None and "g_w" in prev:
+        if prev is not None and "g_w" in prev and "g_fyaw" in r:
+            # the face in the world, while the gaze holds it (the body may turn under it); not right
+            # after a segment starts: the bench teleports the hero there
+            if r["g_w"] > 0 and prev["g_w"] > 0 and r["frame"] >= 6:
+                dy = (r["g_fyaw"] - prev["g_fyaw"] + 180) % 360 - 180
+                out.append(("gaze_jerk", "-", math.hypot(dy, r["g_fpitch"] - prev["g_fpitch"])))
+        elif prev is not None and "g_w" in prev:
             out.append(("gaze_jerk", "-", abs(r["g_yaw"] * r["g_w"] - prev["g_yaw"] * prev["g_w"])))
     for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
@@ -212,6 +221,11 @@ def analyze(rows):
                   and abs(r.get("g_yawgoal", 0)) < 60)
     if gaze:
         stats["gaze_p90"] = gaze[int(len(gaze) * 0.9)]
+    # how often it looks: share of frames, times it turned to someone, why (talk, script, ...)
+    if rows and "g_on" in rows[0]:
+        stats["gaze_on"] = sum(1 for r in rows if r["g_on"] > 0) / len(rows)
+        stats["gaze_looks"] = sum(1 for a, b in zip(rows, rows[1:]) if a["g_on"] == 0 and b["g_on"] > 0) + int(rows[0]["g_on"] > 0)
+        stats["gaze_src"] = sorted({GAZE_SRC.get(int(r.get("g_src", 0)), "?") for r in rows if r["g_on"] > 0})
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -271,8 +285,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze err p90 deg | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -281,8 +295,10 @@ def report(out):
         limp = "-" if "limp" not in st else f"{st['limp']:.1f}"
         gap = "-" if "spread" not in st else f"{st['spread']:.1f}"
         gz = "-" if "gaze_p90" not in st else f"{st['gaze_p90']:.1f}"
+        gon = "-" if "gaze_on" not in st else \
+            f"{st['gaze_on'] * 100:.0f} ({st['gaze_looks']}{', ' + ' '.join(st['gaze_src']) if st['gaze_src'] else ''})"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gz} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
