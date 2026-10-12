@@ -34,6 +34,7 @@ from .llm import (
     ToolCall,
     ToolChoice,
     ToolResult,
+    with_deadlines,
 )
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import MOOD_DELIVERY, Persona, PersonaProvider
@@ -62,6 +63,11 @@ log = logging.getLogger(__name__)
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 PREPARE_S = 3.0  # what an extension asks the game before a turn
+# a model call that goes quiet: no answer this long after the request, or no more of it this long; such a
+# step is asked again once per turn if the npc has said nothing of it yet (a stalled stream would otherwise
+# leave the npc "thinking" for the 10 minutes of the HTTP read timeout)
+LLM_FIRST_S, LLM_IDLE_S, STEP_RETRIES = 15.0, 15.0, 1
+SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
 
@@ -374,6 +380,7 @@ class DialogueManager:
         self.free_body: Callable[[str, str], None] | None = None
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
+        self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
         self.extensions: list[TurnExtension] = []
         self.llm = llm
         self.personas = personas
@@ -462,9 +469,12 @@ class DialogueManager:
         prompt = f"Прежняя сводка: {conv.memory.summary or 'нет'}\n\nНовые записи:\n{records}"
         text = ""
         try:
-            async for event in self.llm.stream(
+            events = self.llm.stream(
                 instructions=SUMMARY_INSTRUCTIONS.format(name=conv.persona.name),
                 messages=[Message("user", prompt)],
+            )
+            async for event in with_deadlines(
+                events, first_s=SUMMARY_FIRST_S, idle_s=SUMMARY_FIRST_S, name=self.llm.name
             ):
                 if isinstance(event, TextDelta):
                     text += event.text
@@ -788,7 +798,7 @@ class DialogueManager:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here.
         # What started the turn is remembered even when the npc said nothing (it may have acted).
         self._remember(conv, trigger.role, trigger.content)
-        if text:
+        if text := text.strip():
             self._remember(conv, "assistant", text)
         self._maybe_compact(conv)
 
@@ -895,10 +905,22 @@ class DialogueManager:
         await self._status(conv, "thinking")
         status = "completed"
         added: list[Item] = list(request)
+        retries = STEP_RETRIES
         try:
             for step in range(MAX_STEPS):
                 st = trace.step(added, tool_choice(step))
-                done = await self._step(conv, state, request, tool_choice(step), st)
+                while True:
+                    said = state.text.strip()
+                    try:
+                        done = await self._step(conv, state, request, tool_choice(step), st)
+                        break
+                    except LLMError as err:
+                        # asked again only if nothing of this step was said: else the npc would repeat it
+                        if not err.retryable or retries <= 0 or state.text.strip() != said:
+                            raise
+                        retries -= 1
+                        log.warning("%s: %s; asking the model again", conv.npc, err)
+                        trace.event("retry", error=str(err))
                 if not state.text.strip() and state.relevant is not None and not state.relevant():
                     raise StaleTurn  # nothing said yet and the incident is over: no late intents either
                 calls = [i for i in done.items if isinstance(i, ToolCall)]
@@ -988,39 +1010,51 @@ class DialogueManager:
         if state.text and not state.text.endswith((" ", "\n")):
             state.text += " "
         try:
-            async for event in self.llm.stream(
-                instructions=conv.persona.instructions,
-                messages=request,
-                tools=state.tools,
-                tool_choice=choice,
-            ):
-                if isinstance(event, Done):
-                    done = event
-                if not isinstance(event, TextDelta):
-                    continue
-                now = time.monotonic()
-                if first is None and state.relevant is not None and not state.relevant():
-                    raise StaleTurn
-                first = first if first is not None else now - started
-                if state.first_delta is None:
-                    state.first_delta = now - state.started
-                pieces = self._spoken(state, state.moods.feed(event.text))
-                # the chat shows the reply as it is written
-                if (
-                    now - state.shown_at >= CHAT_TEXT_EVERY
-                    and (shown := to_game_text(state.text)) != state.shown
+            try:
+                events = self.llm.stream(
+                    instructions=conv.persona.instructions,
+                    messages=request,
+                    tools=state.tools,
+                    tool_choice=choice,
+                )
+                async for event in with_deadlines(
+                    events, first_s=self.llm_first_s, idle_s=self.llm_idle_s, name=self.llm.name
                 ):
-                    state.shown, state.shown_at = shown, now
-                    await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
-                await self._feed_lines(conv, state, pieces)
-            await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
-            for line in state.splitter.flush():
-                await self._line(conv, state, line)
+                    if isinstance(event, Done):
+                        done = event
+                    if not isinstance(event, TextDelta):
+                        continue
+                    now = time.monotonic()
+                    if first is None and state.relevant is not None and not state.relevant():
+                        raise StaleTurn
+                    first = first if first is not None else now - started
+                    if state.first_delta is None:
+                        state.first_delta = now - state.started
+                    pieces = self._spoken(state, state.moods.feed(event.text))
+                    # the chat shows the reply as it is written
+                    if (
+                        now - state.shown_at >= CHAT_TEXT_EVERY
+                        and (shown := to_game_text(state.text)) != state.shown
+                    ):
+                        state.shown, state.shown_at = shown, now
+                        await self.link.send(ChatTextCmd(npc=conv.npc, reply=state.reply, text=shown))
+                    await self._feed_lines(conv, state, pieces)
+            except LLMError:
+                if first is not None:  # the model went quiet mid-answer: what it wrote is said, as remembered
+                    await self._say_rest(conv, state)
+                raise
+            await self._say_rest(conv, state)
         finally:
             TurnTrace.finish_step(st, done, first, time.monotonic() - started)
         if done is None:
             raise LLMError(f"{self.llm.name}: the stream ended without a result", retryable=True)
         return done
+
+    async def _say_rest(self, conv: Conversation, state: TurnState) -> None:
+        """What is left of the step's text once its stream is over: the last sentence."""
+        await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
+        for line in state.splitter.flush():
+            await self._line(conv, state, line)
 
     @staticmethod
     def _spoken(state: TurnState, pieces: list[str | MoodTag]) -> list[str | MoodTag]:
