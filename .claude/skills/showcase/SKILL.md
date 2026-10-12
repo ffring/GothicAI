@@ -53,8 +53,10 @@ One idea per short. "Xardas sees through a lie" is a short; "the AI npc's" is no
 6. **Hand it over**: the full file stays in `.shorts/<name>/take-NN/` (for upload, 1080x1920, -14 LUFS).
    To show it on the user's phone send a copy under 30 MB:
    `ffmpeg -i short-ru.mp4 -c:v libx264 -preset slow -crf 25 -c:a aac -b:a 128k short-ru-preview.mp4`.
-   Write the YouTube title and description (`references/copy.md`). Uploading is the user's: never upload
-   or post anywhere yourself.
+   Write the YouTube title and description (`references/copy.md`) into the `youtube` section of the short's
+   JSON. Uploading: `gothic-shorts upload <short> --meta <json> --lang <ru|en>` sends it to the user's channel
+   as a private video, and only after the user said yes to that upload in the conversation (name the file,
+   the channel and the title). Making it public is the user's, in YouTube Studio. Never post anywhere else.
 
 ## A devlog post
 

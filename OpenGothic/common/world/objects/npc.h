@@ -306,6 +306,11 @@ class Npc final {
     void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {},
                            const Tempest::Vec2& tremor = {});
     bool      hasManualAim() const { return manualAim; }
+    // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), as smooth as
+    // whoever drives it makes it (PlayerControl)
+    void      setAimStance(float crouch, float peek) { stanceCrouch = crouch; stancePeek = peek; }
+    float     aimCrouch() const { return stanceCrouch; }
+    float     aimPeek()   const { return stancePeek; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
     void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
     // how far the animation of that name has played, 0..1; -1: it does not play
@@ -703,6 +708,8 @@ class Npc final {
     Tempest::Vec3                  manualPoint = {};
     Tempest::Vec2                  manualSway  = {};
     Tempest::Vec2                  manualTremor = {};
+    float                          stanceCrouch = 0;
+    float                          stancePeek   = 0;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

@@ -938,7 +938,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
-  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean,a_side,ik_crouch,m_crouch,m_peek");
   std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
   std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss,bd_follow,bd_fit,bd_offset,bd_angle,hd_hand,hd_fore,hd_arrow,bd_hold,bd_nock,rh_x,rh_y,rh_z,bd_held,bd_overgrip,bd_atmiddle,bd_nockgap,bd_square,bd_cant,bd_bowmove,bd_bowmiss");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
@@ -1018,7 +1018,8 @@ void writeRow(Npc& pl) {
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
                am.animYaw,am.animPitch,am.turn,am.bend,am.error);
-  std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
+  std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.2f,%.2f",int(am.steady),am.lean,am.side,FootIk::playerProbe.crouch,
+               double(pl.aimCrouch()),double(pl.aimPeek()));
   // the manual aim: the bow's stage, the sway, how far the arrow points off the aim
   const auto& mp = Archer::playerProbe;
   // the crosshair: how far it is open, degrees; how far it moved on the screen since the last frame,
@@ -1677,13 +1678,23 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("volley " + std::to_string(bench.volleyLeft));
     }
   else if(c=="aimat") {
-    // aimat <npc|nearest> [head|body|limb] | aimat <x> <y> <z> | aimat off: the manual aim aims there
+    // aimat <npc|nearest> [head|body|limb] | aimat <x> <y> <z> | aimat ahead [dist] [height] | aimat off: the
+    // manual aim aims there
     // instead of the mouse - the middle of a zone of the npc, every frame
     bench.aimNpc   = nullptr;
     bench.aimFixed = false;
     if(a.size()>1 && a[1]=="off") {
       ctrl.setAimOverride(false);
       say("aimat off");
+      return;
+      }
+    if(a.size()>1 && a[1]=="ahead") {
+      // aimat ahead [dist cm 2000] [height cm 140]: a point that far ahead of the hero as it faces now
+      const Vec3 f   = facing(pl);
+      bench.aimFixed = true;
+      bench.aimAt    = pl.position() + f*num(a,2,2000) + Vec3(0,num(a,3,140),0);
+      ctrl.setAimOverride(true,bench.aimAt);
+      say("aimat ahead");
       return;
       }
     if(a.size()>3 && (std::isdigit(uint8_t(a[1][0])) || a[1][0]=='-')) {
@@ -1875,6 +1886,75 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       char buf[256];
       std::snprintf(buf,sizeof(buf),"ledge %s yaw=%.1f dist=%.0f drop=%.0f down=%.0f from=%.0f",all[i].name.c_str(),
                     double(all[i].yaw),double(all[i].dist),double(all[i].drop),double(all[i].down),double(all[i].from));
+      say(buf);
+      }
+    }
+  else if(c=="corner") {
+    // corner <left|right> [count] | corner <left|right> go <i>: spots at a corner of a wall (near waypoints):
+    // a wall right in front of the head, open far ahead leaning out to that side (Aim::SideReach): where
+    // the manual aim leans out round it. Lists them (nearest first) or puts the hero at the i-th, facing
+    // along it
+    const bool  right = a.size()>1 && a[1]=="right";
+    const bool  go    = a.size()>2 && a[2]=="go";
+    const size_t pick = size_t(num(a,3,0));
+    const size_t count = size_t(num(a,2,10));
+    struct Spot { std::string name; Vec3 at; float yaw, front, from; };
+    std::vector<Spot> all;
+    const Vec3 at0 = pl.position();
+    w.findWayPoint(at0,[&](const WayPoint& wp) {
+      if((wp.pos-at0).length()>8000.f)
+        return false;
+      for(int k=0; k<16; ++k) {
+        const float y    = float(k)*22.5f*float(M_PI)/180.f;
+        const Vec3  f    = Vec3(std::cos(y),0,std::sin(y));
+        Vec3        sd   = Vec3::crossProduct(Vec3(0,1,0),f);
+        sd = Vec3::normalize(sd)*(right ? 1.f : -1.f);
+        for(float shift=-90; shift<=90; shift+=15) {
+          const Vec3  p0 = Vec3(wp.pos.x,wp.pos.y+50,wp.pos.z);
+          const Vec3  p1 = p0 + sd*shift;
+          if(w.physic()->ray(p0,p1).hasCol)
+            continue;
+          const float g  = groundY(w,p1.x,p1.z,p1.y+50);
+          if(std::isnan(g) || std::abs(g-wp.pos.y)>40)
+            continue;
+          const Vec3 head = Vec3(p1.x,g+148,p1.z);
+          auto       fr   = w.physic()->ray(head,head+f*400.f);
+          if(!fr.hasCol || (fr.v-head).length()<50.f)
+            continue; // no wall in front, or right at the face
+          const Vec3 out = head + sd*Aim::SideReach;
+          if(w.physic()->ray(head,out+sd*15.f).hasCol)
+            continue; // no room to lean out
+          if(w.physic()->ray(out,out+f*600.f).hasCol)
+            continue; // walled leaning out too
+          if(w.physic()->ray(Vec3(p1.x,g+60,p1.z),Vec3(p1.x,g+60,p1.z)+f*60.f).hasCol)
+            continue; // a low step in front: not a corner
+          all.push_back(Spot{wp.name,Vec3(p1.x,g,p1.z),float(k)*22.5f,(fr.v-head).length(),(p1-at0).length()});
+          break;
+          }
+        }
+      return false;
+      });
+    std::sort(all.begin(),all.end(),[](const Spot& x, const Spot& y) { return x.from<y.from; });
+    if(go) {
+      if(pick>=all.size()) {
+        say("corner: no spot " + std::to_string(pick));
+        return;
+        }
+      auto& sp = all[pick];
+      pl.setPosition(sp.at);
+      face(pl,Vec3(std::cos(sp.yaw*float(M_PI)/180.f),0,std::sin(sp.yaw*float(M_PI)/180.f)));
+      bench.hasPrev = false;
+      char buf[200];
+      std::snprintf(buf,sizeof(buf),"corner %s %zu: %s yaw=%.1f wall in front %.0f cm",right ? "right" : "left",pick,sp.name.c_str(),
+                    double(sp.yaw),double(sp.front));
+      say(buf);
+      return;
+      }
+    say("corners " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[200];
+      std::snprintf(buf,sizeof(buf),"corner %zu %s yaw=%.1f front=%.0f from=%.0f",i,all[i].name.c_str(),double(all[i].yaw),
+                    double(all[i].front),double(all[i].from));
       say(buf);
       }
     }
@@ -2673,8 +2753,8 @@ void drawOverlay(Pixmap& pm) {
     }
   const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
   if(am.valid && am.active) {
-    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f",double(am.weight),double(am.error),double(am.yaw),
-                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean));
+    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f S%.0f",double(am.weight),double(am.error),double(am.yaw),
+                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean),double(am.side));
     cv.text(x,y,buf,2,{255,140,60,255});
     y += 16;
     }

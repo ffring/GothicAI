@@ -27,6 +27,8 @@ constexpr float TremorWeak    = 0.6f;     // too weak for the bow: trembles draw
 constexpr float FatigueRest   = 4.f;      // seconds to rest from full fatigue
 constexpr float RaiseMin      = 0.25f;    // seconds raising before the string can be drawn
 constexpr float ReloadMax     = 3.f;      // seconds: reloading takes no longer, steady or not
+constexpr float CrouchSteady  = 0.7f;     // the sway crouched (a knee bent, low)...
+constexpr float PeekShaky     = 1.25f;    // ...and leaning out round a corner
 
 uint32_t hash(uint32_t x) {
   x ^= x>>16; x *= 0x7feb352d;
@@ -185,7 +187,9 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
     return false;
     }
 
-  amp = st.sway*(0.6f+0.4f*drawAmt)*calm*(1.f+DisturbGain*disturb);
+  const float stance = (1.f + (CrouchSteady-1.f)*std::clamp(in.crouch,0.f,1.f)) *
+                       (1.f + (PeekShaky-1.f)*std::clamp(std::abs(in.peek),0.f,1.f));
+  amp = st.sway*(0.6f+0.4f*drawAmt)*calm*(1.f+DisturbGain*disturb)*stance;
   float trem = TremorTired*fatigue;
   if(stg==Held)
     trem += TremorMax*std::clamp((hold-st.holdLimit)/Archery::GiveUp,0.f,1.f);

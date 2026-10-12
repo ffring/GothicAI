@@ -688,6 +688,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
+        in.follow = 1.f - CrouchSlow*npc.aimCrouch();
         in.reload = pose.animProgress(ws==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload,npc.world().tickCount())>=0.f;
         // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
         in.slot   = ammunition.boneId;
@@ -698,6 +699,18 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
     else if(ws==WeaponState::Mage && bs==BS_CASTING) {
       in.active = true;
       in.dir    = aimAt() - from;
+      }
+    if(in.active && manual && npc.aimPeek()!=0.f) {
+      // round a corner: lean out sideways as far as there is room beside the head
+      const float           peek  = npc.aimPeek();
+      const Tempest::Vec3   right = Tempest::Vec3::normalize(Tempest::Vec3::crossProduct(Tempest::Vec3(0,1,0),in.forward));
+      // from where the head is upright (not leaned: the room does not chase itself)
+      const Tempest::Vec3   head  = npc.position() + Tempest::Vec3(0,shoulder+HeadOverShoulder,0);
+      const Tempest::Vec3   dir   = right*(peek>0.f ? 1.f : -1.f);
+      const float           reach = Aim::SideReach + PeekClear;
+      auto                  r     = npc.world().physic()->ray(head,head+dir*reach);
+      const float           room  = r.hasCol ? std::clamp(((r.v-head).length()-PeekClear)/Aim::SideReach,0.f,1.f) : 1.f;
+      in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
       // steeply down: lean over the edge, if there is room in front of the head

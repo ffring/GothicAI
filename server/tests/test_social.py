@@ -263,3 +263,41 @@ def test_a_lie_he_took_a_reward_for_goes_further(graph, monkeypatch):
     # Lobart -> Andre (dealings) -> Vatras (the city) -> the citizen: the third retelling is only for a lie
     # he took a reward for
     assert reach == {"caught": None, "found_out": 3}
+
+
+def test_one_who_promised_silence_tells_no_one(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    monkeypatch.setattr(social, "P_DEAL", 1.0)
+    s = Social(PEOPLE, graph)
+    r, rumor, facts = _rumors(s)
+    # Lobart took the hero's gold for keeping quiet (deals.py): the rumor does not leave him
+    r._on_fact({"fact": "deal", "npc": LOBART, "silence": [rumor.key]})
+    assert r.spread(DAY + _h(9), 3 * DAY) == 0 and set(rumor.known) == {LOBART}
+    # whom he told before still pass it on
+    rumor.known[HILDA] = 1
+    r.spread(3 * DAY, 3 * DAY + _h(23))
+    assert VINO in rumor.known and all(f["from"] != LOBART for f in facts)
+
+
+def test_a_debt_not_paid_back_goes_round(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    monkeypatch.setattr(social, "P_DEAL", 0.0)
+    s = Social(PEOPLE, graph)
+    r, rumor, facts = _rumors(s)
+    del r.rumors[rumor.key]
+    r._on_fact(
+        {
+            "fact": "broken",
+            "debt": "d1",
+            "npc": LOBART,
+            "name": "Лобарт",
+            "what": "25 золотых до конца дня 2",
+            "day": 2,
+        }
+    )
+    broken = r.rumors["broken:BAU_950_LOBART:d1"]
+    assert broken.hops == 2
+    r.spread(2 * DAY + _h(9), 2 * DAY + _h(23))
+    told = next(f for f in facts if f["to"] == HILDA)
+    assert (told["kind"], told["title"], told["quest"]) == ("broken", "25 золотых до конца дня 2", "d1")
+    assert "задолжал человеку по имени Лобарт и не вернул в срок" in broken.told("Лобарт")

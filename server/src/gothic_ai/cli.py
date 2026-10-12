@@ -480,6 +480,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.deals = Deals(link, state.dialogue, state.chronicle, journal=journal)
         state.dialogue.extensions.append(state.deals)
         talk.on_talk_end.append(state.deals.end)
+        debts = asyncio.create_task(state.deals.run())  # a debt not paid back by its day is a broken word
         state.quests = QuestBoard(
             link,
             state.dialogue,
@@ -553,6 +554,7 @@ async def serve(args: argparse.Namespace) -> int:
             await link.closed.wait()  # the session lives while the game is connected
         finally:
             lies.cancel()
+            debts.cancel()
             for task in directing:
                 task.cancel()
             if brain is not None:
@@ -656,12 +658,13 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
-            elif args.scenario == "amends":
+            elif args.scenario in ("amends", "amends_deal"):
                 dialogue, talk, amends = state.dialogue, state.talk, state.amends
                 assert dialogue is not None and talk is not None and amends is not None
-                results = await scenarios.amends_storylet(link, dialogue, talk, amends)
+                deals = state.deals if args.scenario == "amends_deal" else None
+                results = await scenarios.amends_storylet(link, dialogue, talk, amends, deals=deals)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
-                log.info("scenario amends: %d checks, %d failed", len(results), len(bad))
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "deal":
                 dialogue, talk, deals = state.dialogue, state.talk, state.deals
@@ -669,6 +672,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.deal_window(link, dialogue, talk, deals)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario deal: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "debt":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.deal_debt(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario debt: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "deal_demo":
                 assert state.deals is not None
@@ -1111,6 +1121,8 @@ def main() -> None:
             "amends",
             "deal",
             "deal_demo",
+            "debt",
+            "amends_deal",
             "rescue",
             "rescue_self",
             "tts",

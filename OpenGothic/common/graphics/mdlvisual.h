@@ -167,6 +167,9 @@ class MdlVisual final {
     // the bow's morph that holds it drawn as the aim animation does (G2)
     static constexpr const char* BowHeld = "S_READY";
     static constexpr const char* BowLoose = "S_RELAX";
+    static constexpr float       CrouchSlow = 0.4f;  // crouched the upper body follows the aim that much slower
+    static constexpr float       PeekClear  = 15.f;  // cm the head keeps from a wall leaning out round a corner
+    static constexpr float       HeadOverShoulder = 20.f; // cm
     static constexpr uint64_t    LooseLate = 1000; // ms: the animation's release after the hand let go is the same
 
     template<class View>

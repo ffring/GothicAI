@@ -1,0 +1,83 @@
+# The stance aiming by hand (docs/manual-aim.md, stage 3): standing; crouched (the sneak key: the hips go down,
+# the knees bend, the feet stay); leaning out round a corner (the side steps held), right and left, from the
+# side, from behind and from the game's camera (crouched it goes down, leaning out it goes aside, over the
+# left shoulder to the left)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 100
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1500 0 0
+aimat BAU_904_BAUER body
+stats str 60 dex 60 bow 60
+tap bow
+wait 1500
+cam follow 230 110 90
+cam look 120
+wait 300
+
+rec stand_side
+volley 1 600
+stop
+
+rec crouch_side
+press action
+wait 600
+tap sneak
+wait 1200
+release action
+wait 1500
+volley 1 600
+stop
+
+cam game
+wait 300
+rec crouch_game
+volley 1 600
+press action
+wait 300
+tap sneak
+wait 1500
+release action
+wait 1500
+stop
+
+cam follow 260 150 200
+wait 300
+rec peek_right_back
+press action
+wait 600
+hold right 3500
+wait 1200
+release action
+wait 2500
+stop
+
+rec peek_left_back
+press action
+wait 600
+hold left 3500
+wait 1200
+release action
+wait 2500
+stop
+
+cam game
+wait 300
+rec peek_game
+press action
+wait 600
+hold right 2000
+wait 2200
+hold left 2000
+wait 2200
+release action
+wait 1500
+stop
