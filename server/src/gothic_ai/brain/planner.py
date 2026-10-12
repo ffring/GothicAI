@@ -32,8 +32,6 @@ from typing import Any
 
 from ..protocol import (
     Attached,
-    ChatClose,
-    ChatOpen,
     Detached,
     GameMessage,
     Loading,
@@ -41,7 +39,6 @@ from ..protocol import (
     NpcIdle,
     NpcRoster,
     PerceptionHeld,
-    PlayerText,
     RosterEntry,
 )
 from .apply import Applier, Decision
@@ -161,6 +158,7 @@ class NpcRecord:
     flight: Flight | None = None
     holds: list[tuple[str, float]] = field(default_factory=list)  # threats held from the scripts, (id, when)
     last_plan: float | None = None
+    talking: bool = False  # in a conversation with the hero (talk.py has its body): threats only
 
 
 @dataclass
@@ -239,13 +237,8 @@ class NpcPlanner:
                 self.on_idle(msg.npc, now)
             case PerceptionHeld():
                 self.on_held(msg, now)
-            case PlayerText():
-                self.on_player_text(msg.npc, msg.text, now)
-            case ChatOpen() | Attached():
-                self._set_activity(msg.npc, "dialog" if isinstance(msg, ChatOpen) else "attached")
-            case ChatClose():
-                self._after_chat(msg.npc, now)
-                self._set_activity(msg.npc, "routine")
+            case Attached():
+                self._set_activity(msg.npc, "attached")
             case Detached():
                 self._set_activity(msg.npc, "routine")
             case Loading():
@@ -299,6 +292,8 @@ class NpcPlanner:
         if p.scripted:  # the game's scripts react; it stays as context for later decisions
             self.stats.scripted_events += 1
             return
+        if rec.talking and not p.threat:
+            return  # its body is in a conversation (talk.py); threats are still ours
         if rec.tier is Tier.FAR or (rec.tier is Tier.MID and not p.salient):
             return
         rec.version += 1
@@ -339,7 +334,7 @@ class NpcPlanner:
 
     def on_idle(self, npc: str, now: float) -> None:
         rec = self.npcs.get(npc.upper())
-        if rec is None or rec.tier is not Tier.NEAR:
+        if rec is None or rec.tier is not Tier.NEAR or rec.talking:
             return
         if not self._has_reason(rec, now):
             self.stats.quiet += 1
@@ -348,11 +343,21 @@ class NpcPlanner:
         self._want(rec, "react", False, now, not_before=earliest)
 
     def on_player_text(self, partner: str, text: str, now: float) -> None:
-        """The player said something in the chat with `partner`: npc's close by overhear it."""
+        """The player said something to `partner` (talk.py; "" — to nobody): npc's close by overhear it."""
         partner = partner.upper()
         for rec in list(self.npcs.values()):
             if rec.id != partner and rec.distance_cm <= OVERHEAR_CM:
                 self.on_event(rec.id, "player_speech", now, distance_cm=rec.distance_cm, detail=text)
+
+    def talking(self, npc: str, on: bool) -> None:
+        """The npc is in a conversation with the hero (talk.py decides its body) or no longer is."""
+        rec = self.npcs.get(npc.upper())
+        if rec is None or rec.talking == on:
+            return
+        rec.talking = on
+        rec.version += 1  # an answer asked before is moot
+        if not on:
+            self._after_chat(rec.id, self.clock())
 
     def stirred(self, npc: str, now: float | None = None) -> bool:
         """The npc still has something urgent or threatening going on (its stimuli have not expired)."""
@@ -375,7 +380,7 @@ class NpcPlanner:
         """Turn due timers into requests and send what the budget allows."""
         self._refill(now)
         for rec in self.npcs.values():
-            if rec.tier is Tier.OFF or rec.pending or rec.flight or rec.next_check > now:
+            if rec.tier is Tier.OFF or rec.talking or rec.pending or rec.flight or rec.next_check > now:
                 continue
             if rec.tier is not Tier.FAR and not self._has_reason(rec, now):
                 if self.routine_of is not None and now - (rec.last_plan or now) >= self.cfg.plan_period_s:

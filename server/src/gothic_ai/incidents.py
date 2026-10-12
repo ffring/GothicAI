@@ -1,4 +1,4 @@
-"""The two loops together, for the npc's we control (in a chat with the hero, or following him).
+"""The two loops together, for the npc's we control (held for a conversation with the hero, or following him).
 
 Something happens to the npc → an incident (brain/incident.py). At once, without waiting:
 - the **behavioral model** picks the body's reaction (brain/reflex.py) — in ~0.1 s;
@@ -31,7 +31,6 @@ from .dialogue import DialogueManager
 from .game import GameError, GameLink
 from .protocol import (
     Attached,
-    ChatEndCmd,
     Detached,
     FollowEnded,
     GameMessage,
@@ -265,7 +264,6 @@ class IncidentDesk:
         self.tracker.close(npc)
         self.dialogue.note(npc, f"{event.describe_ru()}. Ты прервал разговор и защищаешься")
         try:
-            await self.link.send(ChatEndCmd(npc=npc))
             await self.link.act(npc, "return_to_routine", timeout=10)
         except (GameError, TimeoutError) as err:
             log.info("%s: release failed: %s", npc, err)

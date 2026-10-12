@@ -44,7 +44,7 @@ async def test_lines_are_voiced_in_order_and_actions_wait_for_them():
     )
     async with fake_tts(delay=0.3) as (url, requests), connected(fake) as link:
         await link.attach(XARDAS)
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient(url), greet=False)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient(url))
         dialogue.open(XARDAS, "Ксардас")
         await dialogue.say_as_player(XARDAS, "Дай зелье")
         await _until(lambda: any(m["type"] == "action" for m in fake.received))
@@ -68,9 +68,7 @@ async def test_without_a_tts_service_lines_go_out_silent():
     fake = FakeGame()
     llm = FakeBackend("Ты наконец вернулся из храма. Хорошо, теперь слушай меня внимательно.", delay=0)
     async with connected(fake) as link:
-        dialogue = DialogueManager(
-            link, llm, PersonaProvider(None), tts=TtsClient("ws://127.0.0.1:9"), greet=False
-        )
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient("ws://127.0.0.1:9"))
         dialogue.open(XARDAS, "Ксардас")
         await dialogue.say_as_player(XARDAS, "Привет")
         await _until(lambda: len(fake.said) == 2)

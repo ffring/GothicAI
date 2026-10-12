@@ -82,7 +82,7 @@ async def _scene(decider: FakeDecider | None, llm: FakeBackend, fake: FakeGame, 
     link_cm = connected(fake)
     link = await link_cm.__aenter__()
     trace = TraceWriter(tmp_path)
-    dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False, trace=trace)
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), trace=trace)
     reflexes = Reflexes(decider) if decider is not None else None
     desk = IncidentDesk(link, dialogue, reflexes, budget or Budget(), trace, settle_s=0.05)
     await link.attach(XARDAS)
@@ -128,8 +128,6 @@ async def test_a_second_hit_hands_the_npc_to_the_games_scripts(tmp_path):
     finally:
         await cm.__aexit__(None, None, None)
 
-    types = [m["type"] for m in fake.received]
-    assert "chat_end" in types
     assert any(m["type"] == "action" and m["action"] == "return_to_routine" for m in fake.received)
     notes = [m.content for m in dialogue.conversations[XARDAS].history if m.role == "developer"]
     assert any("защищаешься" in n for n in notes)
@@ -207,7 +205,7 @@ async def test_a_fight_ends_with_the_incident_and_the_old_intent_comes_back(tmp_
     link_cm = connected(fake)
     link = await link_cm.__aenter__()
     try:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
         desk = IncidentDesk(link, dialogue, None, Budget(), None, settle_s=0.05, gap_s=0.5)
         await link.attach(XARDAS)
         conv = dialogue.open(XARDAS, "Ксардас")
@@ -237,7 +235,7 @@ async def test_lines_said_on_the_move_wait_for_each_other(tmp_path):
     fake = FakeGame()
     llm = FakeBackend("Волки! Все сюда, на помощь! Бегите к ферме, быстрее!", delay=0)
     async with connected(fake) as link:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
         dialogue.open(XARDAS, "Ксардас")
         t0 = asyncio.get_running_loop().time()
         task = dialogue.event_turn(XARDAS, "[Событие: волки]", overlay=True)
@@ -269,7 +267,7 @@ async def test_a_free_npc_speaks_on_the_move_when_the_moment_calls_for_it(tmp_pa
     fake = FakeGame()
     llm = FakeBackend("Волки! Эй, путник, выручай!", delay=0)
     async with connected(fake) as link:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
         planner = NpcPlanner(Decider("flee", 0.9), LogApplier(), config=PlannerConfig(ask_attitude=False))
         link.listeners.append(planner.on_message)
         IncidentDesk(link, dialogue, None, Budget(), None, planner=planner)

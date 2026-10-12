@@ -1,4 +1,8 @@
-"""Free-form conversation with an npc: player text in, npc lines (sentence by sentence) and actions out."""
+"""Free-form conversation with an npc: player text in, npc lines (sentence by sentence) and actions out.
+
+Whom the hero speaks to and when a conversation starts or ends is decided in talk.py (M5e: no chat
+window); here are the turns of the conversational model, the npc's memory and its speech.
+"""
 
 from __future__ import annotations
 
@@ -34,16 +38,13 @@ from .llm import (
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import Persona, PersonaProvider
 from .protocol import (
-    ChatClose,
-    ChatEndCmd,
-    ChatOpen,
     ChatStatus,
     ChatStatusCmd,
     ChatTextCmd,
     GameMessage,
+    HushCmd,
     LineStarted,
     MemoryCmd,
-    PlayerText,
     SayAudioCmd,
     SayCmd,
     SayEndCmd,
@@ -56,7 +57,6 @@ from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
 
 log = logging.getLogger(__name__)
 
-GREETING_CUE = "[Герой подходит к тебе и хочет поговорить.]"
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
@@ -209,6 +209,9 @@ class Conversation:
     pending: list[str] = field(default_factory=list)  # events that came while a turn was running
     calm: Intent | None = None  # the intent before an incident goal replaced it
     overlay_free_at: float = 0.0  # lines said on the move: when the last one is over
+    reply_id: str = ""  # the latest turn's reply (its subtitle entry)
+    hushed: set[str] = field(default_factory=set)  # lines cut off by the hero: never sent
+    cut: str | None = None  # the hero interrupted the running turn: what the npc had said of it
 
     @property
     def history(self) -> list[Message]:
@@ -225,7 +228,7 @@ class Conversation:
 
 
 class DialogueManager:
-    """Reacts to chat messages from the game. One reply in flight per npc; new player text interrupts it.
+    """Turns of the npc's conversational model. One reply in flight per npc; new player text interrupts it.
 
     Every message is stored in `memory` under the game's current branch (see memory.py), so npc's
     remember earlier conversations of the same save game.
@@ -239,7 +242,6 @@ class DialogueManager:
         *,
         memory: MemoryStore | None = None,
         tts: TtsClient | None = None,
-        greet: bool = True,
         tools: bool = True,
         journal: Journal | None = None,
         trace: TraceWriter | None = None,
@@ -257,12 +259,17 @@ class DialogueManager:
         self.on_body_failed: Callable[[str, str], None] | None = None
         # whether the npc is under our control (attached): only then do intents move its body directly
         self.controls: Callable[[str], bool] | None = None
+        # a free npc's body is needed for a commitment (give an item, follow): hold it (attach) for `why`,
+        # and let it go again; without them only controlled npc's act on commitments (talk.py)
+        self.take_body: Callable[[str, str], Awaitable[bool]] | None = None
+        self.free_body: Callable[[str, str], None] | None = None
+        # the npc ended the conversation (its goodbye has been said)
+        self.on_end: Callable[[str], None] | None = None
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
         self.tts = tts
         self._tts_paused_until = 0.0
-        self.greet = greet
         self.tools = npc_tools.TOOLS if tools else []
         self.branch: str | None = None
         self.conversations: dict[str, Conversation] = {}
@@ -278,21 +285,6 @@ class DialogueManager:
         match msg:
             case Session():
                 self._switch_branch(msg)
-            case ChatOpen():
-                conv = self.open(msg.npc, msg.name)
-                conv.new_meeting = True
-                if self.greet and not conv.memory.entries and not conv.memory.summary:
-                    self._start_reply(conv, GREETING_CUE)
-            case PlayerText():
-                conv = self.conversations.get(msg.npc.upper())
-                if conv is None:
-                    log.warning("player_text for npc without open chat: %s", msg.npc)
-                    return
-                self.journal.add("player", npc=conv.npc, name=conv.persona.name, text=msg.text, via="text")
-                self._start_reply(conv, msg.text)
-            case ChatClose():
-                if conv := self.conversations.get(msg.npc.upper()):
-                    self._cancel(conv)
             case LineStarted():
                 if msg.line in self._lines:
                     self._lines[msg.line] = (self._lines[msg.line][0], time.monotonic())
@@ -399,31 +391,90 @@ class DialogueManager:
                 )
         return conv
 
-    def say_as_player(self, npc: str, text: str) -> asyncio.Task[None]:
-        """Player text that did not come as `player_text`: voice, console, scenarios."""
+    def say_as_player(
+        self, npc: str, text: str, *, overlay: bool = False, body: str | None = None
+    ) -> asyncio.Task[None]:
+        """The hero says `text` to the npc (talk.py, console, scenarios). `overlay`: the npc answers on the
+        move (it walks or works); `body`: what its body does meanwhile, for the situation."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             raise KeyError(f"no conversation with {npc}")
-        return self._start_reply(conv, text)
+        return self._start_reply(conv, text, overlay=overlay, body=body)
 
     def _cancel(self, conv: Conversation) -> None:
         if conv.reply is not None and not conv.reply.done():
             conv.reply.cancel()
         conv.reply = None
 
-    def _start_reply(self, conv: Conversation, user_text: str) -> asyncio.Task[None]:
-        self._cancel(conv)
+    def _drop_unvoiced(self, conv: Conversation) -> None:
         if conv.voice is not None:  # lines of the interrupted reply that were not voiced yet
             while not conv.voice.empty():
                 conv.voice.get_nowait()
                 conv.voice.task_done()
-        kind = "greeting" if user_text == GREETING_CUE else "player"
+
+    def _start_reply(
+        self, conv: Conversation, user_text: str, *, overlay: bool = False, body: str | None = None
+    ) -> asyncio.Task[None]:
+        self._cancel(conv)
+        self._drop_unvoiced(conv)
         if self.budget is not None:
             self.budget.note(conv.npc)
-        conv.reply = asyncio.create_task(self._turn(conv, Message("user", user_text), kind))
-        if kind == "player" and self.on_player_phrase is not None:
+        conv.reply = asyncio.create_task(
+            self._turn(conv, Message("user", user_text), "player", overlay=overlay, body=body)
+        )
+        if self.on_player_phrase is not None:
             self.on_player_phrase(conv.npc, user_text)
         return conv.reply
+
+    def _said(self, conv: Conversation) -> tuple[list[str], bool, bool]:
+        """The latest reply: the texts of its lines that started, whether one is being said now and
+        whether some were not said yet."""
+        now = time.monotonic()
+        said, speaking, unsaid = [], False, False
+        for line in conv.last_lines:
+            text, at = self._lines.get(line, ("", None))
+            if line in conv.hushed:
+                continue
+            if at is None:
+                unsaid = True
+                continue
+            said.append(text)
+            speaking = speaking or at + line_duration(text) > now
+        return said, speaking, unsaid
+
+    def speaking(self, npc: str) -> bool:
+        """The npc is answering: thinking of it, saying it or about to."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None:
+            return False
+        _, speaking, unsaid = self._said(conv)
+        return speaking or unsaid or (conv.reply is not None and not conv.reply.done())
+
+    def interrupt(self, npc: str) -> bool:
+        """The hero speaks while the npc answers: it stops at once (its voice, the lines it did not say
+        yet, the turn if it is still thinking) and remembers being interrupted. False if it was silent."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None or not self.speaking(npc):
+            return False
+        said, _, _ = self._said(conv)
+        spoken = " ".join(said)
+        conv.hushed.update(line for line in conv.last_lines if self._lines.get(line, ("", None))[1] is None)
+        running = conv.reply is not None and not conv.reply.done()
+        if running:
+            conv.cut = spoken  # the turn remembers only this (see _turn)
+        self._cancel(conv)
+        self._drop_unvoiced(conv)
+        log.info("%s interrupted after %d line(s)", conv.npc, len(said))
+        self._spawn(self.link.send(HushCmd(npc=conv.npc, reply=conv.reply_id or None, said=spoken or None)))
+        if not running:
+            self._note(conv, f"Герой перебил тебя{f'; ты успел сказать: «{spoken}»' if spoken else ''}")
+        return True
+
+    def overheard(self, npc: str, name: str, text: str, to_name: str | None) -> None:
+        """A witness: the npc heard the hero say something to someone else (no model call, only memory)."""
+        conv = self.open(npc, name)
+        whom = f" собеседнику ({to_name})" if to_name else " вслух"
+        self._note(conv, f"Ты слышал, как герой сказал{whom}: «{text}»")
 
     def event_turn(
         self,
@@ -501,6 +552,8 @@ class DialogueManager:
             if overlay:
                 await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
             try:
+                if line in conv.hushed:
+                    continue  # the hero interrupted the npc before this line
                 if time.monotonic() >= self._tts_paused_until:
 
                     async def start(
@@ -512,6 +565,8 @@ class DialogueManager:
                         overlay: bool = overlay,
                     ) -> None:
                         nonlocal started, spoken_at
+                        if line in conv.hushed:
+                            return  # interrupted while its voice was being made
                         started = True
                         spoken_at = time.monotonic()
                         await self.link.send(
@@ -527,6 +582,8 @@ class DialogueManager:
                         )
 
                     async def chunk(pcm: bytes, line: str = line) -> None:
+                        if line in conv.hushed:
+                            return
                         await self.link.send(
                             SayAudioCmd(npc=conv.npc, line=line, data=base64.b64encode(pcm).decode())
                         )
@@ -559,7 +616,7 @@ class DialogueManager:
                         )
                         if started:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
-                if not started:
+                if not started and line not in conv.hushed:
                     if overlay:
                         conv.overlay_free_at = time.monotonic() + line_duration(text)
                     await self.link.send(
@@ -607,7 +664,7 @@ class DialogueManager:
         self.journal.add("action", npc=conv.npc, name=conv.persona.name, action=name, arguments=arguments)
 
     async def _end_after_speech(self, conv: Conversation, lines: list[str]) -> None:
-        """Close the chat only once the npc has said its goodbye (closing clears its speech queue)."""
+        """The conversation ends once the npc has said its goodbye."""
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             started = [self._lines.get(line, ("", None)) for line in lines]
@@ -617,7 +674,8 @@ class DialogueManager:
                 break
             await asyncio.sleep(0.2)
         self._note(conv, "Ты закончил разговор")
-        await self.link.send(ChatEndCmd(npc=conv.npc))
+        if self.on_end is not None:
+            self.on_end(conv.npc)
 
     async def _turn(
         self,
@@ -628,9 +686,11 @@ class DialogueManager:
         *,
         overlay: bool = False,
         tools: list[Tool] | None = None,
+        body: str | None = None,
     ) -> None:
         """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
-        chat and the voice as it comes; tool calls are handled after their step."""
+        subtitles and the voice as it comes; tool calls are handled after their step. `body`: what the
+        npc's body does meanwhile (the behavioral model's choice)."""
         if conv.new_meeting:
             conv.new_meeting = False
             if conv.memory.entries or conv.memory.summary:
@@ -638,6 +698,8 @@ class DialogueManager:
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         snap = self.link.snapshots.get(conv.npc)
         situation_text = npc_tools.render_situation(snap, conv.intent)
+        if body:
+            situation_text += f"\nТвоё тело сейчас: {body} — это уже происходит, не противоречь этому."
         if conv.pending:  # events that came during the last turn
             situation_text += "\nТолько что: " + "; ".join(c.strip("[]") for c in conv.pending) + "."
             conv.pending = []
@@ -653,6 +715,7 @@ class DialogueManager:
             splitter=SentenceSplitter(first_clause=self.tts is not None),
             started=time.monotonic(),
         )
+        conv.reply_id = state.reply
         trace = TurnTrace(
             self.trace,
             npc=conv.npc,
@@ -706,6 +769,12 @@ class DialogueManager:
             await self._status(conv, "idle")
             return
         except asyncio.CancelledError:
+            if conv.cut is not None:  # the hero interrupted: only what was said counts
+                said, conv.cut = conv.cut, None
+                self._commit(conv, trigger, said)
+                self._note(conv, "Герой перебил тебя" + ("" if said else ", ты не успел ничего сказать"))
+                trace.close("interrupted")
+                raise
             self._commit(conv, trigger, state.text)  # the npc remembers what it already said
             trace.close("cancelled")
             raise
@@ -837,8 +906,26 @@ class DialogueManager:
         return "Ты вспоминаешь:\n" + "\n".join(lines)
 
     async def _give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
-        outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
+        if not await self._hold(conv, "give"):
+            return "Тело не смогло отдать предмет: ты занят", False
+        try:
+            outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
+        finally:
+            self._free(conv, "give")
         return outcome.note, outcome.ok
+
+    def _controlled(self, npc: str) -> bool:
+        return self.controls is None or self.controls(npc)
+
+    async def _hold(self, conv: Conversation, why: str) -> bool:
+        """The npc's body for a commitment: a free npc is held (attached) for it, if it can be."""
+        if self.take_body is None:
+            return self._controlled(conv.npc)
+        return await self.take_body(conv.npc, why)
+
+    def _free(self, conv: Conversation, why: str) -> None:
+        if self.free_body is not None:
+            self.free_body(conv.npc, why)
 
     def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
         intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap)
@@ -861,12 +948,26 @@ class DialogueManager:
         self._send_head(conv.branch, seq)
         if self.on_intent is not None:
             self.on_intent(conv.npc, intent)
-        controlled = self.controls is None or self.controls(conv.npc)
-        acts = (
-            executor.intent_actions(old, intent, snap.npc.following if snap else False) if controlled else []
-        )
-        if acts:
-            self._after_speech(conv, lambda: self._body(conv, acts))
+        following = snap.npc.following if snap else False
+        acts = executor.intent_actions(old, intent, following)
+        if old.goal == "follow_hero" and intent.goal != "follow_hero":
+            self._free(conv, "follow")  # after `stop`, if it is still following (below)
+        if not acts:
+            return
+        if self.take_body is None and not self._controlled(conv.npc):
+            return  # nobody can lend us a free npc's body
+        why = "follow" if intent.goal == "follow_hero" else "intent"
+
+        async def job() -> tuple[str, bool]:
+            if not await self._hold(conv, why):
+                return "Тело не смогло выполнить намерение: ты занят", False
+            try:
+                return await self._body(conv, acts)
+            finally:
+                if why != "follow":
+                    self._free(conv, why)
+
+        self._after_speech(conv, job)
 
     def incident_over(self, npc: str) -> None:
         """Goals that only hold while something is going on (flee, fight...) end with it: the npc goes

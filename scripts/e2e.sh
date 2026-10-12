@@ -10,6 +10,9 @@
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
 #       DECIDER_URL, or a fixed stand-in)
+#   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
+#       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
+#       of a conversation when the hero walks away, a walking npc answering on the move
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
@@ -47,7 +50,7 @@ if [ "$SCENARIO" = "tts" ]; then
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")
 fi
-if [ "$SCENARIO" = "m3" ]; then
+if [ "$SCENARIO" = "m3" ] || [ "$SCENARIO" = "m5e" ]; then
   (cd "$ROOT/asr-service" && exec uv run gothic-asr serve --port "$ASR_PORT" --provider "$ASR" --fallback none) >"$LOG_DIR/asr.log" 2>&1 &
   ASR_PID=$!
   VOICE_ARGS=(--asr-url "ws://127.0.0.1:$ASR_PORT" --voice-file "$VOICE_FILE")

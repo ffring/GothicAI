@@ -50,7 +50,7 @@ export function journalLine(e: JournalEntry): Line | null {
       return {
         t: e.t,
         tone: "you",
-        text: `Вы: «${e.text}»`,
+        text: e.name ? `Вы → ${e.name}: «${e.text}»` : `Вы (никому): «${e.text}»`,
         meta: e.via === "voice" ? `голосом, ${providerTitle(e.asr ?? "?")}, ${seconds(e.latency_s)}` : undefined,
       };
     case "npc":
@@ -63,6 +63,8 @@ export function journalLine(e: JournalEntry): Line | null {
       return { t: e.t, tone: "bad", text: `${e.name} не смог ответить`, meta: e.detail };
     case "voice_error":
       return { t: e.t, tone: "warn", text: `Голос не распознан`, meta: e.detail };
+    case "interrupt":
+      return { t: e.t, tone: "plain", text: `Вы перебили: ${e.name}` };
   }
   return null;
 }
