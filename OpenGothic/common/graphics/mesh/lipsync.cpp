@@ -231,6 +231,8 @@ bool LipSync::isSpeaking(uint64_t now) const {
   const uint64_t len = track->durationMs();
   if(!track->isFinished())
     return t < len + 5000;  // a voice that stopped arriving does not hold the mouth forever
+  if(track->playedMs()>=0)
+    return t+StepMs < len;  // a streamed voice is played up to its end and no further (its last step may be partial)
   return t < len + 100;
   }
 
