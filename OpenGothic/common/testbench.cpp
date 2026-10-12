@@ -484,6 +484,10 @@ struct Bench {
   bool        hasPrev   = false;
   bool        inDialog  = false;
   Npc*        pinned    = nullptr;  // pin: held there every frame
+  Npc*        hearNpc   = nullptr;  // hear: it listens to the hero (words every hearEvery ms) until hearUntil
+  uint64_t    hearUntil = 0, hearEvery = 600, hearNext = 0;
+  Npc*        thinkNpc  = nullptr;  // think: it thinks of an answer until thinkUntil
+  uint64_t    thinkUntil = 0;
   Vec3        pinAt     = {};
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
@@ -939,6 +943,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss,bd_follow,bd_fit,bd_offset,bd_angle,hd_hand,hd_fore,hd_arrow,bd_hold,bd_nock,rh_x,rh_y,rh_z,bd_held,bd_overgrip,bd_atmiddle,bd_nockgap,bd_square,bd_cant,bd_bowmove,bd_bowmiss");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops,ge_nods,ge_pitch,ge_yaw,ge_roll");
+  std::fprintf(bench.csv,",ge_listen,ge_think,ge_lnods,ge_aside");
   std::fprintf(bench.csv,",bk_on,bk_w,bk_n,bk_pause,bk_shift,bk_double");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
@@ -1060,6 +1065,7 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),
                unsigned(ge.mood),ge.starts,ge.cuts,ge.stops,ge.nods,double(ge.head.pitch*180.f/float(M_PI)),
                double(ge.head.yaw*180.f/float(M_PI)),double(ge.head.roll*180.f/float(M_PI)));
+  std::fprintf(bench.csv,",%d,%d,%u,%.3f",int(ge.listening),int(ge.thinking),ge.listenNods,ge.aside.weight);
   // its blinks: how closed the eyes are now, counters
   const auto& bk = EyeBlink::subjectProbe;
   std::fprintf(bench.csv,",%d,%.3f,%u,%u,%u,%u",int(bk.valid && bk.enabled),subjectOf(pl).faceWeight("R_EYESBLINK"),
@@ -2154,6 +2160,31 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else
       say("unknown gestures command: " + line);
     }
+  else if(c=="hear") {
+    // hear <npc|nearest> <ms> [every ms]: the hero speaks to it that long, his words come every so often
+    // (as the bridge does with his voice: it listens, nods now and then)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("hear: no npc " + line);
+      return;
+      }
+    bench.hearNpc   = n;
+    bench.hearUntil = bench.time + uint64_t(num(a,2,4000));
+    bench.hearEvery = uint64_t(std::max(100.f,num(a,3,600)));
+    bench.hearNext  = bench.time;
+    say("hear " + symName(w,n));
+    }
+  else if(c=="think") {
+    // think <npc|nearest> <ms>: it thinks of an answer that long (as on the AI server's `thinking`)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("think: no npc " + line);
+      return;
+      }
+    bench.thinkNpc   = n;
+    bench.thinkUntil = bench.time + uint64_t(num(a,2,2500));
+    say("think " + symName(w,n));
+    }
   else if(c=="blink") {
     // blink on|off|param <name> <value>|params: blinking (off: nobody blinks, as OpenGothic was)
     const std::string m = a.size()>1 ? a[1] : "";
@@ -2775,7 +2806,8 @@ void drawOverlay(Pixmap& pm) {
   const auto& ge = TalkGestures::subjectProbe;
   if(ge.valid && TalkGestures::probeNpc!=nullptr) {
     const auto mood = TalkGestures::moodName(ge.mood);
-    std::snprintf(buf,sizeof(buf),"GEST%s %s G%02u %.*s S%u C%u X%u N%u P%.1f",ge.enabled ? "" : " OFF",ge.speaking ? "TALK" : "-",
+    std::snprintf(buf,sizeof(buf),"GEST%s %s G%02u %.*s S%u C%u X%u N%u P%.1f",ge.enabled ? "" : " OFF",
+                  ge.speaking ? "TALK" : (ge.thinking ? "THINK" : (ge.listening ? "LISTEN" : "-")),
                   unsigned(ge.gesture),int(mood.size()),mood.data(),ge.starts,ge.cuts,ge.stops,ge.nods,
                   double(ge.head.pitch*180.f/float(M_PI)));
     cv.text(x,y,buf,2,{255,200,120,255});
@@ -2978,6 +3010,30 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       at.y += 0.5f*DynamicWorld::gravity*t*t;
       }
     ctrl.setAimOverride(true,at);
+    }
+  // the hero speaks to an npc (as the bridge does with his voice), it thinks of an answer
+  if(bench.hearNpc!=nullptr) {
+    if(bench.time<bench.hearUntil) {
+      bench.hearNpc->listenTo(300);
+      bench.hearNpc->setTalkPartner(player,1000);
+      player->setTalkPartner(bench.hearNpc,1000);
+      if(bench.time>=bench.hearNext) {
+        bench.hearNpc->heardWords();
+        bench.hearNext = bench.time + bench.hearEvery;
+        }
+      } else {
+      bench.hearNpc->stopListening();
+      bench.hearNpc = nullptr;
+      }
+    }
+  if(bench.thinkNpc!=nullptr) {
+    if(bench.time<bench.thinkUntil) {
+      bench.thinkNpc->thinkOfAnswer(300);
+      bench.thinkNpc->setTalkPartner(player,1000);
+      } else {
+      bench.thinkNpc->thinkOfAnswer(0);
+      bench.thinkNpc = nullptr;
+      }
     }
   if(bench.orbitUntil>bench.time) {
     bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;

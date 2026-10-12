@@ -141,6 +141,11 @@ class MdlVisual final {
     void                           setTalkMood    (std::string_view mood) { gestures.setMood(TalkGestures::moodOf(mood)); }
     void                           updateGestures (Npc& npc, uint64_t dt);
     void                           updateBlink    (Npc& npc, uint64_t dt);
+    // the other one speaks to it, it thinks of an answer (TalkGestures)
+    void                           listen         (uint64_t until) { gestures.listen(until); }
+    void                           stopListening  (uint64_t now)   { gestures.stopListening(now); }
+    void                           heard          (uint64_t now)   { gestures.heard(now); }
+    void                           think          (uint64_t now, uint64_t until) { gestures.think(now,until); }
     void                           stopAnim       (Npc& npc, std::string_view anim);
     bool                           stopItemStateAnim(Npc &npc);
     void                           stopWalkAnim   (Npc &npc);

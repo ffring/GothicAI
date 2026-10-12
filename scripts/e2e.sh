@@ -23,7 +23,10 @@
 #       recall gives a topic in full (model scripted with LLM=fake)
 #   see: what npc's perceive (npc_view, v11): Xardas sees the hero in front of him and not through the tower's
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
-#       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second
+#       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
+#       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
+#       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
@@ -43,6 +46,10 @@
 #   amends: the director's storylet: Lobart catches the hero lying, the rumor reaches Andre, who asks for a
 #       fine and closes joining the militia until then (model scripted with LLM=fake); the hero hears him
 #       out and pays, and the militia is open again (stage 5)
+#   amends_deal: as amends, but the hero makes them in conversation: he asks to be forgiven, the npc offers a
+#       deal that forgives the lie for the fine, and he accepts it (docs/npc-tools.md, wave 1 step 2)
+#   debt: Lobart lends the hero 20 gold for 25 back by the end of the next day; two days on the debt is a
+#       broken word (trust) and goes round as a rumor; then the hero pays it back, late (wave 1 step 2)
 #   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
 #       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
 #       haggling: the deal window shows the new version, Y waits right after the change, then the deal is

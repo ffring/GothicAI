@@ -1987,11 +1987,16 @@ async def amends_storylet(
     amends: Amends,
     giver: str = LOBART,
     fine: int = 50,
+    deals: Deals | None = None,
 ) -> dict[str, str]:
     """The director's storylet of amends (stage 5), on the game. Lobart catches the hero lying; by the next
     morning the rumor has gone round. The director's model, scripted unless LLM=chatgpt, has Andre (who has
     dealings with Lobart) ask for a fine and close joining the militia until then; a live model decides who
-    asks and what for. The hero comes, hears the npc out, makes amends, and what was closed opens again."""
+    asks and what for. The hero comes, hears the npc out, makes amends, and what was closed opens again.
+
+    With `deals` (amends_deal, docs/npc-tools.md wave 1 step 2) he makes them in conversation instead of
+    the dialog menu: he asks to be forgiven, the npc offers a deal that forgives the lie for gold (scripted
+    unless LLM=chatgpt: then the two haggle as they like), and he accepts it."""
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object = "") -> None:
@@ -2041,65 +2046,83 @@ async def amends_storylet(
 
     # he makes amends: what was closed is open again
     gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
-    if gold < s.gold:
-        await link.story_effect(s.npc, [{"do": "give", "item": "ITMI_GOLD", "count": s.gold - gold + 10}])
-        gold = s.gold + 10
+    want = s.gold + (10 if deals is None else 100)  # in a deal the price may go up
+    if gold < want:
+        await link.story_effect(s.npc, [{"do": "give", "item": "ITMI_GOLD", "count": want - gold}])
+        gold = want
     if s.to != s.npc:
         await link.debug("player_goto", to=s.to, distance=250)
         await _until(lambda: s.to in talk.people, 20)
     await asyncio.sleep(1)
-    try:
-        await link.choose_dialog(s.to, s.pay)
-        paid = await _until(lambda: s.stage == "done", 20)
-    except GameError as err:
-        paid = False
-        log.info("amends: %s", err)
+    price = s.gold
+    if deals is None:
+        try:
+            await link.choose_dialog(s.to, s.pay)
+            paid = await _until(lambda: s.stage == "done", 20)
+        except GameError as err:
+            paid = False
+            log.info("amends: %s", err)
+    else:
+        offered = await _forgiveness_deal(link, dialogue, talk, deals, s)
+        check("offered", offered is not None, offered.terms() if offered else "no deal that forgives it")
+        if offered is None:
+            return _logged(results)
+        price = offered.gold()
+        await asyncio.sleep(1.2)
+        pressed = await link.press_deal()
+        paid = pressed == "sent" and await _until(lambda: s.stage == "done", 20)
     await asyncio.sleep(1)
     left = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
     opened = {op["node"] for op in amends.patches.ops() if op.get("op") == "enable"}
     check(
         "paid",
-        paid and left == gold - s.gold and set(s.close) <= opened,
-        f"{s.description}: {gold} -> {left} gold",
+        paid and left == gold - price and set(s.close) <= opened,
+        f"{s.description if deals is None else 'a deal'}: {gold} -> {left} gold",
     )
+    if deals is not None:
+        removed = {op["node"] for op in amends.patches.ops() if op.get("op") == "remove_node"}
+        check("menu_clean", {s.talk, s.pay} <= removed, sorted({s.talk, s.pay} - removed))
     line = Trust(amends.chronicle).situation(s.npc) or ""
     check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
     return _logged(results)
-    s = next(x for x in amends.storylets.values() if x.npc == ANDRE)
-    closed = [op["node"] for op in amends.patches.ops() if op.get("op") == "disable"]
-    check("closed", bool(s.close) and set(s.close) <= set(closed), s.close)
 
-    # the hero comes to Andre: Andre starts the talk himself (an important dialog)
-    await link.debug("player_goto", to=ANDRE, distance=250)
-    await _until(lambda: ANDRE in talk.people, 20)
-    by_himself = await _until(lambda: s.stage != "open", 20)
-    if not by_himself:
-        try:
-            await link.choose_dialog(ANDRE, s.talk)
-        except GameError as err:
-            log.info("amends: %s", err)
-    heard = await _until(lambda: s.stage != "open", 20)
-    check("talked", heard, f"{s.talk}{', he started it' if by_himself else ''}")
 
-    # he pays the fine: the militia is open to him again
-    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
-    if gold < s.gold:
-        await link.story_effect(ANDRE, [{"do": "give", "item": "ITMI_GOLD", "count": s.gold - gold + 10}])
-        gold = s.gold + 10
-    await asyncio.sleep(1)
-    try:
-        await link.choose_dialog(s.to, s.pay)
-        paid = await _until(lambda: s.stage == "done", 20)
-    except GameError as err:
-        paid = False
-        log.info("amends: %s", err)
-    await asyncio.sleep(1)
-    left = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
-    opened = {op["node"] for op in amends.patches.ops() if op.get("op") == "enable"}
-    check("paid", paid and left == gold - s.gold and set(s.close) <= opened, f"{gold} -> {left} gold")
-    line = Trust(amends.chronicle).situation(ANDRE) or ""
-    check("forgiven", "он загладил вину" in line, line.splitlines()[-1:])
-    return _logged(results)
+async def _forgiveness_deal(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, deals: Deals, s: Any
+) -> Any:
+    """The hero asks the one the amends are to be made at to forgive him; it offers a deal that forgives the
+    lie (scripted unless the model is live). The open offer, or None."""
+    name = talk.people[s.to].name if s.to in talk.people else s.to_name
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    script = dialogue.llm if isinstance(dialogue.llm, ClaimScript) else None
+    live = (
+        script.others
+        if script is not None
+        else (None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm)
+    )
+    if live is None:
+        terms = {
+            "npc_gives": [],
+            "hero_gives": [{"item": GOLD, "count": s.gold}] if s.gold else [],
+            "forgive": [s.lie],
+            "silence": [],
+            "hero_later": [],
+            "repay": [],
+        }
+        offer = FakeStep("Ладно. Плати — и забудем.", [ToolCall("propose_deal", terms, "forgive")])
+        dialogue.llm = ClaimScript(said=[("прости", offer)], told=[], default="По рукам.", only=name)
+    else:
+        dialogue.llm = live
+
+    def forgiving() -> bool:
+        deal = deals.open.get(s.to)
+        return deal is not None and any(lie.key == s.lie for lie in deal.forgive)
+
+    await link.debug("type", text=f"{name}, прости меня за враньё. Чем мне загладить вину?")
+    if not await _until(forgiving, 60) and live is not None:
+        await link.debug("type", text=f"{name}, я согласен. Предложи, и по рукам.")
+        await _until(forgiving, 60)
+    return deals.open.get(s.to) if forgiving() else None
 
 
 async def m6_knows(
@@ -2339,6 +2362,25 @@ async def see_perception(
     perception._views.clear()
     pushed = await _until(lambda: perception.view(farmer) is not None, 5)
     check("pushed", pushed, "; ".join(perception.english(farmer)))
+
+    # 6. places by name (step 5): at Xardas's tower, on Lobart's and Onar's farms, in the city
+    if perception.places is None:
+        check("places", False, "no book of places (gamedata/places.json)")
+        return _logged(results)
+    said = []
+    for who in (npc, farmer, "BAU_900_ONAR", "VLK_412_HARAD"):
+        try:
+            await link.debug("teleport", near=who, distance=300)
+        except GameError as err:
+            said.append(f"{who}: {err}")
+            continue
+        await asyncio.sleep(1)
+        view = await perception.fresh(who)
+        place = perception.place(view) if view is not None else None
+        sight = perception.sight(who)
+        said.append(f"{who}: {sight.place if sight else '(no view)'}" + ("" if place else " [no name]"))
+    named = [line for line in said if "[no name]" not in line and "(no view)" not in line and ": " in line]
+    check("places", len(named) == 4, " | ".join(said))
     return _logged(results)
 
 
@@ -2466,6 +2508,121 @@ async def deal_window(
     conv = dialogue.conversations.get(seller)
     answered = await _until(lambda: conv is not None and "assistant" == conv.memory.entries[-1].role, 30)
     check("answered", answered, conv.memory.entries[-1].content if conv and conv.memory.entries else "")
+    return _logged(results)
+
+
+async def deal_debt(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    lender: str = LOBART,
+) -> dict[str, str]:
+    """A debt (docs/npc-tools.md, wave 1 step 2), on the game. Lobart (scripted unless LLM=chatgpt) lends the
+    hero 20 gold for 25 back by the end of the next day. The clock goes two days on: the debt is a broken
+    word, Lobart takes nothing on his word any more, and it goes round as a rumor. Then the hero pays it
+    back, late."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    async def come() -> str | None:
+        await link.debug("player_goto", to=lender, distance=250)
+        talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+        return talk.people[lender].name if await _until(lambda: lender in talk.people, 20) else None
+
+    await link.debug("skip_important", near=lender)  # his important dialog would start as the hero comes
+    await link.attach(lender)  # gold to lend
+    await link.act(lender, "debug_add_item", item=GOLD, count=100)
+    await link.detach(lender)
+    name = await come()
+    if name is None:
+        check("near", False, lender)
+        return _logged(results)
+    script: ClaimScript | None = None
+    lend = {
+        "npc_gives": [{"item": GOLD, "count": 20}],
+        "hero_gives": [],
+        "forgive": [],
+        "silence": [],
+        "hero_later": [{"item": GOLD, "count": 25, "days": 1}],
+        "repay": [],
+    }
+    if isinstance(dialogue.llm, FakeBackend):
+        offer = FakeStep(
+            "Двадцать дам. Вернёшь двадцать пять — к завтрашнему вечеру.",
+            [ToolCall("propose_deal", lend, "lend")],
+        )
+        script = dialogue.llm = ClaimScript(
+            said=[("одолжи", offer)], told=[], default="Смотри не подведи.", only=name
+        )
+
+    # he borrows: 20 now, 25 back by the end of the next day
+    gold = await has(GOLD)
+    await link.debug("type", text=f"{name}, одолжи мне двадцать золотых, я верну.")
+    ok = await _until(lambda: lender in deals.open and bool(deals.open[lender].later), 60)
+    window = await link.deal_window() or {}
+    check("offered", ok, window.get("hero_gives"))
+    if not ok:
+        return _logged(results)
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    ok = await _until(lambda: any(d.npc == lender for d in deals.debts.values()), 20)
+    debt = next((d for d in deals.debts.values() if d.npc == lender), None)
+    got = await has(GOLD)
+    check(
+        "lent",
+        pressed == "sent" and ok and got == gold + 20,
+        f"{gold} -> {got} gold, {debt.what() if debt else '-'}",
+    )
+    if debt is None:
+        return _logged(results)
+
+    # two days on: past its day, a broken word
+    await link.debug("time", hour=7, minute=0)
+    await link.debug("time", hour=6, minute=59)
+    ok = await _until(lambda: debt.broken, 40)
+    trust = Trust(deals.chronicle)
+    check("broken", ok and trust.broken(lender), (trust.situation(lender) or "").splitlines()[-1:])
+
+    # the morning goes by: it goes round
+    await link.debug("time", hour=12, minute=0)
+    ok = await _until(lambda: any(f.get("kind") == "broken" for f in deals.chronicle.facts("rumor")), 60)
+    heard = [
+        f.get("to_name") or f.get("to") for f in deals.chronicle.facts("rumor") if f.get("kind") == "broken"
+    ]
+    check("rumor", ok, heard[:3])
+
+    # late, he pays it back; his word stays broken
+    if await has(GOLD) < 25:
+        await link.story_effect(lender, [{"do": "give", "item": GOLD, "count": 30}])
+    name = await come() or name
+    if script is not None:
+        back = dict(lend, npc_gives=[], hero_later=[], repay=[debt.id])
+        script.said.append(
+            ("долг", FakeStep("Наконец-то. Давай сюда.", [ToolCall("propose_deal", back, "repay")]))
+        )
+        script.only = name
+    before = await has(GOLD)
+    await link.debug("type", text=f"{name}, вот твой долг, прости, что поздно.")
+    ok = await _until(lambda: lender in deals.open and bool(deals.open[lender].repay), 60)
+    if ok:
+        await asyncio.sleep(1.2)
+        await link.press_deal()
+        ok = await _until(lambda: debt.paid, 20)
+    after = await has(GOLD)
+    check("repaid", ok and after == before - 25, f"{before} -> {after} gold")
+    check("word_stays", Trust(deals.chronicle).broken(lender))
     return _logged(results)
 
 

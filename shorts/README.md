@@ -99,3 +99,42 @@ Say so in the description.
 - `cut` builds the timeline (`timeline.py`), cuts the wait between the hero's phrase and the first answer,
   mixes the hero's recordings into the game's sound, burns in the hook, captions and subtitles as images
   (Pillow; Homebrew's ffmpeg has no libass), normalizes to -14 LUFS.
+
+## Before and after (no AI)
+
+For what you see rather than hear (foot IK, the gaze, the lean): the same bench scenario filmed twice,
+the animation work off (OpenGothic as it is) and on, stacked top and bottom.
+
+```bash
+shorts/compare/film.sh bodies                                   # .shorts/compare/bodies/{off,on}/<segment>.mp4|.wav
+uv run --project shorts python shorts/compare/cut.py bodies ru  # -> .shorts/compare/bodies/short-ru.mp4 (+ .png)
+```
+
+- `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
+  time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
+  `_FLINCH`, `_ANIBLEND`, `_LIPSYNC` to 0. Frames 1080x960 (`TEMPEST_WINDOW_SIZE`), the game's sound into
+  `<segment>.wav` (`TEMPEST_AUDIO_LOOPBACK`, `SOUND`/`MUSIC` of `scripts/bench.sh`).
+- `compare/<name>.json`: the hook, the two labels, the beats in order with their trims and titles, per language.
+- `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
+  take, normalizes to -14 LUFS.
+
+Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
+cutting: a difference that does not read at phone size (a flinch on top of the game's stumble) stays out.
+
+## Uploading to YouTube
+
+```bash
+uv run gothic-shorts youtube login                     # once: the browser opens Google's consent page
+uv run gothic-shorts upload .shorts/compare/bodies/short-ru.mp4 --meta compare/bodies.json --lang ru
+```
+
+The OAuth client is a Desktop app client of the Google Cloud project `gothicai-shorts` (YouTube Data API v3,
+consent screen in testing with the channel's account as a test user); its JSON and the token live in
+`~/.local/share/gothic-ai/` (`youtube-client.json`, `youtube-token.json`), never in the repository. A testing
+app's token lasts 7 days, then `login` again (the upload opens the browser itself). The metadata come from
+`youtube.<lang>` of the JSON: title (up to 100 characters), description, tags, `synthetic` (altered or
+synthetic content: set it for shorts with AI voices). Uploads are private: a project without YouTube's audit
+can not publish through the API; make the video public in YouTube Studio. `upload` shows the channel, the
+file and the title and asks before it sends anything; it refuses any channel but the project's (GothicAI,
+`UCbeAoPh3V7yFVpiuWNI-wkw`; `--channel` or `GOTHIC_YOUTUBE_CHANNEL`).
+

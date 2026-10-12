@@ -242,3 +242,26 @@ async def test_one_confession_settles_both_who_asked_for_it(graph):
         assert len(chronicle.facts("amends")) == 2
     finally:
         await link_cm.__aexit__(None, None, None)
+
+
+async def test_amends_made_in_a_deal(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = FakeBackend(script=[FakeStep("", [_proposal()])], delay=0)
+    link_cm, amends, chronicle = await _amends(fake, llm, graph, store)
+    try:
+        s = await amends.consider(LIE, ANDRE, "Лобарт")
+        assert s is not None
+        assert f"загладить вину за ложь ({LIE})" in (amends.situation(ANDRE) or "")
+        # before the talk is even over Andre lets the hero off for 40 gold in a deal (deals.py)
+        chronicle.record({"fact": "deal", "npc": ANDRE, "forgive": [LIE], "gold": 40, "silence": []})
+        await _until(lambda: s.stage == "done")
+        await _until(lambda: {"op": "enable", "node": JOIN} in _ops(fake))
+        assert {"op": "remove_node", "node": s.talk} in _ops(fake)  # his talk leaves the menu
+        fact = chronicle.facts("amends")[0]
+        assert (fact["id"], fact["gold"], fact["lie"]) == (s.id, 40, LIE)
+        assert "заплатил 40 золотых" in (Trust(chronicle).situation(ANDRE) or "")
+        amends._load()
+        assert amends.storylets[s.id].stage == "done"
+    finally:
+        await link_cm.__aexit__(None, None, None)

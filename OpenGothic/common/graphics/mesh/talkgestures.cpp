@@ -22,6 +22,18 @@ float SwayYaw   = 2.5f;    // degrees aside, at most, while the voice lasts
 float SwayRoll  = 2.f;
 float SwayTime  = 1300.f;  // ms, a new sway this often (+-40%)...
 float SwayLag   = 450.f;   // ...reached with this time constant
+// listening and thinking
+float ListenSway = 0.6f;   // of the sway while it listens (0.4 while it thinks)
+float ListenNod  = 4.f;    // degrees, a nod as the words of the other one come...
+float ListenHz   = 1.6f;   // ...slower than one on a stressed syllable
+float ListenGap  = 1500.f; // ms, such nods at most this often...
+float ListenProb = 0.45f;  // ...and with this chance when words come
+float DoubleNod  = 0.25f;  // the chance of a second nod right after (350 ms)
+float ThinkDelay = 350.f;  // ms after it starts to think the eyes go aside...
+float ThinkYaw   = 18.f;   // ...this far (degrees, to a side at random)...
+float ThinkPitch = 8.f;    // ...and up
+float ThinkTilt  = 5.f;    // degrees the head tilts while it thinks
+float AsideTime  = 250.f;  // ms, the time constant of the eyes going aside and back
 
 struct Param final {
   std::string_view name;
@@ -32,6 +44,9 @@ const Param params[] = {
   {"Tail", &Tail}, {"Wait", &Wait}, {"MinLeft", &MinLeft}, {"Slack", &Slack}, {"Long", &Long},
   {"RestScale", &RestScale}, {"Nod", &Nod}, {"NodHz", &NodHz}, {"Stress", &Stress}, {"NodGap", &NodGap},
   {"SwayYaw", &SwayYaw}, {"SwayRoll", &SwayRoll}, {"SwayTime", &SwayTime}, {"SwayLag", &SwayLag},
+  {"ListenSway", &ListenSway}, {"ListenNod", &ListenNod}, {"ListenHz", &ListenHz}, {"ListenGap", &ListenGap},
+  {"ListenProb", &ListenProb}, {"DoubleNod", &DoubleNod}, {"ThinkDelay", &ThinkDelay}, {"ThinkYaw", &ThinkYaw},
+  {"ThinkPitch", &ThinkPitch}, {"ThinkTilt", &ThinkTilt}, {"AsideTime", &AsideTime},
   };
 
 constexpr float Deg = 3.14159265f/180.f;
@@ -191,29 +206,75 @@ TalkGestures::Decision TalkGestures::update(const Input& in) {
   return d;
   }
 
-void TalkGestures::updateHead(uint64_t dt, bool speak, bool syllable, float loud) {
-  const bool  on = enabled && speak;
-  const float t  = float(dt)/1000.f;
-  talkW = on ? std::min(1.f, talkW + t/0.3f) : std::max(0.f, talkW - t/0.5f);
+void TalkGestures::heard(uint64_t now) {
+  if(!enabled || now<lastHeardNod+uint64_t(std::max(0.f,ListenGap)))
+    return;
+  if(float(random()%1000)>=ListenProb*1000.f)
+    return;
+  lastHeardNod = now;
+  wantNod      = 0.5f + 0.5f*float(random()%1000)/1000.f;
+  if(float(random()%1000)<DoubleNod*1000.f)
+    secondNod = now + 350;
+  }
+
+void TalkGestures::think(uint64_t now, uint64_t until) {
+  if(until==0) {
+    thinkUntil = std::min(thinkUntil,now);
+    return;
+    }
+  if(now>=thinkUntil) {
+    // a new thought: to a side at random
+    thinkFrom = now;
+    tiltSign  = (random()%2)==0 ? 1.f : -1.f;
+    }
+  thinkUntil = until;
+  }
+
+void TalkGestures::updateHead(uint64_t now, uint64_t dt, bool speak, bool syllable, float loud) {
+  lastNow = now;
+  const bool  listening = enabled && !speak && now<listenUntil;
+  const bool  thinking  = enabled && !speak && now<thinkUntil;
+  const bool  on        = enabled && (speak || listening || thinking);
+  const float t         = float(dt)/1000.f;
+  const float swayW     = speak ? 1.f : (listening ? ListenSway : 0.4f);
+  talkW = on ? std::min(swayW, talkW + t/0.3f) : std::max(0.f, talkW - t/0.5f);
+  if(talkW>swayW)
+    talkW = std::max(swayW, talkW - t/0.5f);
 
   // a stressed syllable: clearly louder than the ones before it in this line
   sinceNod += dt;
-  if(on && syllable && loud>0.f) {
+  if(enabled && speak && syllable && loud>0.f) {
     if(sylMean>0.f && loud>sylMean*Stress && float(sinceNod)>=NodGap) {
       const float s = std::clamp((loud/sylMean - 1.f)/0.5f, 0.3f, 1.f);
-      const float w = 2.f*3.14159265f*NodHz;
-      nodSpeed -= Nod*Deg*s*w*2.7182818f;  // a spring kicked so: its largest turn is speed/(w e)
+      nodHz     = NodHz;
+      nodSpeed -= Nod*Deg*s*2.f*3.14159265f*nodHz*2.7182818f;  // a spring kicked so: its largest turn is speed/(w e)
       sinceNod  = 0;
       ++nods;
       }
     sylMean = sylMean>0.f ? sylMean + (loud-sylMean)*0.3f : loud;
     }
-  if(!on)
+  if(!speak)
     sylMean = 0;
+
+  // listening: a nod as the words come (asked for by heard), sometimes two
+  if(secondNod!=0 && now>=secondNod) {
+    secondNod = 0;
+    if(listening)
+      wantNod = std::max(wantNod,0.6f);
+    }
+  if(wantNod>0.f) {
+    if(listening) {
+      nodHz     = ListenHz;
+      nodSpeed -= ListenNod*Deg*wantNod*2.f*3.14159265f*nodHz*2.7182818f;
+      sinceNod  = 0;
+      ++listenNods;
+      }
+    wantNod = 0;
+    }
 
   // the nod: x(t) = (x0 + (v0 + w x0) t) e^(-w t)
   if(t>0.f) {
-    const float w  = 2.f*3.14159265f*NodHz;
+    const float w  = 2.f*3.14159265f*nodHz;
     const float c  = nodSpeed + w*nod;
     const float e  = std::exp(-w*t);
     const float x  = (nod + c*t)*e;
@@ -240,10 +301,20 @@ void TalkGestures::updateHead(uint64_t dt, bool speak, bool syllable, float loud
       sway[i] = 0;
     }
 
+  // thinking: a moment, then the eyes go aside and up, the head tilts; back when it answers
+  const bool  away = thinking && now>=thinkFrom+uint64_t(std::max(0.f,ThinkDelay));
+  const float ka   = AsideTime>0 ? 1.f - std::exp(-float(dt)/AsideTime) : 1.f;
+  aside.weight += ((away ? 1.f : 0.f) - aside.weight)*ka;
+  if(!away && aside.weight<0.01f)
+    aside.weight = 0;
+  aside.yaw   = tiltSign*ThinkYaw*Deg;
+  aside.pitch = ThinkPitch*Deg;
+  tilt        = tiltSign*ThinkTilt*Deg*aside.weight;
+
   headNow.pitch = nod;
   headNow.yaw   = sway[0]*talkW;
-  headNow.roll  = sway[1]*talkW;
-  headMoves     = talkW>0.f || nod!=0.f || nodSpeed!=0.f || sway[0]!=0.f || sway[1]!=0.f;
+  headNow.roll  = sway[1]*talkW + tilt;
+  headMoves     = talkW>0.f || nod!=0.f || nodSpeed!=0.f || sway[0]!=0.f || sway[1]!=0.f || aside.weight>0.f;
   }
 
 void TalkGestures::started(uint8_t gesture, bool overPlaying) {
@@ -318,5 +389,9 @@ void TalkGestures::probe(Probe& p) const {
   p.cuts     = cuts;
   p.stops    = stops;
   p.nods     = nods;
+  p.listenNods = listenNods;
+  p.listening  = lastNow<listenUntil;
+  p.thinking   = lastNow<thinkUntil;
   p.head     = headNow;
+  p.aside    = aside;
   }

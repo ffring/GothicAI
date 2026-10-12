@@ -30,6 +30,7 @@ from .turn import ToolOutcome
 
 if TYPE_CHECKING:
     from .dialogue import Conversation, DialogueManager
+    from .places import Place, PlaceBook
     from .social import Social
 
 log = logging.getLogger(__name__)
@@ -105,6 +106,7 @@ DOING = {
     "ZS_SIT_GROUND": ("сидит на земле", "сидишь на земле"),
     "ZS_SLEEP": ("спит", "спишь"),
     "ZS_SLEEP_GROUND": ("спит на земле", "спишь на земле"),
+    "ZS_GOTOBED": ("спит", "спишь"),
     "ZS_SMALLTALK": ("болтает", "болтаешь"),
     "ZS_READ_BOOKSTAND": ("читает у книжной стойки", "читаешь у книжной стойки"),
     "ZS_POTION_ALCHEMY": ("варит зелья", "варишь зелья"),
@@ -119,6 +121,8 @@ DOING = {
     "ZS_COOK_PAN": ("жарит на сковороде", "жаришь на сковороде"),
     "ZS_ROAST_SCAVENGER": ("жарит мясо", "жаришь мясо"),
     "ZS_PICK_FIELD": ("работает в поле", "работаешь в поле"),
+    "ZS_PICK_FP": ("работает в поле", "работаешь в поле"),
+    "ZS_RAKE_FP": ("работает граблями", "работаешь граблями"),
     "ZS_PICK_ORE": ("добывает руду", "добываешь руду"),
     "ZS_RAKE_FIP": ("работает граблями", "работаешь граблями"),
     "ZS_PRAY_INNOS": ("молится Инносу", "молишься Инносу"),
@@ -157,6 +161,7 @@ EN_DOING = {
     "ZS_FLEE": "running away",
     "ZS_SLEEP": "asleep",
     "ZS_SLEEP_GROUND": "asleep",
+    "ZS_GOTOBED": "asleep",
     "ZS_TALK": "talking",
     "ZS_SMALLTALK": "chatting",
 }
@@ -190,11 +195,13 @@ class PerceptionDesk:
         *,
         social: Callable[[], Social | None] = lambda: None,
         knows_hero: Callable[[str], bool] = lambda npc: False,
+        places: PlaceBook | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.link = link
         self.social = social
         self.knows_hero = knows_hero
+        self.places = places  # the book of place names (places.py); without it, waypoints
         self.clock = clock
         self._views: dict[str, tuple[float, NpcView]] = {}
         link.listeners.append(self._on_message)
@@ -252,16 +259,24 @@ class PerceptionDesk:
             return None
         return Sight(self._place(view), self._hero(view, snap), self._people(view))
 
+    def place(self, view: NpcView) -> Place | None:
+        """Where the npc is, by name."""
+        return self.places.of(view.waypoint, view.nearest_waypoint) if self.places is not None else None
+
     def _place(self, view: NpcView) -> str:
-        where = "под крышей" if view.indoors else "под открытым небом"
+        roof = "под крышей" if view.indoors else "под открытым небом"
         if view.indoors and view.room_guild in ROOMS:
-            where += f" (это помещение {ROOMS[view.room_guild]})"
-        wp = view.waypoint or view.nearest_waypoint
-        line = f"Ты {where}" + (f", у точки {wp}" if wp else "") + "."
-        doing = _doing(view.state, view.body, 1)
-        if view.body == "mob" and view.mob:
+            roof += f" (это помещение {ROOMS[view.room_guild]})"
+        if (place := self.place(view)) is not None:
+            line = f"Ты {place.where_ru}, {roof}."
+        else:
+            wp = view.waypoint or view.nearest_waypoint
+            line = f"Ты {roof}" + (f", у точки {wp}" if wp else "") + "."
+        if view.state in DOING:  # what it does, said as one says it; else what it uses
+            line += f" Ты {DOING[view.state][1]}."
+        elif view.body == "mob" and view.mob:
             line += f" Ты занят: {view.mob}."
-        elif doing:
+        elif doing := _doing(view.state, view.body, 1):
             line += f" Ты {doing}."
         if view.weapon in WEAPON:
             line += " Твоё оружие наготове." if view.weapon != "magic" else " Ты держишь заклинание наготове."
@@ -403,7 +418,10 @@ class PerceptionDesk:
         if view is None:
             return ()
         lines = []
-        if view.indoors:
+        place = self.place(view)
+        if place is not None:
+            lines.append(f"You are {place.where_en}" + (", indoors." if view.indoors else "."))
+        elif view.indoors:
             room = f", in the {_EN_ROOMS[view.room_guild]} quarters" if view.room_guild in _EN_ROOMS else ""
             lines.append(f"You are indoors{room}.")
         hero = view.hero

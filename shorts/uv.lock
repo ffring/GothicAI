@@ -72,6 +72,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "gothic-launcher" },
+    { name = "httpx" },
     { name = "pillow" },
 ]
 
@@ -84,6 +85,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "gothic-launcher", editable = "../launcher/core" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pillow", specifier = ">=11.0" },
 ]
 
