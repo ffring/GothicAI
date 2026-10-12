@@ -2,6 +2,7 @@
 
 #include <Tempest/Vec>
 
+#include <cstdint>
 #include <vector>
 #include <memory>
 #include <string>
@@ -43,6 +44,12 @@ class SoundDevice final {
     void setListenerDirection(float dx, float dy, float dz, float ux, float uy, float uz);
 
     void setGlobalVolume(float v);
+
+    // TEMPEST_AUDIO_LOOPBACK=<rate>: nothing plays; the mix of every context waits until the
+    // application renders it (recording in step with the frames). 0 when off
+    static uint32_t loopbackRate();
+    // the next `frames` frames of the mix, 16-bit stereo; false if loopback is off
+    static bool     renderLoopback(int16_t* out, size_t frames);
 
   private:
     struct Data;

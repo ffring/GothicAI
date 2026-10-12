@@ -37,6 +37,7 @@
 #include "npcobserver.h"
 #include "textcodec.h"
 #include "voicebuffer.h"
+#include "testbench.h"
 
 using namespace Tempest;
 
@@ -184,7 +185,8 @@ struct AiBridge::Impl final {
   std::string focusSymbol(World& world);
   void submitChat(const std::string& text);
   void onLineStarted(const LineLibrary::Line& line);
-  void sendPtt(std::string_view type);
+  // `audio`: the test bench says this recording for the hero (the server takes it instead of the microphone)
+  void sendPtt(std::string_view type, std::string_view audio = {});
 
   void send(std::string&& text);
   void sendResult(std::string_view req, bool ok, std::string_view err);
@@ -261,6 +263,13 @@ AiBridge::Impl::Impl() {
     pendingRecord   = std::move(rec);
     };
   debugTimer.timeout.bind(this,&Impl::runDebug);
+  if(TestBench::isActive())
+    TestBench::aiBusy = [this]() {
+      for(auto& v:voices)
+        if(v.drainedAt==0)
+          return true;
+      return lines.pending();
+      };
   lines.onStart   = [this](const LineLibrary::Line& l) { onLineStarted(l); };
   ctrl.onFollowEnded = [this](const std::string& npc, std::string_view) {
     // following on its own ended: back to its routine (the server takes it again if it wants)
@@ -315,6 +324,7 @@ AiBridge::Impl::~Impl() {
   gothic.externalSoundFn   = nullptr;
   gothic.saveExtFn         = nullptr;
   gothic.sessionStartFn    = nullptr;
+  TestBench::aiBusy        = nullptr;
   voices.clear();  // before the game's sound device goes
   chat.reset();
   ws.stop();
@@ -778,7 +788,25 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     return true;
     }
 
-  reply = "usage: ai status | ai attach <npc> | ai detach [npc]";
+  if(sub=="ptt" && args.size()>2) {
+    // the T key without a keyboard (the test bench): ai ptt start [<wav> said for the hero] | stop | cancel
+    const auto state = lower(args[2]);
+    if(state!="start" && state!="stop" && state!="cancel") {
+      reply = "usage: ai ptt start [<wav>] | stop | cancel";
+      return true;
+      }
+    std::string audio;
+    if(state=="start" && args.size()>3) {
+      // the rest of the line: a path may have spaces
+      const auto at = cmd.find(args[3]);
+      audio = std::string(cmd.substr(at));
+      }
+    sendPtt(state=="start" ? "ptt_start" : (state=="stop" ? "ptt_stop" : "ptt_cancel"),audio);
+    reply = connected ? "ptt " + state : "ptt " + state + " (server is not connected!)";
+    return true;
+    }
+
+  reply = "usage: ai status | ai attach <npc> | ai detach [npc] | ai ptt start [<wav>]|stop|cancel";
   return true;
   }
 
@@ -895,6 +923,7 @@ void AiBridge::Impl::tickVoices(World& world) {
     if(v.drainedAt==0 && v.buf->isDrained()) {
       v.drainedAt = now;
       Log::i("[ai] voice ",v.line," played, ",v.buf->durationMs()," ms");
+      TestBench::aiVoiceEnd(v.npc,v.buf->durationMs());
       }
     }
   // keep the source a little after the last sample: OpenAL still holds a buffer of it
@@ -937,6 +966,7 @@ void AiBridge::Impl::onTranscript(const rapidjson::Value& msg) {
     return;
   std::string who = TextCodec::fromUtf8("Ты");
   const auto  to  = JsonRead::str(msg,"to_name");
+  TestBench::aiHeard(JsonRead::str(msg,"text"),to);
   if(!to.empty())
     who += " -> " + TextCodec::fromUtf8(to);
   chat->addLine(std::move(who),text,LineLibrary::durationFor(text));
@@ -1007,11 +1037,13 @@ void AiBridge::Impl::submitChat(const std::string& text) {
   send(j.finish());
   }
 
-void AiBridge::Impl::sendPtt(std::string_view type) {
+void AiBridge::Impl::sendPtt(std::string_view type, std::string_view audio) {
   JsonWriter j(type);
   if(World* world = Gothic::inst().world())
     if(auto focus = focusSymbol(*world); !focus.empty())
       j.str("focus",focus);
+  if(!audio.empty())
+    j.str("audio",audio);
   send(j.finish());
   }
 
@@ -1021,6 +1053,13 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
   lastLine[line.npc] = line.id;
   if(line.voice!=nullptr)
     startVoice(line);
+  {
+    std::string name = line.npc;
+    if(auto world = Gothic::inst().world())
+      if(auto npc = npcBySymbol(*world,line.npc))
+        name = std::string(npc->displayName());
+    TestBench::aiLine(line.npc,TextCodec::toUtf8(name),TextCodec::toUtf8(line.text),line.time);
+  }
   ensureChat();
   if(!line.reply.empty()) {
     chat->extend(line.reply,line.time);  // its text is on screen already

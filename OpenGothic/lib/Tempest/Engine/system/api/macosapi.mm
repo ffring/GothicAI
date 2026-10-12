@@ -1,5 +1,6 @@
 #include "macosapi.h"
 
+#include <cstdio>
 #include <cstdlib>
 
 #ifdef __OSX__
@@ -394,7 +395,16 @@ SystemApi::Window *MacOSApi::implCreateWindow(Tempest::Window *owner, uint32_t w
   }
 
 SystemApi::Window *MacOSApi::implCreateWindow(Tempest::Window *owner, SystemApi::ShowMode sm) {
-  return implCreateWindow(owner,800,600,sm);
+  // TEMPEST_WINDOW_SIZE=<w>x<h>: the window's size in points (automated runs that record a given frame)
+  uint32_t w = 800, h = 600;
+  if(const char* sz = std::getenv("TEMPEST_WINDOW_SIZE")) {
+    unsigned sw = 0, sh = 0;
+    if(std::sscanf(sz,"%ux%u",&sw,&sh)==2 && sw>0 && sh>0) {
+      w = sw;
+      h = sh;
+      }
+    }
+  return implCreateWindow(owner,w,h,sm);
   }
 
 void MacOSApi::implDestroyWindow(SystemApi::Window *w) {

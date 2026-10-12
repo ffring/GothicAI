@@ -24,3 +24,8 @@ Keep these when updating a library from upstream.
 
 - `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_BACKGROUND=1` starts the app without taking the
   focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
+- `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_WINDOW_SIZE=<w>x<h>` sets the size of a window created
+  by show mode (points; shorts are filmed in a 9:16 window, `shorts/`).
+- `Tempest/Engine/sound/sounddevice.{h,cpp}`: `TEMPEST_AUDIO_LOOPBACK=<rate>` opens an OpenAL loopback
+  device instead of the speakers; `SoundDevice::renderLoopback` mixes the next frames of every context
+  (the test bench records the game's sound in step with the frames).
