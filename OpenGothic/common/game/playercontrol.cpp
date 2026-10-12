@@ -22,6 +22,7 @@ constexpr float SpreadOpen  = 0.1f;                  // seconds: it opens about 
 constexpr float SpreadClose = 0.2f;                  // ...closes
 constexpr float StanceRate  = 6.f;                   // 1/s: crouching, leaning out eases in and out
 constexpr float HeadOverHips = 70.f;                 // cm: leaning out tilts the trunk from the hips
+constexpr float CantRate     = 10.f;                 // 1/s: the bow canted, straightened (a quick shot)
 
 // a critically damped spring moves v toward goal, smooth seconds (about half the time it takes): it eases
 // in and out, no jerks when the goal jumps; vel is its speed
@@ -303,6 +304,18 @@ bool PlayerControl::isPressed(KeyCodec::Action a) const {
 void PlayerControl::onRotateMouse(float dAngleX, float dAngleY) {
   rotMouse  += dAngleX;
   rotMouseY += dAngleY;
+  }
+
+bool PlayerControl::onMouseWheel(int delta) {
+  // aiming a bow by hand: down cants it for quick shots, up straightens it; kept till changed (a crossbow
+  // is not canted: the wheel does nothing then, the camera stays)
+  if(!manualAiming || delta==0)
+    return false;
+  auto w  = Gothic::inst().world();
+  auto pl = w!=nullptr ? w->player() : nullptr;
+  if(pl!=nullptr && pl->weaponState()==WeaponState::Bow)
+    aimCant = delta<0;
+  return true;
   }
 
 void PlayerControl::drawVobRay(DbgPainter& p) const {
@@ -1066,7 +1079,7 @@ Npc* PlayerControl::aimRayHit(Npc& pl, Tempest::Vec3& at) const {
 bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   // the bow aimed by hand (game/archery): the left button raises it and draws the string, letting it go
   // shoots along the arrow; the right one lowers the bow, a step too; shift holds the breath; the sneak
-  // key crouches, the side steps lean out round a corner
+  // key crouches, the side steps lean out round a corner, the wheel cants the bow (onMouseWheel)
   const auto ws = pl.weaponState();
   if(!Archery::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow) || pl.isDown() ||
      pl.isInAir() || pl.isSwim() || pl.isDive() || pl.interactive()!=nullptr)
@@ -1112,17 +1125,21 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     aimCrouch    = bool(pl.walkMode() & WalkBit::WM_Sneak);
     }
 
-  // the stance: crouched, leaning out round a corner (held), eased
+  // the stance: crouched, leaning out round a corner (held), the bow canted (not a crossbow), eased
   const float dtS  = float(dt)/1000.f;
   const float peek = (wantsToStrafeRight() ? 1.f : 0.f) - (wantsToStrafeLeft() ? 1.f : 0.f);
+  const float cant = aimCant && ws==WeaponState::Bow ? 1.f : 0.f;
   const float ease = 1.f - std::exp(-StanceRate*dtS);
   crouchK += ((aimCrouch ? 1.f : 0.f) - crouchK)*ease;
   peekK   += (peek - peekK)*ease;
+  cantK   += (cant - cantK)*(1.f - std::exp(-CantRate*dtS));
   if(std::abs(crouchK-(aimCrouch ? 1.f : 0.f))<1e-3f)
     crouchK = aimCrouch ? 1.f : 0.f;
   if(std::abs(peekK-peek)<1e-3f)
     peekK = peek;
-  pl.setAimStance(crouchK,peekK);
+  if(std::abs(cantK-cant)<1e-3f)
+    cantK = cant;
+  pl.setAimStance(crouchK,peekK,cantK);
   manualAiming = true;
 
   // the mouse (the keys) turn the hero, the camera follows; up and down is the camera's
@@ -1150,7 +1167,8 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   const float         turn = ar.isRaised() ? std::acos(std::clamp(Tempest::Vec3::dotProduct(dir,aimDirPrev),-1.f,1.f)) : 0.f;
   aimDirPrev = dir;
 
-  const auto    st = Archery::stats(pl,pl.currentRangedWeapon());
+  // canted: a quick shot (drawn fast, settles fast, looser)
+  const auto    st = Archery::canted(Archery::stats(pl,pl.currentRangedWeapon()),cantK);
   // the next arrow as fast as the hands are (dexterity); set when it changes (the test bench may set its own)
   if(st.reload!=reloadTempo) {
     pl.setAnimSpeed(Archery::reloadAnim(st.crossbow),st.reload);
@@ -1206,10 +1224,11 @@ void PlayerControl::endManualAim(Npc& pl) {
       pl.setAnim(Npc::Anim::Idle);
     }
   pl.setManualAim(false);
-  pl.setAimStance(0,0);
+  pl.setAimStance(0,0,0);
   aimCrouch = false;
   crouchK   = 0;
   peekK     = 0;
+  cantK     = 0;
   Archer::playerProbe = Archer::Probe();
   ctrl[Action::Walk] = false;
   if(auto camera = Gothic::inst().camera()) {

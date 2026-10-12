@@ -25,6 +25,8 @@ class PlayerControl final {
     void  onKeyReleased(KeyCodec::Action a, KeyCodec::Mapping mapping);
     bool  isPressed(KeyCodec::Action a) const;
     void  onRotateMouse(float dAngleX, float dAngleY);
+    // the mouse wheel; true: taken (aiming a bow by hand: down cants it for a quick shot, up straightens it)
+    bool  onMouseWheel(int delta);
 
     void  drawVobRay(DbgPainter& p) const;
 
@@ -177,6 +179,8 @@ class PlayerControl final {
     bool           aimCrouch      = false;   //!< crouched to aim (the sneak key while the bow is up)
     float          crouchK        = 0;       //!< crouched 0..1, smoothed
     float          peekK          = 0;       //!< leaning out round a corner -1 (left)..1 (right), smoothed
+    bool           aimCant        = false;   //!< the bow canted for quick shots (the wheel; kept till changed)
+    float          cantK          = 0;       //!< canted 0..1, smoothed
 
     DialogMenu&    dlg;
     InventoryMenu& inv;

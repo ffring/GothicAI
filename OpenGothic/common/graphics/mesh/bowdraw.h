@@ -36,6 +36,8 @@ class BowDraw final {
     static constexpr const char* StringLoose = "S_LOOSE";
     static constexpr float       StringSide  = 6.f; // cm: the arrow beside the bow (it passes the grip on its
                                                     // side, clear of it), the string drawn to it
+    static constexpr float       CantAngle   = 30.f; // degrees: the bow canted for a quick shot, the top limb
+                                                     // toward the drawing hand (the archers' 15..30)
 
     struct Input final {
       bool     active = false; // aiming a bow by hand
@@ -52,6 +54,7 @@ class BowDraw final {
       Tempest::Vec3 stringPull = {};    // to the arrow of the animation (S_READY); in the space of the bow
       Tempest::Vec3 stringHigh = {};    // (the bow hand's slot)
       Tempest::Vec3 bowAxis    = {};    // along the bow's limbs (either way)
+      float         cant       = 0;     // the bow canted for a quick shot, 0..1 of CantAngle
       bool               grabKnown = false; // the hand and the elbow as they take the arrow (the reload at
       Tempest::Matrix4x4 grabHand;          // GrabAt), relative to the chest: Pose fills them in
       Tempest::Matrix4x4 grabElbow;
@@ -124,8 +127,13 @@ class BowDraw final {
     // its turn
     bool                moveHand(Tempest::Matrix4x4* tr, const Tempest::Vec3& target, const Tempest::Vec3* bend = nullptr);
     // the bow held as an archer holds it: slid up in the hand (up: along its limbs, world), raised by the
-    // bow hand so that the string drawn straight back ends at the nock
-    void                alignBow(Tempest::Matrix4x4* tr, const Tempest::Vec3& up, const Tempest::Vec3& nock);
+    // bow hand so that the string drawn straight back ends at the nock; canted round the arrow (axis) by
+    // lean radians
+    void                alignBow(Tempest::Matrix4x4* tr, const Tempest::Vec3& up, const Tempest::Vec3& nock,
+                                 const Tempest::Vec3& axis, float lean);
+    // the drawing hand turned round the arrow's line (through at) as the bow is canted: the fingers on the
+    // string
+    void                cantHand(Tempest::Matrix4x4* tr, const Tempest::Vec3& at, const Tempest::Vec3& axis, float lean);
     // the string's middle at rest and the way it goes to the full draw as shown (world)
     void                stringNow(const Tempest::Matrix4x4* tr, Tempest::Vec3& rest, Tempest::Vec3& pull) const;
     void                measurePose(const Tempest::Matrix4x4* tr, size_t numBones, const Tempest::Vec3& slotAt,
@@ -148,6 +156,7 @@ class BowDraw final {
     Tempest::Vec3       stringHigh = {};
     Tempest::Vec3       bowAxis    = {};
     float               fit = -1, offset = -1, angle = -1;
+    float               cantK  = 0; // the bow canted, 0..1 of CantAngle (as smooth as the input)
     float               align  = 0; // how far the bow is held as an archer holds it, 0..1 (eased)...
     float               alignT = 0; // ...as the time goes
     float               bowMove = 0, bowMiss = 0;

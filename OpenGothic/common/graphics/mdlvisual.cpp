@@ -675,7 +675,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
-        in.follow = 1.f - CrouchSlow*npc.aimCrouch();
+        in.follow = (1.f - CrouchSlow*npc.aimCrouch())*(1.f + CantQuick*(ws==WeaponState::Bow ? npc.aimCant() : 0.f));
         in.reload = pose.animProgress(ws==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload,npc.world().tickCount())>=0.f;
         // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
         in.slot   = ammunition.boneId;
@@ -731,6 +731,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   bd.draw   = ar.draw();
   bd.span   = bowSpan();
   bd.arrow  = !ammunition.view.isEmpty() && ammunition.bone=="ZS_RIGHTHAND";
+  bd.cant   = npc.aimCant();
   if(auto p = bow.view.protoMesh()) {
     bool high = false, straight = false;
     for(auto& m:p->morph) {

@@ -189,7 +189,9 @@ bool BowDraw::update(const Input& in) {
   const float prevDraw = draw;
   const float prevBack = follow;
   const float prevTurn = align;
+  const float prevCant = cantK;
   active     = in.active;
+  cantK      = std::clamp(in.cant,0.f,1.f);
   inHand     = in.arrow;
   given      = in.span;
   hasString  = in.hasString;
@@ -238,7 +240,8 @@ bool BowDraw::update(const Input& in) {
     alignT = std::min(1.f, alignT + dt/HoldIn); else
     alignT = std::max(0.f, alignT - dt/BlendOut);
   align = smooth(alignT);
-  return weight!=prev || (weight>0.f && draw!=prevDraw) || follow!=prevBack || holding || align!=prevTurn;
+  return weight!=prev || (weight>0.f && draw!=prevDraw) || follow!=prevBack || holding || align!=prevTurn ||
+         (align>0.f && cantK!=prevCant);
   }
 
 void BowDraw::hold(Matrix4x4* tr, size_t numBones, const Matrix4x4& object) {
@@ -303,29 +306,43 @@ void BowDraw::stringNow(const Matrix4x4* tr, Vec3& rest, Vec3& pull) const {
   pull = turnOf(tr[bowHand],stringHigh + (stringPull-stringHigh)*align);
   }
 
-void BowDraw::alignBow(Matrix4x4* tr, const Vec3& up, const Vec3& nock) {
+void BowDraw::alignBow(Matrix4x4* tr, const Vec3& up, const Vec3& nock, const Vec3& axis, float lean) {
   // the bow slides up in the hand: the hand below its middle, the arrow on the hand...
   const Vec3 slide = up*(Shelf*align);
   slid = slide;
   tr[bowHand].set(3,0,tr[bowHand].at(3,0)+slide.x);
   tr[bowHand].set(3,1,tr[bowHand].at(3,1)+slide.y);
   tr[bowHand].set(3,2,tr[bowHand].at(3,2)+slide.z);
-  // ...the bow hand raises it to the arrow: the string drawn straight back ends at the nock
+  // ...the bow hand raises it to the arrow: the string drawn straight back ends at the nock. Canted, the
+  // bow turns round the arrow from there: the arrow stays on the hand, the string at the nock
   Vec3 rest, pull;
   stringNow(tr,rest,pull);
-  const Vec3 move = (nock-(rest+pull))*align;
   const Vec3 from = position(tr[lHand]);
-  bowMove = length(move);
+  Vec3       to   = from + (nock-(rest+pull))*align;
+  Mat3       turn = rotationOf(tr[lHand]);
+  if(lean!=0.f) {
+    const Mat3 r = axisAngle(axis,lean);
+    to   = nock + mul(r,to-nock);
+    turn = mul(r,turn);
+    slid = mul(r,slid);
+    }
+  bowMove = length(to-from);
   if(bowMove<0.01f)
     return;
-  const Mat3 turn = rotationOf(tr[lHand]);
   TwoBone    tb;
   const Vec3 bend = position(tr[lFore]) - position(tr[lUpper]);
-  if(!twoBone(tr,lUpper,lFore,lHand,lUpperTree,lForeTree,from+move,bend,Reach,0.f,tb))
+  if(!twoBone(tr,lUpper,lFore,lHand,lUpperTree,lForeTree,to,bend,Reach,0.f,tb))
     return;
-  // the hand keeps its turn: the bow upright
+  // the hand keeps its turn: the bow upright (canted as it is turned)
   rotateAbout(tr,lHandTree,mul(turn,transpose(rotationOf(tr[lHand]))),position(tr[lHand]));
-  bowMiss = length(position(tr[lHand])-(from+move));
+  bowMiss = length(position(tr[lHand])-to);
+  }
+
+void BowDraw::cantHand(Matrix4x4* tr, const Vec3& at, const Vec3& axis, float lean) {
+  const Mat3 r = axisAngle(axis,lean);
+  if(!moveHand(tr,at+mul(r,position(tr[hand])-at)))
+    return;
+  rotateAbout(tr,handTree,r,position(tr[hand]));
   }
 
 void BowDraw::measurePose(const Matrix4x4* tr, size_t numBones, const Vec3& slotAt, const Vec3& axis,
@@ -442,10 +459,9 @@ void BowDraw::implApply(Matrix4x4* tr, size_t numBones) {
 
   // the hand holds the string at the nock, where the animation draws it (on the arrow's line); the bow
   // held so that it is drawn straight back to there, the hand going straight along the arrow
-  const Vec3 handAnim = position(tr[hand]);
-  Vec3       shift    = {};
-  Vec3       up       = {};
-  Vec3       nock     = slotAt;
+  Vec3 shift = {};
+  Vec3 up    = {};
+  Vec3 nock  = slotAt;
   if(hasString) {
     const Vec3 high = turnOf(tr[bowHand],stringHigh);
     up = normalize(turnOf(tr[bowHand],bowAxis));
@@ -456,8 +472,19 @@ void BowDraw::implApply(Matrix4x4* tr, size_t numBones) {
     // where the animation draws the string to: there the hand holds it
     nock = slotAt + axis*dot(rest+high-slotAt,axis);
     if(align>0.f && length(up)>0.5f && length(vert)>0.1f && !lHandTree.empty() && lHandTree.back()<numBones) {
-      alignBow(tr,up,nock);
+      // canted for a quick shot: round the arrow, the top limb toward the drawing hand (the side of its
+      // shoulder), the fingers on the string with it
+      float lean = 0;
+      if(cantK>0.f && lUpper<numBones) {
+        const float side = dot(cross(axis,up),position(tr[upper])-position(tr[lUpper]));
+        lean = cantK*align*CantAngle*float(M_PI)/180.f*(side>=0.f ? 1.f : -1.f);
+        cantHand(tr,slotAt,axis,lean);
+        }
+      alignBow(tr,up,nock,axis,lean);
       stringNow(tr,rest,pull);
+      // the limbs as the bow is held now
+      if(lean!=0.f)
+        up = mul(axisAngle(axis,lean),up);
       // the bow arm short of it: the hand goes with the string
       shift = rest+pull-nock;
       }
@@ -473,6 +500,7 @@ void BowDraw::implApply(Matrix4x4* tr, size_t numBones) {
     }
 
   // that way as far as the arm reaches: |hand + way*t - shoulder| <= Comfort*arm
+  const Vec3  handAnim = position(tr[hand]);
   const Vec3  h0    = handAnim + shift;
   const Vec3  p     = h0 - position(tr[upper]);
   const float arm   = Comfort*(length(position(tr[fore])-position(tr[upper])) + length(h0-position(tr[fore])));
