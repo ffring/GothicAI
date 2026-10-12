@@ -26,3 +26,6 @@ Keep these when updating a library from upstream.
   focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
 - `Tempest/Engine/sound/sound.{h,cpp}`: `Sound::samples16` gives the decoded samples of a sound (lip sync
   measures the loudness of a voice line, `common/graphics/mesh/lipsync.cpp`).
+- `ZenKit/` `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine
+  function the way the `BE` instruction does. The story graph (`ai_bridge/storygraph`) computes the AI
+  director's conditions with the engine's own functions through it.

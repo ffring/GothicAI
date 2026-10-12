@@ -14,8 +14,8 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Coroutine
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import Any, Protocol
 
 from . import executor, npc_tools
 from .budget import Budget
@@ -61,6 +61,7 @@ log = logging.getLogger(__name__)
 
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
+PREPARE_S = 3.0  # what an extension asks the game before a turn
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
 
@@ -313,6 +314,25 @@ class Conversation:
         return [t for t in (self.reply, self.compacting, self.voicing, *self.actions) if t is not None]
 
 
+class TurnExtension(Protocol):
+    """More of the world for the conversational model (the director's quests, quests.py; the scripts'
+    quests, vanilla.py): lines for the situation, tools to offer, and the handling of their calls."""
+
+    async def prepare(self, npc: str) -> None:
+        """Before a turn: what the situation and the tools need from the game."""
+        ...
+
+    def situation(self, npc: str) -> str | None: ...
+
+    def tools(self, npc: str) -> list[Tool]: ...
+
+    async def handle(
+        self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
+    ) -> ToolOutcome | None:
+        """The outcome of a call this extension knows, None for other calls."""
+        ...
+
+
 class DialogueManager:
     """Turns of the npc's conversational model. One reply in flight per npc; new player text interrupts it.
 
@@ -351,6 +371,7 @@ class DialogueManager:
         self.free_body: Callable[[str, str], None] | None = None
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
+        self.extensions: list[TurnExtension] = []
         self.llm = llm
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
@@ -485,6 +506,8 @@ class DialogueManager:
         conv = self.conversations.get(npc.upper())
         if conv is None:
             raise KeyError(f"no conversation with {npc}")
+        # square brackets are remarks about what really happens: the hero's words can't pass for one
+        text = text.replace("[", "(").replace("]", ")")
         return self._start_reply(conv, text, overlay=overlay, body=body)
 
     def _cancel(self, conv: Conversation) -> None:
@@ -555,6 +578,23 @@ class DialogueManager:
         if not running:
             self._note(conv, f"Герой перебил тебя{f'; ты успел сказать: «{spoken}»' if spoken else ''}")
         return True
+
+    def remember(self, npc: str, name: str, text: str) -> None:
+        """A remark in the memory of any npc, also one nobody talks to (a rumor, something it saw)."""
+        self._note(self.open(npc, name), text)
+
+    def change_intent(self, npc: str, name: str, **fields: Any) -> None:
+        """Change what the npc wants or how it sees the hero, from outside a turn (a lie found out)."""
+        conv = self.open(npc, name)
+        self._change_intent(conv, replace(conv.intent, **fields), self.link.snapshots.get(conv.npc))
+
+    def after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
+        """For extensions: a body job once the npc has said its lines; its note goes into the history."""
+        self._after_speech(conv, job)
+
+    async def give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
+        """For extensions: hand an item over (give_item's checks are the caller's)."""
+        return await self._give(conv, call, snap)
 
     def overheard(self, npc: str, name: str, text: str, to_name: str | None) -> None:
         """A witness: the npc heard the hero say something to someone else (no model call, only memory)."""
@@ -804,6 +844,14 @@ class DialogueManager:
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         snap = self.link.snapshots.get(conv.npc)
         situation_text = npc_tools.render_situation(snap, conv.intent)
+        for ext in self.extensions:
+            try:
+                await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
+            except (GameError, TimeoutError) as err:
+                log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
+        for ext in self.extensions:
+            if extra := ext.situation(conv.npc):
+                situation_text += "\n" + extra
         if body:
             situation_text += f"\nТвоё тело сейчас: {body} — это уже происходит, не противоречь этому."
         if conv.pending:  # events that came during the last turn
@@ -815,7 +863,7 @@ class DialogueManager:
         state = TurnState(
             relevant=relevant,
             overlay=overlay,
-            tools=self.tools if tools is None else tools,
+            tools=self._offered(conv.npc) if tools is None else tools,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
@@ -1022,7 +1070,14 @@ class DialogueManager:
                 give = ToolCall(call.name, args, call.call_id)
                 self._after_speech(conv, lambda: self._give(conv, give, snap))
                 return ToolOutcome("Принято: отдашь после реплики.", "accepted")
+        for ext in self.extensions:
+            if (outcome := await ext.handle(self, conv, call, snap)) is not None:
+                return outcome
         return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
+
+    def _offered(self, npc: str) -> list[Tool]:
+        """The tools for a turn with the hero: the npc's own and those of the extensions."""
+        return [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
 
     def _recall(self, conv: Conversation, query: str) -> str:
         """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded)."""
