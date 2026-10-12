@@ -20,6 +20,8 @@
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/hitzones.h"
+#include "game/archery.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -320,6 +322,19 @@ struct Bench {
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
   Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  // volley: shots by hand in a row - press, draw to volleyDraw, hold volleyHold, let go, wait for the
+  // next arrow
+  int         volleyLeft  = 0;
+  int         volleyPhase = 0;
+  uint64_t    volleyHold  = 0;
+  float       volleyDraw  = 1;
+  uint64_t    volleyT     = 0;
+  // aimat: the manual aim aims there instead of the mouse, every frame
+  Npc*           aimNpc   = nullptr;
+  HitZones::Zone aimZone  = HitZones::Body;
+  bool           aimFixed = false;
+  bool           aimRaw   = false; // no holding over for the drop of the arrow
+  Vec3           aimAt    = {};
   // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
   float       placeDist  = 0;
   float       placeAngle = 0;
@@ -363,6 +378,7 @@ bool keyAction(std::string_view k, KeyCodec::Action& a) {
     {"turnl",  KeyCodec::RotateL}, {"turnr",KeyCodec::RotateR},   {"jump",KeyCodec::Jump},  {"walk", KeyCodec::Walk},
     {"sneak",  KeyCodec::Sneak},   {"weapon",KeyCodec::Weapon},   {"action",KeyCodec::ActionGeneric},
     {"melee",  KeyCodec::WeaponMele},{"bow",KeyCodec::WeaponBow}, {"spell",KeyCodec::WeaponMage3},
+    {"parade", KeyCodec::Parade},  {"breath",KeyCodec::Walk},
     };
   for(auto& i:keys)
     if(i.name==k) {
@@ -564,6 +580,27 @@ void updateCamera(World& w, Npc& pl) {
     }
   }
 
+// degrees between where the arrow points and the aim (sway, the turn lagging); -1 not aiming by hand
+float manualAimOff(Npc& pl) {
+  Vec3 pos, dir;
+  if(!pl.hasManualAim() || !pl.arrowRay(pos,dir))
+    return -1;
+  const Vec3 want = Vec3::normalize(pl.manualAimPoint()-pos);
+  return std::acos(std::clamp(Vec3::dotProduct(dir,want),-1.f,1.f))*180.f/float(M_PI);
+  }
+
+const char* archerStage(Archer::Stage s) {
+  switch(s) {
+    case Archer::Lowered:   return "lowered";
+    case Archer::Raising:   return "raising";
+    case Archer::Nocked:    return "nocked";
+    case Archer::Drawing:   return "drawing";
+    case Archer::Held:      return "held";
+    case Archer::Reloading: return "reloading";
+    }
+  return "?";
+  }
+
 void writeHeader() {
   std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,nlegs,bad,pelvis,chest,pelvis_target,pelvis_limit,floor");
   for(const char* s:{"l","r","fl","fr"}) {
@@ -575,6 +612,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
+  std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -615,6 +653,10 @@ void writeRow(Npc& pl) {
   std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
                am.animYaw,am.animPitch,am.turn,am.bend,am.error);
   std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
+  // the manual aim: the bow's stage, the sway, how far the arrow points off the aim
+  const auto& mp = Archer::playerProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
+               mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl));
   std::fprintf(bench.csv,"\n");
   }
 
@@ -1002,6 +1044,127 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->aiPush(AiQueue::aiGoToPoint(*wp));
     say("npcgo " + symName(w,n) + " " + a[2]);
     }
+  else if(c=="manual") {
+    // manual on|off: the hero aims a bow by hand (game/archery)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Archery::setEnabled(m=="on"); else
+      say("unknown manual command: " + line);
+    }
+  else if(c=="stats") {
+    // stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]: the hero's strength, dexterity, hit chances (the
+    // skill of the manual aim)
+    auto& h = pl.handle();
+    for(size_t i=1; i+1<a.size(); i+=2) {
+      const int v = int(num(a,i+1,0));
+      if(a[i]=="str")
+        h.attribute[ATR_STRENGTH] = v;
+      else if(a[i]=="dex")
+        h.attribute[ATR_DEXTERITY] = v;
+      else if(a[i]=="bow")
+        h.hitchance[TALENT_BOW] = v;
+      else if(a[i]=="cbow")
+        h.hitchance[TALENT_CROSSBOW] = v;
+      else
+        say("stats: unknown " + a[i]);
+      }
+    const auto  wp = pl.currentRangedWeapon();
+    const auto  st = Archery::stats(pl,wp);
+    char buf[360];
+    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg",
+                  pl.attribute(ATR_STRENGTH),pl.attribute(ATR_DEXTERITY),pl.hitChance(TALENT_BOW),pl.hitChance(TALENT_CROSSBOW),
+                  wp!=nullptr ? int(wp->handle().damage_total) : -1,
+                  double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
+                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)));
+    say(buf);
+    }
+  else if(c=="zones") {
+    // zones <npc|nearest|player>: where its hit zones are now (the capsules on its bones)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr) {
+      say("zones: no npc " + line);
+      return;
+      }
+    Vec3 h, b;
+    n->hitZoneCenter(HitZones::Head,h);
+    n->hitZoneCenter(HitZones::Body,b);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"zones %s at %.0f %.0f %.0f: head %.0f %.0f %.0f body %.0f %.0f %.0f",symName(w,n).c_str(),
+                  n->position().x,n->position().y,n->position().z,h.x,h.y,h.z,b.x,b.y,b.z);
+    say(buf + std::string("\n") + n->hitZonesDump());
+    }
+  else if(c=="clear") {
+    // clear [dist cm]: how far it is open around the hero at head height and at the knees, every 15
+    // degrees from the facing (a target for the bow needs open ground)
+    const float dist = num(a,1,4000);
+    const Vec3  p0   = pl.position();
+    std::string out  = "clear (yaw from the facing: head/knees m):";
+    for(int i=0; i<24; ++i) {
+      const float an = (pl.rotation()+float(i*15))*float(M_PI)/180.f;
+      const Vec3  d  = Vec3(std::cos(an),0,std::sin(an));
+      float       m[2];
+      for(int k=0; k<2; ++k) {
+        const Vec3 from = p0 + Vec3(0,k==0 ? 160.f : 40.f,0);
+        auto       r    = w.physic()->ray(from,from+d*dist);
+        m[k] = r.hasCol ? (r.v-from).length()/100.f : dist/100.f;
+        }
+      char buf[48];
+      std::snprintf(buf,sizeof(buf)," %d:%.0f/%.0f",i*15,double(m[0]),double(m[1]));
+      out += buf;
+      }
+    say(out);
+    }
+  else if(c=="volley") {
+    // volley <shots> [hold ms] [draw 0..1]: shots by hand in a row (manual on): the string drawn that far
+    // (1: full), held, let go; the scenario goes on after the last one is reloaded
+    bench.volleyLeft  = int(num(a,1,5));
+    bench.volleyHold  = uint64_t(num(a,2,300));
+    bench.volleyDraw  = num(a,3,1);
+    bench.volleyPhase = 0;
+    bench.volleyT     = bench.time;
+    say("volley " + std::to_string(bench.volleyLeft));
+    }
+  else if(c=="aimat") {
+    // aimat <npc|nearest> [head|body|limb] | aimat <x> <y> <z> | aimat off: the manual aim aims there
+    // instead of the mouse - the middle of a zone of the npc, every frame
+    bench.aimNpc   = nullptr;
+    bench.aimFixed = false;
+    if(a.size()>1 && a[1]=="off") {
+      ctrl.setAimOverride(false);
+      say("aimat off");
+      return;
+      }
+    if(a.size()>3 && (std::isdigit(uint8_t(a[1][0])) || a[1][0]=='-')) {
+      bench.aimFixed = true;
+      bench.aimAt    = Vec3(num(a,1,0),num(a,2,0),num(a,3,0));
+      ctrl.setAimOverride(true,bench.aimAt);
+      say("aimat " + a[1] + " " + a[2] + " " + a[3]);
+      return;
+      }
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("aimat: no npc " + line);
+      return;
+      }
+    const std::string z = a.size()>2 ? a[2] : "body";
+    bench.aimNpc  = n;
+    bench.aimZone = z=="head" ? HitZones::Head : (z=="limb" ? HitZones::Limb : HitZones::Body);
+    bench.aimRaw  = a.size()>3 && a[3]=="raw";
+    say("aimat " + symName(w,n) + " " + std::string(HitZones::name(bench.aimZone)) + (bench.aimRaw ? " raw" : ""));
+    }
+  else if(c=="immortal") {
+    // immortal <npc|nearest> on|off: arrows hit it, it does not die (counting hits)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr) {
+      say("immortal: no npc " + line);
+      return;
+      }
+    auto& h = n->handle();
+    if(a.size()>2 && a[2]=="off")
+      h.flags = zenkit::NpcFlag(uint32_t(h.flags) & ~uint32_t(zenkit::NpcFlag::IMMORTAL)); else
+      h.flags = zenkit::NpcFlag(uint32_t(h.flags) |  uint32_t(zenkit::NpcFlag::IMMORTAL));
+    say("immortal " + symName(w,n) + " " + (n->isImmortal() ? "on" : "off"));
+    }
   else if(c=="aim") {
     // aim on|off: the upper body turns and bends to the target with a bow, a crossbow, a spell
     const std::string m = a.size()>1 ? a[1] : "";
@@ -1354,9 +1517,64 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   }
 
+void tickVolley(PlayerControl& ctrl) {
+  const auto& mp = Archer::playerProbe;
+  const auto  t  = bench.time - bench.volleyT;
+  auto stop = [&](const char* why) {
+    say(std::string("volley: ") + why);
+    release(ctrl,KeyCodec::ActionGeneric);
+    bench.volleyLeft = 0;
+    };
+  switch(bench.volleyPhase) {
+    case 0:
+      press(ctrl,KeyCodec::ActionGeneric);
+      bench.volleyPhase = 1;
+      bench.volleyT     = bench.time;
+      break;
+    case 1: {
+      const bool drawn = mp.valid && (mp.stage==Archer::Held || (mp.stage==Archer::Drawing && mp.draw>=bench.volleyDraw));
+      if(drawn) {
+        bench.volleyPhase = 2;
+        bench.volleyT     = bench.time;
+        }
+      else if(t>10000)
+        stop("the string is not drawn");
+      break;
+      }
+    case 2:
+      if(t>=bench.volleyHold) {
+        if(bench.aimNpc!=nullptr) {
+          // where it aims, the middle of the zone: the log compares the arrow's flight with it
+          Vec3 c = bench.aimNpc->collosionCenter();
+          bench.aimNpc->hitZoneCenter(bench.aimZone,c);
+          char buf[160];
+          std::snprintf(buf,sizeof(buf),"aim zone %.1f %.1f %.1f",c.x,c.y,c.z);
+          say(buf);
+          }
+        release(ctrl,KeyCodec::ActionGeneric);
+        bench.volleyPhase = 3;
+        bench.volleyT     = bench.time;
+        }
+      break;
+    case 3:
+      if(mp.valid && mp.stage==Archer::Nocked && t>200) {
+        --bench.volleyLeft;
+        bench.volleyPhase = 0;
+        }
+      else if(t>8000)
+        stop("no next arrow");
+      break;
+    }
+  }
+
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+  if(bench.volleyLeft>0) {
+    tickVolley(ctrl);
+    if(bench.volleyLeft>0)
+      return;
+    }
   while(bench.pc<bench.prog.size()) {
-    if(bench.time<bench.waitUntil)
+    if(bench.time<bench.waitUntil || bench.volleyLeft>0)
       return;
     if(bench.waitArrive) {
       if(!pl.isAiQueueEmpty() && bench.time<bench.arriveEnd)
@@ -1368,7 +1586,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
     }
-  if(bench.time>=bench.waitUntil && !bench.waitArrive)
+  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0)
     finish();
   }
 
@@ -1495,6 +1713,37 @@ void drawOverlay(Pixmap& pm) {
       }
     }
 
+  // the manual aim: where the arrow points (a cross; the game draws it in its interface, not captured)
+  // and where it aims (a dot)
+  auto hero = Gothic::inst().player();
+  if(cam!=nullptr && hero!=nullptr && hero->hasManualAim()) {
+    const Matrix4x4 vp = cam->viewProj();
+    auto proj = [&](const Vec3& p, float& x, float& y) {
+      float px = p.x, py = p.y, pz = p.z, pw = 1;
+      vp.project(px,py,pz,pw);
+      if(pw<=1e-3f)
+        return false;
+      x = (0.5f*px/pw+0.5f)*float(cv.w);
+      y = (0.5f*py/pw+0.5f)*float(cv.h);
+      return true;
+      };
+    Vec3  pos, dir;
+    float x, y;
+    if(hero->arrowRay(pos,dir)) {
+      auto r = hero->world().physic()->rayArrow(pos,pos+dir*10000.f,[hero](Npc& n, const Vec3& a, const Vec3& b, float& t) {
+        return &n!=hero && n.rayHitZone(a,b,t)!=HitZones::None;
+        });
+      if(proj(r.hasCol ? r.v : pos+dir*10000.f,x,y)) {
+        cv.line(x-9,y,x-3,y,1,{255,255,255,255});
+        cv.line(x+3,y,x+9,y,1,{255,255,255,255});
+        cv.line(x,y-9,x,y-3,1,{255,255,255,255});
+        cv.line(x,y+3,x,y+9,1,{255,255,255,255});
+        }
+      }
+    if(proj(hero->manualAimPoint(),x,y))
+      cv.dot(x,y,2,{140,200,255,255});
+    }
+
   // zoomed copy of the feet in the bottom right corner
   if(bench.zoom && zx>=0 && zy>=0 && zx<float(cv.w) && zy<float(cv.h)) {
     const int sc = 2;
@@ -1550,6 +1799,13 @@ void drawOverlay(Pixmap& pm) {
     cv.text(x,y,buf,2,{255,140,60,255});
     y += 16;
     }
+  const auto& mp = Archer::playerProbe;
+  if(mp.valid && bench.subject==nullptr) {
+    std::snprintf(buf,sizeof(buf),"BOW %s D%.2f H%.1f F%.2f B%.1f%s%s A%.2f",archerStage(mp.stage),double(mp.draw),double(mp.hold),
+                  double(mp.fatigue),double(mp.breath),mp.holding ? " HOLD" : "",mp.short_ ? " SHORT" : "",double(mp.amp));
+    cv.text(x,y,buf,2,{140,200,255,255});
+    y += 16;
+    }
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   if(ln.valid) {
     std::snprintf(buf,sizeof(buf),"LEAN%s R%.1f P%.1f V%.0f T%.0f S%.0f",Lean::isEnabled() ? "" : " OFF",double(ln.roll),
@@ -1596,6 +1852,11 @@ void writeVideo(const Pixmap& pm) {
 
 bool TestBench::isActive() {
   return scenarioPath!=nullptr;
+  }
+
+void TestBench::note(const char* text) {
+  if(scenarioPath!=nullptr && bench.started && !bench.done)
+    say(text);
   }
 
 uint64_t TestBench::frameDt(uint64_t dt) {
@@ -1656,6 +1917,19 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     bench.pinned->setPosition(bench.pinAt);
     bench.pinned->setDirection(Vec3(d.x,0,d.z));
     bench.pinned->updateTransform();
+    }
+  if(bench.aimNpc!=nullptr) {
+    Vec3 at;
+    if(!bench.aimNpc->hitZoneCenter(bench.aimZone,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
+      at = bench.aimNpc->collosionCenter();
+    if(!bench.aimRaw) {
+      // as an archer does: over it by how much the arrow drops on the way (at full draw)
+      const auto  st = Archery::stats(*player,player->currentRangedWeapon());
+      const Vec3  d  = at - player->position();
+      const float t  = std::sqrt(d.x*d.x+d.z*d.z)/std::max(st.speed,0.1f);
+      at.y += 0.5f*DynamicWorld::gravity*t*t;
+      }
+    ctrl.setAimOverride(true,at);
     }
   if(bench.orbitUntil>bench.time) {
     bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;

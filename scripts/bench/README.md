@@ -36,7 +36,7 @@ Output goes to `.bench/<scenario>-<time>/` (not in git):
 
 | File | What |
 |---|---|
-| `report.md` | one line per recorded segment, then the worst events with their contact sheets |
+| `report.md` | one line per recorded segment, then the worst events with their contact sheets; a "Manual aim" table when the bow was aimed by hand: shots, hits by zone, the sway at full draw, the draw time |
 | `sheets/<segment>.png` | 16 frames of a segment in a 4x4 grid |
 | `sheets/evNN-*.png` | frames around an event |
 | `<segment>.mp4` | the video, 800x600, 30 fps |
@@ -129,7 +129,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `walkto <waypoint>` | walk there (AI path) |
 | `walkmode walk\|run\|sneak` | |
 | `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `face rel <deg>`, `turn <deg>` | turn the player at once; `rel`: the watched npc's facing turned by that much (the angles of `place`) |
-| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it) |
+| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action parade breath` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it; in the manual aim holding `action` draws, releasing shoots, `parade` lowers the bow, `breath` (= walk) holds the breath) |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
@@ -149,6 +149,12 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
 | `aim on\|off` | the upper body turning to the target with a bow, a crossbow, a spell; leaning over an edge (and the focus seeing from there) |
+| `manual on\|off` | the manual aim (`game/archery`, `GAME/manualAim` in Gothic.ini): the hero aims a bow by hand, no dice: the arrow hits where it flies (bones), the sway comes from the skill, strength, dexterity |
+| `stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]` | the hero's strength, dexterity, hit chances (the skill); prints what the manual aim makes of them (sway, draw, hold, arrow speed) |
+| `aimat <npc\|nearest> [head\|body\|limb] [raw]`, `aimat <x> <y> <z>`, `aimat off` | the manual aim aims at the middle of that zone of the npc (every frame) or at a point, instead of the mouse; the hero faces it. Over it by the drop of the arrow at full draw, as an archer holds over (`raw`: right at it) |
+| `clear [dist cm]` | how far it is open around the hero at head height and at the knees every 15 degrees from the facing: where to put a target |
+| `volley <shots> [hold ms] [draw 0..1]` | shots by hand in a row: press `action`, draw that far (1: full), hold, release, wait for the next arrow; every arrow is in the log (`arrow hit <npc>: <zone>, hp a -> b, draw, flew` or `arrow missed`) |
+| `immortal <npc\|nearest> [off]` | arrows hit it, it does not die: counting hits |
 | `give <item> [count]`, `equip <item>` | into the hero's inventory; `equip` puts it on whatever the strength (`ItRw_Bow_L_01`, `ItRw_Arrow`, `ItRw_Crossbow_L_01`, `ItRw_Bolt`, `ItRu_FireBolt`) |
 | `put <npc\|nearest> <dist> <angle>` | the npc stands there on the ground from the hero (angle from the hero's facing), frozen |
 | `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |

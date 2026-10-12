@@ -12,6 +12,7 @@
 #include "graphics/mesh/gaze.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/aim.h"
+#include "game/archery.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -158,6 +159,7 @@ Marvin::Marvin() {
     {"toggle gaze",                C_ToggleGaze},
     {"toggle lean",                C_ToggleLean},
     {"toggle aim",                 C_ToggleAim},
+    {"toggle manualaim",           C_ToggleManualAim},
     };
   }
 
@@ -504,6 +506,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleAim:
       Aim::setEnabled(!Aim::isEnabled());
+      return true;
+    case C_ToggleManualAim:
+      Archery::setEnabled(!Archery::isEnabled());
       return true;
     }
 

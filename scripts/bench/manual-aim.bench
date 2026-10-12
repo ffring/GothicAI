@@ -1,0 +1,126 @@
+# Manual aim (game/archery): the hero aims a bow by hand at a farmer pinned at 10, 20, 30 m, immortal
+# so the hits are counted - a novice and a master, the head and the body; a partial draw; held too long
+# (the arms give up); the breath held; last the game's camera over the shoulder. 'aimat' aims at the
+# middle of a zone (over it by the drop) instead of the mouse; the arrow hits (zone, hp) are in the log
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01    # open for 50 m to the left behind; the ground falls away in front:
+turn 225                          # the farmer hangs at the hero's height
+wait 500
+clear 5000
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 200
+insert BAU_904_BAUER
+wait 300
+tap bow
+wait 1500
+cam follow 300 80 165             # behind the hero: the target in front
+cam look 150
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1000 0 0
+wait 300
+
+# a novice: weak, clumsy
+stats str 15 dex 15 bow 10
+rec novice10_body
+aimat BAU_904_BAUER body
+volley 5 300
+stop
+rec novice10_head
+aimat BAU_904_BAUER head
+volley 5 300
+stop
+
+# a master
+stats str 120 dex 120 bow 100
+rec master10_head
+volley 5 300
+stop
+pin BAU_904_BAUER 2000 0 0
+wait 300
+rec master20_head
+volley 5 300
+stop
+rec master20_body
+aimat BAU_904_BAUER body
+volley 5 300
+stop
+pin BAU_904_BAUER 3000 0 0
+wait 300
+rec master30_body
+volley 5 300
+stop
+stats str 15 dex 15 bow 10
+rec novice20_body
+pin BAU_904_BAUER 2000 0 0
+wait 300
+volley 5 300
+stop
+stats str 120 dex 120 bow 100
+
+# half drawn: slower, less damage
+pin BAU_904_BAUER 1000 0 0
+wait 300
+rec half
+volley 3 0 0.5
+stop
+
+# held too long: trembles, then the arms give up (the string goes back, no shot)
+stats str 12 dex 60 bow 40
+rec tired
+press action
+wait 9000
+release action
+wait 1500
+stop
+
+# the breath held at full draw
+rec breath
+press action
+wait 1500
+press breath
+wait 2500
+release breath
+release action
+wait 1500
+stop
+
+# the game's camera over the shoulder: the center of the screen aims (no aimat), zooms in as it draws;
+# raised anew: the aim starts at the focus
+aimat off
+tap parade
+wait 800
+view full
+cam game
+pin BAU_904_BAUER 1500 0 0
+wait 300
+rec camera
+press action
+wait 300
+anims                             # the focus (target) is under the crosshair
+shot camera_raised
+wait 2200
+shot camera_drawn
+wait 500
+release action
+wait 1500
+stop
+
+# the damage: (bow + dexterity) x the zone, no dice - a body, a head shot at a mortal farmer
+aimat BAU_904_BAUER body
+immortal BAU_904_BAUER off
+stats str 15 dex 15 bow 100
+pin BAU_904_BAUER 1000 0 0
+wait 300
+hp BAU_904_BAUER
+rec damage
+volley 1 300
+wait 500
+hp BAU_904_BAUER
+aimat BAU_904_BAUER head
+volley 1 300
+wait 500
+hp BAU_904_BAUER
+stop

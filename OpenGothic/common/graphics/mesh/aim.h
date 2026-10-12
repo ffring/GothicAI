@@ -21,6 +21,8 @@ class Aim final {
       Tempest::Vec3 forward = {1,0,0}; // horizontal facing of the body
       float         lean    = 0;       // radians: bend forward from the hips over an edge (leanFor), 0 if
                                        // there is no room in front of the head
+      Tempest::Vec2 sway    = {};      // radians, the manual aim (Archer): yaw, pitch (+ up) off where the
+                                       // shot has to go, as it is (not smoothed: the arms tremble)
       uint64_t      dt      = 0;
       };
 
@@ -55,6 +57,8 @@ class Aim final {
 
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
+    // The bow holds still in the aim (an arrow on the string), the upper body turned to the target
+    bool           isSteady() const { return steady && ready && weight>=1.f; }
 
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);
@@ -77,6 +81,7 @@ class Aim final {
     bool                steady  = false;
     float               weight  = 0;
     float               leanAmt = 0;  // radians, smoothed
+    Tempest::Vec2       sway    = {};
     Tempest::Vec3       wantB   = {}; // where the shot has to go, body's frame, smoothed
     uint8_t             steadyFrames = 0;
     Tempest::Vec3       rest    = {}; // where the animation aims while the bow holds still, body's frame

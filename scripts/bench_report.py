@@ -252,6 +252,69 @@ def analyze(rows):
     return stats, events
 
 
+ARCHER_STAGE = {0: "lowered", 1: "raising", 2: "nocked", 3: "drawing", 4: "held", 5: "reloading"}
+
+
+def arrows(out):
+    """the arrows of the manual aim per segment, from bench.log: [(zone or 'miss', draw, flew cm)]"""
+    path = os.path.join(out, "bench.log")
+    per = defaultdict(list)
+    if not os.path.exists(path):
+        return per
+    seg = None
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("rec stop"):
+                seg = None
+            elif line.startswith("rec "):
+                seg = line.split()[1]
+            elif seg and line.startswith("arrow hit"):
+                body = line.split(": ", 1)[1]
+                zone = body.split(",")[0].strip()
+                draw = float(body.split("draw ")[1].split(",")[0])
+                flew = float(body.split("flew ")[1].split(" ")[0])
+                per[seg].append((zone, draw, flew))
+            elif seg and line.startswith("arrow missed"):
+                per[seg].append(("miss", math.nan, float(line.split("flew ")[1].split(" ")[0])))
+    return per
+
+
+def manual_aim(out, segs):
+    """the manual aim: hits by zone, the sway at full draw, how long the draw takes"""
+    shots = arrows(out)
+    lines = []
+    for seg, rows in segs.items():
+        if not rows or "m_stage" not in rows[0] or not any(r["m_stage"] >= 1 for r in rows):
+            continue
+        held = [r for r in rows if r["m_stage"] == 4]
+        sway = math.sqrt(sum(r["m_sway_yaw"] ** 2 + r["m_sway_pitch"] ** 2 for r in held) / len(held)) if held else math.nan
+        offs = sorted(r["m_off"] for r in held if r["m_off"] >= 0)
+        off = f"{offs[len(offs) // 2]:.2f} / {offs[int(len(offs) * 0.9)]:.2f}" if offs else "-"
+        draws, start = [], None
+        for r in rows:
+            if r["m_stage"] == 3 and start is None:
+                start = r["t"]
+            elif r["m_stage"] != 3 and start is not None:
+                if r["m_stage"] == 4:
+                    draws.append(r["t"] - start)
+                start = None
+        draw = f"{sum(draws) / len(draws) / 1000:.2f}" if draws else "-"
+        a = shots.get(seg, [])
+        count = defaultdict(int)
+        for z, _, _ in a:
+            count[z] += 1
+        hits = " ".join(f"{z} {count[z]}" for z in ("head", "body", "limb", "miss") if count[z])
+        flew = f"{sum(x[2] for x in a) / len(a) / 100:.1f}" if a else "-"
+        lines.append(f"| {seg} | {len(a)} | {hits or '-'} | {flew} | {sway:.2f} | {off} | {draw} | "
+                     f"{max(r['m_fatigue'] for r in rows):.2f} | {'yes' if any(r['m_holding'] > 0 for r in rows) else '-'} |")
+    if not lines:
+        return []
+    return ["## Manual aim", "",
+            "| segment | shots | hits | flew m | sway RMS deg (held) | off p50 / p90 deg (held) | draw s | fatigue max | breath held |",
+            "|---|---|---|---|---|---|---|---|---|"] + lines + [""]
+
+
 def sheet(video, frames, path, cols=4, width=400):
     """tile the given frame numbers of a video into one image"""
     if not frames:
@@ -320,6 +383,7 @@ def report(out):
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
+    lines += manual_aim(out, segs)
 
     all_events.sort(key=lambda e: -e["severity"])
     lines.append("## Worst events")

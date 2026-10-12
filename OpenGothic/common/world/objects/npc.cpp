@@ -16,6 +16,7 @@
 #include "utils/fileext.h"
 #include "utils/dbgpainter.h"
 #include "camera.h"
+#include "testbench.h"
 #include "gothic.h"
 #include "resources.h"
 
@@ -776,6 +777,8 @@ Tempest::Vec3 Npc::fightDistanceTo(const Npc& tg) const {
   }
 
 uint8_t Npc::calcAniComb() const {
+  if(manualAim)
+    return Pose::calcAniComb(manualPoint-position(),angle);
   if(currentTarget==nullptr)
     return 0;
   auto dpos = currentTarget->position() - position();
@@ -4155,6 +4158,74 @@ bool Npc::shootBow(Interactive* focOverride) {
       b.setHitChance(float(hnpc->hitchance[TALENT_BOW]     )/100.f);
     }
   return true;
+  }
+
+void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway) {
+  manualAim   = on;
+  manualPoint = point;
+  manualSway  = on ? sway : Tempest::Vec2();
+  }
+
+bool Npc::isAimSteady() const {
+  const auto bs = bodyStateMasked();
+  return (bs==BS_AIMNEAR || bs==BS_AIMFAR) && visual.isAimSteady();
+  }
+
+bool Npc::arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const {
+  return visual.arrowRay(pos,dir);
+  }
+
+bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
+  auto active = invent.activeWeapon();
+  if(active==nullptr || !hasAmmunition())
+    return false;
+  const auto bs = bodyStateMasked();
+  if(bs!=BS_AIMNEAR && bs!=BS_AIMFAR)
+    return false;
+
+  // along the arrow as it lies, swaying: read before the shot moves the arms
+  Tempest::Vec3 pos, dir;
+  if(!visual.arrowRay(pos,dir))
+    return false;
+  const int32_t munition = active->handle().munition;
+  auto          itm      = invent.getItem(size_t(munition));
+  if(itm==nullptr || !setAnim(Anim::Attack))
+    return false;
+
+  // the release throws it off, up to the cone
+  if(st.cone>0.f) {
+    auto&               script = owner.script();
+    const float         r      = st.cone*std::sqrt(float(script.rand(10000))/10000.f);
+    const float         a      = 2.f*float(M_PI)*float(script.rand(10000))/10000.f;
+    Tempest::Vec3       side   = Tempest::Vec3::crossProduct(dir,Tempest::Vec3(0,1,0));
+    if(side.length()<1e-3f)
+      side = Tempest::Vec3(1,0,0);
+    side = Tempest::Vec3::normalize(side);
+    const Tempest::Vec3 up     = Tempest::Vec3::crossProduct(side,dir);
+    dir = Tempest::Vec3::normalize(dir*std::cos(r) + (side*std::cos(a) + up*std::sin(a))*std::sin(r));
+    }
+
+  const float speed = Archery::speedAt(st,draw);
+  auto&       b     = owner.shootArrow(*itm,pos,dir,speed);
+  if(TestBench::isActive()) {
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"arrow shot: from %.1f %.1f %.1f dir %.5f %.5f %.5f speed %.3f draw %.2f",
+                  pos.x,pos.y,pos.z,dir.x,dir.y,dir.z,double(speed),double(draw));
+    TestBench::note(buf);
+    }
+  invent.delItem(size_t(munition),1,*this);
+  b.setOrigin(this);
+  b.setDamage(DamageCalculator::rangeDamageValue(*this));
+  b.setPrecise(draw);
+  return true;
+  }
+
+HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const {
+  return visual.rayHitZone(from,to,t);
+  }
+
+bool Npc::hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const {
+  return visual.hitZoneCenter(z,at);
   }
 
 bool Npc::hasAmmunition() const {

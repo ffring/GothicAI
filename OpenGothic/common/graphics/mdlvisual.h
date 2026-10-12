@@ -3,6 +3,7 @@
 #include <Tempest/Matrix4x4>
 
 #include "graphics/mesh/animationsolver.h"
+#include "graphics/mesh/hitzones.h"
 #include "game/constants.h"
 #include "meshobjects.h"
 #include "effect.h"
@@ -86,6 +87,14 @@ class MdlVisual final {
     auto                           mapBone(const size_t boneId) const -> Tempest::Vec3;
     auto                           mapWeaponBone() const -> Tempest::Vec3;
     auto                           mapHeadBone() const -> Tempest::Vec3;
+    // the arrow on the string as posed: its nock, where it points
+    bool                           arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // where an arrow passing from-to hits the body (its bones), t: how far from 'from'
+    auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
+    std::string                    hitZonesDump() const;
+    // the bow holds still in the aim: an arrow on the string
+    bool                           isAimSteady() const;
 
     bool                           isStanding() const;
 
@@ -175,6 +184,7 @@ class MdlVisual final {
     PfxSlot                        hnpcVisual;
 
     const Skeleton*                skeleton=nullptr;
+    HitZones                       hitZones;
 
     WeaponState                    fgtMode=WeaponState::NoWeapon;
     AnimationSolver                solver;

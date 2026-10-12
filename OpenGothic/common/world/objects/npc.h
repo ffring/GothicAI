@@ -14,6 +14,7 @@
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
 #include "world/objects/attention.h"
+#include "world/objects/archer.h"
 #include "world/fplock.h"
 #include "world/waypath.h"
 
@@ -285,6 +286,22 @@ class Npc final {
     bool      aimBow();
     bool      shootBow(Interactive* focOverride = nullptr);
     bool      hasAmmunition() const;
+
+    // the bow aimed by hand (game/archery): the hero's input drives it (PlayerControl)
+    Archer&   archer() { return arch; }
+    void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {});
+    bool      hasManualAim() const { return manualAim; }
+    auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
+    auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
+    bool      isAimSteady() const;
+    // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
+    bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // lets the arrow go along the arrow: drawn that far, thrown off by the release
+    bool      releaseArrow(float draw, const Archery::Stats& st);
+    // where an arrow passing from-to hits this one, t: how far from 'from'
+    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
+    std::string hitZonesDump() const { return visual.hitZonesDump(); }
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
@@ -651,6 +668,10 @@ class Npc final {
     Npc*                           talkWith        =nullptr;
     uint64_t                       talkUntil       =0;
     Attention                      attention;
+    Archer                         arch;
+    bool                           manualAim   = false;
+    Tempest::Vec3                  manualPoint = {};
+    Tempest::Vec2                  manualSway  = {};
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

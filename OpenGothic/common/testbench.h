@@ -18,4 +18,6 @@ namespace TestBench {
   bool     tick(uint64_t dt, PlayerControl& player);
   // The captured frame: draws the overlay and writes it to the video
   void     capture(Tempest::Pixmap& frame);
+  // An event the game reports (an arrow hit): into the bench log, if a scenario runs
+  void     note(const char* text);
   }

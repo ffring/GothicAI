@@ -194,6 +194,11 @@ bool Aim::update(const Input& in) {
 
   if(!on)
     approach(leanAmt,0.f,1.f - std::exp(-LeanRate*dt),MaxLeanRate*dt,changed);
+  // the sway as it is: the arms tremble faster than any smoothing would let through
+  const Tempest::Vec2 sw = on ? in.sway : Tempest::Vec2();
+  if(sw.x!=sway.x || sw.y!=sway.y)
+    changed = true;
+  sway = sw;
   if(ready)
     approach(rot,goal,1.f - std::exp(-BodyRate*dt),MaxBody*dt,changed);
 
@@ -241,6 +246,14 @@ void Aim::apply(Matrix4x4* tr, size_t numBones) {
 
   const Vec3 now  = arrow ? arrowOf(tr) : (an>0.f ? mul(axisAngle(normalize(r),an),forward) : forward);
   error = std::acos(std::clamp(dot(now,want),-1.f,1.f))/Deg;
+
+  // the manual aim sways off that: the chest turns about up and bends (+ up)
+  if(sway.x!=0.f || sway.y!=0.f) {
+    Vec3 side = cross(want,Up);
+    side = length(side)>1e-3f ? normalize(side) : normalize(cross(forward,Up));
+    const Mat3 rs = mul(axisAngle(Up,sway.x*weight),axisAngle(side,sway.y*weight));
+    rotateAbout(tr,chestTree,rs,position(tr[chest]));
+    }
   }
 
 void Aim::probe(Probe& p) const {

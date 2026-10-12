@@ -71,6 +71,7 @@ class Marvin {
       C_ToggleGaze,
       C_ToggleLean,
       C_ToggleAim,
+      C_ToggleManualAim,
       };
 
     struct Cmd {

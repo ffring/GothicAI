@@ -97,6 +97,7 @@ class Pose final {
     bool               updateGaze(const Gaze::Input& in);
     Lean&              leanIk() { return lean; }
     Aim&               aimIk() { return aim; }
+    const Aim&         aimIk() const { return aim; }
     bool               updateAim(const Aim::Input& in);
     bool               updateLean(const Lean::Input& in);
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
