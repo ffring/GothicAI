@@ -181,6 +181,7 @@ class Resources final {
     int64_t               vdfTimestamp(const std::u16string& name);
     void                  detectVdf(std::vector<Archive>& ret, const std::u16string& root);
 
+    void                  indexHdTextures();
     Tempest::Texture2d*   implLoadTexture(std::string_view cname, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips);
@@ -247,6 +248,9 @@ class Resources final {
     uint8_t     recycledId = 0;
 
     TextureCache                                                      texCache;
+    // OPENGOTHIC_TEXTURES: sharper textures of our own (scripts/hd-textures.sh) in place of the game's,
+    // upper-case name without .TGA -> the DDS (or PNG) file
+    std::unordered_map<std::string,std::string>                       hdTextures;
     std::map<Tempest::Color,std::unique_ptr<Tempest::Texture2d>,Less> pixCache;
     std::unordered_map<std::string,std::unique_ptr<ProtoMesh>>        aniMeshCache;
     std::unordered_map<DecalK,std::unique_ptr<ProtoMesh>,Hash>        decalMeshCache;

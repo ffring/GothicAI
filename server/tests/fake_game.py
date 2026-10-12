@@ -50,6 +50,9 @@ class FakeGame:
         self.item_names: dict[str, str] = {}
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
+        # story_effect with `check`: the npc's things (the hero's are hero_items), moved by the gives
+        self.npc_items: dict[str, dict[str, int]] = {}
+        self.deals: list[dict[str, Any]] = []  # deal_show / deal_hide messages
         self.views: dict[str, dict[str, Any]] = {}  # what npc_view answers: npc -> its view (NpcView)
         self.fields: dict[tuple[str, str], int] = {}  # ("SELF" | "OTHER", "GUILD") -> value; others read 0
         self.instances: dict[str, str] = {}
@@ -171,7 +174,12 @@ class FakeGame:
                 self.story.append(msg)
             case "story_effect":
                 self.story.append(msg)
-                await self.send(type="result", req=msg["req"], ok=True)
+                error = self.give(msg) if msg.get("check") else None
+                await self.send(
+                    type="result", req=msg["req"], ok=error is None, **({"error": error} if error else {})
+                )
+            case "deal_show" | "deal_hide":
+                self.deals.append(msg)
             case "story_nearby":
                 await self.send(type="result", req=msg["req"], ok=True, value=self.people_near)
             case "story_state":
@@ -213,6 +221,24 @@ class FakeGame:
                     bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
                     errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
                     await self.send(type="result", req=msg["req"], ok=not bad, **errors)
+
+    def give(self, msg: dict[str, Any]) -> str | None:
+        """story_effect with `check`: all the gives or none, as the bridge does; what is missing, or None."""
+        npc = self.npc_items.setdefault(msg["npc"], {})
+        need: dict[tuple[str, str], int] = {}
+        for e in msg["effects"]:
+            if e.get("do") == "give":
+                who = "npc" if e.get("to") != "self" else "hero"
+                need[(who, e["item"])] = need.get((who, e["item"]), 0) + int(e.get("count", 1))
+        for (who, item), count in need.items():
+            has = (self.hero_items if who == "hero" else npc).get(item, 0)
+            if has < count:
+                return f"missing: {who} {item} {count} (has {has})"
+        for (who, item), count in need.items():
+            giver, taker = (self.hero_items, npc) if who == "hero" else (npc, self.hero_items)
+            giver[item] -= count
+            taker[item] = taker.get(item, 0) + count
+        return None
 
     def evaluate(self, e: Any) -> Any:
         """A story graph expression, as far as the fake world knows: ints, vars, comparisons, logic, the

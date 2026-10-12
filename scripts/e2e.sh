@@ -43,6 +43,10 @@
 #   amends: the director's storylet: Lobart catches the hero lying, the rumor reaches Andre, who asks for a
 #       fine and closes joining the militia until then (model scripted with LLM=fake); the hero hears him
 #       out and pays, and the militia is open again (stage 5)
+#   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
+#       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
+#       haggling: the deal window shows the new version, Y waits right after the change, then the deal is
+#       done and Lobart answers (docs/npc-tools.md, wave 1)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)

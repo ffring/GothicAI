@@ -475,6 +475,7 @@ struct Bench {
   std::FILE*  csv       = nullptr;
   std::string shot;
   bool        overlay   = true;
+  bool        ui        = false;  // the interface is in the captured frame
   bool        zoom      = true;
   bool        bright    = true;  // auto exposure: forests and interiors are too dark to see the legs
   float       clip      = 0;     // > 0: everything closer to the camera than the subject minus this is clipped away
@@ -1370,6 +1371,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.zonesOnly = on; // the hit zones only, no legs, no text
     else
       bench.overlay = (m!="off");
+    }
+  else if(c=="ui") {
+    bench.ui = !(a.size()>1 && a[1]=="off");
     }
   else if(c=="rec") {
     stopRecording();
@@ -2994,6 +2998,10 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       ++bench.recFrame;
     }
   return capture;
+  }
+
+bool TestBench::withUi() {
+  return isActive() && bench.ui;
   }
 
 void TestBench::capture(Pixmap& frame, float uiScale) {

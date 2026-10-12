@@ -88,6 +88,12 @@ def test_the_game_runs_in_its_home_and_finds_the_server(config):
     assert game(config, LAYOUT, PORTS).argv[-1] == "-devmode"
 
 
+def test_the_game_gets_the_sharper_textures_when_they_are_made(config, tmp_path):
+    assert "OPENGOTHIC_TEXTURES" not in game(config, LAYOUT, PORTS).env
+    with_hd = Layout(LAYOUT.repo, LAYOUT.uv, LAYOUT.game_bin, LAYOUT.game_dir, LAYOUT.game_home, tmp_path)
+    assert game(config, with_hd, PORTS).env["OPENGOTHIC_TEXTURES"] == str(tmp_path)
+
+
 def test_latest_save(tmp_path):
     assert latest_save(tmp_path) is None
     for i, slot in enumerate(["1", "0", "12"]):

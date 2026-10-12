@@ -25,6 +25,8 @@ namespace TestBench {
   void     note(const char* text);
   // Filming a short (OPENGOTHIC_BENCH_REALTIME): in step with the wall clock, the window is not drawn
   bool     filming();
+  // `ui on`: the captured frame has the interface on top, as the player sees it (subtitles, the deal window)
+  bool     withUi();
 
   // What the AI bridge does, for scenarios that talk (`ptt`, `waitreply`; shorts/): texts in UTF-8.
   // An npc line starts (`ms`: its length as known now), an npc voice has played out, the hero's phrase was

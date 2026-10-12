@@ -20,6 +20,10 @@
 #include <zenkit/addon/texcvt.hh>
 #include <zenkit/Texture.hh>
 
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/mesh/skeleton.h"
@@ -81,6 +85,7 @@ Resources::Resources(Tempest::Device &device)
 
   fBuff .reserve(8*1024*1024);
   ddsBuf.reserve(8*1024*1024);
+  indexHdTextures();
 
   {
   Pixmap pm(1,1,TextureFormat::RGBA8);
@@ -453,9 +458,50 @@ Tempest::Texture2d* Resources::implLoadTexture(std::string_view cname, bool forc
   return nullptr;
   }
 
+void Resources::indexHdTextures() {
+  const char* dir = std::getenv("OPENGOTHIC_TEXTURES");
+  if(dir==nullptr || dir[0]=='\0')
+    return;
+  std::error_code ec;
+  for(auto& e:std::filesystem::directory_iterator(dir,ec)) {
+    auto ext = e.path().extension().string();
+    for(auto& c:ext)
+      c = char(std::toupper(uint8_t(c)));
+    if(ext!=".DDS" && ext!=".PNG")
+      continue;
+    auto key = e.path().stem().string();
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    // DXT with mipmaps (DDS) over RGBA (PNG): a fraction of the memory
+    auto& path = hdTextures[key];
+    if(path.empty() || ext==".DDS")
+      path = e.path().string();
+    }
+  if(ec)
+    Log::e("textures: unable to read \"",dir,"\"");
+  Log::i("textures: ",hdTextures.size()," of our own from \"",dir,"\"");
+  }
+
 Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMips) {
   if(name.empty())
     return Texture2d();
+
+  // a sharper texture of our own (scripts/hd-textures.sh) instead of the game's: mipmaps from the file
+  // (DDS) or made here (PNG)
+  if(!hdTextures.empty() && FileExt::hasExt(name,"TGA")) {
+    std::string key(name.substr(0,name.size()-4));
+    for(auto& c:key)
+      c = char(std::toupper(uint8_t(c)));
+    if(auto it = hdTextures.find(key); it!=hdTextures.end()) {
+      try {
+        Tempest::Pixmap pm(it->second);
+        return dev.texture(pm,true);
+        }
+      catch(...) {
+        Log::e("textures: unable to load \"",it->second,"\"");
+        }
+      }
+    }
 
   if(FileExt::hasExt(name,"TGA")) {
     auto nameAlt = std::string(name);

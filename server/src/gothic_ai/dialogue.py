@@ -639,14 +639,15 @@ class DialogueManager:
     ) -> asyncio.Task[None] | None:
         """A turn about something that happened (an incident): the npc may speak and change its intent.
         While a turn is running the event waits for the next one's situation instead of interrupting.
-        `tools` limits what the model is offered (an npc nobody controls cannot hand over items)."""
+        `tools` limits what the model is offered (an npc nobody controls cannot hand over items); the names
+        may be of the extensions' tools too (deals.py: an offer declined, the npc may offer again)."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return None
         if conv.reply is not None and not conv.reply.done():
             conv.pending.append(cue)
             return None
-        offered = self.tools if tools is None else [t for t in self.tools if t.name in tools]
+        offered = self.tools if tools is None else [t for t in self._offered(npc) if t.name in tools]
         conv.reply = asyncio.create_task(
             self._turn(conv, Message("developer", cue), "incident", relevant, overlay=overlay, tools=offered)
         )
