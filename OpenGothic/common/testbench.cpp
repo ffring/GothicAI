@@ -857,7 +857,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
   std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
-  std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops");
+  std::fprintf(bench.csv,",ge_on,ge_talk,ge_id,ge_mood,ge_starts,ge_cuts,ge_stops,ge_nods,ge_pitch,ge_yaw,ge_roll");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,"\n");
@@ -938,8 +938,9 @@ void writeRow(Npc& pl) {
                lp.shape.frame0,lp.shape.frame1,lp.shape.alpha,lp.shape.intensity,lp.picks);
   // its hands while it speaks
   const auto& ge = TalkGestures::subjectProbe;
-  std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),unsigned(ge.mood),
-               ge.starts,ge.cuts,ge.stops);
+  std::fprintf(bench.csv,",%d,%d,%u,%u,%u,%u,%u,%u,%.2f,%.2f,%.2f",int(ge.engaged),int(ge.speaking),unsigned(ge.gesture),
+               unsigned(ge.mood),ge.starts,ge.cuts,ge.stops,ge.nods,double(ge.head.pitch*180.f/float(M_PI)),
+               double(ge.head.yaw*180.f/float(M_PI)),double(ge.head.roll*180.f/float(M_PI)));
   // faces of the watched one, as shown (fading in and out)
   Npc& s = subjectOf(pl);
   for(auto& f:FaceColumns)
@@ -2136,8 +2137,9 @@ void drawOverlay(Pixmap& pm) {
   const auto& ge = TalkGestures::subjectProbe;
   if(ge.valid && TalkGestures::probeNpc!=nullptr) {
     const auto mood = TalkGestures::moodName(ge.mood);
-    std::snprintf(buf,sizeof(buf),"GEST%s %s G%02u %.*s S%u C%u X%u",ge.enabled ? "" : " OFF",ge.speaking ? "TALK" : "-",
-                  unsigned(ge.gesture),int(mood.size()),mood.data(),ge.starts,ge.cuts,ge.stops);
+    std::snprintf(buf,sizeof(buf),"GEST%s %s G%02u %.*s S%u C%u X%u N%u P%.1f",ge.enabled ? "" : " OFF",ge.speaking ? "TALK" : "-",
+                  unsigned(ge.gesture),int(mood.size()),mood.data(),ge.starts,ge.cuts,ge.stops,ge.nods,
+                  double(ge.head.pitch*180.f/float(M_PI)));
     cv.text(x,y,buf,2,{255,200,120,255});
     y += 16;
     }

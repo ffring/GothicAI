@@ -309,7 +309,7 @@ def analyze(rows):
         if talk:
             stats["ges_talk"] = sum(1 for r in talk if r["ge_id"] > 0) / len(talk)
             stats["ges_listen"] = None if not quiet else sum(1 for r in quiet if r["ge_id"] > 0) / len(quiet)
-            for k in ("starts", "cuts", "stops"):
+            for k in ("starts", "cuts", "stops") + (("nods",) if "ge_nods" in rows[0] else ()):
                 stats["ges_" + k] = int(rows[-1]["ge_" + k] - rows[0]["ge_" + k])
             stats["ges_kinds"] = len({int(r["ge_id"]) for r in rows if r["ge_id"] > 0})
     stats["ik_on"] = on / max(1, len(rows))
@@ -392,7 +392,8 @@ def report(out):
         lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
         gl = "-" if st.get("ges_listen") is None else f"{st['ges_listen'] * 100:.0f}"
         gs = "-" if "ges_talk" not in st else \
-            f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})"
+            f"{st['ges_talk'] * 100:.0f} / {gl} ({st['ges_starts']}, {st['ges_cuts']}, {st['ges_stops']})" + \
+            ("" if "ges_nods" not in st else f" nods {st['ges_nods']}")
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
                      f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {gs} | {ev or '-'} |")
     lines.append("")

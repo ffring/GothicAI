@@ -29,6 +29,7 @@ class Gaze final {
       bool          headOnly = false;  // the hero (the body is the player's), one walking
       Source        source  = Source::None;
       uint64_t      dt      = 0;
+      Tempest::Vec3 talk    = {};      // the head moving with the voice: pitch (+ up), yaw, roll, radians
       };
 
     // State for the test bench, degrees
@@ -99,4 +100,5 @@ class Gaze final {
     float               parts[3] = {};  // debug: head, chest, waist turn, radians
     float               error    = -1;
     Tempest::Vec3       facing   = {};
+    Tempest::Vec3       talk     = {};
   };

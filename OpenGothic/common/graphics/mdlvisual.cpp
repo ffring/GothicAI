@@ -552,6 +552,7 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
   Gaze::Input in;
   in.dt      = dt;
   in.forward = {std::cos(a), 0, std::sin(a)};
+  in.talk    = {gestures.head().pitch, gestures.head().yaw, gestures.head().roll};
   if(!npc.isDown())
     in.source = npc.gazeTarget(in.target);
   if(in.source!=Gaze::Source::None) {
@@ -1145,28 +1146,34 @@ bool MdlVisual::startAnimDialog(Npc &npc) {
   return false;
   }
 
-void MdlVisual::updateGestures(Npc& npc) {
-  const bool probing = &npc==TalkGestures::probeNpc;
-  if(skInst==nullptr || (gestureSeq==nullptr && gestures.isIdle() && !probing))
-    return;
+void MdlVisual::updateGestures(Npc& npc, uint64_t dt) {
+  const bool     probing = &npc==TalkGestures::probeNpc;
   const uint64_t now     = npc.world().tickCount();
-  const bool     playing = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
+  const bool     voiced  = mouth.isSpeaking(now);
+  const uint64_t left    = std::max(npc.speechLeft(),mouth.voiceLeft(now));
+  if(skInst==nullptr || (gestureSeq==nullptr && gestures.isIdle() && !probing && !voiced && left==0))
+    return;
+  const bool playing = gestureSeq!=nullptr && skInst->isInAnim(gestureSeq);
   if(!playing)
     gestureSeq = nullptr;
+  const uint32_t syl = mouth.syllableCount();
+  const bool     beat = syl!=gestureSyl;
+  gestureSyl = syl;
+
+  // the head: Gaze turns it (updateGaze)
+  gestures.updateHead(dt,voiced || left>0,beat,mouth.syllablePeak());
 
   TalkGestures::Input in;
   in.now      = now;
   // not over an animation of the ai queue (a nod, a shrug the AI server or a script plays)
   in.allowed  = (npc.bodyState()&BS_FLAG_FREEHANDS)!=0 && fgtMode==WeaponState::NoWeapon &&
                 npc.bodyStateMasked()==BS_STAND && !npc.isPlayingQueuedAnim();
-  in.voiced   = mouth.isSpeaking(now);
-  in.left     = npc.speechLeft();
-  in.speaking = in.voiced || in.left>0;
+  in.voiced   = voiced;
+  in.left     = left;
+  in.speaking = voiced || left>0;
   in.more     = npc.hasOutputQueued();
   in.playing  = playing;
-  const uint32_t syl = mouth.syllableCount();
-  in.syllable = syl!=gestureSyl;
-  gestureSyl  = syl;
+  in.syllable = beat;
 
   const auto d = gestures.update(in);
   if(d.act==TalkGestures::Act::Start) {

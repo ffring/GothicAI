@@ -1,6 +1,7 @@
 #include "talkgestures.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -8,10 +9,19 @@ namespace {
 
 float Tail      = 500.f;   // ms: the voice is over this long (and no line waits): the hands rest
 float Wait      = 400.f;   // ms: a gesture due waits this long at most for a syllable to start on
-float MinLeft   = 1200.f;  // ms: with less of the line left (and none after it) no gesture starts
+float MinLeft   = 1200.f;  // ms: with less of the line left no gesture starts
 float Slack     = 600.f;   // ms: a gesture longer than the line left by more than this is unlikely...
 float Long      = 0.15f;   // ...this many times as likely as one that fits
 float RestScale = 1.f;     // of the rests between gestures
+// the head
+float Nod       = 5.f;     // degrees down on a stressed syllable (the loudest ones; less on the others)
+float NodHz     = 2.5f;    // the nod is down in 1/(2 pi NodHz) s, back in about four times that
+float Stress    = 1.1f;    // a syllable this many times as loud as the ones before it is stressed
+float NodGap    = 350.f;   // ms, nods at most this often
+float SwayYaw   = 2.5f;    // degrees aside, at most, while the voice lasts
+float SwayRoll  = 2.f;
+float SwayTime  = 1300.f;  // ms, a new sway this often (+-40%)...
+float SwayLag   = 450.f;   // ...reached with this time constant
 
 struct Param final {
   std::string_view name;
@@ -20,8 +30,11 @@ struct Param final {
 
 const Param params[] = {
   {"Tail", &Tail}, {"Wait", &Wait}, {"MinLeft", &MinLeft}, {"Slack", &Slack}, {"Long", &Long},
-  {"RestScale", &RestScale},
+  {"RestScale", &RestScale}, {"Nod", &Nod}, {"NodHz", &NodHz}, {"Stress", &Stress}, {"NodGap", &NodGap},
+  {"SwayYaw", &SwayYaw}, {"SwayRoll", &SwayRoll}, {"SwayTime", &SwayTime}, {"SwayLag", &SwayLag},
   };
+
+constexpr float Deg = 3.14159265f/180.f;
 
 bool enabled = []() {
   const char* v = std::getenv("OPENGOTHIC_GESTURES");
@@ -167,7 +180,8 @@ TalkGestures::Decision TalkGestures::update(const Input& in) {
   // a moment for a syllable to start on: the stroke of the hand goes with the voice
   if(in.voiced && !in.syllable && in.now<nextAt+uint64_t(std::max(0.f,Wait)))
     return d;
-  if(!in.more && in.left>0 && float(in.left)<MinLeft)
+  // too little of the line left: the next line, if one comes, starts a gesture of its own
+  if(in.left>0 && float(in.left)<MinLeft)
     return d;
 
   const uint8_t g = pick(in.left,in.more);
@@ -180,6 +194,61 @@ TalkGestures::Decision TalkGestures::update(const Input& in) {
   recent[0] = g;
   ++starts;
   return d;
+  }
+
+void TalkGestures::updateHead(uint64_t dt, bool speak, bool syllable, float loud) {
+  const bool  on = enabled && speak;
+  const float t  = float(dt)/1000.f;
+  talkW = on ? std::min(1.f, talkW + t/0.3f) : std::max(0.f, talkW - t/0.5f);
+
+  // a stressed syllable: clearly louder than the ones before it in this line
+  sinceNod += dt;
+  if(on && syllable && loud>0.f) {
+    if(sylMean>0.f && loud>sylMean*Stress && float(sinceNod)>=NodGap) {
+      const float s = std::clamp((loud/sylMean - 1.f)/0.5f, 0.3f, 1.f);
+      const float w = 2.f*3.14159265f*NodHz;
+      nodSpeed -= Nod*Deg*s*w*2.7182818f;  // a spring kicked so: its largest turn is speed/(w e)
+      sinceNod  = 0;
+      ++nods;
+      }
+    sylMean = sylMean>0.f ? sylMean + (loud-sylMean)*0.3f : loud;
+    }
+  if(!on)
+    sylMean = 0;
+
+  // the nod: x(t) = (x0 + (v0 + w x0) t) e^(-w t)
+  if(t>0.f) {
+    const float w  = 2.f*3.14159265f*NodHz;
+    const float c  = nodSpeed + w*nod;
+    const float e  = std::exp(-w*t);
+    const float x  = (nod + c*t)*e;
+    nodSpeed = (c - w*(nod + c*t))*e;
+    nod      = x;
+    if(std::abs(nod)<1e-4f && std::abs(nodSpeed)<1e-3f)
+      nod = nodSpeed = 0;
+    }
+
+  // the sway: now and then somewhere else aside, slowly
+  if(on && swayLeft<=dt) {
+    const float a = float(random()%2001)/1000.f - 1.f;
+    const float b = float(random()%2001)/1000.f - 1.f;
+    swayGoal[0] = a*SwayYaw*Deg;
+    swayGoal[1] = b*SwayRoll*Deg;
+    swayLeft    = uint64_t(SwayTime*(0.6f + 0.8f*float(random()%1001)/1000.f));
+    } else {
+    swayLeft = swayLeft>dt ? swayLeft-dt : 0;
+    }
+  const float k = SwayLag>0 ? 1.f - std::exp(-float(dt)/SwayLag) : 1.f;
+  for(int i=0; i<2; ++i) {
+    sway[i] += ((on ? swayGoal[i] : 0.f) - sway[i])*k;
+    if(!on && std::abs(sway[i])<1e-4f)
+      sway[i] = 0;
+    }
+
+  headNow.pitch = nod;
+  headNow.yaw   = sway[0]*talkW;
+  headNow.roll  = sway[1]*talkW;
+  headMoves     = talkW>0.f || nod!=0.f || nodSpeed!=0.f || sway[0]!=0.f || sway[1]!=0.f;
   }
 
 void TalkGestures::started(uint8_t gesture, bool overPlaying) {
@@ -245,4 +314,6 @@ void TalkGestures::probe(Probe& p) const {
   p.starts   = starts;
   p.cuts     = cuts;
   p.stops    = stops;
+  p.nods     = nods;
+  p.head     = headNow;
   }

@@ -110,9 +110,9 @@ class MdlVisual final {
     void                           startSpeech    (Npc& npc, std::shared_ptr<LipSync::Track> voice);
     void                           stopSpeech     () { mouth.stop(); }
     void                           updateMouth    (Npc& npc, uint64_t dt);
-    // the hands while it speaks (TalkGestures)
+    // the hands and the head while it speaks (TalkGestures)
     void                           setTalkMood    (std::string_view mood) { gestures.setMood(TalkGestures::moodOf(mood)); }
-    void                           updateGestures (Npc& npc);
+    void                           updateGestures (Npc& npc, uint64_t dt);
     void                           stopAnim       (Npc& npc, std::string_view anim);
     bool                           stopItemStateAnim(Npc &npc);
     void                           stopWalkAnim   (Npc &npc);

@@ -12,6 +12,9 @@
 // Here one gesture follows another while the voice lasts, with a rest between them, the next one
 // starting on a syllable; the mood of the line decides how lively they are and how long the rests;
 // when the voice is over, the hands rest. Only decides: the caller plays and stops the animations.
+//
+// The head goes with the voice too (Gaze turns it): a small nod down on a syllable clearly louder
+// than the ones before it (a stressed word), a slow sway aside while the voice lasts.
 class TalkGestures final {
   public:
     enum class Mood : uint8_t { Neutral, Friendly, Angry, Hostile, Afraid, Pain };
@@ -33,6 +36,13 @@ class TalkGestures final {
       uint8_t gesture = 0;  // to start: 1 is T_DIALOGGESTURE_01
       };
 
+    // how the voice turns the head now, radians
+    struct Head final {
+      float pitch = 0;  // + up
+      float yaw   = 0;  // + to the left
+      float roll  = 0;
+      };
+
     // State for the test bench
     struct Probe final {
       bool     valid    = false;
@@ -44,6 +54,8 @@ class TalkGestures final {
       uint32_t starts   = 0;      // gestures started
       uint32_t cuts     = 0;      // started over one that still played
       uint32_t stops    = 0;      // stopped before their end (the voice is over)
+      uint32_t nods     = 0;      // nods on stressed syllables
+      Head     head;
       };
 
     static bool    isEnabled();
@@ -57,10 +69,14 @@ class TalkGestures final {
     // Gothic II ones is known, others count as lively
     void           setGestures(std::vector<uint32_t> durationMs, bool gothic2);
     void           setMood(Mood m) { mood = m; }
-    bool           isIdle() const { return !engaged && current==0; }
+    bool           isIdle() const { return !engaged && current==0 && !headMoves; }
     void           lineStart(uint64_t now);  // a line starts: the gestures go with it
     void           stop();                   // cut off: the other one speaks, a weapon is drawn...
     Decision       update(const Input& in);
+
+    // per frame: whether it speaks, whether a syllable starts now and how loud it gets (0..1)
+    void           updateHead(uint64_t dt, bool speaking, bool syllable, float loud);
+    const Head&    head() const { return headNow; }
 
     // the original way (switched off): a random gesture started with a line
     void           started(uint8_t gesture, bool overPlaying);
@@ -89,4 +105,16 @@ class TalkGestures final {
     uint32_t              cuts       = 0;
     uint32_t              stops      = 0;
     uint32_t              rnd        = 1;
+
+    Head                  headNow;
+    bool                  headMoves  = false;
+    float                 talkW      = 0;  // the sway fades in and out with the voice
+    float                 nod        = 0;  // radians, and its speed: a critically damped spring
+    float                 nodSpeed   = 0;
+    float                 sway[2]    = {}; // yaw, roll
+    float                 swayGoal[2] = {};
+    uint64_t              swayLeft   = 0;
+    float                 sylMean    = 0;  // how loud the syllables were so far
+    uint64_t              sinceNod   = 0;
+    uint32_t              nods       = 0;
   };
