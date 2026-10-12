@@ -20,6 +20,9 @@
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
+#   vlie: a lie about a quest of the scripts: the hero tells Lobart the turnips are in the barn, Lobart's
+#       model (scripted with LLM=fake) believes him and his own ending plays; the next morning he misses the
+#       turnips, turns against the hero, and the people around hear it (story graph, stage 5)
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)

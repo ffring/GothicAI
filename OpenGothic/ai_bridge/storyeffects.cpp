@@ -54,7 +54,7 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
     auto* st = vm ? vm->find_symbol_by_name(e.status) : nullptr;
     if(vm && (st==nullptr || !st->is_const() || st->type()!=DaedalusDataType::INT))
       return "journal: no status " + e.status;
-    return e.topic.empty() || e.text.empty() ? "journal: needs topic and text" : "";
+    return e.topic.empty() ? "journal: needs a topic" : "";
     }
   if(e.kind=="attack") {
     if(e.reason.empty())
@@ -108,7 +108,8 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   else if(kind=="journal") {
     call("LOG_CREATETOPIC",{Value::str(topic),Value::integer(constant("LOG_MISSION",0))});
     call("LOG_SETTOPICSTATUS",{Value::str(topic),Value::integer(constant(status,1))});
-    call("B_LOGENTRY",{Value::str(topic),Value::str(text)});
+    if(!text.empty())
+      call("B_LOGENTRY",{Value::str(topic),Value::str(text)});
     }
   else if(kind=="end") {
     call("AI_STOPPROCESSINFOS",{Value::instance(npc.handlePtr())});

@@ -165,6 +165,9 @@ struct Lifter::State final {
   // values stored on this path, by the key of the target (a local, global, member or instance variable):
   // a read after a store sees the stored value, like `self.aivar[AIV_PASSGATE]` set and then checked
   std::map<std::string, std::pair<ExprP,ExprP>> stored;  // key -> target, value
+  // globals and members a script function called on this path may have written: read afterwards, their
+  // value is not known (B_GivePlayerXP raises hero.exp, then the dialog reads it)
+  std::map<std::string, std::string> clobberedVars, clobberedMembers;  // name -> the function
   ExprP              inst;  // instance for member access (GMOVI)
   };
 
@@ -258,7 +261,36 @@ ExprP Lifter::resolve(const State& s, const ExprP& e) const {
   if(!storable(e))
     return e;
   auto it = s.stored.find(e->key);
-  return it!=s.stored.end() ? it->second.second : unstored(e);
+  if(it!=s.stored.end())
+    return it->second.second;
+  auto& clobbered = e->kind==Expr::Field ? s.clobberedMembers : s.clobberedVars;
+  if(e->kind==Expr::Var || e->kind==Expr::Field || e->kind==Expr::Inst) {
+    auto c = clobbered.find(e->name);
+    if(c!=clobbered.end())
+      return ex::unknown(e->str() + " after " + c->second);
+    }
+  return unstored(e);
+  }
+
+const Lifter::Clobbers& Lifter::clobbers(const zenkit::DaedalusSymbol& fn) const {
+  auto it = clobberCache.find(fn.index());
+  if(it!=clobberCache.end())
+    return it->second;
+  Clobbers c;
+  if(clobberBusy.insert(fn.index()).second) {
+    auto f = code.summarize(fn.index());
+    c.vars = f.writes;
+    for(auto& m : f.memberWrites)
+      c.members.insert(memberName(m));
+    for(auto& name : f.calls)
+      if(auto* callee = script.find_symbol_by_name(name)) {
+        auto& sub = clobbers(*callee);
+        c.vars.insert(sub.vars.begin(), sub.vars.end());
+        c.members.insert(sub.members.begin(), sub.members.end());
+        }
+    clobberBusy.erase(fn.index());
+    }
+  return clobberCache[fn.index()] = std::move(c);
   }
 
 ExprP Lifter::pushVar(const State& s, const zenkit::DaedalusSymbol& sym, int32_t index) const {
@@ -322,6 +354,8 @@ void Lifter::merge(State& a, State&& b) const {
       continue;
     a.stored[k] = {t, mergeValues(ga, va, b.guard, vb, t->str())};
     }
+  a.clobberedVars.insert(b.clobberedVars.begin(), b.clobberedVars.end());
+  a.clobberedMembers.insert(b.clobberedMembers.begin(), b.clobberedMembers.end());
   if(a.inst==nullptr || b.inst==nullptr || a.inst->key!=b.inst->key)
     a.inst = (a.inst==nullptr && b.inst==nullptr) ? nullptr : ex::unknown("instance differs between branches");
   }
@@ -502,6 +536,20 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
         e.args   = args;
         e.guard  = s.guard;
         out.events.push_back(std::move(e));
+        if(op.op==DaedalusOpcode::BL) {
+          // what it may write is no longer what this path stored, nor what was there before
+          auto& c = clobbers(*callee);
+          for(auto& v : c.vars)
+            s.clobberedVars.emplace(v, callee->name());
+          for(auto& m : c.members)
+            s.clobberedMembers.emplace(m, callee->name());
+          for(auto it=s.stored.begin(); it!=s.stored.end();) {
+            auto& t = *it->second.first;
+            bool  w = ((t.kind==Expr::Var || t.kind==Expr::Inst) && c.vars.count(t.name)) ||
+                      (t.kind==Expr::Field && c.members.count(t.name));
+            it = w ? s.stored.erase(it) : std::next(it);
+            }
+          }
         if(callee->has_return())
           s.stack.push_back(op.op==DaedalusOpcode::BE ? ex::call(callee->name(), std::move(args))
                                                       : ex::fn  (callee->name(), std::move(args)));

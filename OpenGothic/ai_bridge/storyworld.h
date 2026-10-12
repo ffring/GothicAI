@@ -25,8 +25,12 @@ class StoryWorld final {
     // story_spawn: `count` creatures of `instance`, `distance` cm from an npc (`near`, or the player),
     // under `tag`; returns how many came
     int  spawn(World& world, const rapidjson::Value& msg, std::string& error);
-    // story_watch: npcs whose distance to each tag's living creatures is reported (`npcs`, replaces)
+    // story_watch: npcs whose distance to each tag's living creatures is reported (`npcs`; replaces the
+    // list of the same `owner`, the lists of all owners are reported)
     void watch(const rapidjson::Value& msg);
+    // story_tag: npcs already in the world (`npcs`, symbols) watched under `tag`, like spawned ones; how many
+    // were found
+    int  tag(World& world, const rapidjson::Value& msg);
     // story_effect: effects on `npc`, as self, with the hero as other
     bool effects(World& world, const rapidjson::Value& msg, std::string& error);
     // story_nearby: people within `radius` cm of `npc` (alive, not the hero), as JSON
@@ -35,7 +39,7 @@ class StoryWorld final {
     // story_state: what the director's rules read (stage 5), as JSON: values of global int `vars`, whether
     // `npcs` live ({"state": "alive", "dead" or "absent", "name"}), which dialogs (`knows`) the hero has
     // heard, what script `symbols` are ("npc", "item", "info", "var", "const", "func", "other"; missing:
-    // absent), and whether a dialog or a cutscene runs now
+    // absent), the names of `items` (instances), whether a dialog or a cutscene runs now, and the game time
     std::string state(World& world, const rapidjson::Value& msg);
     // deaths of people and of tagged creatures (npc_died) and, once a second, the tags (story_world)
     void tick(World& world);
@@ -48,7 +52,7 @@ class StoryWorld final {
     std::function<void(std::string&&)>     send;
     std::function<void(World&,Npc&)>       release;
     std::map<std::string,std::vector<Npc*>> tags;
-    std::vector<std::string>               watchers;  // npc symbols
+    std::map<std::string,std::vector<std::string>> watchers;  // owner -> npc symbols
     std::unordered_set<const Npc*>         dead;      // deaths already known
     bool                                   primed = false;  // the dead of a loaded world are not news
     uint64_t                               nextScan = 0, nextReport = 0;

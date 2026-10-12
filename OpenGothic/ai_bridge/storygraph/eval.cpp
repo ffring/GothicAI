@@ -246,7 +246,11 @@ std::optional<Value> Evaluator::var(const Expr& e) {
 
 std::optional<Value> Evaluator::field(const Expr& e, const Value& inst) {
   if(inst.inst==nullptr) {
-    // the VM reads members of a null instance as 0 or "" (ALLOW_NULL_INSTANCE_ACCESS)
+    // the VM reads members of a null instance as 0 or "" (ALLOW_NULL_INSTANCE_ACCESS): which one, the
+    // member says (its class is not known, the classes are tried)
+    for(auto* cls : {"C_NPC.", "C_ITEM.", "C_INFO.", "C_FOCUS.", "C_MENU_ITEM."})
+      if(auto* m = vm.find_symbol_by_name(cls + e.name); m!=nullptr && m->is_member())
+        return m->type()==DaedalusDataType::STRING ? Value::str("") : Value::integer(0);
     return Value::integer(0);
     }
   auto* sym = member(vm, *inst.inst, e.name);

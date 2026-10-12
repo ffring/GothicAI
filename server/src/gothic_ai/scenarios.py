@@ -45,6 +45,7 @@ from .quests import QuestBoard
 from .story import StoryPatches
 from .talk import TalkDesk
 from .trace import TraceWriter
+from .vanilla import VanillaQuests
 from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
@@ -1102,7 +1103,7 @@ async def lie_found_out(
 
 
 LOBART, HILDA = "BAU_950_LOBART", "BAU_951_HILDA"
-RUEBEN = "MIS_LOBART_RUEBEN"
+RUEBEN, RUEBEN_TO_HILDA = "MIS_LOBART_RUEBEN", "MIS_LOBART_RUEBENTOHILDA"
 
 
 class RepairScript:
@@ -1265,6 +1266,94 @@ async def repair_after_death(
     await asyncio.sleep(1)
     check("once", node not in await link.offered_dialogs(successor))
     check("kept", any(op.get("op") == "add_node" for op in story.ops()))
+    return _logged(results)
+
+
+async def vanilla_lie(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    vanilla: VanillaQuests,
+    giver: str = LOBART,
+    bystander: str = "VLK_408_JORA",
+) -> dict[str, str]:
+    """Stage 5 on the game: a lie about a quest of the scripts. Lobart's turnip field: the hero, with no
+    turnips, tells Lobart they are in the barn; Lobart's model (scripted unless LLM=chatgpt) believes him and
+    the code plays Lobart's own ending: the quest is done, the hero gets the gold and the experience, the next
+    step (bring them to Hilda) starts, and the lie is written down with the truth. The same day nothing
+    happens; the next morning Lobart misses the turnips, turns against the hero and refuses to talk, and Jora,
+    standing by, hears it."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = vanilla.chronicle.facts
+    hero = ["inst", "HERO"]
+
+    async def var(name: str) -> int | None:
+        return (await link.story_state(vars=[name])).get("vars", {}).get(name)
+
+    # the quest, as Lobart gives it, and the hero next to him (no turnips)
+    await link.story_effect(giver, [{"do": "set", "var": RUEBEN, "value": 1}])
+    await link.debug("player_goto", to=giver, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: giver in talk.people, 20):
+        return _logged({"roster": f"failed ({giver} is not around the hero)"})
+    name = talk.people[giver].name
+    gold = await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]])
+    exp = await link.evaluate(["field", hero, "EXP"])
+
+    # the lie
+    llm = None
+    if isinstance(dialogue.llm, FakeBackend):
+        accept = [ToolCall("accept_quest", {"quest": RUEBEN}, "c1")]
+        dialogue.llm = llm = FakeBackend(
+            script=[FakeStep("В амбаре, говоришь? Ладно, держи плату.", accept)], delay=0
+        )
+    await link.debug(
+        "type", text=f"{name}, я собрал всю репу, двадцать штук, и сложил в амбаре. Давай плату."
+    )
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("claim")), 60)
+    lie = next((f for f in facts("lie") if f.get("quest") == RUEBEN), None)
+    check("believed", ok, facts("claim")[-1:])
+    if llm is not None:
+        seen = bool(llm.calls) and "Ты ждёшь от героя" in str(llm.calls[0][1])
+        check("quest_in_situation", seen and "accept_quest" in [t.name for t in llm.calls[0][2]])
+    check("lie", lie is not None and lie.get("truth") == "ITPL_BEET 0 of 20", lie)
+    if lie is None:
+        return _logged(results)
+    await asyncio.sleep(1)
+    after = (
+        await var(RUEBEN),
+        await var(RUEBEN_TO_HILDA),
+        await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]),
+        await link.evaluate(["field", hero, "EXP"]),
+    )
+    check("ending_played", after[:2] == (2, 1) and after[2] >= gold + 5 and after[3] >= exp + 50, after)
+
+    # the same day: nothing
+    await asyncio.sleep(7)
+    check("not_yet", not any(f.get("quest") == RUEBEN for f in facts("found_out")))
+
+    # the next morning, Jora by Lobart
+    await link.debug("time", hour=7, minute=0)
+    await link.debug("spawn", instance=bystander, near=giver, distance=400)
+    await asyncio.sleep(1)
+    await link.attach(bystander)  # held there
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("rumor")), 20)
+    found = next((f for f in facts("found_out") if f.get("quest") == RUEBEN), None)
+    check("found_out", found is not None and "наутро" in found.get("how", ""), found)
+    intent = dialogue.conversations[giver].intent if giver in dialogue.conversations else None
+    check("hostile", intent is not None and intent.attitude == "hostile", intent)
+    refuses = await link.evaluate(["call", "NPC_REFUSETALK", ["inst", "SELF"]], giver)
+    check("refuses_talk", bool(refuses), refuses)
+    check("rumor", ok, [f for f in facts("rumor") if f.get("quest") == RUEBEN][-1:])
+    await link.detach(bystander)
     return _logged(results)
 
 

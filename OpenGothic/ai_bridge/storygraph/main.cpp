@@ -133,6 +133,7 @@ static void printStats(const Model& m, size_t lineTexts) {
   }
 
 int main(int argc, char** argv) {
+  std::setvbuf(stdout, nullptr, _IOLBF, 0);  // what was printed survives a crash
   const char* datPath = nullptr;
   const char* ouPath  = nullptr;
   const char* json    = nullptr;
@@ -143,6 +144,7 @@ int main(int argc, char** argv) {
   bool        pretty  = false;
   bool        scan    = false;
   bool        verbose = false;
+  bool        effects = false;
   size_t      top     = 0;
   uint32_t    fuzz    = 0;
   std::vector<std::string> saves;
@@ -172,13 +174,15 @@ int main(int argc, char** argv) {
       scan = true;
     else if(std::strcmp(argv[i],"--verbose")==0)
       verbose = true;
+    else if(std::strcmp(argv[i],"--effects")==0)
+      effects = true;
     else
       datPath = argv[i];
     }
   if(datPath==nullptr) {
     std::fprintf(stderr, "usage: storygraph <GOTHIC.DAT> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
                          "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN] "
-                         "[--check <save dir>... [--verbose]] [--fuzz N]\n");
+                         "[--check <save dir>... [--verbose]] [--fuzz N] [--effects]\n");
     return 2;
     }
 
@@ -216,8 +220,10 @@ int main(int argc, char** argv) {
     auto id = node ? upper(node) : std::string();
     int  r  = 0;
     if(!saves.empty())
-      r |= checkSaves(datPath, m, saves, node ? id.c_str() : nullptr, verbose);
-    if(fuzz>0)
+      r |= checkSaves(datPath, m, saves, node ? id.c_str() : nullptr, verbose, effects);
+    if(fuzz>0 && effects)
+      r |= fuzzEffects(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
+    else if(fuzz>0)
       r |= fuzzConditions(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
     return r;
     }

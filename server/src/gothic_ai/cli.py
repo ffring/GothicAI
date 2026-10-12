@@ -61,6 +61,7 @@ from .story import StoryPatches
 from .talk import TalkDesk
 from .trace import TraceWriter, find_turn, latest
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
+from .vanilla import VanillaQuests
 from .voice import (
     DEFAULT_ASR_URL,
     MIC_DENIED,
@@ -97,6 +98,7 @@ HELP = """commands (npc defaults to the last attached one):
   quests            the director's quests: paid, lied about, found out
   director          quests left without an ending and the director's repairs of them
   director look     look for such quests now and repair them
+  claims            quests of the scripts the hero said were done: believed, lies, found out
   dialogs           what the npc offers in the dialog menu now (game needs -devmode)
   choose <node>     play a dialog of the npc as if chosen in the menu (game needs -devmode)
   eval <json>       compute a story graph expression in the game, self = the npc (game needs -devmode)
@@ -130,6 +132,7 @@ class ServerState:
         self.chronicle: Chronicle | None = None
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
+        self.vanilla: VanillaQuests | None = None
 
 
 class Console:
@@ -221,6 +224,10 @@ class Console:
                     print(f"{q.id} {q.giver}: {q.title}; {q.reward()}; {state}; done {board.done(q)}")
             case "director" if self.state.director is not None:
                 await self.director(rest)
+            case "claims" if self.state.vanilla is not None:
+                for t in self.state.vanilla.told.values():
+                    state = "found out" if t.found_out else "lie" if t.lie else "true"
+                    print(f"{t.quest} {t.npc}: {t.title}; {t.reward}; {state} ({t.kind or '-'})")
             case "dialogs":
                 print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
             case "choose" if rest:
@@ -364,13 +371,22 @@ async def serve(args: argparse.Namespace) -> int:
             journal=journal,
         )
         lies = asyncio.create_task(state.quests.run())
-        directing = None
+        directing: list[asyncio.Task[None]] = []
         if graph is not None:
             # quests the hero can no longer finish get repaired (story graph, stage 5)
             state.director = Director(
                 link, graph, state.story, state.chronicle, llm, dialogue=state.dialogue, journal=journal
             )
-            directing = asyncio.create_task(state.director.run())
+            # the scripts' quests in their givers' conversations, and the hero's lies about them
+            state.vanilla = VanillaQuests(
+                link,
+                state.dialogue,
+                state.chronicle,
+                graph,
+                hero_distance=lambda npc: talk.people[npc].distance if npc in talk.people else None,
+                journal=journal,
+            )
+            directing = [asyncio.create_task(state.director.run()), asyncio.create_task(state.vanilla.run())]
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
@@ -395,8 +411,8 @@ async def serve(args: argparse.Namespace) -> int:
             await link.closed.wait()  # the session lives while the game is connected
         finally:
             lies.cancel()
-            if directing is not None:
-                directing.cancel()
+            for task in directing:
+                task.cancel()
             if brain is not None:
                 brain.cancel()
 
@@ -465,6 +481,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.repair_after_death(link, state.director, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "vlie":
+                dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
+                assert dialogue is not None and talk is not None and vanilla is not None
+                results = await scenarios.vanilla_lie(link, dialogue, talk, vanilla)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario vlie: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "graph":
                 assert state.story is not None
@@ -852,7 +875,22 @@ def main() -> None:
     p.add_argument("--port", type=int, default=47817)
     p.add_argument(
         "--scenario",
-        choices=["m0", "m1", "m2", "m3", "m4", "m5", "m5b", "m5c", "m5e", "graph", "lie", "repair", "tts"],
+        choices=[
+            "m0",
+            "m1",
+            "m2",
+            "m3",
+            "m4",
+            "m5",
+            "m5b",
+            "m5c",
+            "m5e",
+            "graph",
+            "lie",
+            "repair",
+            "vlie",
+            "tts",
+        ],
         help="run a scripted check when the game connects",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")

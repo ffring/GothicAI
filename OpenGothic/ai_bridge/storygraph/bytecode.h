@@ -21,6 +21,7 @@ struct FnSummary final {
   std::set<std::string> reads;       // global variables read; constants are left out
   std::set<std::string> writes;      // global variables written
   std::set<std::string> members;     // class members used (C_NPC.AIVAR, C_NPC.GUILD, ...)
+  std::set<std::string> memberWrites; // class members written (C_NPC.EXP, ...)
   std::set<std::string> instances;   // instances pushed (HERO, SELF, VLK_4201_WIRT, ...), dialogs left out
   std::set<std::string> infos;       // dialogs pushed, i.e. the arguments of Npc_KnowsInfo
   std::vector<uint32_t> choices;     // functions passed to Info_AddChoice

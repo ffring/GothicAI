@@ -41,9 +41,11 @@ from .protocol import (
     Snapshot,
     SnapshotCmd,
     StoryEffectCmd,
+    StoryEvalCmd,
     StoryNearbyCmd,
     StorySpawnCmd,
     StoryStateCmd,
+    StoryTagCmd,
     StoryWatchCmd,
     WorldLoaded,
     _Command,
@@ -62,6 +64,8 @@ _Request = (
     | StoryEffectCmd
     | StoryNearbyCmd
     | StoryStateCmd
+    | StoryEvalCmd
+    | StoryTagCmd
 )
 
 Listener = Callable[[GameMessage], None]
@@ -235,9 +239,10 @@ class GameLink:
         )
         return int((await self._request(cmd, 5.0)).value or 0)
 
-    async def story_watch(self, npcs: list[str]) -> None:
-        """Npc's whose distance to every tag's living creatures the game reports (story_world)."""
-        await self.send(StoryWatchCmd(npcs=[n.upper() for n in npcs]))
+    async def story_watch(self, npcs: list[str], owner: str = "") -> None:
+        """Npc's whose distance to every tag's living creatures the game reports (story_world); each owner
+        keeps its own list."""
+        await self.send(StoryWatchCmd(npcs=[n.upper() for n in npcs], owner=owner))
 
     async def story_effect(self, npc: str, effects: list[dict[str, Any]], timeout: float = 5.0) -> None:
         """Effects on an npc through the scripts (see StoryEffectCmd)."""
@@ -254,6 +259,7 @@ class GameLink:
         npcs: Iterable[str] = (),
         knows: Iterable[str] = (),
         symbols: Iterable[str] = (),
+        items: Iterable[str] = (),
         timeout: float = 5.0,
     ) -> dict[str, Any]:
         """What the director's rules read (see StoryStateCmd)."""
@@ -263,8 +269,19 @@ class GameLink:
             npcs=[n.upper() for n in npcs],
             knows=list(knows),
             symbols=list(symbols),
+            items=list(items),
         )
         return dict((await self._request(cmd, timeout)).value or {})
+
+    async def story_eval(self, npc: str, exprs: list[Any], timeout: float = 5.0) -> list[Any]:
+        """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""
+        cmd = StoryEvalCmd(req=self._next_id("s"), npc=npc.upper(), exprs=exprs)
+        return list((await self._request(cmd, timeout)).value or [])
+
+    async def story_tag(self, tag: str, npcs: list[str], timeout: float = 5.0) -> int:
+        """Npc's of the world watched under a tag (see StoryTagCmd); how many were found."""
+        cmd = StoryTagCmd(req=self._next_id("s"), tag=tag, npcs=[n.upper() for n in npcs])
+        return int((await self._request(cmd, timeout)).value or 0)
 
     async def offered_dialogs(self, npc: str, timeout: float = 5.0) -> list[str]:
         """The dialogs the npc offers the player now (game in -devmode)."""

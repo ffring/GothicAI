@@ -51,7 +51,8 @@ endif()
 # the command line tool; inside the game build (ai_bridge) only the library is needed
 option(STORYGRAPH_TOOL "build the storygraph command line tool" ${PROJECT_IS_TOP_LEVEL})
 if(STORYGRAPH_TOOL)
-  add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h)
+  add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h
+                            effects.cpp effects.h snapshot.h)
   target_link_libraries(storygraph PRIVATE StoryGraph)
   if(NOT MSVC)
     target_compile_options(storygraph PRIVATE -Wall -Wconversion -Werror)

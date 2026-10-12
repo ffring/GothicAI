@@ -612,6 +612,7 @@ DebugCommand = Literal[
     "eval",
     "check",
     "kill",
+    "time",
 ]
 
 
@@ -620,8 +621,9 @@ class DebugCmd(_Command):
     spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
     player draw (`state: "melee"`) or put away (`"none"`) a weapon; move the player to a `waypoint` (or to
     the nearest one at least `distance` cm from `near`, or one `distance` cm off the npc `to`); `kill` an
-    `npc` (killed by no one); press the talk key as the player does (`ptt`, `state`: start, stop, cancel;
-    with the hero's own focus) or send a typed line (`type`, `text`).
+    `npc` (killed by no one); set the clock to `hour`:`minute` (`time`, the next day if that is earlier, like
+    sleeping); press the talk key as the player does (`ptt`, `state`: start, stop, cancel; with the hero's
+    own focus) or send a typed line (`type`, `text`).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -639,6 +641,8 @@ class DebugCmd(_Command):
     state: str | None = None
     waypoint: str | None = None
     to: str | None = None
+    hour: int | None = None
+    minute: int | None = None
     text: str | None = None
     npc: str | None = None
     node: str | None = None
@@ -673,10 +677,12 @@ class StorySpawnCmd(_Command):
 
 
 class StoryWatchCmd(_Command):
-    """Npc's whose distance to the living creatures of every tag the game reports (v8), replaces the list."""
+    """Npc's whose distance to the living creatures of every tag the game reports (v8). Replaces the list of
+    the same `owner`; the lists of all owners are reported."""
 
     type: Literal["story_watch"] = "story_watch"
     npcs: list[str]
+    owner: str = ""
 
 
 class StoryEffectCmd(_Command):
@@ -695,7 +701,8 @@ class StoryStateCmd(_Command):
     """What the director's rules read (v8, stage 5). `result.value`: {"vars": {name: int}, "npcs": {symbol:
     {"state": "alive" | "dead" | "absent", "name"}}, "knows": {dialog: bool} (the hero has heard it),
     "symbols": {name: "npc" | "item" | "info" | "var" | "const" | "func" | "other"} (unknown names are
-    left out), "dialog": bool, "cutscene": bool}."""
+    left out), "items": {instance: name in the game}, "dialog": bool, "cutscene": bool, "day", "hour",
+    "minute": the game time}."""
 
     type: Literal["story_state"] = "story_state"
     req: str
@@ -703,6 +710,29 @@ class StoryStateCmd(_Command):
     npcs: list[str] = []
     knows: list[str] = []
     symbols: list[str] = []
+    items: list[str] = []
+
+
+class StoryEvalCmd(_Command):
+    """Story graph expressions computed on the live VM, self = `npc`, other = the hero (v8): what the
+    director's rules ask. `result.value`: one value per expression (int, string, instance symbol, or null
+    if it can't be computed)."""
+
+    type: Literal["story_eval"] = "story_eval"
+    req: str
+    npc: str
+    exprs: list[Any]
+
+
+class StoryTagCmd(_Command):
+    """Npc's already in the world (`npcs`, symbols) watched under `tag` like the director's creatures (v8):
+    their deaths and how near they are come in npc_died and story_world. `result.value`: how many were
+    found."""
+
+    type: Literal["story_tag"] = "story_tag"
+    req: str
+    tag: str
+    npcs: list[str]
 
 
 class StoryNearbyCmd(_Command):

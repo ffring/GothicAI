@@ -59,6 +59,7 @@ log = logging.getLogger(__name__)
 
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
+PREPARE_S = 3.0  # what an extension asks the game before a turn
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
 
@@ -228,8 +229,12 @@ class Conversation:
 
 
 class TurnExtension(Protocol):
-    """More of the world for the conversational model (the director's quests, quests.py): lines for the
-    situation, tools to offer, and the handling of their calls."""
+    """More of the world for the conversational model (the director's quests, quests.py; the scripts'
+    quests, vanilla.py): lines for the situation, tools to offer, and the handling of their calls."""
+
+    async def prepare(self, npc: str) -> None:
+        """Before a turn: what the situation and the tools need from the game."""
+        ...
 
     def situation(self, npc: str) -> str | None: ...
 
@@ -733,6 +738,11 @@ class DialogueManager:
                 self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
         snap = self.link.snapshots.get(conv.npc)
         situation_text = npc_tools.render_situation(snap, conv.intent)
+        for ext in self.extensions:
+            try:
+                await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
+            except (GameError, TimeoutError) as err:
+                log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
         for ext in self.extensions:
             if extra := ext.situation(conv.npc):
                 situation_text += "\n" + extra

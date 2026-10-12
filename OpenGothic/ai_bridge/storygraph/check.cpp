@@ -5,9 +5,11 @@
 // difference is an error of the lifting, whatever the engine answers.
 
 #include "check.h"
+#include "effects.h"
 #include "eval.h"
 #include "model.h"
 #include "saveworld.h"
+#include "snapshot.h"
 #include "textcodec.h"
 
 #include <zenkit/DaedalusVm.hh>
@@ -27,61 +29,6 @@ using zenkit::DaedalusDataType;
 
 namespace {
 
-// Values of all script variables, to undo what checking a condition wrote (C_Beklauen stores the theft
-// values, conditions keep static locals): every dialog is checked against the state of the save.
-class Snapshot final {
-  public:
-    explicit Snapshot(zenkit::DaedalusVm& vm) {
-      for(uint32_t i=0; i<vm.symbols().size(); ++i) {
-        auto* s = vm.find_symbol_by_index(i);
-        if(s==nullptr || s->is_const() || s->is_member() || s->is_external())
-          continue;
-        auto t = s->type();
-        if(t==DaedalusDataType::INT || t==DaedalusDataType::FLOAT || t==DaedalusDataType::STRING ||
-           t==DaedalusDataType::INSTANCE)
-          syms.push_back(s);
-        }
-      }
-
-    void take() {
-      ints.clear();
-      floats.clear();
-      strs.clear();
-      insts.clear();
-      for(auto* s : syms)
-        for(uint16_t i=0; i<count(*s); ++i)
-          switch(s->type()) {
-            case DaedalusDataType::INT:      ints.push_back(s->get_int(i));      break;
-            case DaedalusDataType::FLOAT:    floats.push_back(s->get_float(i));  break;
-            case DaedalusDataType::STRING:   strs.push_back(s->get_string(i));   break;
-            default:                         insts.push_back(s->get_instance()); break;
-            }
-      }
-
-    void restore() {
-      size_t ni = 0, nf = 0, ns = 0, nn = 0;
-      for(auto* s : syms)
-        for(uint16_t i=0; i<count(*s); ++i)
-          switch(s->type()) {
-            case DaedalusDataType::INT:      s->set_int(ints[ni++], i);      break;
-            case DaedalusDataType::FLOAT:    s->set_float(floats[nf++], i);  break;
-            case DaedalusDataType::STRING:   s->set_string(strs[ns++], i);   break;
-            default:                         s->set_instance(insts[nn++]);   break;
-            }
-      }
-
-  private:
-    static uint16_t count(const zenkit::DaedalusSymbol& s) {
-      return s.type()==DaedalusDataType::INSTANCE ? 1 : uint16_t(s.count());
-      }
-
-    std::vector<zenkit::DaedalusSymbol*>                    syms;
-    std::vector<int32_t>                                    ints;
-    std::vector<float>                                      floats;
-    std::vector<std::string>                                strs;
-    std::vector<std::shared_ptr<zenkit::DaedalusInstance>>  insts;
-  };
-
 struct Difference final {
   const Node* node;
   int32_t     vm;
@@ -97,6 +44,37 @@ struct Totals final {
   size_t saves = 0, dialogs = 0, checked = 0, agree = 0, differ = 0, unknown = 0, vmErrors = 0, notLifted = 0;
   size_t trueBoth = 0, absent = 0;
   };
+
+}
+
+namespace storygraph {
+
+void EffectTotals::add(const Node& n, const EffectCheck::Result& r) {
+  runs++;
+  calls += r.calls;
+  switch(r.outcome) {
+    case EffectCheck::Outcome::Agree:        agree++; break;
+    case EffectCheck::Outcome::Differ:       if(differ++<1000) diffs.emplace_back(n.id, r.detail); break;
+    case EffectCheck::Outcome::ModelUnknown: unknown++; unknownWhy[r.detail.substr(0, r.detail.find(':'))]++; break;
+    case EffectCheck::Outcome::VmFailed:     vmFailed++; break;
+    case EffectCheck::Outcome::NoFunction:   noFunction++; break;
+    }
+  }
+
+void EffectTotals::print(const char* what, bool verbose) const {
+  std::printf("   effects (%s): %zu runs, %zu calls compared; agree %zu, DIFFER %zu; model could not tell %zu, "
+              "VM failed %zu, no function %zu\n", what, runs, calls, agree, differ, unknown, vmFailed, noFunction);
+  for(auto& [why,c] : unknownWhy)
+    std::printf("     model could not tell: %zu x %s\n", c, why.c_str());
+  for(size_t i=0; i<diffs.size() && (verbose || i<20); ++i)
+    std::printf("   EFFECTS DIFF %s: %s\n", ident(diffs[i].first).c_str(), diffs[i].second.c_str());
+  if(diffs.size()>20 && !verbose)
+    std::printf("   ... %zu more (--verbose)\n", diffs.size()-20);
+  }
+
+}
+
+namespace {
 
 std::string top(const std::map<std::string,size_t>& counts, size_t n) {
   std::vector<std::pair<size_t,std::string>> v;
@@ -121,14 +99,17 @@ std::string shorten(std::string s, size_t n) {
 
 // one save: false if it could not be read
 bool checkSave(const char* datPath, const Model& m, const fs::path& dir, const char* traceNode, bool verbose,
-               Totals& t) {
+               bool effects, Totals& t, EffectTotals& et) {
   auto vm = loadVm(datPath);
   if(vm==nullptr) {
     std::fprintf(stderr, "can't open %s\n", datPath);
     return false;
     }
   SaveWorld world(*vm);
-  bindExternals(*vm, world);
+  std::unique_ptr<EffectCheck> fx;
+  if(effects)
+    fx = std::make_unique<EffectCheck>(*vm, world);
+  bindExternals(*vm, fx ? fx->engine() : world);
   std::string error;
   if(!world.load(dir, error)) {
     std::printf("== %s: can't read the save: %s\n\n", dir.filename().string().c_str(), error.c_str());
@@ -190,6 +171,41 @@ bool checkSave(const char* datPath, const Model& m, const fs::path& dir, const c
     checks.push_back({&n, vm->find_symbol_by_index(uint32_t(info->condition)), self});
     }
   world.resetCounts();  // the instance functions above called the engine too
+
+  if(fx!=nullptr) {
+    // every dialog and choice runs once, with its npc as self, against the save's state
+    Evaluator    ev(*vm, m.helpers, world);
+    EffectTotals here;
+    for(auto& n : m.nodes) {
+      if(traceNode!=nullptr && n.id!=traceNode)
+        continue;
+      auto* npcSym = vm->find_symbol_by_name(n.npc);
+      if(npcSym==nullptr)
+        continue;
+      auto* npc = world.npc(npcSym->index());
+      std::shared_ptr<zenkit::INpc> self = npc ? npc->script : nullptr;
+      if(self==nullptr) {
+        if(!absentNpcs.count(npcSym->index())) {
+          try {
+            absentNpcs[npcSym->index()] = vm->init_instance<zenkit::INpc>(npcSym);
+            }
+          catch(const std::exception&) {
+            absentNpcs[npcSym->index()] = nullptr;
+            }
+          }
+        self = absentNpcs[npcSym->index()];
+        }
+      world.talkingTo(self.get());
+      if(traceNode!=nullptr)
+        fx->trace = [](const std::string& s){ std::printf("     %s\n", s.c_str()); };
+      here.add(n, fx->run(n, self, world.hero, ev));
+      }
+    here.print((dir.filename().empty() ? dir.parent_path() : dir).filename().string().c_str(), verbose);
+    std::printf("\n");
+    et.merge(here);
+    t.saves++;
+    return true;
+    }
 
   Evaluator               ev(*vm, m.helpers, world);
   Snapshot                snap(*vm);
@@ -292,12 +308,18 @@ std::unique_ptr<zenkit::DaedalusVm> loadVm(const char* datPath) {
   }
 
 int checkSaves(const char* datPath, const Model& m, const std::vector<std::string>& saves, const char* traceNode,
-               bool verbose) {
+               bool verbose, bool effects) {
   // member access on null instances is normal in the scripts and logged by ZenKit on every call
   zenkit::Logger::use_logger([](zenkit::LogLevel, const std::string&){});
-  Totals t;
+  Totals       t;
+  EffectTotals et;
   for(auto& s : saves)
-    checkSave(datPath, m, fs::path(s), traceNode, verbose, t);
+    checkSave(datPath, m, fs::path(s), traceNode, verbose, effects, t, et);
+  if(effects) {
+    std::printf("total: %zu saves\n", t.saves);
+    et.print("all saves", false);
+    return et.differ==0 && t.saves==saves.size() ? 0 : 1;
+    }
   std::printf("total: %zu saves, %zu dialog checks: compared %zu, agree %zu, DIFFER %zu; "
               "model could not evaluate %zu, VM failed %zu, not lifted %zu\n",
               t.saves, t.dialogs, t.checked, t.agree, t.differ, t.unknown, t.vmErrors, t.notLifted);

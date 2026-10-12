@@ -201,3 +201,27 @@ def test_conditions_match_the_vm_on_original_saves():
     r = _run(*[a for s in _saves() for a in ("--check", str(s))])
     assert r.returncode == 0, r.stdout[-3000:]
     assert ", DIFFER 0;" in r.stdout.splitlines()[-1]
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_effects_match_the_vm_in_random_states():
+    # what dialogs and choices do (calls in order with their arguments, globals left), 20 states each
+    r = _run("--fuzz", "20", "--effects")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout and "VM failed 0" in r.stdout
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists() and _saves()), reason="needs the tool, game, saves")
+def test_effects_match_the_vm_on_original_saves():
+    r = _run(*[a for s in _saves() for a in ("--check", str(s))], "--effects")
+    assert r.returncode == 0, r.stdout[-3000:]
+    total = next(line for line in r.stdout.splitlines() if "effects (all saves)" in line)
+    assert "DIFFER 0;" in total and "VM failed 0" in total
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_read_after_a_call_that_writes_it_is_not_known():
+    # Vatras raises the hero's max mana through B_RaiseAttribute, then sets his mana to it: found by the
+    # effects check; the value after the call is not the one before it
+    r = _run("--node", "DIA_ADDON_VATRAS_FREE")
+    assert "set other.ATTRIBUTE[ATR_MANA] = ?other.attribute[ATR_MANA_MAX] after B_RAISEATTRIBUTE" in r.stdout

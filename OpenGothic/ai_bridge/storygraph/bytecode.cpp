@@ -181,8 +181,11 @@ FnSummary Bytecode::summarize(uint32_t fnSymbol) const {
       if(s!=nullptr && !s->is_const()) {
         // an assignment pushes its target right before the store
         bool store = isStore(script.instruction_at(pc+in.size).op);
-        if(s->is_member())
+        if(s->is_member()) {
           f.members.insert(s->name());
+          if(store)
+            f.memberWrites.insert(s->name());
+          }
         else if(s->name().find('.')!=std::string::npos)
           ;  // local variable or parameter
         else if(store)
@@ -193,7 +196,12 @@ FnSummary Bytecode::summarize(uint32_t fnSymbol) const {
       }
     else if(op==DaedalusOpcode::PUSHVI) {
       stack.push_back(Operand{Operand::Inst, 0, in.symbol});
-      addInstance(s);
+      // an instance variable assigned (`Godar = Hlp_GetNpc(...)`) is written like any global
+      if(s!=nullptr && !s->is_const() && s->name().find('.')==std::string::npos &&
+         isStore(script.instruction_at(pc+in.size).op))
+        f.writes.insert(s->name());
+      else
+        addInstance(s);
       }
     else if(op==DaedalusOpcode::GMOVI) {
       addInstance(s);  // the instance whose member comes next

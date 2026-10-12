@@ -194,6 +194,7 @@ struct AiBridge::Impl final {
   void sendResult(std::string_view req, bool ok, std::string_view err, std::string_view value = {});
   // debug commands about dialogs (-devmode): they run right away, in the game tick
   void onDialogDebug(World* world, const rapidjson::Value& msg);
+  void onStoryEval(World& world, const rapidjson::Value& msg);
   void sendWorld(std::string_view type, World* world);
 
   std::string          url;
@@ -609,6 +610,13 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_state") {
     sendResult(req,true,"",story.state(*world,doc));
     }
+  else if(type=="story_tag") {
+    const int found = story.tag(*world,doc);
+    sendResult(req,true,"",std::to_string(found));
+    }
+  else if(type=="story_eval") {
+    onStoryEval(*world,doc);
+    }
   else if(type=="story_effect") {
     std::string err;
     const bool  ok = story.effects(*world,doc,err);
@@ -660,7 +668,8 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     return;
     }
   const auto cmd = JsonRead::str(msg,"cmd");
-  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill") {
+  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
+     cmd=="time") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -740,6 +749,12 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     pos.x += dist*dx;
     pos.z += dist*dz;
     sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    return;
+    }
+  if(cmd=="time") {
+    // the clock goes to `hour`:`minute`, the next day if that is earlier than now (like sleeping)
+    world->setDayTime(int32_t(JsonRead::integer(msg,"hour",8)),int32_t(JsonRead::integer(msg,"minute",0)));
+    sendResult(req,true,"");
     return;
     }
   if(cmd=="kill") {
@@ -864,6 +879,25 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
       sendResult(req,false,err.empty() ? "no expr" : err); else
       sendResult(req,true,"",value);
     }
+  }
+
+void AiBridge::Impl::onStoryEval(World& world, const rapidjson::Value& msg) {
+  // story graph expressions on the live VM, self = `npc`, other = the hero: what the director's rules ask
+  const auto req = JsonRead::str(msg,"req");
+  Npc*       npc = npcBySymbol(world,JsonRead::str(msg,"npc"));
+  auto       it  = msg.FindMember("exprs");
+  if(npc==nullptr || it==msg.MemberEnd() || !it->value.IsArray()) {
+    sendResult(req,false,npc==nullptr ? "no npc " + std::string(JsonRead::str(msg,"npc")) : "no exprs");
+    return;
+    }
+  std::string out = "[";
+  for(auto& e : it->value.GetArray()) {
+    std::string value, err;
+    if(!graph.evaluate(world,npc,e,value,err))
+      value = "null";
+    out += (out.size()>1 ? "," : "") + value;
+    }
+  sendResult(req,true,"",out + "]");
   }
 
 void AiBridge::Impl::sendWorld(std::string_view type, World* world) {

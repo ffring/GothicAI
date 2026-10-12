@@ -307,7 +307,7 @@ class Director:
         self._queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._npcs = sorted({n.npc for n in graph.nodes.values()})
         self._dialogs = sorted(n.id for n in graph.nodes.values() if not n.is_choice and not n.permanent)
-        self.titles = _topic_titles(graph)  # journal topic constant -> its title
+        self.titles = topic_titles(graph)  # journal topic constant -> its title
         chronicle.on_fact.append(self._on_fact)
         link.listeners.append(self._on_message)
 
@@ -705,7 +705,7 @@ def _effect(e: dict[str, Any], quest: str, titles: dict[str, str]) -> tuple[dict
     return None
 
 
-def _topic_titles(graph: StoryGraph) -> dict[str, str]:
+def topic_titles(graph: StoryGraph) -> dict[str, str]:
     titles: dict[str, str] = {}
     for q in graph.quests.values():
         titles.update(q.topics)

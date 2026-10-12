@@ -154,7 +154,7 @@ class QuestBoard:
     async def _watch(self) -> None:
         givers = sorted({q.giver for q in self.quests.values() if not q.found_out})
         try:
-            await self.link.story_watch(givers)
+            await self.link.story_watch(givers, owner="quests")
         except GameError as err:
             log.info("quests: no watch: %s", err)
 
@@ -164,6 +164,9 @@ class QuestBoard:
             self._spawn(self._watch())
 
     # --- the conversation (TurnExtension) ------------------------------------------------------
+
+    async def prepare(self, npc: str) -> None:
+        pass  # everything is here already
 
     def situation(self, npc: str) -> str | None:
         lines = []
@@ -241,35 +244,8 @@ class QuestBoard:
     async def found_out(self, q: Quest, how: str) -> None:
         """The giver learns the truth: it remembers, turns against the hero, acts, and tells others."""
         q.found_out = True
-        self.chronicle.record({"fact": "found_out", "quest": q.id, "npc": q.giver, "how": how})
-        self._belief(q, False, how)
-        self.journal.add("lie_found_out", npc=q.giver, name=q.giver_name, quest=q.id, how=how)
-        self.dialogue.remember(
-            q.giver,
-            q.giver_name,
-            f"Ты узнал правду: герой солгал тебе, что выполнил твоё поручение «{q.title}», — ты {how}. "
-            f"А награду ({q.reward()}) он у тебя взял",
-        )
-        agenda = "make the hero answer for lying to you and taking your reward"
-        self.dialogue.change_intent(q.giver, q.giver_name, attitude="hostile", agenda=agenda)
-        effects: list[dict[str, Any]] = [{"do": "refuse_talk", "seconds": REFUSE_TALK_S}]
-        near = self.hero_distance(q.giver)
-        if near is not None and near <= ATTACK_CM:
-            effects.append({"do": "attack", "reason": "AR_NONE"})  # until the hero is down, not to death
-        try:
-            await self.link.story_effect(q.giver, effects)
-            people = await self.link.story_nearby(q.giver, RUMOR_CM)
-        except (GameError, TimeoutError) as err:
-            log.warning("quests: consequences of %s: %s", q.id, err)
-            people = []
-        for p in people:
-            self.dialogue.remember(
-                p["npc"],
-                p.get("name") or p["npc"],
-                f"Слух: {q.giver_name} при тебе рассказывал, что герой его обманул — сказал, что выполнил "
-                f"поручение «{q.title}», взял награду ({q.reward()}), а это неправда",
-            )
-            self.chronicle.record({"fact": "rumor", "quest": q.id, "from": q.giver, "to": p["npc"]})
+        lie = Lie(q.id, q.giver, q.giver_name, q.title, q.reward())
+        await unmask(self.link, self.dialogue, self.chronicle, self.journal, lie, how, self.hero_distance)
         await self._watch()
 
     def _belief(self, q: Quest, believed: bool, source: str) -> None:
@@ -281,6 +257,60 @@ class QuestBoard:
         task = asyncio.create_task(coro)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+
+@dataclass
+class Lie:
+    """A lie about a quest that is found out."""
+
+    quest: str  # its id: Q1 for the director's, MIS_* for the scripts'
+    giver: str
+    giver_name: str
+    title: str
+    reward: str  # what the hero took for it
+
+
+async def unmask(
+    link: GameLink,
+    dialogue: DialogueManager,
+    chronicle: Chronicle,
+    journal: Journal,
+    lie: Lie,
+    how: str,
+    hero_distance: Callable[[str], float | None],
+) -> None:
+    """The giver learns the truth: it remembers, turns against the hero, acts through the scripts (refusing
+    to talk, a beating if the hero is near), and the people around hear it."""
+    chronicle.record({"fact": "found_out", "quest": lie.quest, "npc": lie.giver, "how": how})
+    belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
+    chronicle.record({**belief, "source": how})
+    journal.add("lie_found_out", npc=lie.giver, name=lie.giver_name, quest=lie.quest, how=how)
+    dialogue.remember(
+        lie.giver,
+        lie.giver_name,
+        f"Ты узнал правду: герой солгал тебе, что выполнил твоё поручение «{lie.title}», — ты {how}. "
+        f"А награду ({lie.reward}) он у тебя взял",
+    )
+    agenda = "make the hero answer for lying to you and taking your reward"
+    dialogue.change_intent(lie.giver, lie.giver_name, attitude="hostile", agenda=agenda)
+    effects: list[dict[str, Any]] = [{"do": "refuse_talk", "seconds": REFUSE_TALK_S}]
+    near = hero_distance(lie.giver)
+    if near is not None and near <= ATTACK_CM:
+        effects.append({"do": "attack", "reason": "AR_NONE"})  # until the hero is down, not to death
+    try:
+        await link.story_effect(lie.giver, effects)
+        people = await link.story_nearby(lie.giver, RUMOR_CM)
+    except (GameError, TimeoutError) as err:
+        log.warning("lie %s: consequences: %s", lie.quest, err)
+        people = []
+    for p in people:
+        dialogue.remember(
+            p["npc"],
+            p.get("name") or p["npc"],
+            f"Слух: {lie.giver_name} при тебе рассказывал, что герой его обманул — сказал, что выполнил "
+            f"поручение «{lie.title}», взял награду ({lie.reward}), а это неправда",
+        )
+        chronicle.record({"fact": "rumor", "quest": lie.quest, "from": lie.giver, "to": p["npc"]})
 
 
 def _fields_of() -> list[str]:

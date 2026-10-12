@@ -8,6 +8,7 @@
 #include <limits>
 
 #include <zenkit/DaedalusVm.hh>
+#include <zenkit/addon/daedalus.hh>
 
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -137,13 +138,27 @@ int StoryWorld::spawn(World& world, const rapidjson::Value& msg, std::string& er
   return made;
   }
 
+int StoryWorld::tag(World& world, const rapidjson::Value& msg) {
+  const auto t     = std::string(JsonRead::str(msg,"tag"));
+  int        found = 0;
+  if(t.empty())
+    return 0;
+  auto& list = tags[t];
+  eachString(msg,"npcs",[&](const std::string& name) {
+    if(Npc* n = bySymbol(world,name)) {
+      if(std::find(list.begin(),list.end(),n)==list.end())
+        list.push_back(n);
+      found++;
+      }
+    });
+  Log::i("[story] tagged ",found," npc(s) as ",t);
+  return found;
+  }
+
 void StoryWorld::watch(const rapidjson::Value& msg) {
-  watchers.clear();
-  auto it = msg.FindMember("npcs");
-  if(it!=msg.MemberEnd() && it->value.IsArray())
-    for(auto& v : it->value.GetArray())
-      if(v.IsString())
-        watchers.push_back(upper(std::string_view(v.GetString(),v.GetStringLength())));
+  auto& list = watchers[std::string(JsonRead::str(msg,"owner"))];
+  list.clear();
+  eachString(msg,"npcs",[&](const std::string& name) { list.push_back(name); });
   }
 
 bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string& error) {
@@ -266,8 +281,32 @@ std::string StoryWorld::state(World& world, const rapidjson::Value& msg) {
     });
   w.EndObject();
 
+  w.Key("items");
+  w.StartObject();
+  eachString(msg,"items",[&](const std::string& name) {
+    auto* s = vm.find_symbol_by_name(name);
+    if(s==nullptr || kindOf(vm,*s)!="item")
+      return;
+    // the engine reads names the same way (the gold's); the symbol keeps the instance it had
+    auto prev = s->get_instance();
+    try {
+      auto item = vm.init_instance<zenkit::IItem>(s);
+      auto text = TextCodec::toUtf8(item->name);
+      key(name);
+      w.String(text.data(),rapidjson::SizeType(text.size()));
+      }
+    catch(const std::exception&) {
+      }
+    s->set_instance(prev);
+    });
+  w.EndObject();
+
+  const auto now = world.time();
   w.Key("dialog");   w.Bool(world.isInDialog());
   w.Key("cutscene"); w.Bool(world.currentCs()!=nullptr);
+  w.Key("day");      w.Int64(now.day());
+  w.Key("hour");     w.Int64(now.hour());
+  w.Key("minute");   w.Int64(now.minute());
   w.EndObject();
   return std::string(buf.GetString(),buf.GetSize());
   }
@@ -315,8 +354,11 @@ void StoryWorld::report(World& world) {
     for(auto* n : list)
       alive += !n->isDead();
     j.object().str("tag",tag).integer("alive",alive).integer("dead",int64_t(list.size())-alive);
+    std::set<std::string> all;
+    for(auto& [owner,list] : watchers)
+      all.insert(list.begin(),list.end());
     j.array("near");
-    for(auto& w : watchers) {
+    for(auto& w : all) {
       Npc* who = bySymbol(world,w);
       if(who==nullptr)
         continue;

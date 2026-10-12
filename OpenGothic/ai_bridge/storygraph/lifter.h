@@ -3,6 +3,7 @@
 #include "expr.h"
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -85,8 +86,16 @@ class Lifter final {
     void   merge(State& into, State&& from) const;
     ExprP  mergeValues(const Dnf& ga, const ExprP& va, const Dnf& gb, const ExprP& vb, const std::string& name) const;
 
+    // what a script function and the ones it calls may write: globals, and members by name (EXP, AIVAR...)
+    struct Clobbers final {
+      std::set<std::string> vars, members;
+      };
+    const Clobbers& clobbers(const zenkit::DaedalusSymbol& fn) const;
+
     const zenkit::DaedalusScript&                script;
     const Bytecode&                              code;
+    mutable std::unordered_map<uint32_t, Clobbers> clobberCache;
+    mutable std::set<uint32_t>                   clobberBusy;
     // constants naming the indices of array members, by member: AIVAR -> {value -> AIV_*}
     std::unordered_map<std::string, std::unordered_map<int32_t, std::string>> indexNames;
   };

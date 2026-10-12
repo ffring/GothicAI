@@ -43,6 +43,11 @@ class FakeGame:
         self.known: set[str] = set()
         self.symbols: dict[str, str] = {}
         self.in_dialog = False
+        self.day = 1
+        self.item_names: dict[str, str] = {}
+        # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
+        self.hero_items: dict[str, int] = {}
+        self.instances: dict[str, str] = {}
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
         self.hp = 999
         self.soft: list[tuple[str, str]] = []  # npc_act's: (npc, action)
@@ -168,14 +173,62 @@ class FakeGame:
                     "symbols": {n: self.symbols[n] for n in msg.get("symbols", []) if n in self.symbols},
                     "dialog": self.in_dialog,
                     "cutscene": False,
+                    "items": {i: self.item_names[i] for i in msg.get("items", []) if i in self.item_names},
+                    "day": self.day,
+                    "hour": 8,
+                    "minute": 0,
                 }
                 await self.send(type="result", req=msg["req"], ok=True, value=value)
+            case "story_eval":
+                self.story.append(msg)
+                values = [self.evaluate(e) for e in msg["exprs"]]
+                await self.send(type="result", req=msg["req"], ok=True, value=values)
+            case "story_tag":
+                self.story.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True, value=len(msg["npcs"]))
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):
                     bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
                     errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
                     await self.send(type="result", req=msg["req"], ok=not bad, **errors)
+
+    def evaluate(self, e: Any) -> Any:
+        """A story graph expression, as far as the fake world knows: ints, vars, comparisons, logic, the
+        hero's items and who is dead; fields read 0, anything else is null (can't be computed)."""
+        ops = {
+            "==": lambda a, b: a == b,
+            "!=": lambda a, b: a != b,
+            "<": lambda a, b: a < b,
+            ">": lambda a, b: a > b,
+            "<=": lambda a, b: a <= b,
+            ">=": lambda a, b: a >= b,
+        }
+        match e:
+            case ["int", v, *_]:
+                return v
+            case ["var", name]:
+                return self.vars.get(name, 0)
+            case ["field", *_]:
+                return 0
+            case ["!", a]:
+                v = self.evaluate(a)
+                return None if v is None else int(not v)
+            case ["&&", *args]:
+                vs = [self.evaluate(a) for a in args]
+                return None if None in vs else int(all(vs))
+            case ["||", *args]:
+                vs = [self.evaluate(a) for a in args]
+                return None if None in vs else int(any(vs))
+            case [op, a, b] if op in ops:
+                x, y = self.evaluate(a), self.evaluate(b)
+                return None if x is None or y is None else int(ops[op](x, y))
+            case ["call", "NPC_HASITEMS", ["inst", "OTHER" | "HERO"], ["sym", item]]:
+                return self.hero_items.get(item, 0)
+            case ["call", "NPC_ISDEAD", ["inst", name]]:
+                npc = self.instances.get(name, name)
+                return int(self.npc_states.get(npc, {}).get("state") == "dead")
+        return None
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
