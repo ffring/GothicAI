@@ -82,10 +82,15 @@ def make_backend(
         case "local":
             return OpenAICompatBackend(model, base_url or "http://127.0.0.1:11434/v1", name="local")
         case "fake":
-            # a slow model (to see the fillers): GOTHIC_AI_FAKE_FIRST seconds before it writes,
-            # GOTHIC_AI_FAKE_DELAY seconds a chunk of the canned reply
+            # a slow model (to see the npc's first sounds): GOTHIC_AI_FAKE_FIRST seconds before it writes,
+            # GOTHIC_AI_FAKE_DELAY seconds a chunk of the canned reply; GOTHIC_AI_FAKE_REPLIES: replies
+            # in turn instead, separated by " | " (a scripted scene: answers that fit its phrases)
+            replies = [
+                r.strip() for r in os.environ.get("GOTHIC_AI_FAKE_REPLIES", "").split(" | ") if r.strip()
+            ]
             return FakeBackend(
                 delay=float(os.environ.get("GOTHIC_AI_FAKE_DELAY", "0.02")),
                 first=float(os.environ.get("GOTHIC_AI_FAKE_FIRST", "0")),
+                script=[FakeStep(r) for r in replies] or None,
             )
     raise LLMError(f"unknown LLM backend: {kind} (expected one of {', '.join(BACKENDS)})")

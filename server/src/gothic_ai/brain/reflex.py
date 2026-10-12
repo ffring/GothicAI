@@ -1,10 +1,12 @@
 """The body's instant reactions for an npc we control (in a chat with the hero or following him), chosen
 by the behavioral model in ~0.1 s, while the conversational model may still be thinking.
 
-Three questions:
+Four questions:
 - `react` — an incident (attacked, the hero attacked, a murder nearby...): what the body does now. The
   menu is narrowed by the npc's intent (an npc that means to flee is not offered to fight);
-- `gesture` — the hero just spoke: a gesture in the pause before the npc answers, if any;
+- `gesture` and `voice` — the hero just spoke, asked together (`phrase`): a gesture in the pause before
+  the npc answers, if any, and the sound it makes at once ("Хм...", "Что?!", fillers.py says it), so that
+  the two agree;
 - `posture` — the hero speaks to a free npc (M5e, talk.py): does it stop and listen, keep working, walk
   along or turn away. talk.py carries the choice out.
 
@@ -29,8 +31,9 @@ from .situation import NpcContext, SituationBuilder
 
 REACT = "What do you do right now?"
 GESTURE = "The hero is talking to you. What gesture do you make while you think of an answer?"
+VOICE = "What did the hero just do with his words, and so what do you feel first?"
 POSTURE = "The hero is talking to you. What does your body do while you answer him?"
-INSTRUCTIONS = {"react": REACT, "gesture": GESTURE, "posture": POSTURE}
+INSTRUCTIONS = {"react": REACT, "gesture": GESTURE, "voice": VOICE, "posture": POSTURE}
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,31 @@ GESTURE_OPTIONS: dict[str, Option] = {
     "dismiss": Option("wave it off dismissively", (("play_ani", {"name": "T_FORGETIT"}),)),
 }
 GESTURE_COOLDOWN_S = 10.0
+# the sound an npc makes at once (fillers.py says it): its kind, by what the hero's words were. Read in
+# evals/talk-reactions: the model tells a question, a greeting, an insult or a boast well, alarming news
+# from an ordinary report badly — so "ack" sounds fit news as well. A strong sound needs some confidence.
+VOICE_OPTIONS: dict[str, Option] = {
+    "none": Option(
+        "he greets you, says goodbye, thanks you or makes small talk - you feel nothing special",
+        threshold=0.0,
+    ),
+    "think": Option("he asks you a question you must think about - you ponder", threshold=0.0),
+    "ack": Option("he tells you something ordinary or reports a task done - you take note", threshold=0.0),
+    "surprise": Option(
+        "he tells you alarming or shocking news - an attack, a death, a danger, a great find"
+        " - you are startled",
+        threshold=0.25,
+    ),
+    "displeasure": Option(
+        "he insults you, calls you a liar or a fool, mocks or threatens you, or orders you around rudely"
+        " - you are offended",
+        threshold=0.25,
+    ),
+    "doubt": Option(
+        "he boasts about himself or claims something about himself hard to believe - you doubt him",
+        threshold=0.2,
+    ),
+}
 # carried out by talk.py (holding the body, following); `ru` goes into the conversational model's situation
 POSTURE_OPTIONS: dict[str, Option] = {
     "listen": Option(
@@ -196,18 +224,34 @@ class Reflexes:
             npc.id, "react", state, criteria, REACT_OPTIONS, {"other": other, "target": target}
         )
 
-    async def gesture(
-        self, npc: NpcContext, words: str, intent: Intent | None, clock: str | None = None
-    ) -> Reaction | None:
+    async def phrase(
+        self,
+        npc: NpcContext,
+        words: str,
+        intent: Intent | None,
+        clock: str | None = None,
+        *,
+        gesture: bool = True,
+        voice: bool = True,
+    ) -> dict[str, Reaction]:
+        """The hero just said `words` to the npc: in one question to the model, the sound it makes at once
+        (`voice`) and a gesture while it thinks of an answer (`gesture`, not again within
+        GESTURE_COOLDOWN_S). Answers by question; none when the model did not answer."""
         now = self.clock()
-        if now - self._last_gesture.get(npc.id, float("-inf")) < GESTURE_COOLDOWN_S:
-            return None
-        criteria = {k: o.text for k, o in GESTURE_OPTIONS.items()}
+        asks: dict[str, dict[str, Option]] = {}
+        if voice:
+            asks["voice"] = VOICE_OPTIONS
+        if gesture and now - self._last_gesture.get(npc.id, float("-inf")) >= GESTURE_COOLDOWN_S:
+            asks["gesture"] = GESTURE_OPTIONS
+        if not asks:
+            return {}
         state = self._state(npc, intent, clock, [f'The hero says: "{words}"'])
-        reaction = await self._ask(npc.id, "gesture", state, criteria, GESTURE_OPTIONS, {})
-        if reaction is not None and reaction.applied:
+        reactions = await self._ask_all(
+            npc.id, state, {q: ({k: o.text for k, o in opts.items()}, opts, {}) for q, opts in asks.items()}
+        )
+        if (g := reactions.get("gesture")) is not None and g.applied:
             self._last_gesture[npc.id] = now
-        return reaction
+        return reactions
 
     async def _ask(
         self,
@@ -218,42 +262,54 @@ class Reflexes:
         options: dict[str, Option],
         ids: dict[str, str],
     ) -> Reaction | None:
+        return (await self._ask_all(npc, state, {question: (criteria, options, ids)})).get(question)
+
+    async def _ask_all(
+        self,
+        npc: str,
+        state: str,
+        asks: dict[str, tuple[dict[str, str], dict[str, Option], dict[str, str]]],
+    ) -> dict[str, Reaction]:
+        """Questions about one state in one request: question -> (criteria, options, ids for the actions)."""
         started = self.clock()
         q = {
-            question: {
-                "type": "choice",
-                "instructions": INSTRUCTIONS[question],
-                "criteria": criteria,
-            }
+            question: {"type": "choice", "instructions": INSTRUCTIONS[question], "criteria": criteria}
+            for question, (criteria, _, _) in asks.items()
         }
         out: Outcome = await self.decider.decide(
             f"chat:{npc}#{next(self._ids)}", "urgent", 1.0, self.deadline_ms, state, q
         )
-        if out.kind != "answers" or not out.answers or question not in out.answers:
-            return None
-        answer = out.answers[question]
-        choice, conf = str(answer["choice"]), float(answer["confidence"])
-        opt = options.get(choice)
-        reaction = Reaction(
-            npc,
-            question,
-            choice,
-            conf,
-            applied=False,
-            latency_ms=(self.clock() - started) * 1000,
-            state=state,
-            options=list(criteria),
-        )
-        if opt is None:
-            reaction.why = "unknown option"
-        elif conf < opt.threshold:
-            reaction.why = f"unsure ({conf:.2f} < {opt.threshold})"
-        elif opt.threat and not self.apply_threats:
-            reaction.why = "shadow"
-        else:
-            reaction.actions = [
-                (action, {k: v.format(**ids) if isinstance(v, str) else v for k, v in args.items()})
-                for action, args in opt.actions
-            ]
-            reaction.applied = True
-        return reaction
+        if out.kind != "answers" or not out.answers:
+            return {}
+        latency_ms = (self.clock() - started) * 1000
+        reactions: dict[str, Reaction] = {}
+        for question, (criteria, options, ids) in asks.items():
+            if question not in out.answers:
+                continue
+            answer = out.answers[question]
+            choice, conf = str(answer["choice"]), float(answer["confidence"])
+            opt = options.get(choice)
+            reaction = Reaction(
+                npc,
+                question,
+                choice,
+                conf,
+                applied=False,
+                latency_ms=latency_ms,
+                state=state,
+                options=list(criteria),
+            )
+            if opt is None:
+                reaction.why = "unknown option"
+            elif conf < opt.threshold:
+                reaction.why = f"unsure ({conf:.2f} < {opt.threshold})"
+            elif opt.threat and not self.apply_threats:
+                reaction.why = "shadow"
+            else:
+                reaction.actions = [
+                    (action, {k: v.format(**ids) if isinstance(v, str) else v for k, v in args.items()})
+                    for action, args in opt.actions
+                ]
+                reaction.applied = True
+            reactions[question] = reaction
+        return reactions

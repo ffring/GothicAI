@@ -20,8 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from . import executor, npc_tools
 from .budget import Budget
 from .executor import Intent
-from .fillers import DELAY_S as FILLER_DELAY_S
-from .fillers import Fillers, strip_interjection
+from .fillers import Fillers, strip_said
 from .game import GameError, GameLink
 from .journal import Journal
 from .llm import (
@@ -68,6 +67,9 @@ log = logging.getLogger(__name__)
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 PREPARE_S = 3.0  # what an extension asks the game before a turn
+# the hero's phrase: the model starts after the npc's first sound (the behavioral model's choice, ~50 ms)
+# so that it goes on from it, but waits for that choice no longer than this
+FIRST_REACTION_S = 0.25
 # a model call that goes quiet: no answer this long after the request, or no more of it this long; such a
 # step is asked again once per turn if the npc has said nothing of it yet (a stalled stream would otherwise
 # leave the npc "thinking" for the 10 minutes of the HTTP read timeout)
@@ -308,7 +310,6 @@ class Conversation:
     calm: Intent | None = None  # the intent before an incident goal replaced it
     overlay_free_at: float = 0.0  # lines said on the move: when the last one is over
     reply_id: str = ""  # the latest turn's reply (its subtitle entry)
-    answer_sent: str = ""  # the reply a line of which went to the game (no filler after that)
     hushed: set[str] = field(default_factory=set)  # lines cut off by the hero: never sent
     cut: str | None = None  # the hero interrupted the running turn: what the npc had said of it
     trigger: Message | None = None  # what started the running turn (remembered when it ends)
@@ -374,8 +375,9 @@ class DialogueManager:
         self.budget = budget  # calls nobody asked for (summaries); the player's turns are only counted
         # the npc's intent changed (e.g. for the planner: what it wants from the hero after the chat)
         self.on_intent: Callable[[str, Intent], None] | None = None
-        # the hero said something to the npc (the body may react before the answer)
-        self.on_player_phrase: Callable[[str, str], None] | None = None
+        # the hero said something to the npc (npc, words, whether a sound is wanted): its first reaction,
+        # before the answer (incidents.py asks the behavioral model)
+        self.first_reaction: Callable[[str, str, bool], Awaitable[FirstReaction]] | None = None
         # something the npc's body was to do did not work (npc, what)
         self.on_body_failed: Callable[[str, str], None] | None = None
         # whether the npc is under our control (attached): only then do intents move its body directly
@@ -396,7 +398,7 @@ class DialogueManager:
         self.personas = personas
         self.memory = memory or MemoryStore(":memory:")
         self.tts = tts
-        self.fillers = fillers  # "Хм..." while the model thinks (fillers.py)
+        self.fillers = fillers  # "Хм...", "Что?!" at once, while the model thinks (fillers.py)
         self._tts_paused_until = 0.0
         self.tools = npc_tools.TOOLS if tools else []
         self.branch: str | None = None
@@ -557,8 +559,6 @@ class DialogueManager:
         conv.reply = asyncio.create_task(
             self._turn(conv, Message("user", user_text), "player", overlay=overlay, body=body)
         )
-        if self.on_player_phrase is not None:
-            self.on_player_phrase(conv.npc, user_text)
         return conv.reply
 
     def _said(self, conv: Conversation) -> tuple[list[str], bool, bool]:
@@ -676,42 +676,56 @@ class DialogueManager:
         conv = self.conversations.get(npc.upper())
         return conv is not None and bool(conv.actions)
 
-    async def _filler(self, conv: Conversation, state: TurnState, phrase: str) -> None:
-        """A moment after the hero's phrase no line of the answer is on its way: "Хм..." (fillers.py).
-        Voiced from the npc's fillers made beforehand (none until they are made); without TTS a subtitle."""
+    async def _first_reaction(self, conv: Conversation, phrase: str, voice: bool) -> str:
+        """The npc's first reaction to the hero's phrase, before its answer: the behavioral model's gesture
+        and, if `voice`, a sound ("Хм...", "Что?!", fillers.py). Both or none within FIRST_REACTION_S (a
+        sound without the model's choice: "Хм..." to a question). The sound goes first: the game's queue
+        would hold it until the gesture is over. What was said, "" for nothing."""
+        reaction = FirstReaction()
+        if self.first_reaction is not None:
+            try:
+                reaction = await asyncio.wait_for(
+                    self.first_reaction(conv.npc, phrase, voice), FIRST_REACTION_S
+                )
+            except TimeoutError:
+                log.info("%s: no first reaction within %.2fs", conv.npc, FIRST_REACTION_S)
+        said = await self._sound(conv, phrase, reaction.sound) if voice else ""
+        if reaction.gesture is not None:
+            reaction.gesture()
+        return said
+
+    async def _sound(self, conv: Conversation, phrase: str, kind: str | None) -> str:
+        """Say a sound of `kind` at once (fillers.py picks it, now and then). Voiced from the npc's sounds
+        made beforehand (none until they are made); without TTS a subtitle."""
         assert self.fillers is not None
-        await asyncio.sleep(FILLER_DELAY_S)
-        # the model writes already: its first line is near, a filler would only hold it up in the game
-        if state.first_delta is not None or state.first_line is not None or conv.answer_sent == state.reply:
-            log.debug("%s: no filler, the answer is near", conv.npc)
-            return
-        text = self.fillers.pick(conv.npc, phrase)
-        if text is None:
-            log.debug("%s: no filler for %r this time", conv.npc, phrase)
-            return
+        sound = self.fillers.pick(conv.npc, phrase, kind)
+        if sound is None:
+            log.debug("%s: no sound for %r (%s)", conv.npc, phrase, kind or "no choice")
+            return ""
         wav = None
         if self.tts is not None:
-            wav = self.fillers.audio(conv.npc, conv.persona.voice, text)
+            wav = self.fillers.audio(conv.npc, conv.persona.voice, sound)
             if wav is None or time.monotonic() < self._tts_paused_until:
-                log.debug("%s: no filler, not voiced yet", conv.npc)
-                return
-        self.fillers.said(conv.npc, text)
-        state.filler = text
+                log.debug("%s: no sound, not voiced yet", conv.npc)
+                return ""
+        self.fillers.said(conv.npc, sound)
         line = f"AIB_{next(self._line_ids)}"
-        self._lines[line] = (text, None)
-        log.info("%s (filler): %s", conv.persona.name, text)
+        self._lines[line] = (sound.text, None)
+        log.info("%s (%s): %s", conv.persona.name, sound.kind, sound.text)
         try:
             await self.link.send(
                 SayCmd(
                     npc=conv.npc,
                     line=line,
-                    text=text,
+                    text=sound.text,
                     audio=base64.b64encode(wav).decode() if wav is not None else None,
+                    mood=sound.mood,
                     filler=True,
                 )
             )
         except GameError:
-            pass
+            return ""
+        return sound.text
 
     async def _status(self, conv: Conversation, status: ChatStatus, detail: str | None = None) -> None:
         await self.link.send(ChatStatusCmd(npc=conv.npc, status=status, detail=detail))
@@ -727,7 +741,6 @@ class DialogueManager:
         self._lines[line] = (text, None)
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
-            conv.answer_sent = reply
             if overlay:  # the game does not order lines said on the move
                 await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
                 conv.overlay_free_at = time.monotonic() + line_duration(text)
@@ -772,7 +785,6 @@ class DialogueManager:
                         if line in conv.hushed:
                             return  # interrupted while its voice was being made
                         started = True
-                        conv.answer_sent = reply
                         spoken_at = time.monotonic()
                         await self.link.send(
                             SayCmd(
@@ -912,27 +924,23 @@ class DialogueManager:
         subtitles and the voice as it comes; tool calls are handled after their step. `body`: what the
         npc's body does meanwhile (the behavioral model's choice)."""
         conv.trigger = trigger
-        if conv.new_meeting:
-            conv.new_meeting = False
-            if conv.memory.entries or conv.memory.summary:
-                when = game_time(self.link.snapshots.get(conv.npc))
-                self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
-        for ext in self.extensions:
-            try:
-                await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
-            except (GameError, TimeoutError) as err:
-                log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
-        snap = self.link.snapshots.get(conv.npc)
-        sight = self.sight(conv.npc, snap) if self.sight is not None else None
-        situation_text = npc_tools.render_situation(snap, conv.intent, sight)
-        for ext in self.extensions:
-            if extra := ext.situation(conv.npc):
-                situation_text += "\n" + extra
-        if body:
-            situation_text += f"\nТвоё тело сейчас: {body} — это уже происходит, не противоречь этому."
-        if conv.pending:  # events that came during the last turn
-            situation_text += "\nТолько что: " + "; ".join(c.strip("[]") for c in conv.pending) + "."
-            conv.pending = []
+        await self._status(conv, "thinking")
+        # the hero's phrase: the npc's first reaction comes at once, the model starts after its sound
+        voice = kind == "player" and not overlay and self.fillers is not None
+        first = (
+            asyncio.create_task(self._first_reaction(conv, trigger.content, voice))
+            if kind == "player"
+            else None
+        )
+        try:
+            situation_text, snap = await self._situation(conv, body)
+            sound = await first if first is not None and voice else ""
+        except asyncio.CancelledError:
+            if first is not None:
+                first.cancel()
+            raise
+        if sound:
+            situation_text += f"\nТы уже сказал вслух: «{sound}» — ответ продолжает это, не повторяй его."
         situation = Message("developer", situation_text)
         request: list[Item] = [*conv.history, situation, trigger]
         conv.last_lines = []
@@ -944,6 +952,7 @@ class DialogueManager:
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
             started=time.monotonic(),
+            filler=sound,
         )
         conv.reply_id = state.reply
         trace = TurnTrace(
@@ -957,10 +966,6 @@ class DialogueManager:
             llm=self.llm.name,
             model=getattr(self.llm, "model", None),
         )
-        await self._status(conv, "thinking")
-        filler = None
-        if kind == "player" and not overlay and self.fillers is not None:
-            filler = asyncio.create_task(self._filler(conv, state, trigger.content))
         status = "completed"
         added: list[Item] = list(request)
         retries = STEP_RETRIES
@@ -1014,6 +1019,8 @@ class DialogueManager:
             await self._status(conv, "idle")
             return
         except asyncio.CancelledError:
+            if first is not None:
+                first.cancel()  # its gesture too: the hero speaks again
             if conv.cut is not None:  # the hero interrupted: only what was said counts
                 said, conv.cut = conv.cut, None
                 self._commit(conv, trigger, said)
@@ -1023,9 +1030,6 @@ class DialogueManager:
             self._commit(conv, trigger, state.text)  # the npc remembers what it already said
             trace.close("cancelled")
             raise
-        finally:
-            if filler is not None:
-                filler.cancel()  # the answer is there (or none will come): no "Хм..." after it
 
         self._commit(conv, trigger, state.text)
         trace.close(status)
@@ -1054,6 +1058,31 @@ class DialogueManager:
             task = asyncio.create_task(self._end_after_speech(conv, list(conv.last_lines)))
             conv.actions.add(task)
             task.add_done_callback(conv.actions.discard)
+
+    async def _situation(self, conv: Conversation, body: str | None) -> tuple[str, Snapshot | None]:
+        """The situation of a turn, from what the game and the extensions say now."""
+        if conv.new_meeting:
+            conv.new_meeting = False
+            if conv.memory.entries or conv.memory.summary:
+                when = game_time(self.link.snapshots.get(conv.npc))
+                self._note(conv, f"Новая встреча с героем{f', {when}' if when else ''}")
+        for ext in self.extensions:
+            try:
+                await asyncio.wait_for(ext.prepare(conv.npc), PREPARE_S)
+            except (GameError, TimeoutError) as err:
+                log.warning("%s: %s not ready: %s", conv.npc, type(ext).__name__, err)
+        snap = self.link.snapshots.get(conv.npc)
+        sight = self.sight(conv.npc, snap) if self.sight is not None else None
+        situation_text = npc_tools.render_situation(snap, conv.intent, sight)
+        for ext in self.extensions:
+            if extra := ext.situation(conv.npc):
+                situation_text += "\n" + extra
+        if body:
+            situation_text += f"\nТвоё тело сейчас: {body} — это уже происходит, не противоречь этому."
+        if conv.pending:  # events that came during the last turn
+            situation_text += "\nТолько что: " + "; ".join(c.strip("[]") for c in conv.pending) + "."
+            conv.pending = []
+        return situation_text, snap
 
     async def _step(
         self,
@@ -1147,10 +1176,11 @@ class DialogueManager:
     async def _line(self, conv: Conversation, state: TurnState, line: str) -> None:
         if state.first_line is None:
             state.first_line = time.monotonic() - state.started
-            if state.filler:  # "Хм..." was said already: not "Хм... Хм, ты прав."
-                line = strip_interjection(line)
-                if not line:
-                    return
+        if state.filler:  # said at once already: not "Хм... Хм, ты прав." nor "Что?! Что?! Орки?"
+            line = strip_said(line, state.filler)
+            if not line:
+                return
+            state.filler = ""
         await self._say(conv, line, state.reply, state.overlay, state.mood)
 
     async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
@@ -1311,6 +1341,15 @@ class StaleTurn(Exception):
 
 
 @dataclass
+class FirstReaction:
+    """The behavioral model's first reaction to the hero's phrase (incidents.py)."""
+
+    # the kind of sound the npc makes at once (fillers.KINDS, "none" for nothing); None: no choice
+    sound: str | None = None
+    gesture: Callable[[], None] | None = None  # makes its gesture, if any
+
+
+@dataclass
 class TurnState:
     reply: str  # chat entry id of this turn's text
     splitter: SentenceSplitter
@@ -1326,6 +1365,6 @@ class TurnState:
     given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
     recalled: bool = False  # recall is used once per turn
-    filler: str = ""  # said while the model thought ("Хм..."): the answer does not start with it again
+    filler: str = ""  # said at once ("Хм...", "Что?!"): the answer does not start with it again
     overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it
     tools: list[Tool] = field(default_factory=list)  # offered to the model in this turn
