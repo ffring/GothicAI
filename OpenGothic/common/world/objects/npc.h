@@ -345,6 +345,7 @@ class Npc final {
     bool      hasCollision() const { return physic.hasCollision(); }
 
     void      startDive();
+    bool      transformInto(size_t instance); // shape change spell: another creature until transformBack
     void      transformBack();
 
     auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoice>;

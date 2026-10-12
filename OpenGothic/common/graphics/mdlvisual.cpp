@@ -526,11 +526,18 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
   return changed;
   }
 
+bool MdlVisual::hasQuadrupedIk() const {
+  return FootIk::isEnabled() && skInst->footIk().isQuadruped();
+  }
+
 bool MdlVisual::updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedToGround) {
   Pose& pose = *skInst;
   auto& ik   = pose.footIk();
-  if(!ik.isValid())
+  if(!ik.isValid()) {
+    if(npc.isPlayer())
+      ik.probe(FootIk::playerProbe,FootIk::Input());
     return false;
+    }
 
   const auto in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
   const bool changed = pose.updateFootIk(in);

@@ -143,8 +143,15 @@ void Camera::setViewport(uint32_t w, uint32_t h) {
   }
 
 float Camera::zNear() const {
-  static float near = 10.f;
-  return near;
+  return nearClip;
+  }
+
+void Camera::setNearClip(float zNear) {
+  if(nearClip==zNear)
+    return;
+  nearClip = zNear;
+  if(vpWidth>0 && vpHeight>0)
+    proj.perspective(Gothic::options().cameraFov, float(vpWidth)/float(vpHeight), zNear, zFar());
   }
 
 float Camera::zFar() const {

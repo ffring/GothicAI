@@ -32,6 +32,8 @@ float           PlantLift      = 12.f;   // an ankle this much above the other o
 float           SwingAllowance = 30.f;   // a swinging foot does not pull the body down
 float           SwingHeight    = 30.f;   // a foot swung this high above the standing one goes with the body, not the ground
 float           ToeOff         = 10.f;   // a planted foot behind the hip may stay this much higher, standing on the toes
+float           MaxBodyRoll    = 0.35f;  // radians (~20 degrees): four legs lean the body sideways across a slope
+float           MinPawFold     = 0.35f;  // four legs: a paw comes no closer to its hip than this part of the leg length
 float           ToeOffDist     = 30.f;   // ... fully when it is this far behind the hip
 float           PlantRate      = 200.f;  // 1/s, the ground under a planted foot hardly needs smoothing
 float           SwingRate      = 25.f;   // 1/s, smoothing of the ground under a swinging foot
@@ -43,6 +45,9 @@ float           LegReach       = 0.98f;  // fraction of the full leg length a le
 float           BlendTime      = 0.25f;  // seconds, fade in/out of the whole effect
 constexpr float MinGroundNy    = 0.5f;   // steeper than 60 degrees is a wall, not ground
 constexpr float RayMargin      = 10.f;   // ground rays start this much above MaxRaise
+constexpr float QuadHandHeight = 0.35f;  // front paws lower than this part of the hip height: four legs
+constexpr float QuadSlope      = 0.84f;  // tan(40 degrees): paws far from the middle of the body stand that much higher or lower
+constexpr float HumanLeg       = 87.f;   // hip height of a human in the bind pose: the size the parameters are for
 constexpr float Snap           = 0.01f;  // smoothing stops this close to the target
 constexpr float SnapCos        = 1.f - 1e-6f;
 constexpr float Eps            = 1e-4f;
@@ -62,6 +67,7 @@ const Param params[] = {
   {"MaxSpread",      &MaxSpread},      {"PlantLift",      &PlantLift},
   {"SwingAllowance", &SwingAllowance}, {"SwingHeight",    &SwingHeight},
   {"ToeOff",         &ToeOff},         {"ToeOffDist",     &ToeOffDist},
+  {"MaxBodyRoll",    &MaxBodyRoll},    {"MinPawFold",     &MinPawFold},
   {"PlantRate",      &PlantRate},      {"SwingRate",      &SwingRate},
   {"NormalRate",     &NormalRate},     {"PelvisRate",     &PelvisRate},
   {"ReachRate",      &ReachRate},      {"FloorJump",      &FloorJump},
@@ -173,8 +179,8 @@ Mat3 fromColumns(const Vec3& x, const Vec3& y, const Vec3& z) {
     }};
   }
 
-// Rotates world-space bone matrices around pivot p: tr = W*tr, W = [R | p - R*p]
-void rotateAbout(Matrix4x4* tr, const std::vector<size_t>& bones, const Mat3& r, const Vec3& p) {
+// Rotation R around pivot p as a matrix for world-space bones: tr = W*tr, W = [R | p - R*p]
+Matrix4x4 rotationMatrix(const Mat3& r, const Vec3& p) {
   const Vec3 rp = mul(r,p);
   Matrix4x4 w;
   for(int row=0; row<3; ++row)
@@ -187,7 +193,18 @@ void rotateAbout(Matrix4x4* tr, const std::vector<size_t>& bones, const Mat3& r,
   w.set(3,1,p.y-rp.y);
   w.set(3,2,p.z-rp.z);
   w.set(3,3,1);
+  return w;
+  }
+
+void rotateAbout(Matrix4x4* tr, const std::vector<size_t>& bones, const Mat3& r, const Vec3& p) {
+  const Matrix4x4 w = rotationMatrix(r,p);
   for(auto i:bones)
+    tr[i] = w*tr[i];
+  }
+
+void rotateAll(Matrix4x4* tr, size_t numBones, const Mat3& r, const Vec3& p) {
+  const Matrix4x4 w = rotationMatrix(r,p);
+  for(size_t i=0; i<numBones; ++i)
     tr[i] = w*tr[i];
   }
 
@@ -280,17 +297,25 @@ bool FootIk::isProbing() {
   }
 
 void FootIk::setSkeleton(const Skeleton* sk) {
-  valid  = false;
-  pelvis = 0;
-  weight = 0;
+  skeleton  = sk;
+  valid     = false;
+  quadruped = false;
+  numLegs   = 0;
+  scale     = 1;
+  spread    = MaxSpread;
+  pelvis    = 0;
+  chest     = 0;
+  weight    = 0;
   for(auto& c:legs)
     c = Chain();
   if(sk==nullptr)
     return;
 
-  static const std::string_view names[2][4] = {
-    {"BIP01 L THIGH", "BIP01 L CALF", "BIP01 L FOOT", "BIP01 L TOE0"},
-    {"BIP01 R THIGH", "BIP01 R CALF", "BIP01 R FOOT", "BIP01 R TOE0"},
+  static const std::string_view names[MaxLegs][4] = {
+    {"BIP01 L THIGH",    "BIP01 L CALF",    "BIP01 L FOOT", "BIP01 L TOE0"   },
+    {"BIP01 R THIGH",    "BIP01 R CALF",    "BIP01 R FOOT", "BIP01 R TOE0"   },
+    {"BIP01 L UPPERARM", "BIP01 L FOREARM", "BIP01 L HAND", "BIP01 L FINGER0"},
+    {"BIP01 R UPPERARM", "BIP01 R FOREARM", "BIP01 R HAND", "BIP01 R FINGER0"},
     };
 
   auto& nodes = sk->nodes;
@@ -306,17 +331,19 @@ void FootIk::setSkeleton(const Skeleton* sk) {
         return true;
     return false;
     };
-
-  for(size_t l=0; l<2; ++l) {
+  // a leg: the joint between the two bones can have more bones under it (horselink of a hind paw)
+  auto  mkChain = [&](size_t l) {
     Chain& c = legs[l];
-    c.thigh = find(names[l][0]);
-    c.calf  = find(names[l][1]);
-    c.foot  = find(names[l][2]);
-    c.toe   = find(names[l][3]);
+    c.front    = l>=FrontLeft;
+    c.bendSign = c.front ? -1.f : 1.f;
+    c.thigh    = find(names[l][0]);
+    c.calf     = find(names[l][1]);
+    c.foot     = find(names[l][2]);
+    c.toe      = find(names[l][3]);
     if(c.thigh==size_t(-1) || c.calf==size_t(-1) || c.foot==size_t(-1))
-      return;
+      return false;
     if(!isUnder(c.calf,c.thigh) || !isUnder(c.foot,c.calf))
-      return;
+      return false;
     if(c.toe!=size_t(-1) && !isUnder(c.toe,c.foot))
       c.toe = size_t(-1);
     for(size_t i=0; i<nodes.size(); ++i) {
@@ -327,8 +354,39 @@ void FootIk::setSkeleton(const Skeleton* sk) {
       if(isUnder(i,c.foot))
         c.footTree.push_back(i);
       }
+    return true;
+    };
+
+  if(!mkChain(Left) || !mkChain(Right))
+    return;
+  numLegs = 2;
+  valid   = true;
+
+  // Four legs: the front paws are as low as the hind feet in the bind pose, humanoids hold the hands high
+  if(mkChain(FrontLeft) && mkChain(FrontRight) && sk->tr.size()==nodes.size()) {
+    const float foot = sk->tr[legs[Left].foot].at(3,1);
+    const float hip  = sk->tr[legs[Left].thigh].at(3,1) - foot;
+    const float hand = sk->tr[legs[FrontLeft].foot].at(3,1) - foot;
+    if(hip>Eps && hand<QuadHandHeight*hip) {
+      quadruped = true;
+      numLegs   = 4;
+      }
     }
-  valid = true;
+  if(!quadruped) {
+    legs[FrontLeft]  = Chain();
+    legs[FrontRight] = Chain();
+    }
+
+  // creatures of other sizes: a molerat steps lower than a human, a shadowbeast's paws are far apart
+  if(sk->tr.size()==nodes.size()) {
+    const float leg = sk->tr[legs[Left].thigh].at(3,1) - sk->tr[legs[Left].foot].at(3,1);
+    if(leg>Eps)
+      scale = std::clamp(leg/HumanLeg, 0.3f, 3.f);
+    for(size_t i=0; i<numLegs; ++i) {
+      const auto& t = sk->tr[legs[i].foot];
+      spread = std::max(spread, 2.f*std::sqrt(t.at(3,0)*t.at(3,0) + t.at(3,2)*t.at(3,2)));
+      }
+    }
   }
 
 FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj,
@@ -336,8 +394,9 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
   Input in;
   in.dt     = dt;
   in.floorY = obj.at(3,1);
-  // the test bench measures the ground with IK off too: that is the baseline
-  if(!valid || (!enabled && !probing) || alignedToGround)
+  // the test bench measures the ground with IK off too, and under a body tilted to the ground as
+  // a whole (surface_align): that is the baseline
+  if(!valid || (!enabled && !probing) || (alignedToGround && !probing))
     return in;
   if(npc.isDead() || npc.isUnconscious() || npc.interactive()!=nullptr)
     return in;
@@ -352,8 +411,9 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
     in.hardOff = true;
     return in;
     }
-  // standing and locomotion; other animations (attacks, items, ...) fade out
-  if(bs!=BS_NONE && bs!=(BS_WALK & BS_MAX) && bs!=(BS_SNEAK & BS_MAX) && bs!=BS_RUN && bs!=BS_SPRINT)
+  // Two legs: standing and locomotion; other animations (attacks, items, ...) fade out.
+  // Four legs keep it: a beast attacks standing on the ground, and is not tilted to it otherwise
+  if(!quadruped && bs!=BS_NONE && bs!=(BS_WALK & BS_MAX) && bs!=(BS_SNEAK & BS_MAX) && bs!=BS_RUN && bs!=BS_SPRINT)
     return in;
 
   const Vec3 pos = position(obj);
@@ -363,46 +423,47 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
   if(physic==nullptr)
     return in;
 
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<numLegs; ++i) {
     const Vec3 ankle = legs[i].animAnkle;
-    if(std::abs(ankle.x-pos.x)>MaxSpread || std::abs(ankle.z-pos.z)>MaxSpread)
+    if(std::abs(ankle.x-pos.x)>spread || std::abs(ankle.z-pos.z)>spread)
       return in;
     }
 
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<numLegs; ++i) {
     const Vec3 ankle = legs[i].animAnkle;
     // a bit above MaxRaise: running up a steep slope, the ground under the swinging foot is that
     // high and a ray starting right at MaxRaise misses it (higher ground is not used anyway).
     // Walls are not ground: running against a rock, the rays hit its side
-    const float top = in.floorY + MaxRaise + RayMargin;
-    auto r = physic->ray({ankle.x, top, ankle.z}, {ankle.x, in.floorY - MaxDrop, ankle.z});
+    const float top    = in.floorY + MaxRaise + RayMargin + legs[i].reach;
+    const float bottom = in.floorY - MaxDrop - legs[i].reach;
+    auto r = physic->ray({ankle.x, top, ankle.z}, {ankle.x, bottom, ankle.z});
     in.ground[i].hasCol = r.hasCol && !isWall(r.n);
     in.ground[i].y      = r.v.y;
     in.ground[i].n      = r.n;
     if(legs[i].toe!=size_t(-1)) {
       const Vec3 toe = legs[i].animToe;
-      auto t = physic->ray({toe.x, top, toe.z}, {toe.x, in.floorY - MaxDrop, toe.z});
+      auto t = physic->ray({toe.x, top, toe.z}, {toe.x, bottom, toe.z});
       in.ground[i].toeCol = t.hasCol && !isWall(t.n);
       in.ground[i].toeY   = t.v.y;
       }
     }
-  in.enable = enabled;
+  in.enable = enabled && !alignedToGround;
   return in;
   }
 
 float FootIk::offset(const Chain& c, float floor) const {
-  return std::clamp(c.groundY - floor, -MaxDrop, MaxRaise);
+  return std::clamp(c.groundY - floor, -MaxDrop-c.reach, MaxRaise+c.reach);
   }
 
 // A foot swung high goes where the body carries it and is raised only as far as it has to be to stay
 // above the ground (by the height of the standing ankle): following the whole ground under it lifts
 // a foot kicked back over a downhill slope far too high. A foot near the ground follows the ground:
 // short steps (walking backwards) would shuffle along the ground instead.
-float FootIk::swingOffset(const Chain& c, float floor, float lowAnkle) const {
+float FootIk::swingOffset(const Chain& c, float floor, float lowAnkle, float body) const {
   const float o      = offset(c,floor);
   const float h      = c.animAnkle.y-lowAnkle;
-  const float lift   = std::max(pelvis, o - h);
-  const float follow = std::clamp(1.f - h/SwingHeight, 0.f, 1.f);
+  const float lift   = std::max(body, o - h);
+  const float follow = std::clamp(1.f - h/(SwingHeight*scale), 0.f, 1.f);
   return lift + (o-lift)*follow;
   }
 
@@ -410,72 +471,117 @@ bool FootIk::update(const Input& in) {
   if(!valid)
     return false;
 
-  const float dt = float(in.dt)/1000.f;
-  bool        on = in.enable;
+  const float  dt    = float(in.dt)/1000.f;
+  const size_t pairs = numLegs/2;
+  bool         on    = in.enable;
 
-  // the lower animated ankle stands on the ground, a raised one swings
-  const float lowAnkle = std::min(legs[0].animAnkle.y, legs[1].animAnkle.y);
-  float       plant[2] = {};
-  for(size_t i=0; i<2; ++i)
-    plant[i] = std::clamp(1.f - (legs[i].animAnkle.y-lowAnkle)/PlantLift, 0.f, 1.f);
+  // of each pair, the lower animated ankle stands on the ground, a raised one swings
+  float plant[MaxLegs] = {};
+  for(size_t i=0; i<numLegs; ++i) {
+    const float low = std::min(legs[i].animAnkle.y, legs[i^1].animAnkle.y);
+    plant[i] = std::clamp(1.f - (legs[i].animAnkle.y-low)/(PlantLift*scale), 0.f, 1.f);
+    }
 
   // ground under each foot; a foot without ground keeps its animated height
-  bool  has[2] = {};
-  float gy [2] = {in.floorY, in.floorY};
-  Vec3  n  [2] = {Up, Up};
-  for(size_t i=0; i<2; ++i) {
+  bool  has[MaxLegs] = {};
+  float gy [MaxLegs] = {};
+  Vec3  n  [MaxLegs] = {};
+  for(size_t i=0; i<numLegs; ++i) {
+    gy[i] = in.floorY;
+    n [i] = Up;
     if(!on || !in.ground[i].hasCol)
       continue;
     has[i] = true;
     gy [i] = in.ground[i].y;
     n  [i] = footNormal(in.ground[i].n);
     }
-  if(has[0] && has[1] && std::abs(gy[0]-gy[1])>MaxStep) {
-    // the lower foot is over a ledge
-    const size_t low = gy[0]<gy[1] ? 0 : 1;
-    has[low] = false;
-    gy [low] = in.floorY;
-    n  [low] = Up;
+  for(size_t p=0; p<pairs; ++p) {
+    const size_t l = 2*p, r = l+1;
+    // the paws of a creature walking across a slope are that much higher on one side: a waran's
+    // paws are 80 cm apart and a meter higher on the uphill side of a 40 degree slope
+    float step = MaxStep;
+    if(quadruped) {
+      const Vec3 d = legs[l].animAnkle - legs[r].animAnkle;
+      step += std::sqrt(d.x*d.x + d.z*d.z)*QuadSlope;
+      }
+    if(has[l] && has[r] && std::abs(gy[l]-gy[r])>step) {
+      // the lower foot is over a ledge
+      const size_t low = gy[l]<gy[r] ? l : r;
+      has[low] = false;
+      gy [low] = in.floorY;
+      n  [low] = Up;
+      }
     }
-  if(!has[0] && !has[1])
+  bool any = false;
+  for(size_t i=0; i<numLegs; ++i)
+    any |= has[i];
+  if(!any)
     on = false;
   // a swinging foot goes over the higher of the ground under the ankle and under the toes
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<numLegs; ++i) {
     if(has[i] && in.ground[i].toeCol && in.ground[i].toeY>gy[i] && in.ground[i].toeY-gy[i]<MaxStep)
       gy[i] += (in.ground[i].toeY-gy[i])*(1.f-plant[i]);
     }
 
   // The body follows the lower leg whichever foot stands on it: following only the planted
   // foot makes the body dip on every step of the lower leg (looks like limping).
-  // For a swinging leg that is the ground under its hip, the plane of the planted foot's ground
-  // carried over: running up a slope, the ground under the foot kicked back is far lower than
-  // where the foot lands, following it sinks the body by 30 cm and more
+  // For a swinging leg that is the ground under its hip: running up a slope, the ground under the
+  // foot kicked back is far lower than where the foot lands, following it sinks the body by 30 cm
+  // and more. Only along the way it goes, with the slope under the planted foot: across a slope
+  // the ground under the swinging foot is right (its side stays lower)
   auto legHeight = [&](size_t i) {
-    const size_t o = 1-i;
+    const size_t o = i^1;
     float        h = offset(legs[i],in.floorY);
     const Vec3   g = in.ground[o].n;
     if(plant[o]>plant[i] && has[o] && g.y>0.5f) {
-      const Vec3  a   = legs[o].animAnkle;
-      const Vec3  hip = legs[i].animHip;
-      const float y   = legs[o].groundY - (g.x*(hip.x-a.x) + g.z*(hip.z-a.z))/g.y;
-      h += (std::clamp(y-in.floorY, -MaxDrop, MaxRaise) - h)*(1.f-plant[i]);
+      // the toes of a foot kicked back point anywhere, a lizard's toes point outward
+      const Vec3  f     = quadruped ? forward : legs[o].heading;
+      const Vec3  a     = legs[i].animAnkle;
+      const Vec3  hip   = legs[i].animHip;
+      const float along = (hip.x-a.x)*f.x + (hip.z-a.z)*f.z;
+      // a big creature's paw is far from its hip: noise in the slope grows with it
+      const float lift  = std::clamp(-(g.x*f.x + g.z*f.z)/g.y*along, -SwingAllowance*scale, SwingAllowance*scale);
+      h += (std::clamp(h+lift, -MaxDrop-legs[i].reach, MaxRaise+legs[i].reach) - h)*(1.f-plant[i]);
       }
     return h;
     };
-  auto pelvisTarget = [&]() {
-    const float p = std::min(legHeight(0), legHeight(1));
-    return std::clamp(p, -MaxDrop, 0.f);
+  // Each pair of legs lowers its end of the body: hips, and shoulders of a four-legged creature.
+  // A creature on four legs is not tilted as a whole any more: its ends also go up, on a slope
+  auto pairReach = [&](size_t p) { return std::max(legs[2*p].reach, legs[2*p+1].reach); };
+  auto bodyTop    = [&](size_t p) { return quadruped ? MaxRaise+pairReach(p) : 0.f; };
+  auto bodyLow    = [&](size_t p) { return -MaxDrop-pairReach(p); };
+  // Four legs across a slope: the body leans toward the lower side (the uphill legs would fold up),
+  // what is left over the legs take. Left legs are even: they go up by side(p), right ones down
+  float rollTarget = 0;
+  if(quadruped) {
+    float sum = 0;
+    int   cnt = 0;
+    for(size_t p=0; p<pairs; ++p)
+      if(pairWidth[p]>1.f) {
+        sum += std::atan2(legHeight(2*p)-legHeight(2*p+1), pairWidth[p]);
+        ++cnt;
+        }
+    if(cnt>0)
+      rollTarget = std::clamp(sum/float(cnt), -MaxBodyRoll, MaxBodyRoll);
+    }
+  auto side = [&](size_t i) {
+    const float s = std::tan(roll)*pairWidth[i/2]*0.5f;
+    return (i%2==0) ? s : -s;
+    };
+  auto bodyTarget = [&](size_t p) {
+    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1));
+    return std::clamp(h, bodyLow(p), bodyTop(p));
     };
   // A planted foot must reach the ground: the only reason to lower the body fast
   // (not at once: a sudden dip at every step of the lower leg looks like limping).
   // At the end of a step, behind the body, it may reach it with the toes only: running up a slope
   // the body would go down by 15 cm at every step for the heel to touch
-  auto pelvisLimit = [&]() {
-    float p = 0;
-    for(size_t i=0; i<2; ++i)
-      p = std::min(p, offset(legs[i],in.floorY) + legs[i].slack + (1.f-legs[i].plant)*SwingAllowance +
-                      legs[i].plant*legs[i].behind*ToeOff);
-    return std::max(p, -MaxDrop);
+  auto bodyLimit = [&](size_t p) {
+    float h = bodyTop(p);
+    for(size_t i=2*p; i<2*p+2; ++i)
+      h = std::min(h, offset(legs[i],in.floorY) - side(i) + legs[i].slack + (1.f-legs[i].plant)*SwingAllowance*scale +
+                      legs[i].plant*legs[i].behind*ToeOff*scale);
+    return std::max(h, bodyLow(p));
     };
   // A step is a sudden change of how fast the floor moves, not a big move: running up a steep
   // slope at 30 fps the floor goes up by 8 cm and more every frame
@@ -495,22 +601,32 @@ bool FootIk::update(const Input& in) {
   if(weight!=prevW)
     changed = true;
 
+  float* body[2] = {&pelvis, &chest};
   if(prevW<=0.f) {
     if(weight<=0.f)
       return changed;
     // fading in: start from the current ground without smoothing lag
-    for(size_t i=0; i<2; ++i) {
+    for(size_t i=0; i<numLegs; ++i) {
       legs[i].groundY = gy[i];
       legs[i].plant   = plant[i];
       legs[i].normal  = normalize(Up*(1.f-plant[i]) + footTilt(n[i],legs[i].heading)*plant[i]);
-      legs[i].outward = has[i] ? outwardTarget(n[i],legs[i].heading) : 0.f;
+      legs[i].outward = has[i] && !quadruped ? outwardTarget(n[i],legs[i].heading) : 0.f;
       }
-    pelvis = pelvisTarget();
+    roll = rollTarget;
+    for(size_t p=0; p<pairs; ++p)
+      *body[p] = bodyTarget(p);
     return true;
     }
 
+  {
+    const float prevRoll = roll;
+    approach(roll,rollTarget,1.f - std::exp(-PelvisRate*dt),changed);
+    if(roll!=prevRoll)
+      changed = true;
+  }
+
   const float kN = 1.f - std::exp(-NormalRate*dt);
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<numLegs; ++i) {
     auto&       c    = legs[i];
     const float rate = SwingRate + (PlantRate-SwingRate)*plant[i];
     if(std::abs(gy[i]-c.groundY)>MaxStep) {
@@ -532,35 +648,54 @@ bool FootIk::update(const Input& in) {
       changed = true;
     c.normal = nn;
 
-    approach(c.outward, has[i] ? outwardTarget(n[i],c.heading) : 0.f, kN, changed);
+    // people turn the toes out on a slope; paws do not
+    approach(c.outward, has[i] && !quadruped ? outwardTarget(n[i],c.heading) : 0.f, kN, changed);
     }
 
-  const float pt    = pelvisTarget();
-  const float limit = pelvisLimit();
-  const float prev  = pelvis;
-  dbgTarget = pt;
-  dbgLimit  = limit;
-  if(std::abs(dFloor)>=MaxStep) {
-    pelvis = pt; // teleport
+  for(size_t p=0; p<pairs; ++p) {
+    float&      b     = *body[p];
+    const float bt    = bodyTarget(p);
+    const float limit = bodyLimit(p);
+    const float prev  = b;
+    if(p==0) {
+      dbgTarget = bt;
+      dbgLimit  = limit;
+      }
+    if(std::abs(dFloor)>=MaxStep) {
+      b = bt; // teleport
+      }
+    else {
+      if(std::abs(jump)>FloorJump)
+        b = std::clamp(b-jump, bodyLow(p), bodyTop(p)); // a step: the body stays where it was
+      approach(b,bt,1.f - std::exp(-PelvisRate*dt),changed);
+      if(b>limit)
+        b += (limit-b)*(1.f - std::exp(-ReachRate*dt));
+      }
+    if(b!=prev)
+      changed = true;
     }
-  else {
-    if(std::abs(jump)>FloorJump)
-      pelvis = std::clamp(pelvis-jump, -MaxDrop, 0.f); // a step: the body stays where it was
-    approach(pelvis,pt,1.f - std::exp(-PelvisRate*dt),changed);
-    if(pelvis>limit)
-      pelvis += (limit-pelvis)*(1.f - std::exp(-ReachRate*dt));
-    }
-  if(pelvis!=prev)
-    changed = true;
   return changed;
   }
 
 void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
   if(!valid)
     return;
-  for(auto& c:legs) {
+  for(size_t i=0; i<numLegs; ++i) {
+    auto& c = legs[i];
     if(c.thighTree.empty() || c.thighTree.back()>=numBones)
       return;
+    }
+  // without toes: the paw points where the body goes
+  Vec3 middle = {};
+  if(quadruped) {
+    const Vec3 v = (position(tr[legs[FrontLeft].thigh]) + position(tr[legs[FrontRight].thigh]) -
+                    position(tr[legs[Left].thigh]) - position(tr[legs[Right].thigh]));
+    forward = normalize(Vec3(v.x,0,v.z));
+    for(size_t i=0; i<numLegs; ++i)
+      middle += position(tr[legs[i].thigh])*(1.f/float(numLegs));
+    }
+  for(size_t i=0; i<numLegs; ++i) {
+    auto& c = legs[i];
     c.animAnkle  = position(tr[c.foot]);
     c.animHip    = position(tr[c.thigh]);
     c.finalAnkle = c.animAnkle;
@@ -579,18 +714,27 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
       if(length(hd)>1.f)
         c.heading = normalize(hd);
       }
-    c.behind = std::clamp(-dot(Vec3(c.animAnkle.x-hip.x, 0, c.animAnkle.z-hip.z), c.heading)/ToeOffDist, 0.f, 1.f);
+    else if(length(forward)>0.5f) {
+      c.heading = forward;
+      }
+    c.behind = std::clamp(-dot(Vec3(c.animAnkle.x-hip.x, 0, c.animAnkle.z-hip.z), c.heading)/(ToeOffDist*scale), 0.f, 1.f);
+    // the body pitches: a paw far ahead of or behind the middle stands that much higher or lower
+    // (not sideways: the body does not roll, and higher the rays would find the tops of rocks)
+    if(quadruped)
+      c.reach = std::min(std::abs(dot(Vec3(c.animAnkle.x-middle.x, 0, c.animAnkle.z-middle.z), forward))*QuadSlope,
+                         hip.y-c.animAnkle.y + std::max(0.f, c.slack));
     }
-  const float lowAnkle = std::min(legs[0].animAnkle.y, legs[1].animAnkle.y);
-  {
-    const Vec3 hips = position(tr[legs[Left].thigh]) - position(tr[legs[Right].thigh]);
+  for(size_t l=0; l<numLegs; l+=2) {
+    const Vec3 hips = position(tr[legs[l].thigh]) - position(tr[legs[l+1].thigh]);
     const Vec3 side = normalize(Vec3(hips.x,0,hips.z));
-    legs[Left ].outDir = side;
-    legs[Right].outDir = side*-1.f;
-  }
+    legs[l  ].outDir = side;
+    legs[l+1].outDir = side*-1.f;
+    pairWidth[l/2]   = length(Vec3(hips.x,0,hips.z));
+    }
   const bool dbg = logLevel>=2 || probing;
   if(dbg) {
-    for(auto& c:legs) {
+    for(size_t i=0; i<numLegs; ++i) {
+      auto&        c     = legs[i];
       const size_t id[4] = {c.thigh, c.calf, c.foot, c.toe!=size_t(-1) ? c.toe : c.foot};
       for(size_t k=0; k<4; ++k)
         c.dbgAnim[k] = c.dbgFinal[k] = position(tr[id[k]]);
@@ -607,10 +751,37 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
     for(size_t i=0; i<numBones; ++i)
       tr[i].set(3,1,tr[i].at(3,1)+dy);
     }
+  if(quadruped) {
+    // the body pitches around the hips: the shoulders go down to the front paws' ground
+    const Vec3  hips      = (position(tr[legs[Left].thigh]) + position(tr[legs[Right].thigh]))*0.5f;
+    const Vec3  shoulders = (position(tr[legs[FrontLeft].thigh]) + position(tr[legs[FrontRight].thigh]))*0.5f;
+    const Vec3  v         = shoulders - hips;
+    const float d         = (chest-pelvis)*weight;
+    if(std::abs(d)>Snap && length(v)>1.f)
+      rotateAll(tr,numBones,rotationBetween(normalize(v),normalize(v+Up*d)),hips);
 
-  for(auto& c:legs) {
+    // and leans sideways around its middle, across a slope
+    const float r = roll*weight;
+    if(std::abs(r)>1e-3f) {
+      const Vec3 left  = (position(tr[legs[Left ].thigh]) + position(tr[legs[FrontLeft ].thigh]))*0.5f;
+      const Vec3 right = (position(tr[legs[Right].thigh]) + position(tr[legs[FrontRight].thigh]))*0.5f;
+      const Vec3 sd    = Vec3(left.x-right.x, 0, left.z-right.z);
+      if(length(sd)>1.f) {
+        const Vec3 sn = normalize(sd);
+        rotateAll(tr,numBones,rotationBetween(sn,normalize(sn+Up*std::tan(r))),(left+right)*0.5f);
+        }
+      }
+    }
+
+  for(size_t i=0; i<numLegs; ++i) {
+    auto&       c    = legs[i];
+    const float low  = std::min(c.animAnkle.y, legs[i^1].animAnkle.y);
     Vec3 target = c.animAnkle;
-    target.y += swingOffset(c,floor,lowAnkle)*weight;
+    // the body end this leg hangs from; a body leaning sideways is higher on one side
+    float body = c.front ? chest : pelvis;
+    if(quadruped)
+      body += std::tan(roll)*pairWidth[i/2]*0.5f*(i%2==0 ? 1.f : -1.f);
+    target.y += swingOffset(c,floor,low,body)*weight;
     // the smoothed normal lags behind a turning foot: limit it to the current heading once more
     const Vec3 n = normalize(Up*(1.f-weight) + footTilt(c.normal,c.heading)*weight);
     Vec3      animBend;
@@ -637,6 +808,15 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
         }
       }
     }
+  if(dbg) {
+    dbgBad = 0;
+    for(size_t i=0; i<numBones; ++i)
+      for(int k=0; k<16; ++k)
+        if(!std::isfinite(tr[i].at(k/4,k%4))) {
+          ++dbgBad;
+          break;
+          }
+    }
   }
 
 void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3& normal, float outward, float toeOff) const {
@@ -654,10 +834,14 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
   // a straight knee has no direction and wobbles: the leg does not straighten beyond LegReach,
   // or beyond the animation if it is straighter already (standing)
   const float lmax = std::min(std::max((lab+lbf)*LegReach, length(f-a)), (lab+lbf)*0.999f);
-  lat = std::clamp(lat, std::abs(lab-lbf)+Eps, lmax);
+  // a paw folded up to the body looks broken (a zigzag): it had better go into the ground
+  float lmin = std::abs(lab-lbf)+Eps;
+  if(quadruped)
+    lmin = std::max(lmin, std::min((lab+lbf)*MinPawFold, length(f-a)));
+  lat = std::clamp(lat, lmin, lmax);
 
   // The knee bends in the plane of the animated leg, turned toward the target.
-  // A nearly straight animated leg bends toward the toes (weighted by how level the foot is).
+  // A nearly straight animated leg bends toward the toes (an elbow away from them).
   // Note: the bend must not be taken relative to the target line: at a heel strike uphill
   // the animated knee is behind that line and the knee would flip backwards.
   Vec3 bend = b-a;
@@ -665,7 +849,7 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
     const Vec3  toe     = position(tr[c.toe]) - f;
     const float footLen = length(toe);
     if(footLen>Eps)
-      bend += Vec3(toe.x,0,toe.z)*(0.05f*lab/footLen);
+      bend += Vec3(toe.x,0,toe.z)*(0.05f*lab/footLen*c.bendSign);
     }
   const Vec3 pole = normalize(cross(cross(f-a,bend),dir));
   if(length(pole)<Eps)
@@ -725,7 +909,13 @@ void FootIk::solve(Matrix4x4* tr, const Chain& c, const Vec3& target, const Vec3
 void FootIk::probe(Probe& p, const Input& in) const {
   if(!probing)
     return;
+  p.skeleton = skeleton;
   p.valid   = valid;
+  p.numLegs = uint8_t(numLegs);
+  p.badBones = dbgBad;
+  if(!valid)
+    return;
+  p.chest   = chest;
   p.enable  = in.enable;
   p.hardOff = in.hardOff;
   p.weight  = weight;
@@ -733,7 +923,7 @@ void FootIk::probe(Probe& p, const Input& in) const {
   p.target  = dbgTarget;
   p.limit   = dbgLimit;
   p.floorY  = in.floorY;
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<numLegs; ++i) {
     auto&       l   = p.leg[i];
     auto&       c   = legs[i];
     const auto& g   = in.ground[i];
@@ -748,7 +938,7 @@ void FootIk::probe(Probe& p, const Input& in) const {
     l.toeCol  = g.toeCol;
     l.toeY    = g.toeY;
     l.smoothY = c.groundY;
-    l.plant   = std::clamp(1.f - (c.animAnkle.y-std::min(legs[0].animAnkle.y,legs[1].animAnkle.y))/PlantLift, 0.f, 1.f);
+    l.plant   = std::clamp(1.f - (c.animAnkle.y-std::min(c.animAnkle.y,legs[i^1].animAnkle.y))/(PlantLift*scale), 0.f, 1.f);
     l.slack   = c.slack;
     l.err     = (c.finalAnkle.y - (in.floorY + off)) - (c.animAnkle.y - in.floorY);
     l.kneeDev = c.kneeDev;

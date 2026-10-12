@@ -86,6 +86,7 @@ class Pose final {
     void               setHeadRotation(float dx, float dz);
     Tempest::Vec2      headRotation() const;
     FootIk&            footIk() { return ik; }
+    const FootIk&      footIk() const { return ik; }
     bool               updateFootIk(const FootIk::Input& in);
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
     auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;

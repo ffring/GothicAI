@@ -13,9 +13,11 @@
 #include <string>
 #include <vector>
 
+#include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
+#include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -164,6 +166,10 @@ struct Rgba { uint8_t r,g,b,a; };
 const Rgba White  = {255,255,255,170};
 const Rgba LegL   = { 60,200,255,255};
 const Rgba LegR   = {255,140, 40,255};
+const Rgba LegFL  = {150,140,255,255};
+const Rgba LegFR  = {255,110,190,255};
+const Rgba LegColor[] = {LegL, LegR, LegFL, LegFR};
+const char* const LegName[] = {"L", "R", "FL", "FR"};
 const Rgba Plant  = { 60,230, 80,255};
 const Rgba Swing  = {240,220, 60,255};
 const Rgba Red    = {255, 50, 50,255};
@@ -299,6 +305,7 @@ struct Bench {
   bool        overlay   = true;
   bool        zoom      = true;
   bool        bright    = true;  // auto exposure: forests and interiors are too dark to see the legs
+  float       clip      = 0;     // > 0: everything closer to the camera than the subject minus this is clipped away
 
   Vec3        prevPos;
   bool        hasPrev   = false;
@@ -376,8 +383,10 @@ void finish() {
   bench.csv  = nullptr;
   bench.done = true;
   DrawCommands::hiddenTypes = 0;
-  if(auto c = Gothic::inst().camera())
+  if(auto c = Gothic::inst().camera()) {
     c->setMarvinMode(Camera::M_Normal);
+    c->setNearClip(10);
+    }
   say("done");
   if(!keepRunning)
     SystemApi::exit();
@@ -466,6 +475,9 @@ void updateCamera(World& w, Npc& pl) {
   if(bench.cam==C_Follow || bench.cam==C_World)
     org = camOrigin(w,pl,bench.camAngle);
   lookFrom(org,tgt);
+  if(bench.clip>0)
+    if(auto cam = Gothic::inst().camera())
+      cam->setNearClip(std::max(10.f, (org-tgt).length() - bench.clip));
 
   for(size_t i=0; i<2; ++i)
     if(hidden(w,org,ankle(pl,i)+Vec3(0,5,0)))
@@ -478,8 +490,8 @@ void updateCamera(World& w, Npc& pl) {
   }
 
 void writeHeader() {
-  std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,pelvis,pelvis_target,pelvis_limit,floor");
-  for(const char* s:{"l","r"}) {
+  std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,nlegs,bad,pelvis,chest,pelvis_target,pelvis_limit,floor");
+  for(const char* s:{"l","r","fl","fr"}) {
     std::fprintf(bench.csv,",%s_plant,%s_has,%s_gy,%s_nx,%s_ny,%s_nz,%s_toehas,%s_toey,%s_smooth,%s_err,%s_knee,%s_tilt,%s_roll,%s_yaw,%s_out,%s_slack",
                  s,s,s,s,s,s,s,s,s,s,s,s,s,s,s,s);
     for(const char* j:{"hip","kneea","anka","toea","kneef","ankf","toef"})
@@ -497,10 +509,10 @@ void writeRow(Npc& pl) {
     }
   auto&      p   = FootIk::playerProbe;
   const Vec3 pos = pl.position();
-  std::fprintf(bench.csv,"%s,%llu,%llu,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u,%u,%d,%d,%d,%.3f,%.2f,%.2f,%.2f,%.2f",
+  std::fprintf(bench.csv,"%s,%llu,%llu,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u,%u,%d,%d,%d,%.3f,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f",
                bench.recName.c_str(),(unsigned long long)bench.recFrame,(unsigned long long)(bench.time-bench.recStart),
                pos.x,pos.y,pos.z,pl.rotation(),bench.speed,unsigned(pl.bodyStateMasked()),unsigned(pl.walkMode()),unsigned(bench.occl),
-               int(p.valid),int(p.enable),int(p.hardOff),p.weight,p.pelvis,p.target,p.limit,p.floorY);
+               int(p.valid),int(p.enable),int(p.hardOff),p.weight,unsigned(p.numLegs),unsigned(p.badBones),p.pelvis,p.chest,p.target,p.limit,p.floorY);
   for(auto& l:p.leg) {
     std::fprintf(bench.csv,",%.3f,%d,%.2f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f",
                  l.plant,int(l.hasCol),l.groundY,l.n.x,l.n.y,l.n.z,int(l.toeCol),l.toeY,l.smoothY,l.err,l.kneeDev,l.tilt,l.roll,l.yaw,l.outward,l.slack);
@@ -689,13 +701,31 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="view") {
     const std::string m = a.size()>1 ? a[1] : "full";
-    if(m=="clean")
-      DrawCommands::hiddenTypes = (1u<<DrawCommands::Static) | (1u<<DrawCommands::Movable) |
-                                  (1u<<DrawCommands::Morph)  | (1u<<DrawCommands::Pfx);
+    // Static and Movable objects share draw commands (same shaders), hiding them by type hides
+    // parts of creatures too: what stands between the camera and the subject is clipped instead
+    bench.clip = 0;
+    DrawCommands::hiddenTypes = 0;
+    if(m=="clean") {
+      bench.clip = num(a,2,100);
+      DrawCommands::hiddenTypes = (1u<<DrawCommands::Pfx);
+      }
     else if(m=="nopfx")
       DrawCommands::hiddenTypes = (1u<<DrawCommands::Pfx);
-    else
+    else if(m=="hide") {
+      // view hide static movable morph pfx ...
       DrawCommands::hiddenTypes = 0;
+      for(size_t i=2; i<a.size(); ++i) {
+        const std::string& t = a[i];
+        if(t=="static")   DrawCommands::hiddenTypes |= (1u<<DrawCommands::Static);
+        if(t=="movable")  DrawCommands::hiddenTypes |= (1u<<DrawCommands::Movable);
+        if(t=="morph")    DrawCommands::hiddenTypes |= (1u<<DrawCommands::Morph);
+        if(t=="pfx")      DrawCommands::hiddenTypes |= (1u<<DrawCommands::Pfx);
+        if(t=="animated") DrawCommands::hiddenTypes |= (1u<<DrawCommands::Animated);
+        }
+      }
+    if(bench.clip<=0)
+      if(auto cam = Gothic::inst().camera())
+        cam->setNearClip(10);
     }
   else if(c=="overlay") {
     const std::string m = a.size()>1 ? a[1] : "on";
@@ -755,9 +785,39 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="pos") {
     const Vec3 p = pl.position();
     char buf[256];
-    std::snprintf(buf,sizeof(buf),"pos %.0f %.0f %.0f rot=%.1f bs=%u air=%d swim=%d slide=%d mob=%d",p.x,p.y,p.z,pl.rotation(),
-                  unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr));
+    std::snprintf(buf,sizeof(buf),"pos %.0f %.0f %.0f rot=%.1f bs=%u air=%d swim=%d slide=%d mob=%d guild=%u aligned=%d",p.x,p.y,p.z,pl.rotation(),
+                  unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr),
+                  unsigned(pl.guild()),int(w.script().guildVal().surface_align[pl.guild()]));
     say(buf);
+    }
+  else if(c=="transform") {
+    // the player becomes a creature, like the shape change spell; "transform back"
+    const std::string name = a.size()>1 ? a[1] : "";
+    if(name=="back") {
+      pl.transformBack();
+      say("transform back");
+      return;
+      }
+    const size_t id = w.script().findSymbolIndex(name);
+    const bool   ok = id!=size_t(-1) && pl.transformInto(id);
+    bench.hasPrev = false;
+    say(std::string(ok ? "transform " : "transform failed: ") + name);
+    }
+  else if(c=="bones") {
+    // skeleton of the player: index, parent, name
+    auto sk = FootIk::playerProbe.skeleton;
+    if(sk==nullptr) {
+      say("bones: no skeleton");
+      return;
+      }
+    say("bones: " + std::to_string(sk->nodes.size()) + " nodes, foot ik " + (FootIk::playerProbe.valid ? "valid" : "not valid"));
+    for(size_t i=0; i<sk->nodes.size(); ++i) {
+      char buf[256];
+      const auto& t = sk->tr[i];
+      std::snprintf(buf,sizeof(buf),"bone %zu parent %d %s at %.0f %.0f %.0f",i,int(sk->nodes[i].parent==size_t(-1) ? -1 : int(sk->nodes[i].parent)),
+                    sk->nodes[i].name.c_str(),t.at(3,0),t.at(3,1),t.at(3,2));
+      say(buf);
+      }
     }
   else if(c=="quit") {
     bench.pc = bench.prog.size();
@@ -872,10 +932,12 @@ void drawOverlay(Pixmap& pm) {
   float zx = -1, zy = -1;
   if(cam!=nullptr && p.valid) {
     const Matrix4x4 vp = cam->viewProj();
-    drawLeg(cv,vp,p.leg[0],LegL);
-    drawLeg(cv,vp,p.leg[1],LegR);
-    // zoom center: between the ankles
-    const Vec3 m = (p.leg[0].final[2]+p.leg[1].final[2])*0.5f;
+    for(size_t i=0; i<p.numLegs; ++i)
+      drawLeg(cv,vp,p.leg[i],LegColor[i]);
+    // zoom center: between the feet
+    Vec3 m = {};
+    for(size_t i=0; i<p.numLegs; ++i)
+      m += p.leg[i].final[2]*(1.f/float(p.numLegs));
     float x = m.x, y = m.y, z = m.z, ww = 1;
     vp.project(x,y,z,ww);
     if(ww>1e-3f) {
@@ -913,13 +975,15 @@ void drawOverlay(Pixmap& pm) {
 
   int y = 6;
   const int x = cv.w - 4*2*24 - 6;
-  std::snprintf(buf,sizeof(buf),"IK %s W%.2f P%.1f",p.enable ? "ON" : "OFF",double(p.weight),double(p.pelvis));
+  if(p.numLegs>2)
+    std::snprintf(buf,sizeof(buf),"IK %s W%.2f P%.1f C%.1f",p.enable ? "ON" : "OFF",double(p.weight),double(p.pelvis),double(p.chest)); else
+    std::snprintf(buf,sizeof(buf),"IK %s W%.2f P%.1f",p.enable ? "ON" : "OFF",double(p.weight),double(p.pelvis));
   cv.text(x,y,buf,2,Text);
   y += 16;
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<p.numLegs; ++i) {
     auto& l = p.leg[i];
-    std::snprintf(buf,sizeof(buf),"%s %s E%.1f K%.0f",i==0 ? "L" : "R",l.plant>0.5f ? "PLANT" : "SWING",double(l.err),double(l.kneeDev));
-    cv.text(x,y,buf,2,i==0 ? LegL : LegR);
+    std::snprintf(buf,sizeof(buf),"%s %s E%.1f K%.0f",LegName[i],l.plant>0.5f ? "PLANT" : "SWING",double(l.err),double(l.kneeDev));
+    cv.text(x,y,buf,2,LegColor[i]);
     y += 16;
     }
   if(bench.occl!=0) {

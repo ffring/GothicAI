@@ -17,6 +17,8 @@ from collections import defaultdict
 
 FPS = 30
 TOP_EVENTS = 12
+LEGS = ("l", "r", "fl", "fr")  # hind (or the only) pair, front pair of a four-legged creature
+OTHER = {"l": "r", "r": "l", "fl": "fr", "fr": "fl"}
 CONTACT = ("float", "sink", "toe_sink")
 
 # flag: (threshold, unit, what it means)
@@ -51,6 +53,11 @@ def load(out):
     return segs
 
 
+def legs_of(r):
+    n = r.get("nlegs")
+    return LEGS[:4] if n is not None and n >= 4 else LEGS[:2]
+
+
 def vec(r, leg, joint):
     return (r[f"{leg}_{joint}_x"], r[f"{leg}_{joint}_y"], r[f"{leg}_{joint}_z"])
 
@@ -82,8 +89,7 @@ def toe_yaw(r, leg):
         return math.nan  # the foot points almost straight down: its horizontal direction is noise
     cos = (a[0] * f[0] + a[2] * f[2]) / (la * lf)
     ang = math.degrees(math.acos(max(-1.0, min(1.0, cos))))
-    other = "r" if leg == "l" else "l"
-    side = sub(vec(r, leg, "hip"), vec(r, other, "hip"))
+    side = sub(vec(r, leg, "hip"), vec(r, OTHER[leg], "hip"))
     grow = (f[0] / lf - a[0] / la) * side[0] + (f[2] / lf - a[2] / la) * side[2]
     return ang if grow >= 0 else -ang
 
@@ -93,8 +99,11 @@ def frame_flags(prev2, prev, r):
     out = []
     on = r["ik_valid"] > 0 and r["ik_w"] > 0.99
     if prev is not None and on and prev["ik_w"] > 0.99:
-        out.append(("pelvis", "-", abs(r["pelvis"] - prev["pelvis"])))
-    for leg in ("l", "r"):
+        jump = abs(r["pelvis"] - prev["pelvis"])
+        if "chest" in r and legs_of(r) == LEGS:
+            jump = max(jump, abs(r["chest"] - prev["chest"]))
+        out.append(("pelvis", "-", jump))
+    for leg in legs_of(r):
         planted = r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0
         if on and planted:
             err = r[f"{leg}_err"]
@@ -139,7 +148,7 @@ def analyze(rows):
             on += 1
         if r["occl"] > 0:
             occl += 1
-        for leg in ("l", "r"):
+        for leg in legs_of(r):
             # with IK off too: that is how far the animation misses the ground
             if (r["ik_w"] > 0.99 or r["ik_w"] <= 0) and r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0:
                 errs.append(abs(contact_err(r, leg)))
@@ -160,20 +169,37 @@ def analyze(rows):
                 current[key] = ev
                 events.append(ev)
         prev2, prev = prev, r
+    # how much the height of a planted foot above the ground varies: ~0 when it stands on the ground,
+    # whatever the creature; works for a body tilted to the ground as a whole too (no floor plane needed)
+    gaps = defaultdict(list)
+    for r in rows:
+        for leg in legs_of(r):
+            if r[f"{leg}_plant"] > 0.9 and r[f"{leg}_has"] > 0:
+                gaps[leg].append(r[f"{leg}_ankf_y"] - r[f"{leg}_gy"])
+    dev = []
+    for v in gaps.values():
+        if len(v) > 5:
+            med = sorted(v)[len(v) // 2]
+            dev += [abs(x - med) for x in v]
+    if dev:
+        dev.sort()
+        stats["spread"] = dev[int(len(dev) * 0.9)]
     errs.sort()
     if errs:
         stats["contact_p50"] = errs[len(errs) // 2]
         stats["contact_p90"] = errs[int(len(errs) * 0.9)]
         stats["contact_max"] = errs[-1]
-    # limp: the body is lower on the steps of one leg than on the other's
-    stance = {"l": [], "r": []}
+    # limp: the body is lower on the steps of one leg than on the other's (each pair of legs)
+    stance = {leg: [] for leg in LEGS}
     for r in rows:
         if r["ik_w"] > 0.99:
-            for leg, other in (("l", "r"), ("r", "l")):
-                if r[f"{leg}_plant"] > 0.99 and r[f"{other}_plant"] < 0.5:
-                    stance[leg].append(r["pelvis"])
-    if len(stance["l"]) > 5 and len(stance["r"]) > 5:
-        stats["limp"] = abs(sum(stance["l"]) / len(stance["l"]) - sum(stance["r"]) / len(stance["r"]))
+            for leg in legs_of(r):
+                if r[f"{leg}_plant"] > 0.99 and r[f"{OTHER[leg]}_plant"] < 0.5:
+                    stance[leg].append(r["chest"] if leg.startswith("f") else r["pelvis"])
+    for a, b in (("l", "r"), ("fl", "fr")):
+        if len(stance[a]) > 5 and len(stance[b]) > 5:
+            limp = abs(sum(stance[a]) / len(stance[a]) - sum(stance[b]) / len(stance[b]))
+            stats["limp"] = max(stats.get("limp", 0.0), limp)
     stats["ik_on"] = on / max(1, len(rows))
     stats["hidden"] = occl / max(1, len(rows))
     stats["speed"] = sum(r["speed"] for r in rows) / max(1, len(rows))
@@ -233,16 +259,17 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | limp cm | events |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | events |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
         mx = st.get("contact_max")
         contact = "-" if p90 is None else f"{p90:.1f} / {mx:.1f}"
         limp = "-" if "limp" not in st else f"{st['limp']:.1f}"
+        gap = "-" if "spread" not in st else f"{st['spread']:.1f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {limp} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
@@ -314,6 +341,7 @@ def diff(a, b):
 
         def c(st):
             ret = "-" if "contact_p90" not in st else f"{st['contact_p90']:.1f}/{st['contact_max']:.1f}"
+            ret += "" if "spread" not in st else f" spread {st['spread']:.1f}"
             return ret + ("" if "limp" not in st else f" limp {st['limp']:.1f}")
         print(f"| {seg} | {c(res[0][0])} | {c(res[1][0])} | {changes or 'same'} |")
     print()

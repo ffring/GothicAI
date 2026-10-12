@@ -3228,15 +3228,20 @@ void Npc::commitSpell() {
       }
     }
 
-  if(spellInfo!=0 && transformSpl==nullptr) {
-    transformSpl.reset(new TransformBack(*this));
-    invent.updateView(*this);
-    visual.clearOverlays();
+  if(spellInfo!=0 && transformInto(size_t(spellInfo)))
+    spellInfo = 0;
+  }
 
-    owner.script().initializeInstanceNpc(hnpc, size_t(spellInfo));
-    spellInfo  = 0;
-    hnpc->level = transformSpl->hnpc->level;
-    }
+bool Npc::transformInto(size_t instance) {
+  if(transformSpl!=nullptr)
+    return false;
+  transformSpl.reset(new TransformBack(*this));
+  invent.updateView(*this);
+  visual.clearOverlays();
+
+  owner.script().initializeInstanceNpc(hnpc, instance);
+  hnpc->level = transformSpl->hnpc->level;
+  return true;
   }
 
 void Npc::forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const {
@@ -4771,7 +4776,9 @@ bool Npc::canSeeItem(const Item& it, bool freeLos) const {
 
 bool Npc::isAlignedToGround() const {
   auto gl = guild();
-  return (owner.script().guildVal().surface_align[gl]!=0) || isDead() || isLie();
+  // four-legged creatures stand on the ground with foot IK instead of tilting as a whole
+  const bool align = owner.script().guildVal().surface_align[gl]!=0 && !visual.hasQuadrupedIk();
+  return align || isDead() || isLie();
   }
 
 Vec3 Npc::groundNormal() const {

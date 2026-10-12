@@ -17,6 +17,9 @@ random idle animations the game picks).
 Scenarios for foot IK: `ik-sweep` (12 slopes all over the world: run up, run down, walk across; ~2 min),
 `ik-stairs` (8 stairs: walk up and down, run up), `ik-moves` (stand, turn on the spot, strafe, walk
 backwards, sneak), `ik-ab` (IK off and on on the same run), `smoke` (the bench itself).
+Four legs: `quad-wolf` (the player as a wolf on 6 slopes), `quad-zoo` (molerat, shadowbeast, waran,
+lurker, giant bug, sheep on 2 slopes each). The player becomes the creature (`transform`), so the
+usual player commands drive it.
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -58,24 +61,29 @@ git worktree remove --force /tmp/before
   under a planted foot, yellow under a swinging one; the short line is the ground normal;
 - bottom right: the feet zoomed in;
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
-- top right: IK on/off, weight `W`, pelvis offset `P` (cm), per leg planted/swinging, contact error `E`
-  (cm), knee deviation from the animation `K` (degrees); `HIDDEN` if something is between the camera and
-  an ankle.
+- top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
+  leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
+  if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
 
 ## Events (scripts/bench_report.py)
 
 | Flag | Fires when |
 |---|---|
 | `float` / `sink` | a planted ankle is more than 3 cm above / below the ground it should stand on |
+| `pelvis` | the body height (hips or shoulders) jumps more than 2 cm in one frame |
 | `toe_sink` | the toes go 3 cm deeper into the ground than in the animation (steps lower than 25 cm) |
 | `pop` | the IK correction of a knee, ankle or toe changes abruptly: second difference over 3 frames above 12 cm |
-| `pelvis` | the body height jumps more than 2 cm in one frame |
 | `knee` | the knee bends more than 25 degrees away from the animated direction |
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
+
+Columns of the table: `contact` is the error of planted feet against a flat animation floor (only
+meaningful with IK on); `spread` is how much the height of planted feet above the ground varies (works
+for a body tilted as a whole too: compare IK off and on); `limp` is how much lower the body is on the
+steps of one leg of a pair than on the other's.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 
@@ -97,12 +105,15 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
-| `view clean\|nopfx\|full` | `clean` hides everything but the landscape and characters: trees, bushes, objects, particles |
+| `view clean [margin]\|nopfx\|full` | `clean` clips away everything closer to the camera than the subject minus `margin` (default 100 cm): trees and bushes in between; particles are hidden. The ground right in front of the camera is clipped too (white) |
+| `view hide static movable morph pfx animated` | hide draw types (debugging only: static and movable objects share draw commands, hiding them hides parts of creatures too) |
 | `overlay on\|off`, `overlay zoom on\|off`, `overlay bright on\|off` | `bright` stretches dark images (forests, interiors) |
 | `rec <name> [novideo]`, `stop` | record a segment (video and metrics, or metrics only) |
 | `shot <name>` | one PNG |
 | `label <text>` | text on the overlay |
-| `ik on\|off`, `ik param <name> <value>`, `ik params` | foot IK and its parameters, without rebuilding |
+| `ik on\|off`, `ik param <name> <value>`, `ik params` | foot IK and its parameters, without rebuilding; `ik off` on a four-legged creature brings back the old whole-body tilt |
+| `transform <instance>`, `transform back` | the player becomes a creature (`Wolf`, `Molerat`, `Shadowbeast`, `Waran`, ...), like the shape change spell |
+| `bones` | the player's skeleton to `bench.log`: index, parent, name, bind pose position |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
@@ -117,5 +128,6 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 ## Engine side
 
 `OpenGothic/common/testbench.cpp`, inert unless `OPENGOTHIC_BENCH` is set. Hooks: the fixed time step and
-the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `DrawCommands::hiddenTypes`
-(`view clean`), and `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).
+the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `Camera::setNearClip`
+(`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
+`TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).
