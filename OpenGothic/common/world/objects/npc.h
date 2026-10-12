@@ -296,6 +296,8 @@ class Npc final {
     Archer&   archer() { return arch; }
     void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {});
     bool      hasManualAim() const { return manualAim; }
+    // the animation of that name plays k times as fast from its next start (the reload by dexterity)
+    void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
     auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
     auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
     bool      isAimSteady() const;

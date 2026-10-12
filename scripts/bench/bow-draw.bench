@@ -49,3 +49,16 @@ wait 300
 rec master_front
 volley 2 600
 stop
+
+# the reload at another tempo (dexterity sets it, 0.85..1.6): the arrow in the hand, the string's morphs,
+# the sounds - each event once, in the same order (bench.log: "anim event", "anim morph")
+cam follow 220 150 60
+wait 300
+animspeed T_BOWRELOAD 0.7
+rec tempo07
+volley 2 300
+stop
+animspeed T_BOWRELOAD 1.5
+rec tempo15
+volley 2 300
+stop

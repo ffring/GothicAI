@@ -1518,6 +1518,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       Archery::setEnabled(m=="on"); else
       say("unknown manual command: " + line);
     }
+  else if(c=="animspeed") {
+    // animspeed <anim> <k>: the hero's animation of that name plays k times as fast from its next start
+    // (the reload's tempo is set by the manual aim from dexterity: this overrides it until then)
+    if(a.size()<3) {
+      say("animspeed: <anim> <k>");
+      return;
+      }
+    pl.setAnimSpeed(a[1],num(a,2,1));
+    say("animspeed " + a[1] + " " + a[2]);
+    }
   else if(c=="bowdraw") {
     // bowdraw on|off: the hand draws the string as far as the bow is drawn (graphics/mesh/bowdraw)
     const std::string m = a.size()>1 ? a[1] : "";
@@ -1545,11 +1555,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const auto  wp = pl.currentRangedWeapon();
     const auto  st = Archery::stats(pl,wp);
     char buf[360];
-    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg",
+    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg reload x%.2f",
                   pl.attribute(ATR_STRENGTH),pl.attribute(ATR_DEXTERITY),pl.hitChance(TALENT_BOW),pl.hitChance(TALENT_CROSSBOW),
                   wp!=nullptr ? int(wp->handle().damage_total) : -1,
                   double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
-                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)));
+                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)),
+                  double(st.reload));
     say(buf);
     }
   else if(c=="zones") {

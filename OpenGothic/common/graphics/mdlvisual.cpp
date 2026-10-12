@@ -792,6 +792,10 @@ Vec3 MdlVisual::mapWeaponBone() const {
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
   }
 
+void MdlVisual::setAnimSpeed(std::string_view name, float k) {
+  skInst->setAnimSpeed(name,k);
+  }
+
 float MdlVisual::bowSpan() const {
   // how far the string goes from rest to held drawn: the string's middle moves the most
   if(auto p = bow.view.protoMesh())

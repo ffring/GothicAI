@@ -104,6 +104,8 @@ class Pose final {
     bool               updateAim(const Aim::Input& in);
     // How far the animation of that name has played, 0..1; -1: it does not play
     float              animProgress(std::string_view name, uint64_t tickCount) const;
+    // The animation of that name plays k times as fast, from its next start on (1: as it is)
+    void               setAnimSpeed(std::string_view name, float k);
     BowDraw&           bowDrawIk() { return bowDraw; }
     bool               updateBowDraw(const BowDraw::Input& in);
     Flinch&            flinchIk() { return flinch; }
@@ -142,9 +144,14 @@ class Pose final {
     struct Layer final {
       const Animation::Sequence* seq      = nullptr;
       uint64_t                   sAnim    = 0;
+      float                      speed    = 1;  // plays that many times as fast, from its start (setAnimSpeed)
       uint8_t                    comb     = 0;
       BodyState                  bs       = BS_NONE;
       };
+
+    // the layer's own clock at the time t: its animation plays `speed` times as fast from its start
+    static uint64_t layerTime(const Layer& l, uint64_t t);
+    float           speedOf(const Animation::Sequence* seq) const;
 
     struct ComboState {
       uint16_t bits = 0;
@@ -164,7 +171,7 @@ class Pose final {
     const Animation::Sequence* solveNext(const AnimationSolver& solver, const Layer& lay);
 
     void addLayer(const Animation::Sequence* seq, BodyState bs, uint8_t comb, uint64_t tickCount);
-    void onAddLayer   (const Layer& l);
+    void onAddLayer   (Layer& l);
     void onRemoveLayer(const Layer& l);
 
     static bool hasLayerEvents(const Layer& l);
@@ -185,6 +192,7 @@ class Pose final {
     uint8_t                         hasEvents = 0;
     uint8_t                         isFlyCombined = 0;
     uint8_t                         hasTransitions = 0;
+    std::vector<std::pair<std::string,float>> speeds; // setAnimSpeed
 
     float                           headRotX = 0, headRotY = 0;
     FootIk                          ik;

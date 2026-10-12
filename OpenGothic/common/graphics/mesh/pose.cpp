@@ -180,8 +180,8 @@ bool Pose::startAnim(const AnimationSolver& solver, const Animation::Sequence *s
   for(auto& i:lay)
     if(i.seq->layer==sq->layer) {
       const bool hasNext   = !i.seq->next.empty();
-      const bool finished  = i.seq->isFinished(tickCount,i.sAnim,combo.len()) && !hasNext && (i.seq->animCls!=Animation::Loop);
-      const bool interrupt = force || i.seq->canInterrupt(tickCount,i.sAnim,combo.len());
+      const bool finished  = i.seq->isFinished(layerTime(i,tickCount),i.sAnim,combo.len()) && !hasNext && (i.seq->animCls!=Animation::Loop);
+      const bool interrupt = force || i.seq->canInterrupt(layerTime(i,tickCount),i.sAnim,combo.len());
       if(i.seq==sq && i.comb==comb && !finished) {
         i.bs = bs;
         return true;
@@ -286,7 +286,7 @@ void Pose::processLayers(AnimationSolver& solver, uint64_t tickCount) {
   bool   doSort = false;
   for(size_t i=0; i<lay.size(); ++i) {
     auto& l = lay[i];
-    if(l.seq->animCls==Animation::Transition && l.seq->isFinished(tickCount,l.sAnim,combo.len())) {
+    if(l.seq->animCls==Animation::Transition && l.seq->isFinished(layerTime(l,tickCount),l.sAnim,combo.len())) {
       auto next = solveNext(solver,l);
       if(next!=l.seq) {
         needToUpdate = true;
@@ -347,7 +347,7 @@ bool Pose::update(uint64_t tickCount, bool force) {
       if(numFrames==1 && !needToUpdate)
         continue; //mobsi
 
-      needMkSkeleton |= updateFrame(*seq,i.bs,i.sAnim,tickCount);
+      needMkSkeleton |= updateFrame(*seq,i.bs,i.sAnim,layerTime(i,tickCount));
       }
     // switches of animations: smoothly from the pose shown
     needMkSkeleton |= blend.apply(raw,base,numBones,tickCount);
@@ -518,7 +518,8 @@ void Pose::addLayer(const Animation::Sequence *seq, BodyState bs, uint8_t comb, 
     });
   }
 
-void Pose::onAddLayer(const Pose::Layer& l) {
+void Pose::onAddLayer(Pose::Layer& l) {
+  l.speed = speedOf(l.seq);
   if(hasLayerEvents(l))
     hasEvents++;
   if(l.seq->isFly())
@@ -552,17 +553,17 @@ bool Pose::hasLayerEvents(const Pose::Layer& l) {
 
 void Pose::processSfx(Npc &npc, uint64_t tickCount) {
   for(auto& i:lay)
-    i.seq->processSfx(lastUpdate,i.sAnim,tickCount,&npc,nullptr);
+    i.seq->processSfx(layerTime(i,lastUpdate),i.sAnim,layerTime(i,tickCount),&npc,nullptr);
   }
 
 void Pose::processSfx(Interactive& mob, uint64_t tickCount) {
   for(auto& i:lay)
-    i.seq->processSfx(lastUpdate,i.sAnim,tickCount,nullptr,&mob);
+    i.seq->processSfx(layerTime(i,lastUpdate),i.sAnim,layerTime(i,tickCount),nullptr,&mob);
   }
 
 void Pose::processPfx(MdlVisual& visual, World& world, uint64_t tickCount) {
   for(auto& i:lay)
-    i.seq->processPfx(lastUpdate,i.sAnim,tickCount,visual,world);
+    i.seq->processPfx(layerTime(i,lastUpdate),i.sAnim,layerTime(i,tickCount),visual,world);
   }
 
 bool Pose::processEvents(uint64_t &barrier, uint64_t now, Animation::EvCount &ev) const {
@@ -572,7 +573,7 @@ bool Pose::processEvents(uint64_t &barrier, uint64_t now, Animation::EvCount &ev
     }
 
   for(auto& i:lay)
-    i.seq->processEvents(barrier,i.sAnim,now,ev);
+    i.seq->processEvents(layerTime(i,barrier),i.sAnim,layerTime(i,now),ev);
   barrier=now;
   return hasEvents>0;
   }
@@ -592,28 +593,28 @@ Tempest::Vec3 Pose::animMoveSpeed(uint64_t tickCount, uint64_t dt) const {
     auto& lx = lay[i];
     if(!lx.seq->data->hasMoveTr)
       continue;
-    return lx.seq->speed(tickCount-lx.sAnim,dt);
+    return lx.seq->speed(layerTime(lx,tickCount)-lx.sAnim,uint64_t(float(dt)*lx.speed));
     }
   return Tempest::Vec3();
   }
 
 bool Pose::isDefParWindow(uint64_t tickCount) const {
   for(auto& i:lay)
-    if(i.seq->isDefParWindow(tickCount-i.sAnim))
+    if(i.seq->isDefParWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
   return false;
   }
 
 bool Pose::isDefWindow(uint64_t tickCount) const {
   for(auto& i:lay)
-    if(i.seq->isDefWindow(tickCount-i.sAnim))
+    if(i.seq->isDefWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
   return false;
   }
 
 bool Pose::isDefence(uint64_t tickCount) const {
   for(auto& i:lay) {
-    if(i.bs==BS_PARADE && i.seq->isDefWindow(tickCount-i.sAnim))
+    if(i.bs==BS_PARADE && i.seq->isDefWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
     }
   return false;
@@ -623,7 +624,7 @@ bool Pose::isJumpBack(uint64_t tickCount) const {
   for(auto& i:lay) {
     if(i.bs==BS_PARADE && i.seq->data->defWindow.empty())
       return true;
-    if(i.bs==BS_PARADE && i.seq->isDefWindow(tickCount-i.sAnim))
+    if(i.bs==BS_PARADE && i.seq->isDefWindow(layerTime(i,tickCount)-i.sAnim))
       return true;
     }
   return false;
@@ -660,7 +661,7 @@ bool Pose::isStanding() const {
 
 bool Pose::isPrehit(uint64_t now) const {
   for(auto& i:lay)
-    if(i.seq->isPrehit(i.sAnim,now))
+    if(i.seq->isPrehit(i.sAnim,layerTime(i,now)))
       return true;
   return false;
   }
@@ -700,7 +701,7 @@ bool Pose::hasAnim() const {
 uint64_t Pose::animationTotalTime() const {
   uint64_t ret=0;
   for(auto& i:lay)
-    ret = std::max(ret,uint64_t(i.seq->totalTime()));
+    ret = std::max(ret,uint64_t(i.seq->totalTime()/i.speed));
   return ret;
   }
 
@@ -708,7 +709,7 @@ uint64_t Pose::atkTotalTime() const {
   uint16_t comboLen = combo.len();
   uint64_t ret=0;
   for(auto& i:lay)
-    ret = std::max(ret,uint64_t(i.seq->atkTotalTime(comboLen)));
+    ret = std::max(ret,uint64_t(float(i.seq->atkTotalTime(comboLen))/i.speed));
   return ret;
   }
 
@@ -730,7 +731,7 @@ const Animation::Sequence* Pose::continueCombo(const AnimationSolver &solver, co
     }
 
   auto&    d     = *prev->seq->data;
-  uint64_t t     = tickCount-prev->sAnim;
+  uint64_t t     = layerTime(*prev,tickCount)-prev->sAnim;
   size_t   id    = combo.len()*2;
 
   if(0==d.defWindow.size() || 0==d.defHitEnd.size()) {
@@ -849,13 +850,40 @@ bool Pose::updateAim(const Aim::Input& in) {
   return true;
   }
 
+uint64_t Pose::layerTime(const Layer& l, uint64_t t) {
+  if(l.speed==1.f || t<=l.sAnim)
+    return t;
+  return l.sAnim + uint64_t(double(t-l.sAnim)*double(l.speed));
+  }
+
+float Pose::speedOf(const Animation::Sequence* seq) const {
+  if(seq==nullptr)
+    return 1;
+  for(auto& i:speeds)
+    if(i.first==seq->name)
+      return i.second;
+  return 1;
+  }
+
+void Pose::setAnimSpeed(std::string_view name, float k) {
+  for(size_t i=0; i<speeds.size(); ++i)
+    if(speeds[i].first==name) {
+      if(k==1.f)
+        speeds.erase(speeds.begin()+ptrdiff_t(i)); else
+        speeds[i].second = k;
+      return;
+      }
+  if(k!=1.f)
+    speeds.emplace_back(std::string(name),k);
+  }
+
 float Pose::animProgress(std::string_view name, uint64_t tickCount) const {
   for(auto& i:lay)
     if(i.seq->name==name) {
       const float total = i.seq->totalTime();
       if(total<=0.f)
         return 1;
-      return std::clamp(float(tickCount-i.sAnim)/total, 0.f, 1.f);
+      return std::clamp(float(layerTime(i,tickCount)-i.sAnim)/total, 0.f, 1.f);
       }
   return -1;
   }

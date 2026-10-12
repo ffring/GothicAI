@@ -2395,6 +2395,19 @@ void Npc::tickAnimationTags() {
   if(!hasEvents)
     return;
 
+  if(isPlayer() && TestBench::isActive()) {
+    // what the hero's animations do, for the test bench (the reload at another tempo: each event once)
+    char buf[256];
+    for(auto& i:ev.timed) {
+      std::snprintf(buf,sizeof(buf),"anim event %d %.*s %.*s %.*s",int(i.def),int(i.item.size()),i.item.data(),
+                    int(i.slot[0].size()),i.slot[0].data(),int(i.slot[1].size()),i.slot[1].data());
+      TestBench::note(buf);
+      }
+    for(auto& i:ev.morph) {
+      std::snprintf(buf,sizeof(buf),"anim morph %.*s %.*s",int(i.anim.size()),i.anim.data(),int(i.node.size()),i.node.data());
+      TestBench::note(buf);
+      }
+    }
   for(auto& i:ev.morph)
     visual.startMMAnim(*this,i.anim,i.node);
   if(ev.groundSounds>0 && isPlayer() && bodyStateMasked()!=BodyState::BS_SNEAK)
