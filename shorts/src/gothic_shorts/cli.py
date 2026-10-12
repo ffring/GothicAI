@@ -11,10 +11,12 @@ from gothic_launcher.commands import LaunchError, find_layout, load_config, tool
 from gothic_launcher.settings import Config, SettingsError
 
 from . import cut as cutting
+from . import youtube
 from .film import FilmError, film, shorts_dir
 from .shot import Shot, ShotError, load
 from .timeline import build, read_events
 from .voice import VoiceError, voice_lines
+from .youtube import YouTubeError
 
 SHOTS = Path(__file__).resolve().parents[2] / "shots"
 
@@ -86,6 +88,33 @@ def cmd_subs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_youtube_login(args: argparse.Namespace) -> int:
+    token = youtube.access_token()
+    cid, title = youtube.channel(token)
+    print(f"signed in: channel {title} ({cid}); token in {youtube.TOKEN}")
+    return 0
+
+
+def cmd_upload(args: argparse.Namespace) -> int:
+    video = Path(args.video)
+    if not video.is_file():
+        raise YouTubeError(f"no video {video}")
+    meta = youtube.load_meta(Path(args.meta), args.lang)
+    meta.privacy = args.privacy
+    token = youtube.access_token()
+    cid, title = youtube.channel(token)
+    print(f"channel: {title} ({cid})")
+    print(f"video:   {video} ({video.stat().st_size / 1e6:.1f} MB)")
+    print(f"title:   {meta.title}")
+    print(f"privacy: {meta.privacy}, synthetic media: {meta.synthetic}")
+    if not args.yes and input("upload? [y/N] ").strip().lower() != "y":
+        print("not uploaded")
+        return 1
+    vid = youtube.upload(video, meta, token)
+    print(f"uploaded: https://youtu.be/{vid}  (id {vid})")
+    return 0
+
+
 def _summary(take: Path) -> None:
     events = take / "events.jsonl"
     if not events.is_file():
@@ -138,9 +167,24 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_subs)
 
+    s = sub.add_parser("youtube", help="YouTube: sign in once (the browser opens), show the channel")
+    s.add_argument("action", choices=["login"])
+    s.set_defaults(fn=cmd_youtube_login)
+
+    s = sub.add_parser("upload", help="upload a cut short to YouTube (private unless --privacy)")
+    s.add_argument("video", help="the cut short, e.g. .shorts/compare/bodies/short-ru.mp4")
+    s.add_argument("--meta", required=True,
+                   help="a JSON with youtube.<lang>: title, description, tags, synthetic")
+    s.add_argument("--lang", default="ru")
+    s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
+                   help="an API project without YouTube's audit can upload private only")
+    s.add_argument("--yes", action="store_true", help="do not ask before uploading")
+    s.set_defaults(fn=cmd_upload)
+
     args = p.parse_args()
     try:
         sys.exit(args.fn(args))
-    except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError) as err:
+    except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
+            YouTubeError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)
