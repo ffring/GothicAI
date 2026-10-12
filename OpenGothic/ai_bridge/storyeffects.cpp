@@ -31,6 +31,8 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
   e.text   = TextCodec::fromUtf8(JsonRead::str(x,"text"));
   e.status = upper(JsonRead::str(x,"status"));
+  e.target  = upper(JsonRead::str(x,"npc"));
+  e.routine = upper(JsonRead::str(x,"routine"));
   e.count  = int32_t(JsonRead::integer(x,"count",JsonRead::integer(x,"amount",
                      JsonRead::integer(x,"value",JsonRead::integer(x,"seconds",1)))));
   e.toHero = JsonRead::str(x,"to")!="self";
@@ -66,6 +68,12 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
     }
   if(e.kind=="refuse_talk")
     return e.count<=0 ? "refuse_talk: seconds must be positive" : "";
+  if(e.kind=="routine") {
+    auto* t = vm && !e.target.empty() ? vm->find_symbol_by_name(e.target) : nullptr;
+    if(vm && !e.target.empty() && (t==nullptr || t->type()!=DaedalusDataType::INSTANCE))
+      return "routine: no npc " + e.target;
+    return e.routine.empty() ? "routine: needs a routine" : "";
+    }
   if(e.kind=="xp" || e.kind=="end")
     return {};
   return "unknown effect " + e.kind;
@@ -121,6 +129,14 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
     }
   else if(kind=="refuse_talk") {
     call("NPC_SETREFUSETALK",{Value::instance(npc.handlePtr()),Value::integer(count)});
+    }
+  else if(kind=="routine") {
+    // as the dialogs do it (B_StartOtherRoutine): the symbol holds the npc the world made of it
+    auto* s    = target.empty() ? nullptr : vm.find_symbol_by_name(target);
+    auto  inst = s!=nullptr ? s->get_instance() : npc.handlePtr();
+    if(inst!=nullptr)
+      call("B_STARTOTHERROUTINE",{Value::instance(inst),Value::str(routine)}); else
+      Log::e("[story] ",who,": routine of ",target,": no such npc in the world");
     }
 
   self->set_instance(prevSelf);

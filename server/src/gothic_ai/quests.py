@@ -7,6 +7,10 @@ pays (`pay_reward`), never more than the giver has. The lie is not blocked. It i
 truth and found out by a rule over the chronicle: the giver sees the creatures alive near it. Then the
 giver knows it, sees the hero as an enemy, acts on it through the scripts (a beating until the hero is
 down, refusing to talk) and tells the people around, who keep it as a rumor.
+
+What the giver sees for itself it does not take on his word: with the creatures alive before its eyes, or
+once it knows he lied to it (trust.py), it does not pay. A lie it sees through before it pays (`caught`)
+costs the hero less: no beating, but its trust and a rumor.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from .game import GameError, GameLink
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .protocol import GameMessage, Session, Snapshot
+from .trust import WORD_BROKEN, Trust
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -83,12 +88,14 @@ class QuestBoard:
         *,
         hero_distance: Callable[[str], float | None] | None = None,
         journal: Journal | None = None,
+        trust: Trust | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
         self.chronicle = chronicle
         self.hero_distance = hero_distance or (lambda _npc: None)
         self.journal = journal or dialogue.journal
+        self.trust = trust or Trust(chronicle)
         self.quests: dict[str, Quest] = {}
         self._background: set[asyncio.Task[Any]] = set()
         dialogue.extensions.append(self)
@@ -196,6 +203,12 @@ class QuestBoard:
             return ToolOutcome("Отклонено: нет такого твоего поручения.", "rejected")
         if q.paid:
             return ToolOutcome("Отклонено: за это ты уже заплатил.", "rejected")
+        # what it sees for itself, it does not take on his word
+        d = self.chronicle.near(q.tag, q.giver)
+        if d is not None and d <= SEE_CM:
+            return ToolOutcome(f"Отклонено: одно из них живо — у тебя на глазах, в {_m(d)} м.", "rejected")
+        if self.trust.broken(q.giver) and not self.done(q):
+            return ToolOutcome(f"Отклонено: он уже лгал тебе. {WORD_BROKEN}", "rejected")
         # never more than the giver has
         args, reason = executor.check_give({"item": q.reward_item, "count": q.reward_count}, snap)
         if args is None:
@@ -219,6 +232,8 @@ class QuestBoard:
         done = self.done(q)
         count = int(give.arguments.get("count") or q.reward_count)  # capped by what the giver had
         self.chronicle.record({"fact": "paid", "quest": q.id, "item": q.reward_item, "count": count})
+        claim = {"fact": "claim", "quest": q.id, "npc": q.giver, "name": q.giver_name, "title": q.title}
+        self.chronicle.record({**claim, "reward": q.reward(), "believed": True, "truth": done})
         self._belief(q, True, "hero")
         if not done:
             # not blocked: written down with the truth, to be found out
@@ -239,7 +254,7 @@ class QuestBoard:
                 if q.lie and not q.found_out:
                     d = self.chronicle.near(q.tag, q.giver)
                     if d is not None and d <= SEE_CM:
-                        await self.found_out(q, f"увидел их живыми в {max(1, round(d / 100))} м от себя")
+                        await self.found_out(q, f"увидел их живыми в {_m(d)} м от себя")
 
     async def found_out(self, q: Quest, how: str) -> None:
         """The giver learns the truth: it remembers, turns against the hero, acts, and tells others."""
@@ -281,7 +296,9 @@ async def unmask(
 ) -> None:
     """The giver learns the truth: it remembers, turns against the hero, acts through the scripts (refusing
     to talk, a beating if the hero is near), and the people around hear it."""
-    chronicle.record({"fact": "found_out", "quest": lie.quest, "npc": lie.giver, "how": how})
+    chronicle.record(
+        {"fact": "found_out", "quest": lie.quest, "npc": lie.giver, "title": lie.title, "how": how}
+    )
     belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
     chronicle.record({**belief, "source": how})
     journal.add("lie_found_out", npc=lie.giver, name=lie.giver_name, quest=lie.quest, how=how)
@@ -303,14 +320,78 @@ async def unmask(
     except (GameError, TimeoutError) as err:
         log.warning("lie %s: consequences: %s", lie.quest, err)
         people = []
+    rumor = (
+        f"Слух: {lie.giver_name} при тебе рассказывал, что герой его обманул — сказал, что выполнил "
+        f"поручение «{lie.title}», взял награду ({lie.reward}), а это неправда"
+    )
+    _tell(dialogue, chronicle, lie, rumor, people)
+
+
+async def caught(
+    link: GameLink,
+    dialogue: DialogueManager,
+    chronicle: Chronicle,
+    journal: Journal,
+    lie: Lie,
+    how: str,
+) -> None:
+    """The giver sees for itself that the hero lies to it, before it pays: it remembers, takes his word no
+    more (trust.py), is wary of him, and the people around hear it. No beating: he took nothing."""
+    chronicle.record(
+        {
+            "fact": "caught",
+            "quest": lie.quest,
+            "npc": lie.giver,
+            "name": lie.giver_name,
+            "title": lie.title,
+            "how": how,
+        }
+    )
+    belief = {"fact": "belief", "npc": lie.giver, "quest": lie.quest, "claim": "done", "believed": False}
+    chronicle.record({**belief, "source": how})
+    journal.add("lie_caught", npc=lie.giver, name=lie.giver_name, quest=lie.quest, how=how)
+    dialogue.remember(
+        lie.giver,
+        lie.giver_name,
+        f"Ты уличил героя во лжи: он уверял, что сделал «{lie.title}», а ты {how}. На слово ты ему больше "
+        "не веришь",
+    )
+    conv = dialogue.open(lie.giver, lie.giver_name)
+    if conv.intent.attitude != "hostile":
+        agenda = "make the hero prove what he claims; never take his word again"
+        dialogue.change_intent(lie.giver, lie.giver_name, attitude="wary", agenda=agenda)
+    try:
+        people = await link.story_nearby(lie.giver, RUMOR_CM)
+    except (GameError, TimeoutError) as err:
+        log.warning("lie %s: rumor: %s", lie.quest, err)
+        people = []
+    rumor = (
+        f"Слух: {lie.giver_name} при тебе уличил героя во лжи — тот уверял, что сделал «{lie.title}», "
+        "а это неправда"
+    )
+    _tell(dialogue, chronicle, lie, rumor, people)
+
+
+def _tell(
+    dialogue: DialogueManager, chronicle: Chronicle, lie: Lie, rumor: str, people: list[dict[str, Any]]
+) -> None:
+    """The people around the giver keep what they heard as a rumor."""
     for p in people:
-        dialogue.remember(
-            p["npc"],
-            p.get("name") or p["npc"],
-            f"Слух: {lie.giver_name} при тебе рассказывал, что герой его обманул — сказал, что выполнил "
-            f"поручение «{lie.title}», взял награду ({lie.reward}), а это неправда",
+        dialogue.remember(p["npc"], p.get("name") or p["npc"], rumor)
+        chronicle.record(
+            {
+                "fact": "rumor",
+                "quest": lie.quest,
+                "from": lie.giver,
+                "name": lie.giver_name,
+                "title": lie.title,
+                "to": p["npc"],
+            }
         )
-        chronicle.record({"fact": "rumor", "quest": lie.quest, "from": lie.giver, "to": p["npc"]})
+
+
+def _m(cm: float) -> int:
+    return max(1, round(cm / 100))
 
 
 def _fields_of() -> list[str]:

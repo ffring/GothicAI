@@ -15,9 +15,11 @@ namespace zenkit {
 // What the director makes happen, through the scripts' own functions (docs/story-graph.md, stages 3–4):
 // in a dialog of its own, or as the consequence of a lie found out.
 struct StoryEffect final {
-  std::string kind;     // give, xp, set, journal, end, attack, refuse_talk
+  std::string kind;     // give, xp, set, journal, end, attack, refuse_talk, routine
   std::string item;     // give: item instance
   std::string var;      // set: global int variable
+  std::string target;   // routine: the npc whose routine changes (instance symbol), empty: this npc
+  std::string routine;  // routine: its name in the scripts (Rtn_<name>_<id>), e.g. START
   std::string topic;    // journal: topic, game codepage
   std::string text;     // journal: entry, game codepage
   std::string status;   // journal: LOG_RUNNING (default), LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE

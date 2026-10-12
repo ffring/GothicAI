@@ -96,7 +96,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `action` | `args` | Срок | Успех |
 |---|---|---|---|
 | `go_to_waypoint` | `waypoint`, `radius`=300 | 60 с | NPC в пределах `radius` от точки |
-| `go_to_npc` | `npc`, `radius`=400 | 60 с | NPC в пределах `radius` от цели |
+| `go_to_npc` | `npc`, `radius`=400 | 60 с | NPC в пределах `radius` от цели: дойдя до `radius`, он останавливается |
 | `turn_to` | `npc` | 5 с | очередь отработала |
 | `play_ani` | `name` | 15 с | анимация есть у модели и отыграла (неизвестная → `rejected`) |
 | `wait` | `ms` (≤ 60000) | `ms`+2 с | — |
@@ -309,12 +309,12 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 
 | `type` | Поля | Что делает |
 |---|---|---|
-| `story_spawn` | `req`, `instance`, `tag`, `count`=1, `near`=герой, `distance`=600 | `count` существ рядом с NPC под меткой. Ставятся рядом друг с другом, на линии от NPC к герою. `result.value` — сколько появилось |
+| `story_spawn` | `req`, `instance`, `tag`, `count`=1, `near`=герой, `distance`=600, `waypoint`? | `count` существ рядом с NPC под меткой. Ставятся рядом друг с другом, на линии от NPC к герою; с `waypoint` — на этой точке, как их ставит `Wld_InsertNpc`. `result.value` — сколько появилось |
 | `story_watch` | `npcs[]`, `owner`="" | NPC, для которых игра сообщает расстояние до живых существ каждой метки. Список заменяет прежний список того же `owner`; сообщается объединение всех списков |
 | `story_tag` | `req`, `tag`, `npcs[]` | NPC, уже живущие в мире, под меткой — как существа режиссёра: их смерти и расстояние до них приходят в `npc_died` и `story_world`. `result.value` — сколько нашлось |
-| `story_effect` | `req`, `npc`, `effects[]` | эффекты через функции самих скриптов, `self` — NPC, `other` — герой. Те же, что в диалогах режиссёра (`give`, `xp`, `set`, `journal`, `end`), и ещё два: `attack` — `B_Attack`, `reason` — константа `AR_*`, по умолчанию `AR_NONE`: бьёт, пока герой не упадёт, не до смерти; `refuse_talk` — `Npc_SetRefuseTalk`, `seconds`. На время этих двух мост отпускает NPC, если тот под управлением |
+| `story_effect` | `req`, `npc`, `effects[]` | эффекты через функции самих скриптов, `self` — NPC, `other` — герой. Те же, что в диалогах режиссёра (`give`, `xp`, `set`, `journal`, `end`), и ещё два: `attack` — `B_Attack`, `reason` — константа `AR_*`, по умолчанию `AR_NONE`: бьёт, пока герой не упадёт, не до смерти; `refuse_talk` — `Npc_SetRefuseTalk`, `seconds`. На время этих двух мост отпускает NPC, если тот под управлением. `routine` — смена распорядка, как в диалогах (`B_StartOtherRoutine`): `npc` — символ NPC (по умолчанию этот), `routine` — имя (`START`) |
 | `story_nearby` | `req`, `npc`, `radius`=2000 | люди в радиусе от NPC: `result.value` = `[{npc, name, distance, guild}]` |
-| `story_state` | `req`, `vars[]`, `npcs[]`, `knows[]`, `symbols[]`, `items[]` | что читают правила режиссёра (этап 5). `result.value`: `vars` — значения глобалов `int`; `npcs` — `{state: "alive"/"dead"/"absent", name}`; `knows` — слышал ли герой диалог; `symbols` — что это за имя в скриптах: `npc`, `item`, `info`, `var`, `const`, `func`, `other` (неизвестных нет в ответе); `items` — названия предметов; `dialog`, `cutscene` — идёт ли сейчас диалог или ролик; `day`, `hour`, `minute` — игровое время |
+| `story_state` | `req`, `vars[]`, `npcs[]`, `near`?, `knows[]`, `symbols[]`, `items[]` | что читают правила режиссёра (этап 5). `result.value`: `vars` — значения глобалов `int`; `npcs` — `{state: "alive"/"dead"/"absent", name, distance}`, `distance` — в см от NPC `near`, живого или мёртвого, если он задан; `knows` — слышал ли герой диалог; `symbols` — что это за имя в скриптах: `npc`, `item`, `info`, `var`, `const`, `func`, `other` (неизвестных нет в ответе); `items` — названия предметов; `dialog`, `cutscene` — идёт ли сейчас диалог или ролик; `day`, `hour`, `minute` — игровое время |
 | `story_eval` | `req`, `npc`, `exprs[]` | выражения графа на живой VM, `self` — NPC, `other` — герой; без `-devmode`. `result.value` — по значению на выражение, `null`, если не посчиталось |
 
 **Игра → сервер:**

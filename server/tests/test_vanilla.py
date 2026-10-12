@@ -8,11 +8,11 @@ import pytest
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.gamedata.storygraph import StoryGraph, load
-from gothic_ai.llm import ToolCall
+from gothic_ai.llm import ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.vanilla import VanillaQuests
+from gothic_ai.vanilla import VanillaQuests, _takes
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
 from tests.test_director import GRAPH, HAS_20, HILDA, LOBART, QUEST, _node
@@ -102,7 +102,9 @@ async def test_a_lie_to_lobart_is_paid_and_found_out_the_next_morning(graph):
         situation = vanilla.situation(LOBART)
         assert "Ты ждёшь от героя: «Убрать поле репы» (id MIS_LOBART_RUEBEN)" in situation
         assert "герой принесёт тебе Репа ×20" in situation and "Золото ×5, опыт +50" in situation
-        assert [t.name for t in vanilla.tools(LOBART)] == ["accept_quest"]
+        assert "у героя с собой Репа ×0 из 20" in situation  # what Lobart sees for himself
+        # he sees the hero has none on him: he may call it a lie to his face; nothing to go and check
+        assert [t.name for t in vanilla.tools(LOBART)] == ["accept_quest", "expose_lie"]
 
         # the hero has no turnips and says they are in the barn; Lobart believes him
         await dialogue.say_as_player(LOBART, "Репа в амбаре, двадцать штук. Плати.")
@@ -192,7 +194,8 @@ async def test_a_lie_about_a_killing_is_found_out_when_the_victim_turns_up(graph
     try:
         dialogue.open(LOBART, "Лобарт")
         await vanilla.prepare(LOBART)
-        assert "будут мертвы: BDT_1_BANDIT" in vanilla.situation(LOBART)
+        situation = vanilla.situation(LOBART)
+        assert "будут мертвы: Бандит" in situation and "далеко, проверить сам не можешь" in situation
         await dialogue.say_as_player(LOBART, "Бандит мёртв.")
         await _until(lambda: chronicle.facts("lie") != [])
         lie = chronicle.facts("lie")[0]
@@ -228,5 +231,163 @@ async def test_lies_follow_the_save_branch(graph):
         vanilla._load()  # as after a load of a save made after the lie
         t = vanilla.told[QUEST]
         assert (t.lie, t.kind, t.follow, t.found_out) == (True, "fetch", [TO_HILDA], False)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def _outputs(llm: FakeBackend) -> str:
+    """What came back to the model from its tool calls, all steps."""
+    return " ".join(m.output for _, items, _ in llm.calls for m in items if isinstance(m, ToolResult))
+
+
+def test_an_ending_takes_what_the_hero_has():
+    effects = [
+        {"do": "give", "item": "ITPL_BEET", "count": 20, "to": "self", "take": True},
+        {"do": "give", "item": "ITMI_GOLD", "count": 5},
+    ]
+    assert _takes(effects, {"ITPL_BEET": 5}, truth=False) == [
+        {"do": "give", "item": "ITPL_BEET", "count": 5, "to": "self"},
+        {"do": "give", "item": "ITMI_GOLD", "count": 5},
+    ]
+    assert _takes(effects, {}, truth=False) == [{"do": "give", "item": "ITMI_GOLD", "count": 5}]
+    assert _takes(effects, {"ITPL_BEET": 20}, truth=True)[0]["count"] == 20
+
+
+async def test_what_the_hero_has_on_him_is_seen_and_the_rest_is_the_lie(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = FakeBackend(script=[ACCEPT, FakeStep("Ну?")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.hero_items = {"ITPL_BEET": 5}
+    try:
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert "у героя с собой Репа ×5 из 20 — это он отдаст тебе сразу" in vanilla.situation(LOBART)
+        await dialogue.say_as_player(LOBART, "Вот пять, остальные пятнадцать в амбаре.")
+        await _until(lambda: chronicle.facts("lie") != [])
+        lie = chronicle.facts("lie")[0]
+        assert (lie["truth"], lie["items"]) == ("ITPL_BEET 5 of 20", "Репа ×15")
+
+        fake.day = 2
+        run = asyncio.create_task(vanilla.run())
+        await _until(lambda: chronicle.facts("found_out") != [], 10)
+        run.cancel()
+        assert "(Репа ×15)" in chronicle.facts("found_out")[0]["how"]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_someone_alive_before_its_eyes_is_not_taken_on_word(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    accept = FakeStep("Мёртв, говоришь?", [ToolCall("accept_quest", {"quest": KILL}, "c1")])
+    expose = FakeStep("Врёшь! Вон он стоит.", [ToolCall("expose_lie", {"quest": KILL}, "c2")])
+    llm = FakeBackend(script=[accept, expose, FakeStep("Пошёл вон.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "alive", "name": "Бандит", "distance": 1200}
+    fake.people_near = [{"npc": HILDA, "name": "Хильда", "distance": 400, "guild": 0}]
+    try:
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert "у тебя на глазах (до 20 м): Бандит — жив" in vanilla.situation(LOBART)
+        assert [t.name for t in vanilla.tools(LOBART)] == ["accept_quest", "expose_lie"]
+
+        await dialogue.say_as_player(LOBART, "Бандит мёртв, я его убил.")
+        await _until(lambda: chronicle.facts("caught") != [])
+        assert "Отклонено: Бандит жив — у тебя на глазах, в 12 м" in _outputs(llm)
+        assert chronicle.facts("claim") == [] and chronicle.facts("lie") == []  # nothing paid
+        c = chronicle.facts("caught")[0]
+        assert (c["quest"], c["npc"], c["how"]) == (
+            KILL,
+            LOBART,
+            "видел сам: Бандит жив — у тебя на глазах, в 12 м",
+        )
+        await _until(lambda: chronicle.facts("rumor") != [])
+        assert chronicle.facts("rumor")[0]["to"] == HILDA
+        assert dialogue.conversations[LOBART].intent.attitude == "wary"
+        assert not any(m["type"] == "story_effect" for m in fake.story)  # no beating: he took nothing
+        trust = vanilla.trust
+        assert "он уже лгал тебе: «Бандит у фермы» — видел сам" in (trust.situation(LOBART) or "")
+        assert "ты слышал, что он обманул других: Лобарт («Бандит у фермы»)" in (trust.situation(HILDA) or "")
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_the_npc_goes_to_see_and_catches_the_lie(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    check = FakeStep("Сейчас сам посмотрю.", [ToolCall("check_claim", {"quest": KILL}, "c1")])
+    llm = FakeBackend(script=[check, FakeStep("Ах ты лжец!")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "alive", "name": "Бандит", "distance": 4000}
+    try:
+        await vanilla.link.attach(LOBART)
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert "Бандит — в 40 м, отсюда не видно: можешь сходить и посмотреть сам" in vanilla.situation(
+            LOBART
+        )
+        # (expose_lie is for the turnips: the hero has none on him)
+        assert [t.name for t in vanilla.tools(LOBART)] == ["accept_quest", "check_claim", "expose_lie"]
+
+        await dialogue.say_as_player(LOBART, "Бандит мёртв.")
+        await _until(lambda: chronicle.facts("caught") != [])
+        await _until(lambda: LOBART not in vanilla.checking)
+        go = [m["args"] for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
+        # there, to see; back to the hero, to say it to his face
+        assert go == [{"npc": BANDIT, "radius": 1800}, {"npc": "PLAYER", "radius": 300}]
+        assert "сходил проверить и увидел: Бандит жив, в 18 м" in chronicle.facts("caught")[0]["how"]
+        await _until(lambda: len(llm.calls) >= 2)  # he says what he thinks of it
+        assert "Он тебе солгал" in str(llm.calls[-1][1])
+        assert chronicle.facts("claim") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_the_npc_goes_to_see_and_pays_for_the_truth(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    check = FakeStep("Сейчас сам посмотрю.", [ToolCall("check_claim", {"quest": KILL}, "c1")])
+    llm = FakeBackend(script=[check, FakeStep("Правда. Молодец.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 4000}
+    try:
+        await vanilla.link.attach(LOBART)
+        dialogue.open(LOBART, "Лобарт")
+        await dialogue.say_as_player(LOBART, "Бандит мёртв.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        claim = chronicle.facts("claim")[0]
+        assert (claim["truth"], claim["checked"]) == (True, True)
+        assert {"do": "xp", "amount": 100} in _effects(fake, LOBART)[0]
+        assert chronicle.facts("caught") == [] and chronicle.facts("lie") == []
+        assert "он уже говорил тебе правду: «Бандит у фермы»" in (vanilla.trust.situation(LOBART) or "")
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_once_lied_to_it_takes_his_word_no_more(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = FakeBackend(
+        script=[ACCEPT, FakeStep("Не верю."), ACCEPT, FakeStep("Вот это другое дело.")], delay=0
+    )
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    try:
+        chronicle.record(
+            {"fact": "caught", "quest": KILL, "npc": LOBART, "title": "Бандит у фермы", "how": "видел сам"}
+        )
+        dialogue.open(LOBART, "Лобарт")
+        await dialogue.say_as_player(LOBART, "Репа в амбаре, двадцать штук.")
+        await _until(lambda: "Отклонено: он уже лгал тебе" in _outputs(llm))
+        assert chronicle.facts("claim") == []
+
+        # what it sees for itself it takes: he brings all twenty
+        fake.hero_items = {"ITPL_BEET": 20}
+        await dialogue.say_as_player(LOBART, "Вот вся репа.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        assert chronicle.facts("claim")[0]["truth"] is True
     finally:
         await link_cm.__aexit__(None, None, None)
