@@ -45,7 +45,7 @@ from ..protocol import (
 from .apply import Applier, Decision
 from .decider import Decider, Lane, Outcome
 from .situation import NpcContext, Situation, SituationBuilder, clock_text
-from .stimuli import Stimulus, merge, policy
+from .stimuli import Stimulus, merge, normalize, policy
 from .tiers import Placement, Tier, TierConfig, assign_tiers, importance
 
 log = logging.getLogger(__name__)
@@ -73,7 +73,13 @@ class PlannerConfig:
     plan_threshold: float = 0.5
     # per-option thresholds: harmless gestures need less certainty than walking up to the player
     option_threshold: dict[str, float] = field(
-        default_factory=lambda: {"look_at": 0.25, "greet": 0.3, "approach_talk": 0.6, "give_back": 0.6}
+        default_factory=lambda: {
+            "look_at": 0.25,
+            "greet": 0.3,
+            "approach_talk": 0.6,
+            "give_back": 0.6,
+            "fight": 0.6,  # a fight is not taken back: surer than for a gesture
+        }
     )
     # the same action is not repeated by one npc within this time (walking up to the player twice a minute
     # is pestering, not liveliness)
@@ -113,6 +119,7 @@ class Flight:
     sent: float
     stimuli: tuple[str, ...]
     situation: Situation
+    target: str | None = None  # the newest threat's source: whom a fight or flight is about
 
 
 @dataclass
@@ -253,6 +260,7 @@ class NpcPlanner:
         if rec is None or rec.tier is Tier.OFF:
             return
         self.stats.events += 1
+        kind, detail = normalize(kind, other, other_name, detail)
         stim = Stimulus(kind, now, other, distance_cm, detail, other_name)
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
@@ -445,6 +453,7 @@ class NpcPlanner:
             now,
             tuple(s.kind for s in rec.stimuli),
             sit,
+            next((s.other for s in sorted(rec.stimuli, key=lambda s: -s.at) if s.policy.threat), None),
         )
         rec.flight = flight
         self.stats.sent[lane] += 1
@@ -505,9 +514,11 @@ class NpcPlanner:
             answer.get("probabilities", {}),
             flight.stimuli,
             latency_ms=(now - flight.sent) * 1000,
+            target=flight.target,
         )
         self.applier.apply(decision)
-        if flight.urgent and self.cfg.ask_attitude:  # urgent events are about the player
+        about_hero = flight.target is None  # threats from others say nothing about the hero
+        if flight.urgent and self.cfg.ask_attitude and about_hero:  # urgent events are about the player
             self._spawn(self._ask_attitude(npc, flight))
 
     async def _ask_attitude(self, npc: str, flight: Flight) -> None:

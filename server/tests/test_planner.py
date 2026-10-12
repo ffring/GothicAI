@@ -402,7 +402,7 @@ def test_danger_to_the_npc_and_the_escalate_question() -> None:
     npc = NpcContext("A", "Baltram", guild=3, distance_cm=800, in_view=True)
     wolf = Stimulus("monster_near", 10.0, other="WOLF", distance_cm=800, other_name="Wolf")
     react = builder.react(npc, [wolf], 10.0, None)
-    assert "Wolf is prowling nearby (8 m away)." in react.state
+    assert "Wolf is coming at you." in react.state  # as in the decider's training scenes
     assert "call_help" in react.questions["react"]["criteria"]
     esc = builder.escalate(react)
     assert esc.state == react.state
@@ -472,8 +472,10 @@ async def test_a_new_npc_brings_the_agenda_its_last_conversation_left() -> None:
     assert planner.npcs["BAUER"].agenda is None
 
 
-async def test_monster_threats_are_context_for_now() -> None:
-    planner, decider, _, clock = make()
+async def test_threats_from_others_go_to_the_behavioral_model() -> None:
+    from gothic_ai.brain import Decision, GameApplier
+
+    planner, decider, applier, clock = make(FakeDecider("flee", 0.8))
     planner.on_roster([entry("PEPE", 8)], clock.t)
     msg = parse_game_message(
         json.dumps(
@@ -489,7 +491,35 @@ async def test_monster_threats_are_context_for_now() -> None:
         )
     )
     planner.on_message(msg)
-    await step(planner, clock, 0.5)
-    assert decider.calls == [] and planner.stats.scripted_events == 1  # the scripts still react
-    (stim,) = planner.npcs["PEPE"].stimuli
-    assert stim.describe(clock.t) == "Волк attacks you."
+    await step(planner, clock, 0.05)
+    (call,) = decider.calls  # urgent: at once, and no attitude question (it is not about the hero)
+    assert call["lane"] == "urgent" and "Волк attacked you." in call["state"]
+    assert {"call_help", "flee", "fight"} <= set(call["questions"]["react"]["criteria"])
+    (decision,) = applier.recent
+    assert decision.choice == "flee" and decision.target == "WOLF"
+
+    class Link:
+        def __init__(self) -> None:
+            self.sent: list[tuple] = []
+
+        async def npc_act(self, npc, action, /, **args):  # positional-only, as GameLink.npc_act
+            self.sent.append((npc, action, args))
+            return "n1"
+
+    link = Link()
+    game = GameApplier(link)  # type: ignore[arg-type]
+    game.apply(decision)
+    await settle()
+    assert link.sent == [("PEPE", "flee", {"npc": "WOLF"})]
+    game.apply(Decision("PEPE", "react", "fight", 0.9, {}))  # a fight with nobody: nothing is sent
+    await settle()
+    assert len(link.sent) == 1
+
+
+def test_an_attack_on_someone_else_is_a_fight_nearby() -> None:
+    from gothic_ai.brain.stimuli import normalize
+
+    assert normalize("monster_attack", "WOLF", "Волк", "you") == ("npc_attack", None)
+    assert normalize("monster_attack", "WOLF", "Волк", "Диего") == ("fight_nearby", "Волк attacks Диего")
+    assert normalize("hero_attacked", "WOLF", "Волк", "PLAYER") == ("fight_nearby", "Волк attacks the hero")
+    assert normalize("weapon_drawn", "PLAYER", None, None) == ("weapon_drawn", None)

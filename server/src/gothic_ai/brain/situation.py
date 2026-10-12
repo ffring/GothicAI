@@ -43,10 +43,18 @@ EVENT_OPTIONS = {
     "item_given": {"thank": "thank the hero for the gift", "give_back": "give the item back to the hero"},
     "enter_room": {"tell_to_leave": "tell the hero to get out of your house"},
     "item_dropped": {"pick_up": "pick up the item"},
-    "monster_near": {"call_help": "shout for help"},
-    "monster_attack": {"call_help": "shout for help"},
-    "npc_attack": {"call_help": "shout for help"},
-    "fight_nearby": {"call_guards": "shout for the guards"},
+    # threats from others: the body fights or flees with the game's own combat (npc_act fight / flee)
+    "monster_near": {"call_help": "shout for help", "flee": "run away from it", "fight": "fight it"},
+    "npc_attack": {
+        "call_help": "shout for help",
+        "flee": "run away from the attacker",
+        "fight": "fight back",
+    },
+    "fight_nearby": {
+        "call_guards": "shout for the guards",
+        "fight": "join the fight against the attacker",
+        "flee": "get away from the fight",
+    },
 }
 
 ATTITUDE = "How does what just happened change your attitude toward the hero?"
