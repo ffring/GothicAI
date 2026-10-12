@@ -81,6 +81,18 @@ class Camera final {
 
     void setLookBack(bool lb);
 
+    // Over the shoulder while a bow is aimed by hand (game/archery): the center of the screen is where it
+    // aims; zoom 0..1 (the draw) brings the camera closer, narrows the view
+    void setAim(bool on, float zoom);
+    void setAimAnchor(const Tempest::Vec3& at); // the hero's feet: the shoulder is above
+    void setAimPitch(float deg);                // the aim starts looking that far down (+) or up
+    bool isAim() const { return aimOn; }
+    // The point over the shoulder the center of the screen passes while aiming: from the hero's feet and
+    // the way the camera looks (horizontal)
+    static Tempest::Vec3 aimShoulder(const Tempest::Vec3& feet, const Tempest::Vec3& forward);
+    // The center of the screen as a ray: from the shoulder (aiming), else from the camera
+    void aimRay(Tempest::Vec3& from, Tempest::Vec3& dir) const;
+
     void toggleDebug();
 
     void tick(uint64_t dt);
@@ -115,6 +127,8 @@ class Camera final {
     Tempest::Vec3      originLwc() const { return origin+shake; };
 
     float              zNear() const;
+    float              fovY() const; // degrees, the vertical field of view (the aim narrows it)
+    void               setNearClip(float zNear); // debug (test bench): clips away what is closer to the camera
     float              zFar()  const;
 
   private:
@@ -149,6 +163,7 @@ class Camera final {
     float                 dlgRange   = 0;
 
     Tempest::Matrix4x4    proj;
+    float                 nearClip = 10.f;
     uint32_t              vpWidth=0;
     uint32_t              vpHeight=0;
     float                 depthNear = 0;
@@ -163,6 +178,18 @@ class Camera final {
     bool                  inWater       = false;
 
     mutable int           raysCasted = 0;
+
+    bool                  aimOn      = false;
+    float                 aimBlend   = 0;   // 0..1: from the usual camera to over the shoulder
+    float                 aimZoom    = 0;   // wanted...
+    float                 aimZoomS   = 0;   // ...smoothed
+    float                 aimSaved   = 0;   // the elevation before the aim: back to it after
+    Tempest::Vec3         aimAnchor  = {};
+    Tempest::Vec3         aimFrom    = {};  // the shoulder point the center of the screen passes
+    float                 fovK       = 1;   // of the field of view, the aim narrows it
+
+    void                  updateProj();
+    void                  tickAim(float dtF);
 
     static const float    minLength;
 

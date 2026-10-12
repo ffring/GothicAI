@@ -162,22 +162,20 @@ async def test_new_event_outdates_the_request_in_flight() -> None:
     assert applier.recent[0].stimuli == ("item_given", "player_near")
 
 
-async def test_npc_in_dialog_is_left_alone() -> None:
-    planner, decider, _, clock = make()
+async def test_an_npc_in_a_conversation_is_left_to_it_but_threats() -> None:
+    planner, decider, _, clock = make(ask_attitude=False)
     planner.on_roster([entry("XARDAS", 3)], clock.t)
-    planner.on_message(
-        parse_game_message(json.dumps({"type": "chat_open", "npc": "XARDAS", "name": "Ксардас"}))
-    )
-    assert planner.npcs["XARDAS"].tier is Tier.OFF
-    planner.on_event("XARDAS", "player_speech", clock.t, detail="Здравствуй")
-    planner.on_roster([entry("XARDAS", 3)], clock.t)  # a stale roster does not end the dialog
-    await step(planner, clock, 30)
-    assert decider.calls == []
-    planner.on_message(parse_game_message(json.dumps({"type": "chat_close", "npc": "XARDAS"})))
-    assert planner.npcs["XARDAS"].tier is Tier.NEAR
+    planner.talking("XARDAS", True)
     planner.set_agenda("XARDAS", "make the hero go to Lord Hagen")
-    await step(planner, clock, 1.6)  # catch-up decision after the dialog
-    assert len(decider.calls) == 1 and "What you want: make the hero go" in decider.calls[0]["state"]
+    planner.on_event("XARDAS", "player_speech", clock.t, detail="Здравствуй")
+    await step(planner, clock, 30)
+    assert decider.calls == []  # its body is talk.py's now
+    planner.on_event("XARDAS", "npc_attack", clock.t, other="BANDIT", other_name="Бандит", distance_cm=200)
+    await step(planner, clock)
+    assert len(decider.calls) == 1 and decider.calls[0]["lane"] == "urgent"  # threats are still ours
+    planner.talking("XARDAS", False)
+    await step(planner, clock, 11)  # its next check, with the agenda to act on
+    assert len(decider.calls) >= 2 and "What you want: make the hero go" in decider.calls[-1]["state"]
 
 
 async def test_budget_and_stale_requests() -> None:
@@ -371,9 +369,7 @@ async def test_an_action_is_not_repeated_within_its_cooldown() -> None:
 async def test_npcs_nearby_overhear_the_player() -> None:
     planner, decider, _, clock = make()
     planner.on_roster([entry("XARDAS", 2), entry("LESTER", 6), entry("FAR", 30)], clock.t)
-    planner.on_message(
-        parse_game_message(json.dumps({"type": "player_text", "npc": "XARDAS", "text": "Где Ли?"}))
-    )
+    planner.on_player_text("XARDAS", "Где Ли?", clock.t)  # talk.py: said to Xardas
     await step(planner, clock)
     reacts = [c for c in decider.calls if "react" in c["questions"]]
     assert [c["rid"].split("#")[0] for c in reacts] == ["LESTER"]  # not the partner, not the far one
@@ -463,9 +459,9 @@ async def test_after_a_chat_the_npc_does_not_walk_up_to_the_hero_again_at_once()
     planner, _, applier, clock = make(FakeDecider(choice="approach_talk", confidence=0.9), ask_attitude=False)
     planner.on_roster([entry("PABLO", 6)], clock.t)
     planner.set_agenda("PABLO", "find the thief")
-    planner.on_message(parse_game_message(json.dumps({"type": "chat_open", "npc": "PABLO", "name": "Pablo"})))
-    planner.on_message(parse_game_message(json.dumps({"type": "chat_close", "npc": "PABLO"})))
-    await step(planner, clock, 1.6)  # the catch-up decision after the dialog
+    planner.talking("PABLO", True)
+    planner.talking("PABLO", False)
+    await step(planner, clock, 11)  # its next check after the conversation
     planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
     await step(planner, clock)
     assert not applier.recent and planner.stats.cooldown >= 1

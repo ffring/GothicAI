@@ -117,6 +117,25 @@ async def test_library_voice_steered_by_the_description(api, tmp_path) -> None:
     assert all("instruction" not in body for body in flash_bodies)  # Flash has no steering
 
 
+async def test_the_line_style_steers_any_voice(api, tmp_path) -> None:
+    angry = Voice(XARDAS.id, XARDAS.description, style="say angrily with force.")
+    designed = _provider(api, tmp_path)
+    await _speak(designed, angry)
+    await _speak(designed)
+    library = _provider(api, tmp_path, voice="Dmitry")
+    await _speak(library, angry)
+    flash = _provider(api, tmp_path, voice="Dmitry", model="inworld-tts-2-flash")
+    await _speak(flash, angry)
+    for provider in (designed, library, flash):
+        await provider.aclose()
+
+    angry_designed, calm_designed, angry_library, angry_flash = api.streams()
+    assert angry_designed["instruction"] == "say angrily with force"  # the voice itself is designed
+    assert "instruction" not in calm_designed
+    assert angry_library["instruction"] == f"{XARDAS.description}. say angrily with force"
+    assert "instruction" not in angry_flash
+
+
 async def test_vanished_voice_is_designed_again(api, tmp_path) -> None:
     p = _provider(api, tmp_path)
     await _speak(p)

@@ -118,6 +118,15 @@ async def test_websocket_speak(service) -> None:
         await ws.send(json.dumps({"type": "speak", "id": "2", "text": "  "}))
         assert json.loads(await ws.recv())["type"] == "error"
 
+        await ws.send(
+            json.dumps(
+                {"type": "speak", "id": "3", "text": "Вон!", "voice": {"id": "x"}, "style": "say angrily"}
+            )
+        )
+        while not isinstance(msg := await ws.recv(), str) or json.loads(msg)["type"] != "done":
+            pass
+        assert fake.calls[1][1] == Voice("x", "", None, "say angrily")
+
 
 async def test_health_shows_providers_left_out() -> None:
     synth = Synthesizer(FakeProvider(fail=True), FakeProvider())
@@ -168,8 +177,10 @@ async def test_voxcpm_client_against_a_stand_in_server() -> None:
         assert len(chunks) == 2
         with pytest.raises(TtsError, match="bad text"):
             await p.synthesize("сломайся", XARDAS, on_chunk)
+        await p.synthesize("Вон!", Voice(XARDAS.id, XARDAS.description, style="say angrily"), on_chunk)
         await p.aclose()
     assert seen[0]["voice"] == {"id": "xardas", "description": "An old man with a deep voice"}
+    assert "style" not in seen[0] and seen[2]["style"] == "say angrily"
 
 
 async def test_codex_provider_over_a_fake_app_server(tmp_path) -> None:

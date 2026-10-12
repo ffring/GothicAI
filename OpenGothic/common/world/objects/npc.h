@@ -13,6 +13,8 @@
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
+#include "world/objects/attention.h"
+#include "world/objects/archer.h"
 #include "world/fplock.h"
 #include "world/waypath.h"
 
@@ -178,6 +180,11 @@ class Npc final {
     bool       setAnimItem(std::string_view scheme, int state);
     void       stopAnim(std::string_view ani);
     void       startFaceAnim(std::string_view anim, float intensity, uint64_t duration);
+    float      faceWeight(std::string_view anim);  // how much of the face anim shows now, 0..1 (test bench)
+    // a voiced line starts: the mouth follows the voice (LipSync)
+    void       startSpeech(const Tempest::Sound& voice);
+    void       startSpeech(std::shared_ptr<LipSync::Track> voice);
+    void       stopSpeech();
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;
     bool       hasAnim(Anim a) const;
@@ -285,6 +292,23 @@ class Npc final {
     bool      shootBow(Interactive* focOverride = nullptr);
     bool      hasAmmunition() const;
 
+    // the bow aimed by hand (game/archery): the hero's input drives it (PlayerControl)
+    Archer&   archer() { return arch; }
+    void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {});
+    bool      hasManualAim() const { return manualAim; }
+    auto      manualAimPoint() const -> Tempest::Vec3 { return manualPoint; }
+    auto      manualAimSway() const -> Tempest::Vec2 { return manualSway; }
+    bool      isAimSteady() const;
+    float     aimTrackError() const { return visual.aimTrackError(); }
+    // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
+    bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // lets the arrow go along the arrow: drawn that far, thrown off by the release
+    bool      releaseArrow(float draw, const Archery::Stats& st);
+    // where an arrow passing from-to hits this one, t: how far from 'from'
+    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
+    std::string hitZonesDump() const { return visual.hitZonesDump(); }
+
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
     bool      isLie() const;
@@ -292,8 +316,16 @@ class Npc final {
     bool      isDown() const;
     bool      isAttack() const;
     bool      isTalk() const;
+    // whom this npc talks or listens to, for a while: it looks at them (gaze)
+    void      setTalkPartner(Npc* other, uint64_t ms);
+    Npc*      talkPartner() const;
+    // where the gaze looks: the partner, where a script says, the hero's focus, what caught the eye
+    auto      gazeTarget(Tempest::Vec3& at) const -> Gaze::Source;
+    Npc*      attentionTarget() const { return attention.target(); }
 
     bool      isAttackAnim() const;
+    auto      animNames() const -> std::string; // the playing animations, for debugging
+    void      flinch(const Flinch::Hit& hit); // the upper body gives way to a blow (also the test bench)
     bool      isPrehit() const;
     bool      isImmortal() const;
 
@@ -347,6 +379,7 @@ class Npc final {
     bool      hasCollision() const { return physic.hasCollision(); }
 
     void      startDive();
+    bool      transformInto(size_t instance); // shape change spell: another creature until transformBack
     void      transformBack();
 
     auto      dialogChoices(Npc &player, const std::vector<uint32_t> &except, bool includeImp) -> std::vector<GameScript::DlgChoice>;
@@ -402,6 +435,9 @@ class Npc final {
     void      stopWalking();
 
     bool      canSeeNpc(const Npc& oth, bool freeLos) const;
+    // with a bow, a crossbow, a spell drawn: one steeply below seen when leaning over an edge (the aim
+    // leans the body that far), for the focus
+    bool      canSeeNpcOverEdge(const Npc& oth) const;
     bool      canSeeItem(const Item& it, bool freeLos) const;
     bool      canSeeSource() const;
     bool      canRayHitPoint(const Tempest::Vec3 pos, bool freeLos = true, float extRange=0.f) const;
@@ -416,6 +452,7 @@ class Npc final {
 
     void      clearNearestEnemy();
     int32_t   lastHitSpellId() const { return lastHitSpell; }
+    Npc*      lastHitBy() const { return lastHit; }  // who hit this npc last (ai_bridge: who killed it)
 
     void      setOther(Npc* ot);
     void      setVictim(Npc* ot);
@@ -504,6 +541,7 @@ class Npc final {
     bool      implPointAt(const Tempest::Vec3& to);
     bool      implLookAtWp(uint64_t dt);
     bool      implLookAtNpc(uint64_t dt);
+    void      implHeadBack(uint64_t dt);
     bool      implLookAt (float dx, float dy, float dz, uint64_t dt);
     bool      implTurnAway(const Npc& oth, uint64_t dt);
     bool      implTurnToFai(const Npc& oth, uint64_t dt);
@@ -536,6 +574,7 @@ class Npc final {
     bool      prepareTurn();
     void      stopWalkAnimation();
     void      takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell);
+    void      hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble);
     void      takeFallDamage(const Tempest::Vec3& fallSpeed);
     void      takeDrownDamage();
 
@@ -635,6 +674,13 @@ class Npc final {
 
     const WayPoint*                currentLookAt=nullptr;
     Npc*                           currentLookAtNpc=nullptr;
+    Npc*                           talkWith        =nullptr;
+    uint64_t                       talkUntil       =0;
+    Attention                      attention;
+    Archer                         arch;
+    bool                           manualAim   = false;
+    Tempest::Vec3                  manualPoint = {};
+    Tempest::Vec2                  manualSway  = {};
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

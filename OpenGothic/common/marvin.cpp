@@ -9,6 +9,13 @@
 #include "world/objects/item.h"
 #include "world/triggers/abstracttrigger.h"
 #include "graphics/mesh/footik.h"
+#include "graphics/mesh/gaze.h"
+#include "graphics/mesh/lipsync.h"
+#include "graphics/mesh/lean.h"
+#include "graphics/mesh/animblend.h"
+#include "graphics/mesh/aim.h"
+#include "game/archery.h"
+#include "graphics/mesh/flinch.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -152,6 +159,13 @@ Marvin::Marvin() {
     {"toggle rtsm",                C_ToggleRtsm},
     {"toggle pathtrace",           C_TogglePathtrace},
     {"toggle footik",              C_ToggleFootIk},
+    {"toggle gaze",                C_ToggleGaze},
+    {"toggle lipsync",             C_ToggleLipSync},
+    {"toggle lean",                C_ToggleLean},
+    {"toggle aniblend",            C_ToggleAniBlend},
+    {"toggle aim",                 C_ToggleAim},
+    {"toggle manualaim",           C_ToggleManualAim},
+    {"toggle flinch",              C_ToggleFlinch},
     };
   }
 
@@ -489,6 +503,27 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleFootIk:
       FootIk::setEnabled(!FootIk::isEnabled());
+      return true;
+    case C_ToggleGaze:
+      Gaze::setEnabled(!Gaze::isEnabled());
+      return true;
+    case C_ToggleLipSync:
+      LipSync::setEnabled(!LipSync::isEnabled());
+      return true;
+    case C_ToggleLean:
+      Lean::setEnabled(!Lean::isEnabled());
+      return true;
+    case C_ToggleAniBlend:
+      AnimBlend::setEnabled(!AnimBlend::isEnabled());
+      return true;
+    case C_ToggleAim:
+      Aim::setEnabled(!Aim::isEnabled());
+      return true;
+    case C_ToggleManualAim:
+      Archery::setEnabled(!Archery::isEnabled());
+      return true;
+    case C_ToggleFlinch:
+      Flinch::setEnabled(!Flinch::isEnabled());
       return true;
     }
 

@@ -909,6 +909,8 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
           valid = vm.call_function<int>(conditionSymbol) != 0;
           }
         }
+      if(Gothic::inst().dialogFilterFn)
+        Gothic::inst().dialogFilterFn(info,valid);
       if(!valid)
         continue;
 
@@ -920,6 +922,8 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
       ch.sort     = info.nr;
       choice.emplace_back(std::move(ch));
       }
+    if(Gothic::inst().dialogExtraFn)
+      Gothic::inst().dialogExtraFn(*hnpc,important!=0,choice);
     if(!choice.empty()){
       sort(choice);
       return choice;
@@ -932,6 +936,8 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
 std::vector<GameScript::DlgChoice> GameScript::updateDialog(const GameScript::DlgChoice &dlg, Npc& player,Npc& npc) {
   if(dlg.handle==nullptr)
     return {};
+  if(dlg.handle==nullptr)
+    return {};  // made at runtime, without choices
   const zenkit::IInfo&               info = *dlg.handle;
   std::vector<GameScript::DlgChoice> ret;
 
@@ -940,6 +946,8 @@ std::vector<GameScript::DlgChoice> GameScript::updateDialog(const GameScript::Dl
 
   for(size_t i=0;i<info.choices.size();++i){
     auto& sub = info.choices[i];
+    if(Gothic::inst().dialogChoiceFilterFn && !Gothic::inst().dialogChoiceFilterFn(info,sub.function))
+      continue;
     GameScript::DlgChoice ch;
     ch.title    = sub.text;
     ch.scriptFn = uint32_t(sub.function);
@@ -957,6 +965,14 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
   ScopeVar self (*vm.global_self(), npc.handlePtr());
   ScopeVar other(*vm.global_other(), player.handlePtr());
 
+  if(dlg.handle==nullptr) {
+    if(&player!=&npc)
+      player.stopAnim("");
+    if(Gothic::inst().dialogExtraExecFn)
+      Gothic::inst().dialogExtraExecFn(dlg,player,npc);
+    Gothic::inst().onDialogChosen(dlg,player,npc);
+    return;
+    }
   zenkit::IInfo& info = *dlg.handle;
 
   if(&player!=&npc)
@@ -973,6 +989,7 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
       }
     }
   vm.call_function(vm.find_symbol_by_index(dlg.scriptFn));
+  Gothic::inst().onDialogChosen(dlg,player,npc);
   }
 
 void GameScript::printCannotUseError(Npc& npc, int32_t atr, int32_t nValue) {
@@ -1284,7 +1301,9 @@ bool GameScript::aiOutput(Npc &npc, std::string_view outputname, bool overlay) {
   string_frm name(outputname,".WAV");
   uint64_t   dt = 0;
 
-  world().addDlgSound(name, npc.mapHeadBone(), WorldSound::talkRange, dt);
+  std::shared_ptr<LipSync::Track> voice;
+  world().addDlgSound(name, npc.mapHeadBone(), WorldSound::talkRange, dt, &voice);
+  npc.startSpeech(std::move(voice));
   npc.setAiOutputBarrier(messageTime(outputname),overlay);
 
   return true;
@@ -2560,9 +2579,16 @@ bool GameScript::npc_checkinfo(std::shared_ptr<zenkit::INpc> npcRef, int imp) {
       if (conditionSymbol != nullptr)
         valid = vm.call_function<int>(conditionSymbol)!=0;
       }
+    if(Gothic::inst().dialogFilterFn)
+      Gothic::inst().dialogFilterFn(*info,valid);
     if(valid) {
       return true;
       }
+    }
+  if(Gothic::inst().dialogExtraFn) {
+    std::vector<DlgChoice> extra;
+    Gothic::inst().dialogExtraFn(npc,imp!=0,extra);
+    return !extra.empty();
     }
   return false;
   }

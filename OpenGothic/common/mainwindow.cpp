@@ -9,6 +9,7 @@
 #include <Tempest/Application>
 #include <Tempest/Log>
 
+#include "ui/crosshair.h"
 #include "ui/dialogmenu.h"
 #include "ui/menuroot.h"
 #include "ui/stacklayout.h"
@@ -214,6 +215,7 @@ void MainWindow::paintEvent(PaintEvent& event) {
 
       auto focus = world->validateFocus(player.focus());
       paintFocus(p,focus,vp);
+      paintCrosshair(p,vp);
 
       if(auto pl = Gothic::inst().player()){
         if (!Gothic::inst().isDesktop()) {
@@ -322,6 +324,10 @@ void MainWindow::mouseUpEvent(MouseEvent &event) {
 
 void MainWindow::mouseDragEvent(MouseEvent &event) {
   const bool fs = SystemApi::isFullscreen(hwnd());
+  if(aimCatchesMouse()) {
+    processMouse(event,true);
+    return;
+    }
   if(!mouseP[Event::ButtonLeft] && !fs)
     return;
   if(player.focus().npc && !fs)
@@ -330,7 +336,13 @@ void MainWindow::mouseDragEvent(MouseEvent &event) {
   }
 
 void MainWindow::mouseMoveEvent(MouseEvent &event) {
-  processMouse(event,SystemApi::isFullscreen(hwnd()));
+  processMouse(event,SystemApi::isFullscreen(hwnd()) || aimCatchesMouse());
+  }
+
+bool MainWindow::aimCatchesMouse() {
+  // aiming by hand: the mouse aims, in a window too - but not a window in the background (the test bench
+  // runs one: the mouse is someone else's)
+  return player.isManualAim() && hasFocus() && !TestBench::isActive();
   }
 
 void MainWindow::processMouse(MouseEvent& event, bool enable) {
@@ -647,6 +659,33 @@ void MainWindow::paintFocus(Painter& p, const Focus& focus, const Matrix4x4& vp)
     }*/
   }
 
+void MainWindow::paintCrosshair(Painter& p, const Matrix4x4& vp) {
+  // aiming by hand (game/archery): a chevron "v", its tip where it aims, brackets round it as far apart as
+  // the arrow may go off - the sway, the trembling, the bow not turned to it yet - closing in as it
+  // steadies. The arrow drops: far off one holds over
+  auto  camera = Gothic::inst().camera();
+  Vec3  at;
+  float spread = 0;
+  if(camera==nullptr || dialogs.isActive() || !player.crosshair(at,spread))
+    return;
+  if(player.isCrosshairCentered()) {
+    // it aims at the center of the screen: there, this frame (the point is the last frame's)
+    at = Vec3(0,0,0);
+    } else {
+    float pw = 1.f;
+    vp.project(at.x,at.y,at.z,pw);
+    if(pw<=0.f)
+      return;
+    at /= pw;
+    }
+
+  const float scale = Gothic::interfaceScale(this);
+  const float x     = (0.5f*at.x+0.5f)*float(w());
+  const float y     = (0.5f*at.y+0.5f)*float(h());
+  const float r     = Crosshair::radius(spread,camera->fovY(),float(h()),scale);
+  Crosshair::paint(p,Crosshair::shape(x,y,r,scale),scale);
+  }
+
 void MainWindow::paintFocus(Painter& p, Rect rect) {
   if(focusImg==nullptr)
     return;
@@ -930,6 +969,15 @@ uint64_t MainWindow::tick() {
     clearInput();
   tickMouse(dt);
   player.tickMove(dt);
+
+  // aiming by hand in a window: the mouse is caught as in full screen
+  const bool catchMouse = aimCatchesMouse() && !SystemApi::isFullscreen(hwnd());
+  if(catchMouse!=mouseCaught) {
+    mouseCaught = catchMouse;
+    setCursorShape(catchMouse ? CursorShape::Hidden : CursorShape::Arrow);
+    if(catchMouse)
+      setCursorPosition(Point(w()/2,h()/2));
+    }
   update();
   return dt;
   }
@@ -953,7 +1001,9 @@ void MainWindow::tickCamera(uint64_t dt) {
 
   if(!camera.isCutscene() && !camera.isFree()) {
     const bool fs = SystemApi::isFullscreen(hwnd());
-    if(!fs && mouseP[Event::ButtonLeft]) {
+    if(pl!=nullptr)
+      camera.setAimAnchor(pl->position());
+    if(!fs && mouseP[Event::ButtonLeft] && !player.isManualAim()) {
       camera.setSpin(camera.spin());
       camera.setTarget(pos);
       }
@@ -1250,7 +1300,13 @@ void MainWindow::render(){
       Pixmap pm;
       if(!tex.isEmpty())
         pm = device.readPixels(textureCast<const Texture2d&>(tex));
-      TestBench::capture(pm);
+      TestBench::capture(pm,Gothic::interfaceScale(this));
+      if(TestBench::filming() && !tex.isEmpty()) {
+        // nobody watches the window: the captured frame is the frame (the GPU is idle after the capture)
+        Resources::resetRecycled(cmdId);
+        cmdId = (cmdId+1u)%Resources::MaxFramesInFlight;
+        return;
+        }
       }
 
     auto& sync = fence[cmdId];

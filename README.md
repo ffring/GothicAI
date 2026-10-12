@@ -21,6 +21,9 @@
 | `scripts/make-dev-app.sh` | Обёртка отладочной сборки в `OpenGothic Dev.app` |
 | `scripts/build-engine.sh` | Сборка игры: `OpenGothic/build/opengothic/Gothic2Notr` |
 | `scripts/bench.sh` | Тестовый стенд механик: сценарий в игре → видео с отладочным наложением, метрики и отчёт с подозрительными кадрами, см. `scripts/bench/README.md` |
+| `shorts/` | Шортсы из игры без человека за клавиатурой: сценарий с репликами героя, голос героя через TTS и клавишу разговора, ответы настоящих ИИ-NPC, съёмка на тестовом стенде со звуком игры, вертикальный монтаж с субтитрами, см. `shorts/README.md` |
+| `site/` | Сайт проекта на GitHub Pages (https://kaifaty.github.io/GothicAI/): что уже работает и дневник разработки на английском и русском, RSS; публикуется из `main` (`.github/workflows/pages.yml`), см. `site/README.md` |
+| `.claude/skills/showcase/` | Skill для агента: шортсы, посты дневника, тексты для Telegram и YouTube — как показывать работу аудитории |
 | `reports/` | Итоговые исследования |
 | `research_notes/` | Заметки исследований с источниками |
 | `OpenGothic/` | Движок: OpenGothic (от upstream `Try/OpenGothic`) с ИИ-мостом `ai_bridge/` и IK стоп. Сторонние библиотеки лежат в `lib/` обычными файлами, без подмодулей (`lib/VENDORED.md`) |
@@ -180,7 +183,7 @@ cd server && uv run gothic-ai replay --persona-now
 cd server && uv run gothic-ai voice-test
 ```
 
-Игра в режиме разработчика. Чат с NPC открывается клавишей **T**, когда игрок на него смотрит; Enter отправляет, Esc закрывает. **Удерживайте T, чтобы сказать реплику голосом** (в закрытом чате удержание сразу открывает его и пишет речь). Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
+Игра в режиме разработчика. Окна чата нет: **удерживайте T где угодно, чтобы сказать фразу голосом**, а короткое нажатие T открывает строку ввода (Enter отправляет, Esc закрывает). Кому сказано, решает сервер: имя во фразе, NPC, на которого смотрит герой, текущий собеседник или ближайший NPC перед героем. Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
 
 ```bash
 OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/shared/projects/Gothic II" -devmode

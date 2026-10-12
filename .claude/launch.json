@@ -4,8 +4,27 @@
     {
       "name": "launcher-ui",
       "runtimeExecutable": "bun",
-      "runtimeArgs": ["run", "--cwd", "launcher/app", "dev"],
+      "runtimeArgs": [
+        "run",
+        "--cwd",
+        "launcher/app",
+        "dev"
+      ],
       "port": 47850
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "site",
+        "gothic-site",
+        "serve",
+        "--port",
+        "47860"
+      ],
+      "port": 47860
     }
   ]
 }

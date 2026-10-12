@@ -161,6 +161,16 @@ uint64_t Sound::timeLength() const {
   return 0;
   }
 
+const int16_t* Sound::samples16(size_t& count, uint16_t& channels, uint32_t& frequency) const {
+  count = 0;
+  if(data==nullptr || data->ptr==nullptr || bitrate(data->format)!=16)
+    return nullptr;
+  channels  = channelsCount(data->format);
+  frequency = data->frequency;
+  count     = data->byteSize/sizeof(int16_t);
+  return reinterpret_cast<const int16_t*>(data->ptr.get());
+  }
+
 void Sound::implLoad(IDevice& fin) {
   char sign[4] = {};
   if(fin.read(sign, 4)!=4)

@@ -16,6 +16,7 @@
 #include "utils/fileext.h"
 #include "utils/dbgpainter.h"
 #include "camera.h"
+#include "testbench.h"
 #include "gothic.h"
 #include "resources.h"
 
@@ -776,6 +777,8 @@ Tempest::Vec3 Npc::fightDistanceTo(const Npc& tg) const {
   }
 
 uint8_t Npc::calcAniComb() const {
+  if(manualAim)
+    return Pose::calcAniComb(manualPoint-position(),angle);
   if(currentTarget==nullptr)
     return 0;
   auto dpos = currentTarget->position() - position();
@@ -1029,6 +1032,22 @@ void Npc::stopAnim(std::string_view ani) {
 
 void Npc::startFaceAnim(std::string_view anim, float intensity, uint64_t duration) {
   visual.startFaceAnim(*this,anim,intensity,duration);
+  }
+
+float Npc::faceWeight(std::string_view anim) {
+  return visual.faceWeight(anim);
+  }
+
+void Npc::startSpeech(const Tempest::Sound& voice) {
+  visual.startSpeech(*this,LipSync::Track::fromSound(voice));
+  }
+
+void Npc::startSpeech(std::shared_ptr<LipSync::Track> voice) {
+  visual.startSpeech(*this,std::move(voice));
+  }
+
+void Npc::stopSpeech() {
+  visual.stopSpeech();
   }
 
 bool Npc::stopItemStateAnim() {
@@ -1367,6 +1386,16 @@ bool Npc::implLookAtNpc(uint64_t dt) {
   auto otherHead = currentLookAtNpc->visual.mapHeadBone();
   auto dvec = otherHead - selfHead;
   return implLookAt(dvec.x,dvec.y,dvec.z,dt);
+  }
+
+void Npc::implHeadBack(uint64_t dt) {
+  static const float rotSpeed = 200; // deg per second, as implLookAt
+  auto rot = visual.headRotation();
+  if(rot.x==0 && rot.y==0)
+    return;
+  const float step = rotSpeed*float(dt)/1000.f;
+  auto back = [step](float v) { return std::abs(v)<=step ? 0.f : v - std::copysign(step,v); };
+  visual.setHeadRotation(back(rot.x),back(rot.y));
   }
 
 bool Npc::implLookAt(float dx, float dy, float dz, uint64_t dt) {
@@ -2090,7 +2119,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(hitResult.hasHit) {
-    auto state = bodyStateMasked();
+    auto state   = bodyStateMasked();
+    bool stumble = false;
     if(interactive()==nullptr && ((state&BS_FLAG_INTERRUPTABLE)!=BS_NONE || state==BS_RUN || state==BS_NONE)) {
       //NONE/RUN requires for monsters like waran
       const bool noInter = (hnpc->bodystate_interruptable_override!=0);
@@ -2101,8 +2131,10 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
 
       if((damageType & (1<<zenkit::DamageType::FLY))==0)
-        setAnimAngGet(lastHitType=='A' ? Anim::StumbleA  : Anim::StumbleB);
+        stumble = setAnimAngGet(lastHitType=='A' ? Anim::StumbleA  : Anim::StumbleB)!=nullptr;
       }
+    if((damageType & (1<<zenkit::DamageType::FLY))==0)
+      hitReaction(other,b,hitResult.value,stumble);
     }
 
   // throw enemy
@@ -2129,6 +2161,46 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
       }
     }
+  }
+
+void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble) {
+  // the upper body gives way to the blow (graphics/mesh/flinch), on top of the stumble if one plays
+  const Vec3  feet   = position();
+  const Vec3  center = collosionCenter();
+  const float top    = std::max(mapHeadBone().y - feet.y, 50.f);
+  Flinch::Hit hit;
+  Vec3        at; // where it lands
+  if(b!=nullptr && Vec3(b->direction().x,0,b->direction().z).length()>1e-3f) {
+    hit.dir = b->direction();
+    at      = b->position();
+    } else {
+    // a weapon swung sideways pushes along the swing too and lands on the side it comes from
+    Vec3 to = feet - other.position();
+    to.y = 0;
+    to   = to.length()>1e-3f ? Vec3::normalize(to) : Vec3(-std::cos(rotationRad()),0,-std::sin(rotationRad()));
+    const auto  anim  = other.animNames();
+    const float swing = anim.find("ATTACKL")!=std::string::npos ? 1.f : (anim.find("ATTACKR")!=std::string::npos ? -1.f : 0.f);
+    const float oa    = other.rotationRad();
+    const Vec3  left  = Vec3::crossProduct(Vec3(std::cos(oa),0,std::sin(oa)),Vec3(0,1,0)); // of the one who strikes
+    hit.dir = to + left*(0.6f*swing);
+    at      = center - left*(20.f*swing) - to*20.f;
+    at.y    = feet.y + top*(other.isMonster() ? 0.6f : 0.85f);
+    }
+  // 0 the hips (half the height to the head), 1 the head
+  hit.height = std::clamp((at.y - feet.y)/top*2.f - 1.f, 0.f, 1.f);
+  // off the middle the blow turns the trunk: about up, by the lever
+  Vec3 r = at - center;
+  r.y = 0;
+  Vec3 d = Vec3(hit.dir.x,0,hit.dir.z);
+  if(d.length()>1e-3f) {
+    d = Vec3::normalize(d);
+    hit.twist = std::clamp(Vec3::crossProduct(r,d).y/25.f, -1.f, 1.f);
+    }
+  const int32_t hpMax = std::max(attribute(ATR_HITPOINTSMAX),1);
+  hit.strength = std::clamp(0.35f + 2.5f*float(std::max(damage,0))/float(hpMax), 0.35f, 1.f);
+  if(stumble)
+    hit.strength *= 0.6f; // the stumble throws the body already
+  flinch(hit);
   }
 
 void Npc::takeFallDamage(const Vec3& fallSpeed) {
@@ -2342,6 +2414,7 @@ void Npc::tick(uint64_t dt) {
   assert(go2.flag!=GoToHint::GT_Enemy && go2.flag!=GoToHint::GT_EnemyG);
 
   tickAnimationTags();
+  visual.updateMouth(*this,dt);
 
   if(!visual.pose().hasAnim())
     setAnim(AnimationSolver::Idle);
@@ -2375,6 +2448,9 @@ void Npc::tick(uint64_t dt) {
               hnpc->attribute[ATR_REGENERATEMANA],dt);
     }
 
+  if(visual.hasGaze())
+    attention.tick(*this,owner);
+
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
       implTurnToFai(*currentTarget,dt);
@@ -2384,8 +2460,13 @@ void Npc::tick(uint64_t dt) {
     }
 
   if(!isDown()) {
-    implLookAtNpc(dt);
-    implLookAtWp(dt);
+    if(visual.hasGaze()) {
+      // the gaze turns the head and the body (gazeTarget): the old turn of the head goes back
+      implHeadBack(dt);
+      } else {
+      implLookAtNpc(dt);
+      implLookAtWp(dt);
+      }
 
     if(implAttack(dt))
       return;
@@ -2748,6 +2829,12 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
             msgTime   = owner.script().messageTime(svm);
             }
           visual.startFaceAnim(*this,"VISEME",1,msgTime);
+          // the speaker and the one it speaks to look at each other while the line lasts
+          if(act.target!=nullptr && act.target!=this) {
+            static const uint64_t tail = 1000;
+            setTalkPartner(act.target,msgTime+tail);
+            act.target->setTalkPartner(this,msgTime+tail);
+            }
           }
         if(act.act!=AI_OutputSvmOverlay) {
           visual.startAnimDialog(*this);
@@ -3228,15 +3315,20 @@ void Npc::commitSpell() {
       }
     }
 
-  if(spellInfo!=0 && transformSpl==nullptr) {
-    transformSpl.reset(new TransformBack(*this));
-    invent.updateView(*this);
-    visual.clearOverlays();
+  if(spellInfo!=0 && transformInto(size_t(spellInfo)))
+    spellInfo = 0;
+  }
 
-    owner.script().initializeInstanceNpc(hnpc, size_t(spellInfo));
-    spellInfo  = 0;
-    hnpc->level = transformSpl->hnpc->level;
-    }
+bool Npc::transformInto(size_t instance) {
+  if(transformSpl!=nullptr)
+    return false;
+  transformSpl.reset(new TransformBack(*this));
+  invent.updateView(*this);
+  visual.clearOverlays();
+
+  owner.script().initializeInstanceNpc(hnpc, instance);
+  hnpc->level = transformSpl->hnpc->level;
+  return true;
   }
 
 void Npc::forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const {
@@ -4128,6 +4220,74 @@ bool Npc::shootBow(Interactive* focOverride) {
   return true;
   }
 
+void Npc::setManualAim(bool on, const Tempest::Vec3& point, const Tempest::Vec2& sway) {
+  manualAim   = on;
+  manualPoint = point;
+  manualSway  = on ? sway : Tempest::Vec2();
+  }
+
+bool Npc::isAimSteady() const {
+  const auto bs = bodyStateMasked();
+  return (bs==BS_AIMNEAR || bs==BS_AIMFAR) && visual.isAimSteady();
+  }
+
+bool Npc::arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const {
+  return visual.arrowRay(pos,dir);
+  }
+
+bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
+  auto active = invent.activeWeapon();
+  if(active==nullptr || !hasAmmunition())
+    return false;
+  const auto bs = bodyStateMasked();
+  if(bs!=BS_AIMNEAR && bs!=BS_AIMFAR)
+    return false;
+
+  // along the arrow as it lies, swaying: read before the shot moves the arms
+  Tempest::Vec3 pos, dir;
+  if(!visual.arrowRay(pos,dir))
+    return false;
+  const int32_t munition = active->handle().munition;
+  auto          itm      = invent.getItem(size_t(munition));
+  if(itm==nullptr || !setAnim(Anim::Attack))
+    return false;
+
+  // the release throws it off, up to the cone
+  if(st.cone>0.f) {
+    auto&               script = owner.script();
+    const float         r      = st.cone*std::sqrt(float(script.rand(10000))/10000.f);
+    const float         a      = 2.f*float(M_PI)*float(script.rand(10000))/10000.f;
+    Tempest::Vec3       side   = Tempest::Vec3::crossProduct(dir,Tempest::Vec3(0,1,0));
+    if(side.length()<1e-3f)
+      side = Tempest::Vec3(1,0,0);
+    side = Tempest::Vec3::normalize(side);
+    const Tempest::Vec3 up     = Tempest::Vec3::crossProduct(side,dir);
+    dir = Tempest::Vec3::normalize(dir*std::cos(r) + (side*std::cos(a) + up*std::sin(a))*std::sin(r));
+    }
+
+  const float speed = Archery::speedAt(st,draw);
+  auto&       b     = owner.shootArrow(*itm,pos,dir,speed);
+  if(TestBench::isActive()) {
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"arrow shot: from %.1f %.1f %.1f dir %.5f %.5f %.5f speed %.3f draw %.2f",
+                  pos.x,pos.y,pos.z,dir.x,dir.y,dir.z,double(speed),double(draw));
+    TestBench::note(buf);
+    }
+  invent.delItem(size_t(munition),1,*this);
+  b.setOrigin(this);
+  b.setDamage(DamageCalculator::rangeDamageValue(*this));
+  b.setPrecise(draw);
+  return true;
+  }
+
+HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const {
+  return visual.rayHitZone(from,to,t);
+  }
+
+bool Npc::hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const {
+  return visual.hitZoneCenter(z,at);
+  }
+
 bool Npc::hasAmmunition() const {
   auto active=invent.activeWeapon();
   if(active==nullptr)
@@ -4164,6 +4324,62 @@ bool Npc::isAttack() const {
 
 bool Npc::isTalk() const {
   return owner.script().isTalk(*this);
+  }
+
+void Npc::setTalkPartner(Npc* other, uint64_t ms) {
+  if(other==this)
+    return;
+  talkWith  = other;
+  talkUntil = owner.tickCount() + ms;
+  }
+
+Npc* Npc::talkPartner() const {
+  static const float maxDist = 2000; // further away it is not a conversation any more
+  if(talkWith==nullptr || talkUntil<=owner.tickCount() || talkWith->isDead())
+    return nullptr;
+  if((talkWith->position()-position()).quadLength()>maxDist*maxDist)
+    return nullptr;
+  return talkWith;
+  }
+
+Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
+  static const float focusDist = 800;
+  const Vec3 eyes = {0,6,0}; // the eyes are a bit above the head bone
+  if(auto other = talkPartner()) {
+    at = other->mapHeadBone() + eyes;
+    return Gaze::Source::Talk;
+    }
+  if(currentLookAtNpc!=nullptr && currentLookAtNpc!=this) {
+    at = currentLookAtNpc->mapHeadBone() + eyes;
+    return Gaze::Source::Script;
+    }
+  if(currentLookAt!=nullptr) {
+    // a waypoint is on the floor: where the eyes of one standing there would be
+    at    = currentLookAt->position();
+    at.y += mapHeadBone().y - position().y;
+    return Gaze::Source::Script;
+    }
+  if(isPlayer()) {
+    // the hero looks at the npc in focus; with a weapon the body turns to it anyway
+    auto t = currentTarget;
+    if(t==nullptr || t==this || weaponState()!=WeaponState::NoWeapon || qDistTo(*t)>focusDist*focusDist)
+      return Gaze::Source::None;
+    at = t->mapHeadBone() + eyes;
+    return Gaze::Source::Focus;
+    }
+  if(auto t = attention.target()) {
+    at = t->mapHeadBone() + eyes;
+    return Gaze::Source::Attention;
+    }
+  return Gaze::Source::None;
+  }
+
+void Npc::flinch(const Flinch::Hit& hit) {
+  visual.flinch(*this,hit);
+  }
+
+std::string Npc::animNames() const {
+  return visual.pose().animNames();
   }
 
 bool Npc::isAttackAnim() const {
@@ -4667,6 +4883,27 @@ bool Npc::canSeeNpc(const Npc &oth, bool freeLos) const {
   return false;
   }
 
+bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
+  const auto ws = weaponState();
+  if(!Aim::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow && ws!=WeaponState::Mage))
+    return false;
+  const Vec3  head = visual.mapHeadBone();
+  const Vec3  tg   = oth.physic.center();
+  const Vec3  d    = tg - head;
+  const float h    = std::sqrt(d.x*d.x+d.z*d.z);
+  const float lean = Aim::leanFor(-std::atan2(d.y,h));
+  if(lean<=0.f)
+    return false;
+  // toward it, straight down where the body faces (as the aim leans)
+  const float a   = rotationRad();
+  const Vec3  dir = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(a),0,std::sin(a))*0.25f);
+  const float k   = lean/(Aim::LeanMax*float(M_PI)/180.f);
+  const Vec3  eye = head + dir*(Aim::LeanReach*k) - Vec3(0,Aim::LeanDrop*k,0);
+  if(owner.physic()->ray(head,eye).hasCol)
+    return false; // no room to lean
+  return canRayHitPoint(eye,tg,180.f) || canRayHitPoint(eye,oth.visual.mapHeadBone(),180.f);
+  }
+
 bool Npc::canSeeSource() const {
   const auto head = visual.mapHeadBone();
   const bool ret  = owner.sound()->canSeeSource(head);
@@ -4781,7 +5018,9 @@ bool Npc::canSeeItem(const Item& it, bool freeLos) const {
 
 bool Npc::isAlignedToGround() const {
   auto gl = guild();
-  return (owner.script().guildVal().surface_align[gl]!=0) || isDead() || isLie();
+  // four-legged creatures stand on the ground with foot IK instead of tilting as a whole
+  const bool align = owner.script().guildVal().surface_align[gl]!=0 && !visual.hasQuadrupedIk();
+  return align || isDead() || isLie();
   }
 
 Vec3 Npc::groundNormal() const {
@@ -4855,7 +5094,11 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     }
 
   bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
+  syncAtt |= visual.updateLean(*this,dt);
   syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
+  syncAtt |= visual.updateAim(*this,dt);
+  syncAtt |= visual.updateGaze(*this,dt);
+  syncAtt |= visual.updateFlinch(*this,dt);
   if(syncAtt)
     visual.syncAttaches();
   }

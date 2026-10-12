@@ -17,12 +17,45 @@ random idle animations the game picks).
 Scenarios for foot IK: `ik-sweep` (12 slopes all over the world: run up, run down, walk across; ~2 min),
 `ik-stairs` (8 stairs: walk up and down, run up), `ik-moves` (stand, turn on the spot, strafe, walk
 backwards, sneak), `ik-ab` (IK off and on on the same run), `smoke` (the bench itself).
+Four legs: `quad-wolf` (the player as a wolf on 6 slopes), `quad-zoo` (molerat, shadowbeast, waran,
+lurker, giant bug, sheep on 2 slopes each). The player becomes the creature (`transform`), so the
+usual player commands drive it. Gaze: `gaze` (Xardas and the hero talk; the hero stands in front,
+goes around him, behind his back and back; then Xardas at his bookstand turns the head only),
+`gaze-ambient` (no conversation: Rupert at the market notices the hero walking up, standing, walking,
+running and sneaking past; a script look; the hero looks at the npc in focus; a drawn weapon).
+Lean: `lean` (running in circles left and right, a slalom, walking in a circle, running and walking up
+and down a 27 degree slope). With `lean off` on top of a copy it gives the same run without the lean,
+for `bench_report.py diff`.
+Transitions between animations: `anim` (the hero on a flat floor: start and stop, walk to run, turning
+on the spot, strafing, walking backwards, jumps, sneaking, fists: attacks, a combo, a block). With
+`blend off` on top of a copy it gives the old cross-fade, for `diff`; `gaze-ambient` and `quad-zoo` show
+an npc's and the creatures' transitions too.
+Aim: `aim` (the hero draws a bow at a sheep hung level, above, steeply above, to the side; the same with
+aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 and 46 degrees, and
+from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
+foot of a gallery's wall in Xardas' tower, 78 degrees down: hidden from the head, so without the aim no
+focus; with it the hero leans over the edge, the focus takes it, the arrow kills it).
+Flinch: `flinch` (a frozen bandit: blows only to the flinch from the front, behind, both sides, to the
+head, off the middle, a weak one, three in a row, the same with the flinch off; an arrow in his back;
+the hero's fist from the front, behind and the side as the game deals it, with its stumble; his sword
+swung from the left, the right and straight (a swing pushes along the blade); the hero
+struck standing and while aiming a bow, where the game has no stumble; a wolf: the head only).
+Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
+with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
+the first choice: the lines of both are played the way the game plays them).
+Faces: `faces` (the face animations of a head one after another, then two of them while Xardas speaks),
+`face-fade` (faces fade in and out, one gives way to the next, three a moment apart, the lips over a
+fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serve --scenario m1 --llm fake
+--no-tts` on a port of your own and run the bench with `GOTHIC_AI_URL=ws://127.0.0.1:<port>`; with a TTS
+service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
+`face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
+watched npc shows, 0..1.
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
 | File | What |
 |---|---|
-| `report.md` | one line per recorded segment, then the worst events with their contact sheets |
+| `report.md` | one line per recorded segment, then the worst events with their contact sheets; a "Manual aim" table when the bow was aimed by hand: shots, hits by zone, the sway at full draw, the draw time |
 | `sheets/<segment>.png` | 16 frames of a segment in a 4x4 grid |
 | `sheets/evNN-*.png` | frames around an event |
 | `<segment>.mp4` | the video, 800x600, 30 fps |
@@ -58,26 +91,67 @@ git worktree remove --force /tmp/before
   under a planted foot, yellow under a swinging one; the short line is the ground normal;
 - bottom right: the feet zoomed in;
 - top left: frame number and time in the segment (they match `frame` in `metrics.csv`);
-- top right: IK on/off, weight `W`, pelvis offset `P` (cm), per leg planted/swinging, contact error `E`
-  (cm), knee deviation from the animation `K` (degrees); `HIDDEN` if something is between the camera and
-  an ankle.
+- lips (under the gaze text): `F` the two mouth shapes (VISEME frames) mixed with `A`, intensity `I`;
+  the thin white bar is the voice, the thick blue one how wide the mouth is shown;
+- gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
+  weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
+- orange `AIM`: weight, error `E` (where the arrow points after the turn against where the shot leaves),
+  where the shot has to go `Y`, `P`, the turn `T` and the bend `B` (+ up) of the upper body, degrees;
+- red `HIT`: blows so far `#`, strength `S` and height `H` (0 the hips, 1 the head) of the last one, the
+  trunk's bend `B` away from it and where its top goes `Y` (+ to the right of the facing), the twist `T`
+  about up and the head `N` against the trunk, degrees;
+- green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
+  turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
+- violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
+- top right: IK on/off, weight `W`, pelvis offset `P` and for four legs shoulders offset `C` (cm), per
+  leg planted/swinging, contact error `E` (cm), knee deviation from the animation `K` (degrees); `HIDDEN`
+  if something is between the camera and an ankle. Four legs: front paws in violet (left) and pink.
 
 ## Events (scripts/bench_report.py)
 
 | Flag | Fires when |
 |---|---|
 | `float` / `sink` | a planted ankle is more than 3 cm above / below the ground it should stand on |
+| `pelvis` | the body height (hips or shoulders) jumps more than 2 cm in one frame |
 | `toe_sink` | the toes go 3 cm deeper into the ground than in the animation (steps lower than 25 cm) |
 | `pop` | the IK correction of a knee, ankle or toe changes abruptly: second difference over 3 frames above 12 cm |
-| `pelvis` | the body height jumps more than 2 cm in one frame |
 | `knee` | the knee bends more than 25 degrees away from the animated direction |
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
+| `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
+| `aim_off` | while the bow holds still, the arrow points more than 3 degrees past where the shot leaves although the turn could reach it |
+| `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
+| `anim_pop` | a joint of the animated pose (before lean, IK, gaze) jumps at a switch of animations (a frame before it to 6 after): second difference over 3 frames above 20 cm; the event names the bone and the animations before and after |
+| `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
+| `lip_shut` | the voice is louder than 0.7 while the mouth is shut (under 0.1), 4 frames or more |
+| `face_jump` | a face comes or goes at once: its weight changes more than 0.5 in one frame (faces fade in about a second, `T_HURT` in 0.1 s) |
+| `flinch_none` | a blow, and the upper body gives way less than 1.5 degrees in the 8 frames after it |
+| `flinch_slow` | the upper body is not back 1.5 s after the last blow |
 
 Contact flags (`float`, `sink`, `toe_sink`) for a single frame count only when they are at least twice
 the threshold: a foot leaving the ground a frame early is not visible.
 
+Columns of the table: `contact` is the error of planted feet against a flat animation floor (only
+meaningful with IK on); `spread` is how much the height of planted feet above the ground varies (works
+for a body tilted as a whole too: compare IK off and on); `limp` is how much lower the body is on the
+steps of one leg of a pair than on the other's. `gaze on` is the share of frames the watched one looks
+at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
+the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
+looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `aim err` is the
+angle between where the arrow points and where the shot leaves (while the bow holds still), `bend` the
+largest bend of the upper body (+ up). `lips corr` is the correlation of the voice level and the shown
+mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `anim pop` is the second
+difference of the joints of the animated pose (cm, the largest joint per frame): p99 and max over the
+segment, then the number of switches of animations and the largest value next to one. Within an
+animation it is how the animation moves (a running human 11-25 cm, a running waran up to 80): compare
+the switches, with `blend off` and on. `hits, peak, back` are the blows the watched one took, the
+largest flinch (trunk bend, twist or head, degrees) and how long it took to come back after the last
+blow. `gaze_jerk` is not counted for a second after a blow: it throws the head on purpose.
+
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
+One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
+`bench.log` then says `dialog started: <npc>`. `freeze` that npc first (Lothar at the market).
 
 ## Scenario commands
 
@@ -92,24 +166,81 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `goto <waypoint>` | teleport |
 | `walkto <waypoint>` | walk there (AI path) |
 | `walkmode walk\|run\|sneak` | |
-| `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `turn <deg>` | turn the player at once |
-| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon action` (`left`/`right` strafe) |
+| `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `face rel <deg>`, `turn <deg>` | turn the player at once; `rel`: the watched npc's facing turned by that much (the angles of `place`) |
+| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action parade breath` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it; in the manual aim holding `action` draws, releasing shoots, `parade` lowers the bow, `breath` (= walk) holds the breath) |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
-| `view clean\|nopfx\|full` | `clean` hides everything but the landscape and characters: trees, bushes, objects, particles |
+| `view clean [margin]\|nopfx\|full` | `clean` clips away everything closer to the camera than the subject minus `margin` (default 100 cm): trees and bushes in between; particles are hidden. The ground right in front of the camera is clipped too (white) |
+| `view hide static movable morph pfx animated` | hide draw types (debugging only: static and movable objects share draw commands, hiding them hides parts of creatures too) |
 | `overlay on\|off`, `overlay zoom on\|off`, `overlay bright on\|off` | `bright` stretches dark images (forests, interiors) |
 | `rec <name> [novideo]`, `stop` | record a segment (video and metrics, or metrics only) |
 | `shot <name>` | one PNG |
 | `label <text>` | text on the overlay |
-| `ik on\|off`, `ik param <name> <value>`, `ik params` | foot IK and its parameters, without rebuilding |
+| `ik on\|off`, `ik param <name> <value>`, `ik params` | foot IK and its parameters, without rebuilding; `ik off` on a four-legged creature brings back the old whole-body tilt |
+| `transform <instance>`, `transform back` | the player becomes a creature (`Wolf`, `Molerat`, `Shadowbeast`, `Waran`, ...), like the shape change spell |
+| `bones` | the player's skeleton to `bench.log`: index, parent, name, bind pose position |
+| `watch <npc\|nearest\|player>` | the camera and the gaze metrics follow this npc (a script symbol, `NONE_100_XARDAS`) |
+| `talk <npc\|nearest> <ms>` | the npc and the hero talk to each other that long (no words): they look at each other |
+| `freeze <npc\|nearest> [off]` | the npc leaves what it does and stands still, like a body the AI server attaches |
+| `place <dist> <angle>`, `orbit <deg> <ms>` | the hero stands around the watched npc (angle from its facing, 0 in front) or goes around it; not where no ground is found (inside a rock: it would fall through the world) |
+| `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
+| `lean on\|off` | the lean into turns and on slopes |
+| `blend on\|off`, `blend param <name> <value>` | transitions between animations (`AnimBlend`; off: the old cross-fade); params `min`, `max`, `scale` (blend time, s), `turn` (rad/s), `move` (cm/s), `out`, `side` |
+| `flinch on\|off` | the upper body giving way to blows |
+| `hit <npc\|player> <angle> [strength] [height] [twist]` | a blow from that side of it (angle from its facing, 0 in front, as `place`) to the flinch only: no damage, no stumble; strength 0..1 (1), height 0 the hips .. 1 the head (0.6), twist -1..1 about up (0) |
+| `strike <victim\|player> [attacker\|player]` | the attacker's blow lands as the game deals it (the stumble, the damage, the flinch); the victim gets its hit points back below a third |
+| `clear [radius]` | the npcs around the hero (2500 cm) leave the world, not the watched one: rats, wolves that would join in |
+| `aim on\|off` | the upper body turning to the target with a bow, a crossbow, a spell; leaning over an edge (and the focus seeing from there) |
+| `manual on\|off` | the manual aim (`game/archery`, `GAME/manualAim` in Gothic.ini, on by default; `aim.bench` turns it off to test the game's aim): the hero aims a bow by hand, no dice: the arrow hits where it flies (bones), the sway comes from the skill, strength, dexterity |
+| `stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]` | the hero's strength, dexterity, hit chances (the skill); prints what the manual aim makes of them (sway, draw, hold, arrow speed) |
+| `aimat <npc\|nearest> [head\|body\|limb] [raw]`, `aimat <x> <y> <z>`, `aimat off` | the manual aim aims at the middle of that zone of the npc (every frame) or at a point, instead of the mouse; the hero faces it. Over it by the drop of the arrow at full draw, as an archer holds over (`raw`: right at it) |
+| `open [dist cm]` | how far it is open around the hero at head height and at the knees every 15 degrees from the facing: where to put a target |
+| `volley <shots> [hold ms] [draw 0..1]` | shots by hand in a row: press `action`, draw that far (1: full), hold, release, wait for the next arrow; every arrow is in the log (`arrow hit <npc>: <zone>, hp a -> b, draw, flew` or `arrow missed`) |
+| `immortal <npc\|nearest> [off]` | arrows hit it, it does not die: counting hits |
+| `give <item> [count]`, `equip <item>` | into the hero's inventory; `equip` puts it on whatever the strength (`ItRw_Bow_L_01`, `ItRw_Arrow`, `ItRw_Crossbow_L_01`, `ItRw_Bolt`, `ItRu_FireBolt`) |
+| `put <npc\|nearest> <dist> <angle>` | the npc stands there on the ground from the hero (angle from the hero's facing), frozen |
+| `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |
+| `anims` | what the watched one (or the hero) plays, its body state, weapon and target |
+| `cansee <npc>` | can the hero see it: from the head, leaning over an edge (the aim's lean); what the rays hit; the bow's focus range |
+| `hp <npc> [full]` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit); `full`: the nearest gets them all back first |
+| `walls [count]` | spots at the edge of a wall (from a waypoint walking to where the ground falls away) with its foot 2.5..10 m below, 1 m out, hidden from the head and seen leaning over: the waypoint and the yaw for `goto`, `edge` |
+| `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
+| `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
+| `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
+| `cam face <dist> [angle] [height]` | close to the face of the watched one, looking at the mouth; `angle` from its facing |
+| `speak <npc\|nearest\|player> <output name>` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script |
+| `dialog <npc\|nearest>` | the hero talks to it, as with the action key: the dialog window opens |
+| `choose <n>` | runs the n-th choice (from 1) of the dialog with the watched npc, as if the player picked it |
+| `faceanim <npc\|nearest\|player> <anim> [ms] [intensity]` | a face animation of the head (`S_ANGRY`, `S_FRIENDLY`, `T_HURT`...) |
+| `lips on\|off`, `lips param <name> <value>`, `lips params` | lip sync (off: the old talk loop) and its parameters |
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
+| `edge <yaw> [max cm] [margin cm]` | the hero is put that way to where the ground falls away, `margin` (35) from the edge facing it (closer the body slips over it); prints the drop past it (a wall, a ship's side) |
+| `ledges [min drop] [max drop] [count] [steep]` | waypoints at an edge with open ground that much lower 1.5..14 m away, seen from there (a target below): the yaw to `face`, the distance, the drop, the angle down; nearest first or the steepest |
 | `say <text>`, `quit` | |
+
+Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
+
+| Command | |
+|---|---|
+| `ptt <wav> [text]` | the hero holds the talk key while the recording is said (`ai ptt start <wav>`: the AI server takes the file instead of the microphone, `--voice-files`) |
+| `waitreply [timeout ms] [quiet ms]`, `waitquiet [quiet ms] [timeout ms]` | until an npc of the AI has answered and has been quiet that long; until none speaks |
+| `near <npc> [dist] [deg]`, `approach <npc>`, `face npc <npc>` | the hero in front of an npc (teleport), walks up to it, turns to it |
+| `cam shoulder\|face\|two <npc> [dist] [height] [side\|deg]`, `cam cut`, `cam smooth <k>` | shots of the hero and an npc; they glide from one to the next unless `cut`. `cam face` with an npc's name is this shot, with a number the close-up above |
+| `caption <text>`, `mark <text>` | events for the cut of a short |
+| `ai <...>` | the AI bridge's console: `ai attach <npc>`, `ai ptt start [<wav>]\|stop\|cancel` |
+
+Every talking command writes `events.jsonl` (what was said when, in frames of the recording).
 
 Environment of `scripts/bench.sh`: `GOTHIC_DIR`, `SAVE` (default: `save_slot_1.sav` of the main
 checkout), `NO_BUILD=1`, `TIMEOUT` (seconds, default 300), `KEEP=1`.
+
+Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
+clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into
+`<segment>.wav` instead of playing it; `TEMPEST_WINDOW_SIZE=<w>x<h>` (points) sets the frame;
+`OPENGOTHIC_BENCH_ENCODER` replaces the x264 options (e.g. `-c:v h264_videotoolbox -b:v 24M`).
 
 Good spots near the default save (Xardas' tower): `NW_XARDAS_TOWER_VALLEY_05` (27 degree slope in a
 forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`..`_04`.
@@ -117,5 +248,11 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 ## Engine side
 
 `OpenGothic/common/testbench.cpp`, inert unless `OPENGOTHIC_BENCH` is set. Hooks: the fixed time step and
-the capture in `MainWindow`, `FootIk::playerProbe` (legs before and after IK), `DrawCommands::hiddenTypes`
-(`view clean`), and `TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).
+the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
+and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL loopback device in Tempest's
+`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
+`Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
+switches bone by bone),
+`LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `Camera::setNearClip`
+(`view clean`), `DrawCommands::hiddenTypes` (`view hide`), `Npc::transformInto` (`transform`), and
+`TEMPEST_BACKGROUND` in Tempest's macOS backend (no focus, no Dock icon).

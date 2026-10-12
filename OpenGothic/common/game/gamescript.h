@@ -53,6 +53,7 @@ class GameScript final {
       uint32_t         scriptFn = 0;
       bool             isTrade  = false;
       zenkit::IInfo*   handle   = nullptr;
+      std::string      external;  // a dialog made at runtime (ai_bridge): its id; handle and scriptFn are empty
       };
 
     struct PerDist {

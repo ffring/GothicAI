@@ -1,25 +1,45 @@
 #include "testbench.h"
 
 #include <Tempest/Pixmap>
+#include <Tempest/SoundDevice>
 #include <Tempest/SystemApi>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
+#include <memory>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "graphics/drawcommands.h"
 #include "graphics/mesh/footik.h"
+#include "graphics/mesh/gaze.h"
+#include "graphics/mesh/lipsync.h"
+#include "graphics/mesh/lean.h"
+#include "graphics/mesh/pose.h"
+#include "graphics/mesh/animblend.h"
+#include "graphics/mesh/aim.h"
+#include "graphics/mesh/hitzones.h"
+#include "game/archery.h"
+#include "graphics/mesh/flinch.h"
+#include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
+#include "world/objects/item.h"
 #include "world/world.h"
 #include "world/aiqueue.h"
+#include "ui/crosshair.h"
 #include "utils/keycodec.h"
 #include "camera.h"
 #include "gothic.h"
@@ -38,6 +58,9 @@ const char*       scenarioPath = envStr("OPENGOTHIC_BENCH");
 const std::string outDir       = envStr("OPENGOTHIC_BENCH_OUT") ? envStr("OPENGOTHIC_BENCH_OUT") : ".";
 const bool        keepRunning  = envStr("OPENGOTHIC_BENCH_KEEP")!=nullptr;
 constexpr int     Fps          = 30;
+// the fixed steps keep to the wall clock (never faster): the AI server and its voices live in real time
+const bool        realtime     = envStr("OPENGOTHIC_BENCH_REALTIME")!=nullptr;
+constexpr uint64_t SpeakTailMs = 400;  // the talk key is held this long after the recording ends
 
 std::FILE* logFile = nullptr;
 
@@ -72,6 +95,12 @@ float num(const std::vector<std::string>& a, size_t i, float def) {
   return i<a.size() ? std::strtof(a[i].c_str(),nullptr) : def;
   }
 
+bool isNumber(const std::string& s) {
+  char* end = nullptr;
+  std::strtof(s.c_str(),&end);
+  return end!=s.c_str() && *end=='\0';
+  }
+
 std::string rest(const std::string& line) {
   const size_t sp = line.find(' ');
   return sp==std::string::npos ? "" : line.substr(sp+1);
@@ -80,6 +109,65 @@ std::string rest(const std::string& line) {
 void replaceAll(std::string& s, std::string_view from, std::string_view to) {
   for(size_t p=s.find(from); p!=std::string::npos; p=s.find(from,p+to.size()))
     s.replace(p,from.size(),to);
+  }
+
+std::string jsonStr(std::string_view s) {
+  std::string r = "\"";
+  for(char ch:s) {
+    switch(ch) {
+      case '"':  r += "\\\""; break;
+      case '\\': r += "\\\\"; break;
+      case '\n': r += "\\n"; break;
+      case '\r': r += "\\r"; break;
+      case '\t': r += "\\t"; break;
+      default:
+        if(uint8_t(ch)<0x20) {
+          char buf[8];
+          std::snprintf(buf,sizeof(buf),"\\u%04x",unsigned(uint8_t(ch)));
+          r += buf;
+          } else {
+          r += ch;
+          }
+      }
+    }
+  return r + "\"";
+  }
+
+// length of a 16-bit PCM wav in ms, 0 if it is not one
+uint64_t wavMs(const std::string& path) {
+  std::ifstream f(path,std::ios::binary);
+  char riff[12];
+  if(!f.read(riff,12) || std::memcmp(riff,"RIFF",4)!=0 || std::memcmp(riff+8,"WAVE",4)!=0)
+    return 0;
+  uint32_t byteRate = 0;
+  char     hdr[8];
+  while(f.read(hdr,8)) {
+    uint32_t size = 0;
+    std::memcpy(&size,hdr+4,4);
+    if(std::memcmp(hdr,"fmt ",4)==0) {
+      std::vector<char> fmt(size);
+      if(!f.read(fmt.data(),size) || size<16)
+        return 0;
+      std::memcpy(&byteRate,fmt.data()+8,4);
+      }
+    else if(std::memcmp(hdr,"data",4)==0) {
+      return byteRate>0 ? uint64_t(size)*1000/byteRate : 0;
+      }
+    else {
+      f.seekg(size + (size&1),std::ios::cur);
+      }
+    }
+  return 0;
+  }
+
+void writeWavHeader(std::FILE* f, uint32_t rate, uint64_t frames) {
+  const uint32_t data = uint32_t(frames*4), riff = 36+data, fmtSize = 16, byteRate = rate*4;
+  const uint16_t pcm = 1, channels = 2, align = 4, bits = 16;
+  std::fseek(f,0,SEEK_SET);
+  std::fwrite("RIFF",1,4,f); std::fwrite(&riff,4,1,f); std::fwrite("WAVE",1,4,f);
+  std::fwrite("fmt ",1,4,f); std::fwrite(&fmtSize,4,1,f); std::fwrite(&pcm,2,1,f); std::fwrite(&channels,2,1,f);
+  std::fwrite(&rate,4,1,f); std::fwrite(&byteRate,4,1,f); std::fwrite(&align,2,1,f); std::fwrite(&bits,2,1,f);
+  std::fwrite("data",1,4,f); std::fwrite(&data,4,1,f);
   }
 
 float groundY(World& w, float x, float z, float y) {
@@ -164,6 +252,10 @@ struct Rgba { uint8_t r,g,b,a; };
 const Rgba White  = {255,255,255,170};
 const Rgba LegL   = { 60,200,255,255};
 const Rgba LegR   = {255,140, 40,255};
+const Rgba LegFL  = {150,140,255,255};
+const Rgba LegFR  = {255,110,190,255};
+const Rgba LegColor[] = {LegL, LegR, LegFL, LegFR};
+const char* const LegName[] = {"L", "R", "FL", "FR"};
 const Rgba Plant  = { 60,230, 80,255};
 const Rgba Swing  = {240,220, 60,255};
 const Rgba Red    = {255, 50, 50,255};
@@ -229,6 +321,35 @@ struct Canvas {
       }
     }
 
+  // a polyline stroked as the game strokes the crosshair: white over a dark edge, smooth; each pixel once
+  void stroke(const std::vector<Vec2>& pt, float alpha, const Crosshair::Pen& pen) {
+    if(pt.size()<2)
+      return;
+    float x0 = pt[0].x, y0 = pt[0].y, x1 = x0, y1 = y0;
+    for(auto& p:pt) {
+      x0 = std::min(x0,p.x); x1 = std::max(x1,p.x);
+      y0 = std::min(y0,p.y); y1 = std::max(y1,p.y);
+      }
+    const float m = pen.half+pen.edge+1.f;
+    for(int y=int(std::floor(y0-m)); y<=int(std::ceil(y1+m)); ++y)
+      for(int x=int(std::floor(x0-m)); x<=int(std::ceil(x1+m)); ++x) {
+        const Vec2 q = Vec2(float(x),float(y));
+        float      d = 1e9f;
+        for(size_t i=0; i+1<pt.size(); ++i) {
+          const Vec2  ab = pt[i+1]-pt[i];
+          const float ll = ab.x*ab.x+ab.y*ab.y;
+          const float t  = ll>0.f ? std::clamp(((q.x-pt[i].x)*ab.x+(q.y-pt[i].y)*ab.y)/ll,0.f,1.f) : 0.f;
+          d = std::min(d,(pt[i]+ab*t-q).length());
+          }
+        const float edge = std::clamp(pen.half+pen.edge+0.5f-d,0.f,1.f);
+        const float core = std::clamp(pen.half+0.5f-d,0.f,1.f);
+        if(edge>0.f)
+          blend(x,y,{0,0,0,uint8_t(255.f*alpha*pen.outline*edge)});
+        if(core>0.f)
+          blend(x,y,{255,255,255,uint8_t(255.f*alpha*core)});
+        }
+    }
+
   int text(int x, int y, std::string_view s, int sc, Rgba c) {
     rect(x-sc,y-sc,int(s.size())*4*sc+sc,7*sc,Shade);
     for(char ch:s) {
@@ -247,6 +368,54 @@ struct Canvas {
     }
   };
 
+// frames go to ffmpeg from a thread of their own: the game goes on while a frame is written
+class VideoPipe final {
+  public:
+    explicit VideoPipe(std::FILE* f):f(f),th([this]{ loop(); }) {}
+    ~VideoPipe() {
+      {
+        std::lock_guard<std::mutex> g(sync);
+        done = true;
+      }
+      cv.notify_all();
+      th.join();
+      pclose(f);
+      }
+
+    void push(std::vector<uint8_t>&& frame) {
+      std::unique_lock<std::mutex> g(sync);
+      cv.wait(g,[this]{ return queue.size()<MaxQueued; });
+      queue.push_back(std::move(frame));
+      cv.notify_all();
+      }
+
+  private:
+    static constexpr size_t MaxQueued = 4;
+
+    void loop() {
+      for(;;) {
+        std::vector<uint8_t> frame;
+        {
+          std::unique_lock<std::mutex> g(sync);
+          cv.wait(g,[this]{ return done || !queue.empty(); });
+          if(queue.empty())
+            return;
+          frame = std::move(queue.front());
+          queue.pop_front();
+        }
+        cv.notify_all();
+        std::fwrite(frame.data(),1,frame.size(),f);
+        }
+      }
+
+    std::FILE*                       f;
+    std::mutex                       sync;
+    std::condition_variable          cv;
+    std::deque<std::vector<uint8_t>> queue;
+    bool                             done = false;
+    std::thread                      th;
+  };
+
 // --- the bench ---------------------------------------------------------------------------------------
 
 enum CamMode : uint8_t {
@@ -254,6 +423,10 @@ enum CamMode : uint8_t {
   C_Follow, // around the player, relative to its facing
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
+  C_Face,   // close to the face, relative to the facing of the body
+  C_Shoulder, // over the hero's shoulder at an npc (camNpc)
+  C_NpcFace,  // the npc's face, from the hero's side
+  C_Two,      // the hero and the npc from the side
   };
 
 struct Hold {
@@ -291,7 +464,7 @@ struct Bench {
   std::string recName;
   uint64_t    recFrame  = 0;
   uint64_t    recStart  = 0;
-  std::FILE*  video     = nullptr;
+  std::unique_ptr<VideoPipe> video;
   uint32_t    videoW    = 0;
   uint32_t    videoH    = 0;
   std::FILE*  csv       = nullptr;
@@ -299,15 +472,95 @@ struct Bench {
   bool        overlay   = true;
   bool        zoom      = true;
   bool        bright    = true;  // auto exposure: forests and interiors are too dark to see the legs
+  float       clip      = 0;     // > 0: everything closer to the camera than the subject minus this is clipped away
 
   Vec3        prevPos;
   bool        hasPrev   = false;
+  bool        inDialog  = false;
+  Npc*        pinned    = nullptr;  // pin: held there every frame
+  Vec3        pinAt     = {};
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
+  Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
+  PlayerControl* ctrl     = nullptr; // the player's input: the crosshair of the manual aim
+  // volley: shots by hand in a row - press, draw to volleyDraw, hold volleyHold, let go, wait for the
+  // next arrow
+  int         volleyLeft  = 0;
+  int         volleyPhase = 0;
+  uint64_t    volleyHold  = 0;
+  float       volleyDraw  = 1;
+  uint64_t    volleyT     = 0;
+  // aimat: the manual aim aims there instead of the mouse, every frame
+  Npc*           aimNpc   = nullptr;
+  HitZones::Zone aimZone  = HitZones::Body;
+  bool           aimFixed = false;
+  bool           aimRaw   = false; // no holding over for the drop of the arrow
+  bool           crossValid = false;
+  Vec3           crossPrev  = {}; // on the screen, -1..1
+  float          aspect     = 4.f/3.f; // of the captured frame
+  float          uiScale    = 1;       // of the game's interface
+  Vec3           aimAt    = {};
+  // joints of the watched one's animated pose in the last two frames: a pop is a jump of the second difference
+  std::vector<Vec3> anim1, anim2;
+  // the hero placed around the subject: distance, angle from its facing (0 in front), orbiting
+  float       placeDist  = 0;
+  float       placeAngle = 0;
+  float       orbitSpeed = 0;     // degrees per second
+  uint64_t    orbitUntil = 0;
+
+  // talking (scripts/shorts)
+  std::string camNpc;           // C_Shoulder, C_NpcFace, C_Two
+  float       camSmooth = 0.12f; // share of the way to the wanted camera per frame; 1: no smoothing
+  bool        smValid   = false;
+  Vec3        smOrg, smTgt;
+  bool        speaking  = false;  // the talk key is held while a recording is said
+  uint64_t    speakUntil = 0;
+  uint64_t    heroEndAt = 0;      // the hero's last phrase ended
+  uint64_t    lastLineAt = 0;     // an npc line of the AI started
+  uint64_t    busyAt    = 0;      // an npc of the AI spoke (or had a line waiting)
+  bool        waitReply = false;
+  bool        replyNeed = false;  // a line has to start after replyFrom first
+  uint64_t    replyFrom = 0;
+  uint64_t    replyEnd  = 0;
+  uint64_t    replyQuiet = 0;
+  std::FILE*  events    = nullptr;
+
+  // sound: the mix of the game (Tempest loopback), recorded with the video
+  std::FILE*  audio     = nullptr;
+  uint64_t    audioFrames = 0;
+  uint64_t    audioAcc  = 0;
+  std::vector<int16_t> mix;
+
+  std::chrono::steady_clock::time_point wallStart;
+  std::chrono::steady_clock::time_point recWall;  // when the recording started
+  int64_t     lagMs     = 0;      // how far the game fell behind the wall clock (realtime)
   };
 
 Bench bench;
+
+// a line of events.jsonl: what happened when, in the recording's frames (the cut of a short lines up its
+// subtitles and sound by them); `fields` are more json members, without braces
+void event(std::string_view kind, const std::string& fields = {}) {
+  if(bench.events==nullptr)
+    bench.events = std::fopen((outDir+"/events.jsonl").c_str(),"w");
+  if(bench.events==nullptr)
+    return;
+  std::fprintf(bench.events,"{\"t\":%llu,\"seg\":%s,\"frame\":%lld,\"kind\":%s%s%s}\n",
+               (unsigned long long)bench.time,jsonStr(bench.rec ? bench.recName : "").c_str(),
+               bench.rec ? (long long)bench.recFrame : -1LL,jsonStr(kind).c_str(),fields.empty() ? "" : ",",fields.c_str());
+  std::fflush(bench.events);
+  }
+
+Npc* npcBySymbol(World& w, std::string_view symbol) {
+  const size_t id = w.script().findSymbolIndex(symbol);
+  return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
+  }
+
+bool aiCommand(const std::string& cmd, std::string& reply) {
+  auto& fn = Gothic::inst().consoleCommandFn;
+  return fn && fn(cmd,reply);
+  }
 
 void loadScenario() {
   bench.loaded = true;
@@ -342,6 +595,8 @@ bool keyAction(std::string_view k, KeyCodec::Action& a) {
     {"forward",KeyCodec::Forward}, {"back",KeyCodec::Back},       {"left",KeyCodec::Left},  {"right",KeyCodec::Right},
     {"turnl",  KeyCodec::RotateL}, {"turnr",KeyCodec::RotateR},   {"jump",KeyCodec::Jump},  {"walk", KeyCodec::Walk},
     {"sneak",  KeyCodec::Sneak},   {"weapon",KeyCodec::Weapon},   {"action",KeyCodec::ActionGeneric},
+    {"melee",  KeyCodec::WeaponMele},{"bow",KeyCodec::WeaponBow}, {"spell",KeyCodec::WeaponMage3},
+    {"parade", KeyCodec::Parade},  {"breath",KeyCodec::Walk},
     };
   for(auto& i:keys)
     if(i.name==k) {
@@ -362,22 +617,43 @@ void release(PlayerControl& ctrl, KeyCodec::Action a) {
 void stopRecording() {
   if(!bench.rec)
     return;
-  if(bench.video!=nullptr)
-    pclose(bench.video);
-  bench.video = nullptr;
-  say("rec stop " + bench.recName + " frames=" + std::to_string(bench.recFrame));
+  bench.video.reset();  // waits for the frames still queued
+  if(bench.audio!=nullptr) {
+    writeWavHeader(bench.audio,SoundDevice::loopbackRate(),bench.audioFrames);
+    std::fclose(bench.audio);
+    }
+  bench.audio = nullptr;
+  // how fast the game ran against the wall clock while recording (the AI server keeps to the wall clock)
+  const auto wall  = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-bench.recWall).count();
+  const int  speed = wall>0 ? int((bench.time-bench.recStart)*100/uint64_t(wall)) : 100;
+  event("rec_stop","\"frames\":" + std::to_string(bench.recFrame) + ",\"speed\":" + std::to_string(speed));
+  say("rec stop " + bench.recName + " frames=" + std::to_string(bench.recFrame) +
+      (realtime ? " speed=" + std::to_string(speed) + "%" : std::string()));
   bench.rec = false;
   }
 
 void finish() {
+  if(bench.speaking) {
+    std::string reply;
+    aiCommand("ai ptt cancel",reply);
+    bench.speaking = false;
+    }
   stopRecording();
   if(bench.csv!=nullptr)
     std::fclose(bench.csv);
   bench.csv  = nullptr;
+  if(bench.events!=nullptr)
+    std::fclose(bench.events);
+  bench.events = nullptr;
+  if(realtime)
+    say("realtime: " + std::string(bench.lagMs>200 ? "fell behind the wall clock by " + std::to_string(bench.lagMs) + " ms"
+                                                   : "kept to the wall clock"));
   bench.done = true;
   DrawCommands::hiddenTypes = 0;
-  if(auto c = Gothic::inst().camera())
+  if(auto c = Gothic::inst().camera()) {
     c->setMarvinMode(Camera::M_Normal);
+    c->setNearClip(10);
+    }
   say("done");
   if(!keepRunning)
     SystemApi::exit();
@@ -385,9 +661,70 @@ void finish() {
 
 Vec3 ankle(const Npc& pl, size_t leg) {
   auto& p = FootIk::playerProbe;
-  if(p.valid)
+  if(p.valid && pl.isPlayer())
     return p.leg[leg].final[2];
   return pl.position() + Vec3(0,10,0);
+  }
+
+Npc& subjectOf(Npc& pl) {
+  return bench.subject!=nullptr ? *bench.subject : pl;
+  }
+
+// "nearest": the nearest living npc but the player; else a script symbol (NONE_100_XARDAS)
+Npc* findNpc(World& w, Npc& pl, const std::string& name) {
+  if(name=="player")
+    return &pl;
+  if(name=="nearest") {
+    Npc*  best = nullptr;
+    float dist = 0;
+    for(uint32_t i=0; i<w.npcCount(); ++i) {
+      Npc* n = w.npcById(i);
+      if(n==nullptr || n==&pl || n->isDead())
+        continue;
+      const float d = (n->position()-pl.position()).quadLength();
+      if(best==nullptr || d<dist) {
+        best = n;
+        dist = d;
+        }
+      }
+    return best;
+    }
+  // by its script symbol; of several (two sheep inserted) a living one, the nearest
+  const size_t id = w.script().findSymbolIndex(name);
+  if(id==size_t(-1))
+    return nullptr;
+  Npc*  best = nullptr;
+  float dist = 0;
+  for(uint32_t i=0; i<w.npcCount(); ++i) {
+    Npc* n = w.npcById(i);
+    if(n==nullptr || n->instanceSymbol()!=id)
+      continue;
+    const float d = (n->position()-pl.position()).quadLength() + (n->isDead() ? 1e12f : 0.f);
+    if(best==nullptr || d<dist) {
+      best = n;
+      dist = d;
+      }
+    }
+  return best!=nullptr ? best : w.findNpcByInstance(id);
+  }
+
+std::string symName(World& w, const Npc* n) {
+  if(n==nullptr)
+    return "-";
+  if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
+    return sym->name();
+  return std::string(n->displayName());
+  }
+
+const char* gazeSource(Gaze::Source s) {
+  switch(s) {
+    case Gaze::Source::None:      return "none";
+    case Gaze::Source::Talk:      return "talk";
+    case Gaze::Source::Script:    return "script";
+    case Gaze::Source::Focus:     return "focus";
+    case Gaze::Source::Attention: return "attention";
+    }
+  return "?";
   }
 
 // a point is hidden if something is between it and the camera (not counting the ground right at the point)
@@ -457,15 +794,89 @@ void lookFrom(const Vec3& org, const Vec3& tgt) {
   bench.camPos = org;
   }
 
+Vec3 rotY(const Vec3& v, float deg) {
+  const float a = deg*float(M_PI)/180.f, c = std::cos(a), s = std::sin(a);
+  return {v.x*c - v.z*s, v.y, v.x*s + v.z*c};
+  }
+
+// a shot of the hero and camNpc; false if the npc is not there
+bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
+  Npc* npc = npcBySymbol(w,bench.camNpc);
+  if(npc==nullptr)
+    return false;
+  const Vec3 hero  = pl.mapHeadBone();
+  const Vec3 other = npc->mapHeadBone();
+  Vec3 d = other-hero;
+  d.y = 0;
+  const float len = d.length();
+  d = len>1 ? d/len : facing(pl);
+  const Vec3 side = {-d.z,0,d.x};
+  const Vec3 up   = {0,1,0};
+  if(bench.cam==C_Shoulder) {
+    // behind the hero, off his shoulder (camAngle: +1 or -1 picks the shoulder), at the npc's face
+    org = hero - d*bench.camDist + side*(40.f*bench.camAngle) + up*bench.camHeight;
+    tgt = other - up*8.f;
+    }
+  else if(bench.cam==C_NpcFace) {
+    // in front of the npc's face (where it looks), turned camAngle degrees towards the hero's side
+    const Vec3 f  = facing(*npc);
+    const Vec3 c0 = rotY(f, bench.camAngle), c1 = rotY(f,-bench.camAngle);
+    const Vec3 c  = (c0.x*-d.x + c0.z*-d.z) >= (c1.x*-d.x + c1.z*-d.z) ? c0 : c1;  // the turn towards the hero
+    org = other + c*bench.camDist + up*bench.camHeight;
+    tgt = other - up*8.f;
+    }
+  else {
+    const Vec3  mid  = (hero+other)*0.5f;
+    const float dist = std::max(bench.camDist,len*1.2f);
+    org = mid + side*(dist*(bench.camAngle<0 ? -1.f : 1.f)) + up*bench.camHeight;
+    tgt = mid - up*15.f;
+    }
+  const float g = groundY(w,org.x,org.z,org.y+200);
+  if(!std::isnan(g) && org.y<g+25)
+    org.y = g+25;
+  return true;
+  }
+
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
   if(bench.cam==C_Game)
     return;
-  const Vec3 tgt = pl.position() + Vec3(0,bench.camLook,0);
-  Vec3       org = bench.camPos;
+  if(bench.cam==C_Shoulder || bench.cam==C_NpcFace || bench.cam==C_Two) {
+    // shots of the hero himself, also while the camera watches a subject (gaze)
+    Npc* hero = Gothic::inst().player();
+    Vec3 org, tgt;
+    if(hero==nullptr || !npcShot(w,*hero,org,tgt))
+      return;
+    if(!bench.smValid) {
+      bench.smOrg   = org;
+      bench.smTgt   = tgt;
+      bench.smValid = true;
+      } else {
+      bench.smOrg += (org-bench.smOrg)*bench.camSmooth;
+      bench.smTgt += (tgt-bench.smTgt)*bench.camSmooth;
+      }
+    lookFrom(bench.smOrg,bench.smTgt);
+    if(bench.clip>0)
+      if(auto cam = Gothic::inst().camera())
+        cam->setNearClip(std::max(10.f, (bench.smOrg-bench.smTgt).length() - bench.clip));
+    return;
+    }
+  Vec3 tgt = pl.position() + Vec3(0,bench.camLook,0);
+  Vec3 org = bench.camPos;
   if(bench.cam==C_Follow || bench.cam==C_World)
     org = camOrigin(w,pl,bench.camAngle);
+  if(bench.cam==C_Face) {
+    // the mouth (a bit above the head bone), seen from the front or at an angle
+    const Vec3  f    = facing(pl);
+    const Vec3  side = {-f.z,0,f.x};
+    const float b    = bench.camAngle*float(M_PI)/180.f;
+    tgt = pl.mapHeadBone() + Vec3(0,bench.camLook,0);
+    org = tgt + (f*std::cos(b) + side*std::sin(b))*bench.camDist + Vec3(0,bench.camHeight,0);
+    }
   lookFrom(org,tgt);
+  if(bench.clip>0)
+    if(auto cam = Gothic::inst().camera())
+      cam->setNearClip(std::max(10.f, (org-tgt).length() - bench.clip));
 
   for(size_t i=0; i<2; ++i)
     if(hidden(w,org,ankle(pl,i)+Vec3(0,5,0)))
@@ -477,15 +888,81 @@ void updateCamera(World& w, Npc& pl) {
     }
   }
 
+// degrees between where the arrow points and the aim (sway, the turn lagging); -1 not aiming by hand
+float manualAimOff(Npc& pl) {
+  Vec3 pos, dir;
+  if(!pl.hasManualAim() || !pl.arrowRay(pos,dir))
+    return -1;
+  const Vec3 want = Vec3::normalize(pl.manualAimPoint()-pos);
+  return std::acos(std::clamp(Vec3::dotProduct(dir,want),-1.f,1.f))*180.f/float(M_PI);
+  }
+
+const char* archerStage(Archer::Stage s) {
+  switch(s) {
+    case Archer::Lowered:   return "lowered";
+    case Archer::Raising:   return "raising";
+    case Archer::Nocked:    return "nocked";
+    case Archer::Drawing:   return "drawing";
+    case Archer::Held:      return "held";
+    case Archer::Reloading: return "reloading";
+    }
+  return "?";
+  }
+// the faces a mood shows (the bridge's say.mood)
+struct FaceColumn { const char* column; const char* anim; };
+const FaceColumn FaceColumns[] = {
+  {"face_neutral","S_NEUTRAL"}, {"face_friendly","S_FRIENDLY"}, {"face_angry","S_ANGRY"},
+  {"face_hostile","S_HOSTILE"}, {"face_afraid","S_FRIGHTENED"}, {"face_pain","T_HURT"},
+  };
+
 void writeHeader() {
-  std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,pelvis,pelvis_target,pelvis_limit,floor");
-  for(const char* s:{"l","r"}) {
+  std::fprintf(bench.csv,"seg,frame,t,x,y,z,rot,speed,bs,walk,occl,ik_valid,ik_on,ik_hardoff,ik_w,nlegs,bad,pelvis,chest,pelvis_target,pelvis_limit,floor");
+  for(const char* s:{"l","r","fl","fr"}) {
     std::fprintf(bench.csv,",%s_plant,%s_has,%s_gy,%s_nx,%s_ny,%s_nz,%s_toehas,%s_toey,%s_smooth,%s_err,%s_knee,%s_tilt,%s_roll,%s_yaw,%s_out,%s_slack",
                  s,s,s,s,s,s,s,s,s,s,s,s,s,s,s,s);
     for(const char* j:{"hip","kneea","anka","toea","kneef","ankf","toef"})
       std::fprintf(bench.csv,",%s_%s_x,%s_%s_y,%s_%s_z",s,j,s,j,s,j);
     }
+  std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
+  std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
+  std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
+  std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
+  std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
+  for(auto& f:FaceColumns)
+    std::fprintf(bench.csv,",%s",f.column);
+  std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,"\n");
+  }
+
+// the animated pose of the watched one (or the hero): the largest second difference of a joint over
+// three frames (cm; a pop), which joint, the fastest joint (cm/s) and the playing animations
+void writeAnim() {
+  const auto&  a    = bench.subject!=nullptr ? Pose::subjectProbe : Pose::playerProbe;
+  const size_t n    = a.valid ? a.numBones : 0;
+  float        pop  = 0, speed = 0;
+  size_t       bone = size_t(-1);
+  if(bench.anim2.size()==n && bench.anim1.size()==n) {
+    for(size_t i=0; i<n; ++i) {
+      const float d2 = (a.joint[i] - bench.anim1[i]*2.f + bench.anim2[i]).length();
+      if(d2>pop) {
+        pop  = d2;
+        bone = i;
+        }
+      speed = std::max(speed,(a.joint[i] - bench.anim1[i]).length()*float(Fps));
+      }
+    }
+  bench.anim2 = std::move(bench.anim1);
+  bench.anim1.assign(a.joint,a.joint+n);
+
+  std::string name = "-";
+  if(bone!=size_t(-1) && a.skeleton!=nullptr && bone<a.skeleton->nodes.size())
+    name = a.skeleton->nodes[bone].name;
+  for(auto& c:name)
+    if(c==' ' || c==',')
+      c = '_';
+  std::fprintf(bench.csv,",%.2f,%s,%.0f,%s",pop,name.c_str(),speed,a.layers.empty() ? "-" : a.layers.c_str());
+  std::fprintf(bench.csv,",%d,%u,%u,%.1f,%.3f",int(AnimBlend::isEnabled()),a.blend.active,a.blend.started,a.blend.angle,a.blend.time);
   }
 
 void writeRow(Npc& pl) {
@@ -497,10 +974,10 @@ void writeRow(Npc& pl) {
     }
   auto&      p   = FootIk::playerProbe;
   const Vec3 pos = pl.position();
-  std::fprintf(bench.csv,"%s,%llu,%llu,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u,%u,%d,%d,%d,%.3f,%.2f,%.2f,%.2f,%.2f",
+  std::fprintf(bench.csv,"%s,%llu,%llu,%.2f,%.2f,%.2f,%.1f,%.1f,%u,%u,%u,%d,%d,%d,%.3f,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f",
                bench.recName.c_str(),(unsigned long long)bench.recFrame,(unsigned long long)(bench.time-bench.recStart),
                pos.x,pos.y,pos.z,pl.rotation(),bench.speed,unsigned(pl.bodyStateMasked()),unsigned(pl.walkMode()),unsigned(bench.occl),
-               int(p.valid),int(p.enable),int(p.hardOff),p.weight,p.pelvis,p.target,p.limit,p.floorY);
+               int(p.valid),int(p.enable),int(p.hardOff),p.weight,unsigned(p.numLegs),unsigned(p.badBones),p.pelvis,p.chest,p.target,p.limit,p.floorY);
   for(auto& l:p.leg) {
     std::fprintf(bench.csv,",%.3f,%d,%.2f,%.3f,%.3f,%.3f,%d,%.2f,%.2f,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f",
                  l.plant,int(l.hasCol),l.groundY,l.n.x,l.n.y,l.n.z,int(l.toeCol),l.toeY,l.smoothY,l.err,l.kneeDev,l.tilt,l.roll,l.yaw,l.outward,l.slack);
@@ -508,10 +985,86 @@ void writeRow(Npc& pl) {
     for(auto v:pts)
       std::fprintf(bench.csv,",%.2f,%.2f,%.2f",v->x,v->y,v->z);
     }
+  // gaze of the watched npc (or the hero) and of the hero
+  const auto& g  = bench.subject!=nullptr ? Gaze::subjectProbe : Gaze::playerProbe;
+  const auto& pg = Gaze::playerProbe;
+  // where the face looks in the world: a jerk is a jump of this, whatever the body does
+  const float fyaw   = std::atan2(g.facing.z,g.facing.x)*180.f/float(M_PI);
+  const float fpitch = std::asin(std::clamp(g.facing.y,-1.f,1.f))*180.f/float(M_PI);
+  std::fprintf(bench.csv,",%d,%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%.3f,%.2f,%.2f",
+               int(g.active),int(g.source),g.weight,g.error,g.yaw,g.pitch,g.yawGoal,g.pitchGoal,g.headYaw,g.chestYaw,g.waistYaw,
+               g.animYaw,g.animPitch,g.hipsYaw,fyaw,fpitch,int(pg.active),int(pg.source),pg.weight,pg.error,pg.yaw);
+  // lean of the watched npc (or the hero)
+  const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
+  std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.1f,%.1f",int(ln.active),ln.roll,ln.pitch,ln.speed,ln.turn,ln.slope);
+  writeAnim();
+  // aim of the watched npc (or the hero)
+  const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
+               am.animYaw,am.animPitch,am.turn,am.bend,am.error);
+  std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
+  // the manual aim: the bow's stage, the sway, how far the arrow points off the aim
+  const auto& mp = Archer::playerProbe;
+  // the crosshair: how far it is open, degrees; how far it moved on the screen since the last frame,
+  // percent of the screen's height
+  Vec3  cross;
+  float spread = 0;
+  auto  cam    = Gothic::inst().camera();
+  bool  hasCross = cam!=nullptr && bench.ctrl!=nullptr && bench.ctrl->crosshair(cross,spread);
+  float moved  = -1;
+  if(hasCross) {
+    // as the game draws it: the center of the screen, unless the bench aims elsewhere
+    float x = cross.x, y = cross.y, z = cross.z, w = 1;
+    cam->viewProj().project(x,y,z,w);
+    if(bench.ctrl->isCrosshairCentered()) {
+      x = 0;
+      y = 0;
+      w = 1;
+      }
+    hasCross = w>1e-3f;
+    const Vec3 at = hasCross ? Vec3(x/w,y/w,0) : Vec3();
+    if(hasCross && bench.crossValid)
+      moved = std::hypot((at.x-bench.crossPrev.x)*bench.aspect,at.y-bench.crossPrev.y)*50.f;
+    bench.crossPrev = at;
+    }
+  bench.crossValid = hasCross;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.3f,%.2f,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f",mp.valid ? int(mp.stage) : -1,mp.draw,mp.hold,
+               mp.fatigue,mp.breath,int(mp.holding),int(mp.short_),mp.disturb,mp.amp,mp.yaw,mp.pitch,manualAimOff(pl),
+               hasCross ? spread*180.f/float(M_PI) : -1.f,moved);
+  // lips of the watched one
+  const auto& lp = LipSync::subjectProbe;
+  std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
+               int(lp.valid),int(lp.active),(unsigned long long)lp.time,lp.level,lp.mouth,lp.open,
+               lp.shape.frame0,lp.shape.frame1,lp.shape.alpha,lp.shape.intensity,lp.picks);
+  // faces of the watched one, as shown (fading in and out)
+  Npc& s = subjectOf(pl);
+  for(auto& f:FaceColumns)
+    std::fprintf(bench.csv,",%.3f",s.faceWeight(f.anim));
+  // flinch of the watched one (or the hero)
+  const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
+  std::fprintf(bench.csv,",%d,%.2f,%.1f,%.2f,%.2f,%u,%.2f,%.2f",int(fl.active),fl.bend,fl.bendYaw,fl.twist,fl.head,
+               fl.hits,fl.strength,fl.height);
   std::fprintf(bench.csv,"\n");
   }
 
 void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl);
+
+// the hero stands around the watched npc, facing it
+void placeHero(World& w, Npc& pl) {
+  Npc& s = subjectOf(pl);
+  if(&s==&pl || bench.placeDist<=0)
+    return;
+  const float a   = (s.rotation()+bench.placeAngle)*float(M_PI)/180.f;
+  Vec3        pos = s.position() + Vec3(std::cos(a),0,std::sin(a))*bench.placeDist;
+  const float g   = groundY(w,pos.x,pos.z,pos.y+100);
+  if(std::isnan(g))
+    return; // inside a rock: the hero would fall through the world
+  pos.y = g;
+  pl.setPosition(pos);
+  const Vec3 d = s.position()-pos;
+  pl.setDirection(Vec3(d.x,0,d.z));
+  pl.updateTransform();
+  }
 
 // foreach slope <min deg> <max deg> <count> | foreach stairs <count> | foreach wp <name part> <count>
 // ... end: the body runs at each spot, after a teleport; $NAME, $I, $ANGLE are replaced
@@ -599,6 +1152,28 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       pl.aiPush(AiQueue::aiGoToPoint(*wp));
     say(std::string(wp ? "walkto " : "walkto: no waypoint ") + rest(line));
     }
+  else if(c=="near") {
+    // near <npc> [dist cm 170] [degrees off the npc's facing 0]: the hero stands in front of the npc, facing it
+    Npc* npc = a.size()>1 ? npcBySymbol(w,a[1]) : nullptr;
+    if(npc==nullptr) {
+      say("near: no npc " + (a.size()>1 ? a[1] : std::string()));
+      return;
+      }
+    Vec3 at = npc->position() + rotY(facing(*npc),num(a,3,0))*num(a,2,170);
+    const float g = groundY(w,at.x,at.z,at.y+100);
+    if(!std::isnan(g))
+      at.y = g;
+    pl.setPosition(at);
+    face(pl,npc->position()-at);
+    bench.hasPrev = false;
+    say("near " + a[1]);
+    }
+  else if(c=="approach") {
+    // approach <npc>: walk up to the npc (AI path), then waitarrive
+    if(Npc* npc = a.size()>1 ? npcBySymbol(w,a[1]) : nullptr)
+      pl.aiPush(AiQueue::aiGoToNpc(npc)); else
+      say("approach: no npc " + (a.size()>1 ? a[1] : std::string()));
+    }
   else if(c=="walkmode") {
     const std::string m = a.size()>1 ? a[1] : "run";
     pl.setWalkMode(m=="walk" ? WalkBit::WM_Walk : m=="sneak" ? WalkBit::WM_Sneak : WalkBit::WM_Run);
@@ -614,6 +1189,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else if(m=="wp" && a.size()>2) {
       if(auto wp = w.findPoint(a[2]))
         face(pl,wp->pos-pl.position());
+      }
+    else if(m=="npc" && a.size()>2) {
+      if(auto npc = npcBySymbol(w,a[2]))
+        face(pl,npc->position()-pl.position()); else
+        say("face: no npc " + a[2]);
+      }
+    else if(m=="rel") {
+      // face rel <deg>: along the facing of the watched npc turned by that much (the angles of place)
+      const float y = (subjectOf(pl).rotation()+num(a,2,0))*float(M_PI)/180.f;
+      face(pl,Vec3(std::cos(y),0,std::sin(y)));
       }
     else {
       const float y = num(a,1,0)*float(M_PI)/180.f;
@@ -656,6 +1241,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="cam") {
     const std::string m = a.size()>1 ? a[1] : "";
     bench.camAuto = false;
+    if(m!="shoulder" && m!="face" && m!="two" && m!="smooth")
+      bench.smValid = false;
     if(m=="game") {
       bench.cam = C_Game;
       if(auto cam = Gothic::inst().camera())
@@ -668,7 +1255,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.camAngle  = m=="front" ? 0 : num(a,4,90);
       if(m=="auto") {
         bench.camAuto = true;
-        pickCamAngle(w,pl);
+        pickCamAngle(w,subjectOf(pl));
         }
       }
     else if(m=="world") {
@@ -680,6 +1267,36 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else if(m=="fixed") {
       bench.cam = C_Fixed;
       }
+    else if(m=="shoulder" || m=="two" || (m=="face" && a.size()>2 && !isNumber(a[2]))) {
+      // cam shoulder <npc> [dist 120] [height 15] [shoulder 1|-1]
+      // cam face <npc> [dist 140] [height 0] [degrees from the hero 30]
+      // cam two <npc> [dist 250] [height 10] [side 1|-1]
+      if(a.size()<3) {
+        say("cam " + m + ": no npc");
+        return;
+        }
+      bench.cam       = m=="shoulder" ? C_Shoulder : (m=="face" ? C_NpcFace : C_Two);
+      bench.camNpc    = a[2];
+      bench.camDist   = num(a,3,m=="shoulder" ? 120 : (m=="face" ? 140 : 250));
+      bench.camHeight = num(a,4,m=="shoulder" ? 15 : (m=="face" ? 0 : 10));
+      bench.camAngle  = num(a,5,m=="face" ? 30 : 1);
+      if(npcBySymbol(w,bench.camNpc)==nullptr)
+        say("cam " + m + ": no npc " + bench.camNpc);
+      }
+    else if(m=="cut") {
+      bench.smValid = false;  // the next shot starts where it is, without moving there
+      }
+    else if(m=="smooth") {
+      bench.camSmooth = std::clamp(num(a,2,0.12f),0.01f,1.f);
+      }
+    else if(m=="face") {
+      // cam face <dist> [angle] [height]: close to the face of the watched one, looking at the mouth
+      bench.cam       = C_Face;
+      bench.camDist   = num(a,2,60);
+      bench.camAngle  = num(a,3,0);
+      bench.camHeight = num(a,4,0);
+      bench.camLook   = 5;
+      }
     else if(m=="look") {
       bench.camLook = num(a,2,45);
       }
@@ -689,13 +1306,31 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="view") {
     const std::string m = a.size()>1 ? a[1] : "full";
-    if(m=="clean")
-      DrawCommands::hiddenTypes = (1u<<DrawCommands::Static) | (1u<<DrawCommands::Movable) |
-                                  (1u<<DrawCommands::Morph)  | (1u<<DrawCommands::Pfx);
+    // Static and Movable objects share draw commands (same shaders), hiding them by type hides
+    // parts of creatures too: what stands between the camera and the subject is clipped instead
+    bench.clip = 0;
+    DrawCommands::hiddenTypes = 0;
+    if(m=="clean") {
+      bench.clip = num(a,2,100);
+      DrawCommands::hiddenTypes = (1u<<DrawCommands::Pfx);
+      }
     else if(m=="nopfx")
       DrawCommands::hiddenTypes = (1u<<DrawCommands::Pfx);
-    else
+    else if(m=="hide") {
+      // view hide static movable morph pfx ...
       DrawCommands::hiddenTypes = 0;
+      for(size_t i=2; i<a.size(); ++i) {
+        const std::string& t = a[i];
+        if(t=="static")   DrawCommands::hiddenTypes |= (1u<<DrawCommands::Static);
+        if(t=="movable")  DrawCommands::hiddenTypes |= (1u<<DrawCommands::Movable);
+        if(t=="morph")    DrawCommands::hiddenTypes |= (1u<<DrawCommands::Morph);
+        if(t=="pfx")      DrawCommands::hiddenTypes |= (1u<<DrawCommands::Pfx);
+        if(t=="animated") DrawCommands::hiddenTypes |= (1u<<DrawCommands::Animated);
+        }
+      }
+    if(bench.clip<=0)
+      if(auto cam = Gothic::inst().camera())
+        cam->setNearClip(10);
     }
   else if(c=="overlay") {
     const std::string m = a.size()>1 ? a[1] : "on";
@@ -714,13 +1349,366 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.recName  = a.size()>1 ? a[1] : "rec";
     bench.recFrame = 0;
     bench.recStart = bench.time;
-    say("rec " + bench.recName + (bench.recVideo ? "" : " (metrics only)"));
+    bench.anim1.clear();
+    bench.anim2.clear();
+    bench.recWall  = std::chrono::steady_clock::now();
+    if(bench.recVideo && SoundDevice::loopbackRate()>0) {
+      bench.audio       = std::fopen((outDir+"/"+bench.recName+".wav").c_str(),"wb");
+      bench.audioFrames = 0;
+      if(bench.audio!=nullptr)
+        writeWavHeader(bench.audio,SoundDevice::loopbackRate(),0);
+      }
+    event("rec","\"fps\":" + std::to_string(Fps) + ",\"audio\":" + (bench.audio!=nullptr ? "true" : "false"));
+    say("rec " + bench.recName + (bench.recVideo ? "" : " (metrics only)") + (bench.audio!=nullptr ? " with sound" : ""));
     }
   else if(c=="stop") {
     stopRecording();
     }
   else if(c=="shot") {
     bench.shot = a.size()>1 ? a[1] : "shot";
+    }
+  else if(c=="anims") {
+    // anims: what the watched one (or the hero) plays, its body state, weapon and target
+    Npc& s = subjectOf(pl);
+    char buf[160];
+    std::snprintf(buf,sizeof(buf),"anims %s bs=%u ws=%d target=%s: ",symName(w,&s).c_str(),unsigned(s.bodyStateMasked() & BS_MAX),
+                  int(s.weaponState()),symName(w,s.target()).c_str());
+    say(buf + s.animNames());
+    }
+  else if(c=="cansee") {
+    // cansee <npc|nearest>: can the hero see it (from the head, leaning over an edge), and what is between
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("cansee: no npc " + line);
+      return;
+      }
+    const Vec3  head = pl.mapHeadBone();
+    const Vec3  tg   = n->centerPosition();
+    const Vec3  d    = tg-head;
+    const float h    = std::sqrt(d.x*d.x+d.z*d.z);
+    auto        r    = w.physic()->ray(head,tg);
+    const auto& fr = w.script().focusRange();
+    char buf[300];
+    std::snprintf(buf,sizeof(buf),"cansee %s: head %d, over the edge %d; dist %.0f, down %.0f deg; the ray from the head hits at %.0f cm of %.0f; bow focus %.0f..%.0f",
+                  symName(w,n).c_str(),int(pl.canSeeNpc(*n,true)),int(pl.canSeeNpcOverEdge(*n)),double(d.length()),
+                  double(-std::atan2(d.y,h)*180.f/float(M_PI)),r.hasCol ? double((r.v-head).length()) : -1.0,double(d.length()),
+                  double(fr.npc_range1),double(fr.npc_range2));
+    say(buf);
+    // the lean over the edge, as Npc::canSeeNpcOverEdge does it at full lean
+    const float an   = pl.rotationRad();
+    const Vec3  dir  = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(an),0,std::sin(an))*0.25f);
+    const Vec3  eye  = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
+    auto        r1   = w.physic()->ray(head,eye);
+    auto        r2   = w.physic()->ray(eye,tg);
+    std::snprintf(buf,sizeof(buf),"  leaned head: room %d (hit at %.0f of %.0f), to it %d (hit at %.0f of %.0f), head at %.0f above the feet",
+                  int(!r1.hasCol),r1.hasCol ? double((r1.v-head).length()) : -1.0,double((eye-head).length()),
+                  int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(head.y-pl.position().y));
+    say(buf);
+    }
+  else if(c=="hp") {
+    // hp <npc> [full]: hit points of the 3 nearest npcs of that script symbol (sheep are all over the world),
+    // and how far (did the arrow hit); full: the nearest gets them all back first
+    const std::string name = a.size()>1 ? a[1] : "";
+    const size_t      id   = w.script().findSymbolIndex(name);
+    std::vector<std::pair<float,Npc*>> list;
+    for(uint32_t i=0; i<w.npcCount(); ++i)
+      if(Npc* n = w.npcById(i); n!=nullptr && n->instanceSymbol()==id)
+        list.emplace_back((n->position()-pl.position()).length(),n);
+    std::sort(list.begin(),list.end(),[](auto& x, auto& y) { return x.first<y.first; });
+    if(a.size()>2 && a[2]=="full" && !list.empty() && !list[0].second->isDown()) {
+      // the nearest gets its hit points back
+      Npc& n = *list[0].second;
+      n.changeAttribute(ATR_HITPOINTS,n.attribute(ATR_HITPOINTSMAX)-n.attribute(ATR_HITPOINTS),false);
+      }
+    std::string out = "hp " + name + ":";
+    for(size_t i=0; i<list.size() && i<3; ++i)
+      out += " " + std::to_string(list[i].second->attribute(ATR_HITPOINTS)) + (list[i].second->isDead() ? " dead" : "") +
+             " at " + std::to_string(int(list[i].first/100.f)) + " m;";
+    say(out);
+    }
+  else if(c=="give" || c=="equip") {
+    // give <item> [count]: into the hero's inventory; equip <item>: give one and put it on (a bow, a rune)
+    const std::string name = a.size()>1 ? a[1] : "";
+    const size_t      id   = w.script().findSymbolIndex(name);
+    if(id==size_t(-1)) {
+      say(c + ": no item " + name);
+      return;
+      }
+    pl.addItem(id,size_t(c=="give" ? num(a,2,1) : 1));
+    if(c=="equip")
+      pl.useItem(id,Item::NSLOT,true); // whatever the hero's strength
+    say(c + " " + name);
+    }
+  else if(c=="put") {
+    // put <npc|nearest> <dist> <angle> [dy]: the npc stands there from the hero (angle from the hero's
+    // facing, 0 in front), on the ground, frozen, facing the hero
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("put: no npc " + line);
+      return;
+      }
+    const float d   = num(a,2,500);
+    const float an  = (pl.rotation()+num(a,3,0))*float(M_PI)/180.f;
+    Vec3        pos = pl.position() + Vec3(std::cos(an),0,std::sin(an))*d;
+    // the ground there may be far above or below (a slope): the first one from above, by short rays
+    // (a long one misses the landscape)
+    DynamicWorld::RayLandResult r;
+    for(float y=pos.y+num(a,4,0)+1500; y>pos.y-1500 && !r.hasCol; y-=400)
+      r = w.physic()->ray({pos.x,y,pos.z},{pos.x,y-450,pos.z});
+    if(r.hasCol)
+      pos.y = r.v.y;
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    n->setPosition(pos);
+    const Vec3 dir = pl.position()-pos;
+    n->setDirection(Vec3(dir.x,0,dir.z));
+    n->updateTransform();
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"put %s at %.0f %.0f %.0f (%.0f above the hero%s)",symName(w,n).c_str(),pos.x,pos.y,pos.z,
+                  pos.y-pl.position().y,r.hasCol ? "" : ", no ground found");
+    say(buf);
+    }
+  else if(c=="pin") {
+    // pin <npc|nearest> <dist> <angle> <height> | pin off: the npc hangs there from the hero (angle from
+    // the hero's facing, height above the hero's feet), frozen, every frame: a target above or below
+    if(a.size()>1 && a[1]=="off") {
+      bench.pinned = nullptr;
+      say("pin off");
+      return;
+      }
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("pin: no npc " + line);
+      return;
+      }
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    const float an = (pl.rotation()+num(a,3,0))*float(M_PI)/180.f;
+    bench.pinned   = n;
+    bench.pinAt    = pl.position() + Vec3(std::cos(an)*num(a,2,800),num(a,4,0),std::sin(an)*num(a,2,800));
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"pin %s at %.0f %.0f %.0f",symName(w,n).c_str(),bench.pinAt.x,bench.pinAt.y,bench.pinAt.z);
+    say(buf);
+    }
+  else if(c=="npcgo") {
+    // npcgo <npc|nearest> <waypoint> [walk|run]: the npc goes there (AI path), like a script sends it
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    auto wp = a.size()>2 ? w.findPoint(a[2]) : nullptr;
+    if(n==nullptr || n==&pl || wp==nullptr) {
+      say("npcgo: no npc or waypoint " + line);
+      return;
+      }
+    n->setWalkMode(a.size()>3 && a[3]=="walk" ? WalkBit::WM_Walk : WalkBit::WM_Run);
+    n->aiPush(AiQueue::aiGoToPoint(*wp));
+    say("npcgo " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="manual") {
+    // manual on|off: the hero aims a bow by hand (game/archery)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Archery::setEnabled(m=="on"); else
+      say("unknown manual command: " + line);
+    }
+  else if(c=="stats") {
+    // stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]: the hero's strength, dexterity, hit chances (the
+    // skill of the manual aim)
+    auto& h = pl.handle();
+    for(size_t i=1; i+1<a.size(); i+=2) {
+      const int v = int(num(a,i+1,0));
+      if(a[i]=="str")
+        h.attribute[ATR_STRENGTH] = v;
+      else if(a[i]=="dex")
+        h.attribute[ATR_DEXTERITY] = v;
+      else if(a[i]=="bow")
+        h.hitchance[TALENT_BOW] = v;
+      else if(a[i]=="cbow")
+        h.hitchance[TALENT_CROSSBOW] = v;
+      else
+        say("stats: unknown " + a[i]);
+      }
+    const auto  wp = pl.currentRangedWeapon();
+    const auto  st = Archery::stats(pl,wp);
+    char buf[360];
+    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg",
+                  pl.attribute(ATR_STRENGTH),pl.attribute(ATR_DEXTERITY),pl.hitChance(TALENT_BOW),pl.hitChance(TALENT_CROSSBOW),
+                  wp!=nullptr ? int(wp->handle().damage_total) : -1,
+                  double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
+                  double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)));
+    say(buf);
+    }
+  else if(c=="zones") {
+    // zones <npc|nearest|player>: where its hit zones are now (the capsules on its bones)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr) {
+      say("zones: no npc " + line);
+      return;
+      }
+    Vec3 h, b;
+    n->hitZoneCenter(HitZones::Head,h);
+    n->hitZoneCenter(HitZones::Body,b);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"zones %s at %.0f %.0f %.0f: head %.0f %.0f %.0f body %.0f %.0f %.0f",symName(w,n).c_str(),
+                  n->position().x,n->position().y,n->position().z,h.x,h.y,h.z,b.x,b.y,b.z);
+    say(buf + std::string("\n") + n->hitZonesDump());
+    }
+  else if(c=="open") {
+    // open [dist cm]: how far it is open around the hero at head height and at the knees, every 15
+    // degrees from the facing (a target for the bow needs open ground)
+    const float dist = num(a,1,4000);
+    const Vec3  p0   = pl.position();
+    std::string out  = "open (yaw from the facing: head/knees m):";
+    for(int i=0; i<24; ++i) {
+      const float an = (pl.rotation()+float(i*15))*float(M_PI)/180.f;
+      const Vec3  d  = Vec3(std::cos(an),0,std::sin(an));
+      float       m[2];
+      for(int k=0; k<2; ++k) {
+        const Vec3 from = p0 + Vec3(0,k==0 ? 160.f : 40.f,0);
+        auto       r    = w.physic()->ray(from,from+d*dist);
+        m[k] = r.hasCol ? (r.v-from).length()/100.f : dist/100.f;
+        }
+      char buf[48];
+      std::snprintf(buf,sizeof(buf)," %d:%.0f/%.0f",i*15,double(m[0]),double(m[1]));
+      out += buf;
+      }
+    say(out);
+    }
+  else if(c=="volley") {
+    // volley <shots> [hold ms] [draw 0..1]: shots by hand in a row (manual on): the string drawn that far
+    // (1: full), held, let go; the scenario goes on after the last one is reloaded
+    bench.volleyLeft  = int(num(a,1,5));
+    bench.volleyHold  = uint64_t(num(a,2,300));
+    bench.volleyDraw  = num(a,3,1);
+    bench.volleyPhase = 0;
+    bench.volleyT     = bench.time;
+    say("volley " + std::to_string(bench.volleyLeft));
+    }
+  else if(c=="aimat") {
+    // aimat <npc|nearest> [head|body|limb] | aimat <x> <y> <z> | aimat off: the manual aim aims there
+    // instead of the mouse - the middle of a zone of the npc, every frame
+    bench.aimNpc   = nullptr;
+    bench.aimFixed = false;
+    if(a.size()>1 && a[1]=="off") {
+      ctrl.setAimOverride(false);
+      say("aimat off");
+      return;
+      }
+    if(a.size()>3 && (std::isdigit(uint8_t(a[1][0])) || a[1][0]=='-')) {
+      bench.aimFixed = true;
+      bench.aimAt    = Vec3(num(a,1,0),num(a,2,0),num(a,3,0));
+      ctrl.setAimOverride(true,bench.aimAt);
+      say("aimat " + a[1] + " " + a[2] + " " + a[3]);
+      return;
+      }
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("aimat: no npc " + line);
+      return;
+      }
+    const std::string z = a.size()>2 ? a[2] : "body";
+    bench.aimNpc  = n;
+    bench.aimZone = z=="head" ? HitZones::Head : (z=="limb" ? HitZones::Limb : HitZones::Body);
+    bench.aimRaw  = a.size()>3 && a[3]=="raw";
+    say("aimat " + symName(w,n) + " " + std::string(HitZones::name(bench.aimZone)) + (bench.aimRaw ? " raw" : ""));
+    }
+  else if(c=="immortal") {
+    // immortal <npc|nearest> on|off: arrows hit it, it does not die (counting hits)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr) {
+      say("immortal: no npc " + line);
+      return;
+      }
+    auto& h = n->handle();
+    if(a.size()>2 && a[2]=="off")
+      h.flags = zenkit::NpcFlag(uint32_t(h.flags) & ~uint32_t(zenkit::NpcFlag::IMMORTAL)); else
+      h.flags = zenkit::NpcFlag(uint32_t(h.flags) |  uint32_t(zenkit::NpcFlag::IMMORTAL));
+    say("immortal " + symName(w,n) + " " + (n->isImmortal() ? "on" : "off"));
+    }
+  else if(c=="clear") {
+    // clear [radius]: the npcs around the hero leave the world (rats, wolves that would join in), not the
+    // watched one
+    const float r = num(a,1,2500);
+    std::vector<Npc*> gone;
+    for(uint32_t i=0; i<w.npcCount(); ++i)
+      if(Npc* n = w.npcById(i); n!=nullptr && n!=&pl && n!=bench.subject && (n->position()-pl.position()).length()<r)
+        gone.push_back(n);
+    std::string out = "clear:";
+    for(auto n:gone) {
+      out += " " + symName(w,n);
+      w.removeNpc(*n);
+      }
+    say(out);
+    }
+  else if(c=="flinch") {
+    // flinch on|off: the upper body gives way to a blow (graphics/mesh/flinch)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Flinch::setEnabled(m=="on"); else
+      say("unknown flinch command: " + line);
+    }
+  else if(c=="hit") {
+    // hit <npc|player> <angle> [strength] [height] [twist]: a blow from that side of it (angle from its
+    // facing, 0 in front, as place), only the flinch: no damage, no stumble
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    if(n==nullptr) {
+      say("hit: no npc " + line);
+      return;
+      }
+    const float an = (n->rotation()+num(a,2,0))*float(M_PI)/180.f;
+    Flinch::Hit h;
+    h.dir      = Vec3(-std::cos(an),0,-std::sin(an));
+    h.strength = num(a,3,1);
+    h.height   = num(a,4,0.6f);
+    h.twist    = num(a,5,0);
+    n->flinch(h);
+    char buf[160];
+    std::snprintf(buf,sizeof(buf),"hit %s from %.0f strength %.2f height %.2f twist %.2f",symName(w,n).c_str(),
+                  double(num(a,2,0)),double(h.strength),double(h.height),double(h.twist));
+    say(buf);
+    }
+  else if(c=="strike") {
+    // strike <victim|player> [attacker|player]: the attacker's blow lands as the game deals it (melee: the
+    // stumble, the damage, the flinch); the victim gets its hit points back below a third
+    Npc* n  = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    Npc* by = findNpc(w,pl,a.size()>2 ? a[2] : "player");
+    if(n==nullptr || by==nullptr || n==by) {
+      say("strike: no npc " + line);
+      return;
+      }
+    const int32_t hp0 = n->attribute(ATR_HITPOINTS);
+    n->takeDamage(*by,nullptr);
+    const int32_t hp1 = n->attribute(ATR_HITPOINTS);
+    say("strike " + symName(w,n) + " by " + symName(w,by) + ": hp " + std::to_string(hp0) + " -> " + std::to_string(hp1) +
+        " anim " + n->animNames());
+    if(!n->isDown() && hp1*3<n->attribute(ATR_HITPOINTSMAX))
+      n->changeAttribute(ATR_HITPOINTS,n->attribute(ATR_HITPOINTSMAX)-hp1,false);
+    }
+  else if(c=="aim") {
+    // aim on|off: the upper body turns and bends to the target with a bow, a crossbow, a spell
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Aim::setEnabled(m=="on"); else
+      say("unknown aim command: " + line);
+    }
+  else if(c=="lean") {
+    // lean on|off: the lean into turns and on slopes (graphics/mesh/lean)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Lean::setEnabled(m=="on"); else
+      say("unknown lean command: " + line);
+    }
+  else if(c=="blend") {
+    // blend on|off, blend param <min|scale|max> <value>: transitions between animations (AnimBlend)
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      AnimBlend::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(AnimBlend::setParam(a[2],num(a,3,0)) ? "blend param " : "blend: unknown param ") + a[2] + " " + a[3]);
+    else
+      say("unknown blend command: " + line);
     }
   else if(c=="ik") {
     const std::string m = a.size()>1 ? a[1] : "";
@@ -745,6 +1733,155 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say(buf);
       }
     }
+  else if(c=="ledges") {
+    // ledges [min drop] [max drop] [count] [steep]: waypoints at an edge, open ground that much lower
+    // 1.5..14 m away and seen from there (a target below); prints the waypoint, the yaw to face
+    // (`face <yaw>`), the distance, the drop and the angle down; near first, or the steepest first
+    const float minDrop = num(a,1,300), maxDrop = num(a,2,1000);
+    const size_t count  = size_t(num(a,3,15));
+    struct Ledge { std::string name; float yaw, dist, drop, down, from; };
+    std::vector<Ledge> all;
+    const Vec3 at = pl.position();
+    w.findWayPoint(at,[&](const WayPoint& wp) {
+      const float g0 = groundY(w,wp.pos.x,wp.pos.z,wp.pos.y);
+      if(std::isnan(g0))
+        return false;
+      float an = 0, rough = 0;
+      Vec3  dn;
+      if(!slopeAt(w,Vec3(wp.pos.x,g0,wp.pos.z),an,dn,rough) || an>15)
+        return false;
+      if(w.physic()->ray({wp.pos.x,g0+200,wp.pos.z},{wp.pos.x,g0+1500,wp.pos.z}).hasCol)
+        return false; // a roof above: indoors
+      Ledge best;
+      best.down = 0;
+      for(int k=0; k<16; ++k) {
+        const float y = float(k)*22.5f*float(M_PI)/180.f;
+        for(float d:{150.f,250.f,400.f,550.f,700.f,1000.f,1400.f}) {
+          const Vec3 p = Vec3(wp.pos.x+std::cos(y)*d, g0, wp.pos.z+std::sin(y)*d);
+          auto r = w.physic()->ray({p.x,g0+200,p.z},{p.x,g0-maxDrop-100,p.z});
+          if(!r.hasCol)
+            continue;
+          const float drop = g0-r.v.y;
+          if(drop<minDrop || drop>maxDrop)
+            continue;
+          const Vec3 eye = Vec3(wp.pos.x,g0+170,wp.pos.z), tg = r.v+Vec3(0,60,0);
+          auto los = w.physic()->ray(eye,tg);
+          if(los.hasCol && (los.v-tg).length()>40)
+            continue;
+          const float down = std::atan2(drop,d)*180.f/float(M_PI);
+          if(down>best.down)
+            best = Ledge{wp.name, float(k)*22.5f, d, drop, down, (wp.pos-at).length()};
+          }
+        }
+      if(best.down>0)
+        all.push_back(best);
+      return false;
+      });
+    if(a.size()>4 && a[4]=="steep")
+      std::sort(all.begin(),all.end(),[](const Ledge& x, const Ledge& y) { return x.down>y.down; }); else
+      std::sort(all.begin(),all.end(),[](const Ledge& x, const Ledge& y) { return x.from<y.from; });
+    say("ledges " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"ledge %s yaw=%.1f dist=%.0f drop=%.0f down=%.0f from=%.0f",all[i].name.c_str(),
+                    double(all[i].yaw),double(all[i].dist),double(all[i].drop),double(all[i].down),double(all[i].from));
+      say(buf);
+      }
+    }
+  else if(c=="walls") {
+    // walls [count]: spots at a wall's edge (from a waypoint, walking to where the ground falls away) with
+    // the foot of the wall 2.5..10 m below, 1 m out: hidden from the head, seen leaning over (the aim's
+    // lean); prints the waypoint and the yaw for `goto`, `edge <yaw>`
+    const size_t count = size_t(num(a,1,15));
+    struct Wall { std::string name; float yaw, drop, from; };
+    std::vector<Wall> all;
+    const Vec3 at = pl.position();
+    auto ground = [&](const Vec3& p, float y0, float up, float down) {
+      auto r = w.physic()->ray({p.x,y0+up,p.z},{p.x,y0-down,p.z});
+      return r.hasCol ? r.v.y : NAN;
+      };
+    w.findWayPoint(at,[&](const WayPoint& wp) {
+      const float g0 = groundY(w,wp.pos.x,wp.pos.z,wp.pos.y);
+      if(std::isnan(g0))
+        return false;
+      for(int k=0; k<16; ++k) {
+        const float y   = float(k)*22.5f*float(M_PI)/180.f;
+        const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
+        Vec3 e = Vec3(wp.pos.x,g0,wp.pos.z);
+        bool edge = false;
+        for(float d=25; d<=600; d+=25) {
+          const Vec3  p = Vec3(wp.pos.x,g0,wp.pos.z) + dir*d;
+          const float g = ground(p,e.y,100,150);
+          if(std::isnan(g) || std::abs(g-e.y)>60) {
+            edge = true;
+            break;
+            }
+          e = Vec3(p.x,g,p.z);
+          }
+        if(!edge)
+          continue;
+        const Vec3  st   = e - dir*35.f;
+        const Vec3  t    = st + dir*135.f;
+        const float tg   = ground(t,st.y,-60,1000);
+        if(std::isnan(tg) || st.y-tg<250 || st.y-tg>1000)
+          continue;
+        const Vec3 head = st + Vec3(0,148,0); // drawing a bow the head is that low
+        const Vec3 aimT = Vec3(t.x,tg+60,t.z);
+        if(!w.physic()->ray(head,aimT).hasCol)
+          continue; // seen from the head anyway
+        const Vec3 eye = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
+        if(w.physic()->ray(head,eye).hasCol || w.physic()->ray(eye,aimT).hasCol)
+          continue;
+        if(w.physic()->ray({t.x,tg+100,t.z},{t.x,tg+1500,t.z}).hasCol)
+          continue; // under a roof, an arch
+        all.push_back(Wall{wp.name, float(k)*22.5f, st.y-tg, (wp.pos-at).length()});
+        break;
+        }
+      return false;
+      });
+    std::sort(all.begin(),all.end(),[](const Wall& x, const Wall& y) { return x.from<y.from; });
+    say("walls " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"wall %s yaw=%.1f drop=%.0f from=%.0f",all[i].name.c_str(),double(all[i].yaw),
+                    double(all[i].drop),double(all[i].from));
+      say(buf);
+      }
+    }
+  else if(c=="edge") {
+    // edge <yaw> [max cm] [margin cm]: the hero is put that way to where the ground falls away, and stands
+    // that far from the edge (35: closer the body slips over it) facing it; prints how deep it goes down
+    // right past the edge
+    const float y   = num(a,1,0)*float(M_PI)/180.f;
+    const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
+    const float max = num(a,2,2000);
+    Vec3        pos = pl.position();
+    const float g0  = pos.y;
+    bool        found = false;
+    for(float d=25; d<=max; d+=25) {
+      const Vec3  p = pl.position() + dir*d;
+      auto        r = w.physic()->ray({p.x,g0+100,p.z},{p.x,g0-150,p.z});
+      if(!r.hasCol || std::abs(r.v.y-g0)>60) {
+        found = true;
+        break;
+        }
+      pos = Vec3(p.x,r.v.y,p.z);
+      }
+    if(!found) {
+      say("edge: no edge that way");
+      return;
+      }
+    // a step back from the very edge, the feet on the ground
+    pos -= dir*num(a,3,35);
+    pl.setPosition(pos);
+    face(pl,dir);
+    pl.updateTransform();
+    const Vec3 past = pos + dir*80.f;
+    auto       r    = w.physic()->ray({past.x,pos.y-60,past.z},{past.x,pos.y-3000,past.z});
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"edge at %.0f %.0f %.0f, down past it %.0f",pos.x,pos.y,pos.z,r.hasCol ? pos.y-r.v.y : -1.f);
+    say(buf);
+    }
   else if(c=="findwp") {
     for(auto& s:findSpots(w,pl,K_Name,0,90,rest(line),40)) {
       char buf[256];
@@ -755,9 +1892,255 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="pos") {
     const Vec3 p = pl.position();
     char buf[256];
-    std::snprintf(buf,sizeof(buf),"pos %.0f %.0f %.0f rot=%.1f bs=%u air=%d swim=%d slide=%d mob=%d",p.x,p.y,p.z,pl.rotation(),
-                  unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr));
+    std::snprintf(buf,sizeof(buf),"pos %.0f %.0f %.0f rot=%.1f bs=%u air=%d swim=%d slide=%d mob=%d guild=%u aligned=%d",p.x,p.y,p.z,pl.rotation(),
+                  unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr),
+                  unsigned(pl.guild()),int(w.script().guildVal().surface_align[pl.guild()]));
     say(buf);
+    }
+  else if(c=="talk") {
+    // talk <npc|nearest> <ms>: the npc and the hero talk to each other (no words): they look at each other
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("talk: no npc " + line);
+      return;
+      }
+    const uint64_t ms = uint64_t(num(a,2,3000));
+    n->setTalkPartner(&pl,ms);
+    pl.setTalkPartner(n,ms);
+    say("talk " + symName(w,n) + " " + std::to_string(ms));
+    }
+  else if(c=="speak") {
+    // speak <npc|nearest|player> <output name>: it says a voiced line of the game, like AI_Output in a script
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || a.size()<3) {
+      say("speak: no npc or line " + line);
+      return;
+      }
+    Npc& to = (n==&pl) ? subjectOf(pl) : pl;
+    n->aiPush(AiQueue::aiOutput(to,a[2],0));
+    say("speak " + std::string(n->displayName()) + " " + a[2]);
+    }
+  else if(c=="faceanim") {
+    // faceanim <npc|nearest|player> <anim> [ms] [intensity]: a face animation of the head (S_ANGRY, S_FRIENDLY...)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || a.size()<3) {
+      say("faceanim: no npc or anim " + line);
+      return;
+      }
+    n->startFaceAnim(a[2],num(a,4,1),uint64_t(num(a,3,3000)));
+    say("faceanim " + std::string(n->displayName()) + " " + a[2]);
+    }
+  else if(c=="dialog") {
+    // dialog <npc|nearest>: the hero talks to it, as with the action key (important infos start by themselves)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("dialog: no npc " + line);
+      return;
+      }
+    n->startDialog(pl);
+    say("dialog " + std::string(n->displayName()));
+    }
+  else if(c=="choose") {
+    // choose <n>: runs the n-th dialog choice (from 1, as listed) of the watched npc, as if the player picked it
+    Npc&       n   = subjectOf(pl);
+    auto       chs = w.script().dialogChoices(pl.handlePtr(),n.handlePtr(),{},false);
+    std::sort(chs.begin(),chs.end(),[](const GameScript::DlgChoice& l, const GameScript::DlgChoice& r){ return l.sort<r.sort; });
+    const size_t i = size_t(num(a,1,1));
+    if(i<1 || i>chs.size()) {
+      say("choose: no choice " + std::to_string(i) + " of " + std::to_string(chs.size()));
+      return;
+      }
+    say("choose " + std::to_string(i) + " of " + std::to_string(chs.size()));
+    Gothic::inst().dialogExec(chs[i-1],pl,n);
+    }
+  else if(c=="lips") {
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      LipSync::setEnabled(m=="on");
+    else if(m=="param" && a.size()>3)
+      say(std::string(LipSync::setParam(a[2],num(a,3,0)) ? "lips param " : "lips: unknown param ") + a[2] + " " + a[3]);
+    else if(m=="params")
+      say("lips params: " + LipSync::paramList());
+    else
+      say("unknown lips command: " + line);
+    }
+  else if(c=="watch") {
+    // watch <npc|nearest|player>: the camera and the gaze metrics follow this one
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    bench.subject  = (n==&pl) ? nullptr : n;
+    Gaze::probeNpc = bench.subject;
+    LipSync::probeNpc     = n;
+    LipSync::subjectProbe = LipSync::Probe();
+    Lean::probeNpc = bench.subject;
+    Pose::probeNpc = bench.subject;
+    bench.anim1.clear();
+    bench.anim2.clear();
+    Aim::probeNpc  = bench.subject;
+    Flinch::probeNpc = bench.subject;
+    char buf[160] = "watch nobody";
+    if(n!=nullptr)
+      if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
+        std::snprintf(buf,sizeof(buf),"watch %s dist=%.0f",sym->name().c_str(),double((n->position()-pl.position()).length()));
+    say(buf);
+    }
+  else if(c=="gazeinfo") {
+    Npc&         s = subjectOf(pl);
+    const auto&  g = &s==&pl ? Gaze::playerProbe : Gaze::subjectProbe;
+    Vec3         at;
+    const auto   src = s.gazeTarget(at);
+    char buf[300];
+    std::snprintf(buf,sizeof(buf),"gazeinfo %s source=%s partner=%s script=%s attention=%s probe valid=%d active=%d w=%.2f err=%.1f hero focus=%s",
+                  symName(w,&s).c_str(),gazeSource(src),symName(w,s.talkPartner()).c_str(),symName(w,s.lookAtTarget()).c_str(),
+                  symName(w,s.attentionTarget()).c_str(),int(g.valid),int(g.active),double(g.weight),double(g.error),
+                  symName(w,pl.target()).c_str());
+    say(buf);
+    }
+  else if(c=="nearby") {
+    // nearby [radius]: the npcs around the hero, where they look and why
+    const float r = num(a,1,1500);
+    std::vector<std::pair<float,Npc*>> list;
+    w.detectNpc(pl.position(),r,[&](Npc& n) {
+      if(&n!=&pl)
+        list.emplace_back((n.position()-pl.position()).length(),&n);
+      });
+    std::sort(list.begin(),list.end(),[](auto& x, auto& y) { return x.first<y.first; });
+    say("nearby " + std::to_string(list.size()));
+    for(auto& [d,n]:list) {
+      const Vec3  dp  = pl.position()-n->position();
+      const float ang = std::remainder(std::atan2(dp.z,dp.x)*180.f/float(M_PI) - n->rotation(), 360.f);
+      Vec3 at;
+      const auto src = n->gazeTarget(at);
+      char buf[300];
+      std::snprintf(buf,sizeof(buf),"  %-28s dist=%5.0f hero_at=%5.0f bs=%2u mob=%d look=%s at=%s",
+                    symName(w,n).c_str(),double(d),double(ang),unsigned(n->bodyStateMasked() & BS_MAX),
+                    int(n->interactive()!=nullptr),gazeSource(src),
+                    symName(w,src==Gaze::Source::Talk ? n->talkPartner() : src==Gaze::Source::Script ? n->lookAtTarget() :
+                                src==Gaze::Source::Attention ? n->attentionTarget() : nullptr).c_str());
+      say(buf);
+      }
+    }
+  else if(c=="lookat") {
+    // lookat <npc|nearest> <npc|player|off>: as the script AI_LookAtNpc, AI_StopLookAt
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("lookat: no npc " + line);
+      return;
+      }
+    const std::string t = a.size()>2 ? a[2] : "player";
+    if(t=="off") {
+      n->aiPush(AiQueue::aiStopLookAt());
+      say("lookat " + symName(w,n) + " off");
+      return;
+      }
+    Npc* o = findNpc(w,pl,t);
+    if(o==nullptr || o==n) {
+      say("lookat: no target " + line);
+      return;
+      }
+    n->aiPush(AiQueue::aiLookAtNpc(o));
+    say("lookat " + symName(w,n) + " " + symName(w,o));
+    }
+  else if(c=="freeze") {
+    // freeze <npc|nearest> [off]: it leaves what it does and stands still, like a body the AI server attaches
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("freeze: no npc " + line);
+      return;
+      }
+    if(a.size()>2 && a[2]=="off") {
+      n->setExternalControl(false);
+      say("freeze off");
+      return;
+      }
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    say("freeze " + symName(w,n));
+    }
+  else if(c=="place") {
+    // place <dist> <angle>: the hero stands that far from the watched npc, at that angle from its facing
+    bench.placeDist  = num(a,1,150);
+    bench.placeAngle = num(a,2,0);
+    placeHero(w,pl);
+    bench.hasPrev = false;
+    }
+  else if(c=="orbit") {
+    // orbit <deg> <ms>: the hero goes around the watched npc
+    const float ms = std::max(1.f,num(a,2,3000));
+    bench.orbitSpeed = num(a,1,90)*1000.f/ms;
+    bench.orbitUntil = bench.time + uint64_t(ms);
+    }
+  else if(c=="transform") {
+    // the player becomes a creature, like the shape change spell; "transform back"
+    const std::string name = a.size()>1 ? a[1] : "";
+    if(name=="back") {
+      pl.transformBack();
+      say("transform back");
+      return;
+      }
+    const size_t id = w.script().findSymbolIndex(name);
+    const bool   ok = id!=size_t(-1) && pl.transformInto(id);
+    bench.hasPrev = false;
+    say(std::string(ok ? "transform " : "transform failed: ") + name);
+    }
+  else if(c=="bones") {
+    // skeleton of the player: index, parent, name
+    auto sk = FootIk::playerProbe.skeleton;
+    if(sk==nullptr) {
+      say("bones: no skeleton");
+      return;
+      }
+    say("bones: " + std::to_string(sk->nodes.size()) + " nodes, foot ik " + (FootIk::playerProbe.valid ? "valid" : "not valid"));
+    for(size_t i=0; i<sk->nodes.size(); ++i) {
+      char buf[256];
+      const auto& t = sk->tr[i];
+      std::snprintf(buf,sizeof(buf),"bone %zu parent %d %s at %.0f %.0f %.0f",i,int(sk->nodes[i].parent==size_t(-1) ? -1 : int(sk->nodes[i].parent)),
+                    sk->nodes[i].name.c_str(),t.at(3,0),t.at(3,1),t.at(3,2));
+      say(buf);
+      }
+    }
+  else if(c=="ptt") {
+    // ptt <wav> [text]: the hero holds the talk key while the recording is said; the AI server takes the
+    // file instead of the microphone (--voice-files), the npc's hear it through speech recognition.
+    // The text only goes into events.jsonl (subtitles)
+    const std::string wav = a.size()>1 ? a[1] : "";
+    const uint64_t    ms  = wavMs(wav);
+    if(ms==0) {
+      say("ptt: not a 16-bit wav: " + wav);
+      return;
+      }
+    std::string reply;
+    if(!aiCommand("ai ptt start " + wav,reply)) {
+      say("ptt: no AI bridge");
+      return;
+      }
+    const std::string text = rest(rest(line));
+    bench.speaking   = true;
+    bench.speakUntil = bench.time + ms + SpeakTailMs;
+    event("hero","\"wav\":" + jsonStr(wav) + ",\"ms\":" + std::to_string(ms) + ",\"text\":" + jsonStr(text));
+    say("ptt " + std::to_string(ms) + " ms: " + text + " (" + reply + ")");
+    }
+  else if(c=="waitreply" || c=="waitquiet") {
+    // waitreply [timeout ms 30000] [quiet ms 1200]: until an npc of the AI has answered the hero's last
+    // phrase and has been quiet that long; waitquiet [quiet ms 1200] [timeout ms 30000]: only the quiet
+    const bool reply = c=="waitreply";
+    bench.waitReply  = true;
+    bench.replyNeed  = reply;
+    bench.replyFrom  = bench.heroEndAt>0 ? bench.heroEndAt : bench.time;
+    bench.replyEnd   = bench.time + uint64_t(num(a,reply ? 1 : 2,30000));
+    bench.replyQuiet = uint64_t(num(a,reply ? 2 : 1,1200));
+    }
+  else if(c=="caption") {
+    // text on the screen of a short from here (scripts/shorts cut): caption <text>, caption off
+    event("caption","\"text\":" + jsonStr(rest(line)=="off" ? "" : rest(line)));
+    }
+  else if(c=="mark") {
+    event("mark","\"text\":" + jsonStr(rest(line)));
+    }
+  else if(c=="ai") {
+    std::string reply;
+    say(std::string(aiCommand(line,reply) ? "" : "no AI bridge: ") + line + " -> " + reply);
     }
   else if(c=="quit") {
     bench.pc = bench.prog.size();
@@ -768,9 +2151,99 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   }
 
+void tickVolley(PlayerControl& ctrl) {
+  const auto& mp = Archer::playerProbe;
+  const auto  t  = bench.time - bench.volleyT;
+  auto stop = [&](const char* why) {
+    say(std::string("volley: ") + why);
+    release(ctrl,KeyCodec::ActionGeneric);
+    bench.volleyLeft = 0;
+    };
+  switch(bench.volleyPhase) {
+    case 0:
+      press(ctrl,KeyCodec::ActionGeneric);
+      bench.volleyPhase = 1;
+      bench.volleyT     = bench.time;
+      break;
+    case 1: {
+      const bool drawn = mp.valid && (mp.stage==Archer::Held || (mp.stage==Archer::Drawing && mp.draw>=bench.volleyDraw));
+      if(drawn) {
+        bench.volleyPhase = 2;
+        bench.volleyT     = bench.time;
+        }
+      else if(t>10000)
+        stop("the string is not drawn");
+      break;
+      }
+    case 2:
+      if(t>=bench.volleyHold) {
+        if(bench.aimNpc!=nullptr) {
+          // where it aims, the middle of the zone: the log compares the arrow's flight with it
+          Vec3 c = bench.aimNpc->collosionCenter();
+          bench.aimNpc->hitZoneCenter(bench.aimZone,c);
+          char buf[160];
+          std::snprintf(buf,sizeof(buf),"aim zone %.1f %.1f %.1f",c.x,c.y,c.z);
+          say(buf);
+          }
+        release(ctrl,KeyCodec::ActionGeneric);
+        bench.volleyPhase = 3;
+        bench.volleyT     = bench.time;
+        }
+      break;
+    case 3:
+      if(mp.valid && mp.stage==Archer::Nocked && t>200) {
+        --bench.volleyLeft;
+        bench.volleyPhase = 0;
+        }
+      else if(t>8000)
+        stop("no next arrow");
+      break;
+    }
+  }
+
+// the hero's phrase is said: the talk key goes up
+void endSpeaking() {
+  std::string reply;
+  aiCommand("ai ptt stop",reply);
+  bench.speaking  = false;
+  bench.heroEndAt = bench.time;
+  event("hero_end");
+  }
+
+bool waitingForReply() {
+  if(!bench.waitReply)
+    return false;
+  const bool replied = !bench.replyNeed || bench.lastLineAt>bench.replyFrom;
+  const bool quiet   = bench.time>=bench.busyAt+bench.replyQuiet;
+  if(replied && quiet) {
+    bench.waitReply = false;
+    return false;
+    }
+  if(bench.time<bench.replyEnd)
+    return true;
+  say(std::string(bench.replyNeed ? "waitreply" : "waitquiet") + ": timeout" + (replied ? "" : ", nobody answered"));
+  event("timeout");
+  bench.waitReply = false;
+  return false;
+  }
+
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
-  while(bench.pc<bench.prog.size()) {
-    if(bench.time<bench.waitUntil)
+  if(bench.volleyLeft>0) {
+    tickVolley(ctrl);
+    if(bench.volleyLeft>0)
+      return;
+    }
+  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply) {
+    if(bench.speaking) {
+      if(bench.time<bench.speakUntil)
+        return;
+      endSpeaking();
+      }
+    if(waitingForReply())
+      return;
+    if(bench.pc>=bench.prog.size())
+      break;
+    if(bench.time<bench.waitUntil || bench.volleyLeft>0)
       return;
     if(bench.waitArrive) {
       if(!pl.isAiQueueEmpty() && bench.time<bench.arriveEnd)
@@ -782,7 +2255,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
     }
-  if(bench.time>=bench.waitUntil && !bench.waitArrive)
+  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0)
     finish();
   }
 
@@ -864,6 +2337,8 @@ void drawOverlay(Pixmap& pm) {
   cv.px = reinterpret_cast<uint8_t*>(pm.data());
   cv.w  = int(pm.w());
   cv.h  = int(pm.h());
+  if(cv.h>0)
+    bench.aspect = float(cv.w)/float(cv.h);
   auto  cam = Gothic::inst().camera();
   auto& p   = FootIk::playerProbe;
   if(bench.bright)
@@ -872,15 +2347,77 @@ void drawOverlay(Pixmap& pm) {
   float zx = -1, zy = -1;
   if(cam!=nullptr && p.valid) {
     const Matrix4x4 vp = cam->viewProj();
-    drawLeg(cv,vp,p.leg[0],LegL);
-    drawLeg(cv,vp,p.leg[1],LegR);
-    // zoom center: between the ankles
-    const Vec3 m = (p.leg[0].final[2]+p.leg[1].final[2])*0.5f;
+    for(size_t i=0; i<p.numLegs; ++i)
+      drawLeg(cv,vp,p.leg[i],LegColor[i]);
+    // zoom center: between the feet
+    Vec3 m = {};
+    for(size_t i=0; i<p.numLegs; ++i)
+      m += p.leg[i].final[2]*(1.f/float(p.numLegs));
     float x = m.x, y = m.y, z = m.z, ww = 1;
     vp.project(x,y,z,ww);
     if(ww>1e-3f) {
       zx = (0.5f*x/ww+0.5f)*float(cv.w);
       zy = (0.5f*y/ww+0.5f)*float(cv.h);
+      }
+    }
+
+  // gaze: where the face looks (yellow) and where the partner is (red)
+  const auto& g = bench.subject!=nullptr ? Gaze::subjectProbe : Gaze::playerProbe;
+  if(cam!=nullptr && g.valid && g.active) {
+    const Matrix4x4 vp = cam->viewProj();
+    auto proj = [&](const Vec3& p, float& x, float& y) {
+      float px = p.x, py = p.y, pz = p.z, pw = 1;
+      vp.project(px,py,pz,pw);
+      if(pw<=1e-3f)
+        return false;
+      x = (0.5f*px/pw+0.5f)*float(cv.w);
+      y = (0.5f*py/pw+0.5f)*float(cv.h);
+      return true;
+      };
+    float x0,y0,x1,y1,x2,y2;
+    const bool h = proj(g.head,x0,y0);
+    if(h && proj(g.head+g.facing*60.f,x1,y1))
+      cv.line(x0,y0,x1,y1,1,{255,230,40,255});
+    if(h && proj(g.target,x2,y2)) {
+      cv.line(x0,y0,x2,y2,0,{255,80,80,140});
+      cv.dot(x2,y2,3,Red);
+      }
+    }
+
+  // the manual aim: the crosshair as the game draws it in its interface (not captured): a chevron at where
+  // it aims, brackets as far apart as the arrow may go off; a dot where the arrow points now (debugging)
+  auto  hero = Gothic::inst().player();
+  Vec3  cross;
+  float spread = 0;
+  if(cam!=nullptr && hero!=nullptr && bench.ctrl!=nullptr && bench.ctrl->crosshair(cross,spread)) {
+    const Matrix4x4 vp = cam->viewProj();
+    auto proj = [&](const Vec3& p, float& x, float& y) {
+      float px = p.x, py = p.y, pz = p.z, pw = 1;
+      vp.project(px,py,pz,pw);
+      if(pw<=1e-3f)
+        return false;
+      x = (0.5f*px/pw+0.5f)*float(cv.w);
+      y = (0.5f*py/pw+0.5f)*float(cv.h);
+      return true;
+      };
+    Vec3  pos, dir;
+    float x, y;
+    if(hero->arrowRay(pos,dir)) {
+      auto r = hero->world().physic()->rayArrow(pos,pos+dir*10000.f,[hero](Npc& n, const Vec3& a, const Vec3& b, float& t) {
+        return &n!=hero && n.rayHitZone(a,b,t)!=HitZones::None;
+        });
+      if(proj(r.hasCol ? r.v : pos+dir*10000.f,x,y))
+        cv.dot(x,y,1,{255,120,120,200});
+      }
+    const bool centered = bench.ctrl->isCrosshairCentered();
+    if(centered) {
+      x = 0.5f*float(cv.w);
+      y = 0.5f*float(cv.h);
+      }
+    if(centered || proj(cross,x,y)) {
+      const float r = Crosshair::radius(spread,cam->fovY(),float(cv.h),bench.uiScale);
+      for(auto& l:Crosshair::shape(x,y,r,bench.uiScale))
+        cv.stroke(l.pt,l.alpha,Crosshair::pen(bench.uiScale));
       }
     }
 
@@ -913,13 +2450,71 @@ void drawOverlay(Pixmap& pm) {
 
   int y = 6;
   const int x = cv.w - 4*2*24 - 6;
-  std::snprintf(buf,sizeof(buf),"IK %s W%.2f P%.1f",p.enable ? "ON" : "OFF",double(p.weight),double(p.pelvis));
+  if(p.numLegs>2)
+    std::snprintf(buf,sizeof(buf),"IK %s W%.2f P%.1f C%.1f",p.enable ? "ON" : "OFF",double(p.weight),double(p.pelvis),double(p.chest)); else
+    std::snprintf(buf,sizeof(buf),"IK %s W%.2f P%.1f",p.enable ? "ON" : "OFF",double(p.weight),double(p.pelvis));
   cv.text(x,y,buf,2,Text);
   y += 16;
-  for(size_t i=0; i<2; ++i) {
+  for(size_t i=0; i<p.numLegs; ++i) {
     auto& l = p.leg[i];
-    std::snprintf(buf,sizeof(buf),"%s %s E%.1f K%.0f",i==0 ? "L" : "R",l.plant>0.5f ? "PLANT" : "SWING",double(l.err),double(l.kneeDev));
-    cv.text(x,y,buf,2,i==0 ? LegL : LegR);
+    std::snprintf(buf,sizeof(buf),"%s %s E%.1f K%.0f",LegName[i],l.plant>0.5f ? "PLANT" : "SWING",double(l.err),double(l.kneeDev));
+    cv.text(x,y,buf,2,LegColor[i]);
+    y += 16;
+    }
+  if(g.valid && (g.active || bench.subject!=nullptr)) {
+    std::snprintf(buf,sizeof(buf),"GAZE W%.2f E%.0f Y%.0f P%.0f",double(g.weight),double(g.error),double(g.yaw),double(g.pitch));
+    cv.text(x,y,buf,2,{255,230,40,255});
+    y += 16;
+    std::snprintf(buf,sizeof(buf),"H%.0f C%.0f W%.0f",double(g.headYaw),double(g.chestYaw),double(g.waistYaw));
+    cv.text(x,y,buf,2,{255,230,40,255});
+    y += 16;
+    }
+  const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
+  if(am.valid && am.active) {
+    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f",double(am.weight),double(am.error),double(am.yaw),
+                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean));
+    cv.text(x,y,buf,2,{255,140,60,255});
+    y += 16;
+    }
+  const auto& mp = Archer::playerProbe;
+  if(mp.valid && bench.subject==nullptr) {
+    std::snprintf(buf,sizeof(buf),"BOW %s D%.2f H%.1f F%.2f B%.1f%s%s A%.2f",archerStage(mp.stage),double(mp.draw),double(mp.hold),
+                  double(mp.fatigue),double(mp.breath),mp.holding ? " HOLD" : "",mp.short_ ? " SHORT" : "",double(mp.amp));
+    cv.text(x,y,buf,2,{140,200,255,255});
+    y += 16;
+    }
+  const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
+  if(fl.valid && (fl.active || fl.hits>0)) {
+    std::snprintf(buf,sizeof(buf),"HIT%s #%u S%.2f H%.2f B%.1f Y%.0f T%.1f N%.1f",Flinch::isEnabled() ? "" : " OFF",fl.hits,
+                  double(fl.strength),double(fl.height),double(fl.bend),double(fl.bendYaw),double(fl.twist),double(fl.head));
+    cv.text(x,y,buf,2,{255,90,90,255});
+    y += 16;
+    }
+  // lips: shapes and intensity, then the voice (thin bar) and the mouth as shown (thick bar)
+  const auto& lp = LipSync::subjectProbe;
+  if(lp.valid && LipSync::probeNpc!=nullptr) {
+    const Rgba c = {120,230,255,255};
+    std::snprintf(buf,sizeof(buf),"LIPS %s F%u F%u A%.1f I%.2f",lp.active ? "ON" : "OFF",lp.shape.frame0,lp.shape.frame1,
+                  double(lp.shape.alpha),double(lp.shape.intensity));
+    cv.text(x,y,buf,2,c);
+    y += 16;
+    const int bw = 160;
+    cv.rect(x,y,bw,14,Shade);
+    cv.rect(x,y+1,int(float(bw)*std::clamp(lp.level,0.f,1.f)),3,{255,255,255,255});
+    cv.rect(x,y+6,int(float(bw)*std::clamp(lp.open,0.f,1.f)),7,c);
+    y += 20;
+    }
+  const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
+  if(ln.valid) {
+    std::snprintf(buf,sizeof(buf),"LEAN%s R%.1f P%.1f V%.0f T%.0f S%.0f",Lean::isEnabled() ? "" : " OFF",double(ln.roll),
+                  double(ln.pitch),double(ln.speed),double(ln.turn),double(ln.slope));
+    cv.text(x,y,buf,2,{120,255,160,255});
+    y += 16;
+    }
+  const auto& an = bench.subject!=nullptr ? Pose::subjectProbe : Pose::playerProbe;
+  if(an.valid) {
+    std::snprintf(buf,sizeof(buf),"BLEND%s N%u A%.0f",AnimBlend::isEnabled() ? "" : " OFF",an.blend.active,double(an.blend.angle));
+    cv.text(x,y,buf,2,{200,160,255,255});
     y += 16;
     }
   if(bench.occl!=0) {
@@ -934,27 +2529,29 @@ void writeVideo(const Pixmap& pm) {
     bench.videoH = pm.h() & ~1u;
     const char* ff = envStr("OPENGOTHIC_BENCH_FFMPEG") ? envStr("OPENGOTHIC_BENCH_FFMPEG") : "ffmpeg";
     char cmd[2048];
+    // OPENGOTHIC_BENCH_ENCODER: ffmpeg's video encoder options instead of x264 (the hardware encoder keeps
+    // a large frame in real time: "-c:v h264_videotoolbox -b:v 24M")
+    const char* enc = envStr("OPENGOTHIC_BENCH_ENCODER") ? envStr("OPENGOTHIC_BENCH_ENCODER") : "-c:v libx264 -preset veryfast -crf 18";
     std::snprintf(cmd,sizeof(cmd),
                   "\"%s\" -loglevel error -y -f rawvideo -pix_fmt rgba -s %ux%u -framerate %d -i - "
-                  "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p \"%s/%s.mp4\"",
-                  ff,bench.videoW,bench.videoH,Fps,outDir.c_str(),bench.recName.c_str());
-    bench.video = popen(cmd,"w");
-    if(bench.video==nullptr) {
+                  "%s -pix_fmt yuv420p \"%s/%s.mp4\"",
+                  ff,bench.videoW,bench.videoH,Fps,enc,outDir.c_str(),bench.recName.c_str());
+    std::FILE* f = popen(cmd,"w");
+    if(f==nullptr) {
       say("can not start ffmpeg");
       bench.recVideo = false;
       return;
       }
+    bench.video = std::make_unique<VideoPipe>(f);
     }
   const size_t row = size_t(bench.videoW)*4;
-  std::vector<uint8_t> black;
-  if(pm.w()<bench.videoW || pm.h()<bench.videoH || pm.data()==nullptr) {
-    black.resize(row*bench.videoH,0);
-    std::fwrite(black.data(),1,black.size(),bench.video);
-    return;
+  std::vector<uint8_t> frame(row*bench.videoH,0);
+  if(pm.w()>=bench.videoW && pm.h()>=bench.videoH && pm.data()!=nullptr) {
+    auto px = reinterpret_cast<const uint8_t*>(pm.data());
+    for(uint32_t j=0; j<bench.videoH; ++j)
+      std::memcpy(frame.data() + j*row, px + size_t(j)*size_t(pm.w())*4, row);
     }
-  auto px = reinterpret_cast<const uint8_t*>(pm.data());
-  for(uint32_t j=0; j<bench.videoH; ++j)
-    std::fwrite(px + size_t(j)*size_t(pm.w())*4, 1, row, bench.video);
+  bench.video->push(std::move(frame));
   }
 
 }
@@ -963,11 +2560,74 @@ bool TestBench::isActive() {
   return scenarioPath!=nullptr;
   }
 
+void TestBench::note(const char* text) {
+  if(scenarioPath!=nullptr && bench.started && !bench.done)
+    say(text);
+  }
+
+bool TestBench::filming() {
+  return scenarioPath!=nullptr && realtime;
+  }
+
 uint64_t TestBench::frameDt(uint64_t dt) {
   if(!bench.started || bench.done)
     return dt;
   ++bench.step;
+  if(realtime) {
+    using namespace std::chrono;
+    const auto now = steady_clock::now();
+    if(bench.step==1)
+      bench.wallStart = now;
+    const auto due = bench.wallStart + microseconds(int64_t(bench.step)*1000000/Fps);
+    if(now<due)
+      std::this_thread::sleep_until(due); else
+      bench.lagMs = std::max<int64_t>(bench.lagMs,duration_cast<milliseconds>(now-due).count());
+    }
   return (bench.step*1000)/Fps - ((bench.step-1)*1000)/Fps;
+  }
+
+namespace {
+// the game's sound for `dt` ms of game time, into the recording when there is one
+void renderSound(uint64_t dt) {
+  const uint32_t rate = SoundDevice::loopbackRate();
+  if(rate==0 || dt==0)
+    return;
+  bench.audioAcc += uint64_t(rate)*dt;
+  const size_t n = size_t(bench.audioAcc/1000);
+  bench.audioAcc -= uint64_t(n)*1000;
+  bench.mix.resize(n*2);
+  SoundDevice::renderLoopback(bench.mix.data(),n);
+  if(bench.audio!=nullptr) {
+    std::fwrite(bench.mix.data(),sizeof(int16_t),bench.mix.size(),bench.audio);
+    bench.audioFrames += n;
+    }
+  }
+}
+
+std::function<bool()> TestBench::aiBusy;
+
+void TestBench::aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms) {
+  if(scenarioPath==nullptr)
+    return;
+  bench.lastLineAt = std::max<uint64_t>(bench.time,1);
+  bench.busyAt     = bench.time;
+  event("npc_line","\"npc\":" + jsonStr(npc) + ",\"name\":" + jsonStr(name) + ",\"text\":" + jsonStr(text) +
+                   ",\"ms\":" + std::to_string(ms));
+  say("npc line " + std::string(npc) + ": " + std::string(text));
+  }
+
+void TestBench::aiVoiceEnd(std::string_view npc, uint64_t ms) {
+  if(scenarioPath==nullptr)
+    return;
+  bench.busyAt = bench.time;
+  event("npc_voice_end","\"npc\":" + jsonStr(npc) + ",\"ms\":" + std::to_string(ms));
+  }
+
+void TestBench::aiHeard(std::string_view text, std::string_view to) {
+  if(scenarioPath==nullptr)
+    return;
+  event("heard","\"text\":" + jsonStr(text) + ",\"to\":" + jsonStr(to));
+  say("heard: " + std::string(text) + " -> " + std::string(to));
   }
 
 bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
@@ -978,17 +2638,22 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
 
   auto world  = Gothic::inst().world();
   auto player = Gothic::inst().player();
-  if(world==nullptr || player==nullptr || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle)
+  if(world==nullptr || player==nullptr || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) {
+    renderSound(dt);
     return false;
+    }
   if(!bench.started) {
     bench.started = true;
     FootIk::setProbing(true);
     say("start");
+    renderSound(dt);
     return false;
     }
   if(dt==0)
     return false;
   bench.time += dt;
+  if(aiBusy && aiBusy())
+    bench.busyAt = bench.time;
 
   for(auto k:bench.taps)
     release(ctrl,k);
@@ -1002,9 +2667,45 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       }
     }
 
+  bench.ctrl = &ctrl;
   run(*world,*player,ctrl);
+  renderSound(dt);
   if(bench.done)
     return false;
+  // a dialog (an npc with an important one comes to the hero) holds the player: say so
+  if(Gothic::inst().isInDialog()!=bench.inDialog) {
+    bench.inDialog = !bench.inDialog;
+    std::string who;
+    if(bench.inDialog)
+      world->detectNpc(player->position(),2000,[&](Npc& n) {
+        if(&n!=player && Gothic::inst().isNpcInDialog(n))
+          who += " " + symName(*world,&n);
+        });
+    say(std::string(bench.inDialog ? "dialog started:" : "dialog ended") + who);
+    }
+  if(bench.pinned!=nullptr) {
+    const Vec3 d = player->position()-bench.pinAt;
+    bench.pinned->setPosition(bench.pinAt);
+    bench.pinned->setDirection(Vec3(d.x,0,d.z));
+    bench.pinned->updateTransform();
+    }
+  if(bench.aimNpc!=nullptr) {
+    Vec3 at;
+    if(!bench.aimNpc->hitZoneCenter(bench.aimZone,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
+      at = bench.aimNpc->collosionCenter();
+    if(!bench.aimRaw) {
+      // as an archer does: over it by how much the arrow drops on the way (at full draw)
+      const auto  st = Archery::stats(*player,player->currentRangedWeapon());
+      const Vec3  d  = at - player->position();
+      const float t  = std::sqrt(d.x*d.x+d.z*d.z)/std::max(st.speed,0.1f);
+      at.y += 0.5f*DynamicWorld::gravity*t*t;
+      }
+    ctrl.setAimOverride(true,at);
+    }
+  if(bench.orbitUntil>bench.time) {
+    bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;
+    placeHero(*world,*player);
+    }
 
   const Vec3 pos = player->position();
   if(bench.hasPrev) {
@@ -1014,7 +2715,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   bench.prevPos = pos;
   bench.hasPrev = true;
 
-  updateCamera(*world,*player);
+  updateCamera(*world,subjectOf(*player));
 
   bool capture = !bench.shot.empty();
   if(bench.rec) {
@@ -1026,7 +2727,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   return capture;
   }
 
-void TestBench::capture(Pixmap& frame) {
+void TestBench::capture(Pixmap& frame, float uiScale) {
+  bench.uiScale = uiScale;
   Pixmap pm;
   if(frame.w()>0 && frame.format()!=TextureFormat::RGBA8)
     pm = Pixmap(frame,TextureFormat::RGBA8); else

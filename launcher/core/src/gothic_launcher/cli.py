@@ -161,7 +161,9 @@ def _describe(e: Event) -> str | None:
 def _journal_line(entry: dict[str, Any]) -> str | None:
     match entry.get("kind"):
         case "player":
-            return f"you -> {entry.get('name')}: {entry.get('text')}"
+            return f"you -> {entry.get('name') or 'nobody'}: {entry.get('text')}"
+        case "interrupt":
+            return f"you interrupted {entry.get('name')}"
         case "npc":
             return f"{entry.get('name')}: {entry.get('text')}"
         case "action":

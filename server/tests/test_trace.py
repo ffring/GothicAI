@@ -15,7 +15,7 @@ FOLLOW = {"goal": "follow_hero", "target": None, "attitude": "friendly", "agenda
 async def _talk(llm: FakeBackend, writer: TraceWriter, *phrases: str) -> DialogueManager:
     fake = FakeGame()
     async with connected(fake) as link:
-        dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False, trace=writer)
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), trace=writer)
         await link.attach(XARDAS)
         dialogue.open(XARDAS, "Ксардас")
         for text in phrases:

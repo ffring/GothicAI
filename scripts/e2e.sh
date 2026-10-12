@@ -14,7 +14,28 @@
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
 #       words). rescue_self: the shepherd kills the wolf himself and says a word about it
+#   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
+#       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
+#       of a conversation when the hero walks away, a walking npc answering on the move
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
+#   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
+#        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
+#        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
+#   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
+#       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
+#       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
+#   vlie: a lie about a quest of the scripts: the hero tells Lobart the turnips are in the barn, Lobart's
+#       model (scripted with LLM=fake) believes him and his own ending plays; the next morning he misses the
+#       turnips, turns against the hero, and the people around hear it (story graph, stage 5)
+#   vcheck: lies as a mechanic: the hero tells Lobart he killed the raiders on his field; Lobart goes to see
+#       for himself, sees them alive and catches the lie; then he takes no lie on the hero's word; once the
+#       raiders are really dead he goes to see again and pays (model scripted with LLM=fake; stage 5)
+#   rumor: Lobart catches the hero lying; the clock goes to the next morning and the rumor goes round the
+#       people that know each other (routines, shared quests) as far as the city; one there has it in mind
+#       when the hero speaks to it (stage 5)
+#   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
+#       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
+#       the game checks every script condition against its lifted form ("[story] check" in game.log)
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
@@ -51,7 +72,7 @@ if [ "$SCENARIO" = "tts" ]; then
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")
 fi
-if [ "$SCENARIO" = "m3" ]; then
+if [ "$SCENARIO" = "m3" ] || [ "$SCENARIO" = "m5e" ]; then
   (cd "$ROOT/asr-service" && exec uv run gothic-asr serve --port "$ASR_PORT" --provider "$ASR" --fallback none) >"$LOG_DIR/asr.log" 2>&1 &
   ASR_PID=$!
   VOICE_ARGS=(--asr-url "ws://127.0.0.1:$ASR_PORT" --voice-file "$VOICE_FILE")
@@ -93,7 +114,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|incident|reflex|rejected_give|give|intent_|ERROR" "$LOG_DIR/server.log" || true
-grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|incident|reflex|rejected_give|give|intent_|story|director|ERROR" "$LOG_DIR/server.log" || true
+grep -E "^\[(ai|story)\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

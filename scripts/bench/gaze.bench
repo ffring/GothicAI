@@ -1,0 +1,34 @@
+# Gaze in a conversation: the nearest npc (Xardas in the default save) and the hero talk; the hero
+# stands in front, goes around to the side, behind the back and back; then the talk ends
+cheat god
+view clean 60
+watch nearest
+freeze nearest       # Xardas leaves his bookstand: a free body turns the chest too
+wait 500
+cam front 230 40
+cam look 150
+place 150 0
+wait 800
+rec quiet
+wait 1000
+talk nearest 14000
+rec front
+wait 1500
+rec side
+orbit 120 3000
+wait 3000
+rec behind
+orbit 50 1500
+wait 1500
+rec back
+orbit -170 3000
+wait 3000
+rec busy             # back at the bookstand: the head only
+freeze nearest off
+place 150 60
+wait 3000
+stop
+wait 4000
+rec after
+wait 1500
+stop

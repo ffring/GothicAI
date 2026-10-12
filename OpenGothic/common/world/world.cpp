@@ -670,30 +670,27 @@ Bullet& World::shootSpell(const Item &itm, const Npc &npc, const Npc *target) {
   return b;
   }
 
+Tempest::Vec3 World::bulletVelocity(const Tempest::Vec3& from, const Tempest::Vec3& to) {
+  Tempest::Vec3 dir = to - from;
+
+  float lxz   = std::sqrt(dir.x*dir.x+0*0+dir.z*dir.z);
+  float speed = DynamicWorld::bulletSpeed;
+  float t     = lxz/speed;
+
+  dir/=t;
+  dir.y += 0.5f*DynamicWorld::gravity*t;
+  return dir;
+  }
+
 Bullet& World::shootBullet(const Item &itm, const Npc &npc, const Npc *target, const Interactive* inter) {
   Tempest::Vec3 dir = {1.f,0.f,0.f};
   auto          pos = npc.mapWeaponBone();
 
   if(target!=nullptr) {
-    dir = target->collosionCenter() - pos;
-
-    float lxz   = std::sqrt(dir.x*dir.x+0*0+dir.z*dir.z);
-    float speed = DynamicWorld::bulletSpeed;
-    float t     = lxz/speed;
-
-    dir/=t;
-    dir.y += 0.5f*DynamicWorld::gravity*t;
+    dir = bulletVelocity(pos,target->collosionCenter());
     } else
   if(inter!=nullptr) {
-    auto  tgPos = inter->position();
-    dir = tgPos-pos;
-
-    float lxz   = std::sqrt(dir.x*dir.x+0*0+dir.z*dir.z);
-    float speed = DynamicWorld::bulletSpeed;
-    float t     = lxz/speed;
-
-    dir/=t;
-    dir.y += 0.5f*DynamicWorld::gravity*t;
+    dir = bulletVelocity(pos,inter->position());
     } else {
     float a = npc.rotationRad();
     dir.x = std::cos(a);
@@ -702,6 +699,12 @@ Bullet& World::shootBullet(const Item &itm, const Npc &npc, const Npc *target, c
 
   auto& b = wobj.shootBullet(itm, pos, dir, 0, DynamicWorld::bulletSpeed);
   b.setTarget(target);
+  return b;
+  }
+
+Bullet& World::shootArrow(const Item& itm, const Tempest::Vec3& pos, const Tempest::Vec3& dir, float speed) {
+  auto& b = wobj.shootBullet(itm, pos, dir, 0, speed);
+  b.setTarget(nullptr);
   return b;
   }
 
@@ -807,8 +810,9 @@ bool World::isInPfxRange(const Tempest::Vec3& p) const {
   return wview->isInPfxRange(p);
   }
 
-void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen) {
-  auto sfx = wsound.addDlgSound(s,pos,range,timeLen);
+void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float range, uint64_t& timeLen,
+                        std::shared_ptr<LipSync::Track>* voice) {
+  auto sfx = wsound.addDlgSound(s,pos,range,timeLen,voice);
   sfx.play();
   }
 

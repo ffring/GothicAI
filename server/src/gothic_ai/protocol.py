@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 9
 
 # --- game -> server -----------------------------------------------------------
 
@@ -75,6 +75,7 @@ class Result(_GameMessage):
     req: str
     ok: bool
     error: str | None = None
+    value: Any = None  # debug commands: what was asked for (dialogs, a computed expression)
 
 
 ActionStatus = Literal["done", "failed", "timeout", "cancelled", "rejected"]
@@ -171,31 +172,18 @@ class Pong(_GameMessage):
     req: str = ""
 
 
-class ChatOpen(_GameMessage):
-    """The player opened the chat with the npc they look at (the game has already attached it)."""
-
-    type: Literal["chat_open"]
-    npc: str
-    name: str
-
-
 class PlayerText(_GameMessage):
+    """A line the player typed (v7: into the input line, to nobody in particular). `focus` is the npc he
+    looks at, if any; the server decides whom it is said to (talk.py)."""
+
     type: Literal["player_text"]
-    npc: str
     text: str
-
-
-class ChatClose(_GameMessage):
-    """The player closed the chat; the game hands the npc back to its routine."""
-
-    type: Literal["chat_close"]
-    npc: str
+    focus: str | None = None
 
 
 class FollowEnded(_GameMessage):
     """The npc stopped following: `stopped`/`replaced` by a command, or on its own
-    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine
-    unless the chat is open."""
+    (`target_gone`, `target_too_far`, `timeout`); then the game hands it back to its routine."""
 
     type: Literal["follow_ended"]
     npc: str
@@ -203,21 +191,24 @@ class FollowEnded(_GameMessage):
 
 
 class PttStart(_GameMessage):
-    """The player pressed the push-to-talk key in the chat with `npc`: start recording.
-    Followed by `ptt_stop` (recognize what was said) or `ptt_cancel` (it was a short tap)."""
+    """The player pressed the push-to-talk key, anywhere (v7): start recording. Followed by `ptt_stop`
+    (recognize what was said) or `ptt_cancel` (it was a short tap). `focus`: the npc he looks at."""
 
     type: Literal["ptt_start"]
-    npc: str
+    focus: str | None = None
+    # the test bench: the hero says this recording (a 16-bit mono wav on the server's machine) instead
+    # of the microphone; the server takes it only when started with --voice-files
+    audio: str | None = None
 
 
 class PttStop(_GameMessage):
     type: Literal["ptt_stop"]
-    npc: str
+    focus: str | None = None
 
 
 class PttCancel(_GameMessage):
     type: Literal["ptt_cancel"]
-    npc: str
+    focus: str | None = None
 
 
 class LineStarted(_GameMessage):
@@ -227,6 +218,48 @@ class LineStarted(_GameMessage):
     npc: str
     line: str
     voiced: bool = False
+
+
+class DialogChosen(_GameMessage):
+    """The player chose a dialog or one of its choices in the dialog menu (v8). `node` is the script
+    symbol of the dialog (C_INFO) or of the choice's function, or the id of a dialog the director added
+    (`made`)."""
+
+    type: Literal["dialog_chosen"]
+    npc: str
+    node: str
+    made: bool = False
+
+
+class NpcDied(_GameMessage):
+    """A person died, or a creature the director put under a tag (v8). `killer`: PLAYER, an npc's symbol,
+    or empty if nobody hit it."""
+
+    type: Literal["npc_died"]
+    npc: str
+    name: str = ""
+    tag: str | None = None
+    killer: str = ""
+
+
+class TagNear(_GameMessage):
+    npc: str
+    distance: float  # cm, to the nearest living creature of the tag
+
+
+class TagState(_GameMessage):
+    tag: str
+    alive: int
+    dead: int
+    near: list[TagNear] = Field(default_factory=list)
+
+
+class StoryWorld(_GameMessage):
+    """The director's tagged creatures, once a second while there are any (v8): how many live, and how
+    far the nearest one is from each watched npc (`story_watch`)."""
+
+    type: Literal["story_world"]
+    tags: list[TagState]
 
 
 NpcActivity = Literal["routine", "attached", "dialog", "fight", "down"]
@@ -239,6 +272,8 @@ class RosterEntry(_GameMessage):
     distance: float  # to the player, cm
     in_view: bool = False  # on the player's screen
     activity: NpcActivity = "routine"
+    state: str = ""  # v7: the script state it is in, e.g. ZS_SIT_BENCH
+    moving: bool = False  # v7: walking or running
 
 
 class NpcRoster(_GameMessage):
@@ -343,9 +378,7 @@ GameMessage = Annotated[
     | Snapshot
     | Perception
     | Pong
-    | ChatOpen
     | PlayerText
-    | ChatClose
     | FollowEnded
     | PttStart
     | PttStop
@@ -356,7 +389,10 @@ GameMessage = Annotated[
     | NpcIdle
     | NpcActResult
     | RoutineInfo
-    | PerceptionHeld,
+    | PerceptionHeld
+    | DialogChosen
+    | NpcDied
+    | StoryWorld,
     Field(discriminator="type"),
 ]
 
@@ -478,6 +514,11 @@ class PingCmd(_Command):
     req: str
 
 
+# v9: how the npc looks while it says a line (and a moment after): a face of the game's heads
+Mood = Literal["neutral", "friendly", "angry", "hostile", "afraid", "pain"]
+MOODS: tuple[Mood, ...] = ("neutral", "friendly", "angry", "hostile", "afraid", "pain")
+
+
 class SayCmd(_Command):
     """One line (usually a sentence) for the npc to speak, controlled or (v6) free; shown as a subtitle.
     Aloud either with
@@ -495,10 +536,11 @@ class SayCmd(_Command):
     # v6: said on the move, not through the npc's AI queue: it keeps running or fighting. Such lines
     # are not ordered by the game: the server sends the next one when the previous has been said.
     overlay: bool | None = None
+    mood: Mood | None = None  # v9: the face while the line is said; none: the face stays as it is
 
 
 class ChatTextCmd(_Command):
-    """The npc's reply as it is generated (`text` so far), for the chat window; its lines (`say`
+    """The npc's reply as it is generated (`text` so far), shown as its subtitle; its lines (`say`
     with the same `reply`) then voice and animate it without showing the text again."""
 
     type: Literal["chat_text"] = "chat_text"
@@ -531,27 +573,34 @@ ChatStatus = Literal["recognizing", "thinking", "idle", "error", "notice"]  # no
 
 
 class ChatStatusCmd(_Command):
+    """A status line under the subtitles: `thinking` names the npc, the others are about the player's
+    voice (`npc` empty)."""
+
     type: Literal["chat_status"] = "chat_status"
-    npc: str
+    npc: str = ""
     status: ChatStatus
     detail: str | None = None
 
 
-class ChatEndCmd(_Command):
-    """The npc ends the conversation: the game closes the chat and releases the npc (unless it follows)."""
-
-    type: Literal["chat_end"] = "chat_end"
-    npc: str
-
-
 class TranscriptCmd(_Command):
-    """What the player says (push-to-talk). Partial (`final=false`) while speaking: text so far;
-    the final one is shown in the chat as the hero's line."""
+    """What the player says. Partial (`final=false`) while he speaks: text so far; the final one is his
+    line, shown as "Ты -> `to_name`: ..." (v7: whom it is said to, decided by the server; none: to nobody)."""
 
     type: Literal["transcript"] = "transcript"
-    npc: str
     text: str
     final: bool = True
+    to: str | None = None
+    to_name: str | None = None
+
+
+class HushCmd(_Command):
+    """The npc is interrupted (v7): its voice stops, its lines that have not started yet are dropped,
+    its reply's subtitle keeps only what it `said`."""
+
+    type: Literal["hush"] = "hush"
+    npc: str
+    reply: str | None = None
+    said: str | None = None
 
 
 class MemoryCmd(_Command):
@@ -562,17 +611,43 @@ class MemoryCmd(_Command):
     seq: int
 
 
-DebugCommand = Literal["save", "load", "spawn", "player_weapon", "teleport", "kill", "skip_important"]
+DebugCommand = Literal[
+    "save",
+    "load",
+    "spawn",
+    "player_weapon",
+    "player_goto",
+    "ptt",
+    "type",
+    "dialogs",
+    "choose",
+    "eval",
+    "check",
+    "kill",
+    "teleport",
+    "skip_important",
+    "time",
+]
 
 
 class DebugCmd(_Command):
     """Test helpers, the game must run with -devmode: save or load a slot (`save_slot_<slot>.sav`);
     spawn a creature (`instance`) `distance` cm in front of an npc (`near`, default the player); make the
-    player draw (`state: "melee"`) or put away (`"none"`) a weapon; put the player `distance` cm in front of
-    an npc (`teleport`, `near`), facing it; kill the living creature of an `instance` closest to `near`
-    (default the player) by the hand of `by` (`kill`, default the player: npc's around and the killer
-    perceive it like a deadly hit); make an npc's important dialogs count as told (`skip_important`, `near`:
-    it will not stop the player to talk)."""
+    player draw (`state: "melee"`) or put away (`"none"`) a weapon; move the player to a `waypoint` (or to
+    the nearest one at least `distance` cm from `near`, or one `distance` cm off the npc `to`); put the
+    player on the ground `distance` cm in front of an npc (`teleport`, `near`), facing it; `kill` an `npc`
+    (killed by no one), or the living creature of an `instance` closest to `near` (default the player) by
+    the hand of `by` (default the player, in melee: npc's around and the killer perceive it like a deadly
+    hit); make an npc's important dialogs count as told (`skip_important`, `near`: it will not stop the
+    player to talk); set the clock to `hour`:`minute` (`time`, the next day if that is earlier, like
+    sleeping); press the talk key as the player does (`ptt`, `state`: start, stop, cancel; with the hero's
+    own focus) or send a typed line (`type`, `text`).
+
+    The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
+    menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
+    `eval` — computes `expr` (story graph expression) with self = `npc`, other = the hero (`value`);
+    `check` — every npc of the world builds its dialog menu, each script condition is compared with its
+    lifted form (`value`: {npcs, computed, differ, differences})."""
 
     type: Literal["debug"] = "debug"
     req: str
@@ -583,3 +658,118 @@ class DebugCmd(_Command):
     by: str | None = None
     distance: int | None = None
     state: str | None = None
+    waypoint: str | None = None
+    to: str | None = None
+    hour: int | None = None
+    minute: int | None = None
+    text: str | None = None
+    npc: str | None = None
+    node: str | None = None
+    expr: list[Any] | None = None
+
+
+class GraphPatchCmd(_Command):
+    """Changes to the story graph (v8): which dialogs npc's offer. `replace` drops the earlier ones first.
+
+    Operations (`op`): `disable` / `enable` a dialog or a choice (`node`); `condition`: add `expr` to the
+    dialog's script condition (`expr` null drops the added ones); `add_node` (`node` = {id, npc,
+    description, nr, important, permanent, condition, lines, effects}); `remove_node`; `told`: the hero
+    has chosen that added dialog. With `req`, the game answers `result` (`error` lists rejected ops)."""
+
+    type: Literal["graph_patch"] = "graph_patch"
+    req: str | None = None
+    replace: bool = False
+    ops: list[dict[str, Any]]
+
+
+class StorySpawnCmd(_Command):
+    """Creatures for the director (v8): `count` of `instance` `distance` cm from `near` (default the
+    player), or at `waypoint` as the scripts insert them, under `tag`. The game answers `result` (`value`:
+    how many came)."""
+
+    type: Literal["story_spawn"] = "story_spawn"
+    req: str
+    instance: str
+    tag: str
+    count: int = 1
+    near: str | None = None
+    distance: int = 600
+    waypoint: str | None = None
+
+
+class StoryWatchCmd(_Command):
+    """Npc's whose distance to the living creatures of every tag the game reports (v8). Replaces the list of
+    the same `owner`; the lists of all owners are reported."""
+
+    type: Literal["story_watch"] = "story_watch"
+    npcs: list[str]
+    owner: str = ""
+
+
+class StoryEffectCmd(_Command):
+    """Effects on an npc (v8), through the scripts' own functions, the npc as self and the hero as other:
+    the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
+    constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`) — an npc held by
+    the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
+    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`."""
+
+    type: Literal["story_effect"] = "story_effect"
+    req: str
+    npc: str
+    effects: list[dict[str, Any]]
+
+
+class StoryStateCmd(_Command):
+    """What the director's rules read (v8, stage 5). `result.value`: {"vars": {name: int}, "npcs": {symbol:
+    {"state": "alive" | "dead" | "absent", "name", "distance": cm from `near`, alive or dead, if given}},
+    "knows": {dialog: bool} (the hero has heard it), "symbols": {name: "npc" | "item" | "info" | "var" |
+    "const" | "func" | "other"} (unknown names are left out), "items": {instance: name in the game},
+    "dialog": bool, "cutscene": bool, "day", "hour", "minute": the game time}."""
+
+    type: Literal["story_state"] = "story_state"
+    req: str
+    vars: list[str] = []
+    npcs: list[str] = []
+    near: str | None = None
+    knows: list[str] = []
+    symbols: list[str] = []
+    items: list[str] = []
+
+
+class StoryPeopleCmd(_Command):
+    """Every person of the world, for the rumors (v8): `result.value` [{npc, name, guild, routine: [{start,
+    end (minutes of the day), state, waypoint, pos?}]}] — alive, not the hero, no monsters."""
+
+    type: Literal["story_people"] = "story_people"
+    req: str
+
+
+class StoryEvalCmd(_Command):
+    """Story graph expressions computed on the live VM, self = `npc`, other = the hero (v8): what the
+    director's rules ask. `result.value`: one value per expression (int, string, instance symbol, or null
+    if it can't be computed)."""
+
+    type: Literal["story_eval"] = "story_eval"
+    req: str
+    npc: str
+    exprs: list[Any]
+
+
+class StoryTagCmd(_Command):
+    """Npc's already in the world (`npcs`, symbols) watched under `tag` like the director's creatures (v8):
+    their deaths and how near they are come in npc_died and story_world. `result.value`: how many were
+    found."""
+
+    type: Literal["story_tag"] = "story_tag"
+    req: str
+    tag: str
+    npcs: list[str]
+
+
+class StoryNearbyCmd(_Command):
+    """People within `radius` cm of an npc (v8); `result.value`: [{npc, name, distance, guild}]."""
+
+    type: Literal["story_nearby"] = "story_nearby"
+    req: str
+    npc: str
+    radius: int = 2000

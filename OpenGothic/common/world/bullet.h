@@ -7,6 +7,7 @@
 #include "game/damagecalculator.h"
 #include "graphics/meshobjects.h"
 #include "graphics/effect.h"
+#include "graphics/mesh/hitzones.h"
 
 class World;
 class Item;
@@ -29,6 +30,8 @@ class Bullet final : public DynamicWorld::BulletCallback {
     void     setPosition  (float x,float y,float z);
 
     void     setDirection (const Tempest::Vec3& dir);
+    auto     position()  const -> Tempest::Vec3;
+    auto     direction() const -> Tempest::Vec3;
     void     setTargetRange(float tgRange);
 
     void     setView      (MeshObjects::Mesh&&   m);
@@ -53,6 +56,13 @@ class Bullet final : public DynamicWorld::BulletCallback {
     float    hitChance() const { return hitCh; }
     void     setHitChance(float v) { hitCh=v; }
 
+    // an arrow aimed by hand (game/archery): no dice, it hits where it flies; draw: how far the string
+    // was drawn (the damage), the zone it hit
+    void     setPrecise(float draw) { precise=true; drawK=draw; }
+    bool     isPrecise() const override { return precise; }
+    float    draw() const { return drawK; }
+    auto     hitZone() const -> HitZones::Zone { return zone; }
+
     bool     isFinished() const;
     float    pathLength() const;
 
@@ -63,6 +73,7 @@ class Bullet final : public DynamicWorld::BulletCallback {
     void     onMove() override;
     void     onCollide(zenkit::MaterialGroup matId) override;
     bool     onCollide(Npc& other) override;
+    bool     onCollidePrecise(Npc& other, const Tempest::Vec3& from, const Tempest::Vec3& to) override;
 
   private:
     DynamicWorld::BulletBody* obj=nullptr;
@@ -72,6 +83,10 @@ class Bullet final : public DynamicWorld::BulletCallback {
     DamageCalculator::Damage  dmg        = {};
     float                     hitCh      = 1.f;
     float                     critCh     = 0.f;
+    bool                      precise    = false;
+    float                     drawK      = 1.f;
+    HitZones::Zone            zone       = HitZones::None;
+    bool                      landed     = false; // came down to the ground (a miss)
 
     MeshObjects::Mesh         view;
     Effect                    vfx;

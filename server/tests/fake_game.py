@@ -34,8 +34,28 @@ class FakeGame:
         self.heads: list[tuple[str, int]] = []  # memory heads the server reported
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
+        self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
+        self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect messages
+        self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
+        # what story_state answers: globals, npc's ({"state", "name", "distance" from `near`}), dialogs the
+        # hero heard, script names
+        self.vars: dict[str, int] = {}
+        self.npc_states: dict[str, dict[str, Any]] = {}
+        self.known: set[str] = set()
+        self.symbols: dict[str, str] = {}
+        self.in_dialog = False
+        self.day = 1
+        self.hour, self.minute = 8, 0
+        self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
+        self.item_names: dict[str, str] = {}
+        # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
+        self.hero_items: dict[str, int] = {}
+        self.instances: dict[str, str] = {}
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
         self.hp = 999
+        self.soft: list[tuple[str, str]] = []  # npc_act's: (npc, action)
+        self.hushed: list[dict[str, Any]] = []
+        self.heard: list[dict[str, Any]] = []  # final transcripts with whom they were said to
 
     async def perception(
         self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
@@ -43,6 +63,11 @@ class FakeGame:
         """What a controlled npc noticed (the game sends these for attached npc's only)."""
         extra = {"victim": victim} if victim else {}
         await self.send(type="perception", npc=npc, perc=perc, other=other, distance=distance, **extra)
+
+    async def roster(self, *people: dict[str, Any]) -> None:
+        """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
+        npcs = [{"guild": 0, "in_view": False, "activity": "routine", **p} for p in people]
+        await self.send(type="npc_roster", t=1000, hour=8, minute=0, full=True, npcs=npcs)
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -99,6 +124,15 @@ class FakeGame:
 
     async def handle(self, msg: dict[str, Any]) -> None:
         match msg["type"]:
+            case "detach":
+                self.attached.discard(msg["npc"])
+                await self.send(type="result", req=msg["req"], ok=True)
+                await self.send(type="detached", npc=msg["npc"], reason="server")
+            case "npc_act":
+                self.soft.append((msg["npc"], msg["action"]))
+                await self.send(type="npc_act_result", id=msg["id"], npc=msg["npc"], status="queued")
+            case "hush":
+                self.hushed.append(msg)
             case "attach":
                 if self.busy_attaches > 0:
                     self.busy_attaches -= 1
@@ -122,6 +156,91 @@ class FakeGame:
                 self.heads.append((msg["branch"], msg["seq"]))
             case "transcript":
                 (self.transcripts if msg.get("final", True) else self.partials).append(msg["text"])
+                if msg.get("final", True):
+                    self.heard.append(msg)
+            case "story_spawn":
+                self.story.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True, value=msg.get("count", 1))
+            case "story_watch":
+                self.story.append(msg)
+            case "story_effect":
+                self.story.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True)
+            case "story_nearby":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.people_near)
+            case "story_state":
+                value = {
+                    "vars": {v: self.vars[v] for v in msg.get("vars", []) if v in self.vars},
+                    "npcs": {
+                        n: {
+                            k: v
+                            for k, v in self.npc_states.get(n, {"state": "absent"}).items()
+                            if k != "distance" or msg.get("near")
+                        }
+                        for n in msg.get("npcs", [])
+                    },
+                    "knows": {k: k in self.known for k in msg.get("knows", [])},
+                    "symbols": {n: self.symbols[n] for n in msg.get("symbols", []) if n in self.symbols},
+                    "dialog": self.in_dialog,
+                    "cutscene": False,
+                    "items": {i: self.item_names[i] for i in msg.get("items", []) if i in self.item_names},
+                    "day": self.day,
+                    "hour": self.hour,
+                    "minute": self.minute,
+                }
+                await self.send(type="result", req=msg["req"], ok=True, value=value)
+            case "story_people":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.people)
+            case "story_eval":
+                self.story.append(msg)
+                values = [self.evaluate(e) for e in msg["exprs"]]
+                await self.send(type="result", req=msg["req"], ok=True, value=values)
+            case "story_tag":
+                self.story.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True, value=len(msg["npcs"]))
+            case "graph_patch":
+                self.graph.append(msg)
+                if msg.get("req"):
+                    bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
+                    errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
+                    await self.send(type="result", req=msg["req"], ok=not bad, **errors)
+
+    def evaluate(self, e: Any) -> Any:
+        """A story graph expression, as far as the fake world knows: ints, vars, comparisons, logic, the
+        hero's items and who is dead; fields read 0, anything else is null (can't be computed)."""
+        ops = {
+            "==": lambda a, b: a == b,
+            "!=": lambda a, b: a != b,
+            "<": lambda a, b: a < b,
+            ">": lambda a, b: a > b,
+            "<=": lambda a, b: a <= b,
+            ">=": lambda a, b: a >= b,
+        }
+        match e:
+            case ["int", v, *_]:
+                return v
+            case ["var", name]:
+                return self.vars.get(name, 0)
+            case ["field", *_]:
+                return 0
+            case ["!", a]:
+                v = self.evaluate(a)
+                return None if v is None else int(not v)
+            case ["&&", *args]:
+                vs = [self.evaluate(a) for a in args]
+                return None if None in vs else int(all(vs))
+            case ["||", *args]:
+                vs = [self.evaluate(a) for a in args]
+                return None if None in vs else int(any(vs))
+            case [op, a, b] if op in ops:
+                x, y = self.evaluate(a), self.evaluate(b)
+                return None if x is None or y is None else int(ops[op](x, y))
+            case ["call", "NPC_HASITEMS", ["inst", "OTHER" | "HERO"], ["sym", item]]:
+                return self.hero_items.get(item, 0)
+            case ["call", "NPC_ISDEAD", ["inst", name]]:
+                npc = self.instances.get(name, name)
+                return int(self.npc_states.get(npc, {}).get("state") == "dead")
+        return None
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
@@ -132,6 +251,9 @@ class FakeGame:
             status, detail = "rejected", "unknown animation"
         elif action == "go_to_waypoint" and args.get("waypoint") not in WAYPOINTS:
             status, detail = "rejected", "unknown waypoint"
+        elif action == "go_to_npc" and args.get("npc") in self.npc_states:
+            # it gets there: the target is as far from it as it was to stop
+            self.npc_states[args["npc"]]["distance"] = args.get("radius", 400)
         await self.send(
             type="action_result",
             id=msg["id"],

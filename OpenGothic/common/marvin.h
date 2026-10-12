@@ -68,6 +68,13 @@ class Marvin {
       C_ToggleRtsm,
       C_TogglePathtrace,
       C_ToggleFootIk,
+      C_ToggleGaze,
+      C_ToggleLipSync,
+      C_ToggleLean,
+      C_ToggleAniBlend,
+      C_ToggleAim,
+      C_ToggleManualAim,
+      C_ToggleFlinch,
       };
 
     struct Cmd {
