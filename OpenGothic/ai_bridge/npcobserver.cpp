@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 
 #include "game/gamescript.h"
 #include "world/aiqueue.h"
@@ -11,6 +12,7 @@
 
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "npcfind.h"
 #include "textcodec.h"
 
 namespace {
@@ -22,10 +24,14 @@ constexpr float    ViewRadius     = 3000;
 constexpr float    ViewHalfAngle  = 60;    // degrees around where the player faces
 constexpr float    NearEnter      = 500;   // cm: "player_near" when the player comes this close
 constexpr float    NearLeave      = 700;   // and forgets it once they are this far again
-constexpr uint64_t EventPeriodMs  = 1000;  // per npc and kind
+constexpr uint64_t EventPeriodMs  = 1000;  // per npc, kind and who did it
+constexpr uint64_t MonsterNearPeriodMs = 10000;
 constexpr uint64_t NearPeriodMs   = 30000;
 constexpr uint64_t ActMaxMs       = 30000; // npc_idle at the latest after this
 constexpr uint64_t ActGraceMs     = 200;   // let the npc take the action from its queue
+constexpr uint64_t StateMaxMs     = 120000; // fight/flee: npc_idle at the latest after this
+constexpr uint64_t StateStartMs   = 3000;
+constexpr uint64_t ActivityMaxMs  = 10*60*1000;
 
 std::string upper(std::string_view s) {
   std::string r(s);
@@ -73,26 +79,47 @@ std::string_view activity(Npc& npc, std::string_view owner) {
   return "routine";
   }
 
-// what a perception of `self` says about the player, if anything: kind and the npc it concerns
+// what a perception of `self` is about: the player's doings, or a threat from someone else
+// (a monster, an armed npc). `about` is the victim for attacks and murders.
 struct Seen final {
   std::string_view kind;
-  Npc*             about = nullptr;  // victim, for attacks and murders
+  Npc*             about    = nullptr;
+  uint64_t         periodMs = EventPeriodMs;
   };
 
 Seen classify(Npc& self, Npc& other, Npc* victim, PercType perc) {
-  const bool byPlayer = other.isPlayer();
+  if(other.isPlayer()) {
+    switch(perc) {
+      case PERC_DRAWWEAPON:      return Seen{"weapon_drawn"};
+      case PERC_ASSESSTHREAT:    return Seen{"threatened"};
+      case PERC_ASSESSTHEFT:     return Seen{"theft"};
+      case PERC_ASSESSENTERROOM: return Seen{"enter_room"};
+      case PERC_ASSESSGIVENITEM: return Seen{"item_given"};
+      case PERC_ASSESSMAGIC:
+      case PERC_ASSESSCASTER:    return Seen{"magic"};
+      case PERC_ASSESSDAMAGE:    return Seen{"attack",&self};
+      case PERC_ASSESSOTHERSDAMAGE:
+        return victim!=nullptr ? Seen{"attack",victim} : Seen{};
+      case PERC_ASSESSMURDER:
+        return victim!=nullptr ? Seen{"murder",victim} : Seen{};
+      default:
+        return Seen{};
+      }
+    }
+  if(other.isDead() || other.isDown())
+    return Seen{};
   switch(perc) {
-    case PERC_DRAWWEAPON:      return byPlayer ? Seen{"weapon_drawn"} : Seen{};
-    case PERC_ASSESSTHEFT:     return byPlayer ? Seen{"theft"}        : Seen{};
-    case PERC_ASSESSENTERROOM: return byPlayer ? Seen{"enter_room"}   : Seen{};
-    case PERC_ASSESSGIVENITEM: return byPlayer ? Seen{"item_given"}   : Seen{};
-    case PERC_ASSESSMAGIC:
-    case PERC_ASSESSCASTER:    return byPlayer ? Seen{"magic"}        : Seen{};
-    case PERC_ASSESSDAMAGE:    return byPlayer ? Seen{"attack",&self} : Seen{};
+    case PERC_ASSESSENEMY:
+      // an enemy the npc senses; repeats every perception tick, so reported seldom
+      return other.isMonster() ? Seen{"monster_near",nullptr,MonsterNearPeriodMs} : Seen{};
+    case PERC_ASSESSDAMAGE:
+      return Seen{other.isMonster() ? "monster_attack" : "npc_attack",&self};
     case PERC_ASSESSOTHERSDAMAGE:
-      return byPlayer && victim!=nullptr ? Seen{"attack",victim} : Seen{};
-    case PERC_ASSESSMURDER:
-      return byPlayer && victim!=nullptr ? Seen{"murder",victim} : Seen{};
+      if(victim==nullptr)
+        return Seen{};
+      if(victim->isPlayer())
+        return Seen{"hero_attacked",victim};
+      return other.isMonster() ? Seen{"monster_attack",victim} : Seen{};
     default:
       return Seen{};
     }
@@ -153,7 +180,7 @@ void NpcObserver::emitRoster(World& world) {
   j.endArray();
   emit(j.finish());
   for(auto& n:cameClose)
-    emitEvent(n.symbol,"player_near","PLAYER",double(n.dist),"");
+    emitEvent(n.symbol,"player_near","PLAYER",double(n.dist),"","");
   }
 
 bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol, float dist) {
@@ -169,7 +196,7 @@ bool NpcObserver::trackProximity(World& world, Npc& npc, std::string_view symbol
   }
 
 void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc) {
-  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM)
+  if(self.isPlayer() || self.isDead() || self.isDown() || self.guild()>=GIL_SEPERATOR_HUM || &other==&self)
     return;
   const Seen seen = classify(self,other,victim,perc);
   if(seen.kind.empty())
@@ -177,20 +204,21 @@ void NpcObserver::perception(World& world, Npc& self, Npc& other, Npc* victim, P
   Npc* pl = world.player();
   if(pl==nullptr)
     return;
-  const float dist = std::sqrt(self.qDistTo(*pl));
-  if(dist>EventRadius)
+  if(std::sqrt(self.qDistTo(*pl))>EventRadius)
     return;
   const auto symbol = npcId(world,self);
   if(symbol.empty() || !owner(symbol).empty())
     return;
-  if(throttled(symbol,seen.kind,world.tickCount(),EventPeriodMs))
+  const auto otherId = npcId(world,other);
+  if(otherId.empty() || throttled(symbol,std::string(seen.kind)+"/"+otherId,world.tickCount(),seen.periodMs))
     return;
   std::string detail;
   if(seen.about==&self)
     detail = "you"; else
   if(seen.about!=nullptr)
-    detail = TextCodec::toUtf8(seen.about->displayName());
-  emitEvent(symbol,seen.kind,"PLAYER",dist,detail);
+    detail = seen.about->isPlayer() ? "PLAYER" : TextCodec::toUtf8(seen.about->displayName());
+  const double dist = std::sqrt(double(self.qDistTo(other)));
+  emitEvent(symbol,seen.kind,otherId,dist,detail,other.isPlayer() ? "" : TextCodec::toUtf8(other.displayName()));
   }
 
 void NpcObserver::act(World& world, const rapidjson::Value& msg) {
@@ -217,12 +245,13 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   const auto& args   = (argsIt!=msg.MemberEnd() && argsIt->value.IsObject()) ? argsIt->value : empty;
   Npc*        target = pl;
   if(auto t = JsonRead::str(args,"npc"); !t.empty()) {
-    target = npcBySymbol(world,t);
-    if(target==nullptr) {
+    target = AiNpc::findNpc(world,t,npc);
+    if(target==nullptr || target==npc) {
       reply(id,symbol,"rejected","target not found");
       return;
       }
     }
+  ScriptFn state;
 
   if(action=="say_svm") {
     std::string svm = upper(JsonRead::str(args,"svm"));
@@ -260,6 +289,49 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   else if(action=="turn_away") {
     npc->aiPush(AiQueue::aiTurnAway(target));
     }
+  else if(action=="fight" || action=="flee") {
+    // the game's own behaviour, the way B_Attack / B_Flee start it; the routine resumes afterwards
+    state = AiNpc::scriptState(world,action=="fight" ? "ZS_ATTACK" : "ZS_FLEE");
+    if(!state.isValid() || target->isDead()) {
+      reply(id,symbol,"rejected",state.isValid() ? "target is dead" : "the scripts have no such state");
+      return;
+      }
+    npc->setTarget(target);
+    npc->aiPush(AiQueue::aiStartState(state,0,target,nullptr,""));
+    }
+  else if(action=="draw_weapon") {
+    const auto kind = JsonRead::str(args,"kind");
+    npc->aiPush(kind=="ranged" ? AiQueue::aiReadyRangedWeapon()
+                               : (kind=="melee" ? AiQueue::aiReadyMeleeWeapon() : AiQueue::aiDrawWeapon()));
+    }
+  else if(action=="remove_weapon") {
+    npc->aiPush(AiQueue::aiRemoveWeapon());
+    }
+  else if(action=="start_activity") {
+    // what a routine entry does (TA_Sit_Bench: ZS_SIT_BENCH at a waypoint), now, for `minutes` of game
+    // time; afterwards the routine goes on by itself
+    const auto name = upper(JsonRead::str(args,"state"));
+    const auto wp   = world.findPoint(JsonRead::str(args,"waypoint"),false);
+    state = name.starts_with("ZS_") ? AiNpc::scriptState(world,name) : ScriptFn();
+    if(!state.isValid() || wp==nullptr) {
+      reply(id,symbol,"rejected",!state.isValid() ? "unknown state: " + name : "unknown waypoint");
+      return;
+      }
+    auto until = world.time();
+    until.addMilis(uint64_t(std::clamp<int64_t>(JsonRead::integer(args,"minutes",60),1,24*60))*60*1000);
+    npc->startState(state,wp->name,until,false);
+    }
+  else if(action=="set_routine") {
+    // Npc_ExchangeRoutine: another set of routine entries (Rtn_<name>_<id>), effective at once
+    const auto   name = upper(JsonRead::str(args,"name"));
+    const size_t fn   = world.script().findSymbolIndex("RTN_" + name + "_" + std::to_string(npc->handle().id));
+    if(name.empty() || fn==size_t(-1)) {
+      reply(id,symbol,"rejected","unknown routine: " + name);
+      return;
+      }
+    npc->excRoutine(fn);
+    npc->resumeAiRoutine();
+    }
   else {
     reply(id,symbol,"rejected","unknown action: " + std::string(action));
     return;
@@ -268,8 +340,51 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   // a newer action for the same npc replaces the tracking of the older one
   running.erase(std::remove_if(running.begin(),running.end(),[&](const Running& r){ return r.symbol==symbol; }),
                 running.end());
-  running.push_back({std::string(id),symbol,world.script().findSymbolIndex(symbol),world.tickCount()});
+  const uint64_t maxMs = action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs);
+  running.push_back({std::string(id),symbol,world.script().findSymbolIndex(symbol),world.tickCount(),
+                     state,false,maxMs});
   reply(id,symbol,"queued","");
+  }
+
+void NpcObserver::routine(World& world, const rapidjson::Value& msg) {
+  const auto symbol = upper(JsonRead::str(msg,"npc"));
+  Npc*       npc    = npcBySymbol(world,symbol);
+  JsonWriter j("routine");
+  j.str("req",JsonRead::str(msg,"req")).str("npc",symbol);
+  if(npc==nullptr || npc->isPlayer()) {
+    emit(j.str("error","npc not found").finish());
+    return;
+    }
+  auto stateName = [&](ScriptFn fn) -> std::string {
+    auto sym = fn.isValid() ? world.script().findSymbol(fn.ptr) : nullptr;
+    return sym!=nullptr ? sym->name() : "";
+    };
+  auto hhmm = [](gtime t) {
+    char buf[8];
+    std::snprintf(buf,sizeof(buf),"%02d:%02d",int(t.hour()),int(t.minute()));
+    return std::string(buf);
+    };
+  j.str("current",stateName(npc->currentState())).array("entries");
+  npc->forEachRoutine([&](const Npc::RoutineInfo& r) {
+    j.object()
+       .str("start",hhmm(r.start))
+       .str("end",hhmm(r.end))
+       .str("state",stateName(r.state))
+       .str("waypoint",r.point)
+     .end();
+    });
+  j.endArray().array("routines");
+  // the npc's routine variants: Rtn_<name>_<id> in the scripts
+  const std::string suffix = "_" + std::to_string(npc->handle().id);
+  for(size_t i=0; i<world.script().symbolsCount(); ++i) {
+    auto sym = world.script().findSymbol(i);
+    if(sym==nullptr)
+      continue;
+    const std::string& n = sym->name();
+    if(n.size()>4+suffix.size() && n.starts_with("RTN_") && n.ends_with(suffix))
+      j.item(n.substr(4,n.size()-4-suffix.size()));
+    }
+  emit(j.endArray().finish());
   }
 
 void NpcObserver::checkRunning(World& world, uint64_t now) {
@@ -277,8 +392,16 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
     auto& r   = running[i];
     Npc*  npc = world.findNpcByInstance(r.instance);
     const bool gone = npc==nullptr || npc->isDead() || npc->isDown() || !owner(r.symbol).empty();
-    const bool done = !gone && now>r.start+ActGraceMs && npc->isAiQueueEmpty();
-    const bool late = now>r.start+ActMaxMs;
+    bool       done = false;
+    if(!gone && r.state.isValid()) {
+      // a script state: done once the npc has entered it and left it again
+      const bool in = npc->isInState(r.state);
+      r.entered = r.entered || in;
+      done      = (r.entered && !in) || (!r.entered && now>r.start+StateStartMs);
+      } else {
+      done = !gone && now>r.start+ActGraceMs && npc->isAiQueueEmpty();
+      }
+    const bool late = now>r.start+r.maxMs;
     if(!gone && !done && !late) {
       ++i;
       continue;
@@ -293,9 +416,11 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
   }
 
 void NpcObserver::emitEvent(std::string_view npc, std::string_view kind, std::string_view other,
-                            double distance, std::string_view detail) {
+                            double distance, std::string_view detail, std::string_view otherName) {
   JsonWriter j("npc_event");
   j.str("npc",npc).str("kind",kind).str("other",other).num("distance",distance);
+  if(!otherName.empty())
+    j.str("other_name",otherName);
   if(!detail.empty())
     j.str("detail",detail);
   emit(j.finish());

@@ -42,6 +42,7 @@ def _object(properties: dict | None = None) -> dict:
 
 SET_INTENT = "set_intent"
 GIVE_ITEM = "give_item"
+RECALL = "recall"
 
 TOOLS = [
     Tool(
@@ -59,9 +60,10 @@ TOOLS = [
                 },
                 "attitude": {"type": "string", "enum": list(ATTITUDES), "description": "отношение к герою"},
                 "agenda": {
-                    "type": "string",
-                    "description": "по-английски, до 15 слов: чего ты хочешь от героя или что задумал; "
-                    "пусто — ничего",
+                    "type": ["string", "null"],
+                    "description": "по-английски, до 15 слов: чего ты в долгую хочешь от героя или что "
+                    "задумал; null — оставить как есть (мгновенные события его не меняют); "
+                    "пустая строка — ничего",
                 },
             }
         ),
@@ -79,6 +81,13 @@ TOOLS = [
                 "count": {"type": "integer", "description": "сколько штук, не меньше 1"},
             }
         ),
+    ),
+    Tool(
+        RECALL,
+        "Вспомнить подробности прежних встреч с героем, которых нет в сводке твоей памяти: что он "
+        "рассказывал, о чём просил, что ты обещал. Перед вызовом скажи только «Хм…» или «Дай вспомнить…», "
+        "без вопросов; ответишь, когда вспомнишь.",
+        _object({"query": {"type": "string", "description": "о чём вспомнить, ключевые слова"}}),
     ),
     Tool(
         END_CONVERSATION,

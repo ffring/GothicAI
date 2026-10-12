@@ -4,18 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .brain import NpcPlanner
+from .brain import Decider, NpcPlanner, Outcome
+from .brain.reflex import Reflexes
+from .budget import Budget
 from .dialogue import DialogueManager
 from .game import GameError, GameLink
+from .incidents import IncidentDesk
 from .llm import ToolCall
-from .llm.fake import FakeBackend
+from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
 from .persona import PersonaProvider
 from .protocol import (
     ActionResult,
+    Detached,
     FollowEnded,
     GameMessage,
     LineStarted,
@@ -24,10 +29,13 @@ from .protocol import (
     NpcEvent,
     NpcIdle,
     NpcRoster,
+    Perception,
     Saved,
+    SayCmd,
     Session,
     Snapshot,
 )
+from .trace import TraceWriter
 from .voice import VoiceInput
 
 log = logging.getLogger(__name__)
@@ -373,4 +381,277 @@ async def m4_planner_bridge(
         results["planner"] = f"{'done' if ok else 'failed'} ({snap})"
     for name, outcome in results.items():
         log.info("%-20s %s", name, outcome)
+    return results
+
+
+class FixedDecider:
+    """A stand-in for the behavioral model: the same choice for every question that offers it."""
+
+    def __init__(self, choices: dict[str, str]) -> None:
+        self.choices = choices
+
+    async def decide(self, rid, lane, priority, deadline_ms, state, questions) -> Outcome:  # noqa: ANN001
+        answers = {}
+        for name, q in questions.items():
+            pick = self.choices.get(name)
+            pick = pick if pick in q["criteria"] else next(iter(q["criteria"]))
+            answers[name] = {
+                "type": "choice",
+                "choice": pick,
+                "probabilities": {pick: 0.9},
+                "confidence": 0.9,
+            }
+        return Outcome("answers", answers, 0.0, 1.0)
+
+    async def cancel(self, rid: str) -> None:
+        pass
+
+
+async def m5_turn_loop(
+    link: GameLink,
+    npc: str = "NONE_100_XARDAS",
+    decider: Decider | None = None,
+    trace: TraceWriter | None = None,
+) -> dict[str, str]:
+    """M5a on the game: the turn loop with checks, intents moving the body, and the two loops on an
+    incident (the body reacts before the words). The conversational model is scripted; the behavioral
+    model is the live service when given, a fixed stand-in otherwise. The game cannot hit an npc on
+    command, so the incident's perception is injected on the server side."""
+    await link.wait_world()
+    await attach_when_free(link, npc)
+    snap = await link.snapshot(npc, fresh=True)
+    results: dict[str, str] = {}
+    potion = "ITPO_HEALTH_01"
+    results["debug_add_item"] = (await link.act(npc, "debug_add_item", item=potion, count=2)).status
+
+    def count_of(s: Snapshot) -> int:
+        return next((i.count for i in s.npc.inventory if i.item == potion and not i.equipped), 0)
+
+    intent = {"target": None, "attitude": "friendly", "agenda": "wants the hero to visit Lord Hagen"}
+    llm = FakeBackend(
+        script=[
+            FakeStep(
+                "Держи свиток огненного шара.",
+                [ToolCall("give_item", {"item": "ITSC_NOT_THERE", "count": 1})],
+            ),
+            FakeStep("Хотя нет, такого свитка у меня нет."),
+            FakeStep("Вот, возьми зелье.", [ToolCall("give_item", {"item": potion, "count": 1})]),
+            FakeStep("Хорошо, пойдём вместе.", [ToolCall("set_intent", {"goal": "follow_hero", **intent})]),
+            FakeStep(
+                "Довольно, у меня свои дела.", [ToolCall("set_intent", {"goal": "keep_routine", **intent})]
+            ),
+            FakeStep("Проклятая тварь! Ко мне, герой!"),
+        ],
+        delay=0,
+    )
+    budget = Budget()
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), greet=False, trace=trace, budget=budget)
+    reflexes = Reflexes(decider or FixedDecider({"react": "run_to_hero", "gesture": "nod"}))
+    desk = IncidentDesk(link, dialogue, reflexes, budget, trace)
+    desk.attached.add(npc)  # it was attached before the desk was listening
+    conv = dialogue.open(npc, snap.npc.name)
+
+    async def following(expected: bool) -> bool:
+        for _ in range(20):
+            if (await link.snapshot(npc, fresh=True)).npc.following == expected:
+                return True
+            await asyncio.sleep(0.5)
+        return False
+
+    try:
+        # 1. a commitment the npc cannot keep is rejected before the game and corrected in the same turn
+        before = count_of(await link.snapshot(npc, fresh=True))
+        await dialogue.say_as_player(npc, "Дай мне свиток огненного шара")
+        said = conv.history[-1].content if conv.history else ""
+        unchanged = count_of(await link.snapshot(npc, fresh=True)) == before
+        ok = len(llm.calls) == 2 and "Хотя нет" in said and unchanged
+        results["rejected_give"] = f"{'done' if ok else 'failed'} ({len(llm.calls)} calls: {said})"
+
+        # 2. a commitment it can keep: the body gives after the line
+        await dialogue.say_as_player(npc, "Тогда дай зелье")
+        for _ in range(60):
+            if any(m.role == "developer" and "отдал" in m.content for m in conv.history):
+                break
+            await asyncio.sleep(0.5)
+        after = count_of(await link.snapshot(npc, fresh=True))
+        results["give"] = f"{'done' if after == before - 1 else 'failed'} ({potion}: {before} -> {after})"
+
+        # 3. intents move the body: follow, then back to its own business
+        await dialogue.say_as_player(npc, "Пойдём со мной")
+        results["intent_follow"] = "done" if await following(True) else "failed (not following)"
+        await dialogue.say_as_player(npc, "Можешь остаться")
+        results["intent_routine"] = "done" if await following(False) else "failed (still following)"
+
+        # 4. an incident: the body reacts at once, the words come after
+        calls = len(llm.calls)
+        reacted_at: float | None = None
+        started = time.monotonic()
+        link._dispatch(
+            Perception(type="perception", npc=npc, perc="ASSESSDAMAGE", other="WOLF", distance=300.0)
+        )
+        for _ in range(100):
+            if reacted_at is None and any(r.question == "react" for r in desk.reactions):
+                reacted_at = time.monotonic() - started
+            if len(llm.calls) > calls and conv.reply is not None and conv.reply.done():
+                break
+            await asyncio.sleep(0.1)
+        words_at = time.monotonic() - started
+        reaction = next((r for r in reversed(desk.reactions) if r.question == "react"), None)
+        spoke = conv.history[-1].content if conv.history and conv.history[-1].role == "assistant" else ""
+        results["incident_reflex"] = (
+            f"{'done' if reaction else 'failed'} "
+            f"({reaction.choice if reaction else '-'}, applied={reaction.applied if reaction else '-'}, "
+            f"{(reacted_at or 0) * 1000:.0f} ms)"
+        )
+        results["incident_words"] = (
+            f"{'done' if spoke and (reacted_at or 99) < words_at else 'failed'} ({spoke})"
+        )
+    finally:
+        await link.act(npc, "return_to_routine")
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
+    return results
+
+
+async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, str]:
+    """M5b on the game: threats from others reach the server, the player's drawn weapon is perceived,
+    and the new body actions work for free and attached npc's. A wolf is spawned next to the npc."""
+    await link.wait_world()
+    events: list[NpcEvent] = []
+    link.listeners.append(lambda m: events.append(m) if isinstance(m, NpcEvent) else None)
+    results: dict[str, str] = {}
+
+    async def event(kinds: set[str], timeout: float) -> NpcEvent | None:
+        for _ in range(int(timeout / 0.2)):
+            hit = next((e for e in events if e.kind in kinds), None)
+            if hit is not None:
+                return hit
+            await asyncio.sleep(0.2)
+        return None
+
+    # 0. a free npc speaks a line, queued like its own (it waits for what the npc is busy with, e.g.
+    # walking back to its routine spot: the engine does not take speech from the queue while walking)
+    started_lines: list[LineStarted] = []
+    link.listeners.append(lambda m: started_lines.append(m) if isinstance(m, LineStarted) else None)
+    t0 = time.monotonic()
+    await link.send(SayCmd(npc=npc, line="AIB_900001", text="Опять ты здесь.", overlay=None))
+    for _ in range(150):
+        if any(m.line == "AIB_900001" for m in started_lines):
+            break
+        await asyncio.sleep(0.1)
+    queued = any(m.line == "AIB_900001" for m in started_lines)
+    results["free_say"] = (
+        f"{'done' if queued else 'failed'} (line started after {time.monotonic() - t0:.1f} s)"
+    )
+
+    # 1. the player draws a weapon next to the npc: the npc perceives it (it is free, scripts run)
+    await attach_when_free(link, npc)
+    await link.act(npc, "go_to_npc", npc="PLAYER", radius=300)
+    await link.act(npc, "return_to_routine")
+    events.clear()
+    await link.debug("player_weapon", state="melee")
+    e = await event({"weapon_drawn"}, 5)
+    results["weapon_drawn"] = f"done ({e.npc}, {e.distance:.0f} cm)" if e else "failed (no weapon_drawn)"
+    await link.debug("player_weapon", state="none")
+
+    # 2. a wolf next to the npc: the npc senses it or sees it attack
+    events.clear()
+    await link.debug("spawn", instance="WOLF", near=npc, distance=400)
+    e = await event({"monster_near", "monster_attack", "hero_attacked"}, 20)
+    results["monster_event"] = (
+        f"done ({e.npc}: {e.kind} {e.other} '{e.other_name}' {e.distance or 0:.0f} cm {e.detail or ''})"
+        if e
+        else "failed (no threat event)"
+    )
+
+    # 3. a free npc fights it with the game's own combat; npc_idle once it is over
+    idles: list[NpcIdle] = []
+    link.listeners.append(lambda m: idles.append(m) if isinstance(m, NpcIdle) else None)
+    started = time.monotonic()
+    act = await link.npc_act(npc, "fight", npc="WOLF")
+    for _ in range(300):
+        if any(i.act == act for i in idles):
+            break
+        await asyncio.sleep(0.2)
+    idle = next((i for i in idles if i.act == act), None)
+    took = time.monotonic() - started
+    ok = idle is not None and idle.reason == "done"
+    results["free_fight"] = (
+        f"{'done' if ok else 'failed'} ({idle.reason if idle else 'no npc_idle'}, {took:.1f} s)"
+    )
+
+    # 4. an attached npc: weapons, its own voiced line, and fight/flee handed to the scripts and back
+    detached: list[str] = []
+    link.listeners.append(lambda m: detached.append(m.reason) if isinstance(m, Detached) else None)
+    await attach_when_free(link, npc)
+
+    def wolves(sn: Snapshot) -> str:
+        return ", ".join(
+            f"{o.name} {o.distance / 100:.0f} m{' dead' if o.dead else ''}" for o in sn.nearby_npcs
+        )
+
+    results["after_free_fight"] = f"done (around: {wolves(await link.snapshot(npc, fresh=True)) or 'nobody'})"
+    for name, action, args in (
+        ("attached_draw", "draw_weapon", {}),
+        ("attached_remove", "remove_weapon", {}),
+        ("attached_svm", "say_svm", {"svm": "NOTNOW"}),
+    ):
+        res = await link.act(npc, action, **args)  # type: ignore[arg-type]
+        results[name] = f"{res.status} {res.detail or ''}".strip()
+    await link.debug("spawn", instance="WOLF", near=npc, distance=500)
+    started = time.monotonic()
+    res = await link.act(npc, "fight", npc="WOLF", timeout=90)
+    took = time.monotonic() - started
+    snap = await link.snapshot(npc, fresh=True)
+    results["attached_fight"] = (
+        f"{'done' if res.status == 'done' and not detached else 'failed'} "
+        f"({res.status} {res.detail or ''} in {took:.1f} s, still attached: {not detached}, "
+        f"hp {snap.npc.hp}/{snap.npc.hp_max}, around: {wolves(snap)})"
+    )
+    await link.debug("spawn", instance="WOLF", near=npc, distance=800)
+    res = await link.act(npc, "flee", npc="WOLF", timeout_ms=4000)
+    results["attached_flee"] = (
+        f"{'done' if res.status in ('done', 'timeout') and not detached else 'failed'} "
+        f"({res.status} {res.detail or ''}, still attached: {not detached})"
+    )
+    await link.act(npc, "return_to_routine")
+
+    # 5. a free npc speaks: queued like its own lines, or on the move (overlay) without stopping
+    # right after return_to_routine the npc walks back to its spot: queued speech would wait for that,
+    # a line on the move starts at once
+    long_line = "Слушай внимательно, у нас мало времени, и я не стану повторять дважды: драконы уже здесь."
+    t0 = time.monotonic()
+    await link.send(SayCmd(npc=npc, line="AIB_900002", text=long_line, overlay=True))
+    for _ in range(50):
+        if any(m.line == "AIB_900002" for m in started_lines):
+            break
+        await asyncio.sleep(0.05)
+    took = time.monotonic() - t0
+    said = any(m.line == "AIB_900002" for m in started_lines)
+    results["free_say_on_the_move"] = (
+        f"{'done' if said and took < 1.0 else 'failed'} (started after {took:.2f} s while the npc walks back)"
+    )
+
+    # 6. the routine: read it, put the npc to an activity for a while, then back to a routine variant
+    info = await link.routine(npc)
+    entries = "; ".join(f"{e.start}-{e.end} {e.state} {e.waypoint}" for e in info.entries)
+    results["routine"] = (
+        f"{'done' if info.entries else 'failed'} (now {info.current}, variants {info.routines}, {entries})"
+    )
+    if info.entries:
+        spot = info.entries[0].waypoint
+        act = await link.npc_act(npc, "start_activity", state="ZS_SIT_CAMPFIRE", waypoint=spot, minutes=30)
+        await asyncio.sleep(1.0)
+        now = (await link.routine(npc)).current
+        results["start_activity"] = (
+            f"{'done' if now == 'ZS_SIT_CAMPFIRE' else 'failed'} (now {now} at {spot})"
+        )
+        variant = "START" if "START" in info.routines or not info.routines else info.routines[0]
+        await link.npc_act(npc, "set_routine", name=variant)
+        await asyncio.sleep(1.0)
+        now = (await link.routine(npc)).current
+        back = now == info.entries[0].state or now != "ZS_SIT_CAMPFIRE"
+        results["set_routine"] = f"{'done' if back else 'failed'} ({variant}: now {now})"
+    for name, outcome in results.items():
+        log.info("%-24s %s", name, outcome)
     return results

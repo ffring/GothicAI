@@ -7,6 +7,9 @@
 #       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
 #   m4: what the npc planner needs from the bridge: npc roster, soft actions (npc_act) and their end
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
+#   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
+#       intents moving the body, and an incident: the body reacts before the words (behavioral model:
+#       DECIDER_URL, or a fixed stand-in)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
@@ -51,7 +54,7 @@ if [ "$SCENARIO" = "m3" ]; then
 fi
 
 (cd "$ROOT/server" && exec uv run gothic-ai serve --port "$PORT" --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console \
-  --memory-db "$LOG_DIR/memory.sqlite3" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
+  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
 # `|| true`: with set -e a failing kill of an already finished process would change the exit code
@@ -86,7 +89,7 @@ if kill -0 "$SRV" 2>/dev/null; then
 fi
 wait "$SRV" && rc=0 || rc=$?
 
-grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|ERROR" "$LOG_DIR/server.log" || true
+grep -E "scenario|attached|detached|replied|note|calls|memory|remembers|saved|voice|timing|roster|turn_to|say_svm|play_ani|look_at|unknown_npc|planner|decision|incident|reflex|rejected_give|give|intent_|ERROR" "$LOG_DIR/server.log" || true
 grep -E "^\[ai\]" "$LOG_DIR/game.log" || true
 echo "logs: $LOG_DIR"
 exit "$rc"

@@ -27,6 +27,7 @@ class LineLibrary final {
       std::vector<uint8_t> wav;  // empty: subtitles only
       std::shared_ptr<VoiceBuffer> voice;  // streamed audio (instead of `wav`)
       std::string reply;  // the reply this line belongs to, already shown in the chat
+      bool        overlay = false;  // said on the move: not through the npc's AI queue
       };
 
     static constexpr uint32_t VoicePauseMs = 250;  // breath between voiced lines

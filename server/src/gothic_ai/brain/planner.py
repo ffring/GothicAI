@@ -161,8 +161,11 @@ class NpcPlanner:
         *,
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
+        agenda_of: Callable[[str], str | None] | None = None,
     ) -> None:
         self.decider = decider
+        # what an npc wants from the hero, as its last conversation left it (memory); read when it appears
+        self.agenda_of = agenda_of
         self.applier = applier
         self.builder = builder or SituationBuilder()
         self.cfg = config or PlannerConfig()
@@ -189,7 +192,13 @@ class NpcPlanner:
                 self.on_roster(msg.npcs, now, full=msg.full)
             case NpcEvent():
                 self.on_event(
-                    msg.npc, msg.kind, now, other=msg.other, distance_cm=msg.distance, detail=msg.detail
+                    msg.npc,
+                    msg.kind,
+                    now,
+                    other=msg.other,
+                    distance_cm=msg.distance,
+                    detail=msg.detail,
+                    other_name=msg.other_name,
                 )
             case NpcIdle():
                 self.on_idle(msg.npc, now)
@@ -197,7 +206,10 @@ class NpcPlanner:
                 self.on_player_text(msg.npc, msg.text, now)
             case ChatOpen() | Attached():
                 self._set_activity(msg.npc, "dialog" if isinstance(msg, ChatOpen) else "attached")
-            case ChatClose() | Detached():
+            case ChatClose():
+                self._after_chat(msg.npc, now)
+                self._set_activity(msg.npc, "routine")
+            case Detached():
                 self._set_activity(msg.npc, "routine")
             case Loading():
                 self.reset()
@@ -216,6 +228,8 @@ class NpcPlanner:
             if rec is None:
                 rec = self.npcs[npc] = NpcRecord(npc, e.name, e.guild)
                 rec.tier = Tier.OFF  # placed below; a new npc gets a random phase
+                if self.agenda_of is not None:
+                    rec.agenda = self.agenda_of(npc)
             rec.distance_cm, rec.in_view, rec.guild = e.distance, e.in_view, e.guild
             if rec.activity not in ("dialog", "attached") or e.activity != "routine":
                 rec.activity = e.activity
@@ -233,12 +247,13 @@ class NpcPlanner:
         other: str = "PLAYER",
         distance_cm: float | None = None,
         detail: str | None = None,
+        other_name: str | None = None,
     ) -> None:
         rec = self.npcs.get(npc.upper())
         if rec is None or rec.tier is Tier.OFF:
             return
         self.stats.events += 1
-        stim = Stimulus(kind, now, other, distance_cm, detail)
+        stim = Stimulus(kind, now, other, distance_cm, detail, other_name)
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
             rec.last_interaction = now
@@ -349,6 +364,14 @@ class NpcPlanner:
     @staticmethod
     def _has_reason(rec: NpcRecord, now: float) -> bool:
         return rec.agenda is not None or any(s.alive(now) for s in rec.stimuli)
+
+    def _after_chat(self, npc: str, now: float) -> None:
+        """The hero just talked with the npc: it should not walk up to him or greet him again at once."""
+        rec = self.npcs.get(npc.upper())
+        if rec is not None:
+            rec.last_interaction = now
+            for choice in ("approach_talk", "greet"):
+                rec.last_applied[choice] = now
 
     def _set_activity(self, npc: str, activity: str) -> None:
         rec = self.npcs.get(npc.upper())

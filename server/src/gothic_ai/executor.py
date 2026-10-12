@@ -25,6 +25,16 @@ GOALS = {
     "keep_routine": "заниматься своими делами",
     "change_plans": "изменить свои планы",
 }
+GOALS_EN = {
+    "none": "nothing in particular",
+    "follow_hero": "to follow the hero",
+    "flee": "to get away from danger",
+    "seek_help": "to find help",
+    "fight": "to fight",
+    "guard_hero": "to protect the hero",
+    "keep_routine": "to go about your own business",
+    "change_plans": "to change your plans",
+}
 ATTITUDES = {
     "hostile": "враждебное",
     "wary": "настороженное",
@@ -56,6 +66,15 @@ class Intent:
         fields = {k: data[k] for k in ("goal", "target", "attitude", "agenda") if k in data}
         return cls(**fields)
 
+    def describe_en(self) -> str:
+        """English, for the behavioral model's state."""
+        target = "the hero" if self.target == "PLAYER" else self.target
+        parts = [f"You want {GOALS_EN.get(self.goal, self.goal)}{f' ({target})' if target else ''}."]
+        parts.append(f"Your attitude toward the hero is {self.attitude}.")
+        if self.agenda:
+            parts.append(f"What you want from the hero: {self.agenda}")
+        return " ".join(parts)
+
     def describe(self) -> str:
         """Russian, for the conversational model's situation block."""
         goal = GOALS.get(self.goal, self.goal)
@@ -82,13 +101,15 @@ def targets(snap: Snapshot | None) -> dict[str, str]:
     return out
 
 
-def parse_intent(args: dict[str, Any]) -> Intent:
+def parse_intent(args: dict[str, Any], current: Intent | None = None) -> Intent:
+    """The model's set_intent arguments; an agenda of null keeps the current one."""
     target = args.get("target")
+    agenda = args.get("agenda")
     return Intent(
         goal=str(args.get("goal") or "none"),
         target=str(target).strip() or None if target else None,
         attitude=str(args.get("attitude") or "neutral"),
-        agenda=str(args.get("agenda") or "").strip()[:AGENDA_MAX],
+        agenda=(current.agenda if current else "") if agenda is None else str(agenda).strip()[:AGENDA_MAX],
     )
 
 
