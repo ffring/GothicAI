@@ -40,6 +40,7 @@
 #include "npccontroller.h"
 #include "npcfind.h"
 #include "npcobserver.h"
+#include "npcview.h"
 #include "textcodec.h"
 #include "voicebuffer.h"
 #include "testbench.h"
@@ -48,7 +49,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 9;
+constexpr int         ProtocolVersion = 11;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -226,6 +227,7 @@ struct AiBridge::Impl final {
   NpcController        ctrl{[this](std::string&& s){ send(std::move(s)); }};
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
                                 [this](std::string_view symbol){ return npcOwner(symbol); }};
+  NpcView              view{[this](std::string&& s){ send(std::move(s)); }};
 
   Session              session;
   bool                 saving = false;  // a save is in progress: the same world comes back
@@ -428,6 +430,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
     ctrl.tick(*world);
     if(connected) {
       observer.tick(*world);
+      view.tick(*world);
       story.tick(*world);
       }
     tickVoices(*world);
@@ -654,6 +657,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="npc_act") {
     observer.act(*world,doc);
     }
+  else if(type=="npc_view") {
+    auto it = doc.FindMember("npcs");
+    if(it==doc.MemberEnd())
+      sendResult(req,false,"no npcs"); else
+      sendResult(req,true,"",view.views(*world,it->value));
+    }
   else if(type=="routine") {
     observer.routine(*world,doc);
     }
@@ -697,7 +706,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     return;
     }
   const auto cmd = JsonRead::str(msg,"cmd");
-  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
+  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
@@ -899,6 +908,22 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // a line typed into the input line and sent
     sendResult(req,true,"");
     submitChat(TextCodec::fromUtf8(JsonRead::str(msg,"text")));
+    return;
+    }
+  if(cmd=="player_equip") {
+    // the player gets an item and puts it on (armor of another guild, for the npc's eyes)
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    if(!pl->inventory().itemCount(id))
+      pl->addItem(id,1);
+    pl->useItem(id);
+    sendResult(req,true,"");
     return;
     }
   // player_weapon: the player draws ("melee") or puts away ("none") a weapon
