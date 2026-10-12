@@ -51,37 +51,5 @@
         "en": "Leaning into turns"
       }
     }
-  ],
-  "youtube": {
-    "ru": {
-      "title": "Готика II: до и после — ноги, взгляд, наклон | OpenGothic",
-      "description": "Одни и те же сцены дважды: сверху OpenGothic как есть, снизу с нашей анимацией. Ноги на склоне, волк, крестьянин замечает героя, наклон на бегу.\n\nОбе половины — один и тот же сценарий на одной сборке движка, сыгранный дважды: анимация выключена и включена. Ничего не дорисовано, картинка чуть светлее для экрана телефона.\n\nПоиграть пока нельзя: проект запускается из исходников на macOS и требует своей копии Gothic II: Ночь Ворона.\nДневник: https://kaifaty.github.io/GothicAI/   Код: https://github.com/kaifaty/GothicAI\nGothic II: Night of the Raven by Piranha Bytes / THQ Nordic, on the OpenGothic engine.\n\n#Gothic2 #Готика #OpenGothic #gamedev #animation",
-      "tags": [
-        "Gothic 2",
-        "Готика 2",
-        "Gothic II",
-        "OpenGothic",
-        "Piranha Bytes",
-        "animation",
-        "gamedev",
-        "IK"
-      ],
-      "synthetic": false
-    },
-    "en": {
-      "title": "Gothic II: before and after — feet, eyes, lean | OpenGothic",
-      "description": "The same scenes twice: on top OpenGothic as it is, below with our animation. Feet on a slope, a wolf, a farmer noticing the hero, leaning into turns.\n\nBoth halves are the same scripted run on the same engine build, played twice: our animation off and on. Nothing is painted in; the picture is a little brighter for phone screens.\n\nNot playable yet: it runs from source on macOS and needs your own copy of Gothic II: Night of the Raven.\nDevlog: https://kaifaty.github.io/GothicAI/   Code: https://github.com/kaifaty/GothicAI\nGothic II: Night of the Raven by Piranha Bytes / THQ Nordic, on the OpenGothic engine.\n\n#Gothic2 #OpenGothic #gamedev #animation",
-      "tags": [
-        "Gothic 2",
-        "Готика 2",
-        "Gothic II",
-        "OpenGothic",
-        "Piranha Bytes",
-        "animation",
-        "gamedev",
-        "IK"
-      ],
-      "synthetic": false
-    }
-  }
+  ]
 }

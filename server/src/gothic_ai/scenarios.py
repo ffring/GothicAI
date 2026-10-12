@@ -2363,6 +2363,25 @@ async def see_perception(
     perception._views.clear()
     pushed = await _until(lambda: perception.view(farmer) is not None, 5)
     check("pushed", pushed, "; ".join(perception.english(farmer)))
+
+    # 6. places by name (step 5): at Xardas's tower, on Lobart's and Onar's farms, in the city
+    if perception.places is None:
+        check("places", False, "no book of places (gamedata/places.json)")
+        return _logged(results)
+    said = []
+    for who in (npc, farmer, "BAU_900_ONAR", "VLK_412_HARAD"):
+        try:
+            await link.debug("teleport", near=who, distance=300)
+        except GameError as err:
+            said.append(f"{who}: {err}")
+            continue
+        await asyncio.sleep(1)
+        view = await perception.fresh(who)
+        place = perception.place(view) if view is not None else None
+        sight = perception.sight(who)
+        said.append(f"{who}: {sight.place if sight else '(no view)'}" + ("" if place else " [no name]"))
+    named = [line for line in said if "[no name]" not in line and "(no view)" not in line and ": " in line]
+    check("places", len(named) == 4, " | ".join(said))
     return _logged(results)
 
 

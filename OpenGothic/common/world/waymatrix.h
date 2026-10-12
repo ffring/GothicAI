@@ -32,6 +32,8 @@ class WayMatrix final {
     const WayPoint* findWayPoint(std::string_view name) const;
     const WayPoint* findPoint(std::string_view name, bool inexact) const;
     void            marchPoints(DbgPainter& p) const;
+    // every waypoint and freepoint of the world
+    void            forEachPoint(const std::function<void(const WayPoint&)>& f) const;
 
     WayPath         wayTo(const WayPoint** begin, size_t beginSz, const Tempest::Vec3 exactBegin, const WayPoint& end) const;
 

@@ -185,6 +185,12 @@ class Npc final {
     void       startSpeech(const Tempest::Sound& voice);
     void       startSpeech(std::shared_ptr<LipSync::Track> voice);
     void       setTalkMood(std::string_view mood);  // of the line it starts to say: its gestures follow it
+    // the hero speaks to it (his voice) for the next `ms`; words of him came; it thinks of an answer for
+    // the next `ms` (0: it answers now)
+    void       listenTo(uint64_t ms);
+    void       stopListening();
+    void       heardWords();
+    void       thinkOfAnswer(uint64_t ms);
     void       stopSpeech();
     bool       stopItemStateAnim();
     bool       hasAnim(std::string_view scheme) const;
@@ -300,11 +306,12 @@ class Npc final {
     void      setManualAim(bool on, const Tempest::Vec3& point = {}, const Tempest::Vec2& sway = {},
                            const Tempest::Vec2& tremor = {});
     bool      hasManualAim() const { return manualAim; }
-    // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), as smooth as
-    // whoever drives it makes it (PlayerControl)
-    void      setAimStance(float crouch, float peek) { stanceCrouch = crouch; stancePeek = peek; }
+    // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), the bow canted
+    // for a quick shot 0..1, as smooth as whoever drives it makes it (PlayerControl)
+    void      setAimStance(float crouch, float peek, float cant = 0) { stanceCrouch = crouch; stancePeek = peek; stanceCant = cant; }
     float     aimCrouch() const { return stanceCrouch; }
     float     aimPeek()   const { return stancePeek; }
+    float     aimCant()   const { return stanceCant; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
     void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
     // how far the animation of that name has played, 0..1; -1: it does not play
@@ -704,6 +711,7 @@ class Npc final {
     Tempest::Vec2                  manualTremor = {};
     float                          stanceCrouch = 0;
     float                          stancePeek   = 0;
+    float                          stanceCant   = 0;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

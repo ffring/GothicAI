@@ -891,6 +891,10 @@ const WayPoint* World::findWayPoint(std::string_view name) const {
   return wmatrix->findWayPoint(name);
   }
 
+void World::forEachWayPoint(const std::function<void(const WayPoint&)>& f) const {
+  wmatrix->forEachPoint(f);
+  }
+
 const WayPoint* World::findWayPoint(const Tempest::Vec3& pos) const {
   return wmatrix->findWayPoint(pos,[](const WayPoint&){ return true; });
   }

@@ -406,6 +406,8 @@ void MainWindow::onSettings() {
   }
 
 void MainWindow::mouseWheelEvent(MouseEvent &event) {
+  if(player.onMouseWheel(event.delta))
+    return;
   if(auto camera = Gothic::inst().camera())
     camera->changeZoom(event.delta);
   }

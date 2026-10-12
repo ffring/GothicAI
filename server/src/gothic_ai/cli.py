@@ -15,7 +15,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import npc_tools, scenarios
+from . import npc_tools, places, scenarios
 from .amends import Amends
 from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
@@ -416,6 +416,8 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
     graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
+    place_book = places.PlaceBook.load()
+    log.info("places: %s", f"{len(place_book.places)} named" if place_book else "no book, waypoints only")
     log.info(
         "story graph: %s; director %s, npc knowledge %s",
         "none" if graph is None else f"{len(graph.nodes)} nodes, {len(graph.quests)} quests",
@@ -467,6 +469,7 @@ async def serve(args: argparse.Namespace) -> int:
             link,
             social=lambda: state.rumors.social if state.rumors is not None else None,
             knows_hero=knows_hero,
+            places=place_book,
         )
         state.dialogue.extensions.append(perception)
         state.dialogue.sight = perception.sight
@@ -648,6 +651,15 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario see: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "places":
+                # not a check: the world's points and people for the book of places (places.py)
+                await link.wait_world()
+                where = Path(args.trace_dir).parent if args.trace_dir else Path(".")
+                data = await places.dump(link, where / "world_points.json")
+                log.info(
+                    "places: %d points, %d people -> %s", len(data["points"]), len(data["people"]), where
+                )
+                exit_code = 0
             elif args.scenario == "lie":
                 dialogue, talk, quests = state.dialogue, state.talk, state.quests
                 assert dialogue is not None and talk is not None and quests is not None
@@ -872,6 +884,29 @@ async def llm_test(args: argparse.Namespace) -> int:
     else:
         print(f"\n\n[{llm.name}] first token {first or 0:.2f}s, total {total:.2f}s", file=sys.stderr)
     return 0
+
+
+async def places_cmd(args: argparse.Namespace) -> int:
+    """The book of places from a dump of the world (SCENARIO=places): grouped, named by the model, written."""
+    data = json.loads(await asyncio.to_thread(Path(args.dump).read_text, encoding="utf-8"))
+    groups = places.group(data["points"], data.get("people", []))
+    if args.area:
+        groups = [g for g in groups if g.area in {a.upper() for a in args.area}]
+    print(f"{len(data['points'])} points -> {len(groups)} places", flush=True)
+    if args.dry_run:
+        for g in sorted(groups, key=lambda g: g.id):
+            print(f"  {g.id:40s} {len(g.points):4d} points  {'; '.join(g.residents[:3])}")
+        return 0
+    llm = _backend(args)
+    try:
+        names = await places.label(groups, llm)
+    finally:
+        await llm.aclose()
+    book = places.book(groups, names, data.get("world"))
+    text = json.dumps(book, ensure_ascii=False, indent=1)
+    await asyncio.to_thread(Path(args.out).write_text, text, encoding="utf-8")
+    print(f"{len(book['places'])} of {len(groups)} places named -> {args.out}")
+    return 0 if len(book["places"]) == len(groups) else 1
 
 
 async def replay(args: argparse.Namespace) -> int:
@@ -1130,6 +1165,7 @@ def main() -> None:
             "m5e",
             "m6",
             "see",
+            "places",
             "graph",
             "lie",
             "repair",
@@ -1211,6 +1247,15 @@ def main() -> None:
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     _add_llm_args(p)
 
+    p = sub.add_parser(
+        "places", help="the book of places: group a world dump (SCENARIO=places) and name them"
+    )
+    p.add_argument("dump", help="world_points.json from SCENARIO=places")
+    p.add_argument("--out", default=str(places.BOOK), help="the book to write")
+    p.add_argument("--area", action="append", help="only these parts of the world (FARM1, CITY...)")
+    p.add_argument("--dry-run", action="store_true", help="only show the groups, no model calls")
+    _add_llm_args(p)
+
     p = sub.add_parser("login", help="sign in to a provider")
     p.add_argument("provider", choices=["chatgpt"])
 
@@ -1259,6 +1304,8 @@ def main() -> None:
                 code = asyncio.run(llm_test(args))
             case "replay":
                 code = asyncio.run(replay(args))
+            case "places":
+                code = asyncio.run(places_cmd(args))
             case "login":
                 code = asyncio.run(login_chatgpt())
             case "logout":

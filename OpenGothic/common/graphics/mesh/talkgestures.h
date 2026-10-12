@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -15,6 +16,10 @@
 //
 // The head goes with the voice too (Gaze turns it): a small nod down on a syllable clearly louder
 // than the ones before it (a stressed word), a slow sway aside while the voice lasts.
+//
+// And while the other one speaks (the hero's voice): it listens, the head sways a little, now and then
+// it nods as the words come. Then it thinks of its answer (the AI server's model takes a second or
+// three): the head tilts, the eyes go aside and up from the other one, and come back as it answers.
 class TalkGestures final {
   public:
     enum class Mood : uint8_t { Neutral, Friendly, Angry, Hostile, Afraid, Pain };
@@ -43,6 +48,12 @@ class TalkGestures final {
       float roll  = 0;
       };
 
+    // where the eyes go while it thinks: this far aside (+ to the left) and up from the other one,
+    // radians, as much as `weight` (0..1, it comes and goes)
+    struct Aside final {
+      float yaw = 0, pitch = 0, weight = 0;
+      };
+
     // State for the test bench
     struct Probe final {
       bool     valid    = false;
@@ -55,7 +66,11 @@ class TalkGestures final {
       uint32_t cuts     = 0;      // started over one that still played
       uint32_t stops    = 0;      // stopped before their end (the voice is over)
       uint32_t nods     = 0;      // nods on stressed syllables
+      uint32_t listenNods = 0;    // nods as the other one speaks
+      bool     listening = false;
+      bool     thinking  = false;
       Head     head;
+      Aside    aside;
       };
 
     static bool    isEnabled();
@@ -69,14 +84,27 @@ class TalkGestures final {
     // Gothic II ones is known, others count as lively
     void           setGestures(std::vector<uint32_t> durationMs, bool gothic2);
     void           setMood(Mood m) { mood = m; }
-    bool           isIdle() const { return !engaged && current==0 && !headMoves; }
+    bool           isIdle(uint64_t now) const {
+      return !engaged && current==0 && !headMoves && now>=listenUntil && now>=thinkUntil && aside.weight<=0.f;
+      }
     void           lineStart(uint64_t now);  // a line starts: the gestures go with it
     void           stop();                   // cut off: the other one speaks, a weapon is drawn...
     Decision       update(const Input& in);
 
     // per frame: whether it speaks, whether a syllable starts now and how loud it gets (0..1)
-    void           updateHead(uint64_t dt, bool speaking, bool syllable, float loud);
+    void           updateHead(uint64_t now, uint64_t dt, bool speaking, bool syllable, float loud);
     const Head&    head() const { return headNow; }
+
+    // the other one speaks to it until then (renewed while the voice goes on)
+    void           listen(uint64_t until) { listenUntil = std::max(listenUntil,until); }
+    void           stopListening(uint64_t now) { listenUntil = std::min(listenUntil,now); }
+    void           heard(uint64_t now);  // words of the other one came: now and then a nod
+    // it thinks of an answer until then; 0: no more (its answer starts)
+    void           think(uint64_t now, uint64_t until);
+    bool           isListening(uint64_t now) const { return now<listenUntil; }
+    bool           isThinking (uint64_t now) const { return now<thinkUntil; }
+
+    const Aside&   eyesAside() const { return aside; }
 
     // the original way (switched off): a random gesture started with a line
     void           started(uint8_t gesture, bool overPlaying);
@@ -117,4 +145,16 @@ class TalkGestures final {
     float                 sylMean    = 0;  // how loud the syllables were so far
     uint64_t              sinceNod   = 0;
     uint32_t              nods       = 0;
+    uint64_t              lastNow     = 0;
+    uint64_t              listenUntil = 0;
+    uint64_t              thinkUntil  = 0;
+    uint64_t              thinkFrom   = 0;
+    uint64_t              lastHeardNod = 0;
+    uint64_t              secondNod  = 0;  // a double nod: the second one then
+    float                 wantNod    = 0;  // a nod asked for by heard(), its strength
+    float                 nodHz      = 2.5f;  // of the nod now: listening nods are slower
+    float                 tiltSign   = 1;
+    float                 tilt       = 0;  // radians, the head tilted while it thinks
+    Aside                 aside;
+    uint32_t              listenNods = 0;
   };

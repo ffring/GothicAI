@@ -1050,6 +1050,23 @@ void Npc::setTalkMood(std::string_view mood) {
   visual.setTalkMood(mood);
   }
 
+void Npc::listenTo(uint64_t ms) {
+  visual.listen(owner.tickCount()+ms);
+  }
+
+void Npc::stopListening() {
+  visual.stopListening(owner.tickCount());
+  }
+
+void Npc::heardWords() {
+  visual.heard(owner.tickCount());
+  }
+
+void Npc::thinkOfAnswer(uint64_t ms) {
+  const uint64_t now = owner.tickCount();
+  visual.think(now,ms==0 ? 0 : now+ms);
+  }
+
 void Npc::stopSpeech() {
   visual.stopSpeech();
   }

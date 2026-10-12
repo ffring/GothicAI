@@ -381,3 +381,10 @@ WayPath WayMatrix::wayTo(const WayPoint** begin, size_t beginSz, const Tempest::
   ret.reverse();
   return ret;
   }
+
+void WayMatrix::forEachPoint(const std::function<void(const WayPoint&)>& f) const {
+  for(auto& w:wayPoints)
+    f(w);
+  for(auto& w:freePoints)
+    f(w);
+  }

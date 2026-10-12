@@ -46,6 +46,10 @@ constexpr float NeedHeavy      = 100.f;
 constexpr float CbowSpeed      = 1.3f;  // a bolt flies faster than an arrow of a bow as heavy
 constexpr float CReloadSlow    = 0.75f; // the crossbow's reload (cocking): strength half of what it needs...
 constexpr float CReloadFast    = 1.4f;  // ...and twice
+constexpr float CantDraw       = 0.6f;  // the bow canted (a quick shot): drawn that much faster...
+constexpr float CantSettle     = 0.6f;  // ...settles after a turn that much faster...
+constexpr float CantSway       = 1.3f;  // ...but sways more (no anchor, no sight over the arrow)...
+constexpr float CantCone       = 0.3f;  // ...and the release throws it off by that many degrees more
 constexpr float HeadDamage     = 2.f;
 constexpr float LimbDamage     = 0.6f;
 
@@ -105,6 +109,18 @@ Archery::Stats Archery::stats(Npc& npc, const Item* w) {
   s.cone      = lerp(ConeNovice,ConeMaster,s.skill)*Deg;
   s.reload    = s.crossbow ? lerp(CReloadSlow,CReloadFast,(s.strength-0.5f)/1.5f) : lerp(ReloadSlow,ReloadFast,dexK);
   return s;
+  }
+
+Archery::Stats Archery::canted(const Stats& s, float k) {
+  Stats c = s;
+  k = std::clamp(k,0.f,1.f);
+  if(s.crossbow || k<=0.f)
+    return c;
+  c.drawTime *= lerp(1.f,CantDraw,k);
+  c.settle   *= lerp(1.f,CantSettle,k);
+  c.sway     *= lerp(1.f,CantSway,k);
+  c.cone     += CantCone*Deg*k;
+  return c;
   }
 
 float Archery::speedAt(const Stats& s, float draw) {

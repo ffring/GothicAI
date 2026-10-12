@@ -141,6 +141,11 @@ class MdlVisual final {
     void                           setTalkMood    (std::string_view mood) { gestures.setMood(TalkGestures::moodOf(mood)); }
     void                           updateGestures (Npc& npc, uint64_t dt);
     void                           updateBlink    (Npc& npc, uint64_t dt);
+    // the other one speaks to it, it thinks of an answer (TalkGestures)
+    void                           listen         (uint64_t until) { gestures.listen(until); }
+    void                           stopListening  (uint64_t now)   { gestures.stopListening(now); }
+    void                           heard          (uint64_t now)   { gestures.heard(now); }
+    void                           think          (uint64_t now, uint64_t until) { gestures.think(now,until); }
     void                           stopAnim       (Npc& npc, std::string_view anim);
     bool                           stopItemStateAnim(Npc &npc);
     void                           stopWalkAnim   (Npc &npc);
@@ -163,6 +168,7 @@ class MdlVisual final {
     static constexpr const char* BowHeld = "S_READY";
     static constexpr const char* BowLoose = "S_RELAX";
     static constexpr float       CrouchSlow = 0.4f;  // crouched the upper body follows the aim that much slower
+    static constexpr float       CantQuick  = 0.5f;  // the bow canted (a quick shot) that much faster
     static constexpr float       PeekClear  = 15.f;  // cm the head keeps from a wall leaning out round a corner
     static constexpr float       HeadOverShoulder = 20.f; // cm
     static constexpr uint64_t    LooseLate = 1000; // ms: the animation's release after the hand let go is the same

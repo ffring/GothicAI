@@ -11,6 +11,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <memory>
@@ -36,6 +37,7 @@
 #include "storyworld.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "world/waypoint.h"
 #include "linelibrary.h"
 #include "npccontroller.h"
 #include "npcfind.h"
@@ -118,6 +120,13 @@ std::vector<uint8_t> fromBase64(std::string_view in) {
     }
   return out;
   }
+
+// listening to the hero's voice, thinking of an answer (tickListener)
+constexpr float    ListenRange  = 800;    // cm: who listens to the hero's voice is this near
+constexpr float    ListenFront  = 0.34f;  // ...and in front of him (cos of 70 degrees), unless he looks at it
+constexpr uint64_t ListenAfter  = 4000;   // ms after the key: it listens on until the final transcript, at most
+constexpr uint64_t ThinkMax     = 12000;  // ms: no answer by then, it stops thinking
+constexpr uint64_t ThinkVoice   = 2500;   // ms after the text is done (idle): the voice may come that late
 
 // any npc of the world by script symbol (attached or not)
 Npc* npcBySymbol(World& world, std::string_view symbol) {
@@ -212,6 +221,10 @@ struct AiBridge::Impl final {
   void onOriginalLine(std::string_view id);
   // `audio`: the test bench says this recording for the hero (the server takes it instead of the microphone)
   void sendPtt(std::string_view type, std::string_view audio = {});
+  // the npc the hero speaks to listens while he holds the talk key, nods as his words come; the npc
+  // the server's model answers for thinks until its answer starts
+  Npc* pickListener(World& world);
+  void tickListener(World& world);
 
   void send(std::string&& text);
   void sendResult(std::string_view req, bool ok, std::string_view err, std::string_view value = {});
@@ -252,6 +265,12 @@ struct AiBridge::Impl final {
   std::unordered_map<std::string,std::string> lastLine;  // npc -> line it speaks (or spoke) last
   std::unordered_map<std::string,std::string> originalLines;  // original line sent with `say` -> npc, until it starts
   std::unique_ptr<ChatOverlay> chat;
+  std::string                  listener;       // the npc listening to the hero's voice
+  std::string                  lastAddressee;  // whom the server said the hero spoke to last
+  std::string                  thinker;        // the npc thinking of an answer
+  bool                         pttHeld     = false;
+  uint64_t                     listenUntil = 0;  // after the key: until the final transcript, at most
+  uint64_t                     thinkUntil  = 0;  // no answer by then: it stops thinking
   // dialogs of the story graph: the lines of the director's dialogs are runtime lines too
   uint64_t                     graphLines = 0;
   DialogGraph                  graph{[this](std::string&& s){ send(std::move(s)); },
@@ -441,6 +460,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
       }
     tickVoices(*world);
     tickDeal(*world);
+    tickListener(*world);
     }
   ensureChat();
   chat->tick();
@@ -722,7 +742,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
     return;
     }
   const auto cmd = JsonRead::str(msg,"cmd");
-  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
+  if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline") {
     // world changes that are safe within the tick
@@ -944,6 +964,19 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // a line typed into the input line and sent
     sendResult(req,true,"");
     submitChat(TextCodec::fromUtf8(JsonRead::str(msg,"text")));
+    return;
+    }
+  if(cmd=="waypoints") {
+    // every waypoint and freepoint of the world: for the server's book of place names
+    std::string out = "[";
+    char        num[96];
+    world->forEachWayPoint([&](const WayPoint& w) {
+      const auto pos = w.position();
+      std::snprintf(num,sizeof(num),"\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"fp\":%s}",
+                    double(pos.x),double(pos.y),double(pos.z),w.isFreePoint() ? "true" : "false");
+      out += (out.size()>1 ? ",{\"name\":\"" : "{\"name\":\"") + w.name + num;
+      });
+    sendResult(req,true,"",out + "]");
     return;
     }
   if(cmd=="player_equip") {
@@ -1267,9 +1300,25 @@ void AiBridge::Impl::tickVoices(World& world) {
   }
 
 void AiBridge::Impl::onChatStatus(World& world, const rapidjson::Value& msg) {
+  const auto status = JsonRead::str(msg,"status");
+  // the npc thinks of its answer until it starts (the eyes aside, tickListener)
+  if(status=="thinking") {
+    if(!thinker.empty() && thinker!=JsonRead::str(msg,"npc"))
+      if(Npc* old = npcBySymbol(world,thinker))
+        old->thinkOfAnswer(0);
+    thinker    = std::string(JsonRead::str(msg,"npc"));
+    thinkUntil = world.tickCount() + ThinkMax;
+    Log::i("[ai] ",thinker," thinks of an answer");
+    if(listener==thinker)
+      listenUntil = 0;  // it heard him out
+    }
+  else if(status=="idle")
+    thinkUntil = std::min(thinkUntil, world.tickCount() + ThinkVoice);
+  else if(status=="error")
+    thinkUntil = 0;
+
   if(chat==nullptr)
     return;
-  const auto status = JsonRead::str(msg,"status");
   if(status=="thinking") {
     Npc* npc = npcBySymbol(world,JsonRead::str(msg,"npc"));
     if(npc!=nullptr)
@@ -1292,8 +1341,14 @@ void AiBridge::Impl::onTranscript(const rapidjson::Value& msg) {
   const auto text = TextCodec::fromUtf8(JsonRead::str(msg,"text"));
   if(!JsonRead::boolean(msg,"final",true)) {
     chat->setPartial(text);
+    // his words came: the one listening may nod
+    if(World* world = Gothic::inst().world(); world!=nullptr && !listener.empty())
+      if(Npc* npc = npcBySymbol(*world,listener))
+        npc->heardWords();
     return;
     }
+  if(const auto to = JsonRead::str(msg,"to"); !to.empty())
+    lastAddressee = std::string(to);
   chat->setPartial("");
   chat->setStatus("");
   if(text.empty())
@@ -1450,6 +1505,64 @@ void AiBridge::Impl::submitChat(const std::string& text) {
   send(j.finish());
   }
 
+Npc* AiBridge::Impl::pickListener(World& world) {
+  Npc* pl = world.player();
+  if(pl==nullptr)
+    return nullptr;
+  auto near = [&](Npc* n) {
+    return n!=nullptr && n!=pl && !n->isDown() && n->isHuman() && (n->position()-pl->position()).length()<=ListenRange;
+    };
+  // the one he looks at, the one he spoke to last, else the nearest in front of him
+  if(Npc* f = pl->target(); near(f))
+    return f;
+  if(Npc* n = lastAddressee.empty() ? nullptr : npcBySymbol(world,lastAddressee); near(n))
+    return n;
+  const float a    = pl->rotationRad();
+  const Vec3  dir  = {std::cos(a), 0, std::sin(a)};
+  Npc*        best = nullptr;
+  float       dist = ListenRange;
+  world.detectNpc(pl->position(),ListenRange,[&](Npc& n) {
+    if(!near(&n))
+      return;
+    Vec3        d = n.position()-pl->position();
+    const float l = std::sqrt(d.x*d.x + d.z*d.z);
+    if(l<1.f || (d.x*dir.x + d.z*dir.z)/l<ListenFront || l>=dist)
+      return;
+    best = &n;
+    dist = l;
+    });
+  return best;
+  }
+
+void AiBridge::Impl::tickListener(World& world) {
+  const uint64_t now = world.tickCount();
+  Npc*           pl  = world.player();
+  if(!listener.empty()) {
+    Npc* npc = npcBySymbol(world,listener);
+    if(npc!=nullptr && pl!=nullptr && (pttHeld || now<listenUntil)) {
+      npc->listenTo(500);
+      // the two look at each other while he speaks
+      npc->setTalkPartner(pl,1000);
+      pl->setTalkPartner(npc,1000);
+      } else {
+      if(npc!=nullptr)
+        npc->stopListening();
+      listener.clear();
+      }
+    }
+  if(!thinker.empty()) {
+    Npc* npc = npcBySymbol(world,thinker);
+    if(npc!=nullptr && pl!=nullptr && now<thinkUntil) {
+      npc->thinkOfAnswer(500);
+      npc->setTalkPartner(pl,1000);  // the eyes go aside from him, he stays the one it talks to
+      } else {
+      if(npc!=nullptr)
+        npc->thinkOfAnswer(0);
+      thinker.clear();
+      }
+    }
+  }
+
 void AiBridge::Impl::sendPtt(std::string_view type, std::string_view audio) {
   JsonWriter j(type);
   if(World* world = Gothic::inst().world())
@@ -1458,10 +1571,34 @@ void AiBridge::Impl::sendPtt(std::string_view type, std::string_view audio) {
   if(!audio.empty())
     j.str("audio",audio);
   send(j.finish());
+
+  World* world = Gothic::inst().world();
+  if(world==nullptr)
+    return;
+  if(type=="ptt_start") {
+    pttHeld = true;
+    Npc* npc = pickListener(*world);
+    if(npc!=nullptr && npcSymbol(*world,*npc)!=listener) {
+      if(Npc* old = listener.empty() ? nullptr : npcBySymbol(*world,listener))
+        old->stopListening();
+      listener = npcSymbol(*world,*npc);
+      Log::i("[ai] ",listener," listens to the hero");
+      }
+    }
+  else if(type=="ptt_stop") {
+    pttHeld     = false;
+    listenUntil = world->tickCount() + ListenAfter;
+    }
+  else {
+    pttHeld     = false;
+    listenUntil = 0;
+    }
   }
 
 void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
   const bool voiced = !line.wav.empty() || line.voice!=nullptr;
+  if(line.npc==thinker)
+    thinkUntil = 0;  // it answers: the eyes come back (tickListener)
   send(JsonWriter("line_started").str("npc",line.npc).str("line",line.id).boolean("voiced",voiced).finish());
   lastLine[line.npc] = line.id;
   if(line.voice!=nullptr)

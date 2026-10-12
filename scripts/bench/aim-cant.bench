@@ -1,0 +1,114 @@
+# The bow canted for a quick shot (docs/manual-aim.md, stage 3): the mouse wheel down while the bow is up
+# cants it, up straightens it. The bow turns round the arrow, its top limb toward the drawing hand, the
+# fingers on the string with it; drawn faster, settles faster after a turn, looser. Close up from the side,
+# in front, behind and from the game's camera; aimed up and down; then the hits upright and canted at a
+# farmer 8 and 25 m off (bd_cant, m_cant; the hits in the log)
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+open 5000
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 200
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1000 0 0
+aimat BAU_904_BAUER body
+stats str 60 dex 60 bow 60
+tap bow
+wait 1500
+cam follow 220 150 90             # the left side: the arrow's line across the frame
+cam look 145
+wait 300
+
+rec upright_side
+volley 1 600
+stop
+
+# canted while the bow is up: it turns in, the next shots canted
+rec cant_side
+press action
+wait 800
+wheel -1
+wait 1200
+release action
+wait 1500
+volley 1 600
+stop
+
+cam follow 170 150 -50            # in front, on the right: the drawing hand
+wait 300
+rec cant_front
+volley 1 600
+stop
+
+cam front 230 150                 # as the target sees it: canted, then upright
+wait 300
+rec cant_target
+volley 1 600
+wheel 1
+wait 800
+volley 1 600
+wheel -1
+wait 800
+stop
+
+cam follow 200 120 200            # behind: the bow's lean
+wait 300
+rec cant_back
+volley 1 600
+wheel 1
+wait 800
+volley 1 600
+stop
+
+cam game
+wait 300
+wheel -1
+rec cant_game
+volley 2 600
+stop
+
+# up and down: the bow canted round the arrow as the body bends
+cam follow 220 150 90
+wait 300
+rec cant_up
+aimat ahead 1000 700
+volley 1 600
+stop
+rec cant_down
+aimat ahead 1000 -600
+volley 1 600
+stop
+
+# the hits: upright and canted, close (the head) and far (the body); from behind
+cam follow 300 80 165
+cam look 150
+pin BAU_904_BAUER 800 0 0
+aimat BAU_904_BAUER head
+wheel 1
+wait 600
+rec upright8_head
+volley 6 300
+stop
+wheel -1
+wait 600
+rec cant8_head
+volley 6 300
+stop
+pin BAU_904_BAUER 2500 0 0
+aimat BAU_904_BAUER body
+wheel 1
+wait 600
+rec upright25_body
+volley 6 300
+stop
+wheel -1
+wait 600
+rec cant25_body
+volley 6 300
+stop

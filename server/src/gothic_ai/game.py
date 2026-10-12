@@ -264,6 +264,11 @@ class GameLink:
         cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
         await self._request(cmd, timeout)
 
+    async def waypoints(self, timeout: float = 10.0) -> list[dict[str, Any]]:
+        """Every waypoint and freepoint of the world: name, position, freepoint or not (game in -devmode)."""
+        res = await self._request(DebugCmd(req=self._next_id("r"), cmd="waypoints"), timeout)
+        return list(res.value or [])
+
     async def npc_view(self, npcs: list[str], timeout: float = 3.0) -> list[NpcView]:
         """What these npc's perceive now (see NpcViewCmd)."""
         res = await self._request(NpcViewCmd(req=self._next_id("v"), npcs=[n.upper() for n in npcs]), timeout)

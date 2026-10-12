@@ -23,7 +23,10 @@
 #       recall gives a topic in full (model scripted with LLM=fake)
 #   see: what npc's perceive (npc_view, v11): Xardas sees the hero in front of him and not through the tower's
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
-#       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second
+#       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
+#       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
+#       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a

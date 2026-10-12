@@ -709,6 +709,7 @@ DebugCommand = Literal[
     "deal_accept",
     "deal_decline",
     "player_equip",
+    "waypoints",
 ]
 
 
@@ -728,7 +729,8 @@ class DebugCmd(_Command):
     null without a window), `deal_accept` — Y as the player
     presses it (`value`: "sent", or why not: "none", "waiting", "missing", "changed", "blocked"),
     `deal_decline` — N (`value`: "declined", "none", "blocked"); give the player an `item` and put it on
-    (`player_equip`, v11).
+    (`player_equip`, v11); every waypoint and freepoint of the world (`waypoints`, `value`: [{name, x, y,
+    z, fp}]).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
