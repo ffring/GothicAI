@@ -58,6 +58,7 @@ class MdlVisual final {
     // the arrow (the bolt) has left: not shown in the hand till the next one is placed (the slot is kept:
     // the shot leaves from there)
     void                           dropAmmo();
+    bool                           hasAmmoShown() const { return !ammunition.view.isEmpty(); }
     void                           setSlotItem   (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           setStateItem  (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           clearSlotItem (std::string_view bone);
@@ -105,6 +106,7 @@ class MdlVisual final {
     bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string                    hitZonesDump() const;
     void                           hitZonesPosed(std::vector<HitZones::Posed>& out) const;
+    void                           fitHitZones();
     // the bow in the hand, in the arrow's frame (the test bench)
     std::string                    bowDump() const;
     // cm the bow's string goes from rest to drawn as held in the aim (its morph), 0: not known

@@ -1130,7 +1130,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   const auto    st = Archery::stats(pl,pl.currentRangedWeapon());
   // the next arrow as fast as the hands are (dexterity); set when it changes (the test bench may set its own)
   if(st.reload!=reloadTempo) {
-    pl.setAnimSpeed(Archery::BowReload,st.reload);
+    pl.setAnimSpeed(Archery::reloadAnim(st.crossbow),st.reload);
     reloadTempo = st.reload;
     }
   Archer::Input in;
@@ -1139,7 +1139,8 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   in.draw   = lmb;
   in.breath = ctrl[Action::Walk];
   in.turn   = turn;
-  in.reload = pl.animProgress(Archery::BowReload)>=0.f;
+  in.reload = pl.animProgress(Archery::reloadAnim(st.crossbow))>=0.f;
+  in.loaded = pl.isBowLoaded();
   in.dt     = dt;
   if(ar.tick(in,st))
     ar.onShot(pl.releaseArrow(ar.draw(),st));
@@ -1163,6 +1164,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
 void PlayerControl::endManualAim(Npc& pl) {
   pl.setAnimSpeed(Archery::BowReload,1);
+  pl.setAnimSpeed(Archery::CBowReload,1);
   reloadTempo = 1;
   auto& ar = pl.archer();
   if(ar.isRaised()) {

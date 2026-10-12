@@ -86,6 +86,13 @@ class ProtoMesh {
     std::vector<Pos>               pos;
     Tempest::Vec3                  bboxMesh[2];
 
+    // the shape of the mesh, the hit zones are fitted to it (graphics/mesh/hitzones): its points, thinned; a
+    // skinned mesh by the bone each follows the most, in the bone's frame (rigid parts at their bones too)
+    std::vector<Tempest::Vec3>              points;
+    std::vector<std::vector<Tempest::Vec3>> nodePoints;
+    std::vector<std::vector<Tempest::Vec3>> attachPoints; // by attachment: those without a node go on the
+                                                          // bone of their name (a golem's stones)
+
     std::string                    scheme, fname;
 
     size_t                         skinedNodesCount() const;
@@ -94,6 +101,8 @@ class ProtoMesh {
 
   private:
     void                           setupScheme(std::string_view s);
+    void                           shapeOfAttach(const std::vector<std::vector<Tempest::Vec3>>& attachPoints);
+    void                           shapeOfSkin(const PackedMesh& pkg);
     void                           remap(const zenkit::MorphAnimation& a,
                                          const std::vector<uint32_t>& vertId,
                                          std::vector<int32_t>& remapId,

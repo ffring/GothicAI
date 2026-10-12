@@ -2401,15 +2401,16 @@ void Npc::tickAnimationTags() {
 
   if(isPlayer() && TestBench::isActive()) {
     // what the hero's animations do, for the test bench (the reload at another tempo: each event once)
-    char buf[256];
+    const char* reloadAnim = weaponState()==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload;
+    char        buf[256];
     for(auto& i:ev.timed) {
       std::snprintf(buf,sizeof(buf),"anim event %d %.*s %.*s %.*s (reload %.2f)",int(i.def),int(i.item.size()),i.item.data(),
-                    int(i.slot[0].size()),i.slot[0].data(),int(i.slot[1].size()),i.slot[1].data(),double(animProgress("T_BOWRELOAD")));
+                    int(i.slot[0].size()),i.slot[0].data(),int(i.slot[1].size()),i.slot[1].data(),double(animProgress(reloadAnim)));
       TestBench::note(buf);
       }
     for(auto& i:ev.morph) {
       std::snprintf(buf,sizeof(buf),"anim morph %.*s %.*s (reload %.2f)",int(i.anim.size()),i.anim.data(),int(i.node.size()),i.node.data(),
-                    double(animProgress("T_BOWRELOAD")));
+                    double(animProgress(reloadAnim)));
       TestBench::note(buf);
       }
     }
@@ -4209,10 +4210,18 @@ bool Npc::aimBow() {
     setAnim(Anim::Idle);
     return false;
     }
-  if(!setAnim(Anim::AimBow))
+  // aimed with no arrow (bolt) put in: lowered before the reload put the next one, it is put in now
+  const char* reload = weaponState()==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload;
+  const bool  empty  = (bs==BS_AIMNEAR || bs==BS_AIMFAR) && !visual.hasAmmoShown() && hasAmmunition() &&
+                       animProgress(reload)<0.f;
+  if(!setAnim(empty ? Anim::ReloadBow : Anim::AimBow))
     return false;
   visual.setAnimRotate(*this,0);
   return true;
+  }
+
+bool Npc::isBowLoaded() const {
+  return visual.hasAmmoShown();
   }
 
 bool Npc::shootBow(Interactive* focOverride) {

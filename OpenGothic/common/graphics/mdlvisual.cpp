@@ -141,6 +141,22 @@ void MdlVisual::implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, co
   view.setSkeleton(skeleton);
   view.setPose(pos,*skInst);
   hnpcVisual.view.setMesh(&view);
+  fitHitZones();
+  }
+
+void MdlVisual::fitHitZones() {
+  // the zones as thick as the body is: its mesh by bone, its parts on the bones of their names, the head's
+  // mesh on its bone
+  std::vector<HitZones::Shape> shape;
+  if(auto p = view.protoMesh()) {
+    shape.push_back({&p->nodePoints,size_t(-1),nullptr});
+    for(size_t i=0; skeleton!=nullptr && i<p->attach.size() && i<p->attachPoints.size(); ++i)
+      if(!p->attach[i].hasNode)
+        shape.push_back({nullptr,skeleton->findNode(p->attach[i].name),&p->attachPoints[i]});
+    }
+  if(auto p = head.view.protoMesh(); p!=nullptr && skeleton!=nullptr)
+    shape.push_back({nullptr,skeleton->findNode("BIP01 HEAD"),&p->points});
+  hitZones.fit(shape);
   }
 
 void MdlVisual::setSlotAttachment(MeshObjects::Mesh&& itm, std::string_view bone) {
@@ -659,7 +675,9 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
-        in.reload = pose.animProgress("T_BOWRELOAD",npc.world().tickCount())>=0.f;
+        in.reload = pose.animProgress(ws==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload,npc.world().tickCount())>=0.f;
+        // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
+        in.slot   = ammunition.boneId;
         } else {
         in.dir  = World::bulletVelocity(from,aimAt());
         }
@@ -945,6 +963,16 @@ std::string MdlVisual::bowDump() const {
       put("straight drawn",inBow(m.peakAt+m.peakMove));
       }
     }
+  if(ammunition.boneId<skInst->boneCount()) {
+    // the arrow (the bolt) as it lies: where the shot leaves from, along what
+    const auto& m = skInst->bone(ammunition.boneId);
+    const Vec3  d = Vec3::normalize(Vec3(-m.at(0,0),-m.at(0,1),-m.at(0,2)));
+    std::snprintf(buf,sizeof(buf),"  ammo in %s%s, along %.3f %.3f %.3f (the arrow frame)\n",std::string(ammunition.bone).c_str(),
+                  ammunition.view.isEmpty() ? " (not shown)" : "",double(Vec3::dotProduct(d,ax)),double(Vec3::dotProduct(d,up)),
+                  double(Vec3::dotProduct(d,sd)));
+    out += buf;
+    put("ammo",Vec3(m.at(3,0),m.at(3,1),m.at(3,2)));
+    }
   for(auto name:{"BIP01 L HAND","BIP01 L FINGER0","BIP01 L FINGER1","BIP01 L FINGER2","BIP01 L FOREARM","BIP01 R HAND","BIP01 HEAD"}) {
     const size_t id = skeleton->findNode(name);
     if(id<skInst->boneCount()) {
@@ -962,7 +990,10 @@ void MdlVisual::hitZonesPosed(std::vector<HitZones::Posed>& out) const {
 
 std::string MdlVisual::hitZonesDump() const {
   const Vec3 sx = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
-  return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length());
+  auto       body = view.protoMesh();
+  return hitZones.dump(skInst->transform(),skInst->boneCount(),sx.length()) +
+         hitZones.coverage(skInst->transform(),skInst->boneCount(),sx.length()) +
+         " body " + (body!=nullptr ? body->fname : std::string("-"));
   }
 
 float MdlVisual::aimTrackError() const {
@@ -1150,6 +1181,7 @@ const Animation::Sequence* MdlVisual::startAnimAndGet(Npc& npc, AnimationSolver:
       bs = BS_STUMBLE;
       break;
     case AnimationSolver::Anim::AimBow:
+    case AnimationSolver::Anim::ReloadBow:
       bs = BS_AIMNEAR; //TODO: BS_AIMFAR
       break;
     case AnimationSolver::Anim::ItmGet:

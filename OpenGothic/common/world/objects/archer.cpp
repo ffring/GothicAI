@@ -97,7 +97,8 @@ bool Archer::tick(const Input& in, const Archery::Stats& st) {
       case Lowered:
         break;
       case Raising:
-        if(in.ready && stageTime>=RaiseMin) {
+        // raised with no arrow (bolt) put in (lowered before the reload put it in): it is put in first
+        if(in.ready && stageTime>=RaiseMin && in.loaded && !in.reload) {
           setStage(Nocked);
           disturb = std::max(disturb,NockDisturb);
           }

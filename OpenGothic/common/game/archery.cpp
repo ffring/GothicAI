@@ -38,6 +38,14 @@ constexpr float ConeMaster     = 0.1f;
 constexpr float NeedPerDamage  = 0.6f;  // strength a bow needs per its damage: a bow of 100 wants 60
 constexpr float NeedMin        = 10.f;
 constexpr float SlowSpeed      = 0.4f;  // of the speed at no draw (MinDraw shoots a bit faster)
+constexpr float CbowSteady     = 0.8f;  // a crossbow braced at the shoulder sways less than a drawn bow...
+constexpr float CbowLight      = 0.9f;  // ...a light one less, a heavy one more (by the strength it needs,
+constexpr float CbowHeavy      = 1.3f;  // NeedLight..NeedHeavy)
+constexpr float NeedLight      = 20.f;
+constexpr float NeedHeavy      = 100.f;
+constexpr float CbowSpeed      = 1.3f;  // a bolt flies faster than an arrow of a bow as heavy
+constexpr float CReloadSlow    = 0.75f; // the crossbow's reload (cocking): strength half of what it needs...
+constexpr float CReloadFast    = 1.4f;  // ...and twice
 constexpr float HeadDamage     = 2.f;
 constexpr float LimbDamage     = 0.6f;
 
@@ -87,13 +95,15 @@ Archery::Stats Archery::stats(Npc& npc, const Item* w) {
   const float weak = std::max(0.f,1.f-s.strength);
   const float dexK = dex/DexFull;
   s.sway      = lerp(SwayNovice,SwayMaster,s.skill)*(1.f+weak)*Deg;
+  if(s.crossbow)
+    s.sway *= CbowSteady*lerp(CbowLight,CbowHeavy,(need-NeedLight)/(NeedHeavy-NeedLight));
   s.settle    = lerp(SettleNovice,SettleMaster,s.skill)*lerp(1.2f,0.8f,dexK);
   s.breath    = lerp(BreathNovice,BreathMaster,s.skill);
   s.drawTime  = s.crossbow ? 0.f : lerp(DrawSlow,DrawFast,dexK)*std::clamp(1.f/std::sqrt(std::max(s.strength,0.01f)),0.8f,2.f);
   s.holdLimit = s.crossbow ? 1e6f : lerp(HoldWeak,HoldStrong,(s.strength-0.5f)/1.5f);
-  s.speed     = lerp(SpeedLight,SpeedHeavy,(dmg-DamageLight)/(DamageHeavy-DamageLight));
+  s.speed     = lerp(SpeedLight,SpeedHeavy,(dmg-DamageLight)/(DamageHeavy-DamageLight))*(s.crossbow ? CbowSpeed : 1.f);
   s.cone      = lerp(ConeNovice,ConeMaster,s.skill)*Deg;
-  s.reload    = s.crossbow ? 1.f : lerp(ReloadSlow,ReloadFast,dexK);
+  s.reload    = s.crossbow ? lerp(CReloadSlow,CReloadFast,(s.strength-0.5f)/1.5f) : lerp(ReloadSlow,ReloadFast,dexK);
   return s;
   }
 

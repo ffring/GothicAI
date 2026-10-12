@@ -1616,8 +1616,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(st.reload));
     say(buf);
     }
+  else if(c=="zones" && a.size()>2 && a[1]=="fit") {
+    // zones fit on|off: the hit zones as thick as the body's mesh, or by a guess from the bone names (the
+    // hero refitted now, the others when they change their body)
+    HitZones::setFitEnabled(a[2]=="on");
+    pl.fitHitZones();
+    say("zones fit " + a[2]);
+    }
   else if(c=="zones") {
-    // zones <npc|nearest|player>: where its hit zones are now (the capsules on its bones)
+    // zones <npc|nearest|player>: where its hit zones are now (the capsules on its bones), how well they
+    // cover its body
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
     if(n==nullptr) {
       say("zones: no npc " + line);

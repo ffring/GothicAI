@@ -27,6 +27,8 @@ class Aim final {
       bool          manual  = false;   // aimed by hand: the upper body follows the mouse faster
       bool          reload  = false;   // the reload plays: the arrow is not on the string, not measured (the
                                        // hand holds still at the quiver for a while)
+      size_t        slot    = size_t(-1); // the bone the arrow lies along, if not the right hand's slot (a bolt
+                                          // in the crossbow: the left hand's); under the chest
       uint64_t      dt      = 0;
       };
 
@@ -79,6 +81,7 @@ class Aim final {
     Tempest::Vec3       arrowOf(const Tempest::Matrix4x4* tr) const;
 
     size_t              spine = size_t(-1), waist = size_t(-1), chest = size_t(-1), slot = size_t(-1);
+    size_t              arrowSlot = size_t(-1); // where the arrow lies now: slot, or the input's
     std::vector<size_t> spineTree, waistTree, chestTree;
     std::vector<size_t> armsTree; // both arms from the clavicles: they tremble
     bool                valid  = false;

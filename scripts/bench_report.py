@@ -461,6 +461,43 @@ def manual_aim(out, segs):
             "|---|---|---|---|---|---|---|---|---|---|---|---|"] + lines + [""]
 
 
+def hit_zones(out):
+    """the hit zones fitted to the bodies (`zones` with `zones fit on|off`): of each zone, the points of the
+    body in it, in another zone only; by the body's mesh, with the guess and fitted"""
+    path = os.path.join(out, "game.log")
+    if not os.path.exists(path):
+        return []
+    fit, table = "on", {}
+    for l in open(path, encoding="utf-8", errors="replace"):
+        m = re.search(r"\[bench\] zones fit (on|off)", l)
+        if m:
+            fit = m.group(1)
+            continue
+        if "coverage (points" not in l:
+            continue
+        body = re.search(r" body (\S+)\s*$", l)
+        name = body.group(1) if body else "?"
+        zones = {z: (int(n), int(o), int(w)) for z, n, o, w in
+                 re.findall(r"(head|body|limb) (\d+): (\d+)% / (\d+)% / \d+%", l)}
+        fitted = re.search(r"(\d+ of \d+) capsules fitted", l)
+        table.setdefault(name, {})[fit] = (zones, fitted.group(1) if fitted else "-")
+    if not table:
+        return []
+    lines = ["## Hit zones", "",
+             "Of each zone: the points of the body in it, guessed -> fitted (in another zone only, fitted).", "",
+             "| body | head | trunk | limbs | fitted capsules |", "|---|---|---|---|---|"]
+    for name, v in table.items():
+        def cell(z):
+            a = v.get("off", ({}, ""))[0].get(z)
+            b = v.get("on", ({}, ""))[0].get(z)
+            if a is None and b is None:
+                return "-"
+            s = (f"{a[1]}%" if a else "?") + " -> " + (f"{b[1]}%" if b else "?")
+            return s + (f" ({b[2]}%)" if b and b[2] >= 5 else "")
+        lines.append(f"| {name} | {cell('head')} | {cell('body')} | {cell('limb')} | {v.get('on', ({}, '-'))[1]} |")
+    return lines + [""]
+
+
 def sheet(video, frames, path, cols=4, width=400):
     """tile the given frame numbers of a video into one image"""
     if not frames:
@@ -541,6 +578,7 @@ def report(out):
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")
     lines += manual_aim(out, segs)
+    lines += hit_zones(out)
 
     all_events.sort(key=lambda e: -e["severity"])
     lines.append("## Worst events")

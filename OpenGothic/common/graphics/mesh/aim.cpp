@@ -165,6 +165,11 @@ bool Aim::update(const Input& in) {
   if(on) {
     forward = f;
     arrow   = in.arrow;
+    if(arrowSlot!=(in.slot!=size_t(-1) ? in.slot : slot)) {
+      // the arrow lies elsewhere now: measured anew
+      arrowSlot = in.slot!=size_t(-1) ? in.slot : slot;
+      measured  = false;
+      }
     // a direction, not yaw and pitch: straight down the yaw means nothing
     const Vec3 db = toBody(d,forward);
     if(!ready) {
@@ -230,14 +235,17 @@ bool Aim::update(const Input& in) {
   }
 
 Vec3 Aim::arrowOf(const Matrix4x4* tr) const {
-  // the arrow (the bolt) lies along -X of the right hand slot, the nock at the string
-  return normalize(Vec3(-tr[slot].at(0,0),-tr[slot].at(0,1),-tr[slot].at(0,2)));
+  // the arrow (the bolt) lies along -X of its slot, the nock at the string
+  const size_t s = arrowSlot!=size_t(-1) ? arrowSlot : slot;
+  return normalize(Vec3(-tr[s].at(0,0),-tr[s].at(0,1),-tr[s].at(0,2)));
   }
 
 void Aim::apply(Matrix4x4* tr, size_t numBones) {
   error = -1;
   if(!valid || spineTree.back()>=numBones || waistTree.back()>=numBones || chestTree.back()>=numBones || slot>=numBones)
     return;
+  if(arrowSlot!=size_t(-1) && arrowSlot>=numBones)
+    arrowSlot = size_t(-1);
   animArrow = arrowOf(tr);
   measured  = true;
   if(weight<=0.f)
