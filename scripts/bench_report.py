@@ -35,6 +35,7 @@ FLAGS = {
     "toe_twist": (12.0, "deg", "planted toes turned sideways beyond the intended outward turn"),
     "stretch":   (2.0, "cm",  "planted leg straight and still can not reach the ground"),
     "gaze_off":  (15.0, "deg", "looking past the partner although it is within reach of the turn"),
+    "aim_off":   (3.0, "deg", "the bow (the spell) aims past where the shot leaves, although the turn could reach it"),
     "gaze_jerk": (10.0, "deg", "the face turned this much in one frame (a turn to the partner goes up to 9)"),
     "anim_pop":  (20.0, "cm", "a joint of the animated pose (before lean, IK, gaze) jumped at a switch of animations: second difference over 3 frames"),
     "lip_open":  (0.3, "",    "the mouth stays open although the voice is silent"),
@@ -132,6 +133,9 @@ def frame_flags(prev2, prev, r, switch=False):
     # Only at a switch: within an animation it is how the animation moves (a running waran: 80 cm)
     if "an_pop" in r and r["frame"] >= 2 and switch:
         out.append(("anim_pop", r.get("an_bone", "-"), r["an_pop"]))
+    if "a_w" in r and r["a_w"] > 0.99 and r.get("a_steady", 1) > 0 and r["a_err"] >= 0 and abs(r["a_yaw"]) < 40 \
+            and -45 < r["a_pitch"] < 55:
+        out.append(("aim_off", "-", r["a_err"]))
     if prev is not None and FACES[0] in r and FACES[0] in prev:
         out.append(("face_jump", "-", max(abs(r[c] - prev[c]) for c in FACES)))
     if r.get("lip_on", 0) > 0:
@@ -263,6 +267,13 @@ def analyze(rows):
         stats["gaze_on"] = sum(1 for r in rows if r["g_on"] > 0) / len(rows)
         stats["gaze_looks"] = sum(1 for a, b in zip(rows, rows[1:]) if a["g_on"] == 0 and b["g_on"] > 0) + int(rows[0]["g_on"] > 0)
         stats["gaze_src"] = sorted({GAZE_SRC.get(int(r.get("g_src", 0)), "?") for r in rows if r["g_on"] > 0})
+    # aim: how far off the shot direction while aiming, how far the upper body bends
+    # (only while the bow holds still: reloading swings the arrow around on purpose)
+    aims = sorted(r["a_err"] for r in rows if r.get("a_w", 0) > 0.99 and r.get("a_err", -1) >= 0
+                  and r.get("a_steady", 1) > 0)
+    if aims:
+        stats["aim_p90"] = aims[int(len(aims) * 0.9)]
+        stats["aim_bend"] = max((r["a_bend"] for r in rows if r.get("a_w", 0) > 0.99), key=abs)
     # lean: the largest roll into a turn, the trunk pitch range (degrees)
     if rows and "ln_roll" in rows[0]:
         stats["lean_roll"] = max(abs(r["ln_roll"]) for r in rows)
@@ -346,8 +357,8 @@ def report(out):
             counts[ev["flag"]] += 1
         table.append((seg, stats, ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))))
 
-    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | lips corr | events |")
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("| segment | frames | speed cm/s | IK on % | legs hidden % | contact p90 / max cm | spread cm | limp cm | gaze on % (looks, why) | gaze err p90 deg | lean roll / pitch deg | anim pop p99 / max cm (switches: n, max) | aim err p90 / bend deg | lips corr | events |")
+    lines.append("|" + "---|" * 15)
     for seg, st, ev in table:
         still = " (still)" if st["speed"] < 15 else ""
         p90 = st.get("contact_p90")
@@ -362,9 +373,10 @@ def report(out):
             f"{st['lean_roll']:.1f} / {st['lean_pitch'][0]:.1f}..{st['lean_pitch'][1]:.1f}"
         an = "-" if "anim_p99" not in st else \
             f"{st['anim_p99']:.1f} / {st['anim_max']:.1f} ({st['anim_switches']}, {st['anim_switch_max']:.1f})"
+        am = "-" if "aim_p90" not in st else f"{st['aim_p90']:.1f} / {st['aim_bend']:.0f}"
         lc = "-" if "lip_corr" not in st else f"{st['lip_corr']:.2f}"
         lines.append(f"| {seg} | {st['frames']} | {st['speed']:.0f}{still} | {st['ik_on'] * 100:.0f} | "
-                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {lc} | {ev or '-'} |")
+                     f"{st['hidden'] * 100:.0f} | {contact} | {gap} | {limp} | {gon} | {gz} | {ln} | {an} | {am} | {lc} | {ev or '-'} |")
     lines.append("")
     lines.append(f"Overview sheets (16 frames each): {os.path.join(out, 'sheets', '<segment>.png')}")
     lines.append("")

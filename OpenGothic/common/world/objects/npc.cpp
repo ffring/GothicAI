@@ -4260,6 +4260,10 @@ Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
   return Gaze::Source::None;
   }
 
+std::string Npc::animNames() const {
+  return visual.pose().animNames();
+  }
+
 bool Npc::isAttackAnim() const {
   return visual.pose().isAttackAnim();
   }
@@ -4761,6 +4765,27 @@ bool Npc::canSeeNpc(const Npc &oth, bool freeLos) const {
   return false;
   }
 
+bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
+  const auto ws = weaponState();
+  if(!Aim::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow && ws!=WeaponState::Mage))
+    return false;
+  const Vec3  head = visual.mapHeadBone();
+  const Vec3  tg   = oth.physic.center();
+  const Vec3  d    = tg - head;
+  const float h    = std::sqrt(d.x*d.x+d.z*d.z);
+  const float lean = Aim::leanFor(-std::atan2(d.y,h));
+  if(lean<=0.f)
+    return false;
+  // toward it, straight down where the body faces (as the aim leans)
+  const float a   = rotationRad();
+  const Vec3  dir = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(a),0,std::sin(a))*0.25f);
+  const float k   = lean/(Aim::LeanMax*float(M_PI)/180.f);
+  const Vec3  eye = head + dir*(Aim::LeanReach*k) - Vec3(0,Aim::LeanDrop*k,0);
+  if(owner.physic()->ray(head,eye).hasCol)
+    return false; // no room to lean
+  return canRayHitPoint(eye,tg,180.f) || canRayHitPoint(eye,oth.visual.mapHeadBone(),180.f);
+  }
+
 bool Npc::canSeeSource() const {
   const auto head = visual.mapHeadBone();
   const bool ret  = owner.sound()->canSeeSource(head);
@@ -4953,6 +4978,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
   syncAtt |= visual.updateLean(*this,dt);
   syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
+  syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   if(syncAtt)
     visual.syncAttaches();

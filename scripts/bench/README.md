@@ -30,6 +30,11 @@ Transitions between animations: `anim` (the hero on a flat floor: start and stop
 on the spot, strafing, walking backwards, jumps, sneaking, fists: attacks, a combo, a block). With
 `blend off` on top of a copy it gives the old cross-fade, for `diff`; `gaze-ambient` and `quad-zoo` show
 an npc's and the creatures' transitions too.
+Aim: `aim` (the hero draws a bow at a sheep hung level, above, steeply above, to the side; the same with
+aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 and 46 degrees, and
+from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
+foot of a gallery's wall in Xardas' tower, 78 degrees down: hidden from the head, so without the aim no
+focus; with it the hero leans over the edge, the focus takes it, the arrow kills it).
 Lip sync: `lips` (Xardas says a voiced line of the game, the camera at his face; then the same line
 with the old talk loop), `lips-dialog` (the hero talks to Xardas through the dialog window and picks
 the first choice: the lines of both are played the way the game plays them).
@@ -85,6 +90,8 @@ git worktree remove --force /tmp/before
   the thin white bar is the voice, the thick blue one how wide the mouth is shown;
 - gaze: a yellow line where the face of the watched one looks, a red dot at the partner's eyes; text:
   weight, error `E`, turn `Y` and `P` (degrees), parts of the turn: head `H`, chest `C`, waist `W`;
+- orange `AIM`: weight, error `E` (where the arrow points after the turn against where the shot leaves),
+  where the shot has to go `Y`, `P`, the turn `T` and the bend `B` (+ up) of the upper body, degrees;
 - green `LEAN`: roll `R` (+ to the left) and trunk pitch `P` (+ forward) in degrees, speed `V` (cm/s),
   turn `T` (degrees per second, + to the left), slope `S` along the facing (degrees);
 - violet `BLEND`: bones blending from a switch of animations `N`, the largest rotation offset `A` (degrees);
@@ -104,6 +111,7 @@ git worktree remove --force /tmp/before
 | `toe_twist` | planted toes turn sideways more than 12 degrees beyond the intended outward turn |
 | `stretch` | a planted leg is straight and still more than 2 cm short of the ground |
 | `gaze_off` | looking more than 15 degrees past the partner although it is within reach of the turn |
+| `aim_off` | while the bow holds still, the arrow points more than 3 degrees past where the shot leaves although the turn could reach it |
 | `gaze_jerk` | the face turns more than 10 degrees in one frame, in the world (the body may turn under a steady gaze); a turn to the partner goes up to 9 |
 | `anim_pop` | a joint of the animated pose (before lean, IK, gaze) jumps at a switch of animations (a frame before it to 6 after): second difference over 3 frames above 20 cm; the event names the bone and the animations before and after |
 | `lip_open` | the mouth is open wider than 0.3 (of the widest shape) while the voice is silent, 4 frames or more |
@@ -120,12 +128,13 @@ steps of one leg of a pair than on the other's. `gaze on` is the share of frames
 at someone, then how many times it turned to someone and why (`talk`, `script`: AI_LookAtNpc, `focus`:
 the hero's, `attention`: the hero near, a weapon drawn). `gaze err` is the angle between where the face
 looks and the partner, while the partner is within reach of the turn. `lean roll / pitch` is the largest
-roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `lips corr` is the
-correlation of the voice level and the shown mouth opening over the frames lip sync is on (~0.8-0.9 on
-Xardas' lines). `anim pop` is the second difference of the joints of the animated pose (cm, the largest joint per
-frame): p99 and max over the segment, then the number of switches of animations and the largest value
-next to one. Within an animation it is how the animation moves (a running human 11-25 cm, a running
-waran up to 80): compare the switches, with `blend off` and on.
+roll into a turn and the range of the trunk pitch (+ forward) of the watched one. `aim err` is the
+angle between where the arrow points and where the shot leaves (while the bow holds still), `bend` the
+largest bend of the upper body (+ up). `lips corr` is the correlation of the voice level and the shown
+mouth opening over the frames lip sync is on (~0.8-0.9 on Xardas' lines). `anim pop` is the second difference of the joints of the animated pose (cm, the largest
+joint per frame): p99 and max over the segment, then the number of switches of animations and the
+largest value next to one. Within an animation it is how the animation moves (a running human 11-25 cm,
+a running waran up to 80): compare the switches, with `blend off` and on.
 
 A segment marked `(still)` hardly moved: the player got stuck, the scenario did not do what it meant to.
 One reason: an npc with an important dialog came to the hero, and the dialog holds the player;
@@ -145,7 +154,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `walkto <waypoint>` | walk there (AI path) |
 | `walkmode walk\|run\|sneak` | |
 | `face uphill\|downhill\|across\|<yaw deg>`, `face wp <waypoint>`, `face rel <deg>`, `turn <deg>` | turn the player at once; `rel`: the watched npc's facing turned by that much (the angles of `place`) |
-| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon action` (`left`/`right` strafe) |
+| `press\|release\|tap <key>`, `hold <key> <ms>`, `release all` | player input; keys: `forward back left right turnl turnr jump walk sneak weapon melee bow spell action` (`left`/`right` strafe; aiming a bow: hold `action`, a shot: `tap forward` while holding it) |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
@@ -165,6 +174,14 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `gazeinfo` | gaze state of the watched npc to `bench.log`: why it looks, at whom |
 | `lean on\|off` | the lean into turns and on slopes |
 | `blend on\|off`, `blend param <name> <value>` | transitions between animations (`AnimBlend`; off: the old cross-fade); params `min`, `max`, `scale` (blend time, s), `turn` (rad/s), `move` (cm/s), `out`, `side` |
+| `aim on\|off` | the upper body turning to the target with a bow, a crossbow, a spell; leaning over an edge (and the focus seeing from there) |
+| `give <item> [count]`, `equip <item>` | into the hero's inventory; `equip` puts it on whatever the strength (`ItRw_Bow_L_01`, `ItRw_Arrow`, `ItRw_Crossbow_L_01`, `ItRw_Bolt`, `ItRu_FireBolt`) |
+| `put <npc\|nearest> <dist> <angle>` | the npc stands there on the ground from the hero (angle from the hero's facing), frozen |
+| `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |
+| `anims` | what the watched one (or the hero) plays, its body state, weapon and target |
+| `cansee <npc>` | can the hero see it: from the head, leaning over an edge (the aim's lean); what the rays hit; the bow's focus range |
+| `hp <npc>` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit) |
+| `walls [count]` | spots at the edge of a wall (from a waypoint walking to where the ground falls away) with its foot 2.5..10 m below, 1 m out, hidden from the head and seen leaning over: the waypoint and the yaw for `goto`, `edge` |
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
@@ -177,6 +194,8 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `foreach slope <min deg> <max deg> <count>` ... `end` | the body runs on that many slopes all over the world, after a teleport; `$I`, `$NAME`, `$ANGLE` are replaced |
 | `foreach stairs <count>`, `foreach wp <name part> <count>` | the same for stairs and named waypoints |
 | `slopes [min] [max]`, `stairs`, `findwp <name part>`, `pos` | print spots / state to `bench.log` |
+| `edge <yaw> [max cm] [margin cm]` | the hero is put that way to where the ground falls away, `margin` (35) from the edge facing it (closer the body slips over it); prints the drop past it (a wall, a ship's side) |
+| `ledges [min drop] [max drop] [count] [steep]` | waypoints at an edge with open ground that much lower 1.5..14 m away, seen from there (a target below): the yaw to `face`, the distance, the drop, the angle down; nearest first or the steepest |
 | `say <text>`, `quit` | |
 
 Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):

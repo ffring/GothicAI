@@ -601,6 +601,70 @@ bool MdlVisual::updateLean(Npc& npc, uint64_t dt) {
   return changed;
   }
 
+bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
+  Pose& pose = *skInst;
+  auto& aim  = pose.aimIk();
+  if(!aim.isValid()) {
+    if(npc.isPlayer())
+      Aim::playerProbe = Aim::Probe();
+    if(&npc==Aim::probeNpc)
+      Aim::subjectProbe = Aim::Probe();
+    return false;
+    }
+
+  // drawing the bow at the target (a crossbow, a spell): where the shot leaves to, as World shoots it.
+  // From where the bow is held in the stance, not from the hand: the turn moves the hand, the aim would
+  // chase itself (straight down most of all)
+  const float a  = npc.rotationRad();
+  const auto  bs = npc.bodyStateMasked() & BS_MAX;
+  const auto  ws = npc.weaponState();
+  const Npc*  t  = npc.target();
+  Aim::Input in;
+  in.dt      = dt;
+  in.forward = {std::cos(a), 0, std::sin(a)};
+  if(t!=nullptr && t!=&npc && !npc.isDown()) {
+    float shoulder = 145; // human, bind pose
+    if(skeleton!=nullptr) {
+      const size_t sh = skeleton->findNode("BIP01 R UPPERARM");
+      if(sh<skeleton->tr.size())
+        shoulder = skeleton->tr[sh].at(3,1);
+      }
+    const Tempest::Vec3 from = npc.position() + Tempest::Vec3(0,shoulder,0) + in.forward*35.f;
+    // a shot is a frame of BS_HIT, the reload goes on aiming
+    if((ws==WeaponState::Bow || ws==WeaponState::CBow) && (bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==(BS_HIT & BS_MAX))) {
+      in.active = true;
+      in.arrow  = true;
+      in.dir    = World::bulletVelocity(from,t->collosionCenter());
+      }
+    else if(ws==WeaponState::Mage && bs==BS_CASTING) {
+      in.active = true;
+      in.dir    = t->collosionCenter() - from;
+      }
+    if(in.active) {
+      // steeply down: lean over the edge, if there is room in front of the head
+      const Tempest::Vec3 d    = in.dir;
+      const float         down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+      in.lean = Aim::leanFor(down);
+      if(in.lean>0.f) {
+        const float         k    = in.lean/(Aim::LeanMax*float(M_PI)/180.f);
+        const Tempest::Vec3 dir  = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
+        const Tempest::Vec3 head = mapHeadBone();
+        const Tempest::Vec3 to   = head + dir*(Aim::LeanReach*k) - Tempest::Vec3(0,Aim::LeanDrop*k,0);
+        if(npc.world().physic()->ray(head,to).hasCol)
+          in.lean = 0;
+        }
+      }
+    }
+  const bool changed = pose.updateAim(in);
+  if(npc.isPlayer())
+    aim.probe(Aim::playerProbe);
+  if(&npc==Aim::probeNpc)
+    aim.probe(Aim::subjectProbe);
+  if(changed)
+    view.setPose(pos,pose);
+  return changed;
+  }
+
 bool MdlVisual::hasGaze() const {
   return Gaze::isEnabled() && skInst->gazeIk().isValid();
   }

@@ -72,6 +72,7 @@ class Marvin {
       C_ToggleLipSync,
       C_ToggleLean,
       C_ToggleAniBlend,
+      C_ToggleAim,
       };
 
     struct Cmd {

@@ -80,6 +80,7 @@ class MdlVisual final {
     bool                           hasQuadrupedIk() const;
     bool                           hasGaze() const;
     bool                           updateLean(Npc& npc, uint64_t dt);
+    bool                           updateAim(Npc& npc, uint64_t dt);
     bool                           updateGaze(Npc& npc, uint64_t dt);
     void                           processLayers  (World& world);
     bool                           processEvents(World& world, uint64_t &barrier, Animation::EvCount &ev);

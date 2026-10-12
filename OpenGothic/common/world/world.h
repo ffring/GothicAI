@@ -165,6 +165,8 @@ class World final {
     size_t               hasItems(std::string_view tag, size_t itemCls);
 
     Bullet&              shootBullet(const Item &itmId, const Npc& npc, const Npc* target, const Interactive* inter);
+    // the velocity an arrow, a bolt leaves with to fall onto the target
+    static Tempest::Vec3 bulletVelocity(const Tempest::Vec3& from, const Tempest::Vec3& to);
     Bullet&              shootSpell(const Item &itm, const Npc &npc, const Npc *target);
 
     void                 sendPassivePerc  (Npc& self, Npc& other, int32_t perc);

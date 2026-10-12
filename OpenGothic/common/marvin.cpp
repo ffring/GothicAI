@@ -13,6 +13,7 @@
 #include "graphics/mesh/lipsync.h"
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/animblend.h"
+#include "graphics/mesh/aim.h"
 #include "camera.h"
 #include "gothic.h"
 
@@ -160,6 +161,7 @@ Marvin::Marvin() {
     {"toggle lipsync",             C_ToggleLipSync},
     {"toggle lean",                C_ToggleLean},
     {"toggle aniblend",            C_ToggleAniBlend},
+    {"toggle aim",                 C_ToggleAim},
     };
   }
 
@@ -509,6 +511,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleAniBlend:
       AnimBlend::setEnabled(!AnimBlend::isEnabled());
+      return true;
+    case C_ToggleAim:
+      Aim::setEnabled(!Aim::isEnabled());
       return true;
     }
 

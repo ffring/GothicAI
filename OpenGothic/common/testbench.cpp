@@ -29,9 +29,11 @@
 #include "graphics/mesh/lean.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animblend.h"
+#include "graphics/mesh/aim.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
+#include "world/objects/item.h"
 #include "world/world.h"
 #include "world/aiqueue.h"
 #include "utils/keycodec.h"
@@ -442,6 +444,8 @@ struct Bench {
   Vec3        prevPos;
   bool        hasPrev   = false;
   bool        inDialog  = false;
+  Npc*        pinned    = nullptr;  // pin: held there every frame
+  Vec3        pinAt     = {};
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
@@ -540,6 +544,7 @@ bool keyAction(std::string_view k, KeyCodec::Action& a) {
     {"forward",KeyCodec::Forward}, {"back",KeyCodec::Back},       {"left",KeyCodec::Left},  {"right",KeyCodec::Right},
     {"turnl",  KeyCodec::RotateL}, {"turnr",KeyCodec::RotateR},   {"jump",KeyCodec::Jump},  {"walk", KeyCodec::Walk},
     {"sneak",  KeyCodec::Sneak},   {"weapon",KeyCodec::Weapon},   {"action",KeyCodec::ActionGeneric},
+    {"melee",  KeyCodec::WeaponMele},{"bow",KeyCodec::WeaponBow}, {"spell",KeyCodec::WeaponMage3},
     };
   for(auto& i:keys)
     if(i.name==k) {
@@ -632,8 +637,23 @@ Npc* findNpc(World& w, Npc& pl, const std::string& name) {
       }
     return best;
     }
+  // by its script symbol; of several (two sheep inserted) a living one, the nearest
   const size_t id = w.script().findSymbolIndex(name);
-  return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
+  if(id==size_t(-1))
+    return nullptr;
+  Npc*  best = nullptr;
+  float dist = 0;
+  for(uint32_t i=0; i<w.npcCount(); ++i) {
+    Npc* n = w.npcById(i);
+    if(n==nullptr || n->instanceSymbol()!=id)
+      continue;
+    const float d = (n->position()-pl.position()).quadLength() + (n->isDead() ? 1e12f : 0.f);
+    if(best==nullptr || d<dist) {
+      best = n;
+      dist = d;
+      }
+    }
+  return best!=nullptr ? best : w.findNpcByInstance(id);
   }
 
 std::string symName(World& w, const Npc* n) {
@@ -834,6 +854,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
@@ -903,6 +924,11 @@ void writeRow(Npc& pl) {
   const auto& ln = bench.subject!=nullptr ? Lean::subjectProbe : Lean::playerProbe;
   std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.1f,%.1f",int(ln.active),ln.roll,ln.pitch,ln.speed,ln.turn,ln.slope);
   writeAnim();
+  // aim of the watched npc (or the hero)
+  const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
+  std::fprintf(bench.csv,",%d,%.3f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",int(am.active),am.weight,am.yaw,am.pitch,
+               am.animYaw,am.animPitch,am.turn,am.bend,am.error);
+  std::fprintf(bench.csv,",%d,%.2f",int(am.steady),am.lean);
   // lips of the watched one
   const auto& lp = LipSync::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%llu,%.3f,%.3f,%.3f,%u,%u,%.2f,%.3f,%u",
@@ -1234,6 +1260,128 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="shot") {
     bench.shot = a.size()>1 ? a[1] : "shot";
     }
+  else if(c=="anims") {
+    // anims: what the watched one (or the hero) plays, its body state, weapon and target
+    Npc& s = subjectOf(pl);
+    char buf[160];
+    std::snprintf(buf,sizeof(buf),"anims %s bs=%u ws=%d target=%s: ",symName(w,&s).c_str(),unsigned(s.bodyStateMasked() & BS_MAX),
+                  int(s.weaponState()),symName(w,s.target()).c_str());
+    say(buf + s.animNames());
+    }
+  else if(c=="cansee") {
+    // cansee <npc|nearest>: can the hero see it (from the head, leaning over an edge), and what is between
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("cansee: no npc " + line);
+      return;
+      }
+    const Vec3  head = pl.mapHeadBone();
+    const Vec3  tg   = n->centerPosition();
+    const Vec3  d    = tg-head;
+    const float h    = std::sqrt(d.x*d.x+d.z*d.z);
+    auto        r    = w.physic()->ray(head,tg);
+    const auto& fr = w.script().focusRange();
+    char buf[300];
+    std::snprintf(buf,sizeof(buf),"cansee %s: head %d, over the edge %d; dist %.0f, down %.0f deg; the ray from the head hits at %.0f cm of %.0f; bow focus %.0f..%.0f",
+                  symName(w,n).c_str(),int(pl.canSeeNpc(*n,true)),int(pl.canSeeNpcOverEdge(*n)),double(d.length()),
+                  double(-std::atan2(d.y,h)*180.f/float(M_PI)),r.hasCol ? double((r.v-head).length()) : -1.0,double(d.length()),
+                  double(fr.npc_range1),double(fr.npc_range2));
+    say(buf);
+    // the lean over the edge, as Npc::canSeeNpcOverEdge does it at full lean
+    const float an   = pl.rotationRad();
+    const Vec3  dir  = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(an),0,std::sin(an))*0.25f);
+    const Vec3  eye  = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
+    auto        r1   = w.physic()->ray(head,eye);
+    auto        r2   = w.physic()->ray(eye,tg);
+    std::snprintf(buf,sizeof(buf),"  leaned head: room %d (hit at %.0f of %.0f), to it %d (hit at %.0f of %.0f), head at %.0f above the feet",
+                  int(!r1.hasCol),r1.hasCol ? double((r1.v-head).length()) : -1.0,double((eye-head).length()),
+                  int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(head.y-pl.position().y));
+    say(buf);
+    }
+  else if(c=="hp") {
+    // hp <npc>: hit points of the 3 nearest npcs of that script symbol (sheep are all over the world),
+    // and how far (did the arrow hit)
+    const std::string name = a.size()>1 ? a[1] : "";
+    const size_t      id   = w.script().findSymbolIndex(name);
+    std::vector<std::pair<float,Npc*>> list;
+    for(uint32_t i=0; i<w.npcCount(); ++i)
+      if(Npc* n = w.npcById(i); n!=nullptr && n->instanceSymbol()==id)
+        list.emplace_back((n->position()-pl.position()).length(),n);
+    std::sort(list.begin(),list.end(),[](auto& x, auto& y) { return x.first<y.first; });
+    std::string out = "hp " + name + ":";
+    for(size_t i=0; i<list.size() && i<3; ++i)
+      out += " " + std::to_string(list[i].second->attribute(ATR_HITPOINTS)) + (list[i].second->isDead() ? " dead" : "") +
+             " at " + std::to_string(int(list[i].first/100.f)) + " m;";
+    say(out);
+    }
+  else if(c=="give" || c=="equip") {
+    // give <item> [count]: into the hero's inventory; equip <item>: give one and put it on (a bow, a rune)
+    const std::string name = a.size()>1 ? a[1] : "";
+    const size_t      id   = w.script().findSymbolIndex(name);
+    if(id==size_t(-1)) {
+      say(c + ": no item " + name);
+      return;
+      }
+    pl.addItem(id,size_t(c=="give" ? num(a,2,1) : 1));
+    if(c=="equip")
+      pl.useItem(id,Item::NSLOT,true); // whatever the hero's strength
+    say(c + " " + name);
+    }
+  else if(c=="put") {
+    // put <npc|nearest> <dist> <angle> [dy]: the npc stands there from the hero (angle from the hero's
+    // facing, 0 in front), on the ground, frozen, facing the hero
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("put: no npc " + line);
+      return;
+      }
+    const float d   = num(a,2,500);
+    const float an  = (pl.rotation()+num(a,3,0))*float(M_PI)/180.f;
+    Vec3        pos = pl.position() + Vec3(std::cos(an),0,std::sin(an))*d;
+    // the ground there may be far above or below (a slope): the first one from above, by short rays
+    // (a long one misses the landscape)
+    DynamicWorld::RayLandResult r;
+    for(float y=pos.y+num(a,4,0)+1500; y>pos.y-1500 && !r.hasCol; y-=400)
+      r = w.physic()->ray({pos.x,y,pos.z},{pos.x,y-450,pos.z});
+    if(r.hasCol)
+      pos.y = r.v.y;
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    n->setPosition(pos);
+    const Vec3 dir = pl.position()-pos;
+    n->setDirection(Vec3(dir.x,0,dir.z));
+    n->updateTransform();
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"put %s at %.0f %.0f %.0f (%.0f above the hero%s)",symName(w,n).c_str(),pos.x,pos.y,pos.z,
+                  pos.y-pl.position().y,r.hasCol ? "" : ", no ground found");
+    say(buf);
+    }
+  else if(c=="pin") {
+    // pin <npc|nearest> <dist> <angle> <height> | pin off: the npc hangs there from the hero (angle from
+    // the hero's facing, height above the hero's feet), frozen, every frame: a target above or below
+    if(a.size()>1 && a[1]=="off") {
+      bench.pinned = nullptr;
+      say("pin off");
+      return;
+      }
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    if(n==nullptr || n==&pl) {
+      say("pin: no npc " + line);
+      return;
+      }
+    n->setInteraction(nullptr,true);
+    n->clearAiQueue();
+    n->clearState(false);
+    n->setExternalControl(true);
+    const float an = (pl.rotation()+num(a,3,0))*float(M_PI)/180.f;
+    bench.pinned   = n;
+    bench.pinAt    = pl.position() + Vec3(std::cos(an)*num(a,2,800),num(a,4,0),std::sin(an)*num(a,2,800));
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"pin %s at %.0f %.0f %.0f",symName(w,n).c_str(),bench.pinAt.x,bench.pinAt.y,bench.pinAt.z);
+    say(buf);
+    }
   else if(c=="npcgo") {
     // npcgo <npc|nearest> <waypoint> [walk|run]: the npc goes there (AI path), like a script sends it
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
@@ -1245,6 +1393,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     n->setWalkMode(a.size()>3 && a[3]=="walk" ? WalkBit::WM_Walk : WalkBit::WM_Run);
     n->aiPush(AiQueue::aiGoToPoint(*wp));
     say("npcgo " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="aim") {
+    // aim on|off: the upper body turns and bends to the target with a bow, a crossbow, a spell
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on" || m=="off")
+      Aim::setEnabled(m=="on"); else
+      say("unknown aim command: " + line);
     }
   else if(c=="lean") {
     // lean on|off: the lean into turns and on slopes (graphics/mesh/lean)
@@ -1285,6 +1440,155 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       std::snprintf(buf,sizeof(buf),"%s %s angle=%.1f rough=%.1f dist=%.0f",c.c_str(),s.name.c_str(),s.angle,s.rough,s.dist);
       say(buf);
       }
+    }
+  else if(c=="ledges") {
+    // ledges [min drop] [max drop] [count] [steep]: waypoints at an edge, open ground that much lower
+    // 1.5..14 m away and seen from there (a target below); prints the waypoint, the yaw to face
+    // (`face <yaw>`), the distance, the drop and the angle down; near first, or the steepest first
+    const float minDrop = num(a,1,300), maxDrop = num(a,2,1000);
+    const size_t count  = size_t(num(a,3,15));
+    struct Ledge { std::string name; float yaw, dist, drop, down, from; };
+    std::vector<Ledge> all;
+    const Vec3 at = pl.position();
+    w.findWayPoint(at,[&](const WayPoint& wp) {
+      const float g0 = groundY(w,wp.pos.x,wp.pos.z,wp.pos.y);
+      if(std::isnan(g0))
+        return false;
+      float an = 0, rough = 0;
+      Vec3  dn;
+      if(!slopeAt(w,Vec3(wp.pos.x,g0,wp.pos.z),an,dn,rough) || an>15)
+        return false;
+      if(w.physic()->ray({wp.pos.x,g0+200,wp.pos.z},{wp.pos.x,g0+1500,wp.pos.z}).hasCol)
+        return false; // a roof above: indoors
+      Ledge best;
+      best.down = 0;
+      for(int k=0; k<16; ++k) {
+        const float y = float(k)*22.5f*float(M_PI)/180.f;
+        for(float d:{150.f,250.f,400.f,550.f,700.f,1000.f,1400.f}) {
+          const Vec3 p = Vec3(wp.pos.x+std::cos(y)*d, g0, wp.pos.z+std::sin(y)*d);
+          auto r = w.physic()->ray({p.x,g0+200,p.z},{p.x,g0-maxDrop-100,p.z});
+          if(!r.hasCol)
+            continue;
+          const float drop = g0-r.v.y;
+          if(drop<minDrop || drop>maxDrop)
+            continue;
+          const Vec3 eye = Vec3(wp.pos.x,g0+170,wp.pos.z), tg = r.v+Vec3(0,60,0);
+          auto los = w.physic()->ray(eye,tg);
+          if(los.hasCol && (los.v-tg).length()>40)
+            continue;
+          const float down = std::atan2(drop,d)*180.f/float(M_PI);
+          if(down>best.down)
+            best = Ledge{wp.name, float(k)*22.5f, d, drop, down, (wp.pos-at).length()};
+          }
+        }
+      if(best.down>0)
+        all.push_back(best);
+      return false;
+      });
+    if(a.size()>4 && a[4]=="steep")
+      std::sort(all.begin(),all.end(),[](const Ledge& x, const Ledge& y) { return x.down>y.down; }); else
+      std::sort(all.begin(),all.end(),[](const Ledge& x, const Ledge& y) { return x.from<y.from; });
+    say("ledges " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"ledge %s yaw=%.1f dist=%.0f drop=%.0f down=%.0f from=%.0f",all[i].name.c_str(),
+                    double(all[i].yaw),double(all[i].dist),double(all[i].drop),double(all[i].down),double(all[i].from));
+      say(buf);
+      }
+    }
+  else if(c=="walls") {
+    // walls [count]: spots at a wall's edge (from a waypoint, walking to where the ground falls away) with
+    // the foot of the wall 2.5..10 m below, 1 m out: hidden from the head, seen leaning over (the aim's
+    // lean); prints the waypoint and the yaw for `goto`, `edge <yaw>`
+    const size_t count = size_t(num(a,1,15));
+    struct Wall { std::string name; float yaw, drop, from; };
+    std::vector<Wall> all;
+    const Vec3 at = pl.position();
+    auto ground = [&](const Vec3& p, float y0, float up, float down) {
+      auto r = w.physic()->ray({p.x,y0+up,p.z},{p.x,y0-down,p.z});
+      return r.hasCol ? r.v.y : NAN;
+      };
+    w.findWayPoint(at,[&](const WayPoint& wp) {
+      const float g0 = groundY(w,wp.pos.x,wp.pos.z,wp.pos.y);
+      if(std::isnan(g0))
+        return false;
+      for(int k=0; k<16; ++k) {
+        const float y   = float(k)*22.5f*float(M_PI)/180.f;
+        const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
+        Vec3 e = Vec3(wp.pos.x,g0,wp.pos.z);
+        bool edge = false;
+        for(float d=25; d<=600; d+=25) {
+          const Vec3  p = Vec3(wp.pos.x,g0,wp.pos.z) + dir*d;
+          const float g = ground(p,e.y,100,150);
+          if(std::isnan(g) || std::abs(g-e.y)>60) {
+            edge = true;
+            break;
+            }
+          e = Vec3(p.x,g,p.z);
+          }
+        if(!edge)
+          continue;
+        const Vec3  st   = e - dir*35.f;
+        const Vec3  t    = st + dir*135.f;
+        const float tg   = ground(t,st.y,-60,1000);
+        if(std::isnan(tg) || st.y-tg<250 || st.y-tg>1000)
+          continue;
+        const Vec3 head = st + Vec3(0,148,0); // drawing a bow the head is that low
+        const Vec3 aimT = Vec3(t.x,tg+60,t.z);
+        if(!w.physic()->ray(head,aimT).hasCol)
+          continue; // seen from the head anyway
+        const Vec3 eye = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
+        if(w.physic()->ray(head,eye).hasCol || w.physic()->ray(eye,aimT).hasCol)
+          continue;
+        if(w.physic()->ray({t.x,tg+100,t.z},{t.x,tg+1500,t.z}).hasCol)
+          continue; // under a roof, an arch
+        all.push_back(Wall{wp.name, float(k)*22.5f, st.y-tg, (wp.pos-at).length()});
+        break;
+        }
+      return false;
+      });
+    std::sort(all.begin(),all.end(),[](const Wall& x, const Wall& y) { return x.from<y.from; });
+    say("walls " + std::to_string(all.size()));
+    for(size_t i=0; i<all.size() && i<count; ++i) {
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"wall %s yaw=%.1f drop=%.0f from=%.0f",all[i].name.c_str(),double(all[i].yaw),
+                    double(all[i].drop),double(all[i].from));
+      say(buf);
+      }
+    }
+  else if(c=="edge") {
+    // edge <yaw> [max cm] [margin cm]: the hero is put that way to where the ground falls away, and stands
+    // that far from the edge (35: closer the body slips over it) facing it; prints how deep it goes down
+    // right past the edge
+    const float y   = num(a,1,0)*float(M_PI)/180.f;
+    const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
+    const float max = num(a,2,2000);
+    Vec3        pos = pl.position();
+    const float g0  = pos.y;
+    bool        found = false;
+    for(float d=25; d<=max; d+=25) {
+      const Vec3  p = pl.position() + dir*d;
+      auto        r = w.physic()->ray({p.x,g0+100,p.z},{p.x,g0-150,p.z});
+      if(!r.hasCol || std::abs(r.v.y-g0)>60) {
+        found = true;
+        break;
+        }
+      pos = Vec3(p.x,r.v.y,p.z);
+      }
+    if(!found) {
+      say("edge: no edge that way");
+      return;
+      }
+    // a step back from the very edge, the feet on the ground
+    pos -= dir*num(a,3,35);
+    pl.setPosition(pos);
+    face(pl,dir);
+    pl.updateTransform();
+    const Vec3 past = pos + dir*80.f;
+    auto       r    = w.physic()->ray({past.x,pos.y-60,past.z},{past.x,pos.y-3000,past.z});
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"edge at %.0f %.0f %.0f, down past it %.0f",pos.x,pos.y,pos.z,r.hasCol ? pos.y-r.v.y : -1.f);
+    say(buf);
     }
   else if(c=="findwp") {
     for(auto& s:findSpots(w,pl,K_Name,0,90,rest(line),40)) {
@@ -1379,6 +1683,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Pose::probeNpc = bench.subject;
     bench.anim1.clear();
     bench.anim2.clear();
+    Aim::probeNpc  = bench.subject;
     char buf[160] = "watch nobody";
     if(n!=nullptr)
       if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
@@ -1777,6 +2082,13 @@ void drawOverlay(Pixmap& pm) {
     cv.text(x,y,buf,2,{255,230,40,255});
     y += 16;
     }
+  const auto& am = bench.subject!=nullptr ? Aim::subjectProbe : Aim::playerProbe;
+  if(am.valid && am.active) {
+    std::snprintf(buf,sizeof(buf),"AIM W%.2f E%.1f Y%.0f P%.0f T%.0f B%.0f L%.0f",double(am.weight),double(am.error),double(am.yaw),
+                  double(am.pitch),double(am.turn),double(am.bend),double(am.lean));
+    cv.text(x,y,buf,2,{255,140,60,255});
+    y += 16;
+    }
   // lips: shapes and intensity, then the voice (thin bar) and the mouth as shown (thick bar)
   const auto& lp = LipSync::subjectProbe;
   if(lp.valid && LipSync::probeNpc!=nullptr) {
@@ -1963,6 +2275,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           who += " " + symName(*world,&n);
         });
     say(std::string(bench.inDialog ? "dialog started:" : "dialog ended") + who);
+    }
+  if(bench.pinned!=nullptr) {
+    const Vec3 d = player->position()-bench.pinAt;
+    bench.pinned->setPosition(bench.pinAt);
+    bench.pinned->setDirection(Vec3(d.x,0,d.z));
+    bench.pinned->updateTransform();
     }
   if(bench.orbitUntil>bench.time) {
     bench.placeAngle += bench.orbitSpeed*float(dt)/1000.f;

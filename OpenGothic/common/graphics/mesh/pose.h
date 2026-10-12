@@ -10,6 +10,7 @@
 #include "footik.h"
 #include "gaze.h"
 #include "lean.h"
+#include "aim.h"
 #include "resources.h"
 
 class Skeleton;
@@ -72,6 +73,7 @@ class Pose final {
     bool               isIdle() const;
     bool               isInAnim(std::string_view           sq) const;
     bool               isInAnim(const Animation::Sequence* sq) const;
+    std::string        animNames() const; // the playing layers, for debugging
     bool               hasAnim() const;
     uint64_t           animationTotalTime() const;
     uint64_t           atkTotalTime() const;
@@ -95,6 +97,8 @@ class Pose final {
     const Gaze&        gazeIk() const { return gaze; }
     bool               updateGaze(const Gaze::Input& in);
     Lean&              leanIk() { return lean; }
+    Aim&               aimIk() { return aim; }
+    bool               updateAim(const Aim::Input& in);
     bool               updateLean(const Lean::Input& in);
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
     auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;
@@ -178,6 +182,7 @@ class Pose final {
     Gaze                            gaze;
     Lean                            lean;
     AnimBlend                       blend;
+    Aim                             aim;
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};

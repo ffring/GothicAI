@@ -307,11 +307,10 @@ void InstanceStorage::uploadMain() {
   Workers::setThreadName("InstanceStorage upload");
   while(true) {
     std::unique_lock<std::mutex> lck(sync);
-    uploadCnd.wait(lck);
+    // a frame set between two waits is not lost: join() would spin on it forever
+    uploadCnd.wait(lck,[this](){ return uploadFId>=0; });
     if(uploadFId==Resources::MaxFramesInFlight)
       break;
-    if(uploadFId<0)
-      continue;
 
     patchGpu[uploadFId].update(patchCpu);
     uploadFId = -1;
