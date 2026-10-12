@@ -573,3 +573,41 @@ async def test_a_threat_to_an_npc_the_planner_does_not_know_goes_to_the_scripts(
         )
     )
     assert list(applier.verdicts) == [("h9", "scripts")]
+
+
+async def test_a_quiet_npc_plans_its_next_hour_from_its_own_day() -> None:
+    from gothic_ai.brain.apply import actions_for
+    from gothic_ai.protocol import RoutineEntry, RoutineInfo
+
+    asked: list[str] = []
+
+    async def routine_of(npc: str) -> RoutineInfo:
+        asked.append(npc)
+        return RoutineInfo(
+            type="routine",
+            npc=npc,
+            current="ZS_PICK_FIELD",
+            entries=[
+                RoutineEntry(start="06:00", end="20:00", state="ZS_PICK_FIELD", waypoint="FIELD_01"),
+                RoutineEntry(start="20:00", end="06:00", state="ZS_SIT_CAMPFIRE", waypoint="FARM_FIRE"),
+            ],
+        )
+
+    planner, decider, applier, clock = make(FakeDecider("a1", 0.8), plan_period_s=60)
+    planner.routine_of = routine_of
+    planner.game_time = (15, 0)
+    planner.on_roster([entry("PEPE", 8)], clock.t)
+    await step(planner, clock, 10)  # appears quiet: no plan yet
+    assert decider.calls == []
+    await step(planner, clock, 65)  # a period later: time to think of the day; the routine is asked first
+    assert asked == ["PEPE"] and decider.calls == []
+    await step(planner, clock, 2)  # known now: the plan goes out
+    plan = next(c for c in decider.calls if "plan" in c["questions"])
+    assert plan["questions"]["plan"]["criteria"] == {
+        "keep_routine": "keep to your usual routine now: work in the field",
+        "a1": "sit by the campfire (you usually do it at 20:00-06:00)",
+    }
+    (decision,) = [d for d in applier.recent if d.question == "plan"]
+    assert actions_for(decision) == [
+        ("start_activity", {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60})
+    ]

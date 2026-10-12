@@ -17,7 +17,7 @@ from .incidents import IncidentDesk
 from .llm import ToolCall
 from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
-from .persona import PersonaProvider
+from .persona import PersonaProvider, habits_of
 from .protocol import (
     ActionResult,
     Detached,
@@ -681,7 +681,11 @@ async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str
 
     applier = GameApplier(link)
     planner = NpcPlanner(
-        FixedDecider({"react": "fight"}, {"escalate": 3.6}), applier, config=PlannerConfig(ask_attitude=False)
+        FixedDecider({"react": "fight", "plan": "h1"}, {"escalate": 3.6}),
+        applier,
+        config=PlannerConfig(ask_attitude=False, plan_period_s=3.0),
+        routine_of=link.routine,
+        habits_of=habits_of,
     )
     link.listeners.append(planner.on_message)
     runner = asyncio.create_task(planner.run())
@@ -695,6 +699,23 @@ async def m5c_free_npc(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str
             if npc in planner.npcs:
                 break
             await asyncio.sleep(0.2)
+
+        # 1. a quiet moment: the npc thinks of its next hour, from its own day and habits
+        plan = None
+        for _ in range(300):
+            plan = next((d for d in applier.recent if d.npc == npc and d.question == "plan"), None)
+            if plan is not None:
+                break
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(1.0)
+        now = (await link.routine(npc)).current
+        results["day_plan"] = (
+            f"{'done' if plan and plan.args and now == plan.args['state'] else 'failed'} "
+            f"({plan.choice + ' ' + str(plan.args) if plan else 'no plan'}; now {now})"
+        )
+        await link.npc_act(npc, "set_routine", name="START")
+
+        # 2. a wolf
         t0 = time.monotonic()
         await link.debug("spawn", instance="WOLF", near=npc, distance=400)
         decision = None

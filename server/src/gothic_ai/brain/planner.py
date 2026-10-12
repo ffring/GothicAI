@@ -26,8 +26,9 @@ import itertools
 import logging
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from ..protocol import (
     Attached,
@@ -44,6 +45,7 @@ from ..protocol import (
     RosterEntry,
 )
 from .apply import Applier, Decision
+from .day import Habit, plan_options
 from .decider import Decider, Lane, Outcome
 from .situation import NpcContext, Situation, SituationBuilder, clock_text
 from .stimuli import Stimulus, merge, normalize, policy
@@ -109,6 +111,8 @@ class PlannerConfig:
     # after an urgent reaction or a threat, ask how much the moment calls for the npc's own words (0-4); from
     # this level on `on_escalate` is told (whoever listens decides by its rules: the hero hears it, budget)
     escalate_level: float = 3.0
+    # NEAR/MID npc's with nothing to react to think about their next hour this often (a game hour ~4 min)
+    plan_period_s: float = 240.0
     max_inflight: int = 48
     bg_rate: float = 20.0  # background requests per second
     tick_s: float = 0.05
@@ -133,6 +137,7 @@ class Flight:
     stimuli: tuple[str, ...]
     situation: Situation
     target: str | None = None  # the newest threat's source: whom a fight or flight is about
+    plan_args: dict[str, dict] = field(default_factory=dict)  # plan option -> start_activity args
 
 
 @dataclass
@@ -155,6 +160,7 @@ class NpcRecord:
     pending: Pending | None = None
     flight: Flight | None = None
     holds: list[tuple[str, float]] = field(default_factory=list)  # threats held from the scripts, (id, when)
+    last_plan: float | None = None
 
 
 @dataclass
@@ -183,10 +189,16 @@ class NpcPlanner:
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
         agenda_of: Callable[[str], str | None] | None = None,
+        routine_of: Callable[[str], Awaitable[Any]] | None = None,
+        habits_of: Callable[[str], list[Habit]] | None = None,
     ) -> None:
         self.decider = decider
         # what an npc wants from the hero, as its last conversation left it (memory); read when it appears
         self.agenda_of = agenda_of
+        # the npc's daily routine from the game (`routine`, protocol v6) and its habits: the plan's menu
+        self.routine_of = routine_of
+        self.habits_of = habits_of
+        self.routines: dict[str, Any] = {}  # npc -> RoutineInfo (None: the game could not tell)
         # the moment calls for the npc's own words: (npc, level, the reaction applied or None, flight)
         self.on_escalate: Callable[[str, float, Decision | None, Flight], None] | None = None
         self.applier = applier
@@ -366,6 +378,11 @@ class NpcPlanner:
             if rec.tier is Tier.OFF or rec.pending or rec.flight or rec.next_check > now:
                 continue
             if rec.tier is not Tier.FAR and not self._has_reason(rec, now):
+                if self.routine_of is not None and now - (rec.last_plan or now) >= self.cfg.plan_period_s:
+                    self._want(rec, "plan", False, now, not_before=now)  # quiet: time to think of the day
+                    continue
+                if rec.last_plan is None:
+                    rec.last_plan = now  # the first plan comes a period after the npc appears
                 self.stats.quiet += 1
                 self._schedule(rec, now)
                 continue
@@ -493,8 +510,22 @@ class NpcPlanner:
         rec.stimuli = [s for s in rec.stimuli if s.alive(now)]
         ctx = NpcContext(rec.id, rec.name, rec.guild, rec.distance_cm, rec.in_view, agenda=rec.agenda)
         clock = clock_text(*self.game_time) if self.game_time else None
+        plan_args: dict[str, dict] = {}
         if pend.purpose == "plan":
-            sit = self.builder.plan(ctx, clock)
+            routine = self._routine(rec.id)
+            habits = self.habits_of(rec.id) if self.habits_of else []
+            if self.routine_of is not None:
+                if routine is None or not self.game_time:
+                    rec.next_check = now + 1.0  # being asked from the game: plan once it is known
+                    return
+                criteria, plan_args = plan_options(routine.entries, habits, *self.game_time)
+                if not plan_args:
+                    self._schedule(rec, now)  # nothing to choose between: the routine goes on
+                    return
+                sit = self.builder.plan(ctx, clock, criteria)
+            else:
+                sit = self.builder.plan(ctx, clock)
+            rec.last_plan = now
             deadline = self.cfg.deadline_ms["far"]
         else:
             sit = self.builder.react(ctx, rec.stimuli, now, clock)
@@ -510,10 +541,27 @@ class NpcPlanner:
             tuple(s.kind for s in rec.stimuli),
             sit,
             next((s.other for s in sorted(rec.stimuli, key=lambda s: -s.at) if s.policy.threat), None),
+            plan_args,
         )
         rec.flight = flight
         self.stats.sent[lane] += 1
         self._spawn(self._ask(rec.id, flight, lane, rec.importance, deadline))
+
+    def _routine(self, npc: str) -> Any | None:
+        """The npc's routine if known; asked from the game in the background the first time."""
+        if npc in self.routines or self.routine_of is None:
+            return self.routines.get(npc)
+        self.routines[npc] = None
+
+        async def fetch() -> None:
+            assert self.routine_of is not None
+            try:
+                self.routines[npc] = await self.routine_of(npc)
+            except Exception as err:  # the game could not tell: plans stay generic for this npc
+                log.debug("routine of %s: %s", npc, err)
+
+        self._spawn(fetch())
+        return None
 
     async def _ask(self, npc: str, flight: Flight, lane: Lane, priority: float, deadline_ms: int) -> None:
         sit = flight.situation
@@ -582,6 +630,7 @@ class NpcPlanner:
             flight.stimuli,
             latency_ms=(now - flight.sent) * 1000,
             target=flight.target,
+            args=flight.plan_args.get(choice),
         )
         self.applier.apply(decision)
         about_hero = flight.target is None  # threats from others say nothing about the hero

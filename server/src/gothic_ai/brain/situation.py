@@ -143,13 +143,18 @@ class SituationBuilder:
         q = {"escalate": {"type": "score", "instructions": ESCALATE, "criteria": ESCALATE_LEVELS}}
         return Situation(react.state, q)
 
-    def plan(self, npc: NpcContext, clock: str | None) -> Situation:
+    def plan(self, npc: NpcContext, clock: str | None, options: dict[str, str] | None = None) -> Situation:
+        """What to do in the next hour: the npc's own activities and habits (brain/day.py), or generic
+        options when its routine is not known."""
         parts = [self.who(npc)]
         if clock:
             parts.append(f"It is {clock}.")
+        if npc.agenda:
+            parts.append(f"What you want: {npc.agenda}")
         if npc.facts:
             parts.append("What you remember: " + " ".join(npc.facts))
-        q = {"plan": {"type": "choice", "instructions": PLAN, "criteria": dict(PLAN_OPTIONS)}}
+        criteria = dict(options) if options else dict(PLAN_OPTIONS)
+        q = {"plan": {"type": "choice", "instructions": PLAN, "criteria": criteria}}
         return Situation(" ".join(parts), q)
 
 

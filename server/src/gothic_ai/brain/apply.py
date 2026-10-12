@@ -26,6 +26,7 @@ class Decision:
     attitude: float | None = None  # expected level 0..4 when it was asked
     latency_ms: float = 0.0  # from the request leaving the planner to the answer
     target: str | None = None  # whom a fight or flight is about (the newest threat's `other`)
+    args: dict[str, Any] | None = None  # a plan: the activity it chose (start_activity args)
 
 
 class Applier(Protocol):
@@ -88,8 +89,10 @@ COMMENT_SVM = {
 
 
 def actions_for(decision: Decision) -> list[tuple[str, dict[str, Any]]]:
+    if decision.question == "plan":
+        return [("start_activity", dict(decision.args))] if decision.args else []
     if decision.question != "react":
-        return []  # plans and attitudes have no game action yet
+        return []  # attitudes and escalations have no game action
     if decision.choice == "comment":
         svm = next((COMMENT_SVM[k] for k in decision.stimuli if k in COMMENT_SVM), None)
         return [("say_svm", {"svm": svm})] if svm else ACTIONS["look_at"]

@@ -41,7 +41,7 @@ from .llm import (
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
-from .persona import PersonaProvider
+from .persona import PersonaProvider, habits_of
 from .protocol import (
     Attached,
     ChatClose,
@@ -258,7 +258,9 @@ async def serve(args: argparse.Namespace) -> int:
                 saved = memory.intent(dialogue.branch, npc) if dialogue.branch else None
                 return (Intent.from_json(saved).agenda or None) if saved else None
 
-            planner = state.brain = NpcPlanner(decider, GameApplier(link), agenda_of=agenda_of)
+            planner = state.brain = NpcPlanner(
+                decider, GameApplier(link), agenda_of=agenda_of, routine_of=link.routine, habits_of=habits_of
+            )
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             if not args.no_hold_threats:
                 # threats to free npc's: the behavioral model first, the scripts if it does not take them
