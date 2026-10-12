@@ -4,22 +4,23 @@ An answer is kept only where passes A and B agree. Every tenth card goes to vali
 its rows, so no scene is in train and val at once.
 
     cd decider-service/tuning
-    python3 make_train.py
+    python3 make_train.py [--judge C --out train_c]
 
-Writes data/train/:
+With `--judge C` (disputes.py), a disputed answer is kept where the judge sides with one of the passes,
+for training only (validation stays the same for every variant). Writes data/<out>/, by default data/train/:
   gothic_train.jsonl, gothic_val.jsonl   Examples (one per kept question)
   val_requests.jsonl, val_gold.json      the validation rows as decider requests, for score_val.py
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).parent
 DATA = HERE / "data"
-OUT = DATA / "train"
 
 
 def load(pass_: str) -> dict[str, dict]:
@@ -51,9 +52,15 @@ def example(row: dict, name: str, answer) -> dict:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--judge", help="label pass that breaks ties (disputes.py), e.g. C")
+    ap.add_argument("--out", default="train", help="directory under data/")
+    args = ap.parse_args()
+    out_dir = DATA / args.out
     rows = [json.loads(line) for line in (DATA / "rows.jsonl").open()]
     a, b = load("A"), load("B")
-    OUT.mkdir(parents=True, exist_ok=True)
+    judge = load(args.judge) if args.judge else {}
+    out_dir.mkdir(parents=True, exist_ok=True)
     stats: Counter = Counter()
     picked: Counter = Counter()
     train, val, val_reqs, val_gold = [], [], [], {}
@@ -74,6 +81,10 @@ def main() -> None:
                 stats[f"{key} disagree"] += 1
                 if row["questions"][name]["type"] == "score" and abs(va - vb) == 1:
                     stats[f"{key} disagree by one level"] += 1
+                vc = judge.get(row["id"], {}).get(name)
+                if vc is not None and vc in (va, vb) and not is_val:
+                    stats[f"{key} settled by the judge"] += 1
+                    train.append(example(row, name, vc))
                 continue
             kept[name] = va
             if name == "react":
@@ -92,13 +103,13 @@ def main() -> None:
             )
             val_gold[row["id"]] = kept
     for name, items in (("gothic_train", train), ("gothic_val", val)):
-        with (OUT / f"{name}.jsonl").open("w") as out:
+        with (out_dir / f"{name}.jsonl").open("w") as out:
             for ex in items:
                 out.write(json.dumps(ex, ensure_ascii=False) + "\n")
-    with (OUT / "val_requests.jsonl").open("w") as out:
+    with (out_dir / "val_requests.jsonl").open("w") as out:
         for r in val_reqs:
             out.write(json.dumps(r, ensure_ascii=False) + "\n")
-    (OUT / "val_gold.json").write_text(json.dumps(val_gold, ensure_ascii=False, indent=0))
+    (out_dir / "val_gold.json").write_text(json.dumps(val_gold, ensure_ascii=False, indent=0))
     print(f"train {len(train)}, val {len(val)} examples; {len(val_reqs)} val requests")
     for k in sorted(stats):
         print(f"  {k}: {stats[k]}")

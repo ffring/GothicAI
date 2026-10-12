@@ -1,0 +1,9 @@
+{
+ "model": "tuned-g6c",
+ "requests": 228,
+ "load_s": 4.5,
+ "ms_p50": 98.5,
+ "ms_p95": 114.4,
+ "peak_alloc_gb": 3.93,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}
