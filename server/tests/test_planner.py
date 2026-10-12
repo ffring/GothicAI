@@ -442,6 +442,28 @@ def test_decisions_become_soft_actions() -> None:
     assert actions_for(d("comment", ("player_near", "enter_room"))) == [("say_svm", {"svm": "GETOUTOFHERE"})]
     assert actions_for(d("comment", ("player_near",))) == [("look_at", {"ms": 3000})]
     assert actions_for(d("keep_routine", question="plan")) == [] and actions_for(d("pick_up")) == []
+    assert actions_for(d("call_help", ("attacked_by",))) == [("say_svm", {"svm": "HELP"})]
+    assert actions_for(d("comment", ("fight_nearby",))) == [("say_svm", {"svm": "OHMYGODITSAFIGHT"})]
+
+
+def test_danger_to_the_npc_and_the_escalate_question() -> None:
+    from gothic_ai.brain.situation import ESCALATE_LEVELS, NpcContext, SituationBuilder
+    from gothic_ai.brain.stimuli import Stimulus
+
+    builder = SituationBuilder()
+    npc = NpcContext("A", "Baltram", guild=3, distance_cm=800, in_view=True)
+    wolf = Stimulus("monster_near", 10.0, other="WOLF", detail="a wolf")
+    react = builder.react(npc, [wolf], 10.0, None)
+    assert "A wolf is coming at you." in react.state
+    assert "call_help" in react.questions["react"]["criteria"]
+    esc = builder.escalate(react)
+    assert esc.state == react.state
+    assert esc.questions["escalate"] == {
+        "type": "score",
+        "instructions": esc.questions["escalate"]["instructions"],
+        "criteria": ESCALATE_LEVELS,
+    }
+    assert len(ESCALATE_LEVELS) == 5
 
 
 async def test_game_applier_sends_npc_act() -> None:

@@ -56,6 +56,8 @@ ACTIONS: dict[str, list[tuple[str, dict[str, Any]]]] = {
     "step_away": [("turn_away", {})],
     "tell_to_leave": [("say_svm", {"svm": "GETOUTOFHERE"})],
     "thank": [("play_ani", {"name": "T_YES"})],
+    "call_help": [("say_svm", {"svm": "HELP"})],
+    "call_guards": [("say_svm", {"svm": "GUARDS"})],
 }
 # "comment": the line fitting the newest event; without one the npc just looks at the player
 COMMENT_SVM = {
@@ -65,6 +67,9 @@ COMMENT_SVM = {
     "magic": "STOPMAGIC",
     "item_given": "NOTBAD",
     "attack": "NEVERHITMEAGAIN",
+    "monster_near": "HELP",
+    "attacked_by": "HELP",
+    "fight_nearby": "OHMYGODITSAFIGHT",
 }
 
 

@@ -2,6 +2,7 @@
 
 Runs inside the model's own venv on dev-ubuntu:
     .venv-strands/bin/python run_decider.py strands       (also strands-v21, strands-v1-2610)
+    .venv-strands/bin/python run_decider.py tuned-g1 /path/to/checkpoint   (a local Strands checkpoint)
     .venv-laya/bin/python run_decider.py laya
     .venv-openjev/bin/python run_decider.py openjev-2b     (also openjev-4b)
 
@@ -117,6 +118,8 @@ def openjev_runner(size: str):
 
 def main() -> None:
     name = sys.argv[1]
+    if len(sys.argv) > 2:
+        STRANDS_CKPTS[name] = sys.argv[2]
     runner = {
         **{k: (lambda c=c: strands_runner(c)) for k, c in STRANDS_CKPTS.items()},
         "laya": laya_runner,

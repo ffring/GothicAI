@@ -32,6 +32,11 @@ POLICIES: dict[str, EventPolicy] = {
     "attack": EventPolicy("The hero attacked {detail}.", 300, scripted=True),
     "magic": EventPolicy("The hero cast a spell nearby.", 30, scripted=True),
     "murder": EventPolicy("The hero killed {detail}.", 600, scripted=True),
+    # not about the hero: danger to the npc itself or a commotion around it
+    "monster_near": EventPolicy("{Detail} is coming at you.", 20, urgent=True, salient=True),
+    "attacked_by": EventPolicy("{Detail} attacked you.", 60, urgent=True, salient=True),
+    "fight_nearby": EventPolicy("A fight broke out nearby: {detail}.", 30, salient=True),
+    "cry_for_help": EventPolicy("{Detail} is shouting for help nearby.", 30, salient=True),
 }
 DEFAULT_POLICY = EventPolicy("Something happened: {kind} ({detail}).", 15)
 
@@ -58,8 +63,9 @@ class Stimulus:
     def describe(self, now: float) -> str:
         other = "the hero" if self.other == "PLAYER" else self.other
         dist = f"{self.distance_cm / 100:.0f} m" if self.distance_cm is not None else "a few metres"
+        detail = self.detail or "something"
         text = self.policy.text.format(
-            other=other, detail=self.detail or "something", dist=dist, kind=self.kind
+            other=other, detail=detail, Detail=detail[:1].upper() + detail[1:], dist=dist, kind=self.kind
         )
         ago = now - self.at
         return text if ago < 3 else f"{text} ({ago:.0f} s ago)"
