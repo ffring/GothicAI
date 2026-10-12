@@ -10,7 +10,8 @@ would. The model proposes; the code builds the change, the validator checks it, 
 - the amends: a dialog of the director's, at it or at the one lied to, offered once the talk is over:
   paying a fine or the reward back (gold taken from the hero), never more than MAX_GOLD;
 - once he has made amends the dialogs open again, the npc (and the one lied to) remember it, and trust.py
-  counts it.
+  counts it. He may also make them in conversation: the npc offers a deal (deals.py) that forgives the lie,
+  for gold or for nothing, and taking it settles the storylet the same way.
 
 Its state is in the chronicle (`amends_*` facts) and in the patches of the save branch, so a load brings
 back exactly where it was. A lie gets STORYLETS_PER_LIE of them at most, the one lied to first, then those
@@ -303,6 +304,8 @@ class Amends:
                     f"{f.get('kind', 'found_out')}:{f.get('about') or f.get('from', '')}:{f.get('quest', '')}"
                 )
                 self._queue.put_nowait((key, f.get("to", ""), f.get("from_name") or ""))
+            case "deal" if f.get("forgive"):
+                self._spawn(self._forgiven(f))
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
@@ -508,6 +511,20 @@ class Amends:
                         await self._apply({"op": "remove_node", "node": node})
                 await self._settle(other)
 
+    async def _forgiven(self, f: Fact) -> None:
+        """The npc forgave a lie in a deal (deals.py): the storylets of amends for it that it asked for, or
+        that were to be made at it, are settled; their dialogs of the talk and the amends leave the menu."""
+        npc = f.get("npc", "")
+        for key in f.get("forgive", []):
+            for s in list(self.storylets.values()):
+                if s.lie != key or s.stage == "done" or npc not in (s.npc, s.to):
+                    continue
+                for node in (s.talk, s.pay):
+                    if node in self.patches_nodes():
+                        await self._apply({"op": "remove_node", "node": node})
+                s.gold = int(f.get("gold", 0))  # what was agreed on in the end
+                await self._settle(s)
+
     def patches_nodes(self) -> set[str]:
         return {op["node"]["id"] for op in self.patches.ops() if op.get("op") == "add_node"}
 
@@ -589,14 +606,16 @@ class Amends:
             names = [self.graph.nodes[c].description for c in s.close if c in self.graph.nodes]
             if s.npc == npc and s.stage != "done":
                 lines.append(
-                    f"Ты требуешь от героя загладить вину за ложь: {_price(s)}. Пока не заплатит, для него "
-                    f"закрыто: {'; '.join(f'«{n}»' for n in names)}."
+                    f"Ты требуешь от героя загладить вину за ложь ({s.lie}): {_price(s)}. Пока не заплатит, "
+                    f"для него закрыто: {'; '.join(f'«{n}»' for n in names)}. Договоритесь — простишь её в "
+                    "сделке (forgive)."
                 )
             elif s.npc == npc:
                 lines.append(f"Герой загладил перед тобой вину за ложь ({_price(s)}).")
             elif s.to == npc and s.stage != "done":
                 lines.append(
-                    f"{s.name} требует, чтобы герой повинился перед тобой и заплатил тебе {s.gold} золотых."
+                    f"{s.name} требует, чтобы герой повинился перед тобой и заплатил тебе {s.gold} золотых. "
+                    f"Повинится — простишь ему эту ложь ({s.lie}) в сделке (forgive)."
                 )
         return "\n".join(lines) or None
 

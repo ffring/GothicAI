@@ -43,6 +43,10 @@
 #   amends: the director's storylet: Lobart catches the hero lying, the rumor reaches Andre, who asks for a
 #       fine and closes joining the militia until then (model scripted with LLM=fake); the hero hears him
 #       out and pays, and the militia is open again (stage 5)
+#   amends_deal: as amends, but the hero makes them in conversation: he asks to be forgiven, the npc offers a
+#       deal that forgives the lie for the fine, and he accepts it (docs/npc-tools.md, wave 1 step 2)
+#   debt: Lobart lends the hero 20 gold for 25 back by the end of the next day; two days on the debt is a
+#       broken word (trust) and goes round as a rumor; then the hero pays it back, late (wave 1 step 2)
 #   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
 #       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
 #       haggling: the deal window shows the new version, Y waits right after the change, then the deal is

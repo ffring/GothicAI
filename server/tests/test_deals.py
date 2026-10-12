@@ -8,6 +8,7 @@ from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.talk import Talk, TalkDesk
+from gothic_ai.trust import Trust
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import XARDAS, _until
 
@@ -254,3 +255,127 @@ def test_gold_reads_right():
         "21 золотой",
         "30 золотых",
     ]
+
+
+BOOK = f"caught:{XARDAS}:MIS_BOOK"
+
+
+async def test_he_forgives_a_lie_and_keeps_quiet_about_it():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    try:
+        snap = dialogue.link.snapshots[XARDAS]
+        caught = {
+            "fact": "caught",
+            "quest": "MIS_BOOK",
+            "npc": XARDAS,
+            "name": "Ксардас",
+            "title": "Принести книгу",
+        }
+        chronicle.record({**caught, "how": "видел сам", "day": 1})
+        assert "он уже лгал тебе" in Trust(chronicle).situation(XARDAS)
+        situation = deals.situation(XARDAS) or ""
+        assert f"- {BOOK}: он обманул тебя: уверял, что сделал «Принести книгу», а это неправда" in situation
+
+        async def offer(**terms):
+            args = {
+                "npc_gives": [],
+                "hero_gives": [],
+                "forgive": [],
+                "silence": [],
+                "hero_later": [],
+                "repay": [],
+            }
+            return await deals.propose(XARDAS, "Ксардас", {**args, **terms}, snap)
+
+        o = await offer(forgive=["caught:NOBODY:MIS_X"])
+        assert o.status == "rejected" and "ты не знаешь такой лжи" in o.output and BOOK in o.output
+        o = await offer(forgive=[BOOK], silence=[BOOK], hero_gives=[{"item": GOLD, "count": 30}])
+        assert o.status == "accepted" and "прощаешь ему ложь про «Принести книгу»" in o.output
+        await _until(lambda: _shown(fake) != [])
+        shown = _shown(fake)[-1]
+        assert [t["text"] for t in shown["npc_gives"]] == [
+            "Прощает ложь про «Принести книгу»",
+            "Молчит о лжи про «Принести книгу»",
+        ]
+        assert shown["npc_gives"][0]["item"] == ""  # nothing to check in his purse
+
+        fake.hero_items = {GOLD: 30}
+        await deals.accept(shown["deal"], 1)
+        fact = chronicle.facts("deal")[0]
+        assert (fact["forgive"], fact["silence"], fact["gold"]) == ([BOOK], [BOOK], 30)
+        line = Trust(chronicle).situation(XARDAS) or ""
+        assert (
+            "он уже лгал тебе" not in line
+            and "он загладил вину за ложь: «Принести книгу» — заплатил 30" in line
+        )
+        # forgiven: no longer among what he can forgive
+        assert BOOK not in (deals.situation(XARDAS) or "")
+        o = await offer(forgive=[BOOK])
+        assert o.status == "rejected" and "уже простил" in o.output
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_debt_by_its_day_or_a_broken_word():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    try:
+        snap = dialogue.link.snapshots[XARDAS]
+        args = {
+            "npc_gives": [],
+            "hero_gives": [],
+            "forgive": [],
+            "silence": [],
+            "hero_later": [],
+            "repay": [],
+        }
+        o = await deals.propose(
+            XARDAS,
+            "Ксардас",
+            {
+                **args,
+                "npc_gives": [{"item": POTION, "count": 1}],
+                "hero_later": [{"item": GOLD, "count": 25, "days": 1}],
+            },
+            snap,
+        )
+        assert o.status == "accepted" and "отдаст позже 25 золотых до конца дня 3" in o.output  # today: day 2
+        await _until(lambda: _shown(fake) != [])
+        shown = _shown(fake)[-1]
+        assert shown["hero_gives"] == [{"item": "", "count": 0, "text": "Позже: 25 золотых — до конца дня 3"}]
+        await deals.accept(shown["deal"], 1)
+        assert fake.hero_items == {POTION: 1}  # the potion now, the gold later
+        (debt,) = deals.debts.values()
+        assert (debt.due, debt.give.count, debt.paid) == (2, 25, False)
+        assert f"- {debt.id}: 25 золотых до конца дня 3" in (deals.situation(XARDAS) or "")
+
+        # the day is over: a broken word, to him and in his memory
+        assert deals.overdue(2) == []
+        assert deals.overdue(3) == [debt] and deals.overdue(4) == []
+        assert chronicle.facts("broken")[0]["what"] == "25 золотых до конца дня 3"
+        line = Trust(chronicle).situation(XARDAS) or ""
+        assert "он не сдержал слово: обещал вернуть 25 золотых до конца дня 3, а не вернул." in line
+        assert "На слово ты ему больше не веришь" in line and Trust(chronicle).broken(XARDAS)
+        assert "срок прошёл, он не сдержал слово" in (deals.situation(XARDAS) or "")
+        notes = [e.content for e in dialogue.conversations[XARDAS].memory.entries]
+        assert any("Герой не вернул тебе долг в срок" in n for n in notes)
+
+        # late, he pays it back
+        o = await deals.propose(XARDAS, "Ксардас", {**args, "repay": ["nope"]}, snap)
+        assert o.status == "rejected" and debt.id in o.output
+        await deals.propose(XARDAS, "Ксардас", {**args, "repay": [debt.id]}, snap)
+        await _until(lambda: len(_shown(fake)) == 2)
+        shown = _shown(fake)[-1]
+        assert shown["hero_gives"] == [{"item": GOLD, "count": 25, "text": "Долг: 25 золотых"}]
+        fake.hero_items = {GOLD: 25}
+        await deals.accept(shown["deal"], 1)
+        assert debt.paid and chronicle.facts("debt_paid")[0]["id"] == debt.id and fake.hero_items[GOLD] == 0
+        assert "Долги героя тебе" not in (deals.situation(XARDAS) or "")
+        # a load brings the debts back as they stand
+        deals._load()
+        assert deals.debts[debt.id].paid and deals.debts[debt.id].broken
+    finally:
+        await link_cm.__aexit__(None, None, None)

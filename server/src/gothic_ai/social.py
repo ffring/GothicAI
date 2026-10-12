@@ -47,7 +47,7 @@ DEAL_MAX = 6  # a quest with more people in it makes no acquaintances
 OUTLAWS = frozenset({9, 10, 11})  # bandits, convicts, seekers: they have no dealings with the rest
 # retellings away from the one lied to: a lie seen through on the spot is talked about nearby, one he took
 # a reward for goes further
-HOPS = {"caught": 2, "found_out": 3}
+HOPS = {"caught": 2, "found_out": 3, "broken": 2}  # broken: a debt not paid back by its day (deals.py)
 TELLS_PER_DAY = 3  # one tells a rumor to this many a day at most: it goes round in chains, not in a flood
 FRESH_DAYS = 2  # and only while it is news: the day one heard it and the next
 P_MEET = 0.7  # how often a day's meeting passes a rumor on
@@ -166,6 +166,7 @@ class Rumor:
     title: str
     known: dict[str, int] = field(default_factory=dict)  # npc -> retellings away from `about`
     since: dict[str, int] = field(default_factory=dict)  # npc -> the game day it heard it (if known)
+    silent: set[str] = field(default_factory=set)  # promised the hero in a deal to tell nobody (deals.py)
 
     @property
     def hops(self) -> int:
@@ -174,6 +175,8 @@ class Rumor:
     def tells(self, npc: str, day: int) -> bool:
         """It still passes the rumor on that day: not too far from the source, and it is still news."""
         heard = self.since.get(npc)
+        if npc in self.silent:
+            return False
         return self.known.get(npc, self.hops) < self.hops and (heard is None or day < heard + FRESH_DAYS)
 
     @property
@@ -182,6 +185,11 @@ class Rumor:
 
     def told(self, teller: str) -> str:
         """The remark for the one it is told to (names stay as they are: nothing to decline)."""
+        if self.kind == "broken":
+            return (
+                f"Слух (со слов: {teller}): герой задолжал человеку по имени {self.about_name} и не вернул "
+                f"в срок — {self.title}"
+            )
         what = (
             f"взял награду за «{self.title}», а дела не сделал"
             if self.kind == "found_out"
@@ -330,6 +338,18 @@ class Rumors:
                             r.since.setdefault(f.get("to", ""), int(f["day"]))
                         if not r.about_name or r.about_name == about:
                             r.about_name = f.get("about_name") or f.get("name") or about
+            case "broken":
+                r = Rumor(
+                    f.get("debt", ""), "broken", f.get("npc", ""), f.get("name") or "", f.get("what", "")
+                )
+                r.known[r.about] = 0
+                if "day" in f:
+                    r.since[r.about] = int(f["day"])
+                self.rumors.setdefault(r.key, r)
+            case "deal" if f.get("silence"):
+                for key in f["silence"]:
+                    if key in self.rumors:
+                        self.rumors[key].silent.add(f.get("npc", ""))
             case "died":
                 self.dead.add(f.get("npc", ""))
 

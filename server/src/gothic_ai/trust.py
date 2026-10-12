@@ -7,7 +7,9 @@ situation of its quests (vanilla.py), and what it knows of the hero's honesty is
   no more: a quest is accepted only on what it sees for itself (quests.py and vanilla.py enforce it);
 - heard: rumors that he lied to someone else (`rumor`): told before it, or retold by whom (social.py);
 - kept: claims of his to it that were true (`claim` with `truth`);
-- amended: lies he made amends for, to it or as it asked (amends.py): a lie amended does not break his word.
+- amended: lies he made amends for, to it or as it asked (amends.py), or it forgave in a deal (deals.py): a
+  lie amended does not break his word;
+- broke: debts to it he did not pay back by their day (deals.py): a broken word, like a lie.
 
 The last two the conversational model weighs in character.
 """
@@ -36,10 +38,11 @@ class Record:
     heard: list[str] = field(default_factory=list)  # rumors: whom he lied to, about what
     kept: list[str] = field(default_factory=list)  # true claims to it
     amended: list[str] = field(default_factory=list)  # lies he made amends for, with it
+    broke: list[str] = field(default_factory=list)  # debts to it not paid back by their day
 
     @property
     def broken(self) -> bool:
-        return bool(self.lied)
+        return bool(self.lied or self.broke)
 
 
 class Trust:
@@ -58,6 +61,12 @@ class Trust:
             for f in facts
             if f.get("fact") == "amends" and npc in (f.get("npc"), f.get("to"))
         }
+        amended |= {
+            _lie(key)
+            for f in facts
+            if f.get("fact") == "deal" and f.get("npc") == npc
+            for key in f.get("forgive", [])
+        }
         for f in facts:
             quest = f.get("quest", "")
             title = f.get("title") or titles.get(quest) or quest
@@ -68,6 +77,18 @@ class Trust:
                 case "amends" if npc in (f.get("npc"), f.get("to")):
                     gold = int(f.get("gold", 0))
                     r.amended.append(f"«{title}»{f' — заплатил {gold} золотых' if gold else ''}")
+                case "deal" if f.get("npc") == npc and f.get("forgive"):
+                    gold = int(f.get("gold", 0))
+                    for key in f["forgive"]:
+                        what = titles.get(_lie(key)[0]) or _lie(key)[0]
+                        r.amended.append(f"«{what}»{f' — заплатил {gold} золотых' if gold else ''}")
+                case "broken" if f.get("npc") == npc:
+                    r.broke.append(f"обещал вернуть {f.get('what', '')}, а не вернул")
+                case "rumor" if f.get("to") == npc and f.get("kind") == "broken":
+                    about = f.get("about_name") or f.get("about", "")
+                    teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None
+                    told = f", со слов: {teller}" if teller else ""
+                    r.heard.append(f"{about} (не вернул долг: {f.get('title', '')}{told})")
                 case "rumor" if f.get("to") == npc:
                     about = f.get("about_name") or f.get("name") or f.get("from", "")
                     teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None
@@ -75,6 +96,7 @@ class Trust:
                 case "claim" if f.get("npc") == npc and f.get("truth"):
                     r.kept.append(f"«{title}»")
         r.heard = list(dict.fromkeys(r.heard))
+        r.amended = list(dict.fromkeys(r.amended))
         return r
 
     def broken(self, npc: str) -> bool:
@@ -90,6 +112,8 @@ class Trust:
         lines = []
         if r.lied:
             lines.append(f"- он уже лгал тебе: {'; '.join(r.lied)}. {WORD_BROKEN}")
+        if r.broke:
+            lines.append(f"- он не сдержал слово: {'; '.join(r.broke)}.{'' if r.lied else ' ' + WORD_BROKEN}")
         if r.heard:
             lines.append(f"- ты слышал, что он обманул других: {', '.join(r.heard)}")
         if r.kept:
@@ -105,6 +129,12 @@ class Trust:
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
     ) -> ToolOutcome | None:
         return None
+
+
+def _lie(key: str) -> tuple[str, str]:
+    """A lie's key (kind:about:quest, as amends.Lie.key) -> (quest, about)."""
+    _, about, quest = (key.split(":", 2) + ["", ""])[:3]
+    return quest, about
 
 
 def _titles(facts: list[Fact]) -> dict[str, str]:
