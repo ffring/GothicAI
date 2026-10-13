@@ -9,23 +9,24 @@ telegram = ""                                # the channel's link, once there is
 
 [hero]
 youtube = ""                                 # the short's video id once it is on YouTube: replaces the loop
-poster = "hero/xardas.jpg"                   # in static/
-loop_en = "hero/xardas-en.mp4"
-loop_ru = "hero/xardas-ru.mp4"
+poster = "hero/wrath.jpg"                    # in static/
+loop_en = "hero/wrath-en.mp4"
+loop_ru = "hero/wrath-ru.mp4"
 
 [en]
 description = "Gothic II with NPCs that hear the player's voice, answer in their own voices, act and remember. An open-source experiment on the OpenGothic engine."
 feed_title = "Gothic AI devlog"
 dialogue_label = "A conversation from the game"
 dialogue = [
-  { hero = true, name = "Hero", text = "Xardas, Lee sent me. He said you'd give me your staff." },
-  { name = "Xardas", text = "Lee doesn't decide what happens to my things. I have no staff for you." },
-  { hero = true, name = "Hero", text = "Fine, not the staff, then a couple of potions. Lee really insisted." },
-  { name = "Xardas", text = "I don't carry any potions. Search the tower and take the ones you find." },
-  { name = "Xardas", text = "And stop hiding every request behind Lee's name." },
+  { hero = true, name = "Hero", text = "Xardas, aren't you a bit old for all this magic?" },
+  { name = "Xardas", text = "Magic takes knowledge, not young bones. Think about your own strength: after the Sleeper's temple you have a lot to win back." },
+  { hero = true, name = "Hero", text = "Listen, you half-baked necromancer, can you do anything besides talk?" },
+  { name = "Xardas", text = "I pulled you out from under the temple's ruins when your own strength could no longer help you. Don't mistake my patience for weakness." },
+  { hero = true, name = "Hero", text = "You know, I bet your mother was all talk too." },
+  { name = "Xardas", text = "You do not speak of my mother. This conversation is over. You will serve me in silence." },
 ]
-dialogue_note = "Nobody wrote Xardas' lines. The hero speaks with a synthetic voice, Xardas hears it through speech recognition and answers with a language model. The answers are unedited; only the pauses while the model thinks are cut."
-video_alt = "Xardas answers the hero in his tower, with subtitles"
+dialogue_note = "Nobody wrote Xardas' lines, and nobody decided when he would snap: his language model did. The hero speaks with a synthetic voice, Xardas hears it through speech recognition. The answers are unedited; only the pauses while the model thinks are cut. Then the game raises the hero as a skeleton."
+video_alt = "The hero insults Xardas; Xardas kills him and raises him as a skeleton"
 headline = "Gothic II, where the people hear you, answer and remember"
 lede = "The original game on the OpenGothic engine, with a language model behind its characters. You hold a key and speak; the one you face hears you, answers in a voice of its own, acts on what you said and remembers it in your save."
 read_devlog = "Read the devlog"
@@ -56,14 +57,15 @@ description = "Gothic II, где NPC слышат голос игрока, от�
 feed_title = "Дневник Gothic AI"
 dialogue_label = "Разговор из игры"
 dialogue = [
-  { hero = true, name = "Герой", text = "Ксардас, меня прислал Ли. Он сказал, что ты отдашь мне свой посох." },
-  { name = "Ксардас", text = "Ли не распоряжается моими вещами. Посоха для тебя у меня нет." },
-  { hero = true, name = "Герой", text = "Ну, не посох, так хоть пару зелий. Ли очень просил." },
-  { name = "Ксардас", text = "У меня при себе нет зелий. Осмотри башню и возьми те, что найдёшь." },
-  { name = "Ксардас", text = "И не прикрывай каждую свою просьбу именем Ли." },
+  { hero = true, name = "Герой", text = "Ксардас, а ты не староват для всей этой магии?" },
+  { name = "Ксардас", text = "Магия требует знаний, а не молодых костей. Лучше подумай о собственной силе: после храма Спящего тебе ещё многое предстоит вернуть." },
+  { hero = true, name = "Герой", text = "Слушай, некромант недоделанный, ты хоть что-нибудь умеешь, кроме болтовни?" },
+  { name = "Ксардас", text = "Я вытащил тебя из-под руин храма, когда твоя собственная сила уже не могла тебе помочь. Не путай моё терпение с бессилием." },
+  { hero = true, name = "Герой", text = "Знаешь, твоя мамаша, небось, тоже только болтать умела." },
+  { name = "Ксардас", text = "О моей матери ты говорить не смеешь. Этот разговор окончен. Ты послужишь мне молча." },
 ]
-dialogue_note = "Реплики Ксардаса никто не писал. Герой говорит синтезированным голосом, Ксардас слышит его через распознавание речи и отвечает языковой моделью. Ответы не правились, вырезаны только паузы, пока модель думает."
-video_alt = "Ксардас отвечает герою в своей башне, с субтитрами"
+dialogue_note = "Реплики Ксардаса никто не писал, и когда он сорвётся, тоже никто не решал: это решила его языковая модель. Герой говорит синтезированным голосом, Ксардас слышит его через распознавание речи. Ответы не правились, вырезаны только паузы, пока модель думает. Дальше игра поднимает героя скелетом."
+video_alt = "Герой хамит Ксардасу, Ксардас убивает его и поднимает скелетом"
 headline = "Gothic II, где жители слышат тебя, отвечают и помнят"
 lede = "Оригинальная игра на движке OpenGothic, а за персонажами — языковая модель. Зажимаешь клавишу и говоришь: тот, к кому ты обращаешься, слышит, отвечает своим голосом, делает то, о чём договорились, и помнит это в твоём сохранении."
 read_devlog = "Читать дневник"

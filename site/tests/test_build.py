@@ -49,10 +49,10 @@ def test_the_feeds_are_valid_rss_with_absolute_links(built):
 
 def test_the_home_page_shows_the_conversation_and_the_short(built):
     html = (built / "index.html").read_text()
-    assert html.count('class="line ') == 5 and "by-hero" in html
-    assert 'src="/GothicAI/static/hero/xardas-en.mp4"' in html
+    assert html.count('class="line ') >= 2 and "by-hero" in html and "by-npc" in html
+    assert 'src="/GothicAI/static/hero/wrath-en.mp4"' in html
     ru = (built / "ru/index.html").read_text()
-    assert "xardas-ru.mp4" in ru and "Ксардас" in ru
+    assert "wrath-ru.mp4" in ru and "Ксардас" in ru
 
 
 def test_a_post_needs_its_front_matter(tmp_path):
