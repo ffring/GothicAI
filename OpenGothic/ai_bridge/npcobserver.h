@@ -1,6 +1,7 @@
 #pragma once
 
 #include <rapidjson/document.h>
+#include <Tempest/Vec>
 
 #include <cstdint>
 #include <functional>
@@ -55,6 +56,14 @@ class NpcObserver final {
       ScriptFn    state;            // fight/flee: done when the npc leaves this script state
       bool        entered  = false;
       uint64_t    maxMs    = 0;
+      // give (v15): the item changes hands once the walk and the turn are done
+      size_t      item     = 0;
+      size_t      count    = 0;
+      size_t      giveTo   = size_t(-1);  // the receiver's instance
+      // start_activity with `arrive` (v15): "arrived" once it does the activity within `radius` of `at`
+      bool          arrival = false;
+      Tempest::Vec3 at;
+      float         radius  = 0;
       };
 
     void emitRoster(World& world);

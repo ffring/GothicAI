@@ -1,0 +1,16 @@
+# P4 (wave 2 step 1/3): does an npc that walked up to the hero start a dialog of the scripts? Hilda and Maleth
+# have important greetings waiting, Lobart has none (it needs ZS_TALK). bench.log: "dialog started: <npc>".
+# Each one in its own run of the hero: a dialog holds the player.
+cheat god
+set time 10 0
+goto NW_FARM1_OUT_01
+wait 4000
+watch BAU_950_LOBART
+rec lobart
+come BAU_950_LOBART
+wait 15000
+nearby 800
+rec hilda
+come BAU_951_HILDA
+wait 20000
+nearby 800

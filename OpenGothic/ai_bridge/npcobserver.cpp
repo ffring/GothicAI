@@ -357,6 +357,7 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
       }
     }
   ScriptFn state;
+  Running  run;  // what is tracked until npc_idle
 
   if(action=="say_svm") {
     std::string svm = upper(JsonRead::str(args,"svm"));
@@ -430,6 +431,10 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     auto until = world.time();
     until.addMilis(uint64_t(std::clamp<int64_t>(JsonRead::integer(args,"minutes",60),1,24*60))*60*1000);
     npc->startState(state,wp->name,until,false);
+    // `arrive` (v15): npc_idle "arrived" once it is there doing it, not only when it leaves it
+    run.arrival = JsonRead::boolean(args,"arrive",false);
+    run.at      = wp->position();
+    run.radius  = float(std::clamp<int64_t>(JsonRead::integer(args,"radius",500),50,5000));
     }
   else if(action=="set_routine") {
     // Npc_ExchangeRoutine: another set of routine entries (Rtn_<name>_<id>), effective at once
@@ -442,6 +447,27 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     npc->excRoutine(fn);
     npc->resumeAiRoutine();
     }
+  else if(action=="give") {
+    // to another npc (v15), as give_item does for an attached one: walks up if needed, turns, the item
+    // changes hands once its queue is done (checkRunning). The hero gets things only through deals
+    if(target==pl) {
+      reply(id,symbol,"rejected","give: to an npc only");
+      return;
+      }
+    const auto   name = upper(JsonRead::str(args,"item"));
+    const size_t cls  = world.script().findSymbolIndex(name);
+    const size_t have = cls==size_t(-1) ? 0 : npc->inventory().itemCount(cls);
+    if(have==0) {
+      reply(id,symbol,"rejected","npc has no item " + name);
+      return;
+      }
+    run.item   = cls;
+    run.count  = std::min(have,size_t(std::max<int64_t>(1,JsonRead::integer(args,"count",1))));
+    run.giveTo = target->instanceSymbol();
+    if(npc->qDistTo(*target)>AiNpc::GiveRange*AiNpc::GiveRange)
+      npc->aiPush(AiQueue::aiGoToNpc(target));
+    npc->aiPush(AiQueue::aiTurnToNpc(target));
+    }
   else {
     reply(id,symbol,"rejected","unknown action: " + std::string(action));
     return;
@@ -450,9 +476,13 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
   // a newer action for the same npc replaces the tracking of the older one
   running.erase(std::remove_if(running.begin(),running.end(),[&](const Running& r){ return r.symbol==symbol; }),
                 running.end());
-  const uint64_t maxMs = action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs);
-  running.push_back({std::string(id),symbol,world.script().findSymbolIndex(symbol),world.tickCount(),
-                     state,false,maxMs});
+  run.id       = std::string(id);
+  run.symbol   = symbol;
+  run.instance = world.script().findSymbolIndex(symbol);
+  run.start    = world.tickCount();
+  run.state    = state;
+  run.maxMs    = action=="start_activity" ? ActivityMaxMs : (state.isValid() ? StateMaxMs : ActMaxMs);
+  running.push_back(std::move(run));
   reply(id,symbol,"queued","");
   }
 
@@ -498,13 +528,23 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
   for(size_t i=0; i<running.size();) {
     auto& r   = running[i];
     Npc*  npc = world.findNpcByInstance(r.instance);
-    const bool gone = npc==nullptr || npc->isDead() || npc->isDown() || !owner(r.symbol).empty();
-    bool       done = false;
+    const bool  gone   = npc==nullptr || npc->isDead() || npc->isDown() || !owner(r.symbol).empty();
+    bool        done   = false;
+    std::string reason = "done";
+    std::string detail;
     if(!gone && r.state.isValid()) {
       // a script state: done once the npc has entered it and left it again
       const bool in = npc->isInState(r.state);
       r.entered = r.entered || in;
       done      = (r.entered && !in) || (!r.entered && now>r.start+StateStartMs);
+      // there and doing it (v15): the state has begun (its start pushes the walk to the spot) and the walk
+      // is over (queue, go-to and waits empty). From the feet: the waypoint is on the ground, and qDistTo's
+      // center is about a metre above it, so a small radius could never be met
+      if(r.arrival && in && now>r.start+ActGraceMs && npc->isAiQueueEmpty() &&
+         (npc->position()-r.at).quadLength()<=r.radius*r.radius) {
+        done   = true;
+        reason = "arrived";
+        }
       } else {
       done = !gone && now>r.start+ActGraceMs && npc->isAiQueueEmpty();
       }
@@ -513,11 +553,25 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
       ++i;
       continue;
       }
-    emit(JsonWriter("npc_idle")
-           .str("npc",r.symbol)
-           .str("act",r.id)
-           .str("reason",gone ? "gone" : (done ? "done" : "timeout"))
-           .finish());
+    if(gone)
+      reason = "gone"; else
+    if(!done)
+      reason = "timeout"; else
+    if(r.giveTo!=size_t(-1)) {
+      // a give (v15): walked up and turned, the item changes hands now
+      Npc* to = world.findNpcByInstance(r.giveTo);
+      bool ok = false;
+      if(to==nullptr || to->isDead())
+        detail = "target npc is gone"; else
+        ok = AiNpc::giveItem(*npc,*to,r.item,r.count,detail);
+      if(!ok)
+        reason = "failed";
+      }
+    JsonWriter j("npc_idle");
+    j.str("npc",r.symbol).str("act",r.id).str("reason",reason);
+    if(!detail.empty())
+      j.str("detail",detail);
+    emit(j.finish());
     running.erase(running.begin()+ptrdiff_t(i));
     }
   }

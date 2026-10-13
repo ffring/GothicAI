@@ -1,0 +1,136 @@
+# Two people talk about the hero and look at each other (docs/npc-tools.md, wave 2 step 2), with an AI server
+# (GOTHIC_AI_URL) whose scenario stages them (`serve --scenario gossip_demo --llm fake --no-tts`): Lobart has
+# caught the hero lying, Hilda is put 5 m from him (NW_FARM1_PATH_01), the hero 7 m from them; Lobart turns
+# to her and they say three lines in turn, each to the other. During each line both should show `look=talk
+# at=<the other>` (`nearby`, `pair`), the watched Hilda's `gaze err` within 15 degrees, and the frames of the
+# sheet show them facing each other. The game's own lines and SVMs of anyone around are `output` in bench.log.
+cheat god
+goto NW_FARM1_OUT_01
+watch BAU_951_HILDA
+view clean 60
+wait 6000
+cam follow 450 110 90   # from her left side: her profile, Lobart in front of her
+cam look 150
+rec gossip
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+shot gossip
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+nearby 2500
+pair BAU_950_LOBART BAU_951_HILDA
+where BAU_951_HILDA NW_FARM1_PATH_01
+wait 1000
+stop
