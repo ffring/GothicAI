@@ -168,6 +168,19 @@ sent as a lossless WAV: `voice/raw/03-2.wav` is take 2 of line 3, 48 kHz mono 24
 keeps the chosen ones. Embedded browsers (an app's preview pane) may refuse the microphone: open the address
 in Chrome or Safari. Headphones if the game's sound is on, or it ends up in the take.
 
+Then the chosen takes become the short's voice:
+
+```bash
+uv run gothic-shorts words dice           # -> voice/clean/NN.wav, words.ru.json
+```
+
+Each take is cleaned (low cut, de-esser, gentle compression, the silence at both ends trimmed to a breath) and
+aligned on the GPU server, and the lines are laid one after another with 0.35 s between them
+(`voice/gaps.json`, e.g. `{"4": 0.7}`, gives a line a longer pause after it). `words.ru.json` has every word's
+time on the short's timeline, for the plan's captions and for placing the picture on the words. The captions
+follow `script.ru.said.txt` when it exists: what was really said, where it differs from the script. A line whose
+take, text and cleaning have not changed is not aligned again.
+
 ## Uploading to YouTube
 
 ```bash

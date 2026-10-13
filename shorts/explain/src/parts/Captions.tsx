@@ -7,7 +7,7 @@ const MAX_WORDS = 4;
 // a page does not end on these: they belong to the word after them
 const LEANS = new Set(
   ('в во из на и а но не до к ко с со по за о об от у же ли что как ' +
-    'a an the of to in on at by for from and or but not').split(' '),
+    'a an the of to in on at by for from with into as than and or but not').split(' '),
 );
 const leans = (w: Word) => LEANS.has(w.text.toLowerCase().replace(/[^\p{L}]/gu, ''));
 const HOLD = 0.35; // a page stays this long after its last word unless the next one starts
@@ -22,8 +22,12 @@ export const pages = (lines: Word[][]) => {
       page.push(w);
       const breaks = /[,:;—–-]$/.test(w.text) || w.text === '—';
       if (page.length >= MAX_WORDS || (breaks && page.length >= 2)) {
-        // a full page ending on a preposition hands it to the next one
-        const carry = !breaks && page.length > 1 && leans(page[page.length - 1]) ? page.splice(-1) : [];
+        // a full page ending on prepositions ("of the") hands them to the next one
+        let cut = page.length;
+        while (!breaks && cut > 1 && leans(page[cut - 1])) {
+          cut--;
+        }
+        const carry = page.splice(cut);
         out.push(page);
         page = carry;
       }

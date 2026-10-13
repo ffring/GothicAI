@@ -18,6 +18,7 @@ from .shot import Shot, ShotError, load
 from .studio import StudioError, serve, workspace
 from .timeline import build, read_events
 from .voice import VoiceError, voice_lines
+from .words import prepare
 from .youtube import YouTubeError
 
 SHOTS = Path(__file__).resolve().parents[2] / "shots"
@@ -111,6 +112,15 @@ def cmd_align(args: argparse.Namespace) -> int:
 
 def cmd_studio(args: argparse.Namespace) -> int:
     serve(workspace(args.short), args.lang, args.port, open_browser=not args.no_browser)
+    return 0
+
+
+def cmd_words(args: argparse.Namespace) -> int:
+    done = prepare(workspace(args.short), args.lang, args.language)
+    for line in done["lines"]:
+        w = line["words"]
+        print(f"{line['n']:2d} {w[0]['start']:6.2f}-{w[-1]['end']:6.2f}  " + " ".join(x["text"] for x in w))
+    print(f"words.{done['lang']}.json: {len(done['lines'])} lines, {done['duration']:.1f} s")
     return 0
 
 
@@ -219,6 +229,12 @@ def main() -> None:
     s.add_argument("--port", type=int, default=47871)
     s.add_argument("--no-browser", action="store_true", help="do not open the browser")
     s.set_defaults(fn=cmd_studio)
+
+    s = sub.add_parser("words", help="cleaned, aligned, laid out voice of an explainer: words.<lang>.json")
+    s.add_argument("short", help="the short's folder, or its name in ~/.local/share/gothic-ai/explain")
+    s.add_argument("--lang", default="ru", help="the script: script.<lang>[.said].txt (ru)")
+    s.add_argument("--language", default="Russian", help="the aligner's language (Russian)")
+    s.set_defaults(fn=cmd_words)
 
     s = sub.add_parser("youtube", help="YouTube: sign in (the browser opens), the channel, the token's life")
     s.add_argument("action", choices=["login"])
