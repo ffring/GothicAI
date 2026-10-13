@@ -1,0 +1,9 @@
+{
+ "model": "tuned-g8c",
+ "requests": 228,
+ "load_s": 10.2,
+ "ms_p50": 153.0,
+ "ms_p95": 176.3,
+ "peak_alloc_gb": 3.93,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}
