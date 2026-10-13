@@ -1,0 +1,205 @@
+# The hero's balance by hand against G2's dice (docs/manual-aim.md, stage 4): four tiers as G2 has them (the
+# talent, the bow, its strength and dexterity, the trained animations), at a farmer 10, 20 and 30 m off, aimed
+# at the body and at the head; 30 shots each, held 300-600 ms (the sway is a function of time), a seed each
+cheat god
+set time 12 0
+view clean
+goto NW_XARDAS_TOWER_VALLEY_01
+turn 225
+wait 500
+manual on
+give ItRw_Arrow 2000
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+still BAU_904_BAUER on
+cam follow 300 80 165
+cam look 150
+
+equip ItRw_Bow_L_01
+stats str 10 dex 10 bow 10 talent auto
+tap bow
+wait 1500
+pin BAU_904_BAUER 1000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 1
+rec nov10_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 2
+rec nov10_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 2000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 3
+rec nov20_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 4
+rec nov20_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 3000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 5
+rec nov30_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 6
+rec nov30_head novideo
+volley 30 300 1 300
+stop
+
+tap parade
+wait 800
+tap bow
+wait 1500
+equip ItRw_Bow_L_03
+stats str 30 dex 30 bow 30 talent auto
+tap bow
+wait 1500
+pin BAU_904_BAUER 1000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 7
+rec lrn10_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 8
+rec lrn10_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 2000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 9
+rec lrn20_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 10
+rec lrn20_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 3000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 11
+rec lrn30_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 12
+rec lrn30_head novideo
+volley 30 300 1 300
+stop
+
+tap parade
+wait 800
+tap bow
+wait 1500
+equip ItRw_Bow_M_01
+stats str 60 dex 60 bow 60 talent auto
+tap bow
+wait 1500
+pin BAU_904_BAUER 1000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 13
+rec mid10_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 14
+rec mid10_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 2000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 15
+rec mid20_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 16
+rec mid20_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 3000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 17
+rec mid30_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 18
+rec mid30_head novideo
+volley 30 300 1 300
+stop
+
+tap parade
+wait 800
+tap bow
+wait 1500
+equip ItRw_Bow_H_03
+stats str 150 dex 150 bow 100 talent auto
+tap bow
+wait 1500
+pin BAU_904_BAUER 1000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 19
+rec mas10_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 20
+rec mas10_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 2000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 21
+rec mas20_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 22
+rec mas20_head novideo
+volley 30 300 1 300
+stop
+pin BAU_904_BAUER 3000 0 0
+wait 300
+zones BAU_904_BAUER
+aimat BAU_904_BAUER body
+seed 23
+rec mas30_body novideo
+volley 30 300 1 300
+stop
+aimat BAU_904_BAUER head
+seed 24
+rec mas30_head novideo
+volley 30 300 1 300
+stop
