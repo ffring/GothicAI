@@ -253,6 +253,7 @@ def test_words_after_a_scene_go_to_one_of_its_npcs():
     scene = [LOBART, HILDA]  # two were talking near him, Lobart last
     # a name, his focus and his partner come first
     assert addressee("Диего, ты слышал?", None, people, None, scene).id == "PC_THIEF"
+    assert addressee("Диэго, ты слышал?", None, people, None, scene).id == "PC_THIEF"  # as misheard
     assert addressee("Ну?", "PC_THIEF", people, None, scene).why == "focus"
     assert addressee("Ну?", None, people, XARDAS, scene).why == "partner"
     # then the scene, before whoever stands in front of him: the nearest of it he sees...
