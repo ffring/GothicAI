@@ -575,7 +575,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.deals)
         talk.on_talk_end.append(state.deals.end)
         if args.wrath or args.scenario == "wrath":
-            # an ending off the main game: insult Xardas enough and he raises you as a skeleton
+            # insult Xardas enough and he raises you as a skeleton (on by default, --no-wrath turns it off)
             state.wrath = Wrath(link, state.dialogue, journal=journal)
             state.dialogue.extensions.append(state.wrath)
         debts = asyncio.create_task(state.deals.run())  # a debt not paid back by its day is a broken word
@@ -1481,21 +1481,25 @@ def main() -> None:
         action="store_true",
         help="threats to free npc's go straight to the game's scripts, not to the behavioral model first",
     )
+    # what we built is on by default; --no-wrath, --no-apply-threats, --no-apply-day turn it off
     p.add_argument(
         "--wrath",
-        action="store_true",
-        help="npc's take offense and answer insolence with force (docs/xardas-wrath.md; off the main game)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's take offense and answer insolence with force (docs/xardas-wrath.md)",
     )
     p.add_argument(
         "--apply-threats",
-        action="store_true",
-        help="carry out the behavioral model's fights and flights (default: traced only until trained)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="carry out the behavioral model's fights and flights (off: traced only, in shadow)",
     )
     p.add_argument(
         "--apply-day",
-        action="store_true",
-        help="carry out the behavioral model's day plans from the new menu (default: traced in shadow until "
-        "measured)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="carry out the behavioral model's day plans from the new menu (off: `do` traced in shadow, "
+        "the old `plan` applied)",
     )
     _add_voice_args(p)
     _add_llm_args(p)

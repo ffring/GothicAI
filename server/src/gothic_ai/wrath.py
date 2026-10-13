@@ -1,5 +1,5 @@
-"""How much of the hero's insolence an npc takes (docs/xardas-wrath.md), an ending off the main game: on
-with `serve --wrath`.
+"""How much of the hero's insolence an npc takes (docs/xardas-wrath.md): on by default, off with
+`serve --no-wrath`.
 
 The conversational model judges each insult with `take_offense` (how bad, and whether it is the one thing
 the npc never forgives); the code keeps the scales: what the npc took, how much patience it has left, and the
