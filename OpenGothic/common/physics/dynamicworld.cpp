@@ -1059,7 +1059,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         b.move(pos + (to-pos)*a);
         if(l*a>0.1f) {
           b.setDirection({dir.x(),dir.y(),dir.z()});
-          b.addPathLen(l*a);
+          b.addPathLen((to-pos).length()*a);
           b.addHit();
           if(b.cb!=nullptr)
             b.cb->onCollide(callback.matId);

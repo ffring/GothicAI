@@ -8,6 +8,7 @@ namespace Tempest {
 class Pixmap;
 }
 class PlayerControl;
+class Npc;
 
 // Test bench for developing game mechanics: runs a scenario file inside the game with a fixed time step,
 // drives the player and the camera, records video with a debug overlay and per-frame metrics.
@@ -21,8 +22,11 @@ namespace TestBench {
   // The captured frame: draws the overlay and writes it to the video; uiScale: the interface's (the
   // crosshair is drawn that big)
   void     capture(Tempest::Pixmap& frame, float uiScale);
-  // An event the game reports (an arrow hit): into the bench log, if a scenario runs
+  // An event the game reports (an arrow hit): into the bench log, if a scenario runs; also a `note` of
+  // events.jsonl (with the time and the frame)
   void     note(const char* text);
+  // who it is, for the notes: its script symbol (the names are in the game's code page), "none"
+  std::string_view who(const Npc* npc);
   // Filming a short (OPENGOTHIC_BENCH_REALTIME): in step with the wall clock, the window is not drawn
   bool     filming();
   // `ui on`: the captured frame has the interface on top, as the player sees it (subtitles, the deal window)
@@ -36,4 +40,6 @@ namespace TestBench {
   void     aiHeard(std::string_view text, std::string_view to);
   // set by the bridge: an npc of the AI speaks now or has a line waiting for its turn
   extern std::function<bool()> aiBusy;
+  // set by the bridge: whether a thing of it has got that far (`waitai necro risen`: the necromancer's answer)
+  extern std::function<bool(std::string_view key, std::string_view stage)> aiReached;
   }

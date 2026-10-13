@@ -10,6 +10,7 @@
 #include "game/movealgo.h"
 #include "game/inventory.h"
 #include "game/fightalgo.h"
+#include "game/archerai.h"
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
@@ -329,6 +330,16 @@ class Npc final {
     bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
     // lets the arrow go along the arrow: drawn that far, thrown off by the release
     bool      releaseArrow(float draw, const Archery::Stats& st);
+    // one frame of the bow aimed by hand at `at`, the hero's (PlayerControl) or an npc's (ArcherAi): the
+    // caller fills draw, breath, the stance and dt; the turn, ready, reload and loaded are measured here,
+    // the reload plays as fast as the stats say; true: an arrow left
+    bool      tickManualAim(const Tempest::Vec3& at, Archer::Input in, const Archery::Stats& st);
+    // the upper body can aim by hand (Aim on, the bones there): else an npc shoots by the dice
+    bool      canAimByHand() const { return visual.isAimValid(); }
+    ArcherAi& archerAi() { return archAi; }
+    // the bow aimed by hand no more: the reload's tempo back, the string let down, no aim point; idle: back
+    // to standing with the bow (the hero; an npc's fight plays its own animation)
+    void      endManualAim(bool idle);
     // where an arrow passing from-to hits this one, t: how far from 'from'
     auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
@@ -337,6 +348,11 @@ class Npc final {
     void        fitHitZones() { visual.fitHitZones(); }
     std::string bowDump() const { return visual.bowDump(); }
     std::string animInfo(std::string_view name) const { return visual.animInfo(name); }
+    // ms the animation of that name takes as this one plays it (its overlays: the trained archers' reload)
+    float       animTime(std::string_view name) const { return visual.animTime(name); }
+    // the test bench: hit, it neither stumbles nor flinches (a target that keeps its pose)
+    void        setBenchStill(bool s) { benchStill = s; }
+    bool        isBenchStill() const { return benchStill; }
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
@@ -710,6 +726,9 @@ class Npc final {
     uint64_t                       talkUntil       =0;
     Attention                      attention;
     Archer                         arch;
+    ArcherAi                       archAi;
+    Tempest::Vec3                  aimDirPrev  = {};  // the manual aim's last direction (a turn shakes it)
+    float                          reloadTempo = 1;   // how fast the reload plays (set on the model)
     bool                           manualAim   = false;
     Tempest::Vec3                  manualPoint = {};
     Tempest::Vec2                  manualSway  = {};
@@ -718,6 +737,7 @@ class Npc final {
     float                          stancePeek   = 0;
     float                          stanceCant   = 0;
     float                          stanceWalk   = 0;
+    bool                           benchStill   = false;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

@@ -257,7 +257,18 @@ std::string ChatOverlay::pressDeal() {
   return "sent";
   }
 
+void ChatOverlay::setHidden(bool h) {
+  if(hidden==h)
+    return;
+  hidden = h;
+  if(hidden)
+    closeInput();
+  update();
+  }
+
 void ChatOverlay::paintEvent(PaintEvent& e) {
+  if(hidden)
+    return;
   Painter p(e);
   if(!deal.id.empty())
     paintDeal(p);

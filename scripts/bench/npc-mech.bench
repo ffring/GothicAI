@@ -1,0 +1,83 @@
+# NPC archers aiming by hand (docs/manual-aim.md, stage 4, game/archerai): four of a kind on an arc shoot at the
+# hero (immortal, still) where they stand (`archer`, no fight AI): with no error of their own (the bow's sway
+# only), with G2's dice turned into aim, by the dice; then in a fight; one archer filmed
+cheat god
+set time 12 0
+view clean
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02   # Onar's field: open and level for 25 m round the facing (open)
+turn 210
+wait 500
+clear 3000
+immortal player on
+still player on
+zones player
+cam follow 700 250 150
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+npcaim sigma 0
+archer all at player
+wait 3000
+rec bdtm_phys novideo
+wait 45000
+stop
+npcaim sigma off
+rec bdtm_aim novideo
+wait 45000
+stop
+npcaim off
+rec bdtm_dice novideo
+wait 45000
+stop
+archer off
+
+clear 3000
+arc PAL_255_RITTER 4 1350 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+npcaim on second
+npcaim sigma 0
+archer all at player
+wait 3000
+rec pal_phys novideo
+wait 45000
+stop
+npcaim sigma off
+rec pal_aim novideo
+wait 45000
+stop
+npcaim off
+rec pal_dice novideo
+wait 45000
+stop
+archer off
+
+# a fight: the fight AI decides, the archers aim by hand
+clear 3000
+arc BDT_1003_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+fight all player
+wait 3000
+rec fight_hand novideo
+wait 45000
+stop
+
+# one archer close up: raise, draw, hold, let go, reload
+clear 3000
+arc BDT_1003_BANDIT_M 1 1350 0
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+archer all at player
+watch BDT_1003_BANDIT_M
+cam follow 260 150 90
+wait 2000
+rec one_side
+wait 8000
+stop
+archer off

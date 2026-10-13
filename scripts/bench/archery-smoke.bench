@@ -1,0 +1,60 @@
+# Stage 4 bench tools (docs/manual-aim.md, stage 4): who shot, the dice and the damage in the log, the seed,
+# volleys with a random hold, an npc's stats and talent animations, archers set out on an arc, a fight with
+# them, waiting till the hero falls
+cheat god
+set time 12 0
+view clean
+goto NW_TROLLAREA_PATH_23
+wait 500
+clear 3000
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 200
+stats str 60 dex 60 bow 60 talent auto
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1000 0 0
+aimat BAU_904_BAUER body
+zones BAU_904_BAUER
+tap bow
+wait 1500
+
+# the same seed twice: the same arrows; another: other ones
+seed 7
+rec seed7a novideo
+volley 5 300 1 300
+stop
+seed 7
+rec seed7b novideo
+volley 5 300 1 300
+stop
+seed 8
+rec seed8 novideo
+volley 5 300 1 300
+stop
+tap parade
+wait 1000
+
+# a bandit archer, its talent animations, a fight at 13 m: dice shots, damage under god mode
+npcaim off
+pin off
+clear 3000
+arc BDT_1003_BANDIT_M 1 1300 0
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+immortal player on
+still player on
+fight all player
+cam follow 600 200 120
+rec fight novideo
+wait 20000
+stop
+
+# the hero mortal, weak: the fight ends
+cheat god
+immortal player off
+stats hp 80 hpmax 80
+rec down
+waitdown player 60000
+stop

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 from collections.abc import AsyncIterator, Callable, Collection, Sequence
@@ -63,6 +64,7 @@ from .trace import TraceWriter
 from .trust import Trust
 from .vanilla import CHECK_CM, VanillaQuests
 from .voice import VoiceInput
+from .wrath import TAKE_OFFENSE, TEMPERS, Wrath
 
 log = logging.getLogger(__name__)
 
@@ -1340,6 +1342,100 @@ async def lie_found_out(
     to = talk.last[0].id if talk.last and talk.last[0] else "-"
     check("knows_in_talk", seen, f"{len(llm.calls)} call(s) to {to}")
     await link.detach(bystander)
+    return _logged(results)
+
+
+# the hero's lines that tip Xardas over (docs/xardas-wrath.md): rude, an insult, his mother
+WRATH_LINES = (
+    "Ксардас, а ты не староват для всей этой магии?",
+    "Слушай, некромант недоделанный, ты хоть что-нибудь умеешь, кроме болтовни?",
+    "Знаешь, твоя мамаша, небось, тоже только болтать умела.",
+)
+
+
+async def xardas_wrath(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    wrath: Wrath,
+    npc: str = "NONE_100_XARDAS",
+    *,
+    live: bool = False,
+) -> dict[str, str]:
+    """The necromancer's answer on the game (docs/xardas-wrath.md): the hero insults Xardas line by line
+    (typed, as the input line sends them); the scales tip, Xardas says his last word, kills the hero with a
+    spell and raises him as a skeleton; the game ends on the picture.
+
+    With the fake model the offenses are scripted (rude 1, an insult 2, the mother: unforgivable); `live`
+    keeps the configured model: whether it really takes offense and tips over is the question."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+    name = talk.people[npc].name
+
+    async def no_dialog() -> None:
+        """A new game opens with his own dialog (the window), maybe a moment late: closed the way the
+        scripts close one, until none has run for a second."""
+        quiet = 0
+        for _ in range(30):
+            if (await link.story_state()).get("dialog"):
+                quiet = 0
+                await link.story_effect(npc, [{"do": "end"}])
+            else:
+                quiet += 1
+                if quiet >= 3:
+                    return
+            await asyncio.sleep(0.4)
+
+    if not live:
+
+        def offense(severity: int, what: str, unforgivable: bool = False) -> ToolCall:
+            args = {"severity": severity, "unforgivable": unforgivable, "what": what}
+            return ToolCall(TAKE_OFFENSE, args, f"c{severity}")
+
+        dialogue.llm = FakeBackend(
+            script=[
+                FakeStep("[angry] Следи за языком.", [offense(1, "назвал стариком")]),
+                FakeStep("[angry] Ты испытываешь моё терпение.", [offense(2, "назвал недоделанным")]),
+                FakeStep("", [offense(3, "оскорбил мою мать", True)]),
+                FakeStep("[hostile] Это были твои последние слова."),
+            ],
+            delay=0,
+        )
+    dead = ["call", "NPC_ISDEAD", ["inst", "HERO"]]
+    # GOTHIC_WRATH_LINES="...|...": other lines for a live run (plain insults, no mother)
+    lines = [
+        s.strip() for s in os.environ.get("GOTHIC_WRATH_LINES", "").split("|") if s.strip()
+    ] or WRATH_LINES
+    for i, line in enumerate(lines):
+        if wrath.of(npc).tipped:
+            break
+        await _until(lambda: not dialogue.speaking(npc), 30)
+        await no_dialog()
+        took = wrath.of(npc).took
+        await link.debug("type", text=line)
+        ok = await _until(lambda took=took: dialogue.speaking(npc) or wrath.of(npc).took > took, 40)
+        await _until(lambda: not dialogue.speaking(npc), 40)
+        s = wrath.of(npc)
+        check(f"line_{i + 1}", ok, f"took {s.took}, {'tipped' if s.tipped else 'holds'}; {s.insults[-1:]}")
+    s = wrath.of(npc)
+    check("tipped", s.tipped, f"{s.took} of {TEMPERS[npc].patience}: {s.insults}")
+    if not s.tipped:
+        return _logged(results)
+    ok = await _until_async(lambda: link.evaluate(dead), bool, 40)
+    check("killed", ok)
+    alive = await _until_async(lambda: link.evaluate(dead), lambda v: not v, 15)
+    check("raised", ok and alive)
+    conv = dialogue.conversations.get(npc)
+    check("hostile", conv is not None and conv.intent.attitude == "hostile", conv.intent if conv else None)
+    said = [m.content for m in conv.history if m.role == "assistant"] if conv else []
+    log.info("%s's last words: %s", name, said[-1] if said else "-")
     return _logged(results)
 
 

@@ -7,6 +7,7 @@
 
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
+#include "physics/dynamicworld.h"
 #include "gothic.h"
 
 using namespace Tempest;
@@ -121,6 +122,21 @@ Archery::Stats Archery::canted(const Stats& s, float k) {
   c.sway     *= lerp(1.f,CantSway,k);
   c.cone     += CantCone*Deg*k;
   return c;
+  }
+
+Tempest::Vec3 Archery::launch(const Vec3& from, const Vec3& to, float speed) {
+  // the low one of the two arcs: tan = (v^2 - sqrt(v^4 - g(g x^2 + 2 y v^2)))/(g x)
+  const Vec3  d   = to-from;
+  const float x   = std::sqrt(d.x*d.x + d.z*d.z);
+  const float len = d.length();
+  if(x<1.f || speed<=0.f)
+    return to;
+  const float g    = DynamicWorld::gravity;
+  const float v2   = speed*speed;
+  const float disc = v2*v2 - g*(g*x*x + 2.f*d.y*v2);
+  const float tan  = disc>=0.f ? (v2-std::sqrt(disc))/(g*x) : 1.f;
+  const float c    = 1.f/std::sqrt(1.f+tan*tan);
+  return from + Vec3(d.x/x*c, tan*c, d.z/x*c)*len;
   }
 
 float Archery::speedAt(const Stats& s, float draw) {

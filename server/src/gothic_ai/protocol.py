@@ -9,8 +9,9 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-# v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: sounds at once
-PROTOCOL_VERSION = 13
+# v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
+# answer (raise_dead), v14: sounds at once (say.filler)
+PROTOCOL_VERSION = 14
 
 # --- game -> server -----------------------------------------------------------
 
@@ -619,7 +620,7 @@ class SayCmd(_Command):
     # are not ordered by the game: the server sends the next one when the previous has been said.
     overlay: bool | None = None
     mood: Mood | None = None  # v9: the face while the line is said; none: the face stays as it is
-    # v13: "Хм...", "Что?!" said at once while the model thinks: the npc goes on thinking after it (the
+    # v14: "Хм...", "Что?!" said at once while the model thinks: the npc goes on thinking after it (the
     # eyes aside)
     filler: bool | None = None
 
@@ -818,6 +819,29 @@ class StoryEffectCmd(_Command):
     npc: str
     effects: list[dict[str, Any]]
     check: bool | None = None
+
+
+class EndCard(BaseModel):
+    """The picture the game ends on (raise_dead): a file the game reads, a title and a line, plain text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    image: str = ""
+    title: str = ""
+    text: str = ""
+
+
+class RaiseDeadCmd(_Command):
+    """The necromancer's answer (v13, docs/xardas-wrath.md), an ending off the main game: `npc` casts
+    `spell` (an SPL_* symbol, SPL_SKULL by default) at the hero until he falls, raises him where he fell as a
+    skeleton, the screen goes black and `card` comes up; a key takes the player to the main menu. The game
+    answers `result` at once (ok: it began)."""
+
+    type: Literal["raise_dead"] = "raise_dead"
+    req: str
+    npc: str
+    spell: str | None = None
+    card: EndCard
 
 
 class DealTerm(BaseModel):

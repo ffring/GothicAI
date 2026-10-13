@@ -89,9 +89,14 @@ def cmd_subs(args: argparse.Namespace) -> int:
 
 
 def cmd_youtube_login(args: argparse.Namespace) -> int:
-    token = youtube.access_token()
-    cid, title = youtube.channel(token)
+    token = youtube.sign_in()
+    cid, title = youtube.channel(token["access_token"])
     print(f"signed in: channel {title} ({cid}); token in {youtube.TOKEN}")
+    if left := token.get("refresh_token_expires_in"):
+        print(f"the app is in testing: sign in again in {left / 86400:.0f} days "
+              f"(or publish it: Google Auth Platform, Audience, Publish app)")
+    else:
+        print("the token does not expire")
     return 0
 
 
@@ -113,6 +118,11 @@ def cmd_upload(args: argparse.Namespace) -> int:
         return 1
     vid = youtube.upload(video, meta, token)
     print(f"uploaded: https://youtu.be/{vid}  (id {vid})")
+    got = youtube.privacy(youtube.access_token(), vid)
+    if got != meta.privacy:
+        raise YouTubeError(f"YouTube made the video {got}, not {meta.privacy}: the project may need "
+                           f"YouTube's audit (an email about a video locked as private says so)")
+    print(f"privacy: {got}")
     return 0
 
 
@@ -168,17 +178,18 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_subs)
 
-    s = sub.add_parser("youtube", help="YouTube: sign in once (the browser opens), show the channel")
+    s = sub.add_parser("youtube", help="YouTube: sign in (the browser opens), the channel, the token's life")
     s.add_argument("action", choices=["login"])
     s.set_defaults(fn=cmd_youtube_login)
 
     s = sub.add_parser("upload", help="upload a cut short to YouTube (private unless --privacy)")
     s.add_argument("video", help="the cut short, e.g. .shorts/compare/bodies/short-ru.mp4")
     s.add_argument("--meta", required=True,
-                   help="the short's .shorts/<name>/youtube.json: <lang>: title, description, tags, synthetic")
+                   help="the short's .shorts/<name>/youtube.json: <lang>: title, description, tags, "
+                        "synthetic")
     s.add_argument("--lang", default="ru")
     s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
-                   help="an API project without YouTube's audit can upload private only")
+                   help="public goes straight out, no audit needed; the status is read back after the upload")
     s.add_argument("--channel", default=youtube.CHANNEL,
                    help="upload only to this channel id (GOTHIC_YOUTUBE_CHANNEL, the project's GothicAI)")
     s.add_argument("--yes", action="store_true", help="do not ask before uploading")

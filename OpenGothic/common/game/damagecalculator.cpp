@@ -8,6 +8,7 @@
 #include "world/bullet.h"
 #include "game/archery.h"
 #include "gothic.h"
+#include "testbench.h"
 
 // https://forum.worldofplayers.de/forum/threads/127320-Damage-System?p=2198181#post2198181
 // https://strafkolonie-online.net/forum/board/thread/1895-info-erkl%C3%A4rung-der-berechnung-der-trefferchance-im-fernkampf/
@@ -38,6 +39,17 @@ DamageCalculator::Val DamageCalculator::damageValue(Npc& src, Npc& other, const 
   return ret;
   }
 
+int32_t DamageCalculator::vanillaChance(const GameScript& script, int32_t hitChance, float dist) {
+  // the talent's chance at RANGED_CHANCE_MINDIST, all the way up close; past it from two thirds of it
+  // down to none at RANGED_CHANCE_MAXDIST: the line H - H*d/max, it steps there (the exe; the formula the
+  // forums give runs on without the step)
+  const float mn = std::max(script.rangedChanceMinDist(),1.f);
+  const float mx = std::max(script.rangedChanceMaxDist(),mn);
+  const float h  = float(hitChance);
+  const float c  = dist<=mn ? 100.f + (h-100.f)*dist/mn : h - h*dist/mx;
+  return std::max(0,int32_t(c));
+  }
+
 DamageCalculator::Val DamageCalculator::damageFall(Npc& npc, float speed) {
   auto  gl = npc.guild();
   auto& g  = npc.world().script().guildVal();
@@ -66,12 +78,33 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
   bool  invincible = !checkDamageMask(nsrc,nother,&b);
   auto  dmg        = b.damage();
 
+  float zone = 1;
   if(!b.isSpell() && b.isPrecise()) {
-    // an arrow aimed by hand hit where it hit, no dice: the draw and the zone make the damage
-    const float k = Archery::damageAt(b.draw())*Archery::zoneDamage(b.hitZone());
+    // an arrow aimed by hand hit where it hit, no dice: the draw makes the arrow, the armour takes its part,
+    // the zone then scales what went through (a head shot does twice the harm, not the weapon twice)
+    const float k = Archery::damageAt(b.draw());
     for(auto& v:dmg.val)
       v = int32_t(std::lround(float(v)*k));
+    zone  = Archery::zoneDamage(b.hitZone());
     noHit = false;
+    }
+  else if(!b.isSpell() && Gothic::inst().version().game==2) {
+    // G2's dice: one throw, the chance by the distance between the two (not the arrow's way)
+    auto&         script = nsrc.world().script();
+    const float   d      = (nother.position()-nsrc.position()).length();
+    const int32_t talent = int32_t(std::lround(b.hitChance()*100.f));
+    const int32_t chance = vanillaChance(script,talent,d);
+    const int32_t roll   = int32_t(script.rand(100));
+    noHit = roll>=chance;
+    if(TestBench::isActive()) {
+      const auto who = TestBench::who(&nother);
+      const auto by  = TestBench::who(&nsrc);
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"arrow dice %.*s: dist %.0f path %.0f talent %d chance %d roll %d, %s, by %.*s",
+                    int(who.size()),who.data(),double(d),double(dist),int(talent),int(chance),int(roll),noHit ? "miss" : "hit",
+                    int(by.size()),by.data());
+      TestBench::note(buf);
+      }
     }
   else if(!b.isSpell()) {
     auto& script    = nsrc.world().script();
@@ -90,6 +123,16 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
       hitCh = 0;
 
     noHit = (dist>float(MaxBowRange) || hitCh<=hitChance);
+    if(TestBench::isActive()) {
+      const auto who = TestBench::who(&nother);
+      const auto by  = TestBench::who(&nsrc);
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"arrow dice %.*s: dist %.0f path %.0f talent %.0f chance %.1f roll %.0f, %s, by %.*s",
+                    int(who.size()),who.data(),double((nother.position()-nsrc.position()).length()),double(dist),
+                    double(chance*100.f),double(hitCh*100.f),double(hitChance*100.f),noHit ? "miss" : "hit",
+                    int(by.size()),by.data());
+      TestBench::note(buf);
+      }
 
     if(!g2 && !noHit && !invincible) {
       const int32_t mul        = script.criticalDamageMultiplyer();
@@ -108,7 +151,10 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
   if((bMsk & (COLL_APPLYDAMAGE | COLL_APPLYDOUBLEDAMAGE | COLL_APPLYHALVEDAMAGE | COLL_DOEVERYTHING))==0)
     return Val(0,true,true);
 
-  return rangeDamage(nsrc,nother,dmg,bMsk);
+  auto ret = rangeDamage(nsrc,nother,dmg,bMsk);
+  if(zone!=1.f)
+    ret.value = int32_t(std::lround(float(ret.value)*zone));
+  return ret;
   }
 
 DamageCalculator::Val DamageCalculator::rangeDamage(Npc&, Npc& nother, Damage dmg, const CollideMask bMsk) {

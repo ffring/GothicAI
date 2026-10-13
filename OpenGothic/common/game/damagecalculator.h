@@ -6,6 +6,7 @@
 
 class Npc;
 class Bullet;
+class GameScript;
 
 class DamageCalculator {
   public:
@@ -32,6 +33,9 @@ class DamageCalculator {
 
     static Val     damageValue(Npc& src, Npc& other, const Bullet* b, bool isSpell, const DamageCalculator::Damage& splDmg, const CollideMask bMsk);
     static Val     damageFall(Npc& src, float speed);
+    // G2's dice for an arrow, % (Gothic2.exe, oCAIArrow::ReportCollisionToAI): a hit chance of hitChance %,
+    // dist cm between the shooter and the target
+    static int32_t vanillaChance(const GameScript& script, int32_t hitChance, float dist);
     static auto    rangeDamageValue(Npc& src) -> Damage;
     static int32_t damageTypeMask(Npc& npc);
 

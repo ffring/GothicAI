@@ -50,6 +50,8 @@ fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serv
 service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
 `face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
 watched npc shows, 0..1.
+The necromancer's answer: `necro` (docs/xardas-wrath.md: Xardas kills the hero with a spell and raises him as
+a skeleton, the screen goes black and the end card comes up; `ai necro`, no server needed).
 Blinks: `blink` (Xardas' face close up: quiet, saying a line, his eyes jumping after the hero put here
 and there, a frightened face, the eyes closed; with `blink off` on top of a copy nobody blinks, as
 OpenGothic was). Columns `bk_on`, `bk_w` (how shut a blink keeps the eyes, 0..1), `bk_n`, `bk_pause`,
@@ -74,7 +76,8 @@ Output goes to `.bench/<scenario>-<time>/` (not in git):
 
 | File | What |
 |---|---|
-| `report.md` | one line per recorded segment, then the worst events with their contact sheets; a "Manual aim" table when the bow was aimed by hand: shots, hits by zone, the sway at full draw, the draw time |
+| `report.md` | one line per recorded segment, then the worst events with their contact sheets; a "Manual aim" table when the bow was aimed by hand: shots, hits by zone, the sway at full draw, the draw time; the tables of the arrows, the dice and the damage when the log has them (below) |
+| `report.json` | the numbers of `report.md`: per segment, the events, and the tables of the arrows, the dice and the damage (`archery`, `archery_predicted`, `dice`, `damage`, `time_to_kill`, `fights`) |
 | `sheets/<segment>.png` | 16 frames of a segment in a 4x4 grid |
 | `sheets/evNN-*.png` | frames around an event |
 | `<segment>.mp4` | the video, 800x600, 30 fps |
@@ -87,9 +90,26 @@ More frames or a comparison:
 scripts/bench_report.py frames .bench/<run> <segment> 20 40      # frames 20..40 in one sheet
 scripts/bench_report.py compare <run>/off.mp4 <run>/on.mp4        # side by side, a on the left
 scripts/bench_report.py .bench/<run>                              # report again (e.g. after changing a threshold)
+scripts/bench_report.py aggregate .bench/<run a> .bench/<run b>  # the arrows, dice, damage of several runs, by segment
 ```
 
 `compare` also works across runs: the same scenario before and after a change.
+
+The arrows, the dice and the damage come from the game's notes in `bench.log` (`arrow shot`, `arrow aim`,
+`arrow hit`, `arrow missed`, `dice shot`, `arrow dice`, `damage`, `fight over`; `by` names the shooter, `PC_HERO`
+when a line of an older run does not say), their times from the `note` rows of `events.jsonl` (none in older
+runs: no rates then). A table is there only when its lines are:
+
+| Section | What |
+|---|---|
+| Archery accuracy | per segment and shooter: shots, shots a minute; each hand's arrow flown from `arrow shot` (`p = from + v·t - ½·g·t²`) to where it passes closest to the point meant (the hero: the last `aim zone` before it; an npc: `true` of its `arrow aim`), the miss as the shooter sees it in degrees, + right / + up: bias, σ (RMS about the bias, 95% CI by chi-square; MAD / 0.6745); an npc's row `- err` with its own `err` taken off (the body and the bow alone); hits by zone with Wilson 95% intervals; the hero's `stats` (skill, sway, cone) or the npc's aim (`sigma`, settled / waited / flinch) |
+| Predicted hits from σ | when `zones` dumped the target in the same log: its capsules seen from the shooter in 1 cm cells (the first capsule a ray enters takes the cell, as `HitZones::rayTest`) under a Gaussian of the bias and σ above: P(head), P(body), P(limb), P(any) against the counted. The dump is moved to where the shots aimed when the target stood elsewhere (`dump moved cm`; the hero aims at the middle of its `aimat` zone, an npc's point meant counts for the trunk's); its turn is not |
+| Dice | per segment and shooter: `dice shot`s, rolls (`arrow dice`: arrows that reached someone), the mean logged chance, expected hits Σp ± sqrt(Σp(1-p)), hits, z; each roll again under OpenGothic's chance (by the path) and vanilla G2's (by the straight distance, truncated; hit iff roll < chance): mean chance, hits, outcomes that flip against the log; how much longer the path is than the distance |
+| Damage and fights | per segment, shooter and victim: shots (melee and spells: the blows that landed), hits by zone, net damage per hit, damage a minute (per shot times the cadence), the cadence (gaps between the shooter's shots), `fight over` of the victim |
+| Time to kill | each sequence of shots (time, raw, k, hit) replayed on hero ch1 160 HP / 20 protection, ch3 400/50, ch4 520/100, Bandit_M 160/35, a paladin 520/100: from every shot as the first one, round the sequence (after its last shot the mean gap), the time and the shots until the HP is gone: mean and 5-95%. Per hit `max(round(raw·draw) - prot, 0)·zone` (head 2, body 1, limb 0.6) as the game does since 2026-10-13, or as it did before, the zone before the armour `max(round(raw·k) - prot, 0)`; at least 5 a hit (G2) |
+
+`aggregate` pools the shots of several runs (repeats of a scenario) by segment name and prints the same tables;
+gaps and sequences stay within a run.
 
 Before and after a change, with the same scenarios (the version before is built from `main` in a
 temporary worktree, the scenario files are taken from the current one):
@@ -203,7 +223,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `wheel <delta>` | the mouse wheel as the window gets it (-1 down, 1 up): aiming a bow by hand, down cants it for a quick shot, up straightens it |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
-| `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam look <height>`, `cam game` | |
+| `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam hold`, `cam look <height>`, `cam game` | `fixed` stays where it is and turns after the player; `hold` keeps the frame as it is (a scene the player may fall out of) |
 | `view clean [margin]\|nopfx\|full` | `clean` clips away everything closer to the camera than the subject minus `margin` (default 100 cm): trees and bushes in between; particles are hidden. The ground right in front of the camera is clipped too (white) |
 | `view hide static movable morph pfx animated` | hide draw types (debugging only: static and movable objects share draw commands, hiding them hides parts of creatures too) |
 | `overlay on\|off`, `overlay zoom on\|off`, `overlay bright on\|off` | `bright` stretches dark images (forests, interiors) |
@@ -231,16 +251,31 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `bowgeom` | the bow and the bow hand of the hero in the arrow's frame (x along it from its slot, y up, z to the side), cm: the bow's box, the grip, the string's middle at rest and drawn by `S_READY` and `S_DRAWN`, the bow hand's bones, the head |
 | `animspeed <anim> <k>` | the hero's animation of that name plays k times as fast from its next start (`Pose::setAnimSpeed`: a layer keeps its speed, the next one starts at 1). The manual aim sets `T_BOWRELOAD` from dexterity (`stats` prints it: `reload x`); this overrides it until dexterity changes. The hero's animation events go to bench.log (`anim event <type> <item> <slot>`, `anim morph <anim> <slot>`): at any tempo each once, in the same order |
 | `sfx <name>...` | the files a sound effect plays (its variants `_A1`..), `(missing)` if the game's data has no such file. The hero's sounds go to bench.log (`sound <name>`) |
-| `stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]` | the hero's strength, dexterity, hit chances (the skill); prints what the manual aim makes of them (sway, draw, hold, arrow speed) |
+| `stats [npc <npc>] [str <n>] [dex <n>] [bow <n>] [cbow <n>] [hp <n>] [hpmax <n>] [talent auto\|0\|1\|2]` | the hero's (an npc's) strength, dexterity, hit chances (the skill), hit points; prints what the manual aim makes of them (sway, draw, hold, arrow speed). `talent`: the trained archers' animations (`_BOWT1` at 30%, `_BOWT2` at 60% in G2; `auto` as the hit chances say); with it or `npc` also `stats of <npc>: talent, reload ms, hp, point protection` |
+| `seed <n>` | the random numbers start over: the scripts' (the dice, the release cone), the bench's (`volley` jitter), the hero's sway |
+| `npcequip <npc> <item> [count]` | into the npc's inventory, the first put on |
+| `arc <npc> <count> <dist> <step deg>` | that many of the npc stand that far in front of the hero, a step apart round it, facing it: the crew of `fight all` (a new arc replaces it, `clear` takes the gone out) |
+| `fight <npc\|all> <target\|player>` | it attacks as the game starts a fight (`ZS_ATTACK`, attack reason to kill: archers keep the bow beyond 9 m) |
+| `waitdown <npc\|player> [ms]` | the scenario waits till it is down: `fight over: <npc> down after <ms>`, else `waitdown: timeout` |
+| `npcaim on [second\|arrow] \| off \| sigma <deg\|off> \| lead on\|off` | npc archers aim by hand (game/archerai, `[GAME] npcManualAim`, on by default: `npcaim off` for the dice): as many hits a second as G2's dice (`second`) or as sure an arrow (`arrow`); an error forced, degrees per axis (0: the bow's own spread only); the lead on a runner. Each release logs `arrow aim: at, true <the point meant>, err <right up> deg, sigma, pv <dice %> p <target %> rho, lead, hold, disturb, settled\|waited, by <npc>` |
+| `archer <npc\|all> at <npc\|player> [dice] \| archer off` | the archers stand where they are and shoot at the target every time they can, by hand (npcaim on) or by the dice: no fight AI, no perception's wait, arrows topped up (the aim's calibration) |
+| `still <npc\|player> [off]` | hit, it neither stumbles nor flinches: a target that keeps its pose (as its zones were dumped) |
 | `aimat <npc\|nearest> [head\|body\|limb] [raw]`, `aimat <x> <y> <z>`, `aimat ahead [dist] [height]`, `aimat off` | the manual aim aims at the middle of that zone of the npc (every frame) or at a point, instead of the mouse; the hero faces it. Over it by the drop of the arrow at full draw, as an archer holds over (`raw`: right at it) |
 | `open [dist cm]` | how far it is open around the hero at head height and at the knees every 15 degrees from the facing: where to put a target |
-| `volley <shots> [hold ms] [draw 0..1]` | shots by hand in a row: press `action`, draw that far (1: full), hold, release, wait for the next arrow; every arrow is in the log (`arrow hit <npc>: <zone>, hp a -> b, draw, flew` or `arrow missed`) |
+| `volley <shots> [hold ms] [draw 0..1] [jitter ms]` | shots by hand in a row: press `action`, draw that far (1: full), hold (up to `jitter` longer at random: the sway is a function of time), release, wait for the next arrow; every arrow is in the log (`arrow shot: ..., by <npc>`, `arrow hit <npc>: <zone>, hp a -> b, draw, flew, at, by <npc>` or `arrow missed: ..., by <npc>`) |
+| *(log)* | the dice of npc shots: `dice shot: by <npc> at <target>`, `arrow dice <victim>: dist <cm> path <cm> talent <%> chance <%> roll <0..99>, hit\|miss, by <npc>`; every blow: `damage <victim>: raw <n> zone <z> k <x> prot <n> net <n> hit 0\|1, hp <n>, precise\|dice\|melee\|spell, by <npc>`; every note also in `events.jsonl` (`kind: note`, with the time) |
 | `immortal <npc\|nearest> [off]` | arrows hit it, it does not die: counting hits |
 | `zones <npc\|nearest\|player>` | the hit zones of the npc now (`graphics/mesh/hitzones`): each capsule (radius, the guess by the bone's name) and how well they cover its body: of each zone, the points of the body in it / only in another zone / in none, and the body's mesh. The report sums them up (`Hit zones`) |
 | `zones fit on\|off` | the hit zones as thick as the body's mesh (on, the default) or guessed by the bone names and the creature's size; the hero refitted at once, the others when they change their body (`transform`) |
 | `showzones <npc symbol>\|player\|off`, `overlay zones [off]` | the overlay draws the hit zones of that npc (the head red, the trunk yellow, the limbs blue); `overlay zones`: nothing else (no legs, no text). `zones.bench`: 31 creatures with the guess and fitted |
 | `corner <left\|right> [count]`, `corner <left\|right> go <i>` | corners of walls near the waypoints within 80 m: a wall right in front of the head, open 6 m ahead leaning out to that side (the manual aim's peek); lists them nearest first, or puts the hero at the i-th facing along it |
 | `aim-stance.bench`, `aim-corner.bench` | the manual aim's stance: crouched (the sneak key, `ik_crouch`), leaning out (the side steps held, `a_side`, room checked by a ray beside the head); from the side, from behind and from the game's camera; at a corner of a house in the harbour. CSV `a_side ik_crouch m_crouch m_peek` |
+| `archery-smoke.bench` | the stage 4 tools: who shot, the dice and the damage lines, `seed` twice the same, `volley` with jitter, an npc's `stats`/`talent`, `arc`, `fight` (by the dice), `waitdown` |
+| `npc-today.bench` | npc archers by the dice as the game had them (`npcaim off`): 4 bandits with bows, addon bandits with crossbows, paladins, at 11 / 13.5 / 16 m set out (the fight AI moves them), the hero immortal and still; the Dice table checks the throw against G2's formula |
+| `npc-mech.bench` | npc archers aiming by hand where they stand (`archer`): the bow's own spread (`npcaim sigma 0`), with G2's dice as aim, by the dice; a fight; one archer filmed close up |
+| `hero-balance.bench` | the hero by hand against G2's dice: four tiers as G2 has them (talent 10/30/60/100 with its bow, strength and dexterity, the trained animations), a farmer at 10, 20 and 30 m, body and head, 30 shots a cell with a random hold and a seed each; the Archery accuracy table gives the hits and shots a minute |
+| `npc-lead.bench` | npc archers at a runner: the hero runs sideways to and fro 12 m in front of a bandit and a paladin, by hand with the lead, without it, by the dice |
+| `npc-fight.bench` | fights with 4 npc archers of a kind (bandit bow, addon crossbow, paladin): the dice, by hand per second, per arrow; damage a minute and the time to kill from the Damage table; bandits set out at 25 m running in; a real duel at the end |
 | `aim-walk.bench` | steps with the bow drawn (forward and back while aiming by hand): the legs sneak under the aim, the hero moves as they step; on open grass from the side (no overlay), in front, behind, the game's camera with shots on the way, crouched; the hits at 10 m standing and stepping. CSV `m_walk aw_w aw_speed aw_twist aw_chest aw_drop` |
 | `aim-cant.bench` | the bow canted for a quick shot (the mouse wheel, `wheel <delta>`: down cants, up straightens): round the arrow, the top limb toward the drawing hand; from the side, in front, as the target sees it, behind, the game's camera, aimed up and down; the hits upright and canted at 8 and 25 m. CSV `m_cant bd_cant` |
 | `crossbow.bench` | the crossbow by hand: a weak and a strong shooter (`stats ... reload x`: the reload by strength), lowered loaded and raised, lowered right after a shot; the bolt lies in the left hand, the aim lines it up (`bowgeom` prints where it lies) |
@@ -278,6 +313,7 @@ Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
 |---|---|
 | `ptt <wav> [text]` | the hero holds the talk key while the recording is said (`ai ptt start <wav>`: the AI server takes the file instead of the microphone, `--voice-files`) |
 | `waitreply [timeout ms] [quiet ms]`, `waitquiet [quiet ms] [timeout ms]` | until an npc of the AI has answered and has been quiet that long; until none speaks. An npc thinking of its answer is not quiet: the "Хм..." it says at once is not the answer |
+| `waitai <key> <stage> [timeout ms]` | until a thing of the AI bridge has got that far: `waitai necro fallen` (the necromancer's answer: cast, fallen, raise, risen, card; `ai necro <npc> [spell] [picture]` starts it without the server) |
 | `near <npc> [dist] [deg]`, `approach <npc>`, `face npc <npc>` | the hero in front of an npc (teleport), walks up to it, turns to it |
 | `cam shoulder\|face\|two <npc> [dist] [height] [side\|deg]`, `cam cut`, `cam smooth <k>` | shots of the hero and an npc; they glide from one to the next unless `cut`. `cam face` with an npc's name is this shot, with a number the close-up above |
 | `caption <text>`, `mark <text>` | events for the cut of a short |

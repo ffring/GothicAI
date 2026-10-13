@@ -1,6 +1,7 @@
 import json
 import urllib.parse
 
+import httpx
 import pytest
 
 from gothic_shorts import youtube
@@ -43,3 +44,15 @@ def test_upload_only_to_the_projects_channel():
     youtube.check_channel("UC1", "GothicAI", "UC1")
     with pytest.raises(youtube.YouTubeError):
         youtube.check_channel("UC2", "Kaifat", "UC1")
+
+
+def test_privacy_read_back(monkeypatch):
+    answers = {"v1": {"items": [{"status": {"privacyStatus": "public"}}]}, "v2": {"items": []}}
+
+    def get(url, params, headers, timeout):
+        return httpx.Response(200, json=answers[params["id"]])
+
+    monkeypatch.setattr(youtube.httpx, "get", get)
+    assert youtube.privacy("t", "v1") == "public"
+    with pytest.raises(youtube.YouTubeError):
+        youtube.privacy("t", "v2")

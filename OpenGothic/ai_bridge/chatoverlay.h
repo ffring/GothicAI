@@ -66,6 +66,8 @@ class ChatOverlay final : public Tempest::UiOverlay {
     // the npc was interrupted: the entry keeps only what it said (`said`, empty: nothing) and fades
     void cut(std::string_view key, std::string said);
     void setStatus(std::string text);
+    // nothing of the talk on screen (a scene of its own plays); the input line too
+    void setHidden(bool h);
     // what the player is saying, recognized so far (push-to-talk); empty clears it
     void setPartial(std::string text);
     void tick();
@@ -108,6 +110,7 @@ class ChatOverlay final : public Tempest::UiOverlay {
     void pttReset();
 
     bool               active      = false;  // the input line is open
+    bool               hidden      = false;
     bool               wasVisible  = false;
     // push-to-talk on T
     bool               tDown       = false;  // T is held (and was taken by the overlay)

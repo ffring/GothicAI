@@ -50,6 +50,8 @@ class Shot:
     size: str = "486x864"
     timeout: int = 300
     description: str = ""
+    # more arguments for the AI server (`gothic-ai serve`), e.g. ["--wrath"] for the necromancer's answer
+    server_args: tuple[str, ...] = ()
     extra: dict[str, object] = field(default_factory=dict)
 
     @property
@@ -81,7 +83,7 @@ class Shot:
 
 KNOWN = {
     *("title", "hook", "npc", "save", "music", "sound", "hero_voice", "size", "timeout", "description"),
-    "script",
+    *("script", "server_args"),
 }
 
 
@@ -106,6 +108,7 @@ def load(path: Path) -> Shot:
         size=str(data.get("size", Shot.size)),
         timeout=int(data.get("timeout", 300)),
         description=str(data.get("description", "")),
+        server_args=tuple(str(a) for a in data.get("server_args", [])),
         extra={k: v for k, v in data.items() if k not in KNOWN},
     )
     try:

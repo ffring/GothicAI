@@ -1,0 +1,143 @@
+# Fights with npc archers (docs/manual-aim.md, stage 4): four of a kind attack the hero (immortal: the damage is
+# logged, the report replays it into a time to kill against armour presets) as the fight AI has them, by G2's
+# dice, aiming by hand with as many hits a second as the dice (second), as sure an arrow (arrow); a bandit
+# with a bow (40%), an addon bandit with a crossbow (60%), a paladin knight with a crossbow (65%). The hero
+# keeps still. Last a real duel: the hero in leather, 160 hp, against one bandit aiming by hand
+cheat god
+set time 12 0
+view clean
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02   # Onar's field: open and level for 25 m round the facing (open)
+turn 210
+wait 500
+clear 3000
+immortal player on
+still player on                  # hit, the hero would stumble back out of their range: they run after him
+zones player
+cam follow 700 250 150
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim off
+fight all player
+wait 3000
+rec bdtm_dice novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+fight all player
+wait 3000
+rec bdtm_sec novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on arrow
+fight all player
+wait 3000
+rec bdtm_arw novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_10002_ADDON_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_10002_ADDON_BANDIT_M talent auto
+npcaim off
+fight all player
+wait 3000
+rec abdm_dice novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_10002_ADDON_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_10002_ADDON_BANDIT_M talent auto
+npcaim on second
+fight all player
+wait 3000
+rec abdm_sec novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_10002_ADDON_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_10002_ADDON_BANDIT_M talent auto
+npcaim on arrow
+fight all player
+wait 3000
+rec abdm_arw novideo
+wait 45000
+stop
+
+clear 3000
+arc PAL_255_RITTER 4 1350 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+npcaim off
+fight all player
+wait 3000
+rec pal_dice novideo
+wait 45000
+stop
+
+clear 3000
+arc PAL_255_RITTER 4 1350 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+npcaim on second
+fight all player
+wait 3000
+rec pal_sec novideo
+wait 45000
+stop
+
+clear 3000
+arc PAL_255_RITTER 4 1350 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+npcaim on arrow
+fight all player
+wait 3000
+rec pal_arw novideo
+wait 45000
+stop
+
+# set out too far (25 m): they run in to their range and shoot by hand (an attack asked on the run stops the run)
+clear 3000
+arc BDT_1003_BANDIT_M 4 2500 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+fight all player
+rec bdtm_far novideo
+wait 30000
+stop
+
+# the duel
+clear 3000
+immortal player off
+still player off
+cheat god
+equip ItAr_Leather_L
+stats hp 160 hpmax 160
+arc BDT_1003_BANDIT_M 1 1350 0
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+fight all player
+cam follow 400 200 150
+rec duel_sec
+waitdown player 120000
+stop

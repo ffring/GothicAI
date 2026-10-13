@@ -125,16 +125,19 @@ cutting: a difference that does not read at phone size (a flinch on top of the g
 
 ```bash
 uv run gothic-shorts youtube login                     # once: the browser opens Google's consent page
-uv run gothic-shorts upload .shorts/compare/bodies/short-ru.mp4 --meta .shorts/compare/bodies/youtube.json --lang ru
+uv run gothic-shorts upload .shorts/compare/bodies/short-ru.mp4 --meta .shorts/compare/bodies/youtube.json --lang ru --privacy public
 ```
 
-The OAuth client is a Desktop app client of a Google Cloud project (YouTube Data API v3, consent screen in
-testing with the channel's account as a test user); its JSON and the token live in `~/.local/share/gothic-ai/`
-(`youtube-client.json`, `youtube-token.json`), never in the repository. A testing app's token lasts 7 days,
-then `login` again (the upload opens the browser itself). The metadata live next to the short, outside the
+The OAuth client is a Desktop app client of a Google Cloud project (YouTube Data API v3); its JSON and the
+token live in `~/.local/share/gothic-ai/` (`youtube-client.json`, `youtube-token.json`), never in the
+repository. Publish the app (Google Auth Platform, Audience, Publish app): a testing app's token lasts 7 days,
+a published one's does not, and Google's verification is not needed for the channel's own account (the
+consent page warns that the app is not verified: Advanced, go on). `login` signs in again and says how long
+the token lasts. The metadata live next to the short, outside the
 repository (`.shorts/<name>/youtube.json`), one section per language: title (up to 100 characters),
 description, tags, `synthetic` (altered or synthetic content: set it for shorts with AI voices). Uploads are
-private: a project without YouTube's audit can not publish through the API; make the video public in YouTube
-Studio. `upload` shows the channel, the file and the title and asks before it sends anything; it refuses any
+private unless `--privacy public` (or `unlisted`). YouTube no longer locks the uploads of a project without
+its audit to private, and `upload` reads the status back: if YouTube kept the video private, it says so (then
+the project needs YouTube's API audit, and Studio can not change it). `upload` shows the channel, the file and the title and asks before it sends anything; it refuses any
 channel but the project's (GothicAI, `UCbeAoPh3V7yFVpiuWNI-wkw`; `--channel` or `GOTHIC_YOUTUBE_CHANNEL`).
 

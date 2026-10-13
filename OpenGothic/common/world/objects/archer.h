@@ -55,6 +55,10 @@ class Archer final {
       };
 
     void          reset(uint32_t seed);
+    // the sway starts over from another seed, the rest as it is (the test bench, between shots)
+    void          reseed(uint32_t s) { seed = s; clock = 0; }
+    // how shaken the aim is (a turn, a shot, the next arrow put on), settling
+    float         disturbance() const { return disturb; }
     // Moves on by in.dt; true: let the arrow go now, draw() far drawn
     bool          tick(const Input& in, const Archery::Stats& st);
     // After a release: the arrow left (reload) or could not (the string let down)

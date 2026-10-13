@@ -6,6 +6,7 @@ contact sheets (frame grids) from the recorded videos, so the frames can be look
   bench_report.py frames <out dir> <seg> <from> <to> [step]   one sheet of the given frames
   bench_report.py compare <video a> <video b> [from] [to]      side by side video and sheet (a left, b right)
   bench_report.py diff <out dir a> <out dir b>                 event counts per segment, before -> after
+  bench_report.py aggregate <out dir>...                       the arrows, dice and damage of several runs, by segment
 """
 import csv
 import json
@@ -14,7 +15,7 @@ import os
 import re
 import subprocess
 import sys
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 
 FPS = 30
 TOP_EVENTS = 12
@@ -502,6 +503,845 @@ def hit_zones(out):
     return lines + [""]
 
 
+# The arrows, the dice and the damage: the game's notes in bench.log (`arrow shot`, `arrow hit`, `damage`...), their
+# times from events.jsonl (since 2026-10-13 each note is a `note` row there too). Older runs lack the newer notes and
+# the `by` of the older ones: all of it is optional
+GRAVITY = 9.8e-4  # cm/ms^2: the arrows fall by it (DynamicWorld::gravity)
+ZONE_DAMAGE = {"head": 2.0, "body": 1.0, "limb": 0.6}  # Archery::zoneDamage
+MIN_DAMAGE = 5  # G2: a hit does at least that much
+HERO = "PC_HERO"  # who shot when a line does not say: before the notes had `by`, only the hero aimed by hand
+# whom the shooters would fight: hit points, protection against points
+VICTIMS = (("hero ch1", 160, 20), ("hero ch3", 400, 50), ("hero ch4", 520, 100), ("Bandit_M", 160, 35),
+           ("paladin", 520, 100))
+# the zone scales the damage after the armour since 2026-10-13 (the game); before it, the weapon
+RULES = (("zone after armour", "after"), ("zone before armour", "before"))
+Z95 = 1.959964
+NUM = r"(-?\d+(?:\.\d+)?)"
+RE_SHOT = re.compile(rf"arrow shot: from {NUM} {NUM} {NUM} dir {NUM} {NUM} {NUM} speed {NUM} draw {NUM}(?:, by (\S+))?")
+RE_HIT = re.compile(rf"arrow hit (\S+): (\w+), hp {NUM} -> {NUM}, draw {NUM}, flew {NUM} cm(?:, at {NUM} {NUM} {NUM})?"
+                    r"(?:, by (\S+))?")
+RE_MISSED = re.compile(rf"arrow missed: .*?flew {NUM} cm(?:, by (\S+))?$")
+RE_DICE_SHOT = re.compile(r"dice shot: by (\S+) at (\S+)")
+RE_DICE = re.compile(rf"arrow dice (\S+): dist {NUM} path {NUM} talent {NUM} chance {NUM} roll {NUM}, (hit|miss)"
+                     r"(?:, by (\S+))?")
+RE_DAMAGE = re.compile(rf"damage (\S+): raw {NUM} zone (\S+) k {NUM} prot {NUM} net {NUM} hit (\d)(?:, hp {NUM})?"
+                       r"(?:, (\w+))?(?:, by (\S+))?")
+RE_FIGHT = re.compile(rf"fight over: (\S+) down after {NUM}")
+RE_AIM_ZONE = re.compile(rf"aim zone {NUM} {NUM} {NUM}")
+RE_AIMAT = re.compile(r"aimat (\S+)(?: (head|body|limb))?")
+RE_STATS = re.compile(rf"stats str {NUM} dex {NUM} bow {NUM} cbow {NUM}.*? sway {NUM} deg.*? cone {NUM} deg")
+RE_ZONES = re.compile(rf"zones (\S+) at {NUM} {NUM} {NUM}:")
+RE_CAPSULE = re.compile(rf"\s+(head|body|limb) \d+-\d+: {NUM} {NUM} {NUM} - {NUM} {NUM} {NUM} r {NUM}")
+
+
+def add(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def mul(a, k):
+    return (a[0] * k, a[1] * k, a[2] * k)
+
+
+def dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def mean3(ps):
+    return tuple(sum(p[c] for p in ps) / len(ps) for c in range(3))
+
+
+def mean(v):
+    return sum(v) / len(v) if v else math.nan
+
+
+def lround(v):
+    """as std::lround: halves away from zero"""
+    return int(math.floor(v + 0.5)) if v >= 0 else -int(math.floor(-v + 0.5))
+
+
+def f2(v, nd=2):
+    return "-" if v is None or (isinstance(v, float) and math.isnan(v)) else f"{v:.{nd}f}"
+
+
+def clean(v):
+    """for report.json: NaN is not JSON"""
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    if isinstance(v, dict):
+        return {k: clean(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [clean(x) for x in v]
+    return v
+
+
+def fields(body):
+    """`at 1 2 3, err 0.5 -0.2 deg, settled, by SYM` -> {"at": [1, 2, 3], "err": [0.5, -0.2], "deg": [],
+    "settled": [], "by": "SYM"}: a word and the numbers after it"""
+    out, key, toks = {}, None, body.replace(",", " ").split()
+    i = 0
+    while i < len(toks):
+        if toks[i] == "by" and i + 1 < len(toks):
+            out["by"] = toks[i + 1]
+            i += 2
+            continue
+        v = num(toks[i])
+        if math.isnan(v):
+            key = toks[i]
+            out.setdefault(key, [])
+        elif key is not None:
+            out[key].append(v)
+        i += 1
+    return out
+
+
+def note_times(out):
+    """the game's notes in events.jsonl, in order: [(text, game ms)]; none in the runs before them"""
+    path = os.path.join(out, "events.jsonl")
+    notes = []
+    if not os.path.exists(path):
+        return notes
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if ev.get("kind") == "note" and "text" in ev:
+                notes.append((ev["text"], ev.get("t")))
+    return notes
+
+
+def combat(out, run=0):
+    """the shots of a run from bench.log: the hand's arrows (where from, which way, the point meant, where they went),
+    the dice's arrows, the dice rolls, the damage, the fights over, the hit zones `zones` dumped. A note gets its time
+    from events.jsonl (the same text in the same order). A shot belongs to the segment it was shot in ("-": none)"""
+    data = {"shots": [], "rolls": [], "damage": [], "fights": [], "dumps": []}
+    path = os.path.join(out, "bench.log")
+    if not os.path.exists(path):
+        return data
+    with open(path, errors="replace") as f:  # names of the game's npcs come in its codepage
+        lines = [line.rstrip("\n") for line in f]
+    notes, k = note_times(out), 0
+    shots, rolls = data["shots"], data["rolls"]
+    seg, dump, stats = "-", None, None
+    target, zone, aimed = None, None, None  # the hero's `aimat` npc and zone, the last `aim zone`
+    aims = {}  # an npc's last `arrow aim`, until its arrow leaves
+    flying = defaultdict(deque)  # the arrows of each shooter in the air: they come down in the order shot
+    for i, line in enumerate(lines):
+        t = None
+        for j in range(k, min(k + 64, len(notes))):
+            if notes[j][0] == line:
+                t, k = notes[j][1], j + 1
+                break
+        m = RE_CAPSULE.match(line)
+        if dump is not None and m:
+            g = [float(v) for v in m.groups()[1:]]
+            dump["caps"].append((m.group(1), tuple(g[0:3]), tuple(g[3:6]), g[6]))
+            continue
+        dump = None
+        s = line.strip()
+        base = {"run": run, "seg": seg, "t": t, "line": i}
+        if s.startswith("rec stop"):
+            seg = "-"
+        elif s.startswith("rec "):
+            seg = s.split()[1]
+        elif s.startswith("arrow shot"):
+            m = RE_SHOT.match(s)
+            if not m:
+                continue
+            g = [float(v) for v in m.groups()[:8]]
+            by = m.group(9) or HERO
+            x = dict(base, kind="precise", by=by, origin=tuple(g[0:3]), dir=tuple(g[3:6]), speed=g[6], draw=g[7],
+                     aim=None, err=None, info=aims.pop(by, None), target=None, zone=None, stats=None, result=None,
+                     victim=None, hit_line=None, damage=None)
+            if x["info"] is not None and len(x["info"].get("true", [])) == 3:
+                x["aim"] = tuple(x["info"]["true"])
+                if len(x["info"].get("err", [])) == 2:
+                    x["err"] = tuple(x["info"]["err"])
+            elif by == HERO:
+                x["aim"], aimed = aimed, None
+            if by == HERO:
+                x["target"], x["zone"], x["stats"] = target, zone, stats
+            flying[by].append(len(shots))
+            shots.append(x)
+        elif s.startswith("arrow aim"):
+            f = fields(s.split(":", 1)[-1])
+            aims[f.get("by", HERO)] = f
+        elif s.startswith("arrow hit"):
+            m = RE_HIT.match(s)
+            by = (m.group(10) or HERO) if m else HERO
+            if m and flying[by]:
+                shots[flying[by].popleft()].update(result=m.group(2), victim=m.group(1), hit_line=i)
+        elif s.startswith("arrow missed"):
+            m = RE_MISSED.match(s)
+            by = (m.group(2) or HERO) if m else HERO
+            if flying[by]:
+                shots[flying[by].popleft()].update(result="miss", hit_line=i)
+        elif s.startswith("dice shot"):
+            m = RE_DICE_SHOT.match(s)
+            if m:
+                shots.append(dict(base, kind="dice", by=m.group(1), target=m.group(2), victim=None, draw=None, aim=None,
+                                  result=None, damage=None))
+        elif s.startswith("arrow dice"):
+            m = RE_DICE.match(s)
+            if m:
+                g = [float(v) for v in m.groups()[1:6]]
+                rolls.append(dict(base, victim=m.group(1), dist=g[0], path=g[1], talent=g[2], chance=g[3], roll=g[4],
+                                  hit=m.group(7) == "hit", by=m.group(8) or "?", damage=None))
+        elif s.startswith("damage "):
+            m = RE_DAMAGE.match(s)
+            if m:
+                d = dict(base, victim=m.group(1), raw=int(m.group(2)), zone=m.group(3), k=float(m.group(4)),
+                         prot=int(m.group(5)), net=int(m.group(6)), hit=m.group(7) == "1", kind=m.group(9) or "?",
+                         by=m.group(10) or "?", roll=None)
+                if d["kind"] == "dice":
+                    # its dice: the roll just before, of the same shooter at the same victim
+                    for r in reversed(rolls):
+                        if r["by"] == d["by"] and r["victim"] == d["victim"]:
+                            if r["damage"] is None:
+                                r["damage"], d["roll"] = d, r
+                            break
+                data["damage"].append(d)
+        elif s.startswith("fight over"):
+            m = RE_FIGHT.match(s)
+            if m:
+                data["fights"].append(dict(base, sym=m.group(1), ms=float(m.group(2))))
+        elif s.startswith("aim zone"):
+            m = RE_AIM_ZONE.match(s)
+            if m:
+                aimed = tuple(float(v) for v in m.groups())
+        elif s.startswith("aimat"):
+            m = RE_AIMAT.match(s)
+            if m:
+                npc = m.group(1) not in ("off", "ahead") and not re.match(r"-?\d", m.group(1))  # not at a point
+                target, zone = (m.group(1), m.group(2) or "body") if npc else (None, None)
+        elif s.startswith("stats "):
+            m = RE_STATS.match(s)
+            if m:
+                g = [float(v) for v in m.groups()]
+                stats = (g[2], g[4], g[5])  # bow skill, sway, cone
+        elif s.startswith("zones "):
+            m = RE_ZONES.match(s)
+            if m:
+                dump = dict(run=run, line=i, sym=m.group(1), caps=[])
+                data["dumps"].append(dump)
+    # the damage to the arrow it came from: a hand's arrow by its hit next to it, a dice's arrow the last one of that
+    # shooter before; a blow (melee, a spell) is a shot of its own
+    mine = defaultdict(list)
+    for x in shots:
+        mine[x["by"]].append(x)
+    for d in data["damage"]:
+        if d["kind"] == "precise":
+            cand = [x for x in mine[d["by"]] if x["kind"] == "precise" and x["damage"] is None
+                    and x["victim"] == d["victim"] and x["result"] in ZONE_DAMAGE]
+            if cand:
+                min(cand, key=lambda x: abs(x["hit_line"] - d["line"]))["damage"] = d
+        elif d["kind"] == "dice":
+            cand = [x for x in mine[d["by"]] if x["kind"] == "dice" and x["damage"] is None and x["line"] < d["line"]]
+            cand = [x for x in cand if x["target"] == d["victim"]] or cand
+            if cand:
+                cand[-1]["damage"] = d
+        else:
+            shots.append(dict(run=run, seg=d["seg"], t=d["t"], line=d["line"], kind=d["kind"], by=d["by"],
+                              target=d["victim"], victim=d["victim"], draw=None, aim=None, result=None, damage=d))
+    shots.sort(key=lambda x: x["line"])
+    # whom a shot was at: the one it hit, the dice's target, the hero's `aimat`; else whom that shooter hit most
+    most = defaultdict(Counter)
+    for x in shots:
+        if x["victim"] is None and x["damage"] is not None:
+            x["victim"] = x["damage"]["victim"]
+        if x["victim"] is None:
+            x["victim"] = x["target"]
+        if x["victim"] is not None:
+            most[(x["seg"], x["by"])][x["victim"]] += 1
+    for x in shots:
+        if x["victim"] is None:
+            c = most[(x["seg"], x["by"])]
+            x["victim"] = c.most_common(1)[0][0] if c else "?"
+    # the gap since that shooter's shot before, in the same segment
+    last = {}
+    for x in shots:
+        key = (x["seg"], x["by"])
+        x["gap"] = x["t"] - last[key] if x["t"] is not None and key in last else None
+        if x["t"] is not None:
+            last[key] = x["t"]
+    return data
+
+
+def axes(f):
+    """right and up square to the line of sight f (unit) as the shooter sees them: 90 degrees to the left of a
+    facing (x, z) is (-z, x), the world is left-handed"""
+    l = math.hypot(f[0], f[2])
+    right = (f[2] / l, 0.0, -f[0] / l) if l > 1e-6 else (1.0, 0.0, 0.0)
+    return right, cross(f, right)
+
+
+def closest(x, q):
+    """the arrow flown as the game flies it (from where it left, straight at its speed, falling by GRAVITY) to where
+    it comes closest to q: that point minus q"""
+    o, v = x["origin"], mul(x["dir"], x["speed"])
+
+    def miss(t):
+        return (o[0] + v[0] * t - q[0], o[1] + v[1] * t - 0.5 * GRAVITY * t * t - q[1], o[2] + v[2] * t - q[2])
+
+    far = 2.0 * length(sub(q, o)) / max(x["speed"], 1e-3) + 1.0
+    ts = [far * i / 64 for i in range(65)]
+    i = min(range(65), key=lambda j: dot(miss(ts[j]), miss(ts[j])))
+    lo, hi = ts[max(0, i - 1)], ts[min(64, i + 1)]
+    for _ in range(60):  # golden section
+        a, b = hi - 0.618034 * (hi - lo), lo + 0.618034 * (hi - lo)
+        if dot(miss(a), miss(a)) < dot(miss(b), miss(b)):
+            hi = b
+        else:
+            lo = a
+    return miss((lo + hi) / 2)
+
+
+def miss_angles(x):
+    """how far an arrow passed the point meant, degrees as the shooter sees it (+ right, + up), in the plane square to
+    the line from where it left to that point; that line's length, cm"""
+    f = sub(x["aim"], x["origin"])
+    dist = length(f)
+    right, up = axes(mul(f, 1.0 / dist))
+    m = closest(x, x["aim"])
+    return math.degrees(math.atan2(dot(m, right), dist)), math.degrees(math.atan2(dot(m, up), dist)), dist
+
+
+def gamma_p(a, x):
+    """the regularized lower incomplete gamma function P(a, x) (Numerical Recipes: a series below a + 1, a continued
+    fraction above)"""
+    if x <= 0:
+        return 0.0
+    front = math.exp(-x + a * math.log(x) - math.lgamma(a))
+    if x < a + 1:
+        term = total = 1.0 / a
+        ap = a
+        for _ in range(1000):
+            ap += 1
+            term *= x / ap
+            total += term
+            if abs(term) < abs(total) * 1e-14:
+                break
+        return total * front
+    b, c = x + 1 - a, 1e300
+    d = 1.0 / b
+    h = d
+    for i in range(1, 1000):
+        an = -i * (i - a)
+        b += 2
+        d = an * d + b
+        d = 1e-300 if abs(d) < 1e-300 else d
+        c = b + an / c
+        c = 1e-300 if abs(c) < 1e-300 else c
+        d = 1.0 / d
+        h *= d * c
+        if abs(d * c - 1) < 1e-14:
+            break
+    return 1.0 - front * h
+
+
+def chi2_quantile(p, k):
+    """x where the chi-square of k degrees of freedom reaches p, by bisection"""
+    lo, hi = 0.0, k + 10.0
+    while gamma_p(k / 2.0, hi / 2.0) < p:
+        hi *= 2
+    for _ in range(100):
+        mid = (lo + hi) / 2
+        if gamma_p(k / 2.0, mid / 2.0) < p:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def quantile(v, q):
+    """of sorted values, between the two nearest"""
+    if not v:
+        return math.nan
+    p = q * (len(v) - 1)
+    i = int(p)
+    return v[i] if i + 1 >= len(v) else v[i] + (v[i + 1] - v[i]) * (p - i)
+
+
+def spread_of(xs):
+    """one axis of the misses: the bias (the mean), sigma as the RMS about it with its 95% CI (chi-square), sigma as
+    MAD / 0.6745 (a few wild ones do not move it)"""
+    n = len(xs)
+    out = {"n": n, "bias": mean(xs), "sigma": math.nan, "ci": (math.nan, math.nan), "mad": math.nan}
+    if n > 1:
+        sd = math.sqrt(sum((x - out["bias"]) ** 2 for x in xs) / (n - 1))
+        out["sigma"] = sd
+        out["ci"] = (sd * math.sqrt((n - 1) / chi2_quantile(0.975, n - 1)),
+                     sd * math.sqrt((n - 1) / chi2_quantile(0.025, n - 1)))
+        med = quantile(sorted(xs), 0.5)
+        out["mad"] = quantile(sorted(abs(x - med) for x in xs), 0.5) / 0.6745
+    return out
+
+
+def wilson(k, n):
+    """the 95% interval of a share k of n (Wilson)"""
+    if n == 0:
+        return (math.nan, math.nan)
+    p, z2 = k / n, Z95 * Z95
+    c = (p + z2 / (2 * n)) / (1 + z2 / n)
+    h = Z95 * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / (1 + z2 / n)
+    return (max(0.0, c - h), min(1.0, c + h))
+
+
+def per_minute(xs):
+    """how many a minute: by the gaps between them (note times), in each run"""
+    gaps, span = 0, 0.0
+    times = defaultdict(list)
+    for x in xs:
+        if x["t"] is not None:
+            times[x["run"]].append(x["t"])
+    for ts in times.values():
+        if len(ts) > 1:
+            gaps += len(ts) - 1
+            span += max(ts) - min(ts)
+    return gaps * 60000.0 / span if span > 0 else None
+
+
+def sphere_hit(ro, rd, c, r):
+    oc = sub(ro, c)
+    b = dot(oc, rd)
+    cc = dot(oc, oc) - r * r
+    if cc <= 0:
+        return 0.0
+    h = b * b - cc
+    if h < 0:
+        return -1.0
+    t = -b - math.sqrt(h)
+    return t if t >= 0 else -1.0
+
+
+def capsule_hit(ro, rd, pa, pb, r):
+    """where a ray (rd: unit) enters a capsule, 0 from inside, -1: past it (capsuleHit of HitZones)"""
+    ba = sub(pb, pa)
+    baba = dot(ba, ba)
+    best = -1.0
+    if baba > 1e-4:
+        oa = sub(ro, pa)
+        k = min(max(dot(oa, ba) / baba, 0.0), 1.0)
+        if length(sub(oa, mul(ba, k))) <= r:
+            return 0.0
+        bard, baoa = dot(ba, rd), dot(ba, oa)
+        a = baba - bard * bard
+        if a > 1e-6:
+            b = baba * dot(rd, oa) - baoa * bard
+            c = baba * dot(oa, oa) - baoa * baoa - r * r * baba
+            h = b * b - a * c
+            if h < 0:
+                return -1.0  # misses the endless cylinder: the caps lie inside it
+            t = (-b - math.sqrt(h)) / a
+            if 0 < baoa + t * bard < baba and t >= 0:
+                best = t
+        t = sphere_hit(ro, rd, pb, r)
+        if t >= 0 and (best < 0 or t < best):
+            best = t
+    t = sphere_hit(ro, rd, pa, r)
+    if t >= 0 and (best < 0 or t < best):
+        best = t
+    return best
+
+
+def zone_centres(caps):
+    """the middle of each zone as the game takes it (HitZones::center): the head and the trunk the capsules' middles
+    by their weight, a limb the biggest one"""
+    out = {}
+    for z in ZONE_DAMAGE:
+        acc, wsum, best = (0.0, 0.0, 0.0), 0.0, None
+        for zone, a, b, r in caps:
+            if zone != z:
+                continue
+            w = (length(sub(b, a)) + 2 * r) * r * r
+            mid = mul(add(a, b), 0.5)
+            if z == "limb":
+                best = (w, mid) if best is None or w > best[0] else best
+            else:
+                acc, wsum = add(acc, mul(mid, w)), wsum + w
+        if best is not None:
+            out[z] = best[1]
+        elif wsum > 0:
+            out[z] = mul(acc, 1.0 / wsum)
+    return out
+
+
+def raster(caps, s, q):
+    """the target as the shooter at s sees it, on the plane through q square to the line of sight: 1 cm cells (u right,
+    v up from q), each the zone of the capsule a ray from s through it enters first (HitZones::rayTest)"""
+    f = sub(q, s)
+    dist = length(f)
+    f = mul(f, 1.0 / dist)
+    right, up = axes(f)
+
+    def seen(p):  # where p is seen on the plane, how far it is along the line of sight
+        w = sub(p, s)
+        depth = dot(w, f)
+        return dot(w, right) * dist / depth, dot(w, up) * dist / depth, depth
+
+    cells = defaultdict(list)
+    for idx, (zone, a, b, r) in enumerate(caps):
+        (ua, va, da), (ub, vb, db) = seen(a), seen(b)
+        if min(da, db) <= r + 1:
+            continue  # at the shooter or behind it
+        rr = r * dist / (min(da, db) - r) + 1  # it looks at most this big
+        for iu in range(math.floor(min(ua, ub) - rr), math.ceil(max(ua, ub) + rr) + 1):
+            for iv in range(math.floor(min(va, vb) - rr), math.ceil(max(va, vb) + rr) + 1):
+                cells[(iu, iv)].append(idx)
+    out = {}
+    for (iu, iv), idxs in cells.items():
+        p = add(q, add(mul(right, iu), mul(up, iv)))
+        rd = sub(p, s)
+        rd = mul(rd, 1.0 / length(rd))
+        best, zone = -1.0, None
+        for idx in idxs:
+            z, a, b, r = caps[idx]
+            h = capsule_hit(s, rd, a, b, r)
+            if h >= 0 and (best < 0 or h < best):
+                best, zone = h, z
+        if zone is not None:
+            out[(iu, iv)] = zone
+    return out
+
+
+def gauss_cells(cells, mu, sigma):
+    """P of each zone: a 2D Gaussian (independent axes, mean and sigma in cm on the plane) over the cells"""
+    def part(c, m, sd):
+        if sd <= 0:
+            return 1.0 if abs(c - m) <= 0.5 else 0.0
+        k = 1.0 / (sd * math.sqrt(2))
+        return 0.5 * (math.erf((c + 0.5 - m) * k) - math.erf((c - 0.5 - m) * k))
+    pu, pv, out = {}, {}, defaultdict(float)
+    for (iu, iv), z in cells.items():
+        if iu not in pu:
+            pu[iu] = part(iu, mu[0], sigma[0])
+        if iv not in pv:
+            pv[iv] = part(iv, mu[1], sigma[1])
+        out[z] += pu[iu] * pv[iv]
+    return out
+
+
+def predict(aimed, yaw, pitch, dumps):
+    """P(head), P(body), P(limb) of a shot: the target's capsules of its last `zones` dump, seen from where the shots
+    left, under a 2D Gaussian of the misses (each axis its bias and sigma, as angles times the distance). The dump is
+    moved to where the shots aimed when the target stood elsewhere (the hero aims at the middle of its `aimat` zone;
+    an npc's point meant is taken for the trunk's). None without a dump"""
+    if len(aimed) < 2 or math.isnan(yaw["sigma"]) or math.isnan(pitch["sigma"]):
+        return None
+    who = Counter(x["target"] for x in aimed if x["target"]) or \
+        Counter(x["victim"] for x in aimed if x["result"] in ZONE_DAMAGE)
+    if not who:
+        return None
+    sym = who.most_common(1)[0][0]
+    runs = {x["run"] for x in aimed}
+    mine = [d for d in dumps if d["sym"] == sym and d["run"] in runs and d["caps"]]
+    if not mine:
+        return None
+    run = aimed[0]["run"] if any(d["run"] == aimed[0]["run"] for d in mine) else mine[0]["run"]
+    mine = [d for d in mine if d["run"] == run]
+    end = max(x["line"] for x in aimed if x["run"] == run)
+    before = [d for d in mine if d["line"] < end]
+    dump = before[-1] if before else mine[0]
+    s, q = mean3([x["origin"] for x in aimed]), mean3([x["aim"] for x in aimed])
+    dist = length(sub(q, s))
+    centres = zone_centres(dump["caps"])
+    zone = Counter(x["zone"] for x in aimed if x.get("zone")).most_common(1)
+    if zone and zone[0][0] in centres:
+        shift = sub(q, centres[zone[0][0]])
+    else:
+        near = min(centres.values(), key=lambda c: length(sub(c, q)))
+        shift = (0.0, 0.0, 0.0) if length(sub(near, q)) < 40 else sub(q, centres.get("body", near))
+    caps = [(z, add(a, shift), add(b, shift), r) for z, a, b, r in dump["caps"]]
+    mu = (dist * math.tan(math.radians(yaw["bias"])), dist * math.tan(math.radians(pitch["bias"])))
+    sd = (dist * math.radians(yaw["sigma"]), dist * math.radians(pitch["sigma"]))
+    p = gauss_cells(raster(caps, s, q), mu, sd)
+    return {"target": sym, "dist_m": dist / 100, "moved_cm": length(shift), "p": {z: p.get(z, 0.0) for z in ZONE_DAMAGE}}
+
+
+def archery(data):
+    """the hand's arrows per segment and shooter: the miss at the point meant, hits by zone; the hits the misses'
+    spread predicts on the target's hit zones (when `zones` dumped them)"""
+    groups = defaultdict(list)
+    for x in data["shots"]:
+        if x["kind"] == "precise":
+            groups[(x["seg"], x["by"])].append(x)
+    rows, js, pred, pjs = [], [], [], []
+
+    def axis_cells(st):
+        if st["n"] == 0:
+            return ["-"] * 3
+        ci = "-" if math.isnan(st["sigma"]) else f"{st['sigma']:.2f} ({st['ci'][0]:.2f}-{st['ci'][1]:.2f})"
+        return [f2(st["bias"]), ci, f2(st["mad"])]
+
+    for (seg, by), xs in groups.items():
+        aimed = [x for x in xs if x["aim"] is not None and length(sub(x["aim"], x["origin"])) > 1]
+        miss = [miss_angles(x) for x in aimed]
+        yaw, pitch = spread_of([m[0] for m in miss]), spread_of([m[1] for m in miss])
+        done = [x["result"] for x in xs if x["result"] is not None]
+        hits = {z: done.count(z) for z in ("head", "body", "limb", "miss")}
+        rate = per_minute(xs)
+        dist = mean([m[2] for m in miss]) / 100
+        infos = [x["info"] for x in xs if x["info"]]
+        if infos:
+            # an npc: what its aim says of itself
+            sig = [i["sigma"][0] for i in infos if i.get("sigma")]
+            states = Counter(w for i in infos for w in ("settled", "waited", "flinch") if w in i)
+            skill = "; ".join(([f"sigma {mean(sig):.2f}"] if sig else []) + [f"{w} {n}" for w, n in states.items()])
+        else:
+            st = Counter(x["stats"] for x in xs if x["stats"]).most_common(1)
+            skill = f"bow {st[0][0][0]:.0f}: sway {st[0][0][1]:.2f}, cone {st[0][0][2]:.2f}" if st else "-"
+
+        def zc(z):
+            lo, hi = wilson(hits[z], len(done))
+            return f"{hits[z]} ({lo * 100:.0f}-{hi * 100:.0f}%)" if done else "-"
+        rows.append(f"| {seg} | {by} | {len(xs)} | {f2(rate, 1)} | {len(miss)} | {f2(dist, 1)} | "
+                    + " | ".join(axis_cells(yaw) + axis_cells(pitch)) + " | "
+                    + " | ".join(zc(z) for z in ("head", "body", "limb", "miss")) + f" | {skill} |")
+        row = {"segment": seg, "shooter": by, "shots": len(xs), "per_min": rate, "n": len(miss), "dist_m": dist,
+               "yaw": yaw, "pitch": pitch, "skill": skill,
+               "hits": {z: [hits[z], *wilson(hits[z], len(done))] for z in hits}, "of": len(done)}
+        # an npc's own deliberate offset taken off: what its body and the bow threw the arrow off by
+        phys = [(m[0] - x["err"][0], m[1] - x["err"][1]) for m, x in zip(miss, aimed) if x["err"] is not None]
+        if phys:
+            py, pp = spread_of([p[0] for p in phys]), spread_of([p[1] for p in phys])
+            rows.append(f"| {seg} | {by} - err | | | {len(phys)} | | " + " | ".join(axis_cells(py) + axis_cells(pp))
+                        + " | | | | | |")
+            row["physical"] = {"n": len(phys), "yaw": py, "pitch": pp}
+        js.append(row)
+        p = predict(aimed, yaw, pitch, data["dumps"])
+        if p is not None:
+            n = len(done)
+            hit = sum(hits[z] for z in ZONE_DAMAGE)
+            cells = [f"{p['p'][z] * 100:.0f}% / {hits[z] / n * 100:.0f}% ({hits[z]})" if n else f"{p['p'][z] * 100:.0f}% / -"
+                     for z in ZONE_DAMAGE]
+            anyp = sum(p["p"].values())
+            cells.append(f"{anyp * 100:.0f}% / {hit / n * 100:.0f}% ({hit})" if n else f"{anyp * 100:.0f}% / -")
+            pred.append(f"| {seg} | {by} | {p['target']} | {p['dist_m']:.1f} | {p['moved_cm']:.0f} | " + " | ".join(cells) + " |")
+            pjs.append({"segment": seg, "shooter": by, **p, "any": anyp,
+                        "counted": {z: hits[z] for z in ZONE_DAMAGE}, "of": n})
+    if not rows:
+        return [], {}
+    lines = ["## Archery accuracy", "",
+             "Each arrow flown from `arrow shot` (with the fall) to where it passes closest to the point meant (the "
+             "hero's: the last `aim zone`; an npc's: `true` of its `arrow aim`); the miss in degrees as the shooter "
+             "sees it, + right / + up. σ: RMS about the bias (95% CI), and MAD / 0.6745. `- err`: an npc's own "
+             "offset taken off. Hits: count (Wilson 95%).", "",
+             "| segment | shooter | shots | /min | n | dist m | yaw bias deg | yaw σ deg (95% CI) | yaw σ MAD | "
+             "pitch bias deg | pitch σ deg (95% CI) | pitch σ MAD | head | body | limb | miss | skill |",
+             "|" + "---|" * 17] + rows + [""]
+    if pred:
+        lines += ["### Predicted hits from σ", "",
+                  "The target's capsules (`zones` dump; moved to the point meant if it stood elsewhere) seen from the "
+                  "shooter in 1 cm cells, under a Gaussian of the bias and σ above: predicted / counted.", "",
+                  "| segment | shooter | target | dist m | dump moved cm | head | body | limb | any |",
+                  "|" + "---|" * 9] + pred + [""]
+    return lines, {"archery": clean(js), **({"archery_predicted": clean(pjs)} if pjs else {})}
+
+
+def g2_chance(h, d):
+    """vanilla G2's chance (%) by the straight distance"""
+    if d <= 1500:
+        return math.trunc(100 + (h - 100) * d / 1500)
+    return max(0, math.trunc(h - h * d / 4500))
+
+
+def og_chance(h, path):
+    """OpenGothic's (DamageCalculator::rangeDamage), by the arrow's path"""
+    if path < 1500:
+        return 100 + (h - 100) * path / 1500
+    if path < 4500:
+        return h * (1 - (path - 1500) / 3000)
+    return 0.0
+
+
+def dice(data):
+    """the dice's arrows per segment and shooter: the hits the logged chances expect against those rolled; the same
+    rolls under the chance recomputed as OpenGothic and as vanilla G2 take it"""
+    groups = defaultdict(lambda: [0, []])
+    for x in data["shots"]:
+        if x["kind"] == "dice":
+            groups[(x["seg"], x["by"])][0] += 1
+    for r in data["rolls"]:
+        groups[(r["seg"], r["by"])][1].append(r)
+    rows, js = [], []
+    for (seg, by), (shots, rs) in groups.items():
+        ps = [min(max(r["chance"] / 100, 0.0), 1.0) for r in rs]
+        exp, sd = sum(ps), math.sqrt(sum(p * (1 - p) for p in ps))
+        hits = sum(r["hit"] for r in rs)
+        z = (hits - exp) / sd if sd > 0 else math.nan
+        og = [og_chance(r["talent"], r["path"]) for r in rs]
+        og_hit = [c > r["roll"] and r["path"] <= 4500 for c, r in zip(og, rs)]
+        g2 = [g2_chance(r["talent"], r["dist"]) for r in rs]
+        g2_hit = [r["roll"] < c for c, r in zip(g2, rs)]
+        flips = (sum(a != r["hit"] for a, r in zip(og_hit, rs)), sum(a != r["hit"] for a, r in zip(g2_hit, rs)))
+        dist = mean([r["dist"] for r in rs]) / 100
+        detour = mean([r["path"] - r["dist"] for r in rs])
+        rows.append(f"| {seg} | {by} | {shots} | {len(rs)} | {f2(dist, 1)} | {f2(mean([r['chance'] for r in rs]), 1)} | "
+                    f"{exp:.1f} ± {sd:.1f} | {hits} | {f2(z)} | "
+                    f"{f2(mean(og), 1)}, {sum(og_hit)}, {flips[0]} | {f2(mean(g2), 1)}, {sum(g2_hit)}, {flips[1]} | "
+                    f"{f2(detour, 0)} |")
+        js.append({"segment": seg, "shooter": by, "shots": shots, "rolls": len(rs), "dist_m": dist,
+                   "chance": mean([r["chance"] for r in rs]), "expected": exp, "sd": sd, "hits": hits, "z": z,
+                   "opengothic": {"chance": mean(og), "hits": sum(og_hit), "flips": flips[0]},
+                   "g2": {"chance": mean(g2), "hits": sum(g2_hit), "flips": flips[1]}, "path_minus_dist": detour})
+    if not rows:
+        return [], {}
+    return ["## Dice", "",
+            "`arrow dice` rolls: expected hits Σp ± sqrt(Σp(1-p)) by the logged chance, the hits, z. Recomputed from "
+            "each line, with its roll: OpenGothic (by the path: 100+(H-100)·p/1500, then H·(1-(p-1500)/3000), 0 past "
+            "45 m) and vanilla G2 (by the straight distance, truncated: 100+(H-100)·d/1500, then H-H·d/4500): mean "
+            "chance %, hits, outcomes that flip against the log.", "",
+            "| segment | shooter | dice shots | rolls | dist m | chance % | expected hits | hits | z | "
+            "OpenGothic again: chance, hits, flips | vanilla G2: chance, hits, flips | path - dist cm |",
+            "|" + "---|" * 12] + rows + [""], {"dice": clean(js)}
+
+
+def hit_damage(v, prot, rule):
+    """what a shot (t, raw, k, hit, draw, zone) does to a victim of that protection: as the game takes it (the draw
+    scales the weapon, the armour takes its part, the zone scales the rest) or as it did until 2026-10-13 (the draw
+    and the zone scaled the weapon, the armour after); G2's floor"""
+    _, raw, k, hit, draw, zone = v
+    if not hit:
+        return 0
+    if rule == "before":
+        net = max(lround(raw * k) - prot, 0)
+    else:
+        draw = min(max(draw, 0.0), 1.0) if draw is not None else None
+        zf = k / draw if draw else ZONE_DAMAGE.get(zone, 1.0)
+        dr = draw if draw else (k / zf if zf else 1.0)
+        net = lround(max(lround(raw * dr) - prot, 0) * zf)
+    return max(net, MIN_DAMAGE)
+
+
+def to_kill(seq, hp, prot, rule):
+    """from each shot of the sequence as the first one, on and round it (after the last one the mean gap): the ms and
+    the shots until hp is gone. Every start point once: the limit of a bootstrap over them. [] when it does no harm"""
+    nets = [hit_damage(v, prot, rule) for v in seq]
+    n = len(seq)
+    if not any(nets):
+        return []
+    times = [v[0] for v in seq]
+    timed = n > 1 and all(t is not None for t in times)
+    period = (times[-1] - times[0]) * n / (n - 1) if timed else 0
+    out = []
+    for j in range(n):
+        left, m = hp, j
+        while True:
+            left -= nets[m % n]
+            if left <= 0:
+                break
+            m += 1
+        out.append((times[m % n] + (m // n) * period - times[j] if timed else None, m - j + 1))
+    return out
+
+
+def ttk_cell(samples):
+    if not samples:
+        return "-", None
+    shots = sorted(s for _, s in samples)
+    ms = sorted(m for m, _ in samples if m is not None)
+    out = {"shots": mean(shots), "shots_5": quantile(shots, 0.05), "shots_95": quantile(shots, 0.95)}
+    if len(ms) == len(samples):
+        out.update(s=mean(ms) / 1000, s_5=quantile(ms, 0.05) / 1000, s_95=quantile(ms, 0.95) / 1000)
+        return f"{out['s']:.1f} s ({out['s_5']:.1f}-{out['s_95']:.1f}), {out['shots']:.1f} shots", out
+    return f"{out['shots']:.1f} shots ({out['shots_5']:.0f}-{out['shots_95']:.0f})", out
+
+
+def damage(data):
+    """per segment, shooter and victim: the shots, the hits by zone, the damage, the cadence, the fights over; the
+    time to kill the shooter's sequence of shots gives against the victims of VICTIMS"""
+    if not data["damage"]:
+        return [], {}
+    groups = defaultdict(list)
+    for x in data["shots"]:
+        groups[(x["seg"], x["by"], x["victim"])].append(x)
+    rows, js, ttk, tjs, seen = [], [], [], [], set()
+    for (seg, by, victim), xs in groups.items():
+        cnt = Counter()
+        for x in xs:
+            d = x["damage"]
+            if d is not None and d["hit"]:
+                cnt[d["zone"] if d["zone"] in ZONE_DAMAGE else "hit"] += 1
+            elif d is None and x["result"] in ZONE_DAMAGE:
+                cnt[x["result"]] += 1
+        hits = " ".join(f"{z} {cnt[z]}" for z in ("head", "body", "limb", "hit") if cnt[z]) or "-"
+        nets = [x["damage"]["net"] for x in xs if x["damage"] is not None and x["damage"]["hit"]]
+        gaps = [x["gap"] for x in xs if x["gap"] is not None]
+        cad = mean(gaps)
+        cad_sd = math.sqrt(sum((g - cad) ** 2 for g in gaps) / (len(gaps) - 1)) if len(gaps) > 1 else math.nan
+        total = sum(x["damage"]["net"] for x in xs if x["damage"] is not None)
+        dpm = total / len(xs) * 60000 / cad if gaps and cad > 0 else None
+        downs = [f for f in data["fights"] if f["seg"] == seg and f["sym"] == victim]
+        seen.update(id(f) for f in downs)
+        kinds = "/".join(sorted({x["kind"] for x in xs}))
+        down = ", ".join(f"{f['ms'] / 1000:.1f}" for f in downs) or "-"
+        if len(downs) > 4:
+            secs = sorted(f["ms"] / 1000 for f in downs)
+            down = f"{len(secs)} fights: {mean(secs):.1f} ({secs[0]:.1f}-{secs[-1]:.1f})"
+        rows.append(f"| {seg} | {by} | {victim} | {kinds} | {len(xs)} | {hits} | {f2(mean(nets), 1)} | {f2(dpm, 0)} | "
+                    f"{f2(cad / 1000 if gaps else None)} ± {f2(cad_sd / 1000)} | {down} |")
+        js.append({"segment": seg, "shooter": by, "victim": victim, "kinds": kinds, "shots": len(xs), "hits": dict(cnt),
+                   "net_per_hit": mean(nets), "per_min": dpm, "cadence_s": cad / 1000 if gaps else None,
+                   "cadence_sd_s": cad_sd / 1000, "down_after_s": [f["ms"] / 1000 for f in downs]})
+        seqs = defaultdict(list)
+        for x in xs:
+            d = x["damage"]
+            seqs[x["run"]].append((x["t"], d["raw"] if d else 0, d["k"] if d else 0.0, bool(d and d["hit"]),
+                                   x["draw"] if x["kind"] == "precise" else None, d["zone"] if d else None))
+        if not any(v[1] > 0 for seq in seqs.values() for v in seq):
+            continue  # blows: no weapon damage to replay
+        for name, rule in RULES:
+            cells, out = [], {}
+            for vname, hp, prot in VICTIMS:
+                cell, o = ttk_cell([v for seq in seqs.values() for v in to_kill(seq, hp, prot, rule)])
+                cells.append(cell)
+                out[vname] = o
+            ttk.append(f"| {seg} | {by} | {victim} | {name} | " + " | ".join(cells) + " |")
+            tjs.append({"segment": seg, "shooter": by, "victim": victim, "rule": rule, "victims": out})
+    lines = ["## Damage and fights", "",
+             "Per shooter and victim: hits by zone (`hit`: a dice's), net damage per hit, damage a minute (per shot "
+             "times the cadence), the gap between the shooter's shots (`arrow shot`, `dice shot`), s; `fight over` of "
+             "the victim.", "",
+             "| segment | shooter | victim | kind | shots | hits | net per hit | damage /min | cadence s | down after s |",
+             "|" + "---|" * 10] + rows + [""]
+    other = [f for f in data["fights"] if id(f) not in seen]
+    if other:
+        lines += ["Fights over: " + "; ".join(f"{f['sym']} down after {f['ms'] / 1000:.1f} s ({f['seg']})" for f in other), ""]
+    if ttk:
+        lines += ["### Time to kill", "",
+                  "The shooter's shots replayed on these victims (hit points / protection) from each shot on, round the "
+                  "sequence: mean (5-95%). Per hit max(round(raw·draw) - prot, 0)·zone as the game (zone after armour), "
+                  "or max(round(raw·k) - prot, 0) as until 2026-10-13 (zone before armour); at least 5 a hit.", "",
+                  "| segment | shooter | victim | rule | " + " | ".join(f"{n} {hp}/{p}" for n, hp, p in VICTIMS) + " |",
+                  "|" + "---|" * (4 + len(VICTIMS))] + ttk + [""]
+    return lines, {"damage": clean(js), **({"time_to_kill": clean(tjs)} if tjs else {}),
+                   "fights": clean([{"segment": f["seg"], "down": f["sym"], "after_s": f["ms"] / 1000} for f in data["fights"]])}
+
+
+def combat_report(datas):
+    """the tables of the arrows, the dice and the damage of one run, or of several pooled by segment name"""
+    data = {k: [v for d in datas for v in d[k]] for k in ("shots", "rolls", "damage", "fights", "dumps")}
+    lines, summary = [], {}
+    for part in (archery, dice, damage):
+        more, js = part(data)
+        lines += more
+        summary.update(js)
+    return lines, summary
+
+
+def aggregate(outs):
+    """the arrows, the dice and the damage of several runs (repeats of a scenario) pooled by segment name"""
+    lines, summary = combat_report([combat(o, i) for i, o in enumerate(outs)])
+    print(f"# Arrows of {len(outs)} runs: " + ", ".join(os.path.basename(os.path.normpath(o)) for o in outs))
+    print()
+    print("\n".join(lines) if lines else "no arrows, dice or damage")
+
+
 def sheet(video, frames, path, cols=4, width=400):
     """tile the given frame numbers of a video into one image"""
     if not frames:
@@ -585,6 +1425,9 @@ def report(out):
     lines.append("")
     lines += manual_aim(out, segs)
     lines += hit_zones(out)
+    more, numbers = combat_report([combat(out)])
+    lines += more
+    summary.update(numbers)
 
     all_events.sort(key=lambda e: -e["severity"])
     lines.append("## Worst events")
@@ -669,6 +1512,9 @@ def diff(a, b):
 def main():
     if len(sys.argv) == 4 and sys.argv[1] == "diff":
         diff(sys.argv[2], sys.argv[3])
+        return
+    if len(sys.argv) >= 3 and sys.argv[1] == "aggregate":
+        aggregate(sys.argv[2:])
         return
     if len(sys.argv) >= 3 and sys.argv[1] == "compare":
         rng = [int(x) for x in sys.argv[4:6]]

@@ -379,6 +379,10 @@ void GameScript::initCommon() {
   if(auto v = vm.find_symbol_by_name("DAM_CRITICAL_MULTIPLIER")) {
     damCriticalMultiplier = v->get_int();
     }
+  if(auto v = vm.find_symbol_by_name("RANGED_CHANCE_MINDIST"))
+    rangedChanceMin = v->get_float();
+  if(auto v = vm.find_symbol_by_name("RANGED_CHANCE_MAXDIST"))
+    rangedChanceMax = v->get_float();
 
   auto* gilMax = vm.find_symbol_by_name("GIL_MAX");
   gilCount = gilMax!=nullptr ? size_t(gilMax->get_int()) : 0;

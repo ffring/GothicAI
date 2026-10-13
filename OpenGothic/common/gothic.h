@@ -119,6 +119,9 @@ class Gothic final {
 
     bool         isGodMode() const { return godMode; }
     void         setGodMode(bool g) { godMode = g; }
+    // a scene of its own (the AI bridge's endings): no bars, no focus, no messages over it
+    bool         isHudHidden() const { return hudHidden; }
+    void         setHudHidden(bool h) { hudHidden = h; }
 
     void         toggleDesktop() { desktop = !desktop; }
     bool         isDesktop() { return desktop; }
@@ -245,6 +248,7 @@ class Gothic final {
     uint16_t                                pauseSum=0;
     bool                                    isMarvin       = false;
     bool                                    godMode        = false;
+    bool                                    hudHidden      = false;
     bool                                    desktop        = false;
     bool                                    showFpsCounter = false;
     bool                                    showTime       = false;

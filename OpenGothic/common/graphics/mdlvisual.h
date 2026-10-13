@@ -112,10 +112,14 @@ class MdlVisual final {
     // an animation of the model (the test bench): its frames, the nodes it moves, how far it goes, which
     // way the hips face (the thighs) at a few points of it
     std::string                    animInfo(std::string_view name) const;
+    // ms the animation of that name takes (the overlays chosen), 0: none
+    float                          animTime(std::string_view name) const;
     // cm the bow's string goes from rest to drawn as held in the aim (its morph), 0: not known
     float                          bowSpan() const;
     // the bow holds still in the aim: an arrow on the string
     bool                           isAimSteady() const;
+    // the upper body can turn to aim (Aim on, the bones there)
+    bool                           isAimValid() const;
     // degrees the arrow (before the sway) points off where the shot has to go, -1 not aiming
     float                          aimTrackError() const;
 
