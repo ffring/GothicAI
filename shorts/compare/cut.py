@@ -65,7 +65,8 @@ def main() -> None:
             inputs = ["-i", str(takes / "off" / f"{seg}.mp4"), "-i", str(takes / "on" / f"{seg}.mp4"),
                       "-i", str(tmp / f"t{i}.png")]
             if i == 0:
-                text_image(tmp / "hook.png", [(plan["hook"][lang], HOOK_FONT, 86, HALF - 330,
+                hook = plan["hook"][lang]  # a line break in it: two lines, raised by the second
+                text_image(tmp / "hook.png", [(hook, HOOK_FONT, 86, HALF - 330 - 100 * hook.count("\n"),
                                                (255, 255, 255, 255), "c")])
                 inputs += ["-i", str(tmp / "hook.png")]
                 layers.append(f"[3]loop=-1:1,trim=0:{plan['hook_s']}[h]")

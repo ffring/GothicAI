@@ -594,6 +594,8 @@ void loadScenario() {
     say(std::string("can not read scenario: ") + scenarioPath);
     return;
     }
+  const char*       tv   = std::getenv("OPENGOTHIC_BENCH_TAKE");
+  const std::string take = tv!=nullptr && tv[0]!='\0' ? tv : "on";
   std::string line;
   while(std::getline(fin,line)) {
     const size_t hash = line.find('#');
@@ -604,6 +606,18 @@ void loadScenario() {
     size_t b = 0;
     while(b<line.size() && std::isspace(uint8_t(line[b])))
       ++b;
+    // `off: <command>` / `on: <command>`: in that take of a before/after short only (shorts/compare/film.sh
+    // sets OPENGOTHIC_BENCH_TAKE; without it the take is `on`)
+    for(const std::string_view tk:{std::string_view("off:"),std::string_view("on:")}) {
+      if(line.compare(b,tk.size(),tk)!=0)
+        continue;
+      if(tk.substr(0,tk.size()-1)!=take)
+        b = line.size(); else
+        b += tk.size();
+      while(b<line.size() && std::isspace(uint8_t(line[b])))
+        ++b;
+      break;
+      }
     if(b<line.size())
       bench.prog.push_back(line.substr(b));
     }

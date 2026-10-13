@@ -14,6 +14,10 @@ does not take the focus and plays no sound, so it can run while someone works on
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the
 random idle animations the game picks).
 
+A line `off: <command>` or `on: <command>` runs in that take only: `OPENGOTHIC_BENCH_TAKE=off|on`, set by
+`shorts/compare/film.sh` (without it the take is `on`). `OPENGOTHIC_MANUALAIM=0|1` and `OPENGOTHIC_NPCAIM=0|1`
+set the hero's and the npc archers' manual aim over Gothic.ini.
+
 Scenarios for foot IK: `ik-sweep` (12 slopes all over the world: run up, run down, walk across; ~2 min),
 `ik-stairs` (8 stairs: walk up and down, run up), `ik-moves` (stand, turn on the spot, strafe, walk
 backwards, sneak), `ik-ab` (IK off and on on the same run), `smoke` (the bench itself).
