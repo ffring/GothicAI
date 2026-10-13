@@ -1,0 +1,169 @@
+{"id": "VLK_487_BUERGERIN/19/news", "answers": {"plan": "a2", "do": "chat"}}
+{"id": "VLK_498_IGNAZ/09/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_952_VINO/09/news", "answers": {"do": "chat"}}
+{"id": "VLK_415_MELDOR/19/news", "answers": {"do": "chat"}}
+{"id": "BAU_931_TILL/09/news", "answers": {"do": "chat"}}
+{"id": "MIL_331_MILIZ/14/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_952_VINO/19/news", "answers": {"do": "chat"}}
+{"id": "VLK_479_LUCY/09/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "KDF_508_GORAX/19/death", "answers": {"do": "pray"}}
+{"id": "VLK_402_RICHTER/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_951_HILDA/09/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_492_RENGARU/09/loss", "answers": {"plan": "keep_routine", "do": "tavern"}}
+{"id": "NONE_100_XARDAS/19/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/14/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_462_THORBEN/19/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_469_HALVOR/19/loss", "answers": {"plan": "a1", "do": "tavern"}}
+{"id": "VLK_429_BUERGERIN/14/death", "answers": {"do": "pray"}}
+{"id": "VLK_470_SARAH/14/news", "answers": {"do": "chat"}}
+{"id": "NONE_100_XARDAS/14/news", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_498_IGNAZ/19/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "SLD_826_SOELDNER/19/control", "answers": {"do": "keep_routine"}}
+{"id": "MIL_337_MIKA/19/loss", "answers": {"do": "keep_routine"}}
+{"id": "VLK_415_MELDOR/14/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_414_HANNA/09/death", "answers": {"do": "pray"}}
+{"id": "BAU_952_VINO/09/control", "answers": {"do": "chat"}}
+{"id": "NOV_604_DYRIAN/09/death", "answers": {"plan": "a1", "do": "pray"}}
+{"id": "BAU_911_ELENA/14/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NOV_604_DYRIAN/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_952_VINO/14/death", "answers": {"do": "pray"}}
+{"id": "VLK_479_LUCY/14/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_953_BAUER/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "MIL_330_MILIZ/09/news", "answers": {"do": "chat"}}
+{"id": "MIL_331_MILIZ/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_402_RICHTER/09/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_911_ELENA/09/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_414_HANNA/19/death", "answers": {"do": "pray"}}
+{"id": "VLK_470_SARAH/19/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_479_LUCY/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/09/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_415_MELDOR/09/news", "answers": {"do": "chat"}}
+{"id": "PAL_241_RITTER/09/loss", "answers": {"do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/14/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_415_MELDOR/09/control", "answers": {"do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/09/news", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_457_BRIAN/19/death", "answers": {"do": "keep_routine"}}
+{"id": "MIL_330_MILIZ/14/news", "answers": {"do": "chat"}}
+{"id": "VLK_4000_BUERGER/09/loss", "answers": {"plan": "keep_routine", "do": "tavern"}}
+{"id": "VLK_402_RICHTER/14/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_951_HILDA/19/news", "answers": {"do": "chat"}}
+{"id": "BAU_911_ELENA/19/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_479_LUCY/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_931_TILL/19/news", "answers": {"do": "chat"}}
+{"id": "VLK_469_HALVOR/09/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_492_RENGARU/14/loss", "answers": {"plan": "keep_routine", "do": "tavern"}}
+{"id": "BAU_954_MALETH/19/news", "answers": {"do": "keep_routine"}}
+{"id": "BAU_952_VINO/14/news", "answers": {"do": "chat"}}
+{"id": "NOV_604_DYRIAN/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_931_TILL/19/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_429_BUERGERIN/19/death", "answers": {"do": "pray"}}
+{"id": "NOV_604_DYRIAN/14/death", "answers": {"plan": "a1", "do": "pray"}}
+{"id": "VLK_413_BOSPER/14/loss", "answers": {"do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/09/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "MIL_330_MILIZ/09/control", "answers": {"do": "keep_routine"}}
+{"id": "BAU_952_VINO/14/control", "answers": {"do": "chat"}}
+{"id": "KDF_508_GORAX/09/death", "answers": {"do": "pray"}}
+{"id": "VLK_479_LUCY/19/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "BAU_953_BAUER/09/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_953_BAUER/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/19/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "KDF_508_GORAX/14/death", "answers": {"do": "pray"}}
+{"id": "VLK_492_RENGARU/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_487_BUERGERIN/14/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_492_RENGARU/19/loss", "answers": {"plan": "keep_routine", "do": "tavern"}}
+{"id": "VLK_4000_BUERGER/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_954_MALETH/09/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_457_BRIAN/09/death", "answers": {"do": "pray"}}
+{"id": "VLK_457_BRIAN/14/death", "answers": {"do": "pray"}}
+{"id": "VLK_498_IGNAZ/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "SLD_826_SOELDNER/19/news", "answers": {"do": "chat"}}
+{"id": "VLK_479_LUCY/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_911_ELENA/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_429_BUERGERIN/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NOV_604_DYRIAN/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "SLD_826_SOELDNER/09/control", "answers": {"do": "keep_routine"}}
+{"id": "MIL_331_MILIZ/09/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "MIL_330_MILIZ/14/control", "answers": {"do": "keep_routine"}}
+{"id": "BAU_952_VINO/19/control", "answers": {"do": "chat"}}
+{"id": "BAU_911_ELENA/14/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "VLK_487_BUERGERIN/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_950_LOBART/19/news", "answers": {"do": "chat"}}
+{"id": "BAU_953_BAUER/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_951_HILDA/09/news", "answers": {"do": "chat"}}
+{"id": "VLK_415_MELDOR/14/news", "answers": {"do": "chat"}}
+{"id": "BAU_931_TILL/09/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_462_THORBEN/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_413_BOSPER/19/loss", "answers": {"do": "keep_routine"}}
+{"id": "VLK_470_SARAH/09/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_492_RENGARU/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_462_THORBEN/14/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "MIL_331_MILIZ/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_479_LUCY/09/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "VLK_414_HANNA/14/death", "answers": {"do": "pray"}}
+{"id": "BAU_931_TILL/14/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_498_IGNAZ/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "SLD_826_SOELDNER/14/control", "answers": {"do": "keep_routine"}}
+{"id": "BAU_954_MALETH/14/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_413_BOSPER/09/loss", "answers": {"do": "keep_routine"}}
+{"id": "VLK_429_BUERGERIN/09/death", "answers": {"plan": "keep_routine", "do": "pray"}}
+{"id": "BAU_911_ELENA/09/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "MIL_337_MIKA/14/loss", "answers": {"do": "keep_routine"}}
+{"id": "VLK_4000_BUERGER/19/loss", "answers": {"do": "tavern"}}
+{"id": "VLK_462_THORBEN/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_469_HALVOR/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_402_RICHTER/19/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_487_BUERGERIN/09/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "VLK_469_HALVOR/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_487_BUERGERIN/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/19/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_953_BAUER/14/death", "answers": {"plan": "keep_routine", "do": "pray"}}
+{"id": "MIL_331_MILIZ/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_931_TILL/14/news", "answers": {"do": "chat"}}
+{"id": "BAU_911_ELENA/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_487_BUERGERIN/19/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_402_RICHTER/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_470_SARAH/14/control", "answers": {"do": "chat"}}
+{"id": "BAU_952_VINO/19/death", "answers": {"do": "pray"}}
+{"id": "SLD_826_SOELDNER/09/news", "answers": {"do": "chat"}}
+{"id": "BAU_950_LOBART/14/control", "answers": {"do": "keep_routine"}}
+{"id": "MIL_331_MILIZ/19/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_911_ELENA/19/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "VLK_479_LUCY/19/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_479_LUCY/14/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "VLK_470_SARAH/09/news", "answers": {"do": "chat"}}
+{"id": "NONE_100_XARDAS/09/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "PAL_241_RITTER/19/loss", "answers": {"do": "keep_routine"}}
+{"id": "SLD_826_SOELDNER/14/news", "answers": {"do": "chat"}}
+{"id": "NONE_100_XARDAS/14/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_954_MALETH/14/news", "answers": {"do": "chat"}}
+{"id": "VLK_487_BUERGERIN/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_469_HALVOR/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_469_HALVOR/14/loss", "answers": {"plan": "keep_routine", "do": "tavern"}}
+{"id": "VLK_462_THORBEN/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_487_BUERGERIN/09/control", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "NONE_100_XARDAS/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_462_THORBEN/09/loss", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_950_LOBART/09/news", "answers": {"do": "chat"}}
+{"id": "VLK_498_IGNAZ/09/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_4000_BUERGER/14/loss", "answers": {"do": "tavern"}}
+{"id": "BAU_951_HILDA/14/news", "answers": {"do": "chat"}}
+{"id": "VLK_487_BUERGERIN/14/news", "answers": {"plan": "keep_routine", "do": "chat"}}
+{"id": "BAU_950_LOBART/14/news", "answers": {"do": "chat"}}
+{"id": "NOV_604_DYRIAN/19/death", "answers": {"plan": "a1", "do": "pray"}}
+{"id": "VLK_498_IGNAZ/14/death", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_951_HILDA/14/control", "answers": {"do": "keep_routine"}}
+{"id": "BAU_954_MALETH/09/news", "answers": {"do": "keep_routine"}}
+{"id": "VLK_415_MELDOR/19/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_402_RICHTER/14/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_950_LOBART/09/control", "answers": {"do": "keep_routine"}}
+{"id": "MIL_337_MIKA/09/loss", "answers": {"do": "keep_routine"}}
+{"id": "BAU_911_ELENA/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_951_HILDA/19/control", "answers": {"do": "keep_routine"}}
+{"id": "VLK_492_RENGARU/19/none", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "BAU_950_LOBART/19/control", "answers": {"do": "keep_routine"}}
+{"id": "BAU_954_MALETH/19/control", "answers": {"do": "keep_routine"}}
+{"id": "BAU_953_BAUER/19/death", "answers": {"plan": "keep_routine", "do": "pray"}}
+{"id": "NONE_100_XARDAS/19/news", "answers": {"plan": "keep_routine", "do": "keep_routine"}}
+{"id": "VLK_470_SARAH/19/news", "answers": {"do": "chat"}}

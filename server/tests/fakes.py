@@ -8,8 +8,15 @@ from gothic_ai.brain import Outcome
 
 
 class FakeDecider:
-    def __init__(self, choice: str = "greet", confidence: float = 0.9, kind: str = "answers") -> None:
+    def __init__(
+        self,
+        choice: str = "greet",
+        confidence: float = 0.9,
+        kind: str = "answers",
+        per_question: dict[str, str] | None = None,
+    ) -> None:
         self.choice, self.confidence, self.kind = choice, confidence, kind
+        self.per_question = per_question or {}  # question name -> its choice (else `choice`)
         self.calls: list[dict] = []
         self.cancelled: list[str] = []
         self.gate: asyncio.Event | None = None
@@ -32,7 +39,8 @@ class FakeDecider:
         answers = {}
         for name, q in questions.items():
             if q["type"] == "choice":
-                pick = self.choice if self.choice in q["criteria"] else next(iter(q["criteria"]))
+                want = self.per_question.get(name, self.choice)
+                pick = want if want in q["criteria"] else next(iter(q["criteria"]))
                 answers[name] = {
                     "type": "choice",
                     "choice": pick,

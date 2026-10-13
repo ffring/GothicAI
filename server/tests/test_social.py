@@ -15,7 +15,7 @@ from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.social import DAY, Rumor, Rumors, Social
+from gothic_ai.social import DAY, Rumor, Rumors, Social, Spot
 from gothic_ai.trust import Trust
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
@@ -378,6 +378,59 @@ def test_routine_state_and_smalltalk_spans():
     assert not Social(PEOPLE).ties[LOBART][HILDA].talks  # ZS_STAND
 
 
+def test_each_ones_day_and_how_many_a_place_holds():
+    a, b, c, priest, late = "NOV_601_NOVIZE", "NOV_602_NOVIZE", "NOV_603_NOVIZE", "KDF_500_PYROKAR", "VLK_404"
+    church, yard, hut, far = [1000, 0, 1000], [30000, 0, 1000], [60000, 0, 1000], [90000, 0, 1000]
+    s = Social(
+        [
+            _smalltalker(
+                a,
+                (_h(8), _h(9), "zs_pray_innos", "CHURCH", church),
+                (_h(9), _h(22), "ZS_STAND", "YARD", yard),
+                (_h(22), _h(8), "ZS_SLEEP", "BED", []),  # no such point in the world
+            ),
+            _smalltalker(
+                b, (_h(8), _h(9), "ZS_PRAY_INNOS", "CHURCH", church), (_h(9), _h(8), "ZS_STAND", "HUT", hut)
+            ),
+            _smalltalker(
+                c,
+                (_h(7.5), _h(9), "ZS_PRAY_INNOS", "CHURCH", church),
+                (_h(9), _h(7.5), "ZS_STAND", "HUT", hut),
+            ),
+            _smalltalker(
+                priest,
+                (_h(21), _h(5), "ZS_PRAY_INNOS", "CHURCH", church),
+                (_h(5), _h(21), "ZS_STAND", "FAR", far),
+            ),
+            # its first entry holds 8:00-12:00, so the overlapping church hour is never its (the engine's way)
+            _smalltalker(
+                late,
+                (_h(8), _h(12), "ZS_STAND", "FAR", far),
+                (_h(8), _h(9), "ZS_PRAY_INNOS", "CHURCH", church),
+            ),
+        ]
+    )
+    # each one's day, its entries as the routine has them; one without a point is kept, without a position
+    bed = s.days[a][2]
+    assert (bed.start, bed.end, bed.state, bed.waypoint, bed.pos) == (_h(22), _h(8), "ZS_SLEEP", "BED", None)
+    assert s.days[a][0] == Spot(_h(8), _h(9), "ZS_PRAY_INNOS", "CHURCH", (1000, 0, 1000))
+    assert [npc for npc, _ in s.spots()] == [a] * 3 + [b] * 2 + [c] * 2 + [priest] * 2 + [late] * 2
+    assert s.ties[a][b].meets == [(_h(8), _h(9))]  # the bed has no position: no meeting there
+    # where one is at a minute: any day, past midnight, by any case of its name
+    assert s.spot(a, _h(8.5)).waypoint == "CHURCH"
+    assert s.spot(a, _h(23)) is bed and s.spot(a, 3 * DAY + _h(7)) is bed and s.spot(a.lower(), _h(3)) is bed
+    # an entry ends where the next begins
+    assert s.spot(a, _h(22)) is bed and s.spot(a, _h(8)) is s.days[a][0]
+    assert s.spot(priest, _h(4) + 59).waypoint == "CHURCH" and s.spot(priest, _h(5)).waypoint == "FAR"
+    assert s.spot(late, _h(8.5)).waypoint == "FAR" and s.spot("VLK_999_NOBODY", 0) is None
+    # who is at a place then, and how many it holds at once over the day
+    assert s.users("CHURCH", DAY + _h(8.5)) == {a, b, c}
+    assert s.users("CHURCH", _h(7.75)) == {c} and s.users("CHURCH", _h(23)) == {priest}
+    assert s.users("CHURCH", _h(6)) == set() and s.users("NOWHERE", _h(8.5)) == set()
+    assert s.capacity("CHURCH") == 3 and s.capacity("church") == 3
+    assert s.capacity("FAR") == 2 and s.capacity("BED") == 1 and s.capacity("NOWHERE") == 1
+
+
 def test_retold_rumor_keeps_said(graph, monkeypatch):
     monkeypatch.setattr(social, "P_MEET", 1.0)
     monkeypatch.setattr(social, "P_DEAL", 0.0)
@@ -585,6 +638,58 @@ def test_offer_uses_the_same_checks(graph, monkeypatch):
     assert r.offer(rumor, LOBART, ANDRE)  # a tie by dealings only
     assert facts[-1]["how"] == "talked" and [(a, b) for a, b, *_ in staged] == [(LOBART, ANDRE)]
     assert r.tells[(rumor.key, LOBART, 1)] == 2
+
+
+def test_can_tell_is_offer_without_its_effects(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    r, rumor, facts = _rumors(Social(PEOPLE, graph))
+    assert not r.can_tell(rumor, LOBART, HILDA)  # no clock yet
+    r.clock = DAY + _h(9)
+    asked, staged = _staged(r, "words")
+    # Hilda (they meet), Vatras (unacquainted), Vino from Hilda (she does not know it), Andre (dealings)
+    pairs = [(LOBART, HILDA), (LOBART, VATRAS), (HILDA, VINO), (LOBART, ANDRE)]
+    assert [r.can_tell(rumor, a, b) for a, b in pairs] == [True, False, False, True]
+    # asked again: the same; nothing told, staged, counted or waited for
+    assert [r.can_tell(rumor, a, b) for a, b in pairs] == [True, False, False, True]
+    assert not facts and not asked and not staged and not r.tells and not r.waiting
+    assert set(rumor.known) == {LOBART} and VATRAS not in r.social.ties[LOBART]  # no tie made
+    monkeypatch.setattr(social, "P_MEET", 0.0)
+    assert not r.can_tell(rumor, LOBART, HILDA) and not r.offer(rumor, LOBART, HILDA)  # the lot
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    for a, b in pairs:  # and it says what offer does (Hilda knows it by her turn)
+        assert r.can_tell(rumor, a, b) == r.offer(rumor, a, b)
+    assert [f["to"] for f in facts] == [HILDA, VINO, ANDRE] and not r.can_tell(rumor, LOBART, HILDA)
+    r.tells[(rumor.key, LOBART, 1)] = social.TELLS_PER_DAY
+    rumor.known.pop(HILDA)
+    assert not r.can_tell(rumor, LOBART, HILDA)  # his tells of the day are spent
+    r.gate = lambda rumor, a, b: True
+    assert r.can_tell(rumor, LOBART, HILDA)  # the e2e's gate, as for a meeting
+
+
+def test_offer_status_says_why_it_did_not_pass(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    r, rumor, facts = _rumors(Social(PEOPLE, graph))
+    assert r.offer_status(rumor, LOBART, HILDA) == "no"  # no clock yet
+    r.clock = DAY + _h(9)
+    asked, staged = _staged(r, "wait", "sight")
+    # busy now: no fact, no tell, ask again later
+    assert r.offer_status(rumor, LOBART, HILDA, how="visited") == "wait"
+    assert not facts and not any(r.tells.values()) and not r.waiting and HILDA not in rumor.known
+    # one walked up to the other: seen, not heard, it stays a visit
+    assert r.offer_status(rumor, LOBART, HILDA, how="visited") == "told"
+    assert [(f["to"], f["hops"], f["how"], f["where"]) for f in facts] == [(HILDA, 1, "visited", "NW_FARM1")]
+    assert [(a, b, tier) for a, b, tier, _ in staged] == [(LOBART, HILDA, "sight")]
+    assert r.offer_status(rumor, LOBART, HILDA, how="visited") == "no"  # she knows it now
+    monkeypatch.setattr(social, "P_MEET", 0.0)
+    assert r.offer_status(rumor, LOBART, ANDRE, how="visited") == "no"  # the lot
+    assert asked == [(LOBART, HILDA)] * 2  # a no is never staged
+    # said aloud near the hero: talked, whatever the occasion
+    monkeypatch.setattr(social, "P_MEET", 1.0)
+    _staged(r, "words")
+    assert r.offer_status(rumor, LOBART, ANDRE, how="visited") == "told" and facts[-1]["how"] == "talked"
+    # offer is a meeting's: how met
+    r.stage = r.on_staged = None
+    assert r.offer(rumor, HILDA, VINO) is True and facts[-1]["how"] == "met"
 
 
 def test_busy_chain_in_one_spread(monkeypatch):

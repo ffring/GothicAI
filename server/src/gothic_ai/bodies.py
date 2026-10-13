@@ -7,8 +7,9 @@ bridge gives a soft act up after 30 s, ActMaxMs). Since v15 also arrived (a `sta
 `Bodies.act` sends one act and waits for that end.
 
 A newer npc_act on the same npc replaces the bridge's tracking of the older one: the older act then never
-gets its npc_idle and ends here as "timeout". Whoever walks an npc keeps other acts off it meanwhile
-(`busy` tells whether one of ours is under way).
+gets its npc_idle. So once the newer one is queued (ours, or anyone's: the planner's applier, a reflex),
+the older one ends here as "gone", replaced, instead of waiting out its timeout. Whoever walks an npc keeps
+other acts off it meanwhile (`busy` tells whether one of ours is under way).
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ class Bodies:
         self._ended: OrderedDict[str, BodyOutcome] = OrderedDict()
         self._waiting: dict[str, tuple[str, asyncio.Future[BodyOutcome]]] = {}  # act -> (npc, its end)
         self._acting: Counter[str] = Counter()  # npc -> our acts under way, from the send to the end
+        self._queued: dict[str, str] = {}  # npc -> the act the bridge tracks for it now (the latest queued)
         link.listeners.append(self._on_message)
 
     def busy(self, npc: str) -> bool:
@@ -91,8 +93,17 @@ class Bodies:
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
             case NpcActResult(status="rejected"):
+                # the bridge rejects before it touches the tracking: the act before goes on
                 self._end(BodyOutcome(msg.id, msg.npc, "rejected", msg.detail or ""))
+            case NpcActResult(status="queued"):
+                # the bridge tracks one act per npc and replies in order: the one queued before is dropped
+                key = msg.npc.upper()
+                before, self._queued[key] = self._queued.get(key), msg.id
+                if before is not None and before != msg.id:
+                    self._end(BodyOutcome(before, msg.npc, "gone", f"replaced by {msg.id}"))
             case NpcIdle(act=str() as act):
+                if self._queued.get(msg.npc.upper()) == act:
+                    del self._queued[msg.npc.upper()]
                 reason = msg.reason or "done"
                 if reason in _REASONS:
                     self._end(BodyOutcome(act, msg.npc, _REASONS[reason], msg.detail or ""))
@@ -100,6 +111,7 @@ class Bodies:
                     self._end(BodyOutcome(act, msg.npc, "done", reason))
             case Loading():
                 # the npc's were released: their acts will never be answered
+                self._queued.clear()
                 for act, (npc, fut) in list(self._waiting.items()):
                     if not fut.done():
                         fut.set_result(BodyOutcome(act, npc, "lost", "the world is loading"))

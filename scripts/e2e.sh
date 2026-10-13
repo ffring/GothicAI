@@ -79,6 +79,15 @@
 #       asks Hilda and she has it in mind; far from the hero a pass is only the fact. Starts the TTS service
 #       (TTS=fake). Words scripted with LLM=fake. Without DECIDER_URL (with it Lobart may first come up about
 #       the lie himself); TIMEOUT=420
+#   day: everyday life from concerns (docs/npc-tools.md, wave 2 step 6). Lobart catches the hero lying; Vino,
+#       on his field, hears it from him far from the hero. With the hero by Malet, Vino's menu of his next hour
+#       has a walk to Malet to tell the news (about an hour); it is chosen and Vino walks there: near the hero
+#       the two say it in a scene of step 2 (how: talked) and the walk leaves a `day` fact the hero saw; from a
+#       save, with the hero by Vino's field, the same walk ends far from him and Malet learns it as a fact
+#       (how: visited), no model, no words. No sleep or dead option in any menu, few routine asks. Without
+#       DECIDER_URL the scenario's own planner (a fixed stand-in); with it the server's planner, the choice
+#       pinned and the live model's own answer logged. Starts the TTS service (TTS=fake). Words scripted with LLM=fake;
+#       TIMEOUT=480
 #   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
 #       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
 #       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them
@@ -122,7 +131,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

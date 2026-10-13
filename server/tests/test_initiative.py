@@ -568,13 +568,13 @@ async def test_other_choices_wait_while_it_walks(tmp_path):
         await step(s.planner, s.clock)
         await _walks(s, 2)
         assert _decided(s)[-1] == (LOBART, "flee", "")
-        # the bridge follows the flight now: the walk is never told over, the desk waits it out
-        assert s.desk.active == LOBART
-        await _until(lambda: s.desk.active is None)
+        # the bridge follows the flight now: the walk is never told over, so it ends once the flight is
+        # queued (bodies.py), not after its timeout
+        await _until(lambda: s.desk.active is None, 1.0)
 
     assert [(m["action"], m["args"]) for m in s.fake.acts] == [("go_to_npc", {}), ("flee", {"npc": "WOLF"})]
     assert [d.choice for d in s.applier.recent] == ["flee"] and s.planner.stats.vetoed == 1
-    assert _skipped(s) == ["missed: timeout, 8 м"] and not s.llm.calls
+    assert _skipped(s) == ["missed: gone, 8 м"] and not s.llm.calls
 
 
 async def test_who_may_not_come_up(tmp_path):

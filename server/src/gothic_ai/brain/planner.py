@@ -6,9 +6,22 @@ Every npc the game reports has a tier (tiers.py). It gets a decision:
 - when its action queue runs empty (NEAR), but not more often than every `near_min_gap_s`;
 - on a timer with a random phase: NEAR every 6-10 s, MID 30-60 s, FAR about once per game hour
   (a plan, not a reaction); an npc coming in from FAR gets a quick catch-up decision.
-Idle and timer checks of NEAR/MID npc's are only made when there is something to react to: a fresh
+Idle and timer reactions of NEAR/MID npc's are only asked when there is something to react to: a fresh
 stimulus or the npc's own `agenda` (what it wants from the player). With neither, asking the model
 gives a vague answer at best, so the check is skipped and the npc keeps its routine.
+
+The day plan (what to do in the next hour, from the npc's own routine: brain/day.py) runs on its own
+timer: about once a game hour, for NEAR/MID npc's every `plan_period_s`. An agenda does not cancel it; a
+live stimulus (a scripted one too: the game's scripts are reacting) holds it, and so does a body that is
+not doing what its routine has it do now. Without its routine and the game time there is no plan. The
+routine is asked from the game in the background, again after `routine_ttl_s` (scripts swap routines) and,
+after a failure, with a growing pause, never on every check.
+
+A plan request asks two menus at once, with one state (brain/day.py): `plan`, the old menu of the npc's
+own activities, and `do`, the new one, which also has trips to other people and places (the day desk,
+daylife.py, builds both through `menu_of` and walks a chosen trip through `on_plan`). Until the new menu
+is measured (`apply_day` off), `plan` is applied and `do` is only traced, in shadow; with it on, only `do`
+is asked and applied. Without a day desk only the old menu is asked.
 
 Per npc there is at most one pending request (new events merge into it) and one in flight. A pending
 request that waits too long is dropped; an answer is applied only if nothing happened to the npc
@@ -42,7 +55,7 @@ from ..protocol import (
     RosterEntry,
 )
 from .apply import Applier, Decision
-from .day import Habit, plan_options
+from .day import KEEP, DayMenu, DayOption, Habit, current_entry, plan_ids, plan_options
 from .decider import Decider, Lane, Outcome
 from .situation import NpcContext, Situation, SituationBuilder, clock_text
 from .stimuli import THREAT_CONTEXT, Stimulus, merge, normalize, policy
@@ -53,13 +66,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-NO_ACTION = {"continue", "keep_routine"}
+NO_ACTION = {"continue", KEEP}
 # choices that take a held threat over: the body fights, flees or runs shouting for help, the scripts must
 # not react too
 TAKES_BODY = {"fight", "flee", "call_help"}
 BODY_MAX_S = 60.0  # a body taken over without word of it being done is given back after this
 OVERHEAR_CM = 1000  # npc's this close hear what the player says to someone else
 TRACE_PER_MIN = 12  # decision rows per npc a minute: a NEAR npc with an agenda is asked every 6-10 s
+# a quiet npc whose routine is being asked is looked at again this soon (no request, no token spent)
+FETCH_WAIT_S = 1.0
 
 
 def applied_key(choice: str, target: str | None) -> str:
@@ -98,7 +113,6 @@ class PlannerConfig:
             "look_at": 0.25,
             "greet": 0.3,
             "approach_talk": 0.6,
-            "give_back": 0.6,
             "fight": 0.6,  # a fight is not taken back: surer than for a gesture
         }
     )
@@ -111,7 +125,6 @@ class PlannerConfig:
             "comment": 20.0,
             "look_at": 8.0,
             "thank": 30.0,
-            "give_back": 60.0,
             "tell_to_leave": 15.0,
         }
     )
@@ -122,8 +135,14 @@ class PlannerConfig:
     # It is the expected level, which sits between the levels: on held-out scenes the labeller's "level 3 or
     # more" is matched best from 2.5 on (89% for g6c; from 3.0 on only 64%, a fifth of the calls)
     escalate_level: float = 2.5
-    # NEAR/MID npc's with nothing to react to think about their next hour this often (a game hour ~4 min)
+    # NEAR/MID npc's think about their next hour this often (a game hour ~4 min)
     plan_period_s: float = 240.0
+    # the day plan is chosen from the new `do` menu (with trips); off: from the old one, `do` in shadow
+    apply_day: bool = False
+    # an npc's routine is asked again after this long (scripts swap routines), and after a failure only
+    # after these pauses (the last one from then on)
+    routine_ttl_s: float = 600.0
+    routine_retry_s: tuple[float, ...] = (10.0, 30.0, 120.0, 300.0)
     max_inflight: int = 48
     bg_rate: float = 20.0  # background requests per second
     tick_s: float = 0.05
@@ -149,6 +168,24 @@ class Flight:
     situation: Situation
     target: str | None = None  # the newest threat's source: whom a fight or flight is about
     plan_args: dict[str, dict] = field(default_factory=dict)  # plan option -> start_activity args
+    # a plan's applied question: "plan" (the old menu), "do", or None when only `do` is asked in shadow
+    question: str | None = None
+    shadow: str | None = None  # asked along and only traced: "do" while the new menu is in shadow
+    options: dict[str, DayOption] = field(default_factory=dict)  # the applied do menu, by wire key
+    shadow_menu: dict[str, DayOption] = field(default_factory=dict)  # the do menu in shadow
+    # what the applied question did, {question, choice, applied, why}: the shadow row's `code`
+    outcome: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RoutineSlot:
+    """An npc's routine as the game told it, and how asking for it goes."""
+
+    info: Any | None = None  # RoutineInfo
+    fetching: bool = False
+    fetched: float = float("-inf")
+    failures: int = 0  # in a row
+    retry_at: float = 0.0  # after a failure: not asked again before this
 
 
 @dataclass
@@ -159,6 +196,8 @@ class NpcRecord:
     distance_cm: float = 0.0
     in_view: bool = False
     activity: str = "routine"
+    state: str = ""  # the script state it is in (roster v7), e.g. ZS_RAKE_FP; "" when the bridge is older
+    moving: bool = False  # walking or running (roster v7)
     tier: Tier = Tier.FAR
     importance: float = 0.0
     version: int = 0
@@ -174,7 +213,7 @@ class NpcRecord:
     holds: list[tuple[str, float]] = field(default_factory=list)  # threats held from the scripts, (id, when)
     body: tuple[str, float] | None = None  # the body took a threat over: (choice, since); until npc_idle
     missed_urgent: bool = False  # something urgent happened while it was fighting
-    last_plan: float | None = None
+    last_plan: float = 0.0  # when it last thought of its day (or appeared): the next plan is a period later
     talking: bool = False  # in a conversation with the hero (talk.py has its body): threats only
 
 
@@ -192,6 +231,7 @@ class PlannerStats:
     vetoed: int = 0  # the `allow` hook kept a sure answer from being applied
     events: int = 0
     scripted_events: int = 0
+    shadow: int = 0  # answers to the do menu traced in shadow
 
 
 class NpcPlanner:
@@ -222,7 +262,7 @@ class NpcPlanner:
         # the npc's daily routine from the game (`routine`, protocol v6) and its habits: the plan's menu
         self.routine_of = routine_of
         self.habits_of = habits_of
-        self.routines: dict[str, Any] = {}  # npc -> RoutineInfo (None: the game could not tell)
+        self.routines: dict[str, RoutineSlot] = {}
         # how much the moment calls for the npc's own words: (npc, level, the reaction applied or None,
         # flight); told every level, the listener decides (`escalate_level`, or more when it already spoke)
         self.on_escalate: Callable[[str, float, Decision | None, Flight], None] | None = None
@@ -230,6 +270,11 @@ class NpcPlanner:
         self.allow: Callable[[NpcRecord, str], str | None] | None = None
         # takes approach_talk over: walks the npc up and lets it speak; without it the applier walks it
         self.on_approach: Callable[[Decision, NpcRecord], None] | None = None
+        # the day desk (daylife.py): an npc's menus for the next hour from its routine (rec, routine info,
+        # hour, minute, habits); without it only the old menu is asked
+        self.menu_of: Callable[[NpcRecord, Any, int, int, list[Habit]], DayMenu] | None = None
+        # takes a chosen trip over (chat, pray, tavern): walks the npc there; without it a trip is not done
+        self.on_plan: Callable[[Decision, NpcRecord, DayOption], None] | None = None
         self.applier = applier
         self.builder = builder or SituationBuilder()
         self.cfg = config or PlannerConfig()
@@ -244,6 +289,7 @@ class NpcPlanner:
         self._ids = itertools.count(1)
         self._tasks: set[asyncio.Task[None]] = set()
         self._traced: dict[str, tuple[float, int]] = {}  # npc -> (minute started, rows in it)
+        self._world = 0  # a load or a new world: routines asked before it are dropped when they come
 
     # --- input ----------------------------------------------------------------------------
 
@@ -278,10 +324,14 @@ class NpcPlanner:
                 self.reset()
 
     def reset(self) -> None:
+        """A load or a new world: nothing known of the npc's holds, their routines and the time included."""
         for task in self._tasks:
             task.cancel()
         self.npcs.clear()
         self._traced.clear()
+        self.routines.clear()
+        self.game_time = None
+        self._world += 1
 
     def on_roster(self, entries: list[RosterEntry], now: float, *, full: bool = True) -> None:
         seen = set()
@@ -292,9 +342,11 @@ class NpcPlanner:
             if rec is None:
                 rec = self.npcs[npc] = NpcRecord(npc, e.name, e.guild)
                 rec.tier = Tier.OFF  # placed below; a new npc gets a random phase
+                rec.last_plan = now  # its first plan comes a period after it appears
                 if self.agenda_of is not None:
                     rec.agenda = self.agenda_of(npc)
             rec.distance_cm, rec.in_view, rec.guild = e.distance, e.in_view, e.guild
+            rec.state, rec.moving = e.state, e.moving
             if rec.activity not in ("dialog", "attached") or e.activity != "routine":
                 rec.activity = e.activity
         if full:
@@ -463,16 +515,21 @@ class NpcPlanner:
         for rec in self.npcs.values():
             if rec.tier is Tier.OFF or rec.talking or rec.pending or rec.flight or rec.next_check > now:
                 continue
-            if rec.tier is not Tier.FAR and not self._has_reason(rec, now):
-                if self.routine_of is not None and now - (rec.last_plan or now) >= self.cfg.plan_period_s:
-                    self._want(rec, "plan", False, now, not_before=now)  # quiet: time to think of the day
+            soon = False
+            if self._plan_due(rec, now):
+                info = self._routine_ready(rec, now)  # may start asking for it; never touches next_check
+                if info is not None and self._in_routine(rec, info):
+                    self._want(rec, "plan", False, now, not_before=now)  # time to think of the day
                     continue
-                if rec.last_plan is None:
-                    rec.last_plan = now  # the first plan comes a period after the npc appears
-                self.stats.quiet += 1
-                self._schedule(rec, now)
+                soon = info is None and self.routines[rec.id].fetching
+            if rec.tier is not Tier.FAR and self._has_reason(rec, now):
+                self._want(rec, "react", False, now, not_before=now)  # an agenda or a live stimulus
                 continue
-            self._want(rec, "plan" if rec.tier is Tier.FAR else "react", False, now, not_before=now)
+            if rec.tier is not Tier.FAR:
+                self.stats.quiet += 1
+            self._schedule(rec, now)
+            if soon:
+                rec.next_check = min(rec.next_check, now + FETCH_WAIT_S)  # plan once the routine is known
 
         ready = []
         for rec in self.npcs.values():
@@ -523,6 +580,7 @@ class NpcPlanner:
             "quiet": s.quiet,
             "cooldown": s.cooldown,
             "vetoed": s.vetoed,
+            "shadow": s.shadow,
             "events": s.events,
             "slowdown": round(self.slowdown, 2),
         }
@@ -532,6 +590,23 @@ class NpcPlanner:
     @staticmethod
     def _has_reason(rec: NpcRecord, now: float) -> bool:
         return rec.agenda is not None or any(s.alive(now) for s in rec.stimuli)
+
+    def _plan_due(self, rec: NpcRecord, now: float) -> bool:
+        """The hour's plan is due: routines and the clock are known, the timer is up, and a NEAR/MID npc has
+        no live stimulus (a scripted one too: the game's scripts are reacting to it). An agenda does not stop
+        it."""
+        if self.routine_of is None or self.game_time is None:
+            return False
+        if rec.tier is Tier.FAR:
+            return True
+        return now - rec.last_plan >= self.cfg.plan_period_s and not any(s.alive(now) for s in rec.stimuli)
+
+    def _in_routine(self, rec: NpcRecord, info: Any) -> bool:
+        """It does what its routine has it do now: its roster state is the current entry's (not a script's
+        reaction, not an activity of ours still running). Unknown state (bridge < v7): yes."""
+        assert self.game_time is not None
+        entry = current_entry(info.entries, *self.game_time)
+        return not rec.state or entry is None or rec.state.upper() == entry.state.upper()
 
     def _after_chat(self, npc: str, now: float) -> None:
         """The hero just talked with the npc: it should not walk up to him or greet him again at once."""
@@ -575,8 +650,6 @@ class NpcPlanner:
             elif tier < old or old is Tier.OFF:
                 # coming closer (or back to its routine): decide soon, it may have missed things
                 rec.next_check = min(rec.next_check, now + self.rng.uniform(*self.cfg.catch_up_s))
-                if rec.pending:
-                    rec.pending.purpose = "plan" if tier is Tier.FAR else "react"
             else:
                 rec.next_check = now + self.rng.uniform(0, self._period(tier)[1])
                 if rec.pending and tier is Tier.FAR:
@@ -612,21 +685,39 @@ class NpcPlanner:
         )
         clock = clock_text(*self.game_time) if self.game_time else None
         plan_args: dict[str, dict] = {}
+        question: str | None = None  # a plan's applied question and the one asked in shadow
+        shadow: str | None = None
+        options: dict[str, DayOption] = {}
+        shadow_menu: dict[str, DayOption] = {}
         if pend.purpose == "plan":
-            routine = self._routine(rec.id)
+            slot = self.routines.get(rec.id)
+            if slot is None or slot.info is None or self.game_time is None:
+                self._schedule(rec, now)  # gone with a load meanwhile: asked again when due
+                return
             habits = self.habits_of(rec.id) if self.habits_of else []
-            if self.routine_of is not None:
-                if routine is None or not self.game_time:
-                    rec.next_check = now + 1.0  # being asked from the game: plan once it is known
-                    return
-                criteria, plan_args = plan_options(routine.entries, habits, *self.game_time)
-                if not plan_args:
-                    self._schedule(rec, now)  # nothing to choose between: the routine goes on
-                    return
-                sit = self.builder.plan(ctx, clock, criteria)
-            else:
-                sit = self.builder.plan(ctx, clock)
-            rec.last_plan = now
+            hour, minute = self.game_time
+            if self.menu_of is not None:
+                menu = self.menu_of(rec, slot.info, hour, minute, habits)
+            else:  # no day desk (m5c, planner_sim): the old menu alone
+                menu = DayMenu(plan=plan_options(slot.info.entries, habits, hour, minute, rec.state))
+            rec.last_plan = now  # an empty menu too: not looked at again before the next period
+            question, shadow = self._day_questions(menu)
+            if question is None and shadow is None:
+                # nothing to choose between (or on duty, asleep): the routine goes on
+                if menu.stay is not None:
+                    log.debug("%s: no day plan (%s)", rec.id, menu.stay)
+                self._schedule(rec, now)
+                return
+            old = menu.plan[0] if question == "plan" else None
+            do = {key: o.text for key, o in menu.do.items()} if "do" in (question, shadow) else None
+            sit = self.builder.day(ctx, clock, old, do)
+            if question == "plan":
+                plan_args = dict(menu.plan[1])
+            elif question == "do":
+                options = menu.do
+                plan_args = {key: o.args for key, o in options.items() if o.args is not None}
+            if shadow == "do":
+                shadow_menu = menu.do
             deadline = self.cfg.deadline_ms["far"]
         else:
             sit = self.builder.react(ctx, rec.stimuli, now, clock)
@@ -643,10 +734,26 @@ class NpcPlanner:
             sit,
             self._threat(rec),
             plan_args,
+            question=question,
+            shadow=shadow,
+            options=options,
+            shadow_menu=shadow_menu,
         )
         rec.flight = flight
         self.stats.sent[lane] += 1
         self._spawn(self._ask(rec.id, flight, lane, rec.importance, deadline))
+
+    def _day_questions(self, menu: DayMenu) -> tuple[str | None, str | None]:
+        """Which day questions to ask: (the applied one, the one in shadow). Each needs two options at least:
+        `plan` (the old menu) is applied and `do` asked along in shadow, or `do` alone in shadow when the
+        old menu has nothing to choose; with `apply_day` (and a day desk to build it), `do` alone is applied.
+        Nothing while the npc stays as it is (on duty, asleep)."""
+        if menu.stay is not None:
+            return None, None
+        do = "do" if len(menu.do) >= 2 else None
+        if self.cfg.apply_day and self.menu_of is not None:
+            return do, None
+        return ("plan" if len(menu.plan[0]) >= 2 else None), do
 
     @staticmethod
     def _threat(rec: NpcRecord, now: float | None = None) -> str | None:
@@ -660,21 +767,38 @@ class NpcPlanner:
             None,
         )
 
-    def _routine(self, npc: str) -> Any | None:
-        """The npc's routine if known; asked from the game in the background the first time."""
-        if npc in self.routines or self.routine_of is None:
-            return self.routines.get(npc)
-        self.routines[npc] = None
+    def _routine_ready(self, rec: NpcRecord, now: float) -> Any | None:
+        """Its routine if known (a stale one is used while a fresh one is asked); None while it is first
+        asked or after a failure. A fetch starts when there is none or it is older than routine_ttl_s, unless
+        one runs or a failure's retry time is ahead. Never touches rec.next_check: the react path keeps its
+        own timer."""
+        slot = self.routines.setdefault(rec.id, RoutineSlot())
+        stale = slot.info is None or now - slot.fetched >= self.cfg.routine_ttl_s
+        if stale and not slot.fetching and now >= slot.retry_at:
+            self._fetch(rec.id, slot)
+        return slot.info
+
+    def _fetch(self, npc: str, slot: RoutineSlot) -> None:
+        """Ask the game for the npc's routine in the background; a failure waits routine_retry_s, longer
+        each time."""
+        assert self.routine_of is not None
+        ask, world = self.routine_of, self._world
+        slot.fetching = True
 
         async def fetch() -> None:
-            assert self.routine_of is not None
             try:
-                self.routines[npc] = await self.routine_of(npc)
-            except Exception as err:  # the game could not tell: plans stay generic for this npc
-                log.debug("routine of %s: %s", npc, err)
+                info = await ask(npc)
+                if world == self._world:  # not from before a load
+                    slot.info, slot.fetched, slot.failures = info, self.clock(), 0
+            except Exception as err:  # the game could not tell: no plan for this npc until it can
+                slot.failures += 1
+                pauses = self.cfg.routine_retry_s
+                slot.retry_at = self.clock() + pauses[min(slot.failures, len(pauses)) - 1]
+                log.info("routine of %s: %s (asked again in %.0f s)", npc, err, slot.retry_at - self.clock())
+            finally:
+                slot.fetching = False
 
         self._spawn(fetch())
-        return None
 
     async def _ask(self, npc: str, flight: Flight, lane: Lane, priority: float, deadline_ms: int) -> None:
         sit = flight.situation
@@ -696,20 +820,25 @@ class NpcPlanner:
             self._settle_holds(rec, flight.sent, None)
             self._schedule(rec, now)
             return
+        # the question whose answer is applied: a plan's may be none (only `do`, in shadow)
+        asked = flight.question if flight.purpose == "plan" else flight.purpose
+        answer = outcome.answers.get(asked) if asked is not None else None
         if rec.tier is Tier.OFF or rec.version != flight.version:
             self.stats.discarded += 1  # something happened meanwhile: a new pending request covers it
-            self._trace(npc, flight, outcome.answers.get(flight.purpose), False, "outdated")
+            self._settled(npc, flight, answer, False, "outdated")
+            self._shadow(npc, flight, outcome)
             if rec.pending is None:
                 self._schedule(rec, now)
             return
         rec.last_decision = now
         self._schedule(rec, now)
-        answer = outcome.answers.get(flight.purpose)
         if not answer:
             self._settle_holds(rec, flight.sent, None)
+            self._shadow(npc, flight, outcome)
             return
         decision = self._react_outcome(rec, flight, answer, now)
         if flight.purpose != "react":
+            self._shadow(npc, flight, outcome)
             return
         self._settle_holds(rec, flight.sent, decision)
         # what the moment means beyond the body's reaction, asked in the background: how the attitude toward
@@ -733,23 +862,30 @@ class NpcPlanner:
             threshold = self.cfg.option_threshold.get(choice, self.cfg.react_threshold)
         if conf < threshold:
             self.stats.unsure += 1
-            self._trace(npc, flight, answer, False, "unsure")
+            self._settled(npc, flight, answer, False, "unsure")
             return None
         if choice in NO_ACTION:
             self.stats.no_action += 1
-            self._trace(npc, flight, answer, False, "no action")
+            self._settled(npc, flight, answer, False, "no action")
             return None
         key = applied_key(choice, flight.target)
         if now - rec.last_applied.get(key, float("-inf")) < self.cfg.cooldown_s.get(
             choice, self.cfg.default_cooldown_s
         ):
             self.stats.cooldown += 1
-            self._trace(npc, flight, answer, False, "cooldown")
+            self._settled(npc, flight, answer, False, "cooldown")
             return None
         if self.allow is not None and (why := self.allow(rec, choice)) is not None:
             rec.last_applied[key] = now  # not asked to do it again at once
             self.stats.vetoed += 1
-            self._trace(npc, flight, answer, False, f"veto: {why}")
+            self._settled(npc, flight, answer, False, f"veto: {why}")
+            return None
+        trip = flight.options.get(choice) if flight.purpose == "plan" else None
+        if trip is not None and not trip.trip:
+            trip = None  # its own activity: the applier starts it
+        if trip is not None and self.on_plan is None:
+            # nobody to walk it there: the routine goes on
+            self._settled(npc, flight, answer, False, "no desk")
             return None
         rec.last_applied[key] = now
         self.stats.applied += 1
@@ -771,12 +907,45 @@ class NpcPlanner:
         if choice == "approach_talk" and flight.purpose == "react" and self.on_approach is not None:
             # the desk walks it and lets it speak; the applier would send a second go_to_npc
             log.info("decision %s react=approach_talk handed to the initiative desk", npc)
-            self._trace(npc, flight, answer, True, "initiative desk")
+            self._settled(npc, flight, answer, True, "initiative desk")
             self.on_approach(decision, rec)
+        elif trip is not None and self.on_plan is not None:
+            # the day desk walks it there and sees what comes of it (arrive); the applier sends nothing
+            log.info("decision %s %s=%s handed to the day desk", npc, flight.question, choice)
+            self._settled(npc, flight, answer, True, "day desk")
+            self.on_plan(decision, rec, trip)
         else:
-            self._trace(npc, flight, answer, True, "")
+            self._settled(npc, flight, answer, True, "")
             self.applier.apply(decision)
         return decision
+
+    def _settled(self, npc: str, flight: Flight, answer: dict | None, applied: bool, why: str) -> None:
+        """The applied question's row (a plan's is not capped); a plan also keeps what it did, for the row of
+        the question asked in shadow. A plan with only `do` in shadow has no row of its own."""
+        if flight.purpose != "plan":
+            self._trace(npc, flight, answer, applied, why)
+            return
+        choice = (answer or {}).get("choice")
+        flight.outcome = {"question": flight.question, "choice": choice, "applied": applied, "why": why}
+        if flight.question is not None:
+            self._trace(npc, flight, answer, applied, why, capped=False)
+
+    def _shadow(self, npc: str, flight: Flight, outcome: Outcome) -> None:
+        """The answer to the question asked in shadow (the do menu, until it is measured) as a brain row,
+        never applied: `code` is what the applied question did, the decider's times and model come along."""
+        answer = (outcome.answers or {}).get(flight.shadow) if flight.shadow is not None else None
+        if not answer:
+            return
+        self.stats.shadow += 1
+        why = "not asked" if flight.question is None else "no answer"
+        code = flight.outcome or {"question": flight.question, "choice": None, "applied": False, "why": why}
+        extra = {
+            "code": code,
+            "infer_ms": outcome.infer_ms,
+            "queue_ms": outcome.queue_ms,
+            "model": getattr(self.decider, "model", None),
+        }
+        self._trace(npc, flight, answer, False, "shadow", question=flight.shadow, extra=extra, capped=False)
 
     async def _ask_after(self, npc: str, flight: Flight, reaction: Decision | None, names: list[str]) -> None:
         """`attitude` and/or `escalate` about the reaction's situation, in one request: the decider reads the
@@ -828,21 +997,25 @@ class NpcPlanner:
         question: str | None = None,
         questions: dict[str, dict] | None = None,
         sent: float | None = None,
+        extra: dict[str, Any] | None = None,
+        capped: bool = True,
     ) -> None:
         """One answered question as a `brain` row: the state, the options' texts, the answer and what came of
-        it (`why` it was not applied). At most TRACE_PER_MIN rows per npc a minute."""
+        it (`why` it was not applied); a day question also what each option is (`args`), `extra` adds more.
+        At most TRACE_PER_MIN rows per npc a minute, `capped` ones (the day plan's are rare: not counted)."""
         if self.trace is None:
             return
         now = self.clock()
-        start, rows = self._traced.get(npc, (now, 0))
-        if now - start >= 60.0:
-            start, rows = now, 0
-        if rows >= TRACE_PER_MIN:
-            return
-        self._traced[npc] = (start, rows + 1)
-        question = question or flight.purpose
+        if capped:
+            start, rows = self._traced.get(npc, (now, 0))
+            if now - start >= 60.0:
+                start, rows = now, 0
+            if rows >= TRACE_PER_MIN:
+                return
+            self._traced[npc] = (start, rows + 1)
+        question = question or flight.question or flight.purpose
         criteria = (questions or flight.situation.questions).get(question, {}).get("criteria", {})
-        after = question != flight.purpose
+        after = question not in (flight.purpose, flight.question)
         rec = self.npcs.get(npc)
         row: dict[str, Any] = {
             "type": "brain",
@@ -866,7 +1039,24 @@ class NpcPlanner:
         row["applied"] = applied
         row["why"] = why
         row["latency_ms"] = round((now - (flight.sent if sent is None else sent)) * 1000, 1)
+        if flight.purpose == "plan" and question in ("plan", "do"):
+            row["args"] = self._option_args(flight, question)
+        row.update(extra or {})
         self.trace.write(row)
+
+    @staticmethod
+    def _option_args(flight: Flight, question: str) -> dict[str, dict[str, Any]]:
+        """Per wire key of a day question, what the option is: its stable id and start_activity args (a do
+        option also its kind, concern and partner). Training maps a positional key back to its id by it."""
+        if question == "do":
+            menu = flight.options if flight.question == "do" else flight.shadow_menu
+            return {
+                key: {"id": o.id, "args": o.args, "kind": o.kind, "concern": o.concern, "partner": o.partner}
+                for key, o in menu.items()
+            }
+        ids = plan_ids(flight.plan_args)
+        criteria = flight.situation.questions.get("plan", {}).get("criteria", {})
+        return {key: {"id": ids.get(key, key), "args": flight.plan_args.get(key)} for key in criteria}
 
     def _schedule(self, rec: NpcRecord, now: float) -> None:
         if rec.tier is Tier.OFF:

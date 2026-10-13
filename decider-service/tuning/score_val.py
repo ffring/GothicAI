@@ -25,7 +25,7 @@ from strands_decider.infer import load_engine
 from strands_decider.schema import SystemOneRequest
 
 # server/src/gothic_ai/brain/planner.py: option_threshold, otherwise 0.5
-THRESHOLDS = {"look_at": 0.25, "greet": 0.3, "approach_talk": 0.6, "give_back": 0.6}
+THRESHOLDS = {"look_at": 0.25, "greet": 0.3, "approach_talk": 0.6}
 
 
 def acted(probs: dict[str, float]) -> str:

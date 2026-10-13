@@ -21,7 +21,8 @@ Each retelling is a `rumor` fact and a remark in the listener's memory; trust.py
 
 What passes is decided here; how it looks is gossip.py's (`stage`): a pass in a live window (a tick, not a
 jump of the clock) may be said aloud near the hero (how: talked) or seen, or wait while the two are busy.
-The fact is written first, the scene comes second.
+The fact is written first, the scene comes second. A walk to tell someone (daylife.py) is offered only when
+the lot would pass it now (`can_tell`), and passes as a visit (how: visited) unless it is said aloud.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ import math
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
@@ -92,14 +93,47 @@ class Tie:
                     yield at
 
 
+@dataclass(frozen=True)
+class Spot:
+    """One entry of a person's daily routine: when, what it does and where."""
+
+    start: int  # minutes of the day; an end before the start goes past midnight, an equal one is all day
+    end: int
+    state: str  # upper case
+    waypoint: str
+    pos: tuple[float, float, float] | None  # None: the world has no such waypoint
+
+
 class Social:
-    """The acquaintances of the world's people: whom each meets, and when; whom each has dealings with."""
+    """The acquaintances of the world's people: whom each meets, and when; whom each has dealings with.
+    And each one's day by its routine: where it is at a minute, how many a place holds (daylife.py)."""
 
     def __init__(self, people: list[dict[str, Any]], graph: StoryGraph | None = None) -> None:
         self.names = {p["npc"]: p.get("name") or p["npc"] for p in people}
         self.guilds = {p["npc"]: int(p.get("guild", 0)) for p in people}
         self.ties: dict[str, dict[str, Tie]] = defaultdict(dict)
-        self._meetings(people)
+        # every routine entry in story_people's order (a smalltalk's place is its first one's); then by person
+        self._spots = [
+            (
+                p["npc"],
+                Spot(
+                    int(r["start"]),
+                    int(r["end"]),
+                    str(r.get("state") or "").upper(),
+                    str(r.get("waypoint") or ""),
+                    tuple(r["pos"]) if r.get("pos") else None,
+                ),
+            )
+            for p in people
+            for r in p.get("routine", [])
+        ]
+        self.days: dict[str, list[Spot]] = {p["npc"]: [] for p in people}
+        self._at: dict[str, list[tuple[str, Spot]]] = defaultdict(list)  # waypoint (upper case) -> entries
+        for npc, spot in self._spots:
+            self.days[npc].append(spot)
+            self._at[spot.waypoint.upper()].append((npc, spot))
+        self._room: dict[str, int] = {}  # capacity, by waypoint
+        self._meetings()
         if graph is not None:
             self._dealings(graph)
 
@@ -112,14 +146,13 @@ class Social:
             self.ties[a][b] = self.ties[b][a] = t
         return self.ties[a][b]
 
-    def _meetings(self, people: list[dict[str, Any]]) -> None:
+    def _meetings(self) -> None:
         # (npc, start, end, pos, state, waypoint): what one does there is kept, for their smalltalk
         spots = [
-            (p["npc"], s, e, tuple(r["pos"]), str(r.get("state") or "").upper(), str(r.get("waypoint") or ""))
-            for p in people
-            for r in p.get("routine", [])
-            if r.get("pos")
-            for s, e in _span(int(r["start"]), int(r["end"]))
+            (npc, s, e, spot.pos, spot.state, spot.waypoint)
+            for npc, spot in self._spots
+            if spot.pos is not None
+            for s, e in _span(spot.start, spot.end)
         ]
         cells: dict[tuple[int, int], list[int]] = defaultdict(list)
         for i, spot in enumerate(spots):
@@ -181,6 +214,29 @@ class Social:
                 if s <= minute % DAY < e:
                     return wp
         return None
+
+    def spot(self, npc: str, minute: int) -> Spot | None:
+        """Its routine entry at that game minute (any day), None if no entry holds it."""
+        return _entry(self.days.get(npc.upper(), []), minute)
+
+    def spots(self) -> Iterator[tuple[str, Spot]]:
+        """Every routine entry of the world's people, with whose it is."""
+        return iter(self._spots)
+
+    def users(self, waypoint: str, minute: int) -> set[str]:
+        """Who is at the waypoint at that game minute by their routines (their entry then is there)."""
+        at = self._at.get(waypoint.upper(), [])
+        return {npc for npc, spot in at if _entry(self.days[npc], minute) is spot}
+
+    def capacity(self, waypoint: str) -> int:
+        """How many the routines put at the waypoint at once, at most over the day; at least 1."""
+        wp = waypoint.upper()
+        if (room := self._room.get(wp)) is None:
+            people = {npc for npc, _ in self._at.get(wp, [])}
+            # who is where changes only when one of their entries starts or ends
+            turns = {0} | {m % DAY for npc in people for s in self.days[npc] for m in (s.start, s.end)}
+            room = self._room[wp] = max(1, max(len(self.users(wp, m)) for m in turns))
+        return room
 
 
 @dataclass
@@ -317,18 +373,29 @@ class Rumors:
                     meetings(b, t)
         return told
 
-    def offer(self, r: Rumor, a: str, b: str) -> bool:
-        """An occasion the schedule does not have now (two acquaintances see each other near the hero,
-        gossip.py; the e2e): the same checks and lot as a meeting. True if it passed."""
+    def can_tell(self, r: Rumor, a: str, b: str) -> bool:
+        """a would tell b the rumor if they met now: acquainted, and the checks and lot of a meeting. Changes
+        nothing (the day desk asks it for a menu, daylife.py)."""
         if self.social is None or self.clock is None or self.social.ties.get(a, {}).get(b) is None:
             return False
-        if not self._passes(r, a, b, self.clock, meet=True):
-            return False
+        return self._passes(r, a, b, self.clock, meet=True)
+
+    def offer_status(self, r: Rumor, a: str, b: str, how: str = "met") -> Literal["told", "wait", "no"]:
+        """An occasion the schedule does not have now (two acquaintances see each other near the hero,
+        gossip.py; a walk to tell one, daylife.py, how: visited; the e2e): the same checks and lot as a
+        meeting. told: it passed; wait: they are busy now, ask again later; no: it does not pass."""
+        clock = self.clock
+        if clock is None or not self.can_tell(r, a, b):
+            return "no"
         staging = self._staging(r, a, b)
         if staging is not None and staging.tier == "wait":
-            return False  # busy now: the view trigger asks again later
-        self._pass(r, a, b, self.clock, "met", staging)
-        return True
+            return "wait"
+        self._pass(r, a, b, clock, how, staging)
+        return "told"
+
+    def offer(self, r: Rumor, a: str, b: str) -> bool:
+        """offer_status of a meeting: True if it passed (busy now: the view trigger asks again later)."""
+        return self.offer_status(r, a, b) == "told"
 
     def _passes(self, r: Rumor, a: str, b: str, t: int, meet: bool) -> bool:
         """a tells b the rumor at minute t: the living, what each knows, a's tells that day and the lot."""
@@ -340,7 +407,7 @@ class Rumors:
         forced = self.gate(r, a, b) if self.gate is not None else None
         if forced is not None:
             return forced  # True also skips TELLS_PER_DAY and the lot
-        if self.tells[(r.key, a, day)] >= TELLS_PER_DAY:
+        if self.tells.get((r.key, a, day), 0) >= TELLS_PER_DAY:  # a read adds no key
             return False
         return _chance(r.key, a, b, str(day)) < (P_MEET if meet else P_DEAL)
 
@@ -487,6 +554,12 @@ def _span(start: int, end: int) -> list[tuple[int, int]]:
     if start == end:
         return [(0, DAY)]
     return [(start, DAY), (0, end)]
+
+
+def _entry(day: list[Spot], minute: int) -> Spot | None:
+    """The entry of a day that holds the game minute: the first one, as the engine takes it."""
+    m = minute % DAY
+    return next((spot for spot in day if any(s <= m < e for s, e in _span(spot.start, spot.end))), None)
 
 
 def _merged(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:

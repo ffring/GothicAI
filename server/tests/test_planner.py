@@ -6,16 +6,31 @@ import pytest
 from websockets.asyncio.server import serve
 
 from gothic_ai.brain import DeciderClient, LogApplier, NpcPlanner, PlannerConfig, Tier
+from gothic_ai.brain.day import DayMenu, DayOption, own_options, plan_options
 from gothic_ai.brain.tiers import Placement, TierConfig, assign_tiers, raw_tier
-from gothic_ai.protocol import RosterEntry, parse_game_message
+from gothic_ai.game import GameError
+from gothic_ai.protocol import RosterEntry, RoutineEntry, RoutineInfo, parse_game_message
 from tests.fakes import Clock, FakeDecider
 
 
 def entry(
-    npc: str, metres: float, in_view: bool = False, activity: str = "routine", guild: int = 3
+    npc: str,
+    metres: float,
+    in_view: bool = False,
+    activity: str = "routine",
+    guild: int = 3,
+    state: str = "",
+    moving: bool = False,
 ) -> RosterEntry:
     return RosterEntry(
-        id=npc, name=npc.title(), guild=guild, distance=metres * 100, in_view=in_view, activity=activity
+        id=npc,
+        name=npc.title(),
+        guild=guild,
+        distance=metres * 100,
+        in_view=in_view,
+        activity=activity,
+        state=state,
+        moving=moving,
     )
 
 
@@ -35,6 +50,80 @@ async def step(planner: NpcPlanner, clock: Clock, seconds: float = 0.0) -> None:
     clock.t += seconds
     planner.tick(clock.t)
     await settle()
+
+
+# a farmhand's day: at 14:00 it rakes the field; the campfire in the evening is the other choice
+FIELD_DAY = [
+    RoutineEntry(start="06:00", end="20:00", state="ZS_RAKE_FP", waypoint="FIELD_04"),
+    RoutineEntry(start="20:00", end="22:00", state="ZS_SIT_CAMPFIRE", waypoint="FARM_FIRE"),
+    RoutineEntry(start="22:00", end="06:00", state="ZS_GOTOBED", waypoint="FARM_BED"),
+]
+
+
+# Vino's day from the dump: one state at two fields, then the bed
+RAKE = [
+    RoutineEntry(start="08:00", end="12:00", state="ZS_RAKE_FP", waypoint="NW_FARM1_FIELD_04"),
+    RoutineEntry(start="12:00", end="22:00", state="ZS_RAKE_FP", waypoint="NW_FARM1_FIELD_05"),
+    RoutineEntry(start="22:00", end="08:00", state="ZS_GOTOBED", waypoint="NW_FARM1_INSTABLE_BED"),
+]
+WHERE = {"FIELD_04": "in the fields of Lobart's farm", "FARM_FIRE": "in Lobart's farmyard"}
+# a trip the day desk (daylife.py) offers Vino once he has heard of the lie: walk to Malet and tell him
+CHAT = DayOption(
+    "chat",
+    "chat:BAU_954_MALETH",
+    "go to Малет on the road from Lobart's farm to Khorinis to tell the news: the hero lied to Лобарт"
+    " (about an hour)",
+    {"state": "ZS_STAND_WP", "waypoint": "NW_FARM1_PATH_CITY_SHEEP_09", "minutes": 61},
+    "chat",
+    concern="news:caught:BAU_950_LOBART:q1",
+    partner="BAU_954_MALETH",
+    trip=True,
+)
+
+
+def day_menu(*trips: DayOption, stay: str | None = None):
+    """A stand-in for the day desk's `menu` (daylife.DayDesk.menu): both menus from the routine, the trips
+    after keep."""
+
+    def menu_of(rec, info, hour: int, minute: int, habits) -> DayMenu:
+        plan = plan_options(info.entries, habits, hour, minute, rec.state)
+        keep, *own = own_options(info.entries, habits, hour, minute, rec.state, WHERE.get)
+        return DayMenu(plan, {o.key: o for o in (keep, *trips, *own)}, stay)
+
+    return menu_of
+
+
+class Routines:
+    """`routine_of` for the planner: everyone has `entries`; it may fail or hang, and counts who was asked."""
+
+    def __init__(self, entries: list[RoutineEntry] = FIELD_DAY) -> None:
+        self.entries = entries
+        self.asked: list[str] = []
+        self.error: Exception | None = None
+        self.hang: asyncio.Event | None = None
+
+    async def __call__(self, npc: str) -> RoutineInfo:
+        self.asked.append(npc)
+        if self.hang is not None:
+            await self.hang.wait()
+        if self.error is not None:
+            raise self.error
+        return RoutineInfo(type="routine", npc=npc, entries=list(self.entries))
+
+
+def make_day(
+    decider: FakeDecider | None = None, routines: Routines | None = None, **cfg
+) -> tuple[NpcPlanner, FakeDecider, LogApplier, Clock, Routines]:
+    """A planner that knows the npc's routines and the game time (14:00)."""
+    planner, decider, applier, clock = make(decider, **cfg)
+    planner.routine_of = routines = routines or Routines()
+    planner.game_time = (14, 0)
+    return planner, decider, applier, clock, routines
+
+
+def kinds(decider: FakeDecider) -> list[str]:
+    """What each request asked, in order: react, plan..."""
+    return ["+".join(sorted(c["questions"])) for c in decider.calls]
 
 
 # --- tiers ---------------------------------------------------------------------------------
@@ -65,13 +154,18 @@ def test_tier_caps_keep_the_most_important() -> None:
 
 
 async def test_new_npcs_get_spread_first_checks() -> None:
-    planner, decider, _, clock = make()
+    planner, decider, _, clock, routines = make_day()
     planner.on_roster([entry(f"far{i}", 50) for i in range(100)], clock.t)
     checks = sorted(r.next_check - clock.t for r in planner.npcs.values())
     assert all(r.tier is Tier.FAR for r in planner.npcs.values())
     assert checks[0] >= 0 and checks[-1] <= 280 and checks[50] > 60  # spread over the period, no spike
     await step(planner, clock, 1)
-    assert len(decider.calls) <= 3
+    assert len(routines.asked) <= 3 and len(decider.calls) <= 3
+    await step(planner, clock, 285)  # every first check is past: the routines are asked
+    for _ in range(6):  # and the plans go out as the budget allows (20 a second)
+        await step(planner, clock, 1)
+    plans = [c["rid"].split("#")[0] for c in decider.calls if "plan" in c["questions"]]
+    assert len(plans) == 100 and len(set(plans)) == 100  # one per npc
 
 
 async def test_urgent_event_goes_to_urgent_lane_and_is_applied() -> None:
@@ -104,7 +198,7 @@ async def test_events_debounce_into_one_request() -> None:
     call = decider.calls[0]
     assert call["lane"] == "background" and call["deadline_ms"] == 1000
     assert "came close to you (3 m away)" in call["state"] and "dropped an apple" in call["state"]
-    assert "pick_up" in call["questions"]["react"]["criteria"]
+    assert "pick_up" not in call["questions"]["react"]["criteria"]  # the game never sends it: no option
 
 
 async def test_scripted_events_are_context_only() -> None:
@@ -132,12 +226,26 @@ async def test_mid_tier_reacts_only_to_salient_events() -> None:
 
 
 async def test_far_npc_gets_a_plan() -> None:
-    planner, decider, applier, clock = make(FakeDecider(choice="socialize"))
+    planner, decider, applier, clock, routines = make_day(FakeDecider("a1"))
     planner.on_roster([entry("HERMIT", 50)], clock.t)
-    await step(planner, clock, 281)
-    call = decider.calls[0]
+    await step(planner, clock, 281)  # its first check: the routine is asked, nothing else yet
+    assert routines.asked == ["HERMIT"] and decider.calls == []
+    await step(planner, clock, 1)  # known now: the plan goes out
+    (call,) = decider.calls
     assert set(call["questions"]) == {"plan"} and call["deadline_ms"] == 30000
-    assert applier.recent[0].question == "plan" and applier.recent[0].choice == "socialize"
+    assert list(call["questions"]["plan"]["criteria"]) == ["keep_routine", "a1"]
+    (decision,) = applier.recent
+    assert (decision.question, decision.choice) == ("plan", "a1")
+    assert decision.args == {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60}
+
+
+async def test_without_its_routine_an_npc_is_not_asked_for_a_plan() -> None:
+    planner, decider, _, clock = make(FakeDecider("a1"))
+    planner.game_time = (14, 0)
+    planner.on_roster([entry("HERMIT", 50)], clock.t)
+    for _ in range(3):
+        await step(planner, clock, 281)
+    assert decider.calls == []
 
 
 async def test_new_event_outdates_the_request_in_flight() -> None:
@@ -378,6 +486,7 @@ async def test_npcs_nearby_overhear_the_player() -> None:
 
 def test_decisions_become_soft_actions() -> None:
     from gothic_ai.brain.apply import Decision, actions_for
+    from gothic_ai.brain.situation import EVENT_OPTIONS
 
     def d(choice: str, stimuli: tuple[str, ...] = (), question: str = "react") -> Decision:
         return Decision("A", question, choice, 0.9, {}, stimuli)
@@ -385,7 +494,8 @@ def test_decisions_become_soft_actions() -> None:
     assert actions_for(d("approach_talk")) == [("go_to_npc", {})]
     assert actions_for(d("comment", ("player_near", "enter_room"))) == [("say_svm", {"svm": "GETOUTOFHERE"})]
     assert actions_for(d("comment", ("player_near",))) == [("look_at", {"ms": 3000})]
-    assert actions_for(d("keep_routine", question="plan")) == [] and actions_for(d("pick_up")) == []
+    assert actions_for(d("keep_routine", question="plan")) == [] and actions_for(d("dance")) == []
+    assert "give_back" not in EVENT_OPTIONS["item_given"]  # the game never sends a given item
     assert actions_for(d("call_help", ("npc_attack",))) == [("say_svm", {"svm": "HELP"})]
     # a call for help is shouted on the move, running away from the threat
     help_ = Decision("A", "react", "call_help", 0.9, {}, ("npc_attack",), target="WOLF")
@@ -645,7 +755,6 @@ async def test_a_threat_to_an_npc_the_planner_does_not_know_goes_to_the_scripts(
 
 async def test_a_quiet_npc_plans_its_next_hour_from_its_own_day() -> None:
     from gothic_ai.brain.apply import actions_for
-    from gothic_ai.protocol import RoutineEntry, RoutineInfo
 
     asked: list[str] = []
 
@@ -654,9 +763,9 @@ async def test_a_quiet_npc_plans_its_next_hour_from_its_own_day() -> None:
         return RoutineInfo(
             type="routine",
             npc=npc,
-            current="ZS_PICK_FIELD",
+            current="ZS_PICK_FP",
             entries=[
-                RoutineEntry(start="06:00", end="20:00", state="ZS_PICK_FIELD", waypoint="FIELD_01"),
+                RoutineEntry(start="06:00", end="20:00", state="ZS_PICK_FP", waypoint="FIELD_01"),
                 RoutineEntry(start="20:00", end="06:00", state="ZS_SIT_CAMPFIRE", waypoint="FARM_FIRE"),
             ],
         )
@@ -679,6 +788,391 @@ async def test_a_quiet_npc_plans_its_next_hour_from_its_own_day() -> None:
     assert actions_for(decision) == [
         ("start_activity", {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60})
     ]
+
+
+async def test_an_agenda_does_not_cancel_the_day_plan() -> None:
+    planner, decider, applier, clock, routines = make_day(FakeDecider("a1", 0.8), plan_period_s=60)
+    planner.on_roster([entry("LOBART", 8, state="ZS_RAKE_FP")], clock.t)
+    planner.set_agenda("LOBART", "make the hero pay back the 25 gold he owes you")
+    for _ in range(100):
+        await step(planner, clock, 1)
+    asked = kinds(decider)
+    assert asked.count("plan") == 1 and asked.count("react") >= 9  # it reacts every 6-10 s all the same
+    assert asked.index("plan") >= 6  # a period after it appeared
+    plan = next(c for c in decider.calls if "plan" in c["questions"])
+    assert "What you want: make the hero pay back" in plan["state"]
+    assert [(d.question, d.choice) for d in applier.recent] == [("plan", "a1")]  # react: no action
+
+
+async def test_a_live_event_comes_before_the_plan() -> None:
+    planner, decider, _, clock, routines = make_day(FakeDecider("a1", 0.8), plan_period_s=60)
+    planner.on_roster([entry("VINO", 8, state="ZS_RAKE_FP")], clock.t)
+    await step(planner, clock, 61)  # the plan is due: the routine is asked first
+    assert routines.asked == ["VINO"] and decider.calls == []
+    planner.on_event("VINO", "player_near", clock.t, distance_cm=600)
+    for _ in range(14):  # the hero came close 15 s ago at most: that is what it thinks of
+        await step(planner, clock, 1)
+    assert set(kinds(decider)) == {"react"}
+    for _ in range(12):
+        await step(planner, clock, 1)
+    assert kinds(decider)[-1] == "plan"
+
+
+async def test_a_scripted_stimulus_holds_the_plan() -> None:
+    planner, decider, _, clock, _ = make_day(FakeDecider("a1", 0.8), plan_period_s=60)
+    planner.on_roster([entry("VINO", 8, state="ZS_RAKE_FP")], clock.t)
+    planner.on_event("VINO", "murder", clock.t, detail="Малет")
+    assert decider.calls == []  # the game's scripts react to it
+    for _ in range(118):  # 590 s: it is still on its mind (600 s)
+        await step(planner, clock, 5)
+    assert kinds(decider) and set(kinds(decider)) == {"react"}
+    assert "The hero killed Малет." in decider.calls[-1]["state"]  # context, as before
+    for _ in range(6):
+        await step(planner, clock, 5)
+    assert kinds(decider)[-1] == "plan"
+
+
+async def test_an_npc_out_of_its_routine_state_is_not_planned() -> None:
+    planner, decider, _, clock, routines = make_day(FakeDecider("a1", 0.8), plan_period_s=60)
+    planner.on_roster([entry("VINO", 8, state="ZS_WATCHFIGHT", moving=True)], clock.t)
+    assert (planner.npcs["VINO"].state, planner.npcs["VINO"].moving) == ("ZS_WATCHFIGHT", True)
+    for _ in range(90):  # its scripts have it watch a fight: not ours to plan
+        await step(planner, clock, 1)
+    assert routines.asked == ["VINO"] and decider.calls == []
+    assert planner.stats.sent["background"] == 0 and planner._tokens == planner.cfg.bg_rate  # no token
+    planner.on_roster([entry("VINO", 8, state="zs_rake_fp")], clock.t)  # back at its rake
+    for _ in range(10):
+        await step(planner, clock, 1)
+    assert kinds(decider) == ["plan"]
+
+
+async def test_a_pending_plan_stays_a_plan_when_the_npc_comes_closer() -> None:
+    planner, decider, _, clock, _ = make_day(FakeDecider("a1", 0.8), bg_rate=0.01)
+    planner.on_roster([entry("HERMIT", 50)], clock.t)
+    await step(planner, clock, 281)  # its routine is asked
+    await step(planner, clock, 1)  # the plan is wanted, but there is no budget for it yet
+    rec = planner.npcs["HERMIT"]
+    assert rec.pending is not None and rec.pending.purpose == "plan" and decider.calls == []
+    planner.on_roster([entry("HERMIT", 8)], clock.t)  # it comes close
+    assert rec.tier is Tier.NEAR and rec.pending.purpose == "plan"
+    planner.cfg.bg_rate = 20.0
+    await step(planner, clock, 0.05)
+    assert kinds(decider) == ["plan"]
+
+
+@pytest.mark.parametrize("desk", [False, True])
+async def test_same_state_options_are_left_out(desk: bool) -> None:
+    """At its rake on one field, the same rake on the other is no choice: the engine would only move it. In
+    the do menu too, when there is no trip to offer: keep alone is no question."""
+    planner, decider, _, clock, routines = make_day(
+        FakeDecider("a1", 0.8), Routines(RAKE), plan_period_s=60, near_period_s=(1.0, 1.0)
+    )
+    if desk:
+        planner.menu_of = day_menu()
+    planner.game_time = (10, 0)
+    planner.on_roster([entry("VINO", 8, state="ZS_RAKE_FP")], clock.t)
+    for _ in range(100):
+        await step(planner, clock, 1)
+    assert routines.asked == ["VINO"] and decider.calls == []
+    # the empty menu counts as its plan (at about 60 s): not built again on every check, a token each
+    assert 1060 <= planner.npcs["VINO"].last_plan <= 1062
+
+
+async def test_a_failed_routine_is_retried_with_backoff() -> None:
+    routines = Routines()
+    routines.error = GameError("npc not found")
+    planner, decider, _, clock, _ = make_day(routines=routines, plan_period_s=1, near_period_s=(1.0, 1.0))
+    planner.on_roster([entry("VINO", 8)], clock.t)
+    planner.npcs["VINO"].next_check = clock.t + 1
+    for _ in range(60):  # looked at every second: it was asked (a token spent) every second before
+        await step(planner, clock, 1)
+    assert routines.asked == ["VINO"] * 3  # at its first check, then 10 and 30 s after the failures
+    assert decider.calls == [] and planner.stats.sent["background"] == 0
+    assert planner.routines["VINO"].failures == 3
+
+
+async def test_an_agenda_holder_whose_routine_fails_still_reacts() -> None:
+    routines = Routines()
+    routines.error = GameError("npc not found")
+    planner, decider, _, clock, _ = make_day(FakeDecider("continue"), routines, plan_period_s=1)
+    planner.on_roster([entry("LOBART", 8)], clock.t)
+    planner.set_agenda("LOBART", "make the hero pay back the 25 gold he owes you")
+    planner.npcs["LOBART"].next_check = clock.t + 1
+    for _ in range(60):
+        await step(planner, clock, 1)
+    assert 6 <= len(decider.calls) <= 10 and set(kinds(decider)) == {"react"}
+    assert len(routines.asked) == 3
+
+
+async def test_no_plan_and_no_fetch_without_game_time() -> None:
+    planner, decider, _, clock, routines = make_day(plan_period_s=1)
+    planner.game_time = None
+    planner.on_roster([entry("VINO", 8), entry("HERMIT", 50)], clock.t)
+    for _ in range(300):
+        await step(planner, clock, 1)
+    assert routines.asked == [] and decider.calls == []
+
+
+async def test_routines_are_asked_again_after_loading() -> None:
+    routines = Routines()
+    planner, decider, _, clock, _ = make_day(FakeDecider("a1", 0.8), routines, plan_period_s=5)
+    roster = {
+        "type": "npc_roster",
+        "t": 1,
+        "hour": 14,
+        "minute": 0,
+        "npcs": [{"id": "VINO", "name": "Вино", "guild": 12, "distance": 800}],
+    }
+    loading = parse_game_message(json.dumps({"type": "loading"}))
+
+    async def play(seconds: int) -> None:
+        planner.on_message(parse_game_message(json.dumps(roster)))
+        for _ in range(seconds):
+            await step(planner, clock, 1)
+
+    await play(30)
+    assert "sit by the campfire" in decider.calls[-1]["questions"]["plan"]["criteria"]["a1"]
+    planner.on_message(loading)
+    assert planner.routines == {} and planner.game_time is None
+    routines.entries = [
+        RoutineEntry(start="06:00", end="20:00", state="ZS_RAKE_FP", waypoint="FIELD_04"),
+        RoutineEntry(start="20:00", end="06:00", state="ZS_SAW", waypoint="FARM_SAW"),
+    ]  # another day in the save that was loaded
+    await play(30)
+    assert decider.calls[-1]["questions"]["plan"]["criteria"]["a1"].startswith("saw wood")
+    assert routines.asked == ["VINO", "VINO"]
+
+    # a load while the routine is being asked: asked again after it
+    routines.hang = asyncio.Event()
+    planner.on_message(loading)
+    await play(30)
+    assert routines.asked == ["VINO"] * 3
+    planner.on_message(loading)  # the hanging ask is cancelled with it
+    routines.hang, before = None, len(decider.calls)
+    await play(30)
+    assert routines.asked == ["VINO"] * 4 and set(kinds(decider)[before:]) == {"plan"}
+
+
+async def test_the_routine_comes_from_the_game() -> None:
+    from tests.fake_game import FakeGame, connected
+
+    fake = FakeGame()
+    fake.routines["VINO"] = {"current": "ZS_RAKE_FP", "entries": [e.model_dump() for e in FIELD_DAY]}
+    fake.routine_errors["MALETH"] = "no routine"
+    async with connected(fake) as link:
+        planner, decider, applier, clock = make(FakeDecider("a1", 0.8))
+        planner.routine_of, planner.game_time = link.routine, (14, 0)
+        planner.on_roster([entry("VINO", 50), entry("MALETH", 50), entry("HERMIT", 50)], clock.t)
+        await step(planner, clock, 281)  # asked from the game
+        for _ in range(100):
+            if not any(slot.fetching for slot in planner.routines.values()):
+                break
+            await asyncio.sleep(0.01)
+        await step(planner, clock, 1)
+        assert sorted(fake.routine_calls) == ["HERMIT", "MALETH", "VINO"]
+        # Malet's routine is an error, the hermit is not in the world: a pause before they are asked again
+        assert [c["rid"].split("#")[0] for c in decider.calls] == ["VINO"]
+        assert [slot.failures for slot in planner.routines.values()] == [0, 1, 1]
+        assert applier.recent[0].args == {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60}
+
+
+# --- the day plan's two menus: one request, the new one in shadow ----------------------------------
+
+
+async def test_plan_and_do_go_in_one_request_do_in_shadow(tmp_path) -> None:
+    from gothic_ai.brain.planner import TRACE_PER_MIN
+    from gothic_ai.trace import TraceWriter, read
+
+    planner, decider, applier, clock, _ = make_day(FakeDecider("a1", 0.8, per_question={"do": "chat"}))
+    planner.trace = writer = TraceWriter(tmp_path)
+    planner.menu_of = day_menu(CHAT)
+    planner.on_roster([entry("VINO", 50, guild=8)], clock.t)
+    await step(planner, clock, 281)  # its routine is asked
+    planner._traced["VINO"] = (clock.t, TRACE_PER_MIN)  # its rows of this minute are used up (reactions)
+    await step(planner, clock, 1)
+    (call,) = decider.calls
+    assert list(call["questions"]) == ["plan", "do"]
+    assert call["state"] == "You are Vino, a farmer. It is 14:00, afternoon."  # the plan's state, as it was
+    plan, do = call["questions"]["plan"], call["questions"]["do"]
+    assert plan["instructions"] == do["instructions"] == "What do you do during the next hour?"
+    assert plan["criteria"] == {
+        "keep_routine": "keep to your usual routine now: rake the field",
+        "a1": "sit by the campfire (you usually do it at 20:00-22:00)",
+    }
+    assert do["criteria"] == {
+        "keep_routine": "keep to your usual routine: rake the field in the fields of Lobart's farm",
+        "chat": CHAT.text,
+        "a1": "sit by the campfire in Lobart's farmyard (about an hour; usually 20:00-22:00)",
+    }
+    (decision,) = applier.recent  # the old menu's answer is applied, as before
+    assert (decision.question, decision.choice) == ("plan", "a1")
+    assert decision.args == {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60}
+
+    plan_row, do_row = read(writer.path())  # both, though its rows of the minute were used up
+    assert (plan_row["question"], plan_row["choice"], plan_row["applied"], plan_row["why"]) == (
+        "plan",
+        "a1",
+        True,
+        "",
+    )
+    assert plan_row["args"] == {
+        "keep_routine": {"id": "keep_routine", "args": None},
+        "a1": {"id": "routine:ZS_SIT_CAMPFIRE@FARM_FIRE", "args": decision.args},
+    }
+    assert (do_row["question"], do_row["choice"], do_row["applied"], do_row["why"]) == (
+        "do",
+        "chat",
+        False,
+        "shadow",
+    )
+    assert (do_row["rid"], do_row["state"], do_row["options"]) == (
+        plan_row["rid"],
+        call["state"],
+        do["criteria"],
+    )
+    assert do_row["code"] == {"question": "plan", "choice": "a1", "applied": True, "why": ""}
+    assert do_row["args"]["chat"] == {
+        "id": "chat:BAU_954_MALETH",
+        "args": CHAT.args,
+        "kind": "chat",
+        "concern": "news:caught:BAU_950_LOBART:q1",
+        "partner": "BAU_954_MALETH",
+    }
+    assert do_row["args"]["a1"]["id"] == "routine:ZS_SIT_CAMPFIRE@FARM_FIRE"
+    assert (do_row["infer_ms"], do_row["queue_ms"]) == (30.0, 1.0) and "model" in do_row
+    assert planner.stats.shadow == 1 and planner.snapshot()["shadow"] == 1
+
+
+async def test_an_outdated_plan_still_traces_the_shadow(tmp_path) -> None:
+    from gothic_ai.trace import TraceWriter, read
+
+    decider = FakeDecider("a1", 0.8, per_question={"do": "chat"})
+    decider.gate = asyncio.Event()
+    planner, _, applier, clock, _ = make_day(decider)
+    planner.trace = writer = TraceWriter(tmp_path)
+    planner.menu_of = day_menu(CHAT)
+    planner.on_roster([entry("VINO", 50)], clock.t)
+    await step(planner, clock, 281)
+    await step(planner, clock, 1)  # asked; the answer waits
+    planner.set_agenda("VINO", "tell everyone the hero is a liar")  # something changed meanwhile
+    decider.gate.set()
+    await settle()
+    plan_row, do_row = read(writer.path())
+    assert (plan_row["applied"], plan_row["why"]) == (False, "outdated") and not applier.recent
+    assert do_row["why"] == "shadow"
+    assert do_row["code"] == {"question": "plan", "choice": "a1", "applied": False, "why": "outdated"}
+
+
+async def test_shadow_only_when_the_old_menu_is_empty(tmp_path) -> None:
+    """Vino at his rake has nothing of his own to choose, but a trip: only `do` is asked, and while it is in
+    shadow he keeps his routine."""
+    from gothic_ai.trace import TraceWriter, read
+
+    planner, decider, applier, clock, _ = make_day(FakeDecider("chat", 0.9), Routines(RAKE), plan_period_s=60)
+    planner.trace = writer = TraceWriter(tmp_path)
+    planner.menu_of = day_menu(CHAT)
+    handed: list[DayOption] = []
+    planner.on_plan = lambda decision, rec, option: handed.append(option)
+    planner.game_time = (10, 0)
+    planner.on_roster([entry("VINO", 8, state="ZS_RAKE_FP")], clock.t)
+    for _ in range(70):
+        await step(planner, clock, 1)
+    (call,) = decider.calls
+    assert list(call["questions"]) == ["do"]
+    assert list(call["questions"]["do"]["criteria"]) == ["keep_routine", "chat"]
+    assert not applier.recent and not handed  # traced only
+    (row,) = read(writer.path())
+    assert (row["question"], row["choice"], row["applied"], row["why"]) == ("do", "chat", False, "shadow")
+    assert row["code"] == {"question": None, "choice": None, "applied": False, "why": "not asked"}
+
+
+async def test_on_duty_or_asleep_it_is_not_asked() -> None:
+    planner, decider, _, clock, routines = make_day(FakeDecider("chat"), plan_period_s=60)
+    planner.menu_of = day_menu(CHAT, stay="стоит на посту")
+    planner.on_roster([entry("GUARD", 8)], clock.t)
+    for _ in range(100):
+        await step(planner, clock, 1)
+    assert routines.asked == ["GUARD"] and decider.calls == []
+    assert planner.npcs["GUARD"].last_plan > clock.t - 45  # looked at: not again before the next period
+
+
+async def test_apply_day_asks_do_only(tmp_path) -> None:
+    from gothic_ai.brain.apply import actions_for
+    from gothic_ai.trace import TraceWriter, read
+
+    async def plan(choice: str, desk: bool) -> tuple[NpcPlanner, LogApplier, list, dict]:
+        planner, decider, applier, clock, _ = make_day(FakeDecider(choice, 0.8), apply_day=True)
+        planner.trace = writer = TraceWriter(tmp_path / f"{choice}-{desk}")
+        planner.menu_of = day_menu(CHAT)
+        handed: list[tuple] = []
+        if desk:
+            planner.on_plan = lambda decision, rec, option: handed.append((decision, rec.id, option))
+        planner.on_roster([entry("VINO", 50)], clock.t)
+        await step(planner, clock, 281)
+        await step(planner, clock, 1)
+        (call,) = decider.calls
+        assert list(call["questions"]) == ["do"]
+        (row,) = read(writer.path())
+        assert row["question"] == "do" and "code" not in row and planner.stats.shadow == 0
+        return planner, applier, handed, row
+
+    # its own activity: the applier starts it, as one of the old menu
+    planner, applier, handed, row = await plan("a1", True)
+    (decision,) = applier.recent
+    assert (decision.question, decision.choice) == ("plan", "a1") and not handed
+    assert actions_for(decision) == [
+        ("start_activity", {"state": "ZS_SIT_CAMPFIRE", "waypoint": "FARM_FIRE", "minutes": 60})
+    ]
+    assert (row["applied"], row["why"], row["args"]["a1"]["id"]) == (
+        True,
+        "",
+        "routine:ZS_SIT_CAMPFIRE@FARM_FIRE",
+    )
+    # a trip: the day desk walks it there, the applier sends nothing
+    planner, applier, handed, row = await plan("chat", True)
+    ((decision, npc, option),) = handed
+    assert (decision.question, decision.choice, npc, option) == ("plan", "chat", "VINO", CHAT)
+    assert decision.args == CHAT.args and not applier.recent and planner.stats.applied == 1
+    assert (row["choice"], row["applied"], row["why"]) == ("chat", True, "day desk")
+    # nobody to walk it there: the routine goes on
+    planner, applier, handed, row = await plan("chat", False)
+    assert not applier.recent and planner.stats.applied == 0
+    assert (row["applied"], row["why"]) == (False, "no desk")
+    # no day desk, so no do menu at all: the old one is asked and applied
+    planner, decider, applier, clock, _ = make_day(FakeDecider("a1", 0.8), apply_day=True)
+    planner.on_roster([entry("VINO", 50)], clock.t)
+    await step(planner, clock, 281)
+    await step(planner, clock, 1)
+    assert kinds(decider) == ["plan"] and [d.choice for d in applier.recent] == ["a1"]
+
+
+def test_the_day_questions_share_todays_plan_state() -> None:
+    from gothic_ai.brain.situation import NpcContext, SituationBuilder, news_short
+
+    builder = SituationBuilder(traits={"VINO": "Cynical, fond of his drink."})
+    npc = NpcContext("VINO", "Вино", 8, agenda="see the hero pay for his lie", facts=("He lied to Lobart.",))
+    old = {"keep_routine": "keep to your usual routine now: rake the field", "a1": "stand and eat"}
+    do = {"keep_routine": "keep to your usual routine: rake the field", "chat": "go to Малет"}
+    day = builder.day(npc, "10:00, morning", old, do)
+    assert (
+        day.state
+        == builder.plan(npc, "10:00, morning", old).state
+        == builder.plan_state(npc, "10:00, morning")
+    )
+    assert day.state == (
+        "You are Вино, a farmer. Cynical, fond of his drink. It is 10:00, morning."
+        " What you want: see the hero pay for his lie What you remember: He lied to Lobart."
+    )
+    assert day.questions["plan"] == builder.plan(npc, "10:00, morning", old).questions["plan"]
+    assert day.questions["do"] == {
+        "type": "choice",
+        "instructions": "What do you do during the next hour?",
+        "criteria": do,
+    }
+    assert list(builder.day(npc, None, None, do).questions) == ["do"]
+    assert news_short("caught", "Лобарт") == "the hero lied to Лобарт"
+    assert news_short("found_out", "Лобарт", about_you=True) == "the hero cheated you out of a reward"
+    assert news_short("broken", "Лобарт") == "the hero did not pay back Лобарт"
 
 
 async def test_the_hero_kills_the_monster_the_danger_is_over() -> None:

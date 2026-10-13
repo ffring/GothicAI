@@ -43,9 +43,8 @@ REACT_OPTIONS = {
 }
 # extra options that only make sense after a given event
 EVENT_OPTIONS = {
-    "item_given": {"thank": "thank the hero", "give_back": "give it back"},
+    "item_given": {"thank": "thank the hero"},
     "enter_room": {"tell_to_leave": "tell the hero to get out"},
-    "item_dropped": {"pick_up": "pick it up"},
     # threats from others: the body fights or flees with the game's own combat (npc_act fight / flee)
     "monster_near": {"call_help": "shout for help", "flee": "run away", "fight": "fight it"},
     "npc_attack": {"call_help": "shout for help", "flee": "run away", "fight": "fight back"},
@@ -82,11 +81,6 @@ ESCALATE_LEVELS = [
 TALK_TO = "Do you tell {name} this news now?"
 
 PLAN = "What do you do during the next hour?"
-PLAN_OPTIONS = {
-    "keep_routine": "keep to your usual daily routine",
-    "rest": "take a break and rest",
-    "socialize": "go and chat with people nearby",
-}
 
 
 @dataclass(frozen=True)
@@ -158,9 +152,9 @@ class SituationBuilder:
         q = {"talk_to": {"type": "choice", "instructions": TALK_TO.format(name=other), "criteria": criteria}}
         return Situation(" ".join(parts), q)
 
-    def plan(self, npc: NpcContext, clock: str | None, options: dict[str, str] | None = None) -> Situation:
-        """What to do in the next hour: the npc's own activities and habits (brain/day.py), or generic
-        options when its routine is not known."""
+    def plan_state(self, npc: NpcContext, clock: str | None) -> str:
+        """The state of the day questions: who, the time, what it wants and remembers. Where it is and what
+        it does now are in the keep option's text."""
         parts = [self.who(npc)]
         if clock:
             parts.append(f"It is {clock}.")
@@ -168,9 +162,25 @@ class SituationBuilder:
             parts.append(f"What you want: {npc.agenda}")
         if npc.facts:
             parts.append("What you remember: " + " ".join(npc.facts))
-        criteria = dict(options) if options else dict(PLAN_OPTIONS)
-        q = {"plan": {"type": "choice", "instructions": PLAN, "criteria": criteria}}
-        return Situation(" ".join(parts), q)
+        return " ".join(parts)
+
+    def plan(self, npc: NpcContext, clock: str | None, options: dict[str, str]) -> Situation:
+        """What to do in the next hour: the npc's own activities and habits (brain/day.py). Without its
+        routine there is nothing of its own to offer, and it is not asked."""
+        return self.day(npc, clock, options, None)
+
+    def day(
+        self, npc: NpcContext, clock: str | None, plan: dict[str, str] | None, do: dict[str, str] | None
+    ) -> Situation:
+        """The next hour, one state for both menus (the decider reads it once): `plan`, the old menu, and
+        `do`, the new one with trips (brain/day.py); each option text by its wire key, a menu None is not
+        asked. Both have PLAN's instructions: question names are not shown to the model."""
+        q = {
+            name: {"type": "choice", "instructions": PLAN, "criteria": dict(options)}
+            for name, options in (("plan", plan), ("do", do))
+            if options is not None
+        }
+        return Situation(self.plan_state(npc, clock), q)
 
 
 def news_text(kind: str, about_name: str, title: str, *, about_you: bool = False) -> str:
@@ -182,6 +192,17 @@ def news_text(kind: str, about_name: str, title: str, *, about_you: bool = False
     if kind == "found_out":
         return f"the hero lied to {whom}: he took a reward for '{title}' without doing it"
     return f"the hero lied to {whom}: he claimed '{title}', and it was false"
+
+
+def news_short(kind: str, about_name: str, *, about_you: bool = False) -> str:
+    """A rumor of the hero in a few words, for the do menu's chat option ("go to X to tell the news: ...").
+    `about_you`: the one asked is the one he lied to."""
+    whom = "you" if about_you else about_name
+    if kind == "broken":
+        return f"the hero did not pay back {whom}"
+    if kind == "found_out":
+        return f"the hero cheated {whom} out of a reward"
+    return f"the hero lied to {whom}"
 
 
 def clock_text(hour: int, minute: int) -> str:

@@ -111,15 +111,17 @@ async def test_arrived_failed_and_busy(monkeypatch):
             return await send(npc, action, **args)
 
         monkeypatch.setattr(link, "npc_act", slow)
-        first = asyncio.create_task(bodies.act(LOBART, "turn_to", timeout=0.2))
+        first = asyncio.create_task(bodies.act(LOBART, "turn_to", timeout=5))
         await sent.wait()
         assert bodies.busy(LOBART) and not bodies._waiting
+        go.set()
+        await _until(lambda: bool(bodies._waiting) and fake.acts[-1]["action"] == "turn_to")
         monkeypatch.setattr(link, "npc_act", send)
         second = asyncio.create_task(bodies.act(LOBART, "look_at", timeout=5))
-        go.set()
-        assert (await asyncio.wait_for(first, 2)).status == "timeout"  # the newer act took the tracking
-        assert bodies.busy(LOBART)
+        replaced = await asyncio.wait_for(first, 2)  # the newer act took the tracking: the older one ends
         look = next(a["id"] for a in fake.acts if a["action"] == "look_at")
+        assert (replaced.status, replaced.detail) == ("gone", f"replaced by {look}")
+        assert bodies.busy(LOBART)
         await fake.send(type="npc_idle", npc=LOBART, act=look, reason="done")
         assert (await asyncio.wait_for(second, 2)).status == "done"
         assert not bodies.busy(LOBART) and not bodies._acting
@@ -129,3 +131,30 @@ async def test_arrived_failed_and_busy(monkeypatch):
     bodies._on_message(idle(LOBART, "a1", "arrived"))
     assert bodies._ended["g1"] == BodyOutcome("g1", LOBART, "failed", "npc has no item ITFO_BREAD")
     assert bodies._ended["a1"] == BodyOutcome("a1", LOBART, "arrived")
+
+
+async def test_a_newer_act_on_the_npc_ends_the_older_one():
+    """The bridge tracks one act per npc: a newer one queued by anyone (the planner's applier, a reflex) ends
+    the wait for ours at once, as gone. A rejected one, or another npc's, leaves it be."""
+    fake = FakeGame()
+    async with connected(fake) as link:
+        bodies = Bodies(link)
+        here = {"state": "ZS_STAND_ARMSCROSSED", "waypoint": "NW_FARM1_PATH_01", "minutes": 60}
+        walking = asyncio.create_task(bodies.act(LOBART, "start_activity", arrive=True, **here))
+        await _until(lambda: bool(bodies._waiting) and bodies._queued.get(LOBART) == fake.acts[0]["id"])
+        walk = fake.acts[0]["id"]
+        fake.busy_npcs.add(LOBART)
+        refused = await link.npc_act(LOBART, "fight", npc="PLAYER")
+        await _until(lambda: refused in bodies._ended)
+        fake.busy_npcs.clear()
+        flee = await link.npc_act(HILDA, "flee", npc="PLAYER")
+        await _until(lambda: bodies._queued.get(HILDA) == flee)
+        assert not walking.done() and bodies._queued[LOBART] == walk
+
+        fight = await link.npc_act(LOBART, "fight", npc="PLAYER")  # the planner's, past Bodies
+        assert await asyncio.wait_for(walking, 2) == BodyOutcome(walk, LOBART, "gone", f"replaced by {fight}")
+        assert not bodies.busy(LOBART) and bodies._queued[LOBART] == fight
+        await fake.send(type="npc_idle", npc=HILDA, act=flee, reason="done")
+        await _until(lambda: HILDA not in bodies._queued)  # ended: no act of hers is tracked
+        await fake.send(type="loading")
+        await _until(lambda: not bodies._queued)  # the npc's are released

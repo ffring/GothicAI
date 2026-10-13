@@ -23,7 +23,6 @@ GOALS = {
     "fight": "драться",
     "guard_hero": "защищать героя",
     "keep_routine": "заниматься своими делами",
-    "change_plans": "изменить свои планы",
 }
 GOALS_EN = {
     "none": "nothing in particular",
@@ -33,7 +32,6 @@ GOALS_EN = {
     "fight": "to fight",
     "guard_hero": "to protect the hero",
     "keep_routine": "to go about your own business",
-    "change_plans": "to change your plans",
 }
 ATTITUDES = {
     "hostile": "враждебное",
@@ -64,6 +62,8 @@ class Intent:
         except json.JSONDecodeError:
             return cls()
         fields = {k: data[k] for k in ("goal", "target", "attitude", "agenda") if k in data}
+        if fields.get("goal") not in GOALS:
+            fields["goal"] = "none"  # a goal there is no more (change_plans): it would read as its symbol
         return cls(**fields)
 
     def describe_en(self) -> str:

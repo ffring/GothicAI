@@ -18,7 +18,7 @@ import time
 
 from gothic_ai.brain import DeciderClient, LogApplier, NpcPlanner
 from gothic_ai.brain.situation import SituationBuilder
-from gothic_ai.protocol import RosterEntry
+from gothic_ai.protocol import RosterEntry, RoutineEntry, RoutineInfo
 
 SAYINGS = ["Привет!", "Где тут рынок?", "Хорошая погода сегодня.", "Ты не видел Ли?", "Продай мне что-нибудь."]
 NEAR = [  # name, guild, traits, agenda
@@ -32,6 +32,16 @@ NEAR = [  # name, guild, traits, agenda
     ("Ignaz", 3, "An odd alchemist who talks to himself.", None),
 ]
 EVENTS = [("player_near", None), ("player_speech", None), ("item_dropped", "an apple"), ("player_sits", None)]
+# everyone's day, as the game tells it: without a routine there is no plan (FAR plans load the decider)
+DAY = [
+    RoutineEntry(start="06:00", end="18:00", state="ZS_PICK_FP", waypoint="FIELD_01"),
+    RoutineEntry(start="18:00", end="22:00", state="ZS_STAND_EATING", waypoint="FARM_YARD"),
+    RoutineEntry(start="22:00", end="06:00", state="ZS_GOTOBED", waypoint="FARM_BED"),
+]
+
+
+async def routine_of(npc: str) -> RoutineInfo:
+    return RoutineInfo(type="routine", npc=npc, current="ZS_PICK_FP", entries=DAY)
 
 
 async def main() -> None:
@@ -52,7 +62,7 @@ async def main() -> None:
     client = DeciderClient(args.url)
     applier = LogApplier(keep=100_000)
     builder = SituationBuilder(traits={f"NEAR_{i}": n[2] for i, n in enumerate(NEAR)})
-    planner = NpcPlanner(client, applier, builder)
+    planner = NpcPlanner(client, applier, builder, routine_of=routine_of)
     planner.game_time = (14, 0)
     runner = asyncio.create_task(planner.run())
     planner.on_roster(roster, time.monotonic())
