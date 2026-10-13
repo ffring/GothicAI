@@ -29,6 +29,11 @@
 #       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
 #       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
 #       story_state's `seen` (check_claim) is the engine's sight
+#   witness: asking a witness (wave 2 step 3): at 8:00 someone Lobart knows sees the hero in the open, Lobart
+#       does not; later the hero comes up to Lobart with an alibi («это не я топтал твою репу — я всё утро был
+#       в городе»), Lobart calls that one over, it comes and tells what it saw, Lobart catches the lie «со слов»
+#       (model scripted with LLM=fake; live, the hero bluffs «спроси у …» if nobody is asked); then someone far
+#       is asked at their next meeting: the answer is a fact, no model call
 #   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
 #       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
 #   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud

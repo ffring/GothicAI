@@ -173,12 +173,15 @@ class LieRef:
     title: str
     about: str  # the one lied to
     about_name: str
+    said: bool = False  # caught: the title is his own words, seen to be false (sightings.py), not a quest
 
     def words(self, npc: str) -> str:
         """What the hero did, to the npc's face."""
         whom = "тебя" if self.about == npc else f"человека по имени {self.about_name}"
         if self.key.startswith("found_out:"):
             return f"обманул {whom}: взял награду за «{self.title}», а дела не сделал"
+        if self.said:
+            return f"обманул {whom}: сказал «{self.title}», а это неправда"
         return f"обманул {whom}: уверял, что сделал «{self.title}», а это неправда"
 
 
@@ -413,11 +416,15 @@ class Deals:
             match f.get("fact"):
                 case "found_out" | "caught" if f.get("npc") == npc:
                     key = f"{f['fact']}:{npc}:{f.get('quest', '')}"
-                    known.setdefault(key, LieRef(key, _title(f), npc, f.get("name") or npc))
+                    ref = LieRef(key, _title(f), npc, f.get("name") or npc, said=bool(f.get("said")))
+                    known.setdefault(key, ref)
                 case "rumor" if f.get("to") == npc and f.get("kind", "found_out") in LIE_KINDS:
                     about = f.get("about") or f.get("from", "")
                     key = f"{f.get('kind', 'found_out')}:{about}:{f.get('quest', '')}"
-                    known.setdefault(key, LieRef(key, _title(f), about, f.get("about_name") or about))
+                    ref = LieRef(
+                        key, _title(f), about, f.get("about_name") or about, said=bool(f.get("said"))
+                    )
+                    known.setdefault(key, ref)
                 case "deal" if f.get("npc") == npc:
                     forgiven.update(f.get("forgive", []))
                     silent.update(f.get("silence", []))
