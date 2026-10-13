@@ -1524,7 +1524,9 @@ class DialogueManager:
             self.free_body(conv.npc, why)
 
     def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
-        intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap)
+        sight = self.sight(conv.npc, snap) if self.sight is not None else None
+        seen = sight.targets if sight is not None else None  # whom it perceives, not all within 15 m
+        intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap, seen)
         if intent is None:
             return ToolOutcome(f"Отклонено: {reason}", "rejected")
         if executor.same(conv.intent, intent):

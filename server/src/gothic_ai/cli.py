@@ -573,6 +573,7 @@ async def serve(args: argparse.Namespace) -> int:
             places=place_book,
         )
         state.dialogue.extensions.append(perception)
+        state.talk.orders.view_of = perception.fresh  # a companion sent somewhere looks around there
         state.dialogue.sight = perception.sight
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
@@ -836,7 +837,9 @@ async def serve(args: argparse.Namespace) -> int:
                 exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
-                results = await scenarios.companion_scenario(link, state.dialogue, state.talk)
+                results = await scenarios.companion_scenario(
+                    link, state.dialogue, state.talk, perception=state.perception
+                )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0

@@ -6,6 +6,7 @@ from gothic_ai.llm import FakeBackend, FakeStep, ToolCall
 from gothic_ai.orders import Orders
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.places import PlaceBook
+from gothic_ai.protocol import NpcView
 from gothic_ai.talk import TalkDesk
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import LOBART, XARDAS, _until
@@ -355,3 +356,33 @@ async def test_a_companion_sent_ahead_hears_its_name_from_afar():
     finally:
         await cm.__aexit__(None, None, None)
     assert (LOBART, "follow") not in acts(fake)  # only the one called
+
+
+async def test_sent_into_a_place_it_looks_around_until_it_sees_someone():
+    fake = FakeGame()
+    go = ToolCall("go_to", {"place": "CAVE"})
+    llm = FakeBackend(script=[FakeStep("Пойду первым.", [go]), FakeStep("Тут бандит.", [])], delay=0)
+    cm, dialogue, talk = await _desk(fake, llm, places=PlaceBook(BOOK))
+    dialogue.extensions.append(talk.orders)
+    looked: list[int] = []
+
+    async def view_of(npc: str) -> NpcView:
+        looked.append(len(walks(fake)))  # how many walks it had made when it looked
+        sees = [{"id": BANDIT, "name": "Бандит", "distance": 600.0}] if len(walks(fake)) >= 2 else []
+        return NpcView.model_validate({"npc": npc, "name": "Горн", "sees": sees})
+
+    talk.orders.view_of = view_of
+    try:
+        await _follows(fake, dialogue)
+        await fake.send(type="player_text", text="Горн, иди в пещеру первым.")
+        await _until(lambda: len(llm.calls) == 2)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    # to the middle (nobody seen there), on to the next point (the bandit seen): no third walk
+    assert [w["args"]["waypoint"] for w in walks(fake)] == ["NW_XARDAS_STAIRS_01", "NW_XARDAS_STAIRS_01"]
+    assert walks(fake)[1]["args"].get("pos") is None and looked == [1, 2]
+
+
+def walks(fake: FakeGame) -> list[dict]:
+    return [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_waypoint"]

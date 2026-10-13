@@ -116,8 +116,11 @@ def parse_intent(args: dict[str, Any], current: Intent | None = None) -> Intent:
     )
 
 
-def check_intent(intent: Intent, snap: Snapshot | None) -> tuple[Intent | None, str | None]:
-    """The intent as it will be carried out, or why not."""
+def check_intent(
+    intent: Intent, snap: Snapshot | None, seen: dict[str, str] | None = None
+) -> tuple[Intent | None, str | None]:
+    """The intent as it will be carried out, or why not. `seen`: whom it may point to, as the npc perceives
+    them (perception.py); else the snapshot's people and points around."""
     if intent.goal not in GOALS:
         return None, f"Нет такой цели: {intent.goal}. Можно: {', '.join(GOALS)}."
     if intent.attitude not in ATTITUDES:
@@ -125,8 +128,8 @@ def check_intent(intent: Intent, snap: Snapshot | None) -> tuple[Intent | None, 
     if intent.goal == "seek_help" and intent.target is None:
         intent = replace(intent, target="PLAYER")
     if intent.target is not None:
-        allowed = targets(snap)
-        if intent.goal in BODY_TARGETS:  # someone to fight, not a place
+        allowed = dict(seen) if seen else targets(snap)
+        if intent.goal in BODY_TARGETS and not seen:  # someone to fight, not a place
             allowed = {k: v for k, v in allowed.items() if k == "PLAYER" or k in npc_ids(snap)}
         match = next((t for t in allowed if t.upper() == intent.target.upper()), None)
         if match is None:
@@ -175,8 +178,8 @@ def intent_actions(old: Intent, new: Intent, following: bool) -> list[Action]:
     return acts
 
 
-def describe_targets(snap: Snapshot | None) -> str:
-    return ", ".join(f"{k} ({v})" for k, v in targets(snap).items())
+def describe_targets(snap: Snapshot | None, seen: dict[str, str] | None = None) -> str:
+    return ", ".join(f"{k} ({v})" for k, v in (seen or targets(snap)).items())
 
 
 def same(a: Intent, b: Intent) -> bool:

@@ -219,5 +219,6 @@ def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight:
     lines.append("Сейчас ты идёшь за героем." if npc.following else "Сейчас ты стоишь на месте.")
     if intent is not None:
         lines.append(f"Твоё намерение: {intent.describe()}.")
-        lines.append(f"Цели для намерения (target): {describe_targets(snap)}.")
+        targets = sight.targets if sight is not None and sight.targets else None
+        lines.append(f"Цели для намерения (target): {describe_targets(snap, targets)}.")
     return "\n".join(lines)

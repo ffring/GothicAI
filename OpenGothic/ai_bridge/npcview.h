@@ -10,7 +10,8 @@ class Npc;
 class World;
 
 // What an npc perceives right now, for the AI server's two models (protocol v11; v12: the game time of a
-// view, the nearest waypoint of whom it sees):
+// view, the nearest waypoint of whom it sees; v18: how each treats it and the hero, where each is from the
+// hero, whom the hero looks at, those close by it notices out of its field of view):
 // - `npc_view{req, npcs}`: one view per npc, as the result's value;
 // - `npc_views{t, views}`: once a second, the views of the npc's nearest to the player.
 // A view: where the npc is (indoors, whose room), what it does and holds; whom it sees and what they look

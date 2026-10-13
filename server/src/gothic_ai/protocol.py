@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
 # v16: opt-in passive numeric body observations (independently versioned schema).
-PROTOCOL_VERSION = 17
+PROTOCOL_VERSION = 18
 
 # --- game -> server -----------------------------------------------------------
 
@@ -325,6 +325,10 @@ class ItemRef(_GameMessage):
     name: str
 
 
+Attitude = Literal["hostile", "angry", "neutral", "friendly"]
+Side = Literal["ahead", "left", "right", "behind"]
+
+
 class Look(_GameMessage):
     """What an npc can tell of someone it sees (v11): who it is (shown name and guild, for the server to
     decide whether the npc knows it), what it does and looks like."""
@@ -344,10 +348,18 @@ class Look(_GameMessage):
     in_hands: ItemRef | None = None
     talking_to: str | None = None
     waypoint: str | None = None  # a person's nearest waypoint (v12): where it was seen
+    # v18: how it treats the viewer and the hero (hostile, angry, neutral, friendly), where it is from the
+    # hero as he faces (ahead, left, right, behind; left and right as on his screen) and how far from him
+    att: Attitude | None = None
+    att_hero: Attitude | None = None
+    from_hero: Side | None = None
+    hero_cm: float | None = None
+    noticed: bool = False  # v18: close by, out of the viewer's field of view: it notices it all the same
 
 
 class HeroLook(Look):
     seen: bool = False  # in its field of view and not behind a wall; it hears him anyway
+    focus: str | None = None  # v18: whom the hero looks at (his focus), an npc id
 
 
 class NpcView(_GameMessage):
