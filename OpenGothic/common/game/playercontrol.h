@@ -181,6 +181,7 @@ class PlayerControl final {
     float          peekK          = 0;       //!< leaning out round a corner -1 (left)..1 (right), smoothed
     bool           aimCant        = false;   //!< the bow canted for quick shots (the wheel; kept till changed)
     float          cantK          = 0;       //!< canted 0..1, smoothed
+    float          walkK          = 0;       //!< stepping with the bow drawn 0..1, smoothed
 
     DialogMenu&    dlg;
     InventoryMenu& inv;

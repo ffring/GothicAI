@@ -6,21 +6,25 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import characters
 from .amends import Amends
+from .bodies import Bodies
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Fact
+from .concerns import Concerns
 from .deals import GOLD, Deals, gold_text
 from .dialogue import DialogueManager
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .incidents import IncidentDesk
+from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
 from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
@@ -34,6 +38,7 @@ from .protocol import (
     FollowEnded,
     GameMessage,
     LineStarted,
+    NpcActCmd,
     NpcActResult,
     NpcActType,
     NpcEvent,
@@ -41,6 +46,7 @@ from .protocol import (
     NpcRoster,
     Perception,
     PerceptionHeld,
+    PlayerText,
     Saved,
     SayCmd,
     Session,
@@ -51,6 +57,7 @@ from .quests import SEE_CM, QuestBoard
 from .sightings import Sightings
 from .social import TICK_S, Rumors
 from .story import StoryPatches
+from .storyguard import StoryGuard
 from .talk import TalkDesk
 from .trace import TraceWriter
 from .trust import Trust
@@ -509,21 +516,28 @@ async def m4_planner_bridge(
 
 class FixedDecider:
     """A stand-in for the behavioral model: per question the first of its choices the question offers, and a
-    fixed level for score questions (escalate, attitude)."""
+    fixed level for score questions (escalate, attitude). With `npcs` it decides so only for those; the others
+    keep to what they do: the first option the question offers (continue, keep_routine) and level 0."""
 
     def __init__(
-        self, choices: dict[str, str | tuple[str, ...]], scores: dict[str, float] | None = None
+        self,
+        choices: dict[str, str | tuple[str, ...]],
+        scores: dict[str, float] | None = None,
+        npcs: Collection[str] | None = None,
     ) -> None:
         self.choices = choices
         self.scores = scores or {}
+        self.npcs = {n.upper() for n in npcs} if npcs is not None else None
 
     async def decide(self, rid, lane, priority, deadline_ms, state, questions) -> Outcome:  # noqa: ANN001
+        mine = self.npcs is None or rid.split("#", 1)[0].upper() in self.npcs
         answers: dict[str, dict] = {}
         for name, q in questions.items():
             if q["type"] == "score":
-                answers[name] = {"type": "score", "score": self.scores.get(name, 2.0), "confidence": 0.8}
+                score = self.scores.get(name, 2.0) if mine else 0.0
+                answers[name] = {"type": "score", "score": score, "confidence": 0.8}
                 continue
-            prefs = self.choices.get(name, ())
+            prefs = self.choices.get(name, ()) if mine else ()
             prefs = (prefs,) if isinstance(prefs, str) else prefs
             pick = next((c for c in prefs if c in q["criteria"]), next(iter(q["criteria"])))
             answers[name] = {
@@ -2797,6 +2811,444 @@ async def deal_debt(
     after = await has(GOLD)
     check("repaid", ok and after == before - 25, f"{before} -> {after} gold")
     check("word_stays", Trust(deals.chronicle).broken(lender))
+    return _logged(results)
+
+
+INITIATIVE_DEBT = "e2einit"
+# Lobart's farmhands: their important dialogs would stop the hero (Hilda's is the initiative's first check)
+FARMHANDS = ("BAU_954_MALETH", "BAU_952_VINO")
+CROWD_CM = 600.0  # nobody else this close to the hero: his line without a name could go to them
+
+
+async def initiative_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    concerns: Concerns,
+    guard: StoryGuard,
+    bodies: Bodies,
+    perception: PerceptionDesk,
+    desk: InitiativeDesk | None = None,
+    lender: str = LOBART,
+) -> dict[str, str]:
+    """An npc comes up to the hero and speaks first (docs/npc-tools.md, wave 2 step 1), on the game. Hilda has
+    her greeting waiting for the hero: the game's own Npc_CheckInfo says so and the initiative leaves her to
+    the scripts. The hero owes Lobart 25 gold since yesterday (a debt written into the chronicle): a broken
+    word, on Lobart's mind. The hero stands 12 m in front of him; Lobart comes up by himself, once, and speaks
+    first about the debt, the hero's next words without a name go to him. The hero says he will pay: Lobart
+    offers a deal that settles the debt, the hero accepts it, and nothing is on Lobart's mind any more. With
+    the server's planner and its desk (DECIDER_URL) the behavioral model decides whether he comes up; without
+    it a fixed stand-in does, for Lobart only. The words are scripted unless LLM=chatgpt."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    chronicle = deals.chronicle
+    hero = ["inst", "HERO"]
+    name = "Лобарт"
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    async def checkinfo(npc: str) -> Any:
+        """The game's own Npc_CheckInfo(npc, 1); None if it cannot tell."""
+        try:
+            return (await link.story_eval(npc, [CHECKINFO]))[0]
+        except (GameError, TimeoutError, IndexError) as err:
+            log.info("Npc_CheckInfo of %s: %s", npc, err)
+            return None
+
+    # without the server's planner: a fixed stand-in, Lobart comes up and the others keep to their routines
+    own = desk is None
+    runner: asyncio.Task[None] | None = None
+    on_change: Callable[[str], None] | None = None
+    talk_planner = talk.planner
+    if desk is None:
+        from .brain import GameApplier
+
+        planner = NpcPlanner(
+            FixedDecider({"react": "approach_talk"}, npcs={lender}),
+            GameApplier(link),
+            agenda_of=concerns.agenda,
+            view_of=perception.english,
+        )
+        link.listeners.append(planner.on_message)
+        desk = InitiativeDesk(
+            link,
+            dialogue,
+            talk,
+            planner,
+            concerns,
+            guard,
+            Budget(),
+            chronicle,
+            bodies=bodies,
+            perception=perception,
+            journal=dialogue.journal,
+        )
+        talk.planner = planner  # its conversation with the hero leaves the npc to it
+
+        def agenda(npc: str) -> None:
+            """What it wants of the hero follows its concerns (cli.py does so for the server's planner)."""
+            planner.set_agenda(npc, concerns.agenda(npc))
+
+        on_change = agenda
+        concerns.on_change.append(on_change)
+    planner = desk.planner
+    # Lobart's lines as the server sent them, with the trigger of the turn they came from
+    said: list[tuple[float, str, str]] = []
+    walked: list[float] = []  # when Lobart was sent to the hero (by the desk: no one else sends go_to_npc)
+    send = link.send
+
+    async def sending(cmd: Any) -> Any:
+        if isinstance(cmd, NpcActCmd) and cmd.npc.upper() == lender and cmd.action == "go_to_npc":
+            walked.append(time.monotonic())
+        if isinstance(cmd, SayCmd) and cmd.npc.upper() == lender:
+            conv = dialogue.conversations.get(lender)
+            trigger = conv.trigger.content if conv is not None and conv.trigger is not None else ""
+            said.append((time.monotonic(), cmd.text, trigger))
+        return await send(cmd)
+
+    link.send = sending  # type: ignore[method-assign]
+    typed: list[float] = []  # when the hero said something
+
+    def heard(m: GameMessage) -> None:
+        if isinstance(m, PlayerText):
+            typed.append(time.monotonic())
+
+    link.listeners.append(heard)
+    try:
+        # their important dialogs would stop the hero as he comes; not Hilda's yet (the first check)
+        for npc in (lender, *FARMHANDS):
+            try:
+                await link.debug("skip_important", near=npc)
+            except GameError as err:
+                log.info("skip_important %s: %s", npc, err)
+        # gold: Lobart has some to give, the hero 30 of it to pay back with
+        await attach_when_free(link, lender)
+        await link.act(lender, "debug_add_item", item=GOLD, count=100)
+        await link.detach(lender)
+        await link.story_effect(lender, [{"do": "give", "item": GOLD, "count": 30}])
+        # the hero owes him 25 gold by yesterday
+        day = int((await link.story_state()).get("day", 0))
+        chronicle.record(
+            {
+                "fact": "debt",
+                "id": INITIATIVE_DEBT,
+                "npc": lender,
+                "npc_name": name,
+                "item": GOLD,
+                "count": 25,
+                "name": "золото",
+                "due": day - 1,
+                "day": day - 1,
+            }
+        )
+        deals.reload()
+        await link.debug("time", hour=10, minute=0)
+        if isinstance(dialogue.llm, FakeBackend):
+            repay = {
+                "npc_gives": [],
+                "hero_gives": [],
+                "forgive": [],
+                "silence": [],
+                "hero_later": [],
+                "repay": [INITIATIVE_DEBT],
+            }
+            first = FakeStep("[angry] Эй, ты! Двадцать пять золотых за тобой, и срок вчера вышел.")
+            dialogue.llm = ClaimScript(
+                said=[
+                    ("подошёл к герою", first),
+                    ("Отдам", FakeStep("Давно бы так.", [ToolCall("propose_deal", repay, "repay")])),
+                ],
+                told=[],
+                default="Вот и ладно.",
+                only=name,
+            )
+
+        # 1. Hilda has her greeting for the hero (DIA_Hilda_Hallo): the game's own check says so, and the
+        # initiative leaves her to the scripts; once it counts as told, nothing waits
+        before, waiting = await checkinfo(HILDA), await desk.important(HILDA)
+        await link.debug("skip_important", near=HILDA)
+        after, left = await checkinfo(HILDA), await desk.important(HILDA)
+        check(
+            "important_guard",
+            before is not None and bool(before) and waiting and after is not None and not after and not left,
+            f"Npc_CheckInfo {before} -> {after}, the desk {waiting} -> {left}",
+        )
+
+        # 2. the debt is past its day (the deals look every 10 s): a broken word, on Lobart's mind
+        ok = await _until(
+            lambda: any(f.get("debt") == INITIATIVE_DEBT for f in chronicle.facts("broken")), 20
+        )
+        top = concerns.top(lender)
+        key = f"debt_broken:{INITIATIVE_DEBT}"
+        check("concern", ok and top is not None and top.key == key, f"{top.key}: {top.en}" if top else "none")
+
+        # 3. the hero 12 m in front of him, facing him, nobody else close: Lobart comes up by himself
+        walks = len(walked)
+        if own:
+            runner = asyncio.create_task(planner.run())
+        t0 = time.monotonic()
+        crowd: list[str] = []
+        for distance in (1200, 1500, 900):
+            await link.debug("teleport", near=lender, distance=distance)
+            await asyncio.sleep(1.5)  # the roster comes twice a second
+            crowd = [
+                f"{e.name} {e.distance / 100:.0f} m"
+                for k, e in talk.people.items()
+                if k != lender and e.activity != "down" and e.distance <= CROWD_CM
+            ]
+            if not crowd:
+                break
+        came = await _until(
+            lambda: (
+                len(walked) > walks and lender in talk.people and talk.people[lender].distance <= ARRIVE_CM
+            ),
+            45 if own else 120,  # the live model decides when
+        )
+        entry, rec = talk.people.get(lender), planner.npcs.get(lender)
+        where = f"{entry.distance / 100:.1f} m" if entry else "not around"
+        body = guard.body(lender, entry.state if entry else "") or "may walk"
+        check(
+            "walked_up",
+            came and len(walked) - walks == 1,
+            f"{where} after {time.monotonic() - t0:.0f} s, {len(walked) - walks} walk(s), "
+            f"vetoed {planner.stats.vetoed}, agenda {rec.agenda if rec else '-'!r}, body: {body}"
+            f"{f', others close: {crowd}' if crowd else ''}",
+        )
+        if not came:
+            return _logged(results)
+
+        # 4. he speaks first, about the debt; the hero has said nothing
+        def first_words() -> tuple[float, str, str] | None:
+            return next((w for w in said if w[2].startswith("[Ты сам подошёл к герою")), None)
+
+        await _until(lambda: first_words() is not None, 15)
+        words = first_words()
+        early = [t for t in typed if words is not None and t < words[0]]
+        # the hero said nothing yet: only the desk can have made Lobart his partner, listening
+        partner = talk.partner
+        opened = partner is not None and partner.npc == lender and partner.posture == "listen"
+        check(
+            "spoke_first",
+            words is not None and "25" in words[2] and not early and opened,
+            f"«{words[1]}» on {words[2]!r}{f', the hero spoke {len(early)} time(s) before' if early else ''}"
+            if words
+            else f"silent; lines: {[w[1] for w in said][-3:]}",
+        )
+
+        # 5. the fact: who came up, about what, who saw it
+        fact = next((f for f in reversed(chronicle.facts("initiative")) if f.get("npc") == lender), None)
+        check(
+            "fact",
+            fact is not None and fact.get("occasion") == key and "PLAYER" in (fact.get("seen_by") or []),
+            fact or "none",
+        )
+
+        # 6. the hero answers him without a name: it goes to Lobart, his partner now
+        await _until(lambda: not dialogue.speaking(lender), 15)
+        text = "Отдам, держи свои двадцать пять."
+        await link.debug("type", text=text)
+        await _until(lambda: talk.last is not None and talk.last[1] == text, 10)
+        to = talk.last[0] if talk.last is not None and talk.last[1] == text else None
+        check(
+            "reply_goes_to_him",
+            to is not None and to.id == lender,
+            f"to {to.id} by {to.why}" if to else "not heard or to nobody",
+        )
+
+        # 7. he offers a deal that settles the debt: the window shows it
+        def offered() -> bool:
+            deal = deals.open.get(lender)
+            return deal is not None and [d.id for d in deal.repay] == [INITIATIVE_DEBT]
+
+        ok = await _until(offered, 30)
+        owed = f"Долг: {gold_text(25)}"
+        shown = await _until_async(
+            link.deal_window, lambda w: w is not None and owed in (w.get("hero_gives") or []), 10
+        )
+        window = await link.deal_window() or {}
+        check("offered_repay", ok and shown, window.get("hero_gives"))
+        if not ok:
+            return _logged(results)
+
+        # 8. the hero accepts: the debt is paid, nothing is on Lobart's mind, he does not come up again
+        gold = await has(GOLD)
+        await asyncio.sleep(1.2)  # Y waits until the terms have stood a moment
+        pressed = await link.press_deal()
+        debt = deals.debts.get(INITIATIVE_DEBT)
+        paid = await _until(lambda: debt is not None and debt.paid, 20)
+        left_gold = await has(GOLD)
+        walks = len(walked)
+        await asyncio.sleep(20)
+        top, rec = concerns.top(lender), planner.npcs.get(lender)
+        check(
+            "settled",
+            pressed == "sent"
+            and paid
+            and top is None
+            and rec is not None
+            and rec.agenda is None
+            and len(walked) == walks,
+            f"{pressed}, gold {gold} -> {left_gold}, concern {top.key if top else None}, "
+            f"agenda {rec.agenda if rec else '-'!r}, {len(walked) - walks} walk(s) after",
+        )
+    finally:
+        link.send = send  # type: ignore[method-assign]
+        link.listeners.remove(heard)
+        if own:
+            if runner is not None:
+                runner.cancel()
+            link.listeners.remove(planner.on_message)
+            if on_change is not None:
+                concerns.on_change.remove(on_change)
+            talk.planner = talk_planner
+    return _logged(results)
+
+
+async def write_cards(
+    link: GameLink, graph: Any, llm: LLMBackend, only: set[str] | None = None, path: Path | None = None
+) -> dict[str, str]:
+    """Character cards (docs/npc-tools.md, wave 1 step 3): the model writes them, a few npc's a call, for
+    those of `only` (GOTHIC_CARDS: symbols, comma separated) or for everyone of this world with lines of its
+    own, into gamedata/characters.json (cards there for others stay). Saved after every batch; who got no
+    card is asked about once more. Without `only`, those that have a card already are left as they are: a
+    run cut short goes on where it stopped."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    people = await link.story_people(timeout=30)
+    target = path or characters.CARDS_FILE
+    cards = characters.load(target)
+    subjects = [x for x in characters.subjects(graph, people, only) if only or x.npc not in cards]
+    check(
+        "subjects", bool(subjects) or not only, f"{len(subjects)} of {len(people)} people, {len(cards)} cards"
+    )
+    left = list(subjects)
+    for attempt in (1, 2):
+        missed = []
+        for i in range(0, len(left), characters.BATCH):
+            batch = left[i : i + characters.BATCH]
+            got, errors = await characters.write(llm, batch)
+            cards.update(got)
+            characters.save(cards, target)
+            missed += [x for x in batch if x.npc not in got]
+            log.info(
+                "cards: %d/%d written (attempt %d)%s",
+                len(got),
+                len(batch),
+                attempt,
+                f": {errors}" if errors else "",
+            )
+        left = missed
+        if not left:
+            break
+    check(
+        "written",
+        not left,
+        f"{len(subjects) - len(left)} of {len(subjects)}; none for {[x.npc for x in left]}",
+    )
+    return _logged(results)
+
+
+CANTHAR, LUTERO = "VLK_468_CANTHAR", "VLK_404_LUTERO"
+
+
+async def haggle(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    npcs: tuple[str, str] = (CANTHAR, LUTERO),
+    ware: str = "ITMI_SILVERCUP",
+) -> dict[str, str]:
+    """Character in a deal (docs/npc-tools.md, wave 1 step 3), live only (LLM=chatgpt). The hero offers the
+    same silver cup to two traders who would buy it, a greedy one and a fairer one by their character cards
+    (Canthar, Lutero), and asks for more, as a player would: he agrees in words when a price is named. What
+    each offers first and after the haggling is logged; the greedy one should offer less."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    if isinstance(dialogue.llm, FakeBackend):
+        check("live", False, "run with LLM=chatgpt")
+        return _logged(results)
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    offers: dict[str, list[int]] = {}
+
+    def buying(npc: str, version: int) -> int | None:
+        deal = deals.open.get(npc)
+        if deal is None or deal.version < version or not any(g.item == ware for g in deal.hero_gives):
+            return None
+        return sum(g.count for g in deal.npc_gives if g.item == GOLD)
+
+    for npc in npcs:
+        await link.attach(npc)
+        await link.act(npc, "debug_add_item", item=GOLD, count=300)
+        await link.act(npc, "debug_add_item", item=ware, count=1)
+        await link.detach(npc)
+        await link.story_effect(npc, [{"do": "give", "item": ware, "count": 1}])  # the cup is the hero's
+        await link.debug("skip_important", near=npc)
+        await link.debug("player_goto", to=npc, distance=250)
+        # the roster must have him close: else the words would go to the one the hero talked to before
+        if not await _until(lambda npc=npc: npc in talk.people and talk.people[npc].distance <= 600, 20):
+            check(f"{npc}_near", False)
+            continue
+        name = talk.people[npc].name
+        got: list[int] = []
+
+        async def say_until(lines: list[str], version: int, npc: str = npc) -> int | None:
+            """Say the lines one by one until the npc offers a deal of `version` or later."""
+            for line in lines:
+                await link.debug("type", text=line)
+                if await _until(lambda: buying(npc, version) is not None, 45):
+                    return buying(npc, version)
+            return None
+
+        first = await say_until(
+            [
+                f"{name}, купишь у меня серебряный кубок? Сколько дашь?",
+                f"{name}, назови цену.",
+                f"{name}, согласен, давай по рукам.",
+            ],
+            1,
+        )
+        if first is not None:
+            got.append(first)
+            version = deals.open[npc].version
+            more = await say_until(
+                [
+                    f"{name}, маловато. Кубок серебряный, накинь ещё.",
+                    f"{name}, ладно, на твою новую цену согласен.",
+                ],
+                version + 1,
+            )
+            if more is not None:
+                got.append(more)
+            await link.decline_deal()
+        offers[npc] = got
+        check(f"{npc}_offered", bool(got), got)
+        await asyncio.sleep(2)
+    cards = dialogue.personas.cards
+    greedy, generous = sorted(npcs, key=lambda n: -(cards[n].greed if n in cards else 3))
+    a, b = offers.get(greedy, []), offers.get(generous, [])
+    detail = f"{greedy} (greed {cards[greedy].greed if greedy in cards else '?'}): {a}; {generous}: {b}"
+    check("greedy_pays_less", bool(a) and bool(b) and a[0] < b[0], detail)
     return _logged(results)
 
 

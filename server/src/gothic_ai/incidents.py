@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 
 SECOND_HIT_S = 10.0
 FREE_HEARING_CM = 2000.0  # a free npc's words are worth the call if the hero is this close (or sees it)
+FREE_SEEING_CM = 3000.0
 FREE_COOLDOWN_S = 30.0  # one call per free npc at most this often about the same thing
 FREE_NEW_REASON_S = 5.0  # a new reason (the wolf it shouted about is dead) may follow sooner
 FREE_TOOLS = ("set_intent", "recall")  # an npc nobody controls cannot hand over items or end a chat
@@ -85,6 +86,11 @@ REACTIONS_RU = {
     "tell_to_leave": "ты велел герою убираться",
     "thank": "ты кивнул в знак благодарности",
 }
+
+
+def hears(distance_cm: float, in_view: bool) -> bool:
+    """The hero hears a free npc's words: it is close, or he sees it a little farther off."""
+    return distance_cm <= FREE_HEARING_CM or (in_view and distance_cm <= FREE_SEEING_CM)
 
 
 def describe_ru(stim: Stimulus) -> str:
@@ -373,9 +379,8 @@ class IncidentDesk:
         )
         if level < self.planner.cfg.escalate_level and not settles:
             return
-        hears = rec.distance_cm <= FREE_HEARING_CM or (rec.in_view and rec.distance_cm <= 3000)
         gap = FREE_NEW_REASON_S if new else FREE_COOLDOWN_S
-        if not hears or now - spoke_at < gap:
+        if not hears(rec.distance_cm, rec.in_view) or now - spoke_at < gap:
             return
         if not self.budget.allow(npc):
             log.info("%s: no budget for words (escalate %.1f)", npc, level)

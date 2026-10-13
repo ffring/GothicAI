@@ -27,6 +27,8 @@ inline const std::set<std::string> PredicateExternals = {
   "NPC_HASRANGEDWEAPONWITHAMMO", "NPC_ISAIMING", "NPC_ISDRAWINGWEAPON", "NPC_ISDRAWINGSPELL",
   "NPC_GETLOOKATTARGET", "NPC_ISVOICEACTIVE", "NPC_HASDETECTEDNPC", "WLD_GETMOBSTATE", "NPC_GETLASTHITSPELLCAT",
   "NPC_OWNEDBYNPC", "NPC_OWNEDBYGUILD", "NPC_ISNEAR", "NPC_GETNEXTTARGET", "NPC_AREWESTRONGER",
+  // no dialog condition calls it; the server asks it whether an important info waits (initiative.py)
+  "NPC_CHECKINFO",
   };
 
 // Engine predicates that return TRUE or FALSE (the rest return counts, distances, instances...).

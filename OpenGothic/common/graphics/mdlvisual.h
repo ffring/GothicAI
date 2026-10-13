@@ -109,6 +109,9 @@ class MdlVisual final {
     void                           fitHitZones();
     // the bow in the hand, in the arrow's frame (the test bench)
     std::string                    bowDump() const;
+    // an animation of the model (the test bench): its frames, the nodes it moves, how far it goes, which
+    // way the hips face (the thighs) at a few points of it
+    std::string                    animInfo(std::string_view name) const;
     // cm the bow's string goes from rest to drawn as held in the aim (its morph), 0: not known
     float                          bowSpan() const;
     // the bow holds still in the aim: an arrow on the string

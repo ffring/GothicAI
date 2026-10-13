@@ -31,6 +31,7 @@ class Archer final {
       bool     loaded = true;  // an arrow (a bolt) is put in: raised without one, it is put in first
       float    crouch = 0;     // crouched 0..1: steadier
       float    peek   = 0;     // leaning out round a corner, 0..1 either way: less steady
+      float    walk   = 0;     // stepping with the bow drawn 0..1: the steps shake it
       uint64_t dt     = 0;
       };
 

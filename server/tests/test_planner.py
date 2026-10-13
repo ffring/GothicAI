@@ -778,3 +778,115 @@ async def test_attitude_and_escalate_go_in_one_request() -> None:
     assert set(after["questions"]) == {"attitude", "escalate"} and after["lane"] == "background"
     assert after["state"] == react["state"]  # one state for both: the decider reads it once
     assert [d.question for d in applier.recent] == ["react", "attitude"] and told == [("BOSPER", 3.0)]
+
+
+# --- hooks for the initiative desk and the decision trace -----------------------------------
+
+
+async def test_veto_records_cooldown_and_skips_the_applier() -> None:
+    planner, decider, applier, clock = make(FakeDecider("approach_talk", 0.9), ask_attitude=False)
+    asked: list[tuple[str, str]] = []
+
+    def allow(rec, choice: str) -> str | None:
+        asked.append((rec.id, choice))
+        return "к герою уже идут" if choice == "approach_talk" else None
+
+    planner.allow = allow
+    planner.on_roster([entry("PABLO", 6)], clock.t)
+    planner.set_agenda("PABLO", "find the thief")
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock)
+    assert asked == [("PABLO", "approach_talk")] and not applier.recent
+    assert planner.stats.vetoed == 1 and planner.snapshot()["vetoed"] == 1 and planner.stats.applied == 0
+    assert planner.npcs["PABLO"].last_applied["approach_talk"] == clock.t
+    clock.t += 10
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock)
+    assert len(decider.calls) == 2 and len(asked) == 1  # the loop guard: a cooldown, not another veto
+    assert planner.stats.cooldown == 1 and planner.stats.vetoed == 1
+    decider.choice = "look_at"
+    clock.t += 10
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock)
+    assert [d.choice for d in applier.recent] == ["look_at"]  # allowed: applied as before
+
+
+async def test_approach_is_handed_over() -> None:
+    planner, _, applier, clock = make(FakeDecider("approach_talk", 0.9), ask_attitude=False)
+    handed: list[tuple] = []
+    planner.on_approach = lambda decision, rec: handed.append((decision, rec))
+    planner.on_roster([entry("LOBART", 8)], clock.t)
+    planner.set_agenda("LOBART", "make the hero pay back the 25 gold he owes you; his day has passed")
+    planner.on_event("LOBART", "player_near", clock.t, distance_cm=800)
+    await step(planner, clock, 0.3)
+    ((decision, rec),) = handed
+    assert (decision.npc, decision.question, decision.choice) == ("LOBART", "react", "approach_talk")
+    assert rec is planner.npcs["LOBART"] and rec.last_applied["approach_talk"] == clock.t
+    assert not applier.recent and planner.stats.applied == 1  # the applier sends no second go_to_npc
+
+
+async def test_facts_reach_the_state() -> None:
+    planner, decider, _, clock = make(ask_attitude=False)
+    said = "You already spoke to the hero about it today at 10:15."
+    planner.facts_of = lambda npc: (said,) if npc == "LOBART" else ()
+    planner.on_roster([entry("LOBART", 6), entry("MALETH", 7)], clock.t)
+    for npc in ("LOBART", "MALETH"):
+        planner.set_agenda(npc, "make the hero pay back the 25 gold he owes you; his day has passed")
+        planner.on_event(npc, "player_near", clock.t, distance_cm=600)
+    await step(planner, clock, 0.3)
+    states = {c["rid"].split("#")[0]: c["state"] for c in decider.calls}
+    assert states["LOBART"].endswith(f"What you remember: {said}")
+    assert "What you remember" not in states["MALETH"]
+
+
+async def test_decisions_traced_with_option_texts(tmp_path) -> None:
+    from gothic_ai.brain.planner import TRACE_PER_MIN
+    from gothic_ai.brain.situation import ATTITUDE_LEVELS, ESCALATE_LEVELS
+    from gothic_ai.trace import TraceWriter, read
+
+    writer = TraceWriter(tmp_path)
+    decider = FakeDecider("tell_to_leave", 0.8)
+    planner, _, _, clock = make(decider)
+    planner.trace = writer
+    planner.on_escalate = lambda npc, level, reaction, flight: None
+    planner.on_roster([entry("BOSPER", 4, in_view=True), entry("PABLO", 6)], clock.t)
+    planner.on_event("BOSPER", "enter_room", clock.t)
+    await step(planner, clock, 0.05)
+    react, attitude, escalate = read(writer.path())
+    assert {r["type"] for r in (react, attitude, escalate)} == {"brain"}
+    assert (react["question"], react["lane"], react["tier"]) == ("react", "urgent", "NEAR")
+    assert react["state"].startswith("You are Bosper")
+    assert react["options"]["tell_to_leave"] == "tell the hero to get out"
+    assert react["options"]["approach_talk"] == "go talk to the hero"
+    assert (react["choice"], react["confidence"]) == ("tell_to_leave", 0.8)
+    assert react["applied"] is True and react["why"] == ""
+    assert attitude["rid"] == react["rid"] and attitude["lane"] == "background"
+    assert (attitude["question"], attitude["score"]) == ("attitude", 3.0)
+    assert attitude["options"] == ATTITUDE_LEVELS
+    assert (escalate["question"], escalate["score"]) == ("escalate", 3.0)
+    assert escalate["options"] == ESCALATE_LEVELS
+
+    # an outdated answer, a veto and the rate cap
+    decider.choice, decider.gate = "greet", asyncio.Event()
+    planner.allow = lambda rec, choice: "занят"
+    planner.on_escalate, planner.cfg.ask_attitude = None, False
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock, 0.05)  # asked; the answer waits
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй, ты!")  # it is outdated now
+    decider.gate.set()
+    await step(planner, clock, 0.05)
+    await step(planner, clock, 0.05)
+    outdated, vetoed = [r for r in read(writer.path()) if r["npc"] == "PABLO"]
+    assert (outdated["applied"], outdated["why"], outdated["choice"]) == (False, "outdated", "greet")
+    assert (vetoed["applied"], vetoed["why"]) == (False, "veto: занят")
+    planner.allow = None
+    for _ in range(TRACE_PER_MIN + 3):
+        clock.t += 2
+        planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+        await step(planner, clock)
+    rows = [r for r in read(writer.path()) if r["npc"] == "PABLO"]
+    assert len(rows) == TRACE_PER_MIN and {r["why"] for r in rows} >= {"cooldown"}
+    clock.t += 60
+    planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
+    await step(planner, clock)
+    assert len([r for r in read(writer.path()) if r["npc"] == "PABLO"]) == TRACE_PER_MIN + 1

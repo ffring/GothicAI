@@ -28,7 +28,7 @@ import asyncio
 import itertools
 import logging
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -83,10 +83,12 @@ PROPOSE_TOOL = Tool(
     "Предложить герою сделку. Герой увидит условия и примет их сам, если согласен, — тогда всё сразу "
     "перейдёт из рук в руки. Торгуетесь — вызови снова с новыми условиями, они заменят прежние. "
     "Отдать можешь только то, что есть в твоём инвентаре (он в обстановке); у героя проси предметы по "
-    "идентификатору, золото — ITMI_GOLD. Сколько у него с собой, ты не знаешь. Кроме вещей: простить ему "
-    "ложь, о которой ты знаешь (forgive), пообещать о ней молчать (silence), дать в долг — он отдаст позже, "
-    "к сроку (hero_later), принять возврат его долга тебе (repay); id лжи и долгов — в обстановке. Сначала "
-    "договоритесь о сути словами, потом предлагай и скажи, что предлагаешь. Ненужные списки — пустые.",
+    "идентификатору, золото — ITMI_GOLD. Сколько у него с собой, ты не знаешь, но сделка сама тебя "
+    "защищает: если у него нет того, что он отдаёт, она не состоится — осматривать вещь заранее не нужно. "
+    "Кроме вещей: простить ему ложь, о которой ты знаешь (forgive), пообещать о ней молчать (silence), дать "
+    "в долг — он отдаст позже, к сроку (hero_later), принять возврат его долга тебе (repay); id лжи и долгов "
+    "— в обстановке. Сначала договоритесь о сути словами, потом предлагай и скажи, что предлагаешь. Ненужные "
+    "списки — пустые.",
     {
         "type": "object",
         "properties": {
@@ -111,7 +113,11 @@ PROPOSE_TOOL = Tool(
                 },
                 "description": "что герой отдаст позже, к сроку: его долг тебе",
             },
-            "repay": {**_IDS, "description": "id долгов героя тебе, которые он возвращает сейчас"},
+            "repay": {
+                **_IDS,
+                "description": "id долгов героя тебе, которые он возвращает сейчас; что он должен, войдёт в "
+                "сделку само — не добавляй это в hero_gives ещё раз",
+            },
         },
         "required": ["npc_gives", "hero_gives", "forgive", "silence", "hero_later", "repay"],
         "additionalProperties": False,
@@ -265,6 +271,9 @@ class Deals:
         self.journal = journal or dialogue.journal
         self.open: dict[str, Deal] = {}  # npc -> its offer, while the conversation lasts
         self.debts: dict[str, Debt] = {}  # by id, of the save branch
+        self.day: int | None = None  # the game day, as last read
+        self.on_day: list[Callable[[int], None]] = []  # a new game day (concerns.py: a debt due today)
+        self.on_reload: list[Callable[[], None]] = []  # the debts were read again (concerns.py)
         self._ids = itertools.count(1)
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
@@ -278,6 +287,7 @@ class Deals:
                 self._spawn(self.decline(msg.deal, msg.version))
             case Loading():
                 self.open.clear()  # the game drops its window with the world
+                self.day = None  # the world loaded may be of another day
             case Session():
                 self._load()
 
@@ -373,6 +383,15 @@ class Deals:
         self.journal.add("deal_offer", npc=npc, name=name, deal=deal.id, version=deal.version, terms=terms)
         changed = "Условия изменились" if current is not None else "Герой видит твоё предложение"
         after = "Он примет его сам, если согласен; пока не принял, можно торговаться."
+        twice = [g for g in hero_gives if any(d.give.item == g.item for d in repay)]
+        if twice:  # the debt brings its own: what was added on top is more, not the debt again
+            total = ", ".join(
+                Give(
+                    g.item, g.count + sum(d.give.count for d in repay if d.give.item == g.item), g.name
+                ).text()
+                for g in twice
+            )
+            after += f" Учти: долг уже включает своё, с hero_gives герой отдаёт всего {total}."
         return ToolOutcome(f"{changed}: {deal.terms()}. {after}", "accepted")
 
     def end(self, npc: str, why: str = "") -> None:
@@ -492,6 +511,8 @@ class Deals:
         await self._send(DealHideCmd(deal=deal.id))
         await self._notice("Сделка заключена")
         day = await _day(self.link)
+        if "day" in day:
+            self._set_day(day["day"])
         debts = [Debt(uuid.uuid4().hex[:6], deal.npc, deal.name, x.give, x.due) for x in deal.later]
         self.chronicle.record(
             {
@@ -530,7 +551,10 @@ class Deals:
         log.info("deal %s v%d with %s done: %s", deal.id, deal.version, deal.npc, deal.terms())
         self.dialogue.note(deal.npc, f"Герой принял твою сделку, она состоялась: {deal.terms()}")
         self.dialogue.event_turn(
-            deal.npc, "[Герой согласился, сделка состоялась. Отзовись коротко.]", tools=()
+            deal.npc,
+            "[Герой согласился, сделка состоялась. Отзовись коротко. Если ты хотел от него именно этого, "
+            "твоё желание исполнено — обнови его (set_intent).]",
+            tools=("set_intent",),
         )
 
     async def decline(self, deal_id: str, version: int) -> None:
@@ -587,6 +611,7 @@ class Deals:
             except (GameError, TimeoutError) as err:
                 log.info("debts: %s", err or type(err).__name__)
                 continue
+            self._set_day(day)
             self.overdue(day)
 
     def overdue(self, day: int) -> list[Debt]:
@@ -613,6 +638,18 @@ class Deals:
             broke = f"Герой не вернул тебе долг в срок: {d.what()}. Он не сдержал слово"
             self.dialogue.remember(d.npc, d.name, broke)
         return out
+
+    def _set_day(self, day: int) -> None:
+        if day != self.day:
+            self.day = day
+            for listener in self.on_day:
+                listener(day)
+
+    def reload(self) -> None:
+        """The debts again from the chronicle: after a fact written past the deals (the e2e seeds a debt)."""
+        self._load()
+        for listener in self.on_reload:
+            listener()
 
     def _load(self) -> None:
         self.debts.clear()

@@ -60,6 +60,15 @@ class FakeGame:
         self.nearby = [{"id": "PC_THIEF", "name": "Диего", "distance": 650.0, "guild": 0, "dead": False}]
         self.hp = 999
         self.soft: list[tuple[str, str]] = []  # npc_act's: (npc, action)
+        self.acts: list[dict[str, Any]] = []  # npc_act messages as sent
+        self.busy_npcs: set[str] = set()  # their npc_act's are rejected
+        self.auto_idle = False  # answer every queued npc_act with npc_idle at once
+        self.idle_reason = "done"
+        # as the bridge tracks soft acts: one per npc, a newer one drops the older (no npc_idle for it), an
+        # npc taken over (attached) ends its act as "gone"
+        self.track_acts = False
+        self.running: dict[str, str] = {}  # npc -> its act being tracked
+        self.important: set[str] = set()  # npc's with an important dialog to tell (NPC_CHECKINFO)
         self.hushed: list[dict[str, Any]] = []
         self.heard: list[dict[str, Any]] = []  # final transcripts with whom they were said to
 
@@ -77,7 +86,7 @@ class FakeGame:
     async def roster(self, *people: dict[str, Any]) -> None:
         """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
         npcs = [{"guild": 0, "in_view": False, "activity": "routine", **p} for p in people]
-        await self.send(type="npc_roster", t=1000, hour=8, minute=0, full=True, npcs=npcs)
+        await self.send(type="npc_roster", t=1000, hour=self.hour, minute=self.minute, full=True, npcs=npcs)
 
     async def send(self, **msg: Any) -> None:
         assert self.ws is not None
@@ -139,8 +148,18 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True)
                 await self.send(type="detached", npc=msg["npc"], reason="server")
             case "npc_act":
-                self.soft.append((msg["npc"], msg["action"]))
-                await self.send(type="npc_act_result", id=msg["id"], npc=msg["npc"], status="queued")
+                npc = msg["npc"]
+                self.soft.append((npc, msg["action"]))
+                self.acts.append(msg)
+                if npc in self.busy_npcs:
+                    busy = {"status": "rejected", "detail": "npc is busy (attached or in a dialog)"}
+                    await self.send(type="npc_act_result", id=msg["id"], npc=npc, **busy)
+                    return
+                await self.send(type="npc_act_result", id=msg["id"], npc=npc, status="queued")
+                if self.auto_idle:
+                    await self.send(type="npc_idle", npc=npc, act=msg["id"], reason=self.idle_reason)
+                elif self.track_acts:
+                    self.running[npc] = msg["id"]
             case "hush":
                 self.hushed.append(msg)
             case "attach":
@@ -149,6 +168,8 @@ class FakeGame:
                     await self.send(type="result", req=msg["req"], ok=False, error="npc is in dialog")
                     return
                 self.attached.add(msg["npc"])
+                if (act := self.running.pop(msg["npc"], None)) is not None:
+                    await self.send(type="npc_idle", npc=msg["npc"], act=act, reason="gone")
                 await self.send(type="result", req=msg["req"], ok=True)
                 await self.send(type="attached", npc=msg["npc"], name="Ксардас")
                 await self.send(**self.snapshot(msg["npc"]))
@@ -213,7 +234,7 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True, value=self.people)
             case "story_eval":
                 self.story.append(msg)
-                values = [self.evaluate(e) for e in msg["exprs"]]
+                values = [self.evaluate(e, msg["npc"]) for e in msg["exprs"]]
                 await self.send(type="result", req=msg["req"], ok=True, value=values)
             case "story_tag":
                 self.story.append(msg)
@@ -243,9 +264,10 @@ class FakeGame:
             taker[item] = taker.get(item, 0) + count
         return None
 
-    def evaluate(self, e: Any) -> Any:
+    def evaluate(self, e: Any, npc: str | None = None) -> Any:
         """A story graph expression, as far as the fake world knows: ints, vars, comparisons, logic, the
-        hero's items and who is dead; fields read 0, anything else is null (can't be computed)."""
+        hero's items, who is dead and whether self (`npc`) has something important to tell; fields read 0,
+        anything else is null (can't be computed)."""
         ops = {
             "==": lambda a, b: a == b,
             "!=": lambda a, b: a != b,
@@ -264,22 +286,24 @@ class FakeGame:
             case ["field", *_]:
                 return 0
             case ["!", a]:
-                v = self.evaluate(a)
+                v = self.evaluate(a, npc)
                 return None if v is None else int(not v)
             case ["&&", *args]:
-                vs = [self.evaluate(a) for a in args]
+                vs = [self.evaluate(a, npc) for a in args]
                 return None if None in vs else int(all(vs))
             case ["||", *args]:
-                vs = [self.evaluate(a) for a in args]
+                vs = [self.evaluate(a, npc) for a in args]
                 return None if None in vs else int(any(vs))
             case [op, a, b] if op in ops:
-                x, y = self.evaluate(a), self.evaluate(b)
+                x, y = self.evaluate(a, npc), self.evaluate(b, npc)
                 return None if x is None or y is None else int(ops[op](x, y))
             case ["call", "NPC_HASITEMS", ["inst", "OTHER" | "HERO"], ["sym", item]]:
                 return self.hero_items.get(item, 0)
             case ["call", "NPC_ISDEAD", ["inst", name]]:
-                npc = self.instances.get(name, name)
-                return int(self.npc_states.get(npc, {}).get("state") == "dead")
+                dead = self.instances.get(name, name)
+                return int(self.npc_states.get(dead, {}).get("state") == "dead")
+            case ["call", "NPC_CHECKINFO", ["inst", "SELF"], ["int", 1, *_]]:
+                return int(npc in self.important)
         return None
 
     async def handle_action(self, msg: dict[str, Any]) -> None:

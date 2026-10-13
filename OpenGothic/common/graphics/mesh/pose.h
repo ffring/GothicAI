@@ -11,6 +11,7 @@
 #include "gaze.h"
 #include "lean.h"
 #include "aim.h"
+#include "aimwalk.h"
 #include "bowdraw.h"
 #include "flinch.h"
 #include "resources.h"
@@ -112,6 +113,8 @@ class Pose final {
     // The animation of that name plays k times as fast, from its next start on (1: as it is)
     void               setAnimSpeed(std::string_view name, float k);
     BowDraw&           bowDrawIk() { return bowDraw; }
+    AimWalk&           aimWalk() { return walk; }
+    bool               updateAimWalk(const AimWalk::Input& in);
     bool               updateBowDraw(const BowDraw::Input& in);
     Flinch&            flinchIk() { return flinch; }
     bool               updateFlinch(const Flinch::Input& in);
@@ -205,6 +208,7 @@ class Pose final {
     Lean                            lean;
     AnimBlend                       blend;
     Aim                             aim;
+    AimWalk                         walk;
     BowDraw                         bowDraw;
     Flinch                          flinch;
 

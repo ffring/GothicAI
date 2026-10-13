@@ -17,10 +17,13 @@ from typing import Any
 
 from . import npc_tools, places, scenarios
 from .amends import Amends
+from .bodies import Bodies
 from .brain import DeciderClient, GameApplier, NpcPlanner
 from .brain.reflex import Reflexes
+from .brain.situation import SituationBuilder
 from .budget import Budget
 from .chronicle import Chronicle
+from .concerns import Concerns
 from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
@@ -30,6 +33,7 @@ from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .incidents import IncidentDesk
+from .initiative import InitiativeDesk
 from .journal import Journal, print_sink
 from .knowledge import Knowledge
 from .llm import (
@@ -66,6 +70,7 @@ from .replay import replay as replay_turn
 from .sightings import Sightings
 from .social import Rumors
 from .story import StoryPatches
+from .storyguard import StoryGuard
 from .talk import TalkDesk
 from .trace import TraceWriter, find_turn, latest
 from .trust import Trust
@@ -112,6 +117,7 @@ HELP = """commands (npc defaults to the last attached one):
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
   seen [npc] [query]  what the npc saw itself: the hero's sightings, the people it knows (and recall)
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
+  guard [npc]       whether the npc may leave its spot (plot, post), its concerns about the hero
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
   amends            the director's storylets of amends for the hero's lies, and where they stand
@@ -157,6 +163,10 @@ class ServerState:
         self.amends: Amends | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
+        self.bodies: Bodies | None = None
+        self.concerns: Concerns | None = None
+        self.guard: StoryGuard | None = None
+        self.initiative: InitiativeDesk | None = None
         self.perception: PerceptionDesk | None = None
         self.sightings: Sightings | None = None
 
@@ -275,6 +285,19 @@ class Console:
                 print(self.state.knowledge.situation(who))
                 if len(rest) > 1:
                     print(self.state.knowledge.recall(who, " ".join(rest[1:])) or "(recall: nothing)")
+            case "guard" if self.state.guard is not None:
+                who = (rest[0] if rest else npc).upper()
+                guard = self.state.guard
+                state = (
+                    self.state.talk.people[who].state
+                    if self.state.talk and who in self.state.talk.people
+                    else ""
+                )
+                body = guard.body(who, state) or "may walk"
+                print(f"plot {guard.plot(who)}, post {who in guard.posts}, body: {body}")
+                if self.state.concerns is not None:
+                    print("concerns:", [c.key for c in self.state.concerns.of(who)] or "none")
+                print("reads where it stands:", guard.placed().get(who, []) or "no")
             case "trust" if self.state.trust is not None:
                 print(self.state.trust.situation(rest[0] if rest else npc) or "(nothing)")
             case "amends" if self.state.amends is not None:
@@ -502,6 +525,10 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.deals)
         talk.on_talk_end.append(state.deals.end)
         debts = asyncio.create_task(state.deals.run())  # a debt not paid back by its day is a broken word
+        # what each npc has on its mind about the hero, and what may come of it (wave 2 step 1)
+        state.bodies = Bodies(link)
+        state.concerns = Concerns(link, state.chronicle, state.deals)
+        state.guard = StoryGuard(graph)
         state.quests = QuestBoard(
             link,
             state.dialogue,
@@ -549,9 +576,13 @@ async def serve(args: argparse.Namespace) -> int:
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
+            concerns = state.concerns
+
             def agenda_of(npc: str, dialogue: DialogueManager = state.dialogue) -> str | None:
+                """What it wants of the hero: the conversation's agenda, else its most pressing concern."""
                 saved = memory.intent(dialogue.branch, npc) if dialogue.branch else None
-                return (Intent.from_json(saved).agenda or None) if saved else None
+                agenda = Intent.from_json(saved).agenda if saved else None
+                return concerns.current(npc, agenda) or concerns.agenda(npc)
 
             planner = state.brain = NpcPlanner(
                 decider,
@@ -560,6 +591,9 @@ async def serve(args: argparse.Namespace) -> int:
                 routine_of=link.routine,
                 habits_of=habits_of,
                 view_of=perception.english,
+                # each npc's character, from its card (characters.py)
+                builder=SituationBuilder(traits={npc: card.en for npc, card in personas.cards.items()}),
+                trace=trace,  # its decisions: data for fine-tuning (M5d)
             )
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
             state.talk.planner = planner  # npc's in a conversation are left to it; others overhear
@@ -568,7 +602,24 @@ async def serve(args: argparse.Namespace) -> int:
                 await link.send(ThreatControlCmd(hold=True))
             link.listeners.append(planner.on_message)
             # what the npc wants from the hero, from the conversation, steers it afterwards
-            state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(npc, intent.agenda or None)
+            state.dialogue.on_intent = lambda npc, intent: planner.set_agenda(
+                npc, concerns.current(npc, intent.agenda or None) or concerns.agenda(npc)
+            )
+            concerns.on_change.append(lambda npc: planner.set_agenda(npc, agenda_of(npc)))
+            # an npc with something on its mind comes up to the hero and speaks first (wave 2 step 1)
+            state.initiative = InitiativeDesk(
+                link,
+                state.dialogue,
+                state.talk,
+                planner,
+                concerns,
+                state.guard,
+                budget,
+                state.chronicle,
+                bodies=state.bodies,
+                perception=perception,
+                journal=journal,
+            )
             brain = asyncio.create_task(planner.run())
         try:
             await _run_scenario(link)
@@ -710,12 +761,40 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario deal: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "cards":
+                if graph is None:
+                    raise SystemExit("cards need the story graph")
+                only = {n.strip().upper() for n in os.environ.get("GOTHIC_CARDS", "").split(",") if n.strip()}
+                results = await scenarios.write_cards(link, graph, llm, only or None)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario cards: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "haggle":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.haggle(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario haggle: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "debt":
                 dialogue, talk, deals = state.dialogue, state.talk, state.deals
                 assert dialogue is not None and talk is not None and deals is not None
                 results = await scenarios.deal_debt(link, dialogue, talk, deals)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario debt: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "initiative":
+                dialogue, talk, deals, concerns = state.dialogue, state.talk, state.deals, state.concerns
+                guard, bodies, perception = state.guard, state.bodies, state.perception
+                assert dialogue is not None and talk is not None and deals is not None
+                assert concerns is not None and guard is not None and bodies is not None
+                assert perception is not None
+                # with DECIDER_URL the server's planner and its desk; else the scenario's fixed stand-in
+                results = await scenarios.initiative_scenario(
+                    link, dialogue, talk, deals, concerns, guard, bodies, perception, desk=state.initiative
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario initiative: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "deal_demo":
                 assert state.deals is not None
@@ -1184,7 +1263,10 @@ def main() -> None:
             "deal",
             "deal_demo",
             "debt",
+            "initiative",
             "amends_deal",
+            "cards",
+            "haggle",
             "rescue",
             "rescue_self",
             "tts",
