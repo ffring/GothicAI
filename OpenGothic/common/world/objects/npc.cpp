@@ -4330,6 +4330,47 @@ bool Npc::arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const {
   return visual.arrowRay(pos,dir);
   }
 
+bool Npc::tickManualAim(const Tempest::Vec3& at, Archer::Input in, const Archery::Stats& st) {
+  // how far the aim turned since the last frame, from the eyes: a turn shakes it
+  const Tempest::Vec3 eye = position() + Tempest::Vec3(0,165,0);
+  const Tempest::Vec3 dir = Tempest::Vec3::normalize(at-eye);
+  in.turn    = arch.isRaised() ? std::acos(std::clamp(Tempest::Vec3::dotProduct(dir,aimDirPrev),-1.f,1.f)) : 0.f;
+  aimDirPrev = dir;
+  // the next arrow as fast as the hands are (dexterity; a crossbow: strength); set when it changes (the
+  // test bench may set its own)
+  if(st.reload!=reloadTempo) {
+    setAnimSpeed(Archery::reloadAnim(st.crossbow),st.reload);
+    reloadTempo = st.reload;
+    }
+  in.raised = true;
+  in.ready  = isAimSteady();
+  in.reload = animProgress(Archery::reloadAnim(st.crossbow))>=0.f;
+  in.loaded = isBowLoaded();
+  bool shot = false;
+  if(arch.tick(in,st)) {
+    shot = releaseArrow(arch.draw(),st);
+    arch.onShot(shot);
+    }
+  setManualAim(true,at,arch.sway(),arch.tremor());
+  return shot;
+  }
+
+void Npc::endManualAim(bool idle) {
+  setAnimSpeed(Archery::BowReload,1);
+  setAnimSpeed(Archery::CBowReload,1);
+  reloadTempo = 1;
+  if(arch.isRaised()) {
+    Archer::Input in;
+    in.raised = false;
+    arch.tick(in,Archery::stats(*this,currentRangedWeapon()));
+    const auto ws = weaponState();
+    if(idle && !isDown() && (ws==WeaponState::Bow || ws==WeaponState::CBow))
+      setAnim(Anim::Idle);
+    }
+  setManualAim(false);
+  setAimStance(0,0,0,0);
+  }
+
 bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
   auto active = invent.activeWeapon();
   if(active==nullptr || !hasAmmunition())

@@ -329,6 +329,13 @@ class Npc final {
     bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
     // lets the arrow go along the arrow: drawn that far, thrown off by the release
     bool      releaseArrow(float draw, const Archery::Stats& st);
+    // one frame of the bow aimed by hand at `at`, the hero's (PlayerControl) or an npc's (ArcherAi): the
+    // caller fills draw, breath, the stance and dt; the turn, ready, reload and loaded are measured here,
+    // the reload plays as fast as the stats say; true: an arrow left
+    bool      tickManualAim(const Tempest::Vec3& at, Archer::Input in, const Archery::Stats& st);
+    // the bow aimed by hand no more: the reload's tempo back, the string let down, no aim point; idle: back
+    // to standing with the bow (the hero; an npc's fight plays its own animation)
+    void      endManualAim(bool idle);
     // where an arrow passing from-to hits this one, t: how far from 'from'
     auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
@@ -715,6 +722,8 @@ class Npc final {
     uint64_t                       talkUntil       =0;
     Attention                      attention;
     Archer                         arch;
+    Tempest::Vec3                  aimDirPrev  = {};  // the manual aim's last direction (a turn shakes it)
+    float                          reloadTempo = 1;   // how fast the reload plays (set on the model)
     bool                           manualAim   = false;
     Tempest::Vec3                  manualPoint = {};
     Tempest::Vec2                  manualSway  = {};

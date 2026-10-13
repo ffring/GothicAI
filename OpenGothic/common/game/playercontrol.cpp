@@ -1168,34 +1168,18 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   Tempest::Vec3 at;
   aimRayHit(pl,at);
-  const Tempest::Vec3 eye  = pl.position() + Tempest::Vec3(0,165,0);
-  const Tempest::Vec3 dir  = Tempest::Vec3::normalize(at-eye);
-  const float         turn = ar.isRaised() ? std::acos(std::clamp(Tempest::Vec3::dotProduct(dir,aimDirPrev),-1.f,1.f)) : 0.f;
-  aimDirPrev = dir;
 
   // canted: a quick shot (drawn fast, settles fast, looser)
   const auto    st = Archery::canted(Archery::stats(pl,pl.currentRangedWeapon()),cantK);
-  // the next arrow as fast as the hands are (dexterity); set when it changes (the test bench may set its own)
-  if(st.reload!=reloadTempo) {
-    pl.setAnimSpeed(Archery::reloadAnim(st.crossbow),st.reload);
-    reloadTempo = st.reload;
-    }
   Archer::Input in;
-  in.raised = true;
-  in.ready  = pl.isAimSteady();
   in.draw   = lmb;
   in.breath = ctrl[Action::Walk];
-  in.turn   = turn;
-  in.reload = pl.animProgress(Archery::reloadAnim(st.crossbow))>=0.f;
-  in.loaded = pl.isBowLoaded();
   in.crouch = crouchK;
   in.peek   = peekK;
   in.walk   = walkK;
   in.dt     = dt;
-  if(ar.tick(in,st))
-    ar.onShot(pl.releaseArrow(ar.draw(),st));
+  pl.tickManualAim(at,in,st);
   ar.probe(Archer::playerProbe);
-  pl.setManualAim(true,at,ar.sway(),ar.tremor());
 
   // the crosshair is where it aims; it opens as far as the arrow may go off: the sway, the trembling,
   // the arrow not turned to it yet (a flick of the mouse), the bow being raised, the next arrow nocked.
@@ -1218,20 +1202,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   }
 
 void PlayerControl::endManualAim(Npc& pl) {
-  pl.setAnimSpeed(Archery::BowReload,1);
-  pl.setAnimSpeed(Archery::CBowReload,1);
-  reloadTempo = 1;
-  auto& ar = pl.archer();
-  if(ar.isRaised()) {
-    Archer::Input in;
-    in.raised = false;
-    ar.tick(in,Archery::stats(pl,pl.currentRangedWeapon()));
-    const auto ws = pl.weaponState();
-    if(!pl.isDown() && (ws==WeaponState::Bow || ws==WeaponState::CBow))
-      pl.setAnim(Npc::Anim::Idle);
-    }
-  pl.setManualAim(false);
-  pl.setAimStance(0,0,0,0);
+  pl.endManualAim(true);
   aimCrouch = false;
   crouchK   = 0;
   peekK     = 0;
