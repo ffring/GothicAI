@@ -4,10 +4,11 @@ at once to what the hero just said (server/src/gothic_ai/brain/reflex.py, Reflex
 Every phrase is put in the hero's mouth to `--per-phrase` npcs drawn from the character cards
 (gamedata/characters.json), the state built by the server's own code the way the game builds it: the npc's
 card line, the time, the distance, a few of the lines it perceives (place, a stranger, others about) and
-its intent. Half of the phrases come as speech recognition writes them, without "ё" («Лестер мертв.»),
-some of them lower case without punctuation too. The npcs of evals/talk-reactions (Xardas, Lobart, the
-gate guards) are left out, and so are its phrases (voice_phrases.yaml), so the eval stays fair. Every
-tenth phrase of a kind goes to validation, with all its npcs.
+its intent. Half of the phrases come as speech recognition writes them, without "ё" and with a period for
+«!» («Лестер мертв.», «Орки напали на город.»), some of them lower case without punctuation too. The npcs
+of evals/talk-reactions (Xardas, Lobart, the gate guards) are left out, and so are its phrases
+(voice_phrases.yaml), so the eval stays fair. Every tenth phrase of a kind goes to validation, with all
+its npcs.
 
     cd decider-service/tuning
     uv run --project ../../server python make_voice.py [--per-phrase 2] [--out voice]
@@ -46,7 +47,7 @@ ATTITUDES = [("neutral", 40), ("friendly", 25), ("wary", 18), ("hostile", 7), ("
 NO_INTENT = 0.15  # the first turn of a talk: the conversational model has not set one yet
 NO_CARD = 0.1  # an npc without a card: "You are Бромор, someone."
 SPOKEN = 0.12  # as speech recognition may give it: lower case, no punctuation, no "ё"
-HEARD = 0.45  # as speech recognition writes it: no "ё", else as said (it never writes "ё")
+HEARD = 0.45  # as speech recognition writes it: no "ё", mostly a period for «!» (heard)
 DOING = ["talking", "eating", "asleep", "working"]
 
 
@@ -55,8 +56,9 @@ def weighted(rng: random.Random, pairs: list[tuple[str, int]]) -> str:
 
 
 def heard(text: str) -> str:
-    """As speech recognition writes it: no "ё"."""
-    return text.replace("ё", "е").replace("Ё", "Е")
+    """As speech recognition writes it: no "ё", and a period where the hero exclaimed ("?!" a question)."""
+    text = text.replace("ё", "е").replace("Ё", "Е").replace("?!", "?")
+    return text.replace("!", ".")
 
 
 def spoken(text: str) -> str:
@@ -115,7 +117,7 @@ def main() -> None:
                     stats["spoken"] += 1
                 elif form < SPOKEN + HEARD and heard(words) != words:
                     words = heard(words)
-                    stats["heard, no ё"] += 1
+                    stats["heard"] += 1
                 traits = None if rng.random() < NO_CARD else card.en
                 npc = NpcContext(
                     card.npc,
