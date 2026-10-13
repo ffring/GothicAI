@@ -214,6 +214,15 @@ class MemoryStore:
         ).fetchall()
         return [row[0] for row in rows]
 
+    def facts_since(self, branch: str, seq: int) -> list[tuple[int, str]]:
+        """The branch's facts after `seq`, oldest first, with their seq: what a reader that has the facts up
+        to `seq` lacks (seqs only grow on a branch, and a branch copies what it inherits when it is made)."""
+        rows = self._db.execute(
+            "SELECT seq, content FROM events WHERE branch=? AND kind='fact' AND seq>? ORDER BY seq",
+            (branch, seq),
+        ).fetchall()
+        return [(int(s), content) for s, content in rows]
+
     def add_patch(self, branch: str, op: str) -> int:
         """A change to the story graph (JSON of one operation) made on this branch."""
         return self._insert(branch, PATCHES, "patch", None, op, None, None)

@@ -1,14 +1,26 @@
 import asyncio
+import json
+import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+import pytest
+from websockets.asyncio.server import serve
+
+from gothic_ai import dialogue as dialogue_module
 from gothic_ai import scenarios
-from gothic_ai.dialogue import DialogueManager
+from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager
+from gothic_ai.fillers import Fillers
+from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, ToolCall
 from gothic_ai.llm.fake import FakeBackend
-from gothic_ai.persona import PersonaProvider
+from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
+from gothic_ai.tts import TtsClient
 from tests.fake_game import FakeGame, connected
 
 XARDAS = "NONE_100_XARDAS"
+LOBART = "BAU_950_LOBART"
+HILDA = "BAU_951_HILDA"
 
 
 async def _until(predicate, timeout: float = 3.0) -> None:
@@ -268,3 +280,199 @@ async def test_a_new_mood_starts_a_new_line():
     # "Ты вернулся." is short and would be merged with the next sentence, but its mood is another
     says = [(m["text"], m.get("mood")) for m in fake.received if m["type"] == "say"]
     assert says == [("Ты вернулся.", "friendly"), ("Времени мало, слушай внимательно.", "angry")]
+
+
+# --- two npc's talk to each other (play_scene) ---------------------------------------------
+
+SCENE = [
+    (LOBART, "Лобарт", HILDA, "Слыхала? Этот бродяга мне наврал.", "angry"),
+    (HILDA, "Хильда", LOBART, "Да ну? А с виду смирный.", None),
+    (LOBART, "Лобарт", HILDA, "Глаз с него не спускай.", None),
+]
+
+
+@asynccontextmanager
+async def scene_tts(per_char: float = 0.01, fail: bool = False):
+    """TTS service stand-in: `per_char` seconds of audio per character in two chunks, or an error."""
+    requests: list[dict] = []
+
+    async def handler(ws) -> None:
+        async for raw in ws:
+            msg = json.loads(raw)
+            requests.append(msg)
+            if fail:
+                await ws.send(json.dumps({"type": "error", "id": msg["id"], "detail": "no voice"}))
+                continue
+            start = {"type": "start", "id": msg["id"], "sample_rate": 16000, "provider": "fake"}
+            await ws.send(json.dumps(start))
+            pcm = b"\0\1" * int(16000 * per_char * len(msg["text"]))
+            half = len(pcm) // 4 * 2
+            await ws.send(pcm[:half])
+            await ws.send(pcm[half:])
+            await ws.send(json.dumps({"type": "done", "id": msg["id"]}))
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        yield f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}", requests
+
+
+def _scene_dialogue(link, pace: float = 0.05, **kwargs) -> DialogueManager:
+    dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), **kwargs)
+    dialogue.scene_pace = lambda text: pace
+    return dialogue
+
+
+async def test_a_scene_is_said_in_turn_each_line_whole_and_to_the_other():
+    fake = FakeGame()
+    async with scene_tts() as (url, requests), connected(fake) as link:
+        dialogue = _scene_dialogue(link, tts=TtsClient(url))
+        play = dialogue.play_scene(SCENE, quiet=True)
+        await asyncio.wait_for(play.task, 10)
+
+    says = [m for m, _ in fake.says]
+    assert [(m["npc"], m["to"], m["text"]) for m in says] == [(n, to, t) for n, _, to, t, _ in SCENE]
+    assert all(m["stream"] and "audio" not in m and "reply" not in m for m in says)
+    # each line goes out whole: the game knows its length when it starts (never a WAV: a hush can't stop it)
+    flow = [m["type"] for m in fake.received if m["type"] in ("say", "say_audio", "say_end")]
+    assert flow == ["say", "say_audio", "say_audio", "say_end"] * 3
+    assert fake.say_ends == {line.line: round(line.audio_s, 3) for line in play.lines}
+    # the next line only once the one before has been heard: started, its voice over, a breath
+    for line, (_, sent_at) in zip(play.lines[:-1], fake.says[1:], strict=True):
+        assert line.audio_s == pytest.approx(0.01 * len(line.text), abs=0.01)
+        assert sent_at >= line.started + line.audio_s + SCENE_GAP_S - 0.005
+    assert (play.sent, play.why, play.said()) == (3, "", play.lines)
+    # each in its own voice, lowered, the mood heard; on a connection of its own (answers don't wait)
+    assert [r["voice"]["id"] for r in requests] == [LOBART, HILDA, LOBART]
+    assert all(QUIET_STYLE in r["style"] for r in requests)
+    assert MOOD_DELIVERY["angry"] in requests[0]["style"]
+    assert dialogue.tts._ws is None and dialogue._scene_tts is not None
+    assert dialogue.conversations == {}  # nobody remembers it here: gossip.py writes the notes
+
+
+async def test_without_a_voice_a_line_waits_for_the_one_before_to_start_and_be_said():
+    fake = FakeGame()
+    fake.start_delay = 0.3
+    async with connected(fake) as link:
+        play = _scene_dialogue(link).play_scene(SCENE[:2])
+        await asyncio.wait_for(play.task, 5)
+
+    (first, t0), (second, t1) = fake.says
+    assert "stream" not in first and first["to"] == HILDA and first["mood"] == "angry"
+    assert second["to"] == LOBART and "mood" not in second
+    assert t1 - t0 >= 0.3 + 0.05 + SCENE_GAP_S - 0.005  # started late, said, then the breath
+    assert [line.audio_s for line in play.lines] == [None, None]
+
+
+async def test_a_line_the_game_never_starts_ends_the_scene(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "SCENE_START_S", 0.3)
+    fake = FakeGame()
+    fake.drop_says = {HILDA}  # she can't speak now: the bridge drops her line without a word
+    async with connected(fake) as link:
+        dialogue = _scene_dialogue(link)
+        play = dialogue.play_scene(SCENE)
+        await asyncio.wait_for(play.task, 5)
+        await _until(lambda: bool(fake.hushed))
+
+    assert [m["npc"] for m, _ in fake.says] == [LOBART, HILDA]  # the third is never sent
+    assert fake.hushed == [{"type": "hush", "npc": HILDA}]  # if it starts later, it is cut at once
+    assert (play.sent, play.why, play.said()) == (2, "not_started", play.lines[:1])
+    assert dialogue._starts == {}
+
+
+async def test_the_hero_cuts_a_scene_both_stop():
+    fake = FakeGame()
+    async with connected(fake) as link:
+        dialogue = _scene_dialogue(link, pace=0.5)
+        play = dialogue.play_scene(SCENE)
+        await _until(lambda: play.sent == 2 and dialogue.started_at(play.lines[1].line) is not None)
+        said = play.cut()
+        assert said == play.lines[:2] and play.cut() == said  # once
+        await asyncio.wait({play.task})  # a cut play does not raise
+        await asyncio.sleep(0.9)  # the third line's time
+
+    second = play.lines[1]
+    assert fake.hushed == [
+        {"type": "hush", "npc": HILDA, "line": second.line, "said": second.text},  # keeps her subtitle
+        {"type": "hush", "npc": LOBART},
+    ]
+    assert len(fake.says) == 2 and play.why == "cut"
+
+
+async def test_a_line_sent_but_not_started_is_hushed_plainly_and_a_load_hushes_nothing():
+    fake = FakeGame()
+    fake.start_delay = 0.5
+    async with connected(fake) as link:
+        dialogue = _scene_dialogue(link)
+        play = dialogue.play_scene(SCENE)
+        await _until(lambda: play.sent == 1)
+        assert play.cut() == []
+        await _until(lambda: len(fake.hushed) == 2)
+        assert fake.hushed == [{"type": "hush", "npc": LOBART}, {"type": "hush", "npc": HILDA}]
+
+        fake.hushed.clear()
+        fake.start_delay = 0
+        loaded = dialogue.play_scene(SCENE)
+        await _until(lambda: dialogue.started_at(loaded.lines[0].line) is not None)
+        assert loaded.cut(hush=False) == loaded.lines[:1]  # the world is gone: nothing to stop
+        await asyncio.sleep(0.4)
+
+    assert fake.hushed == [] and [m["text"] for m, _ in fake.says][-1] == SCENE[0][3]
+    assert len(fake.says) == 2
+
+
+async def test_a_voice_that_fails_leaves_the_scene_in_subtitles():
+    fake = FakeGame()
+    journal: list[dict] = []
+    async with scene_tts(fail=True) as (url, requests), connected(fake) as link:
+        dialogue = _scene_dialogue(link, tts=TtsClient(url), journal=Journal(journal.append))
+        play = dialogue.play_scene(SCENE)
+        await asyncio.wait_for(play.task, 5)
+
+    assert [m["text"] for m, _ in fake.says] == [t for _, _, _, t, _ in SCENE]
+    assert not any(m.get("stream") or m.get("audio") for m, _ in fake.says)
+    assert len(requests) == 1  # the voice is off for a while: the next lines don't try it
+    assert dialogue._tts_paused_until - time.monotonic() > TTS_PAUSE - 5
+    assert [e["kind"] for e in journal] == ["tts_off"]
+
+
+class _Warming(Fillers):
+    def __init__(self) -> None:
+        super().__init__("ws://unused")
+        self.warmed: list[str] = []
+
+    def warm(self, npc: str, voice: str) -> None:
+        self.warmed.append(npc)
+
+
+async def test_notes_do_not_voice_an_npcs_sounds_but_talking_to_it_does():
+    fake = FakeGame()
+    fillers = _Warming()
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, FakeBackend(), PersonaProvider(None), tts=TtsClient("ws://unused"), fillers=fillers
+        )
+        dialogue.remember(HILDA, "Хильда", "Лобарт рассказал тебе о герое")  # a rumor
+        dialogue.overheard(HILDA, "Хильда", "Привет", None)
+        said = [("Лобарт", "Слыхала?"), ("Хильда", "Да ну?")]
+        dialogue.overheard_talk(XARDAS, "Ксардас", ("Лобарт", "Хильда"), said)
+        assert fillers.warmed == []
+        dialogue.open(HILDA, "Хильда")  # the hero talks to her: made by a note before, warmed now
+        assert fillers.warmed == [HILDA]
+
+    (heard,) = [m.content for m in dialogue.conversations[XARDAS].history]
+    assert heard == "[Ты слышал, как Лобарт и Хильда говорили о герое: Лобарт: «Слыхала?» — Хильда: «Да ну?»]"
+
+
+async def test_a_line_that_never_starts_is_not_spoken_forever(monkeypatch):
+    """The game does not start a line of an npc far from the hero (or one the bridge refused): after a while
+    the npc is not counted as speaking any more, or whatever waits for it (a scene) would wait forever."""
+    monkeypatch.setattr(dialogue_module, "LINE_LOST_S", 0.3)
+    fake = FakeGame()
+    fake.drop_says.add(XARDAS)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend("Ступай.", delay=0), PersonaProvider(None))
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Привет.")
+        await _until(lambda: dialogue.conversations[XARDAS].reply.done())
+        assert dialogue.speaking(XARDAS)  # its line may still come
+        await asyncio.sleep(0.4)
+        assert not dialogue.speaking(XARDAS)

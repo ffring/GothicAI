@@ -5,7 +5,7 @@ import pytest
 
 from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.protocol import RosterEntry
-from gothic_ai.storyguard import StoryGuard
+from gothic_ai.storyguard import StoryGuard, asleep
 from tests.test_director import _node
 
 GUARD, LARES, VINO, LOBART = "MIL_310_STADTWACHE", "VLK_449_LARES", "BAU_952_VINO", "BAU_950_LOBART"
@@ -80,3 +80,22 @@ def test_guard_and_escort_states_from_roster():
     for s in ("", "ZS_SIT_BENCH", "ZS_STAND_GUARDING", "ZS_TALK", "ZS_SLEEP"):
         assert guard.body(LOBART, state(s)) is None, s
     assert guard.body("NONE_100_XARDAS", "ZS_GUIDE_PLAYER") == PLOT
+
+
+def test_on_duty_is_posts_and_escorts_only(graph):
+    guard = StoryGuard(graph)
+    assert guard.on_duty(GUARD) == POST  # its dialogs read where it stands
+    assert guard.on_duty(VINO, "ZS_GUARD_PASSAGE") == POST
+    assert guard.on_duty(VINO, "zs_guide_player") == ESCORT
+    assert guard.on_duty(VINO, "ZS_FOLLOW_PLAYER") == ESCORT
+    assert guard.on_duty(VINO, "ZS_STAND_GUARDING") is None
+    # a plot npc may be held to speak, unless the scripts have it at a post or leading the hero
+    assert guard.body(MESSENGER) == PLOT and guard.on_duty(MESSENGER) is None
+    assert guard.on_duty(LARES) == POST and guard.on_duty("NONE_100_XARDAS", "ZS_GUIDE_PLAYER") == ESCORT
+
+
+def test_asleep():
+    for s in ("ZS_GOTOBED", "zs_gotobed", "ZS_SLEEP", "ZS_SLEEP_GROUND"):
+        assert asleep(s), s
+    for s in ("", "ZS_STAND_GUARDING", "ZS_SIT_BENCH", "ZS_PRAY_SLEEPER"):
+        assert not asleep(s), s

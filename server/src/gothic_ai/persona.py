@@ -14,12 +14,13 @@ from pathlib import Path
 from . import characters
 from .brain.day import Habit
 from .characters import Card
-from .gamedata.ou import load_npc_lines
+from .gamedata.ou import load_npc_lines, voice_index
 from .protocol import Mood
 
 log = logging.getLogger(__name__)
 
 SAMPLE_LINES = 24
+BRIEF_SAMPLES = 3  # an npc in another's prompt (a scene of two): a taste of its manner
 MIN_SAMPLE_LEN, MAX_SAMPLE_LEN = 30, 220
 
 # Hand-written background for npc's we work with: who they are and their past, no plot. What they know of
@@ -79,11 +80,36 @@ RULES = """Как отвечать:
 
 
 # Voices for text-to-speech, as natural-language descriptions (VoxCPM2 voice design). Designed, not
-# cloned: the original voice actors' recordings are never used as references.
+# cloned: the original voice actors' recordings are never used as references. Lobart, Hilda, Maleth, Vino
+# and Andre talk to each other in scenes (gossip.py); their voices differ by age and timbre on purpose, since
+# the original had one actor for Lobart and Vino (voice 05) and one for Maleth and Andre (08).
 VOICES = {
     "NONE_100_XARDAS": "An old man with a deep, low, calm and wise voice, speaking slowly and gravely",
+    "BAU_950_LOBART": (
+        "A gruff farmer in his fifties with a low, weathered, slightly hoarse male voice, speaking curtly "
+        "and bluntly"
+    ),
+    "BAU_951_HILDA": (
+        "A middle-aged farm wife with a firm, clear, slightly husky woman's voice, speaking briskly and "
+        "sharply, like a strict housewife"
+    ),
+    "BAU_954_MALETH": (
+        "A wiry shepherd of about forty with a dry, wary, slightly nasal male voice, speaking warily and to "
+        "the point"
+    ),
+    "BAU_952_VINO": (
+        "A young farmhand with a lazy, slightly slurred, mocking male voice, speaking loosely with a sneer"
+    ),
+    "MIL_311_ANDRE": (
+        "A militia commander in his forties with a firm, clear, commanding baritone, speaking evenly and "
+        "with authority"
+    ),
 }
 DEFAULT_VOICE = "A middle-aged man with an ordinary, slightly rough voice, speaking calmly"
+# voices 16 and 17 of the original are women (the line names, gamedata/ou.py): without a voice of her own,
+# a woman still speaks as one
+FEMALE_VOICE = "A middle-aged woman with an ordinary, clear voice, speaking calmly"
+FEMALE_INDEXES = ("16", "17")
 
 # How a line is said in each mood (the model's tag): the TTS steers the delivery, the voice stays the
 # npc's. English, as TTS steering wants it. Neutral: the voice's usual manner.
@@ -127,17 +153,20 @@ class Persona:
     traits: str | None = None  # English, for the behavioral model
 
 
-def render_instructions(npc: str, name: str, sample_lines: list[str], card: Card | None = None) -> str:
-    """Who the npc is: a hand-written biography, else its character card (characters.py), else its name."""
+def biography(npc: str, name: str, card: Card | None = None) -> str:
+    """Who the npc is, to it («Ты — …»): a hand-written biography, else its character card (characters.py),
+    else its name."""
     bio = BIOGRAPHIES.get(npc.upper())
-    if bio is None:
-        bio = (
-            f"{card.ru}\n{card.traits_ru()}" if card is not None else f"Ты — {name}, житель острова Хоринис."
-        )
+    if bio is not None:
+        return bio
+    return f"{card.ru}\n{card.traits_ru()}" if card is not None else f"Ты — {name}, житель острова Хоринис."
+
+
+def render_instructions(npc: str, name: str, sample_lines: list[str], card: Card | None = None) -> str:
     parts = [
         f"Ты играешь персонажа по имени {name} в мире Gothic 2: Ночь Ворона (остров Хоринис). "
         "С тобой говорит главный герой — безымянный герой.",
-        bio,
+        biography(npc, name, card),
         RULES.format(name=name),
     ]
     if sample_lines:
@@ -163,18 +192,51 @@ class PersonaProvider:
     def get(self, npc: str, name: str) -> Persona:
         return self._get(npc.upper(), name)
 
+    def brief(self, npc: str, name: str) -> str:
+        """Who the npc is, for a prompt written for someone else (a scene of two, gossip.py). Its card speaks
+        to it in the second person, hence the header."""
+        npc = npc.upper()
+        samples, index = self._original(npc)
+        whom = "неё самой" if index in FEMALE_INDEXES else "него самого"
+        parts = [
+            f"Карточка {name} (написана для {whom}: «ты» — это {name}):",
+            biography(npc, name, self.cards.get(npc)),
+        ]
+        if samples:
+            parts.append(f"Так {name} говорит в игре:")
+            parts += [f"- {line}" for line in pick_samples(list(samples), BRIEF_SAMPLES)]
+        return "\n".join(parts)
+
+    def _voice(self, npc: str, index: str | None) -> str:
+        """The TTS voice: a hand-written one, else the card's (once cards have voices), else a man's or a
+        woman's by the original actor (`index`)."""
+        card = self.cards.get(npc)
+        return (
+            VOICES.get(npc)
+            or getattr(card, "voice", "")
+            or (FEMALE_VOICE if index in FEMALE_INDEXES else DEFAULT_VOICE)
+        )
+
     @cache  # noqa: B019 - one provider per server run
     def _get(self, npc: str, name: str) -> Persona:
-        samples: list[str] = []
-        if self.game_dir is not None:
-            lines = [text for _, text in load_npc_lines(self.game_dir, npc)]
-            samples = pick_samples(lines)
-            log.info("persona %s: %d original lines, %d samples", npc, len(lines), len(samples))
+        samples, index = self._original(npc)
         card = self.cards.get(npc)
         return Persona(
             npc,
             name,
-            render_instructions(npc, name, samples, card),
-            VOICES.get(npc, DEFAULT_VOICE),
+            render_instructions(npc, name, list(samples), card),
+            self._voice(npc, index),
             TRAITS.get(npc) or (card.en if card else None),
         )
+
+    @cache  # noqa: B019 - one provider per server run
+    def _original(self, npc: str) -> tuple[tuple[str, ...], str | None]:
+        """Its sample lines from OU.BIN and its original voice actor (gamedata/ou.py): none without the
+        game."""
+        if self.game_dir is None:
+            return (), None
+        lines = load_npc_lines(self.game_dir, npc)
+        samples = tuple(pick_samples([text for _, text in lines]))
+        index = voice_index(lines)
+        log.info("persona %s: %d original lines, %d samples, voice %s", npc, len(lines), len(samples), index)
+        return samples, index

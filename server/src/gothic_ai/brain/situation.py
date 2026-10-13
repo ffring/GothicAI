@@ -77,6 +77,10 @@ ESCALATE_LEVELS = [
     "a turning point: danger to life, big loss or gain; speak and plan",
 ]
 
+# Two acquaintances near the hero (gossip.py): does the one who knows of his lie tell the other now. Asked
+# in shadow: the rumor's lot decides, the answer is only traced.
+TALK_TO = "Do you tell {name} this news now?"
+
 PLAN = "What do you do during the next hour?"
 PLAN_OPTIONS = {
     "keep_routine": "keep to your usual daily routine",
@@ -142,6 +146,18 @@ class SituationBuilder:
         q = {"escalate": {"type": "score", "instructions": ESCALATE, "criteria": ESCALATE_LEVELS}}
         return Situation(react.state, q)
 
+    def talk_to(self, npc: NpcContext, clock: str | None, other: str, other_m: float, news: str) -> Situation:
+        """Whether to pass `news` (news_text) on to `other`, who stands `other_m` metres away, now."""
+        parts = [self.who(npc)] + ([f"It is {clock}."] if clock else [])
+        parts.append(f"{other} stands {other_m:.0f} m from you.")
+        seen = ", looking at you" if npc.in_view else ""
+        parts.append(f"The hero is {npc.distance_cm / 100:.0f} m away{seen}.")
+        parts += npc.view
+        parts.append(f"News you know and {other} does not: {news}")
+        criteria = {"tell": f"tell {other} now", "keep": "keep it to yourself for now"}
+        q = {"talk_to": {"type": "choice", "instructions": TALK_TO.format(name=other), "criteria": criteria}}
+        return Situation(" ".join(parts), q)
+
     def plan(self, npc: NpcContext, clock: str | None, options: dict[str, str] | None = None) -> Situation:
         """What to do in the next hour: the npc's own activities and habits (brain/day.py), or generic
         options when its routine is not known."""
@@ -155,6 +171,17 @@ class SituationBuilder:
         criteria = dict(options) if options else dict(PLAN_OPTIONS)
         q = {"plan": {"type": "choice", "instructions": PLAN, "criteria": criteria}}
         return Situation(" ".join(parts), q)
+
+
+def news_text(kind: str, about_name: str, title: str, *, about_you: bool = False) -> str:
+    """A rumor of the hero (social.Rumor: kind, about_name, title) in English, for talk_to. The title stays
+    as the game has it. `about_you`: the one asked is the one he lied to."""
+    whom = "you" if about_you else about_name
+    if kind == "broken":
+        return f"the hero did not pay back {whom} on time: {title}"
+    if kind == "found_out":
+        return f"the hero lied to {whom}: he took a reward for '{title}' without doing it"
+    return f"the hero lied to {whom}: he claimed '{title}', and it was false"
 
 
 def clock_text(hour: int, minute: int) -> str:

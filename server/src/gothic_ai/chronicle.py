@@ -48,6 +48,12 @@ class Chronicle:
         self.tags: dict[str, Tag] = {}
         self.on_fact: list[Callable[[Fact], None]] = []  # every new fact, after it is written
         self._background: set[asyncio.Task[Any]] = set()
+        # the branch's facts as read so far: each read takes only the newer rows (by seq), since trust,
+        # deals and the rumors read them on every turn
+        self._cached: str | None = None
+        self._seq = 0
+        self._all: list[Fact] = []
+        self._by_kind: dict[str | None, list[Fact]] = {}
         link.listeners.append(self._on_message)
         if link.session is not None:
             self._on_session(link.session)
@@ -64,10 +70,19 @@ class Chronicle:
             listener(fact)
 
     def facts(self, kind: str | None = None) -> list[Fact]:
+        """The branch's facts (of one `kind`), oldest first. The list is the caller's own, but the dicts
+        in it are shared by every reader: read them, never change them."""
         if self.branch is None:
             return []
-        out = [json.loads(f) for f in self.memory.facts(self.branch)]
-        return [f for f in out if kind is None or f.get("fact") == kind]
+        if self._cached != self.branch:
+            self._cached, self._seq, self._all, self._by_kind = self.branch, 0, [], {}
+        # facts written straight into the store (tests, another chronicle) are seen too
+        for seq, content in self.memory.facts_since(self.branch, self._seq):
+            f = json.loads(content)
+            self._all.append(f)
+            self._by_kind.setdefault(f.get("fact"), []).append(f)
+            self._seq = seq
+        return list(self._all) if kind is None else list(self._by_kind.get(kind, ()))
 
     def killed(self, tag: str, by: str | None = None) -> int:
         """How many of the tag died (by `by`, e.g. PLAYER), as written down."""

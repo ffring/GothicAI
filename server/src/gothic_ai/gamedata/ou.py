@@ -8,6 +8,8 @@ Line names look like `DIA_<Npc>_<Info>_<voice>_<n>`; voice 15 is the hero.
 from __future__ import annotations
 
 import re
+from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 
 HERO_VOICE = "15"
@@ -65,6 +67,13 @@ def npc_lines(lines: dict[str, str], symbol: str) -> list[tuple[str, str]]:
         if name.startswith(prefix) and len(parts) >= 4 and parts[-2] != HERO_VOICE and text:
             out.append((name, text))
     return out
+
+
+def voice_index(lines: Iterable[tuple[str, str]]) -> str | None:
+    """The original voice actor of an npc's lines (`npc_lines`): the most common `<voice>` in their names.
+    The npc's own dialogs may have a line of someone else's now and then, hence the majority."""
+    voices = Counter(p[-2] for p in (name.split("_") for name, _ in lines) if len(p) >= 4 and p[-2].isdigit())
+    return voices.most_common(1)[0][0] if voices else None
 
 
 def load_npc_lines(game_dir: Path, symbol: str) -> list[tuple[str, str]]:

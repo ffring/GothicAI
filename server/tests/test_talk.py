@@ -2,15 +2,14 @@ import asyncio
 
 from gothic_ai.brain.reflex import Reflexes
 from gothic_ai.dialogue import DialogueManager
+from gothic_ai.journal import Journal
 from gothic_ai.llm import FakeBackend, ToolCall
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.protocol import RosterEntry
 from gothic_ai.talk import TalkDesk, addressee, default_posture
 from tests.fake_game import FakeGame, connected
 from tests.fakes import FakeDecider
-from tests.test_dialogue import XARDAS, _until
-
-LOBART = "BAU_950_LOBART"
+from tests.test_dialogue import HILDA, LOBART, XARDAS, _until
 
 
 def person(npc: str, name: str, metres: float, in_view: bool = False, **extra) -> dict:
@@ -51,10 +50,10 @@ def test_the_codes_posture_when_the_behavioral_model_is_unsure():
     assert default_posture(stand.model_copy(update={"moving": True})) == "keep_working"
 
 
-async def _desk(fake: FakeGame, llm, decider: FakeDecider | None = None):
+async def _desk(fake: FakeGame, llm, decider: FakeDecider | None = None, journal: Journal | None = None):
     cm = connected(fake)
     link = await cm.__aenter__()
-    dialogue = DialogueManager(link, llm, PersonaProvider(None))
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), journal=journal)
     reflexes = Reflexes(decider) if decider is not None else None
     talk = TalkDesk(link, dialogue, reflexes, end_silence_s=0.2)
     return cm, link, dialogue, talk
@@ -216,3 +215,92 @@ async def test_a_free_npc_is_held_only_to_hand_an_item_over():
     assert any(
         m.content == "[Ты отдал герою: Эликсир лечения ×1]" for m in dialogue.conversations[XARDAS].history
     )
+
+
+def test_words_after_a_scene_go_to_one_of_its_npcs():
+    people = roster(
+        person(LOBART, "Лобарт", 9),
+        person(HILDA, "Хильда", 11, True),
+        person(XARDAS, "Ксардас", 3, True),
+        person("PC_THIEF", "Диего", 6),
+    )
+    scene = [LOBART, HILDA]  # two were talking near him, Lobart last
+    # a name, his focus and his partner come first
+    assert addressee("Диего, ты слышал?", None, people, None, scene).id == "PC_THIEF"
+    assert addressee("Ну?", "PC_THIEF", people, None, scene).why == "focus"
+    assert addressee("Ну?", None, people, XARDAS, scene).why == "partner"
+    # then the scene, before whoever stands in front of him: the nearest of it he sees...
+    hit = addressee("О чём шепчетесь?", None, people, None, scene)
+    assert (hit.id, hit.why) == (HILDA, "scene")
+    # ...else the one who spoke last
+    unseen = roster(
+        person(LOBART, "Лобарт", 9), person(HILDA, "Хильда", 11), person(XARDAS, "Ксардас", 3, True)
+    )
+    assert addressee("Эй!", None, unseen, None, scene).id == LOBART
+    # too far to be called, or down: not his addressee
+    far = roster(person(LOBART, "Лобарт", 25, True), person(HILDA, "Хильда", 4, activity="down"), XARDAS_NEAR)
+    assert addressee("Эй!", None, far, None, scene).why == "front"
+    assert addressee("Эй!", None, people, None).why == "front"  # no scene
+
+
+async def test_the_heros_voice_stops_a_scene_without_a_partner():
+    fake = FakeGame()
+    journal: list[dict] = []
+    cm, link, dialogue, talk = await _desk(fake, FakeBackend("Да?", delay=0), journal=Journal(journal.append))
+    calls: list[str] = []
+
+    def scene() -> bool:
+        calls.append("scene")
+        return True  # two were talking: they stopped
+
+    def other() -> bool:
+        calls.append("other")
+        return False  # nothing to stop
+
+    talk.on_hero_voice += [scene, other]
+    try:
+        assert talk.interrupt() and calls == ["scene", "other"]  # every one asked
+        await fake.send(type="ptt_start")  # the talk key
+        await _until(lambda: len(calls) == 4)
+        await fake.send(type="player_text", text="Эй!")  # typed
+        await _until(lambda: len(calls) == 6)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert talk.partner is None
+    assert not any(e["kind"] == "interrupt" for e in journal)  # the scene's own desk tells of its cut
+
+
+async def test_an_npc_held_for_a_scene_listens_to_the_hero():
+    fake = FakeGame()
+    llm = FakeBackend("Не твоё дело.", delay=0)
+    decider = FakeDecider(choice="keep_working", confidence=0.9)
+    cm, link, dialogue, talk = await _desk(fake, llm, decider)
+    ended: list[tuple[str, str]] = []
+    talk.on_talk_end.append(lambda npc, why: ended.append((npc, why)))
+    talk.scene_hint = lambda: [HILDA]
+    try:
+        await fake.roster(person(HILDA, "Хильда", 6, True, state="ZS_STAND_ARMSCROSSED"))
+        assert await talk.hold(HILDA, "scene")  # it stood talking to another
+        await fake.send(type="player_text", text="О чём вы шептались?")
+        await _until(lambda: fake.said == ["Не твоё дело."])
+        assert talk.held == {HILDA: {"scene", "listen"}}
+
+        talk.end()  # the conversation is over; the scene's hold is the scene's to free
+        assert talk.partner is None and talk.held == {HILDA: {"scene"}}
+        talk.free(HILDA, "scene")
+        await _until(lambda: HILDA not in fake.attached)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    to, _ = talk.last
+    assert (to.id, to.why) == (HILDA, "scene")
+    acts = [(m["action"], m["args"]) for m in fake.received if m["type"] == "action"]
+    assert acts == [("turn_to", {"npc": "PLAYER"})]  # it turns to him
+    say = next(m for m in fake.received if m["type"] == "say")
+    assert "overlay" not in say  # it stands and listens, not an answer on the move
+    assert not any("posture" in c["questions"] for c in decider.calls)
+    situation = llm.calls[0][1][-2].content
+    assert "Твоё тело сейчас: ты остановился, повернулся к герою и слушаешь" in situation
+    assert ended == [(HILDA, "walked_away")]
+    assert dialogue.conversations[HILDA].history[-1].content == "[Герой ушёл, разговор закончился]"

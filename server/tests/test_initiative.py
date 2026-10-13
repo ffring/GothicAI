@@ -1,3 +1,4 @@
+import asyncio
 import json
 import random
 from collections.abc import AsyncIterator
@@ -609,3 +610,77 @@ async def test_without_occasion_it_only_walks_up(tmp_path):
     occ = s.desk.occasion(LOBART, "get the hero to find my stolen sheep")
     assert occ is not None and occ.key.startswith("agenda:")
     assert occ.ru == "«get the hero to find my stolen sheep»"
+
+
+async def test_one_gone_to_bed_does_not_come(tmp_path):
+    async with _scene(tmp_path) as s:
+        # every sleep of the routines is ZS_GOTOBED, not ZS_SLEEP
+        await _around(s, person(VINO, "Вино", 6, True, state="ZS_GOTOBED"), person(MALETH, "Малет", 6, True))
+        assert s.desk.allow(s.planner.npcs[VINO], "approach_talk") == "спит"
+        assert s.desk.allow(s.planner.npcs[MALETH], "approach_talk") is None
+
+
+async def _up_while_two_talk(s: Scene) -> None:
+    """Lobart walks up to the hero while two others talk next to him (gossip.py's floor)."""
+    _owes(s)
+    await _around(s, person(LOBART, "Лобарт", 8))
+    await _near(s)
+    await _walks(s, 1)
+    await _around(s, person(LOBART, "Лобарт", 3))
+    await _idle(s)
+
+
+async def test_it_waits_for_two_talking_next_to_the_hero(tmp_path):
+    async with _scene(tmp_path) as s:
+        talking = True
+        s.desk.floor_busy = lambda: talking
+        await _up_while_two_talk(s)
+        await asyncio.sleep(0.6)  # a few of its looks at the floor
+        assert s.desk.active == LOBART and not s.llm.calls and s.talk.partner is None
+        talking = False  # their scene is over: now it speaks
+        await _said(s, WORDS)
+
+    assert _skipped(s) == [] and s.talk.partner.npc == LOBART
+    assert [f["npc"] for f in s.chronicle.facts("initiative")] == [LOBART]
+    assert s.budget.allow(LOBART) and not s.budget.allow(LOBART)  # the words took one token, the wait none
+
+
+async def test_still_talking_it_lets_it_go(tmp_path, monkeypatch):
+    monkeypatch.setattr("gothic_ai.initiative.FLOOR_WAIT_S", 0.5)
+    async with _scene(tmp_path) as s:
+        s.desk.floor_busy = lambda: True
+        await _up_while_two_talk(s)
+        await _until(lambda: s.desk.active is None)
+
+    assert _skipped(s) == ["рядом болтают"]
+    assert not s.llm.calls and s.talk.partner is None and s.talk.held == {}
+    assert s.chronicle.facts("initiative") == []
+    assert s.budget.allow(LOBART) and s.budget.allow(LOBART)  # no token taken
+
+
+async def test_the_hero_walks_off_while_it_waits(tmp_path):
+    async with _scene(tmp_path) as s:
+        talking = True
+        s.desk.floor_busy = lambda: talking
+        await _up_while_two_talk(s)
+        await asyncio.sleep(0.3)  # it came up and waits
+        await _around(s, person(LOBART, "Лобарт", 21))  # he left: that also ends their scene (hero_left)
+        talking = False
+        await _until(lambda: s.desk.active is None)
+
+    assert _skipped(s) == ["missed: waited, 21 м"]
+    assert not s.llm.calls and s.talk.partner is None and s.talk.held == {}
+    assert s.budget.allow(LOBART) and s.budget.allow(LOBART)  # no token taken
+
+
+async def test_the_hero_speaks_to_it_while_it_waits(tmp_path):
+    async with _scene(tmp_path, FakeBackend("Ага, вот и ты.", delay=0)) as s:
+        s.desk.floor_busy = lambda: True
+        await _up_while_two_talk(s)
+        await s.fake.send(type="player_text", text="Лобарт, чего тебе?")
+        await _said(s, "Ага, вот и ты.")
+        await _until(lambda: s.desk.active is None)
+
+    history = [m.content for m in s.dialogue.conversations[LOBART].history]
+    assert f"[Ты сам шёл к герою: {OWED}]" in history  # it knows why it came
+    assert len(s.llm.calls) == 1 and _skipped(s) == [] and s.chronicle.facts("initiative") == []

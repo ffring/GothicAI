@@ -890,3 +890,37 @@ async def test_decisions_traced_with_option_texts(tmp_path) -> None:
     planner.on_event("PABLO", "player_speech", clock.t, detail="эй")
     await step(planner, clock)
     assert len([r for r in read(writer.path()) if r["npc"] == "PABLO"]) == TRACE_PER_MIN + 1
+
+
+async def test_two_talking_veto_before_the_initiative_desk(tmp_path) -> None:
+    """gossip.py chains its veto before the hook already there (InitiativeDesk's): one talking to another
+    near the hero keeps still, nobody walks up to speak over them; a fight or a flight is the body's own."""
+    from gothic_ai.brain.planner import NpcRecord
+    from gothic_ai.gossip import Scene
+    from tests.test_gossip import HILDA, LOBART, VINO, _gossip
+
+    planner, _, applier, clock = make(FakeDecider("look_at", 0.9), ask_attitude=False)
+    asked: list[tuple[str, str]] = []
+
+    def initiative(rec, choice: str) -> str | None:  # as InitiativeDesk.allow
+        asked.append((rec.id, choice))
+        return "к герою уже идут" if choice == "approach_talk" else None
+
+    planner.allow = initiative
+    async with _gossip(tmp_path) as g:
+        g.desk.follow(planner)
+        g.desk.scene = Scene("s", LOBART, HILDA, "Лобарт", "Хильда", "r", "words", state="playing")
+        planner.on_roster([entry(LOBART, 6), entry(VINO, 7)], clock.t)
+        for npc in (LOBART, VINO):
+            planner.on_event(npc, "player_speech", clock.t, detail="эй")
+        await step(planner, clock)
+        # Lobart talks to Hilda: the initiative desk is not even asked; Vino looks at the hero
+        assert asked == [(VINO, "look_at")] and [d.npc for d in applier.recent] == [VINO]
+        lobart, vino = NpcRecord(LOBART, "Лобарт"), NpcRecord(VINO, "Вино")
+        assert planner.stats.vetoed == 1 and planner.allow(lobart, "look_at") == "болтает"
+        assert planner.allow(lobart, "flee") is None and asked[-1] == (LOBART, "flee")
+        assert planner.allow(vino, "approach_talk") == "рядом болтают"
+        assert asked[-1] == (LOBART, "flee")  # not over a scene, whatever the desk would say
+        g.desk.scene = None  # the scene is over: the desk decides again
+        assert planner.allow(vino, "approach_talk") == "к герою уже идут"
+        assert planner.allow(lobart, "look_at") is None
