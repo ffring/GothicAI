@@ -333,22 +333,23 @@ g8c ничего не выиграла, в сервисе осталась g8b. 
 
 ## Как включить в сервисе
 
-С 2026-10-13 сервис на GPU-сервере работает на **g8b** (раздел о `voice` выше), до этого с 2026-10-12 — на g7.
+С 2026-10-13 сервис на GPU-сервере работает на **g9e** (дообучение от g8b, раздел о `voice` выше). До этого в тот же день — на g8b, а с 2026-10-12 — на g7.
 
-- **g8b через сервис** выбирает то же, что без него, в 701 из 702 ответов тестового набора. Вероятности расходятся не больше чем на 0,024 ([preds/service-g8b.jsonl](../../evals/npc-decisions/preds/service-g8b.jsonl)).
+- **g9e через сервис** выбирает то же, что без него, в 700 из 702 ответов тестового набора. Вероятности расходятся не больше чем на 0,025 ([preds/service-g9e.jsonl](../../evals/npc-decisions/preds/service-g9e.jsonl)). Тест talk-reactions — 58/59, запрос звука и жеста p50 48 мс.
+- **g8b через сервис** выбирала то же, что без него, в 701 из 702 ответов тестового набора. Вероятности расходятся не больше чем на 0,024 ([preds/service-g8b.jsonl](../../evals/npc-decisions/preds/service-g8b.jsonl)).
 - **g7 через сервис** выбирала то же, что в прогоне без него, в 221 из 228 запросов тестового набора. Остальные 7 — почти ничьи: разница между первыми двумя вариантами не больше 0,034, `p_true` около 0,5, вероятности расходятся не больше чем на 0,025 (пакетная обработка). Видеопамяти столько же, сколько у g5.
 
 Сервис берёт чекпоинт из `GOTHIC_DECIDER_CHECKPOINT`. На GPU-сервере:
 
 ```bash
-rsync -a --exclude replay_teacher.jsonl ~/gothic-ai/tuning/ckpt/g8b/ ~/gothic-ai/decider/models/gothic-g8b/
+rsync -a --exclude replay_teacher.jsonl ~/gothic-ai/tuning/ckpt/g9e/ ~/gothic-ai/decider/models/gothic-g9e/
 mkdir -p ~/.config/systemd/user/gothic-decider.service.d
-printf '[Service]\nEnvironment=GOTHIC_DECIDER_CHECKPOINT=%%h/gothic-ai/decider/models/gothic-g8b\n' \
+printf '[Service]\nEnvironment=GOTHIC_DECIDER_CHECKPOINT=%%h/gothic-ai/decider/models/gothic-g9e\n' \
   > ~/.config/systemd/user/gothic-decider.service.d/checkpoint.conf
 systemctl --user daemon-reload && systemctl --user restart gothic-decider
 ```
 
-Вернуться к g7 или g5 — тот же `checkpoint.conf` с `gothic-g7` или `gothic-g5`. g5 через сервис отвечала так же, как без него: тот же выбор во всех 228 запросах тестового набора, вероятности расходятся не больше чем на 0,022, видеопамяти 4,65 ГБ. Вернуть v1-2610: удалить `checkpoint.conf`, затем `daemon-reload` и `restart`.
+Вернуться к g8b, g7 или g5 — тот же `checkpoint.conf` с `gothic-g8b`, `gothic-g7` или `gothic-g5`. g5 через сервис отвечала так же, как без него: тот же выбор во всех 228 запросах тестового набора, вероятности расходятся не больше чем на 0,022, видеопамяти 4,65 ГБ. Вернуть v1-2610: удалить `checkpoint.conf`, затем `daemon-reload` и `restart`.
 
 ## Что дальше
 
