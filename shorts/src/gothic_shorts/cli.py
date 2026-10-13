@@ -15,6 +15,7 @@ from . import youtube
 from .align import AlignError, align
 from .film import FilmError, film, shorts_dir
 from .shot import Shot, ShotError, load
+from .studio import StudioError, serve, workspace
 from .timeline import build, read_events
 from .voice import VoiceError, voice_lines
 from .youtube import YouTubeError
@@ -105,6 +106,11 @@ def cmd_align(args: argparse.Namespace) -> int:
         print(f"  {w['start']:6.2f} {w['end']:6.2f}  {w['text']}")
     print(f"{out}: {len(done['words'])} words over {done['duration']:.2f} s of audio; "
           f"{done['ssh_s']:.1f} s on the GPU server ({done['metrics'] or 'no metrics'})")
+    return 0
+
+
+def cmd_studio(args: argparse.Namespace) -> int:
+    serve(workspace(args.short), args.lang, args.port, open_browser=not args.no_browser)
     return 0
 
 
@@ -207,6 +213,13 @@ def main() -> None:
     s.add_argument("--out", help="the words' JSON (default: <wav>.words.json)")
     s.set_defaults(fn=cmd_align)
 
+    s = sub.add_parser("studio", help="record the voice of an explainer: a teleprompter over its draft video")
+    s.add_argument("short", help="the short's folder, or its name in ~/.local/share/gothic-ai/explain")
+    s.add_argument("--lang", default="ru", help="the script: script.<lang>.txt (ru)")
+    s.add_argument("--port", type=int, default=47871)
+    s.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    s.set_defaults(fn=cmd_studio)
+
     s = sub.add_parser("youtube", help="YouTube: sign in (the browser opens), the channel, the token's life")
     s.add_argument("action", choices=["login"])
     s.set_defaults(fn=cmd_youtube_login)
@@ -228,6 +241,6 @@ def main() -> None:
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError, AlignError) as err:
+            YouTubeError, AlignError, StudioError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)
