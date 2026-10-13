@@ -63,12 +63,15 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-NAME_CM = 2000.0  # a name is heard this far
-FOCUS_CM = 1500.0  # the npc the hero looks at, if not farther than this
-PARTNER_CM = 800.0  # the current partner stays the addressee this close
-FRONT_CM = 800.0  # the nearest npc in front of the hero
+# how far the hero is heard (user, 2026-10-13: 20 m for a name and 8 m for the partner lost words said on
+# the run, to a companion a few steps behind or to one he called from afar)
+NAME_CM = 4000.0  # a name is heard this far: it is called out
+FOCUS_CM = 2500.0  # the npc the hero looks at, if not farther than this
+PARTNER_CM = 1500.0  # the current partner stays the addressee this close
+FRONT_CM = 1200.0  # the nearest npc in front of the hero
+SCENE_CM = 2000.0  # two npc's talking near him (gossip.py), if not farther than this
 OVERHEAR_CM = 1000.0  # witnesses
-END_CM = 1000.0  # farther than this and silent for END_SILENCE_S: the conversation is over
+END_CM = 1500.0  # farther than this and silent for END_SILENCE_S: the conversation is over
 END_SILENCE_S = 20.0
 SNAPSHOT_WAIT_S = 1.0
 LOOK_MS = 4000
@@ -221,7 +224,7 @@ def addressee(
     if partner and (e := alive.get(partner)) is not None and e.distance <= PARTNER_CM:
         return Addressee(e.id.upper(), e.name, "partner")
     # a scene starts only while he has no partner, so this never takes words meant for one
-    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.distance <= NAME_CM]
+    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.distance <= SCENE_CM]
     if near:
         seen = [e for e in near if e.in_view]
         e = min(seen, key=lambda e: e.distance) if seen else near[0]

@@ -476,3 +476,25 @@ async def test_a_line_that_never_starts_is_not_spoken_forever(monkeypatch):
         assert dialogue.speaking(XARDAS)  # its line may still come
         await asyncio.sleep(0.4)
         assert not dialogue.speaking(XARDAS)
+
+
+async def test_an_npc_that_means_to_fight_the_hero_attacks_him_through_the_scripts():
+    fake = FakeGame()
+    fight = {"goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None}
+    llm = FakeBackend("Кошелёк или жизнь!", delay=0, tool_calls=[ToolCall("set_intent", fight)])
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.guild_of = lambda npc: 9  # a bandit
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.say_as_player(XARDAS, "Отойди с дороги")
+        await _until(lambda: any(m.get("type") == "story_effect" for m in fake.story))
+        await _until(lambda: dialogue.conversations[XARDAS].history[-1].content == "[Ты напал на героя.]")
+
+    (attack,) = [m for m in fake.story if m["type"] == "story_effect"]
+    assert attack["npc"] == XARDAS and attack["effects"] == [
+        {"do": "attack", "reason": "AR_SUDDENENEMYINFERNO"}
+    ]
+    assert not any(
+        m["type"] == "action" and m["action"] == "fight" for m in fake.received
+    )  # the scripts fight

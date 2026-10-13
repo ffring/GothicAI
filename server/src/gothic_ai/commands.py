@@ -6,7 +6,8 @@ time (orders.py carries it out at once). Anything else — "Иди за мной
 "Он сказал: стой" — is not an order here and goes to the conversational model as before.
 
 A phrase is an order when, without words of address ("эй", "ребята", the npc's name) and of hurry
-("быстро", "живо"), what is left is one of the forms of the order, said once or repeated ("Стой, стой!").
+("быстро", "живо"), what is left is one of the forms of the order, said once or repeated ("Стой, стой!",
+"Бей его, бей!").
 Speech recognition may run words together or mishear a letter in a long form ("оружия к бою"): a form of
 nine letters or more is matched with one letter off, of six to eight with an alike letter only.
 
@@ -45,15 +46,33 @@ FORMS: dict[str, tuple[str, ...]] = {
         "жди тут",
         "стой тут",
     ),
+    # with nobody to attack (no foe, the hero looks at no one) these are words: "Помоги!" asks for help
     "attack": (
         "в атаку",
         "атакуй",
         "атакуйте",
+        "атакуй его",
+        "атакуйте его",
+        "бей",
+        "бейте",
         "бей его",
         "бейте его",
+        "бей их",
+        "бейте их",
+        "убей",
+        "убейте",
         "убей его",
         "убейте его",
+        "убей их",
+        "мочи его",
+        "руби его",
         "взять его",
+        "помоги",
+        "помоги мне",
+        "помогите",
+        "на помощь",
+        "защищай меня",
+        "защити меня",
     ),
     "retreat": ("отступай", "отступайте", "отступаем", "назад", "беги", "бегите", "уходим", "отходим"),
     "draw": ("к бою", "к оружию", "оружие к бою", "доставай оружие", "достань оружие", "обнажить оружие"),
@@ -148,4 +167,6 @@ def parse(text: str, is_name: Callable[[str], bool] = lambda w: False) -> Order 
             joined = "".join(rest[:n])
             break
     form = match(joined)
+    if form is None and len(set(rest)) < len(rest):  # "бей его, бей": its words, some said twice
+        form = match("".join(dict.fromkeys(rest)))
     return Order(_JOINED[form], form, text) if form is not None else None

@@ -29,7 +29,7 @@ constexpr float    NearbyNpcRadius  = 1500;
 constexpr size_t   NearbyNpcCount   = 8;
 constexpr size_t   InventoryLimit   = 40;
 constexpr float    FollowNear       = 400;   // stop closing in
-constexpr float    FollowRunFrom    = 1200;  // run instead of walking
+constexpr float    FollowCatchUp    = 800;   // farther than this it runs, whatever the leader does
 constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
 constexpr uint64_t FollowMaxMs      = 10*60*1000;
@@ -91,6 +91,39 @@ std::string scriptString(World& world, std::string_view name, std::string_view f
   if(sym!=nullptr && sym->type()==zenkit::DaedalusDataType::STRING)
     return sym->get_string();
   return std::string(fallback);
+  }
+
+// "pos": [x,y,z], "points": [names]: the waypoint nearest to pos, of these points if given (a place: its
+// points and their middle); nullptr without pos
+const WayPoint* nearestPoint(World& world, const rapidjson::Value& args) {
+  auto pos = args.FindMember("pos");
+  if(pos==args.MemberEnd() || !pos->value.IsArray() || pos->value.Size()!=3)
+    return nullptr;
+  for(auto& v:pos->value.GetArray())
+    if(!v.IsNumber())
+      return nullptr;
+  const Tempest::Vec3 at(float(pos->value[0].GetDouble()),float(pos->value[1].GetDouble()),float(pos->value[2].GetDouble()));
+  std::vector<std::string> names;
+  auto points = args.FindMember("points");
+  if(points!=args.MemberEnd() && points->value.IsArray())
+    for(auto& v:points->value.GetArray())
+      if(v.IsString())
+        names.push_back(upper(std::string_view(v.GetString(),v.GetStringLength())));
+  if(names.empty())
+    return world.findWayPoint(at);
+  const WayPoint* best = nullptr;
+  float           dist = 0;
+  for(auto& n:names) {
+    auto wp = world.findPoint(n,false);
+    if(wp==nullptr)
+      continue;
+    const float d = (wp->position()-at).quadLength();
+    if(best==nullptr || d<dist) {
+      best = wp;
+      dist = d;
+      }
+    }
+  return best;
   }
 
 void writePos(JsonWriter& j, std::string_view key, const Tempest::Vec3& p) {
@@ -314,7 +347,9 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
   // a.deadline temporarily holds the default timeout, ms
   if(a.type=="go_to_waypoint") {
     auto name = str(args,"waypoint");
-    auto wp   = world.findPoint(name);
+    auto wp   = nearestPoint(world,args);
+    if(wp==nullptr)
+      wp = world.findPoint(name);
     if(wp==nullptr) {
       err = "unknown waypoint: " + std::string(name);
       return false;
@@ -592,10 +627,12 @@ bool NpcController::giveItem(World& world, Controlled& c, const Action& a, std::
 void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
   auto& f      = *c.follow;
   Npc*  target = f.toPlayer ? world.player() : world.findNpcByInstance(f.target);
-  if(target==nullptr || target->isDown()) {
+  if(target==nullptr || target->isDead()) {
     stopFollow(c,"target_gone");
     return;
     }
+  if(target->isDown())
+    return;  // knocked out, he gets up again: it stays by him (a companion fights whoever beat him, server)
   const float d = std::sqrt(c.npc->qDistTo(*target));
   if(d>FollowLost) {
     stopFollow(c,"target_too_far");
@@ -605,10 +642,15 @@ void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
     stopFollow(c,"timeout");
     return;
     }
+  // keeps the leader's pace on the way, not only when it sets off: walks while he walks, runs while he
+  // runs, sneaks after him; left behind, it runs to catch up
+  const auto pace = d>FollowCatchUp ? WalkBit::WM_Run
+                                    : target->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak);
+  if((c.npc->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak))!=pace)
+    c.npc->setWalkMode(pace);
   if(d<=FollowNear || now<f.nextStep || c.npc->isAiBusy())
     return;
   f.nextStep = now + FollowStepMs;
-  c.npc->setWalkMode(d>FollowRunFrom ? WalkBit::WM_Run : WalkBit::WM_Walk);
   c.npc->aiPush(AiQueue::aiGoToNpc(target));
   }
 
