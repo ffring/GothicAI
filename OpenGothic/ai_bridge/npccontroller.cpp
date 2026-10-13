@@ -278,6 +278,12 @@ void NpcController::action(World& world, const rapidjson::Value& msg) {
   if(c->follow && type!="give_item" && type!="play_ani" && type!="turn_to" && type!="say_svm" &&
      type!="draw_weapon" && type!="remove_weapon")
     stopFollow(*c,"replaced");
+  if(c->follow && (type=="draw_weapon" || type=="remove_weapon") && !c->npc->haveOutput()) {
+    // an order in a fight ("К оружию!"): at once, not after the step towards the leader (which may be
+    // stuck on the way); following pushes the next step once the weapon is out
+    c->npc->clearAiQueue();
+    c->npc->clearGoTo();
+    }
 
   if(type=="return_to_routine") {
     emitActionResult(id,symbol,"done","",-1);
