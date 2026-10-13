@@ -3858,6 +3858,9 @@ async def day_scenario(
     async def walk(tag: str = "") -> tuple[float, NpcActCmd | None]:
         """Vino is asked of his next hour: the menu has the walk to Malet, it is chosen and he walks there.
         When it was chosen and his act."""
+        # from here on the lot lets Vino tell Malet: opened only now, so no menu before the counts below has
+        # the walk (a check of his as the hero's goto brings him back would send him off uncounted)
+        open_pairs.add((VINO, MALETH))
         rec = brain.npcs.get(VINO)
         if rec is not None:
             rec.next_check = brain.clock()  # looked at now, not at his next background turn
@@ -4007,12 +4010,11 @@ async def day_scenario(
         if not passed:
             return _logged(results)
 
-        # 3. a save to walk it twice; from now on the lot lets Vino tell Malet
+        # 3. a save to walk it twice; the lot lets Vino tell Malet once he is asked (walk)
         saved = await _save(link, DAY_SLOT)
         check("saved", saved is not None, f"{saved.branch}@{saved.seq}" if saved is not None else "refused")
         if saved is None:
             return _logged(results)
-        open_pairs.add((VINO, MALETH))
 
         # 4. the hero by Malet: Vino is asked of his next hour and walks over; near the hero they say it
         await link.debug("player_goto", waypoint=DAY_SCENE_HERO)

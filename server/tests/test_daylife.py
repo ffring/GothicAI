@@ -443,6 +443,26 @@ async def test_far_from_the_hero_the_news_passes_as_a_visit(tmp_path):
     assert not d.llm.calls and not d.fake.says and not d.desk.walking
 
 
+async def test_a_closed_lot_asks_nothing_until_opened(tmp_path):
+    """The day e2e's order: while the gate holds the pair closed his do menu is the routine alone and he
+    is asked nothing; opened and looked at now, the first question he gets has the walk."""
+    async with _day(tmp_path) as d:
+        d.open.clear()
+        d.fake.nearby_of[VINO] = [{"npc": MALETH, "name": "Малет", "distance": 300}]
+        await _plan(d, person(VINO, "Вино", 50, state="ZS_RAKE_FP", guild=12))
+        rec = d.planner.npcs[VINO]
+        assert list(d.desk.menus[VINO].do) == ["keep_routine"]  # he was looked at: a menu without the walk
+        assert not d.decider.calls and rec.flight is None and not d.fake.acts
+        d.open.add((VINO, MALETH))
+        rec.next_check = d.clock.t
+        await step(d.planner, d.clock)
+        _, option, outcome = await _over(d)
+
+    (call,) = d.decider.calls
+    assert list(call["questions"]) == ["do"] and "chat" in call["questions"]["do"]["criteria"]
+    assert (option.id, outcome) == (f"chat:{MALETH}", "told") and len(d.fake.acts) == 1
+
+
 async def test_near_the_hero_the_two_say_it(tmp_path):
     async with _day(tmp_path) as d:
         d.fake.nearby_of[VINO] = [{"npc": MALETH, "name": "Малет", "distance": 300}]
