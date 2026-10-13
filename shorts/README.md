@@ -110,9 +110,16 @@ shorts/compare/film.sh bodies                                   # .shorts/compar
 uv run --project shorts python shorts/compare/cut.py bodies ru  # -> .shorts/compare/bodies/short-ru.mp4 (+ .png)
 ```
 
+`bodies`: the animation work off and on. `archery`: the bow as Gothic II has it (the auto aim and the dice,
+`OPENGOTHIC_MANUALAIM=0 OPENGOTHIC_NPCAIM=0`) and aimed by hand: the draw, a head shot from the game's
+camera (`ui on`: the crosshair), the cant, steps with the bow drawn, leaning out round a corner, paladins
+at a runner. A line break in the hook makes it two lines.
+
 - `compare/<name>.bench`: the scenario; every `rec` is a beat. Both takes run the same steps on the fixed
   time step, so the halves stay in sync; the "off" take sets `OPENGOTHIC_FOOTIK=0`, `_GAZE`, `_LEAN`, `_AIM`,
-  `_FLINCH`, `_ANIBLEND`, `_LIPSYNC` to 0. Frames 1080x960 (`TEMPEST_WINDOW_SIZE`), the game's sound into
+  `_FLINCH`, `_ANIBLEND`, `_LIPSYNC` to 0, or what `"off_env"` of `compare/<name>.json` names. A line
+  `off: <command>` / `on: <command>` runs in that take only (the two ways of doing the same thing, e.g. the
+  auto aim shoots on action + forward, the hand lets go of the action key). Frames 1080x960 (`TEMPEST_WINDOW_SIZE`), the game's sound into
   `<segment>.wav` (`TEMPEST_AUDIO_LOOPBACK`, `SOUND`/`MUSIC` of `scripts/bench.sh`).
 - `compare/<name>.json`: the hook, the two labels, the beats in order with their trims and titles, per language.
 - `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"

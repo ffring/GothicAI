@@ -36,8 +36,9 @@ class BowDraw final {
     static constexpr const char* StringLoose = "S_LOOSE";
     static constexpr float       StringSide  = 6.f; // cm: the arrow beside the bow (it passes the grip on its
                                                     // side, clear of it), the string drawn to it
-    static constexpr float       CantAngle   = 30.f; // degrees: the bow canted for a quick shot, the top limb
-                                                     // toward the drawing hand (the archers' 15..30)
+    static constexpr float       CantAngle   = 30.f; // degrees from upright: the bow canted for a quick shot, the
+                                                     // top limb toward the drawing hand (the archers' 15..30);
+                                                     // else upright, whatever the animation leans it
 
     struct Input final {
       bool     active = false; // aiming a bow by hand

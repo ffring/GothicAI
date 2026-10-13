@@ -1,6 +1,11 @@
 """Loudness of the voices. TTS speaks 7-10 dB quieter than the game's own dialogue, so every line is
 brought to the level of the original speech, and a limiter keeps the raised peaks from clipping.
 
+The original Russian dialogue is at -16.6 LUFS (median of 435 lines, Xardas -16.3). The engine plays an
+original line and a TTS line the same way, so in the game they are as loud as each other (Xardas in one
+shot: -18.0 LUFS the original, -17.6..-18.6 the TTS lines). A mood (`style`) keeps the loudness the
+provider gives it (Inworld's Xardas: angry about +4 dB after the limiter, hostile -2.5).
+
 Lines are streamed, so the gain has to be known before the first chunk goes out: it comes from the
 earlier lines of the same voice. A voice not heard yet gets the usual level of its provider.
 """
