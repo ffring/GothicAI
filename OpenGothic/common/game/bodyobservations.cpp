@@ -215,7 +215,8 @@ void BodyObservations::watch(const std::vector<Npc*>& actors) {
   if(actors.size()>s.config.maxActors)
     throw std::invalid_argument("body observation actor limit exceeded");
   for(size_t i=0;i<actors.size();++i) {
-    if(actors[i]==nullptr || std::find(actors.begin(),actors.begin()+i,actors[i])!=actors.begin()+i)
+    auto end = actors.begin()+std::ptrdiff_t(i);
+    if(actors[i]==nullptr || std::find(actors.begin(),end,actors[i])!=end)
       throw std::invalid_argument("null or duplicate body observation actor");
     }
   clearActors();

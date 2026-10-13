@@ -31,6 +31,9 @@ Keep these when updating a library from upstream.
   (the test bench records the game's sound in step with the frames).
 - `Tempest/Engine/sound/sound.{h,cpp}`: `Sound::samples16` gives the decoded samples of a sound (lip sync
   measures the loudness of a voice line, `common/graphics/mesh/lipsync.cpp`).
+- `rapidjson/include/rapidjson/document.h`: `GenericStringRef::operator=` deleted (GCC 15 diagnoses the
+  old one), and `memcpy` into `GenericValue`/`Member` storage goes through `void*`, as upstream does now
+  (clang's `-Wnontrivial-memcall`; the engine builds with `-Werror`).
 - `ZenKit/` `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine
   function the way the `BE` instruction does. The story graph (`ai_bridge/storygraph`) computes the AI
   director's conditions with the engine's own functions through it.
