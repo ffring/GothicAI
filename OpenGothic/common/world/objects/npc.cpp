@@ -2131,6 +2131,23 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  if(TestBench::isActive()) {
+    // what it did: the weapon's damage before the draw, the zone and the armour; the arrow's kind
+    int32_t raw = 0;
+    if(b!=nullptr)
+      for(auto v:b->damage().val)
+        raw += v;
+    const char* kind = isSpell ? "spell" : (b==nullptr ? "melee" : (b->isPrecise() ? "precise" : "dice"));
+    const float k    = b!=nullptr && b->isPrecise() ? Archery::damageAt(b->draw())*Archery::zoneDamage(b->hitZone()) : 1.f;
+    const auto  zone = b!=nullptr && b->isPrecise() ? HitZones::name(b->hitZone()) : std::string_view("-");
+    const auto  who  = TestBench::who(this);
+    const auto  by   = TestBench::who(&other);
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"damage %.*s: raw %d zone %.*s k %.2f prot %d net %d hit %d, hp %d, %s, by %.*s",
+                  int(who.size()),who.data(),int(raw),int(zone.size()),zone.data(),double(k),int(protection(PROT_POINT)),
+                  int(hitResult.value),int(hitResult.hasHit),int(attribute(ATR_HITPOINTS)),kind,int(by.size()),by.data());
+    TestBench::note(buf);
+    }
   if(!isSpell && !isDown() && hitResult.hasHit)
     owner.addWeaponHitEffect(other,b,*this).play();
 
@@ -2139,7 +2156,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     return;
     }
 
-  if(hitResult.hasHit) {
+  if(hitResult.hasHit && !benchStill) {
     auto state   = bodyStateMasked();
     bool stumble = false;
     if(interactive()==nullptr && ((state&BS_FLAG_INTERRUPTABLE)!=BS_NONE || state==BS_RUN || state==BS_NONE)) {
@@ -4266,6 +4283,13 @@ bool Npc::shootBow(Interactive* focOverride) {
   auto& b = owner.shootBullet(*itm,*this,currentTarget,focOverride);
   // the arrow left the hand: the reload places the next one
   visual.dropAmmo();
+  if(TestBench::isActive()) {
+    const auto by = TestBench::who(this);
+    const auto at = TestBench::who(currentTarget);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"dice shot: by %.*s at %.*s",int(by.size()),by.data(),int(at.size()),at.data());
+    TestBench::note(buf);
+    }
 
   invent.delItem(size_t(munition),1,*this);
   b.setOrigin(this);
@@ -4340,9 +4364,10 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
   auto&       b     = owner.shootArrow(*itm,pos,dir,speed);
   visual.dropAmmo();
   if(TestBench::isActive()) {
-    char buf[200];
-    std::snprintf(buf,sizeof(buf),"arrow shot: from %.1f %.1f %.1f dir %.5f %.5f %.5f speed %.3f draw %.2f",
-                  pos.x,pos.y,pos.z,dir.x,dir.y,dir.z,double(speed),double(draw));
+    const auto by = TestBench::who(this);
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"arrow shot: from %.1f %.1f %.1f dir %.5f %.5f %.5f speed %.3f draw %.2f, by %.*s",
+                  pos.x,pos.y,pos.z,dir.x,dir.y,dir.z,double(speed),double(draw),int(by.size()),by.data());
     TestBench::note(buf);
     }
   invent.delItem(size_t(munition),1,*this);

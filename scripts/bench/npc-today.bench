@@ -1,0 +1,102 @@
+# NPC archers as the game has them today (docs/manual-aim.md, stage 4): four of a kind on an arc at 11, 13.5
+# and 16 m shoot at the hero (immortal, still) with the dice; a bandit with a bow (40%), an addon bandit
+# with a crossbow (60%), a paladin knight with a crossbow (65%). The cadence, the dice's chances, the damage
+cheat god
+set time 12 0
+view clean
+goto NW_TROLLAREA_PATH_23
+wait 500
+clear 3000
+immortal player on
+still player on
+cam follow 700 250 150
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1100 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+fight all player
+wait 3000
+rec bdtm11 novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+fight all player
+wait 3000
+rec bdtm13 novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_1003_BANDIT_M 4 1600 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+fight all player
+wait 3000
+rec bdtm16 novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_10002_ADDON_BANDIT_M 4 1100 12
+wait 300
+stats npc BDT_10002_ADDON_BANDIT_M talent auto
+fight all player
+wait 3000
+rec abdm11 novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_10002_ADDON_BANDIT_M 4 1350 12
+wait 300
+stats npc BDT_10002_ADDON_BANDIT_M talent auto
+fight all player
+wait 3000
+rec abdm13 novideo
+wait 45000
+stop
+
+clear 3000
+arc BDT_10002_ADDON_BANDIT_M 4 1600 12
+wait 300
+stats npc BDT_10002_ADDON_BANDIT_M talent auto
+fight all player
+wait 3000
+rec abdm16 novideo
+wait 45000
+stop
+
+clear 3000
+arc PAL_255_RITTER 4 1100 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+fight all player
+wait 3000
+rec pal11 novideo
+wait 45000
+stop
+
+clear 3000
+arc PAL_255_RITTER 4 1350 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+fight all player
+wait 3000
+rec pal13 novideo
+wait 45000
+stop
+
+clear 3000
+arc PAL_255_RITTER 4 1600 12
+wait 300
+stats npc PAL_255_RITTER talent auto
+fight all player
+wait 3000
+rec pal16 novideo
+wait 45000
+stop

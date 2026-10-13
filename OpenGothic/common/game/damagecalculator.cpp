@@ -8,6 +8,7 @@
 #include "world/bullet.h"
 #include "game/archery.h"
 #include "gothic.h"
+#include "testbench.h"
 
 // https://forum.worldofplayers.de/forum/threads/127320-Damage-System?p=2198181#post2198181
 // https://strafkolonie-online.net/forum/board/thread/1895-info-erkl%C3%A4rung-der-berechnung-der-trefferchance-im-fernkampf/
@@ -90,6 +91,16 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
       hitCh = 0;
 
     noHit = (dist>float(MaxBowRange) || hitCh<=hitChance);
+    if(TestBench::isActive()) {
+      const auto who = TestBench::who(&nother);
+      const auto by  = TestBench::who(&nsrc);
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"arrow dice %.*s: dist %.0f path %.0f talent %.0f chance %.1f roll %.0f, %s, by %.*s",
+                    int(who.size()),who.data(),double((nother.position()-nsrc.position()).length()),double(dist),
+                    double(chance*100.f),double(hitCh*100.f),double(hitChance*100.f),noHit ? "miss" : "hit",
+                    int(by.size()),by.data());
+      TestBench::note(buf);
+      }
 
     if(!g2 && !noHit && !invincible) {
       const int32_t mul        = script.criticalDamageMultiplyer();

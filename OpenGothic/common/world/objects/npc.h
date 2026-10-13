@@ -344,6 +344,11 @@ class Npc final {
     bool      isUnconscious() const;
     bool      isDown() const;
     bool      isAttack() const;
+    // ms the animation of that name takes as this one plays it (its overlays: the trained archers' reload)
+    float       animTime(std::string_view name) const { return visual.animTime(name); }
+    // the test bench: hit, it neither stumbles nor flinches (a target that keeps its pose)
+    void        setBenchStill(bool s) { benchStill = s; }
+    bool        isBenchStill() const { return benchStill; }
     bool      isTalk() const;
     // whom this npc talks or listens to, for a while: it looks at them (gaze)
     void      setTalkPartner(Npc* other, uint64_t ms);
@@ -727,6 +732,7 @@ class Npc final {
 
     GoTo                           go2;
     const WayPoint*                currentFp      =nullptr;
+    bool                           benchStill   = false;
     FpLock                         currentFpLock;
     WayPath                        wayPath;
 

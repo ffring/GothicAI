@@ -119,7 +119,9 @@ void Bullet::onStop() {
   if(precise && zone==HitZones::None && !landed && !isFinished()) {
     const auto p = obj->position();
     char buf[160];
-    std::snprintf(buf,sizeof(buf),"arrow missed: flew out at %.0f %.0f %.0f, flew %.0f cm",p.x,p.y,p.z,double(pathLength()));
+    const auto by = TestBench::who(origin());
+    std::snprintf(buf,sizeof(buf),"arrow missed: flew out at %.0f %.0f %.0f, flew %.0f cm, by %.*s",p.x,p.y,p.z,double(pathLength()),
+                  int(by.size()),by.data());
     TestBench::note(buf);
     }
   flg = Flg(flg|Stopped);
@@ -146,7 +148,9 @@ void Bullet::onCollide(zenkit::MaterialGroup matId) {
     landed = true;
     const auto p = obj->position();
     char buf[160];
-    std::snprintf(buf,sizeof(buf),"arrow missed: came down at %.0f %.0f %.0f, flew %.0f cm",p.x,p.y,p.z,double(pathLength()));
+    const auto by = TestBench::who(origin());
+    std::snprintf(buf,sizeof(buf),"arrow missed: came down at %.0f %.0f %.0f, flew %.0f cm, by %.*s",p.x,p.y,p.z,double(pathLength()),
+                  int(by.size()),by.data());
     TestBench::note(buf);
     }
   if(matId != zenkit::MaterialGroup::NONE) {
@@ -173,14 +177,14 @@ bool Bullet::onCollidePrecise(Npc& npc, const Vec3& from, const Vec3& to) {
   const int32_t hp = npc.attribute(ATR_HITPOINTS);
   const bool    ret = onCollide(npc);
   if(TestBench::isActive()) {
-    // by its script symbol: the names are in the game's code page
-    const auto       p   = from + Vec3::normalize(to-from)*t;
-    auto             sym = wrld->script().findSymbol(size_t(npc.instanceSymbol()));
-    std::string_view who = sym!=nullptr ? std::string_view(sym->name()) : std::string_view("npc");
-    char buf[200];
-    std::snprintf(buf,sizeof(buf),"arrow hit %.*s: %.*s, hp %d -> %d, draw %.2f, flew %.0f cm, at %.0f %.0f %.0f",
+    const auto p   = from + Vec3::normalize(to-from)*t;
+    const auto who = TestBench::who(&npc);
+    const auto by  = TestBench::who(origin());
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"arrow hit %.*s: %.*s, hp %d -> %d, draw %.2f, flew %.0f cm, at %.0f %.0f %.0f, by %.*s",
                   int(who.size()),who.data(),int(HitZones::name(z).size()),HitZones::name(z).data(),
-                  int(hp),int(npc.attribute(ATR_HITPOINTS)),double(drawK),double(pathLength()+t),p.x,p.y,p.z);
+                  int(hp),int(npc.attribute(ATR_HITPOINTS)),double(drawK),double(pathLength()+t),p.x,p.y,p.z,
+                  int(by.size()),by.data());
     TestBench::note(buf);
     }
   return ret;

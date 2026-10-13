@@ -85,6 +85,8 @@ class GameScript final {
     void         tick(uint64_t dt);
 
     uint32_t     rand(uint32_t max);
+    // the random numbers start over (the test bench)
+    void         setSeed(uint32_t s) { randGen.seed(s); }
     void         removeItem(Item& it);
 
     void         setInstanceNPC (std::string_view name, Npc& npc);

@@ -940,6 +940,11 @@ bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
   return hitZones.center(skInst->transform(),skInst->boneCount(),z,at);
   }
 
+float MdlVisual::animTime(std::string_view name) const {
+  const Animation::Sequence* sq = solver.solveFrm(name);
+  return sq!=nullptr ? sq->totalTime() : 0.f;
+  }
+
 std::string MdlVisual::animInfo(std::string_view name) const {
   const Animation::Sequence* sq = solver.solveFrm(name);
   if(sq==nullptr || sq->data==nullptr)

@@ -500,6 +500,12 @@ struct Bench {
   int         volleyPhase = 0;
   uint64_t    volleyHold  = 0;
   float       volleyDraw  = 1;
+  uint64_t    volleyJitter = 0;  // ms more to hold, at random up to that (the sway is a function of time)
+  uint64_t    volleyHoldNow = 0;
+  uint32_t    lcg          = 1;  // the bench's own random numbers (seed)
+  std::vector<Npc*> crew;        // arc: the npcs set out, `all` of fight
+  Npc*        downNpc      = nullptr; // waitdown: till it falls
+  uint64_t    downFrom = 0, downEnd = 0;
   uint64_t    volleyT     = 0;
   // aimat: the manual aim aims there instead of the mouse, every frame
   Npc*           aimNpc   = nullptr;
@@ -948,6 +954,7 @@ void writeHeader() {
   for(auto& f:FaceColumns)
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
+  std::fprintf(bench.csv,",hp_player,hp_subject");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -1081,6 +1088,8 @@ void writeRow(Npc& pl) {
   const auto& fl = bench.subject!=nullptr ? Flinch::subjectProbe : Flinch::playerProbe;
   std::fprintf(bench.csv,",%d,%.2f,%.1f,%.2f,%.2f,%u,%.2f,%.2f",int(fl.active),fl.bend,fl.bendYaw,fl.twist,fl.head,
                fl.hits,fl.strength,fl.height);
+  // hit points: the hero's, the watched one's (a fight's course)
+  std::fprintf(bench.csv,",%d,%d",pl.attribute(ATR_HITPOINTS),bench.subject!=nullptr ? bench.subject->attribute(ATR_HITPOINTS) : -1);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -1613,10 +1622,26 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say(pl.bowDump());
     }
   else if(c=="stats") {
-    // stats [str <n>] [dex <n>] [bow <n>] [cbow <n>]: the hero's strength, dexterity, hit chances (the
-    // skill of the manual aim)
-    auto& h = pl.handle();
-    for(size_t i=1; i+1<a.size(); i+=2) {
+    // stats [npc <npc>] [str <n>] [dex <n>] [bow <n>] [cbow <n>] [hp <n>] [hpmax <n>] [talent auto|0|1|2]:
+    // the hero's (an npc's) strength, dexterity, hit chances (the skill of the manual aim), hit points;
+    // talent: the animations of the trained (G2 sets level 1 at 30%, 2 at 60%: _BOWT1, _BOWT2), auto as
+    // the hit chances say
+    Npc&   n  = (a.size()>2 && a[1]=="npc" && findNpc(w,pl,a[2])!=nullptr) ? *findNpc(w,pl,a[2]) : pl;
+    size_t i0 = &n!=&pl ? 3 : 1;
+    auto&  h  = n.handle();
+    bool   more = &n!=&pl;
+    for(size_t i=i0; i+1<a.size(); i+=2) {
+      if(a[i]=="talent") {
+        auto level = [&](int32_t chance) {
+          if(a[i+1]=="auto")
+            return chance>=60 ? 2 : (chance>=30 ? 1 : 0);
+          return int(num(a,i+1,0));
+          };
+        n.setTalentSkill(TALENT_BOW,     level(h.hitchance[TALENT_BOW]));
+        n.setTalentSkill(TALENT_CROSSBOW,level(h.hitchance[TALENT_CROSSBOW]));
+        more = true;
+        continue;
+        }
       const int v = int(num(a,i+1,0));
       if(a[i]=="str")
         h.attribute[ATR_STRENGTH] = v;
@@ -1626,19 +1651,136 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
         h.hitchance[TALENT_BOW] = v;
       else if(a[i]=="cbow")
         h.hitchance[TALENT_CROSSBOW] = v;
+      else if(a[i]=="hp")
+        h.attribute[ATR_HITPOINTS] = v;
+      else if(a[i]=="hpmax")
+        h.attribute[ATR_HITPOINTSMAX] = v;
       else
         say("stats: unknown " + a[i]);
       }
-    const auto  wp = pl.currentRangedWeapon();
-    const auto  st = Archery::stats(pl,wp);
+    const auto  wp = n.currentRangedWeapon();
+    const auto  st = Archery::stats(n,wp);
     char buf[360];
+    if(more) {
+      // whose, the reload as long as the animation is (the trained ones' is shorter), the hit points
+      const bool cbow = wp!=nullptr && wp->isCrossbow();
+      std::snprintf(buf,sizeof(buf),"stats of %s: talent bow %d cbow %d, reload %.0f ms, hp %d of %d, point protection %d",
+                    symName(w,&n).c_str(),n.talentSkill(TALENT_BOW),n.talentSkill(TALENT_CROSSBOW),
+                    double(n.animTime(Archery::reloadAnim(cbow))),n.attribute(ATR_HITPOINTS),n.attribute(ATR_HITPOINTSMAX),
+                    n.protection(PROT_POINT));
+      say(buf);
+      }
     std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg reload x%.2f",
-                  pl.attribute(ATR_STRENGTH),pl.attribute(ATR_DEXTERITY),pl.hitChance(TALENT_BOW),pl.hitChance(TALENT_CROSSBOW),
+                  n.attribute(ATR_STRENGTH),n.attribute(ATR_DEXTERITY),n.hitChance(TALENT_BOW),n.hitChance(TALENT_CROSSBOW),
                   wp!=nullptr ? int(wp->handle().damage_total) : -1,
                   double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
                   double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)),
                   double(st.reload));
     say(buf);
+    }
+  else if(c=="seed") {
+    // seed <n>: the random numbers start over: the scripts' (the dice, the release), the bench's, the
+    // hero's sway
+    const uint32_t s = uint32_t(num(a,1,1));
+    w.script().setSeed(s);
+    bench.lcg = s*2654435761u + 1u;
+    pl.archer().reseed(s);
+    say("seed " + std::to_string(s));
+    }
+  else if(c=="npcequip") {
+    // npcequip <npc> <item> [count]: into its inventory, the first one put on (a bow and its arrows)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
+    const size_t id = w.script().findSymbolIndex(a.size()>2 ? a[2] : "");
+    if(n==nullptr || id==size_t(-1)) {
+      say("npcequip: no npc or item " + line);
+      return;
+      }
+    n->addItem(id,size_t(num(a,3,1)));
+    n->useItem(id,Item::NSLOT,true);
+    say("npcequip " + symName(w,n) + " " + a[2]);
+    }
+  else if(c=="arc") {
+    // arc <npc> <count> <dist> <step deg>: that many of it stand that far in front of the hero, a step
+    // apart round it, facing it (`all` of fight)
+    const size_t id = w.script().findSymbolIndex(a.size()>1 ? a[1] : "");
+    if(id==size_t(-1)) {
+      say("arc: no npc " + line);
+      return;
+      }
+    const int   cnt  = int(num(a,2,4));
+    const float d    = num(a,3,1500);
+    const float step = num(a,4,15);
+    std::string out  = "arc";
+    bench.crew.clear();
+    for(int i=0; i<cnt; ++i) {
+      const float an  = (pl.rotation() + (float(i)-float(cnt-1)*0.5f)*step)*float(M_PI)/180.f;
+      Vec3        pos = pl.position() + Vec3(std::cos(an),0,std::sin(an))*d;
+      DynamicWorld::RayLandResult r;
+      for(float y=pos.y+1500; y>pos.y-1500 && !r.hasCol; y-=400)
+        r = w.physic()->ray({pos.x,y,pos.z},{pos.x,y-450,pos.z});
+      if(r.hasCol)
+        pos.y = r.v.y;
+      Npc* n = w.addNpc(id,pos);
+      if(n==nullptr)
+        continue;
+      const Vec3 dir = pl.position()-pos;
+      n->setDirection(Vec3(dir.x,0,dir.z));
+      n->updateTransform();
+      bench.crew.push_back(n);
+      char buf[100];
+      std::snprintf(buf,sizeof(buf)," %.0f %.0f %.0f",pos.x,pos.y,pos.z);
+      out += buf;
+      }
+    say(out);
+    }
+  else if(c=="fight") {
+    // fight <npc|all> <target|player>: it attacks as the game's fight starts (ZS_ATTACK, to kill: an
+    // archer readies its bow from 9 m); all: the npcs of arc
+    std::vector<Npc*> who;
+    if(a.size()>1 && a[1]=="all")
+      who = bench.crew; else
+    if(Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest"))
+      who.push_back(n);
+    Npc*         tg     = findNpc(w,pl,a.size()>2 ? a[2] : "player");
+    const size_t state  = w.script().findSymbolIndex("ZS_ATTACK");
+    auto         reason = w.script().findSymbol("AIV_ATTACKREASON");
+    auto         kill   = w.script().findSymbol("AR_KILL");
+    if(tg==nullptr || state==size_t(-1)) {
+      say("fight: no target or no ZS_ATTACK " + line);
+      return;
+      }
+    for(auto n:who) {
+      if(n==tg)
+        continue;
+      if(reason!=nullptr && kill!=nullptr && size_t(reason->get_int())<std::size(n->handle().aivar))
+        n->handle().aivar[size_t(reason->get_int())] = kill->get_int();
+      n->setExternalControl(false);
+      n->setTarget(tg);
+      n->aiPush(AiQueue::aiStartState(ScriptFn(state),0,tg,nullptr,""));
+      }
+    say("fight " + std::to_string(who.size()) + " at " + symName(w,tg));
+    }
+  else if(c=="waitdown") {
+    // waitdown <npc|player> [ms]: the scenario waits till it is down (dead, unconscious): `fight over`
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    if(n==nullptr) {
+      say("waitdown: no npc " + line);
+      return;
+      }
+    bench.downNpc  = n;
+    bench.downFrom = bench.time;
+    bench.downEnd  = bench.time + uint64_t(num(a,2,120000));
+    }
+  else if(c=="still") {
+    // still <npc|player> on|off: hit, it neither stumbles nor flinches (a target that keeps its pose, as
+    // its zones were dumped)
+    Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "player");
+    if(n==nullptr) {
+      say("still: no npc " + line);
+      return;
+      }
+    n->setBenchStill(a.size()<3 || a[2]!="off");
+    say("still " + symName(w,n) + (n->isBenchStill() ? " on" : " off"));
     }
   else if(c=="zones" && a.size()>2 && a[1]=="fit") {
     // zones fit on|off: the hit zones as thick as the body's mesh, or by a guess from the bone names (the
@@ -1685,11 +1827,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say(out);
     }
   else if(c=="volley") {
-    // volley <shots> [hold ms] [draw 0..1]: shots by hand in a row (manual on): the string drawn that far
-    // (1: full), held, let go; the scenario goes on after the last one is reloaded
+    // volley <shots> [hold ms] [draw 0..1] [jitter ms]: shots by hand in a row (manual on): the string drawn
+    // that far (1: full), held (up to jitter longer, at random), let go; the scenario goes on after the last
+    // one is reloaded
     bench.volleyLeft  = int(num(a,1,5));
     bench.volleyHold  = uint64_t(num(a,2,300));
     bench.volleyDraw  = num(a,3,1);
+    bench.volleyJitter = uint64_t(num(a,4,0));
     bench.volleyPhase = 0;
     bench.volleyT     = bench.time;
     say("volley " + std::to_string(bench.volleyLeft));
@@ -1756,6 +1900,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     std::string out = "clear:";
     for(auto n:gone) {
       out += " " + symName(w,n);
+      bench.crew.erase(std::remove(bench.crew.begin(),bench.crew.end(),n),bench.crew.end());
+      if(bench.pinned==n)
+        bench.pinned = nullptr;
+      if(bench.downNpc==n)
+        bench.downNpc = nullptr;
       w.removeNpc(*n);
       }
     say(out);
@@ -2418,22 +2567,27 @@ void tickVolley(PlayerControl& ctrl) {
     case 1: {
       const bool drawn = mp.valid && (mp.stage==Archer::Held || (mp.stage==Archer::Drawing && mp.draw>=bench.volleyDraw));
       if(drawn) {
-        bench.volleyPhase = 2;
-        bench.volleyT     = bench.time;
+        bench.volleyPhase   = 2;
+        bench.volleyT       = bench.time;
+        bench.volleyHoldNow = bench.volleyHold;
+        if(bench.volleyJitter>0) {
+          bench.lcg = bench.lcg*1664525u + 1013904223u;
+          bench.volleyHoldNow += (bench.lcg>>8)%(bench.volleyJitter+1);
+          }
         }
       else if(t>10000)
         stop("the string is not drawn");
       break;
       }
     case 2:
-      if(t>=bench.volleyHold) {
+      if(t>=bench.volleyHoldNow) {
         if(bench.aimNpc!=nullptr) {
           // where it aims, the middle of the zone: the log compares the arrow's flight with it
           Vec3 c = bench.aimNpc->collosionCenter();
           bench.aimNpc->hitZoneCenter(bench.aimZone,c);
           char buf[160];
           std::snprintf(buf,sizeof(buf),"aim zone %.1f %.1f %.1f",c.x,c.y,c.z);
-          say(buf);
+          TestBench::note(buf);
           }
         release(ctrl,KeyCodec::ActionGeneric);
         bench.volleyPhase = 3;
@@ -2502,10 +2656,22 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
         say("waitarrive: timeout");
       bench.waitArrive = false;
       }
+    if(bench.downNpc!=nullptr) {
+      if(!bench.downNpc->isDown() && bench.time<bench.downEnd)
+        return;
+      char buf[160];
+      if(bench.downNpc->isDown())
+        std::snprintf(buf,sizeof(buf),"fight over: %s down after %llu",symName(w,bench.downNpc).c_str(),
+                      (unsigned long long)(bench.time-bench.downFrom)); else
+        std::snprintf(buf,sizeof(buf),"waitdown: timeout, %s hp %d",symName(w,bench.downNpc).c_str(),
+                      bench.downNpc->attribute(ATR_HITPOINTS));
+      TestBench::note(buf);
+      bench.downNpc = nullptr;
+      }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
     }
-  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0)
+  if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0 && bench.downNpc==nullptr)
     finish();
   }
 
@@ -2883,8 +3049,18 @@ bool TestBench::isActive() {
   }
 
 void TestBench::note(const char* text) {
-  if(scenarioPath!=nullptr && bench.started && !bench.done)
+  if(scenarioPath!=nullptr && bench.started && !bench.done) {
     say(text);
+    event("note","\"text\":"+jsonStr(text));
+    }
+  }
+
+std::string_view TestBench::who(const Npc* npc) {
+  auto w = Gothic::inst().world();
+  if(npc==nullptr || w==nullptr)
+    return "none";
+  auto sym = w->script().findSymbol(size_t(npc->instanceSymbol()));
+  return sym!=nullptr ? std::string_view(sym->name()) : std::string_view("npc");
   }
 
 bool TestBench::filming() {
