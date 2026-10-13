@@ -133,6 +133,28 @@ async def test_a_second_hit_hands_the_npc_to_the_games_scripts(tmp_path):
     assert any("защищаешься" in n for n in notes)
 
 
+async def test_a_companions_body_in_a_fight_is_left_to_orders_only_its_words_come_from_here(tmp_path):
+    fake = FakeGame()
+    fake.nearby.append(WOLF)
+    llm = FakeBackend("Получай, тварь!", delay=0)
+    cm, link, dialogue, desk, trace = await _scene(FakeDecider("run_to_hero", 0.9), llm, fake, tmp_path)
+    desk.companion = lambda npc: True
+    desk.fighting_ru = lambda npc: "ты дерёшься с: Волк"
+    try:
+        await link.snapshot(XARDAS, fresh=True)
+        await fake.perception(XARDAS, "ASSESSDAMAGE", "WOLF")
+        await asyncio.sleep(0.05)
+        await fake.perception(XARDAS, "ASSESSDAMAGE", "WOLF")  # a second hit: no handing to the scripts
+        await _until(lambda: fake.said, timeout=5)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert not any(m["type"] == "action" for m in fake.received)  # neither the reflex nor the safety rule
+    assert XARDAS in fake.attached
+    cue = llm.calls[0][1][-1].content
+    assert "Волк нападает на тебя" in cue and "ты дерёшься с: Волк" in cue
+
+
 async def test_words_about_an_incident_that_is_over_are_dropped(tmp_path):
     fake = FakeGame()
     fake.nearby.append(WOLF)

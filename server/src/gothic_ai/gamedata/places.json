@@ -4444,10 +4444,10 @@
   },
   {
    "id": "XARDAS_BANDITS",
-   "ru": "стоянка под лестницей к башне Ксардаса",
-   "where_ru": "на стоянке под лестницей к башне Ксардаса",
-   "en": "Camp below the steps to Xardas's tower",
-   "where_en": "at the camp below the steps to Xardas's tower",
+   "ru": "пещера бандитов под лестницей к башне Ксардаса",
+   "where_ru": "в пещере бандитов под лестницей к башне Ксардаса",
+   "en": "Bandits' cave below the steps to Xardas's tower",
+   "where_en": "in the bandits' cave below the steps to Xardas's tower",
    "center": [
     18584,
     3229,

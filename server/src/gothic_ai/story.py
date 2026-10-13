@@ -4,6 +4,12 @@ Dialogs can be switched off, get a condition on top of their script one, or be a
 do it (stage 5), for now the console does. Each change is one operation (see protocol.GraphPatchCmd). It
 goes to the game and into the memory log of the save branch, so a load brings back exactly the changes
 made before that save, like the rest of the world; the game gets them again whenever a session starts.
+
+Some dialogs are off for good, on every branch (`static`): the scripted ambush of the bandits below Xardas's
+tower (`FREED`). Their important dialogs ended in an attack the scripts decided; without them the bandits
+stand at their posts and the behavioral and conversational models decide what they do — whether they
+talk, threaten or attack (dialogue.py: an npc that means to fight the hero attacks him through the scripts).
+They still fight back when struck, and the gang joins a fight it hears, as in the game.
 """
 
 from __future__ import annotations
@@ -11,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from .game import GameError, GameLink
@@ -22,11 +28,28 @@ log = logging.getLogger(__name__)
 
 Op = dict[str, Any]
 
+# the bandits below the steps to Xardas's tower (user, 2026-10-13): the lure's "Where are you going?" that
+# ends in his attack or leads the hero into the cave, the cave's ambush, Brago's and his mate's attack, and
+# Cavalorn's "let's deal with them", which sets them on the hero at sight
+FREED = (
+    "DIA_BDT_1013_BANDIT_WHERE",
+    "DIA_1013_BANDIT_AMBUSH",
+    "DIA_BDT_1014_BANDIT_KILLER",
+    "DIA_1015_BANDIT_AMBUSH",
+    "DIA_ADDON_CAVALORN_LETSKILLBANDITS",
+)
+
+
+def freed(known: Callable[[str], bool] = lambda node: True) -> list[Op]:
+    """The ops that switch the freed npc's scripted dialogs off; only dialogs the game has (`known`)."""
+    return [{"op": "disable", "node": node} for node in FREED if known(node)]
+
 
 class StoryPatches:
-    def __init__(self, link: GameLink, memory: MemoryStore) -> None:
+    def __init__(self, link: GameLink, memory: MemoryStore, *, static: list[Op] | None = None) -> None:
         self.link = link
         self.memory = memory
+        self.static = static or []  # changes on every branch, never recorded
         self.branch: str | None = None
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
@@ -61,7 +84,7 @@ class StoryPatches:
         if ops:
             log.info("story graph: %d change(s) on branch %s", len(ops), session.branch)
         # also when there are none: whatever the game had belongs to another line of play
-        self._spawn(self.link.patch_graph(ops, replace=True))
+        self._spawn(self.link.patch_graph([*self.static, *ops], replace=True))
 
     def _record(self, op: Op) -> None:
         if self.branch is None:

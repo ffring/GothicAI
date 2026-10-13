@@ -69,3 +69,18 @@ async def test_the_model_names_places_and_a_broken_answer_is_asked_again():
     assert sight is not None
     assert sight.place == "Ты во дворе фермы Лобарта, под открытым небом. Ты стоишь, скрестив руки."
     assert desk.english("BAU_950_LOBART")[0] == "You are in Lobart's farmyard."
+
+
+def test_the_places_around_a_spot_nearest_first():
+    book = PlaceBook.load()
+    assert book is not None
+    cave = book.get("xardas_bandits")
+    assert (
+        cave is not None and cave.ru.startswith("пещера бандитов") and "NW_XARDAS_BANDITS_01" in cave.points
+    )
+    # Cavalorn on the steps below Xardas's tower, where the hero asked him to go into the cave
+    near = book.near((20529.0, 3040.0, -21386.0), 8000, 6)
+    assert [p.id for p, _ in near[:3]] == ["XARDAS_STAIRS", "WP_XXX", "XARDAS_BANDITS"]
+    assert 1500 < near[2][1] < 2500
+    assert [d for _, d in near] == sorted(d for _, d in near)
+    assert "XARDAS_TOWER_WATERFALL" not in {p.id for p, _ in near}  # the other cave is 111 m off

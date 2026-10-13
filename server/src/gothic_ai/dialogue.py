@@ -68,6 +68,7 @@ log = logging.getLogger(__name__)
 CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply streams in
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 PREPARE_S = 3.0  # what an extension asks the game before a turn
+KILLERS = frozenset({9})  # GIL_BDT: bandits attack the hero to kill, as their scripts do
 # the hero's phrase: the model starts after the npc's first sound (the behavioral model's choice, ~50 ms)
 # so that it goes on from it, but waits for that choice no longer than this
 FIRST_REACTION_S = 0.25
@@ -456,6 +457,13 @@ class DialogueManager:
         # and let it go again; without them only controlled npc's act on commitments (talk.py)
         self.take_body: Callable[[str, str], Awaitable[bool]] | None = None
         self.free_body: Callable[[str, str], None] | None = None
+        # a companion's fight (npc, target): carried out by orders.py, which brings it back to the hero
+        # after; False if it is not the companions' business
+        self.companion_fight: Callable[[str, str | None], bool] | None = None
+        # the npc is in such a fight: a goal of going with the hero waits for it to end
+        self.fighting: Callable[[str], bool] = lambda npc: False
+        # the npc's guild (the roster's, talk.py), None if not known: whom it attacks to kill (`KILLERS`)
+        self.guild_of: Callable[[str], int | None] = lambda npc: None
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
         self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
@@ -1522,6 +1530,11 @@ class DialogueManager:
         if intent.goal in executor.INCIDENT_GOALS and old.goal not in executor.INCIDENT_GOALS:
             conv.calm = old  # what to go back to when the incident is over
         conv.intent = intent
+        with_hero = old.goal in executor.COMPANION_GOALS or (
+            old.goal in executor.INCIDENT_GOALS
+            and conv.calm is not None
+            and conv.calm.goal in executor.COMPANION_GOALS
+        )
         seq = self.memory.set_intent(
             conv.branch, conv.npc, intent.to_json(), game_time(self.link.snapshots.get(conv.npc))
         )
@@ -1530,10 +1543,22 @@ class DialogueManager:
             self.on_intent(conv.npc, intent)
         following = snap.npc.following if snap else False
         acts = executor.intent_actions(old, intent, following)
-        if old.goal == "follow_hero" and intent.goal != "follow_hero":
+        if body and intent.goal == "fight" and with_hero and self.companion_fight is not None:
+            if self.companion_fight(conv.npc, intent.target):
+                return  # a companion's fight: it stays with the hero (orders.py)
+        if old.goal in executor.COMPANION_GOALS and intent.goal not in executor.COMPANION_GOALS:
             self._free(conv, "follow")  # after `stop`, if it is still following (below)
         if not body:
             return
+        if (
+            intent.goal == "fight"
+            and intent.target == "PLAYER"
+            and (old.goal, old.target) != ("fight", "PLAYER")
+        ):
+            self._after_speech(conv, lambda: self._attack_hero(conv, intent))
+            return
+        if self.fighting(conv.npc) and intent.goal in executor.COMPANION_GOALS:
+            return  # it is fighting for the hero: it follows him again once the fight is over (orders.py)
         if intent.goal in executor.INCIDENT_GOALS and not self._controlled(conv.npc):
             # a free npc's goal of the moment (flee, fight, seek help) is carried out by whoever runs its body
             # (the planner): held for it, the npc would be out of the scripts in the middle of the danger
@@ -1557,16 +1582,32 @@ class DialogueManager:
 
         self._after_speech(conv, job)
 
-    def incident_over(self, npc: str) -> None:
+    def incident_over(self, npc: str, *, body: bool = True) -> None:
         """Goals that only hold while something is going on (flee, fight...) end with it: the npc goes
-        back to what it wanted before, keeping its attitude and agenda."""
+        back to what it wanted before, keeping its attitude and agenda. `body` False: the caller moves
+        the body (orders.py)."""
         conv = self.conversations.get(npc.upper())
         if conv is None or conv.intent.goal not in executor.INCIDENT_GOALS:
             return
         calm = conv.calm or Intent()
         intent = Intent(calm.goal, calm.target, conv.intent.attitude, conv.intent.agenda)
         log.info("%s: the incident is over, intent back to %s", conv.npc, intent.goal)
-        self._change_intent(conv, intent, self.link.snapshots.get(conv.npc))
+        self._change_intent(conv, intent, self.link.snapshots.get(conv.npc), body=body)
+
+    async def _attack_hero(self, conv: Conversation, intent: Intent) -> tuple[str, bool]:
+        """The npc turns on the hero, after its words: the scripts' own attack (B_Attack), held or free, so
+        the fight goes as the game's do. A bandit means to kill and its gang joins it; anyone else gives him
+        a beating until he is down."""
+        if conv.intent is not intent:
+            return "", True  # it changed its mind before it was done talking
+        reason = "AR_SUDDENENEMYINFERNO" if self.guild_of(conv.npc) in KILLERS else "AR_NONE"
+        try:
+            await self.link.story_effect(conv.npc, [{"do": "attack", "reason": reason}])
+        except (GameError, TimeoutError) as err:
+            return f"Тело не напало на героя ({err})", False
+        log.info("%s attacks the hero (%s)", conv.npc, reason)
+        self.journal.add("attack", npc=conv.npc, name=conv.persona.name, target="PLAYER", reason=reason)
+        return "Ты напал на героя.", True
 
     async def _body(self, conv: Conversation, acts: list[executor.Action]) -> tuple[str, bool]:
         """Game actions for an intent; only what did not work is noted."""

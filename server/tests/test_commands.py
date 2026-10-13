@@ -20,6 +20,10 @@ def test_the_forms_of_an_order_in_what_the_hero_says_around_them():
     # said again and again
     assert kind("Стой, стой!") == "halt"
     assert kind("Назад! Назад! Назад!") == "retreat"
+    assert kind("Бей его, бей!") == "attack"
+    assert kind("Давай, бей его!") == "attack"
+    assert kind("Кавалорн, на помощь!", ("кавалорн",)) == "attack"
+    assert kind("Помоги!") == "attack"  # orders.py: an order only with someone to attack
     # as speech recognition may write it: run together, a letter off in a long form
     assert kind("Замной!") == "follow"
     assert kind("Оружия к бою!") == "draw"
@@ -37,6 +41,8 @@ def test_words_of_an_order_that_are_not_one():
         "Стою.",
         "Иду.",
         "Стой, стой, а где Лестер?",
+        "Ну блин, давай бей его, сделай что-нибудь.",  # the conversational model's
+        "Помоги мне найти Лестера.",
         "Горн, за мной!",  # Горн is nobody around: a word too many
         "",
     ):

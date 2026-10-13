@@ -1355,6 +1355,213 @@ async def orders_scenario(
     return results
 
 
+class _OnWords:
+    """A scripted model that answers by what it is asked: the step of the first words found in the last
+    message (the hero's phrase or an event's cue), `default` else."""
+
+    name = "fake"
+
+    def __init__(self, replies: list[tuple[str, FakeStep]], default: FakeStep) -> None:
+        self.replies, self.default = replies, default
+
+    async def aclose(self) -> None:
+        pass
+
+    def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        last = messages[-1] if messages else None
+        text = last.content if isinstance(last, Message) else ""
+        step = next((s for words, s in self.replies if words in text), self.default)
+        return FakeBackend(script=[step], delay=0).stream(
+            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+        )
+
+
+class _ByNpc:
+    """A scripted model for each npc: the one whose «Ты — {name}» its instructions have; `default` else."""
+
+    name = "fake"
+
+    def __init__(self, by: dict[str, Any], default: Any) -> None:
+        self.by, self.default = by, default
+
+    async def aclose(self) -> None:
+        pass
+
+    def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        llm = next((b for name, b in self.by.items() if f"Ты — {name}" in instructions), self.default)
+        return llm.stream(instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice)
+
+
+async def companion_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    bandit: str = "BDT_1013_BANDIT_L",
+    cave: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+) -> dict[str, str]:
+    """The hero's companion on the game (orders.py), as the user played it on 2026-10-13: Cavalorn walked
+    after a running hero, watched a bandit beat him and only talked, and did not understand "go into the
+    cave"; the bandits below Xardas's tower ran their scripted ambush. Checks:
+    - pace: a companion left behind runs to the hero (it walked within 12 m before);
+    - freed: the bandit at the steps does not start his scripted "Where are you going?" (story.FREED);
+    - go_to: told to go into the cave first, it walks into the bandits' cave and waits there; the freed
+      bandits in it do not fall on it;
+    - attack: the bandit's own model decides to attack the hero (scripted): the scripts' attack;
+    - defend: the companion fights him at once, with no order, and follows the hero again after.
+    The models are scripted (LLM=fake); the hero wears heavy armor, so that he lives through the beating."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    calls: list[tuple[float, str, str, dict[str, Any]]] = []  # (sent, action, status, args)
+    act = link.act
+
+    async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
+        t = time.monotonic()
+        res = await act(who, action, **kw)
+        if who.upper() == npc:
+            calls.append((t, action, res.status, kw))
+        return res
+
+    link.act = recorded  # type: ignore[method-assign]
+    chosen: list[DialogChosen] = []
+    link.listeners.append(lambda m: chosen.append(m) if isinstance(m, DialogChosen) else None)
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    fight = {"goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None}
+    go = ToolCall("go_to", {"place": "XARDAS_BANDITS"})
+    dialogue.llm = _ByNpc(
+        {
+            "Кавалорн": _OnWords(
+                [
+                    ("пещеру первым", FakeStep("Пойду первым.", [go])),
+                    ("пришёл первым", FakeStep("Тут двое.")),
+                ],
+                FakeStep("Держись, я с тобой!"),
+            ),
+            "Бандит": FakeBackend(
+                script=[FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])], delay=0
+            ),
+        },
+        FakeBackend("Хм.", delay=0),
+    )
+
+    def dist(who: str = npc) -> float:
+        return talk.people[who].distance / 100 if who in talk.people else -1.0
+
+    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any]]]:
+        return [c for c in calls if c[0] >= t0 and c[1] == action]
+
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")
+    except GameError as err:
+        log.info("companion: no armor for the hero: %s", err)
+    await link.debug("skip_important", near=npc)  # Cavalorn's own greeting would stop the hero
+    for _ in range(2):  # the goblins by his fire: they would beat the hero down before anything is checked
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("companion: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: 0 <= dist() <= 15, 20):
+        link.act = act  # type: ignore[method-assign]
+        return _logged({"roster": f"failed ({npc} is not around the hero: {dist():.1f} m)"})
+    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    following = await _until(lambda: since(0, "follow") and 0 <= dist() <= 5, 20)
+    check("follow", following, f"{dist():.1f} m")
+
+    # pace: the hero is suddenly 11+ m off; a run covers it in about 2 s, a walk in 5 or more
+    await link.debug("player_goto", near=npc, distance=1100)
+    t0 = time.monotonic()
+    await _until(lambda: dist() >= 9, 3)
+    d0 = dist()
+    caught_up = await _until(lambda: 0 <= dist() <= 5, 20)
+    took = time.monotonic() - t0
+    speed = (d0 - 5) / took if took > 0 else 0.0
+    check("pace", caught_up and speed >= 2.5, f"{d0:.1f} m -> 5 m in {took:.1f} s, {speed:.1f} m/s")
+
+    # freed: next to the bandit at the steps, nothing starts on its own
+    await link.debug("player_goto", to=bandit, distance=300)
+    near = await _until(lambda: 0 <= dist(bandit) <= 6, 15)
+    await asyncio.sleep(8)
+    ambush = [c.node for c in chosen if c.npc.upper() == bandit]
+    check("freed", near and not ambush, f"{dist(bandit):.1f} m from him, dialogs {ambush or 'none'}")
+
+    # go_to: "into the cave first"; the bandits there let it be
+    await _until(lambda: 0 <= dist() <= 6, 30)  # it has caught up from its fire: it hears its name
+    t0 = time.monotonic()
+    talk.hear("Кавалорн, иди в пещеру первым.", None, {"via": "scenario"})
+    walked = await _until(lambda: since(t0, "go_to_waypoint"), 20)
+    arrived = await _until(lambda: any(c[2] == "done" for c in since(t0, "go_to_waypoint")), 100)
+    walk = since(t0, "go_to_waypoint")
+    snap = await link.snapshot(npc, fresh=True)
+    standing = talk.orders.standing.get(npc) if talk.orders else None
+    check(
+        "go_to",
+        walked and arrived and standing is not None and standing.kind == "go",
+        f"{walk[-1][2] if walk else 'not sent'}, at {snap.npc.waypoint or snap.npc.nearest_waypoint}",
+    )
+    hp = snap.npc.hp
+    await asyncio.sleep(6)
+    snap = await link.snapshot(npc, fresh=True)
+    fought = since(t0, "fight")
+    check("cave_quiet", not fought and snap.npc.hp == hp, f"hp {hp} -> {snap.npc.hp}, fights {len(fought)}")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    back = await _until(lambda: 0 <= dist() <= 6, 40)
+    check("back", back, f"{dist():.1f} m")
+
+    # the bandit's own decision; the gang in the cave would join a fight it hears: out of it for this check
+    for other in cave:
+        try:
+            await link.debug("kill", npc=other)
+        except GameError as err:
+            log.info("companion: kill %s: %s", other, err)
+    await link.debug("player_goto", to=bandit, distance=250)
+    await _until(lambda: 0 <= dist(bandit) <= 5 and 0 <= dist() <= 8, 15)
+    t0 = time.monotonic()
+    talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
+    attacked = await _until(lambda: any(e["kind"] == "attack" for e in entries), 20)
+    check("attack", attacked, "the scripts' attack" if attacked else "no attack")
+    defended = await _until(
+        lambda: any(c[3].get("npc", "").upper() == bandit for c in since(t0, "fight")), 30
+    )
+    started = since(t0, "fight")
+    check("defend", defended, f"{started[0][0] - t0:.1f} s after the words" if started else "no fight")
+    down = await _until(lambda: bandit not in talk.people or talk.people[bandit].activity == "down", 90)
+    after = await _until(lambda: calls[-1][1] == "follow" and 0 <= dist() <= 8, 30)
+    defends = [e for e in entries if e["kind"] == "defend"]
+    check("after", down and after, f"bandit down {down}, follows {after}, stood up {len(defends)} time(s)")
+    link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
 async def lie_found_out(
     link: GameLink,
     dialogue: DialogueManager,

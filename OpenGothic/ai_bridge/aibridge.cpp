@@ -131,7 +131,7 @@ std::vector<uint8_t> fromBase64(std::string_view in) {
   }
 
 // listening to the hero's voice, thinking of an answer (tickListener)
-constexpr float    ListenRange  = 800;    // cm: who listens to the hero's voice is this near
+constexpr float    ListenRange  = 1500;   // cm: who listens to the hero's voice is this near (talk.py PARTNER_CM)
 constexpr float    ListenFront  = 0.34f;  // ...and in front of him (cos of 70 degrees), unless he looks at it
 constexpr uint64_t ListenAfter  = 4000;   // ms after the key: it listens on until the final transcript, at most
 constexpr uint64_t ThinkMax     = 12000;  // ms: no answer by then, it stops thinking

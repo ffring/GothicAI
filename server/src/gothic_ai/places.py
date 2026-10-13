@@ -10,7 +10,8 @@ The game only has waypoints. The book of places is made once, offline:
    and the places around: «двор фермы Лобарта», where — «во дворе фермы Лобарта», and in English;
 4. the book is read through and kept as a file (gamedata/places.json).
 
-At run time `PlaceBook` tells the place of a waypoint.
+At run time `PlaceBook` tells the place of a waypoint, and the places around a spot (a companion is sent
+to one, orders.py).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import logging
 import math
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -257,6 +258,8 @@ class Place:
     where_ru: str
     en: str
     where_en: str
+    center: tuple[float, float, float] | None = None  # the middle of its points
+    points: tuple[str, ...] = ()  # its waypoints and freepoints
 
 
 class PlaceBook:
@@ -264,10 +267,23 @@ class PlaceBook:
 
     def __init__(self, data: dict[str, Any]) -> None:
         self.world = str(data.get("world", "")).upper()
-        self.places = [
-            Place(p["id"], p["ru"], p["where_ru"], p["en"], p["where_en"]) for p in data.get("places", [])
-        ]
         self.points: dict[str, int] = dict(data.get("points", {}))
+        names: dict[int, list[str]] = defaultdict(list)
+        for name, i in sorted(self.points.items()):
+            names[i].append(name)
+        self.places = [
+            Place(
+                p["id"],
+                p["ru"],
+                p["where_ru"],
+                p["en"],
+                p["where_en"],
+                tuple(float(c) for c in p["center"]) if len(p.get("center") or ()) == 3 else None,  # type: ignore[arg-type]
+                tuple(names[i]),
+            )
+            for i, p in enumerate(data.get("places", []))
+        ]
+        self._by_id = {p.id: p for p in self.places}
 
     @classmethod
     def load(cls, path: Path = BOOK) -> PlaceBook | None:
@@ -285,3 +301,17 @@ class PlaceBook:
             if wp and (i := self.points.get(wp.upper())) is not None:
                 return self.places[i]
         return None
+
+    def get(self, place_id: str) -> Place | None:
+        return self._by_id.get(place_id.strip().upper())
+
+    def near(self, pos: Sequence[float], radius_cm: float, limit: int) -> list[tuple[Place, float]]:
+        """The places whose middle is within `radius_cm` of `pos` (x, y, z), nearest first, with how far."""
+        out = []
+        for p in self.places:
+            if p.center is None or not p.points:
+                continue
+            d = math.dist(pos, p.center)
+            if d <= radius_cm:
+                out.append((p, d))
+        return sorted(out, key=lambda pd: pd[1])[:limit]

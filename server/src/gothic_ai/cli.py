@@ -72,7 +72,7 @@ from .quests import QuestBoard
 from .replay import replay as replay_turn
 from .sightings import Sightings
 from .social import Rumors
-from .story import StoryPatches
+from .story import StoryPatches, freed
 from .storyguard import StoryGuard
 from .talk import TalkDesk
 from .trace import TraceWriter, find_turn, latest
@@ -520,14 +520,26 @@ async def serve(args: argparse.Namespace) -> int:
             trace=trace,
             budget=budget,
         )
-        state.story = StoryPatches(link, memory)
+        # the bandits below Xardas's tower are freed of their scripted ambush: our models decide (story.py)
+        static = freed(graph.nodes.__contains__) if graph is not None else freed()
+        state.story = StoryPatches(link, memory, static=static if args.free_bandits else None)
         # npc's we control: the body's instant reactions (behavioral model) and words for incidents
         reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
         state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
         # the hero talks to the world: whom he speaks to, the conversation, the body meanwhile (M5e)
         state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
         # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
-        state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal)
+        state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
+        state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
+        state.incidents.companion = state.talk.orders.companion
+        state.incidents.fighting_ru = state.talk.orders.fighting_ru
+        talk_desk = state.talk  # its roster is a new dict each time
+
+        def guild_of(npc: str) -> int | None:
+            e = talk_desk.people.get(npc.upper())
+            return e.guild if e is not None else None
+
+        state.dialogue.guild_of = guild_of
         if asr is not None and source is not None:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
@@ -809,6 +821,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.orders_scenario(link, state.dialogue, state.talk, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "companion":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.companion_scenario(link, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m6":
                 dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
@@ -1417,6 +1435,7 @@ def main() -> None:
             "m5c",
             "m5e",
             "orders",
+            "companion",
             "m6",
             "see",
             "seen",
@@ -1493,6 +1512,12 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="carry out the behavioral model's fights and flights (off: traced only, in shadow)",
+    )
+    p.add_argument(
+        "--free-bandits",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="the bandits below Xardas's tower without their scripted ambush: our models decide (story.py)",
     )
     p.add_argument(
         "--apply-day",

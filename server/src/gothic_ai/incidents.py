@@ -4,6 +4,8 @@ Something happens to the npc → an incident (brain/incident.py). At once, witho
 - the **behavioral model** picks the body's reaction (brain/reflex.py) — in ~0.1 s;
 - the code's **safety rule** hands a beaten npc back to the game's scripts (they fight back or flee):
   a second hit from the same attacker within `SECOND_HIT_S`, or health below half.
+The hero's companions are the exception: in a fight orders.py has their bodies (they stand up for him),
+so neither the behavioral model nor the safety rule moves them; only their words come from here.
 
 In parallel, if the incident is worth words and someone hears them, the **conversational model** gets
 an event turn (dialogue.py): words and maybe a new intent, 3–5 s later. Its answer is dropped if the
@@ -170,6 +172,10 @@ class IncidentDesk:
         dialogue.controls = lambda npc: npc.upper() in self.attached
         dialogue.on_free_intent = self.on_free_intent
         self.planner: NpcPlanner | None = None
+        # the hero's companions fight for him on their own (orders.py): whether the npc is one, and what its
+        # body does in the fight now, for its words
+        self.companion: Callable[[str], bool] = lambda npc: False
+        self.fighting_ru: Callable[[str], str | None] = lambda npc: None
         # free npc -> when its words were last asked for, and what about
         self._spoke: dict[str, tuple[float, frozenset[tuple[str, str]]]] = {}
         self._calming: set[str] = set()  # free npc's waiting for their moment to pass
@@ -237,6 +243,9 @@ class IncidentDesk:
             self._spawn(self._watch(npc, inc.id))
         if event.kind == "down":
             self.dialogue.note(npc, event.describe_ru())
+            return
+        if event.spec.urgent and self.companion(npc):
+            self._spawn(self._escalate_later(npc, inc.id))  # its body fights already (orders.py)
             return
         if event.kind == "attacked" and self._beaten(npc, inc, event):
             self._spawn(self._release(npc, event))
@@ -341,6 +350,7 @@ class IncidentDesk:
         inc.escalated_version, inc.escalated_at = inc.version, self.clock()
         body = [r for r in self.reactions if r.npc == npc and r.applied and r.question == "react"]
         did = REACT_OPTIONS[body[-1].choice].ru if body and body[-1].choice in REACT_OPTIONS else ""
+        did = self.fighting_ru(npc) or did
         done = f" Твоё тело уже среагировало: {did} — это уже случилось, не противоречь этому." if did else ""
         cue = f"[Событие: {inc.describe_ru()}.{done}]"
         log.info("%s incident #%d: calling the conversational model (%s)", npc, inc.id, reason)

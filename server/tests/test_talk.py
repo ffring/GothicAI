@@ -38,9 +38,9 @@ def test_whom_the_hero_speaks_to():
     hit = addressee("Эй!", None, people, None)
     assert (hit.id, hit.why) == (XARDAS, "front")
     # nobody close in front of him: said into the air
-    far = roster(person(LOBART, "Лобарт", 12, True))
+    far = roster(person(LOBART, "Лобарт", 20, True))
     assert addressee("Эй!", None, far, None) is None
-    assert addressee("Эй!", LOBART, far, None).why == "focus"  # 12 m: still the one he looks at
+    assert addressee("Эй!", LOBART, far, None).why == "focus"  # 20 m: still the one he looks at
 
 
 def test_a_name_as_speech_recognition_heard_it():
@@ -196,7 +196,7 @@ async def test_the_conversation_ends_when_the_hero_walks_away():
         await fake.send(type="player_text", text="Пока", focus=XARDAS)
         await _until(lambda: fake.said == ["Иди."] and XARDAS in fake.attached)
         await asyncio.sleep(1.6)  # the line is said
-        await fake.roster({**XARDAS_NEAR, "distance": 1500.0})
+        await fake.roster({**XARDAS_NEAR, "distance": 2000.0})
         await _until(lambda: talk.partner is None and XARDAS not in fake.attached)
     finally:
         await cm.__aexit__(None, None, None)
