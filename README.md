@@ -84,7 +84,7 @@ uv tool install --editable launcher/core
 Один раз указать папку игры:
 
 ```bash
-gothic-launcher config set game.dir "/Volumes/shared/projects/Gothic II"
+gothic-launcher config set game.dir "/Volumes/DevSSD/Dev/games/Gothic II"
 ```
 
 Играть, продолжив последнее сохранение (`--new` — сразу новая игра, `-v` — вывод всех процессов в терминал):
@@ -191,7 +191,7 @@ cd server && uv run gothic-ai voice-test
 Игра в режиме разработчика. Окна чата нет: **удерживайте T где угодно, чтобы сказать фразу голосом**, а короткое нажатие T открывает строку ввода (Enter отправляет, Esc закрывает). Кому сказано, решает сервер: имя во фразе, NPC, на которого смотрит герой, текущий собеседник или ближайший NPC перед героем. Консоль Marvin открывается по F2, там доступны `ai status` и `ai attach <npc>`:
 
 ```bash
-OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/shared/projects/Gothic II" -devmode
+OpenGothic/build/opengothic/Gothic2Notr -g "/Volumes/DevSSD/Dev/games/Gothic II" -devmode
 ```
 
 Тесты (в каждом проекте свои):

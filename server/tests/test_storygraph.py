@@ -9,7 +9,7 @@ from gothic_ai.gamedata.storygraph import is_known, load, render, variables
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
-GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/shared/projects/Gothic II"))
+GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/DevSSD/Dev/games/Gothic II"))
 DAT = GAME_DIR / "_work" / "Data" / "Scripts" / "_compiled" / "GOTHIC.DAT"
 # original-format saves (ZenGin), one folder each; see docs/story-graph.md, stage 2
 SAVES = Path(os.environ.get("GOTHIC_SAVES", Path.home() / ".local/share/gothic-ai/saves/original"))

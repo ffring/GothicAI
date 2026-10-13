@@ -162,7 +162,7 @@ cmake --build OpenGothic/ai_bridge/storygraph/build
 ```
 
 ```bash
-OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/shared/projects/Gothic II/_work/Data/Scripts/_compiled/GOTHIC.DAT" --json story.json
+OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/DevSSD/Dev/games/Gothic II/_work/Data/Scripts/_compiled/GOTHIC.DAT" --json story.json
 ```
 
 Другие режимы:
@@ -226,11 +226,11 @@ OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/shared/projects/Gothi
 Запуск:
 
 ```bash
-OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/shared/projects/Gothic II/_work/Data/Scripts/_compiled/GOTHIC.DAT" --check ~/.local/share/gothic-ai/saves/original/ch5
+OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/DevSSD/Dev/games/Gothic II/_work/Data/Scripts/_compiled/GOTHIC.DAT" --check ~/.local/share/gothic-ai/saves/original/ch5
 ```
 
 ```bash
-OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/shared/projects/Gothic II/_work/Data/Scripts/_compiled/GOTHIC.DAT" --fuzz 2000
+OpenGothic/ai_bridge/storygraph/build/storygraph "/Volumes/DevSSD/Dev/games/Gothic II/_work/Data/Scripts/_compiled/GOTHIC.DAT" --fuzz 2000
 ```
 
 `--check` можно повторять. С `--node ID` обе стороны печатают трассу: какие функции движка спросили и что получили.
