@@ -3192,11 +3192,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     if(!bench.aimNpc->hitZoneCenter(bench.aimZone,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
       at = bench.aimNpc->collosionCenter();
     if(!bench.aimRaw) {
-      // as an archer does: over it by how much the arrow drops on the way (at full draw)
-      const auto  st = Archery::stats(*player,player->currentRangedWeapon());
-      const Vec3  d  = at - player->position();
-      const float t  = std::sqrt(d.x*d.x+d.z*d.z)/std::max(st.speed,0.1f);
-      at.y += 0.5f*DynamicWorld::gravity*t*t;
+      // as an archer does: over it by how much the arrow drops on the way (at full draw), from the nock
+      const auto st = Archery::stats(*player,player->currentRangedWeapon());
+      Vec3       nock, dir;
+      if(!player->arrowRay(nock,dir))
+        nock = player->position() + Vec3(0,145,0);
+      at = Archery::launch(nock,at,Archery::speedAt(st,1.f));
       }
     ctrl.setAimOverride(true,at);
     }
