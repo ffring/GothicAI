@@ -25,6 +25,8 @@ namespace TestBench {
   // An event the game reports (an arrow hit): into the bench log, if a scenario runs; also a `note` of
   // events.jsonl (with the time and the frame)
   void     note(const char* text);
+  // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
+  void     arrowAt(const void* arrow, float x, float y, float z);
   // who it is, for the notes: its script symbol (the names are in the game's code page), "none"
   std::string_view who(const Npc* npc);
   // An npc says a line of the game or an SVM (AI_Output, AI_OutputSvm): who, to whom, how long (`ms`, 0 if

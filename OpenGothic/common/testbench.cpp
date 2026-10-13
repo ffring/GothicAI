@@ -434,6 +434,7 @@ enum CamMode : uint8_t {
   C_Shoulder, // over the hero's shoulder at an npc (camNpc)
   C_NpcFace,  // the npc's face, from the hero's side
   C_Two,      // the hero and the npc from the side
+  C_Arrow,    // from the side of the newest arrow's way, going along with it (overlay trail records it)
   };
 
 struct Hold {
@@ -515,6 +516,7 @@ struct Bench {
   // aimat: the manual aim aims there instead of the mouse, every frame
   Npc*           aimNpc   = nullptr;
   HitZones::Zone aimZone  = HitZones::Body;
+  bool        aimLeg    = false;  // aimat ... leg: the middle of the legs' capsules (limb takes the arms too)
   bool           aimFixed = false;
   bool           aimRaw   = false; // no holding over for the drop of the arrow
   bool           crossValid = false;
@@ -534,6 +536,19 @@ struct Bench {
   std::string camNpc;           // C_Shoulder, C_NpcFace, C_Two
   std::string zonesNpc;         // showzones: the npc whose hit zones the overlay draws
   bool        zonesOnly = false; // the overlay draws the hit zones only
+  // overlay trail: the way each arrow flew, kept trailKeep ms after its last move; nothing else drawn
+  struct Trail { const void* key = nullptr; std::vector<Vec3> pts; uint64_t last = 0; };
+  bool        trailOn   = false;
+  bool        trailLine = false;  // ...and a dashed straight line along the way it left: the bow's line
+  uint64_t    trailKeep = 1500;
+  std::vector<Trail> trails;
+  // slowmo: the game runs `slow` times slower than the video (its sound is not recorded meanwhile)
+  float       slow      = 1;
+  uint64_t    slowAcc   = 0;      // microseconds of game time owed to the next frame
+  uint64_t    frameMs   = 0;      // the video's time of this frame, ms
+  // track: where an npc's head (or trunk) is in each recorded frame, for labels that follow it
+  std::string trackNpc;
+  bool        trackHead = true;
   float       camSmooth = 0.12f; // share of the way to the wanted camera per frame; 1: no smoothing
   bool        smValid   = false;
   Vec3        smOrg, smTgt;
@@ -929,10 +944,72 @@ bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
   return true;
   }
 
+// the point aimed at: the middle of a zone of the npc; `leg`: the limb capsules below the knees' height (limb
+// alone is the middle of arms and legs, at the hips)
+bool aimPoint(Npc& n, HitZones::Zone z, bool leg, Vec3& out) {
+  if(leg) {
+    std::vector<HitZones::Posed> caps;
+    n.hitZonesPosed(caps);
+    const float knees = n.position().y + 80.f;
+    Vec3  sum   = {};
+    float count = 0;
+    for(auto& c:caps) {
+      const Vec3 m = (c.a+c.b)*0.5f;
+      if(c.zone==HitZones::Limb && m.y<knees) {
+        sum   += m;
+        count += 1;
+        }
+      }
+    if(count>0) {
+      out = sum*(1.f/count);
+      return true;
+      }
+    }
+  return n.hitZoneCenter(z,out);
+  }
+
+// cam arrow: beside the newest arrow (from the hero until one flies), looking a little ahead of it
+void arrowShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
+  Vec3 head = pl.position() + Vec3(0,150,0);
+  Vec3 dir  = facing(pl);
+  const Bench::Trail* tr = nullptr;
+  for(auto& t:bench.trails)
+    if(t.pts.size()>=2 && (tr==nullptr || t.last>=tr->last))
+      tr = &t;
+  if(tr!=nullptr) {
+    head = tr->pts.back();
+    Vec3 d = tr->pts[1]-tr->pts[0];
+    d.y = 0;
+    if(d.length()>1e-3f)
+      dir = d/d.length();
+    }
+  const Vec3 side = Vec3(-dir.z,0,dir.x)*(bench.camAngle<0 ? -1.f : 1.f);
+  org = head + side*bench.camDist + Vec3(0,bench.camHeight,0);
+  tgt = head + dir*bench.camLook;
+  // the ground may rise beside the way: keep the camera a man's height over it
+  const float g = groundY(w,org.x,org.z,org.y+400);
+  if(!std::isnan(g) && org.y<g+120)
+    org.y = g+120;
+  }
+
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
   if(bench.cam==C_Game || bench.cam==C_Hold)
     return;
+  if(bench.cam==C_Arrow) {
+    Vec3 org, tgt;
+    arrowShot(w,pl,org,tgt);
+    if(!bench.smValid) {
+      bench.smOrg   = org;
+      bench.smTgt   = tgt;
+      bench.smValid = true;
+      } else {
+      bench.smOrg += (org-bench.smOrg)*bench.camSmooth;
+      bench.smTgt += (tgt-bench.smTgt)*bench.camSmooth;
+      }
+    lookFrom(bench.smOrg,bench.smTgt);
+    return;
+    }
   if(bench.cam==C_Shoulder || bench.cam==C_NpcFace || bench.cam==C_Two) {
     // shots of the hero himself, also while the camera watches a subject (gaze)
     Npc* hero = Gothic::inst().player();
@@ -1370,7 +1447,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="cam") {
     const std::string m = a.size()>1 ? a[1] : "";
     bench.camAuto = false;
-    if(m!="shoulder" && m!="face" && m!="two" && m!="smooth")
+    if(m!="shoulder" && m!="face" && m!="two" && m!="smooth" && m!="arrow")
       bench.smValid = false;
     if(m=="game") {
       bench.cam = C_Game;
@@ -1414,6 +1491,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.camAngle  = num(a,5,m=="face" ? 30 : 1);
       if(npcBySymbol(w,bench.camNpc)==nullptr)
         say("cam " + m + ": no npc " + bench.camNpc);
+      }
+    else if(m=="arrow") {
+      // cam arrow [dist 600] [height 40] [side 1|-1] [ahead 80]: beside the newest arrow's way (overlay trail
+      // records it), from the hero until one flies; glides by `cam smooth`
+      bench.cam       = C_Arrow;
+      bench.camDist   = num(a,2,600);
+      bench.camHeight = num(a,3,40);
+      bench.camAngle  = num(a,4,1);
+      bench.camLook   = num(a,5,80);
       }
     else if(m=="cut") {
       bench.smValid = false;  // the next shot starts where it is, without moving there
@@ -1471,13 +1557,39 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.zoom = on;
     else if(m=="bright")
       bench.bright = on;
-    else if(m=="zones")
+    else if(m=="zones") {
       bench.zonesOnly = on; // the hit zones only, no legs, no text
+      bench.overlay   = bench.overlay || on;
+      }
+    else if(m=="trail") {
+      // overlay trail [off] [keep ms] [line]: the arrows' ways only (with the zones of showzones), no legs, no
+      // text; `line`: also the straight line it left along (where the bow pointed), dashed
+      bench.trailOn   = on;
+      bench.trailKeep = a.size()>2 && a[2]!="off" && a[2]!="line" ? uint64_t(num(a,2,1500)) : bench.trailKeep;
+      bench.trailLine = on && std::find(a.begin(),a.end(),"line")!=a.end();
+      bench.overlay   = bench.overlay || on;
+      if(!on)
+        bench.trails.clear();
+      }
     else
       bench.overlay = (m!="off");
     }
   else if(c=="ui") {
     bench.ui = !(a.size()>1 && a[1]=="off");
+    }
+  else if(c=="slowmo") {
+    // slowmo <k>: the game runs k times slower than the video (1: normal); the game's sound is not recorded
+    // while slowed (silence keeps the sound in step with the picture)
+    bench.slow    = std::clamp(num(a,1,1),1.f,20.f);
+    bench.slowAcc = 0;
+    say("slowmo " + std::to_string(bench.slow));
+    }
+  else if(c=="track") {
+    // track <npc|off> [head|body]: each recorded frame, where it is on the picture (events.jsonl "track":
+    // x, y in pixels of the frame, w, h; and each zone: hx hy, bx by, lx ly)
+    bench.trackNpc  = a.size()>1 && a[1]!="off" ? a[1] : "";
+    bench.trackHead = !(a.size()>2 && a[2]=="body");
+    say("track " + (bench.trackNpc.empty() ? std::string("off") : bench.trackNpc));
     }
   else if(c=="rec") {
     stopRecording();
@@ -1991,7 +2103,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("volley " + std::to_string(bench.volleyLeft));
     }
   else if(c=="aimat") {
-    // aimat <npc|nearest> [head|body|limb] | aimat <x> <y> <z> | aimat ahead [dist] [height] | aimat off: the
+    // aimat <npc|nearest> [head|body|limb|leg] | aimat <x> <y> <z> | aimat ahead [dist] [height] | aimat off: the
     // manual aim aims there
     // instead of the mouse - the middle of a zone of the npc, every frame
     bench.aimNpc   = nullptr;
@@ -2024,7 +2136,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string z = a.size()>2 ? a[2] : "body";
     bench.aimNpc  = n;
-    bench.aimZone = z=="head" ? HitZones::Head : (z=="limb" ? HitZones::Limb : HitZones::Body);
+    bench.aimZone = z=="head" ? HitZones::Head : (z=="limb" || z=="leg" ? HitZones::Limb : HitZones::Body);
+    bench.aimLeg  = z=="leg";
     bench.aimRaw  = a.size()>3 && a[3]=="raw";
     say("aimat " + symName(w,n) + " " + std::string(HitZones::name(bench.aimZone)) + (bench.aimRaw ? " raw" : ""));
     }
@@ -2858,7 +2971,7 @@ void tickVolley(PlayerControl& ctrl) {
         if(bench.aimNpc!=nullptr) {
           // where it aims, the middle of the zone: the log compares the arrow's flight with it
           Vec3 c = bench.aimNpc->collosionCenter();
-          bench.aimNpc->hitZoneCenter(bench.aimZone,c);
+          aimPoint(*bench.aimNpc,bench.aimZone,bench.aimLeg,c);
           char buf[160];
           std::snprintf(buf,sizeof(buf),"aim zone %.1f %.1f %.1f",c.x,c.y,c.z);
           TestBench::note(buf);
@@ -3081,6 +3194,57 @@ void drawZones(Canvas& cv, Camera* cam) {
     }
   }
 
+// the arrows' ways (overlay trail): gold lines from the bow to where each flew, fading out after it stopped
+void drawTrails(Canvas& cv, Camera* cam) {
+  if(cam==nullptr)
+    return;
+  const Matrix4x4 vp = cam->viewProj();
+  auto proj = [&](const Vec3& p, float& x, float& y) {
+    float px = p.x, py = p.y, pz = p.z, pw = 1;
+    vp.project(px,py,pz,pw);
+    if(pw<=1e-3f)
+      return false;
+    x = (0.5f*px/pw+0.5f)*float(cv.w);
+    y = (0.5f*py/pw+0.5f)*float(cv.h);
+    return true;
+    };
+  const int thick = cv.h>1200 ? 2 : 1;
+  for(auto& tr:bench.trails) {
+    const uint64_t age = bench.time>tr.last ? bench.time-tr.last : 0;
+    if(age>bench.trailKeep || tr.pts.size()<2)
+      continue;
+    const float  k   = 1.f - float(age)/float(std::max<uint64_t>(bench.trailKeep,1));
+    const Rgba   col = {255,214,120,uint8_t(235.f*k)};
+    for(size_t i=1; i<tr.pts.size(); ++i) {
+      float x0,y0,x1,y1;
+      if(proj(tr.pts[i-1],x0,y0) && proj(tr.pts[i],x1,y1))
+        cv.line(x0,y0,x1,y1,thick,col);
+      }
+    float x,y;
+    if(age==0 && proj(tr.pts.back(),x,y))
+      cv.dot(x,y,thick+1,{255,255,255,235});
+    if(!bench.trailLine)
+      continue;
+    // the bow's line: the first step of the flight, drawn straight on as far (across the ground) as the arrow
+    // has flown; under it the arrow's way bends down
+    Vec3 d = tr.pts[1]-tr.pts[0];
+    const float dh = std::hypot(d.x,d.z);
+    const float fh = std::hypot(tr.pts.back().x-tr.pts[0].x,tr.pts.back().z-tr.pts[0].z);
+    if(dh<1e-3f || fh<1.f)
+      continue;
+    const Vec3   end = tr.pts[0] + d*(fh/dh);
+    const Rgba   wc  = {255,255,255,uint8_t(200.f*k)};
+    const int    n   = 40;
+    for(int i=0; i<n; i+=2) {
+      float x0,y0,x1,y1;
+      const Vec3 p0 = tr.pts[0] + (end-tr.pts[0])*(float(i)/float(n));
+      const Vec3 p1 = tr.pts[0] + (end-tr.pts[0])*(float(i+1)/float(n));
+      if(proj(p0,x0,y0) && proj(p1,x1,y1))
+        cv.line(x0,y0,x1,y1,thick,wc);
+      }
+    }
+  }
+
 void drawOverlay(Pixmap& pm) {
   Canvas cv;
   cv.px = reinterpret_cast<uint8_t*>(pm.data());
@@ -3092,8 +3256,9 @@ void drawOverlay(Pixmap& pm) {
   auto& p   = FootIk::playerProbe;
   if(bench.bright)
     autoExposure(cv);
-  if(bench.zonesOnly) {
+  if(bench.zonesOnly || bench.trailOn) {
     drawZones(cv,cam);
+    drawTrails(cv,cam);
     return;
     }
 
@@ -3371,7 +3536,13 @@ uint64_t TestBench::frameDt(uint64_t dt) {
       std::this_thread::sleep_until(due); else
       bench.lagMs = std::max<int64_t>(bench.lagMs,duration_cast<milliseconds>(now-due).count());
     }
-  return (bench.step*1000)/Fps - ((bench.step-1)*1000)/Fps;
+  bench.frameMs = (bench.step*1000)/Fps - ((bench.step-1)*1000)/Fps;
+  if(bench.slow<=1.f)
+    return bench.frameMs;
+  bench.slowAcc += uint64_t(float(bench.frameMs*1000)/bench.slow);
+  const uint64_t dtGame = bench.slowAcc/1000;
+  bench.slowAcc -= dtGame*1000;
+  return dtGame;
   }
 
 namespace {
@@ -3380,15 +3551,25 @@ void renderSound(uint64_t dt) {
   const uint32_t rate = SoundDevice::loopbackRate();
   if(rate==0 || dt==0)
     return;
+  const bool slowed = bench.slow>1.f && bench.frameMs>0;
   bench.audioAcc += uint64_t(rate)*dt;
   const size_t n = size_t(bench.audioAcc/1000);
   bench.audioAcc -= uint64_t(n)*1000;
   bench.mix.resize(n*2);
   SoundDevice::renderLoopback(bench.mix.data(),n);
-  if(bench.audio!=nullptr) {
+  if(bench.audio==nullptr)
+    return;
+  if(!slowed) {
     std::fwrite(bench.mix.data(),sizeof(int16_t),bench.mix.size(),bench.audio);
     bench.audioFrames += n;
+    return;
     }
+  // slowed: the mixer has played dt of game time (the sounds go on), the recording gets the frame's
+  // length of silence, so that the sound stays in step with the picture
+  const size_t quiet = size_t(uint64_t(rate)*bench.frameMs/1000);
+  bench.mix.assign(quiet*2,0);
+  std::fwrite(bench.mix.data(),sizeof(int16_t),bench.mix.size(),bench.audio);
+  bench.audioFrames += quiet;
   }
 }
 
@@ -3516,7 +3697,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   if(bench.aimNpc!=nullptr) {
     Vec3 at;
-    if(!bench.aimNpc->hitZoneCenter(bench.aimZone,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
+    if(!aimPoint(*bench.aimNpc,bench.aimZone,bench.aimLeg,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
       at = bench.aimNpc->collosionCenter();
     if(!bench.aimRaw) {
       // as an archer does: over it by how much the arrow drops on the way (at full draw), from the nock
@@ -3581,6 +3762,51 @@ bool TestBench::withUi() {
   return isActive() && bench.ui;
   }
 
+// track: where the tracked npc is on this frame, into events.jsonl: x, y the head (or the trunk: track ... body),
+// and every zone: hx hy (head), bx by (trunk), lx ly (the legs, below the knees); pixels of the frame
+void trackFrame(int w, int h) {
+  World* wrld = Gothic::inst().world();
+  auto   cam  = Gothic::inst().camera();
+  Npc*   n    = wrld!=nullptr ? npcBySymbol(*wrld,bench.trackNpc) : nullptr;
+  if(n==nullptr || cam==nullptr)
+    return;
+  std::vector<HitZones::Posed> caps;
+  n->hitZonesPosed(caps);
+  const float knees = n->position().y + 80.f;
+  Vec3  sum[3] = {};
+  float cnt[3] = {};
+  for(auto& c:caps) {
+    const Vec3 m = (c.a+c.b)*0.5f;
+    const int  k = c.zone==HitZones::Head ? 0 : (c.zone==HitZones::Body ? 1 : (m.y<knees ? 2 : -1));
+    if(k>=0) {
+      sum[k] += m;
+      cnt[k] += 1;
+      }
+    }
+  const Matrix4x4 vp = cam->viewProj();
+  float sx[3] = {-1,-1,-1}, sy[3] = {-1,-1,-1};
+  for(int k=0; k<3; ++k) {
+    if(cnt[k]==0)
+      continue;
+    Vec3  p  = sum[k]*(1.f/cnt[k]);
+    float pw = 1;
+    vp.project(p.x,p.y,p.z,pw);
+    if(pw<=1e-3f)
+      continue;
+    sx[k] = (0.5f*p.x/pw+0.5f)*float(w);
+    sy[k] = (0.5f*p.y/pw+0.5f)*float(h);
+    }
+  const int main = bench.trackHead ? 0 : 1;
+  if(sx[main]<0)
+    return;
+  char buf[320];
+  std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"x\":%.1f,\"y\":%.1f,\"hx\":%.1f,\"hy\":%.1f,\"bx\":%.1f,\"by\":%.1f,"
+                "\"lx\":%.1f,\"ly\":%.1f,\"w\":%d,\"h\":%d",
+                jsonStr(bench.trackNpc).c_str(),double(sx[main]),double(sy[main]),double(sx[0]),double(sy[0]),
+                double(sx[1]),double(sy[1]),double(sx[2]),double(sy[2]),w,h);
+  event("track",buf);
+  }
+
 void TestBench::capture(Pixmap& frame, float uiScale) {
   bench.uiScale = uiScale;
   Pixmap pm;
@@ -3597,7 +3823,29 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     bench.shot.clear();
     }
   if(bench.rec && bench.recVideo) {
+    if(!bench.trackNpc.empty() && pm.w()>0)
+      trackFrame(int(pm.w()),int(pm.h()));
     writeVideo(pm);
     ++bench.recFrame;
     }
+  }
+
+void TestBench::arrowAt(const void* arrow, float x, float y, float z) {
+  if(scenarioPath==nullptr || !bench.trailOn)
+    return;
+  const Vec3 p = {x,y,z};
+  // the same arrow if it moved within 200 ms (a new arrow may get the place of an old one in memory)
+  for(auto& tr:bench.trails) {
+    if(tr.key!=arrow || bench.time>tr.last+200)
+      continue;
+    if(tr.pts.empty() || (tr.pts.back()-p).length()>2.f) {
+      if(tr.pts.size()<4000)
+        tr.pts.push_back(p);
+      }
+    tr.last = bench.time;
+    return;
+    }
+  // drop the ones long gone, start this one
+  std::erase_if(bench.trails,[](const Bench::Trail& t){ return bench.time>t.last+bench.trailKeep; });
+  bench.trails.push_back({arrow,{p},bench.time});
   }
