@@ -54,6 +54,18 @@
 #       deal that forgives the lie for the fine, and he accepts it (docs/npc-tools.md, wave 1 step 2)
 #   debt: Lobart lends the hero 20 gold for 25 back by the end of the next day; two days on the debt is a
 #       broken word (trust) and goes round as a rumor; then the hero pays it back, late (wave 1 step 2)
+#   wrath: the necromancer's answer (docs/xardas-wrath.md): the hero insults Xardas line by line; the scales of
+#       his patience tip (model scripted with LLM=fake: rude, an insult, his mother), he kills the hero with a
+#       spell and raises him as a skeleton. LLM=chatgpt: whether the real model tips over (GOTHIC_WRATH_LINES:
+#       other lines, "|" between them)
+#   initiative: an npc comes up to the hero and speaks first (docs/npc-tools.md, wave 2 step 1). Hilda's
+#       greeting waits for the hero (the game's Npc_CheckInfo), so she is left to the scripts. The hero owes
+#       Lobart 25 gold since yesterday (a debt seeded into the chronicle): a broken word, on Lobart's mind. The
+#       hero stands 12 m in front of him; Lobart walks up once by himself and speaks first about the debt (the
+#       fact `initiative`), the hero's next words without a name go to him, Lobart offers a deal that settles
+#       the debt, the hero accepts it and nothing is on Lobart's mind any more. Without DECIDER_URL a fixed
+#       stand-in decides for Lobart only; with it the behavioral model decides (give a longer TIMEOUT).
+#       Words scripted with LLM=fake. Run on a save: SAVE=save_slot_1.sav
 #   cards: the model writes character cards (docs/npc-tools.md, wave 1 step 3) for every npc of the world with
 #       lines of its own (GOTHIC_CARDS=SYM,...: those only) into server/src/gothic_ai/gamedata/characters.json;
 #       those with a card are skipped; needs LLM=chatgpt and a long TIMEOUT for all of them

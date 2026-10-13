@@ -28,7 +28,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..protocol import (
     Attached,
@@ -48,6 +48,9 @@ from .situation import NpcContext, Situation, SituationBuilder, clock_text
 from .stimuli import THREAT_CONTEXT, Stimulus, merge, normalize, policy
 from .tiers import Placement, Tier, TierConfig, assign_tiers, importance
 
+if TYPE_CHECKING:
+    from ..trace import TraceWriter
+
 log = logging.getLogger(__name__)
 
 NO_ACTION = {"continue", "keep_routine"}
@@ -56,6 +59,7 @@ NO_ACTION = {"continue", "keep_routine"}
 TAKES_BODY = {"fight", "flee", "call_help"}
 BODY_MAX_S = 60.0  # a body taken over without word of it being done is given back after this
 OVERHEAR_CM = 1000  # npc's this close hear what the player says to someone else
+TRACE_PER_MIN = 12  # decision rows per npc a minute: a NEAR npc with an agenda is asked every 6-10 s
 
 
 def applied_key(choice: str, target: str | None) -> str:
@@ -185,6 +189,7 @@ class PlannerStats:
     stale: int = 0  # pending dropped before it could be sent
     quiet: int = 0  # idle/timer checks skipped: nothing to react to
     cooldown: int = 0  # decided an action it did just recently
+    vetoed: int = 0  # the `allow` hook kept a sure answer from being applied
     events: int = 0
     scripted_events: int = 0
 
@@ -203,8 +208,13 @@ class NpcPlanner:
         routine_of: Callable[[str], Awaitable[Any]] | None = None,
         habits_of: Callable[[str], list[Habit]] | None = None,
         view_of: Callable[[str], tuple[str, ...]] | None = None,
+        trace: TraceWriter | None = None,
+        facts_of: Callable[[str], tuple[str, ...]] | None = None,
     ) -> None:
         self.decider = decider
+        self.trace = trace  # every answered decision as a "brain" row: data for the fast model
+        # what the npc remembers about the hero, a few English lines (the state's "What you remember")
+        self.facts_of = facts_of
         # what the npc perceives now (perception.py), a few English lines
         self.view_of = view_of
         # what an npc wants from the hero, as its last conversation left it (memory); read when it appears
@@ -216,6 +226,10 @@ class NpcPlanner:
         # how much the moment calls for the npc's own words: (npc, level, the reaction applied or None,
         # flight); told every level, the listener decides (`escalate_level`, or more when it already spoke)
         self.on_escalate: Callable[[str, float, Decision | None, Flight], None] | None = None
+        # a reason not to apply a sure choice now, or None (initiative.py: one walk-up at a time)
+        self.allow: Callable[[NpcRecord, str], str | None] | None = None
+        # takes approach_talk over: walks the npc up and lets it speak; without it the applier walks it
+        self.on_approach: Callable[[Decision, NpcRecord], None] | None = None
         self.applier = applier
         self.builder = builder or SituationBuilder()
         self.cfg = config or PlannerConfig()
@@ -229,6 +243,7 @@ class NpcPlanner:
         self._refilled = clock()
         self._ids = itertools.count(1)
         self._tasks: set[asyncio.Task[None]] = set()
+        self._traced: dict[str, tuple[float, int]] = {}  # npc -> (minute started, rows in it)
 
     # --- input ----------------------------------------------------------------------------
 
@@ -266,6 +281,7 @@ class NpcPlanner:
         for task in self._tasks:
             task.cancel()
         self.npcs.clear()
+        self._traced.clear()
 
     def on_roster(self, entries: list[RosterEntry], now: float, *, full: bool = True) -> None:
         seen = set()
@@ -506,6 +522,7 @@ class NpcPlanner:
             "stale": s.stale,
             "quiet": s.quiet,
             "cooldown": s.cooldown,
+            "vetoed": s.vetoed,
             "events": s.events,
             "slowdown": round(self.slowdown, 2),
         }
@@ -584,7 +601,14 @@ class NpcPlanner:
         rec.stimuli = [s for s in rec.stimuli if s.alive(now)]
         view = self.view_of(rec.id) if self.view_of is not None else ()
         ctx = NpcContext(
-            rec.id, rec.name, rec.guild, rec.distance_cm, rec.in_view, agenda=rec.agenda, view=view
+            rec.id,
+            rec.name,
+            rec.guild,
+            rec.distance_cm,
+            rec.in_view,
+            agenda=rec.agenda,
+            view=view,
+            facts=self.facts_of(rec.id) if self.facts_of else (),
         )
         clock = clock_text(*self.game_time) if self.game_time else None
         plan_args: dict[str, dict] = {}
@@ -674,6 +698,7 @@ class NpcPlanner:
             return
         if rec.tier is Tier.OFF or rec.version != flight.version:
             self.stats.discarded += 1  # something happened meanwhile: a new pending request covers it
+            self._trace(npc, flight, outcome.answers.get(flight.purpose), False, "outdated")
             if rec.pending is None:
                 self._schedule(rec, now)
             return
@@ -708,15 +733,23 @@ class NpcPlanner:
             threshold = self.cfg.option_threshold.get(choice, self.cfg.react_threshold)
         if conf < threshold:
             self.stats.unsure += 1
+            self._trace(npc, flight, answer, False, "unsure")
             return None
         if choice in NO_ACTION:
             self.stats.no_action += 1
+            self._trace(npc, flight, answer, False, "no action")
             return None
         key = applied_key(choice, flight.target)
         if now - rec.last_applied.get(key, float("-inf")) < self.cfg.cooldown_s.get(
             choice, self.cfg.default_cooldown_s
         ):
             self.stats.cooldown += 1
+            self._trace(npc, flight, answer, False, "cooldown")
+            return None
+        if self.allow is not None and (why := self.allow(rec, choice)) is not None:
+            rec.last_applied[key] = now  # not asked to do it again at once
+            self.stats.vetoed += 1
+            self._trace(npc, flight, answer, False, f"veto: {why}")
             return None
         rec.last_applied[key] = now
         self.stats.applied += 1
@@ -735,7 +768,14 @@ class NpcPlanner:
         )
         if flight.purpose == "react":
             rec.body = (choice, now) if choice in TAKES_BODY else None
-        self.applier.apply(decision)
+        if choice == "approach_talk" and flight.purpose == "react" and self.on_approach is not None:
+            # the desk walks it and lets it speak; the applier would send a second go_to_npc
+            log.info("decision %s react=approach_talk handed to the initiative desk", npc)
+            self._trace(npc, flight, answer, True, "initiative desk")
+            self.on_approach(decision, rec)
+        else:
+            self._trace(npc, flight, answer, True, "")
+            self.applier.apply(decision)
         return decision
 
     async def _ask_after(self, npc: str, flight: Flight, reaction: Decision | None, names: list[str]) -> None:
@@ -746,6 +786,7 @@ class NpcPlanner:
             questions |= getattr(self.builder, name)(flight.situation).questions
         # words are worth little when late; the attitude can wait
         deadline = self.cfg.deadline_ms["escalate" if "escalate" in names else "attitude"]
+        sent = self.clock()
         out = await self.decider.decide(
             f"{flight.rid}{''.join(n[0] for n in names)}",
             "background",
@@ -757,6 +798,7 @@ class NpcPlanner:
         if out.kind != "answers" or not out.answers:
             return
         if a := out.answers.get("attitude"):
+            self._trace(npc, flight, a, True, "", question="attitude", questions=questions, sent=sent)
             self.applier.apply(
                 Decision(
                     npc,
@@ -771,8 +813,60 @@ class NpcPlanner:
         if a := out.answers.get("escalate"):
             level = float(a["score"])
             log.info("escalate %s %.1f after %s", npc, level, ",".join(flight.stimuli))
+            self._trace(npc, flight, a, True, "", question="escalate", questions=questions, sent=sent)
             if self.on_escalate is not None:
                 self.on_escalate(npc, level, reaction, flight)
+
+    def _trace(
+        self,
+        npc: str,
+        flight: Flight,
+        answer: dict | None,
+        applied: bool,
+        why: str,
+        *,
+        question: str | None = None,
+        questions: dict[str, dict] | None = None,
+        sent: float | None = None,
+    ) -> None:
+        """One answered question as a `brain` row: the state, the options' texts, the answer and what came of
+        it (`why` it was not applied). At most TRACE_PER_MIN rows per npc a minute."""
+        if self.trace is None:
+            return
+        now = self.clock()
+        start, rows = self._traced.get(npc, (now, 0))
+        if now - start >= 60.0:
+            start, rows = now, 0
+        if rows >= TRACE_PER_MIN:
+            return
+        self._traced[npc] = (start, rows + 1)
+        question = question or flight.purpose
+        criteria = (questions or flight.situation.questions).get(question, {}).get("criteria", {})
+        after = question != flight.purpose
+        rec = self.npcs.get(npc)
+        row: dict[str, Any] = {
+            "type": "brain",
+            "t": round(time.time(), 3),
+            "npc": npc,
+            "rid": flight.rid,
+            "question": question,
+            "lane": "urgent" if flight.urgent and not after else "background",
+            "tier": rec.tier.name if rec is not None else None,
+            "state": flight.situation.state,
+            "options": dict(criteria) if isinstance(criteria, dict) else list(criteria),
+            "stimuli": list(flight.stimuli),
+        }
+        answer = answer or {}
+        if "score" in answer:
+            row["score"] = round(float(answer["score"]), 3)
+        else:
+            row["choice"] = answer.get("choice")
+        row["confidence"] = round(float(answer.get("confidence", 0.0)), 3)
+        row["probabilities"] = answer.get("probabilities", {})
+        row["applied"] = applied
+        row["why"] = why
+        row["latency_ms"] = round((now - (flight.sent if sent is None else sent)) * 1000, 1)
+        self.trace.write(row)
 
     def _schedule(self, rec: NpcRecord, now: float) -> None:
         if rec.tier is Tier.OFF:

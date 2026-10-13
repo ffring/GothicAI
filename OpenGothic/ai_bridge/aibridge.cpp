@@ -39,6 +39,7 @@
 #include "jsonwriter.h"
 #include "world/waypoint.h"
 #include "linelibrary.h"
+#include "necromancy.h"
 #include "npccontroller.h"
 #include "npcfind.h"
 #include "npcobserver.h"
@@ -51,7 +52,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 12;
+constexpr int         ProtocolVersion = 13;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -72,6 +73,13 @@ std::string lower(std::string_view s) {
   std::string r(s);
   for(auto& c:r)
     c = char(std::tolower(static_cast<unsigned char>(c)));
+  return r;
+  }
+
+std::string upperSymbol(std::string_view s) {
+  std::string r(s);
+  for(auto& c:r)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
   return r;
   }
 
@@ -231,6 +239,8 @@ struct AiBridge::Impl final {
   // debug commands about dialogs (-devmode): they run right away, in the game tick
   void onDialogDebug(World* world, const rapidjson::Value& msg);
   void onStoryEval(World& world, const rapidjson::Value& msg);
+  // v13: the necromancer's answer (docs/xardas-wrath.md): `npc` kills the hero, raises him, the game ends
+  bool onRaiseDead(World& world, const rapidjson::Value& msg, std::string& err);
   void sendWorld(std::string_view type, World* world);
 
   std::string          url;
@@ -265,6 +275,7 @@ struct AiBridge::Impl final {
   std::unordered_map<std::string,std::string> lastLine;  // npc -> line it speaks (or spoke) last
   std::unordered_map<std::string,std::string> originalLines;  // original line sent with `say` -> npc, until it starts
   std::unique_ptr<ChatOverlay> chat;
+  Necromancy                   necro;
   std::string                  listener;       // the npc listening to the hero's voice
   std::string                  lastAddressee;  // whom the server said the hero spoke to last
   std::string                  thinker;        // the npc thinking of an answer
@@ -333,6 +344,10 @@ AiBridge::Impl::Impl() {
     };
   debugTimer.timeout.bind(this,&Impl::runDebug);
   if(TestBench::isActive())
+    TestBench::aiReached = [this](std::string_view key, std::string_view stage) {
+      return key=="necro" && necro.reached(stage);
+      };
+  if(TestBench::isActive())
     TestBench::aiBusy = [this]() {
       for(auto& v:voices)
         if(v.drainedAt==0)
@@ -394,6 +409,7 @@ AiBridge::Impl::~Impl() {
   gothic.saveExtFn         = nullptr;
   gothic.sessionStartFn    = nullptr;
   TestBench::aiBusy        = nullptr;
+  TestBench::aiReached     = nullptr;
   voices.clear();  // before the game's sound device goes
   chat.reset();
   ws.stop();
@@ -461,8 +477,10 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
     tickVoices(*world);
     tickDeal(*world);
     tickListener(*world);
+    necro.tick(*world);
     }
   ensureChat();
+  chat->setHidden(necro.hidesChat());
   chat->tick();
   }
 
@@ -485,6 +503,7 @@ void AiBridge::Impl::onStartLoading() {
   Log::i("[story] ",graph.status());
   graph.clear();  // the server sends the patches of the new branch
   story.clear();
+  necro.clear();
   if(auto world = Gothic::inst().world())
     ctrl.detachAll(*world,"loading"); else
     ctrl.dropAll("loading");
@@ -681,6 +700,11 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_effect") {
     std::string err;
     const bool  ok = story.effects(*world,doc,err);
+    sendResult(req,ok,err);
+    }
+  else if(type=="raise_dead") {
+    std::string err;
+    const bool  ok = onRaiseDead(*world,doc,err);
     sendResult(req,ok,err);
     }
   else if(type=="npc_act") {
@@ -1061,6 +1085,25 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     }
   }
 
+bool AiBridge::Impl::onRaiseDead(World& world, const rapidjson::Value& msg, std::string& err) {
+  const auto symbol = upperSymbol(JsonRead::str(msg,"npc"));
+  Npc*       npc    = npcBySymbol(world,symbol);
+  if(npc==nullptr) {
+    err = "no npc " + symbol;
+    return false;
+    }
+  Necromancy::Card card;
+  if(auto it = msg.FindMember("card"); it!=msg.MemberEnd() && it->value.IsObject()) {
+    card.image = std::string(JsonRead::str(it->value,"image"));
+    card.title = TextCodec::fromUtf8(JsonRead::str(it->value,"title"));
+    card.text  = TextCodec::fromUtf8(JsonRead::str(it->value,"text"));
+    }
+  auto spell = upperSymbol(JsonRead::str(msg,"spell"));
+  if(spell.empty())
+    spell = "SPL_SKULL";
+  return necro.start(world,*npc,std::move(card),std::move(spell),err);
+  }
+
 void AiBridge::Impl::onStoryEval(World& world, const rapidjson::Value& msg) {
   // story graph expressions on the live VM, self = `npc`, other = the hero: what the director's rules ask
   const auto req = JsonRead::str(msg,"req");
@@ -1098,6 +1141,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     reply  = std::string(connected ? "connected to " : "NOT connected to ") + url;
     reply += "; " + ctrl.status(world);
     reply += "; " + graph.status();
+    reply += "; necro " + necro.status();
     return true;
     }
 
@@ -1123,6 +1167,20 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     return true;
     }
 
+  if(sub=="necro" && args.size()>2) {
+    // ai necro <npc> [spell] [picture]: the necromancer's answer without the server (docs/xardas-wrath.md)
+    Npc* npc = npcBySymbol(*world,upperSymbol(args[2]));
+    if(npc==nullptr) {
+      reply = "no npc " + args[2];
+      return true;
+      }
+    Necromancy::Card card;
+    card.image = args.size()>4 ? args[4] : "";
+    card.title = TextCodec::fromUtf8("Конец");
+    const auto spell = args.size()>3 ? upperSymbol(args[3]) : std::string("SPL_SKULL");
+    reply = necro.start(*world,*npc,std::move(card),spell,err) ? "necro " + spell : err;
+    return true;
+    }
   if(sub=="ptt" && args.size()>2) {
     // the T key without a keyboard (the test bench): ai ptt start [<wav> said for the hero] | stop | cancel
     const auto state = lower(args[2]);

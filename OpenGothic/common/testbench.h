@@ -40,4 +40,6 @@ namespace TestBench {
   void     aiHeard(std::string_view text, std::string_view to);
   // set by the bridge: an npc of the AI speaks now or has a line waiting for its turn
   extern std::function<bool()> aiBusy;
+  // set by the bridge: whether a thing of it has got that far (`waitai necro risen`: the necromancer's answer)
+  extern std::function<bool(std::string_view key, std::string_view stage)> aiReached;
   }

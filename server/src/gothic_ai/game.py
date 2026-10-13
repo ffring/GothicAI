@@ -25,6 +25,7 @@ from .protocol import (
     DebugCommand,
     DetachCmd,
     Detached,
+    EndCard,
     GameMessage,
     GraphPatchCmd,
     Hello,
@@ -36,6 +37,7 @@ from .protocol import (
     NpcViewCmd,
     PingCmd,
     Pong,
+    RaiseDeadCmd,
     Result,
     RoutineCmd,
     RoutineInfo,
@@ -65,6 +67,7 @@ _Request = (
     | GraphPatchCmd
     | StorySpawnCmd
     | StoryEffectCmd
+    | RaiseDeadCmd
     | StoryNearbyCmd
     | StoryStateCmd
     | StoryEvalCmd
@@ -262,6 +265,14 @@ class GameLink:
         """Effects on an npc through the scripts (see StoryEffectCmd); `check`: all or nothing, the gives
         only if each giver has what it gives."""
         cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
+        await self._request(cmd, timeout)
+
+    async def raise_dead(
+        self, npc: str, card: EndCard, spell: str | None = None, timeout: float = 5.0
+    ) -> None:
+        """The necromancer's answer: `npc` kills the hero, raises him as a skeleton, the game ends on
+        `card`."""
+        cmd = RaiseDeadCmd(req=self._next_id("s"), npc=npc.upper(), spell=spell, card=card)
         await self._request(cmd, timeout)
 
     async def waypoints(self, timeout: float = 10.0) -> list[dict[str, Any]]:

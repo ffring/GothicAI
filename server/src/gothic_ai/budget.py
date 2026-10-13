@@ -49,6 +49,11 @@ class Budget:
         total.tokens -= 1
         return True
 
+    def can(self, npc: str) -> bool:
+        """Whether a call would be allowed now, without taking it."""
+        own, total = self._buckets(npc)
+        return own.tokens >= 1 and total.tokens >= 1
+
     def note(self, npc: str) -> None:
         """A call that was not up to us (the player spoke): counted, never refused."""
         own, total = self._buckets(npc)

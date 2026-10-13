@@ -236,15 +236,29 @@ class TalkDesk:
         if to is None:
             self._spawn(self.link.send(ChatStatusCmd(status="notice", detail="Рядом некому ответить")))
             return
-        if self.partner is None or self.partner.npc != to.id:
-            if self.partner is not None:
+        talk = self.partner
+        if talk is None or talk.npc != to.id:
+            if talk is not None:
                 self._end("switched", to.name)
-            self.dialogue.open(to.id, to.name).new_meeting = True
-            self.partner = Talk(to.id, to.name, now, now)
-            if self.planner is not None:
-                self.planner.talking(to.id, True)
-        self.partner.last_at = now
-        self._spawn(self._answer(self.partner, text))
+            talk = self._open(to.id, to.name, now)
+        talk.last_at = now
+        self._spawn(self._answer(talk, text))
+
+    def begin(self, npc: str, name: str, posture: str | None = None) -> bool:
+        """The npc opens the conversation itself (it came up to the hero): it is his partner now, and his next
+        words go to it. Not while he talks to another; True if it is the partner already."""
+        npc = npc.upper()
+        if self.partner is not None:
+            return self.partner.npc == npc
+        self._open(npc, name, self.clock()).posture = posture
+        return True
+
+    def _open(self, npc: str, name: str, now: float) -> Talk:
+        self.dialogue.open(npc, name).new_meeting = True
+        self.partner = Talk(npc, name, now, now)
+        if self.planner is not None:
+            self.planner.talking(npc, True)
+        return self.partner
 
     def interrupt(self) -> bool:
         """The hero speaks: the partner stops answering (what it said so far stays in its memory)."""
@@ -319,8 +333,7 @@ class TalkDesk:
         """Carry the posture out; what the body really does (holding it may fail)."""
         match choice:
             case "listen":
-                if await self.hold(npc, "listen"):
-                    self._spawn(self._act(npc, "turn_to", npc="PLAYER"))
+                if await self.listen(npc):
                     return "listen"
             case "walk_with":
                 if await self.hold(npc, "walk"):
@@ -331,6 +344,14 @@ class TalkDesk:
                 return "leave"
         self._spawn(self._soft(npc, "look_at", ms=LOOK_MS))
         return "keep_working"
+
+    async def listen(self, npc: str) -> bool:
+        """The npc stops and turns to the hero, held while it listens; False if its body cannot be held."""
+        npc = npc.upper()
+        if not await self.hold(npc, "listen"):
+            return False
+        self._spawn(self._act(npc, "turn_to", npc="PLAYER"))
+        return True
 
     async def _act(self, npc: str, action: str, /, **args: Any) -> None:
         try:
