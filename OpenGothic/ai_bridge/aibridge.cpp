@@ -1745,7 +1745,7 @@ void AiBridge::Impl::onLineStarted(const LineLibrary::Line& line) {
   Npc*        npc   = world!=nullptr ? npcBySymbol(*world,line.npc) : nullptr;
   Npc*        to    = world!=nullptr && !line.to.empty() ? npcBySymbol(*world,line.to) : nullptr;
   std::string name  = npc!=nullptr ? std::string(npc->displayName()) : line.npc;
-  TestBench::aiLine(line.npc,TextCodec::toUtf8(name),TextCodec::toUtf8(line.text),line.time,line.to);
+  TestBench::aiLine(line.npc,TextCodec::toUtf8(name),TextCodec::toUtf8(line.text),line.time,line.to,line.filler);
   // the face while the line is said, and a moment after (v8); the hands go with the mood too
   if(npc!=nullptr) {
     npc->setTalkMood(line.mood);
