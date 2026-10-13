@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "game/archery.h"
 #include "game/damagecalculator.h"
@@ -87,8 +88,13 @@ ArcherAi::Probe    ArcherAi::subjectProbe;
 const void*        ArcherAi::probeNpc    = nullptr;
 
 bool ArcherAi::isEnabled() {
-  if(enabled<0)
-    enabled = Gothic::settingsGetI("GAME","npcManualAim")!=0 ? 1 : 0;
+  if(enabled<0) {
+    // OPENGOTHIC_NPCAIM=0|1 over Gothic.ini (a before/after short films the dice)
+    const char* v = std::getenv("OPENGOTHIC_NPCAIM");
+    if(v!=nullptr && v[0]!='\0')
+      enabled = v[0]!='0' ? 1 : 0; else
+      enabled = Gothic::settingsGetI("GAME","npcManualAim")!=0 ? 1 : 0;
+    }
   return enabled!=0 && Gothic::inst().version().game==2;
   }
 

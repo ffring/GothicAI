@@ -472,13 +472,20 @@ void BowDraw::implApply(Matrix4x4* tr, size_t numBones) {
     // where the animation draws the string to: there the hand holds it
     nock = slotAt + axis*dot(rest+high-slotAt,axis);
     if(align>0.f && length(up)>0.5f && length(vert)>0.1f && !lHandTree.empty() && lHandTree.back()<numBones) {
-      // canted for a quick shot: round the arrow, the top limb toward the drawing hand (the side of its
-      // shoulder), the fingers on the string with it
+      // upright, or canted for a quick shot: round the arrow, the top limb toward the drawing hand (the side
+      // of its shoulder), the fingers on the string with it. So much from upright whatever the animation
+      // leans it (the trained ones hold the bow canted ~60 degrees: canted more, it would lie flat)
       float lean = 0;
-      if(cantK>0.f && lUpper<numBones) {
-        const float side = dot(cross(axis,up),position(tr[upper])-position(tr[lUpper]));
-        lean = cantK*align*CantAngle*float(M_PI)/180.f*(side>=0.f ? 1.f : -1.f);
-        cantHand(tr,slotAt,axis,lean);
+      if(lUpper<numBones) {
+        const Vec3  v    = normalize(vert);
+        const Vec3  u    = normalize(up - axis*dot(up,axis));
+        const float roll = std::atan2(dot(axis,cross(v,u)),dot(v,u));
+        const float side = dot(cross(axis,v),position(tr[upper])-position(tr[lUpper]));
+        const float want = cantK*CantAngle*float(M_PI)/180.f*(side>=0.f ? 1.f : -1.f);
+        lean = align*(want-roll);
+        if(std::abs(lean)>1e-4f)
+          cantHand(tr,slotAt,axis,lean); else
+          lean = 0;
         }
       alignBow(tr,up,nock,axis,lean);
       stringNow(tr,rest,pull);
