@@ -1,5 +1,5 @@
 [Unit]
-Description=Gothic AI: VoxCPM2 TTS (WebSocket, port 47831)
+Description=Gothic AI: VoxCPM2 TTS (audio.cpp + WebSocket bridge, port 47831)
 After=network-online.target
 
 [Service]
