@@ -348,9 +348,12 @@ async def caught(
     journal: Journal,
     lie: Lie,
     how: str,
+    *,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """The giver sees for itself that the hero lies to it, before it pays: it remembers, takes his word no
-    more (trust.py), is wary of him, and the people around hear it. No beating: he took nothing."""
+    more (trust.py), is wary of him, and the people around hear it. No beating: he took nothing. `extra`:
+    more of the fact (the witness whose words caught him, witnesses.py)."""
     day = await _day(link)
     chronicle.record(
         {
@@ -361,6 +364,7 @@ async def caught(
             "title": lie.title,
             "how": how,
             **({"said": True} if lie.said else {}),
+            **(extra or {}),
             **day,
         }
     )

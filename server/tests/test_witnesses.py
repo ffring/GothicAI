@@ -1,0 +1,421 @@
+from dataclasses import dataclass, field
+
+from gothic_ai.amends import Lie as AmendsLie
+from gothic_ai.budget import Budget
+from gothic_ai.chronicle import Chronicle
+from gothic_ai.concerns import Concerns
+from gothic_ai.deals import Deals, LieRef
+from gothic_ai.dialogue import DialogueManager
+from gothic_ai.llm import Message, ToolCall
+from gothic_ai.llm.fake import FakeStep
+from gothic_ai.memory import MemoryStore
+from gothic_ai.perception import PerceptionDesk
+from gothic_ai.persona import PersonaProvider
+from gothic_ai.protocol import NpcView
+from gothic_ai.scenarios import ClaimScript
+from gothic_ai.sightings import Sightings
+from gothic_ai.social import Tie
+from gothic_ai.storyguard import StoryGuard
+from gothic_ai.trust import Trust
+from gothic_ai.witnesses import ASK_TOOL, Inquiry, Witnesses
+from tests.fake_game import FakeGame, connected
+from tests.test_dialogue import _until
+from tests.test_perception import HILDA, LOBART, MALETH, look
+from tests.test_sightings import BOOK
+
+ANDRE, STRANGER = "MIL_311_ANDRE", "VLK_999_STRANGER"
+DAY = 1440
+AT_8 = DAY + 8 * 60 + 10  # the second day, 08:10
+LIE = "Я всё утро был в городе, только что оттуда."
+
+
+@dataclass
+class Social:
+    """Who knows whom: Lobart meets Hilda and Maleth on the farm, Andre in the evening (a dealing)."""
+
+    ties: dict[str, dict[str, Tie]] = field(
+        default_factory=lambda: {
+            LOBART: {
+                HILDA: Tie([(6 * 60, 22 * 60)]),
+                MALETH: Tie([(6 * 60, 22 * 60)]),
+                ANDRE: Tie([(18 * 60, 19 * 60)]),
+            }
+        }
+    )
+    names: dict[str, str] = field(
+        default_factory=lambda: {HILDA: "Хильда", MALETH: "Малет", ANDRE: "Андре", LOBART: "Лобарт"}
+    )
+    guilds: dict[str, int] = field(default_factory=dict)
+
+
+def hero_seen_by(npc: str, name: str, t: int, waypoint: str = "NW_FARM1_PATH_01") -> NpcView:
+    """The npc's view at game minute `t`: the hero in sight (on the pasture, by default)."""
+    return NpcView.model_validate(
+        {"npc": npc, "name": name, "time": t, "hero": look("PLAYER", "Я", 8, seen=True, waypoint=waypoint)}
+    )
+
+
+def lobarts_view(state: str = "ZS_STAND") -> dict:
+    return {
+        "npc": LOBART,
+        "name": "Лобарт",
+        "waypoint": "NW_FARM1_OUT_01",
+        "state": state,
+        "time": DAY + 9 * 60 + 35,
+        "hero": look("PLAYER", "Я", 3, seen=True, waypoint="NW_FARM1_OUT_01"),
+        "sees": [look(HILDA, "Хильда", 9, state="ZS_COOK_CAULDRON", waypoint="NW_FARM1_OUT_02")],
+    }
+
+
+def hildas_view(state: str = "ZS_COOK_CAULDRON") -> dict:
+    return {
+        "npc": HILDA,
+        "name": "Хильда",
+        "waypoint": "NW_FARM1_OUT_02",
+        "state": state,
+        "time": DAY + 9 * 60 + 35,
+    }
+
+
+class World:
+    """Lobart's farm at 09:35 of the second day: Hilda 9 m off, Maleth 40 m, Andre in the city."""
+
+    def __init__(self, link, fake: FakeGame, llm, *, budget: Budget | None = None) -> None:
+        fake.day, fake.hour, fake.minute = 1, 9, 35
+        fake.npc_states = {
+            HILDA: {"state": "alive", "name": "Хильда", "distance": 900},
+            MALETH: {"state": "alive", "name": "Малет", "distance": 4000},
+            ANDRE: {"state": "alive", "name": "Андре", "distance": 90000},
+        }
+        fake.views = {LOBART: lobarts_view(), HILDA: hildas_view()}
+        self.store = MemoryStore(":memory:")
+        self.dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=self.store)
+        self.chronicle = Chronicle(link, self.store)
+        social = Social()
+        self.desk = PerceptionDesk(link, social=lambda: social, places=BOOK)  # type: ignore[arg-type,return-value]
+        self.seen = Sightings(link, self.store, self.desk, self.chronicle)
+        self.held: list[tuple[str, str]] = []
+
+        async def take(npc: str, why: str) -> bool:
+            await link.attach(npc)
+            self.held.append((npc, why))
+            return True
+
+        self.dialogue.take_body = take
+        self.dialogue.free_body = lambda npc, why: None
+        self.witnesses = Witnesses(
+            link,
+            self.dialogue,
+            self.seen,
+            self.desk,
+            self.chronicle,
+            StoryGuard(None),
+            social=lambda: social,  # type: ignore[arg-type,return-value]
+            budget=budget,
+            hero_cm=lambda npc: 500.0,
+        )
+        self.trust = Trust(self.chronicle)
+        self.dialogue.extensions += [self.desk, self.seen, self.witnesses, self.trust]
+        self.dialogue.sight = self.desk.sight
+
+
+def lobart(*rules: tuple[str, FakeStep], hilda: list[tuple[str, FakeStep]] | None = None) -> ClaimScript:
+    others = ClaimScript(hilda or [], [], "Ну.", only="Хильда")
+    return ClaimScript(list(rules), [], "Ну?", only="Лобарт", others=others)
+
+
+ASK_HILDA = FakeStep(
+    "Хильда! Ты его утром не видала?",
+    [ToolCall("ask_witness", {"who": "Хильду", "said": "всё утро был в городе"}, "a1")],
+)
+CATCH = FakeStep(
+    "Так ты врёшь!", [ToolCall("catch_lie", {"said": "всё утро был в городе", "seen": "C1"}, "c1")]
+)
+
+
+async def test_a_witness_called_over_tells_what_it_saw_and_the_lie_is_caught_by_its_word():
+    fake = FakeGame(branch="A")
+    llm = lobart(
+        ("Ответ:", CATCH),
+        ("город", ASK_HILDA),
+        hilda=[("спрашивает тебя", FakeStep("Видела его утром на пастбище."))],
+    )
+    async with connected(fake) as link:
+        w = World(link, fake, llm)
+        for t in range(AT_8, AT_8 + 21, 5):  # this morning Hilda saw him on the pasture; Lobart did not
+            w.seen.saw(hero_seen_by(HILDA, "Хильда", t))
+        w.dialogue.open(LOBART, "Лобарт")
+        await w.dialogue.say_as_player(LOBART, LIE)
+        await _until(lambda: w.chronicle.facts("caught") != [], 10)
+
+    first = llm.calls[0]
+    assert "ask_witness" in [t.name for t in first[2]]
+    situation = str(first[1][-2].content)
+    assert (
+        "Кого из знакомых можно расспросить о герое (ask_witness):\n- Хильда — рядом, в 9 м: окликнешь"
+        in situation
+    )
+    assert "- Малет — в 40 м: дойдёшь и спросишь" in situation
+    assert "- Андре — далеко: спросишь при встрече (сегодня около 18:00)" in situation
+
+    t = w.chronicle.facts("testimony")[0]
+    assert (t["npc"], t["witness"], t["said"], t["tier"]) == (LOBART, HILDA, "всё утро был в городе", "near")
+    assert t["told"] and t["told"][0]["places"] == ["на пастбище у входа на ферму Лобарта"]
+    assert t["told"][0]["place_ids"] == ["FARM1_PASTURE"]
+    # Hilda was held, came up to Lobart and turned to him; then she answered aloud with what she saw
+    acts = [
+        (m["npc"], m["action"], m.get("args", {}).get("npc")) for m in fake.received if m["type"] == "action"
+    ]
+    assert (HILDA, "go_to_npc", LOBART) in acts and (LOBART, "play_ani", None) in acts
+    hilda = llm.others.calls[0]  # type: ignore[union-attr]
+    cue = str(hilda[1][-1].content)
+    assert "Лобарт спрашивает тебя о герое: тот говорит «всё утро был в городе»" in cue
+    assert "Что ты видел сам: сегодня 08:10–08:30" in cue and hilda[2] == []
+    assert "Видела его утром на пастбище." in fake.said
+
+    # Lobart's reaction: the answer is С1, catch_lie is offered for it
+    reaction = next(c for c in llm.calls if "Ответ:" in str(c[1][-1].content))
+    assert "catch_lie" in [x.name for x in reaction[2]]
+    assert (
+        "С1: Хильда, сегодня в 09:35, о его словах «всё утро был в городе»: героя видели сегодня 08:10–08:30"
+        in str(reaction[1][-2].content)
+    )
+    c = w.chronicle.facts("caught")[0]
+    assert (c["npc"], c["said"], c["witness"], c["witness_name"]) == (LOBART, True, HILDA, "Хильда")
+    assert c["how"].startswith("узнал со слов: Хильда, сегодня в 09:35") and c["testimony"]
+    assert "он уже лгал тебе: «всё утро был в городе» — узнал со слов: Хильда" in (
+        w.trust.situation(LOBART) or ""
+    )
+    assert w.dialogue.conversations[LOBART].intent.attitude == "wary"
+    # Hilda remembers she was asked and what the hero claims
+    assert any(
+        "тот говорит «всё утро был в городе»" in e.content
+        for e in w.dialogue.conversations[HILDA].memory.entries
+    )
+
+
+async def test_a_witness_that_did_not_see_him_can_not_catch_him():
+    fake = FakeGame(branch="A")
+    llm = lobart(
+        ("Ответ:", CATCH), ("город", ASK_HILDA), hilda=[("спрашивает тебя", FakeStep("Не видала я его."))]
+    )
+    async with connected(fake) as link:
+        w = World(link, fake, llm)
+        w.dialogue.open(LOBART, "Лобарт")
+        await w.dialogue.say_as_player(LOBART, LIE)
+        await _until(lambda: any("Ответ:" in str(c[1][-1].content) for c in llm.calls), 10)
+        await _until(lambda: not w.dialogue.speaking(LOBART), 5)
+
+    t = w.chronicle.facts("testimony")[0]
+    assert t["witness"] == HILDA and t["told"] == []
+    reaction = next(c for c in llm.calls if "Ответ:" in str(c[1][-1].content))
+    assert "героя не видели за сутки до того" in str(reaction[1][-1].content)
+    # it saw nothing: nothing to catch him with, the lie stands
+    assert any(o == "Отклонено: со слов: Хильда — героя не видели, уличить нечем." for o in llm.outputs)
+    assert w.chronicle.facts("caught") == []
+
+
+async def test_who_may_be_asked_and_when_not():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        conv = w.dialogue.open(LOBART, "Лобарт")
+        conv.trigger = Message("user", LIE)
+        await w.witnesses.prepare(LOBART)
+        assert [c.name for c in w.witnesses._near[LOBART]] == ["Хильда", "Малет", "Андре"]
+
+        async def ask(who: str, said: str = "всё утро был в городе") -> tuple[str, str]:
+            out = await w.witnesses.handle(
+                w.dialogue, conv, ToolCall("ask_witness", {"who": who, "said": said}, "x"), None
+            )
+            assert out is not None
+            return out.status, out.output
+
+        status, text = await ask("Бенгар")
+        assert status == "rejected" and "Хильда, Малет, Андре" in text
+        status, text = await ask("Хильда", "убил волка")
+        assert status == "rejected" and "он этого не говорил" in text
+        fake.views[HILDA] = hildas_view("ZS_SLEEP")
+        status, text = await ask("Хильда")
+        assert (status, text) == ("rejected", "Отклонено: Хильда спит.")
+        # the same question to her within the hour: the old answer, no new one
+        w.chronicle.record(
+            {"fact": "testimony", "id": "T1", "npc": LOBART, "name": "Лобарт", "witness": HILDA,
+             "witness_name": "Хильда", "said": "всё утро был в городе", "tier": "near", "saw": [], "told": [],
+             "minute": DAY + 9 * 60 + 20}
+        )  # fmt: skip
+        status, text = await ask("Хильду")
+        assert status == "read" and "Ты уже спрашивал: Хильда" in text
+        # nobody it knows: no tool
+        fake.npc_states = {}
+        w.desk._views.clear()
+        await w.witnesses.prepare(LOBART)
+        assert w.witnesses.tools(LOBART) == []
+    params = ASK_TOOL.parameters
+    assert params["additionalProperties"] is False and sorted(params["required"]) == sorted(
+        params["properties"]
+    )
+
+
+async def test_a_far_witness_is_asked_at_their_meeting_and_the_answer_is_on_its_mind():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        concerns = Concerns(link, w.chronicle, Deals(link, w.dialogue, w.chronicle))
+        concerns.extra.append(w.witnesses.concerns)
+        for t in (AT_8, AT_8 + 15):  # Andre saw the hero on the pasture this morning too
+            w.seen.saw(hero_seen_by(ANDRE, "Андре", t))
+        conv = w.dialogue.open(LOBART, "Лобарт")
+        conv.trigger = Message("user", LIE)
+        await w.witnesses.prepare(LOBART)
+        out = await w.witnesses.handle(
+            w.dialogue,
+            conv,
+            ToolCall("ask_witness", {"who": "Андре", "said": "всё утро был в городе"}, "x"),
+            None,
+        )
+        assert (
+            out is not None and out.status == "accepted" and "при встрече (сегодня около 18:00)" in out.output
+        )
+        assert "Ты собирался расспросить при встрече:\n- Андре" in (w.witnesses.situation(LOBART) or "")
+        # a load keeps the question
+        again = Witnesses(link, w.dialogue, w.seen, w.desk, w.chronicle, StoryGuard(None))
+        assert [q.witness for q in again.inquiries.values()] == [ANDRE]
+        w.seen.hearsay = w.witnesses
+
+        fake.hour = 17
+        await w.witnesses.tick()
+        assert w.chronicle.facts("testimony") == []
+        fake.hour, fake.minute = 18, 5
+        await w.witnesses.tick()
+        t = w.chronicle.facts("testimony")[0]
+        assert (t["witness"], t["tier"], t["id"]) == (ANDRE, "far", w.chronicle.facts("inquiry")[0]["id"])
+        assert t["told"] and not w.witnesses.inquiries
+        notes = [e.content for e in w.dialogue.conversations[LOBART].memory.entries]
+        assert any("Ты расспросил при встрече: Андре" in n for n in notes)
+        # on its mind: it may come up to the hero about it, until it has spoken of it
+        top = concerns.top(LOBART)
+        assert (
+            top is not None
+            and top.key == f"witness:{t['id']}"
+            and "а он говорил тебе «всё утро был в городе»" in top.ru
+        )
+        w.chronicle.record(
+            {"fact": "initiative", "npc": LOBART, "occasion": top.key, "day": 1, "hour": 18, "minute": 20}
+        )
+        assert concerns.top(LOBART) is None
+        assert w.seen.tools(LOBART) != []  # catch_lie: a witness saw him
+
+
+async def test_without_budget_the_witness_is_silent_and_the_answer_is_a_remark():
+    fake = FakeGame(branch="A")
+    llm = lobart(("город", ASK_HILDA), hilda=[("спрашивает тебя", FakeStep("Видела."))])
+    async with connected(fake) as link:
+        w = World(link, fake, llm, budget=Budget(per_npc_per_min=0, total_per_min=0))
+        w.seen.saw(hero_seen_by(HILDA, "Хильда", AT_8))
+        w.seen.saw(hero_seen_by(HILDA, "Хильда", AT_8 + 5))
+        w.dialogue.open(LOBART, "Лобарт")
+        await w.dialogue.say_as_player(LOBART, LIE)
+        await _until(lambda: w.chronicle.facts("testimony") != [], 10)
+        await _until(
+            lambda: any("Ответ:" in e.content for e in w.dialogue.conversations[LOBART].memory.entries), 5
+        )
+
+    assert llm.others.calls == []  # type: ignore[union-attr]
+    assert not any("Ответ:" in str(c[1][-1].content) for c in llm.calls)  # a remark, not a turn
+    assert w.chronicle.facts("testimony")[0]["told"]
+
+
+def test_a_lie_told_by_a_witness_is_retold_so():
+    lie = AmendsLie(
+        "SAID_X_1", "caught", LOBART, "Лобарт", "всё утро был в городе", said=True, witness_name="Хильда"
+    )
+    assert (
+        "сказал ему «всё утро был в городе», а тот узнал от человека по имени Хильда, что это неправда"
+        in lie.words()
+    )
+    ref = LieRef(f"caught:{LOBART}:SAID_X_1", "всё утро был в городе", LOBART, "Лобарт", said=True)
+    assert ref.words(LOBART) == "обманул тебя: сказал «всё утро был в городе», а это неправда"
+    assert ref.words(HILDA) == (
+        "обманул человека по имени Лобарт: сказал «всё утро был в городе», а это неправда"
+    )
+
+
+async def test_the_asker_walks_to_a_witness_and_back():
+    fake = FakeGame(branch="A")
+    llm = lobart(("Ответ:", CATCH), ("город", ASK_HILDA), hilda=[("спрашивает тебя", FakeStep("Видела."))])
+    async with connected(fake) as link:
+        w = World(link, fake, llm)
+        fake.npc_states[HILDA]["distance"] = 3000  # 30 m: a walk away
+        for t in range(AT_8, AT_8 + 11, 5):
+            w.seen.saw(hero_seen_by(HILDA, "Хильда", t))
+        w.dialogue.open(LOBART, "Лобарт")
+        await w.dialogue.say_as_player(LOBART, LIE)
+        await _until(lambda: w.chronicle.facts("caught") != [], 10)
+
+    acts = [
+        (m["npc"], m["action"], m.get("args", {}).get("npc")) for m in fake.received if m["type"] == "action"
+    ]
+    there, back = acts.index((LOBART, "go_to_npc", HILDA)), acts.index((LOBART, "go_to_npc", "PLAYER"))
+    assert there < back and not any(a[0] == HILDA and a[1] == "go_to_npc" for a in acts)  # she stays put
+    assert w.chronicle.facts("testimony")[0]["tier"] == "walk"
+    assert (LOBART, "witness") in w.held
+
+
+async def test_a_witness_cut_off_by_the_hero_still_gets_its_answer_to_the_asker():
+    fake = FakeGame(branch="A")
+    slow = FakeStep("Видела его утром на пастбище, у самых ворот, с утра пораньше, а потом ещё раз у реки.")
+    llm = lobart(("Ответ:", CATCH), ("город", ASK_HILDA), hilda=[("спрашивает тебя", slow)])
+    async with connected(fake) as link:
+        w = World(link, fake, llm)
+        for t in range(AT_8, AT_8 + 11, 5):
+            w.seen.saw(hero_seen_by(HILDA, "Хильда", t))
+        w.dialogue.open(LOBART, "Лобарт")
+        await w.dialogue.say_as_player(LOBART, LIE)
+        await _until(
+            lambda: (c := w.dialogue.conversations.get(HILDA)) is not None and c.reply is not None, 10
+        )
+        w.dialogue.conversations[HILDA].reply.cancel()  # the hero spoke to her meanwhile
+        await _until(lambda: w.chronicle.facts("caught") != [], 10)
+    assert w.chronicle.facts("caught")[0]["witness"] == HILDA  # Lobart still heard the answer and reacted
+
+
+async def test_a_meeting_going_on_now_is_no_meeting_to_ask_at():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        fake.hour, fake.minute = 18, 30  # Lobart and Andre meet 18:00–19:00: they are far apart all the same
+        await w.witnesses.prepare(LOBART)
+        andre = next(c for c in w.witnesses._near[LOBART] if c.npc == ANDRE)
+        assert andre.tier == "far" and andre.meets == 2 * DAY + 18 * 60  # tomorrow's
+
+
+async def test_a_far_answer_leaves_the_mind_with_time_or_once_he_is_caught_for_it():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        concerns = Concerns(link, w.chronicle, Deals(link, w.dialogue, w.chronicle))
+        concerns.extra.append(w.witnesses.concerns)
+        w.witnesses.on_change.append(concerns.changed)
+        w.seen.saw(hero_seen_by(ANDRE, "Андре", AT_8))
+        w.seen.saw(hero_seen_by(ANDRE, "Андре", AT_8 + 5))
+        for i, said in enumerate(("всё утро был в городе", "с утра сидел в таверне")):
+            w.witnesses._inquire(
+                Inquiry(f"Q{i}", LOBART, "Лобарт", ANDRE, "Андре", said, DAY + 9 * 60 + 30, DAY + 18 * 60)
+            )
+        fake.hour, fake.minute = 18, 5
+        await w.witnesses.tick()
+
+        def witness() -> list[str]:
+            return [c.key for c in concerns.of(LOBART) if c.key.startswith("witness:")]
+
+        assert witness() == ["witness:Q0", "witness:Q1"]
+        # caught by С1 in other words: that answer is settled
+        w.chronicle.record(
+            {"fact": "caught", "npc": LOBART, "title": "был в городе", "said": True, "testimony": "Q1"}
+        )
+        assert witness() == ["witness:Q0"]  # (and a caught lie of its own now: concerns.lied)
+        # half a day later the other one is off its mind too
+        fake.day, fake.hour = 2, 7
+        await w.witnesses.tick()
+        assert witness() == []
