@@ -27,7 +27,7 @@ from .brain.reflex import REACT_OPTIONS, Reaction, Reflexes
 from .brain.situation import NpcContext, clock_text
 from .brain.stimuli import Stimulus, policy
 from .budget import Budget
-from .dialogue import DialogueManager
+from .dialogue import DialogueManager, FirstReaction
 from .executor import Intent
 from .game import GameError, GameLink
 from .protocol import (
@@ -165,7 +165,7 @@ class IncidentDesk:
         self.view_of: Callable[[str], tuple[str, ...]] = lambda npc: ()
         self._tasks: set[asyncio.Task[Any]] = set()
         link.listeners.append(self.on_message)
-        dialogue.on_player_phrase = self.on_player_phrase
+        dialogue.first_reaction = self.first_reaction
         dialogue.on_body_failed = self.on_body_failed
         dialogue.controls = lambda npc: npc.upper() in self.attached
         dialogue.on_free_intent = self.on_free_intent
@@ -209,9 +209,26 @@ class IncidentDesk:
         if npc in self.attached:
             self._event(npc, IncidentEvent("action_failed", self.clock(), detail=what.strip("[]")))
 
-    def on_player_phrase(self, npc: str, text: str) -> None:
-        if self.reflexes is not None and npc in self.attached:
-            self._spawn(self._gesture(npc, text))
+    async def first_reaction(self, npc: str, text: str, voice: bool) -> FirstReaction:
+        """The hero spoke to the npc: one question to the behavioral model for the sound it makes at once
+        (if `voice`: the dialogue says it) and, if the npc is ours, a gesture while it thinks of an answer
+        (made when the dialogue calls for it, after the sound)."""
+        gesture = npc in self.attached
+        if self.reflexes is None or not (voice or gesture):
+            return FirstReaction()
+        ctx, clock = self._context(npc)
+        conv = self.dialogue.conversations.get(npc)
+        reactions = await self.reflexes.phrase(
+            ctx, text, conv.intent if conv else None, clock, gesture=gesture, voice=voice
+        )
+        sound = reactions.get("voice")
+        if sound is not None:
+            await self._apply(sound, None)  # traced; nothing for the body to do
+        move = reactions.get("gesture")
+        return FirstReaction(
+            sound.choice if sound is not None and sound.applied else None,
+            (lambda: self._spawn(self._gesture(move))) if move is not None else None,
+        )
 
     def _event(self, npc: str, event: IncidentEvent) -> None:
         inc = self.tracker.add(npc, event)
@@ -256,13 +273,8 @@ class IncidentDesk:
         if reaction is not None:
             await self._apply(reaction, incident_id)
 
-    async def _gesture(self, npc: str, text: str) -> None:
-        assert self.reflexes is not None
-        ctx, clock = self._context(npc)
-        conv = self.dialogue.conversations.get(npc)
-        reaction = await self.reflexes.gesture(ctx, text, conv.intent if conv else None, clock)
-        if reaction is None:
-            return
+    async def _gesture(self, reaction: Reaction) -> None:
+        npc = reaction.npc
         if reaction.applied and (self.dialogue.has_spoken(npc) or self.dialogue.body_busy(npc)):
             # too late (the answer started) or the body is busy with a commitment
             reaction.applied, reaction.why = (

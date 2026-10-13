@@ -9,7 +9,7 @@ cd site
 uv run gothic-site serve                       # http://127.0.0.1:47860/ (the preview "site" in .claude/launch.json)
 uv run gothic-site new first-quest --title "The first quest" --title-ru "Первый квест"
 uv run gothic-site frame ../.shorts/xardas-lie/take-02/main.mp4 content/posts/<post>/cover.jpg --at 41 --width 540
-uv run gothic-site clip ../.shorts/xardas-lie/take-02/short-ru.mp4 static/hero/xardas-ru.mp4 --start 24.9 --length 7.6
+uv run gothic-site clip ../.shorts/xardas-wrath/take-09/short-ru.mp4 static/hero/wrath-ru.mp4 --start 33.6 --length 20
 uv run gothic-site build                       # _build/ for /GothicAI/ (what the workflow publishes)
 uv run pytest -q
 ```
@@ -23,6 +23,9 @@ uv run pytest -q
   matter between `+++` lines: `title`, `summary` (one sentence: the list and the feed), `date` with a time
   zone, optionally `cover` (a picture in the post's folder) and `youtube` (a video id). Pictures next to
   the post are linked by their name: `![Frames of the short](sheet-en.jpg)`.
+- `content/pages/<slug>/en.md` and `ru.md`: pages outside the devlog at `/<slug>/`, linked from every
+  footer, with `title` and `summary` only. `privacy` is the privacy policy that the Google Cloud project of
+  the YouTube uploader points to (`shorts/README.md`): change it when the uploader asks for more.
 
 ## Media
 

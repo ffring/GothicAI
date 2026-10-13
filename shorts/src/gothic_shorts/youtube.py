@@ -1,9 +1,10 @@
 """Uploads a short to YouTube with the Data API v3: the sign-in of an installed app (the browser opens once,
 the token stays next to the client's file, outside the repository), a resumable upload, private by default.
 
-An API project that has not passed YouTube's audit can only upload private videos: the user makes them
-public in YouTube Studio. The client's file is the OAuth client of the Google Cloud project (a Desktop
-app), downloaded from the console.
+`public` goes straight out: YouTube no longer locks the uploads of an API project without its audit to
+private (the videos.insert reference says so; the first shorts of this project were made public in Studio
+without a lock), and the upload reads the video's status back to be sure. The client's file is the OAuth
+client of the Google Cloud project (a Desktop app), downloaded from the console.
 """
 
 from __future__ import annotations
@@ -163,6 +164,12 @@ def _sign_in(client: dict) -> dict:
     return token
 
 
+def sign_in() -> dict:
+    """A new sign-in even with a token at hand; Google's answer, with `refresh_token_expires_in` while the
+    app is in testing"""
+    return _sign_in(_client())
+
+
 def access_token(*, sign_in: bool = True) -> str:
     client = _client()
     token = json.loads(TOKEN.read_text()) if TOKEN.is_file() else None
@@ -179,7 +186,7 @@ def access_token(*, sign_in: bool = True) -> str:
             token["expires_at"] = time.time() + fresh.get("expires_in", 3600) - 60
             _save(token)
             return token["access_token"]
-        # a test app's refresh token expires after 7 days: sign in again
+        # a testing app's refresh token expires after 7 days: sign in again
     if not sign_in:
         raise YouTubeError("not signed in: gothic-shorts youtube login")
     return _sign_in(client)["access_token"]
@@ -200,6 +207,18 @@ def check_channel(cid: str, title: str, expected: str = CHANNEL) -> None:
     if cid != expected:
         raise YouTubeError(f"signed in to the channel {title!r} ({cid}), not {expected}: delete {TOKEN}, "
                            f"gothic-shorts youtube login, then pick the project's channel in Google's window")
+
+
+def privacy(token: str, vid: str) -> str:
+    """What YouTube made of the video: private, unlisted or public"""
+    r = httpx.get(f"{API}/videos", params={"part": "status", "id": vid},
+                  headers={"Authorization": f"Bearer {token}"}, timeout=30)
+    if r.status_code != 200:
+        raise YouTubeError(f"videos.list: {r.status_code} {r.text[:300]}")
+    items = r.json().get("items", [])
+    if not items:
+        raise YouTubeError(f"YouTube does not show the video {vid}")
+    return items[0]["status"]["privacyStatus"]
 
 
 def upload(video: Path, meta: Meta, token: str) -> str:

@@ -35,12 +35,14 @@ class FakeBackend:
         *,
         chunk: int = 7,
         delay: float = 0.02,
+        first: float = 0.0,  # seconds before the first chunk: a model that thinks before it writes
         tool_calls: list[ToolCall] | None = None,
         script: list[FakeStep] | None = None,
     ) -> None:
         self.script = script or [FakeStep(reply, list(tool_calls or []))]
         self.chunk = chunk
         self.delay = delay
+        self.first = first
         self.calls: list[tuple[str, list[Item], list[Tool]]] = []
         self.tool_choices: list[ToolChoice | None] = []
 
@@ -62,6 +64,8 @@ class FakeBackend:
         step = self.script[min(len(self.calls), len(self.script) - 1)]
         self.calls.append((instructions, list(messages), list(tools or [])))
         self.tool_choices.append(tool_choice)
+        if self.first > 0:
+            await asyncio.sleep(self.first)
         for i in range(0, len(step.text), self.chunk):
             await asyncio.sleep(self.delay)
             yield TextDelta(step.text[i : i + self.chunk])

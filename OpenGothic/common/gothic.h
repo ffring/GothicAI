@@ -181,6 +181,7 @@ class Gothic final {
     Tempest::Signal<void()>                                             onWorldLoaded;
     Tempest::Signal<void()>                                             onStartLoading;
     Tempest::Signal<void()>                                             onSessionExit;
+    Tempest::Signal<void()>                                             onSessionUnload;  // the session and its sound device are about to go
     Tempest::Signal<void()>                                             onSettingsChanged;
 
     Tempest::Signal<void()>                                             onBenchmarkFinished;

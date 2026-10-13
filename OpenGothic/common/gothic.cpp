@@ -263,6 +263,8 @@ void Gothic::setGame(std::unique_ptr<GameSession> &&w) {
   }
 
 std::unique_ptr<GameSession> Gothic::clearGame() {
+  if(game!=nullptr)
+    onSessionUnload();
   return std::move(game);
   }
 
