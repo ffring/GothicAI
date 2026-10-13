@@ -224,5 +224,6 @@ def render_situation(
     if intent is not None:
         lines.append(f"Твоё намерение: {intent.describe()}.")
         if not brief:
-            lines.append(f"Цели для намерения (target): {describe_targets(snap)}.")
+            targets = sight.targets if sight is not None and sight.targets else None
+            lines.append(f"Цели для намерения (target): {describe_targets(snap, targets)}.")
     return "\n".join(lines)

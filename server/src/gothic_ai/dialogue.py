@@ -544,6 +544,9 @@ class DialogueManager:
         self.guild_of: Callable[[str], int | None] = lambda npc: None
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
+        # an npc's turn is over and it said something (npc, name, the text said, the turn's kind): whoever
+        # stood by heard it (group.py)
+        self.on_said: list[Callable[[str, str, str, str], None]] = []
         self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
         # the npc is in a fight (incidents.py): its lines come from the quick model, if there is one
         self.in_fight: Callable[[str], bool] = lambda npc: False
@@ -912,6 +915,11 @@ class DialogueManager:
         conv = self.open(npc, name, warm=False)
         whom = f" собеседнику ({to_name})" if to_name else " вслух"
         self._note(conv, f"Ты слышал, как герой сказал{whom}: «{text}»")
+
+    def heard(self, npc: str, name: str, speaker: str, text: str, whom: str) -> None:
+        """A witness: the npc heard another npc (`speaker`, its name) say something, `whom`: "герою",
+        "вслух". No model call, only memory."""
+        self._note(self.open(npc, name, warm=False), f"Ты слышал, как {speaker} говорит {whom}: «{text}»")
 
     def overheard_talk(
         self, npc: str, name: str, names: tuple[str, str], said: list[tuple[str, str]]
@@ -1293,12 +1301,14 @@ class DialogueManager:
             )
         await self.link.send(SayEndCmd(npc=line.npc, line=line.line, audio_s=round(audio_s, 3)))
 
-    def _commit(self, conv: Conversation, trigger: Message, text: str) -> None:
+    def _commit(self, conv: Conversation, trigger: Message, text: str, kind: str) -> None:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here.
         # What started the turn is remembered even when the npc said nothing (it may have acted).
         self._remember(conv, trigger.role, trigger.content)
         if text := text.strip():
             self._remember(conv, "assistant", text)
+            for listener in self.on_said:
+                listener(conv.npc, conv.persona.name, to_game_text(text), kind)
         self._maybe_compact(conv)
 
     def _note(self, conv: Conversation, note: str) -> None:
@@ -1435,13 +1445,13 @@ class DialogueManager:
             log.error("%s: %s", conv.npc, err)
             self.journal.add("llm_error", npc=conv.npc, name=conv.persona.name, detail=str(err))
             if state.text:  # a turn that failed before a word was said is not remembered
-                self._commit(conv, trigger, state.text)
+                self._commit(conv, trigger, state.text, kind)
             trace.close("llm_error")
             await self._status(conv, "error", str(err))
             return
         except StaleTurn:
             # what the turn was about is over: words now would be out of place
-            self._commit(conv, trigger, state.text)
+            self._commit(conv, trigger, state.text, kind)
             trace.close("stale")
             await self._status(conv, "idle")
             return
@@ -1450,11 +1460,11 @@ class DialogueManager:
                 first.cancel()  # its gesture too: the hero speaks again
             if conv.cut is not None:  # the hero interrupted: only what was said counts
                 said, conv.cut = conv.cut, None
-                self._commit(conv, trigger, said)
+                self._commit(conv, trigger, said, kind)
                 self._note(conv, "Герой перебил тебя" + ("" if said else ", ты не успел ничего сказать"))
                 trace.close("interrupted")
                 raise
-            self._commit(conv, trigger, state.text)  # the npc remembers what it already said
+            self._commit(conv, trigger, state.text, kind)  # the npc remembers what it already said
             trace.close("cancelled")
             raise
         finally:
@@ -1462,7 +1472,7 @@ class DialogueManager:
             if full is not None:
                 full.cancel()  # done by now, unless the turn ended before the line
 
-        self._commit(conv, trigger, state.text)
+        self._commit(conv, trigger, state.text, kind)
         trace.close(status)
         total = time.monotonic() - state.started
         if state.text:
@@ -1812,7 +1822,9 @@ class DialogueManager:
             self.free_body(conv.npc, why)
 
     def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
-        intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap)
+        sight = self.sight(conv.npc, snap) if self.sight is not None else None
+        seen = sight.targets if sight is not None else None  # whom it perceives, not all within 15 m
+        intent, reason = executor.check_intent(executor.parse_intent(call.arguments, conv.intent), snap, seen)
         if intent is None:
             return ToolOutcome(f"Отклонено: {reason}", "rejected")
         if executor.same(conv.intent, intent):

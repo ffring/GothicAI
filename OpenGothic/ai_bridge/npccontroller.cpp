@@ -7,6 +7,7 @@
 #include "game/gamescript.h"
 #include "game/inventory.h"
 #include "world/objects/item.h"
+#include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
 #include "world/waypoint.h"
 #include "world/world.h"
@@ -32,6 +33,8 @@ constexpr float    FollowNear       = 400;   // stop closing in
 constexpr float    FollowCatchUp    = 800;   // farther than this it runs, whatever the leader does
 constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
+constexpr uint64_t FollowStuckMs    = 2000;  // walking, but it has not moved FollowMovedCm in this long: stuck
+constexpr float    FollowMovedCm    = 75;
 constexpr uint64_t FollowMaxMs      = 10*60*1000;
 constexpr uint64_t StateStartMs     = 3000;  // fight/flee: the script state must begin within this
 
@@ -648,9 +651,34 @@ void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
                                     : target->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak);
   if((c.npc->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak))!=pace)
     c.npc->setWalkMode(pace);
+  // a walk to an npc goes straight at him: past a cave's bend or a tower's wall it runs into the rock and
+  // stays there. Got nowhere for a while: by the waynet, to the point nearest him that he can see from where
+  // he is (as the engine's own fights do), then straight at him again
+  const auto pos = c.npc->position();
+  if(f.movedAt==0 || (pos-f.movedFrom).quadLength()>=FollowMovedCm*FollowMovedCm) {
+    f.movedFrom = pos;
+    f.movedAt   = now;
+    }
+  if(c.npc->isAiBusy() && !c.npc->haveOutput() && d>FollowNear && now>=f.movedAt+FollowStuckMs) {
+    c.npc->clearAiQueue();
+    c.npc->clearGoTo();
+    f.movedAt = now;
+    if(!f.byWay) {
+      auto wp = world.findWayPoint(target->position(),[&](const WayPoint& w) {
+        return target->canRayHitPoint(w.position(),true);
+        });
+      if(wp!=nullptr) {
+        f.byWay = true;
+        c.npc->aiPush(AiQueue::aiGoToPoint(*wp));
+        return;
+        }
+      }
+    f.byWay = false;  // stuck on the waynet too: straight again
+    }
   if(d<=FollowNear || now<f.nextStep || c.npc->isAiBusy())
     return;
   f.nextStep = now + FollowStepMs;
+  f.byWay    = false;
   c.npc->aiPush(AiQueue::aiGoToNpc(target));
   }
 

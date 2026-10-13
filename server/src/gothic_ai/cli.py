@@ -34,6 +34,7 @@ from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .gossip import GossipDesk
+from .group import GroupTalk
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
 from .journal import Journal, print_sink
@@ -534,6 +535,8 @@ async def serve(args: argparse.Namespace) -> int:
         # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
         state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
+        # talk with several npc's: who takes part, and whose words the others heard (group.py)
+        state.dialogue.extensions.append(GroupTalk(link, state.dialogue, state.talk))
         state.incidents.companion = state.talk.orders.companion
         state.incidents.fighting_ru = state.talk.orders.fighting_ru
         state.incidents.foe = state.talk.orders.foe
@@ -573,6 +576,7 @@ async def serve(args: argparse.Namespace) -> int:
             places=place_book,
         )
         state.dialogue.extensions.append(perception)
+        state.talk.orders.view_of = perception.fresh  # a companion sent somewhere looks around there
         state.dialogue.sight = perception.sight
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
@@ -836,7 +840,9 @@ async def serve(args: argparse.Namespace) -> int:
                 exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
-                results = await scenarios.companion_scenario(link, state.dialogue, state.talk)
+                results = await scenarios.companion_scenario(
+                    link, state.dialogue, state.talk, perception=state.perception
+                )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0

@@ -1446,6 +1446,7 @@ async def companion_scenario(
     npc: str = "BAU_4300_ADDON_CAVALORN",
     bandit: str = "BDT_1013_BANDIT_L",
     cave: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+    perception: PerceptionDesk | None = None,
 ) -> dict[str, str]:
     """The hero's companion on the game (orders.py), as the user played it on 2026-10-13: Cavalorn walked
     after a running hero, watched a bandit beat him and only talked, and did not understand "go into the
@@ -1455,7 +1456,10 @@ async def companion_scenario(
     - go_to: told to go into the cave first, it walks into the bandits' cave and waits there; the freed
       bandits in it do not fall on it;
     - attack: the bandit's own model decides to attack the hero (scripted): the scripts' attack;
-    - defend: the companion fights him at once, with no order, and follows the hero again after.
+    - defend: the companion fights him at once, with no order, and follows the hero again after;
+    - sees_cave, focus (with `perception`, step M1 of docs/npc-tools.md): in the cave, having looked around,
+      it sees a bandit there (the other may be behind the cave's bend), with its id for its intent; whom the
+      hero faces is his focus in its view, and a target.
     The models are scripted (LLM=fake); the hero wears heavy armor, so that he lives through the beating."""
     from .executor import Intent
 
@@ -1561,6 +1565,32 @@ async def companion_scenario(
         walked and arrived and standing is not None and standing.kind == "go",
         f"{walk[-1][2] if walk else 'not sent'}, at {snap.npc.waypoint or snap.npc.nearest_waypoint}",
     )
+    # it looks around in there before it says what it found
+    told = await _until(
+        lambda: any(
+            e["kind"] == "npc" and e.get("npc") == npc and "Тут" in e.get("text", "") for e in entries
+        ),
+        90,
+    )
+    snap = await link.snapshot(npc, fresh=True)
+    log.info("companion: %s at %s, told %s", npc, snap.npc.waypoint or snap.npc.nearest_waypoint, told)
+    if perception is not None:
+        await perception.fresh(npc)
+        sight = perception.sight(npc, snap)
+        sees = set(sight.targets) if sight is not None else set()
+        why = sight.people if sight is not None else "no view"
+        if not set(cave) & sees:
+            # why not: its senses range, the engine's own sight with and without the eyes' angle
+            me = ["inst", npc]
+            probe = [f"senses {await link.evaluate(['field', me, 'SENSES_RANGE'])}"]
+            near = {o.id: o.distance for o in snap.nearby_npcs}
+            for other in cave:
+                them = ["inst", other]
+                sees_it = await link.evaluate(["call", "NPC_CANSEENPC", me, them])
+                free = await link.evaluate(["call", "NPC_CANSEENPCFREELOS", me, them])
+                probe.append(f"{other} {near.get(other, -1) / 100:.1f} m: sees {sees_it}, free {free}")
+            why += " | " + "; ".join(probe)
+        check("sees_cave", bool(set(cave) & sees), why)
     hp = snap.npc.hp
     await asyncio.sleep(6)
     snap = await link.snapshot(npc, fresh=True)
@@ -1576,8 +1606,17 @@ async def companion_scenario(
             await link.debug("kill", npc=other)
         except GameError as err:
             log.info("companion: kill %s: %s", other, err)
-    await link.debug("player_goto", to=bandit, distance=250)
+    await link.debug("teleport", near=bandit, distance=250)  # facing him: he is the hero's focus
     await _until(lambda: 0 <= dist(bandit) <= 5 and 0 <= dist() <= 8, 15)
+    if perception is not None:
+        view = await perception.fresh(npc)
+        focus = view.hero.focus if view is not None and view.hero is not None else None
+        sight = perception.sight(npc)
+        check(
+            "focus",
+            focus == bandit and sight is not None and bandit in sight.targets,
+            f"hero looks at {focus}",
+        )
     t0 = time.monotonic()
     talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
     attacked = await _until(lambda: any(e["kind"] == "attack" for e in entries), 20)

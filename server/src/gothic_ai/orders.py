@@ -32,8 +32,9 @@ while, unless struck itself. The conversational model's own "fight X" for a comp
 too (dialogue.py hands it over), so that it ends with the companion back at the hero's side.
 
 **Words the conversational model acts on** ("Заходи в пещеру первым"): a companion is shown the places
-around it (places.py) and may `go_to` one: it walks there ahead of the hero and waits for him, and on
-arrival says what it finds. Whoever is there is a target for its fight then.
+around it (places.py) and may `go_to` one: it walks there ahead of the hero, looks around it (walks on
+through its points until it sees someone) and waits for him, and says what it finds. Whoever is there is
+a target for its fight then.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -53,7 +54,7 @@ from .game import GameError, GameLink
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .places import Place, PlaceBook
-from .protocol import GameMessage, Loading, Perception, Snapshot
+from .protocol import GameMessage, Loading, NpcView, Perception, Snapshot
 from .talk import calls, named, words
 from .turn import ToolOutcome
 
@@ -80,6 +81,8 @@ PLACES_MAX = 6
 GO_S = 90.0  # a walk to a place is given up after this
 GO_RADIUS_CM = 400
 GO_WAIT_S = 180.0  # it waits there this long, then comes back to the hero
+LOOK_POINTS = 4  # seeing nobody there, it walks on through this many more of the place's points
+LOOK_RADIUS_CM = 200
 # orders after which a companion that had to fight stays where it was told to be
 STAY = frozenset({"halt", "wait", "go"})
 GO_TO = "go_to"
@@ -141,6 +144,8 @@ class Orders:
         self.standing: dict[str, Standing] = {}
         self.foes: dict[str, float] = {}  # who struck the hero or a companion, and when
         self.fights: dict[str, Fight] = {}  # companion -> its fight now
+        # what an npc sees now, asked afresh (perception.py): a companion sent somewhere looks around there
+        self.view_of: Callable[[str], Awaitable[NpcView | None]] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         link.listeners.append(self.on_message)
         # the conversational model's "fight X" for a companion is carried out here (dialogue.py)
@@ -531,7 +536,10 @@ class Orders:
         if failed(status):
             await self._resume(npc, standing)
             return f"Ты не дошёл ({status}) и вернулся к герою.", False
-        await self._act(npc, "turn_to", npc="PLAYER")
+        # it stays facing the way it came in, into the place: turned to the hero, it would have whoever is
+        # there at its back (Cavalorn saw nobody in the bandits' cave, 2026-10-13)
+        if await self._look_around(npc, place, standing) is None:
+            return "", True  # an order came meanwhile
         self._later(self.go_wait_s, npc, standing)
         self.dialogue.event_turn(
             npc,
@@ -539,6 +547,29 @@ class Orders:
             overlay=True,
         )
         return f"Ты дошёл: {place.where_ru}.", True
+
+    async def _look_around(self, npc: str, place: Place, standing: Standing) -> bool | None:
+        """Walk on through the place's other points until it sees someone there, a few at most: from its
+        middle a cave's corner hides who sits at its fire (the bandits' cave, 2026-10-14). Whether it saw
+        anyone; None if an order came meanwhile."""
+        if self.view_of is None:
+            return False
+        snap = self.link.snapshots.get(npc)
+        here = {snap.npc.waypoint, snap.npc.nearest_waypoint} if snap is not None else set()
+        for wp in [None, *[p for p in place.points if p not in here][:LOOK_POINTS]]:
+            if wp is not None:
+                status = await self._act(
+                    npc, "go_to_waypoint", waypoint=wp, radius=LOOK_RADIUS_CM, timeout_ms=20000, timeout=30
+                )
+                if status == "cancelled" or not self._current(npc, standing):
+                    return None
+            try:
+                view = await self.view_of(npc)
+            except (GameError, TimeoutError):
+                return False
+            if view is not None and any(o.kind != "body" and not self.companion(o.id) for o in view.sees):
+                return True
+        return False
 
     def _later(self, seconds: float, npc: str, standing: Standing) -> None:
         async def run() -> None:
