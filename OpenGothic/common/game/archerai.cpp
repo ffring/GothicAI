@@ -33,6 +33,8 @@ constexpr float    RhoMax      = 2.f;     // per second: an arrow at most that m
 constexpr float    PMax        = 0.9f;    // ...and not surer than this
 constexpr uint64_t RaiseStuck  = 3000;    // ms raised and never steady: the dice for this weapon
 constexpr uint64_t GiveUp      = 5000;    // ms asked for an arrow that does not come: the fight AI goes on
+constexpr uint64_t RequestLapse= 1500;    // ms not asked any more (the fight AI's queue cleared, a strafe,
+                                          // hit): the arrow is not wanted
 constexpr float    LeadTau     = 0.15f;   // seconds: the target's speed, smoothed...
 constexpr float    LeadMax     = 0.8f;    // ...not over (cm/ms)...
 constexpr float    LeadJump    = 200.f;   // ...and forgotten when it jumps that far (a teleport)
@@ -80,6 +82,7 @@ ArcherAi::Mode     ArcherAi::mode        = ArcherAi::PerSecond;
 float              ArcherAi::forcedSigma = -1;
 bool               ArcherAi::leadOn      = true;
 uint32_t           ArcherAi::seedBase    = 0;
+uint32_t           ArcherAi::epoch       = 0;
 ArcherAi::Probe    ArcherAi::subjectProbe;
 const void*        ArcherAi::probeNpc    = nullptr;
 
@@ -112,6 +115,7 @@ float ArcherAi::gauss() {
 
 bool ArcherAi::attack(Npc& npc) {
   const uint64_t now = npc.world().tickCount();
+  askedAt = now;
   if(!npc.hasAmmunition()) {
     // out of arrows: the fight AI's loop puts more in (B_CreateAmmo), or takes the sword
     want = false;
@@ -134,6 +138,13 @@ bool ArcherAi::attack(Npc& npc) {
   return false;
   }
 
+void ArcherAi::cancel(Npc& npc) {
+  want = false;
+  done = false;
+  if(active)
+    end(npc);
+  }
+
 void ArcherAi::begin(Npc& npc) {
   if(!seeded) {
     // its own sway and errors: not in step with every other archer, the same on every run
@@ -154,9 +165,19 @@ void ArcherAi::end(Npc& npc) {
   npc.endManualAim(false);
   active = false;
   heldAt = 0;
+  if(&npc==probeNpc)
+    probe(subjectProbe);
   }
 
 void ArcherAi::nextError(Npc& npc, const Npc& tg) {
+  spread(npc,tg);
+  // the next arrow's error: in from the last one's while the next arrow is put on
+  errFrom = errFrom + (err-errFrom)*smooth(easeT);
+  err     = Vec2(gauss(),gauss());
+  easeT   = 0;
+  }
+
+void ArcherAi::spread(Npc& npc, const Npc& tg) {
   // the dice's chance at this distance, as sure (perArrow), or as many hits a second (perSecond: the
   // hand is slower than the dice's cadence, the reload and 2 frames)
   const auto     st     = Archery::stats(npc,npc.currentRangedWeapon());
@@ -178,20 +199,23 @@ void ArcherAi::nextError(Npc& npc, const Npc& tg) {
   const float k     = st.crossbow ? PhysCbow : PhysBow;
   const float phys2 = std::pow(st.sway*k,2.f) + std::pow(st.cone*0.5f,2.f);
   sigma = forcedSigma>=0.f ? forcedSigma*Deg : std::sqrt(std::max(0.f,need*need-phys2));
-
-  // the next arrow's error: in from the last one's while the next arrow is put on
-  errFrom = errFrom + (err-errFrom)*smooth(easeT);
-  err     = Vec2(gauss(),gauss());
-  easeT   = 0;
+  epochSeen = epoch;
   }
 
 void ArcherAi::tick(Npc& npc, uint64_t dt) {
+  const uint64_t now = npc.world().tickCount();
+  if((want || done) && now-askedAt>RequestLapse) {
+    // the fight AI dropped the attack (its queue cleared, a strafe, a hit): no arrow for it, none drawn
+    want = false;
+    done = false;
+    if(active && (npc.archer().stage()==Archer::Drawing || npc.archer().stage()==Archer::Held))
+      end(npc);
+    }
   if(!active && !want)
     return;
   const auto     ws  = npc.weaponState();
   const auto     bs  = npc.bodyStateMasked() & BS_MAX;
   Npc*           tg  = npc.target();
-  const uint64_t now = npc.world().tickCount();
   const bool ok = isDriving(npc) && (ws==WeaponState::Bow || ws==WeaponState::CBow) && tg!=nullptr && tg!=&npc &&
                   !tg->isDown() && !npc.isDown() && npc.interactive()==nullptr && !npc.isSwim() && !npc.isDive() &&
                   !npc.isInAir() && npc.hasAmmunition();
@@ -224,6 +248,12 @@ void ArcherAi::tick(Npc& npc, uint64_t dt) {
     return;
     }
 
+  if(tg!=tgLast) {
+    // another target: its speed is not known yet, its error is sized anew
+    tgLast  = tg;
+    tgKnown = false;
+    sigma   = -1;
+    }
   // the target's speed: the lead
   const Vec3 tp = tg->position();
   if(tgKnown && (tp-tgPrev).length()<LeadJump && dt>0) {
@@ -238,6 +268,8 @@ void ArcherAi::tick(Npc& npc, uint64_t dt) {
   tgKnown = true;
   if(sigma<0.f)
     nextError(npc,*tg);
+  else if(epochSeen!=epoch)
+    spread(npc,*tg);
   easeT = std::min(1.f,easeT+dtS/EaseTime);
 
   // where it aims: the chest (a man's: by its head; else the middle of the body), ahead of a runner by
@@ -303,7 +335,9 @@ void ArcherAi::tick(Npc& npc, uint64_t dt) {
     if(shotAt>0 && now-shotAt<CycleGap)
       cycle = cycle>0.f ? cycle + (float(now-shotAt)-cycle)*CycleRate : float(now-shotAt);
     shotAt = now;
-    done   = true;
+    // the arrow for the attack asked for (none if it lapsed meanwhile), drawn no more till the next one
+    done   = want;
+    want   = false;
     nextError(npc,*tg);
     }
 

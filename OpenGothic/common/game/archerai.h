@@ -40,12 +40,15 @@ class ArcherAi final {
     static float   forcedSigma;
     static bool    leadOn;
     static uint32_t seedBase;
+    static uint32_t epoch;          // the bench changed the mode or the error: the arrow drawn now too
 
     // every frame (Npc::tick, before the fight AI's waits): raises, reloads, draws and lets go; lowers
     // when the fight moves on
     void           tick(Npc& npc, uint64_t dt);
-    // MV_ATTACK wants an arrow: true once it is over (it left, given up)
+    // MV_ATTACK wants an arrow: true once it is over (it left, given up); asked every frame it is pending
     bool           attack(Npc& npc);
+    // the arrow asked for is withdrawn (the test bench lets go): the string let down, the bow lowered
+    void           cancel(Npc& npc);
     // this one aims by hand (else the dice)
     bool           isDriving(Npc& npc) const;
     void           probe(Probe& p) const;
@@ -57,6 +60,7 @@ class ArcherAi final {
     void           begin(Npc& npc);
     void           end(Npc& npc);
     void           nextError(Npc& npc, const Npc& tg);
+    void           spread(Npc& npc, const Npc& tg);
     float          gauss();
 
     bool          active   = false;
@@ -64,7 +68,10 @@ class ArcherAi final {
     bool          done     = false; // ...and it left
     bool          diceOnly = false; // never got the bow steady: the dice for this weapon
     bool          seeded   = false;
-    uint64_t      wantAt   = 0;     // ms the arrow was asked for
+    uint64_t      wantAt   = 0;     // ms the arrow was asked for...
+    uint64_t      askedAt  = 0;     // ...and the last time (the fight AI stops asking: dropped)
+    uint32_t      epochSeen = 0;
+    const void*   tgLast   = nullptr; // the target its speed and error are for (compared only)
     uint64_t      raiseAt  = 0;     // ms the bow went up
     uint64_t      heldAt   = 0;     // ms it was held at full draw
     uint64_t      shotAt   = 0;     // ms of the last arrow...

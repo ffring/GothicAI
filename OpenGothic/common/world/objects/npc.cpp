@@ -1739,7 +1739,10 @@ bool Npc::implAttack(uint64_t dt) {
       }
     else if(ws==WeaponState::Bow || ws==WeaponState::CBow) {
       if(archAi.isDriving(*this)) {
-        // aimed by hand (game/archerai): drawn and let go frame by frame, the attack is over with the arrow
+        // aimed by hand (game/archerai): drawn and let go frame by frame, the attack is over with the arrow;
+        // a run (a walk) stops first, as shootBow does: the bow is raised standing
+        if(bs==BS_RUN || bs==BS_WALK || bs==BS_SNEAK)
+          setAnim(Anim::Idle);
         if(archAi.attack(*this))
           fghAlgo.consumeAction();
         }

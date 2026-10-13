@@ -114,6 +114,17 @@ rec pal_arw novideo
 wait 45000
 stop
 
+# set out too far (25 m): they run in to their range and shoot by hand (an attack asked on the run stops the run)
+clear 3000
+arc BDT_1003_BANDIT_M 4 2500 12
+wait 300
+stats npc BDT_1003_BANDIT_M talent auto
+npcaim on second
+fight all player
+rec bdtm_far novideo
+wait 30000
+stop
+
 # the duel
 clear 3000
 immortal player off

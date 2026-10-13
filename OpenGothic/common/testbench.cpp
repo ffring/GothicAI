@@ -1635,9 +1635,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     // the hero's (an npc's) strength, dexterity, hit chances (the skill of the manual aim), hit points;
     // talent: the animations of the trained (G2 sets level 1 at 30%, 2 at 60%: _BOWT1, _BOWT2), auto as
     // the hit chances say
-    Npc&   n  = (a.size()>2 && a[1]=="npc" && findNpc(w,pl,a[2])!=nullptr) ? *findNpc(w,pl,a[2]) : pl;
-    size_t i0 = &n!=&pl ? 3 : 1;
-    auto&  h  = n.handle();
+    Npc*   np = &pl;
+    size_t i0 = 1;
+    if(a.size()>1 && a[1]=="npc") {
+      np = a.size()>2 ? findNpc(w,pl,a[2]) : nullptr;
+      if(np==nullptr) {
+        say("stats: no npc " + line);
+        return;
+        }
+      i0 = 3;
+      }
+    Npc&   n    = *np;
+    auto&  h    = n.handle();
     bool   more = &n!=&pl;
     for(size_t i=i0; i+1<a.size(); i+=2) {
       if(a[i]=="talent") {
@@ -1669,7 +1678,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const auto  wp = n.currentRangedWeapon();
     const auto  st = Archery::stats(n,wp);
-    char buf[360];
+    char buf[440];
     if(more) {
       // whose, the reload as long as the animation is (the trained ones' is shorter), the hit points
       const bool cbow = wp!=nullptr && wp->isCrossbow();
@@ -1679,8 +1688,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                     n.protection(PROT_POINT));
       say(buf);
       }
-    std::snprintf(buf,sizeof(buf),"stats str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg reload x%.2f",
-                  n.attribute(ATR_STRENGTH),n.attribute(ATR_DEXTERITY),n.hitChance(TALENT_BOW),n.hitChance(TALENT_CROSSBOW),
+    // an npc's: by name (the report takes `stats str` for the hero's)
+    const std::string who = &n!=&pl ? " npc " + symName(w,&n) : "";
+    std::snprintf(buf,sizeof(buf),"stats%s str %d dex %d bow %d cbow %d, weapon damage %d: skill %.2f strength %.2f sway %.2f deg settle %.2f s breath %.1f s draw %.2f s hold %.1f s speed %.1f m/s cone %.2f deg reload x%.2f",
+                  who.c_str(),n.attribute(ATR_STRENGTH),n.attribute(ATR_DEXTERITY),n.hitChance(TALENT_BOW),n.hitChance(TALENT_CROSSBOW),
                   wp!=nullptr ? int(wp->handle().damage_total) : -1,
                   double(st.skill),double(st.strength),double(st.sway*180.f/float(M_PI)),double(st.settle),double(st.breath),
                   double(st.drawTime),double(std::min(st.holdLimit,999.f)),double(st.speed*10.f),double(st.cone*180.f/float(M_PI)),
@@ -1758,16 +1769,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say("fight: no target or no ZS_ATTACK " + line);
       return;
       }
+    size_t sent = 0;
     for(auto n:who) {
-      if(n==tg)
+      if(n==tg || n->isDown())
         continue;
+      ++sent;
       if(reason!=nullptr && kill!=nullptr && size_t(reason->get_int())<std::size(n->handle().aivar))
         n->handle().aivar[size_t(reason->get_int())] = kill->get_int();
       n->setExternalControl(false);
       n->setTarget(tg);
       n->aiPush(AiQueue::aiStartState(ScriptFn(state),0,tg,nullptr,""));
       }
-    say("fight " + std::to_string(who.size()) + " at " + symName(w,tg));
+    say("fight " + std::to_string(sent) + " at " + symName(w,tg));
     }
   else if(c=="waitdown") {
     // waitdown <npc|player> [ms]: the scenario waits till it is down (dead, unconscious): `fight over`
@@ -1785,6 +1798,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     // (game/archerai): as many hits a second as G2's dice (second) or as sure an arrow (arrow); an error
     // forced (degrees per axis); the lead on a runner
     const std::string m = a.size()>1 ? a[1] : "";
+    ++ArcherAi::epoch;
     if(m=="on") {
       ArcherAi::setEnabled(true);
       if(a.size()>2)
@@ -1803,11 +1817,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     // archer <npc|all> at <npc|player> [dice] | archer off: it stands where it is and shoots at the target
     // every time it can, by hand (npcaim on) or by the dice: no fight AI, no perception's wait (the aim's
     // calibration); all: the npcs of arc
-    if(a.size()>1 && a[1]=="off") {
+    auto release = [&]() {
       for(auto& [n,at]:bench.archers)
-        if(n!=nullptr)
+        if(n!=nullptr) {
+          n->archerAi().cancel(*n);
           n->setExternalControl(false);
+          }
       bench.archers.clear();
+      };
+    if(a.size()>1 && a[1]=="off") {
+      release();
       bench.archerAt = nullptr;
       say("archer off");
       return;
@@ -1817,11 +1836,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       who = bench.crew; else
     if(Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest"))
       who.push_back(n);
+    release();
     bench.archerAt   = findNpc(w,pl,a.size()>3 ? a[3] : "player");
     bench.archerDice = a.size()>4 && a[4]=="dice";
-    bench.archers.clear();
     for(auto n:who) {
-      if(n==bench.archerAt)
+      if(n==bench.archerAt || n->isDown())
         continue;
       n->setInteraction(nullptr,true);
       n->clearAiQueue();
@@ -1962,6 +1981,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       out += " " + symName(w,n);
       bench.crew.erase(std::remove(bench.crew.begin(),bench.crew.end(),n),bench.crew.end());
       bench.archers.erase(std::remove_if(bench.archers.begin(),bench.archers.end(),[n](auto& x){ return x.first==n; }),bench.archers.end());
+      if(bench.archerAt==n) {
+        // their target gone: archer off
+        for(auto& [x,at]:bench.archers)
+          if(x!=nullptr) {
+            x->archerAi().cancel(*x);
+            x->setExternalControl(false);
+            }
+        bench.archers.clear();
+        bench.archerAt = nullptr;
+        }
       if(bench.pinned==n)
         bench.pinned = nullptr;
       if(bench.downNpc==n)
@@ -2436,7 +2465,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.anim1.clear();
     bench.anim2.clear();
     Aim::probeNpc  = bench.subject;
-    ArcherAi::probeNpc = bench.subject;
+    ArcherAi::probeNpc     = bench.subject;
+    ArcherAi::subjectProbe = ArcherAi::Probe();
     Flinch::probeNpc = bench.subject;
     char buf[160] = "watch nobody";
     if(n!=nullptr)
@@ -2699,7 +2729,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.volleyLeft>0)
       return;
     }
-  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply) {
+  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply || bench.downNpc!=nullptr) {
     if(bench.speaking) {
       if(bench.time<bench.speakUntil)
         return;
@@ -2707,17 +2737,6 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     if(waitingForReply())
       return;
-    if(bench.pc>=bench.prog.size())
-      break;
-    if(bench.time<bench.waitUntil || bench.volleyLeft>0)
-      return;
-    if(bench.waitArrive) {
-      if(!pl.isAiQueueEmpty() && bench.time<bench.arriveEnd)
-        return;
-      if(!pl.isAiQueueEmpty())
-        say("waitarrive: timeout");
-      bench.waitArrive = false;
-      }
     if(bench.downNpc!=nullptr) {
       if(!bench.downNpc->isDown() && bench.time<bench.downEnd)
         return;
@@ -2729,6 +2748,17 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
                       bench.downNpc->attribute(ATR_HITPOINTS));
       TestBench::note(buf);
       bench.downNpc = nullptr;
+      }
+    if(bench.pc>=bench.prog.size())
+      break;
+    if(bench.time<bench.waitUntil || bench.volleyLeft>0)
+      return;
+    if(bench.waitArrive) {
+      if(!pl.isAiQueueEmpty() && bench.time<bench.arriveEnd)
+        return;
+      if(!pl.isAiQueueEmpty())
+        say("waitarrive: timeout");
+      bench.waitArrive = false;
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
