@@ -513,7 +513,8 @@ HERO = "PC_HERO"  # who shot when a line does not say: before the notes had `by`
 # whom the shooters would fight: hit points, protection against points
 VICTIMS = (("hero ch1", 160, 20), ("hero ch3", 400, 50), ("hero ch4", 520, 100), ("Bandit_M", 160, 35),
            ("paladin", 520, 100))
-RULES = (("zone before armour", "before"), ("zone after armour", "after"))
+# the zone scales the damage after the armour since 2026-10-13 (the game); before it, the weapon
+RULES = (("zone after armour", "after"), ("zone before armour", "before"))
 Z95 = 1.959964
 NUM = r"(-?\d+(?:\.\d+)?)"
 RE_SHOT = re.compile(rf"arrow shot: from {NUM} {NUM} {NUM} dir {NUM} {NUM} {NUM} speed {NUM} draw {NUM}(?:, by (\S+))?")
@@ -1202,7 +1203,8 @@ def dice(data):
 
 def hit_damage(v, prot, rule):
     """what a shot (t, raw, k, hit, draw, zone) does to a victim of that protection: as the game takes it (the draw
-    and the zone scale the weapon, the armour takes its part after) or with the zone after the armour; G2's floor"""
+    scales the weapon, the armour takes its part, the zone scales the rest) or as it did until 2026-10-13 (the draw
+    and the zone scaled the weapon, the armour after); G2's floor"""
     _, raw, k, hit, draw, zone = v
     if not hit:
         return 0
@@ -1313,8 +1315,8 @@ def damage(data):
     if ttk:
         lines += ["### Time to kill", "",
                   "The shooter's shots replayed on these victims (hit points / protection) from each shot on, round the "
-                  "sequence: mean (5-95%). Per hit max(round(raw·k) - prot, 0) as the game, or max(round(raw·draw) - "
-                  "prot, 0)·zone (zone after armour); at least 5 a hit.", "",
+                  "sequence: mean (5-95%). Per hit max(round(raw·draw) - prot, 0)·zone as the game (zone after armour), "
+                  "or max(round(raw·k) - prot, 0) as until 2026-10-13 (zone before armour); at least 5 a hit.", "",
                   "| segment | shooter | victim | rule | " + " | ".join(f"{n} {hp}/{p}" for n, hp, p in VICTIMS) + " |",
                   "|" + "---|" * (4 + len(VICTIMS))] + ttk + [""]
     return lines, {"damage": clean(js), **({"time_to_kill": clean(tjs)} if tjs else {}),
