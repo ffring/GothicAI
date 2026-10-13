@@ -33,7 +33,7 @@ from gothic_ai.llm import Done, LLMError, Message, make_backend
 HERE = Path(__file__).parent
 DATA = HERE / "data"
 EVAL = HERE.parent.parent / "evals" / "npc-decisions" / "situations.yaml"
-GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/shared/projects/Gothic II"))
+GAME_DIR = Path(os.environ.get("GOTHIC_DIR", "/Volumes/DevSSD/Dev/games/Gothic II"))
 
 EVENT_KINDS = [
     "player_near", "player_speech", "enter_room", "item_given", "item_dropped", "player_sits",

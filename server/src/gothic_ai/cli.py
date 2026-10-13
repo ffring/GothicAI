@@ -24,6 +24,7 @@ from .brain.situation import SituationBuilder
 from .budget import Budget
 from .chronicle import Chronicle
 from .concerns import Concerns
+from .contracts import symbol_by_name
 from .daylife import DayDesk
 from .deals import Deals
 from .dialogue import DialogueManager
@@ -96,7 +97,7 @@ log = logging.getLogger("gothic_ai")
 
 DEFAULT_TRACE_DIR = DEFAULT_MEMORY_DB.parent / "traces"
 
-DEFAULT_GAME_DIR = "/Volumes/shared/projects/Gothic II"
+DEFAULT_GAME_DIR = "/Volumes/DevSSD/Dev/games/Gothic II"
 
 HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping
@@ -583,8 +584,16 @@ async def serve(args: argparse.Namespace) -> int:
         trust = state.trust = Trust(state.chronicle)
         state.dialogue.extensions.append(trust)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
-        state.deals = Deals(link, state.dialogue, state.chronicle, journal=journal)
+        state.deals = Deals(
+            link,
+            state.dialogue,
+            state.chronicle,
+            journal=journal,
+            names=lambda name: symbol_by_name(personas.cards, name),
+        )
         state.dialogue.extensions.append(state.deals)
+        # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
+        state.dialogue.extensions.append(state.deals.contracts)
         talk.on_talk_end.append(state.deals.end)
         if args.wrath or args.scenario == "wrath":
             # insult Xardas enough and he raises you as a skeleton (on by default, --no-wrath turns it off)
@@ -916,6 +925,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.deal_window(link, dialogue, talk, deals)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario deal: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "contract":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.contract(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario contract: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cards":
                 if graph is None:
@@ -1451,6 +1467,7 @@ def main() -> None:
             "amends",
             "deal",
             "deal_demo",
+            "contract",
             "debt",
             "initiative",
             "gossip",

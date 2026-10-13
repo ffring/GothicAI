@@ -67,6 +67,12 @@ class FakeGame:
         self.hero_items: dict[str, int] = {}
         # story_effect with `check`: the npc's things (the hero's are hero_items), moved by the gives
         self.npc_items: dict[str, dict[str, int]] = {}
+        # v17: the hero's learning points and experience; what teaching costs (per point for attribute and
+        # fight, else for the lesson), default 1; what was taught
+        self.hero_lp = 0
+        self.hero_xp = 0
+        self.learn_cost: dict[tuple[str, str], int] = {}
+        self.taught: list[tuple[str, str, int]] = []
         self.deals: list[dict[str, Any]] = []  # deal_show / deal_hide messages
         self.views: dict[str, dict[str, Any]] = {}  # what npc_view answers: npc -> its view (NpcView)
         self.fields: dict[tuple[str, str], int] = {}  # ("SELF" | "OTHER", "GUILD") -> value; others read 0
@@ -353,22 +359,45 @@ class FakeGame:
         return None
 
     def give(self, msg: dict[str, Any]) -> str | None:
-        """story_effect with `check`: all the gives or none, as the bridge does; what is missing, or None."""
+        """story_effect with `check`: all the gives or none, as the bridge does; what is missing, or None.
+        What the npc creates (v17) is its own to give; teaching takes the hero's learning points."""
         npc = self.npc_items.setdefault(msg["npc"], {})
         need: dict[tuple[str, str], int] = {}
+        made: dict[str, int] = {}
+        lp = 0
         for e in msg["effects"]:
             if e.get("do") == "give":
                 who = "npc" if e.get("to") != "self" else "hero"
                 need[(who, e["item"])] = need.get((who, e["item"]), 0) + int(e.get("count", 1))
+            elif e.get("do") == "create":
+                made[e["item"]] = made.get(e["item"], 0) + int(e.get("count", 1))
+            elif e.get("do") == "teach":
+                lp += self.cost(e)
         for (who, item), count in need.items():
-            has = (self.hero_items if who == "hero" else npc).get(item, 0)
+            has = (self.hero_items if who == "hero" else npc).get(item, 0) + (
+                made.get(item, 0) if who == "npc" else 0
+            )
             if has < count:
                 return f"missing: {who} {item} {count} (has {has})"
+        if lp > self.hero_lp:
+            return f"missing: hero LP {lp} (has {self.hero_lp})"
+        for item, count in made.items():
+            npc[item] = npc.get(item, 0) + count
         for (who, item), count in need.items():
             giver, taker = (self.hero_items, npc) if who == "hero" else (npc, self.hero_items)
             giver[item] -= count
             taker[item] = taker.get(item, 0) + count
+        for e in msg["effects"]:
+            if e.get("do") == "teach":
+                self.hero_lp -= self.cost(e)
+                self.taught.append((e["teach"], e.get("arg", ""), int(e.get("count", 1))))
+            elif e.get("do") == "xp":
+                self.hero_xp += int(e.get("amount", e.get("count", 0)))
         return None
+
+    def cost(self, e: dict[str, Any]) -> int:
+        each = self.learn_cost.get((e["teach"], e.get("arg", "")), 1)
+        return each * int(e.get("count", 1)) if e["teach"] in ("attribute", "fight") else each
 
     def evaluate(self, e: Any, npc: str | None = None) -> Any:
         """A story graph expression, as far as the fake world knows: ints, vars, comparisons, logic, the
