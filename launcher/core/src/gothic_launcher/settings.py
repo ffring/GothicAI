@@ -26,6 +26,7 @@ ENV_KEYS = {
     "GOTHIC_DIR": "game.dir",
     "GOTHIC_AI_CHAT_SCALE": "game.chat_scale",
     "GOTHIC_AI_LLM": "llm.backend",
+    "GOTHIC_DECIDER_URL": "llm.decider_url",
     "GOTHIC_ASR_PROVIDER": "voice.provider",
     "GOTHIC_ASR_FALLBACK": "voice.fallback",
     "GOTHIC_VOXTRAL_URL": "voice.voxtral_url",
@@ -64,6 +65,11 @@ class LlmSettings(_Section):
     model: str | None = Field(None, title="Модель", description="Пусто: модель бэкенда по умолчанию")
     base_url: str | None = Field(None, title="Адрес API", description="Для бэкендов openai и local")
     reasoning_effort: str = Field("low", title="Глубина рассуждений")
+    decider_url: str | None = Field(
+        None,
+        title="Адрес быстрой модели",
+        description="Strands decider (ws://…): первый звук, жесты, тело, распорядок NPC. Пусто: выключена",
+    )
 
 
 class VoiceSettings(_Section):

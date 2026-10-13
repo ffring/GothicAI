@@ -37,6 +37,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     config.set("tts.fallback", "none")
     config.set("tts.loudness", "-16")
     config.set("llm.model", "gpt-6.1-sol")
+    config.set("llm.decider_url", "ws://gpu:47832")
     config.set("secrets.inworld_api_key", "iw-secret")
     config.set("secrets.openai_api_key", "sk-secret")
 
@@ -63,6 +64,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     assert args[args.index("--asr-url") + 1] == "ws://127.0.0.1:50002"
     assert args[args.index("--tts-url") + 1] == "ws://127.0.0.1:50003"
     assert args[args.index("--model") + 1] == "gpt-6.1-sol" and "--no-console" in args
+    assert args[args.index("--decider-url") + 1] == "ws://gpu:47832"
     assert args[args.index("--game-dir") + 1] == "/games/G2"
     for p in procs:  # keys never in argv: they would end up in logs and `ps`
         assert not any("secret" in a for a in p.argv)
