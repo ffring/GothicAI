@@ -2,7 +2,8 @@ import asyncio
 
 import gothic_ai.deals
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.deals import Deals, LieRef, gold_text
+from gothic_ai.contracts import gold_text
+from gothic_ai.deals import Deals, LieRef
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep

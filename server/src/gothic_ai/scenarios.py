@@ -22,8 +22,9 @@ from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Fact
 from .concerns import Concerns
+from .contracts import gold_text
 from .daylife import DayDesk
-from .deals import GOLD, Deals, gold_text
+from .deals import GOLD, Deals
 from .dialogue import DialogueManager, SceneLine
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
@@ -2895,6 +2896,140 @@ async def deal_window(
     conv = dialogue.conversations.get(seller)
     answered = await _until(lambda: conv is not None and "assistant" == conv.memory.entries[-1].role, 30)
     check("answered", answered, conv.memory.entries[-1].content if conv and conv.memory.entries else "")
+    return _logged(results)
+
+
+async def contract(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, deals: Deals, npc: str = "NONE_100_XARDAS"
+) -> dict[str, str]:
+    """Contracts (docs/contracts.md) on the game, with Xardas (scripted unless LLM=chatgpt).
+    1. The hero asks for experience: Xardas gives 500 of it and a rune from his stash (he carries none) for
+       1 gold. The hero's experience grows, the rune is his, the stash has one less.
+    2. The hero asks for a task: kill a wolf, for strength +5 (his learning points, as a teacher takes them)
+       and two potions from the stash. A wolf comes and dies by the hero's hand: the game reports the kill,
+       the task is done. The hero speaks to Xardas: the code pays before he answers, and he knows it."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+
+    async def field(name: str, index: int | None = None) -> int:
+        expr: list[Any] = ["field", hero, name] if index is None else ["field", hero, name, index]
+        return int(await link.evaluate(expr) or 0)
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    await link.debug("skip_important", near=npc)
+    await link.debug("player_goto", to=npc, distance=250)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: npc in talk.people, 20):
+        check("near", False, npc)
+        return _logged(results)
+    name = talk.people[npc].name
+    rune, potion, strength = "ITRU_SUMSKEL", "ITPO_HEALTH_02", 4  # ATR_STRENGTH
+    if await has(GOLD) < 1:
+        await link.story_effect(npc, [{"do": "give", "item": GOLD, "count": 1}])
+
+    if isinstance(dialogue.llm, FakeBackend):
+
+        def terms(**more: Any) -> dict[str, Any]:
+            return {
+                "npc_gives": [],
+                "hero_gives": [],
+                "forgive": [],
+                "silence": [],
+                "hero_later": [],
+                "repay": [],
+                "npc_xp": 0,
+                "npc_teach": [],
+                "task": {"kill": [], "bring": [], "days": 0},
+                "reward": {"npc_gives": [], "xp": 0, "teach": []},
+                **more,
+            }
+
+        now = terms(
+            npc_gives=[{"item": rune, "count": 1}], hero_gives=[{"item": GOLD, "count": 1}], npc_xp=500
+        )
+        task = terms(
+            task={"kill": [{"target": "GIL_WOLF", "count": 1}], "bring": [], "days": 0},
+            reward={
+                "npc_gives": [{"item": potion, "count": 2}],
+                "xp": 0,
+                "teach": [{"what": "attribute", "arg": "ATR_STRENGTH", "count": 5}],
+            },
+        )
+        dialogue.llm = ClaimScript(
+            said=[
+                ("опыта", FakeStep("Опыт и руну — за один золотой.", [ToolCall("propose_deal", now, "now")])),
+                (
+                    "поручени",
+                    FakeStep("Убей волка — научу тебя силе.", [ToolCall("propose_deal", task, "task")]),
+                ),
+            ],
+            told=[],
+            default="Хорошо.",
+            only=name,
+        )
+
+    # 1. experience and a rune from the stash, now
+    exp, lp, runes = await field("EXP"), await field("LP"), await has(rune)
+    await link.debug("type", text=f"{name}, дай мне опыта.")
+    ok = await _until(lambda: npc in deals.open, 30)
+    window = await link.deal_window() or {}
+    check("shown_now", ok and "Опыт +500" in window.get("npc_gives", []), window)
+    if not ok:
+        return _logged(results)
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    done = await _until(lambda: bool(deals.chronicle.facts("deal")), 20)
+    check("accepted_now", pressed == "sent" and done, pressed)
+    exp2, lp2, runes2 = await field("EXP"), await field("LP"), await has(rune)
+    check("experience", exp2 == exp + 500, f"exp {exp} -> {exp2}, lp {lp} -> {lp2}")
+    check(
+        "rune_from_stash", runes2 == runes + 1 and rune not in deals.stash.left(npc), f"{runes} -> {runes2}"
+    )
+
+    # 2. a task: a wolf for strength and potions
+    deals_before = len(deals.chronicle.facts("deal"))
+    await asyncio.sleep(2)
+    await link.debug("type", text=f"{name}, дай мне поручение.")
+    ok = await _until(lambda: npc in deals.open, 30)
+    window = await link.deal_window() or {}
+    check("shown_task", ok and any("волки" in t for t in window.get("hero_gives", [])), window)
+    if not ok:
+        return _logged(results)
+    await asyncio.sleep(1.2)
+    pressed = await link.press_deal()
+    done = await _until(lambda: len(deals.chronicle.facts("deal")) > deals_before, 20)
+    check("contract", pressed == "sent" and done and bool(deals.chronicle.facts("contract")), pressed)
+
+    strength1, lp3, potions = await field("ATTRIBUTE", strength), await field("LP"), await has(potion)
+    await link.debug("spawn", instance="WOLF", near=npc, distance=600)
+    await asyncio.sleep(1)
+    killed = await link.debug("kill", instance="WOLF", near=npc, by="PLAYER")
+    done = await _until(lambda: bool(deals.chronicle.facts("contract_done")), 15)
+    check("wolf_counted", done, f"kill: {killed}, kills: {deals.chronicle.facts('contract_kill')}")
+    check("not_paid_yet", await has(potion) == potions)
+
+    await asyncio.sleep(2)
+    await link.debug("type", text=f"{name}, волк мёртв.")
+    paid = await _until(lambda: bool(deals.chronicle.facts("contract_paid")), 30)
+    strength2, lp4, potions2 = await field("ATTRIBUTE", strength), await field("LP"), await has(potion)
+    check(
+        "paid",
+        paid and strength2 == strength1 + 5 and lp4 < lp3 and potions2 == potions + 2,
+        f"str {strength1} -> {strength2}, lp {lp3} -> {lp4}, potions {potions} -> {potions2}",
+    )
+    conv = dialogue.conversations.get(npc)
+    knows = conv is not None and any("исполнил твоё поручение" in e.content for e in conv.memory.entries)
+    check("npc_knows", knows)
     return _logged(results)
 
 

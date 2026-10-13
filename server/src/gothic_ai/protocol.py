@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
 # v16: opt-in passive numeric body observations (independently versioned schema).
-PROTOCOL_VERSION = 16
+PROTOCOL_VERSION = 17
 
 # --- game -> server -----------------------------------------------------------
 
@@ -243,6 +243,17 @@ class NpcDied(_GameMessage):
     name: str = ""
     tag: str | None = None
     killer: str = ""
+
+
+class HeroKill(_GameMessage):
+    """Whoever the hero killed, person or creature (v17): an npc's contract may count it. `guild` is the
+    victim's guild as the scripts number it (GIL_*)."""
+
+    type: Literal["hero_kill"]
+    npc: str
+    name: str = ""
+    guild: int = 0
+    monster: bool = False
 
 
 class TagNear(_GameMessage):
@@ -734,6 +745,7 @@ GameMessage = Annotated[
     | PerceptionHeld
     | DialogChosen
     | NpcDied
+    | HeroKill
     | StoryWorld
     | DealAccept
     | DealDecline

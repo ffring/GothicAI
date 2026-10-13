@@ -1,6 +1,6 @@
-# Протокол игра ↔ ИИ-сервер (v16)
+# Протокол игра ↔ ИИ-сервер (v17)
 
-v10 — сделки ([ниже](#сделки-v10)), v11 — восприятие NPC ([ниже](#восприятие-npc-v11)), v12 — когда и где: игровое время в виде, точка каждого, кого видно, и зрение в `story_state` и `story_world` (память увиденного), v13 — ответ некроманта ([ниже](#ответ-некроманта-v13)), v14 — быстрые реакции (`say.filler`), v15 — NPC друг с другом: `say.to`, `hush.line`, `npc_act give`, `start_activity arrive`, `debug npc_goto`; v16 — пассивный числовой поток `body_watch` / `body_observations`.
+v10 — сделки ([ниже](#сделки-v10)), v11 — восприятие NPC ([ниже](#восприятие-npc-v11)), v12 — когда и где: игровое время в виде, точка каждого, кого видно, и зрение в `story_state` и `story_world` (память увиденного), v13 — ответ некроманта ([ниже](#ответ-некроманта-v13)), v14 — быстрые реакции (`say.filler`), v15 — NPC друг с другом: `say.to`, `hush.line`, `npc_act give`, `start_activity arrive`, `debug npc_goto`; v16 — пассивный числовой поток `body_watch` / `body_observations`; v17 — поручения и награды сверх инвентаря ([ниже](#поручения-v17)).
 
 WebSocket, одно JSON-сообщение на кадр, кодировка UTF-8. Игра (`OpenGothic/ai_bridge`) — клиент, ИИ-сервер (`server/`) — сервер, по умолчанию `ws://127.0.0.1:47817`.
 
@@ -338,6 +338,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `type` | Поля | Когда |
 |---|---|---|
 | `npc_died` | `npc`, `name`, `tag?`, `killer` | умер человек или существо с меткой. `killer` — `PLAYER`, символ NPC, или пусто, если никто не бил |
+| `hero_kill` | `npc`, `name`, `guild`, `monster` | (v17) герой убил кого-то — человека или любое существо, с меткой или без. `guild` — номер гильдии в скриптах (`GIL_*`). Поручения NPC считают по нему убитых ([ниже](#поручения-v17)) |
 | `story_world` | `tags[]`: `{tag, alive, dead, near[]: {npc, distance, seen?}}` | раз в секунду, пока есть метки. `seen` — расстояние до ближайшего живого, которого NPC видит (v12); нет — не видит никого |
 
 Метки живут, пока жив мир: загрузка их сбрасывает. Существа в сохранении остаются, но мост их больше не узнаёт.
@@ -361,6 +362,21 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `deal_decline` | `deal`, `version` | игрок нажал N: окно в игре уже ушло. Сервер закрывает сделку, NPC узнаёт об отказе и может предложить иначе (новая `deal`) |
 
 Y и N работают, только пока строка ввода закрыта; пока окно открыто, N не открывает дневник (он остаётся на L). Окно уходит при загрузке и при потере связи с сервером. Отладка (`-devmode`): `debug` с `cmd: "deal"` — что показывает окно, `cmd: "deal_accept"` / `"deal_decline"` — нажать Y / N как игрок.
+
+## Поручения (v17)
+
+Награды сверх инвентаря и поручения с наградой ([contracts.md](contracts.md)). На сервере — [contracts.py](../server/src/gothic_ai/contracts.py) и [deals.py](../server/src/gothic_ai/deals.py), в мосте — [storyeffects.cpp](../OpenGothic/ai_bridge/storyeffects.cpp) и [storyworld.cpp](../OpenGothic/ai_bridge/storyworld.cpp).
+
+Новые эффекты `story_effect`:
+
+| `do` | Поля | Что делает |
+|---|---|---|
+| `create` | `item`, `count` | `CreateInvItems` в руки NPC (`self`): вещь из его тайника, отдаётся следующим `give`. С `check` созданное засчитывается NPC как его собственное |
+| `teach` | `teach`, `arg`, `count` | учительская функция скриптов, как в диалоге учителя (`self` — учитель, `other` — герой), она сама берёт очки обучения. `teach`: `attribute` — `B_TeachAttributePoints(arg = ATR_*, count очков)`; `fight` — `B_TeachFightTalentPercent(arg = NPC_TALENT_1H/2H/BOW/CROSSBOW, count процентов)`; `thief` — `B_TeachThiefTalent(arg = NPC_TALENT_PICKLOCK/SNEAK/PICKPOCKET/ACROBAT)`; `circle` — `B_TeachMagicCircle(count = 1–6)`; `rune` — `B_TeachPlayerTalentRunes(arg = SPL_*)`; `alchemy` — `B_TeachPlayerTalentAlchemy(arg = POTION_*)`; `smith` — `B_TeachPlayerTalentSmith(arg = WEAPON_*)`; `trophy` — `B_TeachPlayerTalentTakeAnimalTrophy(arg = TROPHY_*)`. Предел учителя мост не ставит (1000 очков, 100%): сколько учить — решает сервер |
+
+С `check: true` мост сначала считает очки обучения всех `teach` — так же, как их считает сама учительская функция (`B_GetLearnCostAttribute(other, arg) × count`, `B_GetLearnCostTalent(other, arg, 1) × count` для оружия, `B_GetLearnCostTalent(other, arg, 1)` для воровских навыков, `B_GetLearnCostTalent(other, NPC_TALENT_*, count или arg)` для остального; сверено по `GOTHIC.DAT`). Не хватает — ничего не происходит, `error`: `missing: hero LP 20 (has 2)`. Сервер ставит `teach` первыми, опыт (`xp`) — последним.
+
+`debug kill` с `by` теперь записывает убийцу (`lastHitBy`), как смертельный удар: так `hero_kill` приходит и от стенда.
 
 ## Восприятие NPC (v11)
 

@@ -53,7 +53,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 16;
+constexpr int         ProtocolVersion = 17;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -1064,6 +1064,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     at1.x += 150*std::cos(by->rotationRad());
     at1.z += 150*std::sin(by->rotationRad());
     victim->setPosition(at1);
+    victim->setLastHitBy(by);  // as a deadly hit leaves it: whose kill it is (hero_kill, v17)
     victim->changeAttribute(ATR_HITPOINTS,-victim->attribute(ATR_HITPOINTS),false);
     world->sendPassivePerc(*victim,*by,*victim,PERC_ASSESSMURDER);
     sendResult(req,victim->isDead(),"it did not die");

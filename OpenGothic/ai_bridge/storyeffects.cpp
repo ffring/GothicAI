@@ -3,6 +3,7 @@
 #include <Tempest/Log>
 
 #include <cctype>
+#include <optional>
 
 #include <zenkit/DaedalusVm.hh>
 
@@ -23,9 +24,50 @@ static std::string upper(std::string_view s) {
   return r;
   }
 
+namespace {
+
+// What an npc teaches (v17): the scripts' own teacher function, and for those that teach one thing of a
+// talent (a rune, a potion...), the talent their learn cost is asked for (B_GetLearnCostTalent).
+struct Teaching {
+  std::string_view kind;
+  const char*      fn;
+  const char*      talent;
+  };
+
+constexpr Teaching Teachings[] = {
+  {"attribute", "B_TEACHATTRIBUTEPOINTS",              nullptr},
+  {"fight",     "B_TEACHFIGHTTALENTPERCENT",           nullptr},
+  {"thief",     "B_TEACHTHIEFTALENT",                  nullptr},
+  {"circle",    "B_TEACHMAGICCIRCLE",                  "NPC_TALENT_MAGE"},
+  {"rune",      "B_TEACHPLAYERTALENTRUNES",            "NPC_TALENT_RUNES"},
+  {"alchemy",   "B_TEACHPLAYERTALENTALCHEMY",          "NPC_TALENT_ALCHEMY"},
+  {"smith",     "B_TEACHPLAYERTALENTSMITH",            "NPC_TALENT_SMITH"},
+  {"trophy",    "B_TEACHPLAYERTALENTTAKEANIMALTROPHY", "NPC_TALENT_TAKEANIMALTROPHY"},
+  };
+
+// no teacher's own limit: how far the npc goes is the npc's to say (the server's deal)
+constexpr int32_t AttributeMax = 1000;
+constexpr int32_t FightMax     = 100;
+
+const Teaching* teaching(std::string_view kind) {
+  for(auto& t:Teachings)
+    if(t.kind==kind)
+      return &t;
+  return nullptr;
+  }
+
+int32_t intConst(zenkit::DaedalusVm& vm, std::string_view name) {
+  auto* s = vm.find_symbol_by_name(name);
+  return s!=nullptr && s->type()==DaedalusDataType::INT ? s->get_int(0) : 0;
+  }
+
+}
+
 std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm, StoryEffect& e) {
   e.kind   = std::string(JsonRead::str(x,"do"));
   e.item   = upper(JsonRead::str(x,"item"));
+  e.teach  = std::string(JsonRead::str(x,"teach"));
+  e.arg    = upper(JsonRead::str(x,"arg"));
   e.var    = upper(JsonRead::str(x,"var"));
   e.reason = upper(JsonRead::str(x,"reason"));
   e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
@@ -38,11 +80,26 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.toHero = JsonRead::str(x,"to")!="self";
   auto* item = vm ? vm->find_symbol_by_name(e.item) : nullptr;
   auto* var  = vm ? vm->find_symbol_by_name(e.var) : nullptr;
-  if(e.kind=="give") {
+  if(e.kind=="give" || e.kind=="create") {
     if(vm && (item==nullptr || item->type()!=DaedalusDataType::INSTANCE))
-      return "give: no item " + e.item;
+      return e.kind + ": no item " + e.item;
     if(e.count<=0)
-      return "give: count must be positive";
+      return e.kind + ": count must be positive";
+    return {};
+    }
+  if(e.kind=="teach") {
+    auto* t = teaching(e.teach);
+    if(t==nullptr)
+      return "teach: unknown teaching " + e.teach;
+    if(vm && vm->find_symbol_by_name(t->fn)==nullptr)
+      return std::string("teach: the scripts have no ") + t->fn;
+    if(e.teach=="circle")
+      return e.count<1 || e.count>6 ? "teach: circle must be 1..6" : "";
+    auto* a = vm && !e.arg.empty() ? vm->find_symbol_by_name(e.arg) : nullptr;
+    if(e.arg.empty() || (vm && (a==nullptr || !a->is_const() || a->type()!=DaedalusDataType::INT)))
+      return "teach: no constant " + e.arg;
+    if((e.teach=="attribute" || e.teach=="fight") && e.count<=0)
+      return "teach: count must be positive";
     return {};
     }
   if(e.kind=="set") {
@@ -83,8 +140,10 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   auto call = [&](const char* fn, std::vector<Value> args) {
     std::string err;
     auto* s = vm.find_symbol_by_name(fn);
-    if(s==nullptr || !storygraph::callFunction(vm,*s,args,err))
+    auto  r = s ? storygraph::callFunction(vm,*s,args,err) : std::nullopt;
+    if(!r)
       Log::e("[story] ",who,": ",fn," failed: ",s ? err : "no such function");
+    return r;
     };
   auto constant = [&](std::string_view name, int32_t def) {
     auto* s = vm.find_symbol_by_name(name);
@@ -104,6 +163,28 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
       auto& to   = toHero ? player : npc;
       call("B_GIVEINVITEMS",{Value::instance(from.handlePtr()),Value::instance(to.handlePtr()),
                              Value::integer(int32_t(s->index())),Value::integer(count)});
+      }
+    }
+  else if(kind=="create") {
+    // into the npc's own hands first: a thing it keeps elsewhere (the server's stash), given after this
+    if(auto* s = vm.find_symbol_by_name(item))
+      call("CREATEINVITEMS",{Value::instance(npc.handlePtr()),Value::integer(int32_t(s->index())),
+                             Value::integer(count)});
+    }
+  else if(kind=="teach") {
+    // the scripts' teacher function, as a teacher's dialog calls it: it takes the learning points itself
+    if(auto* t = teaching(teach)) {
+      std::vector<Value> args = {Value::instance(npc.handlePtr()),Value::instance(player.handlePtr())};
+      if(teach=="circle")
+        args.push_back(Value::integer(count)); else
+        args.push_back(Value::integer(intConst(vm,arg)));
+      if(teach=="attribute" || teach=="fight") {
+        args.push_back(Value::integer(count));
+        args.push_back(Value::integer(teach=="attribute" ? AttributeMax : FightMax));
+        }
+      auto r = call(t->fn,std::move(args));
+      if(r && r->i==0)
+        Log::e("[story] ",who,": ",t->fn," ",arg," ",count,": the scripts refused");
       }
     }
   else if(kind=="xp") {
@@ -141,4 +222,34 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
 
   self->set_instance(prevSelf);
   other->set_instance(prevOther);
+  }
+
+int32_t StoryEffect::learnCost(zenkit::DaedalusVm& vm, Npc& player, std::string& error) const {
+  auto* t = teaching(teach);
+  if(t==nullptr) {
+    error = "teach: unknown teaching " + teach;
+    return -1;
+    }
+  // as the teacher function itself asks it (B_Teach*: disassembled from GOTHIC.DAT)
+  const char*        fn   = teach=="attribute" ? "B_GETLEARNCOSTATTRIBUTE" : "B_GETLEARNCOSTTALENT";
+  std::vector<Value> args = {Value::instance(player.handlePtr())};
+  if(teach=="attribute") {
+    args.push_back(Value::integer(intConst(vm,arg)));
+    }
+  else if(t->talent==nullptr) {  // fight, thief: the talent itself, skill 1
+    args.push_back(Value::integer(intConst(vm,arg)));
+    args.push_back(Value::integer(1));
+    }
+  else {  // circle: the circle; a rune, a potion...: what is taught
+    args.push_back(Value::integer(intConst(vm,t->talent)));
+    args.push_back(Value::integer(teach=="circle" ? count : intConst(vm,arg)));
+    }
+  auto* s = vm.find_symbol_by_name(fn);
+  auto  r = s ? storygraph::callFunction(vm,*s,args,error) : std::nullopt;
+  if(!r) {
+    if(s==nullptr)
+      error = std::string("the scripts have no ") + fn;
+    return -1;
+    }
+  return teach=="attribute" || teach=="fight" ? r->i*count : r->i;
   }
