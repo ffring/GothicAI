@@ -27,10 +27,6 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-#if defined(__clang__) && __has_warning("-Wnontrivial-memcall")
-// rapidjson memcpy's its values (GCC's -Wclass-memaccess is off for the whole target)
-#pragma clang diagnostic ignored "-Wnontrivial-memcall"
-#endif
 #include <rapidjson/document.h>
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
