@@ -9,7 +9,7 @@
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
-#       DECIDER_URL, or a fixed stand-in)
+#       DECIDER_URL, or a fixed stand-in); with QUICK_URL the words are the quick model's line, at once
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
@@ -126,6 +126,11 @@ BRAIN_ARGS=(--no-brain)
 if [ -n "${DECIDER_URL:-}" ]; then
   BRAIN_ARGS=(--decider-url "$DECIDER_URL")
 fi
+# lines in a fight come from the quick model only when given (QUICK_URL=http://<gpu-host>:47834/v1; m5)
+QUICK_ARGS=(--no-quick)
+if [ -n "${QUICK_URL:-}" ]; then
+  QUICK_ARGS=(--quick-url "$QUICK_URL")
+fi
 
 ASR_PID=""
 TTS_PID=""
@@ -143,7 +148,7 @@ if [ "$SCENARIO" = "m3" ] || [ "$SCENARIO" = "m5e" ]; then
 fi
 
 (cd "$ROOT/server" && exec uv run gothic-ai serve --port "$PORT" --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console \
-  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
+  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}" "${QUICK_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
 # `|| true`: with set -e a failing kill of an already finished process would change the exit code

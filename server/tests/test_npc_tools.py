@@ -36,3 +36,11 @@ def test_situation_shows_the_intent_and_its_possible_targets():
     assert "Твоё намерение: цель — идти за героем; отношение к герою — дружеское" in text
     assert "agenda — wants the hero to see Hagen" in text
     assert "PLAYER (герой)" in text and "PC_THIEF (Диего, 6 м)" in text and "NW_XARDAS_TOWER_04" in text
+
+
+def test_a_brief_situation_is_what_the_npc_perceives_without_its_belongings_and_targets():
+    """For a line in a fight (the quick model): the moment, not what the npc could act on."""
+    snap = Snapshot.model_validate(FakeGame().snapshot("NONE_100_XARDAS"))
+    text = render_situation(snap, Intent("fight", target="PLAYER", attitude="hostile"), brief=True)
+    assert "день 1, 08:00" in text and "Диего (6 м)" in text and "Твоё намерение: цель — драться" in text
+    assert "Эликсир лечения" not in text and "Цели для намерения" not in text

@@ -31,6 +31,7 @@ from .game import GameError, GameLink
 from .gossip import WORDS_CM, GossipDesk, Scene
 from .incidents import IncidentDesk
 from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
+from .journal import Journal
 from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
@@ -80,6 +81,9 @@ from .wrath import TAKE_OFFENSE, TEMPERS, Wrath
 log = logging.getLogger(__name__)
 
 GESTURES = ("T_COMEOVERHERE", "T_GREETNOV", "T_YES")
+QUICK_LINE_S = (
+    1.5  # m5 with the quick model: its line starts this soon (the conversational model takes 3-5 s)
+)
 
 
 @dataclass(frozen=True)
@@ -570,11 +574,13 @@ async def m5_turn_loop(
     npc: str = "NONE_100_XARDAS",
     decider: Decider | None = None,
     trace: TraceWriter | None = None,
+    quick: LLMBackend | None = None,
 ) -> dict[str, str]:
     """M5a on the game: the turn loop with checks, intents moving the body, and the two loops on an
     incident (the body reacts before the words). The conversational model is scripted; the behavioral
     model is the live service when given, a fixed stand-in otherwise. The game cannot hit an npc on
-    command, so the incident's perception is injected on the server side."""
+    command, so the incident's perception is injected on the server side. With `quick` (the quick model
+    of fights, live) the incident's words are its line, said at once; the scripted model only acts."""
     await link.wait_world()
     await attach_when_free(link, npc)
     snap = await link.snapshot(npc, fresh=True)
@@ -603,7 +609,16 @@ async def m5_turn_loop(
         delay=0,
     )
     budget = Budget()
-    dialogue = DialogueManager(link, llm, PersonaProvider(None), trace=trace, budget=budget)
+    spoken: list[dict[str, Any]] = []  # the journal's entries: who said a line, how soon
+    dialogue = DialogueManager(
+        link,
+        llm,
+        PersonaProvider(None),
+        trace=trace,
+        budget=budget,
+        journal=Journal(spoken.append),
+        quick=quick,
+    )
     reflexes = Reflexes(decider or FixedDecider({"react": "run_to_hero", "gesture": "nod"}))
     desk = IncidentDesk(link, dialogue, reflexes, budget, trace)
     desk.attached.add(npc)  # it was attached before the desk was listening
@@ -664,6 +679,12 @@ async def m5_turn_loop(
         results["incident_words"] = (
             f"{'done' if spoke and (reacted_at or 99) < words_at else 'failed'} ({spoke})"
         )
+        if quick is not None:
+            line = next((e for e in reversed(spoken) if e["kind"] == "npc"), {})
+            ok = line.get("llm") == quick.name and line.get("first_token_s", 99) < QUICK_LINE_S
+            results["incident_quick"] = (
+                f"{'done' if ok else 'failed'} ({line.get('llm')}, first token {line.get('first_token_s')} s)"
+            )
     finally:
         await link.act(npc, "return_to_routine")
     for name, outcome in results.items():

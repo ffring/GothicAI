@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from gothic_ai.llm import (
+    QUICK_MAX_TOKENS,
     Done,
     FakeBackend,
     FakeStep,
@@ -11,6 +12,8 @@ from gothic_ai.llm import (
     ToolCall,
     ToolResult,
     Usage,
+    make_quick,
+    quick_url,
 )
 from gothic_ai.llm.openai_compat import chat_messages
 from gothic_ai.llm.openai_responses import OpenAIResponsesBackend, input_items
@@ -174,3 +177,35 @@ async def test_fake_backend_makes_no_calls_with_tool_choice_none():
     events = [e async for e in llm.stream(instructions="", messages=[], tools=[GIVE], tool_choice="none")]
     assert not any(isinstance(e, ToolCall) for e in events)
     assert llm.tool_choices == ["none"]
+
+
+async def test_the_quick_backend_caps_its_answers_and_warms_the_servers_cache():
+    backend = make_quick("http://127.0.0.1:9/v1")
+    sent: list[dict] = []
+
+    async def create(**kwargs):
+        sent.append(kwargs)
+        if not kwargs.get("stream"):
+            return SimpleNamespace()
+
+        async def chunks():
+            delta = SimpleNamespace(content="Держись!", tool_calls=None)
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+        return chunks()
+
+    backend._client.chat.completions.create = create  # type: ignore[attr-defined]
+    messages = [Message("user", "Волк!")]
+    await backend.prewarm(instructions="Ты Кавалорн.", messages=messages)
+    events = [e async for e in backend.stream(instructions="Ты Кавалорн.", messages=messages)]
+
+    chat = [{"role": "system", "content": "Ты Кавалорн."}, {"role": "user", "content": "Волк!"}]
+    assert sent[0]["messages"] == chat and sent[0]["max_tokens"] == 1  # the same prefix, nothing said
+    assert sent[1]["messages"] == chat and sent[1]["max_tokens"] == QUICK_MAX_TOKENS and sent[1]["stream"]
+    assert isinstance(events[-1], Done) and events[-1].text == "Держись!"
+
+
+def test_the_quick_model_is_on_wherever_the_decider_is():
+    assert quick_url(None, "ws://gpu-host:47832") == "http://gpu-host:47834/v1"  # the same GPU server
+    assert quick_url("http://other:9000/v1", "ws://gpu-host:47832") == "http://other:9000/v1"
+    assert quick_url(None, None) is None

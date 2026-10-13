@@ -180,10 +180,13 @@ def _metres(cm: float) -> str:
     return f"{max(1, round(cm / 100))} м"
 
 
-def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight: Sight | None = None) -> str:
+def render_situation(
+    snap: Snapshot | None, intent: Intent | None = None, sight: Sight | None = None, *, brief: bool = False
+) -> str:
     """What the npc perceives right now; sent with every turn, not kept in history. With `sight` (what it
     sees, perception.py) the place, the hero and the people around are as it perceives them; without, as
-    the snapshot has them (everyone within 15 m, seen or not)."""
+    the snapshot has them (everyone within 15 m, seen or not). `brief`: for a line in a fight (the quick
+    model, dialogue.py), without the inventory and the targets of intents: only words, no acts."""
     if snap is None:
         if sight is None:
             return "[Обстановка неизвестна]" + (f"\nТвоё намерение: {intent.describe()}." if intent else "")
@@ -209,8 +212,9 @@ def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight:
             f"{f', {pl.ranged}' if pl.ranged else ''}."
             + (f" Здоровье героя: {pl.hp}/{pl.hp_max}." if pl.hp is not None and pl.hp_max else "")
         )
-    items = [f"{it.name} ({it.item}) ×{it.count}" for it in npc.inventory if not it.equipped]
-    lines.append("Твой инвентарь: " + ("; ".join(items) if items else "пусто") + ".")
+    if not brief:
+        items = [f"{it.name} ({it.item}) ×{it.count}" for it in npc.inventory if not it.equipped]
+        lines.append("Твой инвентарь: " + ("; ".join(items) if items else "пусто") + ".")
     if sight is not None:
         lines.append(sight.people)
     else:
@@ -219,5 +223,6 @@ def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight:
     lines.append("Сейчас ты идёшь за героем." if npc.following else "Сейчас ты стоишь на месте.")
     if intent is not None:
         lines.append(f"Твоё намерение: {intent.describe()}.")
-        lines.append(f"Цели для намерения (target): {describe_targets(snap)}.")
+        if not brief:
+            lines.append(f"Цели для намерения (target): {describe_targets(snap)}.")
     return "\n".join(lines)
