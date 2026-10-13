@@ -1,0 +1,30 @@
+{
+  "about": "What an npc keeps but does not carry: it may give these in a deal as if from its inventory (contracts.py, docs/contracts.md). Counts are what it has at the start; what it gives is gone for good.",
+  "stash": {
+    "NONE_100_XARDAS": [
+      {"item": "ITMI_GOLD", "count": 500},
+      {"item": "ITRU_SUMSKEL", "count": 1},
+      {"item": "ITRU_FEAR", "count": 1},
+      {"item": "ITRU_SUCKENERGY", "count": 1},
+      {"item": "ITRU_DEATHBOLT", "count": 1},
+      {"item": "ITRU_SKULL", "count": 1},
+      {"item": "ITRU_SUMDEMON", "count": 1},
+      {"item": "ITRU_DEATHBALL", "count": 1},
+      {"item": "ITRU_BREATHOFDEATH", "count": 1},
+      {"item": "ITRU_ARMYOFDARKNESS", "count": 1},
+      {"item": "ITRU_TELEPORTXARDAS", "count": 1},
+      {"item": "ITSC_SUMSKEL", "count": 3},
+      {"item": "ITSC_FEAR", "count": 2},
+      {"item": "ITSC_SUMDEMON", "count": 1},
+      {"item": "ITSC_ARMYOFDARKNESS", "count": 1},
+      {"item": "ITPO_MANA_02", "count": 5},
+      {"item": "ITPO_MANA_03", "count": 3},
+      {"item": "ITPO_HEALTH_02", "count": 5},
+      {"item": "ITPO_HEALTH_03", "count": 2},
+      {"item": "ITPO_PERM_MANA", "count": 1},
+      {"item": "ITAM_PROT_MAGE_01", "count": 1},
+      {"item": "ITMI_DARKPEARL", "count": 1},
+      {"item": "ITAT_DEMONHEART", "count": 1}
+    ]
+  }
+}

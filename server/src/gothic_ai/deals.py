@@ -19,7 +19,11 @@ The terms are what the code can carry out and check (step 2: deals in the story)
 - the npc keeps silent about it (`silence`): it no longer passes the rumor on (social.py); whom it told
   already, knows;
 - the hero gives later, by a day (`hero_later`): a debt. Paid back in a later deal (`repay`); a debt not paid
-  by its day is a broken word (trust.py) and a rumor (social.py).
+  by its day is a broken word (trust.py) and a rumor (social.py);
+- past the inventory (contracts.py, docs/contracts.md): experience (`npc_xp`), teaching for the hero's
+  learning points (`npc_teach`), the things the npc keeps elsewhere (its stash, in `npc_gives` like the rest);
+- a task (`task`: whom to kill, what to bring, by a day or with none) and its reward (`reward`): the code
+  pays it when the task is done, the next time the hero talks to the npc.
 """
 
 from __future__ import annotations
@@ -29,10 +33,25 @@ import itertools
 import logging
 import uuid
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from .chronicle import Chronicle, Fact
+from .contracts import (
+    GOLD,
+    MAX_TASK_DAYS,
+    TEACH_KINDS,
+    Contracts,
+    Give,
+    Reward,
+    Stash,
+    Task,
+    Teach,
+    carried,
+    parse_kills,
+    parse_teach,
+    split,
+)
 from .game import GameError, GameLink
 from .journal import Journal
 from .llm import Tool, ToolCall
@@ -57,7 +76,6 @@ log = logging.getLogger(__name__)
 
 PROPOSE_DEAL = "propose_deal"
 WITHDRAW_DEAL = "withdraw_deal"
-GOLD = "ITMI_GOLD"
 MAX_COUNT = 100_000  # a sanity bound, not a price limit: what is fair is the npc's to judge
 MAX_TERMS = 6  # things on one side
 MAX_DAYS = 10  # the furthest a debt may be due
@@ -77,6 +95,34 @@ _GIVES = {
     },
 }
 _IDS = {"type": "array", "items": {"type": "string"}}
+_TEACH = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "what": {"type": "string", "enum": list(TEACH_KINDS)},
+            "arg": {"type": "string", "description": "константа скриптов; для circle — пусто"},
+            "count": {"type": "integer", "description": "очки, проценты или номер круга; иначе 1"},
+        },
+        "required": ["what", "arg", "count"],
+        "additionalProperties": False,
+    },
+}
+_KILLS = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "кого: человек или существо — символ скриптов или имя; вид — гильдия GIL_…",
+            },
+            "count": {"type": "integer", "description": "сколько; для одного человека — 1"},
+        },
+        "required": ["target", "count"],
+        "additionalProperties": False,
+    },
+}
 
 PROPOSE_TOOL = Tool(
     PROPOSE_DEAL,
@@ -87,8 +133,20 @@ PROPOSE_TOOL = Tool(
     "защищает: если у него нет того, что он отдаёт, она не состоится — осматривать вещь заранее не нужно. "
     "Кроме вещей: простить ему ложь, о которой ты знаешь (forgive), пообещать о ней молчать (silence), дать "
     "в долг — он отдаст позже, к сроку (hero_later), принять возврат его долга тебе (repay); id лжи и долгов "
-    "— в обстановке. Сначала договоритесь о сути словами, потом предлагай и скажи, что предлагаешь. Ненужные "
-    "списки — пустые.",
+    "— в обстановке. Вещи из твоего тайника (если он есть, он в обстановке) отдаёшь так же, через npc_gives. "
+    "Ещё можешь дать опыт (npc_xp) и научить (npc_teach) за его очки обучения, как учитель в игре: "
+    "attribute — ATR_STRENGTH сила, ATR_DEXTERITY ловкость, ATR_MANA_MAX мана, count — очки; fight — "
+    "NPC_TALENT_1H, NPC_TALENT_2H, NPC_TALENT_BOW, NPC_TALENT_CROSSBOW, count — проценты; thief — "
+    "NPC_TALENT_PICKLOCK, NPC_TALENT_SNEAK, NPC_TALENT_PICKPOCKET, NPC_TALENT_ACROBAT; circle — круг магии, "
+    "count 1–6; rune — SPL_…; alchemy — POTION_…; smith — WEAPON_…; trophy — TROPHY_…. Не хватит у него "
+    "очков — сделка не состоится. Поручение (task): кого убить — человека или существо по символу или "
+    "имени, или вид по гильдии (GIL_WOLF волки, GIL_ORC орки, GIL_DRAGON драконы, GIL_SKELETON скелеты, "
+    "GIL_ZOMBIE зомби, GIL_BDT бандиты, GIL_GOBBO гоблины, GIL_TROLL тролли, GIL_DEMON демоны и другие "
+    "GIL_…), "
+    "и что принести; days — срок в днях, 0 — без срока. reward — что ты отдашь, когда он исполнит: код "
+    "сам выдаст награду, как только он с тобой заговорит, — так что обещай только то, что готов отдать. "
+    "Сначала договоритесь о сути словами, потом предлагай и скажи, что предлагаешь. Ненужные списки — "
+    "пустые, ненужные числа — 0.",
     {
         "type": "object",
         "properties": {
@@ -118,8 +176,43 @@ PROPOSE_TOOL = Tool(
                 "description": "id долгов героя тебе, которые он возвращает сейчас; что он должен, войдёт в "
                 "сделку само — не добавляй это в hero_gives ещё раз",
             },
+            "npc_xp": {"type": "integer", "description": "опыт, который ты даёшь герою сейчас; 0 — нет"},
+            "npc_teach": {**_TEACH, "description": "чему ты учишь его сейчас, за его очки обучения"},
+            "task": {
+                "type": "object",
+                "properties": {
+                    "kill": {**_KILLS, "description": "кого ему убить"},
+                    "bring": {**_GIVES, "description": "что ему принести тебе"},
+                    "days": {"type": "integer", "description": "срок в днях; 0 — без срока"},
+                },
+                "required": ["kill", "bring", "days"],
+                "additionalProperties": False,
+                "description": "поручение герою; пустые списки — без поручения",
+            },
+            "reward": {
+                "type": "object",
+                "properties": {
+                    "npc_gives": {**_GIVES, "description": "что ты отдашь"},
+                    "xp": {"type": "integer", "description": "опыт; 0 — нет"},
+                    "teach": {**_TEACH, "description": "чему научишь"},
+                },
+                "required": ["npc_gives", "xp", "teach"],
+                "additionalProperties": False,
+                "description": "награда, когда он исполнит поручение; без поручения — пустая",
+            },
         },
-        "required": ["npc_gives", "hero_gives", "forgive", "silence", "hero_later", "repay"],
+        "required": [
+            "npc_gives",
+            "hero_gives",
+            "forgive",
+            "silence",
+            "hero_later",
+            "repay",
+            "npc_xp",
+            "npc_teach",
+            "task",
+            "reward",
+        ],
         "additionalProperties": False,
     },
 )
@@ -138,31 +231,6 @@ ENDED = {
     "gone": "Разговор оборвался, герой не согласился",
     "walked_away": "Герой ушёл, не приняв его",
 }
-
-
-def gold_text(count: int) -> str:
-    return f"{count} {'золотой' if count % 10 == 1 and count % 100 != 11 else 'золотых'}"
-
-
-@dataclass(frozen=True)
-class Give:
-    item: str  # instance symbol
-    count: int
-    name: str  # in the game
-
-    def text(self) -> str:
-        if self.item == GOLD:
-            return gold_text(self.count)
-        return f"{self.name} ×{self.count}" if self.count > 1 else self.name
-
-    def term(self, text: str | None = None) -> DealTerm:
-        return DealTerm(item=self.item, count=self.count, text=text or self.text())
-
-    def effect(self, to: Literal["hero", "self"]) -> dict[str, Any]:
-        return {"do": "give", "item": self.item, "count": self.count, "to": to}
-
-    def fact(self) -> dict[str, Any]:
-        return {"item": self.item, "count": self.count, "name": self.name}
 
 
 @dataclass(frozen=True)
@@ -225,6 +293,10 @@ class Deal:
     silence: tuple[LieRef, ...] = ()
     later: tuple[Later, ...] = ()
     repay: tuple[Debt, ...] = ()
+    xp: int = 0  # the npc gives experience now
+    teach: tuple[Teach, ...] = ()  # the npc teaches now, for the hero's learning points
+    task: Task | None = None  # the hero takes on a task...
+    reward: Reward = field(default_factory=Reward)  # ...the npc pays this when it is done (contracts.py)
     state: DealState = "open"
 
     def same(self, other: Deal) -> bool:
@@ -238,22 +310,47 @@ class Deal:
         """In the npc's words: what it gives and what the hero gives."""
         mine = [f"прощаешь ему ложь про «{lie.title}»" for lie in self.forgive]
         mine += [f"обещаешь молчать о лжи про «{lie.title}»" for lie in self.silence]
+        if self.xp:
+            mine.append(f"даёшь ему опыт +{self.xp}")
+        mine += [f"учишь его: {t.text()}" for t in self.teach]
+        if self.task:
+            mine.append(f"когда он исполнит поручение, отдашь: {self.reward.text()}")
         his = [f"возвращает долг — {d.give.text()}" for d in self.repay]
         his += [f"отдаст позже {x.give.text()} до конца дня {x.due + 1}" for x in self.later]
+        if self.task:
+            his.append(f"берётся за поручение — {self.task.text()}")
         return f"ты {_side('отдаёшь', self.npc_gives, mine)}; герой {_side('отдаёт', self.hero_gives, his)}"
 
     def show(self) -> DealShowCmd:
         mine = [g.term() for g in self.npc_gives]
         mine += [DealTerm(item="", count=0, text=f"Прощает ложь про «{lie.title}»") for lie in self.forgive]
         mine += [DealTerm(item="", count=0, text=f"Молчит о лжи про «{lie.title}»") for lie in self.silence]
+        if self.xp:
+            mine.append(DealTerm(item="", count=0, text=f"Опыт +{self.xp}"))
+        mine += [DealTerm(item="", count=0, text=f"Учит: {t.text()}") for t in self.teach]
+        if self.task:
+            mine += [DealTerm(item="", count=0, text=f"За поручение: {x}") for x in self.reward.parts()]
         his = [g.term() for g in self.hero_gives]
         his += [d.give.term(f"Долг: {d.give.text()}") for d in self.repay]
         his += [DealTerm(item="", count=0, text=f"Позже: {x.text()}") for x in self.later]
+        if self.task:
+            his += [DealTerm(item="", count=0, text=f"Поручение: {x}") for x in self.task.parts()]
+            his.append(DealTerm(item="", count=0, text=f"Срок: {self.task.when()}"))
+        # the game's codepage (cp1251) has no "×": the window would show "?"
+        mine = [t.model_copy(update={"text": t.text.replace("×", "x")}) for t in mine]
+        his = [t.model_copy(update={"text": t.text.replace("×", "x")}) for t in his]
         return DealShowCmd(deal=self.id, version=self.version, npc=self.npc, npc_gives=mine, hero_gives=his)
 
     def effects(self) -> list[dict[str, Any]]:
-        hero = [g.effect("self") for g in self.hero_gives] + [d.give.effect("self") for d in self.repay]
-        return hero + [g.effect("hero") for g in self.npc_gives]
+        """Teaching first (the check has counted his learning points), the hero's things, the npc's (out of
+        its stash first), experience last."""
+        out = [t.effect() for t in self.teach]
+        out += [g.effect("self") for g in self.hero_gives] + [d.give.effect("self") for d in self.repay]
+        for g in self.npc_gives:
+            out += g.effects("hero")
+        if self.xp:
+            out.append({"do": "xp", "amount": self.xp})
+        return out
 
 
 class Deals:
@@ -267,11 +364,16 @@ class Deals:
         chronicle: Chronicle,
         *,
         journal: Journal | None = None,
+        names: Callable[[str], str | None] | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
         self.chronicle = chronicle
         self.journal = journal or dialogue.journal
+        self.names = names  # an npc's name -> its symbol, for whom a task is to kill (the character cards)
+        self.stash = Stash(chronicle)
+        # the tasks of the deals and their rewards: a TurnExtension of its own (cli.py)
+        self.contracts = Contracts(link, dialogue, chronicle, self.stash, journal=self.journal)
         self.open: dict[str, Deal] = {}  # npc -> its offer, while the conversation lasts
         self.debts: dict[str, Debt] = {}  # by id, of the save branch
         self.day: int | None = None  # the game day, as last read
@@ -347,9 +449,43 @@ class Deals:
         current = self.open.get(npc)
         if current is not None and current.state == "accepting":
             return ToolOutcome("Отклонено: герой уже согласился на прежние условия.", "rejected")
-        npc_gives, why = self._npc_gives(args.get("npc_gives"), snap)
+        npc_gives, why = self._npc_gives(npc, args.get("npc_gives"), snap)
         if npc_gives is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
+        xp, why = _parse_xp(args.get("npc_xp"))
+        if xp is None:
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
+        teach, why = await parse_teach(self.link, args.get("npc_teach"))
+        if teach is None:
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
+        task_raw = args.get("task") if isinstance(args.get("task"), dict) else {}
+        reward_raw = args.get("reward") if isinstance(args.get("reward"), dict) else {}
+        kills, why = await parse_kills(self.link, task_raw.get("kill"), self.names)
+        if kills is None:
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
+        bring, why = _parse(task_raw.get("bring"))
+        if bring is None:
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
+        days, why = _parse_days(task_raw.get("days"))
+        if days is None:
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
+        paid, why = self._npc_gives(npc, reward_raw.get("npc_gives"), snap)
+        if paid is None:
+            return ToolOutcome(f"Отклонено: награда — {why}", "rejected")
+        paid_xp, why = _parse_xp(reward_raw.get("xp"))
+        if paid_xp is None:
+            return ToolOutcome(f"Отклонено: награда — {why}", "rejected")
+        paid_teach, why = await parse_teach(self.link, reward_raw.get("teach"))
+        if paid_teach is None:
+            return ToolOutcome(f"Отклонено: награда — {why}", "rejected")
+        # what it pays with is decided when it pays: what it carries then, the rest from its stash
+        reward = Reward(tuple(Give(g.item, g.count, g.name) for g in paid), paid_xp, paid_teach)
+        if reward and not (kills or bring):
+            return ToolOutcome(
+                "Отклонено: награда бывает только за поручение (task). Без поручения отдавай сразу — "
+                "npc_gives, npc_xp, npc_teach.",
+                "rejected",
+            )
         forgive, silence, why = self._lies(npc, args.get("forgive"), args.get("silence"))
         if forgive is None or silence is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
@@ -362,18 +498,37 @@ class Deals:
         wanted, why = _parse(args.get("hero_gives"))
         if wanted is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
-        things, day, why = await self._items({*wanted, *(i for i, _, _ in later_raw)})
+        things, day, why = await self._items({*wanted, *bring, *(i for i, _, _ in later_raw)})
         if things is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
         hero_gives = tuple(Give(i, c, things[i]) for i, c in wanted.items())
         later = tuple(Later(Give(i, c, things[i]), day + d) for i, c, d in later_raw)
-        if not (npc_gives or hero_gives or forgive or silence or later or repay):
+        task = None
+        if kills or bring:
+            brought = tuple(Give(i, c, things[i]) for i, c in bring.items())
+            task = Task(kills, brought, day + days if days else None)
+        if not (npc_gives or hero_gives or forgive or silence or later or repay or xp or teach or task):
             return ToolOutcome("Отклонено: в сделке ничего нет.", "rejected")
         current = self.open.get(npc)  # he may have accepted the shown terms meanwhile
         if current is not None and current.state == "accepting":
             return ToolOutcome("Отклонено: герой уже согласился на прежние условия.", "rejected")
         deal_id, version = (current.id, current.version + 1) if current else (f"D{next(self._ids)}", 1)
-        deal = Deal(deal_id, npc, name, version, npc_gives, hero_gives, forgive, silence, later, repay)
+        deal = Deal(
+            deal_id,
+            npc,
+            name,
+            version,
+            npc_gives,
+            hero_gives,
+            forgive,
+            silence,
+            later,
+            repay,
+            xp,
+            teach,
+            task,
+            reward,
+        )
         if current is not None and current.same(deal):
             return ToolOutcome(f"Эти условия герой уже видит: {current.terms()}.", "accepted")
         try:
@@ -434,24 +589,28 @@ class Deals:
 
     # --- the terms ------------------------------------------------------------------------------
 
-    def _npc_gives(self, raw: Any, snap: Snapshot | None) -> tuple[tuple[Give, ...] | None, str]:
+    def _npc_gives(self, npc: str, raw: Any, snap: Snapshot | None) -> tuple[tuple[Give, ...] | None, str]:
+        """What the npc gives: what it carries first, the rest from its stash (contracts.py)."""
         wanted, why = _parse(raw)
         if wanted is None:
             return None, why
         if not wanted:
             return (), ""
-        if snap is None:
+        kept = self.stash.left(npc)
+        if snap is None and not kept:
             return None, "не видно, что у тебя есть."
-        have = {i.item: i for i in snap.npc.inventory if not i.equipped and i.count > 0}
+        have = carried(snap)
         out = []
         for item, count in wanted.items():
-            got = have.get(item)
+            n, name = have.get(item, (0, ""))
+            got = split(item, count, name or self.stash.names.get(item, item), n, kept.get(item, 0))
             if got is None:
-                listed = "; ".join(f"{i.name} ({i.item}) ×{i.count}" for i in have.values()) or "пусто"
-                return None, f"у тебя нет {item}. Твой инвентарь: {listed}."
-            if got.count < count:
-                return None, f"у тебя только {got.count} — {got.name} ({item})."
-            out.append(Give(item, count, got.name))
+                listed = "; ".join(f"{nm} ({i}) ×{c}" for i, (c, nm) in have.items()) or "пусто"
+                hidden = f" Твой тайник: {self.stash.text(npc)}." if kept else ""
+                if n or kept.get(item):
+                    return None, f"у тебя только {n + kept.get(item, 0)} — {name or item} ({item}).{hidden}"
+                return None, f"у тебя нет {item}. Твой инвентарь: {listed}.{hidden}"
+            out.append(got)
         return tuple(out), ""
 
     def _lies(
@@ -535,9 +694,13 @@ class Deals:
                 "silence": [lie.key for lie in deal.silence],
                 "later": [{**d.give.fact(), "due": d.due, "debt": d.id} for d in debts],
                 "repay": [d.id for d in deal.repay],
+                **({"xp": deal.xp} if deal.xp else {}),
+                **({"teach": [t.fact() for t in deal.teach]} if deal.teach else {}),
                 **day,
             }
         )
+        if deal.task:
+            self.contracts.add(deal.id, deal.npc, deal.name, deal.task, deal.reward, day.get("day"))
         for d in debts:
             self.debts[d.id] = d
             self.chronicle.record(
@@ -582,6 +745,21 @@ class Deals:
         """Something is missing after all: the hero's things (his window marks them), or the npc's (it no
         longer has what it offered: the offer goes)."""
         log.info("deal %s v%d with %s failed: %s", deal.id, deal.version, deal.npc, error)
+        if "missing: hero LP" in error:
+            # he can't find learning points in his pocket: the offer goes, the npc may offer otherwise
+            await self._close(deal, "withdrawn")
+            await self._notice("Не хватает очков обучения")
+            need = error.removeprefix("missing: hero LP ").replace("(has", "(у него")
+            self.dialogue.note(
+                deal.npc, f"Сделка сорвалась: у героя не хватает очков обучения — нужно {need}"
+            )
+            self.dialogue.event_turn(
+                deal.npc,
+                f"[Сделка не состоялась: у героя не хватает очков обучения — нужно {need}. Скажи ему; "
+                "захочешь — предложи иначе.]",
+                tools=(PROPOSE_DEAL,),
+            )
+            return
         if "missing: npc" in error:
             await self._close(deal, "withdrawn")
             await self._notice("Сделка не состоялась")
@@ -610,7 +788,8 @@ class Deals:
         """A debt not paid by the end of its day is a broken word."""
         while True:
             await asyncio.sleep(DEBTS_EVERY_S)
-            if not any(not d.paid and not d.broken for d in self.debts.values()):
+            tasks = any(c.state == "open" and c.due is not None for c in self.contracts.contracts.values())
+            if not tasks and not any(not d.paid and not d.broken for d in self.debts.values()):
                 continue
             await self.link.wait_world()
             try:
@@ -620,6 +799,7 @@ class Deals:
                 continue
             self._set_day(day)
             self.overdue(day)
+            self.contracts.overdue(day)
 
     def overdue(self, day: int) -> list[Debt]:
         """The debts past their day as of `day`, now broken words."""
@@ -712,6 +892,26 @@ def _parse(raw: Any) -> tuple[dict[str, int] | None, str]:
     if any(c > MAX_COUNT for c in out.values()):
         return None, f"не больше {MAX_COUNT} штук."
     return out, ""
+
+
+def _parse_xp(raw: Any) -> tuple[int | None, str]:
+    try:
+        xp = int(raw or 0)
+    except (TypeError, ValueError):
+        return None, f"опыт — число: {raw}."
+    if not 0 <= xp <= MAX_COUNT:
+        return None, f"опыт — от 0 до {MAX_COUNT}."
+    return xp, ""
+
+
+def _parse_days(raw: Any) -> tuple[int | None, str]:
+    try:
+        days = int(raw or 0)
+    except (TypeError, ValueError):
+        return None, f"срок — число дней: {raw}."
+    if not 0 <= days <= MAX_TASK_DAYS:
+        return None, f"срок поручения — от 1 до {MAX_TASK_DAYS} дней, 0 — без срока."
+    return days, ""
 
 
 def _parse_later(raw: Any) -> tuple[list[tuple[str, int, int]] | None, str]:
