@@ -76,8 +76,9 @@ GESTURE_OPTIONS: dict[str, Option] = {
 }
 GESTURE_COOLDOWN_S = 10.0
 # the sound an npc makes at once (fillers.py says it): its kind, by what the hero's words were. Read in
-# evals/talk-reactions: the model tells a question, a greeting, an insult or a boast well, alarming news
-# from an ordinary report badly — so "ack" sounds fit news as well. A strong sound needs some confidence.
+# evals/talk-reactions: g7 told alarming news from an ordinary report badly, so "ack" sounds fit news as
+# well; g8b, trained on this question (decider-service/tuning), gets 58 of 59 there. A strong sound needs
+# some confidence.
 VOICE_OPTIONS: dict[str, Option] = {
     "none": Option(
         "he greets you, says goodbye, thanks you or makes small talk - you feel nothing special",

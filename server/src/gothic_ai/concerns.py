@@ -6,7 +6,8 @@ what really happened between them:
 - debt_broken: he did not pay back his debt to it by its day (deals.py);
 - lied: it found a lie of his out or caught him lying (quests.py), and did not forgive it in a deal or take
   amends for it;
-- debt_due: today is the last day of his debt to it.
+- debt_due: today is the last day of his debt to it;
+- witness: someone it asked far away (witnesses.py) saw the hero, and it has not spoken to him of it yet.
 
 The most pressing one is the npc's agenda for the behavioral model (English, in the planner's wording) and
 the occasion it may come up to the hero with (Russian, for the conversational model). Rumors of his lies to
@@ -23,9 +24,11 @@ from .deals import GOLD, Deals, Debt
 from .game import GameLink
 from .protocol import GameMessage, Loading, Session
 
-RANK = {"debt_broken": 0, "lied": 1, "debt_due": 2}
+RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "debt_due": 2}
 # the facts that change what an npc has on its mind; deals.py updates its debts before it records them
-FACTS = frozenset({"debt", "debt_paid", "broken", "deal", "found_out", "caught", "amends"})
+FACTS = frozenset(
+    {"debt", "debt_paid", "broken", "deal", "found_out", "caught", "amends", "testimony", "initiative"}
+)
 # the agendas quests.py sets when the lie comes out
 LIED_EN = {
     "found_out": "make the hero answer for lying to you and taking your reward",
@@ -48,6 +51,7 @@ class Concerns:
     def __init__(self, link: GameLink, chronicle: Chronicle, deals: Deals) -> None:
         self.deals = deals
         self.on_change: list[Callable[[str], None]] = []  # an npc whose concerns may have changed
+        self.extra: list[Callable[[str], list[Concern]]] = []  # more kinds, from other desks (witnesses.py)
         self._cache: dict[str, list[Concern]] = {}
         chronicle.on_fact.append(self._on_fact)
         deals.on_day.append(self._on_day)
@@ -91,6 +95,8 @@ class Concerns:
                 continue  # a rumor of a lie to someone else is not its own grievance
             en = LIED_EN["found_out" if key.startswith("found_out:") else "caught"]
             out.append(Concern(f"lied:{key}", npc, RANK["lied"], en, f"герой {lie.words(npc)}"))
+        for more in self.extra:
+            out += more(npc)
         return sorted(out, key=lambda c: c.rank)
 
     def _on_fact(self, f: Fact) -> None:
@@ -109,6 +115,10 @@ class Concerns:
         self._cache.clear()
         for npc in dict.fromkeys(d.npc.upper() for d in self.deals.debts.values()):
             self._changed(npc)
+
+    def changed(self, npc: str) -> None:
+        """The npc's concerns may be other now (time passed: witnesses.py)."""
+        self._changed(npc.upper())
 
     def _changed(self, npc: str) -> None:
         self._cache.pop(npc, None)

@@ -16,7 +16,7 @@ For the conversational model (a TurnExtension):
 - `catch_lie{said, seen}`: the npc calls the hero a liar with what it saw itself — «я был в городе», when it
   saw him on the farm an hour ago. The code checks both halves: the sighting is the npc's own, and the hero
   did say those words. Then it is a lie caught (quests.caught): the npc takes his word no more, is wary of
-  him, the people around hear it;
+  him, the people around hear it. What a witness it asked saw (witnesses.py, a line С1…) counts the same;
 - recall: the sightings of whom or where the query names.
 
 What npc's far from the hero see is not kept: the game pushes the views of those near him (npc_views).
@@ -29,7 +29,7 @@ import json
 import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .chronicle import Chronicle
 from .game import GameError, GameLink
@@ -71,8 +71,9 @@ CATCH = "catch_lie"
 CATCH_TOOL = Tool(
     CATCH,
     "Уличить героя во лжи тем, что ты видел своими глазами: он говорит, что был где-то или делал что-то, "
-    "а ты сам видел его в другом месте или другим (строка из «Что ты видел сам», например В2). Только если "
-    "его слова прямо противоречат увиденному. Ты это запомнишь, люди вокруг услышат.",
+    "а ты сам видел его в другом месте или другим (строка из «Что ты видел сам», например В2) — или его "
+    "видел тот, кого ты расспросил (строка С1 из «Что тебе рассказали о герое другие»). Только если его "
+    "слова прямо противоречат увиденному. Ты это запомнишь, люди вокруг услышат.",
     {
         "type": "object",
         "properties": {
@@ -80,7 +81,10 @@ CATCH_TOOL = Tool(
                 "type": "string",
                 "description": "его слова, в которых ложь, коротко, как он сказал: «всё утро был в городе»",
             },
-            "seen": {"type": "string", "description": "что ты видел сам: номер строки, например В2"},
+            "seen": {
+                "type": "string",
+                "description": "что ты видел сам или что тебе рассказали: номер строки, например В2 или С1",
+            },
         },
         "required": ["said", "seen"],
         "additionalProperties": False,
@@ -100,6 +104,7 @@ class Sighting:
     armor: list[str] = field(default_factory=list)  # what he wore, in order: armor symbols, "" for none
     armor_names: list[str] = field(default_factory=list)
     notable: list[str] = field(default_factory=list)  # NOTABLE keys, and "dead": a body
+    place_ids: list[str] = field(default_factory=list)  # the same places by the book's ids (FARM1_PASTURE)
     saved: int = -1  # the end last written down; -1: never
 
     @property
@@ -113,6 +118,7 @@ class Sighting:
             "start": self.start,
             "end": self.end,
             "places": self.places,
+            "place_ids": self.place_ids,
             "armor": self.armor,
             "armor_names": self.armor_names,
             "notable": self.notable,
@@ -129,6 +135,7 @@ class Sighting:
             [str(a) for a in record.get("armor", [])],
             [str(a) for a in record.get("armor_names", [])],
             [str(n) for n in record.get("notable", [])],
+            place_ids=[str(p) for p in record.get("place_ids", [])],
         )
         s.saved = s.end
         return s
@@ -140,6 +147,30 @@ class Mind:
 
     sightings: list[Sighting] = field(default_factory=list)
     going: dict[str, Sighting] = field(default_factory=dict)  # who -> the sighting going on
+
+
+@dataclass(frozen=True)
+class Told:
+    """What a witness the npc asked told it of the hero (witnesses.py): a line С1… to catch a lie with."""
+
+    witness: str
+    witness_name: str
+    sightings: list[Sighting]  # what it saw of him; empty: it did not see him
+    words: str  # the line, in words
+    said: str  # the hero's words it was asked about (they were his: checked when it was asked)
+    id: str  # the testimony's
+
+
+class Hearsay(Protocol):
+    """What witnesses told the npc (witnesses.Witnesses)."""
+
+    def told(self, npc: str, sid: str) -> Told | None:
+        """The testimony behind a С line of the npc's latest situation."""
+        ...
+
+    def any(self, npc: str) -> bool:
+        """Whether a witness told it of seeing the hero."""
+        ...
 
 
 class Sightings:
@@ -166,6 +197,7 @@ class Sightings:
         self._minds: dict[str, Mind] = {}
         self._shown: dict[str, dict[str, Sighting]] = {}  # npc -> the hero's sightings by id, last turn
         self._caught: set[tuple[str, str]] = set()  # (npc, his words) caught already
+        self.hearsay: Hearsay | None = None  # what witnesses told the npc (witnesses.py)
         self._background: set[asyncio.Task[Any]] = set()
         desk.on_view.append(self.saw)
         link.listeners.append(self._on_message)
@@ -209,7 +241,10 @@ class Sightings:
                 del mind.sightings[:-KEEP]
                 mind.going[who] = s
             s.end = max(s.end, now)
-            _add(s.places, self._where(view, look), PLACES_MAX)
+            where, place = self._where(view, look)
+            if len(s.places) < PLACES_MAX and where not in s.places and place:
+                _add(s.place_ids, place)
+            _add(s.places, where, PLACES_MAX)
             armor = look.armor.item if look.armor else ""
             if armor not in s.armor:
                 s.armor.append(armor)
@@ -228,16 +263,17 @@ class Sightings:
         out += [(o.id.upper(), o) for o in known[:NEAREST]]
         return out
 
-    def _where(self, view: NpcView, look: Look) -> str:
-        """Where someone was seen, in words: his place by the book, else where the npc is."""
+    def _where(self, view: NpcView, look: Look) -> tuple[str, str]:
+        """Where someone was seen, in words and by the book's id (''): his place by the book, else where the
+        npc is."""
         book = self.desk.places
         place = book.of(look.waypoint) if book is not None and look.waypoint else None
         if place is None and not look.waypoint:
             place = self.desk.place(view)  # an old bridge: not where he is, where the npc is
         if place is not None:
-            return place.where_ru
+            return place.where_ru, place.id
         wp = look.waypoint or view.waypoint or view.nearest_waypoint
-        return f"у точки {wp}" if wp else "где-то рядом"
+        return (f"у точки {wp}" if wp else "где-то рядом"), ""
 
     def _sweep(self, now: int) -> None:
         """Sightings unseen for long enough are over: their end is written down."""
@@ -339,7 +375,8 @@ class Sightings:
         return "Что ты видел сам, своими глазами (не с чужих слов):\n" + "\n".join(lines)
 
     def tools(self, npc: str) -> list[Tool]:
-        return [CATCH_TOOL] if self.hero_trail(npc) else []
+        told = self.hearsay is not None and self.hearsay.any(npc)
+        return [CATCH_TOOL] if self.hero_trail(npc) or told else []
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
@@ -348,31 +385,58 @@ class Sightings:
             return None
         sid = _sid(str(call.arguments.get("seen", "")))
         said = str(call.arguments.get("said", "")).strip().strip("«»\"' .")
-        s = self._shown.get(conv.npc, {}).get(sid)
-        if s is None:
-            return ToolOutcome(
-                "Отклонено: такого ты сам не видел — укажи строку из «Что ты видел сам» (В1, В2…).",
-                "rejected",
-            )
+        extra: dict[str, Any] = {}
+        told: Told | None = None
+        if sid.startswith("С"):
+            told = self.hearsay.told(conv.npc, sid) if self.hearsay is not None else None
+            if told is None:
+                return ToolOutcome(
+                    "Отклонено: такого тебе не рассказывали — укажи строку из «Что тебе рассказали о герое "
+                    "другие» (С1, С2…).",
+                    "rejected",
+                )
+            if not told.sightings:
+                return ToolOutcome(
+                    f"Отклонено: со слов: {told.witness_name} — героя не видели, уличить нечем.", "rejected"
+                )
+            how = f"узнал со слов: {told.words}"
+            extra = {"witness": told.witness, "witness_name": told.witness_name, "testimony": told.id}
+        else:
+            s = self._shown.get(conv.npc, {}).get(sid)
+            if s is None:
+                return ToolOutcome(
+                    "Отклонено: такого ты сам не видел — укажи строку из «Что ты видел сам» (В1, В2…).",
+                    "rejected",
+                )
+            how = f"сам видел его {self.words(s)}"
         if not said:
             return ToolOutcome("Отклонено: скажи, в каких его словах ложь.", "rejected")
-        if not _heard(conv, said):
+        # his words: in his latest lines, or those a witness was asked about (checked when it was asked)
+        asked = told is not None and _matches(said, roots(told.said))
+        if not asked and not heard(conv, said):
             return ToolOutcome(
                 "Отклонено: он этого не говорил — уличить можно только в его собственных словах.", "rejected"
             )
         key = (conv.npc, " ".join(sorted(roots(said))))
-        if key in self._caught:
+        if key in self._caught or self._caught_before(conv.npc, said):
             return ToolOutcome("Отклонено: в этом ты его уже уличил.", "rejected")
         self._caught.add(key)
-        how = f"сам видел его {self.words(s)}"
         lie = Lie(f"SAID_{conv.npc}_{self.now}", conv.npc, conv.persona.name, said, "", said=True)
 
         async def job() -> tuple[str, bool]:
-            await caught(self.link, dialogue, self.chronicle, self.journal, lie, how)
+            await caught(self.link, dialogue, self.chronicle, self.journal, lie, how, extra=extra)
             return f"Ты уличил героя во лжи: «{said}»", True
 
         dialogue.after_speech(conv, job)
         return ToolOutcome("Принято: ты уличил его; ты это запомнишь, люди вокруг услышат.", "accepted")
+
+    def _caught_before(self, npc: str, said: str) -> bool:
+        """Its words were caught as a lie by this npc already, in this branch (a load forgets `_caught`)."""
+        words = roots(said)
+        return any(
+            f.get("npc") == npc and f.get("said") and roots(str(f.get("title", ""))) == words
+            for f in self.chronicle.facts("caught")
+        )
 
     def recall(self, npc: str, query: str) -> str | None:
         """The sightings of whom or where the query names: «где ты видел героя», «Хильда»."""
@@ -495,12 +559,13 @@ def _wore(s: Sighting) -> str:
 
 
 def _sid(text: str) -> str:
-    """The id of a sighting as the model wrote it: «В2», «B2» (Latin), «2»."""
-    t = text.strip().upper().replace("B", "В")
-    return t if t.startswith("В") else f"В{t}"
+    """The id of a sighting as the model wrote it: «В2», «B2» (Latin), «2»; of what it was told: «С1»,
+    «C1»."""
+    t = text.strip().upper().replace("B", "В").replace("C", "С")
+    return t if t.startswith(("В", "С")) else f"В{t}"
 
 
-def _heard(conv: Conversation, said: str) -> bool:
+def heard(conv: Conversation, said: str) -> bool:
     """The hero did say it: most of its words are in his latest lines (this one too)."""
     lines = [e.content for e in conv.memory.entries if e.role == "user"][-HEARD:]
     if conv.trigger is not None and conv.trigger.role == "user":
@@ -508,5 +573,10 @@ def _heard(conv: Conversation, said: str) -> bool:
     heard: set[str] = set()
     for line in lines:
         heard |= roots(line)
+    return _matches(said, heard)
+
+
+def _matches(said: str, heard: set[str]) -> bool:
+    """Most of the words of `said` are among `heard` (word roots)."""
     words = roots(said)
     return bool(words) and 2 * sum(1 for w in words if w in heard) >= len(words)

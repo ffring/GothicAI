@@ -64,6 +64,7 @@ from .trace import TraceWriter
 from .trust import Trust
 from .vanilla import CHECK_CM, VanillaQuests
 from .voice import VoiceInput
+from .witnesses import Witnesses
 from .wrath import TAKE_OFFENSE, TEMPERS, Wrath
 
 log = logging.getLogger(__name__)
@@ -3413,3 +3414,177 @@ def _logged(results: dict[str, str]) -> dict[str, str]:
     for key, outcome in results.items():
         log.info("%-15s %s", key, outcome)
     return results
+
+
+async def witness_check(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    witnesses: Witnesses,
+    farmer: str = LOBART,
+) -> dict[str, str]:
+    """Asking a witness (wave 2 step 3), on the game. At eight in the morning someone Lobart knows sees the
+    hero on the farm. An hour and a half later the hero tells Lobart he was in the city all morning; Lobart
+    calls that one over (`ask_witness`; the model scripted unless LLM=chatgpt), it comes up and tells what it
+    saw, and Lobart catches the lie by its word: «со слов». Then the hero names someone far away; Lobart
+    asks at their next meeting by their routines: the answer is a fact, with no model call."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    chronicle, desk = sightings.chronicle, sightings.desk
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    social = None
+    if not await _until(lambda: witnesses.social() is not None, 15):
+        return _logged({"social": "failed (nobody knows anybody yet)"})
+    social = witnesses.social()
+    assert social is not None
+    farm = [n for n, t in sorted(social.ties.get(farmer, {}).items()) if t.meets]
+
+    # 1. eight in the morning: someone Lobart meets on the farm sees the hero, Lobart does not
+    await link.debug("time", hour=8, minute=0)
+    # one in the open first: from indoors to the yard a walk may not find its way (Hilda at her stove)
+    witness, tried = "", []
+    for who, indoors_too in [(w, False) for w in farm] + [(w, True) for w in farm]:
+        try:
+            await link.debug("skip_important", near=who)
+            await link.debug("teleport", near=who, distance=400)
+        except GameError as err:
+            tried.append(f"{who}: {err}")
+            continue
+        await asyncio.sleep(1)
+        view = await desk.fresh(who)
+        if view is not None and view.indoors and not indoors_too:
+            tried.append(f"{who}: indoors")
+            continue
+        await link.npc_act(who, "turn_to")
+        await _until(lambda who=who: bool(sightings.hero_trail(who)), 5)
+        await desk.fresh(farmer)
+        tried.append(f"{who}: {'saw' if sightings.hero_trail(who) else 'no'}")
+        if sightings.hero_trail(who) and not sightings.hero_trail(farmer):
+            witness = who
+            break
+    if not witness:
+        return _logged({"witness_saw": f"failed (nobody saw him unseen by {farmer}: {', '.join(tried)})"})
+    wname = social.names.get(witness, witness)
+    seen = sightings.hero_trail(witness)[0]
+    check("witness_saw", True, f"{wname}: {sightings.words(seen)}")
+
+    # 2. an hour and a half later: the witness about its day, near Lobart or a walk away; the hero comes up
+    # to Lobart only to say it (standing before him a while would give the lie away to his own eyes)
+    await asyncio.sleep(12)  # the sighting ends unseen
+    hour, minute = divmod(seen.end % 1440 + 90, 60)
+    await link.debug("time", hour=hour, minute=minute)
+    await asyncio.sleep(2)
+    await link.debug("skip_important", near=farmer)
+    await witnesses.prepare(farmer)
+    tier = next((c.tier for c in witnesses._near.get(farmer, []) if c.npc == witness), "none")
+    if tier != "near":
+        # the scene of the plan: the witness within call (it is let go at once and walks back to its day)
+        await talk.hold(witness, "scenario")
+        await link.act(witness, "go_to_npc", npc=farmer, radius=900)
+        talk.free(witness, "scenario")
+    await link.debug("teleport", near=farmer, distance=300)
+    await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 10)
+    await asyncio.sleep(1)
+    name = talk.people[farmer].name if farmer in talk.people else "Лобарт"
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    script = None
+    if isinstance(dialogue.llm, FakeBackend):
+        ask = FakeStep(
+            f"{wname}! Поди-ка сюда. Ты его утром видел?",
+            [ToolCall("ask_witness", {"who": wname, "said": "всё утро был в городе"})],
+        )
+        catch = FakeStep(
+            "Вот как! Значит, ты мне врёшь.",
+            [ToolCall("catch_lie", {"said": "всё утро был в городе", "seen": "С1"})],
+        )
+        others = ClaimScript(
+            [("спрашивает тебя о герое", FakeStep("Утром он тут был, на ферме."))], [], "Ну."
+        )
+        script = ClaimScript([("Ответ:", catch), ("город", ask)], [], "Ну?", only=name, others=others)
+        dialogue.llm = script
+    # a lie with a stake for him: an alibi (the field is where the witness works)
+    await link.debug("type", text=f"{name}, это не я утром топтал твою репу — я всё утро был в городе.")
+    asked = lambda: any(f.get("witness") == witness for f in chronicle.facts("testimony"))  # noqa: E731
+    if script is None and not await _until(asked, 20):
+        # the live model did not ask anyone: the hero bluffs, he does not know the witness saw him
+        await link.debug("type", text=f"{name}, не веришь — спроси у {wname}.")
+    caught = await _until(lambda: any(f.get("witness") for f in chronicle.facts("caught")), 90)
+    if script is not None:
+        first = script.calls[0] if script.calls else None
+        offered = [t.name for t in first[2]] if first else []
+        check(
+            "offered",
+            "ask_witness" in offered and f"- {wname} — " in str(first[1] if first else ""),
+            offered,
+        )
+    testimony = next((f for f in chronicle.facts("testimony") if f.get("witness") == witness), None)
+    check(
+        "testimony",
+        testimony is not None and bool(testimony.get("told")) and testimony.get("tier") in ("near", "walk"),
+        {k: testimony.get(k) for k in ("tier", "said", "told")} if testimony else "none",
+    )
+    tier = testimony.get("tier", tier) if testimony else tier
+    if tier == "near":  # it came up to Lobart, and the hero beside him heard its answer
+        state = await link.story_state(npcs=[witness], near=farmer)
+        cm = (state.get("npcs", {}).get(witness) or {}).get("distance")
+        check("came", cm is not None and float(cm) <= 500, f"near: {wname} {cm} cm from {name}")
+        wconv = dialogue.conversations.get(witness)
+        spoke = [e.content for e in wconv.memory.entries if e.role == "assistant"] if wconv else []
+        check("witness_spoke", bool(spoke), spoke[-1:] or "silent")
+    else:  # Lobart went to it and came back to the hero
+        back = farmer in talk.people and talk.people[farmer].distance <= 600
+        cm = talk.people[farmer].distance if farmer in talk.people else None
+        check("came", tier == "walk" and back, f"{tier}: {name} back {cm} cm from the hero")
+    fact = next((f for f in chronicle.facts("caught") if f.get("witness")), None)
+    check(
+        "caught", caught and fact is not None and fact["witness"] == witness, fact.get("how") if fact else ""
+    )
+    conv = dialogue.conversations.get(farmer)
+    check(
+        "wary", conv is not None and conv.intent.attitude in ("wary", "hostile"), conv.intent if conv else ""
+    )
+    lied = Trust(chronicle).of(farmer).lied
+    check("trust", any("со слов" in x for x in lied), lied)
+
+    # 3. someone far: asked at their next meeting, the answer is a fact, no model call
+    await witnesses.prepare(farmer)
+    far = next((c for c in witnesses._near.get(farmer, []) if c.tier == "far"), None)
+    if far is None:
+        check("far", False, f"no far acquaintance of {name}: {witnesses._near.get(farmer)}")
+        return _logged(results)
+    if script is not None:
+        script.said.insert(
+            0,
+            (
+                far.name,
+                FakeStep(
+                    f"Ладно, спрошу {far.name}, как увижу.",
+                    [ToolCall("ask_witness", {"who": far.name, "said": "всё утро был в городе"})],
+                ),
+            ),
+        )
+    others = len(script.others.calls) if script is not None and isinstance(script.others, ClaimScript) else 0
+    await link.debug("type", text=f"{name}, не веришь — спроси {far.name}, он подтвердит.")
+    asked = await _until(lambda: any(f.get("witness") == far.npc for f in chronicle.facts("inquiry")), 60)
+    q = next((f for f in chronicle.facts("inquiry") if f.get("witness") == far.npc), None)
+    check("far_asked", asked, q.get("meets") if q else "no inquiry")
+    if q is not None:
+        hour, minute = divmod(int(q["meets"]) % 1440 + 5, 60)
+        await link.debug("time", hour=hour, minute=minute)
+        told = await _until(lambda: any(f.get("id") == q["id"] for f in chronicle.facts("testimony")), 20)
+        t = next((f for f in chronicle.facts("testimony") if f.get("id") == q["id"]), None)
+        calls = (
+            len(script.others.calls) if script is not None and isinstance(script.others, ClaimScript) else 0
+        )
+        check(
+            "far_answered",
+            told and t is not None and t.get("tier") == "far" and calls == others,
+            {k: t.get(k) for k in ("tier", "told")} if t else "none",
+        )
+    return _logged(results)

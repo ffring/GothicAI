@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
@@ -63,8 +64,13 @@ float lerp(float a, float b, float t) {
 }
 
 bool Archery::isEnabled() {
-  if(enabled<0)
-    enabled = Gothic::settingsGetI("GAME","manualAim")!=0 ? 1 : 0;
+  if(enabled<0) {
+    // OPENGOTHIC_MANUALAIM=0|1 over Gothic.ini (a before/after short films the auto aim)
+    const char* v = std::getenv("OPENGOTHIC_MANUALAIM");
+    if(v!=nullptr && v[0]!='\0')
+      enabled = v[0]!='0' ? 1 : 0; else
+      enabled = Gothic::settingsGetI("GAME","manualAim")!=0 ? 1 : 0;
+    }
   return enabled!=0;
   }
 
