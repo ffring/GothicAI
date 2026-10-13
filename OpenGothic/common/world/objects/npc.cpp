@@ -4340,10 +4340,11 @@ bool Npc::arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const {
   }
 
 bool Npc::tickManualAim(const Tempest::Vec3& at, Archer::Input in, const Archery::Stats& st) {
-  // how far the aim turned since the last frame, from the eyes: a turn shakes it
+  // how far the aim turned since the last frame, from the eyes: a turn shakes it (the angle by atan2: acos
+  // of a dot near 1 turns the floats' noise into a turn of 0.03 deg a frame)
   const Tempest::Vec3 eye = position() + Tempest::Vec3(0,165,0);
   const Tempest::Vec3 dir = Tempest::Vec3::normalize(at-eye);
-  in.turn    = arch.isRaised() ? std::acos(std::clamp(Tempest::Vec3::dotProduct(dir,aimDirPrev),-1.f,1.f)) : 0.f;
+  in.turn    = arch.isRaised() ? std::atan2(Tempest::Vec3::crossProduct(dir,aimDirPrev).length(),Tempest::Vec3::dotProduct(dir,aimDirPrev)) : 0.f;
   aimDirPrev = dir;
   // the next arrow as fast as the hands are (dexterity; a crossbow: strength); set when it changes (the
   // test bench may set its own)
