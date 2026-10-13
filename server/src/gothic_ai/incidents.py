@@ -176,6 +176,9 @@ class IncidentDesk:
         # body does in the fight now, for its words
         self.companion: Callable[[str], bool] = lambda npc: False
         self.fighting_ru: Callable[[str], str | None] = lambda npc: None
+        # the npc struck the hero or a companion a moment ago (orders.py): it is in the fight too
+        self.foe: Callable[[str], bool] = lambda npc: False
+        dialogue.in_fight = self.in_fight
         # free npc -> when its words were last asked for, and what about
         self._spoke: dict[str, tuple[float, frozenset[tuple[str, str]]]] = {}
         self._calming: set[str] = set()  # free npc's waiting for their moment to pass
@@ -236,11 +239,24 @@ class IncidentDesk:
             (lambda: self._spawn(self._gesture(move))) if move is not None else None,
         )
 
+    def in_fight(self, npc: str) -> bool:
+        """The npc is in a fight, its lines are quick ones (dialogue.py): a threat to its life or the hero's
+        is going on (a controlled npc's incident, a free npc's stimuli), or it fights with or against him."""
+        npc = npc.upper()
+        inc = self.tracker.current.get(npc)
+        if inc is not None and inc.urgent and inc.active(self.clock(), self.tracker.gap_s):
+            return True
+        if self.planner is not None and self.planner.stirred(npc):
+            return True
+        return self.fighting_ru(npc) is not None or self.foe(npc)
+
     def _event(self, npc: str, event: IncidentEvent) -> None:
         inc = self.tracker.add(npc, event)
         log.info("%s incident #%d: %s", npc, inc.id, event.describe_en())
         if inc.version == 1:
             self._spawn(self._watch(npc, inc.id))
+        if event.spec.urgent:
+            self.dialogue.prewarm(npc)  # its words come after `settle_s`: the quick model reads meanwhile
         if event.kind == "down":
             self.dialogue.note(npc, event.describe_ru())
             return

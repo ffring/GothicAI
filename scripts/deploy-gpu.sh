@@ -6,6 +6,7 @@
 #                                              settings changed are restarted
 #   scripts/deploy-gpu.sh voxtral|voxcpm       sync the settings, copy deploy/<name> and run its install.sh
 #   scripts/deploy-gpu.sh decider              the same for the npc decision service (all of decider-service/)
+#   scripts/deploy-gpu.sh gemma                the same for the quick model of fights (server/deploy/gemma)
 #   scripts/deploy-gpu.sh aligner              copy asr-service/deploy/aligner and run its install.sh: the
 #                                              forced aligner, a command per job (no service, no restart)
 #
@@ -14,6 +15,7 @@
 #   GOTHIC_VOXTRAL_URL   -> VOXTRAL_HOST, VOXTRAL_PORT: the server listens where the ASR service connects
 #   GOTHIC_VOXCPM_URL    -> VOXCPM_HOST, VOXCPM_PORT: the same for the TTS service
 #   GOTHIC_DECIDER_URL   -> DECIDER_HOST, DECIDER_PORT: the same for the AI server's npc planner
+#   GOTHIC_QUICK_LLM_URL -> GEMMA_HOST, GEMMA_PORT: the same for the AI server's quick model of fights
 #   GPU_<NAME>=value     -> <NAME>=value, for anything else the server needs (e.g. GPU_HF_TOKEN)
 # Nothing else is sent: API keys of the services on this machine stay here.
 set -euo pipefail
@@ -56,6 +58,7 @@ render_env() {
   listen_lines VOXTRAL GOTHIC_VOXTRAL_URL
   listen_lines VOXCPM GOTHIC_VOXCPM_URL
   listen_lines DECIDER GOTHIC_DECIDER_URL
+  listen_lines GEMMA GOTHIC_QUICK_LLM_URL
   local name value
   { env; [ -z "$ENV_FILE" ] || sed -E 's/^[[:space:]]*export[[:space:]]+//' "$ENV_FILE"; } \
     | sed -n -E 's/^GPU_([A-Za-z0-9_]+)=.*/\1/p' | awk '!seen[$0]++' | while read -r name; do
@@ -74,7 +77,7 @@ case "${1:-}" in
     render_env
     exit 0
     ;;
-  env | voxtral | voxcpm | decider | aligner) ;;
+  env | voxtral | voxcpm | decider | gemma | aligner) ;;
   *)
     sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
@@ -108,7 +111,7 @@ sync_env() {
 needs_restart() {
   local prefix="$1" changed="$2"
   printf '%s\n' "$changed" | grep -q -E "^$prefix" && return 0
-  printf '%s\n' "$changed" | grep -v -E '^(VOXTRAL|VOXCPM|DECIDER)_' | grep -q .
+  printf '%s\n' "$changed" | grep -v -E '^(VOXTRAL|VOXCPM|DECIDER|GEMMA)_' | grep -q .
 }
 
 case "${1:-}" in
@@ -119,7 +122,7 @@ case "${1:-}" in
       echo "not restarting; running services pick the settings up on their next restart" >&2
       exit 0
     fi
-    for svc in voxtral voxcpm decider; do
+    for svc in voxtral voxcpm decider gemma; do
       prefix="$(echo "$svc" | tr '[:lower:]' '[:upper:]')_"
       if needs_restart "$prefix" "$changed" && remote "systemctl --user is-active --quiet gothic-$svc"; then
         echo "restarting gothic-$svc" >&2
@@ -127,10 +130,11 @@ case "${1:-}" in
       fi
     done
     ;;
-  voxtral | voxcpm)
+  voxtral | voxcpm | gemma)
     case "$1" in
       voxtral) src="$ROOT/asr-service/deploy/voxtral" ;;
       voxcpm) src="$ROOT/tts-service/deploy/voxcpm" ;;
+      gemma) src="$ROOT/server/deploy/gemma" ;;
     esac
     sync_env >/dev/null
     remote "mkdir -p ~/$REMOTE_DIR"

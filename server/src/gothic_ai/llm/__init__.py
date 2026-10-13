@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 from .base import (
     Done,
@@ -28,9 +29,17 @@ from .siwc import ChatGPTAuth
 
 BACKENDS = ("chatgpt", "openai", "local", "fake")
 DEFAULT_MODELS = {"chatgpt": "gpt-6.1-sol", "openai": "gpt-6.1-sol", "local": "qwen3:8b", "fake": "fake"}
+# the quick model of a fight (dialogue.py): Gemma 4 12B on llama.cpp, as server/deploy/gemma names it. A line
+# is a sentence or two; the cap keeps a small model from looping until its context is full
+QUICK_MODEL = "gemma-4-12b"
+QUICK_MAX_TOKENS = 120
+QUICK_PORT = 47834  # on the GPU server, next to the decider (server/deploy/gemma)
 
 __all__ = [
     "BACKENDS",
+    "QUICK_MAX_TOKENS",
+    "QUICK_MODEL",
+    "QUICK_PORT",
     "Done",
     "FakeBackend",
     "FakeStep",
@@ -48,8 +57,24 @@ __all__ = [
     "ToolResult",
     "Usage",
     "make_backend",
+    "make_quick",
+    "quick_url",
     "with_deadlines",
 ]
+
+
+def quick_url(url: str | None, decider_url: str | None) -> str | None:
+    """Where the quick model is: `url` if given, else on the decider's host (the GPU server runs both,
+    so it is on wherever the decider is); None without either."""
+    if url:
+        return url
+    host = urlsplit(decider_url).hostname if decider_url else None
+    return f"http://{host}:{QUICK_PORT}/v1" if host else None
+
+
+def make_quick(base_url: str, model: str = QUICK_MODEL) -> LLMBackend:
+    """The quick model of a fight: an OpenAI-compatible server (llama.cpp), its answers capped."""
+    return OpenAICompatBackend(model, base_url, name="quick", max_tokens=QUICK_MAX_TOKENS)
 
 
 def make_backend(

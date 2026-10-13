@@ -45,6 +45,7 @@ class FakeBackend:
         self.first = first
         self.calls: list[tuple[str, list[Item], list[Tool]]] = []
         self.tool_choices: list[ToolChoice | None] = []
+        self.prewarms: list[tuple[str, list[Item]]] = []  # what was sent to fill the prompt cache
 
     @property
     def reply(self) -> str:
@@ -52,6 +53,9 @@ class FakeBackend:
 
     async def aclose(self) -> None:
         pass
+
+    async def prewarm(self, *, instructions: str, messages: Sequence[Item]) -> None:
+        self.prewarms.append((instructions, list(messages)))
 
     async def stream(
         self,

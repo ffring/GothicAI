@@ -1,4 +1,4 @@
-from gothic_ai.dialogue import MoodTag, MoodTags, SentenceSplitter, mood_of, to_game_text
+from gothic_ai.dialogue import MoodTag, MoodTags, SentenceSplitter, mood_of, paragraph_end, to_game_text
 from gothic_ai.gamedata.ou import npc_dialog_key, npc_lines, parse_ou_bin
 from gothic_ai.persona import pick_samples, render_instructions
 
@@ -140,3 +140,9 @@ def test_first_line_at_the_first_clause():
     assert first == "Последний крик Спящего призвал их вместе со всей армией тьмы"
     first = lines("Я долго ждал тебя здесь и думал о том что делать с этим.")[0]
     assert first == "Я долго ждал тебя здесь и думал о том что делать"  # "с" is not left at the end
+
+
+def test_a_quick_line_ends_at_its_first_blank_line():
+    assert paragraph_end("[hostile] Держи его!\n\nset_intent(goal=fight)") == len("[hostile] Держи его!")
+    assert paragraph_end("\n\nДержи его!") is None  # blank lines before any words do not end it
+    assert paragraph_end("Держи его!\nИ живо!") is None
