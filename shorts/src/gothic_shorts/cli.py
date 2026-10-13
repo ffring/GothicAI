@@ -12,6 +12,7 @@ from gothic_launcher.settings import Config, SettingsError
 
 from . import cut as cutting
 from . import youtube
+from .align import AlignError, align
 from .film import FilmError, film, shorts_dir
 from .shot import Shot, ShotError, load
 from .timeline import build, read_events
@@ -85,6 +86,25 @@ def cmd_subs(args: argparse.Namespace) -> int:
     shot, config = _shot(args.shot), _config()
     take = _take(config, shot, args.take)
     print(cutting.write_subs_template(shot, take, args.lang))
+    return 0
+
+
+def cmd_align(args: argparse.Namespace) -> int:
+    wav = Path(args.wav)
+    if (args.text is None) == (args.text_file is None):
+        raise AlignError("give the text, or --text-file")
+    try:
+        text = args.text if args.text is not None else Path(args.text_file).read_text()
+    except OSError as err:
+        raise AlignError(f"can not read the text: {err}") from err
+    out = Path(args.out) if args.out else wav.with_suffix(".words.json")
+    if out.suffix != ".json":
+        out = out.with_name(out.name + ".json")
+    done = align(wav, text, out, args.language)
+    for w in done["words"]:
+        print(f"  {w['start']:6.2f} {w['end']:6.2f}  {w['text']}")
+    print(f"{out}: {len(done['words'])} words over {done['duration']:.2f} s of audio; "
+          f"{done['ssh_s']:.1f} s on the GPU server ({done['metrics'] or 'no metrics'})")
     return 0
 
 
@@ -179,6 +199,14 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_subs)
 
+    s = sub.add_parser("align", help="word timings of a known text in a recording (on the GPU server)")
+    s.add_argument("wav", help="the recording (any format ffmpeg reads)")
+    s.add_argument("text", nargs="?", help="exactly what is said")
+    s.add_argument("--text-file", help="the text in a file instead (line breaks are spaces)")
+    s.add_argument("--language", default="Russian", help="the text's language: a name or a code (ru)")
+    s.add_argument("--out", help="the words' JSON (default: <wav>.words.json)")
+    s.set_defaults(fn=cmd_align)
+
     s = sub.add_parser("youtube", help="YouTube: sign in (the browser opens), the channel, the token's life")
     s.add_argument("action", choices=["login"])
     s.set_defaults(fn=cmd_youtube_login)
@@ -200,6 +228,6 @@ def main() -> None:
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError) as err:
+            YouTubeError, AlignError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)

@@ -6,6 +6,8 @@
 #                                              settings changed are restarted
 #   scripts/deploy-gpu.sh voxtral|voxcpm       sync the settings, copy deploy/<name> and run its install.sh
 #   scripts/deploy-gpu.sh decider              the same for the npc decision service (all of decider-service/)
+#   scripts/deploy-gpu.sh aligner              copy asr-service/deploy/aligner and run its install.sh: the
+#                                              forced aligner, a command per job (no service, no restart)
 #
 # Settings come from the nearest .env at or above the repository (real environment variables win):
 #   GOTHIC_GPU_SSH       ssh destination of the GPU server (required)
@@ -72,9 +74,9 @@ case "${1:-}" in
     render_env
     exit 0
     ;;
-  env | voxtral | voxcpm | decider) ;;
+  env | voxtral | voxcpm | decider | aligner) ;;
   *)
-    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac
@@ -135,6 +137,12 @@ case "${1:-}" in
     scp -q -r "$src" "$SSH_DEST:$REMOTE_DIR/"
     # install.sh (re)starts the service, which reads the settings itself
     remote "set -a; . ~/$REMOTE_ENV; set +a; ~/$REMOTE_DIR/$1/install.sh"
+    ;;
+  aligner)
+    remote "mkdir -p ~/$REMOTE_DIR"
+    scp -q -r "$ROOT/asr-service/deploy/aligner" "$SSH_DEST:$REMOTE_DIR/"
+    # its own audio.cpp build next to the scripts; nothing runs until gothic-shorts align calls align.sh
+    remote "~/$REMOTE_DIR/aligner/install.sh"
     ;;
   decider)
     sync_env >/dev/null
