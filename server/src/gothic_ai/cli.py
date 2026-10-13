@@ -86,6 +86,7 @@ from .voice import (
     VoiceInput,
     WavSource,
 )
+from .witnesses import Witnesses
 from .wrath import Wrath
 
 log = logging.getLogger("gothic_ai")
@@ -117,6 +118,7 @@ HELP = """commands (npc defaults to the last attached one):
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
   seen [npc] [query]  what the npc saw itself: the hero's sightings, the people it knows (and recall)
+  witness [npc]     whom the npc may ask about the hero, its questions under way and what it was told
   trust [npc]       what the npc knows of the hero's word: lies, rumors, claims that were true
   guard [npc]       whether the npc may leave its spot (plot, post), its concerns about the hero
   rumors            rumors of the hero's lies and who knows them, by retellings
@@ -170,6 +172,7 @@ class ServerState:
         self.initiative: InitiativeDesk | None = None
         self.perception: PerceptionDesk | None = None
         self.sightings: Sightings | None = None
+        self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
 
 
@@ -281,6 +284,10 @@ class Console:
                 print(self.state.sightings.situation(who) or "(saw nothing)")
                 if len(rest) > 1:
                     print(self.state.sightings.recall(who, " ".join(rest[1:])) or "(recall: nothing)")
+            case "witness" if self.state.witnesses is not None:
+                who = (rest[0] if rest else npc).upper()
+                await self.state.witnesses.prepare(who)
+                print(self.state.witnesses.situation(who) or "(nobody to ask, nothing told)")
             case "know" if self.state.knowledge is not None:
                 who = (rest[0] if rest else npc).upper()
                 await self.state.knowledge.prepare(who)
@@ -535,6 +542,28 @@ async def serve(args: argparse.Namespace) -> int:
         state.bodies = Bodies(link)
         state.concerns = Concerns(link, state.chronicle, state.deals)
         state.guard = StoryGuard(graph)
+        # the npc checks the hero's words by asking a witness it knows (wave 2 step 3)
+        witnesses = state.witnesses = Witnesses(
+            link,
+            state.dialogue,
+            state.sightings,
+            perception,
+            state.chronicle,
+            state.guard,
+            social=lambda: state.rumors.social if state.rumors is not None else None,
+            budget=budget,
+            hero_cm=lambda npc: talk.people[npc].distance if npc in talk.people else None,
+            state_of=lambda npc: talk.people[npc].state if npc in talk.people else "",
+            controlled=lambda npc: npc.upper() in talk.attached,
+            partner=lambda: talk.partner.npc if talk.partner is not None else None,
+            talking=lambda npc, on: talk.planner.talking(npc, on) if talk.planner is not None else None,
+            journal=journal,
+        )
+        # its lines right after what the npc saw itself
+        state.dialogue.extensions.insert(state.dialogue.extensions.index(state.sightings) + 1, witnesses)
+        state.concerns.extra.append(witnesses.concerns)
+        witnesses.on_change.append(state.concerns.changed)  # a far answer's time on its mind is over
+        asks = asyncio.create_task(witnesses.run())  # far witnesses are asked at their meeting
         state.quests = QuestBoard(
             link,
             state.dialogue,
@@ -633,6 +662,7 @@ async def serve(args: argparse.Namespace) -> int:
         finally:
             lies.cancel()
             debts.cancel()
+            asks.cancel()
             for task in directing:
                 task.cancel()
             if brain is not None:
@@ -729,6 +759,14 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.seen_memory(link, dialogue, talk, sightings)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario seen: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "witness":
+                dialogue, talk, sightings = state.dialogue, state.talk, state.sightings
+                assert dialogue is not None and talk is not None and sightings is not None
+                assert state.witnesses is not None
+                results = await scenarios.witness_check(link, dialogue, talk, sightings, state.witnesses)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario witness: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "places":
                 # not a check: the world's points and people for the book of places (places.py)
@@ -1271,6 +1309,7 @@ def main() -> None:
             "m6",
             "see",
             "seen",
+            "witness",
             "places",
             "graph",
             "lie",
