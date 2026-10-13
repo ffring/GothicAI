@@ -331,3 +331,35 @@ async def test_an_npc_held_for_a_scene_listens_to_the_hero():
     assert "Твоё тело сейчас: ты остановился, повернулся к герою и слушаешь" in situation
     assert ended == [(HILDA, "walked_away")]
     assert dialogue.conversations[HILDA].history[-1].content == "[Герой ушёл, разговор закончился]"
+
+
+BANDIT = "BDT_1013_BANDIT_L"
+
+
+def test_in_a_fight_he_speaks_to_whoever_is_at_him():
+    at_him = person(BANDIT, "Бандит", 4, state="ZS_ATTACK", activity="fight")
+    people = roster(
+        at_him, person(XARDAS, "Ксардас", 3, True), person("PC_FIGHTER", "Горн", 2, state="ZS_ATTACK")
+    )
+    gorn_is_ours = lambda npc: npc == "PC_FIGHTER"  # noqa: E731
+    hit = addressee("Воу, воу, ты чего?", None, people, XARDAS, ours=gorn_is_ours)
+    assert (hit.id, hit.why) == (BANDIT, "attacker")  # not his partner, not his own companion
+    assert addressee("Ксардас, помоги!", None, people, None, ours=gorn_is_ours).why == "name"
+    assert addressee("Ты кто?", XARDAS, people, None, ours=gorn_is_ours).why == "focus"
+    far = roster(person(BANDIT, "Бандит", 14, state="ZS_ATTACK"))
+    assert addressee("Эй!", None, far, None) is None  # a fight farther off is not with him
+
+
+async def test_one_in_a_fight_answers_on_and_fights_on():
+    fake = FakeGame()
+    llm = FakeBackend("Чего тебе?", delay=0)
+    cm, link, dialogue, talk = await _desk(fake, llm, FakeDecider("listen", 0.99))
+    try:
+        await fake.roster(person(BANDIT, "Бандит", 3, True, state="ZS_ATTACK", activity="fight"))
+        await fake.send(type="player_text", text="Ты чего, спокуха!")
+        await _until(lambda: fake.said == ["Чего тебе?"])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert talk.last[0].why == "attacker"
+    assert BANDIT not in fake.attached  # not held to listen: its scripts fight on while it answers

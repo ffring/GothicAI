@@ -1410,7 +1410,7 @@ class _OnWords:
     ) -> AsyncIterator[LLMEvent]:
         last = messages[-1] if messages else None
         text = last.content if isinstance(last, Message) else ""
-        step = next((s for words, s in self.replies if words in text), self.default)
+        step = next((s for words, s in self.replies if words.lower() in text.lower()), self.default)
         return FakeBackend(script=[step], delay=0).stream(
             instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
         )
@@ -1631,6 +1631,107 @@ async def companion_scenario(
     defends = [e for e in entries if e["kind"] == "defend"]
     check("after", down and after, f"bandit down {down}, follows {after}, stood up {len(defends)} time(s)")
     link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
+async def calm_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    bandit: str = "BDT_1013_BANDIT_L",
+    gang: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+) -> dict[str, str]:
+    """Talking an attacker down (the user, 2026-10-14: attacked by a bandit, he spoke to him and was told
+    nobody heard; he wants to calm one with words). The bandit at the steps decides to attack the hero (its
+    model scripted); the hero, looking at no one, says «Воу, воу, ты чего? Спокуха!». Checks:
+    - attack: the scripts' attack, the bandit in ZS_ATTACK;
+    - addressed: the words go to whoever is at the hero, though not in his focus;
+    - calm: its model calls the fight off (scripted) and the effect `calm` goes to the game;
+    - stopped: it is out of the attack state;
+    - stays_calm: 15 s on it has not fallen on the hero again, and the hero has not lost health.
+    The gang in the cave is out of it (a fight's noise would bring them). The hero wears heavy armor."""
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    fight = {"goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None}
+    calm = {"goal": "none", "target": None, "attitude": "wary", "agenda": None}
+    dialogue.llm = _ByNpc(
+        {
+            "Бандит": _OnWords(
+                [
+                    ("отойди", FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])),
+                    ("спокуха", FakeStep("Ладно, ладно. Живи пока.", [ToolCall("set_intent", calm)])),
+                ],
+                FakeStep("Хм."),
+            )
+        },
+        FakeBackend("Хм.", delay=0),
+    )
+
+    def state() -> str:
+        e = talk.people.get(bandit)
+        return e.state.upper() if e is not None else "?"
+
+    async def hero_hp() -> int:
+        snap = await link.snapshot(bandit, fresh=True)
+        return snap.player.hp if snap.player is not None and snap.player.hp is not None else -1
+
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")
+    except GameError as err:
+        log.info("calm: no armor for the hero: %s", err)
+    for other in gang:
+        try:
+            await link.debug("kill", npc=other)
+        except GameError as err:
+            log.info("calm: kill %s: %s", other, err)
+    await link.debug("teleport", near=bandit, distance=250)
+    if not await _until(lambda: bandit in talk.people and talk.people[bandit].distance <= 500, 15):
+        return _logged({"near": f"failed ({bandit} is not near the hero)"})
+
+    talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
+    attacked = await _until(
+        lambda: any(e["kind"] == "attack" for e in entries) and state() == "ZS_ATTACK", 20
+    )
+    check("attack", attacked, f"state {state()}")
+
+    hp = await hero_hp()
+    talk.hear("Воу, воу, ты чего? Спокуха!", None, {"via": "scenario"})
+    to = talk.last[0] if talk.last else None
+    check(
+        "addressed",
+        to is not None and to.id == bandit and to.why == "attacker",
+        f"{to.why if to else 'nobody'}",
+    )
+    calmed = await _until(lambda: any(e["kind"] == "calm" for e in entries), 20)
+    check("calm", calmed, next((e["attitude"] for e in entries if e["kind"] == "calm"), "no effect"))
+    stopped = await _until(lambda: state() != "ZS_ATTACK", 10)
+    check("stopped", stopped, f"state {state()}")
+    after = await hero_hp()
+    again = False
+    t_end = time.monotonic() + 15
+    while time.monotonic() < t_end:
+        again = again or state() == "ZS_ATTACK"
+        await asyncio.sleep(0.5)
+    last = await hero_hp()
+    check(
+        "stays_calm",
+        stopped and not again and last >= after,
+        f"hero hp {hp} -> {after} -> {last}, state {state()}",
+    )
     return _logged(results)
 
 

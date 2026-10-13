@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
 # v16: opt-in passive numeric body observations (independently versioned schema).
-PROTOCOL_VERSION = 18
+PROTOCOL_VERSION = 20
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1127,7 +1127,9 @@ class StoryEffectCmd(_Command):
     the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
     constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`) — an npc held by
     the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
-    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`.
+    START...) through B_StartOtherRoutine, as the dialogs change routines; `calm` (v20; `attitude`: an
+    ATT_* constant, ATT_NEUTRAL by default): the npc calls off its fight with the hero and keeps to it, its
+    attitude to him set through B_SetAttitude, a held npc let go too. The game answers `result`.
 
     `check` (v10): the gives are checked first, and nothing happens unless each giver has all it gives
     (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)")."""

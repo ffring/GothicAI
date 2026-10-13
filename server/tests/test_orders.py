@@ -386,3 +386,18 @@ async def test_sent_into_a_place_it_looks_around_until_it_sees_someone():
 
 def walks(fake: FakeGame) -> list[dict]:
     return [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_waypoint"]
+
+
+async def test_a_foe_that_called_off_its_fight_is_let_be():
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue, person(BANDIT, "Бандит", 6))
+        fake.slow_actions = {"fight"}  # a fight that goes on until something ends it
+        await fake.perception(GORN, "ASSESSOTHERSDAMAGE", BANDIT, victim="PLAYER")
+        await _until(lambda: GORN in talk.orders.fights)
+        talk.orders.truce(BANDIT)  # talked down by the hero (dialogue.py)
+        await _until(lambda: acts(fake)[-1] == (GORN, "follow"))
+    finally:
+        await cm.__aexit__(None, None, None)
+    assert GORN not in talk.orders.fights and not talk.orders.foe(BANDIT)

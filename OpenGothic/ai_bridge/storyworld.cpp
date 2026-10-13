@@ -235,7 +235,7 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
     }
   const auto who = symbolOf(world,*npc);
   for(auto& e : list) {
-    if(e.kind=="attack" || e.kind=="refuse_talk")
+    if(e.kind=="attack" || e.kind=="refuse_talk" || e.kind=="calm")
       release(world,*npc);  // the scripts carry these out: an npc the server holds is let go first
     e.run(vm,*npc,*pl,who);
     }
