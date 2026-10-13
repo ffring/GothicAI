@@ -96,7 +96,7 @@ log = logging.getLogger("gothic_ai")
 
 DEFAULT_TRACE_DIR = DEFAULT_MEMORY_DB.parent / "traces"
 
-DEFAULT_GAME_DIR = "/Volumes/shared/projects/Gothic II"
+DEFAULT_GAME_DIR = "/Volumes/DevSSD/Dev/games/Gothic II"
 
 HELP = """commands (npc defaults to the last attached one):
   attach <npc> | detach [npc] | snap [npc] | ping

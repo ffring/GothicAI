@@ -108,7 +108,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
+GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d -t gothic-e2e)}"
 TIMEOUT="${TIMEOUT:-240}"

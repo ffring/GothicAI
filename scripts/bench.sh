@@ -4,7 +4,7 @@
 #
 #   scripts/bench.sh <scenario file | name from scripts/bench/> [out dir]
 #
-# env: GOTHIC_DIR    game data (default: /Volumes/shared/projects/Gothic II)
+# env: GOTHIC_DIR    game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)
 #      NO_BUILD=1    do not rebuild the engine first
 #      TIMEOUT=300   seconds before the game is killed
@@ -14,7 +14,7 @@
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/shared/projects/Gothic II}"
+GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 BIN="$ROOT/OpenGothic/build/opengothic/Gothic2Notr"
 
 SCEN="${1:?usage: scripts/bench.sh <scenario> [out dir]}"
