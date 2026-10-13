@@ -197,6 +197,7 @@ void NpcController::detachAll(World& world, std::string_view reason) {
 
 void NpcController::dropAll(std::string_view reason) {
   for(auto& c:npcs) {
+    c.npc = nullptr;  // the world is gone already: the pointer dangles
     if(c.act)
       finishAction(c,"cancelled","world unloaded");
     emitDetached(c.symbol,reason);
