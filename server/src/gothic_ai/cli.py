@@ -612,6 +612,7 @@ async def serve(args: argparse.Namespace) -> int:
             state.chronicle,
             journal=journal,
             names=lambda name: symbol_by_name(personas.cards, name),
+            things=graph.things_of if graph is not None else None,
         )
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)

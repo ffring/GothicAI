@@ -125,6 +125,22 @@ class StoryGraph:
         npc = npc.upper()
         return [q for q in self.quests.values() if any(self.nodes[m].npc == npc for m in q.movers())]
 
+    def things_of(self, npc: str) -> set[str]:
+        """Symbols of the npc's story that look like items (IT…): in its dialogs and their choices, and in
+        the dialogs of anyone that move or read the quests its own move or read: Cavalorn's stolen letter
+        is named only in Vatras's «У меня для тебя письмо.». Which of them are items, the game knows."""
+        npc = npc.upper()
+        own = [n for n in self.nodes.values() if n.npc == npc]
+        quests = {v for n in own for v in n.writes | n.reads if v in self.quests}
+        ids = {m for v in quests if (var := self.vars.get(v)) for m in var.readers | var.writers}
+        nodes = own + [self.nodes[i] for i in ids if i in self.nodes and self.nodes[i].npc != npc]
+        out: set[str] = set()
+        for n in nodes:
+            for e in _exprs([n.condition, n.condition_effects, n.effects]):
+                if e[0] == "sym" and len(e) > 1 and str(e[1]).startswith("IT"):
+                    out.add(str(e[1]))
+        return out
+
     def npc(self, instance: str) -> str:
         """Npc instance behind a global instance variable (HILDA -> BAU_951_HILDA); other names unchanged."""
         return self.instances.get(instance.upper(), instance.upper())
@@ -222,6 +238,18 @@ def walk(expr: Expr | None) -> Iterator[Expr]:
     elif tag not in ("int", "str", "var", "inst", "sym", "param", "unknown"):
         for a in expr[1:]:
             yield from walk(a)
+
+
+def _exprs(data: object) -> Iterator[Expr]:
+    """Every expression in a node's parts: conditions, and effects (dicts whose values hold them)."""
+    if isinstance(data, dict):
+        for v in data.values():
+            yield from _exprs(v)
+    elif isinstance(data, list) and data and isinstance(data[0], str):
+        yield from walk(data)
+    elif isinstance(data, list):
+        for v in data:
+            yield from _exprs(v)
 
 
 def variables(expr: Expr | None) -> set[str]:
