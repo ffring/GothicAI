@@ -85,11 +85,14 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
       Workers::setThreadName("Loading: BVH thread");
       return std::unique_ptr<DynamicWorld>(new DynamicWorld(this,worldMesh));
       });
-    auto wviewFut = std::async(std::launch::async, [&]() {
-      Workers::setThreadName("Loading: PackedMesh thread");
-      PackedMesh vmesh(worldMesh,PackedMesh::PK_VisualLnd);
-      return std::unique_ptr<WorldView>(new WorldView(vmesh, wname));
-      });
+    std::future<std::unique_ptr<WorldView>> wviewFut;
+    if(!Resources::isHeadless()) {
+      wviewFut = std::async(std::launch::async, [&]() {
+        Workers::setThreadName("Loading: PackedMesh thread");
+        PackedMesh vmesh(worldMesh,PackedMesh::PK_VisualLnd);
+        return std::unique_ptr<WorldView>(new WorldView(vmesh, wname));
+        });
+      }
 
     loadProgress(30);
 
@@ -102,7 +105,8 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     }
     loadProgress(50);
 
-    wview = wviewFut.get();
+    if(wviewFut.valid())
+      wview = wviewFut.get();
     loadProgress(60);
 
     wdynamic = wdynamicFut.get();
@@ -254,38 +258,59 @@ MeshObjects::Mesh World::addView(std::string_view visual) const {
   }
 
 MeshObjects::Mesh World::addView(std::string_view visual, int32_t headTex, int32_t teetTex, int32_t bodyColor) const {
+  if(Resources::isHeadless()) {
+    if(auto mesh=Resources::loadMesh(visual))
+      return MeshObjects::Mesh(cpuObjects,*mesh,headTex,teetTex,bodyColor,false);
+    return MeshObjects::Mesh();
+    }
   return view()->addView(visual,headTex,teetTex,bodyColor);
   }
 
 MeshObjects::Mesh World::addView(const zenkit::IItem& itm) {
+  if(Resources::isHeadless())
+    return addView(itm.visual,itm.material,0,itm.material);
   return view()->addView(itm.visual,itm.material,0,itm.material);
   }
 
 MeshObjects::Mesh World::addView(const ProtoMesh* visual) {
+  if(Resources::isHeadless())
+    return visual!=nullptr ? MeshObjects::Mesh(cpuObjects,*visual,0,0,0,false) : MeshObjects::Mesh();
   return view()->addView(visual);
   }
 
 MeshObjects::Mesh World::addAtachView(const ProtoMesh::Attach& visual, const int32_t version) {
+  if(Resources::isHeadless())
+    return MeshObjects::Mesh(cpuObjects,visual,version,false);
   return view()->addAtachView(visual,version);
   }
 
 MeshObjects::Mesh World::addStaticView(const ProtoMesh* visual, bool staticDraw) {
+  if(Resources::isHeadless())
+    return visual!=nullptr ? MeshObjects::Mesh(cpuObjects,*visual,0,0,0,staticDraw) : MeshObjects::Mesh();
   return view()->addStaticView(visual,staticDraw);
   }
 
 MeshObjects::Mesh World::addStaticView(std::string_view visual) {
+  if(Resources::isHeadless())
+    return addStaticView(Resources::loadMesh(visual),true);
   return view()->addStaticView(visual);
   }
 
 MeshObjects::Mesh World::addDecalView(const zenkit::VisualDecal& decal) {
+  if(Resources::isHeadless())
+    return MeshObjects::Mesh();
   return view()->addDecalView(decal);
   }
 
 LightGroup::Light World::addLight(const zenkit::VLight& vob) {
+  if(Resources::isHeadless())
+    return LightGroup::Light();
   return view()->addLight(vob, tickCount());
   }
 
 LightGroup::Light World::addLight(std::string_view preset) {
+  if(Resources::isHeadless())
+    return LightGroup::Light();
   return view()->addLight(preset, tickCount());
   }
 
@@ -807,6 +832,8 @@ bool World::isInSfxRange(const Tempest::Vec3& pos) const {
   }
 
 bool World::isInPfxRange(const Tempest::Vec3& p) const {
+  if(Resources::isHeadless())
+    return true; // Effects may carry gameplay collision/perception callbacks.
   return wview->isInPfxRange(p);
   }
 

@@ -37,10 +37,15 @@ float springTo(float v, float goal, float& vel, float smooth, float dt) {
   }
 }
 
-PlayerControl::PlayerControl(DialogMenu& dlg, InventoryMenu &inv)
-  :dlg(dlg),inv(inv) {
+PlayerControl::PlayerControl() {
   Gothic::inst().onSettingsChanged.bind(this,&PlayerControl::setupSettings);
   setupSettings();
+  }
+
+PlayerControl::PlayerControl(DialogMenu& dlg, InventoryMenu& inv)
+  :PlayerControl() {
+  this->dlg = &dlg;
+  this->inv = &inv;
   }
 
 PlayerControl::~PlayerControl() {
@@ -401,7 +406,9 @@ bool PlayerControl::interact(Interactive &it) {
   if(!canInteract())
     return false;
   if(it.isContainer()){
-    inv.open(*pl,it);
+    if(inv==nullptr)
+      return false;
+    inv->open(*pl,it);
     return true;
     }
   if(pl->setInteraction(&it)){
@@ -422,7 +429,9 @@ bool PlayerControl::interact(Npc &other) {
   if(other.isDown()) {
     if(state!=BS_STAND && state!=BS_SNEAK && state!=BS_SWIM && state!=BS_DIVE)
       return false;
-    if(!inv.ransack(*w->player(),other))
+    if(inv==nullptr)
+      return false;
+    if(!inv->ransack(*w->player(),other))
       w->script().printNothingToGet();
     } else {
     if((state&BS_MAX)!=BS_NONE)
@@ -757,7 +766,7 @@ void PlayerControl::implMove(uint64_t dt) {
       }
     }
 
-  if(!pl.isInState(ScriptFn()) || dlg.isActive()) {
+  if(!pl.isInState(ScriptFn()) || (dlg!=nullptr && dlg->isActive())) {
     runAngleDest = 0;
     return;
     }
@@ -1308,7 +1317,8 @@ void PlayerControl::processLadder(Npc& pl, Interactive& inter, KeyCodec::Action 
   }
 
 void PlayerControl::quitPicklock(Npc& pl) {
-  inv.close();
+  if(inv!=nullptr)
+    inv->close();
   pickLockProgress = 0;
   pl.setInteraction(nullptr);
   }

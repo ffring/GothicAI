@@ -55,7 +55,16 @@ class WorldSound final {
       bool                 loop    = false;
       bool                 active  = true;
       bool                 ambient = false;
+      // Headless and benchmark effects share gameplay timing. Rendered benchmarks also play eff.
+      World*               simulationWorld = nullptr;
+      uint64_t             simulationDuration = 0;
+      uint64_t             simulationStartedAt = 0;
+      bool                 simulationPlaying = false;
 
+      bool isEmpty() const;
+      bool isFinished() const;
+      uint64_t timeLength() const;
+      void play();
       void setOcclusion(float occ);
       void setVolume(float v);
       };
@@ -70,6 +79,7 @@ class WorldSound final {
 
     Sound   implAddSound(const SoundFx& s, const Tempest::Vec3& pos, float rangeMax);
     Sound   implAddSound(Tempest::SoundEffect&& s, const Tempest::Vec3& pos, float rangeMax);
+    Sound   implAddSimulationSound(const Tempest::Sound& s, float volume, const Tempest::Vec3& pos, float rangeMax);
 
     GameSession&                            game;
     World&                                  owner;

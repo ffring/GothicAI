@@ -15,6 +15,14 @@ class SoundFx {
     SoundFx(SoundFx&&)=default;
     SoundFx& operator=(SoundFx&&)=default;
 
+    struct Sample {
+      const Tempest::Sound* sound = nullptr;
+      float                 volume = 0.f;
+      bool                  loop = false;
+      };
+
+    // A silent simulation still selects the native variant (including its RNG draw).
+    Sample selectSample() const;
     Tempest::SoundEffect load(Tempest::SoundDevice& dev, bool& loop) const;
 
   private:

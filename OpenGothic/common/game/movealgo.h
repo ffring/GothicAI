@@ -77,6 +77,8 @@ class MoveAlgo final {
     bool    isDive()    const;
 
     auto    state() const { return flags; }
+    // Telemetry counter only: records real MoveAlgo invocations, never advances simulation.
+    uint64_t traceTickSerial() const { return movementTraceSerial; }
 
     zenkit::MaterialGroup groundMaterial() const;
     auto    groundNormal() const -> Tempest::Vec3;
@@ -94,6 +96,9 @@ class MoveAlgo final {
     bool    checkLastBounce() const;
 
   private:
+    // Opt-in native movement observation, scoped to one tick; absent outside a body trace.
+    struct MovementTrace;
+
     void    tickMobsi (uint64_t dt);
     void    tickClimb (uint64_t dt);
     void    tickJumpup(uint64_t dt);
@@ -140,6 +145,8 @@ class MoveAlgo final {
       };
 
     Npc&                npc;
+    MovementTrace*      movementTrace = nullptr;
+    uint64_t            movementTraceSerial = 0;
     mutable CacheLand   cache;
     mutable CacheWater  cacheW;
 

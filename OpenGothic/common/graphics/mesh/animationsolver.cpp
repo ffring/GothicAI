@@ -8,6 +8,7 @@
 #include "skeleton.h"
 #include "pose.h"
 #include "resources.h"
+#include "testbench.h"
 
 using namespace Tempest;
 
@@ -100,17 +101,17 @@ void AnimationSolver::update(uint64_t tickCount) {
     }
   }
 
-const Animation::Sequence* AnimationSolver::solveAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlkMode, const Pose& pose) const {
+const Animation::Sequence* AnimationSolver::solveAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlkMode, const Pose& pose, const Npc* npc) const {
   if(0<a && a<=AnimationSolver::CacheLast && int(st)<2 && int(wlkMode)<2) {
     auto& ptr = cache[a-1][int(st)][int(wlkMode)];
     if(ptr==nullptr)
-      ptr = implSolveAnim(a,st,wlkMode,pose);
+      ptr = implSolveAnim(a,st,wlkMode,pose,npc);
     return ptr;
     }
-  return implSolveAnim(a,st,wlkMode,pose);
+  return implSolveAnim(a,st,wlkMode,pose,npc);
   }
 
-const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlkMode, const Pose& pose) const {
+const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlkMode, const Pose& pose, const Npc* npc) const {
   // Attack
   if(st==WeaponState::Fist) {
     if(a==Anim::Attack) {
@@ -136,7 +137,11 @@ const Animation::Sequence* AnimationSolver::implSolveAnim(AnimationSolver::Anim 
       bool g2 = Gothic::inst().version().game==2;
       if(g2) {
         const Animation::Sequence* s=nullptr;
-        switch(std::rand()%3) {
+        // Preserve the original shared RNG draw at precisely this solve point in every mode.
+        // Only an explicit benchmark opt-in may replace its presentation-clip branch.
+        const int fallback = std::rand()%3;
+        const int variant = npc==nullptr ? fallback : TestBench::bodyBlockVariant(*npc,fallback);
+        switch(variant) {
           case 0: s = solveFrm("T_%sPARADE_0",   st); break;
           case 1: s = solveFrm("T_%sPARADE_0_A2",st); break;
           case 2: s = solveFrm("T_%sPARADE_0_A3",st); break;

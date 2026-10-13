@@ -10,7 +10,7 @@
 #include "visualobjects.h"
 
 MeshObjects::MeshObjects(VisualObjects& parent)
-  :parent(parent) {
+  :parent(&parent) {
   }
 
 MeshObjects::~MeshObjects() {
@@ -37,7 +37,7 @@ MeshObjects::Item MeshObjects::implGet(const StaticMesh &mesh, const StaticMesh:
       Tempest::Log::e("texture not found: \"",s.texName,"\"");
     return MeshObjects::Item();
     }
-  return parent.get(mesh,mat,s.iboOffset,s.iboLength,staticDraw);
+  return parent->get(mesh,mat,s.iboOffset,s.iboLength,staticDraw);
   }
 
 const Tempest::Texture2d *MeshObjects::solveTex(const Tempest::Texture2d *def, std::string_view format, int32_t v, int32_t c) {
@@ -94,11 +94,11 @@ float MeshObjects::Mesh::morphWeight(std::string_view anim) {
   }
 
 Bounds MeshObjects::Mesh::bounds() const {
-  if(subCount==0)
+  if(nodesCount()==0)
     return Bounds();
   auto b = node(0).bounds();
-  for(size_t i=1; i<subCount; ++i)
-    b.assign(b,sub[i].bounds());
+  for(size_t i=1; i<nodesCount(); ++i)
+    b.assign(b,node(i).bounds());
   return b;
   }
 
@@ -116,6 +116,22 @@ MeshObjects::Mesh::~Mesh() {
   }
 
 MeshObjects::Mesh::Mesh(MeshObjects& owner, const StaticMesh& mesh, int32_t version, bool staticDraw) {
+  cpuOnly = owner.parent==nullptr;
+  if(cpuOnly) {
+    for(auto& s:mesh.sub) {
+      if(s.texName.find_first_of("VC")==std::string::npos && version!=0)
+        continue;
+      CpuNode n;
+      n.bounds = mesh.bbox;
+      n.material = s.material;
+      n.mesh = &mesh;
+      n.offset = uint32_t(s.iboOffset);
+      n.length = uint32_t(s.iboLength);
+      n.position.identity();
+      cpuSub.push_back(std::move(n));
+      }
+    return;
+    }
   sub.reset(new Item[mesh.sub.size()]);
   subCount = 0;
   for(size_t i=0;i<mesh.sub.size();++i) {
@@ -132,6 +148,20 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const StaticMesh& mesh, int32_t vers
 
 MeshObjects::Mesh::Mesh(MeshObjects& owner, const StaticMesh& mesh,
                         int32_t texVar, int32_t teethTex, int32_t bodyColor) {
+  cpuOnly = owner.parent==nullptr;
+  if(cpuOnly) {
+    for(auto& s:mesh.sub) {
+      CpuNode n;
+      n.bounds = mesh.bbox;
+      n.material = s.material;
+      n.mesh = &mesh;
+      n.offset = uint32_t(s.iboOffset);
+      n.length = uint32_t(s.iboLength);
+      n.position.identity();
+      cpuSub.push_back(std::move(n));
+      }
+    return;
+    }
   sub.reset(new Item[mesh.sub.size()]);
   subCount = 0;
   for(size_t i=0;i<mesh.sub.size();++i){
@@ -146,6 +176,32 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const StaticMesh& mesh,
 MeshObjects::Mesh::Mesh(MeshObjects& owner, const ProtoMesh& mesh,
                         int32_t texVar, int32_t teethTex, int32_t bodyColor, bool staticDraw)
   :proto(&mesh) {
+  cpuOnly = owner.parent==nullptr;
+  if(cpuOnly) {
+    for(auto& m:mesh.submeshId) {
+      auto& att = mesh.attach[m.id];
+      auto& s = att.sub[m.subId];
+      CpuNode n;
+      n.bounds = att.bbox;
+      n.material = s.material;
+      n.mesh = &att;
+      n.offset = uint32_t(s.iboOffset);
+      n.length = uint32_t(s.iboLength);
+      n.position.identity();
+      cpuSub.push_back(std::move(n));
+      }
+    for(auto& skin:mesh.skined)
+      for(auto& s:skin.sub) {
+        CpuNode n;
+        n.bounds = skin.bbox;
+        n.material = s.material;
+        n.offset = uint32_t(s.iboOffset);
+        n.length = uint32_t(s.iboSize);
+        n.position.identity();
+        cpuSub.push_back(std::move(n));
+        }
+    return;
+    }
   const size_t skinnedCount = mesh.skinedNodesCount();
   sub.reset(new Item[mesh.submeshId.size()+skinnedCount]);
   subCount = 0;
@@ -165,7 +221,7 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const ProtoMesh& mesh,
     bonesCount = std::max(bonesCount,mesh.skined[i].bonesCount);
 
   if(bonesCount>0)
-    anim.reset(new InstanceStorage::Id(owner.parent.alloc(bonesCount*sizeof(Tempest::Matrix4x4))));
+    anim.reset(new InstanceStorage::Id(owner.parent->alloc(bonesCount*sizeof(Tempest::Matrix4x4))));
 
   for(size_t i=0; i<mesh.skined.size(); ++i) {
     auto& skin = mesh.skined[i];
@@ -173,7 +229,7 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const ProtoMesh& mesh,
       Material mat = m.material;
       mat.tex=owner.solveTex(mat.tex,m.texName,texVar,bodyColor);
       if(mat.tex!=nullptr) {
-        sub[subCount] = owner.parent.get(skin,mat,m.iboOffset,m.iboSize,*anim);
+        sub[subCount] = owner.parent->get(skin,mat,m.iboOffset,m.iboSize,*anim);
         ++subCount;
         } else {
         if(!m.texName.empty())
@@ -193,6 +249,8 @@ MeshObjects::Mesh &MeshObjects::Mesh::operator =(MeshObjects::Mesh &&other) {
   std::swap(proto,    other.proto);
   std::swap(skeleton, other.skeleton);
   std::swap(binder,   other.binder);
+  std::swap(cpuOnly,  other.cpuOnly);
+  std::swap(cpuSub,   other.cpuSub);
   return *this;
   }
 
@@ -202,6 +260,13 @@ void MeshObjects::Mesh::setObjMatrix(const Tempest::Matrix4x4 &mt) {
 
 void MeshObjects::Mesh::implSetObjMatrix(const Tempest::Matrix4x4& mt, const Tempest::Matrix4x4* tr) {
   const size_t binds = (binder==nullptr ? 0 : binder->bind.size());
+  if(cpuOnly) {
+    for(size_t i=0; i<cpuSub.size(); ++i) {
+      const size_t id = i<binds ? binder->bind[i] : size_t(-1);
+      cpuSub[i].position = tr!=nullptr && skeleton!=nullptr && id<skeleton->nodes.size() ? tr[id] : mt;
+      }
+    return;
+    }
   for(size_t i=0; i<binds; ++i) {
     auto id = binder->bind[i];
     sub[i].setObjMatrix(tr[id]);
@@ -211,21 +276,21 @@ void MeshObjects::Mesh::implSetObjMatrix(const Tempest::Matrix4x4& mt, const Tem
   }
 
 const Bounds& MeshObjects::Node::bounds() const {
-  return it->bounds();
+  return cpu!=nullptr ? cpu->bounds : it->bounds();
   }
 
 const Material& MeshObjects::Node::material() const {
-  return it->material();
+  return cpu!=nullptr ? cpu->material : it->material();
   }
 
 Tempest::Matrix4x4 MeshObjects::Node::position() const {
-  return it->position();
+  return cpu!=nullptr ? cpu->position : it->position();
   }
 
 const StaticMesh* MeshObjects::Node::mesh() const {
-  return it->mesh();
+  return cpu!=nullptr ? cpu->mesh : it->mesh();
   }
 
 std::pair<uint32_t, uint32_t> MeshObjects::Node::meshSlice() const {
-  return it->meshSlice();
+  return cpu!=nullptr ? std::make_pair(cpu->offset,cpu->length) : it->meshSlice();
   }

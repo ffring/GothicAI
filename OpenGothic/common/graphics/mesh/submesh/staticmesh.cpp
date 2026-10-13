@@ -8,9 +8,11 @@
 
 StaticMesh::StaticMesh(const PackedMesh& mesh) {
   const Vertex* vert=mesh.vertices.data();
-  vbo  = Resources::vbo<Vertex>  (vert,mesh.vertices.size());
-  ibo  = Resources::ibo<uint32_t>(mesh.indices.data(),mesh.indices.size());
-  ibo8 = Resources::ssbo(mesh.indices8.data(),mesh.indices8.size());
+  if(Resources::hasGraphicsDevice()) {
+    vbo  = Resources::vbo<Vertex>  (vert,mesh.vertices.size());
+    ibo  = Resources::ibo<uint32_t>(mesh.indices.data(),mesh.indices.size());
+    ibo8 = Resources::ssbo(mesh.indices8.data(),mesh.indices8.size());
+    }
 
   sub.resize(mesh.subMeshes.size());
   for(size_t i=0;i<mesh.subMeshes.size();++i) {
@@ -21,7 +23,7 @@ StaticMesh::StaticMesh(const PackedMesh& mesh) {
     }
   bbox.assign(mesh.bbox());
 
-  if(Shaders::options().doRtScene) {
+  if(Resources::hasGraphicsDevice() && Shaders::options().doRtScene) {
     for(size_t i=0;i<mesh.subMeshes.size();++i) {
       sub[i].blas = Resources::blas(vbo, ibo, sub[i].iboOffset, sub[i].iboLength);
       }
@@ -40,7 +42,7 @@ StaticMesh::StaticMesh(const Material& mat, std::vector<Resources::Vertex> cvbo,
   assert(cvbo.size()<=PackedMesh::MaxVert);
   assert(cibo.size()<=PackedMesh::MaxInd);
 
-  if(Shaders::options().doMeshShading || true) {
+  {
     const size_t vert = cvbo.size();
     const size_t prim = cibo.size()/3;
 
@@ -59,10 +61,13 @@ StaticMesh::StaticMesh(const Material& mat, std::vector<Resources::Vertex> cvbo,
     ibo[at + 2] = uint8_t(prim);
     ibo[at + 3] = uint8_t(vert);
 
-    ibo8 = Resources::ssbo(ibo.data(),ibo.size());
+    if(Resources::hasGraphicsDevice())
+      ibo8 = Resources::ssbo(ibo.data(),ibo.size());
     }
-  vbo  = Resources::vbo<Vertex>(cvbo.data(),cvbo.size());
-  ibo  = Resources::ibo(cibo.data(),cibo.size());
+  if(Resources::hasGraphicsDevice()) {
+    vbo  = Resources::vbo<Vertex>(cvbo.data(),cvbo.size());
+    ibo  = Resources::ibo(cibo.data(),cibo.size());
+    }
 
   sub.resize(1);
   for(size_t i=0;i<1;++i) {
@@ -70,7 +75,7 @@ StaticMesh::StaticMesh(const Material& mat, std::vector<Resources::Vertex> cvbo,
     sub[i].material  = mat;
     //sub[i].iboLength = Gothic::options().doMeshShading ? PackedMesh::MaxInd : ibo.size();
     sub[i].iboLength = PackedMesh::MaxInd;
-    if(Shaders::options().doRtScene)
+    if(Resources::hasGraphicsDevice() && Shaders::options().doRtScene)
       sub[i].blas = Resources::blas(vbo, ibo, 0, ibo.size());
     }
   bbox.assign(cvbo);

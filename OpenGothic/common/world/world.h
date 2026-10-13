@@ -220,6 +220,7 @@ class World final {
 
     std::unique_ptr<DynamicWorld>         wdynamic;
     std::unique_ptr<WorldView>            wview;
+    mutable MeshObjects                  cpuObjects;
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;
     WorldObjects                          wobj;

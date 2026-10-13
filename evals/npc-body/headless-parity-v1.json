@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "scenario": "melee-v1",
+  "declared_before_measurement": "2026-10-13",
+  "policy": "Ordered per-seed, per-participant mechanics; no histogram or outcome-distribution substitution. Missing evidence is incomplete, not a match.",
+  "tolerances": {
+    "event_time_ms": 34,
+    "position_cm": 2.0,
+    "yaw_deg": 0.5,
+    "animation_scalar": 1e-06
+  },
+  "exact": [
+    "setup and actor roles",
+    "ordered native instruction and six-slot queues",
+    "ordered queue consumption, gates and clearing",
+    "animation acceptance and pose-change flags",
+    "animation names, combination/body state and tag metadata",
+    "guard transitions and censor flags",
+    "ordered hit/defence/damage events and HP",
+    "terminal outcome/death flags"
+  ],
+  "profiles": {
+    "archived_reference": {
+      "required_phases": [
+        "native_choice",
+        "native_consume",
+        "native_attempt",
+        "phase_snapshot",
+        "damage",
+        "episode_end"
+      ],
+      "scope": "Stage 1 observable mechanics, including resulting movement. The archived trace did not record root displacement or collision internals; it cannot close full stage 2 readiness alone.",
+      "requires_physics_step": false
+    },
+    "full": {
+      "required_phases": [
+        "native_choice",
+        "native_consume",
+        "native_attempt",
+        "phase_snapshot",
+        "damage",
+        "episode_end",
+        "physics_step"
+      ],
+      "scope": "Same-source rendered/headless mechanics with per-tick CPU root motion and collision results, in addition to archived-reference comparison.",
+      "requires_physics_step": true
+    }
+  },
+  "physics_step": {
+    "sample_phase": "npc_post_movement",
+    "required_fields": [
+      "dt_ms",
+      "move_flags",
+      "root_dx",
+      "root_dy",
+      "root_dz",
+      "requested_dx",
+      "requested_dy",
+      "requested_dz",
+      "moved_dx",
+      "moved_dy",
+      "moved_dz",
+      "grounded",
+      "movement_state",
+      "collision_scope",
+      "collision_attempts",
+      "collision_failed_count",
+      "collision_land",
+      "collision_npc",
+      "collision_vob",
+      "collision_prefall",
+      "x",
+      "y",
+      "z",
+      "yaw",
+      "movealgo_tick",
+      "skip_reason"
+    ],
+    "exact_fields": [
+      "dt_ms",
+      "move_flags",
+      "grounded",
+      "movement_state",
+      "collision_scope",
+      "collision_attempts",
+      "collision_failed_count",
+      "collision_land",
+      "collision_npc",
+      "collision_vob",
+      "collision_prefall",
+      "movealgo_tick",
+      "skip_reason"
+    ],
+    "boolean_fields": [
+      "grounded",
+      "collision_land",
+      "collision_npc",
+      "collision_vob",
+      "collision_prefall",
+      "movealgo_tick"
+    ],
+    "scope": "CollisionTest flags observed in MoveAlgo::tryMove only; direct NPC ground corrections and mobsi moves are not reclassified as probes. grounded means native movement_state==Run. Every NPC tick is covered: movealgo_tick=false explicitly records a native branch that skipped MoveAlgo, zero applied root/requested motion and collision_scope=none; actual position/yaw changes are still recorded."
+  },
+  "provenance_equal": [
+    "scenario_sha256",
+    "config_sha256",
+    "save_sha256",
+    "settings_sha256",
+    "assets",
+    "sim_fps",
+    "game_version"
+  ],
+  "headless_manifest": {
+    "headless": true,
+    "graphics_device_created": false,
+    "window_created": false,
+    "audio_device_created": false,
+    "display": null,
+    "renderer": "none"
+  },
+  "interpretation": [
+    "Time is relative to episode_start. Actor lifetime IDs are mapped to start actor/target roles; absolute game clocks and IDs are not expected to match.",
+    "34 ms is one fixed 30 Hz step; 2 cm and 0.5 degrees bound trajectory drift. This does not permit different choices, damage or terminal outcomes.",
+    "Animation windows are engine guard predicates. Censored intervals remain censored; an unexercised guard is reported as unexercised.",
+    "Native source nondeterminism may make a historical trace diverge. Report the first ordered mismatch, reproduce it with the archived binary/same-source render, and isolate the cause; never loosen limits after a failed measurement."
+  ]
+}

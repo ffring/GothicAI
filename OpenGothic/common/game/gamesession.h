@@ -52,6 +52,7 @@ class GameSession final {
     auto         loadSound(std::unique_ptr<Tempest::SoundProducer>&& src) -> Tempest::SoundEffect;
 
     Npc*         player();
+    bool         hasAudioDevice() const { return bool(sound); }
     void         updateListenerPos(const Camera::ListenerPos& lpos);
 
     gtime        time() const { return  wrldTime; }
@@ -92,7 +93,7 @@ class GameSession final {
     auto         implChangeWorld(std::unique_ptr<GameSession> &&game, std::string_view world, std::string_view wayPoint) -> std::unique_ptr<GameSession>;
     auto         findStorage(std::string_view name) -> const WorldStateStorage&;
 
-    Tempest::SoundDevice           sound;
+    std::unique_ptr<Tempest::SoundDevice> sound;
 
     std::unique_ptr<Camera>        cam;
     std::unique_ptr<GameScript>    vm;

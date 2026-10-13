@@ -6,6 +6,7 @@ import asyncio
 import itertools
 import json
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from http import HTTPStatus
 from typing import Any
@@ -21,6 +22,10 @@ from .protocol import (
     ActionResult,
     ActionType,
     AttachCmd,
+    BodyObservation,
+    BodyObservationPacket,
+    BodyObservations,
+    BodyWatchCmd,
     DebugCmd,
     DebugCommand,
     DetachCmd,
@@ -62,6 +67,7 @@ log = logging.getLogger(__name__)
 # requests answered with `result`
 _Request = (
     AttachCmd
+    | BodyWatchCmd
     | DetachCmd
     | DebugCmd
     | GraphPatchCmd
@@ -102,6 +108,14 @@ class GameLink:
         self.world: str | None = None
         self.session: Session | None = None
         self.snapshots: dict[str, Snapshot] = {}
+        self.body_latest: dict[int, BodyObservation] = {}
+        self._body_packets: deque[BodyObservationPacket] = deque(maxlen=4)
+        self.body_generation: int | None = None
+        self.body_session_epoch: int | None = None
+        self.body_buffer_dropped_packets = 0
+        self.body_sequence_gaps = 0
+        self.body_stale_packets = 0
+        self._body_last_seq = 0
         self.listeners: list[Listener] = []
         self.closed = asyncio.Event()
 
@@ -119,12 +133,14 @@ class GameLink:
         except ConnectionClosed:
             pass
         finally:
+            self._clear_body_observations()
             self.closed.set()
             self._fail_pending(GameDisconnected("game disconnected"))
 
     def _dispatch(self, msg: GameMessage) -> None:
         match msg:
             case Hello():
+                self._clear_body_observations()
                 self.hello = msg
                 if msg.protocol != PROTOCOL_VERSION:
                     log.warning("protocol mismatch: game %s, server %s", msg.protocol, PROTOCOL_VERSION)
@@ -134,6 +150,7 @@ class GameLink:
             case Session():
                 self.session = msg
             case Loading():
+                self._clear_body_observations()
                 self.world = None
                 self._world_ready.clear()
                 self.snapshots.clear()
@@ -149,12 +166,64 @@ class GameLink:
                 self.snapshots[msg.npc.id] = msg
                 for fut in self._snapshot_waiters.pop(msg.npc.id, []):
                     _resolve(fut, msg)
+            case BodyObservations():
+                if not self._receive_body_observations(msg.packet):
+                    return
             case Detached():
                 self.snapshots.pop(msg.npc, None)
             case NpcActResult(status="rejected"):
                 log.debug("npc_act %s for %s rejected: %s", msg.id, msg.npc, msg.detail)
         for listener in self.listeners:
             listener(msg)
+
+    def _clear_body_observations(self) -> None:
+        self.body_latest.clear()
+        self._body_packets.clear()
+        self.body_generation = None
+        self.body_session_epoch = None
+        self._body_last_seq = 0
+        self.body_buffer_dropped_packets = 0
+        self.body_sequence_gaps = 0
+        self.body_stale_packets = 0
+
+    def _receive_body_observations(self, packet: BodyObservationPacket) -> bool:
+        """Bound both history and latest actor state, rejecting duplicate/older generations."""
+        if self.body_session_epoch is not None and packet.session_epoch != self.body_session_epoch:
+            self.body_stale_packets += 1
+            return False
+        if self.body_generation is not None and packet.generation < self.body_generation:
+            self.body_stale_packets += 1
+            return False
+        if packet.generation != self.body_generation:
+            self._clear_body_observations()
+            self.body_generation = packet.generation
+        self.body_session_epoch = packet.session_epoch
+        if not packet.observations:
+            return False
+        if packet.observations[0].observation_seq <= self._body_last_seq:
+            self.body_stale_packets += 1
+            return False
+        actors = set(self.body_latest) | {row.entity_id for row in packet.observations}
+        if len(actors) > 4:
+            self.body_stale_packets += 1
+            log.warning("body packet changes watched actors without a generation reset")
+            return False
+        for row in packet.observations:
+            self.body_sequence_gaps += max(0, row.observation_seq - self._body_last_seq - 1)
+            self._body_last_seq = row.observation_seq
+            self.body_latest[row.entity_id] = row
+        if len(self._body_packets) == self._body_packets.maxlen:
+            self.body_buffer_dropped_packets += 1
+        self._body_packets.append(packet)
+        return True
+
+    def pop_body_observations(self) -> BodyObservationPacket | None:
+        """Consume one queued packet; the latest state remains available in body_latest.
+
+        Four packets are retained. A slow consumer sees the local overflow counter and each
+        engine packet's drop counters and observation sequences; no policy hidden state exists here.
+        """
+        return self._body_packets.popleft() if self._body_packets else None
 
     def _fail_pending(self, err: Exception) -> None:
         pending: list[asyncio.Future[Any]] = [
@@ -206,6 +275,19 @@ class GameLink:
 
     async def detach(self, npc: str, timeout: float = 5.0) -> None:
         await self._request(DetachCmd(req=self._next_id("r"), npc=npc), timeout)
+
+    async def body_watch(self, npcs: list[str], rate_hz: int = 20, timeout: float = 5.0) -> dict[str, Any]:
+        """Passively watch up to four existing NPC symbols at 10 or 20 Hz; [] disables it."""
+        cmd = BodyWatchCmd(req=self._next_id("b"), npcs=[npc.upper() for npc in npcs], rate_hz=rate_hz)
+        result = await self._request(cmd, timeout)
+        stats = result.value if isinstance(result.value, dict) else {}
+        generation = stats.get("generation")
+        # The receive loop may already have processed the first packet after resolving result.
+        # Preserve it if it belongs to the acknowledged generation.
+        if type(generation) is int and generation != self.body_generation:
+            self._clear_body_observations()
+            self.body_generation = generation
+        return stats
 
     async def routine(self, npc: str, timeout: float = 5.0) -> RoutineInfo:
         """The npc's daily routine, its routine variants and current script state (v6)."""

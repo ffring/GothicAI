@@ -1,6 +1,7 @@
 #include "worldobjects.h"
 
 #include "game/serialize.h"
+#include "game/bodyobservations.h"
 #include "world/objects/itemtorchburning.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -369,6 +370,7 @@ void WorldObjects::removeNpc(Npc& npc) {
   auto ptr = takeNpc(&npc);
   if(ptr==nullptr)
     return;
+  BodyObservations::forget(&npc);
   auto& point = owner.deadPoint();
   npc.attachToPoint(nullptr);
   npc.setPosition(point.position());
@@ -747,7 +749,7 @@ Interactive* WorldObjects::findInteractive(const Npc &pl, Interactive* def, cons
   def = validateInteractive(def);
   if(def && testObj(*def,pl,opt))
     return def;
-  if(owner.view()==nullptr)
+  if(owner.physic()==nullptr)
     return nullptr;
   if(!bool(opt.collectType&TARGET_TYPE_ALL))
     return nullptr;
@@ -784,7 +786,7 @@ Item *WorldObjects::findItem(const Npc &pl, Item *def, const SearchOpt& opt) {
   def = validateItem(def);
   if(def && testObj(*def,pl,opt))
     return def;
-  if(owner.view()==nullptr)
+  if(owner.physic()==nullptr)
     return nullptr;
   if(!bool(opt.collectType&(TARGET_TYPE_ALL|TARGET_TYPE_ITEMS)))
     return nullptr;
@@ -1073,7 +1075,7 @@ template<class T>
 auto WorldObjects::findObj(T &src,const Npc &pl, const SearchOpt& opt) -> typename std::remove_reference<decltype(src[0])>::type {
   typename std::remove_reference<decltype(src[0])>::type ret=nullptr;
   float rlen = opt.rangeMax*opt.rangeMax;
-  if(owner.view()==nullptr)
+  if(owner.physic()==nullptr)
     return nullptr;
 
   if(opt.collectAlgo==TARGET_COLLECT_NONE || opt.collectAlgo==TARGET_COLLECT_CASTER)

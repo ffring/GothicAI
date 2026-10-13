@@ -6,6 +6,70 @@
 #include "world/objects/interactive.h"
 #include "world/world.h"
 #include "serialize.h"
+#include "testbench.h"
+
+#include <cstdio>
+
+// Read-only measurement around the existing movement step. Collision fields describe only calls
+// through MoveAlgo::tryMove: Npc::tryMove exposes success, not DynamicWorld's internal MoveCode.
+// No additional collision/ground queries, animation advances or random draws are made by the trace.
+struct MoveAlgo::MovementTrace final {
+  MovementTrace(MoveAlgo& owner, uint64_t dt, MvFlags moveFlags)
+    :owner(owner),previous(owner.movementTrace),dt(dt),moveFlags(moveFlags) {
+    active = TestBench::bodyTracing() && (owner.npc.bodyTraceMovementActive || owner.npc.target()!=nullptr);
+    if(!active)
+      return;
+    start = owner.npc.position();
+    root = owner.animMoveSpeed(dt); // const pose displacement, rotated into world coordinates
+    owner.movementTrace = this;
+    }
+
+  ~MovementTrace() {
+    if(!active)
+      return;
+    owner.movementTrace = previous;
+    const auto end = owner.npc.position();
+    const auto moved = end-start;
+    char fields[1800];
+    std::snprintf(fields,sizeof(fields),
+                  "\"sample_phase\":\"npc_post_movement\",\"movealgo_tick\":true,\"skip_reason\":\"\","
+                  "\"dt_ms\":%llu,\"move_flags\":%u,"
+                  "\"root_dx\":%.6f,\"root_dy\":%.6f,\"root_dz\":%.6f,"
+                  "\"requested_dx\":%.6f,\"requested_dy\":%.6f,\"requested_dz\":%.6f,"
+                  "\"moved_dx\":%.6f,\"moved_dy\":%.6f,\"moved_dz\":%.6f,"
+                  "\"x\":%.6f,\"y\":%.6f,\"z\":%.6f,\"yaw\":%.6f,"
+                  "\"grounded\":%s,\"movement_state\":%u,\"collision_scope\":\"movealgo_trymove\","
+                  "\"collision_attempts\":%u,\"collision_failed_count\":%u,"
+                  "\"collision_land\":%s,\"collision_npc\":%s,\"collision_vob\":%s,\"collision_prefall\":%s",
+                  (unsigned long long)dt,unsigned(moveFlags),double(root.x),double(root.y),double(root.z),
+                  double(requested.x),double(requested.y),double(requested.z),
+                  double(moved.x),double(moved.y),double(moved.z),double(end.x),double(end.y),double(end.z),
+                  double(owner.npc.rotation()),owner.flags==Run ? "true" : "false",unsigned(owner.flags),
+                  attempts,failures,land ? "true" : "false",otherNpc ? "true" : "false",vob ? "true" : "false",
+                  preFall ? "true" : "false");
+    TestBench::bodyEvent(owner.npc,owner.npc.target(),"physics_step",owner.npc.world().tickCount(),fields);
+    }
+
+  void collision(const Tempest::Vec3& displacement, bool accepted, const DynamicWorld::CollisionTest& info) {
+    if(attempts==0)
+      requested = displacement;
+    ++attempts;
+    failures += accepted ? 0u : 1u;
+    land |= info.landCol;
+    otherNpc |= info.npc!=nullptr;
+    vob |= info.vob!=nullptr;
+    preFall |= info.preFall;
+    }
+
+  MoveAlgo& owner;
+  MovementTrace* previous = nullptr;
+  uint64_t dt = 0;
+  MvFlags moveFlags = NoFlag;
+  bool active = false;
+  Tempest::Vec3 start = {}, root = {}, requested = {};
+  unsigned attempts = 0, failures = 0;
+  bool land = false, otherNpc = false, vob = false, preFall = false;
+  };
 
 const float   MoveAlgo::closeToPointThreshold = 40;
 const float   MoveAlgo::climbMove             = 55;
@@ -73,11 +137,14 @@ bool MoveAlgo::tryMove(float x, float y, float z) {
   }
 
 bool MoveAlgo::tryMove(float x,float y,float z, DynamicWorld::CollisionTest& out) {
-  return npc.tryMove({x,y,z},out);
+  return tryMove(Tempest::Vec3{x,y,z},out);
   }
 
 bool MoveAlgo::tryMove(const Tempest::Vec3& dp, DynamicWorld::CollisionTest& out) {
-  return npc.tryMove(dp,out);
+  const bool accepted = npc.tryMove(dp,out);
+  if(movementTrace!=nullptr)
+    movementTrace->collision(dp,accepted,out);
+  return accepted;
   }
 
 void MoveAlgo::tickJumpup(uint64_t dt) {
@@ -146,6 +213,8 @@ void MoveAlgo::tickClimb(uint64_t dt) {
   }
 
 void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
+  ++movementTraceSerial;
+  MovementTrace trace(*this,dt,moveFlg);
   if(npc.isDown() && (flags==Swim || flags==Dive)) {
     // 'falling' to bottom of the lake
     setState(InAir);

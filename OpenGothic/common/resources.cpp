@@ -23,6 +23,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <stdexcept>
 
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
@@ -58,8 +59,15 @@ static void emplaceTag(char* buf, char tag){
     }
   }
 
+Resources::Resources() {
+  inst=this;
+  // Sound buffers remain CPU data: native sound selection consumes RNG and
+  // dialogue uses their durations even when playback is disabled.
+  fBuff.reserve(8*1024*1024);
+  }
+
 Resources::Resources(Tempest::Device &device)
-  : dev(device) {
+  : dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
   inst=this;
 
   static const uint16_t index[] = {
@@ -187,8 +195,15 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
   }
 
 Resources::~Resources() {
-  DmLoader_release(dmLoader);
+  if(dmLoader!=nullptr)
+    DmLoader_release(dmLoader);
   inst=nullptr;
+  }
+
+Tempest::Device& Resources::device() {
+  if(!hasGraphicsDevice())
+    throw std::logic_error("graphics device access in headless simulation");
+  return *inst->dev;
   }
 
 bool Resources::hasFile(std::string_view name) {
@@ -242,7 +257,7 @@ std::unique_ptr<zenkit::ReadArchive> Resources::openReader(std::string_view name
   }
 
 const char* Resources::renderer() {
-  return inst->dev.properties().name;
+  return hasGraphicsDevice() ? device().properties().name : "headless-cpu";
   }
 
 // A bow's string drawn straight back (graphics/mesh/bowdraw): G2 draws the string's middle up and to the
@@ -438,7 +453,7 @@ int64_t Resources::vdfTimestamp(const std::u16string& name) {
   }
 
 Tempest::Texture2d* Resources::implLoadTexture(std::string_view cname, bool forceMips) {
-  if(cname.empty())
+  if(isHeadless() || cname.empty())
     return nullptr;
 
   //TODO: __cpp_lib_generic_unordered_lookup
@@ -483,7 +498,7 @@ void Resources::indexHdTextures() {
   }
 
 Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMips) {
-  if(name.empty())
+  if(isHeadless() || name.empty())
     return Texture2d();
 
   // a sharper texture of our own (scripts/hd-textures.sh) instead of the game's: mipmaps from the file
@@ -495,7 +510,7 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
     if(auto it = hdTextures.find(key); it!=hdTextures.end()) {
       try {
         Tempest::Pixmap pm(it->second);
-        return dev.texture(pm,true);
+        return device().texture(pm,true);
         }
       catch(...) {
         Log::e("textures: unable to load \"",it->second,"\"");
@@ -529,7 +544,7 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
         try {
           Tempest::Pixmap    pm(tex.width(), tex.height(), TextureFormat::RGBA8);
           std::memcpy(pm.data(), rgba.data(), rgba.size());
-          return dev.texture(pm);
+          return device().texture(pm);
           }
         catch (...) {
           }
@@ -545,6 +560,8 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
   }
 
 Texture2d Resources::implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips) {
+  if(isHeadless())
+    return Texture2d();
   try {
     std::vector<uint8_t> raw;
     data.seek(0, zenkit::Whence::END);
@@ -556,7 +573,7 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, zenkit::Read
     Tempest::Pixmap    pm(rd);
 
     const bool useMipmap = forceMips || (pm.mipCount()>1); // do not generate mips, if original texture has has none
-    return dev.texture(pm, useMipmap);
+    return device().texture(pm, useMipmap);
     }
   catch(...){
     return Texture2d();
@@ -783,7 +800,7 @@ ProtoMesh* Resources::implDecalMesh(const zenkit::VisualDecal& decal) {
   key.sY          = decal.dimension.y;
   key.decal2Sided = decal.two_sided;
 
-  if(key.mat.tex==nullptr)
+  if(key.mat.tex==nullptr && !isHeadless())
     return nullptr;
 
   auto it = decalMeshCache.find(key);
@@ -841,11 +858,15 @@ std::unique_ptr<Animation> Resources::implLoadAnimation(std::string name) {
   }
 
 Dx8::PatternList Resources::implLoadDxMusic(std::string_view name) {
+  if(isHeadless())
+    return Dx8::PatternList();
   auto u = Tempest::TextCodec::toUtf16(name);
   return dxMusic->load(u.c_str());
   }
 
 DmSegment* Resources::implLoadMusicSegment(char const* name) {
+  if(isHeadless())
+    return nullptr;
   DmSegment* sgt = nullptr;
   DmResult rv = DmLoader_getSegment(dmLoader, name, &sgt);
   if(rv != DmResult_SUCCESS) {
@@ -874,6 +895,8 @@ Tempest::Sound Resources::implLoadSoundBuffer(std::string_view name) {
   }
 
 GthFont &Resources::implLoadFont(std::string_view name, FontType type, const float scale) {
+  if(isHeadless())
+    throw std::logic_error("font access in headless simulation");
   std::lock_guard<std::recursive_mutex> g(inst->syncFont);
 
   auto key   = FontK(std::string(name), type, scale);
@@ -949,7 +972,7 @@ const Texture2d* Resources::loadTexture(std::string_view name, bool forceMips) {
   }
 
 const Texture2d* Resources::loadTexture(Tempest::Color color) {
-  if(color==Color())
+  if(isHeadless() || color==Color())
     return nullptr;
   std::lock_guard<std::recursive_mutex> g(inst->sync);
   auto& cache = inst->pixCache;
@@ -961,7 +984,7 @@ const Texture2d* Resources::loadTexture(Tempest::Color color) {
   Pixmap p2(1,1,TextureFormat::RGBA8);
   std::memcpy(p2.data(),iv,4);
 
-  auto t       = std::make_unique<Texture2d>(inst->dev.texture(p2));
+  auto t       = std::make_unique<Texture2d>(device().texture(p2));
   auto ret     = t.get();
   cache[color] = std::move(t);
   return ret;
@@ -1023,12 +1046,14 @@ std::vector<const Texture2d*> Resources::loadTextureAnim(std::string_view name) 
   }
 
 Texture2d Resources::loadTexturePm(const Pixmap &pm) {
+  if(isHeadless())
+    return Texture2d();
   if(pm.isEmpty()) {
     Pixmap p2(1,1,TextureFormat::R8);
     std::memset(p2.data(),0,1);
-    return inst->dev.texture(p2);
+    return device().texture(p2);
     }
-  return inst->dev.texture(pm);
+  return device().texture(pm);
   }
 
 Material Resources::loadMaterial(const zenkit::Material& src, bool enableAlphaTest) {
@@ -1310,5 +1335,5 @@ Tempest::VertexBuffer<Resources::Vertex> Resources::sphere(int passCount, float 
     v.pos[2] *= R;
     }
 
-  return dev.vbo(r);
+  return device().vbo(r);
   }

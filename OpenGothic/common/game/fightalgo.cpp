@@ -5,8 +5,10 @@
 #include "game/definitions/fightaidefinitions.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
+#include "world/world.h"
 #include "gothic.h"
 #include "serialize.h"
+#include "testbench.h"
 
 // According to Gothic1 scripts:
 // W  - Weapon Range (FIGHT_RANGE_FIST * 3)
@@ -106,6 +108,7 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
   using zenkit::FightAiMove;
 
   if(tr[0]==MV_NULL) {
+    const auto selected = queueId;
     switch(queueId) {
       case FightAiMove::TURN:
         tr[0] = MV_TURN;
@@ -198,6 +201,19 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
         }
       }
     queueId = FightAiMove::NOP;
+    if(TestBench::bodyTracing()) {
+      std::string moves = "[";
+      for(size_t i=0; i<MV_MAX; ++i) {
+        if(i!=0)
+          moves += ",";
+        moves += std::to_string(int(tr[i]));
+        }
+      moves += "]";
+      TestBench::bodyEvent(npc,&tg,"native_choice",npc.world().tickCount(),
+                          "\"choice_id\":" + std::to_string(++traceChoice) +
+                          ",\"fai_instruction\":" + std::to_string(int(selected)) +
+                          ",\"primitive\":" + std::to_string(int(tr[0])) + ",\"queue\":" + moves);
+      }
     }
   return tr[0];
   }

@@ -1,0 +1,1983 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "issues": [],
+  "gates": [
+    {
+      "id": "suite",
+      "status": "passed",
+      "detail": "Completed full server suite; smoke/partial cannot confirm stage 3"
+    },
+    {
+      "id": "headless",
+      "status": "passed",
+      "detail": "Explicit device/window/audio attestation"
+    },
+    {
+      "id": "runtime:performance-off-0",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "runtime:performance-on-0",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:performance-on-0",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:performance-on-0",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "lossless:performance-on-0",
+      "status": "passed",
+      "detail": "Normal polling has no silent or declared row/event loss"
+    },
+    {
+      "id": "actors:performance-on-0",
+      "status": "passed",
+      "detail": "Four distinct runtime actors"
+    },
+    {
+      "id": "timing:performance-on-0",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "runtime:performance-on-1",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:performance-on-1",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:performance-on-1",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "lossless:performance-on-1",
+      "status": "passed",
+      "detail": "Normal polling has no silent or declared row/event loss"
+    },
+    {
+      "id": "actors:performance-on-1",
+      "status": "passed",
+      "detail": "Four distinct runtime actors"
+    },
+    {
+      "id": "timing:performance-on-1",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "runtime:performance-off-1",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "runtime:performance-off-2",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "runtime:performance-on-2",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:performance-on-2",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:performance-on-2",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "lossless:performance-on-2",
+      "status": "passed",
+      "detail": "Normal polling has no silent or declared row/event loss"
+    },
+    {
+      "id": "actors:performance-on-2",
+      "status": "passed",
+      "detail": "Four distinct runtime actors"
+    },
+    {
+      "id": "timing:performance-on-2",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "runtime:bounded-queue",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:bounded-queue",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:bounded-queue",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "timing:bounded-queue",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "runtime:privacy-edges",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:privacy-edges",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:privacy-edges",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "lossless:privacy-edges",
+      "status": "passed",
+      "detail": "Normal polling has no silent or declared row/event loss"
+    },
+    {
+      "id": "privacy_oracle:privacy-edges",
+      "status": "passed",
+      "detail": "Visible/occluded/hidden movement/reappearance compared with separate native truth"
+    },
+    {
+      "id": "timing:privacy-edges",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "runtime:native-off",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "runtime:native-on",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:native-on",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:native-on",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "lossless:native-on",
+      "status": "passed",
+      "detail": "Normal polling has no silent or declared row/event loss"
+    },
+    {
+      "id": "timing:native-on",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "runtime:passive-realtime",
+      "status": "passed",
+      "detail": "Completed native simulation with actual /proc device checks"
+    },
+    {
+      "id": "bounded_state:passive-realtime",
+      "status": "passed",
+      "detail": "Actual native statistics: no invalid rows, bounded queue and runtime identity registry"
+    },
+    {
+      "id": "numeric:passive-realtime",
+      "status": "passed",
+      "detail": "Raw schema, identity, units/privacy, availability and bounded delivery"
+    },
+    {
+      "id": "lossless:passive-realtime",
+      "status": "passed",
+      "detail": "Normal polling has no silent or declared row/event loss"
+    },
+    {
+      "id": "native_activity:passive-realtime",
+      "status": "passed",
+      "detail": "Every actor has native choices, accepted attempts and hit attempts in each of ten 60 s buckets, plus actual HP loss"
+    },
+    {
+      "id": "actors:passive-realtime",
+      "status": "passed",
+      "detail": "Four distinct runtime actors"
+    },
+    {
+      "id": "timing:passive-realtime",
+      "status": "passed",
+      "detail": "Measured total observer simulation-thread work per step"
+    },
+    {
+      "id": "wall_clock:passive-realtime",
+      "status": "passed",
+      "detail": "Same-process steady_clock joins every periodic actor row to its actual emission step"
+    },
+    {
+      "id": "passive_10min",
+      "status": "passed",
+      "detail": "At least 600000 game ms in realtime with raw endpoint evidence"
+    },
+    {
+      "id": "realtime_cadence",
+      "status": "passed",
+      "detail": "Periodic interval p95 <= 100 game ms at configured 20 Hz"
+    },
+    {
+      "id": "realtime_wall_cadence",
+      "status": "passed",
+      "detail": "Actual emission periodic interval p95 <= 100 wall ms in realtime"
+    },
+    {
+      "id": "native_events",
+      "status": "passed",
+      "detail": "Actual source event IDs reach samples by the next simulation step"
+    },
+    {
+      "id": "privacy_coverage",
+      "status": "passed",
+      "detail": "Actual visible-to-hidden target with aged last-known position and no current privileged state"
+    },
+    {
+      "id": "bounded_queue",
+      "status": "passed",
+      "detail": "Withheld drain provokes real bounded overflow with exact drop/sequence accounting"
+    },
+    {
+      "id": "observer_cost",
+      "status": "passed",
+      "detail": "Total observer simulation-thread p95 <= 2000 wall us for four actors"
+    },
+    {
+      "id": "throughput",
+      "status": "passed",
+      "detail": "Same-scenario >=3 paired repeats: median processing throughput drop <= 5%"
+    },
+    {
+      "id": "native_parity",
+      "status": "passed",
+      "detail": "Ordered native choice/consume/animation/physics/hit/damage parity with watch disabled/enabled"
+    },
+    {
+      "id": "provenance",
+      "status": "passed",
+      "detail": "Source/build/config/save/assets hashes; no model and passive ownership"
+    }
+  ],
+  "budgets": {
+    "sample_period_game_ms": 50,
+    "normal_realtime_interval_p95_game_ms": 100,
+    "normal_realtime_interval_p95_wall_ms": 100,
+    "passive_duration_game_ms": 600000,
+    "observed_actor_count": 4,
+    "local_ray_count": 16,
+    "observer_cost_p95_wall_us": 2000,
+    "headless_throughput_drop_fraction": 0.05,
+    "paired_repeats_min": 3,
+    "event_delivery_max_sim_steps": 1
+  },
+  "runs": [
+    {
+      "name": "performance-off-0",
+      "role": "paired_off",
+      "pair_id": 0,
+      "mode": "lockstep",
+      "simulated_ms": 90633,
+      "sim_step": 2719,
+      "processing_wall_s": 38.40482994541526,
+      "scenario_sha256": "e71254d1aaf9b3216b808f5fe390708abc54c1a6acd9fd3efd99e7a78e106ee3",
+      "watch_enabled": false,
+      "observations_file": "performance-off-0/observation-batches.jsonl",
+      "timings_file": "performance-off-0/observer-timing.jsonl",
+      "events_file": "performance-off-0/events.jsonl",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 38436,
+        "simulated_ms": 90633,
+        "simulated_wall_ratio_after_reset": 2.3580237277552296,
+        "cold_reset_wall_ms": 1757,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 47,
+          "rss_kib_range": [
+            564880,
+            575688
+          ],
+          "rss_first_kib": 564880,
+          "rss_last_kib": 575688,
+          "rss_delta_kib": 10808,
+          "process_hwm_kib_range": [
+            566692,
+            575688
+          ],
+          "threads_range": [
+            1,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 38.434394313022494,
+          "cpu_user_delta_s": 73.78,
+          "cpu_system_delta_s": 3.02,
+          "cpu_total_delta_s": 76.8,
+          "mean_busy_cpu_cores": 1.998210232598314,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "performance-on-0",
+      "role": "paired_on",
+      "pair_id": 0,
+      "mode": "lockstep",
+      "simulated_ms": 90633,
+      "sim_step": 2719,
+      "processing_wall_s": 39.105099419131875,
+      "scenario_sha256": "e71254d1aaf9b3216b808f5fe390708abc54c1a6acd9fd3efd99e7a78e106ee3",
+      "watch_enabled": true,
+      "observations_file": "performance-on-0/observation-batches.jsonl",
+      "timings_file": "performance-on-0/observer-timing.jsonl",
+      "events_file": "performance-on-0/events.jsonl",
+      "observations_sha256": "719da5a089150f9af86e65db2dbcb54838c4d38cd7e1997527d379df94215644",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 47,
+        "samples": 7907,
+        "actor_instances": 4,
+        "actor_ids_by_generation": {
+          "4": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          4
+        ],
+        "periodic_samples": 7208,
+        "event_only_samples": 699,
+        "game_time_span_ms": 90034,
+        "periodic_interval_game_ms": {
+          "n": 7204,
+          "min": 34,
+          "median": 34.0,
+          "p95": 66,
+          "max": 66
+        },
+        "builder_cost_wall_us": {
+          "n": 7907,
+          "min": 21,
+          "median": 37,
+          "p95": 76,
+          "max": 174
+        },
+        "events": 796,
+        "event_delivery_sim_steps": {
+          "n": 796,
+          "min": 0,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 0,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "visible_target_samples": 7291,
+        "hidden_target_samples": 616,
+        "hidden_last_known_samples": 616,
+        "native_decision_eligible_true": 1633,
+        "native_decision_eligible_false": 6274,
+        "max_batch_rows": 185
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 4,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 4,
+        "control_generation": 0,
+        "sim_step": 2719,
+        "sample_period_ms": 50,
+        "watched_actors": 4,
+        "queue_capacity": 256,
+        "queue_size": 0,
+        "max_queue_size": 185,
+        "emitted": 7907,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "entity_registry_size": 4,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 2703,
+        "last_cost_us": 21,
+        "current_step_wall_us": 21,
+        "last_step_actor_count": 0,
+        "total_wall_us": 440034,
+        "max_step_wall_us": 533,
+        "drain_wall_us": 4306
+      },
+      "observer_cost_wall_us": {
+        "n": 2704,
+        "min": 3,
+        "median": 184.0,
+        "p95": 278,
+        "max": 63325
+      },
+      "packet_transport_wall_us": {
+        "n": 47,
+        "min": 18,
+        "median": 1992,
+        "p95": 2590,
+        "max": 63129
+      },
+      "timings_sha256": "cb38ebff068bc368b75d9d57942408dba9fbd9db23ece42ec0ae4532ba6d5156",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 39413,
+        "simulated_ms": 90633,
+        "simulated_wall_ratio_after_reset": 2.2995712074696164,
+        "cold_reset_wall_ms": 842,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 47,
+          "rss_kib_range": [
+            628968,
+            634100
+          ],
+          "rss_first_kib": 628968,
+          "rss_last_kib": 634100,
+          "rss_delta_kib": 5132,
+          "process_hwm_kib_range": [
+            724888,
+            724888
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 39.412083230912685,
+          "cpu_user_delta_s": 74.90999999999998,
+          "cpu_system_delta_s": 3.0400000000000005,
+          "cpu_total_delta_s": 77.94999999999999,
+          "mean_busy_cpu_cores": 1.9778198361983632,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "performance-on-1",
+      "role": "paired_on",
+      "pair_id": 1,
+      "mode": "lockstep",
+      "simulated_ms": 90633,
+      "sim_step": 2719,
+      "processing_wall_s": 38.73572801332921,
+      "scenario_sha256": "e71254d1aaf9b3216b808f5fe390708abc54c1a6acd9fd3efd99e7a78e106ee3",
+      "watch_enabled": true,
+      "observations_file": "performance-on-1/observation-batches.jsonl",
+      "timings_file": "performance-on-1/observer-timing.jsonl",
+      "events_file": "performance-on-1/events.jsonl",
+      "observations_sha256": "bc6f4942dda37cf3968a59bdc976c35c17d7a9c11eec9304f7de7a092ac5d0cf",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 47,
+        "samples": 7907,
+        "actor_instances": 4,
+        "actor_ids_by_generation": {
+          "7": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          7
+        ],
+        "periodic_samples": 7208,
+        "event_only_samples": 699,
+        "game_time_span_ms": 90034,
+        "periodic_interval_game_ms": {
+          "n": 7204,
+          "min": 34,
+          "median": 34.0,
+          "p95": 66,
+          "max": 66
+        },
+        "builder_cost_wall_us": {
+          "n": 7907,
+          "min": 21,
+          "median": 37,
+          "p95": 77,
+          "max": 235
+        },
+        "events": 796,
+        "event_delivery_sim_steps": {
+          "n": 796,
+          "min": 0,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 0,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "visible_target_samples": 7291,
+        "hidden_target_samples": 616,
+        "hidden_last_known_samples": 616,
+        "native_decision_eligible_true": 1633,
+        "native_decision_eligible_false": 6274,
+        "max_batch_rows": 185
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 7,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 7,
+        "control_generation": 0,
+        "sim_step": 2719,
+        "sample_period_ms": 50,
+        "watched_actors": 4,
+        "queue_capacity": 256,
+        "queue_size": 0,
+        "max_queue_size": 185,
+        "emitted": 7907,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "entity_registry_size": 4,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 2703,
+        "last_cost_us": 26,
+        "current_step_wall_us": 26,
+        "last_step_actor_count": 0,
+        "total_wall_us": 445144,
+        "max_step_wall_us": 493,
+        "drain_wall_us": 3941
+      },
+      "observer_cost_wall_us": {
+        "n": 2704,
+        "min": 3,
+        "median": 186.5,
+        "p95": 287,
+        "max": 3485
+      },
+      "packet_transport_wall_us": {
+        "n": 47,
+        "min": 21,
+        "median": 1985,
+        "p95": 2199,
+        "max": 3243
+      },
+      "timings_sha256": "b4a58a24db65bce699c189bd9efbb96e7afbb3cc3cc061516ab53b05f3c9a640",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 39057,
+        "simulated_ms": 90633,
+        "simulated_wall_ratio_after_reset": 2.320531530839542,
+        "cold_reset_wall_ms": 798,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 47,
+          "rss_kib_range": [
+            645288,
+            645296
+          ],
+          "rss_first_kib": 645288,
+          "rss_last_kib": 645296,
+          "rss_delta_kib": 8,
+          "process_hwm_kib_range": [
+            736736,
+            736736
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 39.05671177699696,
+          "cpu_user_delta_s": 74.32000000000002,
+          "cpu_system_delta_s": 2.9300000000000006,
+          "cpu_total_delta_s": 77.25000000000003,
+          "mean_busy_cpu_cores": 1.9778930812474995,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "performance-off-1",
+      "role": "paired_off",
+      "pair_id": 1,
+      "mode": "lockstep",
+      "simulated_ms": 90633,
+      "sim_step": 2719,
+      "processing_wall_s": 39.732295530848205,
+      "scenario_sha256": "e71254d1aaf9b3216b808f5fe390708abc54c1a6acd9fd3efd99e7a78e106ee3",
+      "watch_enabled": false,
+      "observations_file": "performance-off-1/observation-batches.jsonl",
+      "timings_file": "performance-off-1/observer-timing.jsonl",
+      "events_file": "performance-off-1/events.jsonl",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 39763,
+        "simulated_ms": 90633,
+        "simulated_wall_ratio_after_reset": 2.2793300304302995,
+        "cold_reset_wall_ms": 799,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 47,
+          "rss_kib_range": [
+            649044,
+            649096
+          ],
+          "rss_first_kib": 649044,
+          "rss_last_kib": 649096,
+          "rss_delta_kib": 52,
+          "process_hwm_kib_range": [
+            740528,
+            740528
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 39.76244535995647,
+          "cpu_user_delta_s": 76.52000000000001,
+          "cpu_system_delta_s": 2.9399999999999995,
+          "cpu_total_delta_s": 79.46000000000001,
+          "mean_busy_cpu_cores": 1.9983680400104797,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "performance-off-2",
+      "role": "paired_off",
+      "pair_id": 2,
+      "mode": "lockstep",
+      "simulated_ms": 90633,
+      "sim_step": 2719,
+      "processing_wall_s": 39.1743406271562,
+      "scenario_sha256": "e71254d1aaf9b3216b808f5fe390708abc54c1a6acd9fd3efd99e7a78e106ee3",
+      "watch_enabled": false,
+      "observations_file": "performance-off-2/observation-batches.jsonl",
+      "timings_file": "performance-off-2/observer-timing.jsonl",
+      "events_file": "performance-off-2/events.jsonl",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 39204,
+        "simulated_ms": 90633,
+        "simulated_wall_ratio_after_reset": 2.311830425466789,
+        "cold_reset_wall_ms": 795,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 47,
+          "rss_kib_range": [
+            649104,
+            649148
+          ],
+          "rss_first_kib": 649104,
+          "rss_last_kib": 649148,
+          "rss_delta_kib": 44,
+          "process_hwm_kib_range": [
+            751552,
+            751552
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 39.20345966902096,
+          "cpu_user_delta_s": 75.28999999999996,
+          "cpu_system_delta_s": 2.91,
+          "cpu_total_delta_s": 78.19999999999996,
+          "mean_busy_cpu_cores": 1.9947219112856647,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "performance-on-2",
+      "role": "paired_on",
+      "pair_id": 2,
+      "mode": "lockstep",
+      "simulated_ms": 90633,
+      "sim_step": 2719,
+      "processing_wall_s": 38.08451016037725,
+      "scenario_sha256": "e71254d1aaf9b3216b808f5fe390708abc54c1a6acd9fd3efd99e7a78e106ee3",
+      "watch_enabled": true,
+      "observations_file": "performance-on-2/observation-batches.jsonl",
+      "timings_file": "performance-on-2/observer-timing.jsonl",
+      "events_file": "performance-on-2/events.jsonl",
+      "observations_sha256": "c593f6d12469bbec400797d2d9f21da41cbde681031a164437ccdc5a779ae0c8",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 47,
+        "samples": 7907,
+        "actor_instances": 4,
+        "actor_ids_by_generation": {
+          "12": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          12
+        ],
+        "periodic_samples": 7208,
+        "event_only_samples": 699,
+        "game_time_span_ms": 90034,
+        "periodic_interval_game_ms": {
+          "n": 7204,
+          "min": 34,
+          "median": 34.0,
+          "p95": 66,
+          "max": 66
+        },
+        "builder_cost_wall_us": {
+          "n": 7907,
+          "min": 21,
+          "median": 37,
+          "p95": 75,
+          "max": 203
+        },
+        "events": 796,
+        "event_delivery_sim_steps": {
+          "n": 796,
+          "min": 0,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 0,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "visible_target_samples": 7291,
+        "hidden_target_samples": 616,
+        "hidden_last_known_samples": 616,
+        "native_decision_eligible_true": 1633,
+        "native_decision_eligible_false": 6274,
+        "max_batch_rows": 185
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 12,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 12,
+        "control_generation": 0,
+        "sim_step": 2719,
+        "sample_period_ms": 50,
+        "watched_actors": 4,
+        "queue_capacity": 256,
+        "queue_size": 0,
+        "max_queue_size": 185,
+        "emitted": 7907,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "entity_registry_size": 4,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 2703,
+        "last_cost_us": 60,
+        "current_step_wall_us": 60,
+        "last_step_actor_count": 0,
+        "total_wall_us": 438480,
+        "max_step_wall_us": 476,
+        "drain_wall_us": 3999
+      },
+      "observer_cost_wall_us": {
+        "n": 2704,
+        "min": 3,
+        "median": 184.0,
+        "p95": 284,
+        "max": 3206
+      },
+      "packet_transport_wall_us": {
+        "n": 47,
+        "min": 34,
+        "median": 1977,
+        "p95": 2536,
+        "max": 3019
+      },
+      "timings_sha256": "b63ff6c8ae76d9c141d4ebfef2ef7c4885c40bce28e5d32c9f4c35c65ef7114c",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 38353,
+        "simulated_ms": 90633,
+        "simulated_wall_ratio_after_reset": 2.3631267436706387,
+        "cold_reset_wall_ms": 799,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 47,
+          "rss_kib_range": [
+            649148,
+            649176
+          ],
+          "rss_first_kib": 649148,
+          "rss_last_kib": 649176,
+          "rss_delta_kib": 28,
+          "process_hwm_kib_range": [
+            751640,
+            751640
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 38.35271833196748,
+          "cpu_user_delta_s": 72.79999999999995,
+          "cpu_system_delta_s": 3.009999999999998,
+          "cpu_total_delta_s": 75.80999999999995,
+          "mean_busy_cpu_cores": 1.9766525893631728,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "bounded-queue",
+      "role": "bounded_queue",
+      "pair_id": null,
+      "mode": "lockstep",
+      "simulated_ms": 6633,
+      "sim_step": 199,
+      "processing_wall_s": 3.042557644075714,
+      "scenario_sha256": "9538f7d67e180d55e1748c6c97b01286a5cef94eb9f7dc5c3e5b95cfd90803a8",
+      "watch_enabled": true,
+      "observations_file": "bounded-queue/observation-batches.jsonl",
+      "timings_file": "bounded-queue/observer-timing.jsonl",
+      "events_file": "bounded-queue/events.jsonl",
+      "observations_sha256": "53725112188bb022edeac56613f36786300d76c26f3ce348b0a101cdcb6bcc21",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 2,
+        "samples": 32,
+        "actor_instances": 4,
+        "actor_ids_by_generation": {
+          "15": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          15
+        ],
+        "periodic_samples": 30,
+        "event_only_samples": 2,
+        "game_time_span_ms": 2767,
+        "periodic_interval_game_ms": {
+          "n": 26,
+          "min": 34,
+          "median": 34.0,
+          "p95": 2500,
+          "max": 2500
+        },
+        "builder_cost_wall_us": {
+          "n": 32,
+          "min": 25,
+          "median": 32.0,
+          "p95": 69,
+          "max": 69
+        },
+        "events": 6,
+        "event_delivery_sim_steps": {
+          "n": 6,
+          "min": 0,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 511,
+        "dropped_total": 511,
+        "event_dropped_total": 0,
+        "visible_target_samples": 28,
+        "hidden_target_samples": 4,
+        "hidden_last_known_samples": 4,
+        "native_decision_eligible_true": 4,
+        "native_decision_eligible_false": 28,
+        "max_batch_rows": 16
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 15,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 15,
+        "control_generation": 0,
+        "sim_step": 199,
+        "sample_period_ms": 50,
+        "watched_actors": 4,
+        "queue_capacity": 16,
+        "queue_size": 16,
+        "max_queue_size": 16,
+        "emitted": 543,
+        "dropped_total": 511,
+        "event_dropped_total": 0,
+        "entity_registry_size": 4,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 183,
+        "last_cost_us": 164,
+        "current_step_wall_us": 164,
+        "last_step_actor_count": 2,
+        "total_wall_us": 29572,
+        "max_step_wall_us": 400,
+        "drain_wall_us": 10
+      },
+      "observer_cost_wall_us": {
+        "n": 184,
+        "min": 3,
+        "median": 182.0,
+        "p95": 257,
+        "max": 410
+      },
+      "packet_transport_wall_us": {
+        "n": 2,
+        "min": 188,
+        "median": 193.5,
+        "p95": 199,
+        "max": 199
+      },
+      "timings_sha256": "acf2d0a2146ae11d085b25a84f9a6a538ef559a2f07c95d2eb0dc9bf877ea2bf",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 3048,
+        "simulated_ms": 6633,
+        "simulated_wall_ratio_after_reset": 2.1761811023622046,
+        "cold_reset_wall_ms": 798,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 5,
+          "rss_kib_range": [
+            649124,
+            649136
+          ],
+          "rss_first_kib": 649124,
+          "rss_last_kib": 649136,
+          "rss_delta_kib": 12,
+          "process_hwm_kib_range": [
+            751812,
+            751812
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 3.0469740870175883,
+          "cpu_user_delta_s": 5.8700000000000045,
+          "cpu_system_delta_s": 0.21000000000000085,
+          "cpu_total_delta_s": 6.080000000000005,
+          "mean_busy_cpu_cores": 1.9954222866237685,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "privacy-edges",
+      "role": "privacy_edges",
+      "pair_id": null,
+      "mode": "lockstep",
+      "simulated_ms": 4733,
+      "sim_step": 142,
+      "processing_wall_s": 2.2553222498390824,
+      "scenario_sha256": "f1650cdf86f9ab190901ee222c795fd759152faa52fb74fa3bcd6ff0d1820ace",
+      "watch_enabled": true,
+      "observations_file": "privacy-edges/observation-batches.jsonl",
+      "timings_file": "privacy-edges/observer-timing.jsonl",
+      "events_file": "privacy-edges/events.jsonl",
+      "observations_sha256": "ac8ac04279dca2fd9461be4cb0723aab054aa66ba6e765d74143042721608ce1",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 4,
+        "samples": 178,
+        "actor_instances": 2,
+        "actor_ids_by_generation": {
+          "18": [
+            1,
+            2
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          18
+        ],
+        "periodic_samples": 168,
+        "event_only_samples": 10,
+        "game_time_span_ms": 4134,
+        "periodic_interval_game_ms": {
+          "n": 166,
+          "min": 34,
+          "median": 34.0,
+          "p95": 66,
+          "max": 66
+        },
+        "builder_cost_wall_us": {
+          "n": 178,
+          "min": 27,
+          "median": 58.0,
+          "p95": 107,
+          "max": 157
+        },
+        "events": 8,
+        "event_delivery_sim_steps": {
+          "n": 8,
+          "min": 0,
+          "median": 0.0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 0,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "visible_target_samples": 114,
+        "hidden_target_samples": 64,
+        "hidden_last_known_samples": 64,
+        "native_decision_eligible_true": 2,
+        "native_decision_eligible_false": 176,
+        "max_batch_rows": 80
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 18,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 18,
+        "control_generation": 0,
+        "sim_step": 142,
+        "sample_period_ms": 50,
+        "watched_actors": 2,
+        "queue_capacity": 256,
+        "queue_size": 0,
+        "max_queue_size": 80,
+        "emitted": 178,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "entity_registry_size": 2,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 126,
+        "last_cost_us": 16,
+        "current_step_wall_us": 16,
+        "last_step_actor_count": 0,
+        "total_wall_us": 12767,
+        "max_step_wall_us": 327,
+        "drain_wall_us": 98
+      },
+      "privacy": {
+        "status": "complete",
+        "issues": [],
+        "cases": [
+          {
+            "case": "visible",
+            "sample_t_game_ms": 17327,
+            "current_valid": true,
+            "last_known_age_ms": 0
+          },
+          {
+            "case": "occluded",
+            "sample_t_game_ms": 18127,
+            "current_valid": false,
+            "last_known_age_ms": 66
+          },
+          {
+            "case": "hidden_move",
+            "sample_t_game_ms": 18927,
+            "current_valid": false,
+            "last_known_age_ms": 866
+          },
+          {
+            "case": "reappear",
+            "sample_t_game_ms": 19727,
+            "current_valid": true,
+            "last_known_age_ms": 0
+          }
+        ]
+      },
+      "observer_cost_wall_us": {
+        "n": 0,
+        "min": null,
+        "median": null,
+        "p95": null,
+        "max": null
+      },
+      "packet_transport_wall_us": {
+        "n": 4,
+        "min": 17,
+        "median": 563.0,
+        "p95": 862,
+        "max": 862
+      },
+      "timings_sha256": "9c920ed10923ee86774d7e6b3706765b221aa8e97ad5faa85aa203299362308d",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 2263,
+        "simulated_ms": 4733,
+        "simulated_wall_ratio_after_reset": 2.0914714980114892,
+        "cold_reset_wall_ms": 802,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 4,
+          "rss_kib_range": [
+            649264,
+            649264
+          ],
+          "rss_first_kib": 649264,
+          "rss_last_kib": 649264,
+          "rss_delta_kib": 0,
+          "process_hwm_kib_range": [
+            751812,
+            751812
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 2.262088445946574,
+          "cpu_user_delta_s": 4.399999999999977,
+          "cpu_system_delta_s": 0.15000000000000213,
+          "cpu_total_delta_s": 4.549999999999979,
+          "mean_busy_cpu_cores": 2.011415604970311,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "native-off",
+      "role": "native_off",
+      "pair_id": null,
+      "mode": "lockstep",
+      "simulated_ms": 53833,
+      "sim_step": 1615,
+      "processing_wall_s": 23.956936154165305,
+      "scenario_sha256": "fc2f32e60fde4d14dbc4755357309ea0fef1d8fc2e34db91229b3c8a0d14152c",
+      "watch_enabled": false,
+      "observations_file": "native-off/observation-batches.jsonl",
+      "timings_file": "native-off/observer-timing.jsonl",
+      "events_file": "native-off/events.jsonl",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 23975,
+        "simulated_ms": 53833,
+        "simulated_wall_ratio_after_reset": 2.2453806047966633,
+        "cold_reset_wall_ms": 790,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 28,
+          "rss_kib_range": [
+            649396,
+            649860
+          ],
+          "rss_first_kib": 649396,
+          "rss_last_kib": 649860,
+          "rss_delta_kib": 464,
+          "process_hwm_kib_range": [
+            754992,
+            754992
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            9
+          ],
+          "sample_span_wall_s": 23.974879218963906,
+          "cpu_user_delta_s": 46.24000000000001,
+          "cpu_system_delta_s": 1.629999999999999,
+          "cpu_total_delta_s": 47.870000000000005,
+          "mean_busy_cpu_cores": 1.996673249646041,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "native-on",
+      "role": "native_on",
+      "pair_id": null,
+      "mode": "lockstep",
+      "simulated_ms": 53833,
+      "sim_step": 1615,
+      "processing_wall_s": 23.44292019517161,
+      "scenario_sha256": "fc2f32e60fde4d14dbc4755357309ea0fef1d8fc2e34db91229b3c8a0d14152c",
+      "watch_enabled": true,
+      "observations_file": "native-on/observation-batches.jsonl",
+      "timings_file": "native-on/observer-timing.jsonl",
+      "events_file": "native-on/events.jsonl",
+      "observations_sha256": "7dd15b2e6c88749f32b20662622ffb01db4cee49c9b0ea13bed9c3f2b6b3a930",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 28,
+        "samples": 2325,
+        "actor_instances": 6,
+        "actor_ids_by_generation": {
+          "22": [
+            1,
+            2
+          ],
+          "23": [
+            1,
+            2
+          ],
+          "24": [
+            1,
+            2
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          22,
+          23,
+          24
+        ],
+        "periodic_samples": 2096,
+        "event_only_samples": 229,
+        "game_time_span_ms": 53267,
+        "periodic_interval_game_ms": {
+          "n": 2090,
+          "min": 34,
+          "median": 34.0,
+          "p95": 66,
+          "max": 66
+        },
+        "builder_cost_wall_us": {
+          "n": 2325,
+          "min": 20,
+          "median": 51,
+          "p95": 83,
+          "max": 182
+        },
+        "events": 265,
+        "event_delivery_sim_steps": {
+          "n": 265,
+          "min": 0,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 0,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "visible_target_samples": 2144,
+        "hidden_target_samples": 181,
+        "hidden_last_known_samples": 181,
+        "native_decision_eligible_true": 455,
+        "native_decision_eligible_false": 1870,
+        "max_batch_rows": 94
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 24,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 24,
+        "control_generation": 0,
+        "sim_step": 1615,
+        "sample_period_ms": 50,
+        "watched_actors": 2,
+        "queue_capacity": 256,
+        "queue_size": 0,
+        "max_queue_size": 92,
+        "emitted": 1033,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "entity_registry_size": 2,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 707,
+        "last_cost_us": 170,
+        "current_step_wall_us": 170,
+        "last_step_actor_count": 2,
+        "total_wall_us": 64456,
+        "max_step_wall_us": 302,
+        "drain_wall_us": 542
+      },
+      "observer_cost_wall_us": {
+        "n": 0,
+        "min": null,
+        "median": null,
+        "p95": null,
+        "max": null
+      },
+      "packet_transport_wall_us": {
+        "n": 28,
+        "min": 20,
+        "median": 980.0,
+        "p95": 1134,
+        "max": 1400
+      },
+      "timings_sha256": "a492c50771e797341b74e60a603c7dc75450e7b822bddf4d1d14cee92c54c9b1",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 23590,
+        "simulated_ms": 53833,
+        "simulated_wall_ratio_after_reset": 2.2820262823230184,
+        "cold_reset_wall_ms": 793,
+        "max_realtime_lag_ms": 0,
+        "resources": {
+          "samples": 28,
+          "rss_kib_range": [
+            649408,
+            649424
+          ],
+          "rss_first_kib": 649408,
+          "rss_last_kib": 649424,
+          "rss_delta_kib": 16,
+          "process_hwm_kib_range": [
+            755400,
+            755400
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            9
+          ],
+          "sample_span_wall_s": 23.58885460300371,
+          "cpu_user_delta_s": 45.17000000000007,
+          "cpu_system_delta_s": 1.7399999999999984,
+          "cpu_total_delta_s": 46.91000000000007,
+          "mean_busy_cpu_cores": 1.9886510298819993,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    },
+    {
+      "name": "passive-realtime",
+      "role": "passive_realtime",
+      "pair_id": null,
+      "mode": "realtime",
+      "simulated_ms": 600633,
+      "sim_step": 18019,
+      "processing_wall_s": null,
+      "scenario_sha256": "4219e1301612e8c290b995a1086d92aca8027a295c02b71355ef0c3f169c9187",
+      "watch_enabled": true,
+      "observations_file": "passive-realtime/observation-batches.jsonl",
+      "timings_file": "passive-realtime/observer-timing.jsonl",
+      "events_file": "passive-realtime/events.jsonl",
+      "observations_sha256": "a4ea9c72d5a3b99ed186929e9b4e3a99fe491ab7f6e5eb5d9984a3557635c226",
+      "stream": {
+        "status": "complete",
+        "issues": [],
+        "batches": 302,
+        "samples": 52812,
+        "actor_instances": 4,
+        "actor_ids_by_generation": {
+          "27": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "session_epochs": [
+          1791905681806544012
+        ],
+        "generations": [
+          27
+        ],
+        "periodic_samples": 48008,
+        "event_only_samples": 4804,
+        "game_time_span_ms": 600067,
+        "periodic_interval_game_ms": {
+          "n": 48004,
+          "min": 34,
+          "median": 34.0,
+          "p95": 66,
+          "max": 66
+        },
+        "builder_cost_wall_us": {
+          "n": 52812,
+          "min": 20,
+          "median": 37.0,
+          "p95": 77,
+          "max": 385
+        },
+        "events": 5577,
+        "event_delivery_sim_steps": {
+          "n": 5577,
+          "min": 0,
+          "median": 0,
+          "p95": 0,
+          "max": 0
+        },
+        "sequence_gaps": 0,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "visible_target_samples": 49221,
+        "hidden_target_samples": 3591,
+        "hidden_last_known_samples": 3591,
+        "native_decision_eligible_true": 11267,
+        "native_decision_eligible_false": 41545,
+        "max_batch_rows": 189
+      },
+      "observation_status": {
+        "enabled": true,
+        "generation": 27,
+        "session_epoch": 1791905681806544012,
+        "world_epoch": 27,
+        "control_generation": 0,
+        "sim_step": 18019,
+        "sample_period_ms": 50,
+        "watched_actors": 4,
+        "queue_capacity": 256,
+        "queue_size": 0,
+        "max_queue_size": 189,
+        "emitted": 52812,
+        "dropped_total": 0,
+        "event_dropped_total": 0,
+        "entity_registry_size": 4,
+        "entity_registry_capacity": 4096,
+        "invalid_numeric_rows": 0,
+        "missed_period_buckets": 0,
+        "sample_all_calls": 18003,
+        "last_cost_us": 81,
+        "current_step_wall_us": 81,
+        "last_step_actor_count": 1,
+        "total_wall_us": 3044724,
+        "max_step_wall_us": 552,
+        "drain_wall_us": 26702
+      },
+      "native_activity": {
+        "status": "complete",
+        "issues": [],
+        "duration_game_ms": 600000,
+        "bucket_game_ms": 60000,
+        "bucket_count": 10,
+        "trace_rows": 147303,
+        "source_sha256": "808f505a636b268e22eed86dcadac34372defa876a739d6b63c54e6634131d41",
+        "actors": [
+          {
+            "entity_id": 1,
+            "trace_actor_id": 3,
+            "buckets": [
+              {
+                "native_choice": 66,
+                "accepted_native_attempt": 106,
+                "hit_attempt": 15
+              },
+              {
+                "native_choice": 81,
+                "accepted_native_attempt": 108,
+                "hit_attempt": 17
+              },
+              {
+                "native_choice": 61,
+                "accepted_native_attempt": 112,
+                "hit_attempt": 18
+              },
+              {
+                "native_choice": 81,
+                "accepted_native_attempt": 125,
+                "hit_attempt": 27
+              },
+              {
+                "native_choice": 92,
+                "accepted_native_attempt": 132,
+                "hit_attempt": 21
+              },
+              {
+                "native_choice": 51,
+                "accepted_native_attempt": 122,
+                "hit_attempt": 7
+              },
+              {
+                "native_choice": 55,
+                "accepted_native_attempt": 121,
+                "hit_attempt": 9
+              },
+              {
+                "native_choice": 91,
+                "accepted_native_attempt": 128,
+                "hit_attempt": 28
+              },
+              {
+                "native_choice": 56,
+                "accepted_native_attempt": 120,
+                "hit_attempt": 10
+              },
+              {
+                "native_choice": 70,
+                "accepted_native_attempt": 126,
+                "hit_attempt": 22
+              }
+            ],
+            "actual_hp_loss": 7788
+          },
+          {
+            "entity_id": 2,
+            "trace_actor_id": 4,
+            "buckets": [
+              {
+                "native_choice": 93,
+                "accepted_native_attempt": 137,
+                "hit_attempt": 21
+              },
+              {
+                "native_choice": 87,
+                "accepted_native_attempt": 127,
+                "hit_attempt": 16
+              },
+              {
+                "native_choice": 86,
+                "accepted_native_attempt": 145,
+                "hit_attempt": 30
+              },
+              {
+                "native_choice": 71,
+                "accepted_native_attempt": 135,
+                "hit_attempt": 16
+              },
+              {
+                "native_choice": 75,
+                "accepted_native_attempt": 125,
+                "hit_attempt": 19
+              },
+              {
+                "native_choice": 105,
+                "accepted_native_attempt": 135,
+                "hit_attempt": 37
+              },
+              {
+                "native_choice": 105,
+                "accepted_native_attempt": 135,
+                "hit_attempt": 30
+              },
+              {
+                "native_choice": 73,
+                "accepted_native_attempt": 121,
+                "hit_attempt": 15
+              },
+              {
+                "native_choice": 101,
+                "accepted_native_attempt": 138,
+                "hit_attempt": 31
+              },
+              {
+                "native_choice": 76,
+                "accepted_native_attempt": 125,
+                "hit_attempt": 21
+              }
+            ],
+            "actual_hp_loss": 5446
+          },
+          {
+            "entity_id": 3,
+            "trace_actor_id": 5,
+            "buckets": [
+              {
+                "native_choice": 50,
+                "accepted_native_attempt": 134,
+                "hit_attempt": 5
+              },
+              {
+                "native_choice": 74,
+                "accepted_native_attempt": 123,
+                "hit_attempt": 19
+              },
+              {
+                "native_choice": 91,
+                "accepted_native_attempt": 134,
+                "hit_attempt": 29
+              },
+              {
+                "native_choice": 96,
+                "accepted_native_attempt": 131,
+                "hit_attempt": 29
+              },
+              {
+                "native_choice": 97,
+                "accepted_native_attempt": 124,
+                "hit_attempt": 28
+              },
+              {
+                "native_choice": 85,
+                "accepted_native_attempt": 132,
+                "hit_attempt": 36
+              },
+              {
+                "native_choice": 66,
+                "accepted_native_attempt": 108,
+                "hit_attempt": 17
+              },
+              {
+                "native_choice": 88,
+                "accepted_native_attempt": 120,
+                "hit_attempt": 19
+              },
+              {
+                "native_choice": 77,
+                "accepted_native_attempt": 113,
+                "hit_attempt": 23
+              },
+              {
+                "native_choice": 94,
+                "accepted_native_attempt": 131,
+                "hit_attempt": 37
+              }
+            ],
+            "actual_hp_loss": 5702
+          },
+          {
+            "entity_id": 4,
+            "trace_actor_id": 6,
+            "buckets": [
+              {
+                "native_choice": 135,
+                "accepted_native_attempt": 134,
+                "hit_attempt": 37
+              },
+              {
+                "native_choice": 95,
+                "accepted_native_attempt": 136,
+                "hit_attempt": 22
+              },
+              {
+                "native_choice": 69,
+                "accepted_native_attempt": 121,
+                "hit_attempt": 14
+              },
+              {
+                "native_choice": 66,
+                "accepted_native_attempt": 132,
+                "hit_attempt": 13
+              },
+              {
+                "native_choice": 64,
+                "accepted_native_attempt": 122,
+                "hit_attempt": 9
+              },
+              {
+                "native_choice": 68,
+                "accepted_native_attempt": 145,
+                "hit_attempt": 17
+              },
+              {
+                "native_choice": 88,
+                "accepted_native_attempt": 132,
+                "hit_attempt": 18
+              },
+              {
+                "native_choice": 65,
+                "accepted_native_attempt": 115,
+                "hit_attempt": 17
+              },
+              {
+                "native_choice": 80,
+                "accepted_native_attempt": 138,
+                "hit_attempt": 20
+              },
+              {
+                "native_choice": 53,
+                "accepted_native_attempt": 117,
+                "hit_attempt": 5
+              }
+            ],
+            "actual_hp_loss": 9362
+          }
+        ]
+      },
+      "observer_cost_wall_us": {
+        "n": 18004,
+        "min": 2,
+        "median": 196.0,
+        "p95": 271,
+        "max": 3321
+      },
+      "packet_transport_wall_us": {
+        "n": 302,
+        "min": 35,
+        "median": 2015.0,
+        "p95": 2328,
+        "max": 3075
+      },
+      "periodic_interval_wall_ms": {
+        "n": 48004,
+        "min": 8.037,
+        "median": 39.778,
+        "p95": 67.76,
+        "max": 91.302
+      },
+      "timings_sha256": "0f4999a66e21fdf3e6c972e7828a1a9e152f14d9b8c69459336c520ce3264925",
+      "runtime": {
+        "elapsed_wall_ms_after_reset": 600612,
+        "simulated_ms": 600633,
+        "simulated_wall_ratio_after_reset": 1.0000349643363768,
+        "cold_reset_wall_ms": 794,
+        "max_realtime_lag_ms": 41,
+        "resources": {
+          "samples": 302,
+          "rss_kib_range": [
+            649556,
+            649808
+          ],
+          "rss_first_kib": 649556,
+          "rss_last_kib": 649808,
+          "rss_delta_kib": 252,
+          "process_hwm_kib_range": [
+            755400,
+            755400
+          ],
+          "threads_range": [
+            17,
+            17
+          ],
+          "file_descriptors_range": [
+            7,
+            8
+          ],
+          "sample_span_wall_s": 600.5367304090178,
+          "cpu_user_delta_s": 555.0699999999999,
+          "cpu_system_delta_s": 9.099999999999998,
+          "cpu_total_delta_s": 564.17,
+          "mean_busy_cpu_cores": 0.9394429539984193,
+          "forbidden_device_descriptors": [],
+          "display_socket_descriptors": []
+        }
+      }
+    }
+  ],
+  "observer_cost_wall_us": {
+    "n": 26116,
+    "min": 2,
+    "median": 193.0,
+    "p95": 273,
+    "max": 63325
+  },
+  "throughput": {
+    "pairs": [
+      {
+        "pair_id": 0,
+        "off_substeps_per_s": 70.7983866577332,
+        "on_substeps_per_s": 69.53057377140307,
+        "drop_fraction": 0.017907369732296785
+      },
+      {
+        "pair_id": 1,
+        "off_substeps_per_s": 68.43299546810641,
+        "on_substeps_per_s": 70.19359489163016,
+        "drop_fraction": -0.025727347041885285
+      },
+      {
+        "pair_id": 2,
+        "off_substeps_per_s": 69.40767748660335,
+        "on_substeps_per_s": 71.39385510145857,
+        "drop_fraction": -0.028616108286271036
+      }
+    ],
+    "median_off_substeps_per_s": 69.40767748660335,
+    "median_on_substeps_per_s": 70.19359489163016,
+    "drop_fraction": -0.011323205637856049
+  },
+  "events": {
+    "delivered": 8244,
+    "max_delivery_sim_steps": 0
+  },
+  "native_parity": {
+    "status": "matched",
+    "profile": "full",
+    "comparison_kind": "headless_schedule_invariance",
+    "episodes": [
+      {
+        "seed": 17,
+        "status": "matched",
+        "checks": {
+          "global_event_order": 294,
+          "ordered_mechanics": 294,
+          "timing": 1253,
+          "guard_transitions": 110,
+          "trajectory_samples": 1216,
+          "actor_max_position_cm": 0.0,
+          "actor_max_yaw_deg": 0.0,
+          "actor_max_sample_offset_ms": 0,
+          "physics_steps": 848,
+          "target_max_position_cm": 0.0,
+          "target_max_yaw_deg": 0.0,
+          "target_max_sample_offset_ms": 0
+        },
+        "difference_count": 0,
+        "first_differences": [],
+        "evidence_gaps": [],
+        "unexercised_guards": [
+          "def_par_window"
+        ],
+        "reference_duration_ms": 14133,
+        "candidate_duration_ms": 14133
+      },
+      {
+        "seed": 29,
+        "status": "matched",
+        "checks": {
+          "global_event_order": 364,
+          "ordered_mechanics": 364,
+          "timing": 1434,
+          "guard_transitions": 133,
+          "trajectory_samples": 1354,
+          "actor_max_position_cm": 0.0,
+          "actor_max_yaw_deg": 0.0,
+          "actor_max_sample_offset_ms": 0,
+          "physics_steps": 936,
+          "target_max_position_cm": 0.0,
+          "target_max_yaw_deg": 0.0,
+          "target_max_sample_offset_ms": 0
+        },
+        "difference_count": 0,
+        "first_differences": [],
+        "evidence_gaps": [],
+        "unexercised_guards": [
+          "def_par_window"
+        ],
+        "reference_duration_ms": 15600,
+        "candidate_duration_ms": 15600
+      },
+      {
+        "seed": 43,
+        "status": "matched",
+        "checks": {
+          "global_event_order": 419,
+          "ordered_mechanics": 419,
+          "timing": 1960,
+          "guard_transitions": 126,
+          "trajectory_samples": 2008,
+          "actor_max_position_cm": 0.0,
+          "actor_max_yaw_deg": 0.0,
+          "actor_max_sample_offset_ms": 0,
+          "physics_steps": 1414,
+          "target_max_position_cm": 0.0,
+          "target_max_yaw_deg": 0.0,
+          "target_max_sample_offset_ms": 0
+        },
+        "difference_count": 0,
+        "first_differences": [],
+        "evidence_gaps": [],
+        "unexercised_guards": [
+          "def_par_window"
+        ],
+        "reference_duration_ms": 23567,
+        "candidate_duration_ms": 23567
+      }
+    ]
+  },
+  "provenance": {
+    "source_sha256": "9317071045396cd86d1920b4ac1a3f83ef62db7687bcfb0893f7c45a08cfbf59",
+    "binary_sha256": "f6e8a1e22125390f3064cf9121575aac0762a80ab2b5215506f63c5218a8ab44",
+    "engine_library_sha256": "4d23e507992073ae2f5999ea0b703c7b21124acbfbf491104e471f3cd86ade99",
+    "save_sha256": "c2852f4c009f23225e1c9c70f564ca36b4c12e8220736d1c72a1dbfce8d3372f",
+    "scenario_sha256": "4219e1301612e8c290b995a1086d92aca8027a295c02b71355ef0c3f169c9187",
+    "config_sha256": "2c22ee9de056314316a570b252d2767eae69d3fa4e3701b662972ce9c0984bed",
+    "settings_sha256": "c6e42f176f65e7e2302351a4e87ee478b0e846e453968604902922cf6f752867",
+    "host": "dev-ubuntu",
+    "sim_fps": 30,
+    "time_multiplier": 1,
+    "recorded_at_utc": "2026-10-13T15:34:39.358577+00:00",
+    "completed_at_utc": "2026-10-13T15:49:38.872025+00:00",
+    "remote_run_dir": "/home/kaifat/gothic-ai/body-headless/runs/stage3-v1"
+  },
+  "services_before": {
+    "gpu": "16249 MiB, 7875 MiB, 0 %",
+    "services": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=3570495488\nCPUUsageNSec=12222989135000",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=630559\nMemoryCurrent=4212785152\nCPUUsageNSec=3826458800000"
+    },
+    "service_latency_measurement": null
+  },
+  "services_after": {
+    "gpu": "16249 MiB, 7875 MiB, 0 %",
+    "services": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=3570495488\nCPUUsageNSec=12223991643000",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=630559\nMemoryCurrent=4212785152\nCPUUsageNSec=3827391758000"
+    },
+    "service_latency_measurement": null
+  },
+  "limits": [
+    "Observation subscription is passive and does not acquire body control.",
+    "Action masks and can_decide are availability only until the shared stage 4 resolver exists.",
+    "Frame quantization and sample scheduling use game time; wall measurements are local to one engine process.",
+    "Native event delivery is bounded in simulation steps and does not claim a network or model response latency.",
+    "Service state snapshots are not ASR/TTS latency measurements."
+  ]
+}
