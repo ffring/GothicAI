@@ -18,6 +18,7 @@ export const COLOR = {
   shade: 'rgba(0,0,0,0.62)',
   card: '#14110D',
   grid: 'rgba(255,255,255,0.14)',
+  faint: '#4d463b',
 };
 
 export const FONT = {
