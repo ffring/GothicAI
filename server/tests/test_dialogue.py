@@ -716,3 +716,41 @@ async def test_first_words_are_short_and_not_the_same_twice_in_a_row():
         await _until(lambda: fake.said.count("Слушаю.") == 4)
 
     assert [m["text"] for m, _ in fake.says if m.get("filler")] == ["Хм...", "Ишь ты!"]
+
+
+async def test_one_fighting_the_hero_may_call_it_off_and_keeps_to_it():
+    fake = FakeGame()
+    calm = {"goal": "none", "target": None, "attitude": "wary", "agenda": None}
+    llm = FakeBackend("Ладно, ладно. Живи пока.", delay=0, tool_calls=[ToolCall("set_intent", calm)])
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.fights_hero = lambda npc: True  # the scripts' attack on the hero
+        calmed: list[str] = []
+        dialogue.on_calm.append(calmed.append)
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.say_as_player(XARDAS, "Воу, воу, ты чего? Спокуха!")
+        await _until(
+            lambda: dialogue.conversations[XARDAS].history[-1].content == "[Ты прекратил драку с героем.]"
+        )
+
+    (effect,) = [m for m in fake.story if m["type"] == "story_effect"]
+    assert effect["npc"] == XARDAS and effect["effects"] == [{"do": "calm", "attitude": "ATT_NEUTRAL"}]
+    assert calmed == [XARDAS]
+    situation = next(m.content for m in llm.calls[0][1] if m.role == "developer")
+    assert "Ты дерёшься с героем. Прекратить драку" in situation
+
+
+async def test_words_with_a_hostile_heart_do_not_end_the_fight():
+    fake = FakeGame()
+    still = {"goal": "none", "target": None, "attitude": "hostile", "agenda": None}
+    llm = FakeBackend(
+        "Спокуха? Сейчас я тебе покажу спокуху!", delay=0, tool_calls=[ToolCall("set_intent", still)]
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.fights_hero = lambda npc: True
+        dialogue.open(XARDAS, "Бандит")
+        await dialogue.say_as_player(XARDAS, "Спокуха!")
+        await _until(lambda: dialogue.conversations[XARDAS].intent.attitude == "hostile")
+        await asyncio.sleep(0.1)
+    assert not [m for m in fake.story if m["type"] == "story_effect"]

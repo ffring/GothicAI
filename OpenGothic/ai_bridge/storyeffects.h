@@ -15,7 +15,7 @@ namespace zenkit {
 // What the director makes happen, through the scripts' own functions (docs/story-graph.md, stages 3–4):
 // in a dialog of its own, or as the consequence of a lie found out.
 struct StoryEffect final {
-  std::string kind;     // give, xp, set, journal, end, attack, refuse_talk, routine, create, teach
+  std::string kind;     // give, xp, set, journal, end, attack, refuse_talk, routine, create, teach, calm
   std::string item;     // give, create: item instance
   std::string teach;    // teach: attribute, fight, circle, rune, thief, alchemy, smith, trophy (v17)
   std::string arg;      // teach: the scripts' constant (ATR_STRENGTH, NPC_TALENT_1H, SPL_*, POTION_*...)
@@ -26,6 +26,7 @@ struct StoryEffect final {
   std::string text;     // journal: entry, game codepage
   std::string status;   // journal: LOG_RUNNING (default), LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE
   std::string reason;   // attack: AR_* constant (default AR_NONE: until the hero is down, not to death)
+  std::string attitude; // calm: ATT_* constant, how it treats the hero from now on (default ATT_NEUTRAL; v20)
   int32_t     count  = 1;  // give, create: count; xp: amount; set: value; refuse_talk: seconds;
                            // teach: points (attribute), percent (fight), circle (circle)
   bool        toHero = true;  // give: the npc gives to the hero, else the hero to the npc

@@ -49,7 +49,7 @@ def test_action_command_omits_empty_fields():
 
 
 def test_v15_npc_to_npc():
-    assert PROTOCOL_VERSION == 18
+    assert PROTOCOL_VERSION == 20
     say = SayCmd(
         npc="BAU_950_LOBART", line="AIB_1", text="Слыхала?", stream=True, rate=24000, to="BAU_951_HILDA"
     )

@@ -77,7 +77,7 @@ from .sightings import Sightings
 from .social import Rumors
 from .story import StoryPatches, freed
 from .storyguard import StoryGuard
-from .talk import TalkDesk
+from .talk import TalkDesk, fights
 from .trace import TraceWriter, find_turn, latest
 from .trust import Trust
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
@@ -547,6 +547,12 @@ async def serve(args: argparse.Namespace) -> int:
             return e.guild if e is not None else None
 
         state.dialogue.guild_of = guild_of
+        orders = state.talk.orders
+        # one in a fight near the hero that is not his companion fights him: talked to, it may call it off
+        state.dialogue.fights_hero = lambda npc: (
+            fights(talk_desk.people.get(npc.upper())) and not orders.companion(npc)
+        )
+        state.dialogue.on_calm.append(orders.truce)
         if asr is not None and source is not None:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
@@ -845,6 +851,12 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "calm":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.calm_scenario(link, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario calm: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m6":
                 dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
@@ -1463,6 +1475,7 @@ def main() -> None:
             "m5e",
             "orders",
             "companion",
+            "calm",
             "m6",
             "see",
             "seen",
