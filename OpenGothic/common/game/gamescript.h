@@ -100,6 +100,9 @@ class GameScript final {
     std::string_view currencyName() const { return goldTxt; }
     int              npcDamDiveTime();
     int32_t          criticalDamageMultiplyer() const;
+    // cm: G2's dice for arrows - the talent's chance at the first, none at the second (AI_Constants.d)
+    float            rangedChanceMinDist() const { return rangedChanceMin; }
+    float            rangedChanceMaxDist() const { return rangedChanceMax; }
     auto*            lockPickSymbol() const { return ItKE_lockpick; }
     uint32_t         lockPickId() const;
 
@@ -486,6 +489,8 @@ class GameScript final {
     std::string                                                 goldTxt;
     float                                                       viewTimePerChar = 0.5;
     int32_t                                                     damCriticalMultiplier = 2;
+    float                                                       rangedChanceMin = 1500;
+    float                                                       rangedChanceMax = 4500;
     mutable std::unordered_map<std::string,uint32_t>            msgTimings;
     size_t                                                      gilTblSize=0;
     size_t                                                      gilCount=0;
