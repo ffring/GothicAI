@@ -36,10 +36,11 @@ namespace TestBench {
   bool     withUi();
 
   // What the AI bridge does, for scenarios that talk (`ptt`, `waitreply`; shorts/): texts in UTF-8.
-  // An npc line starts (`ms`: its length as known now; `to`: the npc it is said to, empty for the hero), an
-  // npc voice has played out, the hero's phrase was recognized (`to`: whom the server says it was said to)
+  // An npc line starts (`ms`: its length as known now; `to`: the npc it is said to, empty for the hero;
+  // `filler`: a sound said at once while the model thinks, "Хм..."), an npc voice has played out, the hero's
+  // phrase was recognized (`to`: whom the server says it was said to)
   void     aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms,
-                  std::string_view to);
+                  std::string_view to, bool filler = false);
   void     aiVoiceEnd(std::string_view npc, uint64_t ms);
   void     aiHeard(std::string_view text, std::string_view to);
   // set by the bridge: an npc of the AI speaks now or has a line waiting for its turn

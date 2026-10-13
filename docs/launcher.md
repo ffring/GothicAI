@@ -85,7 +85,7 @@ Gothic AI.app (Tauri, launcher/app)
 | Раздел | Поля | Что получает процесс |
 |---|---|---|
 | Игра | папка игры, режим разработчика, масштаб чата | `-g`, `--game-dir`, `-devmode`, `GOTHIC_AI_CHAT_SCALE` |
-| Мозг NPC | бэкенд (`chatgpt`, `openai`, `local`), модель, адрес API, reasoning effort; ключ OpenAI | `--llm`, `--model`, `--base-url`, `--reasoning-effort`, `OPENAI_API_KEY` |
+| Мозг NPC | бэкенд (`chatgpt`, `openai`, `local`), модель, адрес API, reasoning effort; адрес быстрой модели (decider); ключ OpenAI | `--llm`, `--model`, `--base-url`, `--reasoning-effort`, `--decider-url`, `OPENAI_API_KEY` |
 | Голос игрока | вкл/выкл, провайдер и запасной, адрес Voxtral, микрофон | `--provider`, `--fallback`, `GOTHIC_VOXTRAL_URL`, `--mic-device`, `--no-voice` |
 | Озвучка NPC | вкл/выкл, провайдер и запасной, адрес VoxCPM2, громкость; ключ Inworld | `--provider`, `--fallback`, `GOTHIC_VOXCPM_URL`, `--loudness`, `INWORLD_API_KEY`, `--no-tts` |
 

@@ -3396,13 +3396,13 @@ std::function<bool()> TestBench::aiBusy;
 std::function<bool(std::string_view,std::string_view)> TestBench::aiReached;
 
 void TestBench::aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms,
-                       std::string_view to) {
+                       std::string_view to, bool filler) {
   if(scenarioPath==nullptr)
     return;
   bench.lastLineAt = std::max<uint64_t>(bench.time,1);
   bench.busyAt     = bench.time;
   event("npc_line","\"npc\":" + jsonStr(npc) + ",\"name\":" + jsonStr(name) + ",\"text\":" + jsonStr(text) +
-                   ",\"ms\":" + std::to_string(ms) + ",\"to\":" + jsonStr(to));
+                   ",\"ms\":" + std::to_string(ms) + ",\"to\":" + jsonStr(to) + (filler ? ",\"filler\":true" : ""));
   say("npc line " + std::string(npc) + (to.empty() ? "" : " -> " + std::string(to)) + ": " + std::string(text));
   }
 

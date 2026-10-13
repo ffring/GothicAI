@@ -62,6 +62,24 @@ def test_only_the_wait_for_the_first_answer_is_cut():
     assert build(two).cuts == [(pytest.approx(1.225), pytest.approx(1.775))]
 
 
+def test_after_a_sound_said_at_once_the_wait_for_the_answer_is_cut():
+    events = [
+        ev(0, "rec"),
+        ev(0, "hero", ms=1000, text="Орки напали на город!"),
+        ev(36, "npc_line", npc="A", name="A", text="Что?!", ms=600, filler=True),
+        ev(54, "npc_voice_end", npc="A", ms=600),
+        ev(204, "npc_line", npc="A", name="A", text="Значит, Беллиар торопится.", ms=2000),
+        ev(270, "rec_stop", frames=270),
+    ]
+    tl = build(events)
+    hero, sound, answer = tl.lines
+    assert (sound.filler, answer.filler) == (True, False)
+    # the sound 0.2 s after the phrase stays; the model's 5 s after it go down to a beat
+    assert tl.cuts == [(pytest.approx(2.025), pytest.approx(6.575))]
+    events[2] = ev(36, "npc_line", npc="A", name="A", text="Что?!", ms=600)  # not a filler: the scene
+    assert build(events).cuts == []
+
+
 def test_captions_run_until_the_next_one_or_off():
     tl = build(EVENTS)
     assert [(c.text, c.start, c.end) for c in tl.captions] == [("Ксардас", 0.0, 10.0)]

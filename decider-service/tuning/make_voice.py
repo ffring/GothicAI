@@ -1,20 +1,21 @@
-"""The hero's phrases (voice_phrases.yaml) -> training rows for the `voice` question: what sound an npc
-makes at once to what the hero just said (server/src/gothic_ai/brain/reflex.py, Reflexes.phrase).
+"""The hero's phrases (voice_phrases.yaml) -> training rows for the `voice` question: what sound an npc makes
+at once to what the hero just said (server/src/gothic_ai/brain/reflex.py, Reflexes.phrase).
 
 Every phrase is put in the hero's mouth to `--per-phrase` npcs drawn from the character cards
-(gamedata/characters.json), the state built by the server's own code the way the game builds it: the
-npc's card line, the time, the distance, a few of the lines it perceives (place, a stranger, others
-about) and its intent. Some phrases come as speech recognition may give them: lower case, no
-punctuation. The npcs of evals/talk-reactions (Xardas, Lobart, the gate guards) are left out, and so
-are its phrases (voice_phrases.yaml), so the eval stays fair. Every tenth phrase of a kind goes to
-validation, with all its npcs.
+(gamedata/characters.json), the state built by the server's own code the way the game builds it: the npc's
+card line, the time, the distance, a few of the lines it perceives (place, a stranger, others about) and
+its intent. Half of the phrases come as speech recognition writes them, without "ё" («Лестер мертв.»),
+some of them lower case without punctuation too. The npcs of evals/talk-reactions (Xardas, Lobart, the
+gate guards) are left out, and so are its phrases (voice_phrases.yaml), so the eval stays fair. Every
+tenth phrase of a kind goes to validation, with all its npcs.
 
     cd decider-service/tuning
     uv run --project ../../server python make_voice.py [--per-phrase 2] [--out voice]
 
-Writes data/<out>/gothic_train.jsonl and gothic_val.jsonl (finetune.py Examples, task gothic:voice),
-and for score_voice.py on the GPU host: eval_requests.jsonl (evals/talk-reactions, its states built as
-its run.py builds them) and questions.json (the voice and gesture questions, the voice thresholds).
+Writes data/<out>/gothic_train.jsonl and gothic_val.jsonl (finetune.py Examples, task gothic:voice), and
+for score_voice.py on the GPU host: eval_requests.jsonl (evals/talk-reactions, its states built as its
+run.py builds them, typed and as heard) and questions.json (the voice and gesture questions, the voice
+thresholds).
 """
 
 from __future__ import annotations
@@ -44,7 +45,8 @@ GOALS = [("keep_routine", 70), ("none", 12), ("follow_hero", 6), ("guard_hero", 
 ATTITUDES = [("neutral", 40), ("friendly", 25), ("wary", 18), ("hostile", 7), ("devoted", 10)]
 NO_INTENT = 0.15  # the first turn of a talk: the conversational model has not set one yet
 NO_CARD = 0.1  # an npc without a card: "You are Бромор, someone."
-SPOKEN = 0.12  # as speech recognition may give it
+SPOKEN = 0.12  # as speech recognition may give it: lower case, no punctuation, no "ё"
+HEARD = 0.45  # as speech recognition writes it: no "ё", else as said (it never writes "ё")
 DOING = ["talking", "eating", "asleep", "working"]
 
 
@@ -52,9 +54,14 @@ def weighted(rng: random.Random, pairs: list[tuple[str, int]]) -> str:
     return rng.choices([k for k, _ in pairs], [w for _, w in pairs])[0]
 
 
+def heard(text: str) -> str:
+    """As speech recognition writes it: no "ё"."""
+    return text.replace("ё", "е").replace("Ё", "Е")
+
+
 def spoken(text: str) -> str:
-    """Lower case, no punctuation but the dashes inside words."""
-    text = re.sub(r"[«»\"!?.,;:…—–]", " ", text.lower())
+    """Lower case, no punctuation but the dashes inside words, no "ё"."""
+    text = re.sub(r"[«»\"!?.,;:…—–]", " ", heard(text).lower())
     return " ".join(text.split())
 
 
@@ -102,9 +109,13 @@ def main() -> None:
             is_val = i % 10 == 0
             for card in rng.sample(cards, args.per_phrase):
                 words = text.replace("{name}", card.name)
-                if rng.random() < SPOKEN:
+                form = rng.random()
+                if form < SPOKEN:
                     words = spoken(words)
                     stats["spoken"] += 1
+                elif form < SPOKEN + HEARD and heard(words) != words:
+                    words = heard(words)
+                    stats["heard, no ё"] += 1
                 traits = None if rng.random() < NO_CARD else card.en
                 npc = NpcContext(
                     card.npc,
@@ -161,8 +172,18 @@ def main() -> None:
             traits = " ".join(n["traits"].split())
             ctx = NpcContext(n["id"], n["name"], -1, n["distance_cm"], True, traits=traits)
             intent = Intent(**n["intent"]) if n.get("intent") else None
-            state = reflexes._state(ctx, intent, n.get("clock"), [f'The hero says: "{p["say"]}"'])
-            row = {"i": i, "npc": p["npc"], "say": p["say"], "good": p["good"], "state": state}
+            state, as_heard = (
+                reflexes._state(ctx, intent, n.get("clock"), [f'The hero says: "{say}"'])
+                for say in (p["say"], heard(p["say"]))
+            )
+            row = {
+                "i": i,
+                "npc": p["npc"],
+                "say": p["say"],
+                "good": p["good"],
+                "state": state,
+                "heard": as_heard,
+            }
             out.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(f"eval {len(ev['phrases'])} requests")
 

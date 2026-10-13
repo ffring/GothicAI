@@ -62,8 +62,10 @@ def score_rows(rows: list[dict], gold: dict) -> dict:
 
 def main() -> None:
     gold = json.loads((HERE / "gold.json").read_text())
-    models = sorted(p.stem for p in (HERE / "preds").glob("*.jsonl"))
-    preds = {m: [json.loads(x) for x in (HERE / "preds" / f"{m}.jsonl").open()] for m in models}
+    preds = {p.stem: [json.loads(x) for x in p.open()] for p in sorted((HERE / "preds").glob("*.jsonl"))}
+    # a model's answers to requests.jsonl; other files there (the day's probe and labels) are not
+    preds = {m: rows for m, rows in preds.items() if rows and rows[0].get("id") in gold}
+    models = sorted(preds)
     metas = {}
     for m in models:
         mp = HERE / "preds" / f"{m}.meta.json"

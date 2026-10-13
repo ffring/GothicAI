@@ -5,9 +5,10 @@ host, in the decider service's venv:
 
     ~/gothic-ai/decider/.venv/bin/python score_voice.py --data data g7=ckpt/g7 g8=ckpt/g8
 
-Per checkpoint: right / by kind, answered over the thresholds and right among them, and a strong sound out
-of place (surprise, displeasure or doubt over its threshold where it does not fit). The eval's phrases
-may have several right kinds (`good`, the first is the best).
+The eval is asked twice: as typed and as speech recognition writes it (no "ё"). Per checkpoint: right / by
+kind, answered over the thresholds and right among them, and a strong sound out of place (surprise,
+displeasure or doubt over its threshold where it does not fit). The eval's phrases may have several right
+kinds (`good`, the first is the best).
 """
 
 from __future__ import annotations
@@ -80,10 +81,14 @@ def main() -> None:
         for r in val:
             probs = ask(engine, r["state"], {"voice": questions["voice"]})["voice"]
             val_rows.append(([r["options"][r["label"]][0]], probs))
-        eval_rows, gestures, picks = [], [], []
+        eval_rows, heard_rows, gestures, picks = [], [], [], []
         for r in evals:
             answers = ask(engine, r["state"], questions)
             eval_rows.append((r["good"], answers["voice"]))
+            if "heard" in r:  # as speech recognition writes it: no "ё"
+                heard_rows.append(
+                    (r["good"], ask(engine, r["heard"], {"voice": questions["voice"]})["voice"])
+                )
             gestures.append(max(answers["gesture"], key=answers["gesture"].get))
             v = answers["voice"]
             choice = max(v, key=v.get)
@@ -94,6 +99,8 @@ def main() -> None:
         del engine
         torch.cuda.empty_cache()
         out = {"val": report(val_rows, thresholds), "eval": report(eval_rows, thresholds)}
+        if heard_rows:
+            out["eval as heard"] = report(heard_rows, thresholds)
         if first_gestures is None:
             first_gestures = gestures
         else:

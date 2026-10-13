@@ -1,5 +1,6 @@
 """What the cut needs from a take, in seconds of the recording: who said what when, the pauses while the
-AI thinks (cut down to a beat), the captions. Pure: events in, timeline out."""
+AI thinks (cut down to a beat; after a sound said at once, "Хм...", too), the captions. Pure: events in,
+timeline out."""
 
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ class Line:
     start: float
     end: float
     wav: str | None = None  # the hero's recording
+    filler: bool = False  # a sound the npc makes at once while the model thinks ("Хм...")
 
     @property
     def hero(self) -> bool:
@@ -106,7 +108,10 @@ def build(events: list[dict], *, max_gap: float = MAX_GAP_S, keep_gap: float = K
                         end = min(end, at(later))
                         break
                 name = e.get("name", e["npc"])
-                tl.lines.append(Line(e["npc"], name, e.get("text", ""), start, min(end, duration)))
+                filler = bool(e.get("filler"))
+                tl.lines.append(
+                    Line(e["npc"], name, e.get("text", ""), start, min(end, duration), filler=filler)
+                )
             case "caption":
                 if tl.captions and tl.captions[-1].end >= duration:
                     last = tl.captions[-1]
@@ -119,16 +124,21 @@ def build(events: list[dict], *, max_gap: float = MAX_GAP_S, keep_gap: float = K
                 tl.timeouts += 1
     tl.lines.sort(key=lambda line: line.start)
 
-    # the AI thinking: from the end of the hero's phrase to the first npc line after it
-    for line in tl.lines:
-        if not line.hero:
-            continue
-        answer = next((n for n in tl.lines if not n.hero and n.start >= line.end), None)
+    def wait(after: Line) -> Line | None:
+        """Cut the wait from the end of `after` to the next npc line down to a beat, when it is long and
+        nothing else happens in it; that line."""
+        answer = next((n for n in tl.lines if not n.hero and n is not after and n.start >= after.end), None)
         if answer is None:
-            continue
-        others = [n for n in tl.lines if n is not line and line.end < n.start < answer.start]
-        gap = answer.start - line.end
-        if gap > max_gap and not others:
-            tl.cuts.append((line.end + keep_gap / 2, answer.start - keep_gap / 2))
+            return None
+        others = [n for n in tl.lines if n is not after and after.end < n.start < answer.start]
+        if answer.start - after.end > max_gap and not others:
+            tl.cuts.append((after.end + keep_gap / 2, answer.start - keep_gap / 2))
+        return answer
+
+    # the AI thinking: from the end of the hero's phrase to the first npc line after it; when that line is a
+    # sound said at once ("Хм..."), the sound stays where it was and the model's wait after it is cut
+    for line in tl.lines:
+        if line.hero and (first := wait(line)) is not None and first.filler:
+            wait(first)
     tl.cuts.sort()
     return tl
