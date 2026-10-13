@@ -44,6 +44,32 @@ def test_whom_the_hero_speaks_to():
     assert addressee("Эй!", LOBART, far, None).why == "focus"  # 12 m: still the one he looks at
 
 
+def test_a_name_as_speech_recognition_heard_it():
+    people = roster(
+        person(XARDAS, "Ксардас", 3, True),
+        person(LOBART, "Лобарт", 12),
+        person("PC_THIEF", "Диего", 6, True),
+        person("VLK_FESTER", "Фестер", 4),
+        person("VLK_LESTER", "Лестер", 9),
+        person("MIL_GARAD", "Гарад", 5),
+        person("KDF_BASTER", "Бастер", 5),
+    )
+    # called by a misheard name, even while he looks at someone else
+    assert addressee("Сардас, как победить драконов?", "PC_THIEF", people, None).id == XARDAS
+    assert addressee("Привет, Ксардоз.", "PC_THIEF", people, None).id == XARDAS
+    assert addressee("Лабарт, за меня!", None, people, XARDAS).id == LOBART
+    # the name heard right wins over a nearer one only like it
+    assert addressee("Лестер!", None, people, None).id == "VLK_LESTER"
+    # a misheard word inside the phrase is an ordinary one, and so is an address of its own
+    assert addressee("Что мне нужно знать об этом городе?", "PC_THIEF", people, None).why == "focus"
+    assert addressee("Да, мастер.", "PC_THIEF", people, None).why == "focus"
+    # a word that only begins like a name is not it ("ополчение" is not Ополос, "торт" not Торус)
+    guards = roster(person("MIL_OPOLOS", "Ополос", 3), person("VLK_TORUS", "Торус", 3))
+    assert addressee("Я хочу вступить в ополчение", None, guards, None) is None
+    assert addressee("Купи мне торт", None, guards, None) is None
+    assert addressee("Скажи Торусу, что я пришёл", None, guards, None).id == "VLK_TORUS"
+
+
 def test_the_codes_posture_when_the_behavioral_model_is_unsure():
     stand = RosterEntry(id="A", name="A", distance=300, state="ZS_STAND_ARMSCROSSED")
     assert default_posture(stand) == "listen"

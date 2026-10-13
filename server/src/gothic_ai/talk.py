@@ -88,15 +88,94 @@ def words(text: str) -> list[str]:
     return _WORD.findall(text.lower().replace("ё", "е"))
 
 
-def named(phrase: list[str], name: str) -> bool:
-    """`name` is called in the phrase, in any case form: "Лобарт, ...", "скажи Лобарту"."""
-    for part in words(name):
-        if len(part) < 3:
-            continue
-        stem = part[: max(3, len(part) - 2)] if len(part) > 4 else part
-        if any(w.startswith(stem) and len(w) <= len(part) + 3 for w in phrase):
-            return True
-    return False
+# case endings of a name ("скажи Лобарту", "с Ксардасом", "у Кассии"): cut before the letters are compared
+_ENDINGS = ("ами", "ом", "ой", "ою", "ем", "ей", "ам", "ах", "у", "а", "е", "ы", "и", "ю", "я")
+
+
+# letters speech recognition easily takes for each other: an unstressed vowel, a voiced consonant and its
+# voiceless pair ("Ксардоз" for "Ксардас"); such a change counts half
+_ALIKE = frozenset(
+    frozenset(p) for p in ("ао", "еи", "еэ", "иы", "уо", "ая", "ую", "бп", "вф", "гк", "дт", "жш", "зс")
+)
+
+
+def _change(x: str, y: str) -> float:
+    return 0.0 if x == y else 0.5 if frozenset((x, y)) in _ALIKE else 1.0
+
+
+def edits(a: str, b: str, limit: float) -> float:
+    """Letters to put in, take out, change or swap to make `a` of `b` (alike letters change for half);
+    anything over `limit` is `limit` + 1."""
+    if abs(len(a) - len(b)) > limit:
+        return limit + 1
+    prev2: list[float] = []
+    prev = [float(j) for j in range(len(b) + 1)]
+    for i in range(1, len(a) + 1):
+        row = [float(i)] + [0.0] * len(b)
+        for j in range(1, len(b) + 1):
+            row[j] = min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + _change(a[i - 1], b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                row[j] = min(row[j], prev2[j - 2] + 1)
+        if min(row) > limit:
+            return limit + 1
+        prev2, prev = prev, row
+    return min(prev[-1], limit + 1)
+
+
+def _forms(word: str) -> list[tuple[str, bool]]:
+    """The word, and the word without a case ending (True)."""
+    return [(word, False)] + [
+        (word[: -len(e)], True) for e in _ENDINGS if word.endswith(e) and len(word) - len(e) >= 3
+    ]
+
+
+def name_edits(word: str, part: str, misheard: bool = False) -> float | None:
+    """How far `word` is from the name `part`, if it may be it (None: it is not). In some case form
+    ("Лобарту"; a word without an ending is not a name that has one: "лук" is not "Лука", "Луке" is), a
+    name of five letters or more also with an alike letter ("Андрэ" for "Андре"). `misheard`: as speech
+    recognition may have heard it ("Сардас" for "Ксардас", "Ксардоз", "Лабарту"): one letter off in a name
+    of 5-7 letters, two in a longer one, only an alike one in a name of four ("Анар" for "Онар", but "она"
+    is not), none in a shorter one."""
+    n = len(part)
+    if misheard:
+        slack = 0.0 if n <= 3 else 0.5 if n == 4 else 1.0 if n <= 7 else 2.0
+    else:
+        slack = 0.5 if n >= 5 else 0.0
+    best = min(
+        (edits(w, p, slack) for w, w_cut in _forms(word) for p, p_cut in _forms(part) if w_cut or not p_cut),
+        default=slack + 1,
+    )
+    return best if best <= slack else None
+
+
+_STRETCH = re.compile(r"[^,.!?;:…—–]+")
+# what the hero calls someone by instead of a name: never a misheard name ("Да, мастер." is not "Бастер")
+_ADDRESS = frozenset(
+    "мастер господин госпожа брат сестра сэр лорд друг дружище приятель старик старина парень командир "
+    "капитан генерал отец сынок учитель хозяин торговец кузнец страж стражник маг".split()
+)
+
+
+def calls(text: str) -> list[str]:
+    """Words the hero may be calling someone by: a word alone between commas or at an end of the phrase
+    ("Сардас, как..." "..., Ксардас?"), not an address of its own ("мастер")."""
+    out: list[str] = []
+    for stretch in _STRETCH.findall(text):
+        w = words(stretch)
+        if len(w) == 1 and w[0] not in _ADDRESS:
+            out += w
+    return out
+
+
+def named(phrase: list[str], name: str, called: list[str] | None = None) -> float | None:
+    """How far from `name` the nearest word of the phrase is, if the name is there (None: it is not): in any
+    case form ("Лобарт, ...", "скажи Лобарту"), and among the words the hero calls someone by (`calls`)
+    also as speech recognition may have heard it ("Сардас, ..." for "Ксардас": elsewhere a misheard word
+    is more likely an ordinary one, "в городе" is not "Гарад")."""
+    parts = [p for p in words(name) if len(p) >= 3]
+    found = [name_edits(w, p) for p in parts for w in phrase]
+    found += [name_edits(w, p, misheard=True) for p in parts for w in called or ()]
+    return min((d for d in found if d is not None), default=None)
 
 
 @dataclass(frozen=True)
@@ -111,10 +190,15 @@ def addressee(
 ) -> Addressee | None:
     """Whom the hero speaks to: a name in the phrase, his focus, the current partner, the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
-    phrase = words(text)
-    called = [e for e in alive.values() if e.distance <= NAME_CM and named(phrase, e.name)]
-    if called:
-        e = min(called, key=lambda e: e.distance)
+    phrase, by = words(text), calls(text)
+    near = [
+        (d, e)
+        for e in alive.values()
+        if e.distance <= NAME_CM and (d := named(phrase, e.name, by)) is not None
+    ]
+    if near:
+        # the name heard best ("Лестер!" with Фестер near too), then the nearer one
+        _, e = min(near, key=lambda de: (de[0], de[1].distance))
         return Addressee(e.id.upper(), e.name, "name")
     if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
         return Addressee(e.id.upper(), e.name, "focus")
