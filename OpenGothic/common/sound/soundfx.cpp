@@ -46,13 +46,20 @@ SoundFx::SoundFx(Tempest::Sound &&snd) {
     inst.emplace_back(127.f,std::move(snd));
   }
 
-Tempest::SoundEffect SoundFx::load(Tempest::SoundDevice &dev, bool& loop) const {
+SoundFx::Sample SoundFx::selectSample() const {
   if(inst.size()==0)
+    return {};
+  const auto& var = inst[size_t(std::rand())%inst.size()];
+  return {&var.snd,var.vol,var.loop};
+  }
+
+Tempest::SoundEffect SoundFx::load(Tempest::SoundDevice &dev, bool& loop) const {
+  const auto sample = selectSample();
+  if(sample.sound==nullptr)
     return Tempest::SoundEffect();
-  auto&                var    = inst[size_t(std::rand())%inst.size()];
-  Tempest::SoundEffect effect = dev.load(var.snd);
-  effect.setVolume(var.vol);
-  loop = var.loop;
+  Tempest::SoundEffect effect = dev.load(*sample.sound);
+  effect.setVolume(sample.volume);
+  loop = sample.loop;
   return effect;
   }
 

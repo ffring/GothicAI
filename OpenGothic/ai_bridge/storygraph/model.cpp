@@ -1,5 +1,7 @@
 #include "model.h"
 
+#include <algorithm>
+
 #include "bytecode.h"
 #include "lifter.h"
 #include "predicates.h"

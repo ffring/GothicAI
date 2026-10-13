@@ -33,6 +33,9 @@ class PatternList;
 
 class Resources final {
   public:
+    // Simulation resources: archives, geometry, skeletons and animation data,
+    // without constructing a graphics or audio device.
+    Resources();
     explicit Resources(Tempest::Device& device);
     ~Resources();
 
@@ -80,7 +83,9 @@ class Resources final {
 
     using VobTree = std::vector<std::shared_ptr<zenkit::VirtualObject>>;
 
-    static Tempest::Device&          device() { return inst->dev; }
+    static Tempest::Device&          device();
+    static bool                      hasGraphicsDevice() { return inst!=nullptr && inst->dev!=nullptr; }
+    static bool                      isHeadless() { return inst!=nullptr && inst->dev==nullptr; }
     static const char*               renderer();
     static void                      mountWork(const std::filesystem::path& path);
     static void                      loadVdfs(const std::vector<std::u16string> &modvdfs, bool modFilter);
@@ -117,22 +122,22 @@ class Resources final {
     static const VobTree*            loadVobBundle(std::string_view name);
 
     template<class V>
-    static Tempest::VertexBuffer<V>  vbo(const V* data,size_t sz){ return inst->dev.vbo(data,sz); }
+    static Tempest::VertexBuffer<V>  vbo(const V* data,size_t sz){ return device().vbo(data,sz); }
 
     template<class I>
-    static Tempest::IndexBuffer<I>   ibo(const I* data,size_t sz){ return inst->dev.ibo(data,sz); }
+    static Tempest::IndexBuffer<I>   ibo(const I* data,size_t sz){ return device().ibo(data,sz); }
 
-    static Tempest::StorageBuffer    ssbo(const void* data, size_t size)         { return inst->dev.ssbo(data,size); }
-    static Tempest::StorageBuffer    ssbo(Tempest::Uninitialized_t, size_t size) { return inst->dev.ssbo(Tempest::Uninitialized,size); }
+    static Tempest::StorageBuffer    ssbo(const void* data, size_t size)         { return device().ssbo(data,size); }
+    static Tempest::StorageBuffer    ssbo(Tempest::Uninitialized_t, size_t size) { return device().ssbo(Tempest::Uninitialized,size); }
 
     template<class V, class I>
     static Tempest::AccelerationStructure
                                      blas(const Tempest::VertexBuffer<V>& b,
                                           const Tempest::IndexBuffer<I>&  i,
                                           size_t offset, size_t size){
-      if(!inst->dev.properties().raytracing.rayQuery)
+      if(!device().properties().raytracing.rayQuery)
         return Tempest::AccelerationStructure();
-      return inst->dev.blas(b,i,offset,size);
+      return device().blas(b,i,offset,size);
       }
 
     static void resetRecycled(uint8_t fId);
@@ -225,8 +230,8 @@ class Resources final {
         }
       };
 
-    Tempest::Device&                  dev;
-    Tempest::SoundDevice              sound;
+    Tempest::Device*                  dev = nullptr;
+    std::unique_ptr<Tempest::SoundDevice> sound;
 
     std::recursive_mutex              sync;
     std::unique_ptr<Dx8::DirectMusic> dxMusic;

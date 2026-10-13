@@ -18,6 +18,7 @@ class Gothic;
 
 class PlayerControl final {
   public:
+    PlayerControl(); // CPU simulation observer; inventory and dialog UI are optional.
     PlayerControl(DialogMenu& dlg, InventoryMenu& inv);
     ~PlayerControl();
 
@@ -91,10 +92,10 @@ class PlayerControl final {
 
     struct AxisStatus { 
         /// Main direction (e.g. W or Up arrow)
-        std::array<bool, KeyCodec::NumMappings> main;
+        std::array<bool, KeyCodec::NumMappings> main = {};
         
         /// Reverse direction (e.g. S or Down arrow)
-        std::array<bool, KeyCodec::NumMappings> reverse;
+        std::array<bool, KeyCodec::NumMappings> reverse = {};
 
         /// Current axis value (scale from -1 to 1)
         auto value() const -> float {
@@ -181,8 +182,8 @@ class PlayerControl final {
     float          cantK          = 0;       //!< canted 0..1, smoothed
     float          walkK          = 0;       //!< stepping with the bow drawn 0..1, smoothed
 
-    DialogMenu&    dlg;
-    InventoryMenu& inv;
+    DialogMenu*    dlg = nullptr;
+    InventoryMenu* inv = nullptr;
 
     void           setupSettings();
     void           assessThreat(Npc& pl, Npc& other);

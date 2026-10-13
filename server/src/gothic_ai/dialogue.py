@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from . import executor, npc_tools
 from .budget import Budget
 from .executor import Intent
-from .fillers import Fillers, strip_said
+from .fillers import Fillers, Sound, strip_said
 from .game import GameError, GameLink
 from .journal import Journal
 from .llm import (
@@ -691,10 +691,13 @@ class DialogueManager:
         """A remark in the memory of any npc, also one nobody talks to (a rumor, something it saw)."""
         self._note(self.open(npc, name, warm=False), text)
 
-    def change_intent(self, npc: str, name: str, **fields: Any) -> None:
-        """Change what the npc wants or how it sees the hero, from outside a turn (a lie found out)."""
+    def change_intent(self, npc: str, name: str, *, body: bool = True, **fields: Any) -> None:
+        """Change what the npc wants or how it sees the hero, from outside a turn (a lie found out).
+        `body` False: the body has done its part already (an order, orders.py)."""
         conv = self.open(npc, name)
-        self._change_intent(conv, replace(conv.intent, **fields), self.link.snapshots.get(conv.npc))
+        self._change_intent(
+            conv, replace(conv.intent, **fields), self.link.snapshots.get(conv.npc), body=body
+        )
 
     def after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
         """For extensions: a body job once the npc has said its lines; its note goes into the history."""
@@ -799,6 +802,20 @@ class DialogueManager:
         if sound is None:
             log.debug("%s: no sound for %r (%s)", conv.npc, phrase, kind or "no choice")
             return ""
+        return await self._say_sound(conv, sound)
+
+    async def acknowledge(self, npc: str, name: str) -> None:
+        """The npc's short "Понял!" to the hero's order (orders.py), at once, now and then."""
+        if self.fillers is None:
+            return
+        conv = self.open(npc, name)
+        if (sound := self.fillers.obey(conv.npc)) is not None:
+            # on the move: queued, it would wait while the npc walks and hold up the order's actions
+            await self._say_sound(conv, sound, overlay=True)
+
+    async def _say_sound(self, conv: Conversation, sound: Sound, *, overlay: bool = False) -> str:
+        """Say a sound picked by fillers.py; what was said, "" if it is not voiced yet."""
+        assert self.fillers is not None
         wav = None
         if self.tts is not None:
             wav = self.fillers.audio(conv.npc, conv.persona.voice, sound)
@@ -819,6 +836,7 @@ class DialogueManager:
                     audio=base64.b64encode(wav).decode() if wav is not None else None,
                     mood=sound.mood,
                     filler=True,
+                    overlay=overlay or None,
                 )
             )
         except GameError:
@@ -1497,7 +1515,9 @@ class DialogueManager:
         self._change_intent(conv, intent, snap)
         return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
 
-    def _change_intent(self, conv: Conversation, intent: Intent, snap: Snapshot | None) -> None:
+    def _change_intent(
+        self, conv: Conversation, intent: Intent, snap: Snapshot | None, *, body: bool = True
+    ) -> None:
         old = conv.intent
         if intent.goal in executor.INCIDENT_GOALS and old.goal not in executor.INCIDENT_GOALS:
             conv.calm = old  # what to go back to when the incident is over
@@ -1512,6 +1532,8 @@ class DialogueManager:
         acts = executor.intent_actions(old, intent, following)
         if old.goal == "follow_hero" and intent.goal != "follow_hero":
             self._free(conv, "follow")  # after `stop`, if it is still following (below)
+        if not body:
+            return
         if intent.goal in executor.INCIDENT_GOALS and not self._controlled(conv.npc):
             # a free npc's goal of the moment (flee, fight, seek help) is carried out by whoever runs its body
             # (the planner): held for it, the npc would be out of the scripts in the middle of the danger

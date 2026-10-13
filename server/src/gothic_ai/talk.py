@@ -18,7 +18,9 @@ event of the world:
   to two npc's talking near him (`on_hero_voice`);
 - **witnesses** within `OVERHEAR_CM` remember what they heard, without a model call;
 - what the hero **does** meanwhile (draws a weapon, strikes, walks off mid-reply) goes into the partner's
-  memory, and so into its next turn.
+  memory, and so into its next turn;
+- an **order** to his companions ("Стой!", "За мной!") is no conversation: they obey at once, without
+  the conversational model (orders.py).
 """
 
 from __future__ import annotations
@@ -27,10 +29,11 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Collection, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from . import commands
 from .brain.day import describe
 from .brain.planner import NpcPlanner
 from .brain.reflex import POSTURE_OPTIONS, Reflexes
@@ -54,6 +57,9 @@ from .protocol import (
     TranscriptCmd,
 )
 from .trace import TraceWriter
+
+if TYPE_CHECKING:
+    from .orders import Orders
 
 log = logging.getLogger(__name__)
 
@@ -187,7 +193,7 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    why: str  # name | focus | partner | scene | front
+    why: str  # name | focus | partner | scene | front | order (companions who obey it)
 
 
 def addressee(
@@ -274,6 +280,8 @@ class TalkDesk:
         self.on_hero_voice: list[Callable[[], bool]] = []
         # npc's of a scene near the hero his next words may go to, the one who spoke last first (gossip.py)
         self.scene_hint: Callable[[], list[str]] = lambda: []
+        # orders to the hero's companions ("Стой!"), carried out at once, without an answer (orders.py)
+        self.orders: Orders | None = None
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -324,6 +332,9 @@ class TalkDesk:
         to = addressee(
             text, focus, self.people, self.partner.npc if self.partner else None, self.scene_hint()
         )
+        squad = self._order(text, focus, to)
+        if squad:  # said to the companions who obey it
+            to = Addressee(squad[0][0], squad[0][1], "order")
         self.last = (to, text)
         echo = TranscriptCmd(text=text, to=to.id if to else None, to_name=to.name if to else None)
         self._spawn(self.link.send(echo))
@@ -336,9 +347,11 @@ class TalkDesk:
             **(details or {}),
         )
         log.info("hero -> %s (%s): %s", to.id if to else "nobody", to.why if to else "-", text)
-        self._witnesses(text, to)
+        self._witnesses(text, to, {npc for npc, _ in squad})
         if self.planner is not None:
             self.planner.on_player_text(to.id if to else "", text, now)
+        if squad:
+            return  # carried out already; the order is in their memories, no answer is asked
         if to is None:
             self._spawn(self.link.send(ChatStatusCmd(status="notice", detail="Рядом некому ответить")))
             return
@@ -349,6 +362,21 @@ class TalkDesk:
             talk = self._open(to.id, to.name, now)
         talk.last_at = now
         self._spawn(self._answer(talk, text))
+
+    def _order(self, text: str, focus: str | None, to: Addressee | None) -> list[tuple[str, str]]:
+        """If the phrase is an order and companions obey it, carry it out now; who obeys."""
+        if self.orders is None:
+            return []
+        order = commands.parse(text, self._is_name)
+        return self.orders.take(order, focus, to) if order is not None else []
+
+    def _is_name(self, word: str) -> bool:
+        """The word is the name of someone around ("Горн, стой!")."""
+        for e in self.people.values():
+            for part in words(e.name):
+                if part == word or (len(part) >= 3 and name_edits(word, part) is not None):
+                    return True
+        return False
 
     def begin(self, npc: str, name: str, posture: str | None = None) -> bool:
         """The npc opens the conversation itself (it came up to the hero): it is his partner now, and his next
@@ -559,9 +587,11 @@ class TalkDesk:
         for listener in self.on_talk_end:
             listener(talk.npc, why)
 
-    def _witnesses(self, text: str, to: Addressee | None) -> None:
+    def _witnesses(self, text: str, to: Addressee | None, obeying: Collection[str] = ()) -> None:
         for e in self.people.values():
             npc = e.id.upper()
+            if npc in obeying:
+                continue  # an order: it remembers that it was given one (orders.py)
             if (to is None or npc != to.id) and e.distance <= OVERHEAR_CM and e.activity != "down":
                 self.dialogue.overheard(npc, e.name, text, to.name if to else None)
 

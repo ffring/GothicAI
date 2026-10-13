@@ -1,0 +1,65 @@
+{
+  "host": "dev-ubuntu",
+  "completed_at": "2026-10-13T19:03:43+03:00",
+  "result": "success",
+  "hypervisor": {
+    "type": "Proxmox VE",
+    "vm_id": 100,
+    "disk": "scsi0",
+    "volume": "local-lvm:vm-100-disk-1",
+    "before_gib": 1100,
+    "after_gib": 1300,
+    "added_gib": 200,
+    "command": "qm disk resize 100 scsi0 1300G --digest <current-config-sha1>",
+    "config_backup": "/root/ops/2026-10-13-160124Z-dev-ubuntu-disk-expand/100-before.conf",
+    "config_changed_fields": ["scsi0.size"]
+  },
+  "guest": {
+    "disk": "/dev/sda",
+    "partition": "/dev/sda1",
+    "mount": "/",
+    "filesystem": "ext4",
+    "disk_before_bytes": 1181116006400,
+    "disk_after_bytes": 1395864371200,
+    "partition_before_bytes": 1179925855744,
+    "partition_after_bytes": 1394674220544,
+    "filesystem_blocks_after": 340496635,
+    "filesystem_block_size_bytes": 4096,
+    "df_before": {
+      "size_bytes": 1144474927104,
+      "used_bytes": 1121348464640,
+      "available_bytes": 23109685248,
+      "used_percent": 98
+    },
+    "df_after": {
+      "size_bytes": 1352787656704,
+      "used_bytes": 1121348554752,
+      "available_bytes": 231422324736,
+      "used_percent": 83
+    },
+    "operations": ["sda device rescan", "growpart dry run", "growpart /dev/sda 1", "resize2fs /dev/sda1"],
+    "evidence_directory": "/home/kaifat/gothic-ai/ops/2026-10-13-160124Z-disk-expand"
+  },
+  "verification": {
+    "independent_read_only_check": "passed",
+    "gpt_changes": ["last-lba", "sda1 size"],
+    "partition_starts_types_and_uuids_unchanged": true,
+    "sdb_bytes_unchanged": 107374182400,
+    "srv_assistant_mount_unchanged": true,
+    "boot_id_unchanged": true,
+    "docker_pid_and_start_time_unchanged": true,
+    "gothic_voxtral_voxcpm_decider_pids_and_start_times_unchanged": true,
+    "unchanged_container_pids_and_start_times": 8,
+    "containers_running_after": 9
+  },
+  "separate_observation": {
+    "container": "device-assistant-production-trading-1",
+    "event": "restart after memory cgroup OOM",
+    "oom_at": "2026-10-13T16:02:02Z",
+    "container_started_at": "2026-10-13T16:02:03.048181509Z",
+    "hypervisor_config_backed_up_before_resize_at": "2026-10-13T16:02:04.314298644Z",
+    "previous_oom_times_utc": ["15:14:26", "15:30:38", "15:46:48"],
+    "status_after": "running, healthy",
+    "action_taken": "read-only verification; no container or Docker configuration changes"
+  }
+}

@@ -20,8 +20,13 @@ PfxEmitter::PfxEmitter(World& world, std::string_view name)
   :PfxEmitter(world,Gothic::inst().loadParticleFx(name)) {
   }
 
-PfxEmitter::PfxEmitter(World& world, const ParticleFx* decl)
-  :PfxEmitter(world.view()->pfxGroup,decl) {
+PfxEmitter::PfxEmitter(World& world, const ParticleFx* decl) {
+  if(Resources::isHeadless()) {
+    cpuDecl = decl;
+    cpuWorld = &world;
+    return;
+    }
+  *this = PfxEmitter(world.view()->pfxGroup,decl);
   }
 
 PfxEmitter::PfxEmitter(PfxObjects& owner, const ParticleFx* decl) {
@@ -35,6 +40,13 @@ PfxEmitter::PfxEmitter(PfxObjects& owner, const ParticleFx* decl) {
   }
 
 PfxEmitter::PfxEmitter(World& world, const zenkit::VirtualObject& vob) {
+  if(Resources::isHeadless()) {
+    if(FileExt::hasExt(vob.visual->name,"PFX")) {
+      cpuDecl = Gothic::inst().loadParticleFx(vob.visual->name);
+      cpuWorld = &world;
+      }
+    return;
+    }
   auto& owner = world.view()->pfxGroup;
   if(FileExt::hasExt(vob.visual->name,"PFX")) {
     auto decl = Gothic::inst().loadParticleFx(vob.visual->name);
@@ -60,14 +72,21 @@ PfxEmitter::~PfxEmitter() {
   }
 
 PfxEmitter::PfxEmitter(PfxEmitter && b)
-  :bucket(b.bucket), id(b.id), zone(std::move(b.zone)) {
-  b.bucket = nullptr;
+  :PfxEmitter() {
+  *this = std::move(b);
   }
 
 PfxEmitter& PfxEmitter::operator=(PfxEmitter &&b) {
   std::swap(bucket,b.bucket);
   std::swap(id,    b.id);
   std::swap(zone,  b.zone);
+  std::swap(cpuDecl,b.cpuDecl);
+  std::swap(cpuWorld,b.cpuWorld);
+  std::swap(cpuPosition,b.cpuPosition);
+  std::swap(cpuActive,b.cpuActive);
+  std::swap(cpuLooped,b.cpuLooped);
+  std::swap(cpuStarted,b.cpuStarted);
+  std::swap(cpuStopped,b.cpuStopped);
   return *this;
   }
 
@@ -76,6 +95,11 @@ void PfxEmitter::setPosition(float x, float y, float z) {
   }
 
 void PfxEmitter::setPosition(const Vec3& pos) {
+  if(cpuDecl!=nullptr) {
+    cpuPosition = pos;
+    zone.setPosition(pos);
+    return;
+    }
   if(bucket==nullptr)
     return;
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
@@ -113,6 +137,16 @@ void PfxEmitter::setDirection(const Matrix4x4& d) {
   }
 
 void PfxEmitter::setActive(bool act) {
+  if(cpuDecl!=nullptr) {
+    if(cpuActive!=act) {
+      if(act)
+        cpuStarted = cpuWorld->tickCount();
+      else
+        cpuStopped = cpuWorld->tickCount();
+      cpuActive = act;
+      }
+    return;
+    }
   if(bucket==nullptr)
     return;
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
@@ -128,6 +162,8 @@ void PfxEmitter::setActive(bool act) {
   }
 
 bool PfxEmitter::isActive() const {
+  if(cpuDecl!=nullptr)
+    return cpuActive;
   if(bucket==nullptr)
     return false;
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
@@ -136,6 +172,10 @@ bool PfxEmitter::isActive() const {
   }
 
 void PfxEmitter::setLooped(bool loop) {
+  if(cpuDecl!=nullptr) {
+    cpuLooped = loop;
+    return;
+    }
   if(bucket==nullptr)
     return;
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
@@ -146,6 +186,8 @@ void PfxEmitter::setLooped(bool loop) {
   }
 
 void PfxEmitter::setMesh(const MeshObjects::Mesh* mesh, const Pose* pose) {
+  if(bucket==nullptr)
+    return;
   const PfxEmitterMesh* m = (mesh!=nullptr) ? mesh->toMeshEmitter() : nullptr;
 
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
@@ -157,6 +199,13 @@ void PfxEmitter::setMesh(const MeshObjects::Mesh* mesh, const Pose* pose) {
   }
 
 void PfxEmitter::setPhysicsEnable(World& p, std::function<void (Npc&)> cb) {
+  if(cpuDecl!=nullptr) {
+    zone = CollisionZone(p,cpuPosition,*cpuDecl);
+    zone.setCallback(std::move(cb));
+    return;
+    }
+  if(bucket==nullptr)
+    return;
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);
   auto& v = bucket->get(id);
   zone = CollisionZone(p, v.pos, bucket->decl);
@@ -168,12 +217,22 @@ void PfxEmitter::setPhysicsDisable() {
   }
 
 uint64_t PfxEmitter::effectPrefferedTime() const {
+  if(cpuDecl!=nullptr)
+    return cpuDecl->effectPrefferedTime();
   if(bucket==nullptr)
     return 0;
   return bucket->decl.effectPrefferedTime();
   }
 
 bool PfxEmitter::isAlive() const {
+  if(cpuDecl!=nullptr) {
+    const uint64_t now = cpuWorld->tickCount();
+    if(cpuActive && cpuLooped)
+      return true;
+    const uint64_t until = cpuActive ? cpuStarted+cpuDecl->effectPrefferedTime()+cpuDecl->maxLifetime()
+                                    : cpuStopped+cpuDecl->maxLifetime();
+    return now<until;
+    }
   if(bucket==nullptr)
     return false;
   std::lock_guard<std::recursive_mutex> guard(bucket->parent.sync);

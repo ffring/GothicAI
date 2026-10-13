@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace Tempest {
 class Pixmap;
@@ -15,6 +17,13 @@ class Npc;
 // Inert unless OPENGOTHIC_BENCH is set. Usage: scripts/bench.sh, see scripts/bench/README.md.
 namespace TestBench {
   bool     isActive();
+  // Reinitialize the harness for a fresh runner generation. The caller owns world teardown/load.
+  void     configure(std::string scenario, std::string output, int64_t seedOverride = -1);
+  bool     done();
+  uint64_t stepCount();
+  uint64_t nativeChoices();
+  // Explicit scenario participants for a passive body_watch, including duplicate script symbols.
+  std::vector<Npc*> bodyObservationActors();
   // Fixed time step while a scenario runs: the video and the metrics do not depend on the frame rate
   uint64_t frameDt(uint64_t dt);
   // Runs the scenario after the world update; true if this frame has to be captured
@@ -27,6 +36,16 @@ namespace TestBench {
   void     note(const char* text);
   // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
   void     arrowAt(const void* arrow, float x, float y, float z);
+  // Native melee baseline telemetry. Opt in with OPENGOTHIC_BODY_TRACE=1; no events outside an active bench.
+  bool     bodyTracing();
+  void     bodyEvent(const Npc& actor, const Npc* target, std::string_view phase, uint64_t gameTime,
+                     const std::string& fields = {}, std::string_view animation = {});
+  // Trace IDs describe an NPC object's lifetime; a new object never inherits a destroyed one's ID.
+  void     bodyForget(const Npc* npc);
+  std::string bodyJson(std::string_view text);
+  // Benchmark-only 1H/2H block clip random branch. The solver has already drawn fallback once.
+  // Default/inactive benches return it unchanged; replay accounting observes native_attempt.
+  int      bodyBlockVariant(const Npc& npc, int fallback);
   // who it is, for the notes: its script symbol (the names are in the game's code page), "none"
   std::string_view who(const Npc* npc);
   // An npc says a line of the game or an SVM (AI_Output, AI_OutputSvm): who, to whom, how long (`ms`, 0 if

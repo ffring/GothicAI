@@ -1,0 +1,18 @@
+# Stage 2 proof separate from the saved melee baseline. No models or external AI.
+# Short native duel = 30 substeps. The following probes freeze only these bench-owned actors.
+# Failure emits body_probe_error. Every vision case must be in native range; occlusion needs
+# BOTH target-center and target-head world collision rays. LEVELUP.WAV retains its true duration.
+set time 12 0
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02
+turn 210
+wait 500
+watch player
+clear 3000
+immortal player on
+release all
+bodyduel 17 1000
+wait 5000
+bodyprobe visible
+bodyprobe sound_end
+bodyprobe occluded
+bodyprobe sound_end

@@ -14,6 +14,15 @@
 #include "gamemusic.h"
 #include "gothic.h"
 #include "resources.h"
+#include "testbench.h"
+
+namespace {
+bool usesSimulationAudioClock() {
+  // isActive covers load-finalize animation updates, before body tracing starts. Normal play keeps
+  // the existing OpenAL lifecycle; a benchmark must not change gameplay when rendering is slower.
+  return Resources::isHeadless() || TestBench::isActive();
+  }
+}
 
 const float WorldSound::maxDist   = 7000; // 70 meters
 const float WorldSound::talkRange = 2000;
@@ -48,6 +57,30 @@ struct WorldSound::Zone final {
         bbox[0].z <= z && z<bbox[1].z;
     }
   };
+
+bool WorldSound::Effect::isEmpty() const {
+  return simulationWorld==nullptr ? eff.isEmpty() : false;
+  }
+
+bool WorldSound::Effect::isFinished() const {
+  if(simulationWorld==nullptr)
+    return eff.isFinished();
+  const auto now = simulationWorld->tickCount();
+  return !simulationPlaying || (now>=simulationStartedAt && now-simulationStartedAt>=simulationDuration);
+  }
+
+uint64_t WorldSound::Effect::timeLength() const {
+  return simulationWorld==nullptr ? eff.timeLength() : simulationDuration;
+  }
+
+void WorldSound::Effect::play() {
+  // This is a no-op only for the empty headless effect. Rendered benchmarks retain real playback.
+  eff.play();
+  if(simulationWorld==nullptr)
+    return;
+  simulationStartedAt = simulationWorld->tickCount();
+  simulationPlaying = true;
+  }
 
 void WorldSound::Effect::setOcclusion(float v) {
   occ = v;
@@ -122,7 +155,8 @@ Sound WorldSound::addDlgSound(std::string_view s, const Tempest::Vec3& pos, floa
   if(voice!=nullptr)
     *voice = LipSync::Track::fromSound(snd);
 
-  auto ret = implAddSound(game.loadSound(snd), pos, range);
+  auto ret = usesSimulationAudioClock() ? implAddSimulationSound(snd, 1.f, pos, range) :
+                                         implAddSound(game.loadSound(snd), pos, range);
   if(ret.isEmpty())
     return Sound();
 
@@ -138,6 +172,14 @@ Sound WorldSound::addDlgSound(std::string_view s, const Tempest::Vec3& pos, floa
   }
 
 Sound WorldSound::implAddSound(const SoundFx& eff, const Tempest::Vec3& pos, float rangeMax) {
+  if(usesSimulationAudioClock()) {
+    const auto sample = eff.selectSample();
+    if(sample.sound==nullptr)
+      return Sound();
+    auto ret = implAddSimulationSound(*sample.sound,sample.volume,pos,rangeMax);
+    ret.setLooping(sample.loop);
+    return ret;
+    }
   bool loop = false;
   auto ret = implAddSound(game.loadSound(eff,loop), pos,rangeMax);
   ret.setLooping(loop);
@@ -158,6 +200,25 @@ Sound WorldSound::implAddSound(Tempest::SoundEffect&& eff, const Tempest::Vec3& 
   ex->setOcclusion(0);
 
   return Sound(ex, pos);
+  }
+
+Sound WorldSound::implAddSimulationSound(const Tempest::Sound& snd, float volume, const Tempest::Vec3& pos, float rangeMax) {
+  if(snd.isEmpty())
+    return Sound();
+  auto ex = std::make_shared<Effect>();
+  ex->simulationWorld = &owner;
+  ex->simulationDuration = snd.timeLength();
+  if(!Resources::isHeadless()) {
+    // The SoundFx sample was already selected. Loading its raw buffer consumes no second RNG draw.
+    ex->eff = game.loadSound(snd);
+    ex->eff.setPosition(pos);
+    ex->eff.setMaxDistance(rangeMax);
+    }
+  ex->pos = pos;
+  ex->vol = volume;
+  ex->maxDist = rangeMax;
+  ex->setOcclusion(0);
+  return Sound(ex,pos);
   }
 
 void WorldSound::tick(Npc& player) {
@@ -284,7 +345,7 @@ void WorldSound::tickSoundZone(Npc& player) {
 void WorldSound::tickSlot(std::vector<PEffect>& effect) {
   for(size_t i=0;i<effect.size();) {
     auto& e = *effect[i];
-    if(e.eff.isFinished() && !(e.loop && e.active)){
+    if(e.isFinished() && !(e.loop && e.active)){
       effect[i]=std::move(effect.back());
       effect.pop_back();
       } else {
@@ -297,10 +358,10 @@ void WorldSound::tickSlot(std::vector<PEffect>& effect) {
   }
 
 void WorldSound::tickSlot(Effect& slot) {
-  if(slot.eff.isFinished()) {
+  if(slot.isFinished()) {
     if(!slot.loop)
       return;
-    slot.eff.play();
+    slot.play();
     }
 
   if(slot.ambient) {

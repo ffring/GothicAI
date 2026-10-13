@@ -1,0 +1,15 @@
+# Stage 3 passive observer load: four native combatants, no policy/body ownership.
+# bodyobserve creates two isolated human pairs with one million HP and keeps
+# native combat AI active for ten simulated minutes. The extra HP is confined
+# to these bench-owned actors and is not the production combat contract.
+set time 12 0
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02
+turn 210
+wait 500
+watch player
+clear 3000
+immortal player on
+release all
+bodyobserve 17 600000
+# One extra 100 ms sampling fence covers the initial 30 Hz sample quantization.
+wait 600100

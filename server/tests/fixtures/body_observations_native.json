@@ -1,0 +1,482 @@
+{
+  "kind": "body_observations",
+  "schema_version": 1,
+  "generation": 18,
+  "session_epoch": 1791905681806544012,
+  "world_epoch": 18,
+  "control_generation": 0,
+  "phase": "post_simulation_post_animation",
+  "sample_period_ms": 50,
+  "queue_capacity": 256,
+  "dropped_total": 0,
+  "dropped_since_drain": 0,
+  "event_dropped_total": 0,
+  "observations": [
+    {
+      "kind": "body_observation",
+      "schema_version": 1,
+      "generation": 18,
+      "session_epoch": 1791905681806544012,
+      "world_epoch": 18,
+      "control_generation": 0,
+      "phase": "post_simulation_post_animation",
+      "sample_period_ms": 50,
+      "observation_seq": 1,
+      "entity_id": 1,
+      "script_symbol": 10620,
+      "t_game_ms": 16327,
+      "dt_game_ms": 0,
+      "sim_step": 17,
+      "periodic": true,
+      "event_only": false,
+      "state_changed": true,
+      "motion_discontinuity": false,
+      "can_decide": false,
+      "control_allowed": false,
+      "native_decision_eligible": false,
+      "action_mask_valid": false,
+      "mask_kind": "conservative_native_availability",
+      "availability_mask": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "self": {
+        "position_world_cm": [
+          65706.46875,
+          2419.259765625,
+          -12427.734375
+        ],
+        "linear_velocity_cm_s": null,
+        "velocity_valid": false,
+        "yaw_rad": -2.9052515029907227,
+        "hp": 300,
+        "hp_max": 300,
+        "hp_fraction": 1,
+        "weapon_state": 0,
+        "weapon_symbol": 0,
+        "weapon_length_cm": 0,
+        "skill": 0,
+        "skill_talent": 0,
+        "skill_valid": false,
+        "fight_tactic": 4,
+        "body_state_raw": 98304,
+        "body_state_base": 0,
+        "body_flags": 98304,
+        "dead": false,
+        "unconscious": false,
+        "down": false,
+        "in_air": false,
+        "swim": false,
+        "dive": false,
+        "attack_anim": false,
+        "prehit": false,
+        "defence_active": false,
+        "jumpback_active": false,
+        "def_window": false,
+        "par_window": false,
+        "interruptible": true,
+        "queued_primitive": 0,
+        "choice_id": 0,
+        "gates": {
+          "fai_wait_remaining_ms": 0,
+          "ani_wait_remaining_ms": 0,
+          "ai_wait_remaining_ms": 0,
+          "output_wait_remaining_ms": 0,
+          "fai_wait": false,
+          "ani_wait": false,
+          "ai_wait": false,
+          "output_wait": false
+        }
+      },
+      "target": {
+        "entity_id": 2,
+        "present": true,
+        "visible": true,
+        "current_valid": true,
+        "position_world_cm": [
+          65414.80859375,
+          2415.810791015625,
+          -12497.978515625
+        ],
+        "relative_position_cm": [
+          -291.66015625,
+          -3.448974609375,
+          -70.244140625
+        ],
+        "linear_velocity_cm_s": null,
+        "relative_velocity_cm_s": null,
+        "yaw_error_rad": -3.060871133664378e-05,
+        "fight_distance_cm": 300.01629638671875,
+        "attack_range_cm": 170,
+        "g_range_cm": 270,
+        "closeup_range_cm": 90,
+        "in_w_range": false,
+        "in_g_range": false,
+        "in_closeup": false,
+        "focus_30": true,
+        "focus_5": true,
+        "melee_line_clear": true,
+        "hp": 300,
+        "hp_max": 300,
+        "hp_fraction": 1,
+        "weapon_state": 0,
+        "body_state_raw": 98304,
+        "attack_anim": false,
+        "prehit": false,
+        "defence_active": false,
+        "jumpback_active": false,
+        "down": false,
+        "last_known_position_world_cm": [
+          65414.80859375,
+          2415.810791015625,
+          -12497.978515625
+        ],
+        "last_known_velocity_cm_s": null,
+        "last_seen_game_ms": 16327,
+        "last_known_age_ms": 0
+      },
+      "goal": {
+        "kind": "native_combat",
+        "version": 1,
+        "target_id": 2,
+        "move_hint": 0
+      },
+      "last_result": {
+        "valid": false,
+        "code": 0,
+        "source_game_ms": 0,
+        "source_sim_step": 0
+      },
+      "local_obstacles": {
+        "ray_range_cm": 300,
+        "rays": [
+          {
+            "angle_rad": 0,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 0.39269908169872414,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 0.7853981633974483,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 1.1780972450961724,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 1.5707963267948966,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 1.9634954084936207,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 2.356194490192345,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 2.748893571891069,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 3.141592653589793,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 3.5342917352885173,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 3.9269908169872414,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 4.319689898685965,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 4.71238898038469,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 5.105088062083414,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 5.497787143782138,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 5.890486225480862,
+            "distance_cm": 300,
+            "hit": false
+          }
+        ]
+      },
+      "events": [],
+      "builder_wall_us": 60
+    },
+    {
+      "kind": "body_observation",
+      "schema_version": 1,
+      "generation": 18,
+      "session_epoch": 1791905681806544012,
+      "world_epoch": 18,
+      "control_generation": 0,
+      "phase": "post_simulation_post_animation",
+      "sample_period_ms": 50,
+      "observation_seq": 2,
+      "entity_id": 2,
+      "script_symbol": 11374,
+      "t_game_ms": 16327,
+      "dt_game_ms": 0,
+      "sim_step": 17,
+      "periodic": true,
+      "event_only": false,
+      "state_changed": true,
+      "motion_discontinuity": false,
+      "can_decide": false,
+      "control_allowed": false,
+      "native_decision_eligible": false,
+      "action_mask_valid": false,
+      "mask_kind": "conservative_native_availability",
+      "availability_mask": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "self": {
+        "position_world_cm": [
+          65414.80859375,
+          2415.810791015625,
+          -12497.978515625
+        ],
+        "linear_velocity_cm_s": null,
+        "velocity_valid": false,
+        "yaw_rad": 0.23634137213230133,
+        "hp": 300,
+        "hp_max": 300,
+        "hp_fraction": 1,
+        "weapon_state": 0,
+        "weapon_symbol": 0,
+        "weapon_length_cm": 0,
+        "skill": 0,
+        "skill_talent": 0,
+        "skill_valid": false,
+        "fight_tactic": 4,
+        "body_state_raw": 98304,
+        "body_state_base": 0,
+        "body_flags": 98304,
+        "dead": false,
+        "unconscious": false,
+        "down": false,
+        "in_air": false,
+        "swim": false,
+        "dive": false,
+        "attack_anim": false,
+        "prehit": false,
+        "defence_active": false,
+        "jumpback_active": false,
+        "def_window": false,
+        "par_window": false,
+        "interruptible": true,
+        "queued_primitive": 0,
+        "choice_id": 0,
+        "gates": {
+          "fai_wait_remaining_ms": 0,
+          "ani_wait_remaining_ms": 0,
+          "ai_wait_remaining_ms": 0,
+          "output_wait_remaining_ms": 0,
+          "fai_wait": false,
+          "ani_wait": false,
+          "ai_wait": false,
+          "output_wait": false
+        }
+      },
+      "target": {
+        "entity_id": 1,
+        "present": true,
+        "visible": true,
+        "current_valid": true,
+        "position_world_cm": [
+          65706.46875,
+          2419.259765625,
+          -12427.734375
+        ],
+        "relative_position_cm": [
+          291.66015625,
+          3.448974609375,
+          70.244140625
+        ],
+        "linear_velocity_cm_s": null,
+        "relative_velocity_cm_s": null,
+        "yaw_error_rad": -3.0830244567209286e-05,
+        "fight_distance_cm": 300.02386474609375,
+        "attack_range_cm": 170,
+        "g_range_cm": 270,
+        "closeup_range_cm": 90,
+        "in_w_range": false,
+        "in_g_range": false,
+        "in_closeup": false,
+        "focus_30": true,
+        "focus_5": true,
+        "melee_line_clear": true,
+        "hp": 300,
+        "hp_max": 300,
+        "hp_fraction": 1,
+        "weapon_state": 0,
+        "body_state_raw": 98304,
+        "attack_anim": false,
+        "prehit": false,
+        "defence_active": false,
+        "jumpback_active": false,
+        "down": false,
+        "last_known_position_world_cm": [
+          65706.46875,
+          2419.259765625,
+          -12427.734375
+        ],
+        "last_known_velocity_cm_s": null,
+        "last_seen_game_ms": 16327,
+        "last_known_age_ms": 0
+      },
+      "goal": {
+        "kind": "native_combat",
+        "version": 1,
+        "target_id": 1,
+        "move_hint": 0
+      },
+      "last_result": {
+        "valid": false,
+        "code": 0,
+        "source_game_ms": 0,
+        "source_sim_step": 0
+      },
+      "local_obstacles": {
+        "ray_range_cm": 300,
+        "rays": [
+          {
+            "angle_rad": 0,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 0.39269908169872414,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 0.7853981633974483,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 1.1780972450961724,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 1.5707963267948966,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 1.9634954084936207,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 2.356194490192345,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 2.748893571891069,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 3.141592653589793,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 3.5342917352885173,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 3.9269908169872414,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 4.319689898685965,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 4.71238898038469,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 5.105088062083414,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 5.497787143782138,
+            "distance_cm": 300,
+            "hit": false
+          },
+          {
+            "angle_rad": 5.890486225480862,
+            "distance_cm": 300,
+            "hit": false
+          }
+        ]
+      },
+      "events": [],
+      "builder_wall_us": 27
+    }
+  ]
+}

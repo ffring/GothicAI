@@ -14,6 +14,7 @@
 #include "serialize.h"
 #include "camera.h"
 #include "gothic.h"
+#include "resources.h"
 
 using namespace Tempest;
 
@@ -67,6 +68,8 @@ void GameSession::HeroStorage::putToWorld(World& owner, std::string_view wayPoin
 
 
 GameSession::GameSession(std::string file) {
+  if(!Resources::isHeadless())
+    sound = std::make_unique<Tempest::SoundDevice>();
   cam.reset(new Camera());
 
   Gothic::inst().setLoadingProgress(0);
@@ -119,6 +122,8 @@ GameSession::GameSession(std::string file) {
   }
 
 GameSession::GameSession(Serialize &fin) {
+  if(!Resources::isHeadless())
+    sound = std::make_unique<Tempest::SoundDevice>();
   Gothic::inst().setLoadingProgress(0);
   setupSettings();
 
@@ -234,7 +239,8 @@ void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& scr
 
 void GameSession::setupSettings() {
   const float soundVolume = Gothic::settingsSoundVolume();
-  sound.setGlobalVolume(soundVolume);
+  if(sound)
+    sound->setGlobalVolume(soundVolume);
   }
 
 void GameSession::setWorld(std::unique_ptr<World> &&w) {
@@ -274,8 +280,10 @@ WorldView *GameSession::view() const {
   }
 
 Tempest::SoundEffect GameSession::loadSound(const Tempest::Sound &raw) {
+  if(!sound)
+    return Tempest::SoundEffect();
   try {
-    return sound.load(raw);
+    return sound->load(raw);
     }
   catch(std::bad_alloc&) {
     Tempest::Log::d("Exceeding OpenAL source limit");
@@ -284,8 +292,10 @@ Tempest::SoundEffect GameSession::loadSound(const Tempest::Sound &raw) {
   }
 
 Tempest::SoundEffect GameSession::loadSound(std::unique_ptr<Tempest::SoundProducer>&& src) {
+  if(!sound)
+    return Tempest::SoundEffect();
   try {
-    return sound.load(std::move(src));
+    return sound->load(std::move(src));
     }
   catch(std::bad_alloc&) {
     Tempest::Log::d("Exceeding OpenAL source limit");
@@ -294,8 +304,13 @@ Tempest::SoundEffect GameSession::loadSound(std::unique_ptr<Tempest::SoundProduc
   }
 
 Tempest::SoundEffect GameSession::loadSound(const SoundFx &fx, bool& looped) {
+  if(!sound) {
+    // Direct callers must consume the same variant selection as the rendered path.
+    looped = fx.selectSample().loop;
+    return Tempest::SoundEffect();
+    }
   try {
-    return fx.load(sound,looped);
+    return fx.load(*sound,looped);
     }
   catch(std::bad_alloc&) {
     Tempest::Log::d("Exceeding OpenAL source limit");
@@ -310,8 +325,10 @@ Npc* GameSession::player() {
   }
 
 void GameSession::updateListenerPos(const Camera::ListenerPos& lpos) {
-  sound.setListenerPosition (lpos.pos);
-  sound.setListenerDirection(lpos.front, lpos.up);
+  if(sound) {
+    sound->setListenerPosition (lpos.pos);
+    sound->setListenerDirection(lpos.front, lpos.up);
+    }
   }
 
 void GameSession::setTime(gtime t) {

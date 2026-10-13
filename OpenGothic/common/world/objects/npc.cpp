@@ -6,6 +6,7 @@
 #include "graphics/mesh/skeleton.h"
 #include "graphics/visualfx.h"
 #include "game/damagecalculator.h"
+#include "game/bodyobservations.h"
 #include "game/serialize.h"
 #include "game/gamescript.h"
 #include "utils/string_frm.h"
@@ -23,6 +24,47 @@
 using namespace Tempest;
 
 static std::string_view humansTorchOverlay = "_TORCH.MDS";
+
+// Npc::tick may intentionally return without calling MoveAlgo (for example a native attack gate).
+// Observe that branch explicitly instead of advancing movement just to make telemetry contiguous.
+struct Npc::BodyMovementTrace final {
+  BodyMovementTrace(Npc& npc, uint64_t dt)
+    :npc(npc),dt(dt),serial(npc.mvAlgo.traceTickSerial()),previous(npc.bodyTraceMovementActive) {
+    active = TestBench::bodyTracing() && npc.currentTarget!=nullptr;
+    if(active)
+      start = npc.position();
+    npc.bodyTraceMovementActive = previous || active;
+    }
+
+  ~BodyMovementTrace() {
+    npc.bodyTraceMovementActive = previous;
+    if(!active || npc.mvAlgo.traceTickSerial()!=serial)
+      return;
+    const auto end = npc.position();
+    const auto moved = end-start;
+    const auto state = npc.mvAlgo.state();
+    char fields[1500];
+    std::snprintf(fields,sizeof(fields),
+                  "\"sample_phase\":\"npc_post_movement\",\"movealgo_tick\":false,"
+                  "\"skip_reason\":\"npc_tick_without_movealgo\",\"dt_ms\":%llu,\"move_flags\":0,"
+                  "\"root_dx\":0,\"root_dy\":0,\"root_dz\":0,"
+                  "\"requested_dx\":0,\"requested_dy\":0,\"requested_dz\":0,"
+                  "\"moved_dx\":%.6f,\"moved_dy\":%.6f,\"moved_dz\":%.6f,"
+                  "\"x\":%.6f,\"y\":%.6f,\"z\":%.6f,\"yaw\":%.6f,"
+                  "\"grounded\":%s,\"movement_state\":%u,\"collision_scope\":\"none\","
+                  "\"collision_attempts\":0,\"collision_failed_count\":0,"
+                  "\"collision_land\":false,\"collision_npc\":false,\"collision_vob\":false,\"collision_prefall\":false",
+                  (unsigned long long)dt,double(moved.x),double(moved.y),double(moved.z),
+                  double(end.x),double(end.y),double(end.z),double(npc.rotation()),
+                  state==MoveAlgo::Run ? "true" : "false",unsigned(state));
+    TestBench::bodyEvent(npc,npc.currentTarget,"physics_step",npc.owner.tickCount(),fields);
+    }
+
+  Npc& npc;
+  uint64_t dt = 0, serial = 0;
+  bool active = false, previous = false;
+  Vec3 start = {};
+  };
 
 std::string_view Npc::Routine::wayPointName() const {
   return point!=nullptr ? point->name : fallbackName;
@@ -204,6 +246,8 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint, NpcProcessPol
   }
 
 Npc::~Npc(){
+  BodyObservations::forget(this);
+  TestBench::bodyForget(this);
   if(currentInteract)
     currentInteract->detach(*this,true);
   }
@@ -629,6 +673,12 @@ void Npc::onNoHealth(bool death, HitSound sndMask) {
   if(death)
     setAnim(lastHitType=='A' ? Anim::DeadA        : Anim::DeadB); else
     setAnim(lastHitType=='A' ? Anim::UnconsciousA : Anim::UnconsciousB);
+  BodyObservations::noteEvent(*this,lastHit,death ? "dead" : "unconscious",owner.tickCount());
+  if(TestBench::bodyTracing())
+    TestBench::bodyEvent(*this,lastHit,"termination",owner.tickCount(),
+                        "\"reason\":" + TestBench::bodyJson(death ? "dead" : "unconscious") +
+                        ",\"hp\":" + std::to_string(attribute(ATR_HITPOINTS)) +
+                        ",\"down\":" + (isDown() ? "true" : "false") + ",\"dead\":" + (isDead() ? "true" : "false"));
   }
 
 bool Npc::hasAutoroll() const {
@@ -1003,9 +1053,14 @@ const Animation::Sequence* Npc::setAnimAngGet(Anim a) {
   }
 
 const Animation::Sequence* Npc::setAnimAngGet(Anim a, uint8_t comb) {
+  const bool trace = TestBench::bodyTracing() && currentTarget!=nullptr;
+  const auto before = trace ? combatPoseIdentity() : std::string();
   auto st  = weaponState();
   auto wlk = walkMode();
-  return visual.startAnimAndGet(*this,a,comb,st,wlk);
+  const auto result = visual.startAnimAndGet(*this,a,comb,st,wlk);
+  if(trace)
+    traceCombatAttempt(a,result!=nullptr,before,"set_anim");
+  return result;
   }
 
 void Npc::setAnimRotate(int rot) {
@@ -1606,6 +1661,7 @@ bool Npc::implAttack(uint64_t dt) {
     return false;
 
   if(currentTarget->isDown()){
+    traceCombatGate("target_down");
     // NOTE: don't clear internal target, to make scripts happy
     // currentTarget=nullptr;
     fghAlgo.onClearTarget();
@@ -1613,6 +1669,7 @@ bool Npc::implAttack(uint64_t dt) {
     }
 
   if(aiQueue.size()>0) {
+    traceCombatGate("script_queue");
     // do not messup weapon change animations by MOVE intruction
     return false;
     }
@@ -1621,32 +1678,47 @@ bool Npc::implAttack(uint64_t dt) {
   const auto bs = bodyStateMasked();
 
   if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
+    traceCombatGate("melee_hit_lock");
     //NOTE: 'storm' attack has BS_RUN state and not meant to be auto-rotated
     implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
 
-  if(!fghAlgo.hasInstructions())
+  if(!fghAlgo.hasInstructions()) {
+    traceCombatGate("no_instructions");
     return false;
+    }
 
   if(bs==BS_LIE) {
+    traceCombatGate("lie");
     setAnim(Npc::Anim::Idle);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
   if(bs==BS_STUMBLE || bs==BS_FALL || isInAir()) {
+    traceCombatGate("stumble_fall_air");
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
 
   if(faiWaitTime>=owner.tickCount() || waitTime>=owner.tickCount()) {
+    traceCombatGate("fai_or_script_wait");
     implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
 
   const auto act = fghAlgo.nextFromQueue(*this,*currentTarget,owner.script());
+  const auto consume = [&] {
+    const auto before = fghAlgo.queuedAction();
+    fghAlgo.consumeAction();
+    if(TestBench::bodyTracing())
+      TestBench::bodyEvent(*this,currentTarget,"native_consume",owner.tickCount(),
+                          "\"choice_id\":" + std::to_string(fghAlgo.traceChoiceId()) +
+                          ",\"primitive\":" + std::to_string(int(before)) +
+                          ",\"next_primitive\":" + std::to_string(int(fghAlgo.queuedAction())));
+    };
 
   // NOTE: in original-game, this behaviour seem to be hardcoded
   // test case: wolf jump-back quite often when close, but programmed to jump only if attacked
@@ -1661,24 +1733,24 @@ bool Npc::implAttack(uint64_t dt) {
 
   if(act==FightAlgo::MV_BLOCK) {
     if(!fghAlgo.isInFocusAngle(*this, *currentTarget)) {
-      fghAlgo.consumeAction();
+      consume();
       return true;
       }
 
     switch(ws) {
       case WeaponState::Fist: {
         if(blockFist())
-          fghAlgo.consumeAction();
+          consume();
         break;
         }
       case WeaponState::W1H:
       case WeaponState::W2H: {
         if(blockSword())
-          fghAlgo.consumeAction();
+          consume();
         break;
         }
       default:
-        fghAlgo.consumeAction();
+        consume();
         break;
       }
     return true;
@@ -1688,19 +1760,20 @@ bool Npc::implAttack(uint64_t dt) {
     //NOTE: FIGHT_DIST_CANCEL in scipts is often longer, than senses_range of npc
     const auto sense = fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
     if(!sense) {
+      traceCombatGate("attack_turn_to_focus");
       implTurnToFai(*currentTarget,dt);
       mvAlgo.tick(dt,MoveAlgo::FaiMove);
       return true;
       }
 #if 0
-    fghAlgo.consumeAction(); //debug
+    consume(); //debug
     return true;
 #endif
 
     static const Anim ani[4] = {Anim::Attack, Anim::AttackL, Anim::AttackR};
     if((act!=FightAlgo::MV_ATTACK && bodyState()!=BS_RUN) &&
        !fghAlgo.isInWRange(*this,*currentTarget,owner.script())) {
-      fghAlgo.consumeAction();
+      consume();
       return true;
       }
 
@@ -1725,7 +1798,7 @@ bool Npc::implAttack(uint64_t dt) {
         if(setAnim(anim)){
           visual.setAnimRotate(*this,0);
           implFaiWait(visual.pose().animationTotalTime());
-          fghAlgo.consumeAction();
+          consume();
           return true;
           }
         }
@@ -1735,7 +1808,7 @@ bool Npc::implAttack(uint64_t dt) {
       const auto cast = beginCastSpell();
       if(cast==BeginCastResult::BC_No)
         return false;
-      fghAlgo.consumeAction();
+      consume();
       }
     else if(ws==WeaponState::Bow || ws==WeaponState::CBow) {
       if(archAi.isDriving(*this)) {
@@ -1744,10 +1817,10 @@ bool Npc::implAttack(uint64_t dt) {
         if(bs==BS_RUN || bs==BS_WALK || bs==BS_SNEAK)
           setAnim(Anim::Idle);
         if(archAi.attack(*this))
-          fghAlgo.consumeAction();
+          consume();
         }
       else if(shootBow()) {
-        fghAlgo.consumeAction();
+        consume();
         }
       else if(!implTurnToFai(*currentTarget,dt)) {
         aimBow();
@@ -1757,7 +1830,7 @@ bool Npc::implAttack(uint64_t dt) {
       const auto hit = owner.physic()->ray(this->collosionCenter(),currentTarget->collosionCenter());
       if(hit.hasCol) {
         // blocked by wall
-        fghAlgo.consumeAction();
+        consume();
         return true;
         }
       const auto atkType = (ws==WeaponState::Fist) ? Anim::Attack : ani[act-FightAlgo::MV_ATTACK];
@@ -1768,21 +1841,21 @@ bool Npc::implAttack(uint64_t dt) {
         implFaiWait(aniTime);
         if(bs==BS_RUN)
           implAniWait(aniTime);
-        fghAlgo.consumeAction();
+        consume();
         } else {
         implTurnToFai(*currentTarget,dt);
         }
       }
     else {
       // Attack action without any weapon. Can happend at weapon transition(orc shaman) - skip it.
-      fghAlgo.consumeAction();
+      consume();
       }
     return true;
     }
 
   if(act==FightAlgo::MV_TURN2HIT) {
     if(!implTurnTo(*currentTarget,dt))
-      fghAlgo.consumeAction();
+      consume();
     return true;
     }
 
@@ -1790,12 +1863,12 @@ bool Npc::implAttack(uint64_t dt) {
     if(setAnim(Npc::Anim::MoveL)) {
       visual.setAnimRotate(*this,0);
       implFaiWait(visual.pose().animationTotalTime());
-      fghAlgo.consumeAction();
+      consume();
       }
     else if(!hasAnim(Npc::Anim::MoveL)) {
       // avoid soft-locks
       visual.setAnimRotate(*this,0);
-      fghAlgo.consumeAction();
+      consume();
       }
     return true;
     }
@@ -1804,12 +1877,12 @@ bool Npc::implAttack(uint64_t dt) {
     if(setAnim(Npc::Anim::MoveR)) {
       visual.setAnimRotate(*this,0);
       implFaiWait(visual.pose().animationTotalTime());
-      fghAlgo.consumeAction();
+      consume();
       }
     else if(!hasAnim(Npc::Anim::MoveR)) {
       // avoid soft-locks
       visual.setAnimRotate(*this,0);
-      fghAlgo.consumeAction();
+      consume();
       }
     return true;
     }
@@ -1818,28 +1891,28 @@ bool Npc::implAttack(uint64_t dt) {
     // finalize strafe
     if(!setAnim(Npc::Anim::Idle))
       return false;
-    fghAlgo.consumeAction();
+    consume();
     return true;
     }
 
   if(act==FightAlgo::MV_JUMPBACK || (act==FightAlgo::MV_WAIT && jmp) || (act==FightAlgo::MV_TURN && jmp)) {
     if(isSwim()) {
-      fghAlgo.consumeAction();
+      consume();
       return true;
       }
     if(bodyStateMasked()==BS_PARADE) {
-      fghAlgo.consumeAction();
+      consume();
       return true;
       }
     if(!fghAlgo.isInFocusAngle(*this, *currentTarget) && !jmp) {
       //NOTE: jump-back is ultimate defence, so better to use it only if npc face player directly
-      fghAlgo.consumeAction();
+      consume();
       aiState.loopNextTime = owner.tickCount(); // force ZS_MM_Attack_Loop call
       return true;
       }
     if(setAnim(Npc::Anim::MoveBack)) {
       implFaiWait(visual.pose().animationTotalTime());
-      fghAlgo.consumeAction();
+      consume();
       }
     return true;
     }
@@ -1847,7 +1920,7 @@ bool Npc::implAttack(uint64_t dt) {
   if(act==FightAlgo::MV_MOVE || act==FightAlgo::MV_TURN) {
     if(currentTarget->isDown()) {
       if(setAnim(Anim::Idle))
-        fghAlgo.consumeAction();
+        consume();
       return true;
       }
 
@@ -1901,7 +1974,7 @@ bool Npc::implAttack(uint64_t dt) {
 
     if((isWRange || (isGRange!=prGRange) || prBs!=bodyStateMasked()) && isFocus) {
       visual.setAnimRotate(*this, 0);
-      fghAlgo.consumeAction();
+      consume();
       aiState.loopNextTime = owner.tickCount(); // force ZS_MM_Attack_Loop call
       implAiTick(dt);
       return true;
@@ -1913,25 +1986,220 @@ bool Npc::implAttack(uint64_t dt) {
 
   if(act==FightAlgo::MV_WAIT) {
     implFaiWait(200);
-    fghAlgo.consumeAction();
+    consume();
     stopWalkAnimation();
     return true;
     }
 
   if(act==FightAlgo::MV_WAITLONG) {
     implFaiWait(300);
-    fghAlgo.consumeAction();
+    consume();
     stopWalkAnimation();
     return true;
     }
 
   if(act==FightAlgo::MV_NULL) {
-    fghAlgo.consumeAction();
+    consume();
     stopWalkAnimation();
     return true;
     }
 
   return true;
+  }
+
+std::string Npc::combatPoseIdentity() const {
+  std::string result = std::to_string(visual.pose().comboLength());
+  for(const auto& layer:visual.pose().combatLayers(owner.tickCount()))
+    result += "|" + layer.sequence->name + ":" + std::to_string(layer.start) + ":" +
+              std::to_string(layer.speed) + ":" + std::to_string(layer.combination) + ":" +
+              std::to_string(unsigned(layer.state));
+  return result;
+  }
+
+std::string Npc::combatPoseLayers() const {
+  std::string result = "[";
+  const auto times = [](const auto& values) {
+    std::string json = "[";
+    for(const auto value:values) {
+      if(json.size()>1)
+        json += ",";
+      json += std::to_string(value);
+      }
+    return json + "]";
+    };
+  for(const auto& layer:visual.pose().combatLayers(owner.tickCount())) {
+    const auto& seq = *layer.sequence;
+    const auto& data = *seq.data;
+    std::vector<int32_t> optimal;
+    for(const auto& ev:data.events)
+      if(ev.type==zenkit::MdsEventType::OPTIMAL_FRAME)
+        for(auto frame:ev.frames)
+          optimal.push_back(frame);
+    if(result.size()>1)
+      result += ",";
+    result += "{\"name\":" + TestBench::bodyJson(seq.name) +
+              ",\"start\":" + std::to_string(layer.start) + ",\"clock\":" + std::to_string(layer.time) +
+              ",\"speed\":" + std::to_string(layer.speed) + ",\"combination\":" + std::to_string(layer.combination) +
+              ",\"body_state\":" + std::to_string(unsigned(layer.state)) +
+              ",\"combo_length\":" + std::to_string(visual.pose().comboLength()) +
+              ",\"fps\":" + std::to_string(data.fpsRate) + ",\"duration_ms\":" + std::to_string(seq.totalTime()) +
+              ",\"def_window_ms\":" + times(data.defWindow) + ",\"def_par_ms\":" + times(data.defParFrame) +
+              ",\"hit_end_ms\":" + times(data.defHitEnd) + ",\"optimal_frames\":" + times(optimal) + "}";
+    }
+  return result + "]";
+  }
+
+void Npc::traceCombatSnapshot() {
+  if(!TestBench::bodyTracing() || currentTarget==nullptr)
+    return;
+  const auto now = owner.tickCount();
+  const auto& pose = visual.pose();
+  const bool prehit = pose.isPrehit(now), defence = pose.isDefence(now), jumpback = pose.isJumpBack(now);
+  const bool attack = pose.isAttackAnim(), defWindow = pose.isDefWindow(now), parWindow = pose.isDefParWindow(now);
+  const std::string state = combatPoseIdentity() + ":" + std::to_string(unsigned(bodyState())) + ":" +
+                           std::to_string(int(weaponState())) + ":" + std::to_string(prehit) + ":" +
+                           std::to_string(defence) + ":" + std::to_string(jumpback) + ":" +
+                           std::to_string(attack) + ":" + std::to_string(defWindow) + ":" +
+                           std::to_string(parWindow) + ":" + std::to_string(isDown()) + ":" +
+                           std::to_string(attribute(ATR_HITPOINTS)) + ":" +
+                           std::to_string(int(fghAlgo.queuedAction())) + ":" +
+                           std::to_string(int(processPolicy())) + ":" +
+                           std::to_string(faiWaitTime>=now) + ":" + std::to_string(aniWaitTime>=now) + ":" +
+                           std::to_string(waitTime>=now) + ":" + std::to_string(outWaitTime>now);
+  const bool changed = state!=bodyTraceState;
+  // At 30 Hz this samples adjacent 50 ms buckets (33/67 ms spacing); window/layer edges are always logged.
+  if(!changed && now/50==bodyTraceSampleTime/50)
+    return;
+  bodyTraceState = state;
+  bodyTraceSampleTime = now;
+  char values[1400];
+  std::snprintf(values,sizeof(values),
+                "\"sample_phase\":\"npc_pre_tick_animation_tags\",\"edge\":%s,\"hp\":%d,\"body_state\":%u,"
+                "\"weapon_state\":%d,\"prehit\":%s,\"defence\":%s,\"jumpback\":%s,\"attack_anim\":%s,"
+                "\"def_window\":%s,\"def_par_window\":%s,\"down\":%s,\"dead\":%s,\"x\":%.6f,\"y\":%.6f,"
+                "\"z\":%.6f,\"yaw\":%.6f,\"fai_wait_until\":%llu,\"ani_wait_until\":%llu,"
+                "\"wait_until\":%llu,\"output_wait_until\":%llu,\"script_queue_size\":%zu,\"primitive\":%d,\"choice_id\":%llu",
+                changed ? "true" : "false",int(attribute(ATR_HITPOINTS)),unsigned(bodyState()),int(weaponState()),
+                prehit ? "true" : "false",defence ? "true" : "false",jumpback ? "true" : "false",attack ? "true" : "false",
+                defWindow ? "true" : "false",parWindow ? "true" : "false",isDown() ? "true" : "false",isDead() ? "true" : "false",
+                double(x),double(y),double(z),double(angle),(unsigned long long)faiWaitTime,(unsigned long long)aniWaitTime,
+                (unsigned long long)waitTime,(unsigned long long)outWaitTime,size_t(aiQueue.size()),int(fghAlgo.queuedAction()),
+                (unsigned long long)fghAlgo.traceChoiceId());
+  TestBench::bodyEvent(*this,currentTarget,"phase_snapshot",now,std::string(values) +
+                       ",\"process_policy\":" + std::to_string(int(processPolicy())) +
+                       ",\"native_ai_normal\":" + (processPolicy()==NpcProcessPolicy::AiNormal ? "true" : "false") +
+                       ",\"layers\":" + combatPoseLayers(),pose.animNames());
+  }
+
+void Npc::traceCombatGate(std::string_view reason) {
+  if(!TestBench::bodyTracing() || currentTarget==nullptr)
+    return;
+  const auto key = std::string(reason) + ":" + std::to_string(fghAlgo.traceChoiceId()) + ":" +
+                   std::to_string(int(fghAlgo.queuedAction()));
+  if(key==bodyTraceGate)
+    return;
+  bodyTraceGate = key;
+  TestBench::bodyEvent(*this,currentTarget,"native_gate",owner.tickCount(),
+                      "\"reason\":" + TestBench::bodyJson(reason) + ",\"choice_id\":" + std::to_string(fghAlgo.traceChoiceId()) +
+                      ",\"primitive\":" + std::to_string(int(fghAlgo.queuedAction())));
+  }
+
+Npc::BodyObservationState Npc::bodyObservationState() const {
+  BodyObservationState s;
+  const uint64_t now = owner.tickCount();
+  const auto& pose = visual.pose();
+  const auto ws = weaponState();
+  s.bodyState = uint32_t(bodyState());
+  s.weaponState = uint8_t(ws);
+  if(const auto weapon = invent.activeWeapon()) {
+    s.weaponSymbol = uint32_t(weapon->clsId());
+    s.weaponLength = weapon->swordLength();
+    }
+  switch(ws) {
+    case WeaponState::W1H: s.skillTalent = TALENT_1H; break;
+    case WeaponState::W2H: s.skillTalent = TALENT_2H; break;
+    case WeaponState::Bow: s.skillTalent = TALENT_BOW; break;
+    case WeaponState::CBow: s.skillTalent = TALENT_CROSSBOW; break;
+    default: break;
+    }
+  s.skill = s.skillTalent==TALENT_UNKNOWN ? 0 : hitChance(Talent(s.skillTalent));
+  s.fightTactic = hnpc->fight_tactic;
+  s.primitive = int32_t(fghAlgo.queuedAction());
+  s.choiceId = fghAlgo.traceChoiceId();
+  const auto remaining = [now](uint64_t deadline) { return deadline>now ? deadline-now : 0; };
+  s.faiWaitMs = remaining(faiWaitTime);
+  s.aniWaitMs = remaining(aniWaitTime);
+  s.aiWaitMs = remaining(waitTime);
+  s.outputWaitMs = remaining(outWaitTime);
+  s.faiGate = faiWaitTime>=now;
+  s.aniGate = aniWaitTime>=now;
+  s.aiGate = waitTime>=now;
+  s.outputGate = outWaitTime>now;
+  s.attackAnim = pose.isAttackAnim();
+  s.prehit = pose.isPrehit(now);
+  s.defence = pose.isDefence(now);
+  s.jumpBack = pose.isJumpBack(now);
+  s.defWindow = pose.isDefWindow(now);
+  s.parWindow = pose.isDefParWindow(now);
+  s.interruptible = true;
+  for(const auto& layer:pose.combatLayers(now)) {
+    if(layer.sequence==nullptr)
+      continue;
+    const auto& seq = *layer.sequence;
+    const bool finished = seq.isFinished(layer.time,layer.start,pose.comboLength()) &&
+                          seq.next.empty() && seq.animCls!=Animation::Loop;
+    if(layer.state==BS_ITEMINTERACT || (!finished && !seq.canInterrupt(layer.time,layer.start,pose.comboLength())))
+      s.interruptible = false;
+    }
+  // AttackBlock's generic solver draws std::rand() for G2 sword variants. Only inspect the
+  // actual named clips here; every other listed primitive lookup is free of RNG.
+  s.hasMove = hasAnim(Anim::Move);
+  s.hasLeft = hasAnim(Anim::MoveL);
+  s.hasRight = hasAnim(Anim::MoveR);
+  s.hasBack = hasAnim(Anim::MoveBack);
+  s.hasAttack = hasAnim(Anim::Attack);
+  s.hasAttackLeft = hasAnim(Anim::AttackL);
+  s.hasAttackRight = hasAnim(Anim::AttackR);
+  if(ws==WeaponState::W1H || ws==WeaponState::W2H) {
+    const std::string prefix = ws==WeaponState::W1H ? "T_1HPARADE_" : "T_2HPARADE_";
+    s.hasBlock = Gothic::inst().version().game==2 ? hasAnim(prefix+"0") : hasAnim(prefix+"O");
+    }
+  const auto bs = bodyStateMasked();
+  const bool melee = ws==WeaponState::W1H || ws==WeaponState::W2H;
+  s.nativeEligible = melee && !isPlayer() && !isTalk() && !isDown() && !isInAir() &&
+                     !isSwim() && !isDive() && !externalCtrl && aiQueue.size()==0 &&
+                     bs!=BS_HIT && bs!=BS_LIE && bs!=BS_STUMBLE && bs!=BS_FALL &&
+                     !s.faiGate && !s.aniGate && !s.aiGate && !s.outputGate && s.interruptible;
+  return s;
+  }
+
+Npc::BodyObservationTarget Npc::bodyObservationTarget(const Npc& tg) const {
+  BodyObservationTarget s;
+  auto& script = owner.script();
+  s.fightDistanceCm = fightDistanceTo(tg).length();
+  s.attackRangeCm = fghAlgo.prefferedAttackDistance(*this,tg,script);
+  s.gRangeCm = fghAlgo.prefferedGDistance(*this,tg,script);
+  s.closeupRangeCm = 0.75f*fghAlgo.baseDistance(*this,tg,script);
+  s.inWRange = fghAlgo.isInWRange(*this,tg,script);
+  s.inGRange = fghAlgo.isInGRange(*this,tg,script);
+  s.inCloseup = fghAlgo.isInCloseupRange(*this,tg,script);
+  s.focus30 = fghAlgo.isInFocusAngle(*this,tg);
+  s.focus5 = fghAlgo.isInFocusAngle(*this,tg,5.f);
+  s.meleeLineClear = !owner.physic()->ray(collosionCenter(),tg.collosionCenter()).hasCol;
+  return s;
+  }
+
+void Npc::traceCombatAttempt(Anim requested, bool accepted, const std::string& before, std::string_view hook) {
+  if(!TestBench::bodyTracing())
+    return;
+  const auto after = combatPoseIdentity();
+  const bool changed = before!=after;
+  TestBench::bodyEvent(*this,currentTarget,"native_attempt",owner.tickCount(),
+                      "\"hook\":" + TestBench::bodyJson(hook) + ",\"choice_id\":" + std::to_string(fghAlgo.traceChoiceId()) + ",\"primitive\":" +
+                      std::to_string(int(fghAlgo.queuedAction())) + ",\"requested_anim\":" + std::to_string(int(requested)) +
+                      ",\"accepted\":" + (accepted ? "true" : "false") + ",\"pose_changed\":" + (changed ? "true" : "false") +
+                      ",\"pose_before\":" + TestBench::bodyJson(before) + ",\"pose_after\":" + TestBench::bodyJson(after) +
+                      ",\"layers_after\":" + combatPoseLayers(),visual.pose().animNames());
   }
 
 bool Npc::implAiTick(uint64_t dt) {
@@ -2062,12 +2330,25 @@ bool Npc::setGoToLadder() {
   }
 
 void Npc::commitDamage() {
-  if(currentTarget==nullptr)
+  const auto hitTrace = [&](const char* result) {
+    BodyObservations::noteEvent(*this,currentTarget,result,owner.tickCount());
+    if(TestBench::bodyTracing())
+      TestBench::bodyEvent(*this,currentTarget,"hit_attempt",owner.tickCount(),
+                          "\"result\":" + TestBench::bodyJson(result),visual.pose().animNames());
+    };
+  if(currentTarget==nullptr) {
+    hitTrace("no_target");
     return;
-  if(!fghAlgo.isInAttackRange(*this,*currentTarget,owner.script()))
+    }
+  if(!fghAlgo.isInAttackRange(*this,*currentTarget,owner.script())) {
+    hitTrace("out_of_range");
     return;
-  if(!fghAlgo.isInFocusAngle(*this,*currentTarget))
+    }
+  if(!fghAlgo.isInFocusAngle(*this,*currentTarget)) {
+    hitTrace("out_of_focus");
     return;
+    }
+  hitTrace("applied");
   currentTarget->takeDamage(*this,nullptr);
   }
 
@@ -2081,6 +2362,13 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
   const bool  isBlock = (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
                          fghAlgo.isInFocusAngle(*this,other) &&
                          pose.isDefence(owner.tickCount());
+  if((isBlock || isJumpb) && b==nullptr)
+    BodyObservations::noteEvent(*this,&other,isBlock ? "blocked" : "evaded",owner.tickCount());
+  if(TestBench::bodyTracing())
+    TestBench::bodyEvent(*this,&other,"defence_result",owner.tickCount(),
+                        std::string("\"damage_kind\":") + TestBench::bodyJson(b==nullptr ? "melee" : "ranged") +
+                        ",\"blocked\":" + (isBlock && b==nullptr ? "true" : "false") +
+                        ",\"jumped_back\":" + (isJumpb && b==nullptr ? "true" : "false"),pose.animNames());
 
   lastHit = &other;
   if(!isPlayer())
@@ -2111,6 +2399,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
   }
 
 void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell) {
+  const int32_t traceHpBefore = TestBench::bodyTracing() ? attribute(ATR_HITPOINTS) : 0;
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
   if(std::cos(da*M_PI/180.0)<0)
@@ -2134,11 +2423,25 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
 
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
     perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
+    const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
+    if(TestBench::bodyTracing())
+      TestBench::bodyEvent(*this,&other,"native_queue_clear",owner.tickCount(),
+                          "\"reason\":\"take_hit\",\"primitive_before\":" + std::to_string(int(tracePrimitiveBefore)));
     implFaiWait(0);
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  const auto traceDamage = [&] {
+    BodyObservations::noteEvent(*this,&other,hitResult.value>0 ? "damage_received" : "damage_no_loss",owner.tickCount());
+    if(TestBench::bodyTracing())
+      TestBench::bodyEvent(*this,&other,"damage",owner.tickCount(),
+                          "\"damage_kind\":" + TestBench::bodyJson(isSpell ? "spell" : (b==nullptr ? "melee" : "ranged")) +
+                          ",\"hp_before\":" + std::to_string(traceHpBefore) + ",\"hp_after\":" +
+                          std::to_string(attribute(ATR_HITPOINTS)) + ",\"net\":" + std::to_string(hitResult.value) +
+                          ",\"has_hit\":" + (hitResult.hasHit ? "true" : "false") +
+                          ",\"down\":" + (isDown() ? "true" : "false") + ",\"dead\":" + (isDead() ? "true" : "false"));
+    };
   if(TestBench::isActive()) {
     // what it did: the weapon's damage before the draw and the armour, k the draw times the zone (the zone
     // scales what the armour let through); the arrow's kind
@@ -2162,6 +2465,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
 
   if(isDown()) {
     onNoHealth(dontKill,HS_NoSound);
+    traceDamage();
     return;
     }
 
@@ -2208,6 +2512,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
       }
     }
+  traceDamage();
   }
 
 void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble) {
@@ -2475,6 +2780,8 @@ void Npc::tick(uint64_t dt) {
 
   assert(go2.flag!=GoToHint::GT_Enemy && go2.flag!=GoToHint::GT_EnemyG);
 
+  BodyMovementTrace movementTrace(*this,dt);
+  traceCombatSnapshot();
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
@@ -2520,6 +2827,7 @@ void Npc::tick(uint64_t dt) {
     archAi.tick(*this,dt);
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
+    traceCombatGate("tick_wait_or_animation_lock");
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
       implTurnToFai(*currentTarget,dt);
       }
@@ -3995,24 +4303,32 @@ bool Npc::canFinish(Npc& oth) {
   }
 
 bool Npc::doAttack(Anim anim, BodyState bs) {
+  const bool trace = TestBench::bodyTracing() && currentTarget!=nullptr;
+  const auto before = trace ? combatPoseIdentity() : std::string();
+  const auto result = [&](bool accepted) {
+    BodyObservations::noteEvent(*this,currentTarget,accepted ? "animation_accepted" : "animation_rejected",owner.tickCount());
+    if(trace)
+      traceCombatAttempt(anim,accepted,before,"do_attack");
+    return accepted;
+    };
   auto weaponSt = weaponState();
   if(weaponSt==WeaponState::NoWeapon || weaponSt==WeaponState::Mage)
-    return false;
+    return result(false);
 
   if(mvAlgo.isSwim())
-    return false;
+    return result(false);
 
   if(bs==BS_PARADE && hasState(BS_PARADE))
-    return false;
+    return result(false);
 
   const auto wlk = walkMode();
   visual.setAnimRotate(*this,0);
   if(auto sq = visual.continueCombo(*this,anim,bs,weaponSt,wlk)) {
     (void)sq;
     // implAniWait(uint64_t(sq->atkTotalTime(visual.comboLength())+1));
-    return true;
+    return result(true);
     }
-  return false;
+  return result(false);
   }
 
 void Npc::fistShoot() {
@@ -4583,13 +4899,29 @@ bool Npc::perceptionProcess(Npc &pl) {
     return true;
 
   bool ret=false;
+  SensesBit sensedPlayer = SensesBit::SENSE_NONE;
+  const auto trace = [&](std::string_view gate) {
+    if(!TestBench::bodyTracing() || currentTarget==nullptr)
+      return;
+    TestBench::bodyEvent(*this,&pl,"native_perception",owner.tickCount(),
+                         "\"perception_kind\":\"periodic\",\"gate\":"+TestBench::bodyJson(gate)+
+                         ",\"process_policy\":"+std::to_string(int(processPolicy()))+
+                         ",\"external_control\":"+(externalCtrl ? "true" : "false")+
+                         ",\"sensed_player\":"+std::to_string(int(sensedPlayer))+
+                         ",\"result\":"+(ret ? "true" : "false")+
+                         ",\"next_time\":"+std::to_string(perceptionNextTime));
+    };
   if(processPolicy()!=NpcProcessPolicy::AiNormal) {
     perceptionNextTime = owner.tickCount()+perceptionTimeClampt();
+    trace("policy_disabled");
     return ret;
     }
 
   const float quadDist = pl.qDistTo(*this);
-  if(hasPerc(PERC_ASSESSPLAYER) && canSenseNpc(pl,false)!=SensesBit::SENSE_NONE) {
+  const bool assessPlayer = hasPerc(PERC_ASSESSPLAYER);
+  if(assessPlayer)
+    sensedPlayer = canSenseNpc(pl,false);
+  if(assessPlayer && sensedPlayer!=SensesBit::SENSE_NONE) {
     if(perceptionProcess(pl,nullptr,quadDist,PERC_ASSESSPLAYER)) {
       ret = true;
       }
@@ -4615,6 +4947,7 @@ bool Npc::perceptionProcess(Npc &pl) {
 
   // if(aiQueue.size()==0) // NOTE: Gothic1 fights
   perceptionNextTime = owner.tickCount()+perceptionTimeClampt();
+  trace("normal");
   return ret;
   }
 
@@ -4626,36 +4959,58 @@ bool Npc::passPerception(Npc& other, Npc* victim, PercType perc) {
   }
 
 bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc) {
+  const auto trace = [&](std::string_view gate, bool result, bool dispatched) {
+    if(!TestBench::bodyTracing() || currentTarget==nullptr)
+      return;
+    TestBench::bodyEvent(*this,&pl,"native_perception",owner.tickCount(),
+                         "\"perception_kind\":\"dispatch\",\"gate\":"+TestBench::bodyJson(gate)+
+                         ",\"process_policy\":"+std::to_string(int(processPolicy()))+
+                         ",\"perception\":"+std::to_string(int(perc))+
+                         ",\"quad_distance_cm\":"+std::to_string(quadDist)+
+                         ",\"external_control\":"+(externalCtrl ? "true" : "false")+
+                         ",\"native_callback_dispatched\":"+(dispatched ? "true" : "false")+
+                         ",\"result\":"+(result ? "true" : "false"));
+    };
   if(!aiState.started && aiState.funcIni.isValid()) {
     // avoid ugly soft-lock (ZS_MM_Attack <-> B_MM_AssessWarn) for the orks near ramp
+    trace("waiting_for_state",false,false);
     return false;
     }
 
   float r = float(world().script().percRanges().at(perc, hnpc->senses_range));
   r = r*r;
 
-  if(quadDist>r)
+  if(quadDist>r) {
+    trace("out_of_range",false,false);
     return false;
+    }
 
   if(externalCtrl) {
     Gothic::inst().onExternalPerception(*this,pl,victim,perc);
+    trace("external_control",false,false);
     return false;
     }
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
   if(hasPerc(perc)) {
     auto& intercept = Gothic::inst().interceptPerception;
-    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc))
+    if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
+      trace("intercepted",true,false);
       return true;  // taken over by an outside AI (ai_bridge); it may hand it back
+      }
+    trace("native_callback",true,true);
     owner.script().invokeState(this,&pl,victim,perception[perc].func);
     return true;
     }
   if(perc==PERC_ASSESSMAGIC && isPlayer()) {
     auto defaultFn = owner.script().playerPercAssessMagic();
-    if(defaultFn.isValid())
+    if(defaultFn.isValid()) {
+      trace("native_magic_callback",true,true);
       owner.script().invokeState(this,&pl,victim,defaultFn);
+      }
     return true;
     }
+  trace("no_callback",false,false);
   return false;
   }
 

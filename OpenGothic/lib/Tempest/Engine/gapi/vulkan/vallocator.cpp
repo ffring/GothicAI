@@ -279,7 +279,11 @@ VTexture VAllocator::alloc(const uint32_t w, const uint32_t h, const uint32_t d,
   imageInfo.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
   imageInfo.format        = nativeFormat(frm);
 
-  if(provider.device->props.hasSamplerFormat(frm)) {
+  // hasSamplerFormat also requires blit support for automatic texture mipmaps. Attachments and
+  // storage images can still be sampled without mipmap generation (e.g. R11G11B10 on lavapipe).
+  VkFormatProperties formatProps = {};
+  vkGetPhysicalDeviceFormatProperties(provider.device->physicalDevice, imageInfo.format, &formatProps);
+  if((formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)!=0) {
     imageInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
     // Formats that are required to support VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT
     // must also support VK_FORMAT_FEATURE_TRANSFER_SRC_BIT and VK_FORMAT_FEATURE_TRANSFER_DST_BIT.

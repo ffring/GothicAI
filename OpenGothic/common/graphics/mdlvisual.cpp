@@ -1210,7 +1210,7 @@ const Animation::Sequence* MdlVisual::startAnimAndGet(Npc& npc, AnimationSolver:
     return nullptr;
     }
 
-  const Animation::Sequence *sq = solver.solveAnim(a,st,wlk,*skInst);
+  const Animation::Sequence *sq = solver.solveAnim(a,st,wlk,*skInst,&npc);
   if(sq==nullptr)
     return nullptr;
 
@@ -1378,7 +1378,7 @@ float MdlVisual::viewDirection() const {
 const Animation::Sequence* MdlVisual::continueCombo(Npc& npc, AnimationSolver::Anim a, BodyState bs,
                                                     WeaponState st, WalkBit wlk)  {
   if(st==WeaponState::Fist || st==WeaponState::W1H || st==WeaponState::W2H) {
-    const Animation::Sequence *sq = solver.solveAnim(a,st,wlk,*skInst);
+    const Animation::Sequence *sq = solver.solveAnim(a,st,wlk,*skInst,&npc);
     if(auto ret = skInst->continueCombo(solver,sq,bs,npc.world().tickCount()))
       return ret;
     }

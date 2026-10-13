@@ -18,9 +18,11 @@ static size_t countBones(const Resources::VertexA* v, size_t n) {
 
 AnimMesh::AnimMesh(const PackedMesh& mesh)
   : bonesCount(countBones(mesh.verticesA.data(),mesh.verticesA.size())) {
-  vbo  = Resources::vbo (mesh.verticesA.data(),mesh.verticesA.size());
-  ibo  = Resources::ibo (mesh.indices.data(),  mesh.indices.size());
-  ibo8 = Resources::ssbo(mesh.indices8.data(), mesh.indices8.size());
+  if(Resources::hasGraphicsDevice()) {
+    vbo  = Resources::vbo (mesh.verticesA.data(),mesh.verticesA.size());
+    ibo  = Resources::ibo (mesh.indices.data(),  mesh.indices.size());
+    ibo8 = Resources::ssbo(mesh.indices8.data(), mesh.indices8.size());
+    }
 
   sub.resize(mesh.subMeshes.size());
   for(size_t i=0;i<mesh.subMeshes.size();++i) {
@@ -31,7 +33,7 @@ AnimMesh::AnimMesh(const PackedMesh& mesh)
     }
 
   // compact similar sub-meshes. not a big deal, but helps in graphics debugging
-  size_t cnt = 1;
+  size_t cnt = sub.empty() ? 0 : 1;
   for(size_t i=1;i<mesh.subMeshes.size();++i) {
     auto& a = sub[cnt-1];
     auto& b = sub[i];

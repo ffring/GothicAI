@@ -46,7 +46,7 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, std::string_view fname)
 
   size_t count = 0;
   for(size_t r=0;r<att.sub.size();++r) {
-    if(att.sub[r].material.tex==nullptr) {
+    if(att.sub[r].material.tex==nullptr && !Resources::isHeadless()) {
       if(!att.sub[r].texName.empty())
         Tempest::Log::e("no texture: ",att.sub[r].texName);
       continue;
@@ -82,8 +82,10 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>&
     samplesCnt += i.samples.size();
     }
 
-  morphIndex   = Resources::ssbo(Tempest::Uninitialized, indexSz*aniList.size());
-  morphSamples = Resources::ssbo(Tempest::Uninitialized, samplesCnt*sizeof(Vec4));
+  if(Resources::hasGraphicsDevice()) {
+    morphIndex   = Resources::ssbo(Tempest::Uninitialized, indexSz*aniList.size());
+    morphSamples = Resources::ssbo(Tempest::Uninitialized, samplesCnt*sizeof(Vec4));
+    }
 
   std::vector<int32_t> remapId;
   std::vector<Vec4>    samples;
@@ -93,8 +95,10 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>&
   for(size_t i=0; i<aniList.size(); ++i) {
     remap(aniList[i],pm.verticesId,remapId,samples,samplesCnt);
 
-    morphIndex  .update(remapId.data(), i*indexSz,               remapId.size()*sizeof(remapId[0]));
-    morphSamples.update(samples.data(), samplesCnt*sizeof(Vec4), samples.size()*sizeof(Vec4)      );
+    if(Resources::hasGraphicsDevice()) {
+      morphIndex  .update(remapId.data(), i*indexSz,               remapId.size()*sizeof(remapId[0]));
+      morphSamples.update(samples.data(), samplesCnt*sizeof(Vec4), samples.size()*sizeof(Vec4)      );
+      }
 
     morph[i] = mkAnimation(aniList[i]);
     morph[i].index = (i*indexSz)/sizeof(int32_t);
@@ -157,7 +161,7 @@ ProtoMesh::ProtoMesh(const zenkit::Model& library, std::unique_ptr<Skeleton>&& s
     if(i.attachId<attach.size()) {
       auto& att = attach[i.attachId];
       for(size_t r=0;r<att.sub.size();++r){
-        if(att.sub[r].material.tex==nullptr) {
+        if(att.sub[r].material.tex==nullptr && !Resources::isHeadless()) {
           if(!att.sub[r].texName.empty())
             Tempest::Log::e("no texture: ",att.sub[r].texName);
           continue;
@@ -278,7 +282,7 @@ ProtoMesh::ProtoMesh(const zenkit::ModelMesh& library, std::unique_ptr<Skeleton>
     if(i.attachId<attach.size()) {
       auto& att = attach[i.attachId];
       for(size_t r=0;r<att.sub.size();++r){
-        if(att.sub[r].material.tex==nullptr) {
+        if(att.sub[r].material.tex==nullptr && !Resources::isHeadless()) {
           if(!att.sub[r].texName.empty())
             Tempest::Log::e("no texture: ",att.sub[r].texName);
           continue;
@@ -326,7 +330,7 @@ ProtoMesh::ProtoMesh(const Material& mat, std::vector<Resources::Vertex> vbo, st
 
   size_t count = 0;
   for(size_t r=0;r<att.sub.size();++r) {
-    if(att.sub[r].material.tex==nullptr) {
+    if(att.sub[r].material.tex==nullptr && !Resources::isHeadless()) {
       if(!att.sub[r].texName.empty())
         Tempest::Log::e("no texture: ",att.sub[r].texName);
       continue;

@@ -214,6 +214,12 @@ target_link_libraries(Gothic2Notr PRIVATE OpenGothic)
 add_subdirectory(ai_bridge)
 target_link_libraries(Gothic2Notr PRIVATE AiBridge)
 
+# Uses the shared engine/CPU simulation without constructing a window or graphics/audio device.
+if(UNIX AND NOT APPLE AND NOT ANDROID)
+  add_executable(gothic-body-runner game/bodyrunner.cpp)
+  target_link_libraries(gothic-body-runner PRIVATE OpenGothic AiBridge)
+endif()
+
 # editor
 target_sources(Spacer PRIVATE ${SPACER_SOURCES} spacer/main.cpp)
 target_include_directories(Spacer PRIVATE "spacer")

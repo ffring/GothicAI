@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "scenario": "melee-v1",
+  "bench": "scripts/bench/body-melee.bench",
+  "controller": "native",
+  "seeds": [17, 29, 43],
+  "timeout_ms": 60000,
+  "arena_waypoint": "NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02",
+  "arena_yaw_deg": 210,
+  "observer_distance_cm": 1200,
+  "initial_horizontal_separation_cm": 300,
+  "actors": ["BDT_1003_BANDIT_M", "PAL_255_RITTER"],
+  "setup": {
+    "hp": 300,
+    "hpmax": 300,
+    "str": 60,
+    "dex": 60,
+    "onehand": 60,
+    "onehand_talent": 2,
+    "edge_protection": 30,
+    "blunt_protection": 30,
+    "weapon": "ItMw_1h_Common_01",
+    "armor": "ItAr_Leather_L",
+    "immortal": false
+  },
+  "fight_tactic_symbol": "FAI_HUMAN_MASTER",
+  "guilds": [9, 1],
+  "attack_reason": "AR_KILL",
+  "step": {
+    "fixed_fps": 30,
+    "dt_ms": [33, 34],
+    "trace_sample_target_ms": 50,
+    "trace_sample_max_quantized_ms": 67,
+    "sample_phase": "npc_pre_tick_animation_tags"
+  },
+  "rng": "Reset script RNG before NPC construction and again before mutual ZS_ATTACK; the second reset separates combat from setup callback RNG consumption. Engine time and other native nondeterminism are measured, not assumed absent.",
+  "units": {"time": "ms game time", "position": "cm", "yaw": "deg", "hp": "engine HP"},
+  "outcomes": ["actor_down", "target_down", "both_down", "timeout"],
+  "primitive_names": {
+    "0": "MV_NULL", "1": "MV_MOVEG", "2": "MV_MOVE", "3": "MV_JUMPBACK",
+    "4": "MV_ATTACK", "5": "MV_ATTACKL", "6": "MV_ATTACKR", "7": "MV_STRAFEL",
+    "8": "MV_STRAFER", "9": "MV_BLOCK", "10": "MV_WAIT", "11": "MV_WAITLONG",
+    "12": "MV_TURN2HIT", "13": "MV_TURN", "14": "MV_TURNG", "15": "MV_STRAFE_E"
+  },
+  "guard_fields": ["prehit", "defence", "jumpback", "attack_anim", "def_window", "def_par_window"],
+  "scope": "One bounded three-seed stage 1 reference. Graphics/Vulkan under Xvfb on dev-ubuntu is permitted for reference only; this does not satisfy headless readiness. No models, held player attacks, artificial hit/strike commands, combatant invulnerability or training."
+}

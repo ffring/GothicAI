@@ -20,6 +20,7 @@
 #include "world/triggers/abstracttrigger.h"
 #include "world/objects/npc.h"
 #include "game/serialize.h"
+#include "game/simulationstep.h"
 #include "game/globaleffects.h"
 #include "utils/gthfont.h"
 #include "utils/dbgpainter.h"
@@ -962,15 +963,11 @@ uint64_t MainWindow::tick() {
 
   dialogs.tick(dt);
   inventory.tick(dt);
-  Gothic::inst().tick(dt);
-  player.tickFocus();
-
-  if(dialogs.isActive())
-    ;//clearInput();
-  if(document.isActive())
-    clearInput();
-  tickMouse(dt);
-  player.tickMove(dt);
+  SimulationStep::worldPlayerStep(dt,player,[&] {
+    if(document.isActive())
+      clearInput();
+    tickMouse(dt);
+    });
 
   // aiming by hand in a window: the mouse is caught as in full screen
   const bool catchMouse = aimCatchesMouse() && !SystemApi::isFullscreen(hwnd());
@@ -982,10 +979,6 @@ uint64_t MainWindow::tick() {
     }
   update();
   return dt;
-  }
-
-void MainWindow::updateAnimation(uint64_t dt) {
-  Gothic::inst().updateAnimation(dt);
   }
 
 void MainWindow::tickCamera(uint64_t dt) {
@@ -1311,9 +1304,7 @@ void MainWindow::render(){
       lastly - camera position
       */
     const uint64_t dt = tick();
-    updateAnimation(dt);
-    tickCamera(dt);
-    if(TestBench::tick(dt,player)) {
+    if(SimulationStep::finishStep(dt,player,[&] { tickCamera(dt); })) {
       auto   tex = TestBench::withUi() ? screenshotWithUi() : renderer.screenshoot(cmdId);
       Pixmap pm;
       if(!tex.isEmpty())

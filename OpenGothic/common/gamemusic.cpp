@@ -336,6 +336,8 @@ GameMusic *GameMusic::instance = nullptr;
 GameMusic::GameMusic() {
   instance = this;
   provider = PROVIDER_UNINITIALIZED;
+  if(!Resources::isHeadless())
+    device = std::make_unique<Tempest::SoundDevice>();
 
   Gothic::inst().onSettingsChanged.bind(this, &GameMusic::setupSettings);
   setupSettings();
@@ -356,11 +358,13 @@ GameMusic::Tags GameMusic::mkTags(GameMusic::Tags daytime, GameMusic::Tags mode)
   }
 
 void GameMusic::setEnabled(bool e) {
-  impl->setEnabled(e);
+  if(impl!=nullptr)
+    impl->setEnabled(e);
+  silentEnabled = e;
   }
 
 bool GameMusic::isEnabled() const {
-  return impl->isEnabled();
+  return impl!=nullptr ? impl->isEnabled() : silentEnabled;
   }
 
 void GameMusic::setMusic(GameMusic::Music m) {
@@ -377,7 +381,8 @@ void GameMusic::setMusic(GameMusic::Music m) {
 void GameMusic::setMusic(const zenkit::IMusicTheme &theme, Tags tags) {
   currentMusic.theme = theme;
   currentMusic.tags  = tags;
-  impl->playTheme(currentMusic.theme, currentMusic.tags);
+  if(impl!=nullptr)
+    impl->playTheme(currentMusic.theme, currentMusic.tags);
   }
 
 void GameMusic::stopMusic() {
@@ -386,6 +391,10 @@ void GameMusic::stopMusic() {
 
 void GameMusic::setupSettings() {
   const int   musicEnabled  = Gothic::settingsGetI("SOUND",    "musicEnabled");
+  if(!device) {
+    setEnabled(musicEnabled!=0);
+    return;
+    }
   const float musicVolume   = Gothic::settingsGetF("SOUND",    "musicVolume");
   const int   providerIndex = Gothic::settingsGetI("INTERNAL", "soundProviderIndex");
 
@@ -404,7 +413,7 @@ void GameMusic::setupSettings() {
     impl = p.get();
     impl->playTheme(currentMusic.theme, currentMusic.tags);
 
-    sound = device.load(std::move(p));
+    sound = device->load(std::move(p));
     sound.play();
     }
 

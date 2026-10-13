@@ -1,0 +1,21 @@
+# Stage 1 reference only: native human vs native human; no model or body API.
+# Run on dev-ubuntu using the Linux reference renderer. This is not the stage 2 headless runner.
+# bodyduel validates/reset-equips its own two mortal combatants and waits for either-down or 60 s.
+set time 12 0
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02
+turn 210
+wait 500
+watch player
+clear 3000
+immortal player on    # stationary observer 12 m away; neither combatant inherits this
+release all
+
+rec melee_seed17 novideo
+bodyduel 17 60000
+stop
+rec melee_seed29 novideo
+bodyduel 29 60000
+stop
+rec melee_seed43 novideo
+bodyduel 43 60000
+stop

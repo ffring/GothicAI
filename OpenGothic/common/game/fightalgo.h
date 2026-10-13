@@ -42,6 +42,8 @@ class FightAlgo final {
     void   onTakeHit();
 
     bool   hasInstructions() const;
+    Action queuedAction() const { return tr[0]; }
+    uint64_t traceChoiceId() const { return traceChoice; }
     bool   fetchInstructions(Npc &npc, Npc &tg, GameScript& owner);
     float  qDistTo(const Npc& npc, const Npc& tg) const;
 
@@ -69,4 +71,5 @@ class FightAlgo final {
     zenkit::FightAiMove queueId = zenkit::FightAiMove::NOP;
     Action              tr   [MV_MAX]={};
     bool                hitFlg=false;
+    uint64_t            traceChoice=0; // bench telemetry only, never serialized or used for decisions
   };

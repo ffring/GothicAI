@@ -625,6 +625,14 @@ bool Pose::isDefence(uint64_t tickCount) const {
   return false;
   }
 
+auto Pose::combatLayers(uint64_t tickCount) const -> std::vector<CombatLayer> {
+  std::vector<CombatLayer> result;
+  result.reserve(lay.size());
+  for(const auto& i:lay)
+    result.push_back({i.seq,i.sAnim,layerTime(i,tickCount),i.speed,i.comb,i.bs});
+  return result;
+  }
+
 bool Pose::isJumpBack(uint64_t tickCount) const {
   for(auto& i:lay) {
     if(i.bs==BS_PARADE && i.seq->data->defWindow.empty())

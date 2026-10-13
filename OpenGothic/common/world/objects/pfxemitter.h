@@ -25,7 +25,7 @@ class PfxEmitter {
     PfxEmitter& operator=(PfxEmitter&& b);
     PfxEmitter(const PfxEmitter&)=delete;
 
-    bool     isEmpty() const { return bucket==nullptr; }
+    bool     isEmpty() const { return bucket==nullptr && cpuDecl==nullptr; }
     void     setPosition (float x,float y,float z);
     void     setPosition (const Tempest::Vec3& pos);
     void     setDirection(const Tempest::Matrix4x4& pos);
@@ -48,6 +48,16 @@ class PfxEmitter {
 
     PfxBucket* bucket = nullptr;
     size_t     id     = size_t(-1);
+
+    // The headless adapter retains the declared effect's gameplay collision zone;
+    // it never constructs a PfxObjects bucket or emits rendering particles.
+    const ParticleFx* cpuDecl = nullptr;
+    World*            cpuWorld = nullptr;
+    Tempest::Vec3    cpuPosition;
+    bool              cpuActive = false;
+    bool              cpuLooped = false;
+    uint64_t          cpuStarted = 0;
+    uint64_t          cpuStopped = 0;
 
     CollisionZone      zone;
     MeshObjects::Mesh  shpMesh;

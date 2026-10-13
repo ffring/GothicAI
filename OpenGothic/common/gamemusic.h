@@ -4,6 +4,7 @@
 
 #include <Tempest/SoundDevice>
 #include <Tempest/SoundEffect>
+#include <memory>
 
 class GameMusic final {
   public:
@@ -49,7 +50,8 @@ class GameMusic final {
       } currentMusic;
 
     int                  provider = -1;
-    Tempest::SoundDevice device;
+    std::unique_ptr<Tempest::SoundDevice> device;
     Tempest::SoundEffect sound;
     MusicProvider*       impl = nullptr;
+    bool                 silentEnabled = false;
   };

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "scenario": "body-observe-v1",
+  "declared_before_measurement": "2026-10-13",
+  "policy": "Passive numeric observations must not change native behavior. Missing raw data, dropped data without counters, and incomplete runs cannot pass readiness.",
+  "budgets": {
+    "sample_period_game_ms": 50,
+    "normal_realtime_interval_p95_game_ms": 100,
+    "normal_realtime_interval_p95_wall_ms": 100,
+    "passive_duration_game_ms": 600000,
+    "observed_actor_count": 4,
+    "local_ray_count": 16,
+    "observer_cost_p95_wall_us": 2000,
+    "headless_throughput_drop_fraction": 0.05,
+    "paired_repeats_min": 3,
+    "event_delivery_max_sim_steps": 1
+  },
+  "required_evidence": [
+    "10 minute passive realtime raw observation stream",
+    "four runtime-distinct actors, generation changes and increasing observation sequence",
+    "finite numeric features, declared units, availability and validity flags",
+    "hidden target current values absent, last known state explicitly aged",
+    "16 bounded local obstacle rays using native world collision",
+    "native event source and first delivered sample timestamps",
+    "bounded queues with explicit dropped counters",
+    "same-build paired observer on/off native trace parity and measured throughput",
+    "observer work measured on simulation thread including serialization",
+    "no graphics, audio or GPU device and unchanged production service states"
+  ],
+  "limitations": [
+    "Observation subscription is passive and does not acquire body control.",
+    "Action masks and can_decide are availability only until the shared stage 4 resolver exists.",
+    "Frame quantization and sample scheduling use game time; wall measurements are local to one engine process.",
+    "Native event delivery is bounded in simulation steps and does not claim a network or model response latency.",
+    "Service state snapshots are not ASR/TTS latency measurements."
+  ]
+}

@@ -1216,11 +1216,12 @@ bool DynamicWorld::hasCollision(const NpcItem& it, CollisionTest& out) {
   }
 
 DynamicWorld::NpcItem::~NpcItem() {
-  if(owner==nullptr)
+  if(owner==nullptr || obj==nullptr)
     return;
   owner->world->touchAabbs();
   if(!owner->npcList->del(obj))
     owner->world->removeCollisionObject(obj);
+  delete obj; // The handle owns both the body and its capsule; unregistering alone leaked them.
   }
 
 void DynamicWorld::NpcItem::setPosition(const Tempest::Vec3& pos) {

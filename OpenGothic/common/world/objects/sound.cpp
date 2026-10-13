@@ -19,7 +19,7 @@ Sound::Sound(World& world, Sound::Type type, std::string_view s, const Tempest::
   if(freeSlot) {
     std::lock_guard<std::mutex> guard(owner.sync);
     auto slot = owner.freeSlot.find(cname);
-    if(slot!=owner.freeSlot.end() && !slot->second->eff.isFinished())
+    if(slot!=owner.freeSlot.end() && !slot->second->isFinished())
       return;
     }
 
@@ -73,11 +73,11 @@ Tempest::Vec3 Sound::position() const {
   }
 
 bool Sound::isEmpty() const {
-  return val==nullptr ? true : val->eff.isEmpty();
+  return val==nullptr ? true : val->isEmpty();
   }
 
 bool Sound::isFinished() const {
-  return val==nullptr ? true : val->eff.isFinished();
+  return val==nullptr ? true : val->isFinished();
   }
 
 void Sound::setOcclusion(float occ) {
@@ -125,11 +125,11 @@ void Sound::setActive(bool a) {
 
 void Sound::play() {
   if(val!=nullptr)
-    val->eff.play();
+    val->play();
   }
 
 uint64_t Sound::effectPrefferedTime() const {
   if(val!=nullptr)
-    return val->eff.timeLength();
+    return val->timeLength();
   return 0;
   }

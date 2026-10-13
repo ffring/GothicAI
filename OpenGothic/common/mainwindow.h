@@ -102,7 +102,6 @@ class MainWindow : public Tempest::Window {
     Tempest::Attachment screenshotWithUi();
 
     uint64_t tick();
-    void     updateAnimation(uint64_t dt);
     void     tickCamera(uint64_t dt);
     void     isDialogClosed(bool& ret);
 

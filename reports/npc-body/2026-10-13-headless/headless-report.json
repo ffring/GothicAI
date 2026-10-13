@@ -1,0 +1,1030 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "issues": [],
+  "gates": [
+    {
+      "id": "suite",
+      "label": "Полная серия",
+      "status": "passed",
+      "detail": "suite=passed, full_stage2_evidence=True, required_gate_failures=[], manifest=passed"
+    },
+    {
+      "id": "headless",
+      "label": "Без graphics/audio device",
+      "status": "passed",
+      "detail": "Проверены явные flags отсутствия device/window/playback и renderer=none"
+    },
+    {
+      "id": "rendered_vs_lockstep",
+      "label": "rendered vs lockstep",
+      "status": "passed",
+      "detail": "status=matched, profile=full, comparison=rendered_vs_headless"
+    },
+    {
+      "id": "rendered_vs_lockstep-delayed",
+      "label": "rendered vs lockstep-delayed",
+      "status": "passed",
+      "detail": "status=matched, profile=full, comparison=rendered_vs_headless"
+    },
+    {
+      "id": "rendered_vs_realtime",
+      "label": "rendered vs realtime",
+      "status": "passed",
+      "detail": "status=matched, profile=full, comparison=rendered_vs_headless"
+    },
+    {
+      "id": "lockstep_vs_lockstep-delayed",
+      "label": "lockstep vs lockstep-delayed",
+      "status": "passed",
+      "detail": "status=matched, profile=full, comparison=headless_schedule_invariance"
+    },
+    {
+      "id": "lockstep_vs_realtime",
+      "label": "lockstep vs realtime",
+      "status": "passed",
+      "detail": "status=matched, profile=full, comparison=headless_schedule_invariance"
+    },
+    {
+      "id": "historical_vs_branch_replay",
+      "label": "historical vs branch replay",
+      "status": "passed",
+      "detail": "status=matched, profile=archived_reference, comparison=rendered_vs_headless"
+    },
+    {
+      "id": "replay_completeness",
+      "label": "Полнота архивного replay",
+      "status": "passed",
+      "detail": "Complete trace: seeds 17/29/43, actor setup и terminal события"
+    },
+    {
+      "id": "replay_consumption",
+      "label": "Replay: 17 веток ровно один раз",
+      "status": "passed",
+      "detail": "entries=17, accepted_blocks=17, consumed=17"
+    },
+    {
+      "id": "senses",
+      "label": "Зрение/преграды/звук",
+      "status": "passed",
+      "detail": "Оба case: настоящие world rays, native sight и завершение звука по metadata duration"
+    },
+    {
+      "id": "resets",
+      "label": "100 последовательных resets",
+      "status": "passed",
+      "detail": "count=100, status=passed, issues=[]"
+    },
+    {
+      "id": "ipc",
+      "label": "JSONL IPC",
+      "status": "passed",
+      "detail": "Freeze, stop на native decision, partial line в realtime, pipeline и clean close"
+    },
+    {
+      "id": "lockstep_runtime",
+      "label": "lockstep: runtime evidence",
+      "status": "passed",
+      "detail": "Completed, device attestation, /proc samples и complete melee trace всех трёх seeds"
+    },
+    {
+      "id": "lockstep_perception",
+      "label": "lockstep: native perceptions",
+      "status": "passed",
+      "detail": "native callback dispatches=30"
+    },
+    {
+      "id": "lockstep-delayed_runtime",
+      "label": "lockstep-delayed: runtime evidence",
+      "status": "passed",
+      "detail": "Completed, device attestation, /proc samples и complete melee trace всех трёх seeds"
+    },
+    {
+      "id": "lockstep-delayed_perception",
+      "label": "lockstep-delayed: native perceptions",
+      "status": "passed",
+      "detail": "native callback dispatches=30"
+    },
+    {
+      "id": "realtime_runtime",
+      "label": "realtime: runtime evidence",
+      "status": "passed",
+      "detail": "Completed, device attestation, /proc samples и complete melee trace всех трёх seeds"
+    },
+    {
+      "id": "realtime_perception",
+      "label": "realtime: native perceptions",
+      "status": "passed",
+      "detail": "native callback dispatches=30"
+    },
+    {
+      "id": "historical_vs_isolated_lockstep",
+      "label": "Историческая диагностика: lockstep",
+      "status": "passed",
+      "detail": "Записан diverged; legacy shared RNG не является isolated RNG"
+    },
+    {
+      "id": "historical_vs_isolated_lockstep-delayed",
+      "label": "Историческая диагностика: lockstep-delayed",
+      "status": "passed",
+      "detail": "Записан diverged; legacy shared RNG не является isolated RNG"
+    },
+    {
+      "id": "historical_vs_isolated_realtime",
+      "label": "Историческая диагностика: realtime",
+      "status": "passed",
+      "detail": "Записан diverged; legacy shared RNG не является isolated RNG"
+    },
+    {
+      "id": "ipc_build_provenance",
+      "label": "IPC на проверенном build",
+      "status": "passed",
+      "detail": "IPC фиксирует тот же runner/save/scenario/settings и SHA-256 использованной engine library"
+    },
+    {
+      "id": "source",
+      "label": "Provenance",
+      "status": "passed",
+      "detail": "Хеши исходников/бинарника/save/config/assets и связь fixture с неизменным archive trace"
+    }
+  ],
+  "runtime": {
+    "lockstep": {
+      "mode": "lockstep",
+      "status": "completed",
+      "delay_per_advance_s": 0,
+      "substeps": 1615,
+      "advance_request_substeps": 1615,
+      "simulated_ms": 53833,
+      "elapsed_wall_ms_after_reset": 25198,
+      "simulated_wall_ratio_after_reset": 2.1363997142630367,
+      "cold_reset_wall_ms": 1724,
+      "advance_processing_wall_s": 24.994944447651505,
+      "substeps_per_processing_s": 64.61306618954072,
+      "native_choices": 160,
+      "native_choices_per_processing_s": 6.401294483174313,
+      "native_choices_per_wall_s_after_reset": 6.3497102944678145,
+      "native_choices_per_simulated_s": 2.9721546263444356,
+      "max_realtime_lag_ms": 0,
+      "resources": {
+        "samples": 32,
+        "rss_kib_range": [
+          8,
+          576104
+        ],
+        "peak_rss_kib": 576104,
+        "threads_range": [
+          1,
+          17
+        ],
+        "file_descriptors_range": [
+          3,
+          7
+        ],
+        "sample_interval_wall_s": 27.00650240399409,
+        "cpu_user_s": 49.92,
+        "cpu_system_s": 1.81,
+        "cpu_total_s": 51.730000000000004,
+        "mean_busy_cpu_cores": 1.9154646250063638,
+        "forbidden_device_descriptors": [],
+        "display_socket_descriptors": []
+      }
+    },
+    "lockstep-delayed": {
+      "mode": "lockstep",
+      "status": "completed",
+      "delay_per_advance_s": 0.2,
+      "substeps": 1615,
+      "advance_request_substeps": 1615,
+      "simulated_ms": 53833,
+      "elapsed_wall_ms_after_reset": 29323,
+      "simulated_wall_ratio_after_reset": 1.8358626334276849,
+      "cold_reset_wall_ms": 1753,
+      "advance_processing_wall_s": 23.7203569417121,
+      "substeps_per_processing_s": 68.08497882087231,
+      "native_choices": 160,
+      "native_choices_per_processing_s": 6.745261059652985,
+      "native_choices_per_wall_s_after_reset": 5.456467619274972,
+      "native_choices_per_simulated_s": 2.9721546263444356,
+      "max_realtime_lag_ms": 0,
+      "resources": {
+        "samples": 32,
+        "rss_kib_range": [
+          192,
+          576104
+        ],
+        "peak_rss_kib": 576104,
+        "threads_range": [
+          1,
+          17
+        ],
+        "file_descriptors_range": [
+          3,
+          7
+        ],
+        "sample_interval_wall_s": 31.16124161204789,
+        "cpu_user_s": 49.6,
+        "cpu_system_s": 1.88,
+        "cpu_total_s": 51.480000000000004,
+        "mean_busy_cpu_cores": 1.65205227188689,
+        "forbidden_device_descriptors": [],
+        "display_socket_descriptors": []
+      }
+    },
+    "realtime": {
+      "mode": "realtime",
+      "status": "completed",
+      "delay_per_advance_s": 0,
+      "substeps": 1615,
+      "advance_request_substeps": 1606,
+      "simulated_ms": 53833,
+      "elapsed_wall_ms_after_reset": 53815,
+      "simulated_wall_ratio_after_reset": 1.0003344792344142,
+      "cold_reset_wall_ms": 1751,
+      "advance_processing_wall_s": 53.53344892093446,
+      "substeps_per_processing_s": null,
+      "native_choices": 160,
+      "native_choices_per_processing_s": null,
+      "native_choices_per_wall_s_after_reset": 2.973148750348416,
+      "native_choices_per_simulated_s": 2.9721546263444356,
+      "max_realtime_lag_ms": 46,
+      "resources": {
+        "samples": 32,
+        "rss_kib_range": [
+          8,
+          576064
+        ],
+        "peak_rss_kib": 576064,
+        "threads_range": [
+          1,
+          17
+        ],
+        "file_descriptors_range": [
+          3,
+          7
+        ],
+        "sample_interval_wall_s": 55.66292767599225,
+        "cpu_user_s": 53.85,
+        "cpu_system_s": 1.26,
+        "cpu_total_s": 55.11,
+        "mean_busy_cpu_cores": 0.9900665002888317,
+        "forbidden_device_descriptors": [],
+        "display_socket_descriptors": []
+      }
+    }
+  },
+  "rendered": {
+    "wall_s_including_load": 634.8069643119816,
+    "renderer_gpu_vram_mib": 0,
+    "resources": {
+      "samples": 633,
+      "rss_kib_range": [
+        994720,
+        2039388
+      ],
+      "peak_rss_kib": 2058364,
+      "threads_range": [
+        17,
+        33
+      ],
+      "file_descriptors_range": [
+        12,
+        14
+      ],
+      "sample_interval_wall_s": 632.8040911159478,
+      "cpu_user_s": 843.65,
+      "cpu_system_s": 215.75,
+      "cpu_total_s": 1059.4,
+      "mean_busy_cpu_cores": 1.674135826353069,
+      "forbidden_device_descriptors": [],
+      "display_socket_descriptors": []
+    }
+  },
+  "comparisons": {
+    "rendered_vs_lockstep": {
+      "status": "matched",
+      "comparison_kind": "rendered_vs_headless",
+      "profile": "full",
+      "full_stage2_evidence": true,
+      "episodes": [
+        {
+          "seed": 17,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 294,
+            "ordered_mechanics": 294,
+            "timing": 1253,
+            "guard_transitions": 110,
+            "trajectory_samples": 1216,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 848,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 14133,
+          "candidate_duration_ms": 14133
+        },
+        {
+          "seed": 29,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 364,
+            "ordered_mechanics": 364,
+            "timing": 1434,
+            "guard_transitions": 133,
+            "trajectory_samples": 1354,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 936,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 15600,
+          "candidate_duration_ms": 15600
+        },
+        {
+          "seed": 43,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 419,
+            "ordered_mechanics": 419,
+            "timing": 1960,
+            "guard_transitions": 126,
+            "trajectory_samples": 2008,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 1414,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 23567,
+          "candidate_duration_ms": 23567
+        }
+      ]
+    },
+    "rendered_vs_lockstep-delayed": {
+      "status": "matched",
+      "comparison_kind": "rendered_vs_headless",
+      "profile": "full",
+      "full_stage2_evidence": true,
+      "episodes": [
+        {
+          "seed": 17,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 294,
+            "ordered_mechanics": 294,
+            "timing": 1253,
+            "guard_transitions": 110,
+            "trajectory_samples": 1216,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 848,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 14133,
+          "candidate_duration_ms": 14133
+        },
+        {
+          "seed": 29,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 364,
+            "ordered_mechanics": 364,
+            "timing": 1434,
+            "guard_transitions": 133,
+            "trajectory_samples": 1354,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 936,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 15600,
+          "candidate_duration_ms": 15600
+        },
+        {
+          "seed": 43,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 419,
+            "ordered_mechanics": 419,
+            "timing": 1960,
+            "guard_transitions": 126,
+            "trajectory_samples": 2008,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 1414,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 23567,
+          "candidate_duration_ms": 23567
+        }
+      ]
+    },
+    "rendered_vs_realtime": {
+      "status": "matched",
+      "comparison_kind": "rendered_vs_headless",
+      "profile": "full",
+      "full_stage2_evidence": true,
+      "episodes": [
+        {
+          "seed": 17,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 294,
+            "ordered_mechanics": 294,
+            "timing": 1253,
+            "guard_transitions": 110,
+            "trajectory_samples": 1216,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 848,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 14133,
+          "candidate_duration_ms": 14133
+        },
+        {
+          "seed": 29,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 364,
+            "ordered_mechanics": 364,
+            "timing": 1434,
+            "guard_transitions": 133,
+            "trajectory_samples": 1354,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 936,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 15600,
+          "candidate_duration_ms": 15600
+        },
+        {
+          "seed": 43,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 419,
+            "ordered_mechanics": 419,
+            "timing": 1960,
+            "guard_transitions": 126,
+            "trajectory_samples": 2008,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 1414,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 23567,
+          "candidate_duration_ms": 23567
+        }
+      ]
+    },
+    "lockstep_vs_lockstep-delayed": {
+      "status": "matched",
+      "comparison_kind": "headless_schedule_invariance",
+      "profile": "full",
+      "full_stage2_evidence": false,
+      "episodes": [
+        {
+          "seed": 17,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 294,
+            "ordered_mechanics": 294,
+            "timing": 1253,
+            "guard_transitions": 110,
+            "trajectory_samples": 1216,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 848,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 14133,
+          "candidate_duration_ms": 14133
+        },
+        {
+          "seed": 29,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 364,
+            "ordered_mechanics": 364,
+            "timing": 1434,
+            "guard_transitions": 133,
+            "trajectory_samples": 1354,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 936,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 15600,
+          "candidate_duration_ms": 15600
+        },
+        {
+          "seed": 43,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 419,
+            "ordered_mechanics": 419,
+            "timing": 1960,
+            "guard_transitions": 126,
+            "trajectory_samples": 2008,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 1414,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 23567,
+          "candidate_duration_ms": 23567
+        }
+      ]
+    },
+    "lockstep_vs_realtime": {
+      "status": "matched",
+      "comparison_kind": "headless_schedule_invariance",
+      "profile": "full",
+      "full_stage2_evidence": false,
+      "episodes": [
+        {
+          "seed": 17,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 294,
+            "ordered_mechanics": 294,
+            "timing": 1253,
+            "guard_transitions": 110,
+            "trajectory_samples": 1216,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 848,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 14133,
+          "candidate_duration_ms": 14133
+        },
+        {
+          "seed": 29,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 364,
+            "ordered_mechanics": 364,
+            "timing": 1434,
+            "guard_transitions": 133,
+            "trajectory_samples": 1354,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 936,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 15600,
+          "candidate_duration_ms": 15600
+        },
+        {
+          "seed": 43,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 419,
+            "ordered_mechanics": 419,
+            "timing": 1960,
+            "guard_transitions": 126,
+            "trajectory_samples": 2008,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "physics_steps": 1414,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 23567,
+          "candidate_duration_ms": 23567
+        }
+      ]
+    },
+    "historical_vs_branch_replay": {
+      "status": "matched",
+      "comparison_kind": "rendered_vs_headless",
+      "profile": "archived_reference",
+      "full_stage2_evidence": false,
+      "episodes": [
+        {
+          "seed": 17,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 294,
+            "ordered_mechanics": 294,
+            "timing": 405,
+            "guard_transitions": 110,
+            "trajectory_samples": 1216,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 14133,
+          "candidate_duration_ms": 14133
+        },
+        {
+          "seed": 29,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 339,
+            "ordered_mechanics": 339,
+            "timing": 458,
+            "guard_transitions": 118,
+            "trajectory_samples": 1486,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 17234,
+          "candidate_duration_ms": 17234
+        },
+        {
+          "seed": 43,
+          "status": "matched",
+          "difference_count": 0,
+          "checks": {
+            "global_event_order": 226,
+            "ordered_mechanics": 226,
+            "timing": 307,
+            "guard_transitions": 80,
+            "trajectory_samples": 848,
+            "actor_max_position_cm": 0.0,
+            "actor_max_yaw_deg": 0.0,
+            "actor_max_sample_offset_ms": 0,
+            "target_max_position_cm": 0.0,
+            "target_max_yaw_deg": 0.0,
+            "target_max_sample_offset_ms": 0
+          },
+          "reference_duration_ms": 9800,
+          "candidate_duration_ms": 9800
+        }
+      ]
+    }
+  },
+  "episodes": {
+    "isolated": [
+      {
+        "seed": 17,
+        "duration_ms": 14133,
+        "outcome": "actor_down",
+        "terminal_actor_hp": 0,
+        "terminal_target_hp": 300
+      },
+      {
+        "seed": 29,
+        "duration_ms": 15600,
+        "outcome": "target_down",
+        "terminal_actor_hp": 224,
+        "terminal_target_hp": 0
+      },
+      {
+        "seed": 43,
+        "duration_ms": 23567,
+        "outcome": "actor_down",
+        "terminal_actor_hp": 0,
+        "terminal_target_hp": 288
+      }
+    ],
+    "archival_branch_replay": [
+      {
+        "seed": 17,
+        "duration_ms": 14133,
+        "outcome": "actor_down",
+        "terminal_actor_hp": 0,
+        "terminal_target_hp": 300
+      },
+      {
+        "seed": 29,
+        "duration_ms": 17234,
+        "outcome": "target_down",
+        "terminal_actor_hp": 300,
+        "terminal_target_hp": 0
+      },
+      {
+        "seed": 43,
+        "duration_ms": 9800,
+        "outcome": "target_down",
+        "terminal_actor_hp": 300,
+        "terminal_target_hp": 0
+      }
+    ]
+  },
+  "historical_diagnostics": [
+    {
+      "mode": "lockstep",
+      "status": "diverged",
+      "episodes": [
+        {
+          "seed": 17,
+          "difference_count": 2150,
+          "first_areas": [
+            "animation_metadata",
+            "animation_metadata",
+            "animation_metadata"
+          ]
+        },
+        {
+          "seed": 29,
+          "difference_count": 6955,
+          "first_areas": [
+            "global_event_order",
+            "global_event_order",
+            "global_event_order"
+          ]
+        },
+        {
+          "seed": 43,
+          "difference_count": 6959,
+          "first_areas": [
+            "global_event_order",
+            "global_event_order",
+            "global_event_order"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "lockstep-delayed",
+      "status": "diverged",
+      "episodes": [
+        {
+          "seed": 17,
+          "difference_count": 2150,
+          "first_areas": [
+            "animation_metadata",
+            "animation_metadata",
+            "animation_metadata"
+          ]
+        },
+        {
+          "seed": 29,
+          "difference_count": 6955,
+          "first_areas": [
+            "global_event_order",
+            "global_event_order",
+            "global_event_order"
+          ]
+        },
+        {
+          "seed": 43,
+          "difference_count": 6959,
+          "first_areas": [
+            "global_event_order",
+            "global_event_order",
+            "global_event_order"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "realtime",
+      "status": "diverged",
+      "episodes": [
+        {
+          "seed": 17,
+          "difference_count": 2150,
+          "first_areas": [
+            "animation_metadata",
+            "animation_metadata",
+            "animation_metadata"
+          ]
+        },
+        {
+          "seed": 29,
+          "difference_count": 6955,
+          "first_areas": [
+            "global_event_order",
+            "global_event_order",
+            "global_event_order"
+          ]
+        },
+        {
+          "seed": 43,
+          "difference_count": 6959,
+          "first_areas": [
+            "global_event_order",
+            "global_event_order",
+            "global_event_order"
+          ]
+        }
+      ]
+    }
+  ],
+  "replay": {
+    "mode": "replay",
+    "status": "passed",
+    "fixture_entries": 17,
+    "accepted_blocks": 17,
+    "branch_draws": 37,
+    "consumed_source_sequences": [
+      143,
+      322,
+      407,
+      529,
+      656,
+      805,
+      1114,
+      1209,
+      1380,
+      1443,
+      1653,
+      1755,
+      1908,
+      2202,
+      2322,
+      2547,
+      2600
+    ]
+  },
+  "resets": {
+    "status": "passed",
+    "count": 100,
+    "latency_ms": {
+      "n": 100,
+      "min": 833.7900690967217,
+      "median": 858.6851149448194,
+      "p95": 910.1404250832275,
+      "max": 1833.5074060596526
+    },
+    "warmed_initial_rss_kib": 644152.0,
+    "warmed_final_rss_kib": 644588.0,
+    "rss_growth_limit_kib": 65536,
+    "file_descriptor_span": 0,
+    "threads_span": 0,
+    "warmed_rss_delta_kib": 436.0
+  },
+  "senses": {
+    "status": "passed",
+    "cases": [
+      "occluded",
+      "visible"
+    ]
+  },
+  "ipc": {
+    "status": "passed",
+    "checks": {
+      "lockstep_freeze": {
+        "status": "passed"
+      },
+      "advance_until_decision": {
+        "status": "passed"
+      },
+      "realtime_partial_line": {
+        "status": "passed",
+        "game_ms_advanced": 300,
+        "substeps_advanced": 9,
+        "observed_wall_ms": 251.76276196725667
+      },
+      "pipelined_status": {
+        "status": "passed",
+        "observed_wall_ms": 0.7791700772941113
+      },
+      "clean_close": {
+        "status": "passed",
+        "exit_code": 0
+      }
+    }
+  },
+  "services_before": {
+    "gpu_shared_host": "16105 MiB, 8019 MiB, 96 %",
+    "services": {
+      "gothic-voxtral": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "3366349",
+        "MemoryCurrent": "3563790336",
+        "CPUUsageNSec": "881365625000"
+      },
+      "gothic-voxcpm": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "630559",
+        "MemoryCurrent": "4204191744",
+        "CPUUsageNSec": "2813762869000"
+      }
+    },
+    "service_latency_measurement": null
+  },
+  "services_after": {
+    "gpu_shared_host": "16249 MiB, 7875 MiB, 95 %",
+    "services": {
+      "gothic-voxtral": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "3366349",
+        "MemoryCurrent": "3563790336",
+        "CPUUsageNSec": "882365434000"
+      },
+      "gothic-voxcpm": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "630559",
+        "MemoryCurrent": "4213788672",
+        "CPUUsageNSec": "3737793581000"
+      }
+    },
+    "service_latency_measurement": null
+  },
+  "provenance": {
+    "recorded_at_utc": "2026-10-13T14:35:08.563284+00:00",
+    "completed_at_utc": "2026-10-13T14:50:41.647772+00:00",
+    "host": "dev-ubuntu",
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "source_sha256": "92c16db854ff2148a8f53ae8bba89a29152fcf028407d247139a87c464b8bded",
+    "source_files_hashed": 3106,
+    "binary_sha256": "25fd4ee2ade0401316b0b247ff8db6726d7cf29b22b0b3fce66a00d473fa1beb",
+    "engine_library_sha256": "2743968223c4de9190937836f698b574528e97eff2af3ad521a055e4f056fb9d",
+    "save_sha256": "c2852f4c009f23225e1c9c70f564ca36b4c12e8220736d1c72a1dbfce8d3372f",
+    "scenario_sha256": "fc2f32e60fde4d14dbc4755357309ea0fef1d8fc2e34db91229b3c8a0d14152c",
+    "config_sha256": "11f0c1262fb1e2a9984065ceff518c309cdaf5b66ef5611dcf24dbc70b698324",
+    "settings_sha256": "c6e42f176f65e7e2302351a4e87ee478b0e846e453968604902922cf6f752867",
+    "reference_manifest_sha256": "27d3fb7ae7caa8f2f8993617ffa709799811f4b2825259c3e253a9a7613e0660",
+    "reference_trace_sha256": "9179ca4b2e779913247453f72ead4e30549002e9c414b32190681e2a19060ae4",
+    "reference_binary_sha256": "6682b7c8a7824b28d58fbe5925c3d59e27a1ac7acc778aada895674154bee6e8",
+    "reference": "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4",
+    "game_version": "Gothic II Night of the Raven (explicit -g2)",
+    "sim_fps": 30,
+    "runtime_limits": {
+      "cpu_quota_percent": 200,
+      "memory_max_gib": 12,
+      "tasks_max": 128,
+      "wall_timeout_sec": 1800
+    },
+    "asset_files_hashed": 308,
+    "engine_library_hash_source": "suite.ipc.provenance.engine_library_sha256",
+    "animation_fixture_sha256": "d7b10e2ad0e9c4739e31cfcd9865cd43a0643cfe765dfa862d281de0e0210bc7",
+    "animation_fixture_source_events_sha256": "9179ca4b2e779913247453f72ead4e30549002e9c414b32190681e2a19060ae4",
+    "remote_run_dir": "/home/kaifat/gothic-ai/body-headless/runs/stage2-v3",
+    "source_head": "f405d409ebe4d78ecbbdf83534c0f098f9a109ff"
+  },
+  "inputs": {
+    "run_dir": "/Volumes/DevSSD/Dev/projects/gothic/data/npc-body/headless/stage2-v3",
+    "suite_sha256": "d52271805a1bcb8afd184079e3a584335b00f3b3dc7602e760c85f41af63fc6c",
+    "manifest_sha256": "9850b37899c639dda2129a813e009deee9fd76f467278baa9a51d3350472c85e"
+  },
+  "generated_at_utc": "2026-10-13T14:53:11.419675+00:00"
+}

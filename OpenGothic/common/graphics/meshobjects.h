@@ -15,8 +15,17 @@ class LightSource;
 class MeshObjects final {
   private:
     using Item = VisualObjects::Item;
+    struct CpuNode {
+      Bounds                  bounds;
+      Material                material;
+      Tempest::Matrix4x4      position;
+      const StaticMesh*       mesh = nullptr;
+      uint32_t                offset = 0, length = 0;
+      };
 
   public:
+    // A CPU owner stores attachment geometry without creating VisualObjects or GPU storage.
+    MeshObjects()=default;
     MeshObjects(VisualObjects& parent);
     ~MeshObjects();
 
@@ -36,7 +45,9 @@ class MeshObjects final {
 
       private:
         Node(const Item* it):it(it){}
+        Node(const CpuNode* cpu):cpu(cpu){}
         const Item* it=nullptr;
+        const CpuNode* cpu=nullptr;
 
       friend class Mesh;
       };
@@ -62,9 +73,9 @@ class MeshObjects final {
         void   setMMShape  (std::string_view anim, uint32_t frame0, uint32_t frame1, float alpha, float intensity);
         float  morphWeight (std::string_view anim);
 
-        bool   isEmpty()    const { return subCount==0; }
-        size_t nodesCount() const { return subCount;    }
-        Node   node(size_t i) const { return Node(&sub[i]); }
+        bool   isEmpty()    const { return nodesCount()==0; }
+        size_t nodesCount() const { return subCount+cpuSub.size(); }
+        Node   node(size_t i) const { return cpuOnly ? Node(&cpuSub[i]) : Node(&sub[i]); }
 
         Bounds bounds() const;
         const ProtoMesh* protoMesh() const { return proto; }
@@ -82,10 +93,13 @@ class MeshObjects final {
         const ProtoMesh*        proto   =nullptr;
         const Skeleton*         skeleton=nullptr;
         const AttachBinder*     binder  =nullptr;
+
+        bool                    cpuOnly = false;
+        std::vector<CpuNode>     cpuSub;
       };
 
   private:
-    VisualObjects&                  parent;
+    VisualObjects*                  parent = nullptr;
 
     Item                            implGet(const StaticMesh& mesh, const StaticMesh::SubMesh& smesh,
                                             int32_t texVar, int32_t teethTex, int32_t bodyColor,

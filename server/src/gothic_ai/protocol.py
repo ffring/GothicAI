@@ -7,11 +7,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
-# answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival)
-PROTOCOL_VERSION = 15
+# answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
+# v16: opt-in passive numeric body observations (independently versioned schema).
+PROTOCOL_VERSION = 16
 
 # --- game -> server -----------------------------------------------------------
 
@@ -448,6 +449,264 @@ class RoutineInfo(_GameMessage):
     error: str | None = None
 
 
+# The high-frequency channel has its own strict schema. Existing conversation messages retain
+# their compatibility behavior; numeric observations never coerce strings, booleans or NaN.
+BodyUInt = Annotated[int, Field(strict=True, ge=0)]
+BodyInt = Annotated[int, Field(strict=True)]
+BodyFloat = Annotated[float, Field(strict=True, allow_inf_nan=False)]
+BodyBool = Annotated[bool, Field(strict=True)]
+BodyVec3 = tuple[BodyFloat, BodyFloat, BodyFloat]
+BodyMask = Annotated[tuple[BodyBool, ...], Field(min_length=12, max_length=12)]
+
+
+class _BodyModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strict_literals(cls, value: Any) -> Any:
+        # Literal validates equality (True == 1); wire metadata still requires actual integers.
+        if isinstance(value, dict):
+            for name in ("schema_version", "session_epoch", "control_generation", "sample_period_ms"):
+                if name in value and type(value[name]) is not int:
+                    raise ValueError(f"{name} must be an integer")
+        return value
+
+
+class BodyGates(_BodyModel):
+    fai_wait_remaining_ms: BodyUInt
+    ani_wait_remaining_ms: BodyUInt
+    ai_wait_remaining_ms: BodyUInt
+    output_wait_remaining_ms: BodyUInt
+    fai_wait: BodyBool
+    ani_wait: BodyBool
+    ai_wait: BodyBool
+    output_wait: BodyBool
+
+
+class BodySelf(_BodyModel):
+    position_world_cm: BodyVec3
+    linear_velocity_cm_s: BodyVec3 | None
+    velocity_valid: BodyBool
+    yaw_rad: BodyFloat
+    hp: BodyInt
+    hp_max: BodyInt
+    hp_fraction: BodyFloat
+    weapon_state: BodyInt
+    weapon_symbol: BodyUInt
+    weapon_length_cm: BodyInt
+    skill: BodyInt
+    skill_talent: BodyUInt
+    skill_valid: BodyBool
+    fight_tactic: BodyInt
+    body_state_raw: BodyUInt
+    body_state_base: BodyUInt
+    body_flags: BodyUInt
+    dead: BodyBool
+    unconscious: BodyBool
+    down: BodyBool
+    in_air: BodyBool
+    swim: BodyBool
+    dive: BodyBool
+    attack_anim: BodyBool
+    prehit: BodyBool
+    defence_active: BodyBool
+    jumpback_active: BodyBool
+    def_window: BodyBool
+    par_window: BodyBool
+    interruptible: BodyBool
+    queued_primitive: BodyInt
+    choice_id: BodyUInt
+    gates: BodyGates
+
+    @model_validator(mode="after")
+    def valid_velocity(self) -> BodySelf:
+        if self.velocity_valid != (self.linear_velocity_cm_s is not None):
+            raise ValueError("velocity_valid must match the velocity value")
+        return self
+
+
+class BodyTarget(_BodyModel):
+    entity_id: BodyUInt
+    present: BodyBool
+    visible: BodyBool
+    current_valid: BodyBool
+    position_world_cm: BodyVec3 | None
+    relative_position_cm: BodyVec3 | None
+    linear_velocity_cm_s: BodyVec3 | None
+    relative_velocity_cm_s: BodyVec3 | None
+    yaw_error_rad: BodyFloat | None
+    fight_distance_cm: BodyFloat | None
+    attack_range_cm: BodyFloat | None
+    g_range_cm: BodyFloat | None
+    closeup_range_cm: BodyFloat | None
+    in_w_range: BodyBool | None
+    in_g_range: BodyBool | None
+    in_closeup: BodyBool | None
+    focus_30: BodyBool | None
+    focus_5: BodyBool | None
+    melee_line_clear: BodyBool | None
+    hp: BodyInt | None
+    hp_max: BodyInt | None
+    hp_fraction: BodyFloat | None
+    weapon_state: BodyInt | None
+    body_state_raw: BodyUInt | None
+    attack_anim: BodyBool | None
+    prehit: BodyBool | None
+    defence_active: BodyBool | None
+    jumpback_active: BodyBool | None
+    down: BodyBool | None
+    last_known_position_world_cm: BodyVec3 | None
+    last_known_velocity_cm_s: BodyVec3 | None
+    last_seen_game_ms: BodyUInt | None
+    last_known_age_ms: BodyUInt | None
+
+    @model_validator(mode="after")
+    def visibility_mask(self) -> BodyTarget:
+        if self.current_valid and (not self.present or not self.visible):
+            raise ValueError("current target features need a present visible target")
+        if not self.current_valid:
+            allowed = {
+                "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
+                "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
+            }
+            if any(getattr(self, name) is not None for name in type(self).model_fields if name not in allowed):
+                raise ValueError("an unseen target must not contain current features")
+        elif self.position_world_cm is None or self.relative_position_cm is None:
+            raise ValueError("a valid current target needs its position")
+        return self
+
+
+class BodyGoal(_BodyModel):
+    kind: Literal["native_combat", "native_idle"]
+    version: BodyUInt
+    target_id: BodyUInt
+    move_hint: BodyInt
+
+
+class BodyLastResult(_BodyModel):
+    valid: BodyBool
+    code: BodyInt
+    source_game_ms: BodyUInt
+    source_sim_step: BodyUInt
+
+
+class BodyRay(_BodyModel):
+    angle_rad: BodyFloat
+    distance_cm: Annotated[float, Field(strict=True, allow_inf_nan=False, ge=0)]
+    hit: BodyBool
+
+
+class BodyLocalObstacles(_BodyModel):
+    ray_range_cm: Annotated[float, Field(strict=True, allow_inf_nan=False, gt=0)]
+    rays: Annotated[tuple[BodyRay, ...], Field(min_length=16, max_length=16)]
+
+    @model_validator(mode="after")
+    def bounded_distance(self) -> BodyLocalObstacles:
+        if any(ray.distance_cm > self.ray_range_cm + 0.001 for ray in self.rays):
+            raise ValueError("obstacle ray exceeds its configured range")
+        return self
+
+
+class BodyEvent(_BodyModel):
+    event_id: BodyUInt
+    source_entity_id: BodyUInt
+    source_game_ms: BodyUInt
+    source_sim_step: BodyUInt
+    perspective: Literal["self", "visible_target"]
+    code: BodyInt
+
+
+class BodyObservation(_BodyModel):
+    kind: Literal["body_observation"]
+    schema_version: Literal[1]
+    observation_seq: Annotated[int, Field(strict=True, gt=0)]
+    generation: BodyUInt
+    session_epoch: Annotated[int, Field(strict=True, gt=0)]
+    world_epoch: BodyUInt
+    control_generation: Literal[0]
+    phase: Literal["post_simulation_post_animation"]
+    entity_id: Annotated[int, Field(strict=True, gt=0)]
+    script_symbol: BodyUInt
+    t_game_ms: BodyUInt
+    dt_game_ms: BodyUInt
+    sim_step: BodyUInt
+    sample_period_ms: Literal[50, 100]
+    periodic: BodyBool
+    event_only: BodyBool
+    state_changed: BodyBool
+    motion_discontinuity: BodyBool
+    can_decide: BodyBool
+    control_allowed: BodyBool
+    native_decision_eligible: BodyBool
+    action_mask_valid: BodyBool
+    mask_kind: Literal["conservative_native_availability"]
+    availability_mask: BodyMask
+    self: BodySelf
+    target: BodyTarget
+    goal: BodyGoal
+    last_result: BodyLastResult
+    local_obstacles: BodyLocalObstacles
+    events: Annotated[tuple[BodyEvent, ...], Field(max_length=32)]
+    builder_wall_us: BodyUInt
+
+    @model_validator(mode="after")
+    def consistent_sample(self) -> BodyObservation:
+        if self.can_decide or self.control_allowed or self.action_mask_valid:
+            raise ValueError("body schema 1 is passive; control and action-mask permission must be false")
+        if self.world_epoch != self.generation:
+            raise ValueError("world_epoch must match generation in body schema 1")
+        if self.periodic == self.event_only:
+            raise ValueError("a sample must be periodic or event-only")
+        if any(e.source_game_ms > self.t_game_ms or e.source_sim_step > self.sim_step for e in self.events):
+            raise ValueError("body event is from a future simulation step")
+        return self
+
+
+class BodyObservationPacket(_BodyModel):
+    kind: Literal["body_observations"]
+    schema_version: Literal[1]
+    generation: BodyUInt
+    session_epoch: Annotated[int, Field(strict=True, gt=0)]
+    world_epoch: BodyUInt
+    control_generation: Literal[0]
+    phase: Literal["post_simulation_post_animation"]
+    sample_period_ms: Literal[50, 100]
+    queue_capacity: Annotated[int, Field(strict=True, ge=1, le=256)]
+    dropped_total: BodyUInt
+    dropped_since_drain: BodyUInt
+    event_dropped_total: BodyUInt
+    observations: Annotated[tuple[BodyObservation, ...], Field(max_length=256)]
+
+    @model_validator(mode="after")
+    def consistent_packet(self) -> BodyObservationPacket:
+        if self.world_epoch != self.generation:
+            raise ValueError("world_epoch must match generation in body schema 1")
+        if len(self.observations) > self.queue_capacity or self.dropped_since_drain > self.dropped_total:
+            raise ValueError("body packet exceeds its declared queue or drop count")
+        last = 0
+        actors: set[int] = set()
+        for row in self.observations:
+            if row.session_epoch != self.session_epoch:
+                raise ValueError("body packet mixes process sessions")
+            if row.generation != self.generation or row.sample_period_ms != self.sample_period_ms:
+                raise ValueError("body packet mixes generations or sampling periods")
+            if row.observation_seq <= last:
+                raise ValueError("body observations must have strictly increasing sequences")
+            last = row.observation_seq
+            actors.add(row.entity_id)
+        if len(actors) > 4:
+            raise ValueError("body packet contains more than four watched actors")
+        return self
+
+
+class BodyObservations(_BodyModel):
+    """Ordinary bridge envelope; its packet is identical to the headless numeric schema."""
+
+    type: Literal["body_observations"]
+    packet: BodyObservationPacket
+
+
 GameMessage = Annotated[
     Hello
     | WorldLoaded
@@ -478,7 +737,8 @@ GameMessage = Annotated[
     | StoryWorld
     | DealAccept
     | DealDecline
-    | NpcViews,
+    | NpcViews
+    | BodyObservations,
     Field(discriminator="type"),
 ]
 
@@ -528,6 +788,25 @@ class DetachCmd(_Command):
     type: Literal["detach"] = "detach"
     req: str
     npc: str
+
+
+class BodyWatchCmd(_Command):
+    """Passive subscription; an empty list disables it without acquiring NPC body ownership."""
+
+    type: Literal["body_watch"] = "body_watch"
+    req: str
+    npcs: Annotated[list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)]
+    rate_hz: BodyInt = 20
+
+    @model_validator(mode="after")
+    def unique_symbols(self) -> BodyWatchCmd:
+        if self.rate_hz not in (10, 20):
+            raise ValueError("body_watch rate_hz must be 10 or 20")
+        names = [name.upper() for name in self.npcs]
+        names = ["PLAYER" if name == "HERO" else name for name in names]
+        if len(set(names)) != len(names):
+            raise ValueError("body_watch NPC symbols must be distinct")
+        return self
 
 
 class ActionCmd(_Command):
@@ -847,7 +1126,7 @@ class EndCard(BaseModel):
 
 
 class RaiseDeadCmd(_Command):
-    """The necromancer's answer (v13, docs/xardas-wrath.md), an ending off the main game: `npc` casts
+    """The necromancer's answer (v13, docs/xardas-wrath.md), an ending: `npc` casts
     `spell` (an SPL_* symbol, SPL_SKULL by default) at the hero until he falls, raises him where he fell as a
     skeleton, the screen goes black and `card` comes up; a key takes the player to the main menu. The game
     answers `result` at once (ok: it began)."""

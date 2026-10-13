@@ -141,6 +141,17 @@ class Pose final {
     static Probe       subjectProbe;  // and for the npc the test bench watches
     static const void* probeNpc;
 
+    // Read-only layer identity/timing for the native combat baseline; only queried by opted-in tracing.
+    struct CombatLayer final {
+      const Animation::Sequence* sequence = nullptr;
+      uint64_t start = 0;
+      uint64_t time = 0;
+      float speed = 1;
+      uint8_t combination = 0;
+      BodyState state = BS_NONE;
+      };
+    auto               combatLayers(uint64_t tickCount) const -> std::vector<CombatLayer>;
+
   private:
     // S_Old is only in old saves: AnimBlend does the blending now
     enum SampleStatus : uint8_t {

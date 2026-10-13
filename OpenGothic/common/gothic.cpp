@@ -31,6 +31,8 @@ Gothic* Gothic::instance = nullptr;
 
 Gothic::Gothic() {
   instance = this;
+  if(!Resources::isHeadless())
+    sndDev = std::make_unique<Tempest::SoundDevice>();
 
   systemPackIniFile.reset(new IniFile(nestedPath({u"system",u"SystemPack.ini"},Dir::FT_File)));
   showFpsCounter = systemPackIniFile->getI("DEBUG","Show_FPS_Counter");
@@ -66,10 +68,8 @@ Gothic::Gothic() {
 #endif
   setBenchmarkMode(CommandLine::inst().isBenchmarkMode());
 
-  auto& gpu = Resources::device().properties();
-  if(gpu.raytracing.rayQuery) {
+  if(Resources::hasGraphicsDevice() && Resources::device().properties().raytracing.rayQuery)
     opts.doGi = CommandLine::inst().isRtGi();
-    }
 
   opts.aaPreset = CommandLine::inst().aaPreset();
 
@@ -111,7 +111,8 @@ Gothic::Gothic() {
 
   defaults->set("RENDERER_D3D", "zFogRadial", 1); // sunshafts
   defaults->set("ENGINE",       "zEnvMappingEnabled", 1); // reflections
-  defaults->set("ENGINE",       "zCloudShadowScale", gpu.type==Tempest::DeviceType::Discrete); // ssao
+  defaults->set("ENGINE",       "zCloudShadowScale", Resources::hasGraphicsDevice() &&
+                Resources::device().properties().type==Tempest::DeviceType::Discrete); // ssao
   defaults->set("INTERNAL",     "vidResIndex", 0); // full-res
 
   defaults->set("VIDEO", "zVidBrightness", 0.5f);
@@ -370,8 +371,13 @@ void Gothic::emitGlobalSound(std::string_view sfx) {
 
 void Gothic::emitGlobalSound(const SoundFx *sfx) {
   if(sfx!=nullptr) {
+    if(!sndDev) {
+      // Sound selection shares the game's RNG even without an output device.
+      sfx->selectSample();
+      return;
+      }
     bool loop = false;
-    auto s = sfx->load(sndDev,loop);
+    auto s = sfx->load(*sndDev,loop);
     s.play();
 
     for(size_t i=0;i<sndStorage.size();){
@@ -387,7 +393,9 @@ void Gothic::emitGlobalSound(const SoundFx *sfx) {
   }
 
 void Gothic::emitGlobalSound(const Tempest::Sound &sfx) {
-  auto s = sndDev.load(sfx);
+  if(!sndDev)
+    return;
+  auto s = sndDev->load(sfx);
   s.play();
 
   for(size_t i=0;i<sndStorage.size();){
@@ -402,7 +410,10 @@ void Gothic::emitGlobalSound(const Tempest::Sound &sfx) {
   }
 
 void Gothic::emitGlobalSoundWav(std::string_view wav) {
-  auto s = sndDev.load(Resources::loadSoundBuffer(wav));
+  auto raw = Resources::loadSoundBuffer(wav);
+  if(!sndDev)
+    return;
+  auto s = sndDev->load(raw);
   s.play();
 
   for(size_t i=0;i<sndStorage.size();){
@@ -885,7 +896,8 @@ void Gothic::setupSettings() {
     game->setupSettings();
 
   const float soundVolume = settingsSoundVolume();
-  sndDev.setGlobalVolume(soundVolume);
+  if(sndDev)
+    sndDev->setGlobalVolume(soundVolume);
 
   auto ord  = Gothic::settingsGetS("GAME","invCatOrder");
   while(!ord.empty()) {

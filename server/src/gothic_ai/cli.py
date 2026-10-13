@@ -54,6 +54,7 @@ from .llm import (
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
+from .orders import Orders
 from .perception import PerceptionDesk
 from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
 from .protocol import (
@@ -525,6 +526,8 @@ async def serve(args: argparse.Namespace) -> int:
         state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
         # the hero talks to the world: whom he speaks to, the conversation, the body meanwhile (M5e)
         state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
+        # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
+        state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal)
         if asr is not None and source is not None:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
@@ -572,7 +575,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.deals)
         talk.on_talk_end.append(state.deals.end)
         if args.wrath or args.scenario == "wrath":
-            # an ending off the main game: insult Xardas enough and he raises you as a skeleton
+            # insult Xardas enough and he raises you as a skeleton (on by default, --no-wrath turns it off)
             state.wrath = Wrath(link, state.dialogue, journal=journal)
             state.dialogue.extensions.append(state.wrath)
         debts = asyncio.create_task(state.deals.run())  # a debt not paid back by its day is a broken word
@@ -800,6 +803,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "orders":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.orders_scenario(link, state.dialogue, state.talk, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m6":
                 dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
@@ -1407,6 +1416,7 @@ def main() -> None:
             "m5b",
             "m5c",
             "m5e",
+            "orders",
             "m6",
             "see",
             "seen",
@@ -1471,21 +1481,25 @@ def main() -> None:
         action="store_true",
         help="threats to free npc's go straight to the game's scripts, not to the behavioral model first",
     )
+    # what we built is on by default; --no-wrath, --no-apply-threats, --no-apply-day turn it off
     p.add_argument(
         "--wrath",
-        action="store_true",
-        help="npc's take offense and answer insolence with force (docs/xardas-wrath.md; off the main game)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's take offense and answer insolence with force (docs/xardas-wrath.md)",
     )
     p.add_argument(
         "--apply-threats",
-        action="store_true",
-        help="carry out the behavioral model's fights and flights (default: traced only until trained)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="carry out the behavioral model's fights and flights (off: traced only, in shadow)",
     )
     p.add_argument(
         "--apply-day",
-        action="store_true",
-        help="carry out the behavioral model's day plans from the new menu (default: traced in shadow until "
-        "measured)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="carry out the behavioral model's day plans from the new menu (off: `do` traced in shadow, "
+        "the old `plan` applied)",
     )
     _add_voice_args(p)
     _add_llm_args(p)
