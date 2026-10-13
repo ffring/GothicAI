@@ -80,6 +80,31 @@ async def test_a_free_npc_standing_about_stops_and_listens():
     assert "Твоё тело сейчас: ты остановился, повернулся к герою и слушаешь" in situation
 
 
+async def test_an_npc_can_open_the_conversation():
+    fake = FakeGame()
+    llm = FakeBackend("Долг, парень.", delay=0)
+    cm, link, dialogue, talk = await _desk(fake, llm)
+    try:
+        # Xardas in front of the hero and nearer: without a partner the hero's words would go to him
+        await fake.roster(person(LOBART, "Лобарт", 3), person(XARDAS, "Ксардас", 2, True))
+        assert await talk.listen(LOBART)  # it came up: stops and turns to the hero
+        assert talk.begin(LOBART, "Лобарт", posture="listen")
+        assert talk.partner.npc == LOBART and talk.partner.posture == "listen"
+        assert talk.begin(LOBART, "Лобарт")  # the partner already
+        assert not talk.begin(XARDAS, "Ксардас")  # the hero talks to another
+        await fake.send(type="player_text", text="Чего тебе?")
+        await _until(lambda: fake.said == ["Долг, парень."])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    to, _ = talk.last
+    assert (to.id, to.why) == (LOBART, "partner")
+    assert talk.partner.npc == LOBART and talk.held == {LOBART: {"listen"}}
+    acts = [(m["npc"], m["action"]) for m in fake.received if m["type"] == "action"]
+    assert acts == [(LOBART, "turn_to")]  # once, by listen: the hero's words find it listening
+    assert dialogue.conversations[LOBART].history[0].content == "Чего тебе?"
+
+
 async def test_a_busy_npc_keeps_working_and_answers_on_the_move():
     fake = FakeGame()
     llm = FakeBackend("Некогда мне.", delay=0)

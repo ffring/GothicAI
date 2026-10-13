@@ -1,0 +1,127 @@
+# Steps with the bow drawn (docs/manual-aim.md, stage 3): forward and back while the bow is up, the legs
+# sneak under the aim (graphics/mesh/aimwalk), the hero moves as they step. On open grass: from the side,
+# in front, behind and from the game's camera, shots on the way, crouched; then the hits at a farmer 10 m
+# off standing and stepping (m_walk, aw_*)
+cheat god
+set time 12 0
+view clean
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 200
+stats str 60 dex 60 bow 60
+goto NW_TROLLAREA_PATH_23         # flat open grass in the sun (`slopes 0 2`), no one to see the shots
+wait 500
+tap bow
+wait 1500
+aimat ahead 1500 140
+cam follow 220 120 90             # the left side, close; no overlay: the legs as they are
+cam look 110
+overlay off
+wait 300
+
+# drawn, forward, back, the shot
+rec walk_side
+press action
+wait 800
+hold forward 2400
+wait 2600
+hold back 2400
+wait 2600
+release action
+wait 1500
+stop
+overlay on
+
+goto NW_TROLLAREA_PATH_23
+wait 300
+aimat ahead 1500 140
+cam follow 230 140 -45            # in front, on the right
+wait 300
+rec walk_front
+press action
+wait 800
+hold forward 2400
+wait 2600
+hold back 2400
+wait 2600
+release action
+wait 1500
+stop
+
+goto NW_TROLLAREA_PATH_23
+wait 300
+aimat ahead 1500 140
+cam follow 230 120 200            # behind
+wait 300
+rec walk_back
+press action
+wait 800
+hold forward 2400
+wait 2600
+hold back 2400
+wait 2600
+release action
+wait 1500
+stop
+
+# shots on the way, from the game's camera (nothing clipped: the camera is close behind the head)
+goto NW_TROLLAREA_PATH_23
+wait 300
+aimat ahead 1500 140
+cam game
+view full
+wait 300
+rec walk_game
+hold forward 4000
+volley 2 300
+wait 300
+hold back 4000
+volley 2 300
+stop
+view clean
+
+# crouched
+goto NW_TROLLAREA_PATH_23
+wait 300
+aimat ahead 1500 140
+cam follow 260 140 90
+wait 300
+rec walk_crouch
+press action
+wait 600
+tap sneak
+wait 1000
+hold forward 2400
+wait 2600
+hold back 2400
+wait 2600
+release action
+wait 1500
+tap sneak
+wait 800
+stop
+
+# the hits at 10 m: standing, stepping forward and back (to and fro)
+goto NW_TROLLAREA_PATH_23
+wait 500
+insert BAU_904_BAUER
+wait 300
+immortal BAU_904_BAUER on
+pin BAU_904_BAUER 1000 0 0
+aimat BAU_904_BAUER body
+cam follow 300 80 165
+cam look 150
+wait 300
+rec stand_hits
+volley 4 300
+stop
+rec walk_hits
+hold back 2000
+volley 1 300
+hold forward 2000
+volley 1 300
+hold back 2000
+volley 1 300
+hold forward 2000
+volley 1 300
+stop

@@ -322,7 +322,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `story_nearby` | `req`, `npc`, `radius`=2000 | люди в радиусе от NPC: `result.value` = `[{npc, name, distance, guild}]` |
 | `story_state` | `req`, `vars[]`, `npcs[]`, `near`?, `knows[]`, `symbols[]`, `items[]` | что читают правила режиссёра (этап 5). `result.value`: `vars` — значения глобалов `int`; `npcs` — `{state: "alive"/"dead"/"absent", name, distance, seen}`, если задан NPC `near`: `distance` — в см от него, живого или мёртвого, `seen` — видит ли он его сейчас, движковым зрением (v12); `knows` — слышал ли герой диалог; `symbols` — что это за имя в скриптах: `npc`, `item`, `info`, `var`, `const`, `func`, `other` (неизвестных нет в ответе); `items` — названия предметов; `dialog`, `cutscene` — идёт ли сейчас диалог или ролик; `day`, `hour`, `minute` — игровое время |
 | `story_people` | `req` | все люди мира, для слухов (этап 5): живые, без героя и монстров. `result.value` — `[{npc, name, guild, routine: [{start, end, state, waypoint, pos?}]}]`; `start`, `end` — минуты дня, `pos` — где точка распорядка, если она есть в мире |
-| `story_eval` | `req`, `npc`, `exprs[]` | выражения графа на живой VM, `self` — NPC, `other` — герой; без `-devmode`. `result.value` — по значению на выражение, `null`, если не посчиталось |
+| `story_eval` | `req`, `npc`, `exprs[]` | выражения графа на живой VM, `self` — NPC, `other` — герой; без `-devmode`. Из функций движка — только те, что читают мир (среди них `Npc_CheckInfo`: ждёт ли важный диалог). `result.value` — по значению на выражение, `null`, если не посчиталось |
 
 **Игра → сервер:**
 

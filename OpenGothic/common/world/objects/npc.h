@@ -307,11 +307,15 @@ class Npc final {
                            const Tempest::Vec2& tremor = {});
     bool      hasManualAim() const { return manualAim; }
     // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), the bow canted
-    // for a quick shot 0..1, as smooth as whoever drives it makes it (PlayerControl)
-    void      setAimStance(float crouch, float peek, float cant = 0) { stanceCrouch = crouch; stancePeek = peek; stanceCant = cant; }
+    // for a quick shot 0..1, as smooth as whoever drives it makes it (PlayerControl); stepping -1 (back)..1
+    // (forward)
+    void      setAimStance(float crouch, float peek, float cant = 0, float walk = 0) {
+      stanceCrouch = crouch; stancePeek = peek; stanceCant = cant; stanceWalk = walk;
+      }
     float     aimCrouch() const { return stanceCrouch; }
     float     aimPeek()   const { return stancePeek; }
     float     aimCant()   const { return stanceCant; }
+    float     aimWalk()   const { return stanceWalk; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
     void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
     // how far the animation of that name has played, 0..1; -1: it does not play
@@ -332,6 +336,7 @@ class Npc final {
     void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
     void        fitHitZones() { visual.fitHitZones(); }
     std::string bowDump() const { return visual.bowDump(); }
+    std::string animInfo(std::string_view name) const { return visual.animInfo(name); }
 
     bool      isEnemy(const Npc& other) const;
     bool      isDead() const;
@@ -712,6 +717,7 @@ class Npc final {
     float                          stanceCrouch = 0;
     float                          stancePeek   = 0;
     float                          stanceCant   = 0;
+    float                          stanceWalk   = 0;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
     AiOuputPipe*                   outputPipe     =nullptr;

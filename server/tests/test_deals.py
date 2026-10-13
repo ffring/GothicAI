@@ -1,5 +1,6 @@
 import asyncio
 
+import gothic_ai.deals
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.deals import Deals, gold_text
 from gothic_ai.dialogue import DialogueManager
@@ -99,7 +100,8 @@ async def test_haggle_then_accept_what_he_saw():
         fact = chronicle.facts("deal")[0]
         assert (fact["npc"], fact["version"], fact["hero_gives"][0]["count"]) == (XARDAS, 2, 30)
         await _until(lambda: len(llm.calls) == 3)
-        assert "сделка состоялась" in llm.calls[2][1][-1].content and llm.calls[2][2] == []
+        assert "сделка состоялась" in llm.calls[2][1][-1].content
+        assert [t.name for t in llm.calls[2][2]] == ["set_intent"]  # a wish fulfilled may be dropped
         notes = [e.content for e in dialogue.conversations[XARDAS].memory.entries]
         assert any("Герой принял твою сделку" in n and "30 золотых" in n for n in notes)
         assert XARDAS not in deals.open and deals.situation(XARDAS) is None
@@ -366,16 +368,66 @@ async def test_a_debt_by_its_day_or_a_broken_word():
         # late, he pays it back
         o = await deals.propose(XARDAS, "Ксардас", {**args, "repay": ["nope"]}, snap)
         assert o.status == "rejected" and debt.id in o.output
+        # the debt again in his gold as well (a live model did that): told what it comes to
+        twice = {**args, "repay": [debt.id], "hero_gives": [{"item": GOLD, "count": 25}]}
+        o = await deals.propose(XARDAS, "Ксардас", twice, snap)
+        assert (
+            o.status == "accepted" and "долг уже включает своё" in o.output and "всего 50 золотых" in o.output
+        )
         await deals.propose(XARDAS, "Ксардас", {**args, "repay": [debt.id]}, snap)
-        await _until(lambda: len(_shown(fake)) == 2)
+        await _until(lambda: len(_shown(fake)) == 3)
         shown = _shown(fake)[-1]
         assert shown["hero_gives"] == [{"item": GOLD, "count": 25, "text": "Долг: 25 золотых"}]
         fake.hero_items = {GOLD: 25}
-        await deals.accept(shown["deal"], 1)
+        await deals.accept(shown["deal"], shown["version"])
         assert debt.paid and chronicle.facts("debt_paid")[0]["id"] == debt.id and fake.hero_items[GOLD] == 0
         assert "Долги героя тебе" not in (deals.situation(XARDAS) or "")
         # a load brings the debts back as they stand
         deals._load()
         assert deals.debts[debt.id].paid and deals.debts[debt.id].broken
     finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_day_is_told_when_it_changes(monkeypatch):
+    monkeypatch.setattr(gothic_ai.deals, "DEBTS_EVERY_S", 0.01)
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    watch = None
+    try:
+        days: list[int] = []
+        deals.on_day.append(days.append)
+        assert deals.day is None
+        # a deal with a debt reads the day
+        later = [{"item": GOLD, "count": 25, "days": 2}]
+        o = await deals.propose(XARDAS, "Ксардас", {"hero_later": later}, None)
+        assert o.status == "accepted"
+        await _until(lambda: _shown(fake) != [])
+        await deals.accept(_shown(fake)[-1]["deal"], 1)
+        assert days == [1] and deals.day == 1
+
+        # the debts' watch reads it again: the same day is not told twice, a new one is
+        watch = asyncio.create_task(deals.run())
+        await asyncio.sleep(0.1)
+        assert days == [1]
+        fake.day = 2
+        await _until(lambda: days == [1, 2])
+        assert deals.day == 2 and chronicle.facts("broken") == []
+        fake.day = 4
+        await _until(lambda: chronicle.facts("broken") != [])
+        assert days == [1, 2, 4]
+
+        # another world may be of another day
+        await fake.send(type="loading")
+        await _until(lambda: deals.day is None)
+
+        # a debt written past the deals is theirs once they reload
+        chronicle.record({"fact": "debt", "id": "e2e", "npc": XARDAS, "item": GOLD, "count": 5, "due": 3})
+        assert "e2e" not in deals.debts
+        deals.reload()
+        assert deals.debts["e2e"].give.count == 5 and len(deals.debts) == 2
+    finally:
+        if watch is not None:
+            watch.cancel()
         await link_cm.__aexit__(None, None, None)

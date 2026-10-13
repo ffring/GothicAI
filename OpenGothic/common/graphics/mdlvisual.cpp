@@ -8,6 +8,7 @@
 #include "world/world.h"
 #include "objvisual.h"
 #include "gothic.h"
+#include "graphics/mesh/animmath.h"
 
 #include <algorithm>
 #include <array>
@@ -727,7 +728,21 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         }
       }
     }
-  bool changed = pose.updateAim(in);
+  // steps with the bow drawn: the legs walk under the aim (graphics/mesh/aimwalk), sneaking with the bow
+  // (the crossbow), slowly
+  AimWalk::Input wk;
+  wk.dt   = dt;
+  wk.walk = manual && in.active ? npc.aimWalk() : 0.f;
+  if(wk.walk!=0.f || pose.aimWalk().isActive()) {
+    const bool cbow = ws==WeaponState::CBow;
+    wk.legs = solver.solveFrm(cbow ? "S_CBOWSNEAKL" : "S_BOWSNEAKL");
+    if(wk.legs==nullptr)
+      wk.legs = solver.solveFrm(cbow ? "S_CBOWWALKL" : "S_BOWWALKL");
+    }
+  bool changed = pose.updateAimWalk(wk);
+  if(npc.isPlayer())
+    pose.aimWalk().probe(AimWalk::playerProbe);
+  changed |= pose.updateAim(in);
   if(npc.isPlayer())
     aim.probe(Aim::playerProbe);
   if(&npc==Aim::probeNpc)
@@ -843,7 +858,9 @@ bool MdlVisual::updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedTo
     return false;
     }
 
-  const auto in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
+  auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
+  // crouched stepping with the bow drawn: the steps are low already (sneaking), as low as crouched standing
+  in.crouch = std::max(0.f, in.crouch - pose.aimWalk().lowered());
   const bool changed = pose.updateFootIk(in);
   ik.debugLog(npc.displayName(),in,npc.isPlayer());
   if(npc.isPlayer())
@@ -921,6 +938,73 @@ HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t)
 
 bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
   return hitZones.center(skInst->transform(),skInst->boneCount(),z,at);
+  }
+
+std::string MdlVisual::animInfo(std::string_view name) const {
+  const Animation::Sequence* sq = solver.solveFrm(name);
+  if(sq==nullptr || sq->data==nullptr)
+    return std::string(name) + ": none";
+  const auto& d  = *sq->data;
+  const float ms = sq->totalTime();
+  char buf[512];
+  std::snprintf(buf,sizeof(buf),"%s: layer %u %s frames %u fps %.1f %.0f ms nodes %zu move %d tr %.0f %.0f %.0f (%.0f cm/s) next %s",
+                sq->name.c_str(),unsigned(sq->layer),sq->animCls==Animation::Loop ? "loop" : "trans",unsigned(d.numFrames),
+                double(d.fpsRate),double(ms),d.nodeIndex.size(),int(d.hasMoveTr),double(d.moveTr.x),double(d.moveTr.y),
+                double(d.moveTr.z),ms>0.f ? double(d.moveTr.length()/ms*1000.f) : 0.0,sq->next.c_str());
+  std::string out = buf;
+  if(skeleton==nullptr || d.nodeIndex.empty() || d.numFrames==0)
+    return out;
+  // the nodes it moves (not all: an upper body only animation)
+  auto& nodes = skeleton->nodes;
+  if(d.nodeIndex.size()<nodes.size()) {
+    out += "; moves";
+    for(auto i:d.nodeIndex)
+      if(i<nodes.size())
+        out += " " + nodes[i].name;
+    }
+  // the hips at 0, 1/4, 1/2, 3/4: the thighs' line, degrees of yaw in the model (the bind pose 0); the
+  // root's height
+  const size_t lt = skeleton->findNode("BIP01 L THIGH");
+  const size_t rt = skeleton->findNode("BIP01 R THIGH");
+  if(lt>=nodes.size() || rt>=nodes.size())
+    return out;
+  std::vector<Tempest::Matrix4x4> local(nodes.size()), world(nodes.size());
+  auto yaw = [&](const Tempest::Matrix4x4* m) {
+    const float dx = m[lt].at(3,0)-m[rt].at(3,0);
+    const float dz = m[lt].at(3,2)-m[rt].at(3,2);
+    return std::atan2(dz,dx)*180.f/float(M_PI);
+    };
+  // f: a frame, else the bind pose
+  auto pose = [&](uint32_t f) {
+    for(size_t i=0; i<nodes.size(); ++i)
+      local[i] = nodes[i].tr;
+    for(size_t i=0; i<d.nodeIndex.size() && f<d.numFrames; ++i)
+      if(d.nodeIndex[i]<nodes.size())
+        local[d.nodeIndex[i]] = mkMatrix(d.samples[size_t(f)*d.nodeIndex.size()+i]);
+    std::vector<bool> done(nodes.size(),false);
+    for(size_t i=0; i<nodes.size(); ++i) {
+      size_t chain[Resources::MAX_NUM_SKELETAL_NODES];
+      size_t n = 0;
+      for(size_t b=i; b<nodes.size() && !done[b] && n<nodes.size(); b=nodes[b].parent)
+        chain[n++] = b;
+      while(n>0) {
+        const size_t b = chain[--n];
+        const size_t p = nodes[b].parent;
+        world[b] = p<nodes.size() ? world[p]*local[b] : local[b];
+        done[b]  = true;
+        }
+      }
+    };
+  pose(uint32_t(-1));
+  std::snprintf(buf,sizeof(buf),"; hips bind %.0f, at frames",double(yaw(world.data())));
+  out += buf;
+  for(uint32_t q=0; q<4; ++q) {
+    const uint32_t f = std::min(d.numFrames-1,d.numFrames*q/4);
+    pose(f);
+    std::snprintf(buf,sizeof(buf)," %u:%.0f/%.0f",unsigned(f),double(yaw(world.data())),double(world[0].at(3,1)));
+    out += buf;
+    }
+  return out;
   }
 
 std::string MdlVisual::bowDump() const {

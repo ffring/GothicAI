@@ -941,7 +941,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",g_on,g_src,g_w,g_err,g_yaw,g_pitch,g_yawgoal,g_pitchgoal,g_head,g_chest,g_waist,g_animyaw,g_animpitch,g_hipsyaw,g_fyaw,g_fpitch,pg_on,pg_src,pg_w,pg_err,pg_yaw");
   std::fprintf(bench.csv,",ln_on,ln_roll,ln_pitch,ln_speed,ln_turn,ln_slope");
   std::fprintf(bench.csv,",an_pop,an_bone,an_speed,an_layers,bl_on,bl_active,bl_started,bl_angle,bl_time");
-  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean,a_side,ik_crouch,m_crouch,m_peek,m_cant");
+  std::fprintf(bench.csv,",a_on,a_w,a_yaw,a_pitch,a_animyaw,a_animpitch,a_turn,a_bend,a_err,a_steady,a_lean,a_side,ik_crouch,m_crouch,m_peek,m_cant,m_walk,aw_w,aw_speed,aw_twist,aw_chest,aw_drop");
   std::fprintf(bench.csv,",m_stage,m_draw,m_hold,m_fatigue,m_breath,m_holding,m_short,m_disturb,m_amp,m_sway_yaw,m_sway_pitch,m_off,m_spread,m_cross");
   std::fprintf(bench.csv,",bd_w,bd_draw,bd_span,bd_travel,bd_miss,bd_follow,bd_fit,bd_offset,bd_angle,hd_hand,hd_fore,hd_arrow,bd_hold,bd_nock,rh_x,rh_y,rh_z,bd_held,bd_overgrip,bd_atmiddle,bd_nockgap,bd_square,bd_cant,bd_bowmove,bd_bowmiss");
   std::fprintf(bench.csv,",lip_valid,lip_on,lip_t,lip_level,lip_mouth,lip_open,lip_f0,lip_f1,lip_alpha,lip_int,lip_picks");
@@ -1023,6 +1023,9 @@ void writeRow(Npc& pl) {
                am.animYaw,am.animPitch,am.turn,am.bend,am.error);
   std::fprintf(bench.csv,",%d,%.2f,%.2f,%.1f,%.2f,%.2f,%.2f",int(am.steady),am.lean,am.side,FootIk::playerProbe.crouch,
                double(pl.aimCrouch()),double(pl.aimPeek()),double(pl.aimCant()));
+  // steps with the bow drawn
+  const auto& aw = AimWalk::playerProbe;
+  std::fprintf(bench.csv,",%.2f,%.2f,%.1f,%.1f,%.1f,%.1f",double(pl.aimWalk()),aw.weight,aw.speed,aw.twist,aw.chest,aw.drop);
   // the manual aim: the bow's stage, the sway, how far the arrow points off the aim
   const auto& mp = Archer::playerProbe;
   // the crosshair: how far it is open, degrees; how far it moved on the screen since the last frame,
@@ -1600,6 +1603,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     // red, the trunk yellow, the limbs blue)
     bench.zonesNpc = a.size()>1 && a[1]!="off" ? a[1] : "";
     say("showzones " + (bench.zonesNpc.empty() ? std::string("off") : bench.zonesNpc));
+    }
+  else if(c=="animinfo") {
+    // animinfo <name>...: the hero's animations of those names (frames, the nodes, how far they go, the
+    // hips)
+    for(size_t i=1; i<a.size(); ++i)
+      say("animinfo " + pl.animInfo(a[i]));
+    }
+  else if(c=="aimwalk") {
+    // aimwalk on|off: the legs step under the aim (graphics/mesh/aimwalk)
+    AimWalk::setEnabled(a.size()<2 || a[1]!="off");
     }
   else if(c=="bowgeom") {
     // bowgeom: the bow and the bow hand in the arrow's frame, as posed now
