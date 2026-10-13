@@ -33,6 +33,7 @@
 #include "world/worldsound.h"
 #include "gothic.h"
 
+#include "beasts.h"
 #include "chatoverlay.h"
 #include "dialoggraph.h"
 #include "storyworld.h"
@@ -53,7 +54,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 17;
+constexpr int         ProtocolVersion = 19;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -260,6 +261,8 @@ struct AiBridge::Impl final {
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
                                 [this](std::string_view symbol){ return npcOwner(symbol); }};
   NpcView              view{[this](std::string&& s){ send(std::move(s)); }};
+  // wolves hear the hero's voice (v19, docs/beasts.md)
+  BeastWatch           beasts{[this](std::string&& s){ send(std::move(s)); }};
 
   Session              session;
   bool                 saving = false;  // a save is in progress: the same world comes back
@@ -320,7 +323,10 @@ AiBridge::Impl::Impl() {
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
     World* world = Gothic::inst().world();
-    return connected && world!=nullptr && observer.intercept(*world,self,other,victim,perc);
+    // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
+    return world!=nullptr &&
+           (beasts.intercept(*world,self,other,victim,perc) ||
+            (connected && observer.intercept(*world,self,other,victim,perc)));
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -464,6 +470,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
           if(world!=nullptr) {
             ctrl.detachAll(*world,"server_disconnected");
             observer.releaseAll(*world);
+            beasts.releaseAll(*world);
             }
           observer.setHoldThreats(false);
           if(chat!=nullptr)
@@ -484,6 +491,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
 
   if(world!=nullptr) {
     ctrl.tick(*world);
+    beasts.tick(*world);  // its reports go nowhere without the server; the console drives it then
     if(connected) {
       observer.tick(*world);
       view.tick(*world);
@@ -529,9 +537,13 @@ void AiBridge::Impl::onStartLoading() {
   graph.clear();  // the server sends the patches of the new branch
   story.clear();
   necro.clear();
-  if(auto world = Gothic::inst().world())
-    ctrl.detachAll(*world,"loading"); else
+  if(auto world = Gothic::inst().world()) {
+    ctrl.detachAll(*world,"loading");
+    beasts.releaseAll(*world);
+    } else {
     ctrl.dropAll("loading");
+    }
+  beasts.clear();
   send(JsonWriter("loading").finish());
   }
 
@@ -750,6 +762,11 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="hold_verdict") {
     observer.verdict(*world,doc);
     }
+  else if(type=="beast") {
+    std::string err;
+    const bool  ok = beasts.command(*world,doc,err);
+    sendResult(req,ok,err);
+    }
   else if(type=="say") {
     onSay(*world,doc);
     }
@@ -852,7 +869,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto") {
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1074,6 +1091,18 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // the hero steps to a waypoint (walking away from a conversation): a named one, the nearest one at
     // least `distance` cm away from an npc (`near`), or one next to an npc (`to`, `distance` cm off)
     const WayPoint* wp = nullptr;
+    if(auto pos = msg.FindMember("pos"); pos!=msg.MemberEnd() && pos->value.IsArray() && pos->value.Size()==3) {
+      // a point of the world (v19), on the ground there
+      Tempest::Vec3 at(float(pos->value[0].GetDouble()),float(pos->value[1].GetDouble()),
+                       float(pos->value[2].GetDouble()));
+      const auto land = world->physic()->landRay(at+Tempest::Vec3(0,500,0),1500);
+      if(land.hasCol)
+        at.y = land.v.y;
+      pl->setPosition(at);
+      pl->updateTransform();
+      sendResult(req,true,"");
+      return;
+      }
     if(auto name = JsonRead::str(msg,"waypoint"); !name.empty()) {
       wp = world->findPoint(name,false);
       }
@@ -1143,6 +1172,14 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     if(!pl->inventory().itemCount(id))
       pl->addItem(id,1);
     pl->useItem(id);
+    sendResult(req,true,"");
+    return;
+    }
+  if(cmd=="player_hp") {
+    // the player's health and its maximum (v19): a test of creatures that bite lets him live through it
+    const auto hp = int32_t(std::clamp<int64_t>(JsonRead::integer(msg,"hp",1000),1,100000));
+    pl->changeAttribute(ATR_HITPOINTSMAX,hp-pl->attribute(ATR_HITPOINTSMAX),false);
+    pl->changeAttribute(ATR_HITPOINTS,hp-pl->attribute(ATR_HITPOINTS),false);
     sendResult(req,true,"");
     return;
     }
@@ -1269,6 +1306,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     reply += "; " + ctrl.status(world);
     reply += "; " + graph.status();
     reply += "; necro " + necro.status();
+    reply += "; " + beasts.status();
     return true;
     }
 
@@ -1306,6 +1344,14 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     card.title = TextCodec::fromUtf8("Конец");
     const auto spell = args.size()>3 ? upperSymbol(args[3]) : std::string("SPL_SKULL");
     reply = necro.start(*world,*npc,std::move(card),spell,err) ? "necro " + spell : err;
+    return true;
+    }
+  if(sub=="beast" && args.size()>2) {
+    // ai beast listen|calm|sit|flee|attack|resume [ms]: the word on the wolf nearest the hero (docs/beasts.md),
+    // without the server; sit is calm sitting down
+    const auto what = lower(args[2]);
+    const auto ms   = args.size()>3 ? int64_t(std::atoll(args[3].c_str())) : int64_t(0);
+    reply = beasts.console(*world,what=="sit" ? "calm" : what,ms,what=="sit");
     return true;
     }
   if(sub=="ptt" && args.size()>2) {

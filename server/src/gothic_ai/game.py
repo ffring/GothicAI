@@ -22,6 +22,8 @@ from .protocol import (
     ActionResult,
     ActionType,
     AttachCmd,
+    BeastCmd,
+    BeastDo,
     BodyObservation,
     BodyObservationPacket,
     BodyObservations,
@@ -67,6 +69,7 @@ log = logging.getLogger(__name__)
 # requests answered with `result`
 _Request = (
     AttachCmd
+    | BeastCmd
     | BodyWatchCmd
     | DetachCmd
     | DebugCmd
@@ -349,6 +352,12 @@ class GameLink:
         only if each giver has what it gives."""
         cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
         await self._request(cmd, timeout)
+
+    async def beast(
+        self, npc: str, do: BeastDo, *, ms: int | None = None, sit: bool | None = None, timeout: float = 5.0
+    ) -> None:
+        """The server's word on a wolf (see BeastCmd): listen, calm, flee, attack, resume."""
+        await self._request(BeastCmd(req=self._next_id("b"), npc=npc, do=do, ms=ms, sit=sit), timeout)
 
     async def raise_dead(
         self, npc: str, card: EndCard, spell: str | None = None, timeout: float = 5.0

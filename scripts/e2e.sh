@@ -14,6 +14,10 @@
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
 #       words). rescue_self: the shepherd kills the wolf himself and says a word about it
+#   wolf: wolves hear the hero (docs/beasts.md) on the road below Xardas's tower: a wolf growls at him, waits
+#       for his words while he holds the talk key, is soothed, sits, lets him pass and be; hostility, «Стой!»,
+#       walking right up to a calm one, a threat, a failed roll, and one talked down mid-bite (the tone is the
+#       quick model's with QUICK_URL, the rules' else; the dice are the scenario's)
 #   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move

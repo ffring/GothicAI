@@ -54,6 +54,11 @@ fading face), `mood-ai` (lines of an AI server with moods: start `gothic-ai serv
 service instead of `--no-tts` the lines are voiced in their mood). Columns `face_neutral`, `face_friendly`,
 `face_angry`, `face_hostile`, `face_afraid`, `face_pain` of `metrics.csv`: how much of each face of the
 watched npc shows, 0..1.
+Wolves: `wolf` (docs/beasts.md, no server: the bridge's `ai beast listen|sit|calm|flee|attack|resume` on the
+wolf nearest the hero): a wolf growls at him, listens, is soothed and sits; he comes up close: it gets up and
+growls, sits again once he steps back; he goes off and comes back: it leaves him be; it bites him, talked
+down it backs off and watches him. `cam two`, `cam shoulder`, `cam face` take the nearest living npc of a
+symbol (several wolves share one).
 The necromancer's answer: `necro` (docs/xardas-wrath.md: Xardas kills the hero with a spell and raises him as
 a skeleton, the screen goes black and the end card comes up; `ai necro`, no server needed).
 Blinks: `blink` (Xardas' face close up: quiet, saying a line, his eyes jumping after the hero put here

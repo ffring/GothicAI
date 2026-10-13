@@ -1,0 +1,45 @@
+# Wolves hear the hero (docs/beasts.md), without the server: the bridge's console `ai beast <do> [ms]` takes
+# the wolf nearest the hero, as the server's verdicts do. A wolf growls at him (its own scripts); he speaks:
+# it perks up and waits past its four seconds; soothed, it growls low and sits down; he comes up close: it
+# gets up and growls; he steps back: it sits again; he goes off and comes back: it leaves him be. Then it
+# bites him, he talks it down: it backs off a few steps and watches him.
+cheat god
+set time 12 0
+view clean 200                    # the bushes between the camera and the wolf
+goto NW_XARDAS_PATH_FARM1_05      # the road from Xardas's tower to the farm
+face wp NW_XARDAS_MONSTER_INSERT_01   # where its own young wolf comes from, 9 m off along the road
+clear 3000                        # its own young wolf would join in
+wait 500
+insert Wolf
+put Wolf 900 0                    # 9 m in front of him (it bites from 7 m), frozen, facing him
+watch Wolf
+cam face Wolf 330 60 40           # in front of the wolf, turned towards the hero: its body, its head
+wait 500
+rec growl                         # its scripts: ZS_MM_THREATENENEMY, T_WARN
+freeze Wolf off
+wait 2500
+ai beast listen 8000              # he holds the talk key
+wait 5000                         # it perks up (T_PERCEPTION), a low growl now and then; no bite
+stop
+rec calm                          # soothed: a low growl, then it sits down (T_STAND_2_SIT)
+ai beast sit
+wait 6000
+stop
+rec near                          # he comes up close: it gets up (T_SIT_2_STAND) and growls (T_WARN)
+place 350 0
+wait 4000
+place 750 0                       # he steps back: it watches, then sits again
+wait 5000
+stop
+rec away                          # he goes off (past 15 m) and comes back: it leaves him be
+place 1800 0
+wait 2500
+place 800 0
+wait 5000
+stop
+rec bite                          # it bites him; talked down, it backs off a few steps and watches him
+ai beast attack
+wait 3500
+ai beast calm
+wait 6000
+stop

@@ -17,6 +17,7 @@ from typing import Any
 
 from . import npc_tools, places, scenarios
 from .amends import Amends
+from .beasts import TONE_MAX_TOKENS, BeastDesk
 from .bodies import Bodies
 from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
@@ -184,6 +185,7 @@ class ServerState:
         self.sightings: Sightings | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
+        self.beasts: BeastDesk | None = None
 
 
 class Console:
@@ -489,6 +491,8 @@ async def serve(args: argparse.Namespace) -> int:
     # npc lines in a fight: a local model, in a fraction of a second (dialogue.py)
     quick_at = None if args.no_quick else quick_url(args.quick_url, args.decider_url)
     quick = make_quick(quick_at) if quick_at else None
+    # how the hero's words sound to a wolf, in a word (beasts.py)
+    tone_quick = make_quick(quick_at, max_tokens=TONE_MAX_TOKENS) if quick_at and args.beasts else None
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
     # "Хм..." while the model thinks: made with the npc's voices, kept across reconnections of the game
@@ -504,6 +508,7 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("fillers: %s", "off" if fillers is None else ("voiced" if tts is not None else "subtitles"))
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
     log.info("lines in a fight: %s", quick_at or "the conversational model")
+    log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
     place_book = places.PlaceBook.load()
     log.info("places: %s", f"{len(place_book.places)} named" if place_book else "no book, waypoints only")
@@ -540,6 +545,10 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
         state.incidents.companion = state.talk.orders.companion
+        if args.beasts or args.scenario == "wolf":
+            # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
+            state.beasts = BeastDesk(link, quick=tone_quick, journal=journal, trace=trace)
+            state.talk.beasts = state.beasts
         state.incidents.fighting_ru = state.talk.orders.fighting_ru
         state.incidents.foe = state.talk.orders.foe
         talk_desk = state.talk  # its roster is a new dict each time
@@ -839,6 +848,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "wolf":
+                assert state.talk is not None and state.beasts is not None
+                results = await scenarios.wolf_scenario(link, state.talk, state.beasts)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario wolf: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
                 results = await scenarios.companion_scenario(link, state.dialogue, state.talk)
@@ -1072,6 +1087,8 @@ async def serve(args: argparse.Namespace) -> int:
         await decider.aclose()
     if quick is not None:
         await quick.aclose()
+    if tone_quick is not None:
+        await tone_quick.aclose()
     memory.close()
     for task in finished:
         if not task.cancelled() and (err := task.exception()) is not None:
@@ -1462,6 +1479,7 @@ def main() -> None:
             "m5e",
             "orders",
             "companion",
+            "wolf",
             "m6",
             "see",
             "seen",
@@ -1548,6 +1566,12 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="carry out the behavioral model's fights and flights (off: traced only, in shadow)",
+    )
+    p.add_argument(
+        "--beasts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="wolves hear the tone of the hero's words: they let him pass, run or bite (docs/beasts.md)",
     )
     p.add_argument(
         "--free-bandits",

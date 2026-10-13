@@ -11,8 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
-# v16: opt-in passive numeric body observations (independently versioned schema).
-PROTOCOL_VERSION = 17
+# v16: opt-in passive numeric body observations (independently versioned schema), v17: contracts (hero_kill),
+# v19: wolves hear the hero (beasts, beast).
+PROTOCOL_VERSION = 19
 
 # --- game -> server -----------------------------------------------------------
 
@@ -275,6 +276,42 @@ class StoryWorld(_GameMessage):
 
     type: Literal["story_world"]
     tags: list[TagState]
+
+
+BeastState = Literal["threaten", "attack", "listen", "calm", "flee", "fight", "routine"]
+
+
+class BeastEntry(_GameMessage):
+    id: str  # its symbol and a number of this session ("WOLF#3"): wolves share their symbols
+    name: str
+    distance: float  # to the hero, cm
+    state: BeastState  # what it does about the hero; fight: with someone else
+    hp: int = 0
+    hp_max: int = 0
+    focus: bool = False  # the hero looks at it
+    sitting: bool = False  # calm and sure of him
+    hit_ms: int | None = None  # since the hero hit it last
+    tolerant: bool = False  # it lets him be (after a calm or a flight)
+
+
+class Beasts(_GameMessage):
+    """Wolves within 25 m of the hero, twice a second while there are any, one empty list after (v19,
+    docs/beasts.md). `hero_weapon`: what he holds ready (none, fists, melee, ranged, magic)."""
+
+    type: Literal["beasts"]
+    t: int
+    hero_weapon: str = "none"
+    wolves: list[BeastEntry]
+
+
+class BeastEvent(_GameMessage):
+    """What the game ended itself (v19): `listen_over` (close: he came too near, it attacks; left; time)
+    and `calm_over` (left, time: it lets him be a while) or `calm_broken` (close, hit: it attacks; dead)."""
+
+    type: Literal["beast_event"]
+    npc: str
+    kind: Literal["listen_over", "calm_over", "calm_broken"]
+    detail: str = ""
 
 
 class DealAccept(_GameMessage):
@@ -578,10 +615,18 @@ class BodyTarget(_BodyModel):
             raise ValueError("current target features need a present visible target")
         if not self.current_valid:
             allowed = {
-                "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
-                "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
+                "entity_id",
+                "present",
+                "visible",
+                "current_valid",
+                "last_known_position_world_cm",
+                "last_known_velocity_cm_s",
+                "last_seen_game_ms",
+                "last_known_age_ms",
             }
-            if any(getattr(self, name) is not None for name in type(self).model_fields if name not in allowed):
+            if any(
+                getattr(self, name) is not None for name in type(self).model_fields if name not in allowed
+            ):
                 raise ValueError("an unseen target must not contain current features")
         elif self.position_world_cm is None or self.relative_position_cm is None:
             raise ValueError("a valid current target needs its position")
@@ -749,6 +794,8 @@ GameMessage = Annotated[
     | StoryWorld
     | DealAccept
     | DealDecline
+    | Beasts
+    | BeastEvent
     | NpcViews
     | BodyObservations,
     Field(discriminator="type"),
@@ -807,7 +854,9 @@ class BodyWatchCmd(_Command):
 
     type: Literal["body_watch"] = "body_watch"
     req: str
-    npcs: Annotated[list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)]
+    npcs: Annotated[
+        list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)
+    ]
     rate_hz: BodyInt = 20
 
     @model_validator(mode="after")
@@ -862,6 +911,23 @@ class HoldVerdictCmd(_Command):
     type: Literal["hold_verdict"] = "hold_verdict"
     hold: str
     to: Literal["server", "scripts"]
+
+
+BeastDo = Literal["listen", "calm", "flee", "attack", "resume"]
+
+
+class BeastCmd(_Command):
+    """The server's word on a wolf (v19): `listen` — it waits for the hero's words (`ms`, 6 s by default,
+    15 s at most), `calm` — it lets him pass (`ms`, 2 min at most; `sit`: it sits down while he keeps his
+    distance), `flee` — it runs from him, `attack` — it attacks him now, `resume` — back to its scripts.
+    The game answers `result`."""
+
+    type: Literal["beast"] = "beast"
+    req: str
+    npc: str
+    do: BeastDo
+    ms: int | None = None
+    sit: bool | None = None
 
 
 class RoutineCmd(_Command):
@@ -1021,6 +1087,7 @@ DebugCommand = Literal[
     "player_equip",
     "waypoints",
     "npc_goto",
+    "player_hp",
 ]
 
 
@@ -1043,7 +1110,8 @@ class DebugCmd(_Command):
     (`player_equip`, v11); every waypoint and freepoint of the world (`waypoints`, `value`: [{name, x, y,
     z, fp}]); move an `npc` to a `waypoint` (or `distance` cm, default 300, in front of npc `to`) on the
     ground, facing npc `face` (`npc_goto`, v15: it stays free and goes on with what it does, so its
-    routine may walk it back).
+    routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v19);
+    `player_goto` to a point `pos` [x, y, z] on the ground there (v19).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -1070,6 +1138,8 @@ class DebugCmd(_Command):
     expr: list[Any] | None = None
     item: str | None = None
     face: str | None = None  # npc_goto: the npc it turns to
+    hp: int | None = None  # player_hp
+    pos: tuple[float, float, float] | None = None  # player_goto: a point of the world (v19), on the ground
 
 
 class GraphPatchCmd(_Command):

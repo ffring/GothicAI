@@ -391,6 +391,8 @@ class Orders:
                 )
                 self._stand_up(npc, other, did, struck=victim == npc)
         elif p.perc == "ASSESSENEMY" and p.distance <= ENEMY_CM and self._monster(npc, other):
+            if self.talk.beasts is not None and self.talk.beasts.spares(other):
+                return  # a wolf the hero talked round: it lets him pass, so do they (beasts.py)
             if npc in self.talk.attached and self.companion(npc):
                 self._stand_up(npc, other, "бросается на вас", struck=False)
 
