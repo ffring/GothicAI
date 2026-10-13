@@ -138,6 +138,10 @@ Tempest::Vec3 Bullet::direction() const {
 
 void Bullet::onMove() {
   updateMatrix();
+  if(!isSpell() && TestBench::isActive()) {
+    const auto p = position();
+    TestBench::arrowAt(this,p.x,p.y,p.z);
+    }
   }
 
 void Bullet::onCollide(zenkit::MaterialGroup matId) {

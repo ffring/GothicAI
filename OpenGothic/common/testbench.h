@@ -34,6 +34,8 @@ namespace TestBench {
   // An event the game reports (an arrow hit): into the bench log, if a scenario runs; also a `note` of
   // events.jsonl (with the time and the frame)
   void     note(const char* text);
+  // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
+  void     arrowAt(const void* arrow, float x, float y, float z);
   // Native melee baseline telemetry. Opt in with OPENGOTHIC_BODY_TRACE=1; no events outside an active bench.
   bool     bodyTracing();
   void     bodyEvent(const Npc& actor, const Npc* target, std::string_view phase, uint64_t gameTime,
