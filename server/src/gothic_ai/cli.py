@@ -30,7 +30,6 @@ from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
 from .executor import Intent
-from .fillers import Fillers
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
@@ -52,6 +51,8 @@ from .llm import (
     ToolCall,
     ToolResult,
     make_backend,
+    make_quick,
+    quick_url,
 )
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
@@ -485,10 +486,11 @@ async def serve(args: argparse.Namespace) -> int:
     memory = MemoryStore(args.memory_db)
     asr = None if args.no_voice else AsrClient(args.asr_url)
     decider = None if args.no_brain or not args.decider_url else DeciderClient(args.decider_url)
+    # npc lines in a fight: a local model, in a fraction of a second (dialogue.py)
+    quick_at = None if args.no_quick else quick_url(args.quick_url, args.decider_url)
+    quick = make_quick(quick_at) if quick_at else None
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
-    # "Хм..." while the model thinks: made with the npc's voices, kept across reconnections of the game
-    fillers = None if args.no_fillers else Fillers(None if tts is None else args.tts_url)
     journal = Journal(print_sink if args.journal else None)
     trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
     budget = Budget(per_npc_per_min=args.llm_per_npc_min, total_per_min=args.llm_total_min)
@@ -497,8 +499,8 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
-    log.info("fillers: %s", "off" if fillers is None else ("voiced" if tts is not None else "subtitles"))
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
+    log.info("lines in a fight: %s", quick_at or "the conversational model")
     graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
     place_book = places.PlaceBook.load()
     log.info("places: %s", f"{len(place_book.places)} named" if place_book else "no book, waypoints only")
@@ -517,10 +519,10 @@ async def serve(args: argparse.Namespace) -> int:
             personas,
             memory=memory,
             tts=tts,
-            fillers=fillers,
             journal=journal,
             trace=trace,
             budget=budget,
+            quick=quick,
         )
         # the bandits below Xardas's tower are freed of their scripted ambush: our models decide (story.py)
         static = freed(graph.nodes.__contains__) if graph is not None else freed()
@@ -537,6 +539,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(GroupTalk(link, state.dialogue, state.talk))
         state.incidents.companion = state.talk.orders.companion
         state.incidents.fighting_ru = state.talk.orders.fighting_ru
+        state.incidents.foe = state.talk.orders.foe
         talk_desk = state.talk  # its roster is a new dict each time
 
         def guild_of(npc: str) -> int | None:
@@ -801,7 +804,7 @@ async def serve(args: argparse.Namespace) -> int:
                 log.info("scenario m4: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m5":
-                results = await scenarios.m5_turn_loop(link, args.npc, decider, trace)
+                results = await scenarios.m5_turn_loop(link, args.npc, decider, trace, quick)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
@@ -1068,6 +1071,8 @@ async def serve(args: argparse.Namespace) -> int:
         await tts.aclose()
     if decider is not None:
         await decider.aclose()
+    if quick is not None:
+        await quick.aclose()
     memory.close()
     for task in finished:
         if not task.cancelled() and (err := task.exception()) is not None:
@@ -1494,9 +1499,6 @@ def main() -> None:
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
-    p.add_argument(
-        "--no-fillers", action="store_true", help='npc\'s say no "Хм..." while the model thinks of an answer'
-    )
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
     p.add_argument("--no-trace", action="store_true", help="do not write turn traces")
@@ -1511,6 +1513,15 @@ def main() -> None:
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
+    )
+    p.add_argument(
+        "--quick-url",
+        default=os.environ.get("GOTHIC_QUICK_LLM_URL"),
+        help="the quick model's server (llama.cpp, server/deploy/gemma): npc lines in a fight at once "
+        "(default: the decider's host, http://<gpu>:47834/v1)",
+    )
+    p.add_argument(
+        "--no-quick", action="store_true", help="npc lines in a fight from the conversational model"
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")

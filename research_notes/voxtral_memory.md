@@ -75,7 +75,7 @@
   - Ставится скриптом `asr-service/deploy/voxtral/install.sh`: он собирает audio.cpp с закреплённого коммита и качает GGUF.
   - Адрес для прослушивания берётся из `~/gothic-ai/gothic-ai.env` (`VOXTRAL_HOST`).
 - **vLLM для ASR удалён:** venv, веса bf16 из кэша HF и юнит. Запасной провайдер — по-прежнему `chatgpt`.
-- **VoxCPM2 через audio.cpp** пока не проверялся.
+- **VoxCPM2 через audio.cpp** проверен и развёрнут 2026-10-13: [voxcpm_memory.md](voxcpm_memory.md).
 
 ## Замечание по эксплуатации
 

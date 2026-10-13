@@ -176,6 +176,9 @@ class IncidentDesk:
         # body does in the fight now, for its words
         self.companion: Callable[[str], bool] = lambda npc: False
         self.fighting_ru: Callable[[str], str | None] = lambda npc: None
+        # the npc struck the hero or a companion a moment ago (orders.py): it is in the fight too
+        self.foe: Callable[[str], bool] = lambda npc: False
+        dialogue.in_fight = self.in_fight
         # free npc -> when its words were last asked for, and what about
         self._spoke: dict[str, tuple[float, frozenset[tuple[str, str]]]] = {}
         self._calming: set[str] = set()  # free npc's waiting for their moment to pass
@@ -215,32 +218,34 @@ class IncidentDesk:
         if npc in self.attached:
             self._event(npc, IncidentEvent("action_failed", self.clock(), detail=what.strip("[]")))
 
-    async def first_reaction(self, npc: str, text: str, voice: bool) -> FirstReaction:
-        """The hero spoke to the npc: one question to the behavioral model for the sound it makes at once
-        (if `voice`: the dialogue says it) and, if the npc is ours, a gesture while it thinks of an answer
-        (made when the dialogue calls for it, after the sound)."""
-        gesture = npc in self.attached
-        if self.reflexes is None or not (voice or gesture):
+    async def first_reaction(self, npc: str, text: str) -> FirstReaction:
+        """The hero spoke to the npc: if it is ours, the behavioral model's gesture while it thinks of an
+        answer (made when the dialogue calls for it, after its first words)."""
+        if self.reflexes is None or npc not in self.attached:
             return FirstReaction()
         ctx, clock = self._context(npc)
         conv = self.dialogue.conversations.get(npc)
-        reactions = await self.reflexes.phrase(
-            ctx, text, conv.intent if conv else None, clock, gesture=gesture, voice=voice
-        )
-        sound = reactions.get("voice")
-        if sound is not None:
-            await self._apply(sound, None)  # traced; nothing for the body to do
-        move = reactions.get("gesture")
-        return FirstReaction(
-            sound.choice if sound is not None and sound.applied else None,
-            (lambda: self._spawn(self._gesture(move))) if move is not None else None,
-        )
+        move = await self.reflexes.phrase(ctx, text, conv.intent if conv else None, clock)
+        return FirstReaction((lambda: self._spawn(self._gesture(move))) if move is not None else None)
+
+    def in_fight(self, npc: str) -> bool:
+        """The npc is in a fight, its lines are quick ones (dialogue.py): a threat to its life or the hero's
+        is going on (a controlled npc's incident, a free npc's stimuli), or it fights with or against him."""
+        npc = npc.upper()
+        inc = self.tracker.current.get(npc)
+        if inc is not None and inc.urgent and inc.active(self.clock(), self.tracker.gap_s):
+            return True
+        if self.planner is not None and self.planner.stirred(npc):
+            return True
+        return self.fighting_ru(npc) is not None or self.foe(npc)
 
     def _event(self, npc: str, event: IncidentEvent) -> None:
         inc = self.tracker.add(npc, event)
         log.info("%s incident #%d: %s", npc, inc.id, event.describe_en())
         if inc.version == 1:
             self._spawn(self._watch(npc, inc.id))
+        if event.spec.urgent:
+            self.dialogue.prewarm(npc)  # its words come after `settle_s`: the quick model reads meanwhile
         if event.kind == "down":
             self.dialogue.note(npc, event.describe_ru())
             return

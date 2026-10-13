@@ -205,6 +205,9 @@ async def test_the_body_gestures_while_the_npc_thinks_of_an_answer(tmp_path):
     assert kinds[0] == ("action", "play_ani")
     nod = next(m for m in fake.received if m["type"] == "action")
     assert nod["args"] == {"name": "T_YES"}
+    # the behavioral model is asked about the body only: what is said at once is the quick model's
+    phrase = next(c for c in desk.reflexes.decider.calls if c["rid"].startswith("chat:"))
+    assert list(phrase["questions"]) == ["gesture"]
 
 
 async def test_a_fight_ends_with_the_incident_and_the_old_intent_comes_back(tmp_path):
@@ -519,3 +522,25 @@ async def test_a_stuck_turn_gives_way_to_the_end_of_the_danger(tmp_path, monkeyp
                 break
 
     assert fake.said == ["Спасибо, выручил."] and len(llm.calls) == 2
+
+
+async def test_an_npc_in_a_fight_says_its_line_through_the_quick_model(tmp_path):
+    """A threat to its life makes the npc's lines quick ones while it goes on; the quick model is warmed
+    as the fight begins and after each line."""
+    fake = FakeGame()
+    fake.nearby.append(WOLF)
+    quick = FakeBackend("Прочь, тварь!", delay=0)
+    cm, link, dialogue, desk, trace = await _scene(None, FakeBackend("", delay=0), fake, tmp_path)
+    dialogue.quick = quick
+    try:
+        assert not desk.in_fight(XARDAS) and not dialogue.in_fight(XARDAS)
+        await link.snapshot(XARDAS, fresh=True)
+        await fake.perception(XARDAS, "ASSESSDAMAGE", "WOLF")
+        await _until(lambda: fake.said and quick.prewarms, timeout=5)
+        assert desk.in_fight(XARDAS) and dialogue.in_fight(XARDAS)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert fake.said == ["Прочь, тварь!"] and len(quick.calls) == 1
+    desk.foe = lambda npc: npc == "BDT_1014_BANDIT_L"  # struck the hero a moment ago (orders.py)
+    assert desk.in_fight("BDT_1014_BANDIT_L") and not desk.in_fight("BAU_950_LOBART")
