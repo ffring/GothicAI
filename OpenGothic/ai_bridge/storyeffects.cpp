@@ -8,6 +8,7 @@
 #include <zenkit/DaedalusVm.hh>
 
 #include "world/objects/npc.h"
+#include "world/aiqueue.h"
 
 #include "eval.h"
 #include "jsonread.h"
@@ -70,6 +71,7 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.arg    = upper(JsonRead::str(x,"arg"));
   e.var    = upper(JsonRead::str(x,"var"));
   e.reason = upper(JsonRead::str(x,"reason"));
+  e.attitude = upper(JsonRead::str(x,"attitude"));
   e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
   e.text   = TextCodec::fromUtf8(JsonRead::str(x,"text"));
   e.status = upper(JsonRead::str(x,"status"));
@@ -121,6 +123,14 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
     auto* r = vm ? vm->find_symbol_by_name(e.reason) : nullptr;
     if(vm && (r==nullptr || !r->is_const() || r->type()!=DaedalusDataType::INT))
       return "attack: no reason " + e.reason;
+    return {};
+    }
+  if(e.kind=="calm") {
+    if(e.attitude.empty())
+      e.attitude = "ATT_NEUTRAL";
+    auto* a = vm ? vm->find_symbol_by_name(e.attitude) : nullptr;
+    if(vm && (a==nullptr || !a->is_const() || a->type()!=DaedalusDataType::INT))
+      return "calm: no attitude " + e.attitude;
     return {};
     }
   if(e.kind=="refuse_talk")
@@ -207,6 +217,19 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
     // the scripts' own attack: the reason decides how far it goes (AR_NONE: until the hero is down)
     call("B_ATTACK",{Value::instance(npc.handlePtr()),Value::instance(player.handlePtr()),
                      Value::integer(constant(reason,0)),Value::integer(0)});
+    }
+  else if(kind=="calm") {
+    // the npc calls off its fight with the hero (v20, talked down: "Воу, ты чего, спокуха") and keeps to it:
+    // its attitude to him as the scripts set it (B_SetAttitude), so their B_AssessEnemy sees no enemy in
+    // him any more; and a fight with him ends now, the npc back to its routine
+    call("B_SETATTITUDE",{Value::instance(npc.handlePtr()),Value::integer(constant(attitude,2))});
+    if(npc.target()==&player && !npc.isDown()) {
+      npc.clearAiQueue();
+      npc.clearState(true);
+      npc.setTarget(nullptr);
+      npc.aiPush(AiQueue::aiRemoveWeapon());
+      npc.resumeAiRoutine();
+      }
     }
   else if(kind=="refuse_talk") {
     call("NPC_SETREFUSETALK",{Value::instance(npc.handlePtr()),Value::integer(count)});

@@ -31,11 +31,11 @@ from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
 from .executor import Intent
-from .fillers import Fillers
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .gossip import GossipDesk
+from .group import GroupTalk
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
 from .journal import Journal, print_sink
@@ -78,7 +78,7 @@ from .sightings import Sightings
 from .social import Rumors
 from .story import StoryPatches, freed
 from .storyguard import StoryGuard
-from .talk import TalkDesk
+from .talk import TalkDesk, fights
 from .trace import TraceWriter, find_turn, latest
 from .trust import Trust
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
@@ -495,8 +495,6 @@ async def serve(args: argparse.Namespace) -> int:
     tone_quick = make_quick(quick_at, max_tokens=TONE_MAX_TOKENS) if quick_at and args.beasts else None
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
-    # "Хм..." while the model thinks: made with the npc's voices, kept across reconnections of the game
-    fillers = None if args.no_fillers else Fillers(None if tts is None else args.tts_url)
     journal = Journal(print_sink if args.journal else None)
     trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
     budget = Budget(per_npc_per_min=args.llm_per_npc_min, total_per_min=args.llm_total_min)
@@ -505,7 +503,6 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
-    log.info("fillers: %s", "off" if fillers is None else ("voiced" if tts is not None else "subtitles"))
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
@@ -527,7 +524,6 @@ async def serve(args: argparse.Namespace) -> int:
             personas,
             memory=memory,
             tts=tts,
-            fillers=fillers,
             journal=journal,
             trace=trace,
             budget=budget,
@@ -544,6 +540,8 @@ async def serve(args: argparse.Namespace) -> int:
         # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
         state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
+        # talk with several npc's: who takes part, and whose words the others heard (group.py)
+        state.dialogue.extensions.append(GroupTalk(link, state.dialogue, state.talk))
         state.incidents.companion = state.talk.orders.companion
         if args.beasts or args.scenario == "wolf":
             # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
@@ -558,6 +556,12 @@ async def serve(args: argparse.Namespace) -> int:
             return e.guild if e is not None else None
 
         state.dialogue.guild_of = guild_of
+        orders = state.talk.orders
+        # one in a fight near the hero that is not his companion fights him: talked to, it may call it off
+        state.dialogue.fights_hero = lambda npc: (
+            fights(talk_desk.people.get(npc.upper())) and not orders.companion(npc)
+        )
+        state.dialogue.on_calm.append(orders.truce)
         if asr is not None and source is not None:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
@@ -587,6 +591,7 @@ async def serve(args: argparse.Namespace) -> int:
             places=place_book,
         )
         state.dialogue.extensions.append(perception)
+        state.talk.orders.view_of = perception.fresh  # a companion sent somewhere looks around there
         state.dialogue.sight = perception.sight
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
@@ -856,9 +861,17 @@ async def serve(args: argparse.Namespace) -> int:
                 exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
-                results = await scenarios.companion_scenario(link, state.dialogue, state.talk)
+                results = await scenarios.companion_scenario(
+                    link, state.dialogue, state.talk, perception=state.perception
+                )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "calm":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.calm_scenario(link, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario calm: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m6":
                 dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
@@ -1480,6 +1493,7 @@ def main() -> None:
             "orders",
             "companion",
             "wolf",
+            "calm",
             "m6",
             "see",
             "seen",
@@ -1516,9 +1530,6 @@ def main() -> None:
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
-    p.add_argument(
-        "--no-fillers", action="store_true", help='npc\'s say no "Хм..." while the model thinks of an answer'
-    )
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
     p.add_argument("--no-trace", action="store_true", help="do not write turn traces")

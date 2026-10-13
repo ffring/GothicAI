@@ -269,3 +269,21 @@ async def test_companions_leave_a_calm_wolf_be():
 class _NoLink:
     def __init__(self) -> None:
         self.listeners: list = []
+
+
+async def test_a_person_fighting_him_takes_the_words_unless_he_looks_at_the_wolf():
+    fake = FakeGame()
+    llm = FakeBackend("Сам напросился!", delay=0)
+    cm, dialogue, talk, _ = await _desk(fake, 0.0, llm=llm)
+    try:
+        await fake.roster(person("BDT_1013_BANDIT_L", "Бандит", 3, True, state="ZS_ATTACK"))
+        await fake.beasts(wolf())
+        await _until(lambda: "WOLF#1" in talk.beasts.wolves and talk.people)
+        await fake.send(type="player_text", text="Стой, хватит!")
+        await _until(lambda: talk.last is not None)
+        assert talk.last[0].why == "attacker" and cmds(fake) == []
+        await fake.send(type="player_text", text="Тихо, хороший.", focus="WOLF")
+        await _until(lambda: cmds(fake) == [("WOLF#1", "calm")])
+        assert talk.last[0].why == "beast"
+    finally:
+        await cm.__aexit__(None, None, None)

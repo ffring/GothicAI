@@ -73,6 +73,8 @@ FOCUS_CM = 2500.0  # the npc the hero looks at, if not farther than this
 PARTNER_CM = 1500.0  # the current partner stays the addressee this close
 FRONT_CM = 1200.0  # the nearest npc in front of the hero
 SCENE_CM = 2000.0  # two npc's talking near him (gossip.py), if not farther than this
+ATTACKER_CM = 1000.0  # one fighting this close to the hero is the one he speaks to in the fight
+ATTACK_STATE = "ZS_ATTACK"
 OVERHEAR_CM = 1000.0  # witnesses
 END_CM = 1500.0  # farther than this and silent for END_SILENCE_S: the conversation is over
 END_SILENCE_S = 20.0
@@ -208,9 +210,11 @@ def addressee(
     people: dict[str, RosterEntry],
     partner: str | None,
     scene: Sequence[str] = (),
+    ours: Callable[[str], bool] = lambda npc: False,
 ) -> Addressee | None:
-    """Whom the hero speaks to: a name in the phrase, his focus, the current partner, one of the npc's of
-    a `scene` (two who were just talking near him, the one who spoke last first), the nearest in front."""
+    """Whom the hero speaks to: a name in the phrase, his focus, the one fighting him close by («Воу, ты
+    чего?» — whoever is not `ours`, his companions), the current partner, one of the npc's of a `scene`
+    (two who were just talking near him, the one who spoke last first), the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
     near = [
@@ -224,6 +228,12 @@ def addressee(
         return Addressee(e.id.upper(), e.name, "name")
     if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
         return Addressee(e.id.upper(), e.name, "focus")
+    fighting = [
+        e for e in alive.values() if fights(e) and e.distance <= ATTACKER_CM and not ours(e.id.upper())
+    ]
+    if fighting:  # in a fight he speaks to whoever is at him, where he looks or not
+        e = min(fighting, key=lambda e: e.distance)
+        return Addressee(e.id.upper(), e.name, "attacker")
     if partner and (e := alive.get(partner)) is not None and e.distance <= PARTNER_CM:
         return Addressee(e.id.upper(), e.name, "partner")
     # a scene starts only while he has no partner, so this never takes words meant for one
@@ -286,6 +296,8 @@ class TalkDesk:
         self.on_hero_voice: list[Callable[[], bool]] = []
         # npc's of a scene near the hero his next words may go to, the one who spoke last first (gossip.py)
         self.scene_hint: Callable[[], list[str]] = lambda: []
+        # the hero said something, to whom (None: into the air): the conversation around him (group.py)
+        self.on_phrase: list[Callable[[Addressee | None, str], None]] = []
         # orders to the hero's companions ("Стой!"), carried out at once, without an answer (orders.py)
         self.orders: Orders | None = None
         # wolves at the hero hear his words (beasts.py)
@@ -338,7 +350,12 @@ class TalkDesk:
             return
         now = self.clock()
         to = addressee(
-            text, focus, self.people, self.partner.npc if self.partner else None, self.scene_hint()
+            text,
+            focus,
+            self.people,
+            self.partner.npc if self.partner else None,
+            self.scene_hint(),
+            ours=self.orders.companion if self.orders is not None else lambda npc: False,
         )
         order = commands.parse(text, self._is_name)
         squad: list[tuple[str, str]] = []
@@ -359,6 +376,8 @@ class TalkDesk:
             **(details or {}),
         )
         log.info("hero -> %s (%s): %s", to.id if to else "nobody", to.why if to else "-", text)
+        for listener in self.on_phrase:
+            listener(None if beast is not None else to, text)  # a wolf joins no conversation
         self._witnesses(text, to, {npc for npc, _ in squad})
         if self.planner is not None and beast is None:
             self.planner.on_player_text(to.id if to else "", text, now)
@@ -460,8 +479,8 @@ class TalkDesk:
     async def _posture(self, talk: Talk, text: str) -> str:
         entry = self.people.get(talk.npc)
         default = default_posture(entry)
-        if self.reflexes is None:
-            return default
+        if self.reflexes is None or fights(entry):
+            return default  # one in a fight fights on while it answers: whether to stop is its words' call
         conv = self.dialogue.conversations.get(talk.npc)
         ctx = NpcContext(
             talk.npc,
@@ -629,6 +648,11 @@ class TalkDesk:
         task = asyncio.get_running_loop().create_task(run())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+
+def fights(entry: RosterEntry | None) -> bool:
+    """The npc is in a fight (the scripts' attack state)."""
+    return entry is not None and entry.state.upper() == ATTACK_STATE
 
 
 def default_posture(entry: RosterEntry | None) -> str:

@@ -70,6 +70,9 @@ class NpcController final {
       bool            toPlayer = false;
       uint64_t        until    = 0;
       uint64_t        nextStep = 0;
+      Tempest::Vec3   movedFrom;          // where it last was a step away from: stuck if it stays there
+      uint64_t        movedAt  = 0;
+      bool            byWay    = false;   // going round by the waynet, a straight walk having got stuck
       };
 
     struct Controlled final {

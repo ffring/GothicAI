@@ -54,7 +54,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 19;
+constexpr int         ProtocolVersion = 21;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -261,7 +261,7 @@ struct AiBridge::Impl final {
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
                                 [this](std::string_view symbol){ return npcOwner(symbol); }};
   NpcView              view{[this](std::string&& s){ send(std::move(s)); }};
-  // wolves hear the hero's voice (v19, docs/beasts.md)
+  // wolves hear the hero's voice (v21, docs/beasts.md)
   BeastWatch           beasts{[this](std::string&& s){ send(std::move(s)); }};
 
   Session              session;
@@ -1092,7 +1092,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // least `distance` cm away from an npc (`near`), or one next to an npc (`to`, `distance` cm off)
     const WayPoint* wp = nullptr;
     if(auto pos = msg.FindMember("pos"); pos!=msg.MemberEnd() && pos->value.IsArray() && pos->value.Size()==3) {
-      // a point of the world (v19), on the ground there
+      // a point of the world (v21), on the ground there
       Tempest::Vec3 at(float(pos->value[0].GetDouble()),float(pos->value[1].GetDouble()),
                        float(pos->value[2].GetDouble()));
       const auto land = world->physic()->landRay(at+Tempest::Vec3(0,500,0),1500);
@@ -1176,7 +1176,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     return;
     }
   if(cmd=="player_hp") {
-    // the player's health and its maximum (v19): a test of creatures that bite lets him live through it
+    // the player's health and its maximum (v21): a test of creatures that bite lets him live through it
     const auto hp = int32_t(std::clamp<int64_t>(JsonRead::integer(msg,"hp",1000),1,100000));
     pl->changeAttribute(ATR_HITPOINTSMAX,hp-pl->attribute(ATR_HITPOINTSMAX),false);
     pl->changeAttribute(ATR_HITPOINTS,hp-pl->attribute(ATR_HITPOINTS),false);

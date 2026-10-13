@@ -86,8 +86,8 @@ def _json(obj) -> str:
     return json.dumps(obj)
 
 
-def test_v19_wolves_hear_the_hero():
-    assert PROTOCOL_VERSION == 19
+def test_v21_wolves_hear_the_hero():
+    assert PROTOCOL_VERSION == 21
     seen = parse_game_message(
         _json(
             {

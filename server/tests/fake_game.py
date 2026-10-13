@@ -99,8 +99,10 @@ class FakeGame:
         self.routine_errors: dict[str, str] = {}  # npc -> the error its routine is answered with
         self.routine_hang: set[str] = set()  # npc's whose routine is never answered (the server times out)
         self.routine_calls: list[str] = []  # every npc asked for, in order
-        self.beast_cmds: list[dict[str, Any]] = []  # the server's words on wolves (v19)
+        self.beast_cmds: list[dict[str, Any]] = []  # the server's words on wolves (v21)
         self._later: set[asyncio.Task[None]] = set()
+        self.slow_actions: set[str] = set()  # actions that go on until the npc's next action cancels them
+        self.long_running: dict[str, str] = {}  # npc -> the id of its action going on
 
     async def perception(
         self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
@@ -114,7 +116,7 @@ class FakeGame:
         await self.send(type="npc_views", t=1000, views=list(views))
 
     async def beasts(self, *wolves: dict[str, Any], hero_weapon: str = "none") -> None:
-        """The wolves near the hero (v19): id, name, distance, state, hp, hp_max, focus..."""
+        """The wolves near the hero (v21): id, name, distance, state, hp, hp_max, focus..."""
         await self.send(type="beasts", t=1000, hero_weapon=hero_weapon, wolves=list(wolves))
 
     async def roster(self, *people: dict[str, Any]) -> None:
@@ -451,6 +453,11 @@ class FakeGame:
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
+        if (running := self.long_running.pop(npc, None)) is not None:  # preempted, as the bridge does
+            await self.send(type="action_result", id=running, npc=npc, status="cancelled", detail="preempted")
+        if action in self.slow_actions and npc in self.attached:
+            self.long_running[npc] = msg["id"]  # goes on until the next action of this npc
+            return
         status, detail = "done", None
         if npc not in self.attached:
             status, detail = "rejected", "npc is not attached"

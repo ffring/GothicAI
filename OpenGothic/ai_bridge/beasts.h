@@ -13,7 +13,7 @@
 class Npc;
 class World;
 
-// Wolves hear the hero's voice (docs/beasts.md, protocol v19). A wolf understands no words, only how he
+// Wolves hear the hero's voice (docs/beasts.md, protocol v21). A wolf understands no words, only how he
 // says them; the server judges that, the bridge carries the wolf's answer out with the game's own means.
 // - beasts:     the wolves near the hero and what they do about him (they threaten him, attack him,
 //               listen, let him pass...), twice a second while there are any;

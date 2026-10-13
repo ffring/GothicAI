@@ -1,12 +1,13 @@
 """Wolves hear the hero (docs/beasts.md): not his words, the tone of them.
 
 A wolf that growls at the hero (the scripts' ZS_MM_THREATENENEMY: four seconds, then it bites), attacks
-him, or lets him pass hears what he says. The bridge lists such wolves twice a second (`beasts`, v19):
+him, or lets him pass hears what he says. The bridge lists such wolves twice a second (`beasts`, v21):
 
 - **he starts to speak** (the talk key): the ones growling at him wait for his words, perked up
   (`listen`); their four seconds do not run out while he speaks;
 - **his phrase is theirs**, not the people's about, when he looks at a wolf, or when one is at him and he
-  calls nobody by name and looks at no one. An order to his companions stays theirs, «Стой!» excepted;
+  calls nobody by name, looks at no one and no person fights him. An order to his companions stays
+  theirs, «Стой!» excepted;
 - **the tone** of it, in a word: the quick model (Gemma) tells it; the rules below when it is off, slow or
   unsure: soothing, a firm command, a threat to scare it off, hostility, or nothing of that;
 - **the code rolls** for each wolf that hears it (`chances`): what it does to him now, its kind, the hero's
@@ -260,6 +261,8 @@ class BeastDesk:
             mine = False  # he calls someone by name, or looks at a person
         elif looked is not None:
             mine = True
+        elif to is not None and to.why == "attacker":
+            mine = False  # a person fighting him: the words are his
         else:
             mine = bool(hearers) and (order is None or order.kind in FOR_WOLVES)
         if not mine:

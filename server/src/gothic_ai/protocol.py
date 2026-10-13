@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
 # v16: opt-in passive numeric body observations (independently versioned schema), v17: contracts (hero_kill),
-# v19: wolves hear the hero (beasts, beast).
-PROTOCOL_VERSION = 19
+# v18: what npc's see of whom (att, from_hero...), v20: an npc calls its fight off (story_effect calm),
+# v21: wolves hear the hero (beasts, beast).
+PROTOCOL_VERSION = 21
 
 # --- game -> server -----------------------------------------------------------
 
@@ -295,7 +296,7 @@ class BeastEntry(_GameMessage):
 
 
 class Beasts(_GameMessage):
-    """Wolves within 25 m of the hero, twice a second while there are any, one empty list after (v19,
+    """Wolves within 25 m of the hero, twice a second while there are any, one empty list after (v21,
     docs/beasts.md). `hero_weapon`: what he holds ready (none, fists, melee, ranged, magic)."""
 
     type: Literal["beasts"]
@@ -305,7 +306,7 @@ class Beasts(_GameMessage):
 
 
 class BeastEvent(_GameMessage):
-    """What the game ended itself (v19): `listen_over` (close: he came too near, it attacks; left; time)
+    """What the game ended itself (v21): `listen_over` (close: he came too near, it attacks; left; time)
     and `calm_over` (left, time: it lets him be a while) or `calm_broken` (close, hit: it attacks; dead)."""
 
     type: Literal["beast_event"]
@@ -362,6 +363,10 @@ class ItemRef(_GameMessage):
     name: str
 
 
+Attitude = Literal["hostile", "angry", "neutral", "friendly"]
+Side = Literal["ahead", "left", "right", "behind"]
+
+
 class Look(_GameMessage):
     """What an npc can tell of someone it sees (v11): who it is (shown name and guild, for the server to
     decide whether the npc knows it), what it does and looks like."""
@@ -381,10 +386,18 @@ class Look(_GameMessage):
     in_hands: ItemRef | None = None
     talking_to: str | None = None
     waypoint: str | None = None  # a person's nearest waypoint (v12): where it was seen
+    # v18: how it treats the viewer and the hero (hostile, angry, neutral, friendly), where it is from the
+    # hero as he faces (ahead, left, right, behind; left and right as on his screen) and how far from him
+    att: Attitude | None = None
+    att_hero: Attitude | None = None
+    from_hero: Side | None = None
+    hero_cm: float | None = None
+    noticed: bool = False  # v18: close by, out of the viewer's field of view: it notices it all the same
 
 
 class HeroLook(Look):
     seen: bool = False  # in its field of view and not behind a wall; it hears him anyway
+    focus: str | None = None  # v18: whom the hero looks at (his focus), an npc id
 
 
 class NpcView(_GameMessage):
@@ -917,7 +930,7 @@ BeastDo = Literal["listen", "calm", "flee", "attack", "resume"]
 
 
 class BeastCmd(_Command):
-    """The server's word on a wolf (v19): `listen` — it waits for the hero's words (`ms`, 6 s by default,
+    """The server's word on a wolf (v21): `listen` — it waits for the hero's words (`ms`, 6 s by default,
     15 s at most), `calm` — it lets him pass (`ms`, 2 min at most; `sit`: it sits down while he keeps his
     distance), `flee` — it runs from him, `attack` — it attacks him now, `resume` — back to its scripts.
     The game answers `result`."""
@@ -1110,8 +1123,8 @@ class DebugCmd(_Command):
     (`player_equip`, v11); every waypoint and freepoint of the world (`waypoints`, `value`: [{name, x, y,
     z, fp}]); move an `npc` to a `waypoint` (or `distance` cm, default 300, in front of npc `to`) on the
     ground, facing npc `face` (`npc_goto`, v15: it stays free and goes on with what it does, so its
-    routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v19);
-    `player_goto` to a point `pos` [x, y, z] on the ground there (v19).
+    routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v21);
+    `player_goto` to a point `pos` [x, y, z] on the ground there (v21).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -1139,7 +1152,7 @@ class DebugCmd(_Command):
     item: str | None = None
     face: str | None = None  # npc_goto: the npc it turns to
     hp: int | None = None  # player_hp
-    pos: tuple[float, float, float] | None = None  # player_goto: a point of the world (v19), on the ground
+    pos: tuple[float, float, float] | None = None  # player_goto: a point of the world (v21), on the ground
 
 
 class GraphPatchCmd(_Command):
@@ -1185,7 +1198,9 @@ class StoryEffectCmd(_Command):
     the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
     constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`) — an npc held by
     the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
-    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`.
+    START...) through B_StartOtherRoutine, as the dialogs change routines; `calm` (v20; `attitude`: an
+    ATT_* constant, ATT_NEUTRAL by default): the npc calls off its fight with the hero and keeps to it, its
+    attitude to him set through B_SetAttitude, a held npc let go too. The game answers `result`.
 
     `check` (v10): the gives are checked first, and nothing happens unless each giver has all it gives
     (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)")."""
