@@ -1,7 +1,8 @@
 """Free-form conversation with an npc: player text in, npc lines (sentence by sentence) and actions out.
 
 Whom the hero speaks to and when a conversation starts or ends is decided in talk.py (M5e: no chat
-window); here are the turns of the conversational model, the npc's memory and its speech.
+window); here are the turns of the conversational model, the npc's memory and its speech, and the lines
+two npc's say to each other near the hero, in turn (`play_scene`: what they say is gossip.py's).
 """
 
 from __future__ import annotations
@@ -77,13 +78,20 @@ LLM_FIRST_S, LLM_IDLE_S, STEP_RETRIES = 15.0, 15.0, 1
 SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
+# two npc's talking to each other (play_scene): the gap between their voices (the bridge breathes 250 ms
+# after a line itself), and how long a sent line may take to start (a turn, a walk, a dialog; the game
+# never starts one far from the hero) before the scene ends
+LINE_LOST_S = 20.0  # a line sent this long ago that has not started is not coming
+SCENE_GAP_S = 0.35
+SCENE_START_S = 8.0
+QUIET_STYLE = "say quietly, in a low hushed voice, as if not to be overheard"
 
 SUMMARY_INSTRUCTIONS = (
-    "Ты ведёшь память персонажа {name} из игры Gothic 2. Тебе дают прежнюю сводку и новые записи "
-    'его разговоров с героем. Напиши обновлённую сводку от второго лица ("ты" — это {name}), '
-    "не длиннее 1200 символов: кто такой герой и что он о себе рассказал, о чём просил, что ты обещал "
-    "и что отдал, как ты к нему относишься, важные события и когда они были. Только факты из записей, "
-    "ничего не выдумывай. Выведи только текст сводки."
+    "Ты ведёшь память персонажа {name} из игры Gothic 2. Тебе дают прежнюю сводку и новые записи: его "
+    "разговоры с героем и то, что он слышал о герое от других. Напиши обновлённую сводку от второго лица "
+    '("ты" — это {name}), не длиннее 1200 символов: кто такой герой и что он о себе рассказал, о чём '
+    "просил, что ты обещал и что отдал, как ты к нему относишься, важные события и когда они были. Только "
+    "факты из записей, ничего не выдумывай. Выведи только текст сводки."
 )
 
 
@@ -348,6 +356,66 @@ class TurnExtension(Protocol):
         ...
 
 
+Voice = tuple[int, list[bytes], float]  # a line's whole voice: sample rate, 16-bit mono PCM chunks, seconds
+
+
+@dataclass
+class SceneLine:
+    """A line one npc says to another in a scene (play_scene)."""
+
+    line: str  # its id, as the game knows it
+    npc: str
+    name: str
+    to: str  # the npc it is said to
+    text: str
+    mood: Mood | None
+    started: float | None = None  # when the game started it (time.monotonic())
+    audio_s: float | None = None  # its voice's length; None: said without a voice
+
+
+class ScenePlay:
+    """Lines of a scene being said in turn (DialogueManager.play_scene). `task` ends when the last one has
+    been heard, or early: cut, or a line the game did not start (`why`)."""
+
+    task: asyncio.Task[None]
+
+    def __init__(self, dialogue: DialogueManager, lines: list[SceneLine], quiet: bool) -> None:
+        self.lines = lines
+        self.quiet = quiet
+        self.sent = 0  # lines sent to the game so far
+        self.why = ""  # why it ended early: "cut", "not_started" (the game never started a line), "gone"
+        self.next_voice: asyncio.Task[Voice | None] | None = None  # made while the line before plays
+        self._dialogue = dialogue
+
+    def said(self) -> list[SceneLine]:
+        """The lines the game started (heard, at least in part)."""
+        for line in self.lines[: self.sent]:
+            line.started = line.started or self._dialogue.started_at(line.line)
+        return [line for line in self.lines[: self.sent] if line.started is not None]
+
+    def cut(self, *, hush: bool = True) -> list[SceneLine]:
+        """Stop at once: lines not sent yet are never heard. `hush`: both voices stop too, the line being
+        said keeps its subtitle as said; without it nothing more goes to the game (it is loading). Nothing
+        after the scene has ended. The lines said."""
+        if self.task.done() or self.why == "cut":
+            return self.said()
+        self.why = "cut"
+        self.task.cancel()
+        if self.next_voice is not None:
+            self.next_voice.cancel()
+        said = self.said()
+        if hush and self.sent:
+            last = self.lines[self.sent - 1]
+            if last.started is not None:
+                self._dialogue.hush(HushCmd(npc=last.npc, line=last.line, said=last.text))
+            else:  # sent, not started: if it starts later the game cuts it at once
+                self._dialogue.hush(HushCmd(npc=last.npc))
+            for npc in dict.fromkeys(line.npc for line in self.lines):
+                if npc != last.npc:
+                    self._dialogue.hush(HushCmd(npc=npc))
+        return said
+
+
 class DialogueManager:
     """Turns of the npc's conversational model. One reply in flight per npc; new player text interrupts it.
 
@@ -406,6 +474,13 @@ class DialogueManager:
         self._line_ids = itertools.count(1)
         self._reply_ids = itertools.count(1)
         self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
+        self._sent: dict[str, float] = {}  # line id -> when it was sent (a line that never starts is lost)
+        # scenes (play_scene): how long a line lasts without a voice (tests make it short), the lines
+        # waiting for the game to start them, and a TTS connection of their own (made on first use): a
+        # scene line does not wait behind an answer to the hero, nor the other way round
+        self.scene_pace: Callable[[str], float] = line_duration
+        self._starts: dict[str, asyncio.Event] = {}
+        self._scene_tts: TtsClient | None = None
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
         if link.session is not None:
@@ -418,6 +493,8 @@ class DialogueManager:
             case LineStarted():
                 if msg.line in self._lines:
                     self._lines[msg.line] = (self._lines[msg.line][0], time.monotonic())
+                if (started := self._starts.pop(msg.line, None)) is not None:
+                    started.set()
 
     # --- memory -------------------------------------------------------------------------
 
@@ -506,7 +583,10 @@ class DialogueManager:
 
     # --- conversation -------------------------------------------------------------------
 
-    def open(self, npc: str, name: str) -> Conversation:
+    def open(self, npc: str, name: str, *, warm: bool = True) -> Conversation:
+        """The npc's conversation, read from memory the first time. `warm`: it is about to talk to the hero,
+        its sounds are made now if they are not yet (not for a note: a rumor or a witness would voice them
+        for every npc around); on every warm open, so an npc first opened for a note gets them later."""
         npc = npc.upper()
         conv = self.conversations.get(npc)
         if conv is None:
@@ -515,8 +595,6 @@ class DialogueManager:
             if conv.memory.intent:
                 conv.intent = Intent.from_json(conv.memory.intent)
             self.conversations[npc] = conv
-            if self.fillers is not None and self.tts is not None:
-                self.fillers.warm(npc, conv.persona.voice)
             if conv.memory.entries or conv.memory.summary:
                 log.info(
                     "%s remembers %d message(s)%s",
@@ -524,6 +602,8 @@ class DialogueManager:
                     len(conv.memory.entries),
                     " and a summary" if conv.memory.summary else "",
                 )
+        if warm and self.fillers is not None and self.tts is not None:
+            self.fillers.warm(npc, conv.persona.voice)  # once: those made or being made are skipped
         return conv
 
     def say_as_player(
@@ -571,7 +651,9 @@ class DialogueManager:
             if line in conv.hushed:
                 continue
             if at is None:
-                unsaid = True
+                # still to come, unless it never will: the game does not start a line of an npc far from
+                # the hero, or one the bridge refused
+                unsaid = unsaid or now - self._sent.get(line, now) < LINE_LOST_S
                 continue
             said.append(text)
             speaking = speaking or at + line_duration(text) > now
@@ -607,7 +689,7 @@ class DialogueManager:
 
     def remember(self, npc: str, name: str, text: str) -> None:
         """A remark in the memory of any npc, also one nobody talks to (a rumor, something it saw)."""
-        self._note(self.open(npc, name), text)
+        self._note(self.open(npc, name, warm=False), text)
 
     def change_intent(self, npc: str, name: str, **fields: Any) -> None:
         """Change what the npc wants or how it sees the hero, from outside a turn (a lie found out)."""
@@ -632,9 +714,22 @@ class DialogueManager:
 
     def overheard(self, npc: str, name: str, text: str, to_name: str | None) -> None:
         """A witness: the npc heard the hero say something to someone else (no model call, only memory)."""
-        conv = self.open(npc, name)
+        conv = self.open(npc, name, warm=False)
         whom = f" собеседнику ({to_name})" if to_name else " вслух"
         self._note(conv, f"Ты слышал, как герой сказал{whom}: «{text}»")
+
+    def overheard_talk(
+        self, npc: str, name: str, names: tuple[str, str], said: list[tuple[str, str]]
+    ) -> None:
+        """A witness: the npc heard two others talk about the hero (a scene, gossip.py): `said` is
+        (speaker's name, line). No model call, only memory."""
+        if not said:
+            return
+        lines = " — ".join(f"{who}: «{text}»" for who, text in said)
+        self._note(
+            self.open(npc, name, warm=False),
+            f"Ты слышал, как {names[0]} и {names[1]} говорили о герое: {lines}",
+        )
 
     def event_turn(
         self,
@@ -713,6 +808,7 @@ class DialogueManager:
         self.fillers.said(conv.npc, sound)
         line = f"AIB_{next(self._line_ids)}"
         self._lines[line] = (sound.text, None)
+        self._sent[line] = time.monotonic()
         log.info("%s (%s): %s", conv.persona.name, sound.kind, sound.text)
         try:
             await self.link.send(
@@ -741,6 +837,7 @@ class DialogueManager:
         line = f"AIB_{next(self._line_ids)}"
         conv.last_lines.append(line)
         self._lines[line] = (text, None)
+        self._sent[line] = time.monotonic()
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
             if overlay:  # the game does not order lines said on the move
@@ -832,15 +929,7 @@ class DialogueManager:
                             speech.provider,
                         )
                     except TtsError as err:
-                        self._tts_paused_until = time.monotonic() + TTS_PAUSE
-                        log.warning("%s: no voice, subtitles only for %.0fs: %s", conv.npc, TTS_PAUSE, err)
-                        self.journal.add(
-                            "tts_off",
-                            npc=conv.npc,
-                            name=conv.persona.name,
-                            seconds=TTS_PAUSE,
-                            detail=str(err),
-                        )
+                        self._tts_off(conv.npc, conv.persona.name, err)
                         if started:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started and line not in conv.hushed:
@@ -860,6 +949,141 @@ class DialogueManager:
                 pass
             finally:
                 queue.task_done()
+
+    def _tts_off(self, npc: str, name: str, err: TtsError) -> None:
+        self._tts_paused_until = time.monotonic() + TTS_PAUSE
+        log.warning("%s: no voice, subtitles only for %.0fs: %s", npc, TTS_PAUSE, err)
+        self.journal.add("tts_off", npc=npc, name=name, seconds=TTS_PAUSE, detail=str(err))
+
+    # --- scenes: two npc's talk to each other -------------------------------------------
+
+    def play_scene(
+        self, lines: list[tuple[str, str, str, str, Mood | None]], *, quiet: bool = False
+    ) -> ScenePlay:
+        """Two npc's talk near the hero (gossip.py): lines (npc, name, to, text, mood) said in turn, each
+        to the npc `to`. The game plays two npc's voices over each other, so a line is sent only once the
+        one before has been heard; it goes out voiced whole (the next one is voiced while one plays).
+        `quiet`: they lower their voices. Nothing here goes into anyone's memory."""
+        scene = [
+            SceneLine(f"AIB_{next(self._line_ids)}", npc.upper(), name, to.upper(), said, mood)
+            for npc, name, to, text, mood in lines
+            if (said := to_game_text(text))
+        ]
+        play = ScenePlay(self, scene, quiet)
+        play.task = asyncio.create_task(self._play(play))
+        return play
+
+    def started_at(self, line: str) -> float | None:
+        """When the game started a line sent by this server; None if it has not."""
+        return self._lines.get(line, ("", None))[1]
+
+    def hush(self, cmd: HushCmd) -> None:
+        """Send a hush without waiting for it (a scene is cut synchronously)."""
+        self._spawn(self.link.send(cmd))
+
+    async def _play(self, play: ScenePlay) -> None:
+        lines = play.lines
+        try:
+            if lines:
+                play.next_voice = asyncio.create_task(self._scene_voice(lines[0], play.quiet))
+            free_at = 0.0
+            for i, line in enumerate(lines):
+                assert play.next_voice is not None
+                voice = await play.next_voice
+                play.next_voice = (
+                    asyncio.create_task(self._scene_voice(lines[i + 1], play.quiet))
+                    if i + 1 < len(lines)
+                    else None
+                )
+                await asyncio.sleep(max(0.0, free_at - time.monotonic()))
+                started = self._starts[line.line] = asyncio.Event()
+                self._lines[line.line] = (line.text, None)
+                self._sent[line.line] = time.monotonic()
+                play.sent = i + 1
+                log.info("%s -> %s: %s", line.name, line.to, line.text)
+                await self._send_scene_line(line, voice)
+                try:
+                    await asyncio.wait_for(started.wait(), SCENE_START_S)
+                except TimeoutError:
+                    # the game dropped it (the npc cannot speak) or holds it: the scene is over, and the
+                    # line is cut if it starts later
+                    log.info(
+                        "%s: line %s not started in %.0fs, the scene ends", line.npc, line.line, SCENE_START_S
+                    )
+                    play.why = "not_started"
+                    await self.link.send(HushCmd(npc=line.npc))
+                    return
+                line.started = self.started_at(line.line) or time.monotonic()
+                free_at = line.started + (line.audio_s or self.scene_pace(line.text)) + SCENE_GAP_S
+            await asyncio.sleep(max(0.0, free_at - time.monotonic()))
+        except GameError:
+            play.why = "gone"
+        finally:
+            if play.next_voice is not None:
+                play.next_voice.cancel()
+            for line in lines:
+                self._starts.pop(line.line, None)
+
+    async def _scene_voice(self, line: SceneLine, quiet: bool) -> Voice | None:
+        """A scene line's whole voice, None to say it without one (no TTS, or it failed)."""
+        if self.tts is None or time.monotonic() < self._tts_paused_until:
+            return None
+        if self._scene_tts is None:
+            self._scene_tts = TtsClient(self.tts.url, self.tts.timeout)
+        rate, chunks = 0, []
+
+        # nothing else is awaited here: the client's lock is held while these run
+        async def start(r: int, _provider: str) -> None:
+            nonlocal rate
+            rate = r
+
+        async def chunk(pcm: bytes) -> None:
+            chunks.append(pcm)
+
+        mood = MOOD_DELIVERY[line.mood] if line.mood else ""
+        style = "; ".join(s for s in (mood, QUIET_STYLE if quiet else "") if s)
+        voice = self.personas.get(line.npc, line.name).voice
+        try:
+            speech = await self._scene_tts.stream(line.text, line.npc, voice, start, chunk, style)
+        except TtsError as err:
+            self._tts_off(line.npc, line.name, err)
+            return None
+        log.info(
+            "%s voice %s: %.2fs of audio in %.2fs (%s)",
+            line.npc,
+            line.line,
+            speech.audio_s,
+            speech.latency_s,
+            speech.provider,
+        )
+        return rate, chunks, speech.audio_s
+
+    async def _send_scene_line(self, line: SceneLine, voice: Voice | None) -> None:
+        """Say, all of its audio and its end at once: the game drains them in one tick, so the line starts
+        with its whole voice and its length known (never a WAV `audio`: a hush stops only streamed voices)."""
+        if voice is None:
+            await self.link.send(
+                SayCmd(npc=line.npc, line=line.line, text=line.text, mood=line.mood, to=line.to)
+            )
+            return
+        rate, chunks, audio_s = voice
+        line.audio_s = audio_s
+        await self.link.send(
+            SayCmd(
+                npc=line.npc,
+                line=line.line,
+                text=line.text,
+                stream=True,
+                rate=rate,
+                mood=line.mood,
+                to=line.to,
+            )
+        )
+        for pcm in chunks:
+            await self.link.send(
+                SayAudioCmd(npc=line.npc, line=line.line, data=base64.b64encode(pcm).decode())
+            )
+        await self.link.send(SayEndCmd(npc=line.npc, line=line.line, audio_s=round(audio_s, 3)))
 
     def _commit(self, conv: Conversation, trigger: Message, text: str) -> None:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here.

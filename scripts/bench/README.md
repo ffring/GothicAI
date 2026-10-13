@@ -75,6 +75,10 @@ with `gestures off` on top of a copy he stands still, as before).
 Deals: `deal` (the deal window of an AI server, the interface in the frames: start `gothic-ai serve
 --scenario deal_demo --llm fake --no-tts` on a port of your own and run the bench with `GOTHIC_AI_URL`;
 Xardas offers a thing he has for 50 gold the hero lacks, then for 30, and the hero accepts).
+Two people talking: `gossip` (Lobart and Hilda talk about the hero's lie at Lobart's farm, each line said to
+the other: start `gothic-ai serve --scenario gossip_demo --llm fake --no-tts` on a port of your own and run
+the bench with `GOTHIC_AI_URL`; the server puts Hilda 5 m from Lobart and the hero 7 m from them; `nearby`,
+`pair` and `where` every second: during each line both look at each other, `look=talk at=<the other>`).
 
 Output goes to `.bench/<scenario>-<time>/` (not in git):
 
@@ -293,8 +297,12 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |
+| `pair <a> <b>` | how two npcs stand to each other, to `bench.log`: the distance; for each, where it faces (`at_other`, 0: right at the other), where it looks and why (`look`, `at`), its script state and for how long (`state`, `t` ms), body state, whether it uses a mob, how much of its AI runs (`ai`: `normal`, `far` beyond 30 m from the hero, `far2` beyond 60 m) |
+| `where <npc> [waypoint]` | where it is, how far from the hero (and from the waypoint), its state, whether its queue is busy (walking there), how much of its AI runs |
+| `state <npc> <ZS_*> <waypoint> [minutes]` | it does that at that place now, as a routine entry would (`TA_*`), for that many game minutes (60), then its routine goes on (`npc_act start_activity`) |
+| `come <npc>` | it walks up to the hero and turns to him (`npc_act go_to_npc`); a free one goes back to its routine after |
 | `cam face <dist> [angle] [height]` | close to the face of the watched one, looking at the mouth; `angle` from its facing |
-| `speak <npc\|nearest\|player> <output name>` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script |
+| `speak <npc\|nearest\|player> <output name\|$SVM> [to]` | it says a voiced line of the game (`DIA_Addon_Xardas_Hello_14_00`), like `AI_Output` in a script, or an SVM (`$SMALLTALK01`, like `AI_OutputSvm`); to the hero, or to the npc `to`: it turns to it first, as a line of the AI said to an npc does (`say.to`) |
 | `dialog <npc\|nearest>` | the hero talks to it, as with the action key: the dialog window opens |
 | `choose <n>` | runs the n-th choice (from 1) of the dialog with the watched npc, as if the player picked it |
 | `faceanim <npc\|nearest\|player> <anim> [ms] [intensity]` | a face animation of the head (`S_ANGRY`, `S_FRIENDLY`, `T_HURT`...) |
@@ -323,7 +331,12 @@ Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
 | `caption <text>`, `mark <text>` | events for the cut of a short |
 | `ai <...>` | the AI bridge's console: `ai attach <npc>`, `ai ptt start [<wav>]\|stop\|cancel` |
 
-Every talking command writes `events.jsonl` (what was said when, in frames of the recording).
+Every talking command writes `events.jsonl` (what was said when, in frames of the recording). A line of the
+AI is `npc line <npc>: <text>` in `bench.log`, `npc line <npc> -> <to>: <text>` when it is said to another npc
+(its `npc_line` event has `to`). What the npcs say through the game's own path, lines of the game and SVMs
+(`AI_Output`, `AI_OutputSvm`, the chatter of two in `ZS_SMALLTALK` too), is `output <npc> -> <target> <name>
+<ms>` (0 ms when the engine did not look the length up; `far` or `far2` after it when the npc's AI is cut down
+by its distance to the hero: such a line is never heard), and an `output` event.
 
 Environment of `scripts/bench.sh`: `GOTHIC_DIR`, `SAVE` (default: `save_slot_1.sav` of the main
 checkout), `NO_BUILD=1`, `TIMEOUT` (seconds, default 300), `KEEP=1`, `OPENGOTHIC_TEXTURES` (sharper
@@ -343,7 +356,8 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 
 `OpenGothic/common/testbench.cpp`, inert unless `OPENGOTHIC_BENCH` is set. Hooks: the fixed time step and
 the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
-and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), the OpenAL loopback device in Tempest's
+and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), an npc's lines of the game and SVMs
+(`TestBench::npcOutput` in `Npc::nextAiAction`), the OpenAL loopback device in Tempest's
 `SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
 `Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
 switches bone by bone),

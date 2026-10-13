@@ -1,0 +1,15 @@
+# P7 (wave 2 step 2, the sight tier): a smalltalk SVM said to another npc with the hero at 35 m (AiFar:
+# expected silent) and at 15 m (heard). bench.log: "output ... far" flags.
+cheat god
+set time 10 0
+goto NW_FARM1_OUT_01
+wait 4000
+watch BAU_950_LOBART
+place 3500 0
+wait 2000
+speak BAU_950_LOBART $SMALLTALK01 BAU_951_HILDA
+wait 6000
+place 1500 0
+wait 2000
+speak BAU_950_LOBART $SMALLTALK02 BAU_951_HILDA
+wait 6000

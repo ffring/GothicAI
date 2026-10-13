@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
 from websockets.asyncio.client import ClientConnection, connect
 
 from gothic_ai.game import GameLink, GameServer
+from gothic_ai.protocol import PROTOCOL_VERSION
 
 KNOWN_ANIMS = {
     "T_GREETNOV",
@@ -22,13 +24,23 @@ WAYPOINTS = {"NW_XARDAS_TOWER_IN1_31": 0.0, "NW_XARDAS_TOWER_04": 850.0, "NW_XAR
 
 
 class FakeGame:
-    def __init__(self, busy_attaches: int = 0, branch: str | None = "test-branch") -> None:
+    def __init__(
+        self, busy_attaches: int = 0, branch: str | None = "test-branch", protocol: int = PROTOCOL_VERSION
+    ) -> None:
+        self.protocol = protocol  # what hello reports (an older bridge: an older version)
         self.attached: set[str] = set()
         self.received: list[dict[str, Any]] = []
         self.busy_attaches = busy_attaches  # first N attach requests fail as "npc is in dialog"
+        self.attach_delay = 0.0  # seconds before an attach is answered (to cut something mid-attach)
         self.ws: ClientConnection | None = None
         self.said: list[str] = []
         self.voiced: list[bool] = []  # said with audio
+        # every say the server sent (dropped ones too) and when it came, by time.monotonic()
+        self.says: list[tuple[dict[str, Any], float]] = []
+        self.drop_says: set[str] = set()  # npc's whose says are dropped silently, as the bridge refuses one
+        self.start_delay = 0.0  # seconds before line_started (0: at once)
+        self.say_chunks: dict[str, int] = {}  # line -> say_audio chunks
+        self.say_ends: dict[str, float | None] = {}  # line -> audio_s of its say_end
         self.fillers: list[str] = []  # said as fillers ("Хм..." while the model thinks)
         self.statuses: list[str] = []
         self.branch = branch  # reported as the session on connect (None: an old game without sessions)
@@ -38,6 +50,8 @@ class FakeGame:
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect / raise_dead
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
+        self.nearby_of: dict[str, list[dict[str, Any]]] = {}  # ...around this npc (else people_near)
+        self.nearby_error: set[str] = set()  # npc's story_nearby does not know (ok=false: not in the world)
         # what story_state answers: globals, npc's ({"state", "name", "distance" from `near`}), dialogs the
         # hero heard, script names
         self.vars: dict[str, int] = {}
@@ -63,6 +77,7 @@ class FakeGame:
         self.acts: list[dict[str, Any]] = []  # npc_act messages as sent
         self.busy_npcs: set[str] = set()  # their npc_act's are rejected
         self.auto_idle = False  # answer every queued npc_act with npc_idle at once
+        self.idle_delay = 0.0  # ...or this many seconds later (a walk still under way meanwhile)
         self.idle_reason = "done"
         # as the bridge tracks soft acts: one per npc, a newer one drops the older (no npc_idle for it), an
         # npc taken over (attached) ends its act as "gone"
@@ -71,6 +86,14 @@ class FakeGame:
         self.important: set[str] = set()  # npc's with an important dialog to tell (NPC_CHECKINFO)
         self.hushed: list[dict[str, Any]] = []
         self.heard: list[dict[str, Any]] = []  # final transcripts with whom they were said to
+        self.debug_calls: list[dict[str, Any]] = []  # debug messages, each answered ok
+        # what `routine` answers: npc -> {"current", "entries": [{start, end, state, waypoint}], "routines"};
+        # an npc not in it is not in the world ("npc not found", as the bridge says)
+        self.routines: dict[str, dict[str, Any]] = {}
+        self.routine_errors: dict[str, str] = {}  # npc -> the error its routine is answered with
+        self.routine_hang: set[str] = set()  # npc's whose routine is never answered (the server times out)
+        self.routine_calls: list[str] = []  # every npc asked for, in order
+        self._later: set[asyncio.Task[None]] = set()
 
     async def perception(
         self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
@@ -132,7 +155,7 @@ class FakeGame:
     async def run(self, url: str) -> None:
         async with connect(url) as ws:
             self.ws = ws
-            await self.send(type="hello", protocol=4, client="fake", codepage="cp1251")
+            await self.send(type="hello", protocol=self.protocol, client="fake", codepage="cp1251")
             if self.branch is not None:
                 await self.send(type="session", branch=self.branch, reason="new_game")
             await self.send(type="world_loaded", world="NEWWORLD.ZEN")
@@ -148,7 +171,7 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True)
                 await self.send(type="detached", npc=msg["npc"], reason="server")
             case "npc_act":
-                npc = msg["npc"]
+                npc, args = msg["npc"], msg.get("args", {})
                 self.soft.append((npc, msg["action"]))
                 self.acts.append(msg)
                 if npc in self.busy_npcs:
@@ -156,33 +179,51 @@ class FakeGame:
                     await self.send(type="npc_act_result", id=msg["id"], npc=npc, **busy)
                     return
                 await self.send(type="npc_act_result", id=msg["id"], npc=npc, status="queued")
+                reason, failed = self.idle_reason, None
+                if msg["action"] == "give":  # v15: to another npc
+                    failed = self.hand_over(npc, args)
+                elif msg["action"] == "start_activity" and args.get("arrive") and reason == "done":
+                    reason = "arrived"
                 if self.auto_idle:
-                    await self.send(type="npc_idle", npc=npc, act=msg["id"], reason=self.idle_reason)
+                    idle = {"type": "npc_idle", "npc": npc, "act": msg["id"]}
+                    idle |= {"reason": "failed", "detail": failed} if failed else {"reason": reason}
+                    if self.idle_delay > 0:
+                        self._spawn(self.send_later(self.idle_delay, **idle))
+                    else:
+                        await self.send(**idle)
                 elif self.track_acts:
                     self.running[npc] = msg["id"]
             case "hush":
                 self.hushed.append(msg)
             case "attach":
-                if self.busy_attaches > 0:
-                    self.busy_attaches -= 1
-                    await self.send(type="result", req=msg["req"], ok=False, error="npc is in dialog")
-                    return
-                self.attached.add(msg["npc"])
-                if (act := self.running.pop(msg["npc"], None)) is not None:
-                    await self.send(type="npc_idle", npc=msg["npc"], act=act, reason="gone")
-                await self.send(type="result", req=msg["req"], ok=True)
-                await self.send(type="attached", npc=msg["npc"], name="Ксардас")
-                await self.send(**self.snapshot(msg["npc"]))
+                if self.attach_delay > 0:
+                    self._spawn(self.attach(msg))  # the rest of the messages go on meanwhile
+                else:
+                    await self.attach(msg)
             case "snapshot":
                 await self.send(**self.snapshot(msg["npc"]))
             case "action":
                 await self.handle_action(msg)
             case "say":
+                self.says.append((msg, time.monotonic()))
+                if msg["npc"] in self.drop_says:
+                    return  # the bridge drops a say for an npc that cannot speak, without a word
                 self.said.append(msg["text"])
                 self.voiced.append(bool(msg.get("audio") or msg.get("stream")))
                 if msg.get("filler"):
                     self.fillers.append(msg["text"])
-                await self.send(type="line_started", npc=msg["npc"], line=msg["line"])
+                started = {"type": "line_started", "npc": msg["npc"], "line": msg["line"]}
+                if self.start_delay > 0:
+                    self._spawn(self.send_later(self.start_delay, **started))
+                else:
+                    await self.send(**started)
+            case "say_audio":
+                self.say_chunks[msg["line"]] = self.say_chunks.get(msg["line"], 0) + 1
+            case "say_end":
+                self.say_ends[msg["line"]] = msg.get("audio_s")
+            case "debug":
+                self.debug_calls.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True)
             case "chat_status":
                 self.statuses.append(msg["status"])
             case "memory":
@@ -208,7 +249,13 @@ class FakeGame:
             case "deal_show" | "deal_hide":
                 self.deals.append(msg)
             case "story_nearby":
-                await self.send(type="result", req=msg["req"], ok=True, value=self.people_near)
+                if msg["npc"] in self.nearby_error:
+                    await self.send(type="result", req=msg["req"], ok=False, error=f"no npc {msg['npc']}")
+                    return
+                near = self.nearby_of.get(msg["npc"], self.people_near)
+                await self.send(type="result", req=msg["req"], ok=True, value=near)
+            case "routine":
+                await self.routine(msg)
             case "story_state":
                 value = {
                     "vars": {v: self.vars[v] for v in msg.get("vars", []) if v in self.vars},
@@ -248,6 +295,62 @@ class FakeGame:
                     bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
                     errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
                     await self.send(type="result", req=msg["req"], ok=not bad, **errors)
+
+    async def routine(self, msg: dict[str, Any]) -> None:
+        """`routine` (v6): the npc's day as `routines` has it, an error, or no answer at all."""
+        npc = msg["npc"]
+        self.routine_calls.append(npc)
+        if npc in self.routine_hang:
+            return
+        error = self.routine_errors.get(npc) or (None if npc in self.routines else "npc not found")
+        if error is not None:
+            await self.send(type="routine", req=msg["req"], npc=npc, error=error)
+            return
+        day = {"current": "", "entries": [], "routines": [], **self.routines[npc]}
+        await self.send(type="routine", req=msg["req"], npc=npc, **day)
+
+    async def attach(self, msg: dict[str, Any]) -> None:
+        if self.attach_delay > 0:
+            await asyncio.sleep(self.attach_delay)
+        if self.busy_attaches > 0:
+            self.busy_attaches -= 1
+            await self.send(type="result", req=msg["req"], ok=False, error="npc is in dialog")
+            return
+        self.attached.add(msg["npc"])
+        if (act := self.running.pop(msg["npc"], None)) is not None:
+            await self.send(type="npc_idle", npc=msg["npc"], act=act, reason="gone")
+        await self.send(type="result", req=msg["req"], ok=True)
+        await self.send(type="attached", npc=msg["npc"], name="Ксардас")
+        await self.send(**self.snapshot(msg["npc"]))
+
+    async def send_later(self, delay: float, **msg: Any) -> None:
+        await asyncio.sleep(delay)
+        await self.send(**msg)
+
+    def _spawn(self, coro: Any) -> None:
+        async def run() -> None:
+            try:
+                await coro
+            except Exception:  # the server is gone: nobody to tell
+                pass
+
+        task = asyncio.create_task(run())
+        self._later.add(task)
+        task.add_done_callback(self._later.discard)
+
+    def hand_over(self, npc: str, args: dict[str, Any]) -> str | None:
+        """npc_act give (v15): the npc's item to another npc (at least one, as the bridge); why it failed, or
+        None."""
+        item, count = args.get("item", ""), max(1, int(args.get("count", 1)))
+        giver = self.npc_items.setdefault(npc, {})
+        has = giver.get(item, 0)
+        if has <= 0:
+            return f"npc has no item {item}"
+        moved = min(has, count)
+        giver[item] = has - moved
+        taker = self.npc_items.setdefault(args.get("npc", ""), {})
+        taker[item] = taker.get(item, 0) + moved
+        return None
 
     def give(self, msg: dict[str, Any]) -> str | None:
         """story_effect with `check`: all the gives or none, as the bridge does; what is missing, or None."""

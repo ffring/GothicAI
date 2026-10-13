@@ -59,6 +59,15 @@ def test_intent_actions():
     assert executor.intent_actions(Intent(), Intent("fight"), following=False) == []  # the reflexes' job
 
 
+def test_a_goal_there_is_no_more_reads_as_none():
+    from gothic_ai.npc_tools import TOOLS
+
+    saved = Intent.from_json('{"goal":"change_plans","attitude":"wary"}')  # remembered before it went
+    assert (saved.goal, saved.attitude) == ("none", "wary")
+    assert saved.describe_en().startswith("You want nothing in particular.")
+    assert "change_plans" not in TOOLS[0].parameters["properties"]["goal"]["enum"]
+
+
 async def _turn(
     llm: FakeBackend, fake: FakeGame, store: MemoryStore | None = None, text: str = "Дай мне что-нибудь"
 ):

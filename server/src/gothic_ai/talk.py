@@ -4,7 +4,8 @@ His phrase — spoken (voice.py: the T key held anywhere) or typed (the input li
 event of the world:
 
 - **whom it is said to** is the code's rule (`addressee`): a name in the phrase, the npc he looks at, the
-  current partner if still close, the nearest npc in front of him; with none, he said it into the air;
+  current partner if still close, one of two npc's who were just talking near him (gossip.py), the nearest
+  npc in front of him; with none, he said it into the air;
 - **the conversation** is a soft state here — who the partner is, when something was last said — and the
   npc is not captured: its scripts go on. It ends with the npc's goodbye, or once the hero is farther than
   `END_CM` and nothing has been said for `END_SILENCE_S`;
@@ -13,7 +14,8 @@ event of the world:
   reply is said on the move unless the npc stands listening;
 - the npc is held (attached) only while its body does something for the conversation: listening, walking
   along, handing over an item, following the hero (dialogue.py asks for it through `take_body`);
-- the hero speaking while the npc answers **cuts it off** (`hush`), and it remembers that;
+- the hero speaking while the npc answers **cuts it off** (`hush`), and it remembers that; so does his voice
+  to two npc's talking near him (`on_hero_voice`);
 - **witnesses** within `OVERHEAR_CM` remember what they heard, without a model call;
 - what the hero **does** meanwhile (draws a weapon, strikes, walks off mid-reply) goes into the partner's
   memory, and so into its next turn.
@@ -25,7 +27,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -185,13 +187,18 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    why: str  # name | focus | partner | front
+    why: str  # name | focus | partner | scene | front
 
 
 def addressee(
-    text: str, focus: str | None, people: dict[str, RosterEntry], partner: str | None
+    text: str,
+    focus: str | None,
+    people: dict[str, RosterEntry],
+    partner: str | None,
+    scene: Sequence[str] = (),
 ) -> Addressee | None:
-    """Whom the hero speaks to: a name in the phrase, his focus, the current partner, the nearest in front."""
+    """Whom the hero speaks to: a name in the phrase, his focus, the current partner, one of the npc's of
+    a `scene` (two who were just talking near him, the one who spoke last first), the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
     near = [
@@ -207,6 +214,12 @@ def addressee(
         return Addressee(e.id.upper(), e.name, "focus")
     if partner and (e := alive.get(partner)) is not None and e.distance <= PARTNER_CM:
         return Addressee(e.id.upper(), e.name, "partner")
+    # a scene starts only while he has no partner, so this never takes words meant for one
+    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.distance <= NAME_CM]
+    if near:
+        seen = [e for e in near if e.in_view]
+        e = min(seen, key=lambda e: e.distance) if seen else near[0]
+        return Addressee(e.id.upper(), e.name, "scene")
     front = [e for e in alive.values() if e.in_view and e.distance <= FRONT_CM]
     if front:
         e = min(front, key=lambda e: e.distance)
@@ -257,6 +270,10 @@ class TalkDesk:
         self._tasks: set[asyncio.Task[Any]] = set()
         # a conversation is over (npc, why: npc, gone, walked_away, switched): e.g. an offer not taken goes
         self.on_talk_end: list[Callable[[str, str], None]] = []
+        # the hero starts to speak: others talking near him stop (gossip.py); True if someone did
+        self.on_hero_voice: list[Callable[[], bool]] = []
+        # npc's of a scene near the hero his next words may go to, the one who spoke last first (gossip.py)
+        self.scene_hint: Callable[[], list[str]] = lambda: []
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -304,7 +321,9 @@ class TalkDesk:
         if not text:
             return
         now = self.clock()
-        to = addressee(text, focus, self.people, self.partner.npc if self.partner else None)
+        to = addressee(
+            text, focus, self.people, self.partner.npc if self.partner else None, self.scene_hint()
+        )
         self.last = (to, text)
         echo = TranscriptCmd(text=text, to=to.id if to else None, to_name=to.name if to else None)
         self._spawn(self.link.send(echo))
@@ -348,11 +367,20 @@ class TalkDesk:
         return self.partner
 
     def interrupt(self) -> bool:
-        """The hero speaks: the partner stops answering (what it said so far stays in its memory)."""
+        """The hero speaks: the partner stops answering (what it said so far stays in its memory), and so
+        do two npc's talking near him. Synchronous: what they said is in their memories before his words
+        are answered. True if anyone stopped."""
+        cut = any([f() for f in self.on_hero_voice])  # every one of them, not just up to the first
         if self.partner is None or not self.dialogue.interrupt(self.partner.npc):
-            return False
-        self.journal.add("interrupt", npc=self.partner.npc, name=self.partner.name)
+            return cut
+        self.journal.add(
+            "interrupt", npc=self.partner.npc, name=self.partner.name, **({"scene": True} if cut else {})
+        )
         return True
+
+    def end(self, why: str = "walked_away") -> None:
+        """The conversation is over (scenarios, the console)."""
+        self._end(why)
 
     def on_npc_end(self, npc: str) -> None:
         """The npc said goodbye."""
@@ -365,6 +393,9 @@ class TalkDesk:
         npc = talk.npc
         snap = asyncio.create_task(self._snapshot(npc)) if npc not in self.attached else None
         if npc in self.held:  # it listens, walks along or follows already
+            if "scene" in self.held[npc]:  # it stood talking to another (gossip.py): now it listens to him
+                self.held[npc].add("listen")
+                self._spawn(self._act(npc, "turn_to", npc="PLAYER"))
             choice: str | None = "listen" if "listen" in self.held[npc] else "walk_with"
         elif npc in self.attached:
             choice = None  # held by someone else (a scenario, the console): it stands as before

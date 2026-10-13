@@ -59,3 +59,24 @@ def test_search_finds_older_messages_by_word_stems() -> None:
     assert store.search("A", "X", "драконы", before_seq=0) == []
     # nothing matches: the latest older messages come back anyway (the model reads them)
     assert [r.seq for r in store.search("A", "X", "как меня зовут", before_seq=3, limit=2)] == [2, 3]
+
+
+def test_facts_since_reads_only_the_newer_ones() -> None:
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    first = store.add_fact("A", '{"fact": "died"}')
+    store.append("A", "X", "user", "не факт")  # other events share the seqs
+    second = store.add_fact("A", '{"fact": "quest"}')
+    third = store.add_fact("A", '{"fact": "paid"}')
+    assert (first, second, third) == (1, 3, 4)
+    assert store.facts_since("A", 0) == [
+        (1, '{"fact": "died"}'),
+        (3, '{"fact": "quest"}'),
+        (4, '{"fact": "paid"}'),
+    ]
+    assert store.facts_since("A", first) == [(second, '{"fact": "quest"}'), (third, '{"fact": "paid"}')]
+    assert store.facts_since("A", third) == []
+    # a load inherits them with their seqs
+    store.ensure_branch("B", "A", second)
+    assert [seq for seq, _ in store.facts_since("B", 0)] == [first, second]
+    assert store.facts_since("B", second) == []

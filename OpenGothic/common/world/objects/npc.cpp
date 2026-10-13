@@ -2888,8 +2888,8 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
     case AI_OutputSvm:
     case AI_OutputSvmOverlay:{
       if(performOutput(act)) {
+        uint64_t msgTime = 0;
         if(aiPolicy!=NpcProcessPolicy::AiFar2) {
-          uint64_t msgTime = 0;
           if(act.act==AI_Output) {
             msgTime = owner.script().messageTime(act.s0);
             } else {
@@ -2904,6 +2904,8 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
             act.target->setTalkPartner(this,msgTime+tail);
             }
           }
+        if(TestBench::isActive())
+          TestBench::npcOutput(*this,act.s0,act.target,msgTime);
         if(act.act!=AI_OutputSvmOverlay) {
           visual.startAnimDialog(*this);
           visual.setAnimRotate(*this,0);

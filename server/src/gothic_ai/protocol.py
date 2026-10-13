@@ -10,8 +10,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
-# answer (raise_dead), v14: sounds at once (say.filler)
-PROTOCOL_VERSION = 14
+# answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival)
+PROTOCOL_VERSION = 15
 
 # --- game -> server -----------------------------------------------------------
 
@@ -392,12 +392,15 @@ class NpcEvent(_GameMessage):
 
 class NpcIdle(_GameMessage):
     """A soft action (`npc_act`) is over (v5): a good moment to decide what the npc does next.
-    `reason`: done (its AI queue ran empty), gone (down, removed, taken over) or timeout."""
+    `reason`: done (its AI queue ran empty), gone (down, removed, taken over), timeout, arrived (v15: a
+    `start_activity` with `arrive` got there) or failed (v15: a `give` that could not be done, `detail`
+    says why)."""
 
     type: Literal["npc_idle"]
     npc: str
     act: str | None = None
     reason: str | None = None
+    detail: str | None = None  # v15: why it failed
 
 
 class NpcActResult(_GameMessage):
@@ -546,8 +549,11 @@ NpcActType = Literal[
     "flee",  # v6: ZS_FLEE from args.npc
     "draw_weapon",  # v6
     "remove_weapon",  # v6
-    "start_activity",  # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine
+    # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine. v15: with
+    # args.arrive npc_idle "arrived" once it is within args.radius (cm, 500) of the waypoint in that state
+    "start_activity",
     "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
+    "give",  # v15: args.npc, args.item, args.count: to another npc; npc_idle done or failed
 ]
 
 
@@ -623,6 +629,9 @@ class SayCmd(_Command):
     # v14: "Хм...", "Что?!" said at once while the model thinks: the npc goes on thinking after it (the
     # eyes aside)
     filler: bool | None = None
+    # v15: the npc it says it to (symbol); none: the hero. The speaker turns to it first, both look at each
+    # other; an overlay line only looks
+    to: str | None = None
 
 
 class ChatTextCmd(_Command):
@@ -681,12 +690,14 @@ class TranscriptCmd(_Command):
 
 class HushCmd(_Command):
     """The npc is interrupted (v7): its voice stops, its lines that have not started yet are dropped,
-    its reply's subtitle keeps only what it `said`."""
+    its reply's subtitle keeps only what it `said`; v15: so does the subtitle of the `line` it was saying
+    without a reply (to another npc)."""
 
     type: Literal["hush"] = "hush"
     npc: str
     reply: str | None = None
     said: str | None = None
+    line: str | None = None  # v15
 
 
 class MemoryCmd(_Command):
@@ -718,6 +729,7 @@ DebugCommand = Literal[
     "deal_decline",
     "player_equip",
     "waypoints",
+    "npc_goto",
 ]
 
 
@@ -738,7 +750,9 @@ class DebugCmd(_Command):
     presses it (`value`: "sent", or why not: "none", "waiting", "missing", "changed", "blocked"),
     `deal_decline` — N (`value`: "declined", "none", "blocked"); give the player an `item` and put it on
     (`player_equip`, v11); every waypoint and freepoint of the world (`waypoints`, `value`: [{name, x, y,
-    z, fp}]).
+    z, fp}]); move an `npc` to a `waypoint` (or `distance` cm, default 300, in front of npc `to`) on the
+    ground, facing npc `face` (`npc_goto`, v15: it stays free and goes on with what it does, so its
+    routine may walk it back).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -764,6 +778,7 @@ class DebugCmd(_Command):
     node: str | None = None
     expr: list[Any] | None = None
     item: str | None = None
+    face: str | None = None  # npc_goto: the npc it turns to
 
 
 class GraphPatchCmd(_Command):

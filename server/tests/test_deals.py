@@ -2,7 +2,7 @@ import asyncio
 
 import gothic_ai.deals
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.deals import Deals, gold_text
+from gothic_ai.deals import Deals, LieRef, gold_text
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
@@ -316,6 +316,39 @@ async def test_he_forgives_a_lie_and_keeps_quiet_about_it():
         assert BOOK not in (deals.situation(XARDAS) or "")
         o = await offer(forgive=[BOOK])
         assert o.status == "rejected" and "уже простил" in o.output
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def test_a_lie_in_his_own_words():
+    said = LieRef(f"caught:{XARDAS}:", "всё утро был в городе", XARDAS, "Ксардас", said=True)
+    assert said.words(XARDAS) == "обманул тебя: сказал «всё утро был в городе», а это неправда"
+    assert said.words("LESTER") == (
+        "обманул человека по имени Ксардас: сказал «всё утро был в городе», а это неправда"
+    )
+    quest = LieRef(BOOK, "Принести книгу", XARDAS, "Ксардас")
+    assert quest.words(XARDAS) == "обманул тебя: уверял, что сделал «Принести книгу», а это неправда"
+    # a reward taken for nothing reads the same with or without it
+    found = LieRef(f"found_out:{XARDAS}:MIS_BOOK", "Принести книгу", XARDAS, "Ксардас", said=True)
+    assert "взял награду за «Принести книгу»" in found.words(XARDAS)
+
+
+async def test_lies_of_keeps_his_own_words():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, _dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    try:
+        lie = {"quest": "", "title": "всё утро был в городе", "said": True, "day": 1}
+        chronicle.record({"fact": "caught", "npc": XARDAS, "name": "Ксардас", "how": "видел сам", **lie})
+        chronicle.record({"fact": "caught", "npc": XARDAS, "name": "Ксардас", "quest": "MIS_BOOK"})
+        heard = {"kind": "caught", "about": XARDAS, "about_name": "Ксардас", "from": XARDAS, "hops": 1}
+        chronicle.record({"fact": "rumor", "to": "LESTER", **heard, **lie})
+        known, _, _ = deals.lies_of(XARDAS)
+        assert known[f"caught:{XARDAS}:"].said and not known[BOOK].said
+        heard_of = deals.lies_of("LESTER")[0][f"caught:{XARDAS}:"]
+        assert heard_of.said and heard_of.words("LESTER").endswith(
+            "сказал «всё утро был в городе», а это неправда"
+        )
     finally:
         await link_cm.__aexit__(None, None, None)
 

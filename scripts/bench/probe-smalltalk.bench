@@ -1,0 +1,60 @@
+# P1 (wave 2 step 2): two townspeople in their smalltalk (ZS_SMALLTALK). Do they pair up, how often does
+# each speak, do they face each other? Then a voiced line said to one of them (v15 say.to): does their own
+# chatter talk over it, free and held? bench.log: "output <npc> -> <target> <name>", "pair ...".
+cheat god
+set time 9 0
+goto NW_CITY_MERCHANT_SHOP01_FRONT_03
+freeze PAL_203_LOTHAR   # he comes to the hero with an important dialog
+wait 10000
+watch VLK_451_BUERGER
+rec smalltalk
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+pair VLK_451_BUERGER VLK_452_BUERGER
+wait 4000
+rec overlap
+speak VLK_451_BUERGER DIA_Addon_Xardas_Hello_14_00 VLK_452_BUERGER
+wait 9000
+speak VLK_451_BUERGER DIA_Addon_Xardas_Hello_14_00 VLK_452_BUERGER
+wait 9000
+speak VLK_451_BUERGER DIA_Addon_Xardas_Hello_14_00 VLK_452_BUERGER
+wait 9000
+speak VLK_451_BUERGER DIA_Addon_Xardas_Hello_14_00 VLK_452_BUERGER
+wait 9000
+speak VLK_451_BUERGER DIA_Addon_Xardas_Hello_14_00 VLK_452_BUERGER
+wait 9000
+rec held
+ai attach VLK_451_BUERGER
+ai attach VLK_452_BUERGER
+wait 1000
+speak VLK_451_BUERGER DIA_Addon_Xardas_Hello_14_00 VLK_452_BUERGER
+wait 9000
+pair VLK_451_BUERGER VLK_452_BUERGER
+ai detach VLK_451_BUERGER
+ai detach VLK_452_BUERGER

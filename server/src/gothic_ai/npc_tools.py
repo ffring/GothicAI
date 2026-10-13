@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# gesture id offered to the model -> human animation
+# gesture id -> human animation (the m2 scenario plays each; the model has no gesture tool)
 GESTURES = {
     "nod": "T_YES",
     "shake_head": "T_NO",
@@ -110,7 +110,9 @@ class Outcome:
 
 
 async def execute(link: GameLink, npc: str, call: ToolCall, snapshot: Snapshot | None) -> Outcome:
-    """Run one tool call in the game. `end_conversation` is handled by the dialogue itself."""
+    """Run one tool call in the game: `give_item`, the one tool that acts (after the npc's line). Intents
+    are carried out by executor.py and the behavioral model, `recall` and `end_conversation` by the
+    dialogue itself."""
     args = call.arguments
     try:
         match call.name:
@@ -120,21 +122,6 @@ async def execute(link: GameLink, npc: str, call: ToolCall, snapshot: Snapshot |
                 name = _item_name(snapshot, item)
                 res = await link.act(npc, "give_item", item=item, count=count)
                 return _outcome(res, f"Ты отдал герою: {name} ×{count}", f"Не вышло отдать {name}")
-            case "follow_player":
-                res = await link.act(npc, "follow", npc="PLAYER")
-                return _outcome(res, "Ты идёшь за героем", "Не вышло пойти за героем")
-            case "stop":
-                res = await link.act(npc, "stop")
-                return _outcome(res, "Ты остановился", "Не вышло остановиться")
-            case "come_closer":
-                res = await link.act(npc, "go_to_npc", npc="PLAYER")
-                return _outcome(res, "Ты подошёл к герою", "Не вышло подойти к герою")
-            case "gesture":
-                anim = GESTURES.get(str(args.get("name", "")))
-                if anim is None:
-                    return Outcome(f"Неизвестный жест {args.get('name')!r}", ok=False)
-                res = await link.act(npc, "play_ani", name=anim)
-                return _outcome(res, "", "Жест не получился")
     except (GameError, TimeoutError, ValueError) as err:
         return Outcome(f"Действие {call.name} не выполнено: {err}", ok=False)
     return Outcome(f"Неизвестное действие {call.name}", ok=False)

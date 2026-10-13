@@ -8,7 +8,8 @@ concern, concerns.py). The desk takes that choice over from the planner and:
   its spot (storyguard.py) and speaks first only when the hero is already close; once spoken about, the same
   occasion waits a game hour (a loop guard: whether to bring it up again later is its character's);
 - leaves it to the game when the npc has an important dialog of the scripts waiting: the game speaks first;
-- walks the body to the hero (bodies.py) and waits until it is there;
+- walks the body to the hero (bodies.py) and waits until it is there, and until two people talking next to
+  him are done (gossip.py): it does not speak over them;
 - makes it the hero's partner (talk.py): his next words without a name go to it;
 - lets the conversational model say the first words on the occasion, one call within the budget, with the
   conversation's tools (a deal among them);
@@ -21,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +36,7 @@ from .game import GameError, GameLink
 from .incidents import hears
 from .journal import Journal
 from .protocol import GameMessage, Loading, NpcViews, Session
-from .storyguard import StoryGuard
+from .storyguard import StoryGuard, asleep
 
 if TYPE_CHECKING:
     from .dialogue import DialogueManager
@@ -48,6 +49,7 @@ ARRIVE_CM = 400.0  # the roster distance that counts as having come up
 STAY_CM = 500.0  # an npc that may not leave its spot speaks first only this close
 REPEAT_GAME_MIN = 60  # one spoken initiative per occasion per game hour
 WATCH_S = 0.25  # while it walks: has the hero spoken to it meanwhile
+FLOOR_WAIT_S = 45.0  # come up while two talk next to the hero: it waits this long for them to finish
 # the conversation's tools, at most six (docs/npc-tools.md, principle 8)
 TOOLS = ("set_intent", "give_item", "recall", "end_conversation", "propose_deal", "withdraw_deal")
 CHECKINFO = ["call", "NPC_CHECKINFO", ["inst", "SELF"], ["int", 1]]
@@ -95,6 +97,8 @@ class InitiativeDesk:
         self.now: int | None = None  # the game's clock, minutes since the first day began
         self._world = 0  # bumped on every load: a walk of the world before is over
         self._background: set[asyncio.Task[Any]] = set()
+        # two talk next to the hero (gossip.py sets it): the first words wait for them
+        self.floor_busy: Callable[[], bool] = lambda: False
         planner.allow = self.allow
         planner.on_approach = self.approach
         planner.facts_of = self.facts
@@ -142,7 +146,7 @@ class InitiativeDesk:
         if not hears(rec.distance_cm, rec.in_view):
             return "герой не услышит"
         state = self._state(rec.id)
-        if state.startswith("ZS_SLEEP"):
+        if asleep(state):
             return "спит"
         if (why := self.guard.body(rec.id, state)) is not None and rec.distance_cm > STAY_CM:
             return why
@@ -219,6 +223,23 @@ class InitiativeDesk:
             return self._skip(npc, name, f"missed: {outcome.status}, {where}")
         if occ is None:
             return  # it came up and says nothing, as before
+        if self.floor_busy():  # two talk next to the hero (gossip.py): it waits its turn, not over them
+            loop = asyncio.get_running_loop()
+            until = loop.time() + FLOOR_WAIT_S
+            while self.floor_busy() and not self._partner(npc) and loop.time() < until:  # noqa: ASYNC110
+                await asyncio.sleep(WATCH_S)  # the floor is another desk's state: polled, as the walk is
+            if world != self._world:
+                return
+            if self._partner(npc):  # he spoke to it while it waited
+                self.dialogue.remember(npc, name, f"Ты сам шёл к герою: {occ.ru}")
+                return
+            if self.floor_busy():
+                return self._skip(npc, name, "рядом болтают")
+            # the hero may have gone meanwhile: a scene ends when he walks off (gossip.py, hero_left)
+            entry = self.talk.people.get(npc)
+            if entry is None or entry.distance > (STAY_CM if stay else ARRIVE_CM):
+                where = f"{entry.distance / 100:.0f} м" if entry is not None else "ушёл"
+                return self._skip(npc, name, f"missed: waited, {where}")
         if self.talk.partner is not None:
             return self._skip(npc, name, "the hero talks to another")
         if not self.budget.allow(npc):

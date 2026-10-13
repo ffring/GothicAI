@@ -31,6 +31,7 @@ class LineLibrary final {
       bool        hushed  = false;  // cut off before it started (v7 hush): speaks nothing
       std::string mood;             // the face while it is said (v8): neutral, friendly, angry...
       bool        filler  = false;  // "Хм..." while the model thinks (v14): the npc goes on thinking
+      std::string to;               // whom it is said to (v15): an npc's symbol; empty: the hero
       };
 
     static constexpr uint32_t VoicePauseMs = 250;  // breath between voiced lines

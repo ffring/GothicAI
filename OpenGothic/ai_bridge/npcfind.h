@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <string_view>
@@ -9,6 +10,8 @@
 #include "world/world.h"
 
 namespace AiNpc {
+
+inline constexpr float GiveRange = 350;  // cm: an npc hands an item over from this close
 
 inline std::string upper(std::string_view s) {
   std::string r(s);
@@ -53,6 +56,22 @@ inline ScriptFn scriptState(World& world, std::string_view name) {
 inline std::string stateName(World& world, ScriptFn fn) {
   auto sym = fn.isValid() ? world.script().findSymbol(fn.ptr) : nullptr;
   return sym!=nullptr ? sym->name() : "";
+  }
+
+// `from` hands up to `count` of `item` to `to` once it has walked up (within twice GiveRange): an attached
+// npc's give_item, a free npc's give to another (v15)
+inline bool giveItem(Npc& from, Npc& to, size_t item, size_t count, std::string& err) {
+  if(from.qDistTo(to)>GiveRange*GiveRange*4) {
+    err = "could not reach the target";
+    return false;
+    }
+  const size_t have = from.inventory().itemCount(item);
+  if(have==0) {
+    err = "npc no longer has the item";
+    return false;
+    }
+  to.addItem(item,from,std::min(have,count));
+  return true;
   }
 
 // walking, running: anything but standing at its place or doing something there

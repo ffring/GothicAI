@@ -794,6 +794,31 @@ const char* gazeSource(Gaze::Source s) {
   return "?";
   }
 
+// whom the gaze of that source looks at, "-" for none or a point
+std::string gazeWho(World& w, const Npc& n, Gaze::Source s) {
+  return symName(w,s==Gaze::Source::Talk ? n.talkPartner() : s==Gaze::Source::Script ? n.lookAtTarget() :
+                   s==Gaze::Source::Attention ? n.attentionTarget() : nullptr);
+  }
+
+// how much of its AI runs, by its distance to the hero (worldobjects.cpp): far ones say nothing, far2 ones
+// barely move
+const char* policyName(NpcProcessPolicy p) {
+  switch(p) {
+    case NpcProcessPolicy::Player:   return "player";
+    case NpcProcessPolicy::AiNormal: return "normal";
+    case NpcProcessPolicy::AiFar:    return "far";
+    case NpcProcessPolicy::AiFar2:   return "far2";
+    }
+  return "?";
+  }
+
+// the script state it is in (ZS_SMALLTALK), "-" for none
+std::string stateName(World& w, const Npc& n) {
+  const ScriptFn fn  = n.currentState();
+  auto           sym = fn.isValid() ? w.script().findSymbol(fn.ptr) : nullptr;
+  return sym!=nullptr ? sym->name() : "-";
+  }
+
 // a point is hidden if something is between it and the camera (not counting the ground right at the point)
 bool hidden(World& w, const Vec3& from, const Vec3& to) {
   auto r = w.physic()->ray(from,to);
@@ -2384,15 +2409,33 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("talk " + symName(w,n) + " " + std::to_string(ms));
     }
   else if(c=="speak") {
-    // speak <npc|nearest|player> <output name>: it says a voiced line of the game, like AI_Output in a script
+    // speak <npc|nearest|player> <output name|$SVM> [to]: it says a voiced line of the game, like AI_Output in a
+    // script, or an SVM ($SMALLTALK01, like AI_OutputSvm). To another npc it turns to it first, as a line of
+    // the AI said to an npc does (v15 say.to)
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
     if(n==nullptr || a.size()<3) {
       say("speak: no npc or line " + line);
       return;
       }
-    Npc& to = (n==&pl) ? subjectOf(pl) : pl;
-    n->aiPush(AiQueue::aiOutput(to,a[2],0));
-    say("speak " + nameUtf8(*n) + " " + a[2]);
+    Npc* to = (n==&pl) ? &subjectOf(pl) : &pl;
+    if(a.size()>3) {
+      to = findNpc(w,pl,a[3]);
+      if(to==nullptr || to==n) {
+        say("speak: no one to say it to " + line);
+        return;
+        }
+      if(to!=&pl)
+        n->aiPush(AiQueue::aiTurnToNpc(to));
+      }
+    if(a[2].starts_with("$")) {
+      std::string svm = a[2];
+      for(auto& ch:svm)
+        ch = char(std::toupper(uint8_t(ch)));
+      n->aiPush(AiQueue::aiOutputSvm(*to,svm,0));
+      } else {
+      n->aiPush(AiQueue::aiOutput(*to,a[2],0));
+      }
+    say("speak " + nameUtf8(*n) + " " + a[2] + (a.size()>3 ? " -> " + symName(w,to) : ""));
     }
   else if(c=="faceanim") {
     // faceanim <npc|nearest|player> <anim> [ms] [intensity]: a face animation of the head (S_ANGRY, S_FRIENDLY...)
@@ -2557,6 +2600,87 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                                 src==Gaze::Source::Attention ? n->attentionTarget() : nullptr).c_str());
       say(buf);
       }
+    }
+  else if(c=="state") {
+    // state <npc> <ZS_*> <waypoint> [minutes 60]: it does that now at that place, as a routine entry would
+    // (TA_*), for that many game minutes; its routine goes on afterwards (npc_act start_activity)
+    Npc* n = a.size()>1 ? findNpc(w,pl,a[1]) : nullptr;
+    std::string name = a.size()>2 ? a[2] : "";
+    for(auto& ch:name)
+      ch = char(std::toupper(uint8_t(ch)));
+    const size_t fn = name.starts_with("ZS_") ? w.script().findSymbolIndex(name) : size_t(-1);
+    auto         wp = a.size()>3 ? w.findPoint(a[3],false) : nullptr;
+    if(n==nullptr || n==&pl || fn==size_t(-1) || wp==nullptr) {
+      say("state: no npc, state or waypoint " + line);
+      return;
+      }
+    auto until = w.time();
+    until.addMilis(uint64_t(std::clamp(num(a,4,60),1.f,24*60.f))*60*1000);
+    const bool ok = n->startState(ScriptFn(fn),wp->name,until,false);
+    say("state " + symName(w,n) + " " + name + " " + wp->name + (ok ? "" : " failed"));
+    }
+  else if(c=="come") {
+    // come <npc>: it walks up to the hero and turns to him (npc_act go_to_npc): a free one goes back to its
+    // routine afterwards
+    Npc* n = a.size()>1 ? findNpc(w,pl,a[1]) : nullptr;
+    if(n==nullptr || n==&pl) {
+      say("come: no npc " + line);
+      return;
+      }
+    n->aiPush(AiQueue::aiGoToNpc(&pl));
+    n->aiPush(AiQueue::aiTurnToNpc(&pl));
+    char buf[160];
+    std::snprintf(buf,sizeof(buf),"come %s dist=%.0f",symName(w,n).c_str(),double((n->position()-pl.position()).length()));
+    say(buf);
+    }
+  else if(c=="pair") {
+    // pair <a> <b>: how two npcs stand to each other: the distance; for each, where it faces (0: right at the
+    // other), where it looks and why, its state and for how long (ms), its body state, a mob it uses, how much
+    // of its AI runs
+    Npc* x = a.size()>1 ? findNpc(w,pl,a[1]) : nullptr;
+    Npc* y = a.size()>2 ? findNpc(w,pl,a[2]) : nullptr;
+    if(x==nullptr || y==nullptr || x==y) {
+      say("pair: no npcs " + line);
+      return;
+      }
+    auto one = [&](Npc& n, Npc& o) {
+      const Vec3  dp  = o.position()-n.position();
+      const float ang = std::remainder(std::atan2(dp.z,dp.x)*180.f/float(M_PI) - n.rotation(), 360.f);
+      Vec3        at;
+      const auto  src = n.gazeTarget(at);
+      char buf[400];
+      std::snprintf(buf,sizeof(buf),"%s at_other=%.0f look=%s at=%s state=%s t=%llu bs=%u mob=%d ai=%s",
+                    symName(w,&n).c_str(),double(ang),gazeSource(src),gazeWho(w,n,src).c_str(),stateName(w,n).c_str(),
+                    (unsigned long long)n.stateTime(),unsigned(n.bodyStateMasked() & BS_MAX),
+                    int(n.interactive()!=nullptr),policyName(n.processPolicy()));
+      return std::string(buf);
+      };
+    char head[64];
+    std::snprintf(head,sizeof(head),"pair dist=%.0f | ",double((x->position()-y->position()).length()));
+    say(head + one(*x,*y) + " | " + one(*y,*x));
+    }
+  else if(c=="where") {
+    // where <npc> [waypoint]: where it is, how far from the hero (and from the waypoint), its state, whether
+    // it is busy with its queue (walking there), how much of its AI runs
+    Npc* n = a.size()>1 ? findNpc(w,pl,a[1]) : nullptr;
+    if(n==nullptr) {
+      say("where: no npc " + line);
+      return;
+      }
+    const Vec3 p = n->position();
+    char buf[400];
+    int  len = std::snprintf(buf,sizeof(buf),"where %s at %.0f %.0f %.0f hero=%.0f",symName(w,n).c_str(),
+                             double(p.x),double(p.y),double(p.z),double((p-pl.position()).length()));
+    if(a.size()>2 && len>0 && size_t(len)<sizeof(buf)) {
+      if(auto wp = w.findPoint(a[2],false))
+        len += std::snprintf(buf+len,sizeof(buf)-size_t(len)," %s=%.0f",wp->name.c_str(),double((p-wp->position()).length())); else
+        len += std::snprintf(buf+len,sizeof(buf)-size_t(len)," %s=?",a[2].c_str());
+      }
+    if(len>0 && size_t(len)<sizeof(buf))
+      std::snprintf(buf+len,sizeof(buf)-size_t(len)," state=%s t=%llu queue=%d bs=%u ai=%s",stateName(w,*n).c_str(),
+                    (unsigned long long)n->stateTime(),int(!n->isAiQueueEmpty()),unsigned(n->bodyStateMasked() & BS_MAX),
+                    policyName(n->processPolicy()));
+    say(buf);
     }
   else if(c=="lookat") {
     // lookat <npc|nearest> <npc|player|off>: as the script AI_LookAtNpc, AI_StopLookAt
@@ -3271,14 +3395,28 @@ void renderSound(uint64_t dt) {
 std::function<bool()> TestBench::aiBusy;
 std::function<bool(std::string_view,std::string_view)> TestBench::aiReached;
 
-void TestBench::aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms) {
+void TestBench::aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms,
+                       std::string_view to) {
   if(scenarioPath==nullptr)
     return;
   bench.lastLineAt = std::max<uint64_t>(bench.time,1);
   bench.busyAt     = bench.time;
   event("npc_line","\"npc\":" + jsonStr(npc) + ",\"name\":" + jsonStr(name) + ",\"text\":" + jsonStr(text) +
-                   ",\"ms\":" + std::to_string(ms));
-  say("npc line " + std::string(npc) + ": " + std::string(text));
+                   ",\"ms\":" + std::to_string(ms) + ",\"to\":" + jsonStr(to));
+  say("npc line " + std::string(npc) + (to.empty() ? "" : " -> " + std::string(to)) + ": " + std::string(text));
+  }
+
+void TestBench::npcOutput(const Npc& npc, std::string_view name, const Npc* target, uint64_t ms) {
+  World* w = Gothic::inst().world();
+  if(scenarioPath==nullptr || !bench.started || bench.done || w==nullptr)
+    return;
+  const auto who    = symName(*w,&npc);
+  const auto whom   = symName(*w,target);
+  const auto policy = npc.processPolicy();
+  say("output " + who + " -> " + whom + " " + std::string(name) + " " + std::to_string(ms) +
+      (policy==NpcProcessPolicy::AiNormal || policy==NpcProcessPolicy::Player ? "" : std::string(" ") + policyName(policy)));
+  event("output","\"npc\":" + jsonStr(who) + ",\"target\":" + jsonStr(whom) + ",\"name\":" + jsonStr(name) +
+                 ",\"ms\":" + std::to_string(ms) + ",\"ai\":" + jsonStr(policyName(policy)));
   }
 
 void TestBench::aiVoiceEnd(std::string_view npc, uint64_t ms) {

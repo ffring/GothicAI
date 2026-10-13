@@ -18,12 +18,13 @@ from typing import Any
 from . import npc_tools, places, scenarios
 from .amends import Amends
 from .bodies import Bodies
-from .brain import DeciderClient, GameApplier, NpcPlanner
+from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
 from .budget import Budget
 from .chronicle import Chronicle
 from .concerns import Concerns
+from .daylife import DayDesk
 from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
@@ -32,6 +33,7 @@ from .fillers import Fillers
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
+from .gossip import GossipDesk
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
 from .journal import Journal, print_sink
@@ -123,6 +125,8 @@ HELP = """commands (npc defaults to the last attached one):
   guard [npc]       whether the npc may leave its spot (plot, post), its concerns about the hero
   rumors            rumors of the hero's lies and who knows them, by retellings
   ties [npc]        whom the npc meets by its routine (and when) and has dealings with
+  gossip            the latest scene of two talking about the hero near him: its lines, how it ended
+  day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
   deal              offers open to the hero, and what the game's deal window shows (needs -devmode)
   deal <npc gives> / <hero gives>   the npc offers a deal, e.g. deal ITPO_HEALTH_01:2 / ITMI_GOLD:30
@@ -170,6 +174,8 @@ class ServerState:
         self.concerns: Concerns | None = None
         self.guard: StoryGuard | None = None
         self.initiative: InitiativeDesk | None = None
+        self.gossip: GossipDesk | None = None
+        self.day: DayDesk | None = None
         self.perception: PerceptionDesk | None = None
         self.sightings: Sightings | None = None
         self.witnesses: Witnesses | None = None
@@ -319,6 +325,21 @@ class Console:
                 print("\n".join(self.state.rumors.describe()) or "(none)")
             case "ties" if self.state.rumors is not None and self.state.rumors.social is not None:
                 print("\n".join(self.state.rumors.social.describe(rest[0] if rest else npc)) or "(none)")
+            case "gossip" if self.state.gossip is not None:
+                gossip = self.state.gossip
+                s = gossip.scene or gossip.last
+                if s is None:
+                    print(f"(no scene yet; {gossip.scenes} begun)")
+                else:
+                    print(f"{s.id} {s.a_name} -> {s.b_name}: {s.state}{f' ({s.why})' if s.why else ''}")
+                    names = {s.a: s.a_name, s.b: s.b_name}
+                    said = [x.text for x in s.play.said()] if s.play is not None else []
+                    for n, text, _ in s.lines:  # + said, - written and not heard
+                        print(f"  {'+' if text in said else '-'} {names[n]}: {text}")
+                    for e in s.errors:
+                        print(f"  rejected: {e}")
+            case "day" if self.state.day is not None:
+                self.day((rest[0] if rest else npc).upper())
             case "dialogs":
                 print(" ".join(await link.offered_dialogs(rest[0] if rest else npc)) or "(none)")
             case "choose" if rest:
@@ -329,6 +350,23 @@ class Console:
                 self.state.talk.hear(" ".join(rest), npc, {"via": "console"})
             case _:
                 print(HELP)
+
+    def day(self, npc: str) -> None:
+        """day: the npc's last menus of its next hour, as the planner asked them, and the trip it is on."""
+        desk = self.state.day
+        assert desk is not None
+        menu = desk.menus.get(npc)
+        if menu is None:
+            print("(not asked for its next hour yet)")
+        elif menu.stay is not None:
+            print(f"not asked: {menu.stay}")
+        else:
+            for key, text in menu.plan[0].items():
+                print(f"  plan {key}: {text}")
+            for o in menu.do.values():
+                print(f"  do {o.key} [{o.id}]: {o.text}")
+        if (trip := desk.walking.get(npc)) is not None:
+            print(f"on its way: {trip.id}")
 
     async def deal(self, link: GameLink, npc: str, rest: list[str]) -> None:
         """deal: the open offers; deal accept: Y on the window; deal <npc gives> / <hero gives>: an offer."""
@@ -608,6 +646,34 @@ async def serve(args: argparse.Namespace) -> int:
         # rumors of the hero's lies go round the people that know each other (story graph, stage 5)
         state.rumors = Rumors(link, state.dialogue, state.chronicle, graph)
         directing.append(asyncio.create_task(state.rumors.run()))
+        # near the hero a retelling is said aloud, in the two's own voices, or seen (wave 2 step 2)
+        state.gossip = GossipDesk(
+            link,
+            state.dialogue,
+            talk,
+            state.rumors,
+            perception,
+            budget,
+            state.chronicle,
+            trust,
+            state.guard,
+            state.bodies,
+            trace=trace,
+            journal=journal,
+        )
+        # what each npc does in its next hour: trips from its everyday concerns (wave 2 step 6); always
+        # there, so the deaths the npc's see are written down without the planner too
+        state.day = DayDesk(
+            link,
+            state.rumors,
+            state.chronicle,
+            state.bodies,
+            state.guard,
+            perception,
+            talk,
+            place_book,
+            journal=journal,
+        )
         brain = None
         if decider is not None:
             # npc's outside conversations: the bridge reports them (npc_roster, npc_event, protocol v5)
@@ -628,6 +694,8 @@ async def serve(args: argparse.Namespace) -> int:
                 view_of=perception.english,
                 # each npc's character, from its card (characters.py)
                 builder=SituationBuilder(traits={npc: card.en for npc, card in personas.cards.items()}),
+                # the new day menu applied, or still asked in shadow beside the old one
+                config=PlannerConfig(apply_day=args.apply_day),
                 trace=trace,  # its decisions: data for fine-tuning (M5d)
             )
             state.incidents.follow(planner)  # free npc's speak when the moment calls for it
@@ -655,6 +723,10 @@ async def serve(args: argparse.Namespace) -> int:
                 perception=perception,
                 journal=journal,
             )
+            # two talking near the hero: their veto before the initiative's, whose first words wait for them
+            state.gossip.follow(planner, state.initiative)
+            # the day's menus and trips: its veto before the two talking's
+            state.day.follow(planner, state.gossip, state.initiative)
             brain = asyncio.create_task(planner.run())
         try:
             await _run_scenario(link)
@@ -858,6 +930,35 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.deal_demo(link, state.deals, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario deal_demo: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in ("gossip", "gossip_demo"):
+                dialogue, talk, rumors = state.dialogue, state.talk, state.rumors
+                gossip, bodies, perception = getattr(state, "gossip", None), state.bodies, state.perception
+                assert dialogue is not None and talk is not None and rumors is not None
+                assert gossip is not None and bodies is not None and perception is not None
+                if args.scenario == "gossip":
+                    where = str(Path(args.trace_dir).parent) if args.trace_dir else None
+                    results = await scenarios.gossip_scenario(
+                        link, dialogue, talk, rumors, gossip, bodies, perception, log_dir=where
+                    )
+                else:
+                    results = await scenarios.gossip_demo(link, dialogue, talk, rumors, gossip, bodies)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "day":
+                dialogue, talk, rumors, gossip = state.dialogue, state.talk, state.rumors, state.gossip
+                bodies, perception, day = state.bodies, state.perception, state.day
+                assert dialogue is not None and talk is not None and rumors is not None
+                assert gossip is not None and bodies is not None and perception is not None
+                assert day is not None
+                where = str(Path(args.trace_dir).parent) if args.trace_dir else None
+                # with DECIDER_URL the server's planner (day settings for the run); else the scenario's own
+                results = await scenarios.day_scenario(
+                    link, dialogue, talk, rumors, gossip, bodies, perception, day, state.brain, log_dir=where
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario day: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "rumor":
                 dialogue, talk, rumors = state.dialogue, state.talk, state.rumors
@@ -1323,6 +1424,9 @@ def main() -> None:
             "deal_demo",
             "debt",
             "initiative",
+            "gossip",
+            "gossip_demo",
+            "day",
             "amends_deal",
             "cards",
             "haggle",
@@ -1376,6 +1480,12 @@ def main() -> None:
         "--apply-threats",
         action="store_true",
         help="carry out the behavioral model's fights and flights (default: traced only until trained)",
+    )
+    p.add_argument(
+        "--apply-day",
+        action="store_true",
+        help="carry out the behavioral model's day plans from the new menu (default: traced in shadow until "
+        "measured)",
     )
     _add_voice_args(p)
     _add_llm_args(p)

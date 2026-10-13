@@ -28,7 +28,6 @@ constexpr size_t   NearbyCount      = 6;
 constexpr float    NearbyNpcRadius  = 1500;
 constexpr size_t   NearbyNpcCount   = 8;
 constexpr size_t   InventoryLimit   = 40;
-constexpr float    GiveRange        = 350;
 constexpr float    FollowNear       = 400;   // stop closing in
 constexpr float    FollowRunFrom    = 1200;  // run instead of walking
 constexpr float    FollowLost       = 6000;  // give up
@@ -379,10 +378,10 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     a.count    = std::min(have,size_t(std::max<int64_t>(1,integer(args,"count",1))));
     a.toPlayer = target->isPlayer();
     a.target   = target->instanceSymbol();
-    a.radius   = GiveRange;
+    a.radius   = AiNpc::GiveRange;
     a.deadline = 30000;
     // walk up first if needed, the transfer happens once the queue is done
-    if(npc.qDistTo(*target)>GiveRange*GiveRange)
+    if(npc.qDistTo(*target)>AiNpc::GiveRange*AiNpc::GiveRange)
       npc.aiPush(AiQueue::aiGoToNpc(target));
     npc.aiPush(AiQueue::aiTurnToNpc(target));
     return true;
@@ -568,18 +567,11 @@ bool NpcController::giveItem(World& world, Controlled& c, const Action& a, std::
     err = "target npc is gone";
     return false;
     }
-  if(c.npc->qDistTo(*target)>GiveRange*GiveRange*4) {
-    err = "could not reach the target";
-    return false;
-    }
-  const size_t have = c.npc->inventory().itemCount(a.item);
-  if(have==0) {
-    err = "npc no longer has the item";
-    return false;
-    }
-  const size_t count = std::min(have,a.count);
+  // what it gives, read before it is gone from the giver's inventory
+  const size_t count = std::min(c.npc->inventory().itemCount(a.item),a.count);
   const auto   name  = itemName(c.npc->inventory(),a.item);
-  target->addItem(a.item,*c.npc,count);
+  if(!AiNpc::giveItem(*c.npc,*target,a.item,a.count,err))
+    return false;
 
   if(target->isPlayer()) {
     std::string msg = name + ": ";

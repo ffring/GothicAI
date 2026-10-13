@@ -7,8 +7,10 @@ import logging
 import os
 import re
 import time
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -20,10 +22,12 @@ from .brain.reflex import Reflexes
 from .budget import Budget
 from .chronicle import Fact
 from .concerns import Concerns
+from .daylife import DayDesk
 from .deals import GOLD, Deals, gold_text
-from .dialogue import DialogueManager
+from .dialogue import DialogueManager, SceneLine
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
+from .gossip import WORDS_CM, GossipDesk, Scene
 from .incidents import IncidentDesk
 from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
 from .knowledge import Knowledge, Topic
@@ -39,28 +43,33 @@ from .protocol import (
     FollowEnded,
     GameMessage,
     LineStarted,
+    Loading,
+    Look,
     NpcActCmd,
     NpcActResult,
     NpcActType,
     NpcEvent,
     NpcIdle,
     NpcRoster,
+    NpcView,
     Perception,
     PerceptionHeld,
     PlayerText,
+    RoutineCmd,
     Saved,
     SayCmd,
     Session,
     Snapshot,
     ThreatControlCmd,
 )
-from .quests import SEE_CM, QuestBoard
+from .quests import RUMOR_CM, SEE_CM, QuestBoard
 from .sightings import Sightings
-from .social import TICK_S, Rumors
+from .social import DAY, TICK_S, Rumor, Rumors
 from .story import StoryPatches
 from .storyguard import StoryGuard
 from .talk import TalkDesk
 from .trace import TraceWriter
+from .trace import read as read_trace
 from .trust import Trust
 from .vanilla import CHECK_CM, VanillaQuests
 from .voice import VoiceInput
@@ -2079,7 +2088,8 @@ async def _caught_by(
     await link.story_effect(giver, [{"do": "set", "var": RUEBEN, "value": 1}])
     await link.debug("player_goto", to=giver, distance=250)
     talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
-    if not await _until(lambda: giver in talk.people, 20):
+    # by the roster after the move: one from before it may still have him farther than a name is heard
+    if not await _until(lambda: giver in talk.people and talk.people[giver].distance <= 600, 20):
         return False, None
     name = talk.people[giver].name
     live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
@@ -3210,6 +3220,1104 @@ async def initiative_scenario(
     return _logged(results)
 
 
+GOSSIP_SLOT = 8  # the save before the scene: played whole, then again from there and cut
+GOSSIP_SPOT = "NW_FARM1_PATH_01"  # Hilda stands here: 5.3 m from Lobart's spot (the routines' dump)
+# the hero: 13 m from Lobart's freepoint and 10.6 m from the spot, he hears both (`player_goto to=` would
+# take NW_FARM1_OUT_03, 14.6 m from her)
+GOSSIP_HERO = "NW_FARM1_ENTRANCE_03"
+GOSSIP_OUT = "NW_FARM1_OUT_01"  # 7 m from Lobart's spot, 8.5 m from GOSSIP_SPOT
+VINO = "BAU_952_VINO"
+# the scene as the scripted model writes it: (0 the teller, 1 the listener), text, mood
+GOSSIP_LINES = (
+    (0, "Слыхала? Этот бродяга мне про репу наврал, глазом не моргнул.", "angry"),
+    (1, "Да ну? А с виду смирный.", "neutral"),
+    (0, "Смирный… Глаз с него не спускай.", "neutral"),
+)
+FACE_S = 1.5  # a speaker faces the one it speaks to this soon after its line starts
+LOOK_TAIL_S = 1.25  # a line's look outlasts its voice by 1 s (npc.cpp, aibridge.cpp), plus a sample's margin
+
+
+class GossipScript:
+    """The conversational model of the gossip e2e (and the day e2e's), routed by what is asked: a scene (the
+    tool `lines`) gets `lines` (GOSSIP_LINES) with the two names the tool allows, Hilda's answer to the hero
+    is hers, anything else goes to Lobart's script (which sends the others to the live model itself). With
+    `live` (LLM=chatgpt) the scene and Hilda are the live model."""
+
+    name = "gossip-script"
+
+    def __init__(
+        self,
+        claim: LLMBackend,
+        hilda: LLMBackend,
+        live: LLMBackend | None = None,
+        *,
+        lines: Sequence[tuple[int, str, str]] = GOSSIP_LINES,
+        quiet: bool = True,
+        reason: str = "сплетничают о герое, пока он рядом",
+    ) -> None:
+        self.claim, self.hilda, self.live = claim, hilda, live
+        self.lines = lines
+        self.quiet, self.reason = quiet, reason
+        self.lines_calls = 0  # how often a scene was written
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        lines = next((t for t in tools or [] if t.name == "lines"), None)
+        backend: LLMBackend
+        if lines is not None:
+            self.lines_calls += 1
+            call = ToolCall("lines", _gossip_lines(lines, self.lines, self.quiet, self.reason), "gossip")
+            backend = self.live or FakeBackend(script=[FakeStep("", [call])], delay=0)
+        elif "по имени Хильда" in instructions:
+            backend = self.live or self.hilda
+        else:
+            backend = self.claim
+        async for event in backend.stream(
+            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+        ):
+            yield event
+
+
+def _gossip_lines(
+    tool: Tool,
+    lines: Sequence[tuple[int, str, str]] = GOSSIP_LINES,
+    quiet: bool = True,
+    reason: str = "сплетничают о герое, пока он рядом",
+) -> dict[str, Any]:
+    """The scripted lines (0 the teller, 1 the listener) as the tool `lines` takes them: its schema lists the
+    teller's name first."""
+    try:
+        names = tool.parameters["properties"]["lines"]["items"]["properties"]["speaker"]["enum"]
+        teller, listener = str(names[0]), str(names[1])
+    except (KeyError, IndexError, TypeError):
+        teller, listener = "Лобарт", "Хильда"
+    return {
+        "lines": [
+            {"speaker": (teller, listener)[who], "text": text, "mood": mood} for who, text, mood in lines
+        ],
+        "quiet": quiet,
+        "reason": reason,
+    }
+
+
+async def gossip_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    rumors: Rumors,
+    gossip: GossipDesk,
+    bodies: Bodies,
+    perception: PerceptionDesk,
+    log_dir: str | None = None,
+) -> dict[str, str]:
+    """Two people near the hero talk about his lie, in their own voices (docs/npc-tools.md, wave 2 step 2), on
+    the game. Lobart catches the hero lying; Hilda, in the house, does not hear it. An hour later she is put
+    5 m from Lobart and the hero 13 m off (their days never bring them so close: the e2e stages them), and the
+    pair is opened (`Rumors.gate`; every other pair is held closed): the rumor passes as one fact, then Lobart
+    turns to her and they say three lines in turn, each to the other, a line only once the voice before it has
+    played out (game.log, `log_dir`). From a save before it the scene again: the hero's voice cuts both after
+    the second line, he asks Hilda what they whispered about, and she has the scene and the rumor in mind.
+    Last, far from the hero, a pass is only the fact: no model, no words. The lines are scripted unless
+    LLM=chatgpt; voices with a TTS service (scripts/e2e.sh starts one)."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = rumors.chronicle.facts
+    open_pairs: set[tuple[str, str]] = set()
+    starts: dict[str, tuple[float, bool]] = {}  # line -> when it started, voiced
+    sent: list[tuple[float, SayCmd]] = []  # the lines as the server sent them
+    samples: list[tuple[float, dict[str, NpcView]]] = []  # what Lobart and Hilda perceived, when
+
+    def to_hilda() -> list[Fact]:
+        return [f for f in facts("rumor") if f.get("quest") == RUEBEN and f.get("to") == HILDA]
+
+    def notes(who: str) -> list[str]:
+        conv = dialogue.conversations.get(who)
+        return [m.content for m in conv.history if m.role == "developer"] if conv else []
+
+    def started(m: GameMessage) -> None:
+        if isinstance(m, LineStarted):
+            starts[m.line] = (time.monotonic(), m.voiced)
+
+    def seen(view: NpcView) -> None:  # the views the game pushes anyway (once a second)
+        if view.npc.upper() in (LOBART, HILDA):
+            samples.append((time.monotonic(), {view.npc.upper(): view}))
+
+    send = link.send
+
+    async def sending(cmd: Any) -> Any:
+        if isinstance(cmd, SayCmd):
+            sent.append((time.monotonic(), cmd))
+        return await send(cmd)
+
+    async def stage(tag: str = "") -> bool:
+        """Hilda steps out to Lobart (she stays free: start_activity holds her there), the hero 13 m off."""
+        try:
+            await link.debug("npc_goto", npc=HILDA, waypoint=GOSSIP_SPOT, face=LOBART)
+        except GameError as err:
+            check(f"staged{tag}", False, f"npc_goto: {err}")
+            return False
+        out = await bodies.act(
+            HILDA,
+            "start_activity",
+            state="ZS_STAND_ARMSCROSSED",
+            waypoint=GOSSIP_SPOT,
+            minutes=60,
+            arrive=True,
+            timeout=60,
+        )
+        # distance only: how they face is their routines' (Lobart turns to his freepoint)
+        near = {str(p.get("npc", "")).upper(): p for p in await link.story_nearby(LOBART, 700)}
+        gap = float(near[HILDA].get("distance", 0)) if HILDA in near else None
+        staged = out.status == "arrived" and gap is not None and 300 <= gap <= 700
+        where = f"{gap / 100:.1f} m from Lobart" if gap is not None else "not within 7 m of Lobart"
+        check(f"staged{tag}", staged, f"{out.status}{f': {out.detail}' if out.detail else ''}, {where}")
+        await link.debug("player_goto", waypoint=GOSSIP_HERO)
+        await asyncio.sleep(1.5)  # the roster comes twice a second: not the one from before he moved
+        pair = (LOBART, HILDA)
+        near_hero = await _until(
+            lambda: all(n in talk.people and talk.people[n].distance <= WORDS_CM for n in pair), 10
+        )
+        check(
+            f"hero_near{tag}",
+            near_hero,
+            ", ".join(
+                f"{n}: {talk.people[n].distance / 100:.1f} m" if n in talk.people else f"{n}: not around"
+                for n in pair
+            ),
+        )
+        return staged and near_hero
+
+    link.listeners.append(started)
+    perception.on_view.append(seen)
+    link.send = sending  # type: ignore[method-assign]
+    rumors.gate = lambda r, a, b: (a, b) in open_pairs  # every pair not opened here is held closed
+    try:
+        # 0. who knows whom; the morning at Lobart's farm
+        if not await _until(lambda: rumors.social is not None, 30):
+            return _logged({"social": "failed (no people)"})
+        social = rumors.social
+        assert social is not None
+        tie = social.ties.get(LOBART, {}).get(HILDA)
+        about = next((d for d in social.describe(LOBART) if f"({HILDA})" in d), "no tie")
+        check("ties", tie is not None and any(s <= 10 * 60 < e for s, e in tie.meets), about)
+        await link.debug("time", hour=9, minute=0)
+        await link.debug("skip_important", near=HILDA)  # her greeting would stop the hero
+        await link.debug("player_goto", waypoint=GOSSIP_OUT)  # a new game starts 174 m away at the tower
+
+        def doing(npc: str) -> str:
+            return talk.people[npc].state if npc in talk.people else "not around"
+
+        ok = await _until(lambda: (doing(LOBART), doing(HILDA)) == ("ZS_STAND_GUARDING", "ZS_COOK_STOVE"), 40)
+        check("routines", ok, f"Lobart {doing(LOBART)}, Hilda {doing(HILDA)}")
+
+        # 1. Lobart catches the hero lying; Hilda, in the house, does not hear it (within RUMOR_CM she would,
+        # through the walls: quests.py)
+        around = [str(p.get("npc", "")).upper() for p in await link.story_nearby(LOBART, RUMOR_CM)]
+        if HILDA in around:
+            return _logged({**results, "apart": f"failed (Hilda within {RUMOR_CM // 100} m of Lobart)"})
+        live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+        ok, claim = await _caught_by(link, dialogue, talk, LOBART, facts)
+        check("caught", ok, facts("caught")[-1:])
+        if not ok or claim is None:
+            return _logged(results)
+        # the scene's lines, Hilda's answer, else Lobart's script (it answers every call with LLM=fake)
+        hilda = ClaimScript(
+            said=[("шептались", FakeStep("Не твоё дело. Хотя… Лобарт говорит, ты ему наврал."))],
+            told=[],
+            only="Хильда",
+        )
+        script = GossipScript(claim, hilda, live)
+        dialogue.llm = script
+
+        def rumor() -> Rumor | None:
+            return next((r for r in rumors.rumors.values() if r.quest == RUEBEN), None)
+
+        r = rumor()
+        check(
+            "not_heard",
+            not to_hilda() and r is not None and HILDA not in r.known,
+            f"knows: {sorted(r.known)}" if r is not None else "no rumor",
+        )
+
+        # 2. an hour later: a jump of the clock stages nothing, and every pair is held
+        talk.end()
+        await link.debug("time", hour=10, minute=0)
+        await asyncio.sleep(TICK_S + 1)
+        held = f"{len(to_hilda())} fact(s), {gossip.scenes} scene(s)"
+        check("held_closed", not to_hilda() and gossip.scenes == 0, held)
+
+        # 3. Hilda next to Lobart, the hero 13 m off; a save to play it twice
+        if not await stage():
+            return _logged(results)
+        saved = await _save(link, GOSSIP_SLOT)
+        check("saved", saved is not None, f"{saved.branch}@{saved.seq}" if saved is not None else "refused")
+        if saved is None:
+            return _logged(results)
+
+        # 4. the pair opened: the fact first, then the scene, in turn, each to the other
+        sampler = asyncio.create_task(_sample_views(link, (LOBART, HILDA), samples))
+        first = gossip.scenes
+        open_pairs.add((LOBART, HILDA))
+        try:
+            # a tick may wait for the gap probe, and Lobart for his lines of the catch to be said or lost
+            # (the hero went off before they started: dialogue.LINE_LOST_S)
+            ok = await _until(lambda: bool(to_hilda()), 40)
+            got = to_hilda()
+            fact = got[0] if got else {}
+            check(
+                "one_fact",
+                ok
+                and len(got) == 1
+                and fact.get("from") == LOBART
+                and fact.get("how") == "talked"
+                and int(fact.get("hops", 0)) == 1,
+                _passes_text(got),
+            )
+            done = await _until(
+                lambda: gossip.scenes > first and gossip.scene is None and gossip.last is not None, 45
+            )
+        finally:
+            open_pairs.clear()
+            sampler.cancel()
+        scene = gossip.last if gossip.scenes > first else None
+        if scene is None:
+            return _logged({**results, "scene_done": "failed (no scene)"})
+        check("scene_done", done and scene.state == "done", f"{scene.state} {scene.why}".strip())
+        lines = _scene_lines(scene)
+        said = sorted((x for x in lines if x.line in starts), key=lambda x: starts[x.line][0])
+
+        # the speaker faces the one it speaks to (the addressee's view: faces_you); the first line is
+        # inconclusive when Lobart faced her already, the later ones always tell
+        faced = [_faced(samples, x, starts[x.line][0], first=i == 0) for i, x in enumerate(said)]
+        check(
+            "facing",
+            bool(said) and faced[0] != "no" and all(f == "yes" for f in faced[1:]),
+            "; ".join(f"{i + 1}: {f}" for i, f in enumerate(faced)),
+        )
+        # while it speaks, the one it speaks to talks to it (the speaker's view: talking_to)
+        looked = [_talked_to(samples, said, starts, i) for i in range(len(said))]
+        check(
+            "look",
+            bool(said) and all(looked),
+            "; ".join(f"{i + 1}: {'yes' if ok else 'no'}" for i, ok in enumerate(looked)),
+        )
+        speakers = [x.npc for x in said]
+        want = len(lines) if live is not None else len(GOSSIP_LINES)
+        check(
+            "three_lines",
+            len(said) == len(lines) == want
+            and 2 <= want <= 4
+            and all(n == (LOBART, HILDA)[i % 2] for i, n in enumerate(speakers)),
+            f"{len(said)} of {len(lines)} started: {' -> '.join(social.names.get(n, n) for n in speakers)}",
+        )
+        await asyncio.sleep(1.5)  # the last voice plays out in the game
+        check("no_overlap", *_voices_in_turn(await _game_log(log_dir), [x.line for x in said]))
+        voiced = [x for x in said if starts[x.line][1]]
+        check("voiced", bool(said) and len(voiced) == len(said), f"{len(voiced)} of {len(said)}")
+        rows: list[dict[str, Any]] = []
+
+        async def scene_rows() -> list[dict[str, Any]]:
+            rows[:] = await asyncio.to_thread(_scene_rows, log_dir)
+            return rows
+
+        ok = await _until_async(scene_rows, lambda got: any(x.get("id") == scene.id for x in got), 3)
+        row = next((x for x in rows if x.get("id") == scene.id), None)
+        check(
+            "trace",
+            ok and row is not None,
+            f"{row.get('status')}, {len(row.get('lines') or [])} lines, quiet {row.get('quiet')}"
+            if row is not None
+            else f"{len(rows)} scene row(s), none of {scene.id}",
+        )
+
+        # 5. the scene again from the save, the pair opened only once both stand again: the hero's voice cuts
+        # both after the second line
+        loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load", timeout=60))
+        await link.debug("load", GOSSIP_SLOT)
+        await loaded
+        await link.wait_world()
+        if not await _until(lambda: rumors.social is not None and rumors.clock is not None, 30):
+            return _logged({**results, "reloaded": "failed (no rumors after the load)"})
+        if not await stage("_again"):
+            return _logged(results)
+        again = gossip.scenes
+        open_pairs.add((LOBART, HILDA))
+        try:
+            await _until(lambda: gossip.scenes > again and gossip.scene is not None, 20)
+            cut = gossip.scene if gossip.scenes > again else None
+            if cut is None:
+                return _logged({**results, "cut": "failed (no scene after the load)"})
+
+            def second() -> bool:
+                ls = _scene_lines(cut)
+                return cut.state not in ("writing", "playing") or (len(ls) > 1 and ls[1].line in starts)
+
+            await _until(second, 45)
+            ls = _scene_lines(cut)
+            if len(ls) < 2 or ls[1].line not in starts:
+                return _logged({**results, "cut": f"failed (no second line: {cut.state} {cut.why})"})
+            await asyncio.sleep(0.5)
+            await link.debug("ptt", state="start")
+            cut_at = time.monotonic()
+            await link.debug("ptt", state="cancel")
+        finally:
+            open_pairs.clear()
+        await _until(lambda: cut.state == "cut", 3)
+        check("cut", cut.state == "cut" and cut.why == "hero", f"{cut.state} {cut.why}")
+        talked = [f for f in to_hilda() if f.get("how") == "talked"]
+        check("one_fact_again", len(talked) == 1, _passes_text(talked))
+
+        # 6. within the grace he asks Hilda: she listens to him now, the scene and the rumor in mind
+        conv = dialogue.conversations.get(HILDA)
+        before = conv.reply if conv is not None else None
+        asked_at, calls = time.monotonic(), len(hilda.calls)
+        await link.debug("type", text="Хильда, о чём вы шептались?")
+
+        def answered() -> bool:
+            c = dialogue.conversations.get(HILDA)
+            return c is not None and c.reply is not None and c.reply is not before and c.reply.done()
+
+        ok = await _until(answered, 30)
+        partner = talk.partner
+        hers = [c for t, c in sent if t >= asked_at and c.npc.upper() == HILDA and not c.filler]
+        moving = [c for c in hers if c.overlay]
+        check(
+            "asked",
+            ok and partner is not None and partner.npc == HILDA and bool(hers) and not moving,
+            f"partner {partner.npc if partner else None} ({partner.posture if partner else '-'}), "
+            f"{len(hers)} line(s){f', {len(moving)} on the move' if moving else ''}: "
+            f"{' '.join(c.text for c in hers)[:120]}",
+        )
+        if live is None:
+            request = " ".join(
+                " ".join([text, *(m.content if isinstance(m, Message) else str(m) for m in items)])
+                for text, items, _ in hilda.calls[calls:]
+            )
+            keys = ("ты слышал, что он обманул других", "Лобарт", "рассказал тебе о герое")
+            missing = [k for k in keys if k not in request]
+            check("in_situation", bool(request) and not missing, f"missing {missing}" if missing else "")
+        else:
+            line = Trust(rumors.chronicle).situation(HILDA) or ""
+            noted = any("рассказал тебе о герое" in n for n in notes(HILDA))
+            check(
+                "in_situation",
+                "ты слышал, что он обманул других" in line and "Лобарт" in line and noted,
+                f"{line.splitlines()[-1:]}, scene noted {noted}",
+            )
+        check("lobart_noted", any("заговорил герой" in n for n in notes(LOBART)), notes(LOBART)[-1:])
+        # the third line was never sent, so never heard
+        await asyncio.sleep(max(0.0, cut_at + 6 - time.monotonic()))
+        log_text = await _game_log(log_dir)
+        third = _scene_lines(cut)[2:3]
+        heard = [x.line for x in third if x.line in starts]
+        voiced3 = [x.line for x in third if log_text and f"[ai] voice {x.line} starts" in log_text]
+        sent_n = cut.play.sent if cut.play is not None else None
+        check(
+            "third_silent",
+            sent_n == 2 and not heard and not voiced3,
+            f"sent {sent_n} of {len(_scene_lines(cut))}{', the third started' if heard else ''}"
+            f"{', its voice in game.log' if voiced3 else ''}",
+        )
+
+        # 7. far from the hero a pass is only the fact: no model, no words
+        talk.end()
+        social = rumors.social or social  # built again after the load
+        r = rumor()
+        acquainted = social.ties.get(HILDA, {})
+        known = r.known if r is not None else {}
+        other = (
+            VINO
+            if VINO in acquainted and VINO not in known
+            else next((n for n in sorted(acquainted) if n not in known and n not in rumors.dead), None)
+        )
+        if r is None or other is None:
+            return _logged({**results, "far_fact": f"failed (nobody to tell: {sorted(acquainted)})"})
+        await link.debug("player_goto", to=HILDA, distance=4000)
+        far = await _until(lambda: HILDA not in talk.people or talk.people[HILDA].distance >= 3000, 10)
+        where = f"{talk.people[HILDA].distance / 100:.0f} m" if HILDA in talk.people else "not around"
+        check("hero_far", far, f"Hilda {where}")
+        lines_calls, n, far_at = script.lines_calls, gossip.scenes, time.monotonic()
+        told = False
+        for _ in range(3):
+            # opened only within this synchronous call: no tick sees the pair open
+            open_pairs.add((HILDA, other))
+            told = rumors.offer(r, HILDA, other)
+            open_pairs.discard((HILDA, other))
+            if told:
+                break
+            await asyncio.sleep(1.5)  # it waits (a gap not known yet): asked again
+        got = [f for f in facts("rumor") if f.get("quest") == RUEBEN and f.get("to") == other]
+        check(
+            "far_fact",
+            told and len(got) == 1 and got[0].get("how") == "met",
+            f"{social.names.get(other, other)}: {_passes_text(got)}",
+        )
+        await asyncio.sleep(5)
+        says = [c.text for t, c in sent if t >= far_at and c.npc.upper() in (HILDA, other)]
+        check(
+            "far_no_model",
+            script.lines_calls == lines_calls and gossip.scenes == n and not says,
+            f"{script.lines_calls - lines_calls} model call(s), {gossip.scenes - n} scene(s), lines {says}",
+        )
+    finally:
+        rumors.gate = None
+        link.send = send  # type: ignore[method-assign]
+        link.listeners.remove(started)
+        perception.on_view.remove(seen)
+    return _logged(results)
+
+
+MALETH = "BAU_954_MALETH"
+# Malet guards the sheep here 08:00-22:00, 56.4 m from Vino's field: they meet only in the stable's beds
+MALETH_SPOT = "NW_FARM1_PATH_CITY_SHEEP_09"
+# the hero by Malet: 12.2 m from his spot, 45.5 m from Vino's FIELD_04, 24.5 m from Lobart (routines' dump)
+DAY_SCENE_HERO = "NW_FARM1_PATH_CITY_SHEEP_13"
+DAY_FIELD_HERO = "NW_FARM1_FIELD_01_03"  # 18.5 m from FIELD_04, 72.4 m from Malet's spot
+DAY_SLOT = 9  # the save after Vino heard the news: his walk near the hero, then again from there far from him
+# the scene at Malet's spot as the scripted model writes it: (0 Vino, the teller, 1 Malet), text, mood
+DAY_LINES = (
+    (0, "Слыхал? Чужак Лобарту про репу наврал, а тот его и поймал.", "neutral"),
+    (1, "Вот как? Пригляжу за ним у стада.", "neutral"),
+    (0, "Пригляди. Мне-то что, лишь бы выпивку ставил.", "neutral"),
+)
+DEAD_OPTIONS = {"pick_up", "give_back", "rest", "socialize"}  # removed in wave 2 step 6
+
+
+class DayRecorder:
+    """The behavioral model of the day e2e: every request's questions are kept; the pinned npc's pinned
+    questions get the pinned choice (if offered), every other question the stand-in's default (the first
+    option, level 0), so no other body acts: Lobart, with the lie on his mind, would come up to the hero and
+    hold Vino's scene. With the live model (DECIDER_URL) it is asked first and its own answers are kept."""
+
+    def __init__(self, live: Decider | None, pin: dict[str, dict[str, str]]) -> None:
+        self.live = live
+        self.pin = {npc.upper(): questions for npc, questions in pin.items()}
+        self.requests: list[tuple[str, dict[str, dict]]] = []  # (npc, its questions), in order
+        self.own: list[tuple[str, dict[str, dict]]] = []  # (npc, the live model's own answers)
+        self._rest = FixedDecider({}, npcs=())
+
+    @property
+    def model(self) -> str | None:
+        return getattr(self.live, "model", None)
+
+    async def decide(self, rid, lane, priority, deadline_ms, state, questions) -> Outcome:  # noqa: ANN001
+        npc = rid.split("#", 1)[0].upper()
+        self.requests.append((npc, questions))
+        own = None
+        if self.live is not None:
+            own = await self.live.decide(rid, lane, priority, deadline_ms, state, questions)
+            self.own.append((npc, own.answers or {}))
+        out = await self._rest.decide(rid, lane, priority, deadline_ms, state, questions)
+        answers = dict(out.answers or {})
+        for name, choice in self.pin.get(npc, {}).items():
+            if choice in questions.get(name, {}).get("criteria", {}):
+                answers[name] = {
+                    "type": "choice",
+                    "choice": choice,
+                    "probabilities": {choice: 0.9},
+                    "confidence": 0.9,
+                }
+        if own is None:
+            return Outcome("answers", answers, out.queue_ms, out.infer_ms)
+        return Outcome("answers", answers, own.queue_ms, own.infer_ms)
+
+    async def cancel(self, rid: str) -> None:
+        if self.live is not None:
+            await self.live.cancel(rid)
+
+
+class _TraceTap:
+    """The planner's trace rows as they are written, kept for the checks (and still written)."""
+
+    def __init__(self, inner: TraceWriter | None) -> None:
+        self.inner = inner
+        self.rows: list[dict[str, Any]] = []
+
+    def write(self, row: dict[str, Any]) -> None:
+        self.rows.append(row)
+        if self.inner is not None:
+            self.inner.write(row)
+
+
+async def day_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    rumors: Rumors,
+    gossip: GossipDesk,
+    bodies: Bodies,
+    perception: PerceptionDesk,
+    day: DayDesk,
+    planner: NpcPlanner | None = None,
+    log_dir: str | None = None,
+) -> dict[str, str]:
+    """Everyday life from concerns (docs/npc-tools.md, wave 2 step 6), on the game. Lobart catches the hero
+    lying; Vino, on his field, hears it from him far from the hero. With the hero near Malet, Vino's menu of
+    his next hour has a walk to Malet to tell the news (about an hour); it is chosen (pinned: the live model's
+    own answer is kept with DECIDER_URL) and Vino walks there: near the hero the two say it in a scene of
+    step 2 (the fact how: talked) and the walk leaves a `day` fact the hero saw. From a save before the walk,
+    with the hero by Vino's field, the same walk ends 72 m from the hero: Malet learns it as a fact (how:
+    visited), without the model or words. Across the run: no sleep or dead option in any menu, and each
+    routine asked a few times only. Without the server's planner (DECIDER_URL) the scenario runs its own.
+    The lines are scripted unless LLM=chatgpt; voices with a TTS service (scripts/e2e.sh starts one)."""
+    from .brain import GameApplier
+    from .brain.planner import PlannerConfig
+
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    facts = rumors.chronicle.facts
+    open_pairs: set[tuple[str, str]] = set()
+    starts: dict[str, tuple[float, bool]] = {}  # line -> when it started, voiced
+    sent: list[tuple[float, Any]] = []  # the says and npc_act's as the server sent them
+    asks: Counter[str] = Counter()  # the routines asked of the game, per npc
+    idles: list[NpcIdle] = []
+    loaded_with: list[int] = []  # how many routines the planner knew at each Loading
+    recorder = DayRecorder(None, pin={VINO: {"do": "chat"}})
+
+    # the server's planner with DECIDER_URL, its day settings for the run; else one of the scenario's own
+    own = planner is None
+    if planner is None:
+        planner = NpcPlanner(
+            recorder,
+            GameApplier(link),
+            config=PlannerConfig(
+                apply_day=True, plan_period_s=5.0, far_period_s=(5.0, 8.0), ask_attitude=False
+            ),
+            routine_of=link.routine,
+            habits_of=habits_of,
+            view_of=perception.english,
+            trace=TraceWriter(Path(log_dir, "traces")) if log_dir else None,
+        )
+        day.follow(planner, gossip)  # the server's planner follows it already
+        link.listeners.append(planner.on_message)
+    brain = planner
+    decider, cfg, trace = brain.decider, brain.cfg, brain.trace
+    if not own:
+        recorder.live = decider
+        brain.decider = recorder
+        brain.cfg = replace(
+            cfg, apply_day=True, plan_period_s=5.0, far_period_s=(5.0, 8.0), ask_attitude=False
+        )
+    tap = _TraceTap(trace)
+    brain.trace = tap  # type: ignore[assignment]
+    runner = asyncio.create_task(brain.run()) if own else None
+
+    def rumor() -> Rumor | None:
+        return next((r for r in rumors.rumors.values() if r.quest == RUEBEN), None)
+
+    def told(to: str) -> list[Fact]:
+        return [f for f in facts("rumor") if f.get("quest") == RUEBEN and f.get("to") == to]
+
+    def walked() -> list[Fact]:
+        return [f for f in facts("day") if f.get("npc") == VINO and f.get("to") == MALETH]
+
+    def metres(npc: str) -> float:
+        return talk.people[npc].distance / 100 if npc in talk.people else float("inf")
+
+    def heard(m: GameMessage) -> None:
+        match m:
+            case LineStarted():
+                starts[m.line] = (time.monotonic(), m.voiced)
+            case NpcIdle():
+                idles.append(m)
+            case Loading():
+                loaded_with.append(len(brain.routines))  # the planner's listener came first
+
+    send = link.send
+
+    async def sending(cmd: Any) -> Any:
+        if isinstance(cmd, RoutineCmd):
+            asks[cmd.npc.upper()] += 1
+        elif isinstance(cmd, (SayCmd, NpcActCmd)):
+            sent.append((time.monotonic(), cmd))
+        return await send(cmd)
+
+    async def walk(tag: str = "") -> tuple[float, NpcActCmd | None]:
+        """Vino is asked of his next hour: the menu has the walk to Malet, it is chosen and he walks there.
+        When it was chosen and his act."""
+        # from here on the lot lets Vino tell Malet: opened only now, so no menu before the counts below has
+        # the walk (a check of his as the hero's goto brings him back would send him off uncounted)
+        open_pairs.add((VINO, MALETH))
+        rec = brain.npcs.get(VINO)
+        if rec is not None:
+            rec.next_check = brain.clock()  # looked at now, not at his next background turn
+        since, own_since, rows_since = len(recorder.requests), len(recorder.own), len(tap.rows)
+
+        def asked(chat: bool = True) -> dict[str, Any] | None:
+            """His do question since then: the first with the walk, or (not `chat`) the latest."""
+            mine = [q["do"] for n, q in recorder.requests[since:] if n == VINO and "do" in q]
+            return next((q for q in mine if "chat" in q["criteria"]), None) if chat else (mine or [None])[-1]
+
+        await _until(lambda: asked() is not None, 60)
+        question = asked() or asked(chat=False)
+        options = dict(question["criteria"]) if question is not None else {}
+        place = day.book.of(MALETH_SPOT) if day.book is not None else None
+        where = place.where_en if place is not None else "?"
+        text = options.get("chat", "")
+        menu = day.menus.get(VINO)
+        opt = menu.do.get("chat") if menu is not None else None
+        args = {"state": "ZS_STAND_WP", "waypoint": MALETH_SPOT, "minutes": 61}
+        got = {**opt.args, "waypoint": str(opt.args.get("waypoint")).upper()} if opt and opt.args else {}
+        check(
+            f"menu{tag}",
+            set(options) == {"keep_routine", "chat"}
+            and "Малет" in text
+            and where in text
+            and "(about an hour)" in text
+            and opt is not None
+            and opt.trip
+            and opt.partner == MALETH
+            and got == args,
+            f"{list(options)}; chat: {text!r}; {got or 'no option'}",
+        )
+        if not own:  # what the live model itself chose, informational: the walk is pinned either way
+            mine = next((a["do"] for n, a in recorder.own[own_since:] if n == VINO and "do" in a), None) or {}
+            p = float((mine.get("probabilities") or {}).get("chat", 0.0))
+            check(
+                f"model_answer{tag}", True, f"{mine.get('choice')}, P(chat) {p:.2f}" if mine else "no answer"
+            )
+
+        def chosen() -> dict[str, Any] | None:
+            return next(
+                (
+                    r
+                    for r in tap.rows[rows_since:]
+                    if r.get("npc") == VINO
+                    and r.get("question") == "do"
+                    and r.get("choice") == "chat"
+                    and r.get("why") == "day desk"
+                ),
+                None,
+            )
+
+        ok = await _until(lambda: chosen() is not None, 30)
+        chose_at = time.monotonic()
+        row = chosen()
+        theirs = [
+            (r.get("question"), r.get("choice"), r.get("why"))
+            for r in tap.rows[rows_since:]
+            if r.get("npc") == VINO
+        ]
+        check(f"chosen{tag}", ok, f"applied {row.get('applied')}" if row else f"his rows: {theirs[-3:]}")
+        await _until(lambda: any(t >= chose_at - 1 and _is_walk(c) for t, c in sent), 10)
+        act = next((c for t, c in sent if t >= chose_at - 1 and _is_walk(c)), None)
+        return chose_at, act
+
+    def arrived(act: NpcActCmd | None) -> NpcIdle | None:
+        return next((m for m in idles if act is not None and m.act == act.id), None)
+
+    link.listeners.append(heard)
+    link.send = sending  # type: ignore[method-assign]
+    rumors.gate = lambda r, a, b: (a, b) in open_pairs  # every pair not opened here is held closed
+    try:
+        # 0. Vino and Malet know each other only from the stable's beds: their routines never bring them
+        # together by day
+        if not await _until(lambda: rumors.social is not None, 30):
+            return _logged({"social": "failed (no people)"})
+        social = rumors.social
+        assert social is not None
+        tie = social.ties.get(VINO, {}).get(MALETH)
+        about = next((d for d in social.describe(VINO) if f"({MALETH})" in d), "no tie")
+        night = tie is not None and bool(tie.meets) and all(e <= 8 * 60 or s >= 22 * 60 for s, e in tie.meets)
+        check("ties", night, about)
+        await link.debug("time", hour=9, minute=0)
+        for npc in (MALETH, VINO, HILDA):  # their important dialogs would stop the hero (Malet's at once)
+            try:
+                await link.debug("skip_important", near=npc)
+            except GameError as err:
+                log.info("skip_important %s: %s", npc, err)
+        await _until(lambda: rumors.clock is not None and rumors.clock % DAY >= 9 * 60, 15)
+        t = (rumors.clock or 0) // DAY * DAY + 9 * 60 + 30
+        soon = list(tie.occasions(VINO, MALETH, t, t + 60)) if tie is not None else []
+        check("no_meeting_today", tie is not None and not soon, f"at {soon}" if soon else "")
+        await link.debug("player_goto", waypoint=DAY_SCENE_HERO)
+
+        def doing(npc: str) -> str:
+            return talk.people[npc].state if npc in talk.people else "not around"
+
+        ok = await _until(lambda: (doing(VINO), doing(MALETH)) == ("ZS_RAKE_FP", "ZS_STAND_GUARDING"), 40)
+        check("routines", ok, f"Vino {doing(VINO)}, Malet {doing(MALETH)}")
+
+        # 1. Lobart catches the hero lying; Vino, on his field 44 m off, does not hear it
+        live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+        ok, claim = await _caught_by(link, dialogue, talk, LOBART, facts)
+        check("caught", ok, facts("caught")[-1:])
+        if not ok or claim is None:
+            return _logged(results)
+        around = [str(p.get("npc", "")).upper() for p in await link.story_nearby(LOBART, RUMOR_CM)]
+        r = rumor()
+        check(
+            "vino_away",
+            VINO not in around and r is not None and VINO not in r.known,
+            f"within {RUMOR_CM // 100} m of Lobart: {VINO in around}; knows: {sorted(r.known) if r else '-'}",
+        )
+        # the scene's lines, else Lobart's script (it answers every call with LLM=fake)
+        script = GossipScript(
+            claim, claim, live, lines=DAY_LINES, quiet=False, reason="Вино пришёл с новостью"
+        )
+        dialogue.llm = script
+
+        # 2. Vino hears it from Lobart far from the hero: only the fact
+        talk.end()
+        await link.debug("player_goto", to=VINO, distance=8000)
+        far = await _until(lambda: VINO not in talk.people, 10)
+        check("hero_far", far, f"Vino {metres(VINO):.0f} m")
+        lines_calls, scenes = script.lines_calls, gossip.scenes
+        passed = False
+        for _ in range(3):
+            # opened only within this synchronous call: no tick sees the pair open
+            open_pairs.add((LOBART, VINO))
+            passed = r is not None and rumors.offer(r, LOBART, VINO)
+            open_pairs.discard((LOBART, VINO))
+            if passed:
+                break
+            await asyncio.sleep(1.5)  # it waits (a gap not known yet): asked again
+        got = told(VINO)
+        check(
+            "vino_heard",
+            passed
+            and len(got) == 1
+            and got[0].get("from") == LOBART
+            and int(got[0].get("hops", 0)) == 1
+            and got[0].get("how") == "met"
+            and gossip.scenes == scenes
+            and script.lines_calls == lines_calls,
+            _passes_text(got),
+        )
+        if not passed:
+            return _logged(results)
+
+        # 3. a save to walk it twice; the lot lets Vino tell Malet once he is asked (walk)
+        saved = await _save(link, DAY_SLOT)
+        check("saved", saved is not None, f"{saved.branch}@{saved.seq}" if saved is not None else "refused")
+        if saved is None:
+            return _logged(results)
+
+        # 4. the hero by Malet: Vino is asked of his next hour and walks over; near the hero they say it
+        await link.debug("player_goto", waypoint=DAY_SCENE_HERO)
+        await asyncio.sleep(1.5)  # the roster comes twice a second: not the one from before he moved
+        ok = await _until(lambda: metres(MALETH) <= WORDS_CM / 100 and 30 <= metres(VINO) <= 60, 10)
+        check("hero_at_malet", ok, f"Malet {metres(MALETH):.1f} m, Vino {metres(VINO):.1f} m")
+        first = gossip.scenes
+        chose_at, act = await walk()
+        ok = act is not None and await _until(lambda: arrived(act) is not None, 150)
+        idle = arrived(act)
+        near = [str(p.get("npc", "")).upper() for p in await link.story_nearby(MALETH, 600)]
+        check(
+            "walks",
+            act is not None
+            and act.args.get("arrive") is True
+            and ok
+            and idle is not None
+            and idle.reason == "arrived"
+            and VINO in near,
+            f"{act.args if act else 'no act'}; {idle.reason if idle else 'no end'} after "
+            f"{time.monotonic() - chose_at:.0f} s; within 6 m of Malet: {VINO in near}",
+        )
+        partner = talk.partner
+        check("no_partner", partner is None, partner.npc if partner is not None else "")
+        done = await _until(
+            lambda: gossip.scenes > first and gossip.scene is None and gossip.last is not None, 60
+        )
+        scene = gossip.last if gossip.scenes > first else None
+        lines = _scene_lines(scene)
+        said = sorted((x for x in lines if x.line in starts), key=lambda x: starts[x.line][0])
+        speakers = [x.npc for x in said]
+        want = len(lines) if live is not None else len(DAY_LINES)
+        says = [
+            c for t, c in sent if t >= chose_at and isinstance(c, SayCmd) and c.npc.upper() in (VINO, MALETH)
+        ]
+        to_other = bool(says) and all(
+            (c.to or "").upper() == (MALETH if c.npc.upper() == VINO else VINO) for c in says
+        )
+        voiced = [x for x in said if starts[x.line][1]]
+        check(
+            "scene",
+            done
+            and scene is not None
+            and scene.state == "done"
+            and len(said) == len(lines) == want
+            and 2 <= want <= 4
+            and all(n == (VINO, MALETH)[i % 2] for i, n in enumerate(speakers))
+            and to_other
+            and len(voiced) == len(said),
+            f"{scene.state + ' ' + scene.why if scene else 'no scene'}; {len(said)} of {len(lines)} started: "
+            f"{' -> '.join(social.names.get(n, n) for n in speakers)}; each to the other: {to_other}; "
+            f"voiced {len(voiced)}",
+        )
+        got = told(MALETH)
+        check(
+            "one_fact_talked",
+            len(got) == 1
+            and got[0].get("from") == VINO
+            and int(got[0].get("hops", 0)) == 2
+            and got[0].get("how") == "talked",
+            _passes_text(got),
+        )
+        await _until(lambda: bool(walked()), 15)
+        mine = walked()
+        fact = mine[-1] if mine else {}
+        check(
+            "day_fact",
+            len(mine) == 1
+            and fact.get("what") == "chat"
+            and fact.get("outcome") == "told"
+            and fact.get("where") == "FARM1_PATH_CITY"
+            and "PLAYER" in (fact.get("seen_by") or []),
+            fact or "none",
+        )
+
+        # 5. from the save, the hero by Vino's field: the same walk ends far from him, a fact only
+        asked_before = asks[VINO]
+        loading = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load", timeout=60))
+        await link.debug("load", DAY_SLOT)
+        await loading
+        await link.wait_world()
+        if not await _until(lambda: rumors.social is not None and rumors.clock is not None, 30):
+            return _logged({**results, "reloaded": "failed (no rumors after the load)"})
+        await link.debug("player_goto", waypoint=DAY_FIELD_HERO)
+        await asyncio.sleep(1.5)
+        ok = await _until(lambda: metres(VINO) <= 20 and MALETH not in talk.people, 10)
+        check("hero_at_field", ok, f"Vino {metres(VINO):.1f} m, Malet {metres(MALETH):.0f} m")
+        again = await _until(lambda: asks[VINO] > asked_before, 30)
+        check(
+            "reloaded",
+            bool(loaded_with) and not any(loaded_with) and again,
+            f"routines known at the load: {loaded_with}; Vino's asked again: {again}",
+        )
+        lines_calls, scenes = script.lines_calls, gossip.scenes
+        chose_at, act = await walk("_again")
+        ok = act is not None and await _until(lambda: arrived(act) is not None, 150)
+        idle = arrived(act)
+        check(
+            "walks_again",
+            ok and idle is not None and idle.reason == "arrived",
+            f"{idle.reason if idle else 'no end'} after {time.monotonic() - chose_at:.0f} s",
+        )
+        await _until(lambda: bool(told(MALETH)) and bool(walked()), 30)
+        got = told(MALETH)
+        await asyncio.sleep(3)  # nothing is said after it
+        says = [
+            c.text
+            for t, c in sent
+            if t >= chose_at and isinstance(c, SayCmd) and c.npc.upper() in (VINO, MALETH)
+        ]
+        check(
+            "far_fact",
+            len(got) == 1
+            and got[0].get("from") == VINO
+            and int(got[0].get("hops", 0)) == 2
+            and got[0].get("how") == "visited"
+            and gossip.scenes == scenes
+            and script.lines_calls == lines_calls
+            and not says,
+            f"{_passes_text(got)}; {gossip.scenes - scenes} scene(s), "
+            f"{script.lines_calls - lines_calls} model call(s), lines {says}",
+        )
+        mine = walked()
+        fact = mine[-1] if mine else {}
+        check(
+            "day_fact_far",
+            len(mine) == 1 and fact.get("outcome") == "told" and "PLAYER" not in (fact.get("seen_by") or []),
+            fact or "none",
+        )
+
+        # 6. no sleep and no dead option in any menu of the two, all run long (both have a bed entry)
+        bad: list[str] = []
+        for npc, questions in recorder.requests:
+            if npc not in (VINO, MALETH):
+                continue
+            for name, q in questions.items():
+                criteria = q.get("criteria", {})
+                keys = criteria if isinstance(criteria, dict) else {}
+                bad += [f"{npc} {name}: {k}" for k in keys if k in DEAD_OPTIONS]
+                if name in ("plan", "do"):
+                    bad += [f"{npc} {name} {k}: {v!r}" for k, v in keys.items() if "sleep" in str(v).lower()]
+        for row in tap.rows:
+            if row.get("npc") not in (VINO, MALETH) or row.get("question") not in ("plan", "do"):
+                continue
+            for key, what in (row.get("args") or {}).items():
+                args = (what or {}).get("args") or {}
+                state, wp = str(args.get("state", "")).upper(), str(args.get("waypoint", "")).upper()
+                if state.startswith(("ZS_GOTOBED", "ZS_SLEEP")) or wp == "NW_FARM1_INSTABLE_BED":
+                    bad.append(f"{row['npc']} {row['question']} {key}: {state}@{wp}")
+        asked = sum(1 for npc, _ in recorder.requests if npc in (VINO, MALETH))
+        check("no_sleep_or_dead", not bad, "; ".join(bad[:5]) if bad else f"{asked} request(s) of the two")
+
+        # 7. each routine asked only a few times: the first time, after its TTL, after the load
+        many = {npc: n for npc, n in asks.items() if n > 3}
+        check(
+            "routine_asks",
+            not many,
+            f"too often: {many}" if many else f"Vino {asks[VINO]}, Malet {asks[MALETH]}, {len(asks)} npc's",
+        )
+    finally:
+        rumors.gate = None
+        link.send = send  # type: ignore[method-assign]
+        link.listeners.remove(heard)
+        brain.decider, brain.cfg, brain.trace = decider, cfg, trace
+        if runner is not None:
+            runner.cancel()
+            link.listeners.remove(brain.on_message)
+    return _logged(results)
+
+
+def _is_walk(cmd: Any) -> bool:
+    """Vino's start_activity (the day desk's walk)."""
+    return isinstance(cmd, NpcActCmd) and cmd.npc.upper() == VINO and cmd.action == "start_activity"
+
+
+async def _save(link: GameLink, slot: int, attempts: int = 15) -> Saved | None:
+    """Save into the slot, again while the game refuses (in a dialog); None if it never saved."""
+    for _ in range(attempts):
+        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+        try:
+            await link.debug("save", slot)
+        except GameError as err:
+            saving.cancel()
+            log.info("save refused (%s), retrying", err)
+            await asyncio.sleep(2)
+            continue
+        try:
+            return await saving
+        except TimeoutError:
+            return None
+    return None
+
+
+async def _sample_views(
+    link: GameLink, npcs: Sequence[str], into: list[tuple[float, dict[str, NpcView]]], every: float = 0.25
+) -> None:
+    """What the npc's perceive, asked from the game every so often until cancelled."""
+    while True:
+        try:
+            views = await link.npc_view(list(npcs), timeout=2)
+        except (GameError, TimeoutError) as err:
+            log.debug("npc_view: %s", err)
+        else:
+            into.append((time.monotonic(), {v.npc.upper(): v for v in views}))
+        await asyncio.sleep(every)
+
+
+def _passes_text(facts: list[Fact]) -> str:
+    """Rumor facts in short, for a check's detail."""
+    passes = [f"from {f.get('from')}, how {f.get('how')}, hops {f.get('hops')}" for f in facts]
+    return f"{len(facts)} fact(s){': ' if passes else ''}{'; '.join(passes)}"
+
+
+def _scene_lines(scene: Scene | None) -> list[SceneLine]:
+    """The lines of a scene as they were given to the game."""
+    return list(scene.play.lines) if scene is not None and scene.play is not None else []
+
+
+def _sees(views: dict[str, NpcView], viewer: str, who: str) -> Look | None:
+    """How `viewer` sees `who` in these views; None if they don't have it, or it does not see it."""
+    v = views.get(viewer)
+    return next((o for o in v.sees if o.id.upper() == who), None) if v is not None else None
+
+
+def _faced(
+    samples: list[tuple[float, dict[str, NpcView]]], line: SceneLine, at: float, *, first: bool
+) -> str:
+    """Whether the speaker of a scene line faced the one it says it to within FACE_S of the line's start, by
+    the addressee's view: yes or no; for the first line inconclusive when it faced it already before, or when
+    the addressee did not see it."""
+    looks = [(t, o) for t, views in samples if (o := _sees(views, line.to, line.npc)) is not None]
+    during = [o for t, o in looks if at <= t <= at + FACE_S]
+    before = [o for t, o in looks if t < at]
+    if first and before and before[-1].faces_you:
+        return "inconclusive: faced before"
+    if any(o.faces_you for o in during):
+        return "yes"
+    if not during:
+        return "inconclusive: not seen" if first else "no: not seen"
+    return "no"
+
+
+def _talked_to(
+    samples: list[tuple[float, dict[str, NpcView]]],
+    said: list[SceneLine],
+    starts: dict[str, tuple[float, bool]],
+    i: int,
+) -> bool:
+    """While line i was said (from its start to the next one's), its speaker saw the one it speaks to talking
+    to it. For a later line only once the look of the line before has run out (a line keeps the two each
+    other's talk partners a second after its voice: npc.cpp), or that look would pass for a line said to the
+    wrong one."""
+    line = said[i]
+    start = starts[line.line][0]
+    end = starts[said[i + 1].line][0] if i + 1 < len(said) else start + (line.audio_s or 3.0)
+    if i:
+        before = said[i - 1]
+        start = max(start, starts[before.line][0] + (before.audio_s or 3.0) + LOOK_TAIL_S)
+    return any(
+        (o := _sees(views, line.npc, line.to)) is not None and (o.talking_to or "").upper() == line.npc
+        for t, views in samples
+        if start <= t <= end
+    )
+
+
+def _voices_in_turn(log_text: str | None, lines: list[str]) -> tuple[bool, str]:
+    """From the game's log: each line's voice played out before the next one started, and no other voice
+    started while one played ("[ai] voice <id> starts" / "played", aibridge.cpp)."""
+    if log_text is None:
+        return False, "no game.log"
+    events = re.findall(r"\[ai\] voice (\S+) (starts|played)", log_text)
+    at: dict[tuple[str, str], int] = {}
+    for i, event in enumerate(events):
+        at.setdefault(event, i)
+    missing = [x for x in lines if (x, "starts") not in at or (x, "played") not in at]
+    if missing or not lines:
+        return False, f"no voice of {missing or 'any line'} in game.log"
+    for a, b in pairwise(lines):
+        if at[(b, "starts")] < at[(a, "played")]:
+            return False, f"{b} started before {a} played out"
+    for x in lines:
+        over = [v for v, what in events[at[(x, "starts")] + 1 : at[(x, "played")]] if what == "starts"]
+        if over:
+            return False, f"{', '.join(over)} started while {x} played"
+    return True, f"{len(lines)} voices, one after another"
+
+
+async def _game_log(log_dir: str | None) -> str | None:
+    """The game's log in log_dir (scripts/e2e.sh runs the game there); None without it."""
+    path = Path(log_dir, "game.log") if log_dir else None
+    if path is None or not await asyncio.to_thread(path.exists):
+        return None
+    return await asyncio.to_thread(path.read_text, encoding="utf-8", errors="replace")
+
+
+def _scene_rows(log_dir: str | None) -> list[dict[str, Any]]:
+    """The `scene` rows of the turn traces (gossip.py) in log_dir/traces."""
+    if not log_dir:
+        return []
+    paths = sorted(Path(log_dir, "traces").glob("*.jsonl"))
+    return [row for p in paths for row in read_trace(p) if row.get("type") == "scene"]
+
+
 async def write_cards(
     link: GameLink, graph: Any, llm: LLMBackend, only: set[str] | None = None, path: Path | None = None
 ) -> dict[str, str]:
@@ -3397,6 +4505,84 @@ async def deal_demo(link: GameLink, deals: Deals, npc: str) -> dict[str, str]:
         pressed,
     )
     await asyncio.sleep(3)
+    return _logged(results)
+
+
+async def gossip_demo(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    rumors: Rumors,
+    gossip: GossipDesk,
+    bodies: Bodies,
+) -> dict[str, str]:
+    """Two people talking about the hero, on screen for the test bench (scripts/bench/gossip.bench): Lobart
+    has caught the hero lying about the turnips (the fact written into the chronicle), Hilda is put 5 m from
+    him and the hero 7 m from them; the pair is opened and they say the lines of the gossip e2e in turn (the
+    model's own with LLM=chatgpt), each to the other."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    open_pairs: set[tuple[str, str]] = set()
+    rumors.gate = lambda r, a, b: (a, b) in open_pairs  # nothing passes but the scene
+    try:
+        if not await _until(lambda: rumors.social is not None, 30):
+            return _logged({"social": "failed (no people)"})
+        if isinstance(dialogue.llm, FakeBackend):
+            dialogue.llm = GossipScript(dialogue.llm, dialogue.llm)
+        await link.debug("time", hour=10, minute=0)
+        await link.debug("skip_important", near=HILDA)  # her greeting would stop the hero
+        day = int((await link.story_state()).get("day", 0))
+        rumors.chronicle.record(
+            {
+                "fact": "caught",
+                "quest": RUEBEN,
+                "npc": LOBART,
+                "name": "Лобарт",
+                "title": "Убрать поле репы",
+                "how": "сам видел, что репы в амбаре нет",
+                "day": day,
+            }
+        )
+        await link.debug("player_goto", waypoint=GOSSIP_OUT)
+        await _until(lambda: LOBART in talk.people and HILDA in talk.people, 20)
+        await link.debug("npc_goto", npc=HILDA, waypoint=GOSSIP_SPOT, face=LOBART)
+        out = await bodies.act(
+            HILDA,
+            "start_activity",
+            state="ZS_STAND_ARMSCROSSED",
+            waypoint=GOSSIP_SPOT,
+            minutes=60,
+            arrive=True,
+            timeout=60,
+        )
+        check("staged", out.status == "arrived", out.status)
+        await asyncio.sleep(3)  # the bench records from here
+        first = gossip.scenes
+        open_pairs.add((LOBART, HILDA))
+        began = await _until(lambda: gossip.scenes > first, 20)
+        where = f"Hilda {talk.people[HILDA].distance / 100:.1f} m" if HILDA in talk.people else ""
+        check("scene", began, where)
+        ended = await _until(lambda: gossip.scenes > first and gossip.scene is None, 60)
+        open_pairs.clear()
+        scene = gossip.last if gossip.scenes > first else None
+        play = scene.play if scene is not None else None
+        said = play.said() if play is not None else []
+        how = f"{scene.state} {scene.why}".strip() if scene is not None else "none"
+        check(
+            "said",
+            ended and scene is not None and scene.state == "done",
+            f"{how}, {len(said)} of {len(_scene_lines(scene))} line(s)",
+        )
+        await asyncio.sleep(3)
+    finally:
+        rumors.gate = None
     return _logged(results)
 
 

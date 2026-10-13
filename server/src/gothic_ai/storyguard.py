@@ -3,7 +3,9 @@
 An npc that walks up to the hero by itself leaves its spot, and some must not: the plot's npc's (the same
 rules the director keeps to), the guards of a passage, whose dialogs warn and attack by where SELF stands,
 and whoever the scripts have leading or following the hero right now. They may still speak when the hero
-is close. Works without the director; without a story graph the plot is known by instance prefixes only.
+is close. Posts and escorts are not held for a scene either (gossip.py): a held npc runs no routine, so a
+guard would stop guarding, and its release resumes the routine, not the escort. Works without the director;
+without a story graph the plot is known by instance prefixes only.
 """
 
 from __future__ import annotations
@@ -20,6 +22,13 @@ SELF_PLACE_CALLS = ("NPC_GETDISTTOWP", "NPC_GETNEARESTWP", "NPC_GETDISTTONPC")
 POST_STATES = ("ZS_GUARD_PASSAGE",)  # TA_GUARD_PASSAGE
 # ZS_GUIDE_PLAYER, ZS_FOLLOW_PLAYER: the scripts have it lead or follow the hero now (the roster's state)
 ESCORT_STATES = ("ZS_GUIDE", "ZS_FOLLOW")
+# every sleep entry of the routines is ZS_GOTOBED; ZS_SLEEP and ZS_SLEEP_GROUND are the scripts' own
+SLEEP_STATES = ("ZS_SLEEP", "ZS_GOTOBED")
+
+
+def asleep(state: str) -> bool:
+    """The npc sleeps: `state` is its script state from the roster."""
+    return state.upper().startswith(SLEEP_STATES)
 
 
 class StoryGuard:
@@ -38,9 +47,14 @@ class StoryGuard:
     def body(self, npc: str, state: str = "") -> str | None:
         """Why the npc must stay where it is (Russian, for the journal and the console), or None if it may
         walk. `state` is its script state from the roster."""
-        state = state.upper()
         if self.plot(npc):
             return "сюжетный: только слова"
+        return self.on_duty(npc, state)
+
+    def on_duty(self, npc: str, state: str = "") -> str | None:
+        """Why the npc's body is the scripts' right now (Russian): at its post, or leading or following the
+        hero; else None. Such a body is never held, while a plot npc that is not on duty may be."""
+        state = state.upper()
         if npc.upper() in self.posts or state.startswith(POST_STATES):
             return "стоит на посту"
         if state.startswith(ESCORT_STATES):
