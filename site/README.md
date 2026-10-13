@@ -23,6 +23,9 @@ uv run pytest -q
   matter between `+++` lines: `title`, `summary` (one sentence: the list and the feed), `date` with a time
   zone, optionally `cover` (a picture in the post's folder) and `youtube` (a video id). Pictures next to
   the post are linked by their name: `![Frames of the short](sheet-en.jpg)`.
+- `content/pages/<slug>/en.md` and `ru.md`: pages outside the devlog at `/<slug>/`, linked from every
+  footer, with `title` and `summary` only. `privacy` is the privacy policy that the Google Cloud project of
+  the YouTube uploader points to (`shorts/README.md`): change it when the uploader asks for more.
 
 ## Media
 

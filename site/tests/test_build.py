@@ -73,3 +73,12 @@ def test_a_youtube_short_loads_nothing_from_youtube_until_clicked(tmp_path):
     html = b.player("abc123", "/static/hero/xardas.jpg", "/static/hero/xardas-en.mp4", "Play", "Xardas")
     assert 'data-id="abc123"' in html and "<button" in html
     assert "youtube" not in html and "<video" not in html  # the iframe comes from site.js on click
+
+
+def test_the_privacy_page_is_linked_from_every_page(built):
+    for prefix in ("", "ru/"):
+        assert (built / prefix / "privacy/index.html").is_file()
+    home = (built / "index.html").read_text()
+    assert 'href="/GothicAI/privacy/">Privacy</a>' in home
+    assert 'href="/GothicAI/ru/privacy/">' in (built / "ru/index.html").read_text()
+    assert 'href="https://myaccount.google.com/permissions"' in (built / "privacy/index.html").read_text()

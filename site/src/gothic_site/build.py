@@ -1,6 +1,6 @@
-"""The site as files: the home page and the devlog in English (/) and Russian (/ru/), a page per post, an
-RSS feed per language, the static files and the posts' pictures. Every link starts with the base path
-(/GothicAI/ on GitHub Pages, / for a local preview)."""
+"""The site as files: the home page and the devlog in English (/) and Russian (/ru/), a page per post, the
+standing pages (the privacy policy), an RSS feed per language, the static files and the posts' pictures.
+Every link starts with the base path (/GothicAI/ on GitHub Pages, / for a local preview)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import markdown
 
-from .content import LANGS, Post, Site
+from .content import LANGS, Page, Post, Site
 
 FONTS = (
     "https://fonts.googleapis.com/css2?family=Alegreya:ital,wght@0,400;0,500;0,700;1,400"
@@ -93,6 +93,10 @@ class Builder:
                     written.append(
                         self._write(f"{prefix(lang)}posts/{post.slug}/index.html", self.post(post, lang))
                     )
+            for page in self.site.pages:
+                if page.get(lang) is not None:
+                    rel = f"{prefix(lang)}{page.slug}/index.html"
+                    written.append(self._write(rel, self.standing(page, lang)))
         written.append(self._write("404.html", self.not_found()))
         (self.out / ".nojekyll").write_text("")
         return written
@@ -130,6 +134,9 @@ class Builder:
             f'<link rel="alternate" type="application/rss+xml" title="{escape(home.get("feed_title", ""))}"'
         )
         github = f' <a href="{escape(s["repo"])}">GitHub</a>' if s.get("repo") else ""
+        for p in self.site.pages:
+            at = lang if p.get(lang) else "en"
+            github += f' <a href="{self.url(at, f"{p.slug}/")}">{escape(p.versions[at].title)}</a>'
         return f"""<!doctype html>
 <html lang="{lang}">
 <head>
@@ -285,6 +292,22 @@ class Builder:
   {cover}
   <div class="text">{body_html}</div>
   <p class="back"><a href="{self.url(lang, "posts/")}">{ui["back"]}</a></p>
+</article>
+"""
+        return self.page(lang, v.title, body, other=other, description=v.summary, cls="article")
+
+    def standing(self, page: Page, lang: str) -> str:
+        v = page.get(lang)
+        assert v is not None
+        other_lang = UI[lang]["other_lang"]
+        other = self.url(other_lang, f"{page.slug}/" if page.get(other_lang) else "")
+        body = f"""
+<article class="post">
+  <header>
+    <h1>{escape(v.title)}</h1>
+    <p class="lede">{escape(v.summary)}</p>
+  </header>
+  <div class="text">{md(v.body)}</div>
 </article>
 """
         return self.page(lang, v.title, body, other=other, description=v.summary, cls="article")
