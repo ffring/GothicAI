@@ -25,6 +25,22 @@
         "47860"
       ],
       "port": 47860
+    },
+    {
+      "name": "voice-studio",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "shorts",
+        "gothic-shorts",
+        "studio",
+        "dice",
+        "--no-browser",
+        "--port",
+        "47871"
+      ],
+      "port": 47871
     }
   ]
 }
