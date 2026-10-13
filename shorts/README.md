@@ -128,6 +128,46 @@ at a runner. A line break in the hook makes it two lines.
 Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
 cutting: a difference that does not read at phone size (a flinch on top of the game's stumble) stays out.
 
+## Word timings of a known text
+
+For captions that follow the voice word by word: the recording and exactly what it says go to the GPU
+server, the forced aligner there (Qwen3 Forced Aligner 0.6B on audio.cpp, `scripts/deploy-gpu.sh aligner`
+installs it; nothing runs on the Mac but ffmpeg) maps the words onto the sound.
+
+```bash
+uv run gothic-shorts align voiceover.wav "Ксардас, меня прислал Ли."     # -> voiceover.words.json
+uv run gothic-shorts align voiceover.m4a --text-file voiceover.txt --out beat-1   # -> beat-1.json
+```
+
+`{"text", "duration", "words": [{"text", "start", "end"}]}`, seconds of the recording. The words keep the
+text's punctuation ("Ли." rather than "Ли") when the aligner's words match the text one to one. The text must
+be what is said, word for word (numbers as spoken); `--language` defaults to Russian (`ru` works the same).
+The timings come in steps of 80 ms (the model's grid). GOTHIC_GPU_SSH comes from the environment or the
+nearest `.env`, as for `scripts/deploy-gpu.sh`. A line of 5 s takes ~3 s from here: 0.1 s of alignment, ~1 s
+loading the model (1.5 GB of GPU memory while it runs), the rest ssh and scp; the server's copies are deleted.
+
+## Recording a voice-over
+
+A studio in the browser for the voice of an explainer (`explain/`): the script as a teleprompter, the
+short's draft playing the part each line is said over, a take per press of the space bar.
+
+```bash
+uv run gothic-shorts studio dice          # ~/.local/share/gothic-ai/explain/dice; opens http://127.0.0.1:47871
+```
+
+The short's folder holds `script.ru.txt` (a line of the voice per row), a plan with the lines' places
+(`plan.json` or `plan.storyboard.json`) and the draft `render/preview.mp4` (without captions). Space starts a
+take: the picture runs from 1.5 s before the line's place, the line lights up when its place comes, a bar
+shows how long the plan gives it; Space again keeps the take, Esc throws it away. Enter plays the chosen take
+with the picture, the arrows change the line, 1-9 choose a take, Backspace sends it to `voice/trash/`.
+"Тишина 10 с" records the room for the noise reduction, "Прогон" runs the draft with the prompter alone.
+
+The microphone is taken as it is (no echo cancelling, noise suppression or automatic gain) and the take is
+sent as a lossless WAV: `voice/raw/03-2.wav` is take 2 of line 3, 48 kHz mono 24-bit, next to its
+`03-2.json` (length, peak, where the speech starts and ends, where the picture was); `voice/takes.json`
+keeps the chosen ones. Embedded browsers (an app's preview pane) may refuse the microphone: open the address
+in Chrome or Safari. Headphones if the game's sound is on, or it ends up in the take.
+
 ## Uploading to YouTube
 
 ```bash
