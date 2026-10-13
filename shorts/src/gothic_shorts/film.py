@@ -91,7 +91,7 @@ def film(
 
     ports = Ports.free()
     procs = services(config, layout, ports, cwd=logs)
-    procs[-1] = _server(procs[-1], take, decider_url)
+    procs[-1] = _server(procs[-1], take, decider_url, shot.server_args)
     game = Proc(
         "game",
         [str(layout.game_bin), "-g", str(layout.game_dir), "-window", "-devmode", "-save", "1"],
@@ -140,12 +140,13 @@ def film(
     return take
 
 
-def _server(proc: Proc, take: Path, decider_url: str | None) -> Proc:
+def _server(proc: Proc, take: Path, decider_url: str | None, extra: tuple[str, ...] = ()) -> Proc:
     argv = [
         *proc.argv,
         "--voice-files",
         "--memory-db", str(take / "memory.sqlite3"),
         "--trace-dir", str(take / "traces"),
+        *extra,
     ]  # fmt: skip
     if decider_url:
         argv += ["--decider-url", decider_url]

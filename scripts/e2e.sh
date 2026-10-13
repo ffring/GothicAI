@@ -54,6 +54,10 @@
 #       deal that forgives the lie for the fine, and he accepts it (docs/npc-tools.md, wave 1 step 2)
 #   debt: Lobart lends the hero 20 gold for 25 back by the end of the next day; two days on the debt is a
 #       broken word (trust) and goes round as a rumor; then the hero pays it back, late (wave 1 step 2)
+#   wrath: the necromancer's answer (docs/xardas-wrath.md): the hero insults Xardas line by line; the scales of
+#       his patience tip (model scripted with LLM=fake: rude, an insult, his mother), he kills the hero with a
+#       spell and raises him as a skeleton. LLM=chatgpt: whether the real model tips over (GOTHIC_WRATH_LINES:
+#       other lines, "|" between them)
 #   deal: the hero asks Lobart to sell him something; Lobart offers it for 50 gold (model scripted with
 #       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
 #       haggling: the deal window shows the new version, Y waits right after the change, then the deal is

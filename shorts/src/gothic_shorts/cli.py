@@ -175,7 +175,8 @@ def main() -> None:
     s = sub.add_parser("upload", help="upload a cut short to YouTube (private unless --privacy)")
     s.add_argument("video", help="the cut short, e.g. .shorts/compare/bodies/short-ru.mp4")
     s.add_argument("--meta", required=True,
-                   help="the short's .shorts/<name>/youtube.json: <lang>: title, description, tags, synthetic")
+                   help="the short's .shorts/<name>/youtube.json: <lang>: title, description, tags, "
+                        "synthetic")
     s.add_argument("--lang", default="ru")
     s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
                    help="an API project without YouTube's audit can upload private only")

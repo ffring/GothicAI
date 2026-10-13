@@ -428,6 +428,7 @@ enum CamMode : uint8_t {
   C_Follow, // around the player, relative to its facing
   C_World,  // around the player, fixed world direction
   C_Fixed,  // fixed position, looking at the player
+  C_Hold,   // the camera stays as it is: the position and where it looks
   C_Face,   // close to the face, relative to the facing of the body
   C_Shoulder, // over the hero's shoulder at an npc (camNpc)
   C_NpcFace,  // the npc's face, from the hero's side
@@ -532,6 +533,8 @@ struct Bench {
   uint64_t    lastLineAt = 0;     // an npc line of the AI started
   uint64_t    busyAt    = 0;      // an npc of the AI spoke (or had a line waiting)
   bool        waitReply = false;
+  std::string waitAiKey, waitAiStage;  // waitai: until the bridge says it got that far
+  uint64_t    waitAiEnd = 0;
   bool        replyNeed = false;  // a line has to start after replyFrom first
   uint64_t    replyFrom = 0;
   uint64_t    replyEnd  = 0;
@@ -851,7 +854,7 @@ bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
 
 void updateCamera(World& w, Npc& pl) {
   bench.occl = 0;
-  if(bench.cam==C_Game)
+  if(bench.cam==C_Game || bench.cam==C_Hold)
     return;
   if(bench.cam==C_Shoulder || bench.cam==C_NpcFace || bench.cam==C_Two) {
     // shots of the hero himself, also while the camera watches a subject (gaze)
@@ -1304,6 +1307,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     else if(m=="fixed") {
       bench.cam = C_Fixed;
+      }
+    else if(m=="hold") {
+      bench.cam = C_Hold;  // a shot of a scene: the subject may fall out of it, the frame stays
       }
     else if(m=="shoulder" || m=="two" || (m=="face" && a.size()>2 && !isNumber(a[2]))) {
       // cam shoulder <npc> [dist 120] [height 15] [shoulder 1|-1]
@@ -2368,6 +2374,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.replyEnd   = bench.time + uint64_t(num(a,reply ? 1 : 2,30000));
     bench.replyQuiet = uint64_t(num(a,reply ? 2 : 1,1200));
     }
+  else if(c=="waitai") {
+    // waitai <key> <stage> [timeout ms 20000]: until a thing of the AI bridge has got that far (waitai necro risen)
+    if(a.size()<3) {
+      say("waitai: <key> <stage> [timeout]");
+      return;
+      }
+    bench.waitAiKey   = a[1];
+    bench.waitAiStage = a[2];
+    bench.waitAiEnd   = bench.time + uint64_t(num(a,3,20000));
+    }
   else if(c=="caption") {
     // text on the screen of a short from here (scripts/shorts cut): caption <text>, caption off
     event("caption","\"text\":" + jsonStr(rest(line)=="off" ? "" : rest(line)));
@@ -2464,19 +2480,34 @@ bool waitingForReply() {
   return false;
   }
 
+bool waitingForAi() {
+  if(bench.waitAiKey.empty())
+    return false;
+  if(TestBench::aiReached && TestBench::aiReached(bench.waitAiKey,bench.waitAiStage)) {
+    say("waitai " + bench.waitAiKey + " " + bench.waitAiStage);
+    bench.waitAiKey.clear();
+    return false;
+    }
+  if(bench.time<bench.waitAiEnd)
+    return true;
+  say("waitai " + bench.waitAiKey + " " + bench.waitAiStage + ": timeout");
+  bench.waitAiKey.clear();
+  return false;
+  }
+
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
   if(bench.volleyLeft>0) {
     tickVolley(ctrl);
     if(bench.volleyLeft>0)
       return;
     }
-  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply) {
+  while(bench.pc<bench.prog.size() || bench.speaking || bench.waitReply || !bench.waitAiKey.empty()) {
     if(bench.speaking) {
       if(bench.time<bench.speakUntil)
         return;
       endSpeaking();
       }
-    if(waitingForReply())
+    if(waitingForReply() || waitingForAi())
       return;
     if(bench.pc>=bench.prog.size())
       break;
@@ -2914,6 +2945,7 @@ void renderSound(uint64_t dt) {
 }
 
 std::function<bool()> TestBench::aiBusy;
+std::function<bool(std::string_view,std::string_view)> TestBench::aiReached;
 
 void TestBench::aiLine(std::string_view npc, std::string_view name, std::string_view text, uint64_t ms) {
   if(scenarioPath==nullptr)

@@ -205,7 +205,7 @@ void MainWindow::paintEvent(PaintEvent& event) {
         }
       }
     } else {
-    if(world!=nullptr && world->view()){
+    if(world!=nullptr && world->view() && !Gothic::inst().isHudHidden()){
       auto& camera = *Gothic::inst().camera();
 
       auto vp = camera.viewProj();

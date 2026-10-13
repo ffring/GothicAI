@@ -80,6 +80,7 @@ from .voice import (
     VoiceInput,
     WavSource,
 )
+from .wrath import Wrath
 
 log = logging.getLogger("gothic_ai")
 
@@ -158,6 +159,7 @@ class ServerState:
         self.deals: Deals | None = None
         self.perception: PerceptionDesk | None = None
         self.sightings: Sightings | None = None
+        self.wrath: Wrath | None = None
 
 
 class Console:
@@ -496,6 +498,10 @@ async def serve(args: argparse.Namespace) -> int:
         state.deals = Deals(link, state.dialogue, state.chronicle, journal=journal)
         state.dialogue.extensions.append(state.deals)
         talk.on_talk_end.append(state.deals.end)
+        if args.wrath or args.scenario == "wrath":
+            # an ending off the main game: insult Xardas enough and he raises you as a skeleton
+            state.wrath = Wrath(link, state.dialogue, journal=journal)
+            state.dialogue.extensions.append(state.wrath)
         debts = asyncio.create_task(state.deals.run())  # a debt not paid back by its day is a broken word
         state.quests = QuestBoard(
             link,
@@ -677,6 +683,19 @@ async def serve(args: argparse.Namespace) -> int:
                     "places: %d points, %d people -> %s", len(data["points"]), len(data["people"]), where
                 )
                 exit_code = 0
+            elif args.scenario == "wrath":
+                dialogue, talk, wrath = state.dialogue, state.talk, state.wrath
+                assert dialogue is not None and talk is not None and wrath is not None
+                live = dialogue.llm.name != "fake"
+                results = await scenarios.xardas_wrath(link, dialogue, talk, wrath, args.npc, live=live)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info(
+                    "scenario wrath (%s): %d checks, %d failed",
+                    "live" if live else "fake",
+                    len(results),
+                    len(bad),
+                )
+                exit_code = 1 if bad else 0
             elif args.scenario == "lie":
                 dialogue, talk, quests = state.dialogue, state.talk, state.quests
                 assert dialogue is not None and talk is not None and quests is not None
@@ -1171,6 +1190,7 @@ def main() -> None:
             "places",
             "graph",
             "lie",
+            "wrath",
             "repair",
             "vlie",
             "vcheck",
@@ -1217,6 +1237,11 @@ def main() -> None:
         "--no-hold-threats",
         action="store_true",
         help="threats to free npc's go straight to the game's scripts, not to the behavioral model first",
+    )
+    p.add_argument(
+        "--wrath",
+        action="store_true",
+        help="npc's take offense and answer insolence with force (docs/xardas-wrath.md; off the main game)",
     )
     p.add_argument(
         "--apply-threats",

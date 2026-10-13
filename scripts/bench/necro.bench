@@ -1,0 +1,16 @@
+# The necromancer's answer (docs/xardas-wrath.md): Xardas kills the hero with a spell, raises him as a
+# skeleton where he fell, the screen goes black and the end card comes up. Without the server: the bridge's
+# console command `ai necro <npc> [spell] [picture]`. Xardas is held as in a conversation (`ai attach`).
+view clean 30
+watch NONE_100_XARDAS
+ai attach NONE_100_XARDAS
+place 260 180
+wait 800
+cam two NONE_100_XARDAS 380 150 1
+ui on
+wait 500
+rec necro
+wait 800
+ai necro NONE_100_XARDAS SPL_SKULL
+wait 18000
+stop
