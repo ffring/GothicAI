@@ -1126,7 +1126,7 @@ class EndCard(BaseModel):
 
 
 class RaiseDeadCmd(_Command):
-    """The necromancer's answer (v13, docs/xardas-wrath.md), an ending off the main game: `npc` casts
+    """The necromancer's answer (v13, docs/xardas-wrath.md), an ending: `npc` casts
     `spell` (an SPL_* symbol, SPL_SKULL by default) at the hero until he falls, raises him where he fell as a
     skeleton, the screen goes black and `card` comes up; a key takes the player to the main menu. The game
     answers `result` at once (ok: it began)."""
