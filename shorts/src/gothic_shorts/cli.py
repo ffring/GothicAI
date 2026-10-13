@@ -143,7 +143,8 @@ def _summary(take: Path) -> None:
         print(f"  waiting for an answer timed out {tl.timeouts} time(s)")
     log = take / "bench.log"
     if log.is_file():
-        for row in log.read_text().splitlines():
+        # a stray byte of the game's code page must not lose the summary of a finished take
+        for row in log.read_text(encoding="utf-8", errors="replace").splitlines():
             if row.startswith(("realtime:", "ptt: not", "can not", "unknown", "near: no", "cam ")):
                 print(f"  bench: {row}")
 

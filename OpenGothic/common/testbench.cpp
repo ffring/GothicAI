@@ -733,12 +733,40 @@ Npc* findNpc(World& w, Npc& pl, const std::string& name) {
   return best!=nullptr ? best : w.findNpcByInstance(id);
   }
 
+// an npc's name as the player sees it, for the log and events.jsonl (UTF-8): the game's strings are cp1251
+// (the russian localization). The engine has no codec (ai_bridge's TextCodec is above it); a name only
+// needs the letters, other bytes above ASCII become '?'
+std::string nameUtf8(const Npc& n) {
+  std::string r;
+  for(char ch:n.displayName()) {
+    const auto b = uint8_t(ch);
+    if(b<0x80) {
+      r += ch;
+      continue;
+      }
+    uint32_t cp = '?';
+    if(b>=0xC0)
+      cp = 0x410 + (uint32_t(b) - 0xC0);  // А..я
+    else if(b==0xA8)
+      cp = 0x401;                         // Ё
+    else if(b==0xB8)
+      cp = 0x451;                         // ё
+    if(cp<0x80) {
+      r += char(cp);
+      continue;
+      }
+    r += char(0xC0 | (cp>>6));
+    r += char(0x80 | (cp & 0x3F));
+    }
+  return r;
+  }
+
 std::string symName(World& w, const Npc* n) {
   if(n==nullptr)
     return "-";
   if(auto sym = w.script().findSymbol(size_t(n->instanceSymbol())))
     return sym->name();
-  return std::string(n->displayName());
+  return nameUtf8(*n);
   }
 
 const char* gazeSource(Gaze::Source s) {
@@ -2350,7 +2378,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     Npc& to = (n==&pl) ? subjectOf(pl) : pl;
     n->aiPush(AiQueue::aiOutput(to,a[2],0));
-    say("speak " + std::string(n->displayName()) + " " + a[2]);
+    say("speak " + nameUtf8(*n) + " " + a[2]);
     }
   else if(c=="faceanim") {
     // faceanim <npc|nearest|player> <anim> [ms] [intensity]: a face animation of the head (S_ANGRY, S_FRIENDLY...)
@@ -2360,7 +2388,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       return;
       }
     n->startFaceAnim(a[2],num(a,4,1),uint64_t(num(a,3,3000)));
-    say("faceanim " + std::string(n->displayName()) + " " + a[2]);
+    say("faceanim " + nameUtf8(*n) + " " + a[2]);
     }
   else if(c=="ani") {
     // ani <npc|nearest|player> <anim>: it plays an animation of its model script (T_YES, T_DIALOGGESTURE_03)
