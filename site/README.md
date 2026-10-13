@@ -9,7 +9,7 @@ cd site
 uv run gothic-site serve                       # http://127.0.0.1:47860/ (the preview "site" in .claude/launch.json)
 uv run gothic-site new first-quest --title "The first quest" --title-ru "Первый квест"
 uv run gothic-site frame ../.shorts/xardas-lie/take-02/main.mp4 content/posts/<post>/cover.jpg --at 41 --width 540
-uv run gothic-site clip ../.shorts/xardas-lie/take-02/short-ru.mp4 static/hero/xardas-ru.mp4 --start 24.9 --length 7.6
+uv run gothic-site clip ../.shorts/xardas-wrath/take-09/short-ru.mp4 static/hero/wrath-ru.mp4 --start 33.6 --length 20
 uv run gothic-site build                       # _build/ for /GothicAI/ (what the workflow publishes)
 uv run pytest -q
 ```
