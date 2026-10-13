@@ -78,11 +78,14 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
   bool  invincible = !checkDamageMask(nsrc,nother,&b);
   auto  dmg        = b.damage();
 
+  float zone = 1;
   if(!b.isSpell() && b.isPrecise()) {
-    // an arrow aimed by hand hit where it hit, no dice: the draw and the zone make the damage
-    const float k = Archery::damageAt(b.draw())*Archery::zoneDamage(b.hitZone());
+    // an arrow aimed by hand hit where it hit, no dice: the draw makes the arrow, the armour takes its part,
+    // the zone then scales what went through (a head shot does twice the harm, not the weapon twice)
+    const float k = Archery::damageAt(b.draw());
     for(auto& v:dmg.val)
       v = int32_t(std::lround(float(v)*k));
+    zone  = Archery::zoneDamage(b.hitZone());
     noHit = false;
     }
   else if(!b.isSpell() && Gothic::inst().version().game==2) {
@@ -148,7 +151,10 @@ DamageCalculator::Val DamageCalculator::rangeDamage(Npc& nsrc, Npc& nother, cons
   if((bMsk & (COLL_APPLYDAMAGE | COLL_APPLYDOUBLEDAMAGE | COLL_APPLYHALVEDAMAGE | COLL_DOEVERYTHING))==0)
     return Val(0,true,true);
 
-  return rangeDamage(nsrc,nother,dmg,bMsk);
+  auto ret = rangeDamage(nsrc,nother,dmg,bMsk);
+  if(zone!=1.f)
+    ret.value = int32_t(std::lround(float(ret.value)*zone));
+  return ret;
   }
 
 DamageCalculator::Val DamageCalculator::rangeDamage(Npc&, Npc& nother, Damage dmg, const CollideMask bMsk) {

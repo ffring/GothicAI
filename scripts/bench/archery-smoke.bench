@@ -37,6 +37,7 @@ tap parade
 wait 1000
 
 # a bandit archer, its talent animations, a fight at 13 m: dice shots, damage under god mode
+npcaim off
 pin off
 clear 3000
 arc BDT_1003_BANDIT_M 1 1300 0

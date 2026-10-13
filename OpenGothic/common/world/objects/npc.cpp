@@ -2140,7 +2140,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
   if(TestBench::isActive()) {
-    // what it did: the weapon's damage before the draw, the zone and the armour; the arrow's kind
+    // what it did: the weapon's damage before the draw and the armour, k the draw times the zone (the zone
+    // scales what the armour let through); the arrow's kind
     int32_t raw = 0;
     if(b!=nullptr)
       for(auto v:b->damage().val)

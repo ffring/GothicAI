@@ -1,4 +1,4 @@
-# NPC archers as the game has them today (docs/manual-aim.md, stage 4): four of a kind on an arc at 11, 13.5
+# NPC archers as the game had them (the dice) (docs/manual-aim.md, stage 4): four of a kind on an arc at 11, 13.5
 # and 16 m shoot at the hero (immortal, still) with the dice; a bandit with a bow (40%), an addon bandit
 # with a crossbow (60%), a paladin knight with a crossbow (65%). The cadence, the dice's chances, the damage
 cheat god
@@ -10,6 +10,7 @@ wait 500
 clear 3000
 immortal player on
 still player on
+npcaim off                        # the dice: the archers hand-aim by default
 cam follow 700 250 150
 
 clear 3000

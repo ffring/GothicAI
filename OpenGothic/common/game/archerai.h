@@ -32,7 +32,7 @@ class ArcherAi final {
       float         ps     = 0;
       };
 
-    // [GAME] npcManualAim in Gothic.ini (Marvin: toggle npcmanualaim), G2 only; off: the dice
+    // [GAME] npcManualAim in Gothic.ini, on by default (Marvin: toggle npcmanualaim), G2 only; off: the dice
     static bool    isEnabled();
     static void    setEnabled(bool e);
     // the test bench: the mode, an error forced (degrees per axis, <0: the dice's), the lead, the seeds
