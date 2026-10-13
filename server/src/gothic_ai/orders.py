@@ -14,7 +14,7 @@ looks at no one): the npc asks whom.
 
 **What the body does** (bridge actions; the npc is held through talk.py while it obeys):
 - follow: follows the hero; come, retreat: breaks off whatever it does (a fight, a wait) and follows
-  him (a walk straight to him stuck on the tower's stairs, following finds its way);
+  him;
 - halt: stops where it is, for HALT_S, then goes on as before; wait: stays there until the next
   order, at most WAIT_S, then goes back to its own business;
 - attack: fights whom the hero looks at (the game's own combat), then follows him again;
@@ -27,8 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -50,13 +49,11 @@ COMPANION_GOALS = frozenset({"follow_hero", "guard_hero"})
 WEAPONS = frozenset({"draw", "sheathe"})
 
 
-@dataclass
+@dataclass(eq=False)
 class Standing:
-    """What an npc does on the hero's order."""
+    """What an npc does on the hero's order; a later order puts another in its place."""
 
     kind: str  # the order (commands.KINDS)
-    gen: int  # its number: a later order replaces it
-    since: float
 
 
 def failed(status: str) -> str | None:
@@ -72,7 +69,6 @@ class Orders:
         dialogue: DialogueManager,
         *,
         journal: Journal | None = None,
-        clock: Callable[[], float] = time.monotonic,
         halt_s: float = HALT_S,
         wait_s: float = WAIT_S,
     ) -> None:
@@ -80,10 +76,8 @@ class Orders:
         self.talk = talk
         self.dialogue = dialogue
         self.journal = journal or dialogue.journal
-        self.clock = clock
         self.halt_s, self.wait_s = halt_s, wait_s
         self.standing: dict[str, Standing] = {}
-        self._gen = 0
         self._tasks: set[asyncio.Task[Any]] = set()
 
     # --- who obeys -----------------------------------------------------------------------------
@@ -123,14 +117,12 @@ class Orders:
         target = self.target(focus, squad) if order.kind == "attack" else None
         if not squad or (order.kind == "attack" and target is None):
             return []
-        now = self.clock()
         for npc, name in squad:
             before = self.standing.get(npc)
             if order.kind in WEAPONS:
                 standing = before  # the weapon changes no standing order: it waits, follows... as before
             else:
-                self._gen += 1
-                standing = self.standing[npc] = Standing(order.kind, self._gen, now)
+                standing = self.standing[npc] = Standing(order.kind)
             self.journal.add("order", npc=npc, name=name, order=order.kind, text=order.heard, target=target)
             log.info("order %s -> %s (%s)%s", order.kind, npc, name, f" at {target}" if target else "")
             self._spawn(self._obey(npc, name, order, standing, before, target))

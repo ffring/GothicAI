@@ -10,8 +10,7 @@ A phrase is an order when, without words of address ("эй", "ребята", the
 Speech recognition may run words together or mishear a letter in a long form ("оружия к бою"): a form of
 nine letters or more is matched with one letter off, of six to eight with an alike letter only.
 
-Pure: no game, no models. The research on recognizing orders straight from audio
-(research/voice_commands) builds its training phrases from these forms.
+Pure: no game, no models.
 """
 
 from __future__ import annotations
