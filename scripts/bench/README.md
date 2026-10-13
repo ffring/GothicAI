@@ -337,7 +337,7 @@ Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
 
 Every talking command writes `events.jsonl` (what was said when, in frames of the recording). A line of the
 AI is `npc line <npc>: <text>` in `bench.log`, `npc line <npc> -> <to>: <text>` when it is said to another npc
-(its `npc_line` event has `to`); a sound said at once while the model thinks («Хм...») has `"filler": true`. What the npcs say through the game's own path, lines of the game and SVMs
+(its `npc_line` event has `to`); the quick model's first words said at once while the conversational model thinks («Хм...», «Что?!») have `"filler": true`. What the npcs say through the game's own path, lines of the game and SVMs
 (`AI_Output`, `AI_OutputSvm`, the chatter of two in `ZS_SMALLTALK` too), is `output <npc> -> <target> <name>
 <ms>` (0 ms when the engine did not look the length up; `far` or `far2` after it when the npc's AI is cut down
 by its distance to the hero: such a line is never heard), and an `output` event.

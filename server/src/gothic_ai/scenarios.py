@@ -580,7 +580,8 @@ async def m5_turn_loop(
     incident (the body reacts before the words). The conversational model is scripted; the behavioral
     model is the live service when given, a fixed stand-in otherwise. The game cannot hit an npc on
     command, so the incident's perception is injected on the server side. With `quick` (the quick model
-    of fights, live) the incident's words are its line, said at once; the scripted model only acts."""
+    of fights, live) the hero's phrases get its first words and the incident's words are its line, said
+    at once; the scripted model only acts."""
     await link.wait_world()
     await attach_when_free(link, npc)
     snap = await link.snapshot(npc, fresh=True)
@@ -654,6 +655,16 @@ async def m5_turn_loop(
         results["intent_follow"] = "done" if await following(True) else "failed (not following)"
         await dialogue.say_as_player(npc, "Можешь остаться")
         results["intent_routine"] = "done" if await following(False) else "failed (still following)"
+
+        if quick is not None and trace is not None:  # the quick model's first words to the hero's phrases
+            words = [
+                e["text"]
+                for r in read_trace(trace.path())
+                if r.get("type") == "turn" and r.get("npc") == npc
+                for e in r.get("events", [])
+                if e.get("kind") == "first_words"
+            ]
+            results["first_words"] = f"{'done' if words else 'failed'} ({len(words)} of 4: {words})"
 
         # 4. an incident: the body reacts at once, the words come after
         calls = len(llm.calls)

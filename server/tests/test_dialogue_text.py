@@ -1,4 +1,13 @@
-from gothic_ai.dialogue import MoodTag, MoodTags, SentenceSplitter, mood_of, paragraph_end, to_game_text
+from gothic_ai.dialogue import (
+    MoodTag,
+    MoodTags,
+    SentenceSplitter,
+    first_words,
+    mood_of,
+    paragraph_end,
+    strip_said,
+    to_game_text,
+)
 from gothic_ai.gamedata.ou import npc_dialog_key, npc_lines, parse_ou_bin
 from gothic_ai.persona import pick_samples, render_instructions
 
@@ -146,3 +155,27 @@ def test_a_quick_line_ends_at_its_first_blank_line():
     assert paragraph_end("[hostile] Держи его!\n\nset_intent(goal=fight)") == len("[hostile] Держи его!")
     assert paragraph_end("\n\nДержи его!") is None  # blank lines before any words do not end it
     assert paragraph_end("Держи его!\nИ живо!") is None
+
+
+def test_the_answer_does_not_say_the_first_words_again():
+    assert strip_said("Хм... Ты прав.", "Хм...") == "Ты прав."
+    assert strip_said("Что?! Орки напали?", "Что?!") == "Орки напали?"
+    assert strip_said("Что? Орки?", "Что?!") == "Орки?"
+    assert strip_said("Ну-ну. Так уж и голыми?", "Ну-ну...") == "Так уж и голыми?"
+    assert strip_said("Хм, ну ладно.", "Тьфу!") == "Ну ладно."  # an interjection after any first words
+    assert strip_said("М-м... Пожалуй.", "Хм...") == "Пожалуй."
+    assert strip_said("Так, слушай.", "Так...") == "Слушай."
+    assert strip_said("Так вот оно что.", "Так...") == "Так вот оно что."  # not an interjection here
+    assert strip_said("Что ты сказал?", "Что?!") == "Что ты сказал?"
+    assert strip_said("Хмурый сегодня день.", "Хм...") == "Хмурый сегодня день."
+    assert strip_said("Хм.", "Хм.") == ""
+
+
+def test_the_quick_models_first_words_are_its_first_sentence_without_tags():
+    assert first_words("[afraid] Что?! Лестер мёртв?") == ("Что?!", "afraid")
+    assert first_words("[thoughtful] Хм... Дай подумать") == ("Хм...", None)  # not a mood: only dropped
+    assert first_words("Тьфу, ну и наглец!\n\nset_intent(...)") == ("Тьфу, ну и наглец!", None)
+    assert first_words("Ишь ты") == ("Ишь ты", None)  # no end: what it wrote
+    assert first_words("[neutral] —") == ("", None)  # nothing to say first
+    assert first_words("— Пошли тогда.") == ("Пошли тогда.", None)
+    assert first_words("") == ("", None)

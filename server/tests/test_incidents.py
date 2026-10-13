@@ -205,6 +205,9 @@ async def test_the_body_gestures_while_the_npc_thinks_of_an_answer(tmp_path):
     assert kinds[0] == ("action", "play_ani")
     nod = next(m for m in fake.received if m["type"] == "action")
     assert nod["args"] == {"name": "T_YES"}
+    # the behavioral model is asked about the body only: what is said at once is the quick model's
+    phrase = next(c for c in desk.reflexes.decider.calls if c["rid"].startswith("chat:"))
+    assert list(phrase["questions"]) == ["gesture"]
 
 
 async def test_a_fight_ends_with_the_incident_and_the_old_intent_comes_back(tmp_path):
