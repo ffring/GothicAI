@@ -283,6 +283,8 @@ class TalkDesk:
         self.on_hero_voice: list[Callable[[], bool]] = []
         # npc's of a scene near the hero his next words may go to, the one who spoke last first (gossip.py)
         self.scene_hint: Callable[[], list[str]] = lambda: []
+        # the hero said something, to whom (None: into the air): the conversation around him (group.py)
+        self.on_phrase: list[Callable[[Addressee | None, str], None]] = []
         # orders to the hero's companions ("Стой!"), carried out at once, without an answer (orders.py)
         self.orders: Orders | None = None
         link.listeners.append(self.on_message)
@@ -350,6 +352,8 @@ class TalkDesk:
             **(details or {}),
         )
         log.info("hero -> %s (%s): %s", to.id if to else "nobody", to.why if to else "-", text)
+        for listener in self.on_phrase:
+            listener(to, text)
         self._witnesses(text, to, {npc for npc, _ in squad})
         if self.planner is not None:
             self.planner.on_player_text(to.id if to else "", text, now)

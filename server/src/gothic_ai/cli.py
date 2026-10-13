@@ -35,6 +35,7 @@ from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .gossip import GossipDesk
+from .group import GroupTalk
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
 from .journal import Journal, print_sink
@@ -532,6 +533,8 @@ async def serve(args: argparse.Namespace) -> int:
         # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
         state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
+        # talk with several npc's: who takes part, and whose words the others heard (group.py)
+        state.dialogue.extensions.append(GroupTalk(link, state.dialogue, state.talk))
         state.incidents.companion = state.talk.orders.companion
         state.incidents.fighting_ru = state.talk.orders.fighting_ru
         talk_desk = state.talk  # its roster is a new dict each time
