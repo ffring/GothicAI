@@ -29,6 +29,7 @@ class FakeGame:
         self.ws: ClientConnection | None = None
         self.said: list[str] = []
         self.voiced: list[bool] = []  # said with audio
+        self.fillers: list[str] = []  # said as fillers ("Хм..." while the model thinks)
         self.statuses: list[str] = []
         self.branch = branch  # reported as the session on connect (None: an old game without sessions)
         self.heads: list[tuple[str, int]] = []  # memory heads the server reported
@@ -179,6 +180,8 @@ class FakeGame:
             case "say":
                 self.said.append(msg["text"])
                 self.voiced.append(bool(msg.get("audio") or msg.get("stream")))
+                if msg.get("filler"):
+                    self.fillers.append(msg["text"])
                 await self.send(type="line_started", npc=msg["npc"], line=msg["line"])
             case "chat_status":
                 self.statuses.append(msg["status"])

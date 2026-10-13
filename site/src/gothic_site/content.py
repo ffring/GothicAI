@@ -1,5 +1,6 @@
 """What the site is made of: the settings and the home page (content/home.toml), the devlog posts
-(content/posts/<date>-<slug>/{en,ru}.md plus their pictures and clips).
+(content/posts/<date>-<slug>/{en,ru}.md plus their pictures and clips), the standing pages
+(content/pages/<slug>/{en,ru}.md: the privacy policy; title and summary, no date).
 
 A post is Markdown with TOML between `+++` lines on top:
 
@@ -52,12 +53,24 @@ class Post:
 
 
 @dataclass(frozen=True)
+class Page:
+    """A page outside the devlog, at /<slug>/ and /ru/<slug>/, linked from every page's footer."""
+
+    slug: str
+    versions: dict[str, Version]
+
+    def get(self, lang: str) -> Version | None:
+        return self.versions.get(lang)
+
+
+@dataclass(frozen=True)
 class Site:
     root: Path
     settings: dict
     home: dict[str, dict]  # per language
     hero: dict
     posts: list[Post]  # newest first
+    pages: list[Page] = field(default_factory=list)
 
     @property
     def base(self) -> str:
@@ -113,6 +126,22 @@ def load_post(folder: Path) -> Post:
     return Post(slug, dates.pop(), folder, versions, media)
 
 
+def load_page(folder: Path) -> Page:
+    versions: dict[str, Version] = {}
+    for lang in LANGS:
+        path = folder / f"{lang}.md"
+        if not path.is_file():
+            continue
+        meta, body = split_front_matter(path.read_text(), path)
+        for key in ("title", "summary"):
+            if key not in meta:
+                raise ContentError(f"{path}: no {key}")
+        versions[lang] = Version(title=str(meta["title"]), summary=str(meta["summary"]), body=body)
+    if "en" not in versions:
+        raise ContentError(f"{folder}: a page needs en.md (ru.md is optional)")
+    return Page(folder.name, versions)
+
+
 def load(root: Path) -> Site:
     """`root` is site/: content/home.toml, content/posts/, static/."""
     path = root / "content" / "home.toml"
@@ -129,4 +158,10 @@ def load(root: Path) -> Site:
     if len(set(slugs)) != len(slugs):
         raise ContentError(f"two posts have the same slug: {slugs}")
     posts.sort(key=lambda p: p.date, reverse=True)
-    return Site(root, data.get("site", {}), {lang: data[lang] for lang in LANGS}, data.get("hero", {}), posts)
+    pages_dir = root / "content" / "pages"
+    pages = [load_page(p) for p in sorted(pages_dir.iterdir()) if p.is_dir()] if pages_dir.is_dir() else []
+    taken = {"posts", "static", "media", *LANGS}
+    if clash := [p.slug for p in pages if p.slug in taken]:
+        raise ContentError(f"a page can not be called {clash[0]}: the site uses that path")
+    home = {lang: data[lang] for lang in LANGS}
+    return Site(root, data.get("site", {}), home, data.get("hero", {}), posts, pages)
