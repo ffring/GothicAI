@@ -37,6 +37,7 @@
 #include "graphics/mesh/bowdraw.h"
 #include "graphics/mesh/hitzones.h"
 #include "game/archery.h"
+#include "game/archerai.h"
 #include "graphics/mesh/flinch.h"
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
@@ -506,6 +507,9 @@ struct Bench {
   std::vector<Npc*> crew;        // arc: the npcs set out, `all` of fight
   Npc*        downNpc      = nullptr; // waitdown: till it falls
   uint64_t    downFrom = 0, downEnd = 0;
+  std::vector<std::pair<Npc*,Vec3>> archers; // archer: they stand there and shoot at archerAt...
+  Npc*        archerAt     = nullptr;
+  bool        archerDice   = false;       // ...by the dice
   uint64_t    volleyT     = 0;
   // aimat: the manual aim aims there instead of the mouse, every frame
   Npc*           aimNpc   = nullptr;
@@ -955,6 +959,7 @@ void writeHeader() {
     std::fprintf(bench.csv,",%s",f.column);
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,",hp_player,hp_subject");
+  std::fprintf(bench.csv,",ai_on,ai_want,ai_sigma,ai_errx,ai_erry,ai_lead,ai_pv,ai_ps");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -1090,6 +1095,10 @@ void writeRow(Npc& pl) {
                fl.hits,fl.strength,fl.height);
   // hit points: the hero's, the watched one's (a fight's course)
   std::fprintf(bench.csv,",%d,%d",pl.attribute(ATR_HITPOINTS),bench.subject!=nullptr ? bench.subject->attribute(ATR_HITPOINTS) : -1);
+  // the watched npc's archer by hand (game/archerai)
+  const auto& ai = ArcherAi::subjectProbe;
+  std::fprintf(bench.csv,",%d,%d,%.3f,%.3f,%.3f,%.0f,%.2f,%.2f",int(ai.valid && ai.active),int(ai.want),ai.sigma,ai.err.x,ai.err.y,
+               ai.lead,ai.pv,ai.ps);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -1771,6 +1780,57 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.downFrom = bench.time;
     bench.downEnd  = bench.time + uint64_t(num(a,2,120000));
     }
+  else if(c=="npcaim") {
+    // npcaim on [second|arrow] | off | sigma <deg> | sigma off | lead on|off: npc archers aim by hand
+    // (game/archerai): as many hits a second as G2's dice (second) or as sure an arrow (arrow); an error
+    // forced (degrees per axis); the lead on a runner
+    const std::string m = a.size()>1 ? a[1] : "";
+    if(m=="on") {
+      ArcherAi::setEnabled(true);
+      if(a.size()>2)
+        ArcherAi::mode = a[2]=="arrow" ? ArcherAi::PerArrow : ArcherAi::PerSecond;
+      }
+    else if(m=="off")
+      ArcherAi::setEnabled(false);
+    else if(m=="sigma")
+      ArcherAi::forcedSigma = a.size()>2 && a[2]!="off" ? num(a,2,0) : -1.f;
+    else if(m=="lead")
+      ArcherAi::leadOn = a.size()<3 || a[2]!="off";
+    say("npcaim " + std::string(ArcherAi::isEnabled() ? "on" : "off") + (ArcherAi::mode==ArcherAi::PerArrow ? " arrow" : " second") +
+        " sigma " + std::to_string(ArcherAi::forcedSigma) + " lead " + (ArcherAi::leadOn ? "on" : "off"));
+    }
+  else if(c=="archer") {
+    // archer <npc|all> at <npc|player> [dice] | archer off: it stands where it is and shoots at the target
+    // every time it can, by hand (npcaim on) or by the dice: no fight AI, no perception's wait (the aim's
+    // calibration); all: the npcs of arc
+    if(a.size()>1 && a[1]=="off") {
+      for(auto& [n,at]:bench.archers)
+        if(n!=nullptr)
+          n->setExternalControl(false);
+      bench.archers.clear();
+      bench.archerAt = nullptr;
+      say("archer off");
+      return;
+      }
+    std::vector<Npc*> who;
+    if(a.size()>1 && a[1]=="all")
+      who = bench.crew; else
+    if(Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest"))
+      who.push_back(n);
+    bench.archerAt   = findNpc(w,pl,a.size()>3 ? a[3] : "player");
+    bench.archerDice = a.size()>4 && a[4]=="dice";
+    bench.archers.clear();
+    for(auto n:who) {
+      if(n==bench.archerAt)
+        continue;
+      n->setInteraction(nullptr,true);
+      n->clearAiQueue();
+      n->clearState(false);
+      n->setExternalControl(true);
+      bench.archers.emplace_back(n,n->position());
+      }
+    say("archer " + std::to_string(bench.archers.size()) + " at " + symName(w,bench.archerAt) + (bench.archerDice ? " by the dice" : ""));
+    }
   else if(c=="still") {
     // still <npc|player> on|off: hit, it neither stumbles nor flinches (a target that keeps its pose, as
     // its zones were dumped)
@@ -1901,6 +1961,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     for(auto n:gone) {
       out += " " + symName(w,n);
       bench.crew.erase(std::remove(bench.crew.begin(),bench.crew.end(),n),bench.crew.end());
+      bench.archers.erase(std::remove_if(bench.archers.begin(),bench.archers.end(),[n](auto& x){ return x.first==n; }),bench.archers.end());
       if(bench.pinned==n)
         bench.pinned = nullptr;
       if(bench.downNpc==n)
@@ -2375,6 +2436,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.anim1.clear();
     bench.anim2.clear();
     Aim::probeNpc  = bench.subject;
+    ArcherAi::probeNpc = bench.subject;
     Flinch::probeNpc = bench.subject;
     char buf[160] = "watch nobody";
     if(n!=nullptr)
@@ -3180,6 +3242,28 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           who += " " + symName(*world,&n);
         });
     say(std::string(bench.inDialog ? "dialog started:" : "dialog ended") + who);
+    }
+  for(auto& [n,at]:bench.archers) {
+    // the archer harness: where it was set, at the target, the bow drawn, arrows; an arrow every time it
+    // can (no fight AI, no perception's wait)
+    if(n==nullptr || bench.archerAt==nullptr || n->isDown())
+      continue;
+    const Vec3 d = bench.archerAt->position()-at;
+    n->setPosition(at);
+    n->setDirection(Vec3(d.x,0,d.z));
+    n->updateTransform();
+    n->setTarget(bench.archerAt);
+    const auto ws = n->weaponState();
+    if(auto rw = n->currentRangedWeapon(); rw!=nullptr && n->itemCount(size_t(rw->handle().munition))<5)
+      n->addItem(size_t(rw->handle().munition),20);
+    if(ws!=WeaponState::Bow && ws!=WeaponState::CBow) {
+      n->drawWeaponBow();
+      continue;
+      }
+    if(!bench.archerDice && n->archerAi().isDriving(*n))
+      n->archerAi().attack(*n);
+    else if(!n->shootBow())
+      n->aimBow();
     }
   if(bench.pinned!=nullptr) {
     const Vec3 d = player->position()-bench.pinAt;

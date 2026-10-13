@@ -91,6 +91,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "highlightMeleeFocus", 0);
   defaults->set("GAME", "useQuickSaveKeys",    1);
   defaults->set("GAME", "manualAim",           1); // the bow aimed by hand (game/archery)
+  defaults->set("GAME", "npcManualAim",        0); // npc archers aim by hand too (game/archerai)
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);

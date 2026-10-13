@@ -596,7 +596,8 @@ bool MdlVisual::updateGaze(Npc& npc, uint64_t dt) {
     // the hero's body is the player's; one walking or busy at a bench, a book turns the head only;
     // a four-legged spine does not turn like a man's
     const auto bs = npc.bodyStateMasked() & BS_MAX;
-    in.headOnly = npc.isPlayer() || npc.interactive()!=nullptr || pose.footIk().isQuadruped() ||
+    // aiming by hand the trunk is the aim's: a turn of it would throw the arrow off
+    in.headOnly = npc.isPlayer() || npc.hasManualAim() || npc.interactive()!=nullptr || pose.footIk().isQuadruped() ||
                   bs==(BS_WALK & BS_MAX) || bs==BS_RUN || bs==BS_SPRINT || bs==(BS_SNEAK & BS_MAX);
     }
   const bool changed = pose.updateGaze(in);
@@ -1118,6 +1119,10 @@ float MdlVisual::aimTrackError() const {
 
 bool MdlVisual::isAimSteady() const {
   return skInst->aimIk().isSteady();
+  }
+
+bool MdlVisual::isAimValid() const {
+  return skInst->aimIk().isValid() && Aim::isEnabled();
   }
 
 Vec3 MdlVisual::mapHeadBone() const {

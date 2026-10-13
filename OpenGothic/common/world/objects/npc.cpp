@@ -1738,7 +1738,12 @@ bool Npc::implAttack(uint64_t dt) {
       fghAlgo.consumeAction();
       }
     else if(ws==WeaponState::Bow || ws==WeaponState::CBow) {
-      if(shootBow()) {
+      if(archAi.isDriving(*this)) {
+        // aimed by hand (game/archerai): drawn and let go frame by frame, the attack is over with the arrow
+        if(archAi.attack(*this))
+          fghAlgo.consumeAction();
+        }
+      else if(shootBow()) {
         fghAlgo.consumeAction();
         }
       else if(!implTurnToFai(*currentTarget,dt)) {
@@ -2505,6 +2510,10 @@ void Npc::tick(uint64_t dt) {
 
   if(visual.hasGaze())
     attention.tick(*this,owner);
+
+  // an archer aiming by hand draws, holds and reloads through the fight AI's waits (game/archerai)
+  if(!isPlayer())
+    archAi.tick(*this,dt);
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {

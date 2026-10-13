@@ -118,6 +118,8 @@ class MdlVisual final {
     float                          bowSpan() const;
     // the bow holds still in the aim: an arrow on the string
     bool                           isAimSteady() const;
+    // the upper body can turn to aim (Aim on, the bones there)
+    bool                           isAimValid() const;
     // degrees the arrow (before the sway) points off where the shot has to go, -1 not aiming
     float                          aimTrackError() const;
 
