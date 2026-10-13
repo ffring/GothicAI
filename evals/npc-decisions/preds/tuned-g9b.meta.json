@@ -1,0 +1,9 @@
+{
+ "model": "tuned-g9b",
+ "requests": 228,
+ "load_s": 10.2,
+ "ms_p50": 193.1,
+ "ms_p95": 233.3,
+ "peak_alloc_gb": 3.93,
+ "gpu": "NVIDIA GeForce RTX 3090"
+}
