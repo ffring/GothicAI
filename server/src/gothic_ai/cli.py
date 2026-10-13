@@ -54,6 +54,7 @@ from .llm import (
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
+from .orders import Orders
 from .perception import PerceptionDesk
 from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
 from .protocol import (
@@ -525,6 +526,8 @@ async def serve(args: argparse.Namespace) -> int:
         state.incidents = IncidentDesk(link, state.dialogue, reflexes, budget, trace)
         # the hero talks to the world: whom he speaks to, the conversation, the body meanwhile (M5e)
         state.talk = TalkDesk(link, state.dialogue, reflexes, journal=journal, trace=trace)
+        # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
+        state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal)
         if asr is not None and source is not None:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
@@ -800,6 +803,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "orders":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.orders_scenario(link, state.dialogue, state.talk, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m6":
                 dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
@@ -1407,6 +1416,7 @@ def main() -> None:
             "m5b",
             "m5c",
             "m5e",
+            "orders",
             "m6",
             "see",
             "seen",

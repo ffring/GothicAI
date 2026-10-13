@@ -58,6 +58,8 @@ KINDS: dict[str, Kind] = {
     "surprise": Kind(("Что?!", "Как?!", "Вот как?!"), 1.0, "exclaim in sudden surprise and alarm"),
     "displeasure": Kind(("Хм!", "Тьфу!", "Ишь ты!"), 1.0, "say with irritation and contempt", "angry"),
     "doubt": Kind(("Ой ли?", "Неужто?", "Ну-ну..."), 0.9, "say skeptically, with mocking doubt"),
+    # to the hero's order (orders.py), not a choice of the behavioral model
+    "obey": Kind(("Понял!", "Есть!", "Ладно!"), 0.7, "say it quickly and firmly, acknowledging an order"),
 }
 
 
@@ -174,6 +176,14 @@ class Fillers:
             return None
         if kind is None:
             kind = "think" if question(phrase) else "none"
+        return self._choose(npc, kind)
+
+    def obey(self, npc: str) -> Sound | None:
+        """What the npc says to the hero's order ("Понял!"), now and then: an order is a word or two, yet
+        it is answered."""
+        return self._choose(npc, "obey")
+
+    def _choose(self, npc: str, kind: str) -> Sound | None:
         k = KINDS.get(kind)
         if k is None:
             return None

@@ -1263,6 +1263,98 @@ async def m5e_talk(
     return results
 
 
+async def orders_scenario(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, npc: str = "NONE_100_XARDAS"
+) -> dict[str, str]:
+    """Orders to a companion on the game (orders.py): the hero's words go in through the bridge's input
+    line with his own focus (the attack with a set focus, through the server), the body obeys at once,
+    no model is asked. Each check notes how long from the words to the game's answer for the first
+    action ("in N ms")."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+    calls: list[tuple[float, float, str, str]] = []  # (sent, answered, action, status)
+    act = link.act
+
+    async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
+        t = time.monotonic()
+        res = await act(who, action, **kw)
+        calls.append((t, time.monotonic(), action, res.status))
+        return res
+
+    link.act = recorded  # type: ignore[method-assign]
+    llm = FakeBackend("Это не приказ, а разговор.", delay=0)
+    dialogue.llm = llm
+    if not await _until(lambda: npc in talk.people, 20):
+        return {"roster": f"failed ({npc} is not around the hero)"}
+    dialogue.open(npc, "Ксардас").intent = Intent("follow_hero", "PLAYER", "friendly")
+
+    def dist() -> float:
+        return talk.people[npc].distance / 100 if npc in talk.people else -1.0
+
+    async def order(
+        text: str, action: str, focus: str | None = None, timeout: float = 15
+    ) -> tuple[bool, str]:
+        t0 = time.monotonic()
+        if focus is None:
+            await link.debug("type", text=text)
+        else:
+            talk.hear(text, focus, {"via": "scenario"})
+        ok = await _until(lambda: any(a == action and t >= t0 for t, _, a, _ in calls), timeout)
+        first = next(((t1, a, st) for t, t1, a, st in calls if t >= t0), None)
+        took = f"{(first[0] - t0) * 1000:.0f} ms to {first[1]} {first[2]}" if first else "no action"
+        done = ok and all(st == "done" for t, _, a, st in calls if t >= t0 and a == action)
+        return done, took
+
+    # the tower's walls stop a straight walk: every walk here starts where Xardas can walk from
+    await link.debug("player_goto", near=npc, distance=900)
+    await asyncio.sleep(1)
+    ok, took = await order("Ксардас, ко мне!", "follow")
+    came = await _until(lambda: 0 <= dist() <= 5, 20)
+    results["come"] = f"{'done' if ok and came else 'failed'} (in {took}; {dist():.1f} m from the hero)"
+
+    ok, took = await order("Стой!", "stop")
+    await link.debug("player_goto", near=npc, distance=900)
+    await asyncio.sleep(4)
+    stood = dist()
+    results["halt"] = f"{'done' if ok and stood >= 7.5 else 'failed'} (in {took}; stays {stood:.1f} m behind)"
+
+    ok, took = await order("За мной!", "follow")
+    closer = await _until(lambda: 0 <= dist() <= stood - 2, 15)
+    results["follow"] = f"{'done' if ok and closer else 'failed'} (in {took}; {stood:.1f} -> {dist():.1f} m)"
+
+    ok, took = await order("К оружию!", "draw_weapon")
+    results["draw"] = f"{'done' if ok else 'failed'} (in {took})"
+
+    await link.debug("spawn", instance="WOLF", near=npc, distance=500)
+    await asyncio.sleep(1)
+    ok, took = await order("В атаку!", "fight", focus="WOLF", timeout=60)
+    over = await _until(lambda: any(a == "fight" for _, _, a, _ in calls) and calls[-1][2] == "follow", 60)
+    fight = next((st for _, _, a, st in reversed(calls) if a == "fight"), "-")
+    results["attack"] = (
+        f"{'done' if ok and over and fight == 'done' else 'failed'} "
+        f"(in {took}; fight {fight}, follows after {over})"
+    )
+
+    ok, took = await order("Убери оружие.", "remove_weapon")
+    results["sheathe"] = f"{'done' if ok else 'failed'} (in {took})"
+
+    ok, took = await order("Свободен.", "stop")
+    free = await _until(lambda: npc not in talk.attached, 10)
+    goal = dialogue.conversations[npc].intent.goal
+    results["dismiss"] = (
+        f"{'done' if ok and free and goal == 'keep_routine' else 'failed'} "
+        f"(in {took}; detached {free}, goal {goal})"
+    )
+
+    results["no_model"] = f"{'done' if not llm.calls else 'failed'} ({len(llm.calls)} model call(s))"
+    link.act = act  # type: ignore[method-assign]
+    for name, outcome in results.items():
+        log.info("%-12s %s", name, outcome)
+    return results
+
+
 async def lie_found_out(
     link: GameLink,
     dialogue: DialogueManager,
