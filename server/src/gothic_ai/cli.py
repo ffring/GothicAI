@@ -30,7 +30,6 @@ from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
 from .executor import Intent
-from .fillers import Fillers
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
@@ -491,8 +490,6 @@ async def serve(args: argparse.Namespace) -> int:
     quick = make_quick(quick_at) if quick_at else None
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
-    # "Хм..." while the model thinks: made with the npc's voices, kept across reconnections of the game
-    fillers = None if args.no_fillers else Fillers(None if tts is None else args.tts_url)
     journal = Journal(print_sink if args.journal else None)
     trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
     budget = Budget(per_npc_per_min=args.llm_per_npc_min, total_per_min=args.llm_total_min)
@@ -501,7 +498,6 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
-    log.info("fillers: %s", "off" if fillers is None else ("voiced" if tts is not None else "subtitles"))
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
@@ -522,7 +518,6 @@ async def serve(args: argparse.Namespace) -> int:
             personas,
             memory=memory,
             tts=tts,
-            fillers=fillers,
             journal=journal,
             trace=trace,
             budget=budget,
@@ -1498,9 +1493,6 @@ def main() -> None:
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
-    p.add_argument(
-        "--no-fillers", action="store_true", help='npc\'s say no "Хм..." while the model thinks of an answer'
-    )
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
     p.add_argument("--no-trace", action="store_true", help="do not write turn traces")
