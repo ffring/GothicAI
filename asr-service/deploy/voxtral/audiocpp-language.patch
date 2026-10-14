@@ -1,0 +1,268 @@
+diff --git a/include/engine/models/voxtral_realtime/tokenizer_text.h b/include/engine/models/voxtral_realtime/tokenizer_text.h
+index cd85841..238af2a 100644
+--- a/include/engine/models/voxtral_realtime/tokenizer_text.h
++++ b/include/engine/models/voxtral_realtime/tokenizer_text.h
+@@ -17,6 +17,10 @@ public:
+     VoxtralRealtimePrompt build_transcription_prompt(int64_t audio_samples, bool streaming) const;
+     std::string decode(const std::vector<int32_t> & token_ids) const;
+     bool is_stream_text_token(int32_t token_id) const;
++    // The model takes no language input and at times writes speech in a wrong language. A known
++    // language is enforced by its script instead: the returned vocab-sized mask marks every text
++    // token holding a letter outside it (null for "" / "auto" and for languages left unmasked).
++    std::shared_ptr<const std::vector<uint8_t>> language_suppression(const std::string & language) const;
+ 
+ private:
+     struct Impl;
+diff --git a/include/engine/models/voxtral_realtime/types.h b/include/engine/models/voxtral_realtime/types.h
+index c4a3711..50245d0 100644
+--- a/include/engine/models/voxtral_realtime/types.h
++++ b/include/engine/models/voxtral_realtime/types.h
+@@ -3,6 +3,7 @@
+ #include "engine/framework/runtime/session.h"
+ 
+ #include <cstdint>
++#include <memory>
+ #include <string>
+ #include <vector>
+ 
+@@ -40,6 +41,10 @@ struct VoxtralRealtimeGenerationOptions {
+     float top_p = 1.0F;
+     int64_t top_k = 50;
+     uint64_t seed = 1234;
++    // The language the caller expects ("ru", "en", ...); empty or "auto" lets the model detect it.
++    std::string language;
++    // Vocab-sized, nonzero = never selected: the session fills it from `language`.
++    std::shared_ptr<const std::vector<uint8_t>> suppressed_tokens;
+ };
+ 
+ struct VoxtralRealtimeGeneratedTokens {
+diff --git a/src/models/voxtral_realtime/session.cpp b/src/models/voxtral_realtime/session.cpp
+index e2d3953..2804201 100644
+--- a/src/models/voxtral_realtime/session.cpp
++++ b/src/models/voxtral_realtime/session.cpp
+@@ -6,6 +6,7 @@
+ #include "engine/framework/runtime/partial_text.h"
+ 
+ #include <algorithm>
++#include <cctype>
+ #include <cmath>
+ #include <stdexcept>
+ #include <string>
+@@ -67,6 +68,12 @@ VoxtralRealtimeGenerationOptions parse_generation_options(
+     if (const auto seed = runtime::parse_u64_option(options, {"seed"})) {
+         out.seed = *seed;
+     }
++    if (const auto language = runtime::find_option(options, {"language"})) {
++        out.language = *language;
++        std::transform(out.language.begin(), out.language.end(), out.language.begin(), [](unsigned char ch) {
++            return static_cast<char>(std::tolower(ch));
++        });
++    }
+     if (out.temperature <= 0.0F) {
+         throw std::runtime_error("VoxTral realtime temperature must be positive");
+     }
+@@ -182,6 +189,7 @@ VoxtralRealtimeRequest VoxtralRealtimeSession::make_request(
+     out.audio = *request.audio_input;
+     out.streaming = streaming;
+     out.generation = parse_generation_options(request.options);
++    out.generation.suppressed_tokens = tokenizer_.language_suppression(out.generation.language);
+     return out;
+ }
+ 
+@@ -260,6 +268,7 @@ void VoxtralRealtimeSession::start_stream(const runtime::TaskRequest & request)
+     }
+     reset();
+     streaming_generation_ = parse_generation_options(request.options);
++    streaming_generation_.suppressed_tokens = tokenizer_.language_suppression(streaming_generation_.language);
+     stream_wall_start_ = Clock::now();
+     stream_started_ = true;
+ }
+diff --git a/src/models/voxtral_realtime/text_decoder.cpp b/src/models/voxtral_realtime/text_decoder.cpp
+index 5ace99a..4338109 100644
+--- a/src/models/voxtral_realtime/text_decoder.cpp
++++ b/src/models/voxtral_realtime/text_decoder.cpp
+@@ -195,13 +195,14 @@ struct LogitCandidate {
+ class TokenSampler {
+ public:
+     int32_t select(
+-        const std::vector<float> & logits,
++        const std::vector<float> & raw_logits,
+         const VoxtralRealtimeGenerationOptions & options,
+         uint64_t seed,
+         uint64_t & call_index) {
+-        if (logits.empty()) {
++        if (raw_logits.empty()) {
+             throw std::runtime_error("VoxTral text decoder cannot select from empty logits");
+         }
++        const std::vector<float> & logits = suppress(raw_logits, options);
+         if (!options.do_sample || options.top_k == 1) {
+             return argmax_index(logits.data(), logits.size());
+         }
+@@ -230,6 +231,23 @@ public:
+     }
+ 
+ private:
++    const std::vector<float> & suppress(
++        const std::vector<float> & logits,
++        const VoxtralRealtimeGenerationOptions & options) {
++        if (options.suppressed_tokens == nullptr) {
++            return logits;
++        }
++        const auto & mask = *options.suppressed_tokens;
++        suppressed_logits_.assign(logits.begin(), logits.end());
++        const size_t count = std::min(mask.size(), suppressed_logits_.size());
++        for (size_t token = 0; token < count; ++token) {
++            if (mask[token] != 0) {
++                suppressed_logits_[token] = -std::numeric_limits<float>::infinity();
++            }
++        }
++        return suppressed_logits_;
++    }
++
+     void build_candidates(
+         const std::vector<float> & logits,
+         const VoxtralRealtimeGenerationOptions & options) {
+@@ -305,6 +323,7 @@ private:
+ 
+     std::vector<LogitCandidate> candidates_;
+     std::vector<float> top_k_heap_;
++    std::vector<float> suppressed_logits_;
+ };
+ 
+ struct TextAttentionOutput {
+diff --git a/src/models/voxtral_realtime/tokenizer_text.cpp b/src/models/voxtral_realtime/tokenizer_text.cpp
+index f7ce58e..487adce 100644
+--- a/src/models/voxtral_realtime/tokenizer_text.cpp
++++ b/src/models/voxtral_realtime/tokenizer_text.cpp
+@@ -7,6 +7,8 @@
+ #include <cmath>
+ #include <cstddef>
+ #include <cstdint>
++#include <mutex>
++#include <optional>
+ #include <stdexcept>
+ #include <string>
+ #include <unordered_map>
+@@ -77,6 +79,85 @@ int64_t audio_tokens_for_samples(const VoxtralRealtimeConfig & config, int64_t s
+     return ceil_div(frames, config.audio_length_per_tok);
+ }
+ 
++// Letters a language is written in. Russian takes its 33 letters only, so neither Latin nor the
++// letters of its Cyrillic neighbours (і, ї, є, ў, ј...) slip into a transcript.
++enum class LetterSet { Russian, Latin };
++
++std::optional<LetterSet> letters_for_language(const std::string & language) {
++    static const std::unordered_set<std::string> latin = {"en", "fr", "es", "de", "it", "pt", "nl"};
++    // zh, ja, ko, ar and hi mix their own script with Latin too freely to mask one of them.
++    static const std::unordered_set<std::string> unmasked = {"", "auto", "zh", "ja", "ko", "ar", "hi"};
++    if (language == "ru") {
++        return LetterSet::Russian;
++    }
++    if (latin.count(language) != 0) {
++        return LetterSet::Latin;
++    }
++    if (unmasked.count(language) != 0) {
++        return std::nullopt;
++    }
++    throw std::runtime_error(
++        "VoxTral realtime language must be auto or one of en fr es de it pt nl ru zh ja ko ar hi, got: " + language);
++}
++
++// Digits, ASCII punctuation, Latin-1 punctuation (°, ¿), general punctuation (— …), currency and
++// letterlike symbols (№) fit every language; letters only their own. Quotes fit none: held off a
++// foreign word, the model quotes the speech instead of writing it down («Хи, бро!»).
++bool codepoint_fits(uint32_t cp, LetterSet letters) {
++    if (cp == '"' || cp == 0xAB || cp == 0xBB || (cp >= 0x201C && cp <= 0x201F)) {
++        return false;
++    }
++    if (cp < 0x80) {
++        const uint32_t lower = cp | 0x20;
++        return lower < 'a' || lower > 'z' || letters == LetterSet::Latin;
++    }
++    if ((cp >= 0xA0 && cp <= 0xBF) || (cp >= 0x2000 && cp <= 0x206F) || (cp >= 0x20A0 && cp <= 0x20CF) ||
++        (cp >= 0x2100 && cp <= 0x214F)) {
++        return true;
++    }
++    if (letters == LetterSet::Russian) {
++        return (cp >= 0x410 && cp <= 0x44F) || cp == 0x401 || cp == 0x451;
++    }
++    return cp >= 0xC0 && cp <= 0x24F;
++}
++
++// Tekken pieces are raw bytes and may cut a character. Continuation bytes that open a piece finish
++// a character an earlier piece began, so they pass; a piece cut at its end passes when its lead
++// byte opens a block that holds fitting characters. A split character can thus slip through, but
++// the vocabulary has whole tokens for these letters and only a handful of pieces end inside one.
++bool token_fits(const std::string & bytes, LetterSet letters) {
++    size_t i = 0;
++    while (i < bytes.size() && (static_cast<unsigned char>(bytes[i]) & 0xC0) == 0x80) {
++        ++i;
++    }
++    while (i < bytes.size()) {
++        const auto lead = static_cast<unsigned char>(bytes[i]);
++        if ((lead & 0xC0) == 0x80 || lead >= 0xF8) {
++            return false;
++        }
++        const size_t length = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
++        if (i + length > bytes.size()) {
++            if (lead == 0xC2 || lead == 0xE2) {
++                return true;
++            }
++            return letters == LetterSet::Russian ? (lead == 0xD0 || lead == 0xD1) : (lead >= 0xC3 && lead <= 0xC9);
++        }
++        uint32_t cp = length == 1 ? lead : (lead & (0xFFu >> (length + 1)));
++        for (size_t k = 1; k < length; ++k) {
++            const auto next = static_cast<unsigned char>(bytes[i + k]);
++            if ((next & 0xC0) != 0x80) {
++                return false;
++            }
++            cp = (cp << 6) | (next & 0x3Fu);
++        }
++        if (!codepoint_fits(cp, letters)) {
++            return false;
++        }
++        i += length;
++    }
++    return true;
++}
++
+ }  // namespace
+ 
+ struct VoxtralRealtimeTokenizer::Impl {
+@@ -132,6 +213,8 @@ struct VoxtralRealtimeTokenizer::Impl {
+     std::unordered_map<int32_t, std::string> id_to_bytes;
+     std::unordered_map<std::string, int32_t> special_token_to_id;
+     std::unordered_set<int32_t> special_ids;
++    std::mutex suppression_mutex;
++    std::shared_ptr<const std::vector<uint8_t>> suppression[2];  // by LetterSet, built on first use
+ };
+ 
+ VoxtralRealtimeTokenizer::VoxtralRealtimeTokenizer(std::shared_ptr<const VoxtralRealtimeAssets> assets)
+@@ -183,6 +266,27 @@ std::string VoxtralRealtimeTokenizer::decode(const std::vector<int32_t> & token_
+     return out;
+ }
+ 
++std::shared_ptr<const std::vector<uint8_t>> VoxtralRealtimeTokenizer::language_suppression(
++    const std::string & language) const {
++    const auto letters = letters_for_language(language);
++    if (!letters.has_value()) {
++        return nullptr;
++    }
++    std::lock_guard<std::mutex> lock(impl_->suppression_mutex);
++    auto & mask = impl_->suppression[static_cast<size_t>(*letters)];
++    if (mask == nullptr) {
++        auto built = std::make_shared<std::vector<uint8_t>>(
++            static_cast<size_t>(impl_->assets->config.text.vocab_size), 0);
++        for (const auto & [token_id, bytes] : impl_->id_to_bytes) {
++            if (!token_fits(bytes, *letters)) {
++                (*built)[static_cast<size_t>(token_id)] = 1;
++            }
++        }
++        mask = std::move(built);
++    }
++    return mask;
++}
++
+ bool VoxtralRealtimeTokenizer::is_stream_text_token(int32_t token_id) const {
+     if (impl_->special_ids.find(token_id) != impl_->special_ids.end()) {
+         return false;

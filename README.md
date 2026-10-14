@@ -127,7 +127,7 @@ scripts/build-launcher.sh
 
 Экраны можно править в обычном браузере, без Tauri: `bun run dev` в `launcher/app` и http://localhost:47850. Вместо ядра там отвечает заглушка (`src/lib/mock.ts`), `?scenario=fresh` открывает мастер, `?scenario=failed` — ошибку запуска.
 
-ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`.
+ASR-сервис (для голоса) сам моделей не запускает. По умолчанию он распознаёт потоком через Voxtral Mini 4B Realtime на GPU-сервере (адрес в `GOTHIC_VOXTRAL_URL`), а если тот недоступен — через подписку ChatGPT (Realtime API, `gpt-realtime-whisper`). Провайдеры меняются флагами `--provider` и `--fallback` (`voxtral[:url=…]`, `chatgpt`, `openai:base_url=…,model=…,api_key_env=…`). Voxtral работает на GPU-сервере под audio.cpp (Q4_K, ~3,5 ГБ видеопамяти); развёртывание описано в `asr-service/deploy/voxtral/install.sh`. Своего параметра языка у модели нет, поэтому наш патч к audio.cpp (`audiocpp-language.patch`) запрещает для `ru` все токены с нерусскими буквами.
 
 ```bash
 cd asr-service && uv run gothic-asr serve
