@@ -25,7 +25,7 @@ from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
 from .gamedata.storygraph import Expr, Node, StoryGraph, render, walk
 from .journal import Journal
-from .llm import LLMBackend, LLMError, Message, Tool, ToolCall
+from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .protocol import GameMessage, Session
 from .story import StoryPatches
 from .validator import (
@@ -49,6 +49,9 @@ log = logging.getLogger(__name__)
 
 PROPOSE = "propose_repair"
 SETTLE_S = 2.0  # after a death: the scripts' own reaction (ZS_Dead) comes first
+CACHE_KEY = (
+    "director"  # its requests' own connection (openai_responses.py): the prompt cache of its instructions
+)
 NEARBY_CM = 3000  # who stood near the dead: candidates to take its ending over
 MAX_SUCCESSORS = 8
 ATTEMPTS = 2
@@ -259,6 +262,10 @@ class RepairModel:
     def __init__(self, llm: LLMBackend) -> None:
         self.llm = llm
 
+    def warm(self) -> None:
+        """Its connection opened at once (a death): the request after the pacing does not wait for it."""
+        open_ahead(self.llm, CACHE_KEY, keep=True)
+
     async def propose(
         self, brief: Brief, previous: Proposal | None = None, errors: list[str] | None = None
     ) -> Proposal | None:
@@ -270,7 +277,7 @@ class RepairModel:
         calls: list[ToolCall] = []
         try:
             async for ev in self.llm.stream(
-                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL]
+                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL], cache_key=CACHE_KEY
             ):
                 if isinstance(ev, ToolCall) and ev.name == PROPOSE:
                     calls.append(ev)
@@ -404,6 +411,7 @@ class Director:
     # --- repairing ----------------------------------------------------------------------------
 
     async def repair(self, quest: str, story: Story) -> Repair | None:
+        self.model.warm()
         await self.pacing.wait(self.busy)
         try:
             brief = await self.brief(quest, story)

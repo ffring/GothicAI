@@ -45,6 +45,7 @@ from .llm import (
     ToolCall,
     ToolChoice,
     ToolResult,
+    open_ahead,
     with_deadlines,
 )
 from .memory import Entry, MemoryStore, NpcMemory
@@ -784,8 +785,7 @@ class DialogueManager:
 
     def _open_ahead(self, npc: str) -> None:
         """The conversational model's connection for the npc, opened before its turn (openai_responses.py)."""
-        if (open_ahead := getattr(self.llm, "open_ahead", None)) is not None:
-            open_ahead(npc)
+        open_ahead(self.llm, npc)
 
     async def _prewarm(self, conv: Conversation, warm: Callable[..., Awaitable[None]]) -> None:
         await asyncio.sleep(PREWARM_DELAY_S)

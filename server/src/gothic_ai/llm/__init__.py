@@ -20,6 +20,7 @@ from .base import (
     ToolChoice,
     ToolResult,
     Usage,
+    open_ahead,
     with_deadlines,
 )
 from .fake import FakeBackend, FakeStep
@@ -58,6 +59,7 @@ __all__ = [
     "Usage",
     "make_backend",
     "make_quick",
+    "open_ahead",
     "quick_url",
     "with_deadlines",
 ]

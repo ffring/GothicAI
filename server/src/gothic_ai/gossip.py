@@ -37,7 +37,7 @@ from .dialogue import DialogueManager, SceneLine, ScenePlay, mood_of, to_game_te
 from .game import GameError, GameLink
 from .incidents import classify
 from .journal import Journal
-from .llm import LLMError, Message, Tool, ToolCall, with_deadlines
+from .llm import LLMError, Message, Tool, ToolCall, open_ahead, with_deadlines
 from .perception import PerceptionDesk
 from .protocol import (
     Detached,
@@ -74,6 +74,7 @@ WORDS_CM = 1500  # both this close to the hero: he hears voices (talkRange 2000 
 LEAVE_CM = 2000  # the nearer of the two farther than this: the hero left, the scene ends
 LINES_MIN, LINES_MAX, LINE_MAX = 2, 4, 160
 ATTEMPTS = 2
+CACHE_KEY = "gossip"  # the scenes' own connection (openai_responses.py): the prompt cache of the instructions
 GRACE_S = 10.0  # after the hero's voice ends: still held, and his unnamed words may go to one of them
 PAIR_GAP_MIN = 60  # view trigger: one check per (teller, listener, rumor) per game hour
 RETRY_MIN = 1  # view trigger: a pass that waited (their bodies busy) is offered again this soon
@@ -243,6 +244,10 @@ class SceneModel:
     def __init__(self, dialogue: DialogueManager) -> None:
         self.dialogue = dialogue
 
+    def warm(self) -> None:
+        """Its connection opened as the scene begins: the write after the holds and the walk does not wait."""
+        open_ahead(self.dialogue.llm, CACHE_KEY, keep=True)
+
     async def write(
         self,
         brief: str,
@@ -259,7 +264,9 @@ class SceneModel:
             messages.append(Message("user", f"Твой ответ: {sent}\nОтклонено:\n{reasons}\nИсправь его."))
         calls: list[ToolCall] = []
         try:
-            events = llm.stream(instructions=INSTRUCTIONS, messages=messages, tools=[lines_tool(labels)])
+            events = llm.stream(
+                instructions=INSTRUCTIONS, messages=messages, tools=[lines_tool(labels)], cache_key=CACHE_KEY
+            )
             async for ev in with_deadlines(
                 events, first_s=self.dialogue.llm_first_s, idle_s=self.dialogue.llm_idle_s, name=llm.name
             ):
@@ -552,6 +559,7 @@ class GossipDesk:
         """Holds, a walk, the write, the play. Never cancelled: cut() sets the state and `stop`, and every
         step looks at them after its await (a hold that lands after a cut or a load is still recorded and
         freed)."""
+        self.model.warm()
         try:
             for n in (s.a, s.b):
                 if self._stopped(s):
