@@ -1,0 +1,96 @@
+#pragma once
+
+#include <Tempest/Matrix4x4>
+#include <Tempest/Vec>
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+class CollisionWorld;
+class DynamicWorld;
+class HitZones;
+class Skeleton;
+
+// A limp body. Game code uses centimetres, centimetres/second and radians/second;
+// the implementation alone owns Jolt bodies and constraints.
+class Ragdoll final {
+  public:
+    struct PartState final {
+      uint32_t            bone = 0;
+      Tempest::Matrix4x4  transform;
+      // Initial rendered world frame, including the NPC's positive scale.
+      // Native shapes/anchors and the visual affine correction are rebuilt from it.
+      Tempest::Matrix4x4  referenceTransform;
+      // Version 3 retains the native float pose without the lossy cm/m and
+      // matrix/quaternion round trips. These are COM metres and quaternion xyzw.
+      Tempest::Vec3       centerOfMassMeters = {};
+      Tempest::Vec4       rotation = {0,0,0,1};
+      Tempest::Vec3       linearVelocityMeters = {};
+      Tempest::Vec3       linearVelocity = {};
+      Tempest::Vec3       angularVelocity = {};
+      bool                sleeping = false;
+      };
+    struct AncestorState final {
+      uint32_t           bone = 0;
+      uint32_t           anchorBone = 0;
+      Tempest::Matrix4x4 referenceTransform;
+      };
+    struct State final {
+      uint32_t               version = 3;
+      std::string            skeleton;
+      Tempest::Matrix4x4     rootTransform;
+      std::vector<PartState> parts;
+      std::vector<AncestorState> ancestors;
+      // Only old development snapshots (v1/v2) lack historic ancestor frames.
+      // Their v3 re-export explicitly retains the legacy animated-root fallback.
+      bool                   legacyAncestors = false;
+      };
+
+    ~Ragdoll();
+    Ragdoll(const Ragdoll&) = delete;
+    Ragdoll& operator=(const Ragdoll&) = delete;
+
+    bool valid() const;
+    size_t partCount() const;
+    size_t boneCount() const;
+    float mass() const;
+    const std::vector<size_t>& boneIndices() const;
+    // Ancestors have no bodies; their shown frame is carried by a native child.
+    const std::vector<size_t>& poseIndices() const;
+    // Output is indexed by skeleton bone. Only boneIndices() are physical;
+    // the pose pass keeps the animation-relative transforms of other bones.
+    bool getPose(std::vector<Tempest::Matrix4x4>& worldBones) const;
+    Tempest::Matrix4x4 pelvisTransform() const;
+    Tempest::Matrix4x4 rootTransform() const;
+    bool isSleeping() const;
+    bool settled() const;
+    bool onBack() const;
+    void activate();
+    // Runtime policy for this rig only; native sleeping is allowed by default.
+    // Disabling it also awakens every part. The policy is not part of saved state.
+    void setAllowSleeping(bool allow);
+    // Total impulse, distributed by mass over the parts (newton seconds).
+    void addImpulse(const Tempest::Vec3& impulse);
+    State state() const;
+    // Rejects incompatible, nonfinite or malformed states without changing bodies.
+    bool restore(const State& state);
+    // An explicit teleport defines new public bone-origin positions. Rebuilds
+    // matching COM precision fields from the saved geometry, without adding bodies.
+    static bool translateState(const Skeleton&, State&, const Tempest::Vec3& displacementCm);
+    static bool relocateState(const Skeleton&, State&, const Tempest::Vec3& rootPositionCm);
+
+    static float speciesMass(std::string_view skeletonName);
+
+  private:
+    struct Impl;
+    Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones& zones,
+            const Tempest::Matrix4x4* worldPose, size_t numBones,
+            const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity);
+    void detach();
+    std::unique_ptr<Impl> impl;
+    friend class CollisionWorld;
+    friend class DynamicWorld;
+  };

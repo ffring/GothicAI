@@ -1,0 +1,45 @@
+{
+  "scope": "diagnostic_unchanged_23_record_nine_tick_fall_prefix",
+  "rows_per_backend": 1725,
+  "record_stops": 23,
+  "runtime_seconds": 99.411,
+  "full_foreach_count": 12,
+  "filter_world_tick_ms": [
+    79760,
+    80120
+  ],
+  "all_execution_pass": true,
+  "all_csv_values_exact_to_corresponding_formal_prefix": true,
+  "scenario_sha256": "1d60ecb193ecf891090baa652a123c74287109d06f42a9b15ac9a88a8145ad35",
+  "sources_and_binaries": {
+    "bullet": {
+      "scope": "isolated_nine_tick_fall_motion_trace",
+      "source_sha256": {
+        "common/game/movealgo.cpp": "075642b13f0da99c463798dcefb706fac68448323cb6c830dbf868c5fcb35dde",
+        "common/physics/dynamicworld.cpp": "38e8c50a2e4889f3a30df2d542548dd5e2bc9d74767af31b17e2150f2eeb3588",
+        "common/physics/collisionworld.cpp": "c7683599b445d02369d12911fc02e29467d75e339193edb7ce047e4c089ac195"
+      },
+      "archive_sha256": "dd7cd90ca6975864eddd4dfaacac55a127fc14b3f532bb134f20f2a075600522",
+      "mutex_note": "Traced original CW replaces collisionworld-safe.o while preserving identical per-Broadphase mutex logic; heading TestBench object reused",
+      "heading_TestBench_object_sha256": "2015b94eca7a56993eb1637948f4cb054c2157ee8798a82682082545b18615b9",
+      "runner_sha256": "b77036bd461441cf714e22395bc2a256e92096e8d7b0237e6ea0a8a2aa1b618d"
+    },
+    "jolt": {
+      "scope": "isolated_nine_tick_fall_motion_trace",
+      "source_sha256": {
+        "common/game/movealgo.cpp": "c16a620c2f09e4d3349e665b3ade4cb0bad9c625bf88b79c3341bf29f50e878d",
+        "common/physics/dynamicworld.cpp": "0dd7206c77a16f28a08273a278147561a733964579c2236a037cae0e44dd1871",
+        "common/physics/collisionworld.cpp": "0482850de2c08e6428eb55a0f75fa7919dee33c8111a04f70800ad820f4dfa88"
+      },
+      "archive_sha256": "d2726e5a9c68573fcf196d100f873af75bffdea89f84552b61ee69234b43cf05",
+      "mutex_note": null,
+      "heading_TestBench_object_sha256": "70c496887ed9d54b5e466062ecebef54e180d57f04639c8dcd58a154bdfd8f2a",
+      "runner_sha256": "e72a4acbfe6ddef86c4650646d537de3899c31dc7f002aff837a4e16edb1b09b"
+    }
+  },
+  "raw_data": "data/physics/stage1/fall-v12-prefix",
+  "logs": {
+    "bullet-safe": "c508f44975f8630f8ab63337b9f449f6c4f6001c1e5fd6e7d1f60105277a92d0",
+    "jolt": "f1e4297b3c1cb7239ca2844606a2fee167aa1536d90a99941bcc0adf73dd4508"
+  }
+}

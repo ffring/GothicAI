@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "scope": "independent_local_triangle_edge_eligibility_and_invariants_plus_proved_separated_normal_promotion",
+  "historical_v12_geometry_proof": "scalar-witness-production.json",
+  "production_revision": {
+    "header": {
+      "path": "OpenGothic/lib/JoltPhysics/Jolt/Geometry/GJKClosestPoint.h",
+      "sha256": "64f747b311ef393143adf2532ad6daf3b3602b3dd29db1a35281c1c1486ec4be"
+    },
+    "collisionworld_at_review": {
+      "path": "OpenGothic/common/physics/collisionworld.cpp",
+      "sha256": "f823c47f2d50b18d649d60a67860a334fd804ec9dacaf89d67e58c1023aaeb5e"
+    },
+    "npc_scope": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/promoted-npc-scope.cpp",
+      "sha256": "e98b40e4f3a7e9e898b75ebd85b35e926a7a0f84c33543bfda11595d25aa514e"
+    },
+    "maintained_contract_at_review": {
+      "path": "OpenGothic/tests/physics_contract.cpp",
+      "sha256": "9ff641f1855f97d096d283ea68094329c25278767fc1ed990edab50d61f4ec66"
+    }
+  },
+  "source_equivalence": {
+    "promoted_gjk_equals_compiled_prototype_except_comments_and_binary_mask_spelling": true,
+    "promoted_npc_helper_and_hasCollision_equal_compiled_candidate_except_comments": true,
+    "scope_note": "Whole CollisionWorld additionally includes separately owned ray/sphere work; only NPC helper and hasCollision equivalence are claimed."
+  },
+  "local_fixture": {
+    "host": "Apple ARM64; original Bullet scalar with NEON explicitly disabled",
+    "compile_flags": "-std=c++17 -O2 -DNDEBUG -DJPH_CROSS_PLATFORM_DETERMINISTIC -U__ARM_NEON__ -ffp-contract=off -pthread",
+    "query_positions": 274851,
+    "grid_cases": 4851,
+    "random_cases_per_kind_center": 30000,
+    "seed": 73013,
+    "grid_errors_against_scalar_original": 0,
+    "six_origin_and_367m_group_errors": 0,
+    "10km_small_errors": 1,
+    "10km_wide_errors": 0,
+    "10km_zeroheight_errors": 0,
+    "new_eligibility_regressions_against_previous_scalar_witness": 0,
+    "negative_finite_scalar_barycentric_weights_observed": 0,
+    "negative_scalar_barycentric_weights_applied": 0,
+    "complete_observer_logs_identical": true,
+    "groups": [
+      {
+        "kind": "grid",
+        "summary_lines": [
+          "cases=4851 Bullet_hits=3190 current_mismatches=139 FP=139 FN=0 witness_mismatches=0 FP=0 FN=0 corrected=139 regressed=0"
+        ],
+        "nonnegative_observer_lines": [
+          "BARY negative=0 applied=0 min=0"
+        ],
+        "complete_paired_logs_identical_after_removing_observer_counters": true
+      },
+      {
+        "kind": "broad",
+        "summary_lines": [
+          "center=[0,0,0] cases=30000 boxed=22664 bullet_hits=20850 current_mismatches=0 falsepositive=0 falsenegative=0 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=0 axis_order_differences=18",
+          "center=[367.166107,44.7955017,-326.922913] cases=30000 boxed=22664 bullet_hits=20850 current_mismatches=0 falsepositive=0 falsenegative=0 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=0 axis_order_differences=835",
+          "center=[10000,1000,-10000] cases=30000 boxed=22699 bullet_hits=20868 current_mismatches=4 falsepositive=3 falsenegative=1 scalar_witness_mismatches=1 falsepositive=1 falsenegative=0 count_order_differences=3 axis_order_differences=12405"
+        ],
+        "nonnegative_observer_lines": [
+          "BARY negative=0 applied=0 min=0",
+          "BARY negative=0 applied=0 min=0",
+          "BARY negative=0 applied=0 min=0"
+        ],
+        "complete_paired_logs_identical_after_removing_observer_counters": true
+      },
+      {
+        "kind": "wide",
+        "summary_lines": [
+          "center=[0,0,0] cases=30000 boxed=14747 bullet_hits=3097 current_mismatches=1 falsepositive=1 falsenegative=0 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=1 axis_order_differences=17",
+          "center=[367.166107,44.7955017,-326.922913] cases=30000 boxed=14747 bullet_hits=3098 current_mismatches=0 falsepositive=0 falsenegative=0 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=0 axis_order_differences=105",
+          "center=[10000,1000,-10000] cases=30000 boxed=14753 bullet_hits=3101 current_mismatches=6 falsepositive=0 falsenegative=6 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=6 axis_order_differences=2219"
+        ],
+        "nonnegative_observer_lines": [
+          "BARY negative=0 applied=0 min=0",
+          "BARY negative=0 applied=0 min=0",
+          "BARY negative=0 applied=0 min=0"
+        ],
+        "complete_paired_logs_identical_after_removing_observer_counters": true
+      },
+      {
+        "kind": "zeroheight",
+        "summary_lines": [
+          "center=[0,0,0] cases=30000 boxed=19248 bullet_hits=14413 current_mismatches=0 falsepositive=0 falsenegative=0 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=0 axis_order_differences=0",
+          "center=[367.166107,44.7955017,-326.922913] cases=30000 boxed=19248 bullet_hits=14413 current_mismatches=0 falsepositive=0 falsenegative=0 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=0 axis_order_differences=442",
+          "center=[10000,1000,-10000] cases=30000 boxed=19278 bullet_hits=14419 current_mismatches=6 falsepositive=4 falsenegative=2 scalar_witness_mismatches=0 falsepositive=0 falsenegative=0 count_order_differences=6 axis_order_differences=12877"
+        ],
+        "nonnegative_observer_lines": [
+          "BARY negative=0 applied=0 min=0",
+          "BARY negative=0 applied=0 min=0",
+          "BARY negative=0 applied=0 min=0"
+        ],
+        "complete_paired_logs_identical_after_removing_observer_counters": true
+      }
+    ],
+    "scope_note": "These broad fixtures check eligibility, not universal normal-component parity. One prior small-triangle false positive remains in the 10km stress group."
+  },
+  "source_invariants": {
+    "native_closest_feature_and_gjk_loop_unchanged": true,
+    "default_use_scalar_witness_false_unchanged": true,
+    "only_npc_contact_helper_opts_in": true,
+    "positive_edge_and_area_denominator_guards": true,
+    "finite_nonnegative_triangle_weights_or_native_fallback": true,
+    "finite_witness_axis_length_squared_no_greater_than_previous_squared_distance_or_native_fallback": true,
+    "monotonic_and_nonfinite_fallback_note": "Verified from source; observer logs measure nonnegative weights, not fallback counts.",
+    "positive_gap_normal_export_only": true,
+    "penetrating_contacts_simulation_and_shape_cast_axes_native": true,
+    "no_new_queries_shared_mutable_state_or_nested_locks": true
+  },
+  "gameplay_prefix": {
+    "report": {
+      "path": "reports/physics/2026-10-14-jolt-stage1/witness-normal-v12-prefix.json",
+      "sha256": "6b345f54711ab5f3b0c06099bdadfaeefadc56d84ac3ec4dec166283ef41413c"
+    },
+    "rows": 1800,
+    "source_header_sha256": "4826d8e855c52e52ffa14efd470385c57bbde82ff3a46c88b5e8c5f7b5786f5c",
+    "source_collisionworld_sha256": "006007ecf6ba2255f41d76b83a8e5402e41dd0df97fdd1f9a8739ea13ef94ec1",
+    "runner_sha256": "b6a8d696a00a02d523517266f7308d86be7173506ea1e6de19a4a1a2733dcf32",
+    "hero_xyz_and_yaw_exact_to_safe_original": true,
+    "all_discrete_states_and_contact_flags_exact": true,
+    "ordered_combat_exact": true,
+    "all_continuous_numeric_columns_exact": false,
+    "scope_note": "Controlled unchanged natural prefix, not full stage1 acceptance. Production promotion is source-equivalent in the scoped implementation; final full build and all scenarios are separate."
+  },
+  "files": {
+    "compiled_prototype_header": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/compiled-prototype-GJKClosestPoint.h",
+      "sha256": "4826d8e855c52e52ffa14efd470385c57bbde82ff3a46c88b5e8c5f7b5786f5c"
+    },
+    "promoted_header_snapshot": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/promoted-GJKClosestPoint.h",
+      "sha256": "64f747b311ef393143adf2532ad6daf3b3602b3dd29db1a35281c1c1486ec4be"
+    },
+    "compiled_candidate_collisionworld": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/compiled-candidate-collisionworld.cpp",
+      "sha256": "006007ecf6ba2255f41d76b83a8e5402e41dd0df97fdd1f9a8739ea13ef94ec1"
+    },
+    "promoted_npc_scope": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/promoted-npc-scope.cpp",
+      "sha256": "e98b40e4f3a7e9e898b75ebd85b35e926a7a0f84c33543bfda11595d25aa514e"
+    },
+    "grid_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/grid.log",
+      "sha256": "246074cc723a8f5a98a9799e32a9c69b2eddf88a5b2973706247370e54ba11a0"
+    },
+    "grid_barycentric_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/grid-barycentric.log",
+      "sha256": "82f5b0d10828b4cf32d290d1eb6b144612b998f4bb6b4fdbbdc33213fe5c7c5c"
+    },
+    "grid_source": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/grid.cpp",
+      "sha256": "9fc29726dcb54361a8ae99294348aa666dd24cd6506eeb0ff9f506ce07b0706d"
+    },
+    "broad_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/broad.log",
+      "sha256": "ecb6058526991c8f4459a619ee5ae7f8e397e1ed5860415e342fb863a7c5a53d"
+    },
+    "broad_barycentric_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/broad-barycentric.log",
+      "sha256": "2e567bb4fa9de90034e3d375369ff46bc59d1e333a026195a687abaaef983533"
+    },
+    "broad_source": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/broad.cpp",
+      "sha256": "11dae907ea3a5f778ab9d573c5613fd32f30f4617571040a03b9e601875c5e6f"
+    },
+    "wide_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/wide.log",
+      "sha256": "a38a6a6a3b1a8b91ab24840d61951c6e7054909ae89bc52d16f83bb7ec3c757c"
+    },
+    "wide_barycentric_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/wide-barycentric.log",
+      "sha256": "25c01aff51c99efc3814652c109fa4d341a64becbd3933412d8ecc26112e2afe"
+    },
+    "wide_source": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/wide.cpp",
+      "sha256": "68018c8dc25d8e562183b1a4b9ba5aa01ca68876df86d04b6f4b7d890d083904"
+    },
+    "zeroheight_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/zeroheight.log",
+      "sha256": "7e20de9e0fe09dc359afa1182eaa0d2edb738e02c310c5ceefcd3b7d69d1f9d5"
+    },
+    "zeroheight_barycentric_log": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/zeroheight-barycentric.log",
+      "sha256": "1061e5e6507551fb9a18a7009ae7d4ea6198c93924643613aec3fbe341b3138d"
+    },
+    "zeroheight_source": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/zeroheight.cpp",
+      "sha256": "a41cf0618933f9d6a54680dc20e14de06de82531ebe76b76415a90501d036980"
+    },
+    "invariant_observer_header": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/barycentric-observer-GJKClosestPoint.h",
+      "sha256": "2f078f199a86998ef56de69fb797ed24d03c88827a441d535084ae5e4b78ed15"
+    },
+    "grid_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/grid.bin",
+      "sha256": "77b68cf107cc6865708b6005d2a4bbde5f65bfe73af776b1b7ef52f1aa3ea941"
+    },
+    "grid-bary_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/grid-bary.bin",
+      "sha256": "1115ece39f558afa2ceaa7b565d3d08ee728cf23f2868b04f4fca1ef75e280e0"
+    },
+    "broad_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/broad.bin",
+      "sha256": "f46de83bffb638fc6bfc7ce1735a311ed25edd83e82e5cbfc6a59c642a264aaf"
+    },
+    "broad-bary_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/broad-bary.bin",
+      "sha256": "ccbe8dc1688430f6de49dad7066e5ce831a43a7bea489609e3c5376689345936"
+    },
+    "wide_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/wide.bin",
+      "sha256": "6e9b840f997f20771cfb040a62fcdc3391642f300fd72340d753350b68e1f8a1"
+    },
+    "wide-bary_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/wide-bary.bin",
+      "sha256": "30ee5139e879816a9f2d3b6901f8cf6aa793cc9db48518206cac04c8de869715"
+    },
+    "zeroheight_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/zeroheight.bin",
+      "sha256": "56e2efadab3061e796daedf9e205d142dacef4ad935639ca27b9ec0c077cd236"
+    },
+    "zeroheight-bary_binary": {
+      "path": "data/physics/stage1/triangle-edge-production-proof/zeroheight-bary.bin",
+      "sha256": "4672a6a00008e6342f40be5adadb62793e323092d6cf0f0cd266eebd315b8a30"
+    }
+  }
+}

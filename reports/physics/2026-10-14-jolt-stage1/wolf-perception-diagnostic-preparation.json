@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "kind": "isolated_wolf_perception_diagnostic_preparation",
+  "status": "prepared_not_run",
+  "step_window_inclusive": [
+    1060,
+    1160
+  ],
+  "actors": [
+    "WARG",
+    "MOLERAT"
+  ],
+  "stable_identity": [
+    "World::npcId (native npcArr index)",
+    "handle.id",
+    "instanceSymbol"
+  ],
+  "source_origins": {
+    "common/world/objects/npc.cpp": "c7b57b4d4097ff14f78cdaf5591699a76e1160fbb7972f8594c44da97981f034",
+    "common/world/worldobjects.cpp": "5b817b65f4cddbaeba894967ccbfc50f5fbcefb7d7b0650ca59e6d7b441f5a13"
+  },
+  "backend_reuse": "shared NPC/WorldObjects sources byte-identical between original local snapshot and finalv12; safe original collisionworld-safe.o remains explicitly first in original link",
+  "scenario": "data/physics/stage1/bullet-safe-numeric-v1/quad-wolf/scenario.bench",
+  "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+  "seed": "retain canonical scenario/runner seed",
+  "runtime": "not dispatched; validation schedules after heading/sphere work",
+  "no_new_queries": true,
+  "no_body_event_id_or_sequence_changes": true,
+  "files": {
+    "data/physics/stage1/wolf-perception-v12-prepared/OpenGothic/common/physics-wolf-trace.h": {
+      "sha256": "e716c50c19209f7abbe049aefe1e118f24a514f5941bb585ba7c700bae79b23b"
+    },
+    "data/physics/stage1/wolf-perception-v12-prepared/OpenGothic/common/world/objects/npc.cpp": {
+      "sha256": "a3c86eae10141c783db2be125f9726fb9a9dd794a4461e3227bce113d02ea0d5"
+    },
+    "data/physics/stage1/wolf-perception-v12-prepared/OpenGothic/common/world/worldobjects.cpp": {
+      "sha256": "e72332be4527f20c46f42782cbaf3b746799b76c2acaba3ad4340e271a579e6c"
+    }
+  },
+  "overlay_archive": {
+    "path": "data/physics/stage1/wolf-perception-v12-prepared/source-overlay.tar.gz",
+    "sha256": "bac5aa1997cd52593dcf616c7fab700b35a3cc89ec9b8e492da401a92335ae2e"
+  },
+  "header_lookup": "Use backend-frozen common/world/objects and common/world include paths; no copies of pragma-once native headers.",
+  "syntax_checks": {
+    "local-syntax.json": {
+      "path": "data/physics/stage1/wolf-perception-v12-prepared/local-syntax.json",
+      "sha256": "3d6746b32d1bd45f3c039935d9e6641d11dfbda0eb312fa2dcf4d1d6120439e7",
+      "passed": true
+    },
+    "local-original-syntax.json": {
+      "path": "data/physics/stage1/wolf-perception-v12-prepared/local-original-syntax.json",
+      "sha256": "cd159c4e2bca41b5b93c64af8212004b49b8cd68eb6f973c829c8ca441d2235e",
+      "passed": true
+    }
+  },
+  "natural_prefix": {
+    "stop": "18th original rec_stop",
+    "segment": "w4_down",
+    "scenario_time_ms": 39433,
+    "record_frames": 60,
+    "metric_rows": 960
+  },
+  "scenario_seed": 73013,
+  "safe_original_provenance": {
+    "path": "data/physics/stage1/bullet-safe-reference/manifest.json",
+    "sha256": "434c076c545c7ac49916dd86feea5579f2cf306b6f571a8162e8b58046aa7a8b"
+  },
+  "jolt_v12_source_overlay": {
+    "path": "data/physics/stage1/jolt-final-v12/source-overlay.tar.gz",
+    "sha256": "15c43acf59c5e8f08b08741da0940786fd3adb1458e4affdf8923d1c4b06666f"
+  },
+  "helper_parser": {
+    "path": "data/physics/stage1/wolf-perception-v12-prepared/parse_trace.py",
+    "sha256": "140f14f406307903be0b9521fb91876d24b9203109b9c0eccd54d712ff9f0f93"
+  },
+  "readme": {
+    "path": "data/physics/stage1/wolf-perception-v12-prepared/README.md",
+    "sha256": "669dc224a458c965d9b6192e0937af7b9173bbd326fc8cf11406a3502c2f25eb"
+  },
+  "refreeze_note": "Npc::canSeeNpc also scopes its exact other NPC target; existing sense and ray calls remain unchanged.",
+  "parser_nonfinite_contract": "Only hit=false los_ray_result point_cm[1] native -inf is preserved as string -inf; all other nonfinite fields are rejected.",
+  "execution_evidence": "reports/physics/2026-10-14-jolt-stage1/wolf-perception-stable-analysis.json",
+  "historical_preparation_note": "Frozen source preparation metadata retained; paired execution and analysis are linked separately."
+}

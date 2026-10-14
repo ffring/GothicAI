@@ -55,6 +55,11 @@ namespace TestBench {
   bool     filming();
   // `ui on`: the captured frame has the interface on top, as the player sees it (subtitles, the deal window)
   bool     withUi();
+  // Return true only for the synchronous ragdoll loot fixture, requesting close
+  // after observing the real Ransack target so a paused menu cannot hang it.
+  bool     ragdollLootOpened(const Npc& player, const Npc& target);
+  // Benchmark-only inspection of the actual body drawable, excluding head/items.
+  bool     ragdollBodyDrawable(const Npc& npc);
 
   // What the AI bridge does, for scenarios that talk (`ptt`, `waitreply`; shorts/): texts in UTF-8.
   // An npc line starts (`ms`: its length as known now; `to`: the npc it is said to, empty for the hero;

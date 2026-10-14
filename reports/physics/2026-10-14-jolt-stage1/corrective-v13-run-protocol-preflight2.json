@@ -1,0 +1,39 @@
+{
+  "kind": "preregistered_single_corrective_final_v13_all11",
+  "registered_utc": "2026-10-14T02:47:13.845257+00:00",
+  "requested_unit_command": [
+    "sudo",
+    "systemd-run",
+    "--unit=gothic-physics-final-v13-corrective-v2",
+    "--wait",
+    "--pipe",
+    "--collect",
+    "--property=CPUQuota=200%",
+    "--property=MemoryMax=12G",
+    "--property=TasksMax=128",
+    "--property=RuntimeMaxSec=1200",
+    "--uid=kaifat",
+    "python3",
+    "/home/kaifat/gothic-ai/physics-stage1/run-final-v13-corrective-remote.py"
+  ],
+  "scenarios": [
+    "smoke",
+    "ik-moves",
+    "ik-stairs",
+    "ik-sweep",
+    "lean",
+    "aim",
+    "manual-aim",
+    "crossbow",
+    "quad-wolf",
+    "quad-zoo",
+    "flinch"
+  ],
+  "driver_sha256": "c3d219ceb181b6f90652f5c9958ae533978ed77aa26b62d7a927cffbddd38eef",
+  "runner_sha256": "818360cdea0d96fd4d9c6be51cac631e879824f5f6e86cb1e9e54d6dae9a3165",
+  "original_V7_performance_reference_sha256": "8dc934be2fb93de74217b580aaf6abc6f48606d41312fb8dc294b6eb63d0db3c",
+  "save_sha256": "c2852f4c009f23225e1c9c70f564ca36b4c12e8220736d1c72a1dbfce8d3372f",
+  "output": "runs/jolt-numeric-v13-corrected-resource",
+  "selection_policy": "The one corrective all11 is final regardless of pass/fail; no best-of comparison, further retry or query rerun. Firstv13 preserved as resource-deviation history; fivepair block remains invalid diagnostic.",
+  "preflight_history": "First launcher attempt1.231s failed at physics_suite output mkdir for all11 before any runner/game/sample; retained separately. Added only --resume to allow the fresh provenance directory. This is the first actual corrective game sequence."
+}

@@ -15,7 +15,7 @@ class PhysicMeshShape final {
     PhysicMeshShape(PackedMesh&& packed);
 
     PhysicVbo                      mesh;
-    mutable btBvhTriangleMeshShape shape;
+    JPH::ShapeRefC                  shape;
     float                          frict = 0;
 
   friend class DynamicWorld;

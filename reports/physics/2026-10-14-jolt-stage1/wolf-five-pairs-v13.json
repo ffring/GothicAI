@@ -1,0 +1,346 @@
+{
+  "schema_version": 1,
+  "scope": "wolf_performance_observations_with_protocol_deviation",
+  "selection_policy": "all ten runs retained; no run selected, excluded or repeated",
+  "declared_protocol_verdict": "invalid",
+  "declared_protocol_order_valid": false,
+  "expected_order": [
+    [
+      1,
+      "bullet"
+    ],
+    [
+      1,
+      "jolt"
+    ],
+    [
+      2,
+      "jolt"
+    ],
+    [
+      2,
+      "bullet"
+    ],
+    [
+      3,
+      "bullet"
+    ],
+    [
+      3,
+      "jolt"
+    ],
+    [
+      4,
+      "jolt"
+    ],
+    [
+      4,
+      "bullet"
+    ],
+    [
+      5,
+      "bullet"
+    ],
+    [
+      5,
+      "jolt"
+    ]
+  ],
+  "actual_order": [
+    [
+      1,
+      "bullet"
+    ],
+    [
+      1,
+      "jolt"
+    ],
+    [
+      2,
+      "bullet"
+    ],
+    [
+      2,
+      "jolt"
+    ],
+    [
+      3,
+      "bullet"
+    ],
+    [
+      3,
+      "jolt"
+    ],
+    [
+      4,
+      "bullet"
+    ],
+    [
+      4,
+      "jolt"
+    ],
+    [
+      5,
+      "bullet"
+    ],
+    [
+      5,
+      "jolt"
+    ]
+  ],
+  "protocol_deviations": [
+    "Pairs2 and4 executed originalV7 thenJolt; frozen protocol required Jolt thenoriginalV7",
+    "MemoryMax12GiB/TasksMax128 were not explicitly configured in the launch command; during-run values not recorded",
+    "Exact per-case start timestamps were not recorded; synchronous script and ordered completion records prove actual order"
+  ],
+  "frozen_protocol_sha256_at_audit": "717cdf4cfe7e7317e308824f779848c5bc60cc004ae4156c79d6f06ad1b3fc5a",
+  "declared_full_suite_gate": "bench-comparison.json retains the original fixed V7 full-suite performance result separately",
+  "safe_reference_used_for_performance": false,
+  "provenance": {
+    "save_sha256": "c2852f4c009f23225e1c9c70f564ca36b4c12e8220736d1c72a1dbfce8d3372f",
+    "assets": "/home/kaifat/gothic-ai/body-baseline/assets",
+    "mode": "headless lockstep, 30fps, no render or models"
+  },
+  "pipeline_sha256": "0d48a9b0c2de686629b20c9d7664253304fb7e1ece884387c5b2b60ec1ea81da",
+  "primary_protocol": {
+    "samples_per_backend": 7570,
+    "per_run_warmup": 32,
+    "samples_per_run": 1514,
+    "quantile_index": "sorted_values[int(p*(n-1))]",
+    "gate": "both pooled Jolt quantiles must be no higher than pooled originalV7 quantiles"
+  },
+  "pooled_quantiles_ns": {
+    "bullet": {
+      "p50": 14329317,
+      "p95": 254901458
+    },
+    "jolt": {
+      "p50": 10346215,
+      "p95": 212686139
+    }
+  },
+  "pooled_jolt_to_original_ratio": {
+    "p50": 0.7220312733677398,
+    "p95": 0.8343857295629906
+  },
+  "pooled_timing_gate_pass": null,
+  "observed_pooled_numerical_condition_pass": true,
+  "pairs": [
+    {
+      "pair": 1,
+      "physics_frame_timing": {
+        "bullet": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 14542880,
+          "p95_ns": 243111543,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        },
+        "jolt": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 10263279,
+          "p95_ns": 240560542,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        }
+      },
+      "jolt_to_original_ratio": {
+        "p50": 0.7057253446360006,
+        "p95": 0.9895068701036545
+      },
+      "observed_pair_quantiles_no_higher": true,
+      "provenance": [
+        {
+          "backend": "bullet",
+          "runner_sha256": "8dc934be2fb93de74217b580aaf6abc6f48606d41312fb8dc294b6eb63d0db3c",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "13f93ceb17c89db49c131e401b1f2e9699b93fbc91c1944365665622d92cac4a",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "9da8945fed7fd1c4f97b5494d9ab3035c59dd942f02e39d3c1f401c08d5a7ecd"
+        },
+        {
+          "backend": "jolt",
+          "runner_sha256": "818360cdea0d96fd4d9c6be51cac631e879824f5f6e86cb1e9e54d6dae9a3165",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "8ec329b85ef1f3aa7ba84e8a95ea12ae7c37331c7b34f60a347547c542589320",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "c9e77fb0b334f78ef322ef0ccf263746505b470caffedc7f844414765b82b89f"
+        }
+      ]
+    },
+    {
+      "pair": 2,
+      "physics_frame_timing": {
+        "bullet": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 14112023,
+          "p95_ns": 247730336,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        },
+        "jolt": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 10442600,
+          "p95_ns": 198066648,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        }
+      },
+      "jolt_to_original_ratio": {
+        "p50": 0.7399789526987024,
+        "p95": 0.7995252063114305
+      },
+      "observed_pair_quantiles_no_higher": true,
+      "provenance": [
+        {
+          "backend": "bullet",
+          "runner_sha256": "8dc934be2fb93de74217b580aaf6abc6f48606d41312fb8dc294b6eb63d0db3c",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "666962ed83d6b3df70626a70e75c36e74c620d999618e06caff93a627d4c38e5",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "88e879b1dbb7676c1e8d63eefd9309cb8b6073e972debf728ce0c98a1041ef3d"
+        },
+        {
+          "backend": "jolt",
+          "runner_sha256": "818360cdea0d96fd4d9c6be51cac631e879824f5f6e86cb1e9e54d6dae9a3165",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "51f3d9cda1ca497feeffa57dadbe4abf593e00d311319a8390193b1ca5b1f47a",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "ff548a8bab283dbf862046b23f881219af0ebf33ffb979110d9a7f974460d3b4"
+        }
+      ]
+    },
+    {
+      "pair": 3,
+      "physics_frame_timing": {
+        "bullet": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 14586989,
+          "p95_ns": 256064418,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        },
+        "jolt": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 10315485,
+          "p95_ns": 217774011,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        }
+      },
+      "jolt_to_original_ratio": {
+        "p50": 0.7071702734539664,
+        "p95": 0.8504657253863361
+      },
+      "observed_pair_quantiles_no_higher": true,
+      "provenance": [
+        {
+          "backend": "bullet",
+          "runner_sha256": "8dc934be2fb93de74217b580aaf6abc6f48606d41312fb8dc294b6eb63d0db3c",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "29c3ac9101b409883ad76c4368aa40f5eb48c4685760242d95918c9ba86d2ead",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "4bf9f8298753b9d6cd817c0d7a3a0a329511539cfdb3896e6c1515378ad9b59e"
+        },
+        {
+          "backend": "jolt",
+          "runner_sha256": "818360cdea0d96fd4d9c6be51cac631e879824f5f6e86cb1e9e54d6dae9a3165",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "9dfe051d124877c30b9f893bd6fb73a93466aff3df15ca02688860e8ab68ae69",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "75f1a9c2fc58c2be1b6a08244f685dc0057820ea656838bf2a2e37e7df1ee597"
+        }
+      ]
+    },
+    {
+      "pair": 4,
+      "physics_frame_timing": {
+        "bullet": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 14402235,
+          "p95_ns": 254302564,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        },
+        "jolt": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 10403502,
+          "p95_ns": 202377459,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        }
+      },
+      "jolt_to_original_ratio": {
+        "p50": 0.7223533014146762,
+        "p95": 0.7958136788585427
+      },
+      "observed_pair_quantiles_no_higher": true,
+      "provenance": [
+        {
+          "backend": "bullet",
+          "runner_sha256": "8dc934be2fb93de74217b580aaf6abc6f48606d41312fb8dc294b6eb63d0db3c",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "77f48e2e8c56319388fa86f2b98b91df69a25b76b3b939f04b6b51b1605e82f7",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "1933020197d28a5c3206719b1e4e909a9659919b298a9a33548ea85ff1e40456"
+        },
+        {
+          "backend": "jolt",
+          "runner_sha256": "818360cdea0d96fd4d9c6be51cac631e879824f5f6e86cb1e9e54d6dae9a3165",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "eb5f3676e322d714d2fbc27c54b9c7361dba0a7e3c3e80eb9e5b6413081d24b6",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "0ca9fce826290391839b52ddd58e24048199610f297a426e911a0f6adaf82712"
+        }
+      ]
+    },
+    {
+      "pair": 5,
+      "physics_frame_timing": {
+        "bullet": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 14027458,
+          "p95_ns": 260635246,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        },
+        "jolt": {
+          "frames": 1514,
+          "warmup_frames": 32,
+          "p50_ns": 10287280,
+          "p95_ns": 202916756,
+          "scope": "DynamicWorld tick and public query/movement work between ticks, nested calls counted once; temporary identical instrumentation"
+        }
+      },
+      "jolt_to_original_ratio": {
+        "p50": 0.7333673713369878,
+        "p95": 0.778546873894408
+      },
+      "observed_pair_quantiles_no_higher": true,
+      "provenance": [
+        {
+          "backend": "bullet",
+          "runner_sha256": "8dc934be2fb93de74217b580aaf6abc6f48606d41312fb8dc294b6eb63d0db3c",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "646cac7a243bc72b6f532e3c5eb370cf08a1d2c46750b197974d86e5f17cf0c2",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "a3a0a2c5d45d60141017692703c98ab0b0b3c46604673a46a4b70ffb49f275bc"
+        },
+        {
+          "backend": "jolt",
+          "runner_sha256": "818360cdea0d96fd4d9c6be51cac631e879824f5f6e86cb1e9e54d6dae9a3165",
+          "scenario_sha256": "9d47ec7504e2b92a3249d8b2626ae23e4f40035946c191e2995ce5619671fe99",
+          "manifest_sha256": "ab717e718cc41d65261cfaf3b192fb151edcfa931584d7d5cc5ddfdbed3f5612",
+          "metrics_sha256": "ffa514e9a06f5c3a7aced20c471421d4f1b4f1137bdced7f4eefc45e134aba96",
+          "timing_trace_sha256": "2ba97c7fa7b1f09184cdc6cb7826a7a84ed75c00c8e82a52b3f87aa8ffc71b2e"
+        }
+      ]
+    }
+  ],
+  "observed_pairs_quantiles_no_higher_count": 5,
+  "median_paired_ratio": {
+    "p50": 0.7223533014146762,
+    "p95": 0.7995252063114305
+  },
+  "all_pairs_observed_quantiles_no_higher": true
+}

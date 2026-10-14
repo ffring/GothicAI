@@ -1,0 +1,89 @@
+{
+  "scope": "original_concurrency_and_serialized_reference_diagnostic",
+  "comparison": {
+    "bullet": {
+      "max_player_delta_to_formal_cm": 0.0,
+      "flags_diff_to_formal": {
+        "bs": 0,
+        "walk": 0,
+        "ik_valid": 0,
+        "ik_on": 0,
+        "ik_hardoff": 0,
+        "l_has": 12,
+        "r_has": 3,
+        "l_toehas": 9,
+        "r_toehas": 5,
+        "hp_player": 0,
+        "hp_subject": 0,
+        "f_hits": 0
+      },
+      "flags_diff_to_Jolt": {
+        "bs": 0,
+        "walk": 0,
+        "ik_valid": 0,
+        "ik_on": 0,
+        "ik_hardoff": 0,
+        "l_has": 17,
+        "r_has": 9,
+        "l_toehas": 16,
+        "r_toehas": 10,
+        "hp_player": 0,
+        "hp_subject": 0,
+        "f_hits": 0
+      }
+    },
+    "jolt": {
+      "max_player_delta_to_formal_cm": 0.0,
+      "flags_diff_to_formal": {
+        "bs": 0,
+        "walk": 0,
+        "ik_valid": 0,
+        "ik_on": 0,
+        "ik_hardoff": 0,
+        "l_has": 7,
+        "r_has": 8,
+        "l_toehas": 13,
+        "r_toehas": 7,
+        "hp_player": 0,
+        "hp_subject": 0,
+        "f_hits": 0
+      }
+    },
+    "bullet-serial": {
+      "max_player_delta_to_formal_cm": 0.0,
+      "flags_diff_to_formal": {
+        "bs": 0,
+        "walk": 0,
+        "ik_valid": 0,
+        "ik_on": 0,
+        "ik_hardoff": 0,
+        "l_has": 7,
+        "r_has": 8,
+        "l_toehas": 13,
+        "r_toehas": 7,
+        "hp_player": 0,
+        "hp_subject": 0,
+        "f_hits": 0
+      },
+      "flags_diff_to_Jolt": {
+        "bs": 0,
+        "walk": 0,
+        "ik_valid": 0,
+        "ik_on": 0,
+        "ik_hardoff": 0,
+        "l_has": 0,
+        "r_has": 0,
+        "l_toehas": 0,
+        "r_toehas": 0,
+        "hp_player": 0,
+        "hp_subject": 0,
+        "f_hits": 0
+      }
+    }
+  },
+  "raw_data": "data/physics/stage1/late-prefix-v11/ik-stairs",
+  "observed_maximum_parallel_BP_rays": {
+    "bullet": 6,
+    "bullet-serial": null
+  }
+}

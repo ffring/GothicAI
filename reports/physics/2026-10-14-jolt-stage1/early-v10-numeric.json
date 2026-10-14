@@ -1,0 +1,212 @@
+{
+  "smoke": {
+    "segments": {
+      "stand": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "run_up": {
+        "max_player_delta_cm": 0.020000000000436557,
+        "p95_player_delta_cm": 0.014142135623878865,
+        "bs_mismatch_rows": 0
+      }
+    },
+    "IKflag_mismatches": {},
+    "ordered_combat_difference_count": 0,
+    "ordered_combat_examples": []
+  },
+  "ik-moves": {
+    "segments": {
+      "m0_stand": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m0_turn": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m0_strafe": {
+        "max_player_delta_cm": 0.014142135625325862,
+        "p95_player_delta_cm": 0.014142135622753424,
+        "bs_mismatch_rows": 0
+      },
+      "m0_back": {
+        "max_player_delta_cm": 0.03162277660007319,
+        "p95_player_delta_cm": 0.030000000000654836,
+        "bs_mismatch_rows": 0
+      },
+      "m0_sneak": {
+        "max_player_delta_cm": 0.03162277660179884,
+        "p95_player_delta_cm": 0.024494897429109052,
+        "bs_mismatch_rows": 0
+      },
+      "m1_stand": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m1_turn": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m1_strafe": {
+        "max_player_delta_cm": 0.014142135623728137,
+        "p95_player_delta_cm": 0.010000000000005116,
+        "bs_mismatch_rows": 0
+      },
+      "m1_back": {
+        "max_player_delta_cm": 0.014142135623728137,
+        "p95_player_delta_cm": 0.010000000000005116,
+        "bs_mismatch_rows": 0
+      },
+      "m1_sneak": {
+        "max_player_delta_cm": 0.014142135623728137,
+        "p95_player_delta_cm": 0.014142135622592646,
+        "bs_mismatch_rows": 0
+      },
+      "m2_stand": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m2_turn": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m2_strafe": {
+        "max_player_delta_cm": 0.01732050807449155,
+        "p95_player_delta_cm": 0.014142135625325862,
+        "bs_mismatch_rows": 0
+      },
+      "m2_back": {
+        "max_player_delta_cm": 0.017320508077117037,
+        "p95_player_delta_cm": 0.0173205080747541,
+        "bs_mismatch_rows": 0
+      },
+      "m2_sneak": {
+        "max_player_delta_cm": 0.017320508077117037,
+        "p95_player_delta_cm": 0.017320508075016647,
+        "bs_mismatch_rows": 0
+      },
+      "m3_stand": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m3_turn": {
+        "max_player_delta_cm": 0.0,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m3_strafe": {
+        "max_player_delta_cm": 0.010000000000218279,
+        "p95_player_delta_cm": 0.0,
+        "bs_mismatch_rows": 0
+      },
+      "m3_back": {
+        "max_player_delta_cm": 0.010000000000218279,
+        "p95_player_delta_cm": 0.010000000000047748,
+        "bs_mismatch_rows": 0
+      },
+      "m3_sneak": {
+        "max_player_delta_cm": 0.014142135623878865,
+        "p95_player_delta_cm": 0.014142135623878865,
+        "bs_mismatch_rows": 0
+      },
+      "m4_stand": {
+        "max_player_delta_cm": 0.014142135625325862,
+        "p95_player_delta_cm": 0.010000000002037268,
+        "bs_mismatch_rows": 0
+      },
+      "m4_turn": {
+        "max_player_delta_cm": 0.010000000002037268,
+        "p95_player_delta_cm": 0.010000000000218279,
+        "bs_mismatch_rows": 0
+      },
+      "m4_strafe": {
+        "max_player_delta_cm": 0.014142135625325862,
+        "p95_player_delta_cm": 0.014142135625325862,
+        "bs_mismatch_rows": 0
+      },
+      "m4_back": {
+        "max_player_delta_cm": 0.024494897427623855,
+        "p95_player_delta_cm": 0.02236067977629946,
+        "bs_mismatch_rows": 0
+      },
+      "m4_sneak": {
+        "max_player_delta_cm": 0.024494897429109052,
+        "p95_player_delta_cm": 0.024494897427252554,
+        "bs_mismatch_rows": 0
+      },
+      "m5_stand": {
+        "max_player_delta_cm": 0.009999999999990905,
+        "p95_player_delta_cm": 0.009999999999990905,
+        "bs_mismatch_rows": 0
+      },
+      "m5_turn": {
+        "max_player_delta_cm": 0.009999999999990905,
+        "p95_player_delta_cm": 0.009999999999990905,
+        "bs_mismatch_rows": 0
+      },
+      "m5_strafe": {
+        "max_player_delta_cm": 0.009999999999990905,
+        "p95_player_delta_cm": 0.009999999999990905,
+        "bs_mismatch_rows": 0
+      },
+      "m5_back": {
+        "max_player_delta_cm": 0.014142135625165085,
+        "p95_player_delta_cm": 0.014142135622592646,
+        "bs_mismatch_rows": 0
+      },
+      "m5_sneak": {
+        "max_player_delta_cm": 0.022360679775892723,
+        "p95_player_delta_cm": 0.014142135625165085,
+        "bs_mismatch_rows": 0
+      }
+    },
+    "IKflag_mismatches": {},
+    "ordered_combat_difference_count": 0,
+    "ordered_combat_examples": []
+  },
+  "ik-stairs": {
+    "max_delta_cm": 7.674170964997171,
+    "segments": {
+      "st0_walk_up": 0.028284271245185292,
+      "st0_walk_down": 0.05099019513525719,
+      "st0_run_up": 7.674170964997171,
+      "st1_walk_up": 0.47085029468092193,
+      "st1_walk_down": 0.47021271782151797,
+      "st1_run_up": 0.4805205510689404,
+      "st2_walk_up": 3.932085960403192,
+      "st2_walk_down": 1.8638401218986462,
+      "st2_run_up": 2.959814183356971,
+      "st3_walk_up": 0.05385164807210356,
+      "st3_walk_down": 0.036055512754922414,
+      "st3_run_up": 0.036055512754922414,
+      "st4_walk_up": 0.27748873851056977,
+      "st4_walk_down": 3.9726187836215847,
+      "st4_run_up": 3.8193324023953936,
+      "st5_walk_up": 0.0854400374546145,
+      "st5_walk_down": 0.08660254037854888,
+      "st5_run_up": 2.3627737936597493,
+      "st6_walk_up": 0.050990195136149025,
+      "st6_walk_down": 0.045825756950955615,
+      "st6_run_up": 0.05099019513686249,
+      "st7_walk_up": 0.022360679775485982,
+      "st7_walk_down": 0.4427188724240333,
+      "st7_run_up": 0.4459820624201131
+    },
+    "discrete_mismatches": {
+      "l_has": 80,
+      "r_has": 64,
+      "l_toehas": 80,
+      "r_toehas": 61
+    },
+    "ordered_combat_diff": 0
+  }
+}

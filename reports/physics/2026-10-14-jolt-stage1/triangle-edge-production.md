@@ -1,0 +1,9 @@
+# NPC triangle-edge witness promotion
+
+The promoted GJK header (`64f747b3…`) preserves the tested prototype's behavior. Only comments and binary mask spelling differ. The NPC eligibility helper and separated-contact normal export match the isolated Linux candidate; the whole CollisionWorld also contains separately reviewed ray/sphere work. [The proof manifest](triangle-edge-production.json) records both source scopes and hashes; [the historical v12 geometry proof](scalar-witness-production.json) remains unchanged.
+
+The optional scalar witness uses weighted endpoints after the native triangle becomes an edge. Native feature selection, simplex storage and iteration remain unchanged, and the default template option remains off. Only accepted separated NPC contacts export the conservative witness direction; it can differ from the exact surface normal. Penetration axes remain native. Finite, nonnegative and monotonic checks retain native output when reconstruction fails. There are no new scene queries, shared mutable state or nested locks.
+
+The independent 4,851-position boundary grid and 270,000 randomized positions show no new eligibility regressions. All origin/367 m groups and the wide/zero-height 10 km groups match scalar original Bullet. One earlier small-triangle false positive remains at 10 km. The nonnegative observer found zero negative finite triangle weights, and its complete logs equal uninstrumented logs after removing observer counters. This broad proof concerns contact eligibility, not universal normal-component parity.
+
+The unchanged Linux [1,800-frame prefix](witness-normal-v12-prefix.json) restores hero coordinates/yaw, discrete states/contact flags and ordered combat to the safe original. Continuous joint values still differ. The maintained contracts bind the source q45 direction and the actual tick-80027 two-face normal/gravity response. Full stage1 acceptance remains a separate gate.

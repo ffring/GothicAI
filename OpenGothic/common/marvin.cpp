@@ -172,6 +172,7 @@ Marvin::Marvin() {
     {"toggle manualaim",           C_ToggleManualAim},
     {"toggle npcmanualaim",        C_ToggleNpcManualAim},
     {"toggle flinch",              C_ToggleFlinch},
+    {"toggle ragdoll",             C_ToggleRagdoll},
     };
   }
 
@@ -539,6 +540,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleFlinch:
       Flinch::setEnabled(!Flinch::isEnabled());
+      return true;
+    case C_ToggleRagdoll:
+      Gothic::settingsSetI("GAME","ragdoll",Gothic::settingsGetI("GAME","ragdoll")==0 ? 1 : 0);
       return true;
     }
 

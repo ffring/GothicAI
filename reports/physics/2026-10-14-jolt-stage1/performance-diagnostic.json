@@ -1,0 +1,102 @@
+{
+  "scope": "20 recorded frames, per-method diagnostic only; excludes first loading frame",
+  "frames": 20,
+  "methods": {
+    "ray": {
+      "calls": 114092,
+      "inclusive_ns": 66700381857,
+      "outer_calls": 110992,
+      "outer_ns": 66082902721
+    },
+    "landRay": {
+      "calls": 3076,
+      "inclusive_ns": 616812866,
+      "outer_calls": 3076,
+      "outer_ns": 616812866
+    },
+    "NpcItem::implTryMove": {
+      "calls": 2554,
+      "inclusive_ns": 595856076,
+      "outer_calls": 2526,
+      "outer_ns": 482823603
+    },
+    "waterRay": {
+      "calls": 3076,
+      "inclusive_ns": 473195885,
+      "outer_calls": 3076,
+      "outer_ns": 473195885
+    },
+    "NpcItem::hasCollision": {
+      "calls": 2344,
+      "inclusive_ns": 232377723,
+      "outer_calls": 2344,
+      "outer_ns": 232377723
+    },
+    "NpcItem::testMove": {
+      "calls": 56,
+      "inclusive_ns": 226073429,
+      "outer_calls": 28,
+      "outer_ns": 113037549
+    },
+    "soundOclusion": {
+      "calls": 86,
+      "inclusive_ns": 25363753,
+      "outer_calls": 86,
+      "outer_ns": 25363753
+    },
+    "Item::setObjMatrix": {
+      "calls": 13200,
+      "inclusive_ns": 4633110,
+      "outer_calls": 13200,
+      "outer_ns": 4633110
+    },
+    "cameraRay": {
+      "calls": 20,
+      "inclusive_ns": 1893465,
+      "outer_calls": 20,
+      "outer_ns": 1893465
+    },
+    "tick": {
+      "calls": 20,
+      "inclusive_ns": 690833,
+      "outer_calls": 20,
+      "outer_ns": 690833
+    },
+    "NpcItem::setPosition": {
+      "calls": 2871,
+      "inclusive_ns": 253261,
+      "outer_calls": 2871,
+      "outer_ns": 253261
+    },
+    "landSweep": {
+      "calls": 0,
+      "inclusive_ns": 0,
+      "outer_calls": 0,
+      "outer_ns": 0
+    },
+    "sweep": {
+      "calls": 0,
+      "inclusive_ns": 0,
+      "outer_calls": 0,
+      "outer_ns": 0
+    },
+    "rayNpc": {
+      "calls": 0,
+      "inclusive_ns": 0,
+      "outer_calls": 0,
+      "outer_ns": 0
+    },
+    "rayArrow": {
+      "calls": 0,
+      "inclusive_ns": 0,
+      "outer_calls": 0,
+      "outer_ns": 0
+    },
+    "NpcItem::setScale": {
+      "calls": 0,
+      "inclusive_ns": 0,
+      "outer_calls": 0,
+      "outer_ns": 0
+    }
+  }
+}

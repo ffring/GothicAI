@@ -1,0 +1,28 @@
+# Physical corpses disabled: ordinary Gothic death and unconscious animation remain available.
+seed 73013
+cheat god
+set time 12 0
+ragdoll off
+goto NW_XARDAS_TOWER_VALLEY_091
+clear 2500
+face -106
+wait 500
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 600
+down watched dead
+rec disabled_death
+wait 4000
+stop
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 600
+down watched ko
+rec disabled_ko
+wait 4000
+stop
+physics stats
