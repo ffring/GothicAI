@@ -3394,7 +3394,19 @@ async def see_perception(
     pushed = await _until(lambda: perception.view(farmer) is not None, 5)
     check("pushed", pushed, "; ".join(perception.english(farmer)))
 
-    # 6. places by name (step 5): at Xardas's tower, on Lobart's and Onar's farms, in the city
+    # 6. the dead: a wolf the hero kills in front of Lobart is a wolf to him still, a dead one («о, мёртвый
+    # волк»), with its id; `look` at «мёртвый волк» finds it
+    await link.debug("spawn", instance="WOLF", near=farmer, distance=600)
+    await asyncio.sleep(0.5)
+    await link.debug("kill", instance="WOLF", near=farmer)
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    people = sight.people if sight else "(no view)"
+    looked = perception.look(farmer, "мёртвый волк")
+    check("dead_beast", "туша: Волк" in people and looked.startswith("туша: Волк"), f"{people} | {looked}")
+
+    # 7. places by name (step 5): at Xardas's tower, on Lobart's and Onar's farms, in the city
     if perception.places is None:
         check("places", False, "no book of places (gamedata/places.json)")
         return _logged(results)
