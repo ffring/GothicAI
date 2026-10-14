@@ -1,0 +1,29 @@
+# Separate controlled native AI queue probe; the full acceptance fixture is unchanged.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+goto NW_XARDAS_TOWER_VALLEY_091
+clear 2500
+face -106
+wait 500
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 600
+pin watched 300 0 700
+wait 34
+pin off
+freeze watched off
+rec queued_midair novideo
+wait 100
+down watched ko
+waitragdoll watched sleep 30000
+ragdoll queued-standup watched 1000
+waitragdoll watched recovery 30000
+# End the controlled script state only AFTER the queued native handoff is observed.
+standup watched
+waitragdoll watched getup 30000
+wait 1000
+stop

@@ -45,6 +45,7 @@ from .llm import (
     ToolCall,
     ToolChoice,
     ToolResult,
+    open_ahead,
     with_deadlines,
 )
 from .memory import Entry, MemoryStore, NpcMemory
@@ -753,8 +754,11 @@ class DialogueManager:
         that is in a fight: what it says next only reads the situation and what started the turn (~0.1 s
         instead of ~1 s). Done again whenever the history grows; one running for the npc is replaced."""
         conv = self.conversations.get(npc.upper())
+        if conv is None or not self._listening(conv):
+            return
+        self._open_ahead(conv.npc)
         warm = getattr(self.quick, "prewarm", None)
-        if conv is None or warm is None or not self._listening(conv):
+        if warm is None:
             return
         if conv.reply is not None and not conv.reply.done():
             return  # its turn is on (warming now would hold up its line): once it is over
@@ -774,8 +778,14 @@ class DialogueManager:
         quick model ready, the one he looks at last (the server keeps the latest in its slot, the others
         in its RAM cache)."""
         focus = (focus or "").upper()
+        if focus in self.conversations:
+            self._open_ahead(focus)  # though it has not talked lately: the words to it are on their way
         for npc in sorted(self.conversations, key=lambda n: n == focus):
             self.prewarm(npc)
+
+    def _open_ahead(self, npc: str) -> None:
+        """The conversational model's connection for the npc, opened before its turn (openai_responses.py)."""
+        open_ahead(self.llm, npc)
 
     async def _prewarm(self, conv: Conversation, warm: Callable[..., Awaitable[None]]) -> None:
         await asyncio.sleep(PREWARM_DELAY_S)

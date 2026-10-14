@@ -269,7 +269,7 @@ async def test_scene_instead_of_a_silent_pass(tmp_path):
     ]
     # one call, with the two names for speakers
     ((instructions, request, tools),) = g.llm.calls
-    assert instructions == INSTRUCTIONS
+    assert instructions == INSTRUCTIONS and g.llm.cache_keys == ["gossip"]
     assert tools[0].parameters["properties"]["lines"]["items"]["properties"]["speaker"]["enum"] == [
         "Лобарт",
         "Хильда",

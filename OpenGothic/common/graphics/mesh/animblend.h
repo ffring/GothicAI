@@ -9,6 +9,8 @@
 
 #include "animation.h"
 
+class Serialize;
+
 // Transitions between animations by inertialization (D. Bollo, "Inertialization: High-Performance
 // Animation Transitions in Gears of War", GDC 2018). When a bone switches to another animation, the
 // new one plays at once; the difference to the pose the bone was shown in, and to its velocity, is an
@@ -81,6 +83,19 @@ class AnimBlend final {
     // out = what the animations give (raw) with the offsets of the bones that switched; bones nothing
     // ever drove are left as they are. True while something blends
     bool           apply(const Sample* raw, Sample* out, size_t numBones, uint64_t now);
+    // An external pose (a settled physical body), without a synthetic animation driver. The next
+    // apply starts the same inertial transition for every bone, including bones not keyed by an
+    // animation. This is separate from the normal driver's switch detection.
+    void           transitionFrom(const Sample* shown, size_t numBones, uint64_t now,
+                                  const Sample* previous=nullptr, uint64_t previousTime=0);
+    bool           hasExternalSeed() const { return !external.empty(); }
+    // Finished local targets after root-motion cancellation and procedural passes, sampled ahead.
+    void           setExternalTarget(const Sample* current, const Sample* next, size_t numBones, float rate);
+    // The common driverless transition curve, also used for an affine bone's stretch/shear.
+    float          externalWeight(uint64_t now) const;
+    // Only the driverless external transition; written in the optional ragdoll save entry.
+    void           saveExternal(Serialize& fout) const;
+    void           loadExternal(Serialize& fin, size_t expectedBones, bool hasVelocityState=true);
     void           probe(Probe& p);
 
   private:
@@ -131,9 +146,16 @@ class AnimBlend final {
     std::vector<Offset> off;
     std::vector<Sample> last;   // shown at lastTime
     std::vector<Switch> pend;   // switches of this frame
+    std::vector<Sample> external;
+    std::vector<Sample> externalPrevious;
+    uint64_t            externalPreviousTime = 0;
     uint64_t            outTime  = 0;  // when the current out was made
     uint64_t            lastTime = 0;
     uint32_t            started  = 0;
     bool                log      = false;
     float               lastBlend = 0;
+    bool                externalDriven = false;
+    Curve               externalFade;
+    uint64_t            externalStart = 0;
+    bool                externalClockPending = false;
   };

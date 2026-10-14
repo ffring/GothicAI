@@ -562,6 +562,13 @@ void MoveAlgo::clearSpeed() {
   fallCount   = 0;
   }
 
+void MoveAlgo::takeRagdollControl() {
+  // Native bodies replace this movement state machine, including airborne/climbing state.
+  // Its stale InAir gate must not block queued script actions after the body settles.
+  clearSpeed();
+  flags = Run;
+  }
+
 bool MoveAlgo::accessDamFly(float dx, float dz, char hitType) {
   if(flags!=Run && flags!=Falling && flags!=InAir)
     return false;

@@ -2,91 +2,129 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Vec>
-
 #include <zenkit/Material.hh>
 
+#include <functional>
 #include <memory>
 #include <vector>
-#include <functional>
 
 #include "physics/physics.h"
-
-class btCollisionConfiguration;
-class btConstraintSolver;
+#include <Jolt/Physics/Body/BodyID.h>
 
 class Item;
 class Interactive;
+class PhysicVbo;
+class Skeleton;
+class HitZones;
+class Ragdoll;
+namespace JPH { class PhysicsSystem; }
 
-class CollisionWorld : public btDiscreteDynamicsWorld {
+class CollisionWorld final {
   public:
     CollisionWorld();
+    ~CollisionWorld();
+    CollisionWorld(const CollisionWorld&) = delete;
 
-    static float               toMeters     (const float v);
-    static btVector3           toMeters     (const Tempest::Vec3& v);
-    static const Tempest::Vec3 toCentimeters(const btVector3& v);
+    static float         toMeters(float v);
+    static JPH::Vec3     toMeters(const Tempest::Vec3& v);
+    static Tempest::Vec3 toCentimeters(JPH::Vec3Arg v);
 
-    using btDiscreteDynamicsWorld::operator new;
-    using btDiscreteDynamicsWorld::operator delete;
-
-    class CollisionBody;
     class DynamicBody;
-    class RayCallback;
+    class CollisionBody {
+      public:
+        virtual ~CollisionBody();
+        CollisionBody(const CollisionBody&) = delete;
+
+        void                setObjMatrix(const Tempest::Matrix4x4& matrix);
+        void                setPosition(const Tempest::Vec3& position);
+        void                setScale(const Tempest::Vec3& scale);
+        void                setShape(JPH::ShapeRefC shape);
+        void                setPayload(void* pointer, int type);
+        Tempest::Vec3       position() const;
+        Tempest::Matrix4x4  matrix() const;
+        void                getAabb(JPH::Vec3& min, JPH::Vec3& max) const;
+
+        int                 category() const { return categoryId; }
+        int                 ptrType() const { return pointerType; }
+        void*               payload() const { return pointer; }
+        const JPH::Shape*    shape() const { return scaledShape.GetPtr(); }
+
+      private:
+        CollisionBody(CollisionWorld& owner, JPH::ShapeRefC shape, int category);
+        CollisionWorld*     owner = nullptr;
+        JPH::BodyID         id;
+        JPH::ShapeRefC      baseShape;
+        JPH::ShapeRefC      scaledShape;
+        JPH::Vec3           scale = JPH::Vec3::sOne();
+        const PhysicVbo*    mesh = nullptr;
+        int                 categoryId = 0;
+        int                 pointerType = 0;
+        void*               pointer = nullptr;
+
+      friend class CollisionWorld;
+      friend class DynamicBody;
+      };
+
+    class DynamicBody final : public CollisionBody {
+      private:
+        DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass);
+        const float mass;
+      friend class CollisionWorld;
+      };
+
+    struct QueryResult {
+      bool                 hasHit = false;
+      float                fraction = 1.f;
+      Tempest::Vec3        point = {};
+      Tempest::Vec3        normal = {};
+      CollisionBody*       body = nullptr;
+      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      const char*          sector = nullptr;
+      };
 
     void tick(uint64_t dt);
-    void setBBox(const btVector3& min, const btVector3& max);
-    void setItemHitCallback(std::function<void(Item& itm, zenkit::MaterialGroup mat, float impulse, float mass)> f);
+    void setBBox(JPH::Vec3Arg min, JPH::Vec3Arg max);
+    void setItemHitCallback(std::function<void(Item&, zenkit::MaterialGroup, float impulse, float mass)> f);
 
-    void updateAabbs() override;
-    void touchAabbs();
+    // BodyInterface updates the broad phase immediately when a body moves.
+    void updateAabbs() const {}
+    void touchAabbs() const {}
 
-    bool hasCollision(const btCollisionObject &it, Tempest::Vec3& normal);
-    bool hasCollision(btRigidBody& it, Tempest::Vec3& normal, Interactive*& vob);
+    bool hasCollision(const JPH::Shape* shape, const Tempest::Vec3& center, Tempest::Vec3& normal, Interactive*& vob) const;
 
-    std::unique_ptr<CollisionBody> addCollisionBody(btCollisionShape& shape, const Tempest::Matrix4x4& tr, float friction);
-    std::unique_ptr<DynamicBody>   addDynamicBody  (btCollisionShape& shape, const Tempest::Matrix4x4& tr, float friction, float mass);
+    std::unique_ptr<CollisionBody> addCollisionBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction,
+                                                   int category, bool movable = false, bool sensor = false, const PhysicVbo* mesh = nullptr);
+    std::unique_ptr<DynamicBody> addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction, float mass);
+    std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                         const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                         const Tempest::Matrix4x4& objectMatrix,
+                                         const Tempest::Vec3& initialVelocity = {});
+    size_t bodyCount() const;
+    float stepMilliseconds() const;
+    uint64_t rayCount() const;
 
-    void rayCast(const Tempest::Vec3& b, const Tempest::Vec3& e, RayResultCallback& cb);
-    void raySweep(const Tempest::Vec3& b, const Tempest::Vec3& e, float radius, RayResultCallback& cb);
-
-    class CollisionBody : public btRigidBody {
-      public:
-        ~CollisionBody();
-      private:
-        CollisionBody(btRigidBody::btRigidBodyConstructionInfo& inf, CollisionWorld* owner);
-        CollisionWorld* owner = nullptr;
-      friend class CollisionWorld;
-      friend class CollisionWorld::DynamicBody;
-      };
-
-    class DynamicBody : public CollisionBody {
-      DynamicBody(btRigidBody::btRigidBodyConstructionInfo& inf, CollisionWorld* owner)
-        :CollisionBody(inf,owner), mass(inf.m_mass){}
-      friend class CollisionWorld;
-      const float mass = 0;
-      };
+    // Masks use 1u << DynamicWorld::Category. Normals keep the mesh's winding.
+    QueryResult rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
+                        bool backfaces = false, std::vector<QueryResult>* all = nullptr) const;
+    QueryResult raySweep(const Tempest::Vec3& from, const Tempest::Vec3& to, float radius, uint32_t mask,
+                         bool backfaces = false) const;
 
   private:
-    struct Broadphase;
-    struct ContructInfo;
-
-    CollisionWorld(std::unique_ptr<btCollisionConfiguration>&& conf);
-    CollisionWorld(ContructInfo ci);
-
-    bool tick(float step, btRigidBody& body);
-
-    void saveKinematicState(btScalar timeStep) override;
-
-    std::unique_ptr<btCollisionConfiguration>   conf;
-    std::unique_ptr<btCollisionDispatcher>      disp;
-    std::unique_ptr<btBroadphaseInterface>      broad;
-    std::unique_ptr<btSequentialImpulseConstraintSolver> solver;
-
-    std::function<void(Item& itm, zenkit::MaterialGroup mat, float impulse, float mass)>  hitItem;
-
-    std::vector<btRigidBody*>                   rigid;
-    btVector3                                   gravity = btVector3(0,0,0);
-    btVector3                                   bbox[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-
-    mutable uint32_t aabbChanged = 0;
+    struct Impl;
+    void addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
+                 bool movable, bool sensor, float mass);
+    void removeBody(CollisionBody& body);
+    void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
+    JPH::PhysicsSystem& physicsSystem();
+    uint32_t registerRagdoll(Ragdoll& body);
+    void unregisterRagdoll(Ragdoll& body);
+    std::unique_ptr<Impl> impl;
+    std::vector<CollisionBody*> bodies;
+    std::vector<DynamicBody*> rigid;
+    std::vector<Ragdoll*> ragdolls;
+    uint32_t nextRagdollGroup = 1;
+    std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
+    JPH::Vec3 bboxMin = JPH::Vec3::sZero();
+    float accumulatedTime = 0;
+    friend class Ragdoll;
   };
-

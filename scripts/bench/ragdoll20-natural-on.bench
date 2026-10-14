@@ -1,0 +1,21 @@
+seed 73013
+cheat god
+set time 12 0
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+ragdoll on
+ragdoll arena
+wait 34
+crowd BDT_1013_BANDIT_L 20
+wait 600
+ragdoll frame20
+overlay off
+view nopfx
+wait 34
+cadence normal
+wait 34
+cadence check
+wait 34
+cadence die on
+cadence wait
+cadence report

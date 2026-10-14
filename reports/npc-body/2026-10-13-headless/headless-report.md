@@ -2,7 +2,7 @@
 
 Статус: **подтверждён**.
 
-[Протокол/runtime](../../../docs/npc-body-headless-runner.md), [план](../../../docs/npc-body-control-plan.md), [контракт](../../../docs/npc-body-combat-contract.md). [Сырые данные, ignored](../../../data/npc-body/headless/stage2-v3), [suite.json](../../../data/npc-body/headless/stage2-v3/suite.json), [manifest.json](../../../data/npc-body/headless/stage2-v3/manifest.json).
+[Протокол/runtime](../../../docs/npc-body-headless-runner.md), [план](../../../docs/npc-body-control-plan.md), [контракт](../../../docs/npc-body-combat-contract.md). Локальный путь исходных данных — `data/npc-body/headless/stage2-v3/` (`suite.json`, `manifest.json`); этот ignored-пакет не входит в репозиторий.
 
 | Критерий | Результат | Проверенная граница |
 |---|---|---|

@@ -7,17 +7,13 @@
 #include <memory>
 #include <limits>
 
-class btTriangleIndexVertexArray;
-class btCollisionShape;
-class btCollisionObject;
-class btRigidBody;
-class btVector3;
-
 class PhysicMeshShape;
 class PhysicVbo;
 class PackedMesh;
 class Skeleton;
 class Bounds;
+class HitZones;
+class Ragdoll;
 
 class World;
 class Bullet;
@@ -30,7 +26,9 @@ class CollisionWorld;
 
 class DynamicWorld final {
   private:
-    struct HumShape;
+    struct BodyData;
+    struct WorldBodies;
+    struct BBoxShape;
     struct NpcBody;
     struct NpcBodyList;
     struct BulletsList;
@@ -53,6 +51,7 @@ class DynamicWorld final {
       C_Object    = 4,
       C_Ghost     = 5,
       C_Item      = 6,
+      C_Ragdoll   = 7,
       };
 
     enum PtrType {
@@ -130,14 +129,13 @@ class DynamicWorld final {
     struct Item {
       public:
         Item()=default;
-        Item(DynamicWorld* owner, btCollisionObject* obj, btCollisionShape* shp):owner(owner),obj(obj),shp(shp){}
-        Item(Item&& it):owner(it.owner),obj(it.obj),shp(it.shp){ it.obj=nullptr; it.shp=nullptr; }
+        Item(DynamicWorld* owner, BodyData* obj):owner(owner),obj(obj){}
+        Item(Item&& it):owner(it.owner),obj(it.obj){ it.obj=nullptr; }
         ~Item();
 
         Item& operator = (Item&& it){
           std::swap(owner,it.owner);
           std::swap(obj,  it.obj);
-          std::swap(shp,  it.shp);
           return *this;
           }
 
@@ -149,8 +147,7 @@ class DynamicWorld final {
 
       private:
         DynamicWorld*       owner  = nullptr;
-        btCollisionObject*  obj    = nullptr;
-        btCollisionShape*   shp    = nullptr;
+        BodyData*           obj    = nullptr;
       };
 
     struct RayLandResult {
@@ -251,8 +248,7 @@ class DynamicWorld final {
         DynamicWorld*       owner = nullptr;
         BBoxCallback*       cb    = nullptr;
 
-        btCollisionShape*   shape = nullptr;
-        btRigidBody*        obj   = nullptr;
+        BBoxShape*          shape = nullptr;
 
       friend class DynamicWorld;
       };
@@ -275,12 +271,23 @@ class DynamicWorld final {
     Item           addStaticObj (const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
     Item           addMovableObj(const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
     Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, zenkit::MaterialGroup mat);
+    std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                          const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                          const Tempest::Matrix4x4& objectMatrix,
+                                          const Tempest::Vec3& initialVelocity = {});
 
     BulletBody*    bulletObj(BulletCallback* cb);
     BBoxBody       bboxObj(BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox);
     BBoxBody       bboxObj(BBoxCallback* cb, const Tempest::Vec3& pos, float R);
 
     void           tick(uint64_t dt);
+
+    struct PhysicsStats {
+      float    stepMilliseconds = 0;
+      size_t   bodies = 0;
+      uint64_t rays = 0;
+      };
+    PhysicsStats physicsStats() const;
 
     void           deleteObj(BulletBody* obj);
 
@@ -297,15 +304,6 @@ class DynamicWorld final {
     std::string_view validateSectorName(std::string_view name) const;
 
   private:
-    enum ItemType : uint8_t {
-      IT_Static,
-      IT_Movable,
-      IT_Dynamic,
-      };
-    Item           createObj(btCollisionShape* shape, bool ownShape, const Tempest::Matrix4x4& m,
-                             float mass, float friction, ItemType type);
-
-
     void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const;
     bool           hasCollision(const NpcItem &it, CollisionTest& out);
@@ -314,14 +312,9 @@ class DynamicWorld final {
 
     std::vector<std::string>           sectors;
 
-    std::vector<btVector3>             landVbo;
     std::unique_ptr<PhysicVbo>         landMesh;
-    std::unique_ptr<btCollisionShape>  landShape;
-    std::unique_ptr<btRigidBody>       landBody;
-
-    std::unique_ptr<btCollisionShape>  waterShape;
-    std::unique_ptr<btRigidBody>       waterBody;
     std::unique_ptr<PhysicVbo>         waterMesh;
+    std::unique_ptr<WorldBodies>       bodies;
 
     std::unique_ptr<NpcBodyList>       npcList;
     std::unique_ptr<BulletsList>       bulletList;

@@ -92,6 +92,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "useQuickSaveKeys",    1);
   defaults->set("GAME", "manualAim",           1); // the bow aimed by hand (game/archery)
   defaults->set("GAME", "npcManualAim",        1); // npc archers aim by hand too (game/archerai)
+  defaults->set("GAME", "ragdoll",             1); // physical death/KO bodies; GAME/ragdoll=0 keeps animation-only behavior
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -1047,6 +1048,9 @@ bool Gothic::playvideoex(std::string_view name, bool, bool) {
   }
 
 bool Gothic::printscreen(std::string_view msg, int posx, int posy, std::string_view font, int timesec) {
+  // Script notifications still return normally in the CPU runner, which has no fonts or UI.
+  if(Resources::isHeadless())
+    return false;
   onPrintScreen(msg,posx,posy,timesec,Resources::font(font, Resources::FontType::Normal, 1));
   return false;
   }

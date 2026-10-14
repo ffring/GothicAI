@@ -1,8 +1,10 @@
 #include "instancestorage.h"
 #include "shaders.h"
 #include "utils/workers.h"
+#include "frameprofile.h"
 
 #include <Tempest/Log>
+#include <algorithm>
 #include <cstdint>
 #include <atomic>
 
@@ -28,6 +30,19 @@ static void bitSet(std::vector<uint32_t>& b, size_t id) {
   auto& bits = b[id/32];
   id %= 32;
   reinterpret_cast<std::atomic<uint32_t>&>(bits).fetch_or(1u << id, std::memory_order_relaxed);
+  }
+
+static void bitSetRange(std::vector<uint32_t>& b, size_t first, size_t count) {
+  static_assert(sizeof(std::atomic<uint32_t>)==sizeof(uint32_t));
+  while(count>0) {
+    const size_t offset = first%32;
+    const size_t span = std::min(count,32-offset);
+    const uint32_t mask = (UINT32_MAX >> (32-span)) << offset;
+    auto& bits = b[first/32];
+    reinterpret_cast<std::atomic<uint32_t>&>(bits).fetch_or(mask, std::memory_order_relaxed);
+    first += span;
+    count -= span;
+    }
   }
 
 static bool bitAt(std::vector<uint32_t>& b, size_t id) {
@@ -59,10 +74,20 @@ void InstanceStorage::Id::set(const Tempest::Matrix4x4* mat) {
     return;
 
   auto data = reinterpret_cast<Matrix4x4*>(owner->dataCpu.data() + rgn.begin);
+  const bool identical = rgn.asize==0 || std::memcmp(data,mat,rgn.asize)==0;
+  if(FrameProfile::enabled()) {
+    FrameProfile::add(FrameProfile::Amount::PaletteCalls,1);
+    FrameProfile::add(FrameProfile::Amount::PaletteBytes,rgn.asize);
+    if(identical) {
+      FrameProfile::add(FrameProfile::Amount::IdenticalCalls,1);
+      FrameProfile::add(FrameProfile::Amount::IdenticalBytes,rgn.asize);
+      }
+    }
+  if(identical)
+    return;
   std::memcpy(data, mat, rgn.asize);
 
-  for(size_t i=0; i<rgn.asize; i+=blockSz)
-    bitSet(owner->durty, (rgn.begin+i)/blockSz);
+  bitSetRange(owner->durty,rgn.begin/blockSz,(rgn.asize+blockSz-1)/blockSz);
   }
 
 void InstanceStorage::Id::set(const Tempest::Matrix4x4& obj, size_t offset) {
@@ -122,6 +147,7 @@ InstanceStorage::~InstanceStorage() {
   }
 
 bool InstanceStorage::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
+  FrameProfile::Scope timing(FrameProfile::Zone::StorageCommit);
   auto& device = Resources::device();
 
   std::atomic_thread_fence(std::memory_order_acquire);
@@ -129,6 +155,8 @@ bool InstanceStorage::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
 
   const size_t dataSize = (dataCpu.size() + 0xFFF) & ~size_t(0xFFF);
   if(dataGpu.byteSize()!=dataSize) {
+    FrameProfile::Scope growth(FrameProfile::Zone::StorageGrow);
+    FrameProfile::add(FrameProfile::Amount::GrowBytes,dataCpu.size());
     Resources::recycle(std::move(dataGpu));
     dataGpu = device.ssbo(BufferHeap::Device,Tempest::Uninitialized,dataSize);
     dataGpu.update(dataCpu);
@@ -136,6 +164,7 @@ bool InstanceStorage::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
     return true;
     }
 
+  FrameProfile::Scope packing(FrameProfile::Zone::StoragePack);
   patchBlock.clear();
   size_t payloadSize = 0;
   for(size_t i = 0; i<blockCnt; ++i) {
@@ -185,7 +214,12 @@ bool InstanceStorage::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
     i.size /= 4;
     }
   std::memcpy(patchCpu.data(), patchBlock.data(), headerSize);
+  FrameProfile::add(FrameProfile::Amount::PatchCalls,1);
+  FrameProfile::add(FrameProfile::Amount::PatchBytes,headerSize+payloadSize);
+  FrameProfile::add(FrameProfile::Amount::PatchBlocks,patchBlock.size());
+  packing.finish();
 
+  FrameProfile::Scope dispatch(FrameProfile::Zone::StorageDispatch);
   auto& path = patchGpu[fId];
   if(path.byteSize() < headerSize + payloadSize) {
     path = device.ssbo(BufferHeap::Upload, Uninitialized, headerSize + payloadSize);
@@ -207,6 +241,7 @@ bool InstanceStorage::commit(Encoder<CommandBuffer>& cmd, uint8_t fId) {
   }
 
 void InstanceStorage::join() {
+  FrameProfile::Scope timing(FrameProfile::Zone::StorageJoin);
   while(true) {
     std::unique_lock<std::mutex> lck(sync);
     if(uploadFId<0)
@@ -250,6 +285,10 @@ InstanceStorage::Id InstanceStorage::alloc(const size_t size) {
 
   blockCnt = (dataCpu.size()+blockSz-1)/blockSz;
   durty.resize((blockCnt+32-1)/32, 0);
+  // GPU capacity is page-rounded and its unused tail is uninitialized. Upload
+  // every newly reserved block, including padding, even if the first palette is
+  // zero or a later realloc exposes padding without changing the CPU bytes.
+  bitSetRange(durty,r.begin/blockSz,r.size/blockSz);
   return Id(*this,r);
   }
 
@@ -274,9 +313,7 @@ bool InstanceStorage::realloc(Id& id, const size_t size) {
 
   auto data = dataCpu.data();
   std::memcpy(data+next.rgn.begin, data+id.rgn.begin, id.rgn.asize);
-  for(size_t i=0; i<id.rgn.asize; ++i) {
-    bitSet(durty, (next.rgn.begin + i)/blockSz);
-    }
+  bitSetRange(durty,next.rgn.begin/blockSz,(id.rgn.asize+blockSz-1)/blockSz);
   id = std::move(next);
   return true;
   }
@@ -312,7 +349,13 @@ void InstanceStorage::uploadMain() {
     if(uploadFId==Resources::MaxFramesInFlight)
       break;
 
+    {
+    // Execution interval and payload size, deliberately NOT the originating
+    // dispatch frame. An async upload may overlap a later render attempt.
+    FrameProfile::Scope upload(FrameProfile::Zone::StorageUploadWorker);
+    upload.add(FrameProfile::Amount::UploadBytes,patchCpu.size());
     patchGpu[uploadFId].update(patchCpu);
+    }
     uploadFId = -1;
     }
   }

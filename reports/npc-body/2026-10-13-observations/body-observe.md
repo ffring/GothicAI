@@ -2,7 +2,7 @@
 
 Статус: **подтверждён**.
 
-[Схема/runtime](../../../docs/npc-body-observations.md), [план](../../../docs/npc-body-control-plan.md), [конфигурация](../../../evals/npc-body/body-observe-v1.json), [локальные metadata, ignored](../../../data/npc-body/observe/stage3-v1). Полный raw evidence хранится на сервере: `/home/kaifat/gothic-ai/body-headless/runs/stage3-v1`.
+[Схема/runtime](../../../docs/npc-body-observations.md), [план](../../../docs/npc-body-control-plan.md), [конфигурация](../../../evals/npc-body/body-observe-v1.json), локальные metadata — `data/npc-body/observe/stage3-v1/` (ignored, не входят в репозиторий). Полный raw evidence хранится на сервере: `/home/kaifat/gothic-ai/body-headless/runs/stage3-v1`.
 
 | Критерий | Результат | Проверенная граница |
 |---|---|---|

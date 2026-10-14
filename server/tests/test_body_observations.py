@@ -20,58 +20,146 @@ from gothic_ai.protocol import (
 def observation(seq=1, generation=1, entity=1):
     """A complete passive wire sample with an unseen target and no privileged target features."""
     gates = {
-        "fai_wait_remaining_ms": 0, "ani_wait_remaining_ms": 0,
-        "ai_wait_remaining_ms": 0, "output_wait_remaining_ms": 0,
-        "fai_wait": False, "ani_wait": False, "ai_wait": False, "output_wait": False,
+        "fai_wait_remaining_ms": 0,
+        "ani_wait_remaining_ms": 0,
+        "ai_wait_remaining_ms": 0,
+        "output_wait_remaining_ms": 0,
+        "fai_wait": False,
+        "ani_wait": False,
+        "ai_wait": False,
+        "output_wait": False,
     }
     own = {
-        "position_world_cm": [100.0, 0.0, 300.0], "linear_velocity_cm_s": None,
-        "velocity_valid": False, "yaw_rad": 0.0, "hp": 300, "hp_max": 300, "hp_fraction": 1.0,
-        "weapon_state": 3, "weapon_symbol": 20, "weapon_length_cm": 100,
-        "skill": 60, "skill_talent": 1, "skill_valid": True,
-        "fight_tactic": 1, "body_state_raw": 0, "body_state_base": 0,
-        "body_flags": 0, "queued_primitive": 0, "choice_id": 0, "gates": gates,
+        "position_world_cm": [100.0, 0.0, 300.0],
+        "linear_velocity_cm_s": None,
+        "velocity_valid": False,
+        "yaw_rad": 0.0,
+        "hp": 300,
+        "hp_max": 300,
+        "hp_fraction": 1.0,
+        "weapon_state": 3,
+        "weapon_symbol": 20,
+        "weapon_length_cm": 100,
+        "skill": 60,
+        "skill_talent": 1,
+        "skill_valid": True,
+        "fight_tactic": 1,
+        "body_state_raw": 0,
+        "body_state_base": 0,
+        "body_flags": 0,
+        "queued_primitive": 0,
+        "choice_id": 0,
+        "gates": gates,
     }
-    own.update(dict.fromkeys([
-        "dead", "unconscious", "down", "in_air", "swim", "dive", "attack_anim", "prehit",
-        "defence_active", "jumpback_active", "def_window", "par_window", "interruptible",
-    ], False))
+    own.update(
+        dict.fromkeys(
+            [
+                "dead",
+                "unconscious",
+                "down",
+                "in_air",
+                "swim",
+                "dive",
+                "attack_anim",
+                "prehit",
+                "defence_active",
+                "jumpback_active",
+                "def_window",
+                "par_window",
+                "interruptible",
+            ],
+            False,
+        )
+    )
     target = {"entity_id": 2, "present": True, "visible": False, "current_valid": False}
-    target.update(dict.fromkeys([
-        "position_world_cm", "relative_position_cm", "linear_velocity_cm_s", "relative_velocity_cm_s",
-        "yaw_error_rad", "fight_distance_cm", "attack_range_cm", "g_range_cm", "closeup_range_cm",
-        "in_w_range", "in_g_range", "in_closeup", "focus_30", "focus_5", "melee_line_clear",
-        "hp", "hp_max", "hp_fraction", "weapon_state", "body_state_raw", "attack_anim", "prehit",
-        "defence_active", "jumpback_active", "down", "last_known_position_world_cm",
-        "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
-    ], None))
+    target.update(
+        dict.fromkeys(
+            [
+                "position_world_cm",
+                "relative_position_cm",
+                "linear_velocity_cm_s",
+                "relative_velocity_cm_s",
+                "yaw_error_rad",
+                "fight_distance_cm",
+                "attack_range_cm",
+                "g_range_cm",
+                "closeup_range_cm",
+                "in_w_range",
+                "in_g_range",
+                "in_closeup",
+                "focus_30",
+                "focus_5",
+                "melee_line_clear",
+                "hp",
+                "hp_max",
+                "hp_fraction",
+                "weapon_state",
+                "body_state_raw",
+                "attack_anim",
+                "prehit",
+                "defence_active",
+                "jumpback_active",
+                "down",
+                "last_known_position_world_cm",
+                "last_known_velocity_cm_s",
+                "last_seen_game_ms",
+                "last_known_age_ms",
+            ],
+            None,
+        )
+    )
     return {
-        "kind": "body_observation", "schema_version": 1, "observation_seq": seq,
-        "generation": generation, "session_epoch": 1, "world_epoch": generation,
-        "control_generation": 0, "entity_id": entity, "script_symbol": 50,
+        "kind": "body_observation",
+        "schema_version": 1,
+        "observation_seq": seq,
+        "generation": generation,
+        "session_epoch": 1,
+        "world_epoch": generation,
+        "control_generation": 0,
+        "entity_id": entity,
+        "script_symbol": 50,
         "phase": "post_simulation_post_animation",
-        "t_game_ms": seq * 50, "dt_game_ms": 50, "sim_step": seq * 2,
-        "sample_period_ms": 50, "periodic": True, "event_only": False,
-        "state_changed": True, "motion_discontinuity": False,
-        "can_decide": False, "control_allowed": False, "native_decision_eligible": False,
-        "action_mask_valid": False, "mask_kind": "conservative_native_availability",
-        "availability_mask": [False] * 12, "self": own, "target": target,
+        "t_game_ms": seq * 50,
+        "dt_game_ms": 50,
+        "sim_step": seq * 2,
+        "sample_period_ms": 50,
+        "periodic": True,
+        "event_only": False,
+        "state_changed": True,
+        "motion_discontinuity": False,
+        "can_decide": False,
+        "control_allowed": False,
+        "native_decision_eligible": False,
+        "action_mask_valid": False,
+        "mask_kind": "conservative_native_availability",
+        "availability_mask": [False] * 12,
+        "self": own,
+        "target": target,
         "goal": {"kind": "native_combat", "version": 0, "target_id": 2, "move_hint": 0},
         "last_result": {"valid": False, "code": 0, "source_game_ms": 0, "source_sim_step": 0},
         "local_obstacles": {
             "ray_range_cm": 300.0,
             "rays": [{"angle_rad": i * 0.392699, "distance_cm": 300.0, "hit": False} for i in range(16)],
         },
-        "events": [], "builder_wall_us": 40,
+        "events": [],
+        "builder_wall_us": 40,
     }
 
 
 def packet(*rows, generation=1, **updates):
     value = {
-        "kind": "body_observations", "schema_version": 1, "generation": generation,
-        "session_epoch": 1, "world_epoch": generation, "control_generation": 0,
-        "phase": "post_simulation_post_animation", "sample_period_ms": 50, "queue_capacity": 16,
-        "dropped_total": 0, "dropped_since_drain": 0, "event_dropped_total": 0,
+        "kind": "body_observations",
+        "schema_version": 1,
+        "generation": generation,
+        "session_epoch": 1,
+        "world_epoch": generation,
+        "control_generation": 0,
+        "phase": "post_simulation_post_animation",
+        "sample_period_ms": 50,
+        "queue_capacity": 16,
+        "dropped_total": 0,
+        "dropped_since_drain": 0,
+        "event_dropped_total": 0,
         "observations": list(rows) or [observation(generation=generation)],
     }
     value.update(updates)
@@ -141,20 +229,23 @@ def test_numeric_coordinates_reject_nonfinite_and_coerced_values(bad):
         message(packet(row))
 
 
-@pytest.mark.parametrize("change", [
-    lambda row: row["availability_mask"].pop(),
-    lambda row: row["local_obstacles"]["rays"].pop(),
-    lambda row: row["availability_mask"].__setitem__(0, 1),
-    lambda row: row.__setitem__("observation_seq", True),
-    lambda row: row.__setitem__("schema_version", True),
-    lambda row: row.__setitem__("can_decide", 0),
-    lambda row: row.__setitem__("state_changed", 0),
-    lambda row: row.__setitem__("motion_discontinuity", 1),
-    lambda row: row["self"].__setitem__("skill_valid", 1),
-    lambda row: row["self"].__setitem__("skill_talent", True),
-    lambda row: row.__setitem__("action_mask_valid", True),
-    lambda row: row.__setitem__("future_debug_payload", {"hp": 1}),
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda row: row["availability_mask"].pop(),
+        lambda row: row["local_obstacles"]["rays"].pop(),
+        lambda row: row["availability_mask"].__setitem__(0, 1),
+        lambda row: row.__setitem__("observation_seq", True),
+        lambda row: row.__setitem__("schema_version", True),
+        lambda row: row.__setitem__("can_decide", 0),
+        lambda row: row.__setitem__("state_changed", 0),
+        lambda row: row.__setitem__("motion_discontinuity", 1),
+        lambda row: row["self"].__setitem__("skill_valid", 1),
+        lambda row: row["self"].__setitem__("skill_talent", True),
+        lambda row: row.__setitem__("action_mask_valid", True),
+        lambda row: row.__setitem__("future_debug_payload", {"hp": 1}),
+    ],
+)
 def test_body_sample_rejects_bad_dimensions_masks_ids_and_control(change):
     row = observation()
     change(row)
@@ -162,10 +253,15 @@ def test_body_sample_rejects_bad_dimensions_masks_ids_and_control(change):
         message(packet(row))
 
 
-@pytest.mark.parametrize("name,value", [
-    ("position_world_cm", [4.0, 5.0, 6.0]), ("hp", 300),
-    ("attack_anim", False), ("fight_distance_cm", 200.0),
-])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("position_world_cm", [4.0, 5.0, 6.0]),
+        ("hp", 300),
+        ("attack_anim", False),
+        ("fight_distance_cm", 200.0),
+    ],
+)
 def test_unseen_target_cannot_leak_current_features(name, value):
     row = observation()
     row["target"][name] = value
@@ -175,8 +271,9 @@ def test_unseen_target_cannot_leak_current_features(name, value):
 
 def test_unseen_target_can_keep_last_known_position_and_age():
     row = observation()
-    row["target"].update(last_known_position_world_cm=[1.0, 2.0, 3.0], last_seen_game_ms=10,
-                         last_known_age_ms=40)
+    row["target"].update(
+        last_known_position_world_cm=[1.0, 2.0, 3.0], last_seen_game_ms=10, last_known_age_ms=40
+    )
     assert message(packet(row)).packet.observations[0].target.last_known_age_ms == 40
 
 
@@ -203,8 +300,14 @@ def test_packet_rejects_mixed_generations_duplicate_sequences_and_unbounded_rows
 
 def test_events_cannot_come_from_future_and_are_bounded():
     row = observation()
-    event = {"event_id": 1, "source_entity_id": 1, "source_game_ms": 51, "source_sim_step": 2,
-             "perspective": "self", "code": 1}
+    event = {
+        "event_id": 1,
+        "source_entity_id": 1,
+        "source_game_ms": 51,
+        "source_sim_step": 2,
+        "perspective": "self",
+        "code": 1,
+    }
     row["events"] = [event]
     with pytest.raises(ValidationError):
         message(packet(row))
@@ -225,8 +328,9 @@ class Connection:
         cmd = json.loads(raw)
         self.sent.append(cmd)
         if self.link is not None:
-            self.link._dispatch(Result(type="result", req=cmd["req"], ok=True,
-                                       value={"generation": self.reply_generation}))
+            self.link._dispatch(
+                Result(type="result", req=cmd["req"], ok=True, value={"generation": self.reply_generation})
+            )
             if self.send_sample_before_resume:
                 self.link._dispatch(message(packet(generation=self.reply_generation)))
 
@@ -265,8 +369,9 @@ def test_transport_does_not_grow_latest_actor_set_without_generation_reset():
     assert len(link.body_latest) == 4 and link.body_stale_packets == 1
 
 
-@pytest.mark.parametrize("reset", [Loading(type="loading"), Hello(type="hello", protocol=16,
-                                                                  client="test", codepage="cp1251")])
+@pytest.mark.parametrize(
+    "reset", [Loading(type="loading"), Hello(type="hello", protocol=16, client="test", codepage="cp1251")]
+)
 def test_loading_and_hello_invalidate_cached_body_state(reset):
     link = GameLink(Connection())
     link._dispatch(message(packet()))
@@ -296,8 +401,10 @@ async def test_watch_only_sends_passive_command_and_preserves_first_new_packet()
     assert not link.body_latest and link.body_generation == 4
 
 
-@pytest.mark.parametrize("npcs,rate", [(["X"] * 5, 20), (["x", "X"], 20), (["PLAYER", "HERO"], 20),
-                                       (["X"], 30), (["X"], True), (["X"], 20.0)])
+@pytest.mark.parametrize(
+    "npcs,rate",
+    [(["X"] * 5, 20), (["x", "X"], 20), (["PLAYER", "HERO"], 20), (["X"], 30), (["X"], True), (["X"], 20.0)],
+)
 def test_watch_rejects_invalid_subscription(npcs, rate):
     with pytest.raises(ValidationError):
         BodyWatchCmd(req="r1", npcs=npcs, rate_hz=rate)

@@ -82,4 +82,5 @@ class HitZones final {
     float                size     = 0; // cm: the creature from end to end (the bind pose)
 
     static Tempest::Vec3 point(const Tempest::Matrix4x4* tr, const End& e);
+    friend class Ragdoll;
   };

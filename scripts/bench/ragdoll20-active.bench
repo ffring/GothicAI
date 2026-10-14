@@ -1,0 +1,28 @@
+# Corrected fixed twenty-model arena; selected only by geometry before timing.
+seed 73013
+cheat god
+set time 12 0
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+ragdoll on
+ragdoll arena
+wait 34
+crowd BDT_1013_BANDIT_L 20
+wait 600
+ragdoll frame20
+overlay off
+view nopfx
+wait 34
+down all dead
+ragdoll awake20
+ragdoll churn on
+wait 600
+ragdoll verify20 active
+shot twenty_active_before
+wait 34
+rec twenty_active novideo
+wait 34000
+stop
+shot twenty_active_coverage
+wait 34
+physics stats

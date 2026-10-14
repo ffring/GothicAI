@@ -353,6 +353,7 @@ async def test_the_director_repairs_after_a_rejected_proposal(graph):
         rejected = chronicle.facts("repair_rejected")
         assert len(rejected) == 1 and any("мёртв" in why for why in rejected[0]["why"])
         assert "Отклонено" in llm.calls[1][1][-1].content and "мёртв" in llm.calls[1][1][-1].content
+        assert llm.cache_keys == ["director", "director"]  # its own connection (openai_responses.py)
 
         # Hilda takes the ending over: a dialog of hers, from the lifted ending
         await _until(lambda: any(op["op"] == "add_node" for m in fake.graph for op in m["ops"]))
