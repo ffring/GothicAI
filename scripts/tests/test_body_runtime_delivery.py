@@ -122,14 +122,17 @@ def test_stale_refusal_with_changed_control_never_gets_refresh_credit(changed):
 
 def test_stale_recovery_budget_is_finite_and_never_erases_failed_receipts():
     runner = Runner()
-    runner.responses = [stale(2), stale(4), stale(6), {"accepted": True}]
+    runner.responses = [stale(2), stale(4), stale(6), stale(8)]
     env = environment(runner)
-    for sequence in (1, 3, 5):
+    for sequence in (1, 3, 5, 7):
         env.latest[4] = row(sequence)
         assert env.try_act(4, 9) is None
-    assert len(env.command_responses) == 3
-    assert [r.get("recovery_attempt") for r in env.command_responses] == [1, 2, None]
-    assert env.fallbacks and runner.requests[-1]["cmd"] == "body_release"
+    assert len(env.command_responses) == 4
+    assert [r.get("recovery_attempt") for r in env.command_responses] == [1, 2, None, 1]
+    # The exhausted budget is a missed decision, not a release: ownership stays.
+    assert [r.get("decision_missed") is True for r in env.command_responses] == [False, False, True, False]
+    assert not env.fallbacks and 4 in env.leases
+    assert [r["cmd"] for r in runner.requests] == ["body_action"]*4
 
 
 def masked(sequence=1, *, game_ms=133, **updates):
@@ -190,8 +193,9 @@ def test_mask_change_and_stale_sequence_share_one_finite_refresh_budget():
     assert len(env.command_responses) == 3
     assert [r.get("recovery_attempt") for r in env.command_responses] == [1, 2, None]
     assert [r["response"]["reason"] for r in env.command_responses] == ["stale_observation", "masked", "masked"]
-    assert not env.decisions and env.fallbacks and 4 not in env.leases
-    assert runner.requests[-1]["cmd"] == "body_release"
+    assert env.command_responses[-1]["decision_missed"] is True
+    assert not env.decisions and not env.fallbacks and 4 in env.leases
+    assert runner.requests[-1]["cmd"] == "body_action"
 
 
 def target_guard(sequence=2, **updates):

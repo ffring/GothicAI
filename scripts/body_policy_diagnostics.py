@@ -558,6 +558,15 @@ class DiagnosticEpisodeEnv(PolicyEpisodeEnv):
             return None
         self._fresh_refresh_sources.pop(entity, None)
         self._refresh_required()
+        if healthy_stale or healthy_mask_change:
+            # Ownership is healthy and nothing ran: the decision is simply missed. It stays
+            # in the control-fraction denominator, so a collector that keeps missing fails
+            # the >=95% gate instead of crashing the arena through an explicit release.
+            self._stale_refresh_attempts.pop(entity, None)
+            receipt.update(decision_missed=True, refresh_reason=response["reason"],
+                           superseded_observation_seq=request["observation_seq"],
+                           native_current_observation_seq=actor["observation_seq"])
+            return None
         self.release_to_native(entity, "realtime_decision_rejected:"+str(response.get("reason")))
         return None
 
@@ -707,6 +716,7 @@ def _rollout(env, policy, case, phase_config, journal, latency, *, shadow=False,
                                  execution_id=receipt["response"].get("execution_id"))
                     entry["terminal_censored"] = receipt.get("terminal_transition") is True
                     entry["stale_refresh_pending"] = receipt.get("stale_refresh_pending") is True
+                    entry["decision_missed"] = receipt.get("decision_missed") is True
                     entry["native_guard_wait_pending"] = receipt.get("native_guard_wait_pending") is True
                     if entry["native_guard_wait_pending"]:
                         entry["native_guard_wait"] = receipt["native_guard_wait"]
@@ -715,6 +725,9 @@ def _rollout(env, policy, case, phase_config, journal, latency, *, shadow=False,
                         entry["recovery_attempt"] = receipt["recovery_attempt"]
                         entry["refresh_reason"] = receipt["refresh_reason"]
                         stats["stale_refresh_requests"] += 1
+                    if entry["decision_missed"]:
+                        entry["refresh_reason"] = receipt["refresh_reason"]
+                        stats["missed_decisions"] += 1
                     stats["accepted_model_commands"] += int(command_id is not None)
                     stats["terminal_censored_commands"] += int(entry["terminal_censored"])
                     stats["rejected_model_commands"] += int(command_id is None and not entry["terminal_censored"])

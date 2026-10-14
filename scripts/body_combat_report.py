@@ -25,7 +25,7 @@ TASKS = ("distance","attack","block","native_duel")
 EXPOSED_REFERENCE_SEEDS={17,61,73,89,101,127,29,113,43,151,163}
 SOURCES = {"npc_pre_tick","post_observation","controller_loss_before_idle",
            "controller_loss_after_idle_request","controller_segment_completed",
-           "controller_recovered","controller_release_visibility"}
+           "controller_recovered","controller_release_visibility","controller_recovery_turn"}
 HOUSEKEEPING_BRANCHES = ("hit_lock","fai_or_script_wait","wait_move")
 SOURCES.update("owned_consumed_"+branch+"_"+edge for branch in HOUSEKEEPING_BRANCHES for edge in ("before","after"))
 ORACLE_KEYS = {"visibility_diagnostic","oracle_debug_only","pose_view_deg","actual_can_see","center_ray","head_ray"}
@@ -221,7 +221,7 @@ def runtime_evidence(path,record,normalizer,observations,pairs,controls,*,shadow
     require(digest(path/"policy-inputs.jsonl") == record.get("model_journal_sha256"), "stage8 policy journal hash differs")
     wire,wire_proof=bc.wire_observation_sources(observations,pairs)
     processed,previous,arbitrations,closed,command_keys={}, {}, [],set(),set()
-    accepted,rejected,terminal_censored=0,0,0
+    accepted,rejected,terminal_censored,missed=0,0,0,0
     refresh_attempts,refresh_sources,masked_refreshes,guard_waits={},{},[],[]
     for entry in journal:
         kind=entry.get("kind")
@@ -301,7 +301,8 @@ def runtime_evidence(path,record,normalizer,observations,pairs,controls,*,shadow
                             "late command censor has no authoritative actual terminal")
                     terminal_censored+=1
                 else:
-                    if receipt.get("reason")=="masked":masked_refreshes.append(masked_refresh_evidence(entry,row,command,receipt,controls))
+                    if receipt.get("reason")=="masked" and entry.get("decision_missed") is not True:
+                        masked_refreshes.append(masked_refresh_evidence(entry,row,command,receipt,controls))
                     if entry.get("native_guard_wait_pending") is True:
                         guard_waits.append(target_guard_wait_evidence(entry,row,command,receipt,controls))
                     require(entry.get("terminal_censored") is not True and receipt.get("reason") in
@@ -312,6 +313,13 @@ def runtime_evidence(path,record,normalizer,observations,pairs,controls,*,shadow
                         require(type(attempt) is int and 1<=attempt<=2 and attempt==refresh_attempts.get(identity,0)+1,
                                 "masked/stale recovery exceeds the shared two-attempt budget")
                         refresh_attempts[identity]=attempt;refresh_sources[identity]={"source_seq":row["observation_seq"],"fresh_processed":False}
+                    elif entry.get("decision_missed") is True:
+                        # After the shared two-attempt budget a healthy stale/masked refusal is a
+                        # missed opportunity: no release, no start, and the budget starts over.
+                        require(receipt.get("reason") in ("stale_observation","masked") and refresh_attempts.get(identity,0)==2 and
+                                entry.get("command_id") is None and receipt.get("execution_id",0)==0,
+                                "missed decision without an exhausted stale/masked refresh budget")
+                        refresh_attempts.pop(identity,None);missed+=1
             arbitrations.append(entry)
     require(closed==actors,"stage8 terminal barriers do not close every actual model actor")
     current={}
@@ -337,7 +345,7 @@ def runtime_evidence(path,record,normalizer,observations,pairs,controls,*,shadow
     fraction=accepted/opportunities if opportunities else None
     require(record.get("neural_control_fraction")==fraction,"stage8 healthy-control fraction differs from receipts")
     return {"processed_periodic_inputs":len(processed),"model_actor_ids":sorted(actors),"accepted_commands":accepted,
-            "rejected_commands":rejected,"eligible_opportunities":opportunities,"neural_control_fraction":fraction,
+            "rejected_commands":rejected,"missed_decisions":missed,"eligible_opportunities":opportunities,"neural_control_fraction":fraction,
             "terminal_censored_commands":terminal_censored,
             "terminal_memory_reset":True,"native_to_received_wire":wire_proof,"masked_refreshes":masked_refreshes,
             "native_guard_waits":target_guard_history(record,journal,pairs,controls,guard_waits)}

@@ -115,10 +115,18 @@ class FourActorEnv(DiagnosticEpisodeEnv):
         return self.initial
 
 
-def process_physical_rows(env, policies, streams, journal, latency, stats, *, command_enabled):
+def process_physical_rows(env, policies, streams, journal, latency, stats, *, command_enabled, seen=None):
     rows, env.pulled = env.pulled, []
+    # Actors whose newest row can decide go first, and each one's command is sent as
+    # soon as its own runtime has stepped: four serial memory updates must not eat the
+    # inter-tick window. The sort is stable and keyed per actor, so every actor's own
+    # rows keep their order and every row is still processed exactly once.
+    newest = {row["entity_id"]: row for row in rows}
+    rows = sorted(rows, key=lambda row: newest[row["entity_id"]].get("can_decide") is not True)
+    remaining = Counter(row["entity_id"] for row in rows)
     for row in rows:
         entity = row["entity_id"]
+        remaining[entity] -= 1
         if entity not in policies:
             continue
         # The common collector receives this one original physical row exactly
@@ -126,6 +134,9 @@ def process_physical_rows(env, policies, streams, journal, latency, stats, *, co
         env.pulled = [row]
         process_rows(env, policies[entity], (entity,), streams, journal, latency, stats,
                      shadow=False, command_enabled=command_enabled)
+        if (seen is not None and command_enabled and remaining[entity] == 0 and
+                not (env.arena.get("terminated") or env.arena.get("truncated"))):
+            arbitrate_physical_actors(env, {entity: policies[entity]}, streams, journal, latency, stats, seen)
 
 
 def arbitrate_physical_actors(env, policies, streams, journal, latency, stats, seen):
@@ -156,6 +167,7 @@ def arbitrate_physical_actors(env, policies, streams, journal, latency, stats, s
                          command_request=receipt["request"], command_response=receipt["response"])
             entry["terminal_censored"] = receipt.get("terminal_transition") is True
             entry["stale_refresh_pending"] = receipt.get("stale_refresh_pending") is True
+            entry["decision_missed"] = receipt.get("decision_missed") is True
             entry["native_guard_wait_pending"] = receipt.get("native_guard_wait_pending") is True
             if entry["native_guard_wait_pending"]:
                 entry["native_guard_wait"] = receipt["native_guard_wait"]
@@ -260,7 +272,8 @@ def _load_rollout(env, policies, config, journal, latency, *, worker=None, provi
     polls = 0
     while time.monotonic() <= deadline:
         process_physical_rows(env, policies, streams, journal, latency, stats,
-                              command_enabled=not bool(env.arena.get("terminated") or env.arena.get("truncated")))
+                              command_enabled=not bool(env.arena.get("terminated") or env.arena.get("truncated")),
+                              seen=seen)
         if env.arena.get("terminated") or env.arena.get("truncated"):
             if worker is not None and service_result is None:
                 service_result = worker.take_completed(service_request)

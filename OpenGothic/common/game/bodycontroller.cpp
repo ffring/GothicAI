@@ -29,6 +29,9 @@ using Clock=std::chrono::steady_clock;
 using PolicyAction=FightAlgo::PolicyAction;
 using Json=rapidjson::Document;
 constexpr size_t MaxEvents=512, MaxActors=4, MaxRetries=64;
+// Bounded executor turn after a pose-cone loss. It stays below the 500 ms lease watchdog,
+// so a collector waiting on the guard never outlives its own bound.
+constexpr uint64_t VisibilityRecoveryMs=400;
 struct Command final {
   uint64_t id=0, observation=0, goal=0, target=0, issued=0, ttl=0, execution=0;
   PolicyAction action=PolicyAction::Continue;
@@ -46,7 +49,8 @@ struct Lease final {
   uint64_t entity=0, generation=0, goal=1, target=0, lastCommand=0, timeout=500, minimumSequence=0;
   std::string provider, mode="realtime", releaseReason;
   bool release=false, command=false, infrastructureEmitted=false, visibilityRecovery=false, movementStopPending=false;
-  uint64_t visibilityRecoveryStep=0;
+  bool visibilityTurning=false;
+  uint64_t visibilityRecoveryStep=0, visibilityRecoveryStart=0;
   Clock::time_point heartbeat;
   Command active;
   std::deque<Retry> retries;
@@ -514,7 +518,7 @@ bool BodyController::tick(Npc& actor,uint64_t dt) {
   if(!l->release && !state().paused && !state().infrastructure) {
     if(targetValid(actor,l->target)) {
       if(l->visibilityRecovery) actor.traceVisibilityDiagnostic("controller_recovered",true);
-      l->visibilityRecovery=false; l->visibilityRecoveryStep=0;
+      l->visibilityRecovery=false; l->visibilityTurning=false; l->visibilityRecoveryStep=0;
       } else {
       // Pose-based perception can turn during an already accepted strafe/block/attack.
       // It gates every new decision, but cannot cancel that segment's physical lock.
@@ -535,10 +539,23 @@ bool BodyController::tick(Npc& actor,uint64_t dt) {
           }
         l->visibilityRecovery=true;
         l->visibilityRecoveryStep=BodyObservations::currentStep()+1;
+        l->visibilityRecoveryStart=actor.world().tickCount();
         actor.traceVisibilityDiagnostic("controller_loss_after_idle_request",true);
         }
       if(l->visibilityRecovery && BodyObservations::currentStep()<=l->visibilityRecoveryStep) {
         actor.mvAlgo.tick(dt,MoveAlgo::WaitMove); return true;
+        }
+      // The native fight loop keeps turning toward its held target between primitives and
+      // never consults the view cone. Give the owned body that same FAI turn for a bounded
+      // time before handing it back; no primitive is chosen and no RNG is drawn here, and
+      // every decision stays masked until the target is visible again.
+      if(l->visibilityRecovery && !awaitingCompletion && boundary && boundTarget(actor,l->target) &&
+         actor.world().tickCount()-l->visibilityRecoveryStart<VisibilityRecoveryMs) {
+        if(!l->visibilityTurning) actor.traceVisibilityDiagnostic("controller_recovery_turn",true);
+        l->visibilityTurning=true;
+        actor.implTurnToFai(*actor.target(),dt);
+        actor.mvAlgo.tick(dt,MoveAlgo::FaiMove);
+        return true;
         }
       // A native hit can cancel the policy command while installing an uninterruptible
       // stumble. Loss of that command is not a physical decision boundary: retain the
@@ -668,6 +685,7 @@ void BodyController::postStep() {
       if(!targetValid(*l.npc,l.target)) {
         l.visibilityRecovery=true;
         l.visibilityRecoveryStep=BodyObservations::currentStep()+1;
+        l.visibilityRecoveryStart=now;
         }
       }
     }
