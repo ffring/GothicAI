@@ -416,10 +416,15 @@ class GameLink:
         return list((await self._request(cmd, timeout)).value or [])
 
     async def story_program(
-        self, node: str, part: Literal["information", "condition"] = "information", timeout: float = 5.0
+        self,
+        node: str,
+        part: Literal["information", "condition"] = "information",
+        own: bool = False,
+        timeout: float = 5.0,
     ) -> dict[str, Any]:
-        """The program a dialog's function runs now (StoryProgramCmd): {node, fn, returns, patched, steps}."""
-        cmd = StoryProgramCmd(req=self._next_id("s"), node=node.upper(), part=part)
+        """The program a dialog's function runs now, or the scripts' own (StoryProgramCmd): {node, fn,
+        returns, patched, steps}."""
+        cmd = StoryProgramCmd(req=self._next_id("s"), node=node.upper(), part=part, own=own)
         return dict((await self._request(cmd, timeout)).value or {})
 
     async def story_tag(self, tag: str, npcs: list[str], timeout: float = 5.0) -> int:

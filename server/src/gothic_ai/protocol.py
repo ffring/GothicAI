@@ -16,8 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v21: wolves hear the hero (beasts, beast), v22: things lying about (npc_view items, take_item; follow has
 # no time limit unless asked), v23: programs in the story graph (graph_patch program, add_node.program,
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
-# menu, menu_pick).
-PROTOCOL_VERSION = 24
+# menu, menu_pick), v25: story_program.own (the scripts' program under the director's).
+PROTOCOL_VERSION = 25
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1335,13 +1335,15 @@ class StoryEvalCmd(_Command):
 
 class StoryProgramCmd(_Command):
     """The program a dialog's script function runs now (v23): `node` is a dialog (C_INFO, `part` picks its
-    "information" or "condition") or a choice's function. `result.value`: {"node", "fn", "returns", "patched":
-    the director's program is in place, "steps": [...]} (docs/protocol.md, «Программы»)."""
+    "information" or "condition") or a choice's function; `own` (v25): the scripts' program even when the
+    director's is in place. `result.value`: {"node", "fn", "returns", "patched": the director's program is in
+    place, "steps": [...]} (docs/protocol.md, «Программы»)."""
 
     type: Literal["story_program"] = "story_program"
     req: str
     node: str
     part: Literal["information", "condition"] = "information"
+    own: bool = False
 
 
 class StoryTagCmd(_Command):

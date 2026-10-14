@@ -70,9 +70,9 @@ class DialogGraph final {
     std::string checkWorld(World& world);
     std::string status() const;
     // the program a dialog's script function runs now, as JSON: {"node", "fn", "returns", "patched", "steps"}.
-    // `node`: a dialog (C_INFO; `part` "condition" or "information") or a choice's function. Empty and `error`
-    // if there is none
-    std::string program(std::string_view node, std::string_view part, std::string& error);
+    // `node`: a dialog (C_INFO; `part` "condition" or "information") or a choice's function; `own`: the scripts'
+    // program even when the director's is in place. Empty and `error` if there is none
+    std::string program(std::string_view node, std::string_view part, bool own, std::string& error);
 
   private:
     struct Line final {
