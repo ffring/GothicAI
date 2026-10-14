@@ -11,6 +11,8 @@
 class Pose;
 class ProtoMesh;
 class LightSource;
+class Npc;
+namespace TestBench { bool ragdollBodyDrawable(const Npc& npc); }
 
 class MeshObjects final {
   private:
@@ -96,6 +98,7 @@ class MeshObjects final {
 
         bool                    cpuOnly = false;
         std::vector<CpuNode>     cpuSub;
+        friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
       };
 
   private:

@@ -234,6 +234,17 @@ if(NOT ANDROID AND NOT IOS)
     COMMAND $<TARGET_FILE:gothic-physics-contract>
     DEPENDS gothic-physics-contract
     USES_TERMINAL)
+  add_executable(gothic-ragdoll-contract EXCLUDE_FROM_ALL tests/physics_ragdoll_contract.cpp)
+  target_link_libraries(gothic-ragdoll-contract PRIVATE OpenGothic AiBridge)
+  add_executable(gothic-ragdoll-save-contract EXCLUDE_FROM_ALL tests/ragdoll_save_contract.cpp)
+  target_link_libraries(gothic-ragdoll-save-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-ragdoll-save
+    COMMAND $<TARGET_FILE:gothic-ragdoll-save-contract>
+    DEPENDS gothic-ragdoll-save-contract USES_TERMINAL)
+  add_custom_target(check-ragdoll
+    COMMAND $<TARGET_FILE:gothic-ragdoll-contract>
+    COMMAND $<TARGET_FILE:gothic-ragdoll-save-contract>
+    DEPENDS gothic-ragdoll-contract gothic-ragdoll-save-contract USES_TERMINAL)
 endif()
 
 # editor

@@ -403,7 +403,9 @@ void World::tick(uint64_t dt) {
   if(!doTicks)
     return;
   wobj.tick(dt,dt);
+  wobj.prepareRagdolls();
   wdynamic->tick(dt);
+  wobj.syncRagdolls();
   if(auto pl = player())
     wsound.tick(*pl);
   globFx->tick(dt);

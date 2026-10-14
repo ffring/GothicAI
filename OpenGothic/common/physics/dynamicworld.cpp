@@ -3,6 +3,7 @@
 #include "collisionworld.h"
 #include "physicmeshshape.h"
 #include "physicvbo.h"
+#include "ragdoll.h"
 #include "graphics/mesh/skeleton.h"
 
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -892,6 +893,17 @@ void DynamicWorld::tick(uint64_t dt) {
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);
+  }
+
+std::unique_ptr<Ragdoll> DynamicWorld::createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                                   const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                   const Tempest::Matrix4x4& objectMatrix,
+                                                   const Tempest::Vec3& initialVelocity) {
+  return world->createRagdoll(skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity);
+  }
+
+DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
+  return {world->stepMilliseconds(),world->bodyCount(),world->rayCount()};
   }
 
 void DynamicWorld::deleteObj(BulletBody* obj) {

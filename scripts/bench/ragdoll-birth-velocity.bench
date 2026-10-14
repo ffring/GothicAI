@@ -1,0 +1,50 @@
+# Independent actual post-world birth velocity history, before any native body update.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+goto NW_XARDAS_TOWER_VALLEY_091
+clear 2500
+face -106
+wait 500
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 600
+ragdoll birth-track watched stationary
+wait 200
+ragdoll birth-down watched dead stationary
+wait 100
+ragdoll remove watched
+wait 34
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 600
+pin watched 300 0 700
+wait 34
+pin off
+freeze watched off
+ragdoll birth-track watched falling_dead
+wait 200
+ragdoll birth-down watched dead falling_dead
+wait 100
+ragdoll remove watched
+wait 34
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+put BDT_1013_BANDIT_L 300 0
+watch BDT_1013_BANDIT_L
+wait 600
+pin watched 300 0 700
+wait 34
+pin off
+freeze watched off
+ragdoll birth-track watched falling_ko
+wait 200
+ragdoll birth-down watched ko falling_ko
+wait 100
+ragdoll remove watched
+wait 34

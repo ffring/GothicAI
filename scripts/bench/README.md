@@ -363,6 +363,68 @@ Frame timing sums public physics work across worker threads, so it can exceed el
 For a hotspot diagnostic, `--method-breakdown` additionally writes per-method inclusive and outer
 work to `OPENGOTHIC_PHYSICS_TRACE_METHODS`. Keep this extra instrumentation out of formal timing runs.
 
+For stage 2, `ragdoll.bench` exercises death, sleeping/wake, controlled unconscious recovery,
+slopes, stairs, a cliff and the human/Wolf/Scavenger/Molerat/Orc models. Run it with
+`OPENGOTHIC_RAGDOLL_TRACE=1` to append `ph_ms,ph_bodies,ph_rays,rd_mode,rd_weight,rd_sleep`
+to the existing metric columns and write every watched actor's final world bone positions and
+native part state to `events.jsonl`. Without this flag the established CSV schema stays unchanged.
+`scripts/ragdoll_compare.py --help` describes the required segment, archive and removal controls;
+missing coverage and command errors fail the comparison. `--toggle before_label:after_label` compares
+the full sleeping state before a 600 ms feature-off interval with the automatic on restoration,
+before the fixture manually restores any NPC archive.
+
+| Command | |
+|---|---|
+| `ragdoll on\|off` | Set the same `GAME/ragdoll` switch as the Marvin toggle. The default remains off while acceptance gates are open. |
+| `down <npc> dead\|ko` | Invoke the normal NPC down lifecycle and prepare its body. |
+| `push <npc> <x> <y> <z> <impulse>` | Apply an impulse in Newton seconds along a finite nonzero direction. Requires a physical body. |
+| `waitragdoll <npc> sleep\|recovery\|getup [timeout ms]` | Wait for the actual body/animation state; a bounded timeout is an explicit command error. |
+| `standup <npc>` | End the controlled unconscious state and queue the normal AI stand-up action. The test controls the state end; this does not measure the natural script loop's timing. |
+| `ragdoll queued-standup <npc> <wait_ms>` | Retain the unconscious script state and enqueue normal `AI_Wait` followed by `AI_StandUp`. The separate midair fixture checks the observed deadline and handoff before the normal state-end cleanup. |
+| `ragdoll save\|restore <npc> <label> [old]` | Save/load the actual NPC through `Serialize` in the same world and tick. `old` removes just the optional body/recovery entries. This is an NPC archive control, not a complete game reload. |
+| `ragdoll session-save <npc> <label>`, `ragdoll session-snapshot <npc> <label>` | Write a complete `GameSession` archive plus a full corpse snapshot, or the snapshot only. Files are `session-<label>.sav`/`.json`. |
+| `ragdoll session-initial <npc> <label>` | As the first scenario command only, snapshot the loaded actor at `dt=0` before any positive physics step. A late/positive-dt invocation fails. |
+| `ragdoll loot <npc>` | Require normal player focus to select that exact corpse, then open its real ransack inventory. Trace records the selected and opened NPC ids; the test closes the menu immediately and transfers no items. |
+| `ragdoll remove <npc>` | Remove that NPC through the world and verify that all its native parts disappear. |
+| `physics stats` | Report actual physics step time, native body count and query count. |
+
+An NPC selector can be `watched`, `player`, `nearest`, a script instance symbol, or `id:<uint32>`.
+`watched` keeps the selected corpse when duplicate symbols exist; `id:` selects an exact persisted
+world NPC slot, including a dead actor. A fresh process has no watched subject until one is selected.
+
+`scripts/ragdoll_session_probe.py --help` runs the fixed sleeping-human full save and fresh load in
+two processes from the normal built executable path, preserving an immutable copy and checking
+the executable hash before and after each process. It enables `GAME/ragdoll=1` in an isolated INI before each
+session is constructed, verifies the initial archive NPC id and saved clock at `dt=0`, then checks
+one second of ordinary sleeping continuation. `scripts/ragdoll_session_compare.py` requires the full
+game/world/NPC ZIP entries and compares every final bone, native frame, constant affine reference,
+velocity, sleep flag, ancestor topology and inventory item counts. Native COM, quaternion and velocity
+float values must match exactly. Bounds and scope are recorded in its result; it does not imply successful
+world transitions, mid-return saves, old full-save fallback or inventory interaction.
+
+The asset-free native contract also has `--replay-creation captured.jsonl`: it reconstructs the
+actual constructor's captured hierarchy, checks every bind matrix float, then replays the exact
+world pose/object/velocity. Full proprietary model hierarchies stay in ignored local evidence;
+the maintained test does not embed asset geometry. It checks cold native-world reconstruction of
+moving and sleeping actors, explicit teleports and the actual Human knee/elbow limits under yaw.
+State 3 retains native COM/quaternion/velocity float values and immutable initial affine references,
+preserving positive nonuniform NPC scale and carrying nonphysical ancestor bones with a native child.
+
+The three `ragdoll20-{disabled,active,sleeping}.bench` scenarios use the same 20 actors and camera.
+Run with `OPENGOTHIC_RAGDOLL_TRACE=0 OPENGOTHIC_RAGDOLL_PERF=1`: lightweight counters and actual
+monotonic full-cycle/native-step times are buffered, then written to `ragdoll-performance.csv` at
+the end. Full pose JSON and ordinary per-frame metric writes are disabled during this measurement.
+`scripts/ragdoll_performance.py --help` checks every frame's actor/visibility/awake coverage and
+the declared 120 warm-up plus 900 measured frames. Fixed simulation `dt` is not an FPS measurement.
+Each physical actor must have the complete 24-part Human schema, matching its peers. The pre-record
+bulk-down event proves all 20 individual schemas; every warm-up and measured row must retain exactly
+480 parts (zero in the disabled control). Aggregate counts alone do not establish complete bodies.
+`ragdoll-queued-ai.bench` and `scripts/ragdoll_queue_compare.py` separately check a knockout after an
+ordinary airborne tick, native settling, the full observed `AI_Wait` interval and normal wounded-to-stand
+recovery. This controlled queue test preserves the main acceptance fixture.
+The preregistered acceptance controls and honest results are in
+[`reports/physics/2026-10-14-jolt-stage2/`](../../reports/physics/2026-10-14-jolt-stage2/).
+
 Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
 clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into
 `<segment>.wav` instead of playing it; `TEMPEST_WINDOW_SIZE=<w>x<h>` (points) sets the frame;

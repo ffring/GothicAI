@@ -12,6 +12,8 @@ class PhysicVbo;
 class PackedMesh;
 class Skeleton;
 class Bounds;
+class HitZones;
+class Ragdoll;
 
 class World;
 class Bullet;
@@ -49,6 +51,7 @@ class DynamicWorld final {
       C_Object    = 4,
       C_Ghost     = 5,
       C_Item      = 6,
+      C_Ragdoll   = 7,
       };
 
     enum PtrType {
@@ -268,12 +271,23 @@ class DynamicWorld final {
     Item           addStaticObj (const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
     Item           addMovableObj(const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
     Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, zenkit::MaterialGroup mat);
+    std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                          const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                          const Tempest::Matrix4x4& objectMatrix,
+                                          const Tempest::Vec3& initialVelocity = {});
 
     BulletBody*    bulletObj(BulletCallback* cb);
     BBoxBody       bboxObj(BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox);
     BBoxBody       bboxObj(BBoxCallback* cb, const Tempest::Vec3& pos, float R);
 
     void           tick(uint64_t dt);
+
+    struct PhysicsStats {
+      float    stepMilliseconds = 0;
+      size_t   bodies = 0;
+      uint64_t rays = 0;
+      };
+    PhysicsStats physicsStats() const;
 
     void           deleteObj(BulletBody* obj);
 

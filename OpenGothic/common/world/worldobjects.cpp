@@ -88,8 +88,10 @@ void WorldObjects::load(Serialize &fin) {
     npcInvalid.resize(sz);
     for(size_t i=0; i<npcInvalid.size(); ++i)
       npcInvalid[i] = std::make_unique<Npc>(owner,size_t(-1),"");
-    for(size_t i=0; i<npcInvalid.size(); ++i)
+    for(size_t i=0; i<npcInvalid.size(); ++i) {
       npcInvalid[i]->load(fin,i,"/npc_invalid/");
+      npcInvalid[i]->suspendRagdoll();
+      }
     }
 
   fin.setEntry("worlds/",fin.worldName(),"/items");
@@ -358,6 +360,7 @@ std::unique_ptr<Npc> WorldObjects::takeNpc(const Npc* ptr) {
   for(size_t i=0; i<npcArr.size(); ++i){
     auto& npc=*npcArr[i];
     if(&npc==ptr){
+      npc.suspendRagdoll();
       auto ret=std::move(npcArr[i]);
       npcArr.erase(npcArr.begin() + int32_t(i));
       return ret;
@@ -425,6 +428,16 @@ bool WorldObjects::execTriggerEvent(const TriggerEvent& e) {
     }
 
   return emitted;
+  }
+
+void WorldObjects::prepareRagdolls() {
+  for(auto& npc:npcArr)
+    npc->prepareRagdoll();
+  }
+
+void WorldObjects::syncRagdolls() {
+  for(auto& npc:npcArr)
+    npc->syncRagdoll();
   }
 
 void WorldObjects::updateAnimation(uint64_t dt) {
@@ -997,6 +1010,7 @@ void WorldObjects::resetPositionToTA() {
 
       auto& point = owner.deadPoint();
       auto& npc   = *npcInvalid.back();
+      npc.suspendRagdoll();
       npc.attachToPoint(nullptr);
       npc.setPosition(point.position());
       npc.updateTransform();

@@ -16,6 +16,7 @@ class Serialize;
 class ObjVisual;
 class Npc;
 class Item;
+namespace TestBench { bool ragdollBodyDrawable(const Npc& npc); }
 
 class MdlVisual final {
   public:
@@ -82,7 +83,9 @@ class MdlVisual final {
     void                           setTorch(bool t, World& owner);
     bool                           isUsingTorch() const;
 
+    Pose&                          pose() { return *skInst; }
     const Pose&                    pose() const { return *skInst; }
+    const HitZones&                hitZoneShape() const { return hitZones; }
     // the animation of that name plays k times as fast from its next start (1: as it is)
     void                           setAnimSpeed(std::string_view name, float k);
     bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force);
@@ -248,5 +251,6 @@ class MdlVisual final {
     WeaponState                    fgtMode=WeaponState::NoWeapon;
     AnimationSolver                solver;
     std::unique_ptr<Pose>          skInst;
+    friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
   };
 

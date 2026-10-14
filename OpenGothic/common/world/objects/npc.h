@@ -13,6 +13,7 @@
 #include "game/archerai.h"
 #include "game/gamescript.h"
 #include "physics/dynamicworld.h"
+#include "physics/ragdoll.h"
 #include "world/aiqueue.h"
 #include "world/objects/attention.h"
 #include "world/objects/archer.h"
@@ -20,6 +21,7 @@
 #include "world/waypath.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include <zenkit/addon/daedalus.hh>
@@ -450,6 +452,15 @@ class Npc final {
 
     JumpStatus tryJump();
     bool      hasCollision() const { return physic.hasCollision(); }
+    bool      hasRagdoll() const { return ragdoll!=nullptr; }
+    bool      isRagdollBlending() const { return visual.pose().isRagdollBlending(); }
+    const Skeleton* visualSkeleton() const { return visual.visualSkeleton(); }
+    const Ragdoll* ragdollBody() const { return ragdoll.get(); }
+    void      prepareRagdoll();
+    void      syncRagdoll();
+    void      suspendRagdoll();
+    bool      setRagdollDown(bool death);
+    void      addRagdollImpulse(const Tempest::Vec3& impulse);
 
     void      startDive();
     bool      transformInto(size_t instance); // shape change spell: another creature until transformBack
@@ -676,6 +687,9 @@ class Npc final {
     bool               isAlignedToGround() const;
     Tempest::Vec3      groundNormal() const;
     Tempest::Matrix4x4 mkPositionMatrix() const;
+    void               releaseRagdoll(bool blend);
+    bool               recoverRagdoll();
+    bool               createRagdoll();
 
     World&                         owner;
     // Debug trace cache only: neither serialized nor used by native AI/animation decisions.
@@ -702,6 +716,17 @@ class Npc final {
     Tempest::Vec3                  lastGroundNormal;
 
     DynamicWorld::NpcItem          physic;
+    std::unique_ptr<Ragdoll>       ragdoll;
+    std::optional<Ragdoll::State>  ragdollDormant;
+    std::vector<Tempest::Matrix4x4> ragdollPose;
+    Tempest::Matrix4x4             ragdollObjectMatrix;
+    Tempest::Vec3                  ragdollLastPosition;
+    Tempest::Vec3                  ragdollLastVelocity;
+    uint64_t                      ragdollLastTick = 0;
+    bool                          ragdollHasLastPosition = false;
+    uint64_t                      ragdollStartTick = 0;
+    bool                          ragdollLegacyDown = false;
+    bool                          ragdollRecovering = false;
 
     WalkBit                        wlkMode                 =WalkBit::WM_Run;
     int32_t                        trGuild                 =GIL_NONE;
@@ -799,4 +824,5 @@ class Npc final {
     Sound                          sfxWeapon;
 
   friend class MoveAlgo;
+  friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
   };

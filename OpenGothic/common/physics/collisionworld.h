@@ -14,6 +14,10 @@
 class Item;
 class Interactive;
 class PhysicVbo;
+class Skeleton;
+class HitZones;
+class Ragdoll;
+namespace JPH { class PhysicsSystem; }
 
 class CollisionWorld final {
   public:
@@ -91,6 +95,13 @@ class CollisionWorld final {
     std::unique_ptr<CollisionBody> addCollisionBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction,
                                                    int category, bool movable = false, bool sensor = false, const PhysicVbo* mesh = nullptr);
     std::unique_ptr<DynamicBody> addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction, float mass);
+    std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                         const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                         const Tempest::Matrix4x4& objectMatrix,
+                                         const Tempest::Vec3& initialVelocity = {});
+    size_t bodyCount() const;
+    float stepMilliseconds() const;
+    uint64_t rayCount() const;
 
     // Masks use 1u << DynamicWorld::Category. Normals keep the mesh's winding.
     QueryResult rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
@@ -104,10 +115,16 @@ class CollisionWorld final {
                  bool movable, bool sensor, float mass);
     void removeBody(CollisionBody& body);
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
+    JPH::PhysicsSystem& physicsSystem();
+    uint32_t registerRagdoll(Ragdoll& body);
+    void unregisterRagdoll(Ragdoll& body);
     std::unique_ptr<Impl> impl;
     std::vector<CollisionBody*> bodies;
     std::vector<DynamicBody*> rigid;
+    std::vector<Ragdoll*> ragdolls;
+    uint32_t nextRagdollGroup = 1;
     std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
+    friend class Ragdoll;
   };

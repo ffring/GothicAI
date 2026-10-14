@@ -51,6 +51,8 @@ class WorldObjects final {
     void           load(Serialize& fout);
     void           save(Serialize& fout);
     void           tick(uint64_t dt, uint64_t dtPlayer);
+    void           prepareRagdolls();
+    void           syncRagdolls();
 
     Npc*           addNpc(size_t itemInstance, std::string_view     at);
     Npc*           addNpc(size_t itemInstance, const Tempest::Vec3& at);

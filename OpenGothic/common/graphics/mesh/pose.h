@@ -119,6 +119,15 @@ class Pose final {
     Flinch&            flinchIk() { return flinch; }
     bool               updateFlinch(const Flinch::Input& in);
     bool               updateLean(const Lean::Input& in);
+    // Physical bone frames are world-space, in centimetres, indexed by the same skeleton as tr.
+    // Only mapped bones are replaced; their unmapped children retain the animated local relation.
+    bool               setRagdollPose(const Skeleton* expected, const std::vector<Tempest::Matrix4x4>& worldBones,
+                                     const std::vector<size_t>& physicalBones, float weight=1.f);
+    void               clearRagdollPose(bool blendFromPhysical=false, uint64_t tickCount=0);
+    bool               hasRagdollPose() const { return !physical.empty(); }
+    bool               isRagdollBlending() const { return physicalReturning; }
+    void               saveRagdollRecovery(Serialize& fout) const;
+    void               loadRagdollRecovery(Serialize& fin);
     void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
     auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;
     bool               stopItemStateAnim(const AnimationSolver &solver, uint64_t tickCount);
@@ -182,8 +191,12 @@ class Pose final {
 
     auto mkBaseTranslation() -> Tempest::Vec3;
     void mkSkeleton(const Tempest::Matrix4x4 &mt);
+    void mkSkeleton(const Tempest::Matrix4x4 &mt, float ikFloorY);
     void implMkSkeleton(const Tempest::Matrix4x4 &mt);
     void implMkSkeleton(const Tempest::Matrix4x4 &mt, size_t parent);
+    void applyRagdollPose();
+    void applyRagdollPose(size_t bone, const Tempest::Matrix4x4* animated, bool* done);
+    void applyRagdollReturn();
 
     bool updateFrame(const Animation::Sequence &s, BodyState bs, uint64_t sTime, uint64_t now);
 
@@ -222,6 +235,21 @@ class Pose final {
     AimWalk                         walk;
     BowDraw                         bowDraw;
     Flinch                          flinch;
+
+    std::vector<Tempest::Matrix4x4> physical;
+    std::vector<uint8_t>            physicalMask;
+    float                          physicalWeight = 1.f;
+    AnimBlend                      physicalBlend;
+    std::vector<zenkit::AnimationSample> physicalRaw;
+    std::vector<zenkit::AnimationSample> physicalShown;
+    std::vector<zenkit::AnimationSample> physicalTargetNext;
+    std::vector<Tempest::Matrix4x4> physicalStretchFrom;
+    std::vector<Tempest::Matrix4x4> physicalStretchTarget;
+    bool                           physicalReturning = false;
+    std::vector<Tempest::Matrix4x4> physicalPreviousWorld;
+    std::vector<Tempest::Matrix4x4> physicalCurrentWorld;
+    uint64_t                       physicalPreviousTime = 0;
+    uint64_t                       physicalCurrentTime = 0;
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};

@@ -1,6 +1,7 @@
 #include "collisionworld.h"
 #include "physicvbo.h"
 #include "dynamicworld.h"
+#include "ragdoll.h"
 #include "world/objects/item.h"
 
 #include <Jolt/RegisterTypes.h>
@@ -23,6 +24,8 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <limits>
@@ -42,7 +45,7 @@ namespace {
   struct LayerInterface final : JPH::BroadPhaseLayerInterface {
     JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-      if(layer==DynamicWorld::C_Item)
+      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll)
         return dynamicLayer;
       if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost)
         return sensorLayer;
@@ -57,14 +60,15 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
-      return (a==DynamicWorld::C_Item || b==DynamicWorld::C_Item) &&
+      return (a==DynamicWorld::C_Item || b==DynamicWorld::C_Item ||
+              a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll) &&
              a!=DynamicWorld::C_Null && b!=DynamicWorld::C_Null;
       }
     };
 
   struct BroadPhaseFilter final : JPH::ObjectVsBroadPhaseLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
-      return layer==DynamicWorld::C_Item || (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
+      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
       }
     };
 
@@ -79,7 +83,7 @@ namespace {
   struct QueryBroadPhaseFilter final : JPH::BroadPhaseLayerFilter {
     explicit QueryBroadPhaseFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
-      constexpr uint32_t itemMask = 1u<<DynamicWorld::C_Item;
+      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll);
       constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost);
       if(layer==dynamicLayer)
         return (mask & itemMask)!=0;
@@ -334,6 +338,9 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
   std::vector<Impact> impacts;
   uint64_t simulationStep = 0;
   bool emitImpacts = false;
+  std::atomic<uint64_t> rayCount {0};
+  uint64_t lastRayCount = 0;
+  float stepMilliseconds = 0;
   };
 
 CollisionWorld::CollisionWorld() {
@@ -342,6 +349,8 @@ CollisionWorld::CollisionWorld() {
   }
 
 CollisionWorld::~CollisionWorld() {
+  while(!ragdolls.empty())
+    ragdolls.back()->detach();
   while(!bodies.empty()) {
     auto* body = bodies.back();
     removeBody(*body);
@@ -517,6 +526,7 @@ void CollisionWorld::fillMaterial(QueryResult& result, const JPH::Shape& shape, 
 
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                                                     bool backfaces, std::vector<QueryResult>* all) const {
+  impl->rayCount.fetch_add(1,std::memory_order_relaxed);
   QueryResult result;
   if(all!=nullptr)
     all->clear();
@@ -722,7 +732,7 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
   // Keep that query tolerance without changing the physical capsule.
   settings.mMaxSeparationDistance = radius+disc*0.02f;
   JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
-  constexpr uint32_t mask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
+  constexpr uint32_t mask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
   const auto position = toMeters(center);
@@ -737,6 +747,10 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
     if(!lock.Succeeded())
       continue;
     const auto& native = lock.GetBody();
+    // The animation controller collides with the actual corpse surface. The
+    // legacy positive-gap compatibility rule applies only to the old world.
+    if(native.GetObjectLayer()==DynamicWorld::C_Ragdoll && hit.mPenetrationDepth<=0.f)
+      continue;
     auto* body = reinterpret_cast<CollisionBody*>(native.GetUserData());
     const auto* baseShape = body==nullptr ? native.GetShape() : body->baseShape.GetPtr();
     const float contactDistance = radius+std::min(disc,angularMotionDisc(*baseShape))*0.02f;
@@ -788,9 +802,10 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
   }
 
 void CollisionWorld::tick(uint64_t dt) {
+  const auto started=std::chrono::steady_clock::now();
   constexpr float step = 1.f/60.f;
   bool advanced = false;
-  if(!rigid.empty()) {
+  if(!rigid.empty() || !ragdolls.empty()) {
     accumulatedTime += float(dt)/1000.f;
     int wholeSteps = 0;
     if(accumulatedTime>=step) {
@@ -802,7 +817,12 @@ void CollisionWorld::tick(uint64_t dt) {
     const int count = std::min(wholeSteps,2);
     for(int i=0;i<count;++i) {
       ++impl->simulationStep;
-      impl->system.Update(float(step),1,&impl->allocator,&impl->jobs);
+      // A capsule stopped by CCD otherwise compresses its connected limb while
+      // the rest of the rig finishes the 1/60 s step. Two native collision steps
+      // keep that late-contact displacement small. The public fixed-step clock
+      // and two-update frame budget stay unchanged; worlds without corpses keep
+      // their original single collision step.
+      impl->system.Update(float(step),ragdolls.empty() ? 1 : 2,&impl->allocator,&impl->jobs);
       advanced = true;
       }
     }
@@ -877,7 +897,40 @@ void CollisionWorld::tick(uint64_t dt) {
     if(disable)
       item->setPhysicsDisable();
     }
+  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  impl->lastRayCount=impl->rayCount.exchange(0,std::memory_order_relaxed);
   }
+
+std::unique_ptr<Ragdoll> CollisionWorld::createRagdoll(const Skeleton& skeleton, const HitZones& zones,
+                                                      const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                      const Tempest::Matrix4x4& objectMatrix,
+                                                      const Tempest::Vec3& initialVelocity) {
+  std::unique_ptr<Ragdoll> result;
+  try {
+    result.reset(new Ragdoll(*this,skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity));
+    }
+  catch(const std::runtime_error&) {
+    return nullptr;
+    }
+  return result->valid() ? std::move(result) : nullptr;
+  }
+
+JPH::PhysicsSystem& CollisionWorld::physicsSystem() { return impl->system; }
+
+uint32_t CollisionWorld::registerRagdoll(Ragdoll& body) {
+  // Zero is the default group of ordinary world bodies.
+  if(nextRagdollGroup==0) throw std::runtime_error("Jolt ragdoll collision group capacity exhausted");
+  ragdolls.push_back(&body);
+  return nextRagdollGroup++;
+  }
+
+void CollisionWorld::unregisterRagdoll(Ragdoll& body) {
+  ragdolls.erase(std::remove(ragdolls.begin(),ragdolls.end(),&body),ragdolls.end());
+  }
+
+size_t CollisionWorld::bodyCount() const { return impl->system.GetNumBodies(); }
+float CollisionWorld::stepMilliseconds() const { return impl->stepMilliseconds; }
+uint64_t CollisionWorld::rayCount() const { return impl->lastRayCount; }
 
 void CollisionWorld::setBBox(JPH::Vec3Arg min, JPH::Vec3Arg) {
   bboxMin = min;
