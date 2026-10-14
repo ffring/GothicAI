@@ -111,6 +111,10 @@
 #       with the hero: Brago, who leads them, answers first, the others' words wait their turn and are heard
 #       after his, the second knows what he said, a fourth voice says nothing. Starts the TTS service
 #       (TTS=fake); models scripted with LLM=fake
+#   interject: who speaks up, by character (docs/npc-tools.md, step B3), live only (LLM=chatgpt and
+#       DECIDER_URL): at the bandits' cave the hero says three phrases, to Brago, to his mate, to them all;
+#       no more than three voices to each, none over another, someone speaks up by the behavioral model's
+#       word; what each said is in the log, to be read. Starts the TTS service (TTS=fake)
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, and
@@ -151,7 +155,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

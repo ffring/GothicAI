@@ -32,6 +32,7 @@ from .game import GameError, GameLink
 from .gossip import WORDS_CM, GossipDesk, Scene
 from .incidents import IncidentDesk
 from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
+from .interject import Interjections
 from .journal import Journal
 from .knowledge import Knowledge, Topic
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
@@ -70,7 +71,7 @@ from .sightings import Sightings
 from .social import DAY, TICK_S, Rumor, Rumors
 from .story import StoryPatches
 from .storyguard import StoryGuard
-from .talk import TalkDesk
+from .talk import TalkDesk, fights
 from .trace import TraceWriter
 from .trace import read as read_trace
 from .trust import Trust
@@ -2172,6 +2173,61 @@ async def ground_scenario(
     return _logged(results)
 
 
+async def _at_the_steps(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, npc: str, brago: str, bandit: str, steps: str
+) -> str | None:
+    """The hero with Cavalorn at the bandit by the steps below Xardas's tower, Brago and his mate come up
+    from the cave; what went wrong, if anything. Cavalorn goes with the hero on his own feet: put elsewhere,
+    his routine takes him back."""
+    from .executor import Intent
+
+    def dist(who: str) -> float:
+        return talk.people[who].distance / 100 if who in talk.people else -1.0
+
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")
+    except GameError as err:
+        log.info("at the steps: no armor for the hero: %s", err)
+    await link.debug("skip_important", near=npc)
+    for _ in range(2):  # the goblins by his fire
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("at the steps: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: 0 <= dist(npc) <= 15, 20):
+        return f"{npc} is not around the hero: {dist(npc):.1f} m"
+    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    await _until(lambda: 0 <= dist(npc) <= 5, 20)
+    await link.debug("player_goto", to=steps, distance=400)
+    await link.debug("npc_goto", npc=brago, to=steps, distance=300)
+    await link.debug("npc_goto", npc=bandit, to=steps, distance=500)
+    everyone = (npc, brago, bandit, steps)
+    if not await _until(lambda: all(0 <= dist(n) <= 12 for n in everyone) and dist(npc) <= 6, 30):
+        return ", ".join(f"{n} {dist(n):.1f} m" for n in everyone)
+    await asyncio.sleep(2)
+    return None
+
+
+def _overlaps(
+    dialogue: DialogueManager, started: list[tuple[float, str, str]], names: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    """The voices in the order they were heard, and where one started before the one before it was over."""
+    order = sorted({w for _, w, _ in started}, key=lambda n: min(t for t, w, _ in started if w == n))
+    out = []
+    for a, b in zip(order, order[1:], strict=False):
+        ends = [
+            t + dialogue._audio.get(line, line_duration(dialogue._lines.get(line, ("", None))[0]))
+            for t, w, line in started
+            if w == a
+        ]
+        b_first = min(t for t, w, _ in started if w == b)
+        if b_first < max(ends) - 0.15:
+            out.append(f"{names.get(b, b)} {max(ends) - b_first:.1f} s over {names.get(a, a)}")
+    return order, out
+
+
 async def group_scenario(
     link: GameLink,
     dialogue: DialogueManager,
@@ -2190,8 +2246,6 @@ async def group_scenario(
     - one_at_a_time: no voice starts before the one before it has been heard;
     - heard: the second answers with the first's words in mind;
     - three: three voices to the hero's phrase, the fourth says nothing."""
-    from .executor import Intent
-
     await link.wait_world()
     results: dict[str, str] = {}
 
@@ -2220,34 +2274,8 @@ async def group_scenario(
         )
     )
 
-    def dist(who: str) -> float:
-        return talk.people[who].distance / 100 if who in talk.people else -1.0
-
-    try:
-        await link.debug("player_equip", item="ITAR_PAL_H")
-    except GameError as err:
-        log.info("group: no armor for the hero: %s", err)
-    await link.debug("skip_important", near=npc)
-    for _ in range(2):  # the goblins by his fire
-        try:
-            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
-        except GameError as err:
-            log.info("group: goblin: %s", err)
-    # Cavalorn goes with the hero on his own feet (put elsewhere, his routine takes him back) to the bandit
-    # at the steps; Brago and his mate come up from the cave
-    await link.debug("player_goto", to=npc, distance=300)
-    if not await _until(lambda: 0 <= dist(npc) <= 15, 20):
-        return _logged({"roster": f"failed ({npc} is not around the hero: {dist(npc):.1f} m)"})
-    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
-    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
-    await _until(lambda: 0 <= dist(npc) <= 5, 20)
-    await link.debug("player_goto", to=steps, distance=400)
-    await link.debug("npc_goto", npc=brago, to=steps, distance=300)
-    await link.debug("npc_goto", npc=bandit, to=steps, distance=500)
-    near = await _until(lambda: all(0 <= dist(n) <= 12 for n in names) and dist(npc) <= 6, 30)
-    if not near:
-        return _logged({"roster": "failed (" + ", ".join(f"{n} {dist(n):.1f} m" for n in names) + ")"})
-    await asyncio.sleep(2)
+    if (failed := await _at_the_steps(link, dialogue, talk, npc, brago, bandit, steps)) is not None:
+        return _logged({"roster": f"failed ({failed})"})
 
     t0 = time.monotonic()
     talk.hear("Пацаны, здорово!", None, {"via": "scenario"})
@@ -2260,24 +2288,99 @@ async def group_scenario(
         lambda: time.monotonic() - t0 > 3 and not any(dialogue.speaking(n) for n in names), 40
     )
     voices = [n for n in names if models[n].calls]
-    order = sorted(names, key=lambda n: min((t for t, w, _ in started if w == n), default=1e9))
-    order = [n for n in order if any(w == n for _, w, _ in started)]
     # each voice starts after the one before it has been heard: its lines' starts and lengths
-    overlaps = []
-    for a, b in zip(order, order[1:], strict=False):
-        ends = [
-            t + dialogue._audio.get(line, line_duration(dialogue._lines.get(line, ("", None))[0]))
-            for t, w, line in started
-            if w == a
-        ]
-        b_first = min(t for t, w, _ in started if w == b)
-        if b_first < max(ends) - 0.15:
-            overlaps.append(f"{names[b]} {max(ends) - b_first:.1f} s over {names[a]}")
+    order, overlaps = _overlaps(dialogue, started, names)
     check("one_at_a_time", quiet and len(order) >= 2 and not overlaps, overlaps or [names[n] for n in order])
     second = models[order[1]].calls[0][1] if len(order) > 1 and models[order[1]].calls else []
     heard = "Ты слышал, как Браго говорит герою" in " ".join(str(getattr(m, "content", "")) for m in second)
     check("heard", heard, names[order[1]] if len(order) > 1 else "nobody second")
     check("three", len(voices) == 3 and len(order) == 3, [names[n] for n in voices])
+    return _logged(results)
+
+
+async def interject_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    interject: Interjections | None,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    brago: str = "BDT_1014_BANDIT_L",
+    bandit: str = "BDT_1015_BANDIT_L",
+    steps: str = "BDT_1013_BANDIT_L",
+) -> dict[str, str]:
+    """Who speaks up, by character (step B3 of docs/npc-tools.md), live: the conversational model
+    (LLM=chatgpt) and the behavioral one (DECIDER_URL) are the real ones. At the steps below Xardas's tower,
+    as in `group`, the hero says three phrases, each once the last voice has been heard: one to them all,
+    one to the bandit from the cave (he looks at him) and one to Brago. Checks:
+    - three: no more than three voices to any of them;
+    - one_at_a_time: no voice over another;
+    - asked: after each answer outside a fight the others were asked whether they speak up.
+    Who spoke up and what each said go to the log, to be read: not a bazaar, each by its character. Whether
+    anyone speaks up is the models' call, so it is no check (the bandits may well go for Cavalorn)."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+    if interject is None:
+        return _logged({"decider": "failed (no behavioral model: run with DECIDER_URL)"})
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    names = {npc: "Кавалорн", brago: "Браго", bandit: "Бандит из пещеры", steps: "Бандит у лестницы"}
+    started: list[tuple[float, str, str]] = []
+    link.listeners.append(
+        lambda m: (
+            started.append((time.monotonic(), m.npc.upper(), m.line)) if isinstance(m, LineStarted) else None
+        )
+    )
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    if (failed := await _at_the_steps(link, dialogue, talk, npc, brago, bandit, steps)) is not None:
+        return _logged({"roster": f"failed ({failed})"})
+    phrases = [
+        ("Пацаны, здорово! Как жизнь?", None),
+        ("А ты кто такой? Что-то я тебя тут раньше не видел.", bandit),
+        ("Браго, а торговцы тут часто ходят?", None),
+    ]
+    rounds: list[list[str]] = []
+    overlaps: list[str] = []
+    unasked: list[str] = []
+    for text, focus in phrases:
+        mark, seen, asked = time.monotonic(), len(entries), len(interject.asked)
+        talk.hear(text, focus, {"via": "scenario"})
+        await asyncio.sleep(2)
+        await _until(lambda: not any(dialogue.speaking(n) for n in names), 60)
+        await asyncio.sleep(3)  # one who speaks up asks for words after the answer
+        await _until(lambda: not any(dialogue.speaking(n) for n in names), 60)
+        mine = [st for st in started if st[0] >= mark]
+        order, over = _overlaps(dialogue, mine, names)
+        overlaps += over
+        rounds.append(order)
+        for e in entries[seen:]:
+            if e.get("kind") == "npc":
+                log.info("interject: %s: %s", names.get(e["npc"], e["npc"]), e["text"])
+        ups = [names.get(e["npc"], e["npc"]) for e in entries[seen:] if e.get("kind") == "interject"]
+        log.info(
+            "interject: «%s» -> %s; spoke up: %s", text, [names.get(n, n) for n in order], ups or "nobody"
+        )
+        for speaker, ranked, _ in interject.asked[asked:]:
+            log.info(
+                "interject: after %s: %s",
+                names.get(speaker, speaker),
+                ", ".join(f"{names.get(n, n)} {p:.2f}" for n, p in ranked),
+            )
+        if len(interject.asked) == asked and not any(fights(talk.people.get(n)) for n in names):
+            unasked.append(text)
+    voices = [len(r) for r in rounds]
+    check("three", all(v <= 3 for v in voices), voices)
+    check("one_at_a_time", not overlaps, overlaps or "no voice over another")
+    check("asked", not unasked, unasked or f"{len(interject.asked)} time(s)")
     return _logged(results)
 
 

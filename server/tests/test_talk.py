@@ -354,7 +354,11 @@ def test_a_phrase_to_several():
     assert to("Ребята, вы откуда?", focus=bandit) == (bandit, "group")  # the one he looks at
     assert to("Эй, вы двое, стоять!") == (brago, "group")
     assert to("Всем привет") == (brago, "group")
-    assert to("Пацаны, Браго тут главный?") == (brago, "name")  # a name comes first
+    # called out first, then spoken of (the live run of 2026-10-14: words to Brago went to Cavalorn, nearer)
+    assert to("Пацаны, Браго тут главный?", focus=bandit) == (bandit, "group")  # «Пацаны,» calls them all
+    assert to("Браго, я ищу того, кто ограбил Кавалорна.") == (brago, "name")
+    assert to("Пацаны, верните Кавалорну его вещи.") == (brago, "group")
+    assert to("Где Кавалорн?") == (cavalorn, "name")  # only spoken of, but nobody is called: as before
     # a bare «вы» is the polite one to one person
     assert to("Вы не подскажете дорогу?", focus=bandit) == (bandit, "focus")
     # nobody but companions: one of them; nobody but one: not a phrase to several

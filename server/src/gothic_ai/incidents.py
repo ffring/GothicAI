@@ -176,6 +176,9 @@ class IncidentDesk:
         # body does in the fight now, for its words
         self.companion: Callable[[str], bool] = lambda npc: False
         self.fighting_ru: Callable[[str], str | None] = lambda npc: None
+        # near the hero's conversation, whether a free npc speaks up at his words is asked there
+        # (interject.py)
+        self.speaks_up_there: Callable[[str], bool] = lambda npc: False
         # the npc struck the hero or a companion a moment ago (orders.py): it is in the fight too
         self.foe: Callable[[str], bool] = lambda npc: False
         dialogue.in_fight = self.in_fight
@@ -394,6 +397,8 @@ class IncidentDesk:
         )
         if level < self.planner.cfg.escalate_level and not settles:
             return
+        if {kind for kind, _ in about} <= {"player_speech"} and self.speaks_up_there(npc):
+            return  # only the hero's words: the conversation asks it whether it speaks up, by its character
         gap = FREE_NEW_REASON_S if new else FREE_COOLDOWN_S
         if not hears(rec.distance_cm, rec.in_view) or now - spoke_at < gap:
             return

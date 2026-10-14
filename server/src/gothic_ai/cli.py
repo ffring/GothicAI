@@ -38,6 +38,7 @@ from .gossip import GossipDesk
 from .group import GroupTalk
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
+from .interject import Interjections
 from .journal import Journal, print_sink
 from .knowledge import Knowledge
 from .llm import (
@@ -177,6 +178,7 @@ class ServerState:
         self.amends: Amends | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
+        self.interject: Interjections | None = None
         self.bodies: Bodies | None = None
         self.concerns: Concerns | None = None
         self.guard: StoryGuard | None = None
@@ -553,8 +555,17 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
         # talk with several npc's: who takes part, and whose words the others heard (group.py)
-        state.dialogue.extensions.append(GroupTalk(link, state.dialogue, state.talk))
+        group = GroupTalk(link, state.dialogue, state.talk)
+        state.dialogue.extensions.append(group)
         state.talk.lead = lambda npc: card.lead if (card := personas.cards.get(npc)) is not None else 0
+        if reflexes is not None and args.interject:
+            # who speaks up after the one the hero spoke to, by character (step B3, on by default)
+            interject = Interjections(
+                state.dialogue, state.talk, group, reflexes, budget, trace=trace, journal=journal
+            )
+            interject.view_of = lambda npc: state.talk.view_of(npc)
+            state.interject = interject
+            state.incidents.speaks_up_there = interject.covers
         state.incidents.companion = state.talk.orders.companion
         if args.beasts or args.scenario == "wolf":
             # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
@@ -892,6 +903,14 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.group_scenario(link, state.dialogue, state.talk)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario group: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "interject":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.interject_scenario(
+                    link, state.dialogue, state.talk, state.interject
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario interject: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "calm":
                 assert state.dialogue is not None and state.talk is not None
@@ -1528,6 +1547,7 @@ def main() -> None:
             "calm",
             "ground",
             "group",
+            "interject",
             "m6",
             "see",
             "seen",
@@ -1618,6 +1638,13 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="wolves hear the tone of the hero's words: they let him pass, run or bite (docs/beasts.md)",
+    )
+    p.add_argument(
+        "--interject",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="who speaks up in the conversation after the one the hero spoke to, by character: the "
+        "behavioral model's `interject` (docs/npc-tools.md, step B3)",
     )
     p.add_argument(
         "--free-bandits",

@@ -322,6 +322,58 @@ async def test_a_free_npc_speaks_on_the_move_when_the_moment_calls_for_it(tmp_pa
     assert {t.name for t in tools} == {"set_intent", "recall"}  # a free npc cannot hand over items
 
 
+async def test_near_the_conversation_the_heros_words_alone_are_its_question(tmp_path):
+    # step B3: whether a free npc by the hero speaks up at his words is asked in the conversation
+    # (interject.py), by its character, not by the fast loop's own escalation
+    from gothic_ai.brain import LogApplier, NpcPlanner, PlannerConfig
+    from gothic_ai.protocol import RosterEntry
+
+    class Decider(FakeDecider):
+        async def decide(self, rid, lane, priority, deadline_ms, state, questions):
+            out = await super().decide(rid, lane, priority, deadline_ms, state, questions)
+            if "escalate" in questions and out.answers:
+                out.answers["escalate"] = {
+                    "type": "score",
+                    "score": 3.6,
+                    "probabilities": {},
+                    "confidence": 0.8,
+                }
+            return out
+
+    fake = FakeGame()
+    llm = FakeBackend("Это ты мне?", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        planner = NpcPlanner(Decider("stay", 0.9), LogApplier(), config=PlannerConfig(ask_attitude=False))
+        link.listeners.append(planner.on_message)
+        desk = IncidentDesk(link, dialogue, None, Budget(), None, planner=planner)
+        desk.speaks_up_there = lambda npc: True
+        planner.on_roster(
+            [RosterEntry(id="SHEPHERD", name="Пастух", guild=8, distance=600, in_view=True)], 0.0
+        )
+        planner.on_player_text("BAU_950_LOBART", "Лобарт, где твоя репа?", planner.clock())
+        for _ in range(40):
+            planner.tick(planner.clock())
+            await asyncio.sleep(0.02)
+        quiet = list(fake.said)
+        # a wolf is another matter: it shouts
+        await fake.send(
+            type="npc_event",
+            npc="SHEPHERD",
+            kind="monster_near",
+            other="WOLF",
+            other_name="Волк",
+            distance=600,
+        )
+        for _ in range(100):
+            planner.tick(planner.clock())
+            await asyncio.sleep(0.02)
+            if fake.said:
+                break
+
+    assert quiet == [] and fake.said == ["Это ты мне?"]
+
+
 async def test_the_hero_saves_a_free_npc_and_it_thanks_him(tmp_path):
     """A wolf attacks the shepherd: words about the wolf. The hero kills it: words of thanks soon after,
     though the cooldown for the same reason is longer. Nothing more while nothing new happens."""
