@@ -5,11 +5,13 @@
 #include <Tempest/Pixmap>
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "game/constants.h"
 #include "game/gamescript.h"
 #include "game/gamesession.h"
 #include "graphics/effect.h"
+#include "graphics/mesh/skeleton.h"
 #include "utils/gthfont.h"
 #include "world/aiqueue.h"
 #include "world/objects/npc.h"
@@ -239,8 +241,12 @@ void Necromancy::rise(World& world, Npc& hero) {
   hero.clearState(true);
   hero.changeAttribute(ATR_HITPOINTS,hero.attribute(ATR_HITPOINTSMAX),false);
   const size_t id = world.script().findSymbolIndex(SkeletonNpc);
-  if(!hero.transformInto(id))
+  const bool transformed=hero.transformInto(id);
+  if(!transformed)
     Log::e("[necro] the hero did not become a skeleton");
+  if(const auto* trace=std::getenv("OPENGOTHIC_RAGDOLL_TRACE");trace!=nullptr && trace[0]=='1')
+    Log::i("[necro] raised hero transformed=",transformed," ragdoll=",hero.hasRagdoll(),
+           " skeleton=",hero.visualSkeleton()!=nullptr ? hero.visualSkeleton()->name() : std::string_view());
   if(hero.playAnimByName("T_SPAWN",BS_STAND)==nullptr)
     Log::i("[necro] no T_SPAWN for the skeleton");
   playFx(world,SummonFx,hero.position());

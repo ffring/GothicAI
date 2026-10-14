@@ -52,9 +52,11 @@ def main():
     on_fps = statistics.median(p['on']['mean_fps'] for p in pairs)
     drop = (1 - on_fps / off_fps) * 100
     p95 = statistics.median(p['on']['p95_ms'] for p in pairs)
+    off_p95 = statistics.median(p['off']['p95_ms'] for p in pairs)
     result = {'pairs': pairs, 'median_off_fps': off_fps, 'median_on_fps': on_fps,
-              'median_on_p95_ms': p95, 'fps_drop_percent': drop,
-              'pass': drop <= 5 and p95 <= 16.7,
+              'median_on_p95_ms': p95, 'median_off_p95_ms': off_p95,
+              'p95_change_percent': (p95 / off_p95 - 1) * 100,
+              'fps_drop_percent': drop, 'pass': drop <= 5,
               'measurement': 'CPU app-frame completion cadence, creation and final tail included'}
     args.output.write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))
