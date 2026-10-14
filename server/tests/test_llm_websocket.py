@@ -262,5 +262,7 @@ async def test_a_connection_is_opened_ahead_of_the_turn():
         await _ask(backend, [Message("user", "1")], key="K")
     finally:
         await backend.aclose()
+        backend.open_ahead("L")  # closed: nothing opens
+        await asyncio.sleep(0.1)
         ws.close()
     assert len(server.connections) == 1 and len(server.requests) == 1

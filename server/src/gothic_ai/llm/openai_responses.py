@@ -160,6 +160,7 @@ class OpenAIResponsesBackend:
         self._tasks: set[asyncio.Task[None]] = set()  # connections being read to an answer's end or closed
 
     async def aclose(self) -> None:
+        self._websocket = False  # no connection opens after this (an npc warmed up at the shutdown)
         for task in [*self._opening.values(), *self._tasks]:
             task.cancel()
         sockets = [s for socks in self._sockets.values() for s in socks]
