@@ -30,6 +30,7 @@ from .dialogue import DialogueManager, SceneLine, line_duration
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .gossip import WORDS_CM, GossipDesk, Scene
+from .group import ANSWER_CUE, ROUND_GAP_S
 from .incidents import IncidentDesk
 from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
 from .interject import Interjections
@@ -2313,18 +2314,14 @@ async def _at_the_steps(
 def _overlaps(
     dialogue: DialogueManager, started: list[tuple[float, str, str]], names: dict[str, str]
 ) -> tuple[list[str], list[str]]:
-    """The voices in the order they were heard, and where one started before the one before it was over."""
+    """The voices in the order they were first heard, and where a line started before the line of another
+    before it was over (one may speak again later: Cavalorn, Brago, Cavalorn)."""
     order = sorted({w for _, w, _ in started}, key=lambda n: min(t for t, w, _ in started if w == n))
     out = []
-    for a, b in zip(order, order[1:], strict=False):
-        ends = [
-            t + dialogue._audio.get(line, line_duration(dialogue._lines.get(line, ("", None))[0]))
-            for t, w, line in started
-            if w == a
-        ]
-        b_first = min(t for t, w, _ in started if w == b)
-        if b_first < max(ends) - 0.15:
-            out.append(f"{names.get(b, b)} {max(ends) - b_first:.1f} s over {names.get(a, a)}")
+    for (ta, a, la), (tb, b, _) in pairwise(sorted(started)):
+        end = ta + dialogue._audio.get(la, line_duration(dialogue._lines.get(la, ("", None))[0]))
+        if a != b and tb < end - 0.15:
+            out.append(f"{names.get(b, b)} {end - tb:.1f} s over {names.get(a, a)}")
     return order, out
 
 
@@ -2345,7 +2342,11 @@ async def group_scenario(
     - first: Brago, who leads them, answers first;
     - one_at_a_time: no voice starts before the one before it has been heard;
     - heard: the second answers with the first's words in mind;
-    - three: three voices to the hero's phrase, the fourth says nothing."""
+    - three: three voices to the hero's phrase, the fourth says nothing.
+    Then (step B4) he asks Cavalorn whether they robbed him; Cavalorn answers and calls Brago out by name:
+    - called: that line is said to Brago;
+    - answers_him: Brago answers next, to him, not to the hero, once he has been heard;
+    - look: while each says it, the two look at each other (the snapshot's `gaze`, v27)."""
     await link.wait_world()
     results: dict[str, str] = {}
 
@@ -2395,6 +2396,87 @@ async def group_scenario(
     heard = "Ты слышал, как Браго говорит герою" in " ".join(str(getattr(m, "content", "")) for m in second)
     check("heard", heard, names[order[1]] if len(order) > 1 else "nobody second")
     check("three", len(voices) == 3 and len(order) == 3, [names[n] for n in voices])
+
+    # B4: Cavalorn calls Brago out, Brago answers him
+    await asyncio.sleep(ROUND_GAP_S + 1)  # the round is over
+    cavalorn = FakeBackend(
+        delay=0.02,
+        first=0.5,
+        script=[
+            FakeStep("Они самые, эти рожи я из тысячи узнаю. Браго, верни то, что у меня забрал!"),
+            FakeStep("Посмотрим ещё, кто тут что прикусит."),  # Brago called him back: the third voice
+        ],
+    )
+    brago_says = FakeBackend("Кавалорн, ты бы язык прикусил, пока цел.", delay=0.02, first=0.5)
+    dialogue.llm = _ByNpc({keys[npc]: cavalorn, keys[brago]: brago_says}, FakeBackend("Хм.", delay=0))
+    sent: list[SayCmd] = []
+    send = link.send
+
+    async def spy(cmd: Any) -> None:
+        if isinstance(cmd, SayCmd):
+            sent.append(cmd)
+        await send(cmd)
+
+    link.send = spy  # type: ignore[method-assign]
+    gazes: list[tuple[str, str, str | None]] = []  # (whose line plays, whose eyes, on whom)
+
+    async def watch(speaker: str, other: str, text: str) -> None:
+        """The two's eyes while the line plays."""
+        until = time.monotonic() + max(2.0, line_duration(text))
+        while time.monotonic() < until:
+            for who in (speaker, other):
+                try:
+                    gazes.append((speaker, who, (await link.snapshot(who, fresh=True, timeout=2)).npc.gaze))
+                except (GameError, TimeoutError):
+                    pass
+            await asyncio.sleep(0.2)
+
+    watchers: list[asyncio.Task[None]] = []
+
+    def on_line(m: GameMessage) -> None:
+        if not isinstance(m, LineStarted):
+            return
+        cmd = next((c for c in sent if c.line == m.line and c.to), None)
+        if cmd is not None:
+            watchers.append(asyncio.ensure_future(watch(cmd.npc.upper(), cmd.to.upper(), cmd.text)))
+
+    link.listeners.append(on_line)
+    mark = time.monotonic()
+    talk.hear("Кавалорн, это они тебя ограбили?", None, {"via": "scenario"})
+    await _until(lambda: bool(brago_says.calls) and time.monotonic() - mark > 3, 40)
+    await _until(lambda: not any(dialogue.speaking(n) for n in names), 40)
+    await asyncio.gather(*watchers, return_exceptions=True)
+    link.send = send  # type: ignore[method-assign]
+    to_brago = [c for c in sent if c.npc.upper() == npc and c.to == brago]
+    check(
+        "called",
+        any("Браго" in c.text for c in to_brago),
+        [(c.text, c.to) for c in sent if c.npc.upper() == npc],
+    )
+    cue = brago_says.calls[0][1][-1].content if brago_says.calls else ""
+    to_him = [c for c in sent if c.npc.upper() == brago]
+    mine = sorted(st for st in started if st[0] >= mark)
+    _, overlaps = _overlaps(dialogue, mine, names)
+    turns = [w for i, (_, w, _) in enumerate(mine) if i == 0 or mine[i - 1][1] != w]  # who, as heard
+    check(
+        "answers_him",
+        cue == ANSWER_CUE.format(name="Кавалорн")
+        and bool(to_him)
+        and all(c.to == npc for c in to_him)
+        and turns in ([npc, brago], [npc, brago, npc])  # Brago may call him back: his third voice
+        and not overlaps,
+        overlaps or f"{[names[n] for n in turns]}, Brago to {[c.to for c in to_him]}, cue «{cue}»",
+    )
+
+    def looks(line_of: str, who: str, at: str) -> bool:
+        return any(sp == line_of and w == who and g == at for sp, w, g in gazes)
+
+    each = all(looks(s, s, o) and looks(s, o, s) for s, o in ((npc, brago), (brago, npc)))
+    seen = {
+        f"{names[sp]}'s line, {names[w]}": sorted({str(g) for s, ww, g in gazes if (s, ww) == (sp, w)})
+        for sp, w, _ in gazes
+    }
+    check("look", each, seen or "no snapshots")
     return _logged(results)
 
 

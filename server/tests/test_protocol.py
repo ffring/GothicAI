@@ -211,8 +211,19 @@ def test_v25_the_scripts_own_program():
 
 
 def test_v26_the_directors_lines_in_the_npcs_voice():
-    assert PROTOCOL_VERSION == 26
+    assert PROTOCOL_VERSION >= 26
     msg = parse_game_message(
         '{"type":"line_voice","npc":"NONE_100_XARDAS","name":"Ксардас","line":"AIB_G1","text":"Выбирай."}'
     )
     assert isinstance(msg, LineVoice) and (msg.line, msg.text, msg.name) == ("AIB_G1", "Выбирай.", "Ксардас")
+
+
+def test_v27_whom_the_npc_looks_at():
+    assert PROTOCOL_VERSION == 27
+    snap = '{"type":"snapshot","t":5,"world":{"name":"NEWWORLD.ZEN","day":0,"hour":8,"minute":30},'
+    npc = '"npc":{"id":"BDT_1014_BANDIT_L","name":"Браго","pos":[1,2,3],"rot":0,"hp":10,"hp_max":10,'
+    npc += '"busy":false'
+    looks = parse_game_message(f'{snap}{npc},"gaze":"BAU_4300_ADDON_CAVALORN"}}}}')
+    nobody = parse_game_message(f'{snap}{npc},"gaze":null}}}}')
+    assert isinstance(looks, Snapshot) and looks.npc.gaze == "BAU_4300_ADDON_CAVALORN"
+    assert isinstance(nobody, Snapshot) and nobody.npc.gaze is None
