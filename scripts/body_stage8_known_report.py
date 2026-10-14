@@ -89,7 +89,8 @@ def report(root,snapshot,known_snapshot=None):
     for phase in ("shadow","realtime","realtime-reaction"):
         before=root/f"services-{phase}-before.json";after=root/f"services-{phase}-after.json"
         services[phase]=bc.all_services(bc.read_json(before),bc.read_json(after),current["resources"]["required_services"])
-        require(services[phase]["unchanged"] and services[phase]["services_all_active"],"protected service identity/inactive change during "+phase)
+        require(services[phase]["unchanged"] and (current.get("service_gate_role")=="remote_host_not_measured" or services[phase]["services_all_active"]),
+                "protected service identity/inactive change during "+phase)
         for file in (before,after,root/f"resources-{phase}.txt",root/f"launcher-{phase}.log"):
             require(file.is_file(),"closed phase resource/log missing")
             files[str(file.relative_to(root))]=digest(file)

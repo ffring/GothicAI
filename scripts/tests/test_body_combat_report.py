@@ -11,7 +11,10 @@ report=importlib.util.module_from_spec(spec);spec.loader.exec_module(report)
 
 
 def config():
-    return json.loads((Path(__file__).parents[2]/"evals/npc-body/body-stage8-v1.json").read_text())
+    # Service-report tests pin the standalone role; the live config may name the remote host role.
+    value=json.loads((Path(__file__).parents[2]/"evals/npc-body/body-stage8-v1.json").read_text())
+    value.update(service_gate_role="standalone_report",service_gate_protocol_version=1)
+    return value
 
 
 def service_measurement():
@@ -40,6 +43,18 @@ def test_standalone_service_report_cannot_claim_a_missing_or_invalid_healthy_win
     assert not value["measurement_ready"] and not value["service_gate_ready"] and value["status"]=="incomplete"
     missing=report.service_gate_summary(config())
     assert not missing["measurement_ready"] and not missing["service_gate_ready"]
+
+
+def test_remote_host_role_measures_nothing_and_never_passes_the_service_gate():
+    cfg=config();cfg.update(service_gate_role="remote_host_not_measured",service_gate_protocol_version=2)
+    value=report.service_gate_summary(cfg)
+    assert value["status"]=="not_measured_remote_host" and not value["measurement_ready"] and not value["service_gate_ready"]
+    assert value["combat_budget_issues"]==[] and value["evidence"] is None
+    with pytest.raises(ValueError,match="remote-host gate carries"):
+        report.service_gate_summary(cfg,service_measurement())
+    cfg["service_gate_protocol_version"]=1
+    with pytest.raises(ValueError,match="role/version"):
+        report.service_gate_role(cfg)
 
 
 def test_service_separation_preserves_exact_twenty_sample_receipts():

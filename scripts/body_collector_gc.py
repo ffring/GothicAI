@@ -14,8 +14,9 @@ import time
 
 BOOTSTRAP_PYTHON_VERSION = (3, 12, 13)
 BOOTSTRAP_FREEZE_COUNT = 375
-BOOTSTRAP_EXECUTABLE = "/home/kaifat/gothic-ai/body/.venv/bin/python"
-BOOTSTRAP_RESOLVED_EXECUTABLE = "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12"
+# The same uv CPython build (identical SHA) under whichever home runs the gate.
+BOOTSTRAP_EXECUTABLE = str(Path.home()/"gothic-ai/body/.venv/bin/python")
+BOOTSTRAP_RESOLVED_EXECUTABLE = str(Path.home()/".local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12")
 BOOTSTRAP_EXECUTABLE_SHA256 = "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7"
 
 

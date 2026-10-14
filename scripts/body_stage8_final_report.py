@@ -592,9 +592,14 @@ def report(root,snapshot,native_faults,native_reference):
                 "four-actor load imported another actual Gate package/packer/selected weights")
         checkpoint_issues.extend(quality(load_evidence["cases"],config))
         gate("load_backend_startup",lambda:load_startup_evidence(root,declared,bc))
-        service=gate("protected_services",lambda:combat.protected_service_load(root,current,load_evidence))
-        if service:evidence["protected_services"],service_budget_issues=service;service_measurement=evidence["protected_services"]
-        if current["services"].get("request_cadence") is not None:gate("service_cadence",lambda:service_cadence(root,current,bc))
+        if combat.service_gate_role(current)=="remote_host_not_measured":
+            # No protected service shares this host; the load manifest must say nothing was measured.
+            gate("protected_services_not_colocated",lambda:require(load_manifest.get("protected_services_measured") is False and
+                 not (root/"load/services").exists(),"remote-host load measured or fabricated protected-service evidence"))
+        else:
+            service=gate("protected_services",lambda:combat.protected_service_load(root,current,load_evidence))
+            if service:evidence["protected_services"],service_budget_issues=service;service_measurement=evidence["protected_services"]
+            if current["services"].get("request_cadence") is not None:gate("service_cadence",lambda:service_cadence(root,current,bc))
     def faults():
         import body_api_report as api
         manifest=bc.read_json(native_faults/"manifest.json")

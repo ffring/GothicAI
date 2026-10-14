@@ -50,7 +50,7 @@ def test_final_protocol_keeps_original_80_case_order_and_quality(tmp_path):
 
 def test_standalone_service_role_is_explicit_and_legacy_absence_stays_coupled(tmp_path):
     root,reference,_,candidate,config=protocol(tmp_path)
-    assert final.service_gate_role(final.declared_protocol(root,reference,candidate))=="standalone_report"
+    assert final.service_gate_role(final.declared_protocol(root,reference,candidate))=="remote_host_not_measured"
     current=final.read(root/"code/evals/npc-body/body-stage8-v1.json")
     for value in (config,current):
         value.pop("service_gate_role");value.pop("service_gate_protocol_version")

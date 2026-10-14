@@ -1374,8 +1374,12 @@ def decider_deployment(fixtures):
 def service_gate_role(config):
     role=config.get("service_gate_role","combat_gate")
     version=config.get("service_gate_protocol_version",0)
-    require(role in ("combat_gate","standalone_report") and type(version) is int and version in (0,1) and
-            (role!="standalone_report" or version==1),"invalid declared service gate role/version")
+    # remote_host_not_measured (v2): the gate runs on a host without the protected
+    # services, so it shares no CPU with them and measures none; their report stays
+    # a separate artefact of the service host.
+    require(role in ("combat_gate","standalone_report","remote_host_not_measured") and type(version) is int and version in (0,1,2) and
+            (role!="standalone_report" or version==1) and (role!="remote_host_not_measured" or version==2),
+            "invalid declared service gate role/version")
     return role
 
 
@@ -1397,6 +1401,14 @@ def service_gate_summary(config,measurement=None,candidate_budget_issues=(),meas
                 require(math.isclose(row["degradation_fraction"],delta,rel_tol=0,abs_tol=1e-12) and
                         row["passed"] is (delta<=budget),"service budget result differs from measured p95")
                 if delta>budget:failures.append(f"{provider}: protected {service} p95 degraded {delta:.6f}")
+    if role=="remote_host_not_measured":
+        require(measurement is None and not candidate_budget_issues,"remote-host gate carries a protected-service measurement")
+        return {"schema_version":1,"kind":"body_stage8_protected_service_report","service_gate_role":role,
+                "service_gate_protocol_version":config.get("service_gate_protocol_version",0),
+                "measurement_ready":False,"service_gate_ready":False,"status":"not_measured_remote_host",
+                "maximum_p95_degradation_fraction":budget,"measured_requests_per_service":config["services"]["measured_requests"],
+                "budget_issues":[],"measurement_issues":list(measurement_issues),"candidate_budget_issues":[],
+                "combat_budget_issues":[],"physical_quality_credit":False,"model_causation_claim":False,"evidence":None}
     valid=measurement is not None and not measurement_issues
     return {"schema_version":1,"kind":"body_stage8_protected_service_report","service_gate_role":role,
             "service_gate_protocol_version":config.get("service_gate_protocol_version",0),

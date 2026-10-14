@@ -62,12 +62,18 @@ def report(root,snapshot,load_snapshot):
         if record["policy"]=="gru" and (record.get("fallback_events") or record.get("model_stats",{}).get("runtime_fallbacks",0)):
             issues.append(record["name"]+": actual runtime fallback during neural load")
     startup=reader.load_startup_evidence(root,declared,bc)
-    services,service_issues=combat.protected_service_load(root,current,load)
-    cadence=reader.service_cadence(root,current,bc)
+    remote=combat.service_gate_role(current)=="remote_host_not_measured"
+    if remote:
+        require(manifest.get("protected_services_measured") is False and not (root/"load/services").exists(),
+                "remote-host load measured or fabricated protected-service evidence")
+        services,service_issues,cadence=None,[],None
+    else:
+        services,service_issues=combat.protected_service_load(root,current,load)
+        cadence=reader.service_cadence(root,current,bc)
     execution=declared["runtime_execution_phases"]["load"]
     before=bc.read_json(root/f"services-{execution}-before.json");after=bc.read_json(root/f"services-{execution}-after.json")
     identities=bc.all_services(before,after,original["resources"]["required_services"])
-    require(identities["unchanged"] and identities["services_all_active"],"protected service identity/activity changed during load")
+    require(identities["unchanged"] and (remote or identities["services_all_active"]),"protected service identity/activity changed during load")
     text=(root/f"resources-{execution}.txt").read_text();peak=re.search(r"Maximum resident set size \(kbytes\):\s+(\d+)",text)
     require(re.search(r"Exit status:\s+0\s*$",text,re.M) and peak and 0<int(peak[1])<=6*1024*1024,"load phase failed or exceeded memory budget")
     require(before.get("recorded_at_utc")<=after.get("recorded_at_utc") and before.get("gpu") and after.get("gpu"),"load service clocks/GPU snapshots missing")

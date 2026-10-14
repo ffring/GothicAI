@@ -25,8 +25,8 @@ PROTOCOL=("code/scripts/body_final_evaluation.py","code/scripts/body_combat_eval
           "code/scripts/body_block_reaction.py","code/evals/npc-body/body-block-reaction-v1.json",
           "code/scripts/body_service_load.py","code/scripts/body_policy_load.py","code/evals/npc-body/body-stage8-v1.json")
 BOOTSTRAP_INTERPRETER={"python_version":[3,12,13],"python_implementation":"cpython",
-    "executable":"/home/kaifat/gothic-ai/body/.venv/bin/python",
-    "resolved_executable":"/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+    "executable":str(Path.home()/"gothic-ai/body/.venv/bin/python"),
+    "resolved_executable":str(Path.home()/".local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12"),
     "executable_sha256":"021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7"}
 
 
@@ -41,8 +41,12 @@ def sha(path):return repair.sha(Path(path))
 def service_gate_role(config):
     role=config.get("service_gate_role","combat_gate")
     version=config.get("service_gate_protocol_version",0)
-    require(role in ("combat_gate","standalone_report") and type(version) is int and version in (0,1) and
-            (role!="standalone_report" or version==1),"invalid declared service gate role/version")
+    # remote_host_not_measured (v2): the gate runs on a host without the protected
+    # services, so it shares no CPU with them and measures none; their report stays
+    # a separate artefact of the service host.
+    require(role in ("combat_gate","standalone_report","remote_host_not_measured") and type(version) is int and version in (0,1,2) and
+            (role!="standalone_report" or version==1) and (role!="remote_host_not_measured" or version==2),
+            "invalid declared service gate role/version")
     return role
 
 

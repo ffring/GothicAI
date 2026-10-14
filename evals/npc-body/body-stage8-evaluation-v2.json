@@ -7,7 +7,7 @@
   "selection_allowed": false,
   "reference": {
     "run_name": "stage8-defence-bc-v2",
-    "policy_code_run_name": "stage8-final-gate-v14",
+    "policy_code_run_name": "stage8-final-gate-v15",
     "gru_checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
     "mlp_checkpoint_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
     "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe"
@@ -844,6 +844,6 @@
     "case_matrix_relation": "all original 80 case dictionaries and ordering exact; only 20 block initializers changed",
     "service_probes": false
   },
-  "service_gate_role": "standalone_report",
-  "service_gate_protocol_version": 1
+  "service_gate_role": "remote_host_not_measured",
+  "service_gate_protocol_version": 2
 }

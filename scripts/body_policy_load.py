@@ -365,7 +365,13 @@ def run_suite(args, config):
             manifest["collector_gc"] = gc_scope.enter()
             write_json(args.output / "collector-gc.json", gc_scope.profile)
             write_json(args.output / "manifest.json", manifest)
-        if not args.no_service_load:
+        # On a host without the protected services the full cohort matrix still runs,
+        # but nothing is measured against services that share no CPU with it.
+        remote_host = config.get("service_gate_role") == "remote_host_not_measured"
+        manifest.update(protected_services_measured=not (args.no_service_load or remote_host),
+                        service_gate_role=config.get("service_gate_role", "combat_gate"))
+        write_json(args.output / "manifest.json", manifest)
+        if not (args.no_service_load or remote_host):
             worker = ServiceLoadWorker(args.config, args.output / "services")
             print("stage8 protected-service baseline starts before any engine lease or game tick", flush=True)
             request = worker.begin("before", count=20, warmup=2)

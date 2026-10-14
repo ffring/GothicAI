@@ -99,7 +99,7 @@ out=Path(sys.argv[1])
 def read(args):return subprocess.check_output(args,text=True).strip()
 config=json.loads((out/'code/evals/npc-body/body-bc-v1.json').read_text())
 services={name:read(['systemctl','--user','show',name,'-p','ActiveState','-p','SubState','-p','MainPID']) for name in config['resources']['required_services']}
-preflight={'schema_version':1,'host':'dev-ubuntu','recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'device_requested':'cpu','cuda_visible_devices':os.environ.get('CUDA_VISIBLE_DEVICES'),'gpu':read(['nvidia-smi','--query-gpu=memory.used,memory.free,utilization.gpu','--format=csv,noheader']),'ram':read(['free','-b']),'disk':read(['df','-B1',str(out)]),'services':services,'model_forward_performed':False}
+preflight={'schema_version':1,'host':os.uname().nodename,'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'device_requested':'cpu','cuda_visible_devices':os.environ.get('CUDA_VISIBLE_DEVICES'),'gpu':subprocess.run(['nvidia-smi','--query-gpu=memory.used,memory.free,utilization.gpu','--format=csv,noheader'],capture_output=True,text=True).stdout.strip() or 'unavailable','ram':read(['free','-b']),'disk':read(['df','-B1',str(out)]),'services':services,'model_forward_performed':False}
 (out/'preflight.json').write_text(json.dumps(preflight,indent=2)+'\n')
 environment={'python':sys.version,'packages':{name:version(name) for name in ['torch','numpy','pytest']},'frozen_files':{str(p.relative_to(out)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((out/'code').rglob('*')) if p.is_file() and not {'__pycache__','.pytest_cache'}.intersection(p.parts)},'binary_sha256':hashlib.sha256((out/'reference/gothic-body-runner').read_bytes()).hexdigest(),'source_archive_sha256':hashlib.sha256((out/'source.tar.gz').read_bytes()).hexdigest()}
 (out/'environment.json').write_text(json.dumps(environment,indent=2)+'\n')
@@ -621,8 +621,12 @@ cuda_visible_devices=''
 "$python" - "$out" "$phase" before <<'PY'
 import datetime,json,subprocess,sys
 from pathlib import Path
+def gpu():
+    # The gate runs models on CPU; a host without a working NVIDIA driver records that fact.
+    run=subprocess.run(['nvidia-smi','--query-gpu=memory.used,memory.free,utilization.gpu','--format=csv,noheader'],capture_output=True,text=True)
+    return run.stdout.strip() if run.returncode==0 and run.stdout.strip() else 'unavailable: '+(run.stdout+run.stderr).strip().splitlines()[0][:120]
 out=Path(sys.argv[1]);config=json.loads((out/'code/evals/npc-body/body-bc-v1.json').read_text())
-snapshot={'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'services':{name:subprocess.check_output(['systemctl','--user','show',name,'-p','ActiveState','-p','SubState','-p','MainPID'],text=True).strip() for name in config['resources']['required_services']},'gpu':subprocess.check_output(['nvidia-smi','--query-gpu=memory.used,memory.free,utilization.gpu','--format=csv,noheader'],text=True).strip()}
+snapshot={'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'services':{name:subprocess.check_output(['systemctl','--user','show',name,'-p','ActiveState','-p','SubState','-p','MainPID'],text=True).strip() for name in config['resources']['required_services']},'gpu':gpu()}
 (out/f'services-{sys.argv[2]}-{sys.argv[3]}.json').write_text(json.dumps(snapshot,indent=2)+'\n')
 PY
 gpu_watch_pid=''
@@ -663,8 +667,12 @@ trap - INT TERM
 "$python" - "$out" "$phase" after <<'PY'
 import datetime,json,subprocess,sys
 from pathlib import Path
+def gpu():
+    # The gate runs models on CPU; a host without a working NVIDIA driver records that fact.
+    run=subprocess.run(['nvidia-smi','--query-gpu=memory.used,memory.free,utilization.gpu','--format=csv,noheader'],capture_output=True,text=True)
+    return run.stdout.strip() if run.returncode==0 and run.stdout.strip() else 'unavailable: '+(run.stdout+run.stderr).strip().splitlines()[0][:120]
 out=Path(sys.argv[1]);config=json.loads((out/'code/evals/npc-body/body-bc-v1.json').read_text())
-snapshot={'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'services':{name:subprocess.check_output(['systemctl','--user','show',name,'-p','ActiveState','-p','SubState','-p','MainPID'],text=True).strip() for name in config['resources']['required_services']},'gpu':subprocess.check_output(['nvidia-smi','--query-gpu=memory.used,memory.free,utilization.gpu','--format=csv,noheader'],text=True).strip()}
+snapshot={'recorded_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'services':{name:subprocess.check_output(['systemctl','--user','show',name,'-p','ActiveState','-p','SubState','-p','MainPID'],text=True).strip() for name in config['resources']['required_services']},'gpu':gpu()}
 (out/f'services-{sys.argv[2]}-{sys.argv[3]}.json').write_text(json.dumps(snapshot,indent=2)+'\n')
 PY
 tail -12 "$out/launcher-$phase.log"
