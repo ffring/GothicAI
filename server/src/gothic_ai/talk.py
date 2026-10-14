@@ -85,8 +85,8 @@ NOTE_EVERY_S = 15.0  # one note per kind of the hero's doings this often
 # states an npc is not busy in: when the behavioral model is unsure, such an npc stops and listens
 IDLE_STATES = ("ZS_STAND", "ZS_SIT", "ZS_SMALLTALK", "ZS_GUARD")
 # body jobs that take the partner away from the hero for the conversation and bring it back (check_claim,
-# ask_witness): it has not walked away
-ERRANDS = frozenset({"check", "witness"})
+# ask_witness, a walk to its chest): it has not walked away
+ERRANDS = frozenset({"check", "witness", "chest"})
 
 # what the hero does mid-conversation, for the partner's memory (npc_event kinds; perceptions of an
 # attached npc map to them below)

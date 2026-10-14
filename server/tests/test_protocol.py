@@ -8,11 +8,13 @@ from gothic_ai.protocol import (
     BeastCmd,
     BeastEvent,
     Beasts,
+    Chest,
     DebugCmd,
     GraphPatchCmd,
     HushCmd,
     LineVoice,
     NpcActCmd,
+    NpcChestsCmd,
     NpcIdle,
     NpcViews,
     SayCmd,
@@ -219,7 +221,7 @@ def test_v26_the_directors_lines_in_the_npcs_voice():
 
 
 def test_v27_whom_the_npc_looks_at():
-    assert PROTOCOL_VERSION == 27
+    assert PROTOCOL_VERSION >= 27
     snap = '{"type":"snapshot","t":5,"world":{"name":"NEWWORLD.ZEN","day":0,"hour":8,"minute":30},'
     npc = '"npc":{"id":"BDT_1014_BANDIT_L","name":"Браго","pos":[1,2,3],"rot":0,"hp":10,"hp_max":10,'
     npc += '"busy":false'
@@ -227,3 +229,26 @@ def test_v27_whom_the_npc_looks_at():
     nobody = parse_game_message(f'{snap}{npc},"gaze":null}}}}')
     assert isinstance(looks, Snapshot) and looks.npc.gaze == "BAU_4300_ADDON_CAVALORN"
     assert isinstance(nobody, Snapshot) and nobody.npc.gaze is None
+
+
+def test_v28_npc_chests():
+    assert PROTOCOL_VERSION == 28
+    ask = NpcChestsCmd(req="c1", npc="BDT_1014_BANDIT_L")
+    assert ask.to_json() == '{"type":"npc_chests","req":"c1","npc":"BDT_1014_BANDIT_L"}'
+    chest = Chest.model_validate(
+        {
+            "id": "MOB_17897_3163_-20770",
+            "why": "key",
+            "pos": [17897, 3163, -20770],
+            "distance": 400,
+            "waypoint": "NW_XARDAS_BANDITS_RIGHT",
+            "locked": True,
+            "key": "ITKE_BANDIT",
+            "has_key": True,
+            "items": [{"item": "ITRW_BOW_L_01", "name": "Короткий лук", "count": 1}],
+            "start": [{"item": "ITMI_GOLD", "name": "Золото", "count": 29}],
+        }
+    )
+    assert chest.why == "key" and chest.items[0].item == "ITRW_BOW_L_01" and chest.start[0].count == 29
+    take = DebugCmd(req="r1", cmd="chest_take", chest=chest.id, item="ITMI_GOLD", count=29)
+    assert '"cmd":"chest_take"' in take.to_json() and '"count":29' in take.to_json()

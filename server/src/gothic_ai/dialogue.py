@@ -988,9 +988,17 @@ class DialogueManager:
             conv, replace(conv.intent, **fields), self.link.snapshots.get(conv.npc), body=body
         )
 
-    def after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
-        """For extensions: a body job once the npc has said its lines; its note goes into the history."""
-        self._after_speech(conv, job)
+    def after_speech(
+        self,
+        conv: Conversation,
+        job: Callable[[], Awaitable[tuple[str, bool]]],
+        *,
+        then: str | None = None,
+        kind: str = "incident",
+    ) -> None:
+        """For extensions: a body job once the npc has said its lines; its note goes into the history. `then`:
+        once it is done, a turn of its own with this cue (it came back from its chest: it goes on talking)."""
+        self._after_speech(conv, job, then=then, kind=kind)
 
     async def give(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
         """For extensions: hand an item over (give_item's checks are the caller's)."""
@@ -1490,9 +1498,17 @@ class DialogueManager:
             log.info("%s note: %s", conv.npc, note)
             self._remember(conv, "developer", f"[{note}]")
 
-    def _after_speech(self, conv: Conversation, job: Callable[[], Awaitable[tuple[str, bool]]]) -> None:
+    def _after_speech(
+        self,
+        conv: Conversation,
+        job: Callable[[], Awaitable[tuple[str, bool]]],
+        *,
+        then: str | None = None,
+        kind: str = "incident",
+    ) -> None:
         """Run a body job once the npc has said its queued lines; the note it returns goes into the
-        history after the current turn. A failure is reported (`on_body_failed`)."""
+        history after the current turn. A failure is reported (`on_body_failed`); a success with `then`
+        starts a turn with that cue."""
         reply = conv.reply
 
         async def run() -> None:
@@ -1504,6 +1520,8 @@ class DialogueManager:
             self._note(conv, note)
             if not ok and self.on_body_failed is not None:
                 self.on_body_failed(conv.npc, note)
+            if ok and then is not None:  # a turn as one with the hero: the extensions' tools too (a deal)
+                self.event_turn(conv.npc, then, kind=kind, tools=[t.name for t in self._offered(conv.npc)])
 
         task = asyncio.create_task(run())
         conv.actions.add(task)

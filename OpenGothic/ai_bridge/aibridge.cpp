@@ -25,13 +25,16 @@
 
 #include "game/gamescript.h"
 #include "game/bodyobservations.h"
+#include "game/inventory.h"
 #include "game/serialize.h"
 #include "camera.h"
 #include "commandline.h"
 #include "physics/dynamicworld.h"
+#include "world/objects/interactive.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "world/worldsound.h"
+#include "npcchests.h"
 #include "gothic.h"
 
 #include "beasts.h"
@@ -55,7 +58,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 27;
+constexpr int         ProtocolVersion = 28;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -734,6 +737,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_state") {
     sendResult(req,true,"",story.state(*world,doc));
     }
+  else if(type=="npc_chests") {
+    // v28: the npc's chests and what lies in them
+    if(Npc* npc = npcBySymbol(*world,JsonRead::str(doc,"npc")))
+      sendResult(req,true,"",NpcChests::of(*world,*npc)); else
+      sendResult(req,false,"no npc " + std::string(JsonRead::str(doc,"npc")));
+    }
   else if(type=="story_people") {
     sendResult(req,true,"",story.people(*world));
     }
@@ -882,7 +891,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop") {
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1204,6 +1213,23 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     pl->dropItem(id,1);
     const bool dropped = pl->inventory().itemCount(id)<before;
     sendResult(req,dropped,dropped ? "" : "the hero could not drop it now");
+    return;
+    }
+  if(cmd=="chest_take") {
+    // the hero takes things out of a chest unseen (v28): what its owner remembers is no longer there
+    Interactive* chest = NpcChests::find(*world,JsonRead::str(msg,"chest"));
+    std::string  inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(chest==nullptr || id==size_t(-1)) {
+      sendResult(req,false,chest==nullptr ? "no such chest" : "unknown item " + inst);
+      return;
+      }
+    const size_t n = std::min(chest->inventory().itemCount(id),size_t(std::max<int64_t>(1,JsonRead::integer(msg,"count",1))));
+    if(n>0)
+      Inventory::transfer(const_cast<Inventory&>(pl->inventory()),chest->inventory(),nullptr,id,n,*world);
+    sendResult(req,n>0,"it is not in the chest",std::to_string(n));
     return;
     }
   if(cmd=="player_hp") {
