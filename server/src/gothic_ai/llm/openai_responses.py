@@ -9,13 +9,17 @@ response's own items go back in the next request. Reasoning comes encrypted for 
 (`include=["reasoning.encrypted_content"]`); item ids are dropped, since unstored ids cannot be resolved.
 Checked on a plan token on 2026-10-11 (`gothic-ai llm-test --probe-tools`): the continuation then needs
 no new reasoning at all.
+
+The tools of a request may stay the same while fewer may be called: `allowed` goes as an `allowed_tools`
+tool choice, so the request's start (and the prompt cache) does not change with them; `cache_key` goes as
+`prompt_cache_key`. The plan token takes both (2026-10-14), though its cache seldom engages.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Sequence
 from typing import Any
 
 import openai
@@ -76,6 +80,8 @@ class OpenAIResponsesBackend:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         token = await self._token()
         kwargs: dict[str, Any] = {}
@@ -84,8 +90,10 @@ class OpenAIResponsesBackend:
             kwargs["include"] = ["reasoning.encrypted_content"]
         if tools:
             kwargs["tools"] = [_tool(t) for t in tools]
-            if tool_choice:
-                kwargs["tool_choice"] = tool_choice
+            if choice := _tool_choice(tools, tool_choice, allowed):
+                kwargs["tool_choice"] = choice
+        if cache_key:
+            kwargs["prompt_cache_key"] = cache_key
         text = ""
         items: list[Item] = []
         try:
@@ -175,6 +183,22 @@ def _usage(usage: Any) -> Usage | None:
         output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
         reasoning_tokens=int(getattr(out_details, "reasoning_tokens", 0) or 0),
     )
+
+
+def _tool_choice(
+    tools: list[Tool], choice: ToolChoice | None, allowed: Collection[str] | None
+) -> ToolChoice | dict[str, Any] | None:
+    """`choice`, or the tools of `allowed` when it leaves some out (none of them: no calls at all)."""
+    if choice == "none" or allowed is None or {t.name for t in tools} <= set(allowed):
+        return choice
+    names = [t.name for t in tools if t.name in allowed]
+    if not names:
+        return "none"
+    return {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "function", "name": n} for n in names],
+    }
 
 
 def _tool(tool: Tool) -> dict:

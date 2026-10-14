@@ -447,6 +447,8 @@ class TurnExtension(Protocol):
     quests, vanilla.py; what the npc knows, knowledge.py): lines for the situation, tools to offer, and the
     handling of their calls. One may also answer recall: `recall(npc, query) -> str | None`."""
 
+    all_tools: tuple[Tool, ...]  # every tool `tools` may offer: all are in each request, see `_request_tools`
+
     async def prepare(self, npc: str) -> None:
         """Before a turn: what the situation and the tools need from the game."""
         ...
@@ -1749,8 +1751,10 @@ class DialogueManager:
                 events = llm.stream(
                     instructions=conv.persona.instructions,
                     messages=request,
-                    tools=[] if quick else state.tools,
+                    tools=[] if quick else self._request_tools(state.tools),
                     tool_choice=choice,
+                    allowed=None if quick else [t.name for t in state.tools],
+                    cache_key=conv.npc,
                 )
                 async for event in with_deadlines(events, first_s=first_s, idle_s=idle_s, name=llm.name):
                     if isinstance(event, Done):
@@ -1844,6 +1848,8 @@ class DialogueManager:
         """Handle a call of the model. Checks run here, against what the npc has and sees: a rejection
         goes back to the model at once. Accepted commitments are carried out after the npc's line."""
         snap = self.link.snapshots.get(conv.npc)
+        if all(t.name != call.name for t in state.tools):  # in the request, but not offered in this turn
+            return ToolOutcome(f"Отклонено: сейчас {call.name} тебе недоступен.", "rejected")
         match call.name:
             case npc_tools.END_CONVERSATION:
                 state.end_requested = True
@@ -1886,6 +1892,14 @@ class DialogueManager:
             if (outcome := await ext.handle(self, conv, call, snap)) is not None:
                 return outcome
         return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
+
+    def _request_tools(self, offered: list[Tool]) -> list[Tool]:
+        """The tools of a request: every one a turn may offer, the same list each time, so that the start
+        of an npc's requests (and the provider's prompt cache) does not change with what is offered; only
+        `offered` may be called (`allowed`)."""
+        tools = [*self.tools, *(t for ext in self.extensions for t in ext.all_tools)]
+        names = {t.name for t in tools}
+        return tools + [t for t in offered if t.name not in names]
 
     def _offered(self, npc: str) -> list[Tool]:
         """The tools for a turn with the hero: the npc's own and those of the extensions."""

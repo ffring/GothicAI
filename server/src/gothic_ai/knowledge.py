@@ -319,6 +319,8 @@ class Knowledge:
         view = self.views.get(npc.upper())
         return None if view is None else brief(view)
 
+    all_tools: tuple[Tool, ...] = ()
+
     def tools(self, npc: str) -> list[Tool]:
         return []
 

@@ -432,6 +432,8 @@ class Deals:
                 lines.append(f"- {d.id}: {d.what()}{state}")
         return "\n".join(lines) or None
 
+    all_tools: tuple[Tool, ...] = (PROPOSE_TOOL, WITHDRAW_TOOL)
+
     def tools(self, npc: str) -> list[Tool]:
         return [PROPOSE_TOOL, WITHDRAW_TOOL] if npc.upper() in self.open else [PROPOSE_TOOL]
 

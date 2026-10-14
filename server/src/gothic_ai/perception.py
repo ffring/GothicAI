@@ -498,6 +498,8 @@ class PerceptionDesk:
     def situation(self, npc: str) -> str | None:
         return None  # the view goes into the situation itself (npc_tools.render_situation)
 
+    all_tools: tuple[Tool, ...] = (LOOK_TOOL,)
+
     def tools(self, npc: str) -> list[Tool]:
         view = self.view(npc)
         seen = view is not None and (bool(view.sees) or (view.hero is not None and view.hero.seen))
