@@ -85,12 +85,36 @@ GRAPH = {
                 {"do": "xp", "amount": ["int", 50, "XP_LOBARTHOLRUEBEN"], "when": HAS_20},
             ],
         },
+        {
+            "id": "DIA_HILDA_RUEBEN",
+            "kind": "dialog",
+            "npc": "BAU_951_HILDA",
+            "description": "Лобарт прислал меня за супом.",
+            "nr": 1,
+            "important": False,
+            "permanent": False,
+            "trade": False,
+            "condition": RUEBEN_RUNNING,
+            "lifted": True,
+            "reads": ["MIS_LOBART_RUEBEN"],
+            "knows": [],
+            "writes": [],
+            "effects": [
+                {
+                    "do": "give",
+                    "from": ["inst", "SELF"],
+                    "to": ["inst", "OTHER"],
+                    "item": ["sym", "ITFO_STEW"],
+                    "amount": ["int", 1],
+                },
+            ],
+        },
     ],
     "functions": {},
     "instances": {"HILDA": "BAU_951_HILDA"},
     "vars": {
         "MIS_LOBART_RUEBEN": {
-            "readers": ["DIA_LOBART_RUEBENRUNNING"],
+            "readers": ["DIA_LOBART_RUEBENRUNNING", "DIA_HILDA_RUEBEN"],
             "writers": ["DIA_LOBART_RUEBENRUNNING", "DIA_LOBART_WORKNOW_OK"],
             "others": [],
         },
@@ -130,6 +154,13 @@ def test_quest_and_its_nodes(graph):
     by_nr = [n.id for n in graph.dialogs_of("bau_950_lobart")]
     assert by_nr == ["DIA_LOBART_RUEBENRUNNING", "DIA_LOBART_WORKNOW"]
     assert graph.npc("Hilda") == "BAU_951_HILDA" and graph.npc("BAU_950_LOBART") == "BAU_950_LOBART"
+
+
+def test_the_things_of_an_npcs_story(graph):
+    # his own dialogs, and the dialogs of others in his quest: the stew is named only in Hilda's
+    assert graph.things_of("bau_950_lobart") == {"ITPL_BEET", "ITFO_STEW"}
+    assert graph.things_of("BAU_951_HILDA") == {"ITFO_STEW", "ITPL_BEET"}  # she reads his quest
+    assert graph.things_of("NONE_100_XARDAS") == set()
 
 
 def test_expressions(graph):
@@ -175,6 +206,8 @@ def test_the_real_game(tmp_path):
     hilda = next(e for e in done.effects if e["do"] == "set" and e["var"] == "MIS_LOBART_RUEBENTOHILDA")
     assert render(hilda["when"]) == "!NPC_ISDEAD(HILDA) && (NPC_HASITEMS(other, ITPL_BEET) >= 20)"
     assert graph.npc("HILDA") == "BAU_951_HILDA"
+    # Cavalorn's stolen letter is named only in Vatras's dialog, of the quest Cavalorn's move
+    assert "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED" in graph.things_of("BAU_4300_ADDON_CAVALORN")
     # Franco's death makes two quests obsolete in ZS_Dead, outside any dialog
     assert "ZS_DEAD" in graph.vars["MIS_HLPLOGAN"].others
     # the gate guard stores AIV_PASSGATE and then checks it: the check sees the store (found by the VM check)

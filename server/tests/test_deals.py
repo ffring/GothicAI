@@ -190,6 +190,63 @@ async def test_what_cannot_be_offered():
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_a_thing_of_its_story_by_a_guessed_id():
+    # 2026-10-14: Cavalorn asked for his letter as ITWR_CAVALORNLETTER twice, and no window came
+    sealed, opened, map_ = (
+        "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+        "ITWR_SATURASFIRSTMESSAGE_ADDON",
+        "ITWR_MAP_NEWWORLD_ORNAMENTS_ADDON",
+    )
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    fake.symbols.update({sealed: "item", opened: "item", map_: "item", "DIA_X": "dialog"})
+    fake.item_names.update({sealed: "Запечатанное послание", opened: "Вскрытое послание", map_: "Карта"})
+    deals.things = lambda npc: {sealed, opened, map_, GOLD, "ITMI_NOT_IN_THE_GAME", "DIA_X"}
+    try:
+        snap = dialogue.link.snapshots[XARDAS]
+
+        async def offer(hero_gives, bring=()):
+            args = {
+                "npc_gives": [{"item": POTION, "count": 1}],
+                "hero_gives": hero_gives,
+                "task": {"kill": [], "bring": list(bring), "days": 0},
+            }
+            return await deals.propose(XARDAS, "Ксардас", args, snap)
+
+        letter = {"item": "ITWR_CAVALORNLETTER", "count": 1}
+        fake.hero_items = {map_: 1, sealed: 1, GOLD: 30}  # the map is a letter too, but not his: one of his
+        deals.things = lambda npc: {sealed, opened, GOLD}
+        o = await offer([letter, {"item": GOLD, "count": 5}])
+        assert o.status == "accepted"
+        assert "Предмета ITWR_CAVALORNLETTER нет" in o.output
+        assert f"Запечатанное послание ({sealed})" in o.output
+        await _until(lambda: _shown(fake) != [])
+        assert [t["item"] for t in _shown(fake)[-1]["hero_gives"]] == [sealed, GOLD]
+
+        # he has none of its letters, or two: it is told the things of its story, of the kind it asked first
+        deals.things = lambda npc: {sealed, opened, map_, GOLD, "ITMI_NOT_IN_THE_GAME", "DIA_X"}
+        for items in ({GOLD: 30}, {sealed: 1, map_: 1}):
+            fake.hero_items = items
+            o = await offer([letter])
+            assert o.status == "rejected" and o.output == (
+                "Отклонено: нет таких предметов: ITWR_CAVALORNLETTER. Вещи из твоих дел: "
+                f"Карта ({map_}); Вскрытое послание ({opened}); Запечатанное послание ({sealed}); "
+                f"Золото ({GOLD})."
+            )
+        # what it wants brought some day is not looked for on him
+        fake.hero_items = {sealed: 1}
+        o = await offer([], bring=[letter])
+        assert o.status == "rejected" and "нет таких предметов: ITWR_CAVALORNLETTER." in o.output
+        # with no story graph it is just told there is no such thing
+        deals.things = None
+        o = await offer([letter])
+        assert o.output == "Отклонено: нет таких предметов: ITWR_CAVALORNLETTER."
+        assert len(_shown(fake)) == 1
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_an_offer_not_taken_goes_with_the_conversation():
     fake = FakeGame(branch="A")
     store = MemoryStore(":memory:")

@@ -157,6 +157,7 @@ async def test_in_a_turn_the_npc_sees_and_can_look_closer():
     situation = str(llm.calls[0][1][-2].content)
     assert "ты его не знаешь, по виду ополченец" in situation and "Видишь: Хильда" not in situation  # no ties
     assert "look" in [t.name for t in llm.calls[0][2]]
+    assert "take_item" not in [t.name for t in llm.calls[0][2]]  # nothing on the ground
     result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
     assert result.output.startswith("Герой, 4 м")
 
@@ -231,3 +232,75 @@ def test_its_intent_points_only_to_whom_it_sees_or_saw_a_moment_ago():
     d._store(NpcView.model_validate(cavalorns_view()))
     sight = d.sight(CAVALORN)
     assert sight is not None and sight.targets == {"PLAYER": "герой"}
+
+
+LETTER = "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED"
+
+
+def letter(metres: float = 2, hero_cm: float = 80, **extra) -> dict:
+    return {
+        "item": LETTER,
+        "name": "Запечатанное послание",
+        "distance": metres * 100,
+        "hero_cm": hero_cm,
+        **extra,
+    }
+
+
+def test_things_lying_about():
+    # 2026-10-14: the hero threw Cavalorn's letter down at his feet; Cavalorn: «я даже не вижу, куда ты его
+    # швырнул»
+    herbs = {
+        "item": "ITPL_HEALTH_HERB_01",
+        "name": "Лечебная трава",
+        "count": 3,
+        "distance": 800,
+        "from_hero": "left",
+    }
+    view = {**lobarts_view(), "items": [letter(), herbs]}
+    sight = desk([view]).sight(LOBART)
+    assert sight is not None and sight.ground == (
+        f"На земле: Запечатанное послание ({LETTER}; 2 м, у ног героя); "
+        "Лечебная трава ×3 (ITPL_HEALTH_HERB_01; 8 м, слева от героя)."
+    )
+    assert set(sight.things) == {LETTER, "ITPL_HEALTH_HERB_01"}
+    assert sight.ground in render_situation(None, None, sight)
+    assert "On the ground: Запечатанное послание, 2 m away at the hero's feet." in desk([view]).english(
+        LOBART
+    )
+    nothing = desk([lobarts_view()]).sight(LOBART)
+    assert (
+        nothing is not None
+        and nothing.ground is None
+        and "На земле" not in render_situation(None, None, nothing)
+    )
+
+
+async def test_it_picks_up_what_the_hero_threw_down_and_follows_him_again():
+    xardas = "NONE_100_XARDAS"
+    fake = FakeGame()
+    fake.views = {xardas: {**lobarts_view(), "npc": xardas, "name": "Ксардас", "items": [letter()]}}
+    llm = FakeBackend(
+        script=[
+            FakeStep("Это ещё что?", [ToolCall("take_item", {"item": "ITPL_BEET"}, "c1")]),
+            FakeStep("Ладно, подниму.", [ToolCall("take_item", {"item": LETTER.lower()}, "c2")]),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        perception = PerceptionDesk(link, social=Social)
+        dialogue.extensions.append(perception)
+        dialogue.sight = perception.sight
+        await link.attach(xardas)
+        conv = dialogue.open(xardas, "Ксардас")
+        conv.intent = Intent("follow_hero", "PLAYER", "friendly")
+        await dialogue.say_as_player(xardas, "Вот твоё письмо, под ногами. Бери.")
+        await _until(lambda: any("поднял" in m.content for m in conv.history if m.role == "developer"))
+
+    assert "take_item" in [t.name for t in llm.calls[0][2]]  # offered: it sees something lying there
+    rejected = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert rejected.output == f"Отклонено: на земле нет ITPL_BEET; ты видишь там: {LETTER}."
+    acts = [(m["action"], m["args"]) for m in fake.received if m["type"] == "action"]
+    assert acts == [("take_item", {"item": LETTER}), ("follow", {"npc": "PLAYER"})]
+    assert "[Ты поднял с земли: Запечатанное послание]" in [m.content for m in conv.history]

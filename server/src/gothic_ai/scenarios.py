@@ -2079,6 +2079,99 @@ async def calm_scenario(
     return _logged(results)
 
 
+async def ground_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    perception: PerceptionDesk,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    item: str = "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+) -> dict[str, str]:
+    """Things lying about (the user, 2026-10-14: he threw Cavalorn's letter down at his feet and said «бери»;
+    Cavalorn: «я даже не вижу, куда ты его швырнул»). Cavalorn follows the hero, the hero throws the letter
+    down. Checks:
+    - sees: it is in Cavalorn's view, with its id;
+    - situation: its situation tells it, «На земле: …»;
+    - take: told «бери», its model (scripted) calls take_item: it walks up and picks it up;
+    - has: the letter is in its inventory and no longer on the ground;
+    - follows: it goes with the hero again, and catches up when he is 11 m off."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    calls: list[tuple[float, str, str]] = []  # (sent, action, status)
+    act = link.act
+
+    async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
+        t = time.monotonic()
+        res = await act(who, action, **kw)
+        if who.upper() == npc:
+            calls.append((t, action, res.status))
+        return res
+
+    link.act = recorded  # type: ignore[method-assign]
+    take = ToolCall("take_item", {"item": item})
+    dialogue.llm = _ByNpc(
+        {"Кавалорн": _OnWords([("бери", FakeStep("Давай сюда.", [take]))], FakeStep("Идём."))},
+        FakeBackend("Хм.", delay=0),
+    )
+
+    def dist() -> float:
+        return talk.people[npc].distance / 100 if npc in talk.people else -1.0
+
+    def things() -> list[str]:
+        view = perception.view(npc)
+        return [t.item for t in view.items] if view is not None else []
+
+    def since(t0: float, action: str, status: str = "done") -> bool:
+        return any(t >= t0 and a == action and s == status for t, a, s in calls)
+
+    try:
+        await link.debug("skip_important", near=npc)  # Cavalorn's own greeting would stop the hero
+        for _ in range(2):  # the goblins by his fire would beat the hero down
+            try:
+                await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+            except GameError as err:
+                log.info("ground: goblin: %s", err)
+        await link.debug("player_goto", to=npc, distance=300)
+        if not await _until(lambda: 0 <= dist() <= 15, 20):
+            return _logged({"roster": f"failed ({npc} is not around the hero: {dist():.1f} m)"})
+        dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+        talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+        if not await _until(lambda: since(0, "follow") and 0 <= dist() <= 5, 20):
+            return _logged({"follow": f"failed ({dist():.1f} m)"})
+        await asyncio.sleep(2)  # it has stopped by him
+
+        await link.debug("player_drop", item=item)
+        sees = await _until(lambda: item in things(), 8)
+        check("sees", sees, things() or "nothing on the ground")
+        sight = perception.sight(npc)
+        ground = sight.ground if sight is not None else None
+        check("situation", ground is not None and item in ground, ground or "no line")
+
+        t0 = time.monotonic()
+        talk.hear("Кавалорн, вот твоё письмо, бери.", None, {"via": "scenario"})
+        took = await _until(lambda: since(t0, "take_item") or since(t0, "take_item", "failed"), 45)
+        check("take", since(t0, "take_item"), [a for t, a, s in calls if t >= t0] if took else "no pick-up")
+        snap = await link.snapshot(npc, fresh=True)
+        has = any(i.item == item for i in snap.npc.inventory)
+        await asyncio.sleep(1.5)  # a pushed view after it
+        check("has", has and item not in things(), f"in hands: {has}, on the ground: {things()}")
+
+        following = await _until(lambda: since(t0, "follow"), 10)
+        await link.debug("player_goto", near=npc, distance=1100)
+        await _until(lambda: dist() >= 9, 3)
+        back = await _until(lambda: 0 <= dist() <= 5, 20)
+        check("follows", following and back, f"{dist():.1f} m")
+    finally:
+        link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
 async def lie_found_out(
     link: GameLink,
     dialogue: DialogueManager,
