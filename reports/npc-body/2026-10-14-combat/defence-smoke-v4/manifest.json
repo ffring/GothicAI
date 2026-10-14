@@ -1,0 +1,1608 @@
+{
+  "schema_version": 1,
+  "kind": "body_reactive_defence_demonstrations",
+  "recorded_at_utc": "2026-10-14T10:39:31.976653+00:00",
+  "host": "dev-ubuntu",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+  "python": "3.12.13",
+  "binary_sha256": "04d45057b9e3393bb3e641c580008aec19283bff7c377eb8d6a0363f23d5c5d4",
+  "engine_library_sha256": "dcb8000a59c9bf90ce94018ed492aba2fe6c6c6159db7c6ca27d907425dba988",
+  "source_sha256": "073167d580409a06bf80da13016115b2127bf0fd4f66dca17e9a616829753cc5",
+  "source_files_hashed": 3116,
+  "save_sha256": "c2852f4c009f23225e1c9c70f564ca36b4c12e8220736d1c72a1dbfce8d3372f",
+  "settings_sha256": "c6e42f176f65e7e2302351a4e87ee478b0e846e453968604902922cf6f752867",
+  "game_version": "Gothic II Night of the Raven (explicit -g2)",
+  "config_sha256": "6a370df7c952236a4791085176b52ad262fd69cd99a5d6f9b1d52d46b21fac2b",
+  "scenario_sha256": "d0d5ad2442587122cc25afb534a50d3eae06bd1d30cbb17932f7b2187c87fee7",
+  "melee_scenario_sha256": "fc2f32e60fde4d14dbc4755357309ea0fef1d8fc2e34db91229b3c8a0d14152c",
+  "assets": [
+    {
+      "path": "Data/Anims.vdf",
+      "size": 37559130,
+      "sha256": "1f78030d703cd7db6dff0105b9dc321bee97028765755f8e7e54c4110ca5e9e4"
+    },
+    {
+      "path": "Data/Anims_Addon.vdf",
+      "size": 12587040,
+      "sha256": "f84f1235319221844eb243a2b52daf0e72e3ba1b0ac65c2aceea023ad4a60b19"
+    },
+    {
+      "path": "Data/Fonts_Russian.vdf",
+      "size": 1998711,
+      "sha256": "a5bb88befb48502ef7eec21cec340a73fbb23065ed2a61e16fe94aff9ad1caa5"
+    },
+    {
+      "path": "Data/Meshes.vdf",
+      "size": 15251140,
+      "sha256": "24814577c6f329c4b2d2a65dcb52b324ef7866ef6c6c24d4bab6b6c2ec4a0703"
+    },
+    {
+      "path": "Data/Meshes_Addon.vdf",
+      "size": 4825724,
+      "sha256": "1779a5abcedfaf3745a18b4c58bfd04f03f9c6a39dc3b4e458dbf71dd2895a59"
+    },
+    {
+      "path": "Data/ModVDF/g2_classic.mod",
+      "size": 115310252,
+      "sha256": "57514a54b80e939e0f353325312260deb27141f5dcee39489239973bc5e73e2b"
+    },
+    {
+      "path": "Data/ModVDF/g2_classic_ru.mod",
+      "size": 13711028,
+      "sha256": "0b4657b0e5ad648d5c0b1d5d1863b37711983723a2efed8a8b4f823381124400"
+    },
+    {
+      "path": "Data/Sounds.vdf",
+      "size": 155747102,
+      "sha256": "8606569d89242d04ac3e802cab3573c2f4a4965d587e478f6a0e0f544ea8cfb7"
+    },
+    {
+      "path": "Data/Sounds_Addon.vdf",
+      "size": 52713864,
+      "sha256": "70bfd55908ec0fed94ccdcb446f83bc56c717745828cde801f816252001f4d18"
+    },
+    {
+      "path": "Data/Sounds_bird_01.vdf",
+      "size": 84792,
+      "sha256": "41121684568bc663a554a411ff77fbdbcc5ce68e7784c6cd837e249143505026"
+    },
+    {
+      "path": "Data/Speech1.vdf",
+      "size": 747777384,
+      "sha256": "cce8e6c8b2dd1948a680f2fefa262461b3c89180642e882d219b05f2d9175b58"
+    },
+    {
+      "path": "Data/Speech2.vdf",
+      "size": 622012726,
+      "sha256": "aba079c136a2c1212b425f4079201ce90356c70aa63552ce9d6916d215d54575"
+    },
+    {
+      "path": "Data/Speech_Addon.vdf",
+      "size": 672937550,
+      "sha256": "595235db5cceb11308446e098cdcba8af77dc89b037b7ca756e92eb9b78a323e"
+    },
+    {
+      "path": "Data/Speech_Parlan_engl.vdf",
+      "size": 118692,
+      "sha256": "10f9df8c2da4ff398a972178cd1a8c30ea47d2794c0b6e6e083ae4f706ff593d"
+    },
+    {
+      "path": "Data/Speech_RU_Fix.vdf",
+      "size": 21557768,
+      "sha256": "88181b7d0cc9d057e90f039064c16c8d156816e995412791ee011b9e880b8deb"
+    },
+    {
+      "path": "Data/Speech_heyou_citygde_engl.vdf",
+      "size": 121514,
+      "sha256": "b4b05d89654d68feaf4e7d9cf0ce017bb924459ec45bc6320c2e6c4afea8b3f2"
+    },
+    {
+      "path": "Data/SystemPack.vdf",
+      "size": 64857,
+      "sha256": "4287caafc71eefebf97bbcbbdb8d07f7298075a2d344f7c13a9cbecc270d7fac"
+    },
+    {
+      "path": "Data/Textures.vdf",
+      "size": 329914625,
+      "sha256": "63294eaea45ffb0aa87bacf7dc99b6f0baca2a4e72edb5e943a25ec1e488402f"
+    },
+    {
+      "path": "Data/Textures_Addon.vdf",
+      "size": 160070361,
+      "sha256": "21ebac365a856cfeb65cb5620de3c2589949a9c358719e11839f34ff9385902d"
+    },
+    {
+      "path": "Data/Textures_Russian.vdf",
+      "size": 3445422,
+      "sha256": "395ddc2e89babd81625579f2476deecac73d9f92075b5f47c14dad116834ea26"
+    },
+    {
+      "path": "Data/Worlds.vdf",
+      "size": 100822945,
+      "sha256": "c1cc280a7d1f1f6ee2358526c561f756736d02aecb0c68e80b6e5b1fe33bd601"
+    },
+    {
+      "path": "Data/Worlds_Addon.vdf",
+      "size": 135671400,
+      "sha256": "09074c4c4d21564f9794b363de7cc494ff728930f5f43649829de8e17bcd57bc"
+    },
+    {
+      "path": "Data/speech3.vdf",
+      "size": 1064820,
+      "sha256": "1d2acbfcf03c5e1c051f9fa57c2b0896a471bef36bb2549f05c56c24a129df0c"
+    },
+    {
+      "path": "_work/Data/Anims/Alligator.mds",
+      "size": 15298,
+      "sha256": "6462ef0c0a743eba881186a7bc2037e46aa0761d6f5c7ee679783df17a7996d8"
+    },
+    {
+      "path": "_work/Data/Anims/Blattcrawler.mds",
+      "size": 13711,
+      "sha256": "19f08f5e8a2f842af276f9c0631618333b1d2b18a9af5db42a375cdbc57c6e3c"
+    },
+    {
+      "path": "_work/Data/Anims/Bloodfly.mds",
+      "size": 7907,
+      "sha256": "d11cb33034ffd1dddaee9c58fda1cddc2e949b8475ead22c043cb81a62f3024c"
+    },
+    {
+      "path": "_work/Data/Anims/Crawler.mds",
+      "size": 13515,
+      "sha256": "af7e53d6775368f18ad4620efa68c0baf2c0d8c674e1781e0ad79f1b2a5377d5"
+    },
+    {
+      "path": "_work/Data/Anims/Demon.mds",
+      "size": 10659,
+      "sha256": "50c340b389341444340f1830c2e5daccb04b4411aa9a5f742ba00ff0916edd37"
+    },
+    {
+      "path": "_work/Data/Anims/Draconian.mds",
+      "size": 61255,
+      "sha256": "3d10828cf020b1b51e6335ff17feb900414ea9ad426e77a01a2afd5c08f1733a"
+    },
+    {
+      "path": "_work/Data/Anims/Dragon.mds",
+      "size": 15675,
+      "sha256": "5d14a8baa9c18f50d9e378b317a7d6de1abd95e1b6b93ac1be8a558b3cbd557b"
+    },
+    {
+      "path": "_work/Data/Anims/DragonSnapper.mds",
+      "size": 17644,
+      "sha256": "ee4208049d5cc1c68d5fc9d6f280fc2ddc1c90283ac6841aaed3bb45237828ec"
+    },
+    {
+      "path": "_work/Data/Anims/Dragon_Rock.mds",
+      "size": 16534,
+      "sha256": "46795f459d610492fdc6b7ee1071d0b3450a68d1e18976797d3012270afce619"
+    },
+    {
+      "path": "_work/Data/Anims/FireShadow.mds",
+      "size": 23626,
+      "sha256": "ca3890639bdedbcd3e92aabf87d88ace3abc16ff53a55fc4f8b529208be79ee5"
+    },
+    {
+      "path": "_work/Data/Anims/Giant_Bug.mds",
+      "size": 8728,
+      "sha256": "0f3d9069bb3516a95ef91bb012ba5bf7632c76579581cbed572b02cafe989c47"
+    },
+    {
+      "path": "_work/Data/Anims/Giant_Rat.mds",
+      "size": 18203,
+      "sha256": "caf65a3558b735a1643f4cd555e9ea2adc5041b0977d539c7e812bfbba1b43e1"
+    },
+    {
+      "path": "_work/Data/Anims/Gobbo.mds",
+      "size": 25892,
+      "sha256": "e99d1e6009ecccab316f317145cd0d2898786dcd36d060c7a5aaccd8b22a79ef"
+    },
+    {
+      "path": "_work/Data/Anims/Golem.mds",
+      "size": 17887,
+      "sha256": "ccacd734cbd28ae3b107d50357996060cdbd04523b41a6f34953d89b3ef82a31"
+    },
+    {
+      "path": "_work/Data/Anims/Harpie.mds",
+      "size": 9978,
+      "sha256": "58499ad2c5740146486386a79b5c466e134df4fbc0798cadeaa84a416000c2aa"
+    },
+    {
+      "path": "_work/Data/Anims/HumanS.mds",
+      "size": 169659,
+      "sha256": "a63f69745d4de2d3add4851d0d2da446307d975af26546f41d5e2bc6aaa7624a"
+    },
+    {
+      "path": "_work/Data/Anims/Irrlicht.mds",
+      "size": 5895,
+      "sha256": "5a39955d22effe74a3326499a1fcd97435afb0fdc16e750569875018cf3197b8"
+    },
+    {
+      "path": "_work/Data/Anims/Keiler.mds",
+      "size": 15471,
+      "sha256": "5cae541df28924a33c7010141168071a06626c45beba4a90e439b4e3c9c2a4d8"
+    },
+    {
+      "path": "_work/Data/Anims/Lurker.mds",
+      "size": 17060,
+      "sha256": "f22b789fa39026f09021e71dee164044881a1a2b7bfbc50a749840e8e9bed42f"
+    },
+    {
+      "path": "_work/Data/Anims/Meatbug.mds",
+      "size": 9456,
+      "sha256": "d7854882a6c0290de64e16066202f938e6537b0558db6add8f8e4b06fe116eef"
+    },
+    {
+      "path": "_work/Data/Anims/Molerat.mds",
+      "size": 19035,
+      "sha256": "2c564513331f9d7426d4cfe461bd16547bbf002656c2a112e02cf11394e4e189"
+    },
+    {
+      "path": "_work/Data/Anims/Orc.mds",
+      "size": 61433,
+      "sha256": "fe57cd5f79feb22b6d3d3b74aa761d018442f5adb176f49118ceabac7a5a2508"
+    },
+    {
+      "path": "_work/Data/Anims/Razor.mds",
+      "size": 17249,
+      "sha256": "b9515889bc146d5c4011ccf139b7a00416642f41fee375c6b180ddb98786720d"
+    },
+    {
+      "path": "_work/Data/Anims/Scavenger.mds",
+      "size": 21578,
+      "sha256": "577fed1ffef536bd6c9e1a56cfff16e36d4c5578d1a57bbf2dc7993ec872997b"
+    },
+    {
+      "path": "_work/Data/Anims/ScavengerGL.mds",
+      "size": 21578,
+      "sha256": "78ce560486687b02b0f886f84f7385456267da29e129dd3a69d084b27aa144ed"
+    },
+    {
+      "path": "_work/Data/Anims/Shadow.mds",
+      "size": 21678,
+      "sha256": "ba64c99b8c4b836ed8bbffcc40efa9420f46b831745fdbe419167008e2163b9a"
+    },
+    {
+      "path": "_work/Data/Anims/Sheep.mds",
+      "size": 6106,
+      "sha256": "ad984a2013291173f97b8d18e4d2991a9759e776f69215a0ad4351167f960757"
+    },
+    {
+      "path": "_work/Data/Anims/Snapper.mds",
+      "size": 17269,
+      "sha256": "226a24b4359b440f9250cbddaf103bfcbbf53044f7ade2734d4e7701f57e7068"
+    },
+    {
+      "path": "_work/Data/Anims/StoneGuardian.mds",
+      "size": 6847,
+      "sha256": "75fbb046295ede66b58167b1731e7015f406bfeb71450f943e26a24c67b54966"
+    },
+    {
+      "path": "_work/Data/Anims/StonePuma.mds",
+      "size": 21661,
+      "sha256": "9580e363184549594bf28285c2992b728a69d0b8769f684d92d8e999c7cdfaf5"
+    },
+    {
+      "path": "_work/Data/Anims/SwampDrone.mds",
+      "size": 7825,
+      "sha256": "56991c1c88f1c5a2b4e3023cd2d7bd6a65ef1cde38718ec82ee301c426d67a77"
+    },
+    {
+      "path": "_work/Data/Anims/SwampGolem.mds",
+      "size": 18028,
+      "sha256": "0977d74140222135daa6ee1582af0f4f21610cbeac345f471caac3e1f8939fc8"
+    },
+    {
+      "path": "_work/Data/Anims/SwampRat.mds",
+      "size": 19104,
+      "sha256": "8e9ea2b290b1c4c75865c3efe04b2ad6db629a2852751ca4eccc8f01598de671"
+    },
+    {
+      "path": "_work/Data/Anims/SwampZombie.mds",
+      "size": 12951,
+      "sha256": "2b0e6b5caab9e2aa55cbcbe1ddfddd062581a94b97aa706818932170f1882cb7"
+    },
+    {
+      "path": "_work/Data/Anims/Swampshark.mds",
+      "size": 10135,
+      "sha256": "e89d2aeb5676bb8b0ea2cd1ea5dfac23eac822f8d012e1dd1ac25f80f716e96a"
+    },
+    {
+      "path": "_work/Data/Anims/Swarm.mds",
+      "size": 5550,
+      "sha256": "ed008b598e0e0620c8c108423afb16121c015df1d1ffcda8d5450531c81f8d66"
+    },
+    {
+      "path": "_work/Data/Anims/Troll.mds",
+      "size": 12239,
+      "sha256": "2cd14aa97b0ee9f86d8e71739d79becef3474d123eb8dbf28a5c17b27f70528a"
+    },
+    {
+      "path": "_work/Data/Anims/Waran.mds",
+      "size": 15415,
+      "sha256": "bc2a0fb964a38dd292f8a509b18399b4acfaf7dfcdea22830f35df6cbf53bf16"
+    },
+    {
+      "path": "_work/Data/Anims/Wolf.mds",
+      "size": 16247,
+      "sha256": "11c12ec2c5b6451b0589c3b87953e005b10764112ed79b2cd4a100f4eed245e6"
+    },
+    {
+      "path": "_work/Data/Anims/Zombie.mds",
+      "size": 13550,
+      "sha256": "06d5c4b19ac26f90c9f222e2d82a7ec92c40d68fe70841735cfc3a290bb0c4f6"
+    },
+    {
+      "path": "_work/Data/Anims/_compiled/Gothic2.plc",
+      "size": 11,
+      "sha256": "d11adbc00ea62092800af615aaa63fca0e2e83fa11faaa3ffb9681cb9f0668c3"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BARBQ_NW_MISC_SHEEP_01.mds",
+      "size": 444,
+      "sha256": "64856185bfc1cc6abdf10063caadfd3d715d849e8416abba522131bdb665de6d"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BARBQ_Scav.mds",
+      "size": 432,
+      "sha256": "a4cf05465639e3a4ad1e39b7d6b12c51a3be89c4d8df981066322be92152322a"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BOOK_BLUE.mds",
+      "size": 858,
+      "sha256": "c9a359054669bb102f64090b4119407f1bef6a0ad63bad61df64778d88ea5f98"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BSANVIL_OC.mds",
+      "size": 952,
+      "sha256": "4daad5ab9960fe50fcff509d332fab21663d1d3b22bd504c86af194ccf6f6483"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BSCOOL_OC.mds",
+      "size": 1090,
+      "sha256": "20d35bd1162f750f05079f4464a4e906f627240f3c65a605384a2f1993eea1e5"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BSFIRE_OC.mds",
+      "size": 969,
+      "sha256": "a358638ae7e58a8f2a19d5b3c46b5baf69d8b09b364ab9c0df6e4c64a45020a1"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/BSSHARP_OC.mds",
+      "size": 968,
+      "sha256": "1a4b904d0a57c133df0c308e52d40a834f31f4161f8fa4e062bebe31edd0607f"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_ADD_STONE_LOCKED.mds",
+      "size": 1496,
+      "sha256": "d692ebda601b362d8248c4ab830f337bd7991585a806dba6de19c8b7856de02a"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_ADD_STONE_OPEN.mds",
+      "size": 1492,
+      "sha256": "f2a6c4fddf855ee55cae36c51ff3aa7312363ddfc113fd9cfc1d256025028293"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_NW_NORMAL_LOCKED.MDS",
+      "size": 1484,
+      "sha256": "9d818fbdf8255e260e3311865bd62ef25f5ccb0f8f1a1ae2982ed710647ee711"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_NW_NORMAL_OPEN.MDS",
+      "size": 1490,
+      "sha256": "7ac1f909498a773c0518589b2600fb2005d11a9df19fff80dc5f7a38c1184e26"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_NW_RICH_LOCKED.MDS",
+      "size": 1492,
+      "sha256": "95681e28388f37da179561f79b1b1ce478c3e1b2389b90976adc5567cfd8b18a"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_NW_RICH_OPEN.MDS",
+      "size": 1488,
+      "sha256": "4d74c14d2dcfc01a07134b53ee721859540ece7650ef45218b658b16e85c261d"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_OCCHESTLARGE.mds",
+      "size": 1486,
+      "sha256": "2c1a640eb5ddb9f00148649cf613d03176812bf6034cba651bd849e661b06660"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_OCCHESTLARGELOCKED.mds",
+      "size": 1500,
+      "sha256": "c97b65117343c8627f612ddce10d0215b16a1706536d5d1d7fee930cea89756e"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_OCCHESTMEDIUM.MDS",
+      "size": 1488,
+      "sha256": "addf3b5345b0d49a2d0637b9db3a8c01a53a0efa6f909c9ee1da6111ac3b9e9c"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_OCCHESTMEDIUMLOCKED.MDS",
+      "size": 1490,
+      "sha256": "bccd5d4168b948f64392d082143b182e8ea12455dae0d4387271609393b64cc8"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_OCCRATELARGE.mds",
+      "size": 1486,
+      "sha256": "c3e371b50d64c7b9d33aff9e60652d4f9f4b492706d85d45176caf97d6bcd658"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTBIG_OCCRATELARGELOCKED.mds",
+      "size": 1488,
+      "sha256": "eb8bc1a8b98c5e2481c2292472be7bd14cbfffe82fdcd0a7f997e1c2a5de85b2"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTSMALL_NW_POOR_LOCKED.MDS",
+      "size": 1500,
+      "sha256": "ed4cc1fd24d02a4c04fc72bf86f12276274dd5a0c53b93025f84ef82647f85cb"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTSMALL_NW_POOR_OPEN.MDS",
+      "size": 1506,
+      "sha256": "9699934a2c39069e963dfcde01f69e7270e577abcbbc77475c2d01af9f4c4570"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTSMALL_OCCHESTSMALL.MDS",
+      "size": 1502,
+      "sha256": "cb2e0c4d4a1eeaec831155cf55c3aeba3dbf9c0d3adcc50457c6a6a381a5c510"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTSMALL_OCCHESTSMALLLOCKED.MDS",
+      "size": 1504,
+      "sha256": "fd414466f4c95c48f253a1dca27a21e3a91c45554239968bee273f32c07e8b38"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTSMALL_OCCRATESMALL.MDS",
+      "size": 1502,
+      "sha256": "63cfed328b3957d68021b647ee17a274ed5e6f5769944e6f4964a0abfa4386ef"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/CHESTSMALL_OCCRATESMALLLOCKED.MDS",
+      "size": 1504,
+      "sha256": "ac134fd7429e0ee2bdaf67a844f60720cf9e3e4eafe6c4e939fd36e96d546bd6"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/DOOR_NW_CITY_01.mds",
+      "size": 1393,
+      "sha256": "92522b69e57f4959fbfccd571637be9b892abe62fca406da2602ef4ba78109c2"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/DOOR_NW_DRAGONISLE_01.MDS",
+      "size": 1399,
+      "sha256": "33194f4845109dcd7b79e785e2d79785b72f93d94763c1596d7ae7ddec464738"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/DOOR_NW_DRAGONISLE_02.MDS",
+      "size": 1399,
+      "sha256": "dd46f95f30b50dbfcff9d32388aab88dd199f34f7db17fc29421d2c5d1046d1c"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/DOOR_NW_NORMAL_01.MDS",
+      "size": 1395,
+      "sha256": "549b8ae90a62c085204fc1499c6a13175c0010b1903ababc429de5e87d92dedc"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/DOOR_NW_POOR_01.MDS",
+      "size": 1393,
+      "sha256": "0ad530cba1434c4f5dfb30dbd4ef3585392ca2bc1a7dd4d5144ee2540b83be63"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/DOOR_NW_RICH_01.MDS",
+      "size": 1393,
+      "sha256": "42cc66dd8d7ab4ae2f33f72f2ed0a2247ede9369043e6fa7bccb4bc634aac921"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/Door_Wooden.mds",
+      "size": 1389,
+      "sha256": "058c9a7e8caf8e126deac162a269147f055c294197eabe93f4096ff41aa1f55f"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/FIREPLACE_GROUND2.mds",
+      "size": 776,
+      "sha256": "3d9863bc48883a8110fb382a987885da96c400a32bd1b5fec142d58d74ec3b7e"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/FIREPLACE_HIGH2.mds",
+      "size": 776,
+      "sha256": "3d9863bc48883a8110fb382a987885da96c400a32bd1b5fec142d58d74ec3b7e"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/GRAVE_ORC_1.mds",
+      "size": 781,
+      "sha256": "94870c6745b7d2a6b591b977e629bd52b31b0948a8cdc7dd294999c639226122"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/GRAVE_ORC_2.mds",
+      "size": 781,
+      "sha256": "f50dd999a56b40f129e3bae0ec7d1e29cac31e955ee16489596d4649b72e01cb"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/GRAVE_ORC_3.mds",
+      "size": 781,
+      "sha256": "497e9d71b8a4528c04b751a726823da73831bf57229a03fe4b3a2fe2194d25fc"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/GRAVE_ORC_4.mds",
+      "size": 781,
+      "sha256": "f2baae392ea1a5ef1ee5df4022071c4e6705d29a34e66ae03962e1b946bd69ba"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/HERB_PSI.MDS",
+      "size": 900,
+      "sha256": "221898f8705d7e092456f72a4ec2076b16a4230d7dadcf45e8e858e8d4775dcf"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/LEVER_1_OC.mds",
+      "size": 1331,
+      "sha256": "e86299e5c2c88f8cad370aa2c01a9e115cdee63e40dc3d084526a690970ddb3c"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/PAN_OC.MDS",
+      "size": 1002,
+      "sha256": "eedf6746301f8ebfae4ff87c4a6038ae33030fad7efbb214e7f3a07489739159"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/RMAKER_1.mds",
+      "size": 788,
+      "sha256": "703d6959326d3b100f3f5a5276a84ca96a474c11a8387824e7f35d1d78b10431"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/SMOKE_WATERPIPE.mds",
+      "size": 956,
+      "sha256": "1b3d9ed7ad56735354048a1c83abe0a324684cf28061b3ca021bf873388b1c80"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TOUCHPLATE_SEQ_STONE_KEY_01.mds",
+      "size": 891,
+      "sha256": "f308b8abf1cb34e34d2be47d907480fc8d9b34c0857adfeb697791519074e684"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TOUCHPLATE_SEQ_STONE_MEN_01.mds",
+      "size": 891,
+      "sha256": "3ce745341d2a09bf9f15dbf35ebb18e6d73044f7c457dbf0d3dc0bcf3d95e15a"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TOUCHPLATE_SEQ_STONE_STORM_01.mds",
+      "size": 895,
+      "sha256": "4d8042c09019673f06401858d48ac319c02c75b23b084fb70cb393ab2a2ab442"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TOUCHPLATE_SEQ_STONE_SUN_01.mds",
+      "size": 891,
+      "sha256": "cc0229125dd344092eb1544e7d95b04017532654da2e4811f1ecf567ab6f39d3"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TOUCHPLATE_SEQ_STONE_TRAP_01.mds",
+      "size": 893,
+      "sha256": "f582b5989db9db2c043489e9a4646720a69311452d373b4658788451dcdd8e89"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TOUCHPLATE_STONE.mds",
+      "size": 869,
+      "sha256": "fd00a5dc45cc538683702aba1925e936e39ede7f9f5d0d4b273c748f7db46760"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/TURNSWITCH_BLOCK.mds",
+      "size": 863,
+      "sha256": "0008823e2fe61876ecf65f2eb2c0b86508fa89ff29c3cb12d87bcde041444b79"
+    },
+    {
+      "path": "_work/Data/Anims/mds_mobsi/VWHEEL_1_OC.mds",
+      "size": 857,
+      "sha256": "5008e00b9b4d71494d80a2002fa4f1d28599bd4067ca66d112d507e629b3f11c"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Firewaran.mds",
+      "size": 1596,
+      "sha256": "a3c937eb8fdd8c87fb4381bdae3187bc02aa856d1e3025a986afcb260c0232c5"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Golem_Firegolem.mds",
+      "size": 5568,
+      "sha256": "b70be642858952b4f54287e59bfb4819035811358dcda7726ee4fadf7a421339"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Golem_Icegolem.mds",
+      "size": 9865,
+      "sha256": "992504b7d4074cdea9890513b1edcba95b5d4aaae0629d3939e109bd29e928ce"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/HumanS_Arrogance.mds",
+      "size": 1160,
+      "sha256": "6cae9ab853cf6c735ecb534a918afaa3cf49eb961b441ae56bd75ff5f0d6b6c2"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/HumanS_Flee.mds",
+      "size": 1033,
+      "sha256": "27e9bfe5984c9cb70a1b5b7b2c587b9b1280ba158d023efea8fb13a7a104b4fb"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/HumanS_Militia.mds",
+      "size": 698,
+      "sha256": "b70964b799d76a1c3223ea07bb4b74b18cc96c7796981483c45b5c1971c86b84"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/HumanS_Relaxed.mds",
+      "size": 780,
+      "sha256": "5439d10e604df1c54066b99860f5685e0bd3f5ff0b41501bf933ccdcbb13cf61"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/HumanS_Sprint.mds",
+      "size": 3603,
+      "sha256": "09195ceb65f8677e2c4c57e7541ad33982d9f0ec26288f7e0a203cadfab9f8c5"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/HumanS_Swim.mds",
+      "size": 642,
+      "sha256": "6b27b1924da141bfb380e9b8efcd7119b20ab6cdee66ef004b7affd6a29ded97"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_1hST1.mds",
+      "size": 7745,
+      "sha256": "c9068560c1cd9c8da3428c1a456c4d11937084d8d7b4791bcc8db8ffc2311ad2"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_1hST2.mds",
+      "size": 7454,
+      "sha256": "66d88974ab06d702d6ff36f5595818a86ae94fdb648afe503335d80c17b9fb09"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_2hST1.mds",
+      "size": 7126,
+      "sha256": "cef79ac28352ce67c3ec2a0d6c682b25b5f321c53aa576154faf06e79e121486"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_2hST2.mds",
+      "size": 6964,
+      "sha256": "061f515921316abd95ca1fef78ac686e20ba447fd185d86a18e972c64016076b"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Acrobatic.mds",
+      "size": 2369,
+      "sha256": "3dfbf4feeb565f497294a3fa033be32a160c90194efde61f3488ed197c9695c3"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Babe.mds",
+      "size": 1271,
+      "sha256": "1cd4bec429f84211ff663976583a61071084ef9197005ad37e085efa92b6d62c"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_BowT1.mds",
+      "size": 3040,
+      "sha256": "1c91604144fe5fd8e61f4d780673cdd5050c87cf2ceb3c33408e5365953dcc8b"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_BowT2.mds",
+      "size": 3041,
+      "sha256": "376901557dd53e856657eab2315683bc11cfb9279c35528e58d81c329ff68716"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_CBowT1.mds",
+      "size": 3021,
+      "sha256": "6d8443488b977a5d3b3b7fac02eac792f0c48c45c2cbe54640c0116872155ce3"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_CBowT2.mds",
+      "size": 3281,
+      "sha256": "70d9c2eceb3493fa592967d68a644ec70ff80e58d0c3a70ee90f7776d32821e0"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Mage.mds",
+      "size": 987,
+      "sha256": "ed3104dad12ed6934186701ecda049784280cdd97104b87836d38821d9042ae2"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Skeleton.mds",
+      "size": 759,
+      "sha256": "ff228c76a2e422c20b1b22da0cfea828257d3a53a3aace668433e65f81bd4fe7"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Skeleton_Fly.mds",
+      "size": 7217,
+      "sha256": "78c948132849946171d7db01b2ee7d7a49bc133327ddecaaacbad75cacee4a3c"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Tired.mds",
+      "size": 654,
+      "sha256": "950e7bd2107d057556c16862760e8466426dfd45db054a6741b6c4af631bbf35"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Humans_Torch.mds",
+      "size": 5661,
+      "sha256": "f5441f553b739ecb373223f047d3b2d540af40ceec82c7c12d5d7a244bcbac9b"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Orc_Torch.mds",
+      "size": 5954,
+      "sha256": "9175b1d6bd9eb79f04bad8a98fff993f9947ecb5672c0cd0a705c077629cbaaf"
+    },
+    {
+      "path": "_work/Data/Anims/mds_overlay/Orcbiter.mds",
+      "size": 21551,
+      "sha256": "be6c266e2155f5648e8ba715fa6cb3642a69f3ef253884f20c67885ec7a12ff3"
+    },
+    {
+      "path": "_work/Data/Meshes/_compiled/Gothic2.plc",
+      "size": 11,
+      "sha256": "d11adbc00ea62092800af615aaa63fca0e2e83fa11faaa3ffb9681cb9f0668c3"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/ADT_Day_Std.sgt",
+      "size": 4428,
+      "sha256": "c81edb05e97124c6c876c620a36205f7fce4df4ea8b579f64681f8e6df0be3bd"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/ADW_Day_Fgt.sgt",
+      "size": 4408,
+      "sha256": "fba13c4414884e67c5670617530928223347417abf26d2d511570d46ad4ff801"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/ADW_Day_Std.sgt",
+      "size": 4420,
+      "sha256": "5e4dbaac904d294323a5b60afe869eed06d2338ef7787ce3c49ce3740248f005"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/AWC_Day_Std.sgt",
+      "size": 4440,
+      "sha256": "6997675c2c11d0b6d5d2ec7202cba2d7daa00696b73eceef53379c14dd47ab30"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/BDT_Day_Std.sgt",
+      "size": 4412,
+      "sha256": "5b713c7c02c98891e23a6f447ceba80d93be746ddef98498ec743d446c3be631"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/BIB_Day_Std.sgt",
+      "size": 4440,
+      "sha256": "0f66831ad3e0cec73f1dae60d499fee8c1f97d6489d13659e1bf1a7cefcd5459"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/CAN_Day_Std.sgt",
+      "size": 4440,
+      "sha256": "e4f756c42c10f70e57380f59f89f84dbb2f7b74f0f1ceb85e97e573d9544e716"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/PIR_Day_Std.sgt",
+      "size": 4410,
+      "sha256": "a059e108b63dee213438e6d2df771dbe1c3290b07a411e56eed1e9402da5a59b"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/SHO_Day_Fgt.sgt",
+      "size": 4412,
+      "sha256": "d85c261f24a5e37b1b5fc0f01baaf49f910ac575041f6e97e1a254c0f695b0a1"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/SHO_Day_Std.sgt",
+      "size": 4400,
+      "sha256": "fde8961f34211064cefcd2a8b617a682deaec53bd279c8fcd284f0bf2349b776"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/STO_Day_Std.sgt",
+      "size": 4448,
+      "sha256": "54e02e0a8e91746caf173dafdd845d574ef02113a17370c177c18a540d99e5c7"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/SWP_Day_Std.sgt",
+      "size": 4388,
+      "sha256": "da33e429ab311e571d3f6d12f4c920a084845ddac017402c8920f0390bab0959"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_AdanosTemple.sty",
+      "size": 28694,
+      "sha256": "2eea35e8c1907e00ca2d89d5fe26f3749be85c748ed6f318dee5a19b578a78a6"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_AddonWorld.sty",
+      "size": 58852,
+      "sha256": "3169c1db3927cbbcb4b0335f13adf27a5fd68153483e35ed13ef937d52d40306"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_AddonWorldEntrance.sty",
+      "size": 22874,
+      "sha256": "4d04975e79f6342a0f5dbb143c7bcb21a6aa547bda938cafb699fa43c314373c"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_BanditsCamp.sty",
+      "size": 19738,
+      "sha256": "5a332504cba17b7400d2927f92e814d467133e8ea3f3549c0787711af3868943"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_BibCanyon.sty",
+      "size": 41402,
+      "sha256": "47046e2e13bbeec3541b8e91d5b1dfe1db3bec77c25a0ee370af4a84779e7007"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_Canyon.sty",
+      "size": 45400,
+      "sha256": "22bf07267ecd86b758223a0660b9e740f9f2b04323ee872e2f540a42db3602c4"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_PiratesCamp.sty",
+      "size": 37254,
+      "sha256": "b4669b8886265768705d818157b7206e683fb5060920cf52a2ed15d1bff31b74"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_ShowDown.sty",
+      "size": 41446,
+      "sha256": "1a36cde1ee770a7d9dc483e5e7e8bbf23ad229b8bce5f63304e04da825d3e552"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_StonePlates.sty",
+      "size": 36240,
+      "sha256": "34f2f8f2f7385f428cb2ee96e5b00fa83d68801baf5c364cb6114ea6fca1e5da"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/_Swamp.sty",
+      "size": 20578,
+      "sha256": "8004c565891e7ea7e9290296639ff185a20164f754922acfee28e74a0d1b4e26"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Accordion.dls",
+      "size": 2104664,
+      "sha256": "c111c5dfe9fae9d6f1ffb76b20410fa5ab9c7eef0ae9c40d9406e28d498ef6a9"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Bass.dls",
+      "size": 2090712,
+      "sha256": "9e5a93269e820694e0f3dee9e71fde09073a222382b3ee6c8571ac6e475abfa0"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Celli.dls",
+      "size": 7199192,
+      "sha256": "1205159680222f7f83a429e719b689557cdf8e251c912267f04e6b3cbde9ba27"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Fiddle.dls",
+      "size": 4250198,
+      "sha256": "d52be0bdfd64d875f0862003545b8c840f48dbde98d8130f9a49bf6e92900745"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Guitar.dls",
+      "size": 1227456,
+      "sha256": "462972b6f6cade3ae8399c80fa7a71ca6674fb5a1f58ed2086150a9a17c39b04"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Harp.dls",
+      "size": 863728,
+      "sha256": "cf1a536164ba467a56badf7e9a55fa3c58843f312a1f62855b20caf351ab94f3"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Horn.dls",
+      "size": 5583952,
+      "sha256": "e132e9a0a86773f7006c546e5182d815f37429b0132b9b9f94e4ee4b178a1ab7"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_MonoPerc.dls",
+      "size": 2360840,
+      "sha256": "06f4a5d521447effaae4dbbd06936c5b5f952040276640b19e556b2b8a06fa3f"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_RareIngame.dls",
+      "size": 24711202,
+      "sha256": "f8bb30ae45456a4af067c0a4892ab50126649e48eda01259bb35a36bd0953987"
+    },
+    {
+      "path": "_work/Data/Music/AddonWorld/__DLS_Violins.dls",
+      "size": 5969330,
+      "sha256": "84076abcf5fc73ba254db6fd83733a4f9fd66ee55f1c4fe6e1a26db38bcf3728"
+    },
+    {
+      "path": "_work/Data/Music/newworld/BAN_DayFgt.sgt",
+      "size": 6346,
+      "sha256": "7ef7ffbe555ba6c3c38d876a67a020b9ae06ca68bfa46a4a64f710b938909f11"
+    },
+    {
+      "path": "_work/Data/Music/newworld/BAN_DayStd.sgt",
+      "size": 6382,
+      "sha256": "3a921c89723c7b9204c6fd271874b29989eb6581a6cecdccff76ce590f951a8c"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DI_DayStd.sgt",
+      "size": 7240,
+      "sha256": "80c1d37dde8c3e1fdcf234d3690942a935d7a8ba5aa902624daf4e7403e538de"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLC_DayFgt.sgt",
+      "size": 6368,
+      "sha256": "73d0b983ea835d6e2603b5cab74c4afb6e9c7dfa2337f3c23c24b9147b5257be"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLC_DayStd.sgt",
+      "size": 6896,
+      "sha256": "6bdc8f0b734264fa7b0fa8d32a74b4c923ac6ad4ae36a51c435da443f4b01ceb"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Alpenhorn.dls",
+      "size": 696726,
+      "sha256": "fb9f3473323498d70008e8b383366608e4ec35c39a522a23d0d9739e5f67708e"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Bass.dls",
+      "size": 2420906,
+      "sha256": "1a5bb655ae00ed98e6d3818c2b2850b7533e2cf34692826a54915bff8eb0334b"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Brass.dls",
+      "size": 4683306,
+      "sha256": "0735e21841e26a58fd96dd919cb79cb1d2ac3a3b2ff84a8fe77cf2ea9636b90b"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Daduk.dls",
+      "size": 1213066,
+      "sha256": "8260baa443c077a79edd160969bd3979a0944e5fc72d635bc0ae287444a5595d"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_DragonIsland.dls",
+      "size": 1967334,
+      "sha256": "9b3de6deace5e553eae7ad48d98bcf81050bd611e57e97c00cc53c72d1ddcf2a"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Flute.dls",
+      "size": 7199558,
+      "sha256": "762e2c0bf2e963cd0bfc38c66ba843f5708c3a6af67f39afea72344503075781"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Guitar.dls",
+      "size": 3223924,
+      "sha256": "4127b7679d155acaf3895dc32c1c27feb18c43a47b7c21c2373915b10b3cf132"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Harp.dls",
+      "size": 940834,
+      "sha256": "2f6f76c9dc451c9854fadc1b6ef07f9f1acf0dc16c82665e77b11f68777f1bb4"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Metronom.dls",
+      "size": 32324,
+      "sha256": "8d404dcd5ffe800ae072503022640c5685961fbda04cf03319e4a48de7ec5550"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Organ.dls",
+      "size": 2595222,
+      "sha256": "e21572ba010fd1490e206984d1ea688e261d772e59741a8b9c1ad6b9dc870071"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Percussions.dls",
+      "size": 11641062,
+      "sha256": "e0cccd43118b2851228ab6fd136effe9fc5d4fd5b99aee22cc10869198ea8488"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Piano.dls",
+      "size": 1324278,
+      "sha256": "ba5d55dba6c7262fc1b4dabe5cc00d7bed499447d51d02815d1a66e394967bfa"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Rare.dls",
+      "size": 2217714,
+      "sha256": "f067461318b3ffaf3bb555ee65d99bc9a49d13040e26ce258aa3c73a4d5042e3"
+    },
+    {
+      "path": "_work/Data/Music/newworld/DLS_Strings.dls",
+      "size": 1799844,
+      "sha256": "2edd96fb36343ffb649efcb7d8af15c4233c03dd4f9da98f1be18aabcbf0f7a1"
+    },
+    {
+      "path": "_work/Data/Music/newworld/Default.sgt",
+      "size": 6382,
+      "sha256": "de83a67c4644ddf586e39d309f5de425681b0abd40191d79026d2fc052ecbbb1"
+    },
+    {
+      "path": "_work/Data/Music/newworld/FRI_DayStd.sgt",
+      "size": 6790,
+      "sha256": "cc1bc99729dd570b319cc53b1024709f2c914610ff3002b29faff99c39bedd83"
+    },
+    {
+      "path": "_work/Data/Music/newworld/Gamestart.sgt",
+      "size": 6344,
+      "sha256": "867be3f8ab6e86ce46a8e21d3e6761c31132c907244fd93bd0bd63cd255a5d78"
+    },
+    {
+      "path": "_work/Data/Music/newworld/KAS_DayStd.sgt",
+      "size": 7234,
+      "sha256": "4eaf08fa44685ff87e15adee78b020ace0bdb49ace80c1fbfe55d43f5dc12ed8"
+    },
+    {
+      "path": "_work/Data/Music/newworld/KH_DayFgt.sgt",
+      "size": 7200,
+      "sha256": "24690719ea3d3de2f711fac87799a096906d27a142f577b9bc3e7b5f028813d0"
+    },
+    {
+      "path": "_work/Data/Music/newworld/KH_DayStd.sgt",
+      "size": 6376,
+      "sha256": "04bbd31397ae18214ccbf479f2b9a1fc5dc4d622aa780a413fcc3e9ff472429a"
+    },
+    {
+      "path": "_work/Data/Music/newworld/Khorinis.sty",
+      "size": 40832,
+      "sha256": "a237e1b06eba3682a98ea4e68e9c635467241c5564d9d56d670cf478b4fba712"
+    },
+    {
+      "path": "_work/Data/Music/newworld/LEU_DayStd.sgt",
+      "size": 6860,
+      "sha256": "7844c9ad6736224201c35b29e4a9213444d47d5dc2e831a5463a0cc1f545b7b1"
+    },
+    {
+      "path": "_work/Data/Music/newworld/LOB_DayStd.sgt",
+      "size": 6374,
+      "sha256": "699d9648cc21a76d4fcbb6c68402a522d8cbd790af54b14ea608251c59767b81"
+    },
+    {
+      "path": "_work/Data/Music/newworld/MAY_DayFgt.sgt",
+      "size": 6746,
+      "sha256": "175feabb5cd92c4b52542d3a33275e59dbe246dc798d3e712db7c3f62a9d4c54"
+    },
+    {
+      "path": "_work/Data/Music/newworld/MAY_DayStd.sgt",
+      "size": 6746,
+      "sha256": "16361b2af6d0375634a352638d20faa09983632f9403f82ad17369b6fdaaa1e0"
+    },
+    {
+      "path": "_work/Data/Music/newworld/MI_DayStd.sgt",
+      "size": 6764,
+      "sha256": "b64a401b11cc0a879a78070c026af5169be18485e7caced99c816f13b491b18b"
+    },
+    {
+      "path": "_work/Data/Music/newworld/MO_DayStd.sgt",
+      "size": 6368,
+      "sha256": "52608a6b4f16064713fc1f5cf3d13a75fe4070a73ecb53377cc23bf96943cde5"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NW_DayFgt.sgt",
+      "size": 6356,
+      "sha256": "df7a435be39a84a91e9e49c6c7779cc6a286ae53f90475a3054e4c497cf888ed"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NW_DayStd.sgt",
+      "size": 5318,
+      "sha256": "72f2ea3b640014b2cb226224272df017392c939ef62a8aba8764b66d52ec938f"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NW_DayStd_A0.sgt",
+      "size": 6382,
+      "sha256": "270bdfc0ea55324c77ed18682a306185a62dd46654c5a02c44ec4eeaab2b17cd"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NW_DayStd_A1.sgt",
+      "size": 6382,
+      "sha256": "6fc99529cd8153b546cd5730a784706193fb262f2c0df2b266e7149892b422ef"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NW_DayThr.sgt",
+      "size": 6364,
+      "sha256": "d47b41cbdaeae1de4aef28c2cf74526e94edd138669a3b2c45fd7c965960d973"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NW_MonoTest.sgt",
+      "size": 6332,
+      "sha256": "ee91cec75675eb0dbd75ab1075b6e75f18420ece01582fed80e15e0d717fa504"
+    },
+    {
+      "path": "_work/Data/Music/newworld/NewWorld.sty",
+      "size": 77776,
+      "sha256": "f5b3240de131c2ef64ebd1e8790d1f5d675329315c8283f316362beb4bfe7f46"
+    },
+    {
+      "path": "_work/Data/Music/newworld/OWD_DayStd.sgt",
+      "size": 6774,
+      "sha256": "22920c08480e6b20a41bcf566cb6720fb6d7898510d92b45c4a439c891a0761c"
+    },
+    {
+      "path": "_work/Data/Music/newworld/OWP_DayFgt.sgt",
+      "size": 6338,
+      "sha256": "c9bb0afd792ecd77d78435c88a4d738054c76e8871d6c0c56ea5a96f09ed0ded"
+    },
+    {
+      "path": "_work/Data/Music/newworld/OWP_DayStd.sgt",
+      "size": 6374,
+      "sha256": "ebdc7a2964b68fb33c4670c0fe8137c9176391507bbaccd205bcab7fd14770ef"
+    },
+    {
+      "path": "_work/Data/Music/newworld/PIE_DayStd.sgt",
+      "size": 6338,
+      "sha256": "9bd14c20c7a05db7a1536fcfd0da4c4c393f3bb9c053520619aab19f2c238461"
+    },
+    {
+      "path": "_work/Data/Music/newworld/WOO_DayFgt.sgt",
+      "size": 6314,
+      "sha256": "8eb6e583705e18d362bd7cd0050049f5e9513524832b8b19a3b2be26ff296365"
+    },
+    {
+      "path": "_work/Data/Music/newworld/WOO_DayStd.sgt",
+      "size": 6366,
+      "sha256": "581966942fc26056ef4a72de52a1a7d74097acdd3b6dd5a92ac54dab6694015a"
+    },
+    {
+      "path": "_work/Data/Music/newworld/WOO_DayThr.sgt",
+      "size": 6314,
+      "sha256": "8830813df8e2588aca8d966640f255a2f9524543a4a452a600d7e6393731995c"
+    },
+    {
+      "path": "_work/Data/Music/newworld/XT_DayStd.sgt",
+      "size": 6546,
+      "sha256": "39f49c38f07626ac8e93910822ad9f9b37f92c58b2a7023feede8db09bee084d"
+    },
+    {
+      "path": "_work/Data/Music/newworld/Xardas Tower.sty",
+      "size": 20162,
+      "sha256": "8be2d55daba9d665087bb8a7729f0fea3329e27bae71c5c4e6b76ebcd67c6bbd"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Banditen.sty",
+      "size": 70062,
+      "sha256": "6d2f37de958aec1ad4098aaded5fa5aa3df1af2ce5efd720815a2892712b441b"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_DragonIsland.sty",
+      "size": 41008,
+      "sha256": "5a3730ae1a872f1815be90d6154f466d674a1dbafb5fee6adceecba2f2ecc573"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_DragonLocationFGT.sty",
+      "size": 32276,
+      "sha256": "6e68aec39211c0aad8d43993edba0e99ba1a060f7ae90dfda3acf04dc8c5b368"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_DragonLocationStd.sty",
+      "size": 65354,
+      "sha256": "925d75b9b7d12409dd5a50ee034fb9e667a0a607fafe9bf347cc961e371ee9c0"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Earth.sty",
+      "size": 20308,
+      "sha256": "540561c1e7cecb624dea544340f71982b75a4401088a985e82d5181b5f929b81"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Friedhof.sty",
+      "size": 54102,
+      "sha256": "2a3dba691f74fdd2b1bd71881560073f828b1d12a08eb1623f87f385e665a91b"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Gamestart.sty",
+      "size": 20042,
+      "sha256": "2c2762a65630bab7e394414744e147ff4bf9d8d1cd8feaf280651c6685868900"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Graveyard.sty",
+      "size": 12476,
+      "sha256": "aecb51744c16c2a74f44a728dbbf7bfe7111e7839268d230e9bc391871e4dfe3"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Idylle.sty",
+      "size": 34590,
+      "sha256": "aca5d7f81e65c908d0d3bf5c44d39ca298e00d1a2cb2eb5c07dc163ed164ed7e"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Kaserne.sty",
+      "size": 48210,
+      "sha256": "f13cb22be323d5967e254acaf115d68ae09f4f6ea735e86732caaa381a97c6d1"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Khorinis.sty",
+      "size": 86784,
+      "sha256": "30d641020259968a18dd7e9905e073a9401298a1f6da2147cb1a8df8976ba669"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Leuchtturm.sty",
+      "size": 46734,
+      "sha256": "5ad9abbd1f4ceaa2c1d2ffed4bddbda8745be60f48b4ab2e7c29e8ca2ab5883f"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_LobardsHof.sty",
+      "size": 49720,
+      "sha256": "751317142f1744dd63c4faf8c6ce2c4053c463ed2acc9409c3251a45b3342f5a"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Love.sty",
+      "size": 23062,
+      "sha256": "9441e44a0c66f11796ae139d676e52be35c713041d51f7a1967a8c20faf88f39"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Mayatempel.sty",
+      "size": 28218,
+      "sha256": "5a23a1457cdebc3662998139049c13afaa4e29484f18fbb902bbd163b87e9aea"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Monastry.sty",
+      "size": 45950,
+      "sha256": "722948b00b7d2b8554182900552a96408fbeb9b39b5f45fda239912ac419e571"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Monastry_Indoor.sty",
+      "size": 33066,
+      "sha256": "95a20e7179c57b994a2d755183ecdc34963e325952b6943cfafa595a88af1846"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_NewWorld.sty",
+      "size": 176258,
+      "sha256": "aeb5cf360d669081399ab8796ce26321c69675d12ff6544b13a4e9c4b2d6289d"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_OW_DragonLocation.sty",
+      "size": 32254,
+      "sha256": "00756e0f3dd2b06b1d0400753b0958302a3daf4ccf850d047c98610aed978e4c"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_OW_Path.sty",
+      "size": 66768,
+      "sha256": "40e3bb8a757b3fa554bf092f16f67607c42c186f3ab7c64ce7d694cb53b5da6c"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_OldWorld.sty",
+      "size": 46236,
+      "sha256": "045177911583ab7e8f397ed40a0b62bd0ae24bbfa3e7d73b2bd6a67c0eb97b07"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Oldcamp.sty",
+      "size": 14296,
+      "sha256": "0a5f96ce1502bd3adb8288954e6af8559791b59f41267de6df3bba63978b37b0"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Orcs.sty",
+      "size": 13002,
+      "sha256": "d2a5df6c5172034406e0b2294a238f4bdc2938e918d0e614e5a572ded1ee7b9b"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Pier.sty",
+      "size": 63450,
+      "sha256": "17ace4877e5908e02a791fec62a061359b2cdc1988deb7b9e0acb40e1f4fe95e"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Taverne.sty",
+      "size": 50158,
+      "sha256": "f426680145400024b123c8fb910c7b4b3550ad4189e5449b76cf203e3a4ac0cc"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Wood.sty",
+      "size": 99724,
+      "sha256": "64047a73fd9cd2d19c228d1e3ad12342f33a1435c1967a166324ba9cd9ccefaf"
+    },
+    {
+      "path": "_work/Data/Music/newworld/_Xardas Tower.sty",
+      "size": 26770,
+      "sha256": "51184ede658a9d50cda54db94a60b754699099f5052e5c2770d53aa062615361"
+    },
+    {
+      "path": "_work/Data/Presets/DialogCams.zen",
+      "size": 25591,
+      "sha256": "7f8a4505c85cfa3e59bf2a84411bf597f501a18adb8c27994c64dd7f068c4836"
+    },
+    {
+      "path": "_work/Data/Presets/LIGHTPRESETS.ZEN",
+      "size": 4398,
+      "sha256": "66d54b8a89637d858edac8a64073aa1c549ea58897c2a73342db61c9e4bc8f2f"
+    },
+    {
+      "path": "_work/Data/Presets/Lensflare.zen",
+      "size": 2405,
+      "sha256": "cb1edec329c5d41140fc8205799886759b67c9b2688b3883666e9a32de69e9ff"
+    },
+    {
+      "path": "_work/Data/Scripts/CONTENT/CUTSCENE/OU.BIN",
+      "size": 6110935,
+      "sha256": "ea5da72336c54d3abaaf90c960ef624b52c3950b69b52d2695e5ad982162d72b"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/CAMERA.DAT",
+      "size": 7750,
+      "sha256": "bf4bb8771d5171a410c6dc7df4bfaaa19a88fe79c031aa3e3f2d1ed96349085d"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/FIGHT.DAT",
+      "size": 42312,
+      "sha256": "7c759be349874874e6ebc9957ea260152533a395569d4fe517583f162dc09f20"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/GOTHIC.DAT",
+      "size": 7551463,
+      "sha256": "b6cd55ed7e9963ba24251f8484a510d39a1b36e3883af978f1ea2917a14d530b"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/MENU.DAT",
+      "size": 130151,
+      "sha256": "ae4d0a3c8f21e86943b3135d63b1a4e90312ee4d943850ed03612593433d2618"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/MUSIC.DAT",
+      "size": 14859,
+      "sha256": "6a4ad989823f4cb6395f32235f0447f7b31546a9d76acdadb46fc3aec543c021"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/OUINFO.INF",
+      "size": 3957242,
+      "sha256": "96131f9cf74d17189067b46558862eee09791bbe7fa82b548bf572f12dff4c4d"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/PARTICLEFX.DAT",
+      "size": 647240,
+      "sha256": "4e6997214e1fbee7a5e1507465ba9e07a03a56446548fd7b23f6951e419ec8ee"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/SFX.DAT",
+      "size": 269088,
+      "sha256": "1aa12aa4180c925a6342cb4543d010548e6705d6d38c9858b3daf6b7056dcfae"
+    },
+    {
+      "path": "_work/Data/Scripts/_compiled/VISUALFX.DAT",
+      "size": 176826,
+      "sha256": "06a8381b3b12c4cff46fff1e4c279d7b74581b0f8271df9ce1f8a32c7db5cce7"
+    },
+    {
+      "path": "_work/Data/Video/Credits.bik",
+      "size": 19509916,
+      "sha256": "cedcc1e74196a58472a3a8df1f5150828b024a9e7661d1871c4d05f512b84b23"
+    },
+    {
+      "path": "_work/Data/Video/Credits2.bik",
+      "size": 58824680,
+      "sha256": "7271e25d84268ab0c3207dfc5f4b92ce0e97792263264f1c3f96e21c53654208"
+    },
+    {
+      "path": "_work/Data/Video/Credits_Extro.bik",
+      "size": 19777544,
+      "sha256": "310a75a804de39716886203a1e3ac019e952acfeccf22a3c9d588c952638c316"
+    },
+    {
+      "path": "_work/Data/Video/DragonAttack.bik",
+      "size": 11294764,
+      "sha256": "876a2e1bb2698d0cc6bdaa119644189339eebca118f640698f93175432916c45"
+    },
+    {
+      "path": "_work/Data/Video/Extro_AllesWirdGut.bik",
+      "size": 6070052,
+      "sha256": "48ea9ec11ec59983bd88200805fc73b7af0d0d63cdeec3d76f642753e9679327"
+    },
+    {
+      "path": "_work/Data/Video/Extro_DJG.bik",
+      "size": 15962436,
+      "sha256": "aaf6ae76781ce0455afe929345e836feeccc4ec1215c586c683733566ac300bf"
+    },
+    {
+      "path": "_work/Data/Video/Extro_KDF.bik",
+      "size": 15815896,
+      "sha256": "db7d7c588982fdf6106f8775500cfbfe7ab450f6a10eb5af493a4decef014517"
+    },
+    {
+      "path": "_work/Data/Video/Extro_PAL.bik",
+      "size": 16229264,
+      "sha256": "b8267d07371b3856ed42169d878977a303107faa4b124fb428228e0c31f34cdb"
+    },
+    {
+      "path": "_work/Data/Video/Extro_Raven.bik",
+      "size": 12019876,
+      "sha256": "e546eee22b602d6cc9f4f3a8df93b1deeead5fada10ed15e11134dd2aa130b1e"
+    },
+    {
+      "path": "_work/Data/Video/Extro_Xardas.bik",
+      "size": 12042124,
+      "sha256": "fb334b6b35cc46140632084e6e6021fba33d3a5b81111dd4825e87fb1fb512f4"
+    },
+    {
+      "path": "_work/Data/Video/FishFood.bik",
+      "size": 4879444,
+      "sha256": "59990946408212b5187da8d0e0134c32963c6c5d596cb97e3438f0f3af39b358"
+    },
+    {
+      "path": "_work/Data/Video/Intro.bik",
+      "size": 27105484,
+      "sha256": "da8406b951833ef3d00b6a96c1f3f9035aad48bef663ce9a768358170277916d"
+    },
+    {
+      "path": "_work/Data/Video/Intro_Addon.bik",
+      "size": 29074656,
+      "sha256": "6e3f4dcdc7d7fd29ecce139e94792e461a4c3453c80d81cd45a36d5b40a8410c"
+    },
+    {
+      "path": "_work/Data/Video/Logo1.bik",
+      "size": 6178996,
+      "sha256": "6888325c9eea7de7fc0ada565031b0638c2eff4d75097c2799b16290a18f8db2"
+    },
+    {
+      "path": "_work/Data/Video/Logo2.bik",
+      "size": 3142420,
+      "sha256": "cdcd05b25fdd8e6227d31df2780436ed1b3b947f856bd864a8899806467de27c"
+    },
+    {
+      "path": "_work/Data/Video/LoveScene.bik",
+      "size": 7814036,
+      "sha256": "8fb0a7167135bfea5bbc34e539b0d7a83b754c932befded793cd312fc708852f"
+    },
+    {
+      "path": "_work/Data/Video/OrcAttack.bik",
+      "size": 9368216,
+      "sha256": "a8c7a4c74dfc94ac29f50df56bae5c0abc50b2a071496be42206c39c42d1a742"
+    },
+    {
+      "path": "_work/Data/Video/OreHeap.bik",
+      "size": 19071868,
+      "sha256": "730b5b97a4ad66b2125d16d8441d540ca15df8cf6d8080de0b2a44b8b18cc717"
+    },
+    {
+      "path": "_work/Data/Video/Portal_Raven.bik",
+      "size": 12575324,
+      "sha256": "d8941fd848908a466536a8735768e7d998991892a86928a9350240cadf358a86"
+    },
+    {
+      "path": "_work/Data/Video/Ship.bik",
+      "size": 15263332,
+      "sha256": "827e258cc0c9fc9f3a71794bf9d2f57d84ae6e68fdc9f595a21bc16265d52c86"
+    },
+    {
+      "path": "_work/Data/Video/g2_classic_credits.bik",
+      "size": 37935740,
+      "sha256": "4441bd55bc51f24c21a4b0af09fb3700da711cb9edb067f42ae93bdf9a3836e0"
+    },
+    {
+      "path": "_work/tools/Macros.zmf",
+      "size": 1510,
+      "sha256": "74eef6bfdd64ff1801e3ddd1ed812e2e5a627e02d91c73df559a541a5dcf2e9e"
+    },
+    {
+      "path": "_work/tools/UltraEdit/Wordfile.txt",
+      "size": 24980,
+      "sha256": "d158274ba983134e6df4900d496fd4130035224d8b970e553ddf84c6b082cf17"
+    },
+    {
+      "path": "_work/tools/VDFS/GothicVDFS.exe",
+      "size": 67072,
+      "sha256": "51ec35ec16df6a9d082c92d10860b23a7affd90055c00cd568933b4dba3a3963"
+    },
+    {
+      "path": "_work/tools/data/Addon.pml",
+      "size": 89904,
+      "sha256": "0eae8c37bca4c63f51e35dd7fcb698505215ef56c706de6e006366a65da3f6b2"
+    },
+    {
+      "path": "_work/tools/data/Effects.pml",
+      "size": 1335,
+      "sha256": "7f39425fe11ac418b557613b0f98ed609049e8a1f8880ab860f5219330598163"
+    },
+    {
+      "path": "_work/tools/data/MatLib.ini",
+      "size": 99,
+      "sha256": "a3cde0e78d0d030e662e8ef1c552ea28400f92b2910a5015fa369c6edba431cf"
+    },
+    {
+      "path": "_work/tools/data/NewWorld.pml",
+      "size": 246705,
+      "sha256": "34b660336a8cca748160b250953165d61b53da18a8e51ab0df5ecf6ab761013e"
+    },
+    {
+      "path": "_work/tools/data/OldCamp.pml",
+      "size": 29055,
+      "sha256": "f6360dfa1583b15cfc2470ca98cb7a99ed39f8630b7ee76d872ab49422fc3c85"
+    },
+    {
+      "path": "_work/tools/data/OldWorld.pml",
+      "size": 143744,
+      "sha256": "d8d6ebcaee6992a991545d54702787db17430e9e3b2d68d3ab8c6f8f097c8d1b"
+    },
+    {
+      "path": "_work/tools/data/Portale.pml",
+      "size": 51449,
+      "sha256": "7117fdb53bd104abeb6e7861f156822a2dc8fe2d9357e39d5a83d03b90a8c94c"
+    },
+    {
+      "path": "_work/tools/data/Temp.pml",
+      "size": 2626,
+      "sha256": "0b2f0f921c1c4ea233434fef67a5258cb8889961450a221437958aac801f872f"
+    },
+    {
+      "path": "_work/tools/data/Testlevel.pml",
+      "size": 13156,
+      "sha256": "6bebce210fa31a560d72402139326d153ebdc7f44519f59cd6f9204ed4e7413d"
+    },
+    {
+      "path": "_work/tools/data/Tmp.pml",
+      "size": 7719,
+      "sha256": "7ab4f8fbef66b484762c66abef768081a2ba60163911576080e8ae603f32b609"
+    },
+    {
+      "path": "_work/tools/data/Water.pml",
+      "size": 13171,
+      "sha256": "67a7904e88d2a7ee377ebf7f562ad7a7f8b7086d05c1c3735b85db200c6c6f1b"
+    },
+    {
+      "path": "_work/tools/data/_work.pml",
+      "size": 30984,
+      "sha256": "af5c8b4e61a2d01109342a674a21c41d4804f32b63bc1a29ec08666f8afe2cf7"
+    },
+    {
+      "path": "_work/tools/data/objpresets/zCCsCamera.opf",
+      "size": 87607,
+      "sha256": "81267111c91647a4be37d6faac087c6d9ca433b41436e4d91d5ddc19675df944"
+    },
+    {
+      "path": "_work/tools/data/objpresets/zCZoneZFogDefault.opf",
+      "size": 963,
+      "sha256": "ea7946e8a5d8930c0f068f975c9092aa8f706798cea6245de5aead005eb5804a"
+    },
+    {
+      "path": "_work/tools/max42/3dsexp.dle",
+      "size": 65536,
+      "sha256": "cb29ff38facfeef8308d071fb1514992921fc3831ee786d1e377fe332c550b85"
+    },
+    {
+      "path": "_work/tools/max42/3dsexp.txt",
+      "size": 520,
+      "sha256": "68e265d3908eaf832c5fffd2787c32362200abb80dbcdb26183fc4f7f7991d41"
+    },
+    {
+      "path": "_work/tools/max42/3dsimp.dli",
+      "size": 77824,
+      "sha256": "1cce8edda11e557abe4f567ffde7de8b2b5183de1fce694db3706325f6d59f19"
+    },
+    {
+      "path": "_work/tools/max42/3dsimp.txt",
+      "size": 529,
+      "sha256": "6b8472fd564a7b85c7872473b08c202842eb23c3176cf31def2ec962bc542193"
+    },
+    {
+      "path": "_work/tools/max42/zenexp.dle",
+      "size": 69632,
+      "sha256": "c9fd89a4f85ba5e5b027a562e6ff8e65a5c3876d1e1667838b15804cab34965d"
+    },
+    {
+      "path": "_work/tools/max42/zenexp.txt",
+      "size": 191,
+      "sha256": "25edcf48a8fcfc235ac807cbbef69bbdd659e22b4b0af150a3b475429d84e318"
+    },
+    {
+      "path": "_work/tools/zSpy/zSpy.exe",
+      "size": 307200,
+      "sha256": "b7c463bc0a2f5e28eec9e68d241e9f6c5ce924b24639a3c413754fbb644160f5"
+    },
+    {
+      "path": "_work/tools/zSpy/zSpyDefault.cfg",
+      "size": 656,
+      "sha256": "21ab014bd0d5147aa20e4626b9cb4a18ffb2ce118b9c61a86832c9b03952d5d9"
+    }
+  ],
+  "asset_hash_coverage": "all regular files in assets",
+  "reference_manifest_sha256": "27d3fb7ae7caa8f2f8993617ffa709799811f4b2825259c3e253a9a7613e0660",
+  "headless": true,
+  "renderer": "none",
+  "display": null,
+  "audio_playback": false,
+  "graphics_device_created": false,
+  "window_created": false,
+  "audio_device_created": false,
+  "model": null,
+  "sim_fps": 30,
+  "time_multiplier": 1,
+  "animation_rng_mode": "isolated",
+  "observer_ownership": "passive",
+  "environment": {
+    "DISPLAY": "",
+    "WAYLAND_DISPLAY": "",
+    "VK_DRIVER_FILES": "/nonexistent/body-bc-no-vulkan.json",
+    "VK_ICD_FILENAMES": "/nonexistent/body-bc-no-vulkan.json",
+    "GOTHIC_AI": "0"
+  },
+  "runtime_limits": {
+    "cpu_quota_percent": 200,
+    "memory_max_gib": 12,
+    "tasks_max": 128,
+    "wall_timeout_sec": 2400
+  },
+  "services_before": {
+    "gpu": "19001 MiB, 5124 MiB, 0 %",
+    "services": {
+      "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=3366349\nMemoryCurrent=1066053632\nCPUUsageNSec=13315513888000",
+      "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086\nMemoryCurrent=1167572992\nCPUUsageNSec=159262501000"
+    },
+    "service_latency_measurement": null
+  },
+  "suite_scope": "smoke",
+  "collector_sha256": "ed2db743205c45d46b2501be421192196f8bd728d6d9e1b9674171461a945f70",
+  "teacher_code_sha256": "8422ba65e2a6f924c09433988e9cc88fcdfbcf7d5704ef2e7e1da10bdd223794",
+  "preparation_source": {
+    "run": "stage8-reaction-v3",
+    "helper_file": "code/scripts/body_block_reaction.py",
+    "config_file": "code/evals/npc-body/body-block-reaction-v1.json",
+    "helper_sha256": "8a7e9cbe213e83cd75bf43c7e812a326363000eb30c5dfa8a9f1407b787d2f81",
+    "config_sha256": "5008de06ff1efe1aba1fa2f91683a6f32394e9cf9318e13c8015c9c7f4ed62e3",
+    "status": "exact_frozen_hashes_required_before_collection"
+  },
+  "models_run": false,
+  "completed_at_utc": "2026-10-14T10:39:50.195285+00:00"
+}

@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "kind": "body_motor_v15_queue_summary",
+  "status": "passed",
+  "model": null,
+  "quality_credit": false,
+  "behavioral_quality_evaluated": false,
+  "binary_sha256": "ac2dfe85bc7dd255f08e3eff5502594f854241ee04985f698569f527d2652263",
+  "source_sha256": "9239b2912b05d092a827ae5871ffc621d2657b0f881ba22c6c127e49b10b260b",
+  "engine_library_sha256": "9be068cd18b461fa213bf7c625e9e2c7e6fd1e3c2466ca95e79eb271d9e0202a",
+  "same_native_artifacts_as_motor_v14": true,
+  "independent_saved_audit_exact_match": true,
+  "checks": [
+    {
+      "name": "native_binary_source_helper_binding",
+      "passed": true
+    },
+    {
+      "name": "strict_native_clock_and_ready_admission_cap_one",
+      "passed": true,
+      "ready_chains": 13,
+      "fresh_query_chains": 1
+    },
+    {
+      "name": "actual_periodic_action_mask_and_execution",
+      "passed": true,
+      "accepted": 2,
+      "rejected": 0
+    },
+    {
+      "name": "healthy_real_time_actors_without_model_or_clock_pause",
+      "passed": true
+    }
+  ],
+  "ready_command_counts": {
+    "body_heartbeat": 13
+  },
+  "ready_chains": [
+    {
+      "request_id": 113,
+      "command": "body_heartbeat",
+      "input_read_seq": 146,
+      "tick_id": 18,
+      "input_read_ns": 1103683516807768,
+      "tick_begin_ns": 1103683516963610,
+      "tick_end_ns": 1103683559371956,
+      "deadline_ns": 1103683516715430
+    },
+    {
+      "request_id": 115,
+      "command": "body_heartbeat",
+      "input_read_seq": 150,
+      "tick_id": 19,
+      "input_read_ns": 1103683559587089,
+      "tick_begin_ns": 1103683559786614,
+      "tick_end_ns": 1103683566280039,
+      "deadline_ns": 1103683550715430
+    },
+    {
+      "request_id": 179,
+      "command": "body_heartbeat",
+      "input_read_seq": 216,
+      "tick_id": 20,
+      "input_read_ns": 1103683583854151,
+      "tick_begin_ns": 1103683584023488,
+      "tick_end_ns": 1103683590834840,
+      "deadline_ns": 1103683583715430
+    },
+    {
+      "request_id": 290,
+      "command": "body_heartbeat",
+      "input_read_seq": 329,
+      "tick_id": 21,
+      "input_read_ns": 1103683616899471,
+      "tick_begin_ns": 1103683617158055,
+      "tick_end_ns": 1103683624515190,
+      "deadline_ns": 1103683616715430
+    },
+    {
+      "request_id": 459,
+      "command": "body_heartbeat",
+      "input_read_seq": 502,
+      "tick_id": 23,
+      "input_read_ns": 1103683683722043,
+      "tick_begin_ns": 1103683683878045,
+      "tick_end_ns": 1103683690859506,
+      "deadline_ns": 1103683683715430
+    },
+    {
+      "request_id": 576,
+      "command": "body_heartbeat",
+      "input_read_seq": 621,
+      "tick_id": 24,
+      "input_read_ns": 1103683716764017,
+      "tick_begin_ns": 1103683716915761,
+      "tick_end_ns": 1103683723355245,
+      "deadline_ns": 1103683716715430
+    },
+    {
+      "request_id": 759,
+      "command": "body_heartbeat",
+      "input_read_seq": 808,
+      "tick_id": 26,
+      "input_read_ns": 1103683783757941,
+      "tick_begin_ns": 1103683783912611,
+      "tick_end_ns": 1103683790512885,
+      "deadline_ns": 1103683783715430
+    },
+    {
+      "request_id": 992,
+      "command": "body_heartbeat",
+      "input_read_seq": 1045,
+      "tick_id": 28,
+      "input_read_ns": 1103683850848906,
+      "tick_begin_ns": 1103683851017362,
+      "tick_end_ns": 1103683859469320,
+      "deadline_ns": 1103683850715430
+    },
+    {
+      "request_id": 1194,
+      "command": "body_heartbeat",
+      "input_read_seq": 1251,
+      "tick_id": 30,
+      "input_read_ns": 1103683916790707,
+      "tick_begin_ns": 1103683916942601,
+      "tick_end_ns": 1103683923609542,
+      "deadline_ns": 1103683916715430
+    },
+    {
+      "request_id": 1405,
+      "command": "body_heartbeat",
+      "input_read_seq": 1466,
+      "tick_id": 32,
+      "input_read_ns": 1103683983767509,
+      "tick_begin_ns": 1103683983928099,
+      "tick_end_ns": 1103683991034104,
+      "deadline_ns": 1103683983715430
+    },
+    {
+      "request_id": 1639,
+      "command": "body_heartbeat",
+      "input_read_seq": 1704,
+      "tick_id": 34,
+      "input_read_ns": 1103684050786420,
+      "tick_begin_ns": 1103684050935289,
+      "tick_end_ns": 1103684058843106,
+      "deadline_ns": 1103684050715430
+    },
+    {
+      "request_id": 1847,
+      "command": "body_heartbeat",
+      "input_read_seq": 1916,
+      "tick_id": 36,
+      "input_read_ns": 1103684116717791,
+      "tick_begin_ns": 1103684116870527,
+      "tick_end_ns": 1103684123772368,
+      "deadline_ns": 1103684116715430
+    },
+    {
+      "request_id": 2046,
+      "command": "body_heartbeat",
+      "input_read_seq": 2119,
+      "tick_id": 38,
+      "input_read_ns": 1103684183771477,
+      "tick_begin_ns": 1103684183925806,
+      "tick_end_ns": 1103684191066134,
+      "deadline_ns": 1103684183715430
+    }
+  ],
+  "fresh_query_chains": [
+    {
+      "request_id": 660,
+      "command": "body_control_status",
+      "input_read_ns": 1103683750791829,
+      "tick_begin_ns": 1103683750797871,
+      "tick_end_ns": 1103683759404768,
+      "response_ns": 1103683759627666,
+      "response_game_ms": 16594,
+      "response_sim_step": 25
+    }
+  ],
+  "native_clock_counts": {
+    "tick_begin": 61,
+    "tick_end": 61,
+    "input_read": 2134
+  },
+  "tick_duration_ms_min": 4.359323,
+  "tick_duration_ms_max": 75.390438,
+  "driver_sha256": "7abecaa65ab5fe96252ef698791397212dc7cdb022b3bf9aa4d954b2cedb9532",
+  "helper_inventory": {
+    "body_arena_env": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v15/code/scripts/body_arena_env.py",
+      "sha256": "1f2a72c4a280e961167f646cc8fcc7df1e7c383dbda7484fcc5a6b19a4671f3e"
+    },
+    "body_headless_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v15/code/scripts/body_headless_suite.py",
+      "sha256": "efd2e4a886baa12183b79fe9fd2ad8302a2a68cf1b3d20b21d441e767e961556"
+    },
+    "body_observe_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v15/code/scripts/body_observe_suite.py",
+      "sha256": "5a3f9c53e97f1ae77777489d4eaeb5dcec3f89bb3fe2c91f8052899daf69a5a4"
+    }
+  },
+  "source_report": {
+    "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v15/pending-input-probe/probe.json",
+    "sha256": "66f4c9197c2c740d7bff53b4289eafd7fbcd70103381b3a32cd754bbf69e3cb1",
+    "bytes": 82518
+  },
+  "source_audit": {
+    "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v15/pending-input-probe/audit.json",
+    "sha256": "e8c1c2fd06c3b0e504423f09052aab6edbb9f9b8560914971499d90a597ffc17",
+    "bytes": 5333
+  },
+  "source_native_clocks": {
+    "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v15/pending-input-probe/episode/observer-timing.jsonl",
+    "sha256": "5397fbf4625e14c2b3b99b042a52749aff9aaaccf61ae6924d1b02d4984ea380",
+    "bytes": 898696
+  },
+  "raw_sha256": {
+    "manifest.json": "f2f9359c00ea096a0935c7d83aed9ca8824de45bc1b9c78c85a77a7d2ad83b61",
+    "probe.json": "66f4c9197c2c740d7bff53b4289eafd7fbcd70103381b3a32cd754bbf69e3cb1",
+    "episode/ipc.jsonl": "bd9d1c0069033e59bd8b8057cb76e97a3dac8d77957d78a3b17b42e42eb4d424",
+    "collector-transport.jsonl": "64423c7be671ea4febeb559fb8f9ad19314a19b23dc7f301eb99fa4e20f94fca",
+    "episode/observer-timing.jsonl": "5397fbf4625e14c2b3b99b042a52749aff9aaaccf61ae6924d1b02d4984ea380",
+    "episode/observations.jsonl": "0ba959cc3bd2636b51c106a1aca28217635cd6ba2dde48e27dc15b25be575106",
+    "episode/body-control-events.jsonl": "10da761dc70d516a0b141f5db65ec123f6ec0f91c34a01e1b7d592b41f197fe7"
+  },
+  "preserved_old_failure": {
+    "report": {
+      "remote_path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v14/pending-input-probe/probe.json",
+      "sha256": "3dbcfefe159e6ef8264f9e530f610255d9202c15cef04f6181422c1a83dea993",
+      "bytes": 78183
+    },
+    "status": "failed",
+    "collection_status": "collected",
+    "error": "no real ready admission or more than one command admitted per due tick",
+    "replaced_or_relabelled": false
+  }
+}

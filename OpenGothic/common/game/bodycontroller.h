@@ -1,0 +1,74 @@
+#pragma once
+
+#include "fightalgo.h"
+#include <rapidjson/fwd.h>
+#include <array>
+#include <functional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+class Npc;
+
+// Simulation-thread authority. All adapters share this parser, lease state and executor.
+class BodyController final {
+  public:
+    // Pure command acceptance gate, also exercised with fake states by selfTestJson().
+    struct GateState final {
+      uint64_t session=0,world=0,generation=0,goal=0,target=0,observation=0,observedGame=0,gameNow=0,wallAge=0;
+      bool targetValid=false,paused=false,infrastructure=false,busy=false,realtime=false;
+      FightAlgo::ResolverState resolver;
+      };
+    struct GateCommand final {
+      uint64_t session=0,world=0,generation=0,goal=0,target=0,observation=0,issuedGame=0,ttl=0;
+      FightAlgo::PolicyAction action=FightAlgo::PolicyAction::Continue;
+      };
+    static const char* validate(const GateState& state,const GateCommand& command);
+    struct Snapshot final {
+      bool owned=false, releasePending=false, controlAllowed=false, canDecide=false;
+      uint64_t controlGeneration=0, goalVersion=0, commandId=0, executionId=0;
+      std::array<bool,12> mask{};
+      std::string provider;
+      };
+    static void setActors(const std::vector<Npc*>& actors);
+    static void fixturePrepare(Npc& actor, Npc& target, float distanceCm, float yawOffsetDeg);
+    static void fixtureLock(Npc& actor, uint64_t durationMs);
+    static std::string selfTestJson();
+    static std::string handleJson(const rapidjson::Value& request);
+    static std::string statusJson(const Npc* actor=nullptr);
+    static std::string drainJson();
+    static void setSink(std::function<void(std::string_view)> sink);
+    static Snapshot snapshot(const Npc& actor);
+    static bool owns(const Npc& actor);
+    // Bench-only transition after an independently validated, real post-animation threat.
+    // Keeps scripted leases or explicitly returns the idle defender to ordinary native AI.
+    static void activateBenchReaction(Npc& primary,Npc& opponent,bool native,std::string_view mode);
+    static void takeover(Npc& actor, std::string_view reason);
+    static bool deferNative(Npc& actor, std::function<void()> mutation);
+    static void legacyRejected(Npc& actor, std::string_view reason);
+    static void disconnect(std::string_view provider);
+    static void forget(const Npc* actor);
+    static void reset(std::string_view reason="reset");
+    static void pause(bool paused);
+    static bool isPaused();
+    // Call from the IPC pump as well as simulation: wall watchdog still fires at dt=0.
+    static void pumpWatchdogs();
+    static bool infrastructureFailure();
+    static std::string infrastructureReason();
+    static void postStep();
+    // Returns true while this authority consumed the NPC's body tick (including locks).
+    static bool tick(Npc& actor, uint64_t dt);
+    // Shared native executor callbacks. Consume is never treated as a segment start.
+    static void consumed(Npc& actor);
+    static void takeHit(Npc& actor);
+    static FightAlgo::ResolverState resolverState(const Npc& actor);
+    // Bench-only opt-in telemetry. It never participates in perception, masks or decisions.
+    static bool visibilityDiagnosticsEnabled();
+    static uint64_t visibilityDiagnosticsGeneration();
+    static void visibilityDiagnosticRecorded(bool dropped=false) noexcept;
+    static void visibilityDiagnosticFailed() noexcept;
+    static std::string visibilityDiagnosticsJson();
+
+  private:
+    static bool stopOwnedMovement(Npc& actor);
+  };

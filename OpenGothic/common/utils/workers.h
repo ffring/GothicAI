@@ -15,24 +15,41 @@ class Workers final {
     ~Workers();
 
     static void setThreadName(const char* threadName);
+    // Configure before the first dispatch. Serial execution keeps every task
+    // on the caller and does not instantiate the worker pool.
+    static void setSerialExecution(bool enabled);
+    static bool serialExecution();
+    static bool workerPoolCreated();
 
     template<class T,class F>
     static void parallelFor(T* b, T* e, const F& func) {
+      if(useSerialExecution()) {
+        for(auto it=b;it!=e;++it) func(*it);
+        return;
+        }
       inst().runParallelFor(b,std::distance(b,e),func);
       }
 
     template<class T,class F>
     static void parallelFor(std::vector<T>& data, const F& func) {
+      if(useSerialExecution()) {
+        for(auto& item:data) func(item);
+        return;
+        }
       inst().runParallelFor(data.data(),data.size(),func);
       }
 
     template<class T,class F>
     static void parallelTasks(std::vector<T>& data, const F& func) {
-      inst().runParallelFor(data.data(),data.size(),func);
+      parallelFor(data,func);
       }
 
     template<class F>
     static void parallelTasks(size_t taskCount, const F& func) {
+      if(useSerialExecution()) {
+        for(size_t index=0;index<taskCount;++index) func(index);
+        return;
+        }
       inst().runParallelTasks<F>(taskCount,func);
       }
 
@@ -45,6 +62,7 @@ class Workers final {
     void            execWork(uint32_t& minWorkSize);
     uint32_t        taskLoop();
     static Workers& inst();
+    static bool     useSerialExecution();
 
     template<class T,class F>
     static uint32_t&  minWorkSize() {

@@ -1,4 +1,5 @@
 #include "npccontroller.h"
+#include "game/bodycontroller.h"
 
 #include <algorithm>
 #include <cctype>
@@ -144,6 +145,11 @@ bool NpcController::attach(World& world, std::string_view symbolName, std::strin
     err = "cannot attach the player";
     return false;
     }
+  if(BodyController::owns(*npc)) {
+    BodyController::legacyRejected(*npc,"legacy_attach_rejected");
+    err = "npc body is owned by a combat provider";
+    return false;
+    }
   if(npc->isDown()) {
     err = "npc is down";
     return false;
@@ -224,6 +230,11 @@ void NpcController::action(World& world, const rapidjson::Value& msg) {
   auto* c = find(symbol);
   if(c==nullptr) {
     emitActionResult(id,symbol,"rejected","npc is not attached",-1);
+    return;
+    }
+  if(c->npc!=nullptr && BodyController::owns(*c->npc)) {
+    BodyController::legacyRejected(*c->npc,"legacy_action_rejected");
+    emitActionResult(id,symbol,"rejected","npc body is owned by a combat provider",-1);
     return;
     }
 

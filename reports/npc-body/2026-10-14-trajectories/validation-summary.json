@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "kind": "npc_body_stage6_validation_summary",
+  "date": "2026-10-14",
+  "run": "stage6-v1",
+  "host": "dev-ubuntu",
+  "stage6_ready": true,
+  "diagnostic_bc_coverage_ready": false,
+  "remote_corpus": "~/gothic-ai/body/data/stage6-v1",
+  "remote_final_report": "~/gothic-ai/body/reports/stage6-v1-final",
+  "counts": {
+    "observation": 16421,
+    "decision": 1236,
+    "execution": 4897,
+    "transition": 1236
+  },
+  "lifecycle": {
+    "accepted": 1236,
+    "started": 1225,
+    "completed": 1027,
+    "cancelled": 205,
+    "rejected": 0,
+    "uncompleted": 4,
+    "physical_cancellations": 200,
+    "instrumentation_censored": 0,
+    "native_noop_skips": 5,
+    "expert_labels": 733,
+    "usable_bc_labels": 681
+  },
+  "splits": {
+    "train": {
+      "episodes": 15,
+      "observations": 10985,
+      "usable_bc_labels": 455
+    },
+    "eval": {
+      "episodes": 4,
+      "observations": 2171,
+      "usable_bc_labels": 96
+    },
+    "test": {
+      "episodes": 2,
+      "observations": 1500,
+      "usable_bc_labels": 58
+    },
+    "ood": {
+      "episodes": 2,
+      "observations": 1765,
+      "usable_bc_labels": 72
+    }
+  },
+  "groups": {
+    "[\"arena-native-melee-v1\",61]": "train",
+    "[\"arena-native-melee-v1\",127]": "train",
+    "[\"arena-native-melee-v1\",89]": "train",
+    "[\"arena-native-melee-v1\",17]": "train",
+    "[\"arena-native-melee-v1\",73]": "train",
+    "[\"arena-native-melee-v1\",101]": "train",
+    "[\"arena-native-melee-v1\",113]": "eval",
+    "[\"arena-native-melee-v1\",29]": "eval",
+    "[\"arena-native-melee-v1\",43]": "test",
+    "[\"arena-native-melee-v1\",151]": "ood",
+    "[\"arena-native-melee-v1\",163]": "ood"
+  },
+  "sequences": {
+    "train": {
+      "chunks": 359,
+      "observation_ticks": 10985,
+      "loss_labels": 455,
+      "reset_and_burn_in_verified": true
+    },
+    "eval": {
+      "chunks": 72,
+      "observation_ticks": 2171,
+      "loss_labels": 96,
+      "reset_and_burn_in_verified": true
+    },
+    "test": {
+      "chunks": 49,
+      "observation_ticks": 1500,
+      "loss_labels": 58,
+      "reset_and_burn_in_verified": true
+    },
+    "ood": {
+      "chunks": 57,
+      "observation_ticks": 1765,
+      "loss_labels": 72,
+      "reset_and_burn_in_verified": true
+    }
+  },
+  "features": {
+    "count": 184,
+    "constant_train_features": 82,
+    "normalizer_source": "train",
+    "normalization_sha256": "516c274456c5f50dd0043384508a0e3eb0f5d8c9ab24f888e88f9b20009f91e7",
+    "excluded": [
+      "queued_primitive",
+      "choice_id",
+      "command/execution IDs",
+      "terminal outcomes",
+      "owner-dependent can_decide/action_mask_valid"
+    ]
+  },
+  "train_coverage": {
+    "minimum_true_expert_labels_per_included_class": 20,
+    "included_actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "expert_labels_by_action": {
+      "approach": 105,
+      "turn_to_target": 14,
+      "strafe_left": 39,
+      "strafe_right": 39,
+      "jump_back": 0,
+      "attack_front": 80,
+      "attack_left": 35,
+      "attack_right": 22,
+      "block": 80,
+      "wait_200": 79,
+      "wait_300": 0
+    },
+    "usable_labels_by_action": {
+      "approach": 101,
+      "turn_to_target": 14,
+      "strafe_left": 39,
+      "strafe_right": 39,
+      "jump_back": 0,
+      "attack_front": 59,
+      "attack_left": 25,
+      "attack_right": 20,
+      "block": 79,
+      "wait_200": 79,
+      "wait_300": 0
+    },
+    "episode_outcomes_by_action": {
+      "approach": {
+        "terminated": 105
+      },
+      "turn_to_target": {
+        "terminated": 14
+      },
+      "strafe_left": {
+        "terminated": 39
+      },
+      "strafe_right": {
+        "terminated": 39
+      },
+      "jump_back": {},
+      "attack_front": {
+        "terminated": 80
+      },
+      "attack_left": {
+        "terminated": 35
+      },
+      "attack_right": {
+        "terminated": 22
+      },
+      "block": {
+        "terminated": 80
+      },
+      "wait_200": {
+        "terminated": 79
+      },
+      "wait_300": {}
+    },
+    "execution_outcomes_by_action": {
+      "approach": {
+        "completed": 101,
+        "cancelled": 4
+      },
+      "turn_to_target": {
+        "completed": 14
+      },
+      "strafe_left": {
+        "completed": 39
+      },
+      "strafe_right": {
+        "completed": 39
+      },
+      "jump_back": {},
+      "attack_front": {
+        "completed": 59,
+        "cancelled": 21
+      },
+      "attack_left": {
+        "completed": 25,
+        "cancelled": 10
+      },
+      "attack_right": {
+        "completed": 20,
+        "cancelled": 2
+      },
+      "block": {
+        "completed": 79,
+        "cancelled": 1
+      },
+      "wait_200": {
+        "completed": 79
+      },
+      "wait_300": {}
+    },
+    "condition_observations": {
+      "wall": 0,
+      "target_visibility_lost": 740,
+      "bad_distance": 4520
+    },
+    "condition_labels": {
+      "bad_distance": {
+        "approach": 105,
+        "strafe_left": 39,
+        "strafe_right": 39,
+        "wait_200": 7,
+        "block": 12,
+        "turn_to_target": 2
+      }
+    },
+    "insufficient_classes": [
+      {
+        "action_id": 2,
+        "action": "turn_to_target",
+        "usable_expert_labels": 14,
+        "required": 20,
+        "missing": 6
+      },
+      {
+        "action_id": 5,
+        "action": "jump_back",
+        "usable_expert_labels": 0,
+        "required": 20,
+        "missing": 20
+      },
+      {
+        "action_id": 11,
+        "action": "wait_300",
+        "usable_expert_labels": 0,
+        "required": 20,
+        "missing": 20
+      }
+    ],
+    "missing_conditions": [
+      "wall"
+    ],
+    "diagnostic_bc_coverage_ready": false,
+    "limitations": [
+      "Episode outcomes are diagnostics, not per-action success labels.",
+      "Coverage does not establish model quality or dataset sufficiency for release."
+    ]
+  },
+  "recording_parity": {
+    "status": "matched",
+    "ordered_events": 3049,
+    "physics_steps": 1478,
+    "final_native_queue_rng_pose_waits_matched": true,
+    "normalization": "Runtime actor/entity/epoch/event IDs only; no choice, queue, RNG-dependent event, time, pose, collision, damage or position difference allowed."
+  },
+  "native_reference_parity": {
+    "status": "matched",
+    "seeds": [
+      17,
+      29,
+      43
+    ],
+    "ordered_mechanics": 1077,
+    "physics_steps": 3198,
+    "difference_count": 0,
+    "unexercised_guards": [
+      "def_par_window"
+    ]
+  },
+  "resources": {
+    "wall_seconds": 315.71,
+    "user_cpu_seconds": 556.04,
+    "system_cpu_seconds": 22.34,
+    "cpu_percent": 183,
+    "peak_rss_kib": 758592,
+    "max_sampled_rss_kib": 652564,
+    "samples": 56,
+    "runner_pid": 3342156,
+    "fd_range": [
+      8,
+      10
+    ],
+    "thread_range": [
+      17,
+      17
+    ],
+    "swaps": 0,
+    "forbidden_device_descriptors": 0,
+    "display_socket_descriptors": 0
+  },
+  "tests": {
+    "python_cases": 90,
+    "recorder": 18,
+    "dataset": 42,
+    "reporter": 30,
+    "native_resolver_assertions": 2419,
+    "scope": "Targeted checks only; no full pytest or GUI regression."
+  },
+  "independent_audit": {
+    "raw_hashes_verified": 236,
+    "episode_source_hashes_verified": 207,
+    "engine_source_files_verified": 3115,
+    "physical_mirror_pairs_verified": 9,
+    "causal_joins_masks_lifecycle_zero_drops_verified": true,
+    "all_split_loader_reset_burn_in_verified": true
+  },
+  "production_services_during_collection": {
+    "unchanged": true,
+    "services_all_active": false,
+    "identity": {
+      "gothic-voxtral": {
+        "ActiveState": "active",
+        "SubState": "running",
+        "MainPID": "3366349"
+      },
+      "gothic-voxcpm": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "MainPID": "0"
+      }
+    },
+    "baseline_inactive": [
+      "gothic-voxcpm"
+    ],
+    "notes": [
+      "gothic-voxcpm was inactive/dead with MainPID=0 before collection and remained so afterward; availability was not established."
+    ]
+  },
+  "provenance": {
+    "source_sha256": "3a36fc74bed8f28d44e6f4ec30a388f8d546cdf363d4bae979ef4c4fab30b08c",
+    "engine_files": 3115,
+    "binary_sha256": "2ba761a65cb8c73ac2ec7563d4362917476ede82ce830dbabf338dbd1c5f4c48",
+    "archive_sha256": "529c749d981eb2c5989bb50873323eb7e54fa484f1613c18cb135e1fc0c1e52d",
+    "frozen_python_sha256": {
+      "scripts/body_trajectory_suite.py": "3dcfba4d0e40894f1feda76a2df8252391f38e64e5008cddd88c1c5c72346061",
+      "scripts/body_trajectory_recorder.py": "b8049129301929b3a23036188bb09803da8ed09ff6f35c13fbf4cb551cc3f7d4",
+      "scripts/body_trajectory_dataset.py": "272f04642cba373e64c0081b4e80593187ceec0801cb4b250993841f09fe83d7",
+      "scripts/body_trajectory_report.py": "45bb794958027efe2562730cee38f5543e1e1017a02cfae3487b89eea6fe7158",
+      "scripts/bench/body-arena.bench": "d0d5ad2442587122cc25afb534a50d3eae06bd1d30cbb17932f7b2187c87fee7",
+      "evals/npc-body/body-trajectories-v1.json": "634317ad1b953cf66a2266c82d3d9c1433d88e07e7d1fb924584fb72c56ae97c"
+    },
+    "imported_helper_sha256": {
+      "body_trajectory_dataset.py": "272f04642cba373e64c0081b4e80593187ceec0801cb4b250993841f09fe83d7",
+      "body_arena_report.py": "3bf81cad01d42b29611a52f665b9f8ef1c91296c4e52891804d0cfebac0504a7",
+      "body_api_report.py": "6740ee839f6f554df8f7f7aebf9bef34a9115d5e220c49840ac010bfe74e1f99",
+      "body_headless_parity.py": "9d0094d77a0ce89719887c574ab4c1a9eb9f2fabc463e2179f6153ab5114d742",
+      "body_baseline_report.py": "5ffa500af2d79fe44650901bec4af3b412e3d9c2d261d0f2b2a490bbe600fb66"
+    },
+    "reporter_sha256": "dcde0f738f1ba89b8571824f92ec923b335514aee56d5cf0311f33d943d64bc8",
+    "collected_reporter_sha256": "45bb794958027efe2562730cee38f5543e1e1017a02cfae3487b89eea6fe7158",
+    "actual_reporter_sha256": "dcde0f738f1ba89b8571824f92ec923b335514aee56d5cf0311f33d943d64bc8",
+    "reporter_regrade_reason": "Regrade unchanged production service identity against its actual baseline; an already inactive service may remain inactive. No collection, dataset, engine or mechanics criterion changed."
+  },
+  "issues": [],
+  "limitations": [
+    "This validates a diagnostic corpus and pipeline; no model, optimizer or on-policy rollout ran.",
+    "Environment/corpus readiness is separate from the 20-label-per-class and condition coverage gate.",
+    "OOD contains new separations in the same arena; geometry/opponent diversity remains future work."
+  ],
+  "artifact_sha256": {
+    "body-trajectories.json": "317bd600498b4228f5411b4f5e94883bb0f7996d99751b38ed6dc5d2a53b16fc",
+    "manifest.json": "58795044ff4e193cc0b286d7bd738fc7c8c80895adf625c405a5e91c49510d01",
+    "dataset-index.json": "cb8bf08bc5ce66c9d895558bf9e01d880ef0fae59597a9890271afd81fc6c3da",
+    "normalization.json": "516c274456c5f50dd0043384508a0e3eb0f5d8c9ab24f888e88f9b20009f91e7",
+    "coverage.md": "43bdfe60f9918573b5160cfed767c9b5370483b1335a99025698594769cc7d06",
+    "resources.txt": "76e43ea4db9c5e315a7873722ea3c73488b9896c476972d94a124e7e8bf003e7",
+    "resolver-tests.json": "7ba13bd3628e4be4ca4e713bf96cb700e20cbef036701d4d6dc8263f7b5c36b4",
+    "rng-probe-result.json": "f04ab3bb3a642ebe4faac34db70d3a991abd18a78063afb5b61eea9eba914203"
+  }
+}

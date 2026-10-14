@@ -1,6 +1,6 @@
 # Боевой контракт слоя управления телом NPC
 
-Дата: 13 октября 2026 года. Контракт этапа 1 [плана GRU](npc-body-control-plan.md). Этот документ фиксирует существующую механику OpenGothic и проектируемый интерфейс первой melee policy. Headless runner реализован на этапе 2: [runtime](npc-body-headless-runner.md), [проверка baseline и ресурсы](../reports/npc-body/2026-10-13-headless/headless-report.md). Этап 3 добавил [пассивные числовые наблюдения](npc-body-observations.md) с информационной availability mask; [серверная проверка](../reports/npc-body/2026-10-13-observations/body-observe.md). Внешний боевой API, окончательные action masks и ownership остаются следующими этапами.
+Дата: 13 октября 2026 года. Контракт этапа 1 [плана GRU](npc-body-control-plan.md). Этот документ фиксирует механику reference OpenGothic и словарь первой melee policy. Headless runner реализован на этапе 2: [runtime](npc-body-headless-runner.md), [проверка baseline и ресурсы](../reports/npc-body/2026-10-13-headless/headless-report.md). Этап 3 добавил [числовые наблюдения](npc-body-observations.md) с информационной availability mask; [серверная проверка](../reports/npc-body/2026-10-13-observations/body-observe.md). Реализация внешних команд, authoritative masks и ownership описана в [боевом API этапа 4](npc-body-api.md); описания native ниже относятся к reference пути с выключенным внешним управлением.
 
 Первая задача — дуэль двух людей с одинаковым одноручным оружием, фиксированными характеристиками и штатным `FightAlgo`. Модель выбирает боевой примитив; движение, анимационные окна, столкновения и урон остаются в настоящем движке. Численные результаты и конфигурация reference baseline сохраняются отдельно от контракта. Ни задержки модели, ни окна конкретной анимации нельзя вывести из этой таблицы без прогона с выбранными assets.
 
@@ -50,7 +50,7 @@ Daedalus AI_Attack
 | 14 | `MV_TURNG` | Объявлен; нет producer/ветки исполнения | Исключить |
 | 15 | `MV_STRAFE_E` | Завершение бокового шага через `Anim::Idle` | Внутренняя часть strafe; не отдельный выбор policy |
 
-Будущий `continue` означает «не назначать новый примитив, исполнять текущий». Это новый служебный вариант policy, а не `MV_NULL`. Целевой MVP vocabulary: `continue`, `approach`, `turn_to_target`, `strafe_left`, `strafe_right`, `jump_back`, `attack_front`, `attack_left`, `attack_right`, `block`, `wait_200`, `wait_300`. Пока resolver не реализован, таблица является спецификацией, а не доступным RPC.
+`continue` означает «не назначать новый примитив, исполнять текущий». Это служебный вариант policy, а не `MV_NULL`. MVP vocabulary: `continue`, `approach`, `turn_to_target`, `strafe_left`, `strafe_right`, `jump_back`, `attack_front`, `attack_left`, `attack_right`, `block`, `wait_200`, `wait_300`. Этап 4 публикует этот словарь как IDs 0–11 через общий resolver и body API.
 
 Полный native intent vocabulary берётся из [`zenkit::FightAiMove`](../OpenGothic/lib/ZenKit/include/zenkit/addon/daedalus.hh). Producer [`FightAlgo::nextFromQueue`](../OpenGothic/common/game/fightalgo.cpp) разворачивает его так:
 

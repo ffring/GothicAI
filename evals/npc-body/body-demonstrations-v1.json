@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "scenario": "body-demonstrations-v1",
+  "declared_before_collection": "2026-10-14",
+  "teacher_id": "defensive-melee-scripted-v1",
+  "provider": "stage7-scripted-teacher",
+  "setup_family": "arena-native-melee-v1",
+  "teacher_goal": "defensive_cycle",
+  "primary_geometry": "open",
+  "geometry_policy": "Use the existing open arena setup and separately verified existing static near-wall placements. The targeted cycle ends after defensive retreat and wait_300; actual visibility, collision and per-action physical guards remain mandatory.",
+  "policy": "Every teacher label starts at an exact fresh periodic numerical observation, passes a declared physical rule, and is approved only after its real completed execution and independent per-action outcome proof. Original stage 6 records remain immutable.",
+  "inherited_group_assignments": {
+    "[\"arena-native-melee-v1\",17]": "train",
+    "[\"arena-native-melee-v1\",61]": "train",
+    "[\"arena-native-melee-v1\",73]": "train",
+    "[\"arena-native-melee-v1\",89]": "train",
+    "[\"arena-native-melee-v1\",101]": "train",
+    "[\"arena-native-melee-v1\",127]": "train",
+    "[\"arena-native-melee-v1\",29]": "eval",
+    "[\"arena-native-melee-v1\",113]": "eval",
+    "[\"arena-native-melee-v1\",43]": "test",
+    "[\"arena-native-melee-v1\",151]": "ood",
+    "[\"arena-native-melee-v1\",163]": "ood"
+  },
+  "train_seeds": [17, 61, 73, 89, 101, 127],
+  "eval_seeds": [29, 113],
+  "test_seeds": [43],
+  "train_variants": [0, 1, 2, 3],
+  "eval_variants": [0, 1],
+  "test_variants": [0, 1, 2, 3],
+  "smoke": {"primary_train_seed": 17, "primary_variants": [0, 1, 2, 3], "include_all_near_wall_cases": true, "include_all_ood_cases": true},
+  "variants": [
+    {"side": 0, "distance_cm": 550, "yaw_offset_deg": 20, "center_offset_cm": [0, 0], "separation_yaw_deg": 0},
+    {"side": 1, "distance_cm": 650, "yaw_offset_deg": -20, "center_offset_cm": [120, -120], "separation_yaw_deg": 25},
+    {"side": 0, "distance_cm": 650, "yaw_offset_deg": 35, "center_offset_cm": [-100, 100], "separation_yaw_deg": -25},
+    {"side": 1, "distance_cm": 550, "yaw_offset_deg": -35, "center_offset_cm": [180, 90], "separation_yaw_deg": 60}
+  ],
+  "near_wall_cases": [
+    {"name": "wall-train", "seed": 61, "side": 0, "distance_cm": 550, "yaw_offset_deg": 20},
+    {"name": "wall-eval", "seed": 29, "side": 1, "distance_cm": 650, "yaw_offset_deg": -20},
+    {"name": "wall-test", "seed": 43, "side": 0, "distance_cm": 550, "yaw_offset_deg": 35}
+  ],
+  "ood_cases": [
+    {"name": "ood-151", "seed": 151, "side": 0, "distance_cm": 800, "yaw_offset_deg": 40, "center_offset_cm": [-220, 120], "separation_yaw_deg": -60},
+    {"name": "ood-163", "seed": 163, "side": 1, "distance_cm": 1000, "yaw_offset_deg": -40, "center_offset_cm": [220, -120], "separation_yaw_deg": 90}
+  ],
+  "action_order": [2, 1, "attack_front_with_real_range_corrections", "attack_left_with_real_range_corrections", "attack_right_with_real_range_corrections", 9, 5, "opponent_retreat_until_safe_if_needed", 11],
+  "coverage": {
+    "actions": [1, 2, 5, 6, 7, 8, 9, 11],
+    "native_complement_actions": [3, 4, 10],
+    "global_bc_actions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    "global_bc_minimum_train_usable_per_action": 20,
+    "minimum_new_train_usable_per_action": 24,
+    "minimum_eval_usable_per_action": 4,
+    "minimum_test_usable_per_action": 4,
+    "wall_required_splits": ["train", "eval", "test"],
+    "no_duplicates_or_synthetic_oversampling": true
+  },
+  "budgets": {
+    "episode_timeout_game_ms": 24000,
+    "collection_wall_timeout_s": 900,
+    "max_command_substeps": 200,
+    "max_episode_substeps": 800,
+    "max_range_corrections": 6,
+    "max_opponent_retreats": 4,
+    "native_queue_capacity": 4096,
+    "drain_max": 256,
+    "writer_queue_capacity": 256,
+    "provider_watchdog_wall_ms": 5000,
+    "max_dropped_records": 0
+  },
+  "simulation": {"mode": "lockstep", "fps": 30, "time_multiplier": 1, "delay_substeps": 0, "model": null},
+  "rules": {
+    "approach": "A visible opponent is outside melee range; move into native weapon range.",
+    "turn_to_target": "A visible opponent is more than five degrees off the body's attack axis; reduce the angle into native focus.",
+    "strafe_left": "At safe distance, select a clear left lateral ray; require real lateral displacement without HP loss.",
+    "strafe_right": "At safe distance, select a clear right lateral ray; require real lateral displacement without HP loss.",
+    "jump_back": "React to a newly observed incoming melee attack after a completed block; require increased separation, real displacement and no HP loss or actual melee damage. Each mapped opponent hit attempt must be an explicit range/focus miss or an upstream applied delivery linked one-to-one to a same-time mapped native melee jumped_back defense result with a strictly later trace sequence.",
+    "attack_front": "A visible idle opponent is in clear, focused native weapon range; require an actual applied hit and target HP loss.",
+    "attack_left": "The most recent completed strike was front; allow genuinely completed approach/turn corrections between strikes, require clear focused range and actual damage.",
+    "attack_right": "The most recent completed strike was left; allow genuinely completed approach/turn corrections between strikes, require clear focused range and actual damage.",
+    "block": "React to a visible incoming melee attack in native weapon range; require a native blocked hit without HP loss.",
+    "wait_200": "Briefly assess after completed lateral repositioning at safe distance with no observed attack; require the actual 200 ms wait, stationary position and unchanged HP.",
+    "wait_300": "Hold safe separation after a completed defensive retreat with no observed attack; the opponent may perform real retreat commands first without changing primary history. Require the actual 300 ms wait, stationary position and unchanged HP."
+  },
+  "limitations": [
+    "This is an independent deterministic scripted teacher, not a native AI label or a guarantee of optimal tactics.",
+    "A failed guard or physical proof creates no expert label and cannot satisfy coverage.",
+    "New demonstrations target eight deficient classes; existing immutable native strafe_left, strafe_right and wait_200 labels supply their complement. The combined BC dataset must still cover all eleven actions with at least twenty usable training labels each.",
+    "Every cycle ends as a time-limit truncation after completed demonstrations; it is not a duel victory. Extra corrective approaches/turns are real separately proved decisions, not duplicated labels.",
+    "Near-wall evidence comes from existing static collision geometry, numerical rays and native capsule probes, with no runtime teleport or collision fixture."
+  ]
+}

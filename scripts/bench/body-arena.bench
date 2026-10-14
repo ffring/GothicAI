@@ -1,0 +1,12 @@
+# Stage 5: immutable control-save bootstrap, configured two-person melee arena.
+# The runner installs scenario/seed/side/distance/timeout before loading this script.
+set time 12 0
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02
+turn 210
+wait 500
+watch player
+clear 3000
+immortal player on
+release all
+bodyarena 17
+wait 600100

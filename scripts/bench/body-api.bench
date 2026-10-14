@@ -1,0 +1,12 @@
+# Stage 4: two native mortal sword fighters, then scripted ownership/fixture phases.
+# The API suite supplies assertions; stage 3's native-only activity guard is not enabled.
+set time 12 0
+goto NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_02
+turn 210
+wait 500
+watch player
+clear 3000
+immortal player on
+release all
+bodyapi 17 600000
+wait 600100

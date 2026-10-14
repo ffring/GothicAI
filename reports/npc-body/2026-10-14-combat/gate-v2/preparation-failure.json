@@ -1,0 +1,620 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage8_gate_v2_preparation_failure",
+  "generated_at_utc": "2026-10-14T12:44:36.904446+00:00",
+  "run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2",
+  "scope": "compact_saved_phase_and_preparation_evidence",
+  "stage8_quality_credit": false,
+  "fresh_screening_read": false,
+  "models_run_by_reporter": false,
+  "tests_or_simulation_run_by_reporter": false,
+  "weights_or_binary_downloaded": false,
+  "phases": {
+    "shadow": {
+      "status": "collected",
+      "cases_count": 3,
+      "case_names": [
+        "shadow-223-0-native",
+        "shadow-223-0-gru",
+        "shadow-223-0-mlp"
+      ],
+      "error": null,
+      "quality_gate_evaluated": false,
+      "checkpoint_sha256": {
+        "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+        "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+      },
+      "selected_checkpoint_identities_unchanged": true,
+      "case_checkpoint_identities_unchanged": true,
+      "case_normalizer_identities_unchanged": true,
+      "driver_sha256": "5dc04280929afd7dd15304cae596735e530c1f61e92402de94525c1e6aa4f158",
+      "config_sha256": "7fad78c86e419f50abd459955a8d91a17551f8cb2d57b129c74636675aac32f5",
+      "compact_replies": true,
+      "binary_sha256": "d44ef8a769c49226ea4ee08a024b43dd64bcddaa942183edfb9343eb03b3caaa",
+      "suite_sha256": "b4075e954f26eb240911add68b1e4913250bfc11a36d0df4c1a49f69d5f4b0d8",
+      "manifest_sha256": "9f484a95cdf08befdcd6f4afe435c53f09e0a918cf55f26e93c636cdaa162868",
+      "launcher_log_tail": [
+        "Running as unit: gothic-body-bc-stage8-final-gate-v2-shadow.service; invocation ID: a2a21cc930a34e66a93c4535d5e0521d",
+        "stage8 [shadow-223-0-native] mode=realtime shadow=False outcome=time_limit",
+        "stage8 [shadow-223-0-gru] mode=realtime shadow=True outcome=time_limit",
+        "stage8 [shadow-223-0-mlp] mode=realtime shadow=True outcome=time_limit",
+        "          Finished with result: success",
+        "Main processes terminated with: code=exited, status=0/SUCCESS",
+        "               Service runtime: 1min 9.308s",
+        "             CPU time consumed: 1min 19.079s",
+        "                   Memory peak: 5.1G (swap: 0B)"
+      ],
+      "launcher_log_sha256": "d0927310c223d1aaed94c9a523a2fcc9e0c9507771afe6fa9b101a01350330b6",
+      "resource_lines": [
+        "User time (seconds): 75.99",
+        "System time (seconds): 3.07",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 1:09.29",
+        "Maximum resident set size (kbytes): 736572",
+        "Exit status: 0"
+      ],
+      "resources_sha256": "fdfe1385552760d981c41558057b71d3ce5cfb5d41ba3496c8f8a83fb7ff1d7c"
+    },
+    "realtime": {
+      "status": "collected",
+      "cases_count": 24,
+      "case_names": [
+        "realtime-distance-223-0-native",
+        "realtime-distance-223-0-gru",
+        "realtime-distance-223-0-mlp",
+        "realtime-attack-223-0-native",
+        "realtime-attack-223-0-gru",
+        "realtime-attack-223-0-mlp",
+        "realtime-block-223-0-native",
+        "realtime-block-223-0-gru",
+        "realtime-block-223-0-mlp",
+        "realtime-native_duel-223-0-native",
+        "realtime-native_duel-223-0-gru",
+        "realtime-native_duel-223-0-mlp",
+        "realtime-distance-223-1-native",
+        "realtime-distance-223-1-gru",
+        "realtime-distance-223-1-mlp",
+        "realtime-attack-223-1-native",
+        "realtime-attack-223-1-gru",
+        "realtime-attack-223-1-mlp",
+        "realtime-block-223-1-native",
+        "realtime-block-223-1-gru",
+        "realtime-block-223-1-mlp",
+        "realtime-native_duel-223-1-native",
+        "realtime-native_duel-223-1-gru",
+        "realtime-native_duel-223-1-mlp"
+      ],
+      "error": null,
+      "quality_gate_evaluated": false,
+      "checkpoint_sha256": {
+        "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+        "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+      },
+      "selected_checkpoint_identities_unchanged": true,
+      "case_checkpoint_identities_unchanged": true,
+      "case_normalizer_identities_unchanged": true,
+      "driver_sha256": "5dc04280929afd7dd15304cae596735e530c1f61e92402de94525c1e6aa4f158",
+      "config_sha256": "7fad78c86e419f50abd459955a8d91a17551f8cb2d57b129c74636675aac32f5",
+      "compact_replies": true,
+      "binary_sha256": "d44ef8a769c49226ea4ee08a024b43dd64bcddaa942183edfb9343eb03b3caaa",
+      "suite_sha256": "ccb986ac349e13fe3fb66ff826a564c096ec63b0f5848dac1b5d209f056d5adb",
+      "manifest_sha256": "39f1ad2eeda65f455117fd7e44f0c3aa45a490f582722fd8f3b8215c5e1133cd",
+      "launcher_log_tail": [
+        "stage8 [realtime-block-223-1-gru] mode=realtime shadow=False outcome=time_limit",
+        "stage8 [realtime-block-223-1-mlp] mode=realtime shadow=False outcome=task_success",
+        "stage8 [realtime-native_duel-223-1-native] mode=realtime shadow=False outcome=death_or_down",
+        "stage8 [realtime-native_duel-223-1-gru] mode=realtime shadow=False outcome=death_or_down",
+        "stage8 [realtime-native_duel-223-1-mlp] mode=realtime shadow=False outcome=death_or_down",
+        "          Finished with result: success",
+        "Main processes terminated with: code=exited, status=0/SUCCESS",
+        "               Service runtime: 2min 23.059s",
+        "             CPU time consumed: 2min 51.670s",
+        "                   Memory peak: 1.5G (swap: 0B)"
+      ],
+      "launcher_log_sha256": "42d897a8eac6fa5b71c8838758a848487960f0c2bc6d385c9be761f44a55b14b",
+      "resource_lines": [
+        "User time (seconds): 165.73",
+        "System time (seconds): 5.92",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 2:23.04",
+        "Maximum resident set size (kbytes): 758444",
+        "Exit status: 0"
+      ],
+      "resources_sha256": "84645b83a6062b32445797f19193d12af8d68c2a75aa464ec8ec6136880a1b2c"
+    },
+    "realtime-reaction": {
+      "status": "infrastructure_failure",
+      "cases_count": 0,
+      "case_names": [],
+      "error": "'rng_state'",
+      "quality_gate_evaluated": false,
+      "checkpoint_sha256": {
+        "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+        "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+      },
+      "selected_checkpoint_identities_unchanged": true,
+      "case_checkpoint_identities_unchanged": null,
+      "case_normalizer_identities_unchanged": null,
+      "manifest_normalizer_identity_unchanged": true,
+      "driver_sha256": "adbd69551ceef0e5101594dd6c5987089eda4c95d4f910a1d583a1e6eafdfc3b",
+      "config_sha256": "8dd29bfd42198beb9b5256ea0856cb31a9b57c7a9234dbdd7452be480fa3691b",
+      "compact_replies": true,
+      "binary_sha256": "d44ef8a769c49226ea4ee08a024b43dd64bcddaa942183edfb9343eb03b3caaa",
+      "suite_sha256": "e152cec28da95e96719e0f65c406b0587e4902824411a003fc88d673b30c8c82",
+      "manifest_sha256": "c51200c948f2993a7a8ccc01f5b3bdf413e13a66fc5f6eedf7d14803ed5fe0d1",
+      "launcher_log_tail": [
+        "Running as unit: gothic-body-bc-stage8-final-gate-v2-realtime-reaction.service; invocation ID: 5bdeabaa93b641dd8a301e3ef871a827",
+        "evaluation v2 failed: 'rng_state'",
+        "          Finished with result: exit-code",
+        "Main processes terminated with: code=exited, status=2/INVALIDARGUMENT",
+        "               Service runtime: 5.770s",
+        "             CPU time consumed: 6.209s",
+        "                   Memory peak: 691.1M (swap: 0B)"
+      ],
+      "launcher_log_sha256": "ff7cd04874154434e1c90e54f62828340d20b720f945f187dc59269f15fe65c0",
+      "resource_lines": [
+        "User time (seconds): 5.67",
+        "System time (seconds): 0.53",
+        "Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.76",
+        "Maximum resident set size (kbytes): 664516",
+        "Exit status: 2"
+      ],
+      "resources_sha256": "3ab9fd5f0fd58503861b9495b801493aa15671b3e1f9a029c1d0ffa20e498b60"
+    }
+  },
+  "expected_selected_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "expected_normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "failed_preparation": {
+    "directory": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native",
+    "persisted_completed_case_record": false,
+    "activation_file_present": false,
+    "preparation_file_present": false,
+    "full_raw_journals_downloaded": false,
+    "body_status_shape_evidence": [
+      {
+        "request_id": 3,
+        "request_compact": null,
+        "response_id": 3,
+        "response_compact": null,
+        "actors": [
+          {
+            "entity_id": 1,
+            "control_generation": 0,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue",
+              "rng_state"
+            ],
+            "rng_state_present": true
+          },
+          {
+            "entity_id": 2,
+            "control_generation": 0,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue",
+              "rng_state"
+            ],
+            "rng_state_present": true
+          }
+        ]
+      },
+      {
+        "request_id": 5,
+        "request_compact": null,
+        "response_id": 5,
+        "response_compact": null,
+        "actors": [
+          {
+            "entity_id": 1,
+            "control_generation": 1,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue",
+              "rng_state"
+            ],
+            "rng_state_present": true
+          },
+          {
+            "entity_id": 2,
+            "control_generation": 0,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue",
+              "rng_state"
+            ],
+            "rng_state_present": true
+          }
+        ]
+      },
+      {
+        "request_id": 8,
+        "request_compact": null,
+        "response_id": 8,
+        "response_compact": null,
+        "actors": [
+          {
+            "entity_id": 1,
+            "control_generation": 1,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue",
+              "rng_state"
+            ],
+            "rng_state_present": true
+          },
+          {
+            "entity_id": 2,
+            "control_generation": 2,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue",
+              "rng_state"
+            ],
+            "rng_state_present": true
+          }
+        ]
+      },
+      {
+        "request_id": 21,
+        "request_compact": null,
+        "response_id": 21,
+        "response_compact": null,
+        "actors": [
+          {
+            "entity_id": 1,
+            "control_generation": 1,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue"
+            ],
+            "rng_state_present": false
+          },
+          {
+            "entity_id": 2,
+            "control_generation": 2,
+            "purity_state_keys": [
+              "ani_wait_until",
+              "fai_wait_until",
+              "loop_next_time",
+              "pose_identity",
+              "queue"
+            ],
+            "rng_state_present": false
+          }
+        ]
+      }
+    ]
+  },
+  "not_started": {
+    "load": {
+      "directory": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/load",
+      "present": false,
+      "suite_present": false,
+      "launcher_log_present": false
+    },
+    "screening": {
+      "directory": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/screening",
+      "present": false,
+      "suite_present": false,
+      "launcher_log_present": false
+    },
+    "screen": {
+      "directory": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/screen",
+      "present": false,
+      "suite_present": false,
+      "launcher_log_present": false
+    },
+    "fresh-screening": {
+      "directory": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/fresh-screening",
+      "present": false,
+      "suite_present": false,
+      "launcher_log_present": false
+    }
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/shadow/suite.json",
+      "sha256": "b4075e954f26eb240911add68b1e4913250bfc11a36d0df4c1a49f69d5f4b0d8",
+      "size_bytes": 377344
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/shadow/manifest.json",
+      "sha256": "9f484a95cdf08befdcd6f4afe435c53f09e0a918cf55f26e93c636cdaa162868",
+      "size_bytes": 62904
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/shadow/shadow-223-0-native/episode.json",
+      "sha256": "501f6a520ecdc965c5ece40bef60ede685cdc6bd07d3fe0ac1d88cd1f7b056e0",
+      "size_bytes": 113859
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/shadow/shadow-223-0-gru/episode.json",
+      "sha256": "097f4f549cc7181be690da923c7cd05b34414965c8c673c90f2b3e6f6f0f1405",
+      "size_bytes": 116101
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/shadow/shadow-223-0-mlp/episode.json",
+      "sha256": "c50b98a8628d5293583f2a68498d47f9f1a2f96b8237119d2a048397acbdb4b4",
+      "size_bytes": 116103
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/launcher-shadow.log",
+      "sha256": "d0927310c223d1aaed94c9a523a2fcc9e0c9507771afe6fa9b101a01350330b6",
+      "size_bytes": 573
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/resources-shadow.txt",
+      "sha256": "fdfe1385552760d981c41558057b71d3ce5cfb5d41ba3496c8f8a83fb7ff1d7c",
+      "size_bytes": 2077
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/services-shadow-before.json",
+      "sha256": "88e541f81144827ece5943078be09e11c8e240eafd48923cd29c884434b4ef2b",
+      "size_bytes": 430
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/services-shadow-after.json",
+      "sha256": "bee7bb7a1ac896512f29a37885b9e7378a14181572a6f3cfd3dfe8aec3d602f9",
+      "size_bytes": 430
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/suite.json",
+      "sha256": "ccb986ac349e13fe3fb66ff826a564c096ec63b0f5848dac1b5d209f056d5adb",
+      "size_bytes": 4872114
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/manifest.json",
+      "sha256": "39f1ad2eeda65f455117fd7e44f0c3aa45a490f582722fd8f3b8215c5e1133cd",
+      "size_bytes": 62905
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-distance-223-0-native/episode.json",
+      "sha256": "4dfc276fc99b4a7f406fe56287cffaec4c050fb52f6d8f8e45b23c67a9525b7c",
+      "size_bytes": 113969
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-distance-223-0-gru/episode.json",
+      "sha256": "fa1165ce6c1f50384570685a110386fa4b233f4bb49b4ff832874db9f504fc27",
+      "size_bytes": 144212
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-distance-223-0-mlp/episode.json",
+      "sha256": "51636237810e46ec40592d051573aa7c029acd9c721735580044ef33f4c445d2",
+      "size_bytes": 144212
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-attack-223-0-native/episode.json",
+      "sha256": "7a0c1311e600e3021e580f7774447765a6ea3695cf0af72d917ad4367eb6b0dc",
+      "size_bytes": 114029
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-attack-223-0-gru/episode.json",
+      "sha256": "3c8d7600624d6369c33317cfdbcac38d462f0255dd0126999eb3aa64c313780d",
+      "size_bytes": 130458
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-attack-223-0-mlp/episode.json",
+      "sha256": "9fa6933d64809ab71703808f68a777cbb4135c6797eb2610777afbb55811786b",
+      "size_bytes": 144367
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-block-223-0-native/episode.json",
+      "sha256": "f1d1924f4603fbfd26c70efd64146c0c13a10c88c0ee66bc71e9abca6aa21199",
+      "size_bytes": 127884
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-block-223-0-gru/episode.json",
+      "sha256": "be9a6b50f48a85ffcd0424cd560b5d4156ee6d1c6fea57900744a99d941c4e28",
+      "size_bytes": 268883
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-block-223-0-mlp/episode.json",
+      "sha256": "a3dec3bc2715f29e868dbe3e7497c5ff6d1b83a6a2472299d3d21a271eeac209",
+      "size_bytes": 255389
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-native_duel-223-0-native/episode.json",
+      "sha256": "65d182962137d7a5b6763a324cd0f87f3a72ae1d59fb2dd04abdd6612348c53c",
+      "size_bytes": 113857
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-native_duel-223-0-gru/episode.json",
+      "sha256": "3c5f8fc7e40fb17525346756f306d660f94498d7ddf42bde5136ce28d1d9df9e",
+      "size_bytes": 394124
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-native_duel-223-0-mlp/episode.json",
+      "sha256": "81e47488322b86e3c564add558b38a5dd360dd7525ea2a9759430208d17b8982",
+      "size_bytes": 283018
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-distance-223-1-native/episode.json",
+      "sha256": "67c824c45ff00628582951c71656044ad2d7575ee6e02e1e3183cae5502b62eb",
+      "size_bytes": 114052
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-distance-223-1-gru/episode.json",
+      "sha256": "29c671fb72fbbab4eae7667a1cdd0c805087d2e41ef86e60feb0a5b000b20d5b",
+      "size_bytes": 144420
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-distance-223-1-mlp/episode.json",
+      "sha256": "068c41fd2eaae654903182915f7f8b14888f23b741bea274de9175bdea9423fd",
+      "size_bytes": 144428
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-attack-223-1-native/episode.json",
+      "sha256": "8b57344efe6afd0a1a636fe1883d69c9c61db596384af69b7ca7d018cd7cfb03",
+      "size_bytes": 114104
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-attack-223-1-gru/episode.json",
+      "sha256": "b9207a678d0da85c05be727cf75bab1aeb6b0c9a8a832c129fd30c83b6f01eab",
+      "size_bytes": 130531
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-attack-223-1-mlp/episode.json",
+      "sha256": "27affdff2067ca50cb69788c441382b0caf5fd4b6f712a4841b8225a7b34f43b",
+      "size_bytes": 130573
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-block-223-1-native/episode.json",
+      "sha256": "dd76b0725085a67e637d687d227e9a9a9c6a0905befccb95fdd8cae974a3e841",
+      "size_bytes": 127923
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-block-223-1-gru/episode.json",
+      "sha256": "784615a3dd965c09a0bc5e5e47957aa5e65a030d39d24a8aa680075c10f12ca6",
+      "size_bytes": 268981
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-block-223-1-mlp/episode.json",
+      "sha256": "4559b6cd0893a0089b03831b6570006a34a182b3df38111e6dde63c66f25a9e6",
+      "size_bytes": 144324
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-native_duel-223-1-native/episode.json",
+      "sha256": "e570a18885db187fc12a1d908b9a4b1ab7c59622d4b87cf400f63579b04814d3",
+      "size_bytes": 113874
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-native_duel-223-1-gru/episode.json",
+      "sha256": "941797e126c1f4ea61693bd07b66808005deb512a1cc7031dab0e47924f4ae43",
+      "size_bytes": 463517
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime/realtime-native_duel-223-1-mlp/episode.json",
+      "sha256": "e3eaf1f014b5a53e537f0fc95bf4cfb30cd8f598d147a4b78f41e54de13ecf87",
+      "size_bytes": 283093
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/launcher-realtime.log",
+      "sha256": "42d897a8eac6fa5b71c8838758a848487960f0c2bc6d385c9be761f44a55b14b",
+      "size_bytes": 2411
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/resources-realtime.txt",
+      "sha256": "84645b83a6062b32445797f19193d12af8d68c2a75aa464ec8ec6136880a1b2c",
+      "size_bytes": 2081
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/services-realtime-before.json",
+      "sha256": "d4eafc1959eb4a7741aeb70fd29f0e65580455f5563e5ccbebc21e0fb24d5705",
+      "size_bytes": 430
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/services-realtime-after.json",
+      "sha256": "db95b3cd52ed834be04f9de823f24d71c45839ef1c72c53f920991f7df8ca4f5",
+      "size_bytes": 430
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/suite.json",
+      "sha256": "e152cec28da95e96719e0f65c406b0587e4902824411a003fc88d673b30c8c82",
+      "size_bytes": 656
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/manifest.json",
+      "sha256": "c51200c948f2993a7a8ccc01f5b3bdf413e13a66fc5f6eedf7d14803ed5fe0d1",
+      "size_bytes": 64360
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/launcher-realtime-reaction.log",
+      "sha256": "ff7cd04874154434e1c90e54f62828340d20b720f945f187dc59269f15fe65c0",
+      "size_bytes": 402
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/resources-realtime-reaction.txt",
+      "sha256": "3ab9fd5f0fd58503861b9495b801493aa15671b3e1f9a029c1d0ffa20e498b60",
+      "size_bytes": 2194
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/services-realtime-reaction-before.json",
+      "sha256": "4f54d45fd5086fbd63f00a92d70255e38ea225fa53c98d9b7778435c133ea654",
+      "size_bytes": 430
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/services-realtime-reaction-after.json",
+      "sha256": "13ed25affb360e3270a0d4ed1cbcc39a447b9d9dd900b69671669d358bced2e8",
+      "size_bytes": 430
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/ipc.jsonl",
+      "sha256": "0ab762aaedaa995254d9e5b9ba64cfd63098f32e2b1a52199429581e0e2588a0",
+      "size_bytes": 455421
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/events.jsonl",
+      "sha256": "c4d999eddb4e1a581c8342b0f10e7acb8390e32da0470f6bd978925022e8c6b5",
+      "size_bytes": 33306
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/observations.jsonl",
+      "sha256": "4b1f7d167b336449661c34919c9bf03c0cab208c43f6444ea293857fc7f85229",
+      "size_bytes": 22318
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/arena-events.jsonl",
+      "sha256": "6e64e15136975411b4f199dc81a1a6020b84c26eab6306a224d442cd4f67b29c",
+      "size_bytes": 26346
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/body-control-events.jsonl",
+      "sha256": "80ce2e4cc506cba49ea7f0325c8d49722508794257738bfe9f59c1ce00fce420",
+      "size_bytes": 3522
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/policy-inputs.jsonl",
+      "sha256": "9d5e849791b486825b8ba50099e9cf2b9ec84ab658346afff1a1d428bfcfc0db",
+      "size_bytes": 30905
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/latency.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v2/realtime-reaction/block-reaction-223-0-native/bench.log",
+      "sha256": "44b1f58195ea054879b443933d5cce124b03a79752f179e44890509a0efe1d93",
+      "size_bytes": 281
+    }
+  ],
+  "raw_inventory_scope": "Phase suites/manifests, bounded resource/log fragments, collected episode metadata, and incomplete first reaction preparation journals; no ordinary gameplay quality audit.",
+  "selected_identity_binding": {
+    "scope": "Actual phase manifests and saved case metadata compared against the independently audited fixed child selection; model/normalizer bytes were not downloaded or rehashed by this report.",
+    "reference_selection_path": "../defence-v2/selection.json",
+    "reference_selection_sha256": "a1635ded3df4d989e0b74c8385177103b00ce7d0ec781201039a4e793d8873e1",
+    "weights_fixed_at_utc": "2026-10-14T11:15:23.540769+00:00"
+  },
+  "failure_classification": {
+    "category": "infrastructure_preparation_failure",
+    "error": "'rng_state'",
+    "completed_reaction_cases": 0,
+    "activation_completed": false,
+    "observation": "Body status request 21 preserved both generation identities but purity_state omitted rng_state for both actors; requests 3/5/8 still included it.",
+    "compact_replies_declared": true,
+    "gameplay_quality_pass": false
+  }
+}

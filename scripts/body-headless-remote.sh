@@ -35,7 +35,7 @@ df -h "$HOME/gothic-ai"
 free -h
 nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv,noheader
 systemctl --user is-active gothic-voxtral gothic-voxcpm
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner([[:space:]]|$)' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 echo "Reference: $reference"
@@ -50,7 +50,7 @@ task_root="$HOME/$1"
 mkdir -p "$task_root/source/scripts/bench" "$task_root/source/evals/npc-body" \
          "$task_root/provenance" "$task_root/runs"
 [[ ! -e "$task_root/build-active" ]] || { echo 'Build owns this source tree' >&2; exit 1; }
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner([[:space:]]|$)' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Game/runner is active; do not replace its source/provenance' >&2; exit 1
 fi
 free_kib=$(df -Pk "$task_root" | awk 'NR==2 {print $4}')
@@ -123,7 +123,7 @@ out="$task_root/runs/$run_name"
 # launchers also have a process check; we never stop processes owned by another job.
 exec 9>"$HOME/gothic-ai/body-simulation.lock"
 flock -n 9 || { echo 'Another simulation owns the shared runner lock' >&2; exit 1; }
-if pgrep -f '[/]Gothic2Notr([[:space:]]|$)' >/dev/null || pgrep -f '[/]gothic-body-runner([[:space:]]|$)' >/dev/null; then
+if pgrep -x 'Gothic2Notr|gothic-body-run' >/dev/null; then
   echo 'Another game/runner is active; wait for its owner' >&2; exit 1
 fi
 [[ ! -e "$out" ]] || { echo 'Run directory exists; choose a fresh name' >&2; exit 1; }

@@ -1,0 +1,390 @@
+{
+  "kind": "body_stage8_known_reaction_failure_diagnosis",
+  "schema_version": 1,
+  "frozen_sources_modified": false,
+  "fresh_screening_read": false,
+  "quality_passed": false,
+  "original_audit_report_sha256": "ed6b017664b953594412d66dc0c166e6c8eeb79e0102343036bd294a49a1774f",
+  "episodes": [
+    {
+      "name": "block-reaction-223-0-native",
+      "policy": "native",
+      "side": 0,
+      "outcome": "time_limit",
+      "reason": "time_limit",
+      "final_game_ms": 21294,
+      "hp": 230,
+      "blocked_hits": 0,
+      "received_damage": 70,
+      "neural_control_fraction": null,
+      "model_stats": {},
+      "fallback_summary": [
+        {
+          "kind": "native_execution_boundary"
+        }
+      ],
+      "activation": {
+        "request_mode": "realtime",
+        "anchor_game_ms": 16361,
+        "response_wall_monotonic_ns": 1095126912593966
+      },
+      "raw_sha256": {
+        "episode.json": "782c28a3630bb7952fd641c9a946134c0668a0b2336e02e1bb6cddaec66d949a",
+        "activation.json": "e182a39b09a30583c4fe6a5a9b7aa3e0ae24cc678429096967f332c8102f7912",
+        "preparation.json": "a7558a132b3d1e4f1c052a54059aaeaf926eb8c0dd7e0e1c2053fcf5b69148fd",
+        "policy-inputs.jsonl": "828341817f55038c2bfccc30d181f6596f9de5c41c0e9c9bb5a27c7da08ec304",
+        "body-control-events.jsonl": "ffa4be8bb4cfd9dfbb2520607b21654db01c5329090259fd8180fed41af0cfea",
+        "ipc.jsonl": "ac63aae69362a1ec250f9ec7d3c7e625300e75ebbd3d6f9ad7b2519acc6c72af",
+        "latency.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "collector-transport.jsonl": "6a25f0a3ff4df0d435cc48c7a69e23aec5604f18ada64c0398aeb74b295a92dc"
+      }
+    },
+    {
+      "name": "block-reaction-223-0-gru",
+      "policy": "gru",
+      "side": 0,
+      "outcome": "task_success",
+      "reason": "melee_hit_blocked",
+      "final_game_ms": 16527,
+      "hp": 300,
+      "blocked_hits": 1,
+      "received_damage": 0,
+      "neural_control_fraction": 1.0,
+      "model_stats": {
+        "periodic_observations": 4,
+        "model_processed": 4,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 1,
+        "accepted_model_commands": 1,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 0,
+        "action_9": 1
+      },
+      "fallback_summary": [],
+      "first_model": {
+        "observation_seq": 5,
+        "t_game_ms": 16361,
+        "snapshot_wall_monotonic_ns": 1095132995937484,
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095132997310919,
+          "process_begin_wall_monotonic_ns": 1095133009604588,
+          "process_end_wall_monotonic_ns": 1095133019203615
+        },
+        "action_id": 9,
+        "model_processed": true
+      },
+      "first_command": {
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095132997310919,
+          "arbitration_begin_wall_monotonic_ns": 1095133019389203,
+          "arbitration_end_wall_monotonic_ns": 1095133019546718,
+          "command_sent_wall_monotonic_ns": 1095133019566244
+        },
+        "sent": {
+          "observation_seq": 5,
+          "issued_game_ms": 16361,
+          "action_id": 9,
+          "command_id": 1
+        },
+        "receipt": {
+          "accepted": true,
+          "reason": "accepted",
+          "game_ms": 16394,
+          "sim_step": 19,
+          "wall_monotonic_ns": 1095133019823397
+        }
+      },
+      "snapshot_to_send_ms": 23.62876,
+      "collector_to_send_ms": 22.255325,
+      "activation": {
+        "request_mode": "realtime",
+        "anchor_game_ms": 16361,
+        "response_wall_monotonic_ns": 1095133000830237
+      },
+      "raw_sha256": {
+        "episode.json": "d69aa44ca87d931aae44171fcacc106ed9618ce8d3b481be86255c694e31bb23",
+        "activation.json": "ffdf5925f96aa173e87746b949b42fe62b48c0f4200faa7e8bee5d3069867995",
+        "preparation.json": "2cb630e75c9e48d2d3c0686d27ed194f1caaa2e111a1d1aabf2bf2f7d0eec8c6",
+        "policy-inputs.jsonl": "8ca9127ffab3b97514d7f375fa04bb8cb580a5a2b8bb96287d84c5aab150aca3",
+        "body-control-events.jsonl": "80a4a44c13d871f890f52c0ee4b05518453dee8aacb2cc32039fa92ffff670c9",
+        "ipc.jsonl": "d64711d98381e1d5346227f5b6a6e110840269cadcd0077b8a785d168cab3cdf",
+        "latency.jsonl": "712b23afd903b68091e58e38133ee4f7d89839251f4ec75a7168fa91365e98b8",
+        "collector-transport.jsonl": "cdf023660f1101513279fb8b4476e6b63b237fef4432a646a591820ef654d17d"
+      }
+    },
+    {
+      "name": "block-reaction-223-0-mlp",
+      "policy": "mlp",
+      "side": 0,
+      "outcome": "task_success",
+      "reason": "melee_hit_blocked",
+      "final_game_ms": 16527,
+      "hp": 300,
+      "blocked_hits": 1,
+      "received_damage": 0,
+      "neural_control_fraction": 1.0,
+      "model_stats": {
+        "periodic_observations": 4,
+        "model_processed": 4,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 1,
+        "accepted_model_commands": 1,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 0,
+        "action_9": 1
+      },
+      "fallback_summary": [],
+      "first_model": {
+        "observation_seq": 5,
+        "t_game_ms": 16361,
+        "snapshot_wall_monotonic_ns": 1095134307110321,
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095134308262191,
+          "process_begin_wall_monotonic_ns": 1095134320242071,
+          "process_end_wall_monotonic_ns": 1095134321466958
+        },
+        "action_id": 9,
+        "model_processed": true
+      },
+      "first_command": {
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095134308262191,
+          "arbitration_begin_wall_monotonic_ns": 1095134321552779,
+          "arbitration_end_wall_monotonic_ns": 1095134321648027,
+          "command_sent_wall_monotonic_ns": 1095134321657745
+        },
+        "sent": {
+          "observation_seq": 5,
+          "issued_game_ms": 16361,
+          "action_id": 9,
+          "command_id": 1
+        },
+        "receipt": {
+          "accepted": true,
+          "reason": "accepted",
+          "game_ms": 16394,
+          "sim_step": 19,
+          "wall_monotonic_ns": 1095134322153445
+        }
+      },
+      "snapshot_to_send_ms": 14.547424,
+      "collector_to_send_ms": 13.395554,
+      "activation": {
+        "request_mode": "realtime",
+        "anchor_game_ms": 16361,
+        "response_wall_monotonic_ns": 1095134311704214
+      },
+      "raw_sha256": {
+        "episode.json": "36465a95a6b226b82fc34680f9f1f02d3a0d1f22537ea7e3e97450f04124b21c",
+        "activation.json": "8115931704fa270f824b0d692b9797c4ac7527dcfbf8b925b71d6e75d0be6d83",
+        "preparation.json": "b5fb58361b5aaa1b38f347f3d7a86553a2e3fef4394fdd27643560c8d3948d88",
+        "policy-inputs.jsonl": "ab4e349d65ec54cf949e5b2666f1231105c880f588e459a87a1ccb8eec48cfbc",
+        "body-control-events.jsonl": "a934e91a3d255b3ba5e8db082c08347cde0733bd9bf9926164e7cfa6069fa433",
+        "ipc.jsonl": "fa2efb4342c80e2447f33bcad5812d75a63b9d3109128409adbc1db643f75b85",
+        "latency.jsonl": "97991699ca22a88d19291ea736b73cb45d22b266384a741c9fb99d20a80a0275",
+        "collector-transport.jsonl": "a6c66ae06134affbf76762a0e56ce65a9b8ce312580b49a9d568f3c14bf85f0b"
+      }
+    },
+    {
+      "name": "block-reaction-223-1-native",
+      "policy": "native",
+      "side": 1,
+      "outcome": "time_limit",
+      "reason": "time_limit",
+      "final_game_ms": 21294,
+      "hp": 230,
+      "blocked_hits": 0,
+      "received_damage": 70,
+      "neural_control_fraction": null,
+      "model_stats": {},
+      "fallback_summary": [
+        {
+          "kind": "native_execution_boundary"
+        }
+      ],
+      "activation": {
+        "request_mode": "realtime",
+        "anchor_game_ms": 16361,
+        "response_wall_monotonic_ns": 1095135637359374
+      },
+      "raw_sha256": {
+        "episode.json": "0434cc88c7813ff2bae1fd20eccf85e2306fa6e3fa35967a89c0748967a730b8",
+        "activation.json": "bfe6b74eb65932b35f14b078978be87021d02dad84bb75456de477e244edf45a",
+        "preparation.json": "e7d709880e56603732f73a1fa5a6b03be24165fc048ceace491902575f09c2fc",
+        "policy-inputs.jsonl": "c8e29ac759b541c7a5afbd9c6a7384df5298bc03f35222a30a2b31722d4203d8",
+        "body-control-events.jsonl": "018c316d92e884aadc62466d2488e8b20dd23c36af6a16b732e2262ebcfd462a",
+        "ipc.jsonl": "9abfd1310c751161a86ecb1ce8fb9d5b1e9eb285264f731ff8e81a3a1440ab93",
+        "latency.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "collector-transport.jsonl": "4182fd08567f5723eb44e494685d5c83997cd61242a9d7091c5f713135429029"
+      }
+    },
+    {
+      "name": "block-reaction-223-1-gru",
+      "policy": "gru",
+      "side": 1,
+      "outcome": "time_limit",
+      "reason": "time_limit",
+      "final_game_ms": 21294,
+      "hp": 230,
+      "blocked_hits": 0,
+      "received_damage": 70,
+      "neural_control_fraction": 0.0,
+      "model_stats": {
+        "periodic_observations": 99,
+        "model_processed": 1,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 1,
+        "accepted_model_commands": 0,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 1,
+        "unowned_periodic_observations": 98,
+        "event_only_observations": 3
+      },
+      "fallback_summary": [
+        {
+          "entity_id": 1,
+          "reason": "realtime_decision_rejected:stale_observation",
+          "kind": "model_fallback",
+          "t_game_ms": 16361
+        },
+        {
+          "kind": "native_execution_boundary"
+        }
+      ],
+      "first_model": {
+        "observation_seq": 5,
+        "t_game_ms": 16361,
+        "snapshot_wall_monotonic_ns": 1095141739497207,
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095141740574987,
+          "process_begin_wall_monotonic_ns": 1095141797773674,
+          "process_end_wall_monotonic_ns": 1095141799097667
+        },
+        "action_id": 9,
+        "model_processed": true
+      },
+      "first_command": {
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095141740574987,
+          "arbitration_begin_wall_monotonic_ns": 1095141799209186,
+          "arbitration_end_wall_monotonic_ns": 1095141799331406,
+          "command_sent_wall_monotonic_ns": 1095141799342616
+        },
+        "sent": {
+          "observation_seq": 5,
+          "issued_game_ms": 16361,
+          "action_id": 9,
+          "command_id": 1
+        },
+        "receipt": {
+          "accepted": false,
+          "reason": "stale_observation",
+          "game_ms": 16427,
+          "sim_step": 20,
+          "wall_monotonic_ns": 1095141803423437
+        }
+      },
+      "snapshot_to_send_ms": 59.845409,
+      "collector_to_send_ms": 58.767629,
+      "activation": {
+        "request_mode": "realtime",
+        "anchor_game_ms": 16361,
+        "response_wall_monotonic_ns": 1095141744284772
+      },
+      "raw_sha256": {
+        "episode.json": "0e3d4f7c06e11624b13aecae0c65a5fd8336c8941aa98d38516256b4d27ea472",
+        "activation.json": "0f71518595642cb60d2188b9bd48d4e1756f5c2e47a806f9d0ff637bbae7e899",
+        "preparation.json": "244148921f511a58645aabff4cc71dae94363a4e319dcbb757c4b6db6100c568",
+        "policy-inputs.jsonl": "ad939a9d3c2df047b9cf1a18c75c285317fc9c784b82d2389c3539f46160b473",
+        "body-control-events.jsonl": "a5826112cf77e7191759e71c618fbd2e098f5d3dd8c8d2a23bb5c06341c1221f",
+        "ipc.jsonl": "45337af0a6f838bc13e56c4dce72417a79b11331fbd6ff5e689ba1005395f4e0",
+        "latency.jsonl": "e6849454a536ae2f13204ba584c3f89a8cb9dd6536fd6c7838fda491bca7968b",
+        "collector-transport.jsonl": "7323c20eabdfddb53b500b5be2b519b7d28d1b14c3dd642e4f2cabf5347c9cb9"
+      }
+    },
+    {
+      "name": "block-reaction-223-1-mlp",
+      "policy": "mlp",
+      "side": 1,
+      "outcome": "time_limit",
+      "reason": "time_limit",
+      "final_game_ms": 21294,
+      "hp": 230,
+      "blocked_hits": 0,
+      "received_damage": 70,
+      "neural_control_fraction": 0.0,
+      "model_stats": {
+        "periodic_observations": 99,
+        "model_processed": 1,
+        "runtime_fallbacks": 0,
+        "latest_eligible_periodic_opportunities": 1,
+        "accepted_model_commands": 0,
+        "terminal_censored_commands": 0,
+        "rejected_model_commands": 1,
+        "unowned_periodic_observations": 98,
+        "event_only_observations": 3
+      },
+      "fallback_summary": [
+        {
+          "entity_id": 1,
+          "reason": "realtime_decision_rejected:stale_observation",
+          "kind": "model_fallback",
+          "t_game_ms": 16361
+        },
+        {
+          "kind": "native_execution_boundary"
+        }
+      ],
+      "first_model": {
+        "observation_seq": 5,
+        "t_game_ms": 16361,
+        "snapshot_wall_monotonic_ns": 1095147840942591,
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095147842470566,
+          "process_begin_wall_monotonic_ns": 1095147897150160,
+          "process_end_wall_monotonic_ns": 1095147898594919
+        },
+        "action_id": 9,
+        "model_processed": true
+      },
+      "first_command": {
+        "timing": {
+          "collector_received_wall_monotonic_ns": 1095147842470566,
+          "arbitration_begin_wall_monotonic_ns": 1095147898687894,
+          "arbitration_end_wall_monotonic_ns": 1095147898782591,
+          "command_sent_wall_monotonic_ns": 1095147898793442
+        },
+        "sent": {
+          "observation_seq": 5,
+          "issued_game_ms": 16361,
+          "action_id": 9,
+          "command_id": 1
+        },
+        "receipt": {
+          "accepted": false,
+          "reason": "stale_observation",
+          "game_ms": 16427,
+          "sim_step": 20,
+          "wall_monotonic_ns": 1095147903922087
+        }
+      },
+      "snapshot_to_send_ms": 57.850851,
+      "collector_to_send_ms": 56.322876,
+      "activation": {
+        "request_mode": "realtime",
+        "anchor_game_ms": 16361,
+        "response_wall_monotonic_ns": 1095147846397898
+      },
+      "raw_sha256": {
+        "episode.json": "671ce99c0780ace18b3c7447280d1c6ce9992a32adccb35f8eb316cce3ed5382",
+        "activation.json": "b731d7c8c8df59163d8ab01d0f48efdb7cdadc16cc1db264b2cf26ba44a84c34",
+        "preparation.json": "8adb34a289ac0b97b96eff3d43fb0c71ce057178033a1089636a14d58abc182d",
+        "policy-inputs.jsonl": "8d1e4135ae9d31c91bbe6a655583d5a98f7fc8232cfbca682c1de529821d0e42",
+        "body-control-events.jsonl": "5aee1532f1a0797e5140d65fd7ac30ceb96e4a6337939f2cde8f635ba221c73b",
+        "ipc.jsonl": "c5cd9321e474859304349de5485ec6b87385a03450ba1f5380a78f99bf012b22",
+        "latency.jsonl": "fe6f6f3df1d8e978b3d806f78126f6f510ad2d9113fdae00eafbf41c5c4630df",
+        "collector-transport.jsonl": "2832ac524a8e3ebc93aaa660bb02d9878cae49f6a1ed6850b80ab69bc9dde2fb"
+      }
+    }
+  ]
+}

@@ -1,0 +1,1609 @@
+{
+  "schema_version": 1,
+  "validated": true,
+  "episode_count": 23,
+  "split_seed": 20261013,
+  "requested_split_ratios": {
+    "train": 0.7,
+    "eval": 0.15,
+    "test": 0.15
+  },
+  "split_unit": "whole setup_family + seed groups; both actors and all related repeats stay together",
+  "actions": [
+    "continue",
+    "approach",
+    "turn_to_target",
+    "strafe_left",
+    "strafe_right",
+    "jump_back",
+    "attack_front",
+    "attack_left",
+    "attack_right",
+    "block",
+    "wait_200",
+    "wait_300"
+  ],
+  "feature_version": "body-actor-numeric-v1",
+  "recorder_feature_version": 1,
+  "action_version": 1,
+  "groups": {
+    "[\"arena-native-melee-v1\",61]": "train",
+    "[\"arena-native-melee-v1\",127]": "train",
+    "[\"arena-native-melee-v1\",89]": "train",
+    "[\"arena-native-melee-v1\",17]": "train",
+    "[\"arena-native-melee-v1\",73]": "train",
+    "[\"arena-native-melee-v1\",101]": "train",
+    "[\"arena-native-melee-v1\",113]": "eval",
+    "[\"arena-native-melee-v1\",29]": "eval",
+    "[\"arena-native-melee-v1\",43]": "test",
+    "[\"arena-native-melee-v1\",151]": "ood",
+    "[\"arena-native-melee-v1\",163]": "ood"
+  },
+  "episodes": [
+    {
+      "episode_id": "native-17-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-17-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "2bd39fc3fe30bf2179ca3947be984b00ae51ba26d84d470a70d145240f16c4ab",
+      "records_sha256": "663de452161b12e837e351a4c73454627f7125a0b906a0fb504aba6ead8382f4",
+      "group": "[\"arena-native-melee-v1\",17]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-17-0",
+        "counts": {
+          "observation": 1162,
+          "decision": 87,
+          "execution": 346,
+          "transition": 87
+        },
+        "accepted": 87,
+        "started": 86,
+        "completed": 70,
+        "cancelled": 17,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 17,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 51,
+        "usable_bc_labels": 49,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-17-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-17-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "6dccc7b32ec8472f9e3587dee5f2df2db7b9805606a459e52e3d9afab09dfaa0",
+      "records_sha256": "f53541214c0b5e6782fe29b6965fa2043ccb2f1f8660f79b267702c766d1cbad",
+      "group": "[\"arena-native-melee-v1\",17]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-17-1",
+        "counts": {
+          "observation": 959,
+          "decision": 77,
+          "execution": 304,
+          "transition": 77
+        },
+        "accepted": 77,
+        "started": 76,
+        "completed": 59,
+        "cancelled": 18,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 17,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 1,
+        "expert_labels": 45,
+        "usable_bc_labels": 40,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-29-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-29-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "beb16d0bd435ee8d9005f48de577f669dfd957b88e6d6136bf6469d9a502721a",
+      "records_sha256": "4235aae3baa59fa2388aeb8ec2250d57bf5e6ee5791d68fac7c786bb5201ca59",
+      "group": "[\"arena-native-melee-v1\",29]",
+      "split": "eval",
+      "summary": {
+        "episode_id": "native-29-0",
+        "counts": {
+          "observation": 619,
+          "decision": 46,
+          "execution": 183,
+          "transition": 46
+        },
+        "accepted": 46,
+        "started": 46,
+        "completed": 38,
+        "cancelled": 8,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 8,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 30,
+        "usable_bc_labels": 28,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-29-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-29-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "8e7080cd8f258533ababcf012b89da88badc1a75db154a20745ffdfb434006e0",
+      "records_sha256": "f268d19103561085609d9e58d10ad4882fc1154f3b35b38b18f835f42ac3b343",
+      "group": "[\"arena-native-melee-v1\",29]",
+      "split": "eval",
+      "summary": {
+        "episode_id": "native-29-1",
+        "counts": {
+          "observation": 619,
+          "decision": 46,
+          "execution": 183,
+          "transition": 46
+        },
+        "accepted": 46,
+        "started": 46,
+        "completed": 38,
+        "cancelled": 8,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 8,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 30,
+        "usable_bc_labels": 28,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-43-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-43-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "0ff49a8e165d49140d5d257367f2dcb3158be8de6e3856e5dbec61ba47a38235",
+      "records_sha256": "af8a588cbfae78e325c9010c15fa9cace50412e4b087c3a8643e0ea1abf383d3",
+      "group": "[\"arena-native-melee-v1\",43]",
+      "split": "test",
+      "summary": {
+        "episode_id": "native-43-0",
+        "counts": {
+          "observation": 800,
+          "decision": 61,
+          "execution": 242,
+          "transition": 61
+        },
+        "accepted": 61,
+        "started": 60,
+        "completed": 53,
+        "cancelled": 8,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 8,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 35,
+        "usable_bc_labels": 32,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-43-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-43-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "d37c72f7f28461bca715a7874667ca4dc427cb9a43e5fd22a9e90067960cba86",
+      "records_sha256": "95c17f638f06371a59e77a124efc437b0513136bf7db8468e1213b846564a3f0",
+      "group": "[\"arena-native-melee-v1\",43]",
+      "split": "test",
+      "summary": {
+        "episode_id": "native-43-1",
+        "counts": {
+          "observation": 700,
+          "decision": 49,
+          "execution": 196,
+          "transition": 49
+        },
+        "accepted": 49,
+        "started": 49,
+        "completed": 40,
+        "cancelled": 9,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 9,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 28,
+        "usable_bc_labels": 26,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-61-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-61-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "62c8441e5800c869c6a518fd4aeabaad2a8a765df82b96c323aab72a74440c6b",
+      "records_sha256": "d7a0477f258ccd9c120a59efc17614b1cd97c53b668769cb74e434bfc5f0fbdf",
+      "group": "[\"arena-native-melee-v1\",61]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-61-0",
+        "counts": {
+          "observation": 774,
+          "decision": 61,
+          "execution": 241,
+          "transition": 61
+        },
+        "accepted": 61,
+        "started": 60,
+        "completed": 50,
+        "cancelled": 11,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 11,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 37,
+        "usable_bc_labels": 34,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-61-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-61-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "9ea4fe27e7f0a9421a3cd8effb4315b495c3ba1e38cd879c4b4f31688e2d6a8f",
+      "records_sha256": "c60b200b5fc45ec2bdd7a2bce3e44f9b85425ba077cebfb4392381f30acf38d8",
+      "group": "[\"arena-native-melee-v1\",61]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-61-1",
+        "counts": {
+          "observation": 679,
+          "decision": 53,
+          "execution": 209,
+          "transition": 53
+        },
+        "accepted": 53,
+        "started": 52,
+        "completed": 42,
+        "cancelled": 11,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 11,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 30,
+        "usable_bc_labels": 27,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-73-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-73-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "28f17de8669e63ce5d3b740d08e723fcaa08318d57e9bf6320a10cb392dac1b0",
+      "records_sha256": "98658f455e8f5739b3dc66bcae398e14de6a208852c8dc66ae591ac5b7266e76",
+      "group": "[\"arena-native-melee-v1\",73]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-73-0",
+        "counts": {
+          "observation": 483,
+          "decision": 41,
+          "execution": 162,
+          "transition": 41
+        },
+        "accepted": 41,
+        "started": 40,
+        "completed": 34,
+        "cancelled": 7,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 6,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 1,
+        "expert_labels": 27,
+        "usable_bc_labels": 24,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-73-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-73-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "9c42a4e61b9308db5dd6db25501fe211c01097c9cb8dcfa998a706eb3ec8706e",
+      "records_sha256": "e83bc344290958ca32ba288c8378374339b214dc7293679cc0421ff87e5cf77b",
+      "group": "[\"arena-native-melee-v1\",73]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-73-1",
+        "counts": {
+          "observation": 1162,
+          "decision": 87,
+          "execution": 343,
+          "transition": 87
+        },
+        "accepted": 87,
+        "started": 85,
+        "completed": 66,
+        "cancelled": 21,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 19,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 2,
+        "expert_labels": 50,
+        "usable_bc_labels": 42,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-89-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-89-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "f167d16237a0fdfbcf84744a168d7f5fa69b01e01b0fa3f0eb979d2bd51e2c3d",
+      "records_sha256": "f18b9023c0570cfd4e57886a546b37b3154a417ce587361622c6ab7637b23654",
+      "group": "[\"arena-native-melee-v1\",89]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-89-0",
+        "counts": {
+          "observation": 1140,
+          "decision": 85,
+          "execution": 337,
+          "transition": 85
+        },
+        "accepted": 85,
+        "started": 84,
+        "completed": 73,
+        "cancelled": 12,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 12,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 51,
+        "usable_bc_labels": 48,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-89-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-89-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "52b54a2b484ece0a4e1b1a492319085a356df25051608047b6a9d51f689dfffa",
+      "records_sha256": "577f8d3f267a8b0421b7f653345b8aed7ba92128cb362212372a83f3a1d80c62",
+      "group": "[\"arena-native-melee-v1\",89]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-89-1",
+        "counts": {
+          "observation": 1114,
+          "decision": 85,
+          "execution": 339,
+          "transition": 85
+        },
+        "accepted": 85,
+        "started": 85,
+        "completed": 75,
+        "cancelled": 10,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 10,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 50,
+        "usable_bc_labels": 47,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-101-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-101-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "fa9cd4f5418189710d656e10afa09405d941c9b023b29f5b7b3f846fd8a94b17",
+      "records_sha256": "6bbeb918acd08cca0e99763992c3e0cb8debef749c5719229059bbe9a3836dd2",
+      "group": "[\"arena-native-melee-v1\",101]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-101-0",
+        "counts": {
+          "observation": 898,
+          "decision": 67,
+          "execution": 265,
+          "transition": 67
+        },
+        "accepted": 67,
+        "started": 66,
+        "completed": 56,
+        "cancelled": 11,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 11,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 39,
+        "usable_bc_labels": 37,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-101-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-101-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "8540d36fabc6954596d4856af14c5984044a8fde60688b9d6e5592b391f3eddf",
+      "records_sha256": "a39adacac11e52dead60648e448e4a1a180e9ba317d2c8b2cc5976dc7780a1ed",
+      "group": "[\"arena-native-melee-v1\",101]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-101-1",
+        "counts": {
+          "observation": 681,
+          "decision": 53,
+          "execution": 211,
+          "transition": 53
+        },
+        "accepted": 53,
+        "started": 53,
+        "completed": 46,
+        "cancelled": 7,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 7,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 32,
+        "usable_bc_labels": 30,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-113-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-113-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "80a399d3cf7f74154e861a5c89920e222a821bf37908ad4f2b12d3157e68ce4b",
+      "records_sha256": "d9e5219fa69566fca93ca856e5ffc6630bb7b673815534ed824bd0b12cffe6f8",
+      "group": "[\"arena-native-melee-v1\",113]",
+      "split": "eval",
+      "summary": {
+        "episode_id": "native-113-0",
+        "counts": {
+          "observation": 467,
+          "decision": 36,
+          "execution": 144,
+          "transition": 36
+        },
+        "accepted": 36,
+        "started": 36,
+        "completed": 32,
+        "cancelled": 4,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 4,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 21,
+        "usable_bc_labels": 20,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-113-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-113-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "d536b70b8a89a9a0ccde7a342f14db45af996ac6ddb93d46f2328ad9f0cbaa7d",
+      "records_sha256": "871feef3929b8f5a26fbccaa38af0b7b5ffd9a2d1073d012b1db9db65929695c",
+      "group": "[\"arena-native-melee-v1\",113]",
+      "split": "eval",
+      "summary": {
+        "episode_id": "native-113-1",
+        "counts": {
+          "observation": 466,
+          "decision": 36,
+          "execution": 144,
+          "transition": 36
+        },
+        "accepted": 36,
+        "started": 36,
+        "completed": 32,
+        "cancelled": 4,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 4,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 21,
+        "usable_bc_labels": 20,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-127-0",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-127-0",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "250532311efcb78b88fa5568fca0995bfaa761e47cbc9f1188ab513dab9f0576",
+      "records_sha256": "c8b29b90c752a693348a8e952575a5dc505ebc79428ffb8e1396d2ac11b97d6a",
+      "group": "[\"arena-native-melee-v1\",127]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-127-0",
+        "counts": {
+          "observation": 962,
+          "decision": 70,
+          "execution": 278,
+          "transition": 70
+        },
+        "accepted": 70,
+        "started": 70,
+        "completed": 57,
+        "cancelled": 13,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 13,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 41,
+        "usable_bc_labels": 39,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "native-127-1",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/native-127-1",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "a71cd2ba9bcd5b7e64927659f3390bc2a4dba0773e51dd2a998c10381d9183c7",
+      "records_sha256": "9597de1220892121d714f7222ebc38818e8f4e1df94956ff0109e4c77e0e24bc",
+      "group": "[\"arena-native-melee-v1\",127]",
+      "split": "train",
+      "summary": {
+        "episode_id": "native-127-1",
+        "counts": {
+          "observation": 880,
+          "decision": 65,
+          "execution": 259,
+          "transition": 65
+        },
+        "accepted": 65,
+        "started": 65,
+        "completed": 58,
+        "cancelled": 7,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 7,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 40,
+        "usable_bc_labels": 38,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    },
+    {
+      "episode_id": "scripted-distance",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/scripted-distance",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "e3213fe54e4240d9d6a2303ba75b549efad7814fb76c298321c239dfbee4cf76",
+      "records_sha256": "960447801386bc2ad64309f5cb569e31f87cbe1555dbe600b9c35d1664914803",
+      "group": "[\"arena-native-melee-v1\",17]",
+      "split": "train",
+      "summary": {
+        "episode_id": "scripted-distance",
+        "counts": {
+          "observation": 63,
+          "decision": 4,
+          "execution": 11,
+          "transition": 4
+        },
+        "accepted": 4,
+        "started": 4,
+        "completed": 3,
+        "cancelled": 0,
+        "rejected": 0,
+        "uncompleted": 1,
+        "physical_cancellations": 0,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 0,
+        "usable_bc_labels": 0,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "distance_reached"
+        }
+      }
+    },
+    {
+      "episode_id": "scripted-attack",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/scripted-attack",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "d047f19426dc0180a13303dcaf61587f21351307a03c96ec4e7020d2c6ab60f2",
+      "records_sha256": "721a5d33ec28262551225b91fc0689753fe835e933d960c7c941a1aa21987040",
+      "group": "[\"arena-native-melee-v1\",17]",
+      "split": "train",
+      "summary": {
+        "episode_id": "scripted-attack",
+        "counts": {
+          "observation": 14,
+          "decision": 1,
+          "execution": 2,
+          "transition": 1
+        },
+        "accepted": 1,
+        "started": 1,
+        "completed": 0,
+        "cancelled": 0,
+        "rejected": 0,
+        "uncompleted": 1,
+        "physical_cancellations": 0,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 0,
+        "usable_bc_labels": 0,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "melee_damage_applied"
+        }
+      }
+    },
+    {
+      "episode_id": "scripted-block",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/scripted-block",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "253cdbbc047040be7d3280ffb5c9668ae84d37492dbf32b2c5094fbefd62739e",
+      "records_sha256": "a4ae93eacbac90bf5211bdf5fcfa8162f2d8cce791142b35df20fd5e92415aa4",
+      "group": "[\"arena-native-melee-v1\",17]",
+      "split": "train",
+      "summary": {
+        "episode_id": "scripted-block",
+        "counts": {
+          "observation": 14,
+          "decision": 2,
+          "execution": 4,
+          "transition": 2
+        },
+        "accepted": 2,
+        "started": 2,
+        "completed": 0,
+        "cancelled": 0,
+        "rejected": 0,
+        "uncompleted": 2,
+        "physical_cancellations": 0,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 0,
+        "usable_bc_labels": 0,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "melee_hit_blocked"
+        }
+      }
+    },
+    {
+      "episode_id": "ood-distance-800",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/ood-distance-800",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "fd0605c4c07b2501477d692c148b261f31214da7ffc035e39b23f061f47cbd20",
+      "records_sha256": "008643e733f8b4da1090facea3ecb4e92ff00d8eb41e3ac8db45ed46b670edf9",
+      "group": "[\"arena-native-melee-v1\",151]",
+      "split": "ood",
+      "summary": {
+        "episode_id": "ood-distance-800",
+        "counts": {
+          "observation": 1000,
+          "decision": 72,
+          "execution": 286,
+          "transition": 72
+        },
+        "accepted": 72,
+        "started": 71,
+        "completed": 60,
+        "cancelled": 12,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 11,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 1,
+        "expert_labels": 43,
+        "usable_bc_labels": 41,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "primary_down"
+        }
+      }
+    },
+    {
+      "episode_id": "ood-distance-1000",
+      "path": "/home/kaifat/gothic-ai/body/data/stage6-v1/episodes/ood-distance-1000",
+      "manifest_file": "trajectory-manifest.json",
+      "manifest_sha256": "33d6cc43b1669886ae63b69df5503e6e6b55a0741515188ae05601508c315eed",
+      "records_sha256": "e51ccd991118ee08cc86ddb9d8647a08304e12c5ba8d7afc05587432b9ad856e",
+      "group": "[\"arena-native-melee-v1\",163]",
+      "split": "ood",
+      "summary": {
+        "episode_id": "ood-distance-1000",
+        "counts": {
+          "observation": 765,
+          "decision": 52,
+          "execution": 208,
+          "transition": 52
+        },
+        "accepted": 52,
+        "started": 52,
+        "completed": 45,
+        "cancelled": 7,
+        "rejected": 0,
+        "uncompleted": 0,
+        "physical_cancellations": 7,
+        "instrumentation_censored": 0,
+        "native_noop_skips": 0,
+        "expert_labels": 32,
+        "usable_bc_labels": 31,
+        "outcome": {
+          "terminated": true,
+          "truncated": false,
+          "infrastructure": false,
+          "reason": "opponent_down"
+        }
+      }
+    }
+  ],
+  "coverage": {
+    "train": {
+      "minimum_true_expert_labels_per_included_class": 20,
+      "included_actions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expert_labels_by_action": {
+        "approach": 105,
+        "turn_to_target": 14,
+        "strafe_left": 39,
+        "strafe_right": 39,
+        "jump_back": 0,
+        "attack_front": 80,
+        "attack_left": 35,
+        "attack_right": 22,
+        "block": 80,
+        "wait_200": 79,
+        "wait_300": 0
+      },
+      "usable_labels_by_action": {
+        "approach": 101,
+        "turn_to_target": 14,
+        "strafe_left": 39,
+        "strafe_right": 39,
+        "jump_back": 0,
+        "attack_front": 59,
+        "attack_left": 25,
+        "attack_right": 20,
+        "block": 79,
+        "wait_200": 79,
+        "wait_300": 0
+      },
+      "episode_outcomes_by_action": {
+        "approach": {
+          "terminated": 105
+        },
+        "turn_to_target": {
+          "terminated": 14
+        },
+        "strafe_left": {
+          "terminated": 39
+        },
+        "strafe_right": {
+          "terminated": 39
+        },
+        "jump_back": {},
+        "attack_front": {
+          "terminated": 80
+        },
+        "attack_left": {
+          "terminated": 35
+        },
+        "attack_right": {
+          "terminated": 22
+        },
+        "block": {
+          "terminated": 80
+        },
+        "wait_200": {
+          "terminated": 79
+        },
+        "wait_300": {}
+      },
+      "execution_outcomes_by_action": {
+        "approach": {
+          "completed": 101,
+          "cancelled": 4
+        },
+        "turn_to_target": {
+          "completed": 14
+        },
+        "strafe_left": {
+          "completed": 39
+        },
+        "strafe_right": {
+          "completed": 39
+        },
+        "jump_back": {},
+        "attack_front": {
+          "completed": 59,
+          "cancelled": 21
+        },
+        "attack_left": {
+          "completed": 25,
+          "cancelled": 10
+        },
+        "attack_right": {
+          "completed": 20,
+          "cancelled": 2
+        },
+        "block": {
+          "completed": 79,
+          "cancelled": 1
+        },
+        "wait_200": {
+          "completed": 79
+        },
+        "wait_300": {}
+      },
+      "condition_observations": {
+        "wall": 0,
+        "target_visibility_lost": 740,
+        "bad_distance": 4520
+      },
+      "condition_labels": {
+        "bad_distance": {
+          "approach": 105,
+          "strafe_left": 39,
+          "strafe_right": 39,
+          "wait_200": 7,
+          "block": 12,
+          "turn_to_target": 2
+        }
+      },
+      "insufficient_classes": [
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "usable_expert_labels": 14,
+          "required": 20,
+          "missing": 6
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        }
+      ],
+      "missing_conditions": [
+        "wall"
+      ],
+      "diagnostic_bc_coverage_ready": false,
+      "limitations": [
+        "Episode outcomes are diagnostics, not per-action success labels.",
+        "Coverage does not establish model quality or dataset sufficiency for release."
+      ]
+    },
+    "eval": {
+      "minimum_true_expert_labels_per_included_class": 20,
+      "included_actions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expert_labels_by_action": {
+        "approach": 22,
+        "turn_to_target": 4,
+        "strafe_left": 4,
+        "strafe_right": 10,
+        "jump_back": 0,
+        "attack_front": 24,
+        "attack_left": 6,
+        "attack_right": 0,
+        "block": 20,
+        "wait_200": 12,
+        "wait_300": 0
+      },
+      "usable_labels_by_action": {
+        "approach": 22,
+        "turn_to_target": 4,
+        "strafe_left": 4,
+        "strafe_right": 10,
+        "jump_back": 0,
+        "attack_front": 20,
+        "attack_left": 4,
+        "attack_right": 0,
+        "block": 20,
+        "wait_200": 12,
+        "wait_300": 0
+      },
+      "episode_outcomes_by_action": {
+        "approach": {
+          "terminated": 22
+        },
+        "turn_to_target": {
+          "terminated": 4
+        },
+        "strafe_left": {
+          "terminated": 4
+        },
+        "strafe_right": {
+          "terminated": 10
+        },
+        "jump_back": {},
+        "attack_front": {
+          "terminated": 24
+        },
+        "attack_left": {
+          "terminated": 6
+        },
+        "attack_right": {},
+        "block": {
+          "terminated": 20
+        },
+        "wait_200": {
+          "terminated": 12
+        },
+        "wait_300": {}
+      },
+      "execution_outcomes_by_action": {
+        "approach": {
+          "completed": 22
+        },
+        "turn_to_target": {
+          "completed": 4
+        },
+        "strafe_left": {
+          "completed": 4
+        },
+        "strafe_right": {
+          "completed": 10
+        },
+        "jump_back": {},
+        "attack_front": {
+          "completed": 20,
+          "cancelled": 4
+        },
+        "attack_left": {
+          "completed": 4,
+          "cancelled": 2
+        },
+        "attack_right": {},
+        "block": {
+          "completed": 20
+        },
+        "wait_200": {
+          "completed": 12
+        },
+        "wait_300": {}
+      },
+      "condition_observations": {
+        "wall": 0,
+        "target_visibility_lost": 105,
+        "bad_distance": 798
+      },
+      "condition_labels": {
+        "bad_distance": {
+          "approach": 22,
+          "strafe_right": 10,
+          "turn_to_target": 2,
+          "strafe_left": 4
+        }
+      },
+      "insufficient_classes": [
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "usable_expert_labels": 4,
+          "required": 20,
+          "missing": 16
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "usable_expert_labels": 4,
+          "required": 20,
+          "missing": 16
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "usable_expert_labels": 10,
+          "required": 20,
+          "missing": 10
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "usable_expert_labels": 4,
+          "required": 20,
+          "missing": 16
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "usable_expert_labels": 12,
+          "required": 20,
+          "missing": 8
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        }
+      ],
+      "missing_conditions": [
+        "wall"
+      ],
+      "diagnostic_bc_coverage_ready": false,
+      "limitations": [
+        "Episode outcomes are diagnostics, not per-action success labels.",
+        "Coverage does not establish model quality or dataset sufficiency for release."
+      ]
+    },
+    "test": {
+      "minimum_true_expert_labels_per_included_class": 20,
+      "included_actions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expert_labels_by_action": {
+        "approach": 17,
+        "turn_to_target": 2,
+        "strafe_left": 4,
+        "strafe_right": 7,
+        "jump_back": 0,
+        "attack_front": 10,
+        "attack_left": 2,
+        "attack_right": 5,
+        "block": 11,
+        "wait_200": 5,
+        "wait_300": 0
+      },
+      "usable_labels_by_action": {
+        "approach": 17,
+        "turn_to_target": 2,
+        "strafe_left": 4,
+        "strafe_right": 7,
+        "jump_back": 0,
+        "attack_front": 7,
+        "attack_left": 1,
+        "attack_right": 4,
+        "block": 11,
+        "wait_200": 5,
+        "wait_300": 0
+      },
+      "episode_outcomes_by_action": {
+        "approach": {
+          "terminated": 17
+        },
+        "turn_to_target": {
+          "terminated": 2
+        },
+        "strafe_left": {
+          "terminated": 4
+        },
+        "strafe_right": {
+          "terminated": 7
+        },
+        "jump_back": {},
+        "attack_front": {
+          "terminated": 10
+        },
+        "attack_left": {
+          "terminated": 2
+        },
+        "attack_right": {
+          "terminated": 5
+        },
+        "block": {
+          "terminated": 11
+        },
+        "wait_200": {
+          "terminated": 5
+        },
+        "wait_300": {}
+      },
+      "execution_outcomes_by_action": {
+        "approach": {
+          "completed": 17
+        },
+        "turn_to_target": {
+          "completed": 2
+        },
+        "strafe_left": {
+          "completed": 4
+        },
+        "strafe_right": {
+          "completed": 7
+        },
+        "jump_back": {},
+        "attack_front": {
+          "completed": 7,
+          "cancelled": 3
+        },
+        "attack_left": {
+          "completed": 1,
+          "cancelled": 1
+        },
+        "attack_right": {
+          "completed": 4,
+          "cancelled": 1
+        },
+        "block": {
+          "completed": 11
+        },
+        "wait_200": {
+          "completed": 5
+        },
+        "wait_300": {}
+      },
+      "condition_observations": {
+        "wall": 0,
+        "target_visibility_lost": 61,
+        "bad_distance": 743
+      },
+      "condition_labels": {
+        "bad_distance": {
+          "approach": 17,
+          "block": 4,
+          "strafe_left": 4,
+          "strafe_right": 7,
+          "wait_200": 1
+        }
+      },
+      "insufficient_classes": [
+        {
+          "action_id": 1,
+          "action": "approach",
+          "usable_expert_labels": 17,
+          "required": 20,
+          "missing": 3
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "usable_expert_labels": 2,
+          "required": 20,
+          "missing": 18
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "usable_expert_labels": 4,
+          "required": 20,
+          "missing": 16
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "usable_expert_labels": 7,
+          "required": 20,
+          "missing": 13
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "usable_expert_labels": 7,
+          "required": 20,
+          "missing": 13
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "usable_expert_labels": 1,
+          "required": 20,
+          "missing": 19
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "usable_expert_labels": 4,
+          "required": 20,
+          "missing": 16
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "usable_expert_labels": 11,
+          "required": 20,
+          "missing": 9
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "usable_expert_labels": 5,
+          "required": 20,
+          "missing": 15
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        }
+      ],
+      "missing_conditions": [
+        "wall"
+      ],
+      "diagnostic_bc_coverage_ready": false,
+      "limitations": [
+        "Episode outcomes are diagnostics, not per-action success labels.",
+        "Coverage does not establish model quality or dataset sufficiency for release."
+      ]
+    },
+    "ood": {
+      "minimum_true_expert_labels_per_included_class": 20,
+      "included_actions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "expert_labels_by_action": {
+        "approach": 19,
+        "turn_to_target": 2,
+        "strafe_left": 6,
+        "strafe_right": 7,
+        "jump_back": 0,
+        "attack_front": 13,
+        "attack_left": 3,
+        "attack_right": 3,
+        "block": 14,
+        "wait_200": 8,
+        "wait_300": 0
+      },
+      "usable_labels_by_action": {
+        "approach": 18,
+        "turn_to_target": 2,
+        "strafe_left": 6,
+        "strafe_right": 7,
+        "jump_back": 0,
+        "attack_front": 11,
+        "attack_left": 3,
+        "attack_right": 3,
+        "block": 14,
+        "wait_200": 8,
+        "wait_300": 0
+      },
+      "episode_outcomes_by_action": {
+        "approach": {
+          "terminated": 19
+        },
+        "turn_to_target": {
+          "terminated": 2
+        },
+        "strafe_left": {
+          "terminated": 6
+        },
+        "strafe_right": {
+          "terminated": 7
+        },
+        "jump_back": {},
+        "attack_front": {
+          "terminated": 13
+        },
+        "attack_left": {
+          "terminated": 3
+        },
+        "attack_right": {
+          "terminated": 3
+        },
+        "block": {
+          "terminated": 14
+        },
+        "wait_200": {
+          "terminated": 8
+        },
+        "wait_300": {}
+      },
+      "execution_outcomes_by_action": {
+        "approach": {
+          "completed": 18,
+          "cancelled": 1
+        },
+        "turn_to_target": {
+          "completed": 2
+        },
+        "strafe_left": {
+          "completed": 6
+        },
+        "strafe_right": {
+          "completed": 7
+        },
+        "jump_back": {},
+        "attack_front": {
+          "completed": 11,
+          "cancelled": 2
+        },
+        "attack_left": {
+          "completed": 3
+        },
+        "attack_right": {
+          "completed": 3
+        },
+        "block": {
+          "completed": 14
+        },
+        "wait_200": {
+          "completed": 8
+        },
+        "wait_300": {}
+      },
+      "condition_observations": {
+        "wall": 0,
+        "target_visibility_lost": 97,
+        "bad_distance": 801
+      },
+      "condition_labels": {
+        "bad_distance": {
+          "approach": 19,
+          "block": 3,
+          "strafe_right": 7,
+          "strafe_left": 6
+        }
+      },
+      "insufficient_classes": [
+        {
+          "action_id": 1,
+          "action": "approach",
+          "usable_expert_labels": 18,
+          "required": 20,
+          "missing": 2
+        },
+        {
+          "action_id": 2,
+          "action": "turn_to_target",
+          "usable_expert_labels": 2,
+          "required": 20,
+          "missing": 18
+        },
+        {
+          "action_id": 3,
+          "action": "strafe_left",
+          "usable_expert_labels": 6,
+          "required": 20,
+          "missing": 14
+        },
+        {
+          "action_id": 4,
+          "action": "strafe_right",
+          "usable_expert_labels": 7,
+          "required": 20,
+          "missing": 13
+        },
+        {
+          "action_id": 5,
+          "action": "jump_back",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        },
+        {
+          "action_id": 6,
+          "action": "attack_front",
+          "usable_expert_labels": 11,
+          "required": 20,
+          "missing": 9
+        },
+        {
+          "action_id": 7,
+          "action": "attack_left",
+          "usable_expert_labels": 3,
+          "required": 20,
+          "missing": 17
+        },
+        {
+          "action_id": 8,
+          "action": "attack_right",
+          "usable_expert_labels": 3,
+          "required": 20,
+          "missing": 17
+        },
+        {
+          "action_id": 9,
+          "action": "block",
+          "usable_expert_labels": 14,
+          "required": 20,
+          "missing": 6
+        },
+        {
+          "action_id": 10,
+          "action": "wait_200",
+          "usable_expert_labels": 8,
+          "required": 20,
+          "missing": 12
+        },
+        {
+          "action_id": 11,
+          "action": "wait_300",
+          "usable_expert_labels": 0,
+          "required": 20,
+          "missing": 20
+        }
+      ],
+      "missing_conditions": [
+        "wall"
+      ],
+      "diagnostic_bc_coverage_ready": false,
+      "limitations": [
+        "Episode outcomes are diagnostics, not per-action success labels.",
+        "Coverage does not establish model quality or dataset sufficiency for release."
+      ]
+    }
+  },
+  "diagnostic_bc_coverage_ready": false,
+  "normalization": "normalization.json",
+  "normalization_sha256": "516c274456c5f50dd0043384508a0e3eb0f5d8c9ab24f888e88f9b20009f91e7",
+  "limitations": [
+    "No learner, optimizer or on-policy PPO batch is produced.",
+    "Dataset replay verifies recorded links; it does not reproduce the game world.",
+    "Coverage reports missing labels and conditions; validation alone does not authorize training."
+  ]
+}

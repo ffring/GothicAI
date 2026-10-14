@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
-# v16: opt-in passive numeric body observations (independently versioned schema).
-PROTOCOL_VERSION = 16
+# v16: opt-in passive numeric body observations; v17: shared body authority and combat API.
+PROTOCOL_VERSION = 17
 
 # --- game -> server -----------------------------------------------------------
 
@@ -570,7 +570,9 @@ class BodyTarget(_BodyModel):
                 "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
                 "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
             }
-            if any(getattr(self, name) is not None for name in type(self).model_fields if name not in allowed):
+            if any(
+                getattr(self, name) is not None for name in type(self).model_fields if name not in allowed
+            ):
                 raise ValueError("an unseen target must not contain current features")
         elif self.position_world_cm is None or self.relative_position_cm is None:
             raise ValueError("a valid current target needs its position")
@@ -624,7 +626,7 @@ class BodyObservation(_BodyModel):
     generation: BodyUInt
     session_epoch: Annotated[int, Field(strict=True, gt=0)]
     world_epoch: BodyUInt
-    control_generation: Literal[0]
+    control_generation: BodyUInt
     phase: Literal["post_simulation_post_animation"]
     entity_id: Annotated[int, Field(strict=True, gt=0)]
     script_symbol: BodyUInt
@@ -640,8 +642,9 @@ class BodyObservation(_BodyModel):
     control_allowed: BodyBool
     native_decision_eligible: BodyBool
     action_mask_valid: BodyBool
-    mask_kind: Literal["conservative_native_availability"]
+    mask_kind: Literal["conservative_native_availability", "shared_melee_resolver"]
     availability_mask: BodyMask
+    action_mask: BodyMask | None = None
     self: BodySelf
     target: BodyTarget
     goal: BodyGoal
@@ -652,8 +655,17 @@ class BodyObservation(_BodyModel):
 
     @model_validator(mode="after")
     def consistent_sample(self) -> BodyObservation:
-        if self.can_decide or self.control_allowed or self.action_mask_valid:
+        if self.mask_kind == "conservative_native_availability" and (
+            self.can_decide or self.control_allowed or self.action_mask_valid
+        ):
             raise ValueError("body schema 1 is passive; control and action-mask permission must be false")
+        if self.mask_kind == "shared_melee_resolver":
+            if self.action_mask is None:
+                raise ValueError("the shared resolver needs its action mask")
+            if self.can_decide and not (self.control_allowed and self.action_mask_valid):
+                raise ValueError("body decision permission needs control authority and a valid mask")
+            if self.control_allowed and self.control_generation == 0:
+                raise ValueError("body control authority needs a generation")
         if self.world_epoch != self.generation:
             raise ValueError("world_epoch must match generation in body schema 1")
         if self.periodic == self.event_only:
@@ -689,6 +701,8 @@ class BodyObservationPacket(_BodyModel):
         for row in self.observations:
             if row.session_epoch != self.session_epoch:
                 raise ValueError("body packet mixes process sessions")
+            if row.schema_version != self.schema_version:
+                raise ValueError("body packet mixes schema versions")
             if row.generation != self.generation or row.sample_period_ms != self.sample_period_ms:
                 raise ValueError("body packet mixes generations or sampling periods")
             if row.observation_seq <= last:
@@ -705,6 +719,158 @@ class BodyObservations(_BodyModel):
 
     type: Literal["body_observations"]
     packet: BodyObservationPacket
+
+
+BodyProvider = Annotated[str, Field(strict=True, min_length=1, max_length=64)]
+BodyPositive = Annotated[int, Field(strict=True, gt=0)]
+BodyActionId = Annotated[int, Field(strict=True, ge=0, le=11)]
+BodyMode = Literal["realtime", "lockstep"]
+
+
+class BodyControlResult(_BodyModel):
+    """Immediate shared-controller receipt; accepted does not imply an animation started."""
+
+    type: Literal["body_control_result"]
+    accepted: BodyBool
+    duplicate: BodyBool
+    reason: str
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    entity_id: BodyUInt
+    control_generation: BodyUInt
+    goal_version: BodyUInt
+    target_entity_id: BodyUInt
+    command_id: BodyUInt
+    execution_id: BodyUInt
+    owner: Literal["native", "scripted"]
+    release_pending: BodyBool
+
+
+class BodyLease(_BodyModel):
+    """Scoped client handle. The shared engine controller remains the ownership authority."""
+
+    npc: str
+    provider: BodyProvider
+    mode: BodyMode
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    entity_id: BodyPositive
+    control_generation: BodyPositive
+    goal_version: BodyPositive
+    target_entity_id: BodyPositive
+    acquired_observation_seq: BodyPositive
+
+
+class BodyControlPurityState(_BodyModel):
+    """Debug-only state; never used as actor observation features."""
+
+    pose_identity: str
+    loop_next_time: BodyUInt
+    fai_wait_until: BodyUInt
+    ani_wait_until: BodyUInt
+    queue: Annotated[tuple[BodyUInt, ...], Field(max_length=12)]
+    rng_state: str
+
+
+class BodyControlActor(_BodyModel):
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    entity_id: BodyPositive
+    control_generation: BodyUInt
+    goal_version: BodyUInt
+    target_entity_id: BodyUInt
+    command_id: BodyUInt
+    execution_id: BodyUInt
+    owner: Literal["native", "scripted"]
+    release_pending: BodyBool
+    provider: str
+    mode: Literal["native", "realtime", "lockstep"]
+    t_game_ms: BodyUInt
+    observation_seq: BodyUInt
+    observed_game_ms: BodyUInt
+    watchdog_timeout_ms: BodyUInt
+    control_allowed: BodyBool
+    can_decide: BodyBool
+    action_mask: BodyMask
+    purity_state: BodyControlPurityState | None = None
+
+
+class BodyControlStatus(_BodyModel):
+    type: Literal["body_control_status"]
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    paused: BodyBool
+    infrastructure_failure: BodyBool
+    infrastructure_reason: str
+    actors: Annotated[tuple[BodyControlActor, ...], Field(max_length=4)]
+
+    @model_validator(mode="after")
+    def consistent_actors(self) -> BodyControlStatus:
+        ids = [actor.entity_id for actor in self.actors]
+        if len(ids) != len(set(ids)):
+            raise ValueError("body status duplicates an actor")
+        if any((actor.session_epoch, actor.world_epoch) != (self.session_epoch, self.world_epoch)
+               for actor in self.actors):
+            raise ValueError("body status mixes actor epochs")
+        return self
+
+
+class BodyControlEvent(_BodyModel):
+    event: Literal["body_control_event"]
+    schema_version: Literal[1]
+    event_seq: BodyPositive
+    phase: Literal["accepted", "rejected", "started", "completed", "cancelled", "ownership", "continued"]
+    reason: str
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    entity_id: BodyPositive
+    control_generation: BodyUInt
+    goal_version: BodyUInt
+    target_entity_id: BodyUInt
+    command_id: BodyUInt
+    execution_id: BodyUInt
+    observation_seq: BodyUInt
+    owner: Literal["native", "scripted"]
+    release_pending: BodyBool
+    provider: BodyProvider
+    mode: BodyMode
+    t_game_ms: BodyUInt
+    t_wall_ms: BodyUInt
+    last_heartbeat_wall_ms: BodyUInt
+    pose_identity: str
+    pose_before: str
+    pose_after: str
+    release_reason: str
+    remaining_lock_game_ms: BodyUInt
+    sim_step: BodyUInt
+    action_id: BodyActionId
+    effective_primitive: BodyUInt
+    segment_identity: str
+    segment_started: BodyBool
+    primitive_consumed: BodyBool
+    issued_game_ms: BodyUInt
+    ttl_ms: BodyUInt
+    watchdog_timeout_ms: BodyUInt
+    infrastructure_failure: BodyBool
+
+
+class BodyControlEvents(_BodyModel):
+    type: Literal["body_control_events"]
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    dropped_total: BodyUInt
+    events: Annotated[tuple[BodyControlEvent, ...], Field(max_length=512)]
+
+    @model_validator(mode="after")
+    def ordered_events(self) -> BodyControlEvents:
+        last = 0
+        for event in self.events:
+            if (event.session_epoch, event.world_epoch) != (self.session_epoch, self.world_epoch):
+                raise ValueError("body control events mix epochs")
+            if event.event_seq <= last:
+                raise ValueError("body control events are not ordered")
+            last = event.event_seq
+        return self
 
 
 GameMessage = Annotated[
@@ -738,7 +904,8 @@ GameMessage = Annotated[
     | DealAccept
     | DealDecline
     | NpcViews
-    | BodyObservations,
+    | BodyObservations
+    | BodyControlEvents,
     Field(discriminator="type"),
 ]
 
@@ -795,7 +962,9 @@ class BodyWatchCmd(_Command):
 
     type: Literal["body_watch"] = "body_watch"
     req: str
-    npcs: Annotated[list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)]
+    npcs: Annotated[
+        list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)
+    ]
     rate_hz: BodyInt = 20
 
     @model_validator(mode="after")
@@ -807,6 +976,74 @@ class BodyWatchCmd(_Command):
         if len(set(names)) != len(names):
             raise ValueError("body_watch NPC symbols must be distinct")
         return self
+
+
+class _BodyCommand(_Command, _BodyModel):
+    req: Annotated[str, Field(strict=True, min_length=1, max_length=128)]
+
+
+class BodyAcquireCmd(_BodyCommand):
+    type: Literal["body_acquire"] = "body_acquire"
+    entity_id: BodyPositive
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    provider: BodyProvider
+    body_control: Literal[True] = True
+    mode: BodyMode = "realtime"
+    timeout_ms: Annotated[int, Field(strict=True, ge=100, le=5000)] = 500
+    target_entity_id: BodyPositive | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def explicit_body_permission(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "body_control" in value and value["body_control"] is not True:
+            raise ValueError("body_control must be true")
+        return value
+
+
+class _BodyLeaseCmd(_BodyCommand):
+    entity_id: BodyPositive
+    session_epoch: BodyPositive
+    world_epoch: BodyUInt
+    provider: BodyProvider
+    control_generation: BodyPositive
+
+
+class BodyGoalCmd(_BodyLeaseCmd):
+    type: Literal["body_goal"] = "body_goal"
+    goal_version: BodyPositive
+    target_entity_id: BodyPositive
+
+
+class BodyActionCmd(_BodyLeaseCmd):
+    type: Literal["body_action"] = "body_action"
+    command_id: BodyPositive
+    goal_version: BodyPositive
+    target_entity_id: BodyPositive
+    action_id: BodyActionId
+    observation_seq: BodyPositive
+    issued_game_ms: BodyUInt
+    ttl_ms: Annotated[int, Field(strict=True, ge=1, le=1000)] = 200
+
+
+class BodyHeartbeatCmd(_BodyLeaseCmd):
+    type: Literal["body_heartbeat"] = "body_heartbeat"
+
+
+class BodyReleaseCmd(_BodyLeaseCmd):
+    type: Literal["body_release"] = "body_release"
+
+
+class BodyDisconnectCmd(_BodyLeaseCmd):
+    type: Literal["body_disconnect"] = "body_disconnect"
+
+
+class BodyControlStatusCmd(_BodyCommand):
+    type: Literal["body_control_status"] = "body_control_status"
+
+
+class BodyControlEventsCmd(_BodyCommand):
+    type: Literal["body_events"] = "body_events"
 
 
 class ActionCmd(_Command):

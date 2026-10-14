@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "kind": "compact_prequality_startup_failure",
+  "created_at_utc": "2026-10-14T15:35:30.500750+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7",
+  "status": "infrastructure_failure",
+  "error": "static GC scope requires enabled dynamic GC and no preexisting freeze ownership",
+  "shadow_cases": 0,
+  "stage8_quality_credit": false,
+  "load_started": false,
+  "fresh_screening_started": false,
+  "process_wall_s_parent_reported": 5.089,
+  "profile": {
+    "sampling_version": "periodic-v1",
+    "decision_anchor": "latest_periodic_exact",
+    "feature_version": "body-periodic-numeric-v1",
+    "periodic_rate_hz": 20,
+    "event_only_model_updates": false,
+    "event_only_commands": false
+  },
+  "timing_profile": {
+    "clock": "Linux CLOCK_MONOTONIC, nanoseconds",
+    "collector_clock": "time.monotonic_ns",
+    "native_clock": "std::chrono::steady_clock; independently checked against IPC bounds",
+    "network": "same-host JSONL pipes; no Mac gateway",
+    "animation_latency": "native accepted/started/completed events, separately from inference",
+    "oracle_visibility_enters_features": false
+  },
+  "collector_gc_evidence": {
+    "schema_version": 1,
+    "kind": "body_collector_static_gc_profile",
+    "mode": "freeze_static_keep_dynamic",
+    "enabled": true,
+    "helper_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/code/scripts/body_collector_gc.py",
+    "helper_sha256": "d9ca850b68072df78f485735be75c5b48433b56f9c22ac822d4d194c33d95655",
+    "dynamic_gc_events": [],
+    "dropped_total": 0,
+    "max_events": 65536
+  },
+  "startup_warmup_shape": [
+    "gru",
+    "mlp"
+  ],
+  "native_binding": {
+    "binary_sha256": "ac2dfe85bc7dd255f08e3eff5502594f854241ee04985f698569f527d2652263",
+    "source_sha256": "9239b2912b05d092a827ae5871ffc621d2657b0f881ba22c6c127e49b10b260b",
+    "engine_library_sha256": "9be068cd18b461fa213bf7c625e9e2c7e6fd1e3c2466ca95e79eb271d9e0202a",
+    "driver_sha256": "862c10300bcc1c8d13fb8ad0bf4ed9753edebe4d0f2e5fd72abff5845cbc18cb",
+    "feature_packer_sha256": "185966eed12f07350a230bba027a76c3133968acc6431de422dc7f7b11f6084a",
+    "policy_code_sha256": {
+      "gothic_body/__init__.py": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e",
+      "gothic_body/__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+      "gothic_body/checkpoint.py": "955feda62eda42cf199db7d2b65e163f993b149723bbfc0acd9804422cb07c81",
+      "gothic_body/cli.py": "e0a70e5278b8d1254712a304da1f52c14ea9327d16a546029fd6ffd238d14b7d",
+      "gothic_body/data.py": "db482eddb06929a567b1373e706f6e9684a274814efd82fdc6be4029bf405694",
+      "gothic_body/evaluation.py": "47c8f3de03d53974517ae511ba3976c59974c0edb7c73a1c18b0d55fb3117149",
+      "gothic_body/models.py": "c5622960d9b9d2637d00a13bfdac9d72e88489e4dac1e4628e4e4249137c608f",
+      "gothic_body/runtime.py": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1",
+      "gothic_body/schema.py": "12cbea4c45cd1a2d05a794b9e4df955186aefa6b63bd158039f4a28c3dbe3b10",
+      "gothic_body/serving.py": "1adb0b55b4273cc83d47a72d72123b51cc7a64e6a245853f8461dc3d26fd80cf",
+      "gothic_body/training.py": "16bec9e51463708d5bd6c70813d4426e005141bce3ac69b452ae16df72e2535b",
+      "gothic_body/verification.py": "1e2184081769817fa141c36d24f97e0772a92b4b1aebe75a75ab5087259115e6"
+    }
+  },
+  "checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/shadow/suite.json",
+      "size_bytes": 943,
+      "sha256": "033e3e330f1c51f67f4ac10faf20ed667b176e26808c8619c782a1c83f278a9e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/shadow/manifest.json",
+      "size_bytes": 63813,
+      "sha256": "276547d9378bb82ddf3cacab641840a3008ddbf0e2d8547c7a608a06d2daa8e3"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/shadow/collector-gc.json",
+      "size_bytes": 398,
+      "sha256": "957233e2696cc299b9abd608da16d312fa61a1d59267de99685afa48d30fdd89"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/shadow/startup-warmup.json",
+      "size_bytes": 4705,
+      "sha256": "d6d2e7bf32b902ad733f76f813d2f63e624efeaebf904b4d991f66361287b510"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/environment.json",
+      "size_bytes": 14460,
+      "sha256": "e69e546a47fc96aa4a9aa57730871d2cee824016d8cab78812f70df63c0125ed"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/final-evaluation.json",
+      "size_bytes": 1344248,
+      "sha256": "a2983f19487012311671bed3cb9169c702d34fd78048a29b0f39b19c0dbccf03"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/resources-shadow.txt",
+      "size_bytes": 2106,
+      "sha256": "0e8512d67bfc5f44b61b31e93637c3b1938fb13a960efd3d77cd9f56987194c1"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/launcher-shadow.log",
+      "size_bytes": 462,
+      "sha256": "05722cfc749b71c18ad9336c10d0c6ce4d21dc22b3a2aa85da79ea603246ce9e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/services-shadow-before.json",
+      "size_bytes": 429,
+      "sha256": "69040bd780094c239a25040d701f18b94b486266aa189963f3d7918823bf1a01"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/services-shadow-after.json",
+      "size_bytes": 429,
+      "sha256": "8826ad8b02a8964770de4cce994bc87595b28ec7579edf05ea8624e2bc15cfd6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/isolated-interpreters.txt",
+      "size_bytes": 1849,
+      "sha256": "564c54fedbce2bac61c91fcfcb36c24096d5bddb2d19d0fb048c743b1eb0f972"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/launcher.log",
+      "size_bytes": 1000,
+      "sha256": "79e0737907621326ce97c2254a646ebf5ae836d6ba9d467e53f31055f46aee98"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/profile.py",
+      "size_bytes": 1420,
+      "sha256": "fa8b1a978ec77c9f9067be9f6798594a7f8b46c6fd176518e555f7fd89a1e35e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/report.json",
+      "size_bytes": 670,
+      "sha256": "606cf0b0ddd5c30a66f4c7f55dfc68a9bf870cdca091a0fb7a394c67ace6f3ec"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/resources.txt",
+      "size_bytes": 918,
+      "sha256": "5b6a31e5462e228461777fd57f88cc919716bca604dde045bb9f7469a87917da"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/activation.json",
+      "size_bytes": 2182,
+      "sha256": "aff62ccfd29481e7a415050b5f9d137f559096f72c7f336be53bc6491686a05e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/launcher.log",
+      "size_bytes": 427,
+      "sha256": "c8baf9f400c9d0a32137a27f684b1a8122bc30e384989acb1f7d60506f902bee"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/resources.txt",
+      "size_bytes": 955,
+      "sha256": "3318589bb04a38aa50d7c76d04df0f8a8b3cace1794a845835dc56f67bc84c28"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/scripts/body_collector_gc.py",
+      "size_bytes": 10474,
+      "sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/scripts/tests/test_body_collector_gc.py",
+      "size_bytes": 15322,
+      "sha256": "e4905069b031c36dc6586aa5946a5088379c198e3f2ddf6e8a3035cbea77e169"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/tests.xml",
+      "size_bytes": 5640,
+      "sha256": "8d51cebf5a69793e5d03b45920a675f38cf4a47bba457661b73d202665c96ac3"
+    }
+  ],
+  "resource_and_log_fragments": {
+    "resources-shadow.txt": "Command exited with non-zero status 2\n\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/code/scripts/body_policy_diagnostics.py --runner /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/code/evals/npc-body/body-stage8-v1.json --phase shadow --policy-code-root /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/code --gru-checkpoint /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/models/gru/best.pt --mlp-checkpoint /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/models/mlp/best.pt --device cpu --output /home/kaifat/gothic-ai/body/data/stage8-final-gate-v7/shadow\"\n\tUser time (seconds): 3.62\n\tSystem time (seconds): 1.01\n\tPercent of CPU this job got: 91%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:05.07\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 662040\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 58\n\tMinor (reclaiming a frame) page faults: 123146\n\tVoluntary context switches: 5126\n\tInvoluntary context switches: 49\n\tSwaps: 0\n\tFile system inputs: 9301600\n\tFile system outputs: 464\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 2\n",
+    "launcher-shadow.log": "Running as unit: gothic-body-bc-stage8-final-gate-v7-shadow.service; invocation ID: 19b6a6cdfa9e4de9945d3ab82a6862a0\nstage8 diagnostics failed: static GC scope requires enabled dynamic GC and no preexisting freeze ownership\n          Finished with result: exit-code\nMain processes terminated with: code=exited, status=2/INVALIDARGUMENT\n               Service runtime: 5.089s\n             CPU time consumed: 4.645s\n                   Memory peak: 4.2G (swap: 0B)\n"
+  },
+  "next_state": "Gate-v8 exact private interpreter bootstrap profile pending",
+  "extraction": {
+    "models_engine_tests_services_not_started": true,
+    "failed_run_or_code_not_rewritten": true,
+    "external_diagnostic_extension_only": "isolated-interpreters.txt"
+  }
+}

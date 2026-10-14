@@ -1,10 +1,16 @@
-# Протокол игра ↔ ИИ-сервер (v16)
+# Протокол игра ↔ ИИ-сервер (v17)
 
-v10 — сделки ([ниже](#сделки-v10)), v11 — восприятие NPC ([ниже](#восприятие-npc-v11)), v12 — когда и где: игровое время в виде, точка каждого, кого видно, и зрение в `story_state` и `story_world` (память увиденного), v13 — ответ некроманта ([ниже](#ответ-некроманта-v13)), v14 — быстрые реакции (`say.filler`), v15 — NPC друг с другом: `say.to`, `hush.line`, `npc_act give`, `start_activity arrive`, `debug npc_goto`; v16 — пассивный числовой поток `body_watch` / `body_observations`.
+v10 — сделки ([ниже](#сделки-v10)), v11 — восприятие NPC ([ниже](#восприятие-npc-v11)), v12 — когда и где: игровое время в виде, точка каждого, кого видно, и зрение в `story_state` и `story_world` (память увиденного), v13 — ответ некроманта ([ниже](#ответ-некроманта-v13)), v14 — быстрые реакции (`say.filler`), v15 — NPC друг с другом: `say.to`, `hush.line`, `npc_act give`, `start_activity arrive`, `debug npc_goto`; v16 — пассивный числовой поток `body_watch` / `body_observations`; v17 — [боевой API, body lease и единый арбитр](npc-body-api.md).
 
 WebSocket, одно JSON-сообщение на кадр, кодировка UTF-8. Игра (`OpenGothic/ai_bridge`) — клиент, ИИ-сервер (`server/`) — сервер, по умолчанию `ws://127.0.0.1:47817`.
 
 Модели: [server/src/gothic_ai/protocol.py](../server/src/gothic_ai/protocol.py).
+
+Headless runner использует отдельный stdio RPC с полем `cmd`; его arena-команды не отправляются по этому WebSocket. [Контракт арены](npc-body-arena.md#отдельная-проверка-реакции-на-начавшуюся-атаку) описывает bench-only `reset.arena.reaction_hold:true` и `arena_reaction_activate`. Подготовка разрешена только для `block` или `reset_stress` в lockstep: оба NPC имеют обычные lease, opponent начинает настоящий `AttackFront`, а первая команда защитника ждёт естественного periodic снимка фактического windup после animation update. `reset_stress` позволяет collector дождаться настоящего завершения защитной анимации после blocked hit; terminal обычного `block` сохраняется.
+
+`arena_reaction_activate` принимает uint64 `session_epoch`, `world_epoch`, `primary_entity_id`, `opponent_entity_id`, `primary_control_generation`, `opponent_control_generation`, `observation_seq`, `issued_game_ms`; `provider` — `native` или `scripted` (по умолчанию `scripted`), `mode` — `lockstep` или `realtime` (по умолчанию `lockstep`). Источник должен совпасть с текущей подготовленной границей, обе lease — сохраняться, primary — быть доступным и видеть opponent в weapon range, opponent — иметь настоящий started attack / prehit, а оба — 300 HP без hit attempt/damage/block до активации. Ответ содержит обычный runner status с `arena.reaction`; ошибки активации не меняют scheduler.
+
+Native-защитник явно возвращается арбитром с `release_reason=reaction_activation` и запускает обычный `ZS_ATTACK`; scripted-защитник сохраняет lease. Realtime начинается от текущего wall clock без накопленных тиков; игровые часы, маски, FOV и физические flags сохраняют обычные значения. Подготовленная атака и исход защиты проверяются отдельно по настоящим native событиям.
 
 **Единицы:**
 - координаты и расстояния — в единицах Gothic (сантиметры);
@@ -22,7 +28,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 
 Мост сам переподключается раз в 0,5–3 с. Если связь с сервером рвётся, все NPC под управлением возвращаются к распорядку.
 
-`body_watch` — отдельная подписка без захвата тела: native AI продолжает работать. Она сбрасывается при reconnect, загрузке и выгрузке мира; после `hello` или `world_loaded` подписку нужно запросить заново. Символ NPC должен однозначно указывать на одного актёра: копии одного script instance этим API не выбираются. В числовом потоке `can_decide` и `control_allowed` остаются `false`, а `action_mask_valid=false`: общий боевой resolver и владение телом появятся на этапе 4. `native_decision_eligible` и `availability_mask` служат наблюдаемыми признаками, а не разрешением отправлять команды.
+`body_watch` — отдельная подписка без захвата тела: native AI продолжает работать. Она сбрасывается при reconnect, загрузке и выгрузке мира; после `hello` или `world_loaded` подписку нужно запросить заново. Символ NPC должен однозначно указывать на одного актёра: копии одного script instance этим API не выбираются. Без body lease в числовом потоке `can_decide`, `control_allowed` и `action_mask_valid` равны `false`. `native_decision_eligible` и `availability_mask` служат наблюдаемыми признаками. С v17 после `body_acquire` общий арбитр публикует отдельную authoritative `action_mask` и актуальные control/goal версии. Смена подписки при занятом теле отклоняется; disconnect/reconnect отдаёт native текущий непрерываемый segment перед сбросом IDs.
 
 Сообщение обычного моста имеет оболочку `{"type":"body_observations","packet":…}`. В `packet` лежит та же схема, что возвращает headless API: `kind:"body_observations"`, `schema_version:1`, generation и `observations[]`. Нативная очередь обычного моста хранит до 16 строк. При socket buffer от 64 KiB отправка этого потока ждёт, а вытеснения отражаются в `dropped_total` / `dropped_since_drain`. `GameLink.body_latest` хранит последнее наблюдение до четырёх актёров, `pop_body_observations()` читает очередь из четырёх пакетов; `body_buffer_dropped_packets` считает переполнение этой очереди, `body_sequence_gaps` — недоставленные номера наблюдений. Старые generation и повторные sequence не обновляют состояние и не вызывают listener повторно.
 
@@ -37,11 +43,12 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `world_loaded` | `world` | после подключения, загрузки и смены локации |
 | `loading` | — | перед загрузкой или сменой локации. Все NPC к этому моменту уже отпущены |
 | `saved` | `branch`, `seq` | игра сохранена; в сохранение записана позиция памяти `seq`. При сохранении NPC не отпускаются |
-| `result` | `req`, `ok`, `error?`, `value?` | ответ на `attach` / `detach` / `debug` / `graph_patch`; `value` — у отладочных команд про диалоги (v8) |
+| `result` | `req`, `ok`, `error?`, `value?` | ответ на `attach` / `detach` / `debug` / `graph_patch` и body-команды; `value` — у отладочных команд про диалоги (v8) и типизированный receipt/status/events боевого API (v17). `accepted` не означает `started` |
 | `attached` | `npc`, `name` | NPC взят под управление |
 | `detached` | `npc`, `reason` | NPC отпущен |
 | `snapshot` | `t`, `world{name,day,hour,minute}`, `npc{…}`, `player{…}?`, `nearby_waypoints[]` | для NPC под управлением — раз в 500 мс, после каждого действия и по запросу; с v7 по запросу и для свободного NPC, разово |
 | `body_observations` | версия схемы, generation, ограниченный пакет числовых наблюдений и счётчики пропусков | только после `body_watch`; 10 или 20 Гц на NPC, после world/player/animation updates. Обычный мост отправляет готовый пакет на следующем `onTick` |
+| `body_control_events` | process/world epoch, `events[]`, `dropped_total` | ограниченный поток lifecycle/ownership из общего encoder; отправляется при активной подписке. Начало/завершение связаны с command и execution IDs |
 | `action_result` | `id`, `npc`, `status`, `detail?`, `distance?` | действие завершилось |
 | `perception` | `npc`, `perc`, `other`, `distance`, `victim?` | восприятие NPC под управлением, не чаще 1 раза в секунду на пару (`perc`, `other`) |
 | `pong` | `req` | ответ на `ping` |
@@ -82,6 +89,11 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `action` | `id`, `npc`, `action`, `args{}` |
 | `snapshot` | `npc`: запросить снимок сейчас |
 | `body_watch` | `req`, `npcs[]` (до 4 явных символов NPC), `rate_hz` (10 или 20, по умолчанию 20). Пустой список выключает подписку; ответ `result`. Неизвестные, повторяющиеся и неоднозначные символы отклоняются |
+| `body_acquire` | `req`, `entity_id`, `session_epoch`, `world_epoch`, `provider`, `target_entity_id`, `body_control:true`, `mode:"realtime"`, `timeout_ms` |
+| `body_action` | `req`, полная lease identity, `goal_version`, `target_entity_id`, `observation_seq`, `issued_game_ms`, `command_id`, `action_id` (0–11), `ttl_ms` (1–1000); [словарь и проверки](npc-body-api.md) |
+| `body_goal` | `req`, lease identity, возрастающая `goal_version`, текущая native `target_entity_id`; после обновления нужен свежий sample |
+| `body_heartbeat` / `body_release` / `body_disconnect` | `req`, lease identity: actor/process/world/control generation/provider. Внешний disconnect также scoped; потеря самого socket инвалидирует все его leases |
+| `body_control_status` / `body_events` | `req`; status либо drain общего ограниченного event буфера в `result.value` |
 | `ping` | `req` |
 | `say` | `npc`, `line`, `text`, `audio?`, `stream?`, `rate?`, `mood?`, `to?` | реплика NPC (обычно одно предложение). `line` — уникальный id с префиксом `AIB_`. Вслух — двумя способами: `audio` — WAV-файл в base64 (16 бит, моно), реплика длится столько, сколько звучит аудио; `stream: true` — голос приходит следом кусками `say_audio` (PCM 16 бит, моно, частота `rate`) и заканчивается `say_end` С v6 говорить может и свободный NPC (не под управлением, не в диалоге): реплика встаёт в его очередь ИИ и ждёт того, чем он занят (например, пока он идёт, очередь не разбирается). `overlay:true` (v6) — сказать на ходу: мимо очереди, NPC не останавливается (бежит, дерётся); такие реплики игра не упорядочивает, сервер шлёт следующую, когда прозвучала предыдущая. С v8 `line` может быть и id оригинальной реплики (`DIA_XARDAS_TODO_14_01`): субтитр и голос берутся из файлов игры, `text` не нужен, `line_started` приходит с `voiced:true` `mood` (v9) — лицо NPC, пока он говорит реплику, и ещё 2 с после (потом оно гаснет за секунду), жесты рук (насколько живые и как часто) и подача голоса TTS: `neutral`, `friendly`, `angry`, `hostile`, `afraid`, `pain` (лица голов игры `S_NEUTRAL`, `S_FRIENDLY`, `S_ANGRY`, `S_HOSTILE`, `S_FRIGHTENED`, `T_HURT`); без `mood` лицо не меняется. `filler: true` (v14) — первая реакция на фразу героя («Хм...», «Что?!», «Тьфу!»), сказанная сразу, пока модель думает над ответом: NPC продолжает думать и после неё, взгляд возвращается только с первой репликой ответа; `mood` у неё — тон реакции (у недовольства `angry`). `to` (v15) — кому сказано: символ NPC. Говорящий сначала поворачивается к нему всем телом, потом говорит; пока звучит реплика (и секунду после), оба смотрят друг на друга, а адресат слушает, как слушатель героя. Субтитр — «Имя -> Имя адресата». Реплика на ходу (`overlay`) не поворачивает, только взгляд. `PLAYER` или без `to` — герою. Если адресата нет, он мёртв, без сознания или в диалоге, реплика не звучит. Очередь двух NPC мост не ведёт: следующую реплику сервер шлёт, когда прозвучала предыдущая |
 | `say_audio` | `npc`, `line`, `data` | очередной кусок голоса потоковой реплики, base64 |

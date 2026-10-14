@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "kind": "body_prior_gate11_readonly_audit_invocation",
+  "created_at_utc": "2026-10-14T18:21:17.807855+00:00",
+  "script_sha256": "1de528ac35c674e77726a2fbedfcaa0096e800cd64666fc27b3e868d8eea7191",
+  "snapshot_manifest_sha256": "8293e1c543ff5569d1441c0630bfc5059cc4d72ffe2a5581343acc2245e8ce75",
+  "CPUQuota": "200%",
+  "MemoryMax": "6G",
+  "TasksMax": 128,
+  "Nice": 10,
+  "CUDA_VISIBLE_DEVICES": "",
+  "model_forward": false,
+  "engine_started": false
+}

@@ -8,7 +8,7 @@
 
 - `session_epoch` — положительный opaque ID процесса, создаётся один раз без RNG calls, сохраняется при reset и меняется в новом процессе. Идентичность scoped session и manifest прогона; это поле не является feature или часами для deadline.
 - `world_epoch` и `generation` меняются при reset/load и замене подписки; они инвалидируют runtime ID, историю и отложенные samples. Сейчас observation epoch включает переподписку. Полное network/control epoch управление появится с арбитром этапа 4.
-- `control_generation=0`, поскольку подписка не захватывает тело.
+- В пассивном режиме `control_generation=0`, поскольку подписка не захватывает тело. [API этапа 4](npc-body-api.md) публикует generation действующего lease и отдельную authoritative mask.
 - `entity_id` — ID экземпляра в generation. Два NPC с одинаковым числовым `script_symbol` имеют разные ID; script symbol не является ключом recurrent state.
 - `observation_seq` — одна возрастающая последовательность всех акторов в generation. Между строками одного NPC бывают значения других NPC. Повторный sample не является новым обновлением будущего GRU hidden state.
 - `t_game_ms`, `dt_game_ms` и `sim_step` относятся к игре. `dt_game_ms` — разность предыдущего снимка того же NPC; начальный dt равен нулю.
@@ -37,7 +37,7 @@
 
 В словаре событий: 1/2 — animation accepted/rejected, 3–6 — hit applied/out-of-range/out-of-focus/no-target, 7/8 — block/evade, 9/10 — damage/loss absent, 11/12 — dead/unconscious. Source timestamp берётся в native hook, а не из времени Python polling.
 
-`can_decide=false`, `control_allowed=false`, `action_mask_valid=false`. `native_decision_eligible` отражает только read-only native gates. `availability_mask[12]` — консервативная доступность native примитивов с `mask_kind=conservative_native_availability`; continue остаётся доступным. Этот массив не является разрешением внешней команды. Общий resolver, окончательные masks и повторная проверка при запуске реализуются на этапе 4.
+В пассивном режиме `can_decide=false`, `control_allowed=false`, `action_mask_valid=false`. `native_decision_eligible` отражает только read-only native gates. `availability_mask[12]` — консервативная доступность native примитивов с `mask_kind=conservative_native_availability`; continue остаётся доступным. Этот массив не является разрешением внешней команды. [Общий resolver и арбитр этапа 4](npc-body-api.md) добавляют отдельную `action_mask`, повторную проверку при запуске и актуальные control/goal версии для занятого тела.
 
 ## Headless API и ограниченные буферы
 

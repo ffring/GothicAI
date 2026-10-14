@@ -7,6 +7,8 @@
 #include "graphics/visualfx.h"
 #include "game/damagecalculator.h"
 #include "game/bodyobservations.h"
+#include "game/bodycontroller.h"
+#include "game/bodytrajectory.h"
 #include "game/serialize.h"
 #include "game/gamescript.h"
 #include "utils/string_frm.h"
@@ -20,6 +22,11 @@
 #include "testbench.h"
 #include "gothic.h"
 #include "resources.h"
+
+#include <chrono>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 
 using namespace Tempest;
 
@@ -1656,7 +1663,7 @@ bool Npc::implGoTo(uint64_t dt, float destDist) {
   return false;
   }
 
-bool Npc::implAttack(uint64_t dt) {
+bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyAction) {
   if(currentTarget==nullptr || isPlayer() || isTalk())
     return false;
 
@@ -1685,7 +1692,7 @@ bool Npc::implAttack(uint64_t dt) {
     return true;
     }
 
-  if(!fghAlgo.hasInstructions()) {
+  if(!bodyOverride && !fghAlgo.hasInstructions()) {
     traceCombatGate("no_instructions");
     return false;
     }
@@ -1709,9 +1716,11 @@ bool Npc::implAttack(uint64_t dt) {
     return true;
     }
 
-  const auto act = fghAlgo.nextFromQueue(*this,*currentTarget,owner.script());
+  const auto act = bodyOverride ? bodyAction : fghAlgo.nextFromQueue(*this,*currentTarget,owner.script());
   const auto consume = [&] {
+    if(bodyOverride) { BodyController::consumed(*this); return; }
     const auto before = fghAlgo.queuedAction();
+    BodyTrajectory::nativeConsumed(*this);
     fghAlgo.consumeAction();
     if(TestBench::bodyTracing())
       TestBench::bodyEvent(*this,currentTarget,"native_consume",owner.tickCount(),
@@ -1723,13 +1732,37 @@ bool Npc::implAttack(uint64_t dt) {
   // NOTE: in original-game, this behaviour seem to be hardcoded
   // test case: wolf jump-back quite often when close, but programmed to jump only if attacked
   // so far promoting wait to jump seem to work best
-  const bool jmp = fghAlgo.isInCloseupRange(*this,*currentTarget,owner.script()) && fghAlgo.isInFocusAngle(*this,*currentTarget);
+  FightAlgo::ResolverState nativeResolution;
+  nativeResolution.inCloseup = fghAlgo.isInCloseupRange(*this,*currentTarget,owner.script());
+  nativeResolution.focus30 = nativeResolution.inCloseup && fghAlgo.isInFocusAngle(*this,*currentTarget);
+  const bool jmp = FightAlgo::resolveNative(FightAlgo::MV_WAIT,nativeResolution)==FightAlgo::MV_JUMPBACK;
 
   // vanilla behavior, required for orcs in G1 orcgraveyard
   if(ws==WeaponState::NoWeapon && isAiQueueEmpty() && canSwitchWeapon()) {
     drawWeaponMelee();
     return true;
     }
+
+  // Recorder labels describe the physical opportunity after all native gates. The pure
+  // normalization mirrors the executor below without changing its queue, RNG or decisions.
+  auto trajectoryEffective=act;
+  if(BodyTrajectory::enabled() && !bodyOverride) {
+    // Diagnostic effective primitives follow the native executor even when LOS makes the
+    // separate shared policy mask invalid. Hidden geometry never enters capture features.
+    auto resolver=nativeResolution;
+    resolver.focus5=fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
+    resolver.inWRange=fghAlgo.isInWRange(*this,*currentTarget,owner.script());
+    trajectoryEffective=FightAlgo::resolveNative(act,resolver);
+    // Native TURN uses the same approach executor as MOVE outside weapon range. Inside
+    // range that branch only rotates. Policy TurnToTarget uses TURN2HIT, so labels must
+    // describe those physical semantics rather than the native instruction's name.
+    if(trajectoryEffective==FightAlgo::MV_MOVE || trajectoryEffective==FightAlgo::MV_TURN) {
+      if(!resolver.inWRange) trajectoryEffective=FightAlgo::MV_MOVE;
+      else if(!resolver.focus5) trajectoryEffective=FightAlgo::MV_TURN2HIT;
+      }
+    }
+  BodyTrajectory::Attempt trajectory(*this,!bodyOverride,int(act),int(trajectoryEffective),
+                                    fghAlgo.traceChoiceId(),fghAlgo.traceParentInstruction(),fghAlgo.traceEntrySerial());
 
   if(act==FightAlgo::MV_BLOCK) {
     if(!fghAlgo.isInFocusAngle(*this, *currentTarget)) {
@@ -1759,7 +1792,8 @@ bool Npc::implAttack(uint64_t dt) {
   if(act==FightAlgo::MV_ATTACK || act==FightAlgo::MV_ATTACKL || act==FightAlgo::MV_ATTACKR) {
     //NOTE: FIGHT_DIST_CANCEL in scipts is often longer, than senses_range of npc
     const auto sense = fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
-    if(!sense) {
+    nativeResolution.focus5=sense;
+    if(FightAlgo::resolveNative(act,nativeResolution)==FightAlgo::MV_TURN2HIT) {
       traceCombatGate("attack_turn_to_focus");
       implTurnToFai(*currentTarget,dt);
       mvAlgo.tick(dt,MoveAlgo::FaiMove);
@@ -2091,6 +2125,132 @@ void Npc::traceCombatSnapshot() {
                        ",\"layers\":" + combatPoseLayers(),pose.animNames());
   }
 
+void Npc::traceVisibilityDiagnostic(std::string_view sourcePhase, bool force) noexcept {
+  if(!BodyController::visibilityDiagnosticsEnabled() || !TestBench::bodyTracing() ||
+     !BodyObservations::watched(*this) || currentTarget==nullptr)
+    return;
+  try {
+    constexpr uint64_t PeriodMs=50, MaxRecords=8192;
+    const auto generation=BodyController::visibilityDiagnosticsGeneration();
+    if(visibilityDiagnosticGeneration!=generation) {
+      visibilityDiagnosticGeneration=generation; visibilityDiagnosticCount=0;
+      visibilityDiagnosticTime={}; visibilityDiagnosticKey={};
+      }
+    const auto now=owner.tickCount();
+    const size_t slot=sourcePhase=="post_observation" ? 1 : 0;
+    if(visibilityDiagnosticCount>=MaxRecords) {
+      if(force || visibilityDiagnosticKey[slot].empty() || now/PeriodMs!=visibilityDiagnosticTime[slot]/PeriodMs) {
+        BodyController::visibilityDiagnosticRecorded(true); visibilityDiagnosticTime[slot]=now;
+        }
+      return;
+      }
+    using Clock=std::chrono::steady_clock;
+    const auto snapshotTime=Clock::now();
+    const auto eye=visual.mapHeadBone();
+    const auto& other=*currentTarget;
+    const auto view=visual.viewDirection();
+    const auto range=float(hnpc->senses_range);
+    const auto threshold=std::cos(100*M_PI/180.0);
+    struct Ray final {
+      Vec3 point={}, hitPoint={}, hitNormal={};
+      float distance=0, angle=0, fraction=0;
+      double coneCos=0, bodyConeCos=0;
+      bool rangePass=false, fovPass=false, bodyFovPass=false, hit=false, vob=false, passes=false;
+      };
+    const auto inspect=[&](const Vec3& point) {
+      Ray result; result.point=point;
+      result.distance=std::sqrt(qDistTo(point)); result.rangePass=qDistTo(point)<=range*range;
+      const auto bearing=angleDir(eye.x-point.x,eye.z-point.z);
+      result.angle=view-bearing;
+      // Match the legacy float-angle/cos comparison exactly. Unconditional static rays
+      // explain a cone failure too, but never feed back into the actual query or model.
+      result.coneCos=double(std::cos(float(M_PI)*(view-bearing)/180.f));
+      result.bodyConeCos=double(std::cos(float(M_PI)*(rotation()-bearing)/180.f));
+      result.fovPass=result.coneCos<=threshold; result.bodyFovPass=result.bodyConeCos<=threshold;
+      const auto hit=owner.physic()->ray(eye,point);
+      result.hit=hit.hasCol; result.vob=hit.hasCol && hit.vob!=nullptr;
+      if(hit.hasCol) { result.hitPoint=hit.v; result.hitNormal=hit.n; result.fraction=hit.hitFraction; }
+      result.passes=result.rangePass && result.fovPass && !result.hit;
+      return result;
+      };
+    const auto center=inspect(other.physic.center());
+    const auto skeleton=other.visual.visualSkeleton();
+    const bool hasHead=skeleton!=nullptr && skeleton->BIP01_HEAD!=size_t(-1);
+    const auto head=hasHead ? inspect(other.visual.mapHeadBone()) : Ray{};
+    const bool actual=canSeeNpc(other,false);
+    const bool sense=(hnpc->senses & int32_t(SensesBit::SENSE_SEE))!=0;
+    const bool targetTerminal=other.isDown() || other.attribute(ATR_HITPOINTS)<=0;
+    const auto control=BodyController::snapshot(*this);
+    const auto animation=animNames();
+    const auto key=animation+":"+std::to_string(actual)+":"+std::to_string(center.fovPass)+":"+
+                   std::to_string(head.fovPass)+":"+std::to_string(center.hit)+":"+std::to_string(head.hit);
+    if(!force && visibilityDiagnosticKey[slot]==key && now/PeriodMs==visibilityDiagnosticTime[slot]/PeriodMs)
+      return;
+    const char* reason="mixed_ray_rejection";
+    if(actual) reason="visible";
+    else if(!center.rangePass && (!hasHead || !head.rangePass)) reason="out_of_senses_range";
+    else if(!center.fovPass && (!hasHead || !head.fovPass)) reason="outside_pose_cone";
+    else if(center.hit && (!hasHead || head.hit)) reason="static_occlusion";
+    else if(!hasHead) reason="target_head_missing";
+    std::ostringstream out; out.imbue(std::locale::classic()); out << std::boolalpha << std::setprecision(9);
+    const auto vec=[&](const Vec3& point) {
+      if(!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+        throw std::runtime_error("nonfinite visibility diagnostic position");
+      out << '[' << point.x << ',' << point.y << ',' << point.z << ']';
+      };
+    const auto ray=[&](const Ray& value) {
+      if(!std::isfinite(value.distance) || !std::isfinite(value.angle) || !std::isfinite(value.coneCos) ||
+         !std::isfinite(value.bodyConeCos) || !std::isfinite(value.fraction))
+        throw std::runtime_error("nonfinite visibility diagnostic ray");
+      out << "{\"range_pass\":" << value.rangePass << ",\"distance_cm\":" << value.distance
+          << ",\"fov_pass\":" << value.fovPass << ",\"legacy_angle_deg\":" << value.angle
+          << ",\"cone_cos\":" << value.coneCos << ",\"body_cone_cos\":" << value.bodyConeCos
+          << ",\"body_fov_pass\":" << value.bodyFovPass << ",\"ray_hit\":" << value.hit
+          << ",\"hit_vob\":" << value.vob << ",\"hit_fraction\":" << value.fraction
+          << ",\"query_pass\":" << value.passes << ",\"target_point_cm\":";
+      vec(value.point); out << ",\"hit_point_cm\":";
+      if(value.hit) vec(value.hitPoint); else out << "null";
+      out << ",\"hit_normal\":"; if(value.hit) vec(value.hitNormal); else out << "null";
+      out << '}';
+      };
+    if(!std::isfinite(view) || !std::isfinite(rotation())) throw std::runtime_error("nonfinite visibility diagnostic yaw");
+    const auto ns=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(snapshotTime.time_since_epoch()).count());
+    out << "\"diagnostic_schema_version\":1,\"source_phase\":" << TestBench::bodyJson(sourcePhase)
+        << ",\"diagnostic_generation\":" << generation << ",\"diagnostic_seq\":" << visibilityDiagnosticCount+1
+        << ",\"oracle_debug_only\":true,\"sample_period_ms\":" << PeriodMs << ",\"forced_edge\":" << force
+        << ",\"snapshot_wall_monotonic_ns\":" << ns << ",\"wall_monotonic_ns\":" << ns
+#ifdef __linux__
+        << ",\"clock_domain\":\"linux-clock-monotonic\""
+#else
+        << ",\"clock_domain\":\"cxx-steady-clock\""
+#endif
+        << ",\"sim_step\":" << BodyObservations::currentStep() << ",\"session_epoch\":" << BodyObservations::sessionEpoch()
+        << ",\"world_epoch\":" << BodyObservations::worldEpoch() << ",\"entity_id\":" << BodyObservations::entityId(*this)
+        << ",\"target_entity_id\":" << BodyObservations::entityId(other)
+        << ",\"owner\":" << TestBench::bodyJson(control.owned ? "scripted" : "native")
+        << ",\"provider\":" << TestBench::bodyJson(control.provider) << ",\"control_generation\":" << control.controlGeneration
+        << ",\"command_id\":" << control.commandId << ",\"execution_id\":" << control.executionId
+        << ",\"release_pending\":" << control.releasePending << ",\"control_allowed\":" << control.controlAllowed
+        << ",\"body_state_base\":" << unsigned(bodyStateMasked()) << ",\"native_fai_wait\":" << (faiWaitTime>=now)
+        << ",\"native_script_wait\":" << (waitTime>=now)
+        << ",\"native_fai_wait_remaining_ms\":" << (faiWaitTime>now ? faiWaitTime-now : 0)
+        << ",\"native_script_wait_remaining_ms\":" << (waitTime>now ? waitTime-now : 0)
+        << ",\"body_yaw_deg\":" << rotation() << ",\"pose_view_deg\":" << view
+        << ",\"fov_half_angle_deg\":100,\"legacy_cos_threshold\":" << threshold
+        << ",\"senses_range_cm\":" << range << ",\"senses_see\":" << sense << ",\"target_terminal\":" << targetTerminal
+        << ",\"actual_can_see\":" << actual << ",\"controller_visible\":" << (sense && actual && !targetTerminal)
+        << ",\"query_matches_diagnostic\":" << (actual==(center.passes || (hasHead && head.passes)))
+        << ",\"reason\":" << TestBench::bodyJson(reason) << ",\"eye_cm\":";
+    vec(eye); out << ",\"self_position_cm\":"; vec(position()); out << ",\"target_position_cm\":"; vec(other.position());
+    out << ",\"target_has_head\":" << hasHead << ",\"center_ray\":"; ray(center);
+    out << ",\"head_ray\":"; if(hasHead) ray(head); else out << "null";
+    TestBench::bodyEvent(*this,&other,"visibility_diagnostic",now,out.str(),animation);
+    ++visibilityDiagnosticCount; visibilityDiagnosticTime[slot]=now; visibilityDiagnosticKey[slot]=key;
+    BodyController::visibilityDiagnosticRecorded();
+    }
+  catch(...) { BodyController::visibilityDiagnosticFailed(); }
+  }
+
 void Npc::traceCombatGate(std::string_view reason) {
   if(!TestBench::bodyTracing() || currentTarget==nullptr)
     return;
@@ -2146,6 +2306,12 @@ Npc::BodyObservationState Npc::bodyObservationState() const {
     if(layer.sequence==nullptr)
       continue;
     const auto& seq = *layer.sequence;
+    if(seq.isAttackAnim() || layer.state==BS_PARADE) {
+      const auto duration=seq.isAttackAnim() ? seq.atkTotalTime(pose.comboLength()) : seq.totalTime();
+      const auto elapsed=layer.time>=layer.start ? double(layer.time-layer.start) : 0.0;
+      if(double(duration)>=elapsed && layer.speed>0)
+        s.segmentRemainingMs=std::max(s.segmentRemainingMs,uint64_t(std::ceil((double(duration)-elapsed)/double(layer.speed)))+1);
+      }
     const bool finished = seq.isFinished(layer.time,layer.start,pose.comboLength()) &&
                           seq.next.empty() && seq.animCls!=Animation::Loop;
     if(layer.state==BS_ITEMINTERACT || (!finished && !seq.canInterrupt(layer.time,layer.start,pose.comboLength())))
@@ -2203,6 +2369,8 @@ void Npc::traceCombatAttempt(Anim requested, bool accepted, const std::string& b
   }
 
 bool Npc::implAiTick(uint64_t dt) {
+  if(BodyController::owns(*this))
+    return false;
   // Note AI-action queue takes priority, test case: Vatras pray at night
   if(aiQueue.size()==0) {
     if(externalCtrl)
@@ -2425,6 +2593,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
+    BodyController::takeHit(*this);
     if(TestBench::bodyTracing())
       TestBench::bodyEvent(*this,&other,"native_queue_clear",owner.tickCount(),
                           "\"reason\":\"take_hit\",\"primitive_before\":" + std::to_string(int(tracePrimitiveBefore)));
@@ -2782,6 +2951,7 @@ void Npc::tick(uint64_t dt) {
 
   BodyMovementTrace movementTrace(*this,dt);
   traceCombatSnapshot();
+  traceVisibilityDiagnostic("npc_pre_tick");
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
@@ -2825,6 +2995,9 @@ void Npc::tick(uint64_t dt) {
   // an archer aiming by hand draws, holds and reloads through the fight AI's waits (game/archerai)
   if(!isPlayer())
     archAi.tick(*this,dt);
+
+  if(BodyController::tick(*this,dt))
+    return;
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
@@ -3169,7 +3342,7 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       break;
       }
     case AI_Attack:
-      if(currentTarget!=nullptr) {
+      if(!BodyController::owns(*this) && currentTarget!=nullptr) {
         if(!fghAlgo.fetchInstructions(*this,*currentTarget,owner.script()))
           queue.pushFront(std::move(act));
         }
@@ -3377,6 +3550,13 @@ bool Npc::startState(ScriptFn id, std::string_view wp) {
 bool Npc::startState(ScriptFn id, std::string_view wp, gtime endTime, bool noFinalize) {
   if(!id.isValid())
     return false;
+  if(BodyController::owns(*this)) {
+    const std::string bodyDeferredWp(wp);
+    BodyController::deferNative(*this,[this,id,bodyDeferredWp,endTime,noFinalize] {
+      startState(id,bodyDeferredWp,endTime,noFinalize);
+      });
+    return true;
+    }
 
   if(aiState.funcIni==id) {
     if(!noFinalize) {
@@ -3427,6 +3607,7 @@ bool Npc::startState(ScriptFn id, std::string_view wp, gtime endTime, bool noFin
   }
 
 void Npc::clearState(bool noFinalize) {
+  if(BodyController::deferNative(*this,[this,noFinalize] { clearState(noFinalize); })) return;
   if(aiState.funcIni.isValid() && aiState.started) {
     if(!noFinalize)
       owner.script().invokeState(this,currentOther,currentVictim,aiState.funcEnd);  // cleanup
@@ -3529,6 +3710,11 @@ void Npc::tickRoutine() {
   }
 
 void Npc::setTarget(Npc *t) {
+  if(BodyController::owns(*this) && currentTarget!=t) {
+    const auto bodyTargetId=t ? BodyObservations::entityId(*t) : 0;
+    BodyController::deferNative(*this,[this,bodyTargetId] { setTarget(BodyObservations::findEntity(bodyTargetId)); });
+    return;
+    }
   if(currentTarget==t)
     return;
 
@@ -3868,6 +4054,8 @@ void Npc::setToFistMode() {
   }
 
 void Npc::aiPush(AiQueue::AiAction&& a) {
+  if(BodyController::owns(*this) && a.act!=AI_OutputSvmOverlay)
+    BodyController::takeover(*this,"native_script_queue");
   if(a.act==AI_OutputSvmOverlay)
     aiQueueOverlay.pushBack(std::move(a)); else
     aiQueue.pushBack(std::move(a));
@@ -4883,6 +5071,10 @@ void Npc::setPerceptionDisable(PercType t) {
   }
 
 void Npc::startDialog(Npc& pl) {
+  if(BodyController::owns(*this)) {
+    BodyController::legacyRejected(*this,"dialogue_owned");
+    return;
+    }
   if(pl.isDown() || pl.isInAir() || isPlayer())
     return;
   if(perceptionProcess(pl,nullptr,0,PERC_ASSESSTALK))
@@ -4971,6 +5163,11 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
                          ",\"native_callback_dispatched\":"+(dispatched ? "true" : "false")+
                          ",\"result\":"+(result ? "true" : "false"));
     };
+  if(BodyController::owns(*this)) {
+    Gothic::inst().onObservedPerception(*this,pl,victim,perc);
+    trace("body_control_owned",false,false);
+    return false;
+    }
   if(!aiState.started && aiState.funcIni.isValid()) {
     // avoid ugly soft-lock (ZS_MM_Attack <-> B_MM_AssessWarn) for the orks near ramp
     trace("waiting_for_state",false,false);
@@ -5292,6 +5489,7 @@ bool Npc::isAiBusy() const {
   }
 
 void Npc::clearAiQueue() {
+  if(BodyController::deferNative(*this,[this] { clearAiQueue(); })) return;
   currentLookAt    = nullptr;
   currentLookAtNpc = nullptr;
   visual.setHeadRotation(0,0);

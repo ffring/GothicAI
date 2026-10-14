@@ -1,4 +1,5 @@
 #include "gamesession.h"
+#include "bodycontroller.h"
 #include "savegameheader.h"
 
 #include <Tempest/Log>
@@ -180,6 +181,7 @@ GameSession::GameSession(Serialize &fin) {
   }
 
 GameSession::~GameSession() {
+  BodyController::reset("load_or_session_destroyed");
   }
 
 void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& screen) {
@@ -244,6 +246,7 @@ void GameSession::setupSettings() {
   }
 
 void GameSession::setWorld(std::unique_ptr<World> &&w) {
+  BodyController::reset("world_changed");
   if(wrld) {
     if(!isWorldKnown(wrld->name()))
       visitedWorlds.emplace_back(*wrld);
@@ -252,6 +255,7 @@ void GameSession::setWorld(std::unique_ptr<World> &&w) {
   }
 
 std::unique_ptr<World> GameSession::clearWorld() {
+  BodyController::reset("world_changed");
   if(wrld) {
     if(!isWorldKnown(wrld->name())) {
       visitedWorlds.emplace_back(*wrld);

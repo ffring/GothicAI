@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage8_evaluation_protocol_repair",
+  "created_at_utc": "2026-10-14T09:52:19.596299+00:00",
+  "original_run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "new_run": "/home/kaifat/gothic-ai/body/data/stage8-reaction-v3",
+  "original_files": {
+    "code/evals/npc-body/body-stage8-v1.json": "506cae01813644e53acaf5d9124f887d4ebdab5e198a89e8ce07840b6778b9ac",
+    "code/scripts/body_combat_report.py": "7183079af6391a7dd30d985e8673c90a5945e0f6e371fb48ea24d0eb9bf0651d",
+    "environment.json": "01ab5d176a995a50c68e81ed721e49b8a0bbc0bbf440f5b40185b0d12e3f38cd",
+    "reference/gothic-body-runner": "44eff82c4980fe1e54e1b69f5ed2ecc4d6d94c726bc94f23d45fde868620f84c",
+    "source.tar.gz": "1a4267bfe4bd14459e57852db13f2d4269249b190d622df05822e7c23ec1a5dc"
+  },
+  "modules": {
+    "code/evals/npc-body/body-block-reaction-v1.json": "5008de06ff1efe1aba1fa2f91683a6f32394e9cf9318e13c8015c9c7f4ed62e3",
+    "code/scripts/body_block_reaction.py": "8a7e9cbe213e83cd75bf43c7e812a326363000eb30c5dfa8a9f1407b787d2f81",
+    "code/scripts/body_evaluation_repair.py": "2c22667633cbb4d32bd4c2a48fd611ae61af2c733e2fad64a504603339a58b91"
+  },
+  "fixed_artifacts": {
+    "files": {
+      "dataset/dataset.json": "f75fdcb02ec9389bab77fac1ef2da661d5f48f61add36727a1a57c6ed3fbcfe6",
+      "dataset/normalization.json": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+      "models/gru/best.pt": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+      "models/gru/best.pt.json": "70b5b345755fa257dee8168d80caff8c5458c6d4586c5ae01ecce4522117dac6",
+      "models/gru/selection.json": "f7034eaa8bb1797713355ad6b9faf591845f28da181cf3f829644f0d4956fb83",
+      "models/mlp/best.pt": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf",
+      "models/mlp/best.pt.json": "dd657b8505bc4eae06a85e508446b44b8a94b3f21937b5ea4c66daef19fdc8de",
+      "models/mlp/selection.json": "f354f68cfdadc7f09ea1c590a9d493333699105fdd8eed102d015a70f7de5073",
+      "selection.json": "b8ae94660743319462ce6e24216f83e64fbe104e15885e08a1f8b0605b9022c0"
+    },
+    "checkpoint_sha256": {
+      "gru": "44727b7c99211c6a5e79b4f9aead852c33e277f6cee5dc4bbed95bd86af15c7c",
+      "mlp": "21c81594817959490e2c4d8032d7a75296e878830ae34a89af6e56f0b084d5bf"
+    },
+    "normalizer_sha256": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+    "weights_fixed_at_utc": "2026-10-14T09:02:35.266523+00:00",
+    "training_performed": false,
+    "checkpoint_selection_performed": false
+  },
+  "original_failures": {
+    "files": {
+      "faults/suite.json": "85aa20f32631a533d0786030b2a0006ce02589c8cc9a846a17d5ac01a78b3cc0",
+      "launcher-stage8-faults.log": "b9399f6b5e1e0869addf1f49da876150f7b0cdf1d2d9f0597032edf4a939d148",
+      "realtime/manifest.json": "266cc96ee538674bd2001053313a5f239cdf43de07aecd568ba75bc39cc14809",
+      "realtime/realtime-block-223-0-gru/arena-events.jsonl": "817c6c8cb248f0e6494577e514dc9961703854bf32af2252d99afe3f450e462f",
+      "realtime/realtime-block-223-0-gru/bench.log": "960e5a9ee0309613fe822664dbf06d82c079efc4d8ea8fcad15425251b0b6272",
+      "realtime/realtime-block-223-0-gru/body-control-events.jsonl": "0e0eb5b9f7a2db0cb5000fa83982f1e3cc88ed9ed228ba825e65b743e2fa4878",
+      "realtime/realtime-block-223-0-gru/collector-transport.jsonl": "d5d1469aa309d596b16257318264cf716188e7f05f14f1b112883c0c45df9a3d",
+      "realtime/realtime-block-223-0-gru/episode.json": "1ed743ab5d6f1d39f3c9b5c1f6fa55fa0b850f7547f4ab0b8bcb329c08723346",
+      "realtime/realtime-block-223-0-gru/events.jsonl": "68c4f9dff5c8c25fb00ee17a23b127e66046e445f770cbbb90cfdd0b887ce939",
+      "realtime/realtime-block-223-0-gru/ipc.jsonl": "511584c4465ba792ce9cde6845e0cfcc78ef885715512f834600ab4d22fe5994",
+      "realtime/realtime-block-223-0-gru/latency.jsonl": "5aeaf9a4f5434e55ade8d0887b5b9e4958a7edc2bc72bc118720693625aacb68",
+      "realtime/realtime-block-223-0-gru/observations.jsonl": "075208559e8639e24669c31ff44006e2da021da02110b1a3682ea721105b1f21",
+      "realtime/realtime-block-223-0-gru/observer-timing.jsonl": "467891330f5381b384911cef081f31bd3bf2d8c9dd0f2136b56aa6da9341add5",
+      "realtime/realtime-block-223-0-gru/policy-final-before-clear.json": "42cabb9169aa834e51d4bca24198ef9d187c85d36fbfa3352b85382403022dab",
+      "realtime/realtime-block-223-0-gru/policy-inputs.jsonl": "dec49e7c7983ac6bef1e1ec9b5185ae03cf6b7551933e9dfced6333c2d9cfaad",
+      "realtime/realtime-block-223-0-gru/runner-summary.json": "1961c982c1c92d31940a897c0b4149bd9bc22ae3cf26023a7273e08bc6541b50",
+      "realtime/realtime-block-223-1-gru/arena-events.jsonl": "9628c25946d4cc7916777e5aac091949ae7f1e75487159262150a0eeda9388e1",
+      "realtime/realtime-block-223-1-gru/bench.log": "960e5a9ee0309613fe822664dbf06d82c079efc4d8ea8fcad15425251b0b6272",
+      "realtime/realtime-block-223-1-gru/body-control-events.jsonl": "2d94d46bb38e6ec8831c11024c2308be3ea90a5f4243807de62dfe40a4572aaa",
+      "realtime/realtime-block-223-1-gru/collector-transport.jsonl": "e35dc745d19adbad735fd504e16827e58b6072e9a5e4f802f2081a384fc3f021",
+      "realtime/realtime-block-223-1-gru/episode.json": "aef4dff6bdf0e697b12bbf619de7e05650baf9f95eceda5c9d4d8f3f4ce452a0",
+      "realtime/realtime-block-223-1-gru/events.jsonl": "6a2f10a4248bbe815f67765082beffa795fe29ab7e9208ebd94308eb185a6562",
+      "realtime/realtime-block-223-1-gru/ipc.jsonl": "a8dc67eefe12bd6c2cd7cc03508d868019a39823a28b2552ae064a9b0470bac2",
+      "realtime/realtime-block-223-1-gru/latency.jsonl": "beb32f623230c61bb1d46f89498a4881fc3d638549081260959f31668f4a2857",
+      "realtime/realtime-block-223-1-gru/observations.jsonl": "b33b98de6a1b50c64ed10f05c7b2f8ad2985fada0400270af2950cd18c1168e2",
+      "realtime/realtime-block-223-1-gru/observer-timing.jsonl": "3b6e90ed7e34f9337b62fd9f72da0756ff99c1e93db502f5afd09761a7531803",
+      "realtime/realtime-block-223-1-gru/policy-final-before-clear.json": "7eafdd6ae28bbd568fe06091e5f9496ad4acc94157e80590e41a9971c71ab40a",
+      "realtime/realtime-block-223-1-gru/policy-inputs.jsonl": "2747e8e92ec68b6321e318ffed2b78a4f08fce1f2303917be10adbab5b2e0e93",
+      "realtime/realtime-block-223-1-gru/runner-summary.json": "f69c662fdad4f528f9bb314cee0a443eb4359c71aec5a80a08a558ae5da73242",
+      "realtime/suite.json": "d4648d4c9a1a956b6a059b1dd9f1fe513a89dcc7bd82b92881eedc8bccbf7409"
+    },
+    "original_gru_block": [
+      {
+        "name": "realtime-block-223-0-gru",
+        "outcome": "death_or_down",
+        "reason": "opponent_down",
+        "primary_hp": 300,
+        "blocked_hits": 0,
+        "block_success": false
+      },
+      {
+        "name": "realtime-block-223-1-gru",
+        "outcome": "death_or_down",
+        "reason": "opponent_down",
+        "primary_hp": 300,
+        "blocked_hits": 0,
+        "block_success": false
+      }
+    ],
+    "original_native_fault_phase_status": "infrastructure_failure",
+    "legacy_result_replacement": false
+  },
+  "allowed_repairs": [
+    "reactive_block_start_protocol",
+    "missing_native_fault_fixture"
+  ],
+  "updated_runtime": {
+    "binary_sha256": "325b3cf1b7e5bb7e2a87ffe6eb0a72218cc345a88f84dbdfb54a8e4cbfcaea66",
+    "source_archive_sha256": "927751097ae7af71469117c4c1ec4de56d9699af1917437da48d86f767eb2922",
+    "environment_sha256": "15a401c89e4da616fdc5723cce449ef223e21497c7c771c823e95e06be4be51d",
+    "source_sha256": "09e15791afc6481dfe9c178d3db95f45aedf5bec0085ebab4b7bda259f45e23e",
+    "source_files_hashed": 3116,
+    "contracts": {
+      "observation_schema": 1,
+      "feature_count": 184,
+      "action_version": 1,
+      "periodic_sample_ms": 50,
+      "max_label_age_game_ms": 67
+    },
+    "historical_owned_trajectory_equivalence": false
+  },
+  "reference_runtime": {
+    "binary_sha256": "44eff82c4980fe1e54e1b69f5ed2ecc4d6d94c726bc94f23d45fde868620f84c",
+    "environment_sha256": "01ab5d176a995a50c68e81ed721e49b8a0bbc0bbf440f5b40185b0d12e3f38cd"
+  },
+  "scope": "known_seed_diagnostic_only",
+  "proofs_pending_permitted_for_known_diagnostic_only": true,
+  "output_roots": {
+    "reactive": "/home/kaifat/gothic-ai/body/data/stage8-reaction-v3/block-reaction",
+    "native_fault_retry": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/faults-retry-v1/run"
+  },
+  "screening_preregistered": false,
+  "screening_permitted": false,
+  "stage8_quality_credit": false,
+  "realtime_defense_gate_evaluated": false,
+  "legacy_result_replacement": false,
+  "native_fault_retry_declaration": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/faults-retry-v1/declaration.json",
+    "sha256": "826330fdae6a61f72100ba742b4a01497827fc1b6c00b21a12c73e066f9c0358"
+  }
+}

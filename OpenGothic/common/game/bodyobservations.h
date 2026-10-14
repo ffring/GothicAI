@@ -32,6 +32,17 @@ class BodyObservations final {
     static uint64_t lastStepCostUs();
     static size_t lastStepActorCount();
     static uint64_t entityId(const Npc& actor);
+    static uint64_t sessionEpoch();
+    static uint64_t worldEpoch();
+    static Npc* findEntity(uint64_t id);
+    static bool watched(const Npc& actor);
+    // Recorder-only causal view. Clones the sampled actor's history, reads current native
+    // state before the executor, and leaves live sampling/IPC sequence and actor history intact.
+    static std::string captureDecision(Npc& actor);
+    static uint64_t latestSequence(const Npc& actor);
+    static uint64_t latestGameMs(const Npc& actor);
+    static bool latestPeriodic(const Npc& actor);
+    static uint64_t latestWallMs(const Npc& actor);
     static void forget(const Npc* actor);
     // Explicit teleport/fixture relocation; ordinary MoveAlgo correction is not a discontinuity.
     static void discontinuity(const Npc& actor);
@@ -39,8 +50,10 @@ class BodyObservations final {
     static void beginStep(uint64_t simStep);
     static uint64_t currentStep();
     // Call once after world movement and animation updates, before benchmark mutations.
-    static void sampleAll();
-    static void sample(Npc& actor, uint64_t gameMs);
+    // A terminal episode may request a final sample between periodic buckets. The native
+    // builder still reads actual state, and force never duplicates an already sampled game time.
+    static void sampleAll(bool force = false);
+    static void sample(Npc& actor, uint64_t gameMs, bool force = false);
     // Native hooks carry a fixed event vocabulary; arbitrary debug fields never enter actor input.
     static void noteEvent(const Npc& actor, const Npc* other, std::string_view event, uint64_t gameMs);
 

@@ -1,0 +1,465 @@
+{
+  "schema_version": 1,
+  "kind": "closed_native_cpu_diagnostic",
+  "diagnostic_only": true,
+  "quality_credit": false,
+  "selection_credit": false,
+  "fresh_eval_credit": false,
+  "model_gate_credit": false,
+  "gate10_cause_proven": false,
+  "remote_run": "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1",
+  "binary_sha256": "681a1704364e07836f839c3e4382b16ae43b28ae3bf75fb46f7884e2b10a1359",
+  "stored_source_sha256": "2cda7c85de8f59be09b0f93ec1810552a7b6abdc3b49bc5df5d0a313fc96a926",
+  "stored_engine_library_sha256": "9be068cd18b461fa213bf7c625e9e2c7e6fd1e3c2466ca95e79eb271d9e0202a",
+  "stored_manifest_sha256": "65454b38b0acffbc81acecdc50e6fd1fc70930c4b642c2e389b310272235b4e2",
+  "old_gate10_artifact_sha256": {
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/environment.json": "6ef29807daa59e6488d45e08a87e03911d27f65aede84b8ec254b83973373f57",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/source.tar.gz": "04078037cb0402569af3863bb3f8af57f5274e0c7bb65efa86c1a561738af98e",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/source-head.txt": "4d7eece22cc8aa1de3275cf3663b7af6995c90431645fce01560aa07c98a4005",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/source.patch": "c200d2b035be10f218db17ac7b8013f5c46f02365776cbf5d26fd7dd9ebbc549",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/reference/gothic-body-runner": "681a1704364e07836f839c3e4382b16ae43b28ae3bf75fb46f7884e2b10a1359"
+  },
+  "sampler_source": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v1/code/scripts/body_native_causal_probe.py",
+    "sha256": "8137e8e9c6749e6f7d5cc57d3a8f418a25ab0c9eabe1529fc4bb95fb43093beb"
+  },
+  "samples": 680,
+  "thread_sample_range": [
+    17,
+    18
+  ],
+  "actual_limits": {
+    "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gothic-body-native-model-profile-v1.service",
+    "cpu.max": "200000 100000",
+    "memory.max": "6442450944"
+  },
+  "native_ticks_all": {
+    "count": 410,
+    "median_ms": 5.664211,
+    "p95_ms": 7.958388,
+    "max_ms": 74.033184
+  },
+  "native_ticks_active": {
+    "count": 394,
+    "median_ms": 5.657979,
+    "p95_ms": 7.698061,
+    "max_ms": 11.58907
+  },
+  "native_ticks_bootstrap": {
+    "count": 16,
+    "median_ms": 6.658958500000001,
+    "p95_ms": 73.59324,
+    "max_ms": 74.033184
+  },
+  "slow_ticks_gt33ms_all": 3,
+  "slow_ticks_gt33ms_active": 0,
+  "active_brackets_with_throttle_delta": 1,
+  "whole_capture_cgroup_delta": {
+    "nice_usec": 14836391,
+    "user_usec": 15107129,
+    "nr_throttled": 2,
+    "nr_periods": 144,
+    "throttled_usec": 573348,
+    "usage_usec": 15702151,
+    "nr_bursts": 0,
+    "burst_usec": 0,
+    "system_usec": 595021,
+    "core_sched.force_idle_usec": 0
+  },
+  "cgroup_counter_scope": "native runner plus collector/sampler and any children",
+  "native_counter_scope": "native runner including its worker threads",
+  "counter_warning": "Brackets include adjacent work and may overlap. Do not sum them as independent per-tick CPU or throttle measurements. Thread brackets have a separate cadence.",
+  "outcome": "death_or_down",
+  "game_start_ms": 16294,
+  "game_end_ms": 29427,
+  "slow_tick_intervals": [
+    {
+      "tick_id": 1,
+      "sim_step_before": 0,
+      "sim_step_after": 1,
+      "game_ms_before": 15761,
+      "game_ms_after": 15794,
+      "begin_wall_monotonic_ns": 1115115475476447,
+      "end_wall_monotonic_ns": 1115115549509631,
+      "wall_duration_ms": 74.033184,
+      "start_lag_ms": 0.0746,
+      "counter_scope": "bracketing interval; may include adjacent ticks",
+      "bracketed": true,
+      "sample_begin_ns": 1115115465220244,
+      "sample_end_ns": 1115115550467225,
+      "native_process_delta": {
+        "stime_ticks": 0,
+        "utime_ticks": 11,
+        "minflt": 0,
+        "majflt": 0
+      },
+      "main_schedstat_delta": {
+        "timeslices": 1,
+        "runqueue_ns": 10890,
+        "runtime_ns": 84989761
+      },
+      "native_io_delta": {
+        "syscw": 11,
+        "write_bytes": 4096,
+        "read_bytes": 0,
+        "syscr": 47,
+        "rchar": 221199,
+        "wchar": 4264,
+        "cancelled_write_bytes": 0
+      },
+      "whole_probe_cgroup_cpu_delta": {
+        "nice_usec": 112000,
+        "user_usec": 107608,
+        "nr_throttled": 0,
+        "nr_periods": 1,
+        "throttled_usec": 0,
+        "usage_usec": 111378,
+        "nr_bursts": 0,
+        "burst_usec": 0,
+        "system_usec": 3770,
+        "core_sched.force_idle_usec": 0
+      },
+      "native_cpu_ms": 110,
+      "pressure_total_delta_us": {
+        "memory": {
+          "some": 0,
+          "full": 0
+        },
+        "io": {
+          "some": 0,
+          "full": 0
+        },
+        "cpu": {
+          "some": 228,
+          "full": 26
+        }
+      },
+      "phase": "bootstrap",
+      "thread_counter_bracket": {
+        "scope": "separate external interval includes adjacent reset work",
+        "begin_ns": 1115115465220244,
+        "end_ns": 1115115593715000,
+        "runtime_ns_sum": 230081094,
+        "runqueue_ns_sum": 27820006,
+        "top_runtime_threads": [
+          {
+            "tid": "953057",
+            "comm": "gothic-body-run",
+            "timeslices": 1,
+            "runqueue_ns": 10890,
+            "runtime_ns": 127410718
+          },
+          {
+            "tid": "953088",
+            "comm": "Workers [9]",
+            "timeslices": 12,
+            "runqueue_ns": 214611,
+            "runtime_ns": 12283930
+          },
+          {
+            "tid": "953083",
+            "comm": "Workers [4]",
+            "timeslices": 9,
+            "runqueue_ns": 100970,
+            "runtime_ns": 12216263
+          },
+          {
+            "tid": "953091",
+            "comm": "Workers [12]",
+            "timeslices": 10,
+            "runqueue_ns": 93285,
+            "runtime_ns": 10051007
+          },
+          {
+            "tid": "953092",
+            "comm": "Workers [13]",
+            "timeslices": 10,
+            "runqueue_ns": 211939,
+            "runtime_ns": 9885024
+          }
+        ]
+      }
+    },
+    {
+      "tick_id": 9,
+      "sim_step_before": 8,
+      "sim_step_after": 9,
+      "game_ms_before": 16027,
+      "game_ms_after": 16061,
+      "begin_wall_monotonic_ns": 1115115614186038,
+      "end_wall_monotonic_ns": 1115115687779278,
+      "wall_duration_ms": 73.59324,
+      "start_lag_ms": 0,
+      "counter_scope": "bracketing interval; may include adjacent ticks",
+      "bracketed": true,
+      "sample_begin_ns": 1115115591670991,
+      "sample_end_ns": 1115115708185826,
+      "native_process_delta": {
+        "stime_ticks": 2,
+        "utime_ticks": 27,
+        "minflt": 0,
+        "majflt": 0
+      },
+      "main_schedstat_delta": {
+        "timeslices": 2,
+        "runqueue_ns": 54870999,
+        "runtime_ns": 61128164
+      },
+      "native_io_delta": {
+        "syscw": 0,
+        "write_bytes": 0,
+        "read_bytes": 0,
+        "syscr": 17,
+        "rchar": 85,
+        "wchar": 0,
+        "cancelled_write_bytes": 0
+      },
+      "whole_probe_cgroup_cpu_delta": {
+        "nice_usec": 248623,
+        "user_usec": 267088,
+        "nr_throttled": 1,
+        "nr_periods": 1,
+        "throttled_usec": 222372,
+        "usage_usec": 281871,
+        "nr_bursts": 0,
+        "burst_usec": 0,
+        "system_usec": 14782,
+        "core_sched.force_idle_usec": 0
+      },
+      "native_cpu_ms": 290,
+      "pressure_total_delta_us": {
+        "memory": {
+          "some": 0,
+          "full": 0
+        },
+        "io": {
+          "some": 0,
+          "full": 0
+        },
+        "cpu": {
+          "some": 57797,
+          "full": 53806
+        }
+      },
+      "phase": "bootstrap",
+      "thread_counter_bracket": {
+        "scope": "separate external interval includes adjacent reset work",
+        "begin_ns": 1115115591670991,
+        "end_ns": 1115115708185826,
+        "runtime_ns_sum": 273893617,
+        "runqueue_ns_sum": 241037887,
+        "top_runtime_threads": [
+          {
+            "tid": "953057",
+            "comm": "gothic-body-run",
+            "timeslices": 2,
+            "runqueue_ns": 54870999,
+            "runtime_ns": 59706900
+          },
+          {
+            "tid": "953082",
+            "comm": "Workers [3]",
+            "timeslices": 16,
+            "runqueue_ns": 57979,
+            "runtime_ns": 26104720
+          },
+          {
+            "tid": "953079",
+            "comm": "Workers [0]",
+            "timeslices": 19,
+            "runqueue_ns": 69455769,
+            "runtime_ns": 23201539
+          },
+          {
+            "tid": "953084",
+            "comm": "Workers [5]",
+            "timeslices": 18,
+            "runqueue_ns": 159160,
+            "runtime_ns": 23129912
+          },
+          {
+            "tid": "953089",
+            "comm": "Workers [10]",
+            "timeslices": 16,
+            "runqueue_ns": 222576,
+            "runtime_ns": 20067587
+          }
+        ]
+      }
+    },
+    {
+      "tick_id": 15,
+      "sim_step_before": 14,
+      "sim_step_after": 15,
+      "game_ms_before": 16227,
+      "game_ms_after": 16261,
+      "begin_wall_monotonic_ns": 1115115717819482,
+      "end_wall_monotonic_ns": 1115115787163443,
+      "wall_duration_ms": 69.343961,
+      "start_lag_ms": 0,
+      "counter_scope": "bracketing interval; may include adjacent ticks",
+      "bracketed": true,
+      "sample_begin_ns": 1115115707185772,
+      "sample_end_ns": 1115115811156579,
+      "native_process_delta": {
+        "stime_ticks": 1,
+        "utime_ticks": 16,
+        "minflt": 0,
+        "majflt": 0
+      },
+      "main_schedstat_delta": {
+        "timeslices": 8,
+        "runqueue_ns": 55760705,
+        "runtime_ns": 41410445
+      },
+      "native_io_delta": {
+        "syscw": 46,
+        "write_bytes": 57344,
+        "read_bytes": 0,
+        "syscr": 17,
+        "rchar": 710,
+        "wchar": 223092,
+        "cancelled_write_bytes": 0
+      },
+      "whole_probe_cgroup_cpu_delta": {
+        "nice_usec": 147832,
+        "user_usec": 161615,
+        "nr_throttled": 1,
+        "nr_periods": 1,
+        "throttled_usec": 350976,
+        "usage_usec": 175246,
+        "nr_bursts": 0,
+        "burst_usec": 0,
+        "system_usec": 13631,
+        "core_sched.force_idle_usec": 0
+      },
+      "native_cpu_ms": 170,
+      "pressure_total_delta_us": {
+        "memory": {
+          "some": 0,
+          "full": 0
+        },
+        "io": {
+          "some": 0,
+          "full": 0
+        },
+        "cpu": {
+          "some": 60955,
+          "full": 58499
+        }
+      },
+      "phase": "bootstrap",
+      "thread_counter_bracket": {
+        "scope": "separate external interval includes adjacent reset work",
+        "begin_ns": 1115115707185772,
+        "end_ns": 1115115811156579,
+        "runtime_ns_sum": 169774289,
+        "runqueue_ns_sum": 351380306,
+        "top_runtime_threads": [
+          {
+            "tid": "953057",
+            "comm": "gothic-body-run",
+            "timeslices": 9,
+            "runqueue_ns": 55760705,
+            "runtime_ns": 41635227
+          },
+          {
+            "tid": "953089",
+            "comm": "Workers [10]",
+            "timeslices": 12,
+            "runqueue_ns": 43712,
+            "runtime_ns": 16188947
+          },
+          {
+            "tid": "953080",
+            "comm": "Workers [1]",
+            "timeslices": 12,
+            "runqueue_ns": 64690962,
+            "runtime_ns": 15040645
+          },
+          {
+            "tid": "953087",
+            "comm": "Workers [8]",
+            "timeslices": 11,
+            "runqueue_ns": 158978,
+            "runtime_ns": 12777858
+          },
+          {
+            "tid": "953085",
+            "comm": "Workers [6]",
+            "timeslices": 11,
+            "runqueue_ns": 64631449,
+            "runtime_ns": 12287748
+          }
+        ]
+      }
+    }
+  ],
+  "raw_artifacts": {
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/profile/external-metadata.json": {
+      "sha256": "9d1bfbb30a746b2f0bff35251b0af5b4c8078486eacf9a4b7c4f56e8f674f4a4",
+      "bytes": 1354
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/profile/external-samples.jsonl": {
+      "sha256": "284526a7d518d95cb8fe7bf94880ca0eac621d3dfd9fd0c96885416e0ae2f46b",
+      "bytes": 1809055
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/observer-timing.jsonl": {
+      "sha256": "e28aa1c0143b8f241f173445c79afd805102796e9ee2034bfa174aa878af971e",
+      "bytes": 708465
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/observations.jsonl": {
+      "sha256": "60803da62e0edf42e11d3b36ecf751cfe72e160b3da6563d929fff079df2d774",
+      "bytes": 2288026
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/events.jsonl": {
+      "sha256": "61dd98e7e5647f57067ff224e7c3b09b7777ee353458f76af0e47ca0654426d3",
+      "bytes": 3748023
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/ipc.jsonl": {
+      "sha256": "942dd5d08c0f9d0323409197f013f938c257408e91429b824639f02fe2f87440",
+      "bytes": 8653947
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/body-control-events.jsonl": {
+      "sha256": "2152cd5a695b104ec8251265795f7930be585cad5f44d37c2c6487f8c9e33a09",
+      "bytes": 70244
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/runner-summary.json": {
+      "sha256": "ed0770389501564cc479aa567dfcd797c4610153b71be3aac30c39195e772c30",
+      "bytes": 22152
+    }
+  },
+  "original_complete_phase_cases": 24,
+  "original_complete_phase_status": "collected",
+  "actual_target_model_stats": {
+    "periodic_observations": 264,
+    "unowned_periodic_observations": 1,
+    "model_processed": 263,
+    "runtime_fallbacks": 0,
+    "latest_eligible_periodic_opportunities": 25,
+    "accepted_model_commands": 25,
+    "terminal_censored_commands": 0,
+    "rejected_model_commands": 0,
+    "action_1": 7,
+    "event_only_observations": 39,
+    "action_10": 4,
+    "event_only_latest_eligible_skips": 11,
+    "action_8": 3,
+    "action_4": 3,
+    "action_2": 1,
+    "action_9": 1,
+    "action_5": 1,
+    "action_6": 5
+  },
+  "actual_target_fallback_events": [],
+  "profile_sha256": "f415bb41cd7d4f309b747e4dc6f82f56022889d89455e79e4119e4255934f062",
+  "episode_sha256": "32f3759ef1501ca60f19603754a21172dd04a8147a6e35e591c78431eec13ae7",
+  "runtime_sha256": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1",
+  "candidate_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "wrapper_sha256": "912de3a06257c9f3fe986ff6278cc4aa38dcb90fd0ea0e011806060f207b4507",
+  "source_inventory_and_raw_hashes_verified": true,
+  "conclusion": "All three slow ticks are reset bootstrap. Two bootstrap brackets overlap cgroup throttling/main runqueue/CPU PSI increments; one does not. All394 active ticks have no slow tick and fallback0. Gate10 in-fight failure not reproduced; no quality or causal Gate10 credit."
+}

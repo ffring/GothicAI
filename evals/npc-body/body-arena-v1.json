@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "scenario": "body-arena-v1",
+  "declared_before_measurement": "2026-10-13",
+  "policy": "Episode readiness and throughput derive from native arena, combat and control journals plus timestamped IPC; driver pass flags do not establish readiness.",
+  "actions": ["continue", "approach", "turn_to_target", "strafe_left", "strafe_right", "jump_back", "attack_front", "attack_left", "attack_right", "block", "wait_200", "wait_300"],
+  "scenarios": ["distance", "attack", "block", "native_duel", "reset_stress"],
+  "declared_outcomes": {
+    "task_success": "Terminated microtask with native distance, hit or blocked-attack proof.",
+    "death_or_down": "Terminated duel with a native dead, unconscious or down actor.",
+    "time_limit": "Truncated at the configured game-time budget, without a winner.",
+    "control_lost": "Truncated scripted duel on a linked primary ownership release for target_visibility_lost; a failed candidate episode, without native continuation or a winner.",
+    "infrastructure": "Crash, invalid setup or provider/transport watchdog; separate from combat and game-time outcomes."
+  },
+  "reset_count": 100,
+  "reset_seed": 17,
+  "arena_profile": {
+    "hp": 300,
+    "hp_max": 300,
+    "str": 60,
+    "dex": 60,
+    "onehand": 60,
+    "onehand_talent": 2,
+    "edge_protection": 30,
+    "blunt_protection": 30,
+    "weapon": "ItMw_1h_Common_01",
+    "armor": "ItAr_Leather_L",
+    "distance_goal_cm": 220,
+    "distance_hold_ms": 200
+  },
+  "reset_mutations": ["actual_melee_hp_loss", "actual_jump_back_displacement", "owned_active_wait"],
+  "reset_movement_action": 5,
+  "paired_seeds": [17, 29, 43],
+  "paired_sides": [0, 1],
+  "paired_providers": ["native", "scripted"],
+  "required_micro_cases": ["distance", "attack", "block", "native_terminal", "duel_timeout"],
+  "budgets": {
+    "provider_watchdog_wall_ms": 5000,
+    "command_ttl_game_ms": 1000,
+    "max_command_substeps": 200,
+    "max_episode_substeps": 1800,
+    "event_loss_max": 0,
+    "runner_wall_timeout_s": 2400,
+    "reset_position_tolerance_cm": 0.01,
+    "reset_yaw_tolerance_deg": 0.001
+  },
+  "setups": {
+    "reset_stress": {"distance_cm": 150, "timeout_ms": 10000},
+    "distance": {"distance_cm": 600, "timeout_ms": 10000},
+    "attack": {"distance_cm": 150, "timeout_ms": 5000},
+    "block": {"distance_cm": 150, "timeout_ms": 5000},
+    "native_terminal": {"distance_cm": 150, "timeout_ms": 60000},
+    "duel_timeout": {"distance_cm": 150, "timeout_ms": 33},
+    "paired": {"distance_cm": 400, "timeout_ms": 30000},
+    "throughput": {"distance_cm": 150, "timeout_ms": 10000, "episodes": 12}
+  },
+  "throughput_gate": {
+    "small_ppo_decisions": 32768,
+    "max_collection_wall_s": 21600,
+    "min_transitions_s": 1.517037037037037,
+    "projection_decisions": [32768, 100000, 1000000],
+    "policy_transition": "A unique eligible accepted non-continue command, an actual native segment start, and a linked command or episode outcome; locked observation ticks are not decisions.",
+    "denominator": "End-to-end scripted benchmark wall time including reset, IPC, local provider and final snapshot; excludes model inference, optimization and dataset writing.",
+    "on_failure": "Optimize the server runner before a large training collection; never move episode simulation to the Mac."
+  },
+  "native_seeds": [17, 29, 43],
+  "required_evidence": [
+    "100 consecutive dirty episode resets in one native runner process",
+    "Canonical native initial state repeats for a fixed seed/setup",
+    "Terminal or intentional pre-reset snapshot persists before world reset and recurrent token changes",
+    "Distance, applied melee hit and real blocked attack are computed by the native engine",
+    "Native duel terminal, game-time truncation and infrastructure failure are distinct",
+    "Paired native/scripted seeds and mirrored physical positions use identical initial setup",
+    "Eligible executed policy transitions, episodes/s and reset latency are measured separately",
+    "Archived native-off baseline seeds 17/29/43 still match",
+    "No graphics devices, model, renderer VRAM or production service changes"
+  ],
+  "limitations": [
+    "Scripted providers validate the environment; no GRU, model quality claim or training is part of stage 5.",
+    "Reset determinism covers canonical initial state; bit-identical whole-world evolution is not promised.",
+    "Collection time projections do not include optimizer, future GRU inference or stage 6 recorder overhead.",
+    "One CPU runner with CPUQuota 200 percent and at most two active combat actors is measured."
+  ]
+}

@@ -1,0 +1,593 @@
+{
+  "schema_version": 1,
+  "kind": "stage8_queue_v17_closed_ordering_failure_compact",
+  "created_at_utc": "2026-10-14T16:43:26.681404+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17",
+  "status": "failed",
+  "source_collection_status": "collected",
+  "error": "queued numeric/status query replied before its due physical tick",
+  "model": null,
+  "quality_credit": false,
+  "native_binding": {
+    "binary_sha256": "a1695dfb0edafdbc793075c84c3aae80b3ec3de61d9a7446dfe68ccff92bc0c2",
+    "engine_library_sha256": "9be068cd18b461fa213bf7c625e9e2c7e6fd1e3c2466ca95e79eb271d9e0202a",
+    "source_sha256": "82e628dc7ed120ef51cbe6ff3e55f09c9d34626c70709aa35fe260433cc4de16"
+  },
+  "profile": {
+    "mode": "realtime",
+    "task": "reset_stress",
+    "seed": 223,
+    "side": 0,
+    "distance_cm": 400,
+    "timeout_ms": 1500,
+    "batch_size": 64,
+    "query_batch_size": 8,
+    "maximum_batches": 29,
+    "maximum_terminal_polls": 64,
+    "maximum_action_attempts": 4,
+    "action_id": 11,
+    "command_ttl_ms": 100,
+    "poll_ms": 5,
+    "max_ready_commands_per_due_tick": 1,
+    "model": null,
+    "quality_credit": false
+  },
+  "bad_query_chains": [
+    {
+      "request_id": 8,
+      "command": "body_control_status",
+      "previous_tick_end": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_end",
+        "oracle_only": true,
+        "seq": 40,
+        "tick_id": 17,
+        "game_ms": 16327,
+        "sim_step": 17,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734195979706,
+        "tick_due_wall_monotonic_ns": 1112734143246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "read": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "input_read",
+        "oracle_only": true,
+        "seq": 41,
+        "tick_id": 17,
+        "game_ms": 16327,
+        "sim_step": 17,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734196027605,
+        "tick_due_wall_monotonic_ns": 1112734176246554,
+        "clock_domain": "linux-clock-monotonic",
+        "request_id": 8,
+        "command": "body_control_status",
+        "admitted_before_due_tick": false,
+        "max_ready_commands_per_due_tick": 1
+      },
+      "response_native": {
+        "id": 8,
+        "mode": "realtime",
+        "paused": false,
+        "game_ms": 16327,
+        "sim_step": 17,
+        "wall_monotonic_ns": 1112734196764587,
+        "next_tick_wall_monotonic_ns": 1112734176246554,
+        "arena_started": true
+      },
+      "collector_request": {
+        "direction": "request",
+        "wall_monotonic": 1112734.144493742,
+        "wall_monotonic_ns": 1112734144493742,
+        "value": {
+          "id": 8,
+          "cmd": "body_control_status"
+        }
+      },
+      "collector_response_clock": {
+        "direction": "response",
+        "wall_monotonic": 1112734.197216875,
+        "wall_monotonic_ns": 1112734197216875
+      },
+      "same_due_next_tick_begin": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_begin",
+        "oracle_only": true,
+        "seq": 43,
+        "tick_id": 18,
+        "game_ms": 16327,
+        "sim_step": 17,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734197511767,
+        "tick_due_wall_monotonic_ns": 1112734176246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "same_due_next_tick_end": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_end",
+        "oracle_only": true,
+        "seq": 44,
+        "tick_id": 18,
+        "game_ms": 16361,
+        "sim_step": 18,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734214846055,
+        "tick_due_wall_monotonic_ns": 1112734176246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "derived_ms": {
+        "overdue_at_read": 19.781051,
+        "reply_before_next_tick_begin": 0.74718
+      }
+    },
+    {
+      "request_id": 81,
+      "command": "body_control_status",
+      "previous_tick_end": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_end",
+        "oracle_only": true,
+        "seq": 127,
+        "tick_id": 24,
+        "game_ms": 16561,
+        "sim_step": 24,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734411482491,
+        "tick_due_wall_monotonic_ns": 1112734376246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "read": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "input_read",
+        "oracle_only": true,
+        "seq": 128,
+        "tick_id": 24,
+        "game_ms": 16561,
+        "sim_step": 24,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734411508480,
+        "tick_due_wall_monotonic_ns": 1112734410246554,
+        "clock_domain": "linux-clock-monotonic",
+        "request_id": 81,
+        "command": "body_control_status",
+        "admitted_before_due_tick": false,
+        "max_ready_commands_per_due_tick": 1
+      },
+      "response_native": {
+        "id": 81,
+        "mode": "realtime",
+        "paused": false,
+        "game_ms": 16561,
+        "sim_step": 24,
+        "wall_monotonic_ns": 1112734412115468,
+        "next_tick_wall_monotonic_ns": 1112734410246554,
+        "arena_started": true
+      },
+      "collector_request": {
+        "direction": "request",
+        "wall_monotonic": 1112734.395094427,
+        "wall_monotonic_ns": 1112734395094427,
+        "value": {
+          "id": 81,
+          "cmd": "body_control_status"
+        }
+      },
+      "collector_response_clock": {
+        "direction": "response",
+        "wall_monotonic": 1112734.413325947,
+        "wall_monotonic_ns": 1112734413325947
+      },
+      "same_due_next_tick_begin": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_begin",
+        "oracle_only": true,
+        "seq": 130,
+        "tick_id": 25,
+        "game_ms": 16561,
+        "sim_step": 24,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734412197221,
+        "tick_due_wall_monotonic_ns": 1112734410246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "same_due_next_tick_end": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_end",
+        "oracle_only": true,
+        "seq": 131,
+        "tick_id": 25,
+        "game_ms": 16594,
+        "sim_step": 25,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734430155248,
+        "tick_due_wall_monotonic_ns": 1112734410246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "derived_ms": {
+        "overdue_at_read": 1.261926,
+        "reply_before_next_tick_begin": 0.081753
+      }
+    },
+    {
+      "request_id": 153,
+      "command": "body_control_status",
+      "previous_tick_end": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_end",
+        "oracle_only": true,
+        "seq": 223,
+        "tick_id": 36,
+        "game_ms": 16961,
+        "sim_step": 36,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734820734330,
+        "tick_due_wall_monotonic_ns": 1112734776246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "read": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "input_read",
+        "oracle_only": true,
+        "seq": 224,
+        "tick_id": 36,
+        "game_ms": 16961,
+        "sim_step": 36,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734820777391,
+        "tick_due_wall_monotonic_ns": 1112734810246554,
+        "clock_domain": "linux-clock-monotonic",
+        "request_id": 153,
+        "command": "body_control_status",
+        "admitted_before_due_tick": false,
+        "max_ready_commands_per_due_tick": 1
+      },
+      "response_native": {
+        "id": 153,
+        "mode": "realtime",
+        "paused": false,
+        "game_ms": 16961,
+        "sim_step": 36,
+        "wall_monotonic_ns": 1112734821922026,
+        "next_tick_wall_monotonic_ns": 1112734810246554,
+        "arena_started": true
+      },
+      "collector_request": {
+        "direction": "request",
+        "wall_monotonic": 1112734.808323963,
+        "wall_monotonic_ns": 1112734808323963,
+        "value": {
+          "id": 153,
+          "cmd": "body_control_status"
+        }
+      },
+      "collector_response_clock": {
+        "direction": "response",
+        "wall_monotonic": 1112734.822453473,
+        "wall_monotonic_ns": 1112734822453473
+      },
+      "same_due_next_tick_begin": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_begin",
+        "oracle_only": true,
+        "seq": 226,
+        "tick_id": 37,
+        "game_ms": 16961,
+        "sim_step": 36,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734822991171,
+        "tick_due_wall_monotonic_ns": 1112734810246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "same_due_next_tick_end": {
+        "schema_version": 1,
+        "kind": "runner_scheduling",
+        "phase": "tick_end",
+        "oracle_only": true,
+        "seq": 227,
+        "tick_id": 37,
+        "game_ms": 16994,
+        "sim_step": 37,
+        "runner_generation": 1,
+        "wall_monotonic_ns": 1112734846548334,
+        "tick_due_wall_monotonic_ns": 1112734810246554,
+        "clock_domain": "linux-clock-monotonic"
+      },
+      "derived_ms": {
+        "overdue_at_read": 10.530837,
+        "reply_before_next_tick_begin": 1.069145
+      }
+    }
+  ],
+  "bad_query_count": 3,
+  "clock_counts": {
+    "tick_begin": 61,
+    "tick_end": 61,
+    "input_read": 301
+  },
+  "diagnostic_record_count": 423,
+  "priority_admission_counts": {
+    "body_heartbeat": 30
+  },
+  "max_actual_ready_admissions_per_due_tick": 1,
+  "ordinary_control_events": {
+    "ownership": 4,
+    "accepted": 3,
+    "started": 3,
+    "completed": 2,
+    "cancelled": 1
+  },
+  "final_arena": {
+    "outcome": "time_limit",
+    "reason": "time_limit",
+    "terminated": false,
+    "truncated": true,
+    "infrastructure": false,
+    "elapsed_game_ms": 1500,
+    "game_ms": 17794,
+    "actors": [
+      {
+        "entity_id": 1,
+        "hp": 300,
+        "owner": "scripted",
+        "release_pending": false
+      },
+      {
+        "entity_id": 2,
+        "hp": 300,
+        "owner": "scripted",
+        "release_pending": false
+      }
+    ]
+  },
+  "reader_pure_tests": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "6",
+    "time": "0.122",
+    "timestamp": "2026-10-14T16:35:19.432829+00:00",
+    "hostname": "dev-ubuntu"
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/environment.json",
+      "size_bytes": 14460,
+      "sha256": "54812c4c231ef01cb75d01e735e63f47be4f76e982b3b6f1fdff3535c5c87a73"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/source.tar.gz",
+      "size_bytes": 12329773,
+      "sha256": "463b4ee915782dea6a2cb8c22b3562b8c24ad47f303a890d420a79ff1f1d38c1"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/probe.json",
+      "size_bytes": 53692,
+      "sha256": "5e364b63df9377be6429d381d6472759fb4a06979d33b63601d824bc0e7899e5"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/manifest.json",
+      "size_bytes": 56782,
+      "sha256": "938d4e79dbfab1979ceeea6ef172a814967a493af5fffe7bcaf9dcefed7f7184"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-tests.xml",
+      "size_bytes": 1255,
+      "sha256": "621466d253d973e0bf4bf6ed57a0bcc52a00a61f90ce787580e6e8364a0b2374"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/scripts/body_pending_input_probe.py",
+      "size_bytes": 23943,
+      "sha256": "7abecaa65ab5fe96252ef698791397212dc7cdb022b3bf9aa4d954b2cedb9532"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/arena-events.jsonl",
+      "size_bytes": 27467,
+      "sha256": "537732e47f702d483ee68b63ae724f449bf2ee9f256a679baa6a98a4ddeffde3"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/observer-timing.jsonl",
+      "size_bytes": 162595,
+      "sha256": "8311957f245a5cda3683f6c7a09f52b64eaf80fc9555d17b12c66935c1abde6c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/ipc.jsonl",
+      "size_bytes": 3719703,
+      "sha256": "ddbcb4943ecade48582a035aed0cb1de8b6089949f6367c8b23037ad423e37a0"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/body-control-events.jsonl",
+      "size_bytes": 11745,
+      "sha256": "19a5f85a5f63950f1a4e088cb63661b0ec7225360a7e3568b5bf354dfac1168f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/events.jsonl",
+      "size_bytes": 138589,
+      "sha256": "cae9c5e334a76dbd87aeb6bb06d922fadf79e40eaddbce874b677674c24a24cc"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/observations.jsonl",
+      "size_bytes": 237210,
+      "sha256": "d57c34a79080361ace8d56615f476df34d4fe474c20940342f6545363a39172f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe/episode/runner-summary.json",
+      "size_bytes": 22147,
+      "sha256": "ddeb6c49ebdca319d0882d970e858f5af420fbc6d281d950a32824b7e67c731e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/resources-pending-input-probe.txt",
+      "size_bytes": 1815,
+      "sha256": "5e5584f3abf15fbde8b03d1440a18b690a5c6ba6245a6f3f206406e74b6a8206"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/launcher-pending-input-probe.log",
+      "size_bytes": 410,
+      "sha256": "3fc793eb6ee313c07955249d23bdacfc1b14468c47c2b305eb755d3edffca4a1"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/services-pending-input-probe-before.json",
+      "size_bytes": 429,
+      "sha256": "f9927902d4463e78db1d1f3cdfd7a0607367007f175286b92ea2b11b2efbb8a9"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/services-pending-input-probe-after.json",
+      "size_bytes": 429,
+      "sha256": "950ba8db16d4ad0a45582c33777fa65252603041e8eeffc7f3c746f4b9b65812"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/resources-pending-input-tests.txt",
+      "size_bytes": 968,
+      "sha256": "0e37a3df27324072d4489f3fe227da04bd298cce6f016a18b2e948848024596c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/launcher-pending-input-tests.log",
+      "size_bytes": 402,
+      "sha256": "7c9bac6394c9e7ae082c83117ceb6d1b7bf8ae8c7bd5d68162c75dd2ee72049f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/services-pending-input-tests-before.json",
+      "size_bytes": 429,
+      "sha256": "98949b8b7bfe6b8f75616a952f189e611501db7eba1c318bd84c49ba2ebb845d"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/services-pending-input-tests-after.json",
+      "size_bytes": 429,
+      "sha256": "519c9ab3848d9a9b54b71bf6859130d317bdaecb543bef6405da5f3841fe0afb"
+    }
+  ],
+  "resource_and_log_fragments": {
+    "resources-pending-input-probe.txt": "Command exited with non-zero status 2\n\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/scripts/body_pending_input_probe.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v17/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/evals/npc-body/body-stage8-v1.json --output /home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-probe\"\n\tUser time (seconds): 11.59\n\tSystem time (seconds): 2.42\n\tPercent of CPU this job got: 106%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:13.17\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 571724\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 12\n\tMinor (reclaiming a frame) page faults: 182105\n\tVoluntary context switches: 6137\n\tInvoluntary context switches: 1541\n\tSwaps: 0\n\tFile system inputs: 8966360\n\tFile system outputs: 8960\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 2\n",
+    "launcher-pending-input-probe.log": "Running as unit: gothic-body-bc-stage8-motor-v17-pending-input-probe.service\npending input probe failed: queued numeric/status query replied before its due physical tick\n          Finished with result: exit-code\nMain processes terminated with: code=exited, status=2/INVALIDARGUMENT\n               Service runtime: 13.200s\n             CPU time consumed: 14.037s\n                   Memory peak: 1.7G (swap: 0B)\n",
+    "resources-pending-input-tests.txt": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python -m pytest /home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/scripts/tests/test_body_pending_input_probe.py -q --junitxml=/home/kaifat/gothic-ai/body/data/stage8-motor-v17/pending-input-tests.xml\"\n\tUser time (seconds): 0.41\n\tSystem time (seconds): 0.06\n\tPercent of CPU this job got: 79%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.59\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 36220\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 2\n\tMinor (reclaiming a frame) page faults: 6602\n\tVoluntary context switches: 267\n\tInvoluntary context switches: 18\n\tSwaps: 0\n\tFile system inputs: 22064\n\tFile system outputs: 416\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+    "launcher-pending-input-tests.log": "Running as unit: gothic-body-bc-stage8-motor-v17-pending-input-tests.service\n......                                                                   [100%]\n6 passed in 0.13s\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 622ms\n             CPU time consumed: 488ms\n                   Memory peak: 35.7M (swap: 0B)\n"
+  },
+  "service_identity": {
+    "pending-input-probe": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T16:35:21.039222+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T16:35:34.458180+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    },
+    "pending-input-tests": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T16:35:18.926548+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T16:35:19.707303+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    }
+  },
+  "gate_v9": {
+    "run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v9",
+    "closed_targeted_tests": {
+      "runtime-cpu-profile": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "101",
+        "time": "0.347",
+        "timestamp": "2026-10-14T16:35:59.278503+00:00",
+        "hostname": "dev-ubuntu"
+      },
+      "final-evaluation": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "78",
+        "time": "0.190",
+        "timestamp": "2026-10-14T16:36:00.112945+00:00",
+        "hostname": "dev-ubuntu"
+      },
+      "combat-report": {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "82",
+        "time": "0.148",
+        "timestamp": "2026-10-14T16:36:22.031192+00:00",
+        "hostname": "dev-ubuntu"
+      }
+    },
+    "source_files": [
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v9/runtime-cpu-profile-tests.xml",
+        "size_bytes": 12620,
+        "sha256": "0b1f2216c963c57583a65491e036c4fa269b99062e133b73d9cd4ab718b712b9"
+      },
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v9/final-evaluation-tests.xml",
+        "size_bytes": 12430,
+        "sha256": "b754774e8dc7621e2753f3c9bfe3ab35f65c5babd3721f939479d73b7394fcc0"
+      },
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v9/combat-report-tests.xml",
+        "size_bytes": 14309,
+        "sha256": "641aef45d1195081b59c36949dd21ef022d1f725b25af7657367ebe139a93d54"
+      }
+    ],
+    "quality_cases_started": 0,
+    "actual_model_forwards": 0,
+    "quality_phase_directories_present": {
+      "shadow": false,
+      "realtime": false,
+      "realtime-reaction": false,
+      "load": false,
+      "fresh-screening": false
+    },
+    "overall_gate_pass": false,
+    "fresh_started": false
+  },
+  "interpretation": [
+    "Actual native ordering defect, not a missing coverage case: three queries were read after their next tick deadline was overdue in started/unpaused realtime.",
+    "Explicit READ/reply/BEGIN/END clocks prove previous tick state was replied before the same-due physical tick.",
+    "Motor16 mechanics PASS and six pure reader tests do not supersede this failed physical probe.",
+    "Narrow native fix and upcoming Motor18/Queue19/Gate10 remain pending; no retry credit, no weights/normalizer/quality-threshold changes.",
+    "Extractor performs closed read-only metadata/raw calculations and launches no model/test/simulation/service; failed raw stays unchanged."
+  ]
+}

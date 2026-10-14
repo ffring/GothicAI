@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "scenario": "body-api-v1",
+  "declared_before_measurement": "2026-10-13",
+  "policy": "Readiness derives from native lifecycle journals, full JSONL requests/responses, and ordered archived native traces. A driver's pass flag is never evidence.",
+  "actions": [
+    "continue",
+    "approach",
+    "turn_to_target",
+    "strafe_left",
+    "strafe_right",
+    "jump_back",
+    "attack_front",
+    "attack_left",
+    "attack_right",
+    "block",
+    "wait_200",
+    "wait_300"
+  ],
+  "budgets": {
+    "provider_watchdog_wall_ms": 1000,
+    "command_ttl_game_ms": 1000,
+    "case_substeps_max": 300,
+    "pending_capacity": 1,
+    "native_return_quantization_ms": 100,
+    "event_loss_max": 0
+  },
+  "native_seeds": [
+    17,
+    29,
+    43
+  ],
+  "required_cases": [
+    "mask_purity",
+    "mask_false",
+    "range_mask",
+    "collision_mask",
+    "duplicate",
+    "out_of_order",
+    "stale_session",
+    "stale_world",
+    "stale_generation",
+    "stale_disconnect",
+    "stale_goal",
+    "stale_observation",
+    "expired",
+    "unknown_target",
+    "death",
+    "target_gone",
+    "reset",
+    "pause_resume",
+    "ownership",
+    "accepted_expired",
+    "goal_changed_pending",
+    "realtime_timeout",
+    "realtime_disconnect",
+    "lockstep_timeout",
+    "action_chain"
+  ],
+  "refusal_reasons": {
+    "mask_false": [
+      "weapon_mode"
+    ],
+    "duplicate": [
+      "accepted"
+    ],
+    "out_of_order": [
+      "out_of_order"
+    ],
+    "stale_session": [
+      "stale_session"
+    ],
+    "stale_world": [
+      "stale_world"
+    ],
+    "stale_generation": [
+      "stale_generation"
+    ],
+    "stale_goal": [
+      "stale_goal"
+    ],
+    "expired": [
+      "expired"
+    ],
+    "unknown_target": [
+      "target_invalid"
+    ],
+    "death": [
+      "release_pending",
+      "not_owned"
+    ],
+    "target_gone": [
+      "release_pending",
+      "not_owned"
+    ],
+    "stale_observation": [
+      "stale_observation"
+    ],
+    "stale_disconnect": [
+      "stale_generation"
+    ],
+    "range_mask": [
+      "masked"
+    ],
+    "collision_mask": [
+      "target_invalid"
+    ]
+  },
+  "required_evidence": [
+    "successful lifecycle for all 12 actions including real pose/segment evidence",
+    "mask/resolver agreement without state mutation",
+    "bounded pending commands and unique command execution",
+    "fault refusals and cancellation before startup",
+    "single body owner including soft action, dialog and native takeover",
+    "wall watchdog native fallback at a safe boundary in realtime",
+    "lockstep provider loss classified as infrastructure failure",
+    "strict archived native-off parity for seeds 17, 29 and 43",
+    "CPU headless resource descriptors and unchanged production service states"
+  ],
+  "limitations": [
+    "No neural model or training is part of this stage.",
+    "Fixture mutations establish test states; all action execution, animation, collision and damage use the native engine.",
+    "Continue is a continuation of an existing segment and does not claim a new animation start.",
+    "Wall watchdog timing is measured independently from simulation time."
+  ],
+  "action_chain": [
+    "attack_front",
+    "wait_300",
+    "attack_right"
+  ]
+}

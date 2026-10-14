@@ -1,0 +1,1540 @@
+{
+  "schema_version": 1,
+  "kind": "compact_closed_known_pass_excerpt",
+  "created_at_utc": "2026-10-14T16:02:59.767839+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8",
+  "source_report": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/validation/known-audit-v1/report.json",
+    "size_bytes": 1642282,
+    "sha256": "8dd1c45da22c0a450973af5575673c027b3b60bed6709f4d67ee4b100737439b"
+  },
+  "passed": true,
+  "issues": [],
+  "closed_known_stages_only": true,
+  "stage8_quality_credit": false,
+  "load_read": false,
+  "fresh_screening_read": false,
+  "audit_wall_s": 62.66342278989032,
+  "audit_process_wall_s_parent_reported": 62.755,
+  "candidate_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalization_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "audit_binding": {
+    "environment_sha256": "68e4895925d4c99001c4eea0933e9caf4b05eaa241df6e64ee8c332454f6bada",
+    "declaration_sha256": "f48efea4e0d1c787db666af4cfde931a0de4b4c7676edc401ead559819338c17",
+    "known_reader_sha256": "747845004224b1cfafa9aa47dab19f1b68aa65bf5e47b4433b7b2b8dfdcf14fc",
+    "known_audit_manifest_sha256": null
+  },
+  "external_reader_binding": {
+    "audit_snapshot_sha256": "fd2c500e19d4357d6d2f6dc6398a0b7d1840f05c2ebce66925ee4a8b2956a2e4",
+    "reporter_sha256": "e42e156a70904d3b16a4546d2711d67db9aab0feb8099725c7a404c4024849ea"
+  },
+  "closed_phases": {
+    "shadow": {
+      "episodes": 3,
+      "status": "collected",
+      "suite_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/shadow/suite.json",
+      "suite_sha256": "d4041e2b646aacb629b185e711f1b4cf252b983d4c3ed6f4c8f1c117d48cfe35"
+    },
+    "realtime": {
+      "episodes": 24,
+      "status": "collected",
+      "suite_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/realtime/suite.json",
+      "suite_sha256": "16f2a002fff925fa09131a051c4e0516d8579ce0cd16ca73c203c0e99d67f8a7"
+    },
+    "realtime-reaction": {
+      "episodes": 6,
+      "status": "collected",
+      "suite_path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/realtime-reaction/suite.json",
+      "suite_sha256": "fd5ad4974e5c33ea1e14436bee2fd67762e11189ded1352974d639e2606bb0a6"
+    }
+  },
+  "episode_summaries": [
+    {
+      "name": "shadow-223-0-native",
+      "policy": "native",
+      "task": "native_duel",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": false,
+      "latency": null,
+      "phase": "shadow",
+      "runtime": null
+    },
+    {
+      "name": "shadow-223-0-gru",
+      "policy": "gru",
+      "task": "native_duel",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": false,
+      "latency": null,
+      "phase": "shadow",
+      "runtime": {
+        "processed_periodic_inputs": 401,
+        "accepted_commands": 0,
+        "rejected_commands": 0,
+        "eligible_opportunities": 0,
+        "neural_control_fraction": null,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "shadow-223-0-mlp",
+      "policy": "mlp",
+      "task": "native_duel",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": false,
+      "latency": null,
+      "phase": "shadow",
+      "runtime": {
+        "processed_periodic_inputs": 401,
+        "accepted_commands": 0,
+        "rejected_commands": 0,
+        "eligible_opportunities": 0,
+        "neural_control_fraction": null,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-0-native",
+      "policy": "native",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-distance-223-0-gru",
+      "policy": "gru",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 30,
+          "p95": 2.136596
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 15.007816
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 2.993755
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 30,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-0-mlp",
+      "policy": "mlp",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 29,
+          "p95": 2.149862
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 6.065744
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 2.588655
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 29,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-0-native",
+      "policy": "native",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-attack-223-0-gru",
+      "policy": "gru",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 3,
+          "p95": 1.446313
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 4.36628
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 1.750703
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 3,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-0-mlp",
+      "policy": "mlp",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 6,
+          "p95": 1.819062
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 13.256592
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 3.080006
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 6,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-0-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-block-223-0-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 100,
+          "p95": 1.859878
+        },
+        "observation_to_arbitration_ms": {
+          "count": 9,
+          "p95": 17.399762
+        },
+        "collector_to_command_send_ms": {
+          "count": 9,
+          "p95": 4.683566
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 100,
+        "accepted_commands": 8,
+        "rejected_commands": 1,
+        "eligible_opportunities": 9,
+        "neural_control_fraction": 0.8888888888888888,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-0-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 5,
+          "p95": 1.19911
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 4.001126
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 1.941232
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 5,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-0-native",
+      "policy": "native",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-native_duel-223-0-gru",
+      "policy": "gru",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 241,
+          "p95": 2.15891
+        },
+        "observation_to_arbitration_ms": {
+          "count": 22,
+          "p95": 4.8778
+        },
+        "collector_to_command_send_ms": {
+          "count": 22,
+          "p95": 2.940606
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 241,
+        "accepted_commands": 22,
+        "rejected_commands": 0,
+        "eligible_opportunities": 22,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-0-mlp",
+      "policy": "mlp",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 456,
+          "p95": 1.78526
+        },
+        "observation_to_arbitration_ms": {
+          "count": 48,
+          "p95": 4.159092
+        },
+        "collector_to_command_send_ms": {
+          "count": 48,
+          "p95": 2.359146
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 456,
+        "accepted_commands": 48,
+        "rejected_commands": 0,
+        "eligible_opportunities": 48,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-1-native",
+      "policy": "native",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-distance-223-1-gru",
+      "policy": "gru",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 29,
+          "p95": 1.981047
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 4.164431
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 2.632529
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 29,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-distance-223-1-mlp",
+      "policy": "mlp",
+      "task": "distance",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 29,
+          "p95": 1.56233
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 3.881361
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 2.00456
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 29,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-1-native",
+      "policy": "native",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-attack-223-1-gru",
+      "policy": "gru",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 3,
+          "p95": 1.661076
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 8.375532
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 1.796149
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 3,
+        "accepted_commands": 1,
+        "rejected_commands": 0,
+        "eligible_opportunities": 1,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-attack-223-1-mlp",
+      "policy": "mlp",
+      "task": "attack",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 19,
+          "p95": 1.778476
+        },
+        "observation_to_arbitration_ms": {
+          "count": 2,
+          "p95": 5.288951
+        },
+        "collector_to_command_send_ms": {
+          "count": 2,
+          "p95": 1.856434
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 19,
+        "accepted_commands": 2,
+        "rejected_commands": 0,
+        "eligible_opportunities": 2,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-1-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-block-223-1-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 100,
+          "p95": 2.209114
+        },
+        "observation_to_arbitration_ms": {
+          "count": 8,
+          "p95": 18.053185
+        },
+        "collector_to_command_send_ms": {
+          "count": 8,
+          "p95": 4.837153
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 100,
+        "accepted_commands": 8,
+        "rejected_commands": 0,
+        "eligible_opportunities": 8,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-block-223-1-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 100,
+          "p95": 1.820985
+        },
+        "observation_to_arbitration_ms": {
+          "count": 6,
+          "p95": 14.842022
+        },
+        "collector_to_command_send_ms": {
+          "count": 6,
+          "p95": 3.692878
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 100,
+        "accepted_commands": 6,
+        "rejected_commands": 0,
+        "eligible_opportunities": 6,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-1-native",
+      "policy": "native",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "ordinary_realtime",
+      "runtime": null
+    },
+    {
+      "name": "realtime-native_duel-223-1-gru",
+      "policy": "gru",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 263,
+          "p95": 1.910665
+        },
+        "observation_to_arbitration_ms": {
+          "count": 25,
+          "p95": 4.848345
+        },
+        "collector_to_command_send_ms": {
+          "count": 25,
+          "p95": 2.544785
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 263,
+        "accepted_commands": 25,
+        "rejected_commands": 0,
+        "eligible_opportunities": 25,
+        "neural_control_fraction": 1.0,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "realtime-native_duel-223-1-mlp",
+      "policy": "mlp",
+      "task": "native_duel",
+      "outcome": "death_or_down",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 287,
+          "p95": 1.895255
+        },
+        "observation_to_arbitration_ms": {
+          "count": 23,
+          "p95": 4.257948
+        },
+        "collector_to_command_send_ms": {
+          "count": 23,
+          "p95": 3.166309
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "ordinary_realtime",
+      "runtime": {
+        "processed_periodic_inputs": 287,
+        "accepted_commands": 22,
+        "rejected_commands": 1,
+        "eligible_opportunities": 23,
+        "neural_control_fraction": 0.9565217391304348,
+        "terminal_censored_commands": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "block-reaction-223-0-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 0,
+        "eligible_opportunities": 0,
+        "accepted_model_commands": 0,
+        "healthy_fraction": null,
+        "runtime_fallbacks": 0
+      }
+    },
+    {
+      "name": "block-reaction-223-0-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.848477
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 10.31522
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 8.42282
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      },
+      "defense_reactions": {
+        "linked_reactions": [
+          {
+            "observation_seq": 5,
+            "command_id": 1,
+            "execution_id": 3,
+            "action_id": 9,
+            "observed_windup_game_ms": 16361,
+            "actual_started_game_ms": 16427,
+            "incoming_attempt_game_ms": 16527,
+            "pose_change_seq": 40,
+            "hit_attempt_seq": 59,
+            "defence_result_seq": 60,
+            "reaction_game_ms": 66,
+            "actual_window_game_ms": 166,
+            "hp_preserved": true
+          }
+        ],
+        "censored": {},
+        "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+      },
+      "actual_physics": {
+        "linked_attack_hits": 0,
+        "linked_opponent_hp_loss": 0,
+        "linked_blocked_hits": 1,
+        "primary_mapping": [
+          3
+        ],
+        "opponent_mapping": [
+          4
+        ],
+        "raw_counters": {
+          "primary": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 1
+          },
+          "opponent": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 0
+          }
+        },
+        "issues": []
+      },
+      "capture_integrity": {
+        "final_integrity_sha256": "e805fae2553c8c3932457a14cc3be4dfbc02adb7314c1fc75efdacd8004d92fb",
+        "visibility_records": 25,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "final_primary": {
+        "hp": 300,
+        "blocked_hits": 1,
+        "received_damage": 0
+      },
+      "source_episode": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/realtime-reaction/block-reaction-223-0-gru/episode.json",
+        "size_bytes": 231361,
+        "sha256": "8471e8ec37d2953f1d8c9cda9a596844f68dfb6d2e178147501fac5b3089e1fa"
+      }
+    },
+    {
+      "name": "block-reaction-223-0-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.740314
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 10.466074
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 8.444621
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      }
+    },
+    {
+      "name": "block-reaction-223-1-native",
+      "policy": "native",
+      "task": "block",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true,
+      "latency": null,
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 0,
+        "eligible_opportunities": 0,
+        "accepted_model_commands": 0,
+        "healthy_fraction": null,
+        "runtime_fallbacks": 0
+      }
+    },
+    {
+      "name": "block-reaction-223-1-gru",
+      "policy": "gru",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.75374
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 8.963183
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 7.286479
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      },
+      "defense_reactions": {
+        "linked_reactions": [
+          {
+            "observation_seq": 5,
+            "command_id": 1,
+            "execution_id": 8,
+            "action_id": 9,
+            "observed_windup_game_ms": 16361,
+            "actual_started_game_ms": 16427,
+            "incoming_attempt_game_ms": 16527,
+            "pose_change_seq": 40,
+            "hit_attempt_seq": 59,
+            "defence_result_seq": 60,
+            "reaction_game_ms": 66,
+            "actual_window_game_ms": 166,
+            "hp_preserved": true
+          }
+        ],
+        "censored": {},
+        "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+      },
+      "actual_physics": {
+        "linked_attack_hits": 0,
+        "linked_opponent_hp_loss": 0,
+        "linked_blocked_hits": 1,
+        "primary_mapping": [
+          3
+        ],
+        "opponent_mapping": [
+          4
+        ],
+        "raw_counters": {
+          "primary": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 1
+          },
+          "opponent": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 0
+          }
+        },
+        "issues": []
+      },
+      "capture_integrity": {
+        "final_integrity_sha256": "95f31a6280a3ae611c8fe939696759d557b619c1a7e3d572f580571caf6f9a54",
+        "visibility_records": 25,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "final_primary": {
+        "hp": 300,
+        "blocked_hits": 1,
+        "received_damage": 0
+      },
+      "source_episode": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/realtime-reaction/block-reaction-223-1-gru/episode.json",
+        "size_bytes": 231538,
+        "sha256": "43551152e9a3baf616c561d44c4ad9f8fb08415001d868999a0243350b01c57d"
+      }
+    },
+    {
+      "name": "block-reaction-223-1-mlp",
+      "policy": "mlp",
+      "task": "block",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true,
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 2.428685
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 15.547865
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 12.471695
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "phase": "realtime_reaction",
+      "runtime": {
+        "processed_inputs": 4,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "neural_control_fraction": 1.0,
+        "runtime_fallbacks": 0,
+        "declared_runtime_fallbacks": 0,
+        "terminal_memory_reset": true
+      }
+    }
+  ],
+  "maximum_per_case_p95_and_control": {
+    "gru": {
+      "model_step_ms": {
+        "episode": "realtime-block-223-1-gru",
+        "count": 100,
+        "p95": 2.209114
+      },
+      "observation_to_arbitration_ms": {
+        "episode": "realtime-block-223-1-gru",
+        "count": 8,
+        "p95": 18.053185
+      },
+      "collector_to_command_send_ms": {
+        "episode": "block-reaction-223-0-gru",
+        "count": 1,
+        "p95": 8.42282
+      },
+      "minimum_neural_control": {
+        "episode": "realtime-block-223-0-gru",
+        "fraction": 0.8888888888888888
+      }
+    },
+    "mlp": {
+      "model_step_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 4,
+        "p95": 2.428685
+      },
+      "observation_to_arbitration_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 1,
+        "p95": 15.547865
+      },
+      "collector_to_command_send_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 1,
+        "p95": 12.471695
+      },
+      "minimum_neural_control": {
+        "episode": "realtime-native_duel-223-1-mlp",
+        "fraction": 0.9565217391304348
+      }
+    },
+    "all_neural": {
+      "model_step_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 4,
+        "p95": 2.428685
+      },
+      "observation_to_arbitration_ms": {
+        "episode": "realtime-block-223-1-gru",
+        "count": 8,
+        "p95": 18.053185
+      },
+      "collector_to_command_send_ms": {
+        "episode": "block-reaction-223-1-mlp",
+        "count": 1,
+        "p95": 12.471695
+      },
+      "minimum_neural_control": {
+        "episode": "realtime-block-223-0-gru",
+        "fraction": 0.8888888888888888
+      }
+    }
+  },
+  "percentile_scope": "Maximum of per-case p95, not pooled; counts retained",
+  "real_backend_execution_profiles": {
+    "shadow": {
+      "actual_forward_count": 802,
+      "profiles": [
+        {
+          "inference_cpu_threads": 1,
+          "torch_intraop_threads": 1,
+          "torch_interop_threads": 12,
+          "count": 802
+        }
+      ],
+      "max_process_wall_ms": 65.634002,
+      "max_backend_wall_ms": 11.747471,
+      "wall_latency_population_unchanged": true,
+      "cpu_stall_cause_claim": false
+    },
+    "realtime": {
+      "actual_forward_count": 1700,
+      "profiles": [
+        {
+          "inference_cpu_threads": 1,
+          "torch_intraop_threads": 1,
+          "torch_interop_threads": 12,
+          "count": 1700
+        }
+      ],
+      "max_process_wall_ms": 59.279782,
+      "max_backend_wall_ms": 5.145932,
+      "wall_latency_population_unchanged": true,
+      "cpu_stall_cause_claim": false
+    },
+    "realtime_reaction": {
+      "actual_forward_count": 16,
+      "profiles": [
+        {
+          "inference_cpu_threads": 1,
+          "torch_intraop_threads": 1,
+          "torch_interop_threads": 12,
+          "count": 16
+        }
+      ],
+      "max_process_wall_ms": 2.428685,
+      "max_backend_wall_ms": 1.284891,
+      "wall_latency_population_unchanged": true,
+      "cpu_stall_cause_claim": false
+    }
+  },
+  "actual_real_forward_count": 2518,
+  "closed_phase_gc_profiles": {
+    "shadow": {
+      "source": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/shadow/collector-gc.json",
+        "size_bytes": 27997,
+        "sha256": "7fce871bcf6fbb29b74825c19169e7c4be400965d396eee3507306f1392cf952"
+      },
+      "helper_sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a",
+      "mode": "freeze_static_keep_dynamic",
+      "bootstrap_normalization": {
+        "kind": "body_collector_bootstrap_gc_normalization",
+        "python_version": [
+          3,
+          12,
+          13
+        ],
+        "python_implementation": "cpython",
+        "sys_version": "3.12.13 (main, Aug  7 2026, 02:25:39) [Clang 22.1.3 ]",
+        "executable": "/home/kaifat/gothic-ai/body/.venv/bin/python",
+        "resolved_executable": "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+        "executable_sha256": "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7",
+        "interpreter_metadata_source": "runtime_sys_and_executable_bytes",
+        "begin_wall_monotonic_ns": 1109533141060917,
+        "end_wall_monotonic_ns": 1109533141077227,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 375,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 0
+      },
+      "startup": {
+        "begin_wall_monotonic_ns": 1109533141090292,
+        "end_wall_monotonic_ns": 1109533228897647,
+        "collected_before_freeze": 92,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 0,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 183578
+      },
+      "restore": {
+        "begin_wall_monotonic_ns": 1109599158960349,
+        "end_wall_monotonic_ns": 1109599188319199,
+        "owned_freeze_released": true,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 183578,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 0
+      },
+      "dynamic_gc_event_count": 141,
+      "dynamic_gc_by_generation": {
+        "0": {
+          "count": 129,
+          "maximum_elapsed_ms": 0.518953
+        },
+        "1": {
+          "count": 11,
+          "maximum_elapsed_ms": 4.451949
+        },
+        "2": {
+          "count": 1,
+          "maximum_elapsed_ms": 11.654867
+        }
+      },
+      "dropped_total": 0,
+      "max_events": 65536
+    },
+    "realtime": {
+      "source": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/realtime/collector-gc.json",
+        "size_bytes": 64619,
+        "sha256": "4db18ca5de0ba451c717bd0177ddfef332a5d9ffbb78c19201f9228c4fed6b80"
+      },
+      "helper_sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a",
+      "mode": "freeze_static_keep_dynamic",
+      "bootstrap_normalization": {
+        "kind": "body_collector_bootstrap_gc_normalization",
+        "python_version": [
+          3,
+          12,
+          13
+        ],
+        "python_implementation": "cpython",
+        "sys_version": "3.12.13 (main, Aug  7 2026, 02:25:39) [Clang 22.1.3 ]",
+        "executable": "/home/kaifat/gothic-ai/body/.venv/bin/python",
+        "resolved_executable": "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+        "executable_sha256": "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7",
+        "interpreter_metadata_source": "runtime_sys_and_executable_bytes",
+        "begin_wall_monotonic_ns": 1109608239214364,
+        "end_wall_monotonic_ns": 1109608239233260,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 375,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 0
+      },
+      "startup": {
+        "begin_wall_monotonic_ns": 1109608239246304,
+        "end_wall_monotonic_ns": 1109608372787168,
+        "collected_before_freeze": 84,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 0,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 183578
+      },
+      "restore": {
+        "begin_wall_monotonic_ns": 1109782323612907,
+        "end_wall_monotonic_ns": 1109782338935650,
+        "owned_freeze_released": true,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 183578,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 0
+      },
+      "dynamic_gc_event_count": 341,
+      "dynamic_gc_by_generation": {
+        "0": {
+          "count": 311,
+          "maximum_elapsed_ms": 0.250269
+        },
+        "1": {
+          "count": 28,
+          "maximum_elapsed_ms": 2.54241
+        },
+        "2": {
+          "count": 2,
+          "maximum_elapsed_ms": 9.031683
+        }
+      },
+      "dropped_total": 0,
+      "max_events": 65536
+    },
+    "realtime-reaction": {
+      "source": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v8/realtime-reaction/collector-gc.json",
+        "size_bytes": 9889,
+        "sha256": "600b6e93771beaab595ba095fb4b61f1760f2336e750f67bc277492e12162e2d"
+      },
+      "helper_sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a",
+      "mode": "freeze_static_keep_dynamic",
+      "bootstrap_normalization": {
+        "kind": "body_collector_bootstrap_gc_normalization",
+        "python_version": [
+          3,
+          12,
+          13
+        ],
+        "python_implementation": "cpython",
+        "sys_version": "3.12.13 (main, Aug  7 2026, 02:25:39) [Clang 22.1.3 ]",
+        "executable": "/home/kaifat/gothic-ai/body/.venv/bin/python",
+        "resolved_executable": "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+        "executable_sha256": "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7",
+        "interpreter_metadata_source": "runtime_sys_and_executable_bytes",
+        "begin_wall_monotonic_ns": 1109789800213907,
+        "end_wall_monotonic_ns": 1109789800227673,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 375,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 0
+      },
+      "startup": {
+        "begin_wall_monotonic_ns": 1109789800238333,
+        "end_wall_monotonic_ns": 1109789885664272,
+        "collected_before_freeze": 84,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 0,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 183641
+      },
+      "restore": {
+        "begin_wall_monotonic_ns": 1109818540432408,
+        "end_wall_monotonic_ns": 1109818563913006,
+        "owned_freeze_released": true,
+        "gc_enabled_before": true,
+        "thresholds_before": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_before": 183641,
+        "gc_enabled_after": true,
+        "thresholds_after": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count_after": 0
+      },
+      "dynamic_gc_event_count": 42,
+      "dynamic_gc_by_generation": {
+        "0": {
+          "count": 39,
+          "maximum_elapsed_ms": 0.362088
+        },
+        "1": {
+          "count": 3,
+          "maximum_elapsed_ms": 1.656587
+        }
+      },
+      "dropped_total": 0,
+      "max_events": 65536
+    }
+  },
+  "neutral_block_results_not_replaced": [
+    {
+      "name": "realtime-block-223-0-native",
+      "policy": "native",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-0-gru",
+      "policy": "gru",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-0-mlp",
+      "policy": "mlp",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-1-native",
+      "policy": "native",
+      "outcome": "task_success",
+      "credited_success": true,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-1-gru",
+      "policy": "gru",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true
+    },
+    {
+      "name": "realtime-block-223-1-mlp",
+      "policy": "mlp",
+      "outcome": "time_limit",
+      "credited_success": false,
+      "quality_credit": true
+    }
+  ],
+  "original_raw_sha256_count": 295,
+  "selected_raw_sha256": {
+    "shadow/suite.json": "d4041e2b646aacb629b185e711f1b4cf252b983d4c3ed6f4c8f1c117d48cfe35",
+    "realtime/suite.json": "16f2a002fff925fa09131a051c4e0516d8579ce0cd16ca73c203c0e99d67f8a7",
+    "realtime-reaction/block-reaction-223-0-gru/arena-events.jsonl": "5be4fb44c5febe16bc6d1633051245550235e94a47fd8e4487c88c471ac84a28",
+    "realtime-reaction/block-reaction-223-0-gru/policy-final-before-clear.json": "144d6494e4c31c8a32199f49e61e77ed0abb8af36f9c81e879fd6d25b908d996",
+    "realtime-reaction/block-reaction-223-0-gru/observations.jsonl": "71898924ada3c9cec7f64e87e621bf6fba99776db6dec7df11a75914abf40496",
+    "realtime-reaction/block-reaction-223-0-gru/observer-timing.jsonl": "24a0d1973f50dbb314830601ab36500dde6c3e02661d6588111f9a1674f37f71",
+    "realtime-reaction/block-reaction-223-0-gru/ipc.jsonl": "6cf09a26e05faafc93226ab7d719d41b03c456e06f1037c49ba9002198fa2660",
+    "realtime-reaction/block-reaction-223-0-gru/bench.log": "117a1e847e6bf0903922f4468318b80cb9c4721707690b5f536f595a92856072",
+    "realtime-reaction/block-reaction-223-0-gru/collector-transport.jsonl": "2c65a935b24d95b82a689544cfac9833785d9f7d2d2aace30d9fcf8e0007201d",
+    "realtime-reaction/block-reaction-223-0-gru/activation.json": "c1417b9a238e7608526705599fb2df41b4b118215f4eadfb5279d308060906e7",
+    "realtime-reaction/block-reaction-223-0-gru/preparation.json": "03a3feb80092cceaec6027275bebf38f6ce96d7a893e28efd138638971a38389",
+    "realtime-reaction/block-reaction-223-0-gru/policy-inputs.jsonl": "6f7063c81bfa36d2da66958c72ecc7d5e0ec59b4c2b0737ae198f915d7e56cdc",
+    "realtime-reaction/block-reaction-223-0-gru/events.jsonl": "29833c1f8adf85db5a27ca67d2442b9e5acfc7f1408fa80df8eca99a9cd96b78",
+    "realtime-reaction/block-reaction-223-0-gru/latency.jsonl": "18839967598cd08995c08e3f6b2e9d2e8696ab6c3a37635e6dff5d3ba4b5d9ac",
+    "realtime-reaction/block-reaction-223-0-gru/body-control-events.jsonl": "019e049197de4621a8e4853791d255bf9863ca1c36c503b20b1a456e5315a6b3",
+    "realtime-reaction/block-reaction-223-0-gru/episode.json": "8471e8ec37d2953f1d8c9cda9a596844f68dfb6d2e178147501fac5b3089e1fa",
+    "realtime-reaction/block-reaction-223-0-gru/runner-summary.json": "9f5357557b2e2693b2af6dc2dcc06f01ea30e97df929dc4ffc83f7b0e1bcccb8",
+    "realtime-reaction/block-reaction-223-1-gru/arena-events.jsonl": "1360b04992e390c5d7c1d03d63de8131d4d56a312dbb0f8f38ef48566f280779",
+    "realtime-reaction/block-reaction-223-1-gru/policy-final-before-clear.json": "d4fa8d93d363e5aa5eaf24ab5c803b6490bef627910f5c5f2ecf8f20ed6014a2",
+    "realtime-reaction/block-reaction-223-1-gru/observations.jsonl": "e34ad7585fc0af30d382554c9726a8e9e4ddc6daddff268817eb2ee4ef7fc851",
+    "realtime-reaction/block-reaction-223-1-gru/observer-timing.jsonl": "80d1ba3a461d672f69454c998303be02f1bd7acb696a244893c85bd6b39e8da2",
+    "realtime-reaction/block-reaction-223-1-gru/ipc.jsonl": "30ce8ed5f6b689b19ee4ff272d2b5210dc745d182f86b428cbc11e995626c280",
+    "realtime-reaction/block-reaction-223-1-gru/bench.log": "117a1e847e6bf0903922f4468318b80cb9c4721707690b5f536f595a92856072",
+    "realtime-reaction/block-reaction-223-1-gru/collector-transport.jsonl": "3f43116c95fd19bee2843110dcbd805d41505b14e85d125e389ff3cf67730b6b",
+    "realtime-reaction/block-reaction-223-1-gru/activation.json": "375f3269e1929290da272ff6ceea8823fdd6eb1c5e4a63adb63fa405db0ac117",
+    "realtime-reaction/block-reaction-223-1-gru/preparation.json": "e6772eff1791dbfa2d491c751f4e74e477b685270e6c71b550d6c23b123fa721",
+    "realtime-reaction/block-reaction-223-1-gru/policy-inputs.jsonl": "bc0f31c2a777b5f90b8d85e4154eef82cefb9e31307615cfca05812877cf4d5c",
+    "realtime-reaction/block-reaction-223-1-gru/events.jsonl": "5a9869ba9dfe696a80456d22e57fd1c85b1bc616b6f9d6770b5db7c0206b573d",
+    "realtime-reaction/block-reaction-223-1-gru/latency.jsonl": "55c90ddf8bf2bb6390199654eeeccb252f485d81e039dcaf2d1fff640d64a51e",
+    "realtime-reaction/block-reaction-223-1-gru/body-control-events.jsonl": "fd4a8440d4e22817cfaf3637343fdbc90f6f5eccaa2083a80e6ac6488008df0e",
+    "realtime-reaction/block-reaction-223-1-gru/episode.json": "43551152e9a3baf616c561d44c4ad9f8fb08415001d868999a0243350b01c57d",
+    "realtime-reaction/block-reaction-223-1-gru/runner-summary.json": "a055a9e1831ee7706bc29451dae0340abfe717579eaf538aa38d24c273c53fe5",
+    "realtime-reaction/suite.json": "fd5ad4974e5c33ea1e14436bee2fd67762e11189ded1352974d639e2606bb0a6"
+  },
+  "full_raw_bindings_retained_in_source_report": true,
+  "current_parent_status": {
+    "load": "running",
+    "fresh_screening": "not_started",
+    "overall_combat_gate": "IN_PROGRESS"
+  },
+  "extraction": {
+    "source_hashes_inherited_from_closed_audit": true,
+    "large_raw_journals_rehashed": false,
+    "small_closed_gc_profile_files_only": true,
+    "active_load_read": false,
+    "models_engine_tests_services_started": false,
+    "remote_source_or_failed_raw_changed": false
+  },
+  "registered_repaired_population_control": {
+    "definition": "Ordinary distance/attack/native_duel plus prepared reaction; retained neutral ordinary block diagnostics are reported separately",
+    "policies": {
+      "gru": {
+        "cases": 8,
+        "minimum_neural_control": {
+          "episode": "realtime-distance-223-0-gru",
+          "fraction": 1.0
+        }
+      },
+      "mlp": {
+        "cases": 8,
+        "minimum_neural_control": {
+          "episode": "realtime-native_duel-223-1-mlp",
+          "fraction": 0.9565217391304348
+        }
+      }
+    }
+  }
+}

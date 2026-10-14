@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "kind": "body_defence_independent_auditor_snapshot",
+  "created_at_utc": "2026-10-14T10:46:41.975165+00:00",
+  "run_environment_sha256": "24c34b874536a9a0db3c187cb403d5e8f9a6e5434e64a29bc07c7efb91c13be3",
+  "files": {
+    "body_defence_report.py": "d39132c70a6f8f2a06f86fdadc387c376a053a22e384e6ebccfddd724a6e9ce8"
+  },
+  "models_or_game_started": false
+}

@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "kind": "stage8_v6_dataset_read_only_audit",
+  "created_at_utc": "2026-10-14T08:45:05.920067+00:00",
+  "run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "scope": "Dataset, approved primary fullbout train/eval ticks and selection declaration; no model execution or held-out gameplay inspection",
+  "preregistered_quality_gate": false,
+  "bindings_sha256": {
+    "environment.json": "01ab5d176a995a50c68e81ed721e49b8a0bbc0bbf440f5b40185b0d12e3f38cd",
+    "code/evals/npc-body/body-stage8-v1.json": "506cae01813644e53acaf5d9124f887d4ebdab5e198a89e8ce07840b6778b9ac",
+    "code/evals/npc-body/body-combat-demonstrations-v1.json": "430b8837c870d02281c383c8c7a93c355da68dde43c7d87e926b4a54d88bb837",
+    "code/scripts/body_combat_suite.py": "3ae6e295ed88c03d756ea7e88c16f98a930b790a640215cd54af6ae113ff43b1",
+    "code/scripts/body_trajectory_dataset.py": "e1d3289c2f2532865a15b4e69c10ca1cd1c542ffb8a5c001ac086ed708a84efe",
+    "code/scripts/body_combat_teacher.py": "ece5cb704aff2bcccd9b785a52c0a8b76d9dce417ed9399fb2297e2df7c81f9b",
+    "combat-demonstrations/suite.json": "39df33f13452443482d8ea4efdd2c87663fd0fa4a15802e0c95a2a26a74eab88",
+    "combat-demonstrations/teacher-registry.json": "ddd9d45a229964c2c2d664d0e17a1033eba0e47aa3968cdc9d32af831a660f93",
+    "dataset-parent/dataset.json": "e0dcadc86555f3f110504ee84d0e2ef0e9ddc48d89308063f02e86bef0ab0313",
+    "dataset-parent/normalization.json": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+    "dataset/engine-compatibility.json": "d32850fa13f18bb877676e60e98c17872b1bddccf544e86c6e570a39a6fd36e0",
+    "dataset/dataset.json": "f75fdcb02ec9389bab77fac1ef2da661d5f48f61add36727a1a57c6ed3fbcfe6",
+    "dataset/selection-profile.json": "e9c5ca6db72f21e81fd874826edb7714fa88be17c9efcaf0635425c56b7dc6d4",
+    "dataset/normalization.json": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6"
+  },
+  "binding_checks": {
+    "dataset_sha_matches": true,
+    "parent_sha_matches": true,
+    "profile_config_sha_matches": true,
+    "normalization_binding_matches": true,
+    "parent_normalization_bytes_equal": true,
+    "compatibility_binding_matches": true,
+    "train_normalizer_ids_exact": true,
+    "fresh_eval_ids_exact": true,
+    "primary_source_bytes_match_index": true
+  },
+  "dataset": {
+    "parent_episode_count": 144,
+    "selection_episode_count": 135,
+    "train_episode_count": 112,
+    "fresh_eval_episode_count": 8,
+    "fresh_eval_seeds": [
+      223,
+      227
+    ],
+    "fresh_eval_episode_ids": [
+      "combat-eval-223-near_wall-0",
+      "combat-eval-223-near_wall-1",
+      "combat-eval-223-open-0",
+      "combat-eval-223-open-1",
+      "combat-eval-227-near_wall-0",
+      "combat-eval-227-near_wall-1",
+      "combat-eval-227-open-0",
+      "combat-eval-227-open-1"
+    ],
+    "excluded_legacy_eval_ids": [
+      "native-29-0",
+      "native-29-1",
+      "native-113-0",
+      "native-113-1",
+      "demo-eval-113-0",
+      "demo-eval-113-1",
+      "demo-eval-29-0",
+      "demo-eval-29-1",
+      "wall-eval"
+    ],
+    "train_observation_count": 52892,
+    "feature_count": 184,
+    "feature_version": "body-periodic-numeric-v1",
+    "normalizer_source_split": "train",
+    "train_class_counts": {
+      "continue": 0,
+      "approach": 374,
+      "turn_to_target": 93,
+      "strafe_left": 58,
+      "strafe_right": 61,
+      "jump_back": 25,
+      "attack_front": 205,
+      "attack_left": 36,
+      "attack_right": 55,
+      "block": 37,
+      "wait_200": 75,
+      "wait_300": 49
+    },
+    "train_class_weights": {
+      "continue": 0,
+      "approach": 0.25960136120563926,
+      "turn_to_target": 1.0439882697947214,
+      "strafe_left": 1.6739811912225706,
+      "strafe_right": 1.5916542473919524,
+      "jump_back": 3.8836363636363638,
+      "attack_front": 0.47361419068736144,
+      "attack_left": 2.696969696969697,
+      "attack_right": 1.765289256198347,
+      "block": 2.6240786240786242,
+      "wait_200": 1.2945454545454544,
+      "wait_300": 1.981447124304267
+    },
+    "train_usable_labels_by_source": {
+      "native": {
+        "approach": 116,
+        "turn_to_target": 1,
+        "strafe_left": 34,
+        "strafe_right": 37,
+        "jump_back": 0,
+        "attack_front": 22,
+        "attack_left": 11,
+        "attack_right": 30,
+        "block": 12,
+        "wait_200": 51,
+        "wait_300": 0
+      },
+      "scripted": {
+        "approach": 258,
+        "turn_to_target": 92,
+        "strafe_left": 24,
+        "strafe_right": 24,
+        "jump_back": 25,
+        "attack_front": 183,
+        "attack_left": 25,
+        "attack_right": 25,
+        "block": 25,
+        "wait_200": 24,
+        "wait_300": 49
+      }
+    },
+    "fresh_eval_usable_labels": {
+      "approach": 67,
+      "turn_to_target": 23,
+      "strafe_left": 0,
+      "strafe_right": 0,
+      "jump_back": 0,
+      "attack_front": 59,
+      "attack_left": 0,
+      "attack_right": 0,
+      "block": 0,
+      "wait_200": 8,
+      "wait_300": 0
+    },
+    "fresh_eval_usable_labels_by_source": {
+      "scripted": {
+        "approach": 63,
+        "turn_to_target": 23,
+        "strafe_left": 0,
+        "strafe_right": 0,
+        "jump_back": 0,
+        "attack_front": 56,
+        "attack_left": 0,
+        "attack_right": 0,
+        "block": 0,
+        "wait_200": 0,
+        "wait_300": 0
+      },
+      "native": {
+        "approach": 4,
+        "turn_to_target": 0,
+        "strafe_left": 0,
+        "strafe_right": 0,
+        "jump_back": 0,
+        "attack_front": 3,
+        "attack_left": 0,
+        "attack_right": 0,
+        "block": 0,
+        "wait_200": 8,
+        "wait_300": 0
+      }
+    },
+    "new_teacher_train_labels_by_action": {
+      "1": 183,
+      "2": 67,
+      "3": 24,
+      "4": 24,
+      "5": 0,
+      "6": 158,
+      "7": 0,
+      "8": 0,
+      "9": 0,
+      "10": 24,
+      "11": 24
+    }
+  },
+  "selection": {
+    "evaluation_mode": "continuous",
+    "selection_view": "full_episode",
+    "test_and_ood_used_for_selection": false,
+    "missing_fresh_eval_actions": [
+      "strafe_left",
+      "strafe_right",
+      "jump_back",
+      "attack_left",
+      "attack_right",
+      "block",
+      "wait_300"
+    ],
+    "macro_f1_rule": "All 11 included actions 1..11; zero-support classes contribute zero.",
+    "macro_f1_ceiling_given_support": 0.36363636363636365
+  },
+  "primary_fullbout_eligibility": {
+    "train": {
+      "episodes": 24,
+      "eligible_periodic_ticks": 806,
+      "supervised_ticks": 408,
+      "unlabeled_ticks": 398,
+      "unissued_ticks": 260,
+      "issued_but_no_approved_label": 138,
+      "unlabeled_contexts": {
+        "incoming=False,in_w_range=True,defence=False,focus5=False": 9,
+        "incoming=False,in_w_range=True,defence=False,focus5=True": 79,
+        "incoming=False,in_w_range=False,defence=False,focus5=False": 17,
+        "incoming=True,in_w_range=False,defence=False,focus5=True": 236,
+        "incoming=True,in_w_range=True,defence=False,focus5=True": 46,
+        "incoming=False,in_w_range=False,defence=False,focus5=True": 11
+      },
+      "source_episode_ids": [
+        "combat-train-181-near_wall-0",
+        "combat-train-181-near_wall-1",
+        "combat-train-181-open-0",
+        "combat-train-181-open-1",
+        "combat-train-191-near_wall-0",
+        "combat-train-191-near_wall-1",
+        "combat-train-191-open-0",
+        "combat-train-191-open-1",
+        "combat-train-193-near_wall-0",
+        "combat-train-193-near_wall-1",
+        "combat-train-193-open-0",
+        "combat-train-193-open-1",
+        "combat-train-197-near_wall-0",
+        "combat-train-197-near_wall-1",
+        "combat-train-197-open-0",
+        "combat-train-197-open-1",
+        "combat-train-199-near_wall-0",
+        "combat-train-199-near_wall-1",
+        "combat-train-199-open-0",
+        "combat-train-199-open-1",
+        "combat-train-211-near_wall-0",
+        "combat-train-211-near_wall-1",
+        "combat-train-211-open-0",
+        "combat-train-211-open-1"
+      ]
+    },
+    "eval": {
+      "episodes": 8,
+      "eligible_periodic_ticks": 180,
+      "supervised_ticks": 142,
+      "unlabeled_ticks": 38,
+      "unissued_ticks": 8,
+      "issued_but_no_approved_label": 30,
+      "unlabeled_contexts": {
+        "incoming=False,in_w_range=True,defence=False,focus5=False": 4,
+        "incoming=False,in_w_range=True,defence=False,focus5=True": 23,
+        "incoming=False,in_w_range=False,defence=False,focus5=False": 5,
+        "incoming=True,in_w_range=True,defence=False,focus5=True": 3,
+        "incoming=False,in_w_range=False,defence=False,focus5=True": 3
+      },
+      "source_episode_ids": [
+        "combat-eval-223-near_wall-0",
+        "combat-eval-223-near_wall-1",
+        "combat-eval-223-open-0",
+        "combat-eval-223-open-1",
+        "combat-eval-227-near_wall-0",
+        "combat-eval-227-near_wall-1",
+        "combat-eval-227-open-0",
+        "combat-eval-227-open-1"
+      ]
+    }
+  },
+  "eligibility_count_method": "Periodic primary rows with can_decide,native_decision_eligible,action_mask_valid=true and any noncontinue availability; exact scripted decision observation_seq join, expert=true, matching usable_for_bc transition. Does not interpolate native-opponent labels.",
+  "verification": {
+    "gru": {
+      "sha256": "135a47608c33690655402da945bac1706a48d61a80186566647205c1878db73c",
+      "passed": true,
+      "step_latency_ms": {
+        "p50": 0.0679925,
+        "p95": 0.140443,
+        "max": 0.202129,
+        "warmup": 100,
+        "samples": 500
+      }
+    },
+    "mlp": {
+      "sha256": "aee4722bf886276e85b2c4bf857a2935559c13e9cfbe752df044cfe7bca9c07c",
+      "passed": true,
+      "step_latency_ms": {
+        "p50": 0.0600025,
+        "p95": 0.119564,
+        "max": 0.20212,
+        "warmup": 100,
+        "samples": 500
+      }
+    }
+  },
+  "limitations": [
+    "Physical eligibility count is not a claim that every row was available at the driver latest-packet command boundary; initial/cadence rows may be unissued.",
+    "Incoming out-of-range/focus5 states have no admissible action in the current combat teacher rule; absent supervision must not be converted into wait labels.",
+    "Fresh eval contains no defense labels; it cannot measure block/jump quality. Train jump_back=25 and block=37 counts are unchanged from the old v9 dataset.",
+    "Training/checkpoint quality and closed-loop combat outcomes are not established by this dataset audit. No test/OOD predictions or fresh screening gameplay were inspected."
+  ]
+}

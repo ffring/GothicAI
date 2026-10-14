@@ -1,0 +1,654 @@
+{
+  "schema_version": 1,
+  "kind": "stage8_queue_v19_closed_strict_ordering_proof_compact",
+  "created_at_utc": "2026-10-14T16:47:35.958414+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19",
+  "status": "passed",
+  "source_collection_status": "collected",
+  "model": null,
+  "quality_credit": false,
+  "stage8_complete": false,
+  "native_binding": {
+    "binary_sha256": "681a1704364e07836f839c3e4382b16ae43b28ae3bf75fb46f7884e2b10a1359",
+    "engine_library_sha256": "9be068cd18b461fa213bf7c625e9e2c7e6fd1e3c2466ca95e79eb271d9e0202a",
+    "source_sha256": "2cda7c85de8f59be09b0f93ec1810552a7b6abdc3b49bc5df5d0a313fc96a926"
+  },
+  "profile": {
+    "mode": "realtime",
+    "task": "reset_stress",
+    "seed": 223,
+    "side": 0,
+    "distance_cm": 400,
+    "timeout_ms": 1500,
+    "batch_size": 64,
+    "query_batch_size": 8,
+    "maximum_batches": 29,
+    "maximum_terminal_polls": 64,
+    "maximum_action_attempts": 4,
+    "action_id": 11,
+    "command_ttl_ms": 100,
+    "poll_ms": 5,
+    "max_ready_commands_per_due_tick": 1,
+    "model": null,
+    "quality_credit": false
+  },
+  "audit": {
+    "schema_version": 1,
+    "kind": "body_pending_input_saved_audit",
+    "passed": true,
+    "model": null,
+    "checks": [
+      {
+        "name": "native_binary_source_helper_binding",
+        "passed": true
+      },
+      {
+        "name": "strict_native_clock_and_ready_admission_cap_one",
+        "passed": true,
+        "ready_chains": 18,
+        "fresh_query_chains": 10
+      },
+      {
+        "name": "actual_periodic_action_mask_and_execution",
+        "passed": true,
+        "accepted": 3,
+        "rejected": 0
+      },
+      {
+        "name": "healthy_real_time_actors_without_model_or_clock_pause",
+        "passed": true
+      }
+    ],
+    "chains": [
+      {
+        "request_id": 560,
+        "command": "body_heartbeat",
+        "input_read_seq": 613,
+        "tick_id": 28,
+        "input_read_ns": 1113257028722598,
+        "tick_begin_ns": 1113257029118019,
+        "tick_end_ns": 1113257039213035,
+        "deadline_ns": 1113257023167367
+      },
+      {
+        "request_id": 609,
+        "command": "body_heartbeat",
+        "input_read_seq": 664,
+        "tick_id": 29,
+        "input_read_ns": 1113257056326108,
+        "tick_begin_ns": 1113257056512058,
+        "tick_end_ns": 1113257065575879,
+        "deadline_ns": 1113257056167367
+      },
+      {
+        "request_id": 696,
+        "command": "body_heartbeat",
+        "input_read_seq": 753,
+        "tick_id": 30,
+        "input_read_ns": 1113257089192815,
+        "tick_begin_ns": 1113257089342475,
+        "tick_end_ns": 1113257099044846,
+        "deadline_ns": 1113257089167367
+      },
+      {
+        "request_id": 898,
+        "command": "body_heartbeat",
+        "input_read_seq": 963,
+        "tick_id": 34,
+        "input_read_ns": 1113257228720165,
+        "tick_begin_ns": 1113257229299762,
+        "tick_end_ns": 1113257238649511,
+        "deadline_ns": 1113257223167367
+      },
+      {
+        "request_id": 1037,
+        "command": "body_heartbeat",
+        "input_read_seq": 1106,
+        "tick_id": 36,
+        "input_read_ns": 1113257289189881,
+        "tick_begin_ns": 1113257289370710,
+        "tick_end_ns": 1113257298159007,
+        "deadline_ns": 1113257289167367
+      },
+      {
+        "request_id": 1245,
+        "command": "body_heartbeat",
+        "input_read_seq": 1320,
+        "tick_id": 39,
+        "input_read_ns": 1113257389308349,
+        "tick_begin_ns": 1113257389477647,
+        "tick_end_ns": 1113257398044989,
+        "deadline_ns": 1113257389167367
+      },
+      {
+        "request_id": 1297,
+        "command": "body_heartbeat",
+        "input_read_seq": 1374,
+        "tick_id": 40,
+        "input_read_ns": 1113257428893081,
+        "tick_begin_ns": 1113257429215727,
+        "tick_end_ns": 1113257438043546,
+        "deadline_ns": 1113257423167367
+      },
+      {
+        "request_id": 1351,
+        "command": "body_heartbeat",
+        "input_read_seq": 1430,
+        "tick_id": 41,
+        "input_read_ns": 1113257456321142,
+        "tick_begin_ns": 1113257456455334,
+        "tick_end_ns": 1113257465347835,
+        "deadline_ns": 1113257456167367
+      },
+      {
+        "request_id": 1435,
+        "command": "body_heartbeat",
+        "input_read_seq": 1516,
+        "tick_id": 42,
+        "input_read_ns": 1113257489296633,
+        "tick_begin_ns": 1113257489469026,
+        "tick_end_ns": 1113257498567213,
+        "deadline_ns": 1113257489167367
+      },
+      {
+        "request_id": 1501,
+        "command": "body_heartbeat",
+        "input_read_seq": 1584,
+        "tick_id": 43,
+        "input_read_ns": 1113257528908536,
+        "tick_begin_ns": 1113257529197237,
+        "tick_end_ns": 1113257538390573,
+        "deadline_ns": 1113257523167367
+      },
+      {
+        "request_id": 1556,
+        "command": "body_heartbeat",
+        "input_read_seq": 1641,
+        "tick_id": 44,
+        "input_read_ns": 1113257556291402,
+        "tick_begin_ns": 1113257556467181,
+        "tick_end_ns": 1113257567049561,
+        "deadline_ns": 1113257556167367
+      },
+      {
+        "request_id": 1636,
+        "command": "body_heartbeat",
+        "input_read_seq": 1723,
+        "tick_id": 45,
+        "input_read_ns": 1113257589183397,
+        "tick_begin_ns": 1113257589333608,
+        "tick_end_ns": 1113257598400607,
+        "deadline_ns": 1113257589167367
+      },
+      {
+        "request_id": 1694,
+        "command": "body_heartbeat",
+        "input_read_seq": 1783,
+        "tick_id": 46,
+        "input_read_ns": 1113257629361391,
+        "tick_begin_ns": 1113257629740001,
+        "tick_end_ns": 1113257639216286,
+        "deadline_ns": 1113257623167367
+      },
+      {
+        "request_id": 1855,
+        "command": "body_heartbeat",
+        "input_read_seq": 1950,
+        "tick_id": 49,
+        "input_read_ns": 1113257728753417,
+        "tick_begin_ns": 1113257729377878,
+        "tick_end_ns": 1113257738861397,
+        "deadline_ns": 1113257723167367
+      },
+      {
+        "request_id": 1901,
+        "command": "body_heartbeat",
+        "input_read_seq": 1998,
+        "tick_id": 50,
+        "input_read_ns": 1113257756238174,
+        "tick_begin_ns": 1113257756502911,
+        "tick_end_ns": 1113257765804510,
+        "deadline_ns": 1113257756167367
+      },
+      {
+        "request_id": 1964,
+        "command": "body_heartbeat",
+        "input_read_seq": 2063,
+        "tick_id": 51,
+        "input_read_ns": 1113257789305318,
+        "tick_begin_ns": 1113257789496496,
+        "tick_end_ns": 1113257799541578,
+        "deadline_ns": 1113257789167367
+      },
+      {
+        "request_id": 1998,
+        "command": "body_heartbeat",
+        "input_read_seq": 2099,
+        "tick_id": 52,
+        "input_read_ns": 1113257829473573,
+        "tick_begin_ns": 1113257829938966,
+        "tick_end_ns": 1113257839426342,
+        "deadline_ns": 1113257823167367
+      },
+      {
+        "request_id": 2042,
+        "command": "body_heartbeat",
+        "input_read_seq": 2145,
+        "tick_id": 53,
+        "input_read_ns": 1113257856210930,
+        "tick_begin_ns": 1113257856397951,
+        "tick_end_ns": 1113257865328322,
+        "deadline_ns": 1113257856167367
+      }
+    ],
+    "query_chains": [
+      {
+        "request_id": 82,
+        "command": "body_control_status",
+        "input_read_ns": 1113256689412734,
+        "tick_begin_ns": 1113256689423695,
+        "tick_end_ns": 1113256730840110,
+        "response_ns": 1113256731188443,
+        "response_game_ms": 16361,
+        "response_sim_step": 18
+      },
+      {
+        "request_id": 83,
+        "command": "body_control_status",
+        "input_read_ns": 1113256731228238,
+        "tick_begin_ns": 1113256731237285,
+        "tick_end_ns": 1113256739750776,
+        "response_ns": 1113256740097196,
+        "response_game_ms": 16394,
+        "response_sim_step": 19
+      },
+      {
+        "request_id": 227,
+        "command": "body_control_status",
+        "input_read_ns": 1113256789668219,
+        "tick_begin_ns": 1113256789681544,
+        "tick_end_ns": 1113256829487942,
+        "response_ns": 1113256829789026,
+        "response_game_ms": 16461,
+        "response_sim_step": 21
+      },
+      {
+        "request_id": 228,
+        "command": "body_control_status",
+        "input_read_ns": 1113256829834311,
+        "tick_begin_ns": 1113256829843668,
+        "tick_end_ns": 1113256839381110,
+        "response_ns": 1113256839673447,
+        "response_game_ms": 16494,
+        "response_sim_step": 22
+      },
+      {
+        "request_id": 376,
+        "command": "body_observations",
+        "input_read_ns": 1113256889363615,
+        "tick_begin_ns": 1113256889373734,
+        "tick_end_ns": 1113256929406495,
+        "response_ns": 1113256929624193,
+        "response_game_ms": 16561,
+        "response_sim_step": 24
+      },
+      {
+        "request_id": 514,
+        "command": "body_control_status",
+        "input_read_ns": 1113256989283280,
+        "tick_begin_ns": 1113256989292387,
+        "tick_end_ns": 1113256998228349,
+        "response_ns": 1113256998491923,
+        "response_game_ms": 16661,
+        "response_sim_step": 27
+      },
+      {
+        "request_id": 735,
+        "command": "body_control_status",
+        "input_read_ns": 1113257128984485,
+        "tick_begin_ns": 1113257128998051,
+        "tick_end_ns": 1113257138931173,
+        "response_ns": 1113257139360809,
+        "response_game_ms": 16794,
+        "response_sim_step": 31
+      },
+      {
+        "request_id": 876,
+        "command": "body_control_status",
+        "input_read_ns": 1113257189392365,
+        "tick_begin_ns": 1113257189400131,
+        "tick_end_ns": 1113257199087372,
+        "response_ns": 1113257199399557,
+        "response_game_ms": 16861,
+        "response_sim_step": 33
+      },
+      {
+        "request_id": 1745,
+        "command": "body_events",
+        "input_read_ns": 1113257656284735,
+        "tick_begin_ns": 1113257656308290,
+        "tick_end_ns": 1113257665839038,
+        "response_ns": 1113257666098845,
+        "response_game_ms": 17327,
+        "response_sim_step": 47
+      },
+      {
+        "request_id": 1814,
+        "command": "body_control_status",
+        "input_read_ns": 1113257689183583,
+        "tick_begin_ns": 1113257689190797,
+        "tick_end_ns": 1113257698020801,
+        "response_ns": 1113257698429677,
+        "response_game_ms": 17361,
+        "response_sim_step": 48
+      }
+    ],
+    "raw_sha256": {
+      "manifest.json": "20cc0b1a317f390ed10d18866664f523e962194a1cb93b16c3a255ee0fcc95db",
+      "probe.json": "188263d62f074d9c142a6e5db0c45a9ab40c3ce9e8cebc2b726b8efdd9eaab61",
+      "episode/ipc.jsonl": "2d9f0c019c9fe8927cc3cd9c9041d87c1dec01c4a5caa4c6cd1029524ca1fab6",
+      "collector-transport.jsonl": "db6b020593320508fea499a1c72863a1a128df807b7bdf2bcbea7d99fce926a9",
+      "episode/observer-timing.jsonl": "eb85bc14d4064d175813d5837976b0c8351598275f07c05adbb78edaf3092fdd",
+      "episode/observations.jsonl": "5197034ace723d64b90accf835965f8c28f7f3159547c745007d741a6be6af12",
+      "episode/body-control-events.jsonl": "c48a6c8a3352814de514d04d6386e0712eb1c6705483d84e74663a37eb55deaf"
+    }
+  },
+  "independently_recomputed": {
+    "all18_ready_chains_match_actual_native_markers": true,
+    "ready_commands": {
+      "body_heartbeat": 18
+    },
+    "max_ready_admissions_per_due_tick": 1,
+    "all10_query_chains_read_begin_end_reply_and_post_tick_state": true,
+    "audit_raw_sha256_match_actual_files": true,
+    "clock_counts": {
+      "tick_begin": 61,
+      "tick_end": 61,
+      "input_read": 2113
+    },
+    "clock_record_count": 2235,
+    "accepted_wait11": 3,
+    "started_wait11": 3,
+    "rejected": 0,
+    "started_receipts": [
+      {
+        "entity_id": 1,
+        "command_id": 1,
+        "execution_id": 1,
+        "action_id": 11,
+        "observation_seq": 3,
+        "t_game_ms": 16361,
+        "sim_step": 18,
+        "phase": "started",
+        "reason": "wait_started"
+      },
+      {
+        "entity_id": 1,
+        "command_id": 2,
+        "execution_id": 2,
+        "action_id": 11,
+        "observation_seq": 20,
+        "t_game_ms": 16761,
+        "sim_step": 30,
+        "phase": "started",
+        "reason": "wait_started"
+      },
+      {
+        "entity_id": 1,
+        "command_id": 3,
+        "execution_id": 3,
+        "action_id": 11,
+        "observation_seq": 37,
+        "t_game_ms": 17161,
+        "sim_step": 42,
+        "phase": "started",
+        "reason": "wait_started"
+      }
+    ]
+  },
+  "same_strict_probe_as_failed_queue17": {
+    "unchanged": true,
+    "old_helper": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v17/code/scripts/body_pending_input_probe.py",
+      "size_bytes": 23943,
+      "sha256": "7abecaa65ab5fe96252ef698791397212dc7cdb022b3bf9aa4d954b2cedb9532"
+    },
+    "new_helper": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/scripts/body_pending_input_probe.py",
+      "size_bytes": 23943,
+      "sha256": "7abecaa65ab5fe96252ef698791397212dc7cdb022b3bf9aa4d954b2cedb9532"
+    },
+    "failed_result_preserved": true
+  },
+  "final_arena": {
+    "schema_version": 1,
+    "enabled": true,
+    "episode_id": 1,
+    "runner_generation": 1,
+    "session_epoch": 1791996255074191772,
+    "generation": 1,
+    "world_epoch": 2,
+    "scenario": "reset_stress",
+    "seed": 223,
+    "side": 0,
+    "distance_cm": 400,
+    "timeout_ms": 1500,
+    "distance_goal_cm": 220,
+    "distance_hold_ms": 200,
+    "distance_held_ms": 0,
+    "primary_entity_id": 1,
+    "opponent_entity_id": 2,
+    "ready": true,
+    "started": true,
+    "provider": "scripted",
+    "outcome": "time_limit",
+    "reason": "time_limit",
+    "terminated": false,
+    "truncated": true,
+    "infrastructure": false,
+    "elapsed_game_ms": 1500,
+    "start_game_ms": 16294,
+    "game_ms": 17794,
+    "actors": [
+      {
+        "entity_id": 1,
+        "hp": 300,
+        "owner": "scripted",
+        "release_pending": false
+      },
+      {
+        "entity_id": 2,
+        "hp": 300,
+        "owner": "scripted",
+        "release_pending": false
+      }
+    ]
+  },
+  "reader_pure_tests": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "6",
+    "time": "0.063",
+    "timestamp": "2026-10-14T16:44:07.746299+00:00",
+    "hostname": "dev-ubuntu"
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/environment.json",
+      "size_bytes": 14460,
+      "sha256": "7d8dd5c3a871cc0bc67a60681e24da210115d76e4574236dc198454988b8cb5b"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/source.tar.gz",
+      "size_bytes": 12330397,
+      "sha256": "c06fc26bb11b604228080d9e526e6f4b83a7f8d0275e031fac0325451b2fe145"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/probe.json",
+      "size_bytes": 82519,
+      "sha256": "188263d62f074d9c142a6e5db0c45a9ab40c3ce9e8cebc2b726b8efdd9eaab61"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/manifest.json",
+      "size_bytes": 56782,
+      "sha256": "20cc0b1a317f390ed10d18866664f523e962194a1cb93b16c3a255ee0fcc95db"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/audit.json",
+      "size_bytes": 9460,
+      "sha256": "b4e53d64590a05c5724c2c1cc1157c569b6cf026a56d7e26992899789b2b82a4"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-tests.xml",
+      "size_bytes": 1255,
+      "sha256": "fff2791824aefe2644520eabde0beffcc8a244b2177b1466b0853f0943c5f563"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/scripts/body_pending_input_probe.py",
+      "size_bytes": 23943,
+      "sha256": "7abecaa65ab5fe96252ef698791397212dc7cdb022b3bf9aa4d954b2cedb9532"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/ipc.jsonl",
+      "size_bytes": 16252117,
+      "sha256": "2d9f0c019c9fe8927cc3cd9c9041d87c1dec01c4a5caa4c6cd1029524ca1fab6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/collector-transport.jsonl",
+      "size_bytes": 300088,
+      "sha256": "db6b020593320508fea499a1c72863a1a128df807b7bdf2bcbea7d99fce926a9"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/observer-timing.jsonl",
+      "size_bytes": 890338,
+      "sha256": "eb85bc14d4064d175813d5837976b0c8351598275f07c05adbb78edaf3092fdd"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/observations.jsonl",
+      "size_bytes": 248355,
+      "sha256": "5197034ace723d64b90accf835965f8c28f7f3159547c745007d741a6be6af12"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/body-control-events.jsonl",
+      "size_bytes": 11748,
+      "sha256": "c48a6c8a3352814de514d04d6386e0712eb1c6705483d84e74663a37eb55deaf"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/events.jsonl",
+      "size_bytes": 143362,
+      "sha256": "e864a1f73b8e1f635f7824ec28262a2d747d4f3abdaf6bd447efd0402c22afae"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/arena-events.jsonl",
+      "size_bytes": 93158,
+      "sha256": "a628feaaec2b24fe4f1ec3884c993a65b0df438b6947528d415d4659532d064c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe/episode/runner-summary.json",
+      "size_bytes": 22127,
+      "sha256": "19837cc55e24f3d3f4f556acafa62d23ea87bcf03e543b819ec09da90fc28f8f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/resources-pending-input-probe.txt",
+      "size_bytes": 1776,
+      "sha256": "06a9f2d3cb714bf025f042f0dd2dc197a2d332f232624221d6cd1a22c1e44d14"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/launcher-pending-input-probe.log",
+      "size_bytes": 411,
+      "sha256": "c0fc6fddcb7721da759a4245cb9155639a56bd052a261a8e981d160d81548be5"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/services-pending-input-probe-before.json",
+      "size_bytes": 429,
+      "sha256": "cde71ab69e14647b5803408aa5ba470410b131a0cc072d7747dd1637d598d6f6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/services-pending-input-probe-after.json",
+      "size_bytes": 429,
+      "sha256": "cb2b2004fd270251942aa9f7b9608fe4fe5edd00877c36fdd1de2f9992fe458f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/resources-pending-input-tests.txt",
+      "size_bytes": 967,
+      "sha256": "fa1ca84566fe927f886f9e7f5b3ee9195d0ef0f1e55cbb8cd9e567ba131c9831"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/launcher-pending-input-tests.log",
+      "size_bytes": 451,
+      "sha256": "1cf8cd2b5caaa8d4fbee8623b5ae650e9962fe03284c3ee7c14243deaf7eea21"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/services-pending-input-tests-before.json",
+      "size_bytes": 429,
+      "sha256": "7cf3166b7663329f9a2052380812dfd7cc4eb8d6d894ec8ebc9faad13a186100"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v19/services-pending-input-tests-after.json",
+      "size_bytes": 429,
+      "sha256": "260cd38a2c6a3edb8a9b3afaa6acc07f8e0940de2ae9ab5c4d31ba95e6811efb"
+    }
+  ],
+  "resource_and_log_fragments": {
+    "resources-pending-input-probe.txt": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/scripts/body_pending_input_probe.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v19/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/evals/npc-body/body-stage8-v1.json --output /home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-probe\"\n\tUser time (seconds): 8.57\n\tSystem time (seconds): 1.33\n\tPercent of CPU this job got: 114%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:08.67\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 570032\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 47\n\tMinor (reclaiming a frame) page faults: 203604\n\tVoluntary context switches: 7109\n\tInvoluntary context switches: 259\n\tSwaps: 0\n\tFile system inputs: 9256384\n\tFile system outputs: 35656\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+    "launcher-pending-input-probe.log": "Running as unit: gothic-body-bc-stage8-motor-v19-pending-input-probe.service; invocation ID: 0bda9f9939394f798b1ae20d6aedf869\n{\"status\": \"collected\", \"checks\": 4, \"ready_chains\": 18}\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 8.683s\n             CPU time consumed: 9.920s\n                   Memory peak: 1.3G (swap: 0B)\n",
+    "resources-pending-input-tests.txt": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python -m pytest /home/kaifat/gothic-ai/body/data/stage8-motor-v19/code/scripts/tests/test_body_pending_input_probe.py -q --junitxml=/home/kaifat/gothic-ai/body/data/stage8-motor-v19/pending-input-tests.xml\"\n\tUser time (seconds): 0.19\n\tSystem time (seconds): 0.03\n\tPercent of CPU this job got: 83%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:00.27\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 36672\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 3\n\tMinor (reclaiming a frame) page faults: 6606\n\tVoluntary context switches: 275\n\tInvoluntary context switches: 4\n\tSwaps: 0\n\tFile system inputs: 14304\n\tFile system outputs: 416\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+    "launcher-pending-input-tests.log": "Running as unit: gothic-body-bc-stage8-motor-v19-pending-input-tests.service; invocation ID: dc457ebf71ac4ae0a8b22ca563c7ad70\n......                                                                   [100%]\n6 passed in 0.06s\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 286ms\n             CPU time consumed: 236ms\n                   Memory peak: 31.7M (swap: 0B)\n"
+  },
+  "service_identity": {
+    "pending-input-probe": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T16:44:08.172018+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T16:44:16.953166+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    },
+    "pending-input-tests": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T16:44:07.483043+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T16:44:07.870253+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    }
+  },
+  "next_gate": "Gate10 preregistration then known pending; fresh never started",
+  "limits": [
+    "18 ready admissions are heartbeat commands, not18 combat actions.",
+    "Three real wait11 accepted/started executions and ten post-tick query chains do not establish GRU combat quality.",
+    "Failed Queue17 raw/probe/report remains failed and unmodified; this is a new binary proof, not reclassification.",
+    "Weights, normalizer, masks and quality thresholds remain unchanged.",
+    "Closed read-only extraction; no model/test/simulation/service launch and no large raw downloads."
+  ]
+}

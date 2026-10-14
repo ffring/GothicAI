@@ -1,0 +1,954 @@
+{
+  "schema_version": 1,
+  "kind": "compact_known_latency_failure_excerpt",
+  "created_at_utc": "2026-10-14T14:28:25.333140+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5",
+  "passed": false,
+  "issues": [
+    "block-reaction-223-0-gru: model_step_ms missing/exceeds budget"
+  ],
+  "failed_case_count": 1,
+  "failed_case": "block-reaction-223-0-gru",
+  "closed_known_phases": {
+    "shadow": {
+      "status": "collected",
+      "error": null,
+      "episodes": 3,
+      "suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/shadow/suite.json",
+        "size_bytes": 377351,
+        "sha256": "96827a9616e8a60222ecea5854525c3ee4810c1c8e0a5cb4ca9f5c4a87445c80"
+      }
+    },
+    "realtime": {
+      "status": "collected",
+      "error": null,
+      "episodes": 24,
+      "suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime/suite.json",
+        "size_bytes": 4730867,
+        "sha256": "973ced3031808c02e170a642a6ad5338ca3abe73f65fd78274ae016cc1d208e0"
+      }
+    },
+    "realtime-reaction": {
+      "status": "collected",
+      "error": null,
+      "episodes": 6,
+      "suite": {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/suite.json",
+        "size_bytes": 1489600,
+        "sha256": "cd330373a7d90dd1187f988e3ac566cb4a9b6c2d603b69c4588ec1cc87aa17d5"
+      }
+    }
+  },
+  "stage8_quality_credit": false,
+  "load_read": false,
+  "fresh_screening_read": false,
+  "load_directory_exists": false,
+  "screening_directory_exists": false,
+  "candidate_checkpoint_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalization_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "audit_binding": {
+    "audit_wall_s": 38.885726555017754,
+    "environment_sha256": "d9ed8c225d5888928ca380de80f7cc2b56a746c2d78a597f38231c8b35ddc2e3",
+    "declaration_sha256": "0cd286db636dbba14921a6495805d5bdbe8490c6e3ae8e242a61b671931cf66d",
+    "known_reader_sha256": "747845004224b1cfafa9aa47dab19f1b68aa65bf5e47b4433b7b2b8dfdcf14fc",
+    "external_reader_binding": {
+      "audit_snapshot_sha256": "6ee922ea841b7be706d3c2d8d78df6875046ae869ff847334714171ec906d6f3",
+      "reporter_sha256": "92cff877b5ed5999096b9e8fd732a7e64e38f6f91e49789156697ac413614f16",
+      "combat_helper_correction": null
+    },
+    "known_audit_manifest_sha256": null
+  },
+  "gru_reaction_evidence": [
+    {
+      "name": "block-reaction-223-0-gru",
+      "policy": "gru",
+      "task": "block",
+      "credited_success": true,
+      "quality_credit": true,
+      "outcome": "task_success",
+      "runtime": {
+        "processed_inputs": 4,
+        "runtime_fallbacks": 0,
+        "fallbacks": [],
+        "declared_runtime_fallbacks": 0,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "terminal_memory_reset": true,
+        "command_fallback_cuts": [],
+        "neural_control_fraction": 1.0
+      },
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 18.962995
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 7.502798
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 6.157565
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "defense_reactions": {
+        "linked_reactions": [
+          {
+            "observation_seq": 5,
+            "command_id": 1,
+            "execution_id": 3,
+            "action_id": 9,
+            "observed_windup_game_ms": 16361,
+            "actual_started_game_ms": 16427,
+            "incoming_attempt_game_ms": 16527,
+            "pose_change_seq": 40,
+            "hit_attempt_seq": 59,
+            "defence_result_seq": 60,
+            "reaction_game_ms": 66,
+            "actual_window_game_ms": 166,
+            "hp_preserved": true
+          }
+        ],
+        "censored": {},
+        "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+      },
+      "preparation": {
+        "prepared_game_ms": 16361,
+        "anchor_observation_seq": 5,
+        "feature_sha256": "0f57ff21aaad6558015d740e6be2cfe725ff65e7139ece2a721dcef5e1afb9b7",
+        "attacker_started_game_ms": 16361,
+        "first_dt_ms": 0,
+        "prep_model_updates": 0,
+        "prep_primary_actions": 0,
+        "prep_rng_unchanged": true,
+        "native_to_wire": {
+          "wire_rows": 12,
+          "float_differences": 12,
+          "observed_max_ulps": 1,
+          "allowed_max_ulps": 2
+        }
+      },
+      "softlocks": {
+        "inspected_finite_segments": 1,
+        "unbounded_movement_segments_excluded": 0,
+        "violations": [],
+        "allowance_game_ms": 67,
+        "terminal_or_fresh_hit_not_counted": true
+      },
+      "visibility": {
+        "rows": 25,
+        "actors": 2,
+        "causes": {
+          "visible": 25
+        },
+        "native_query_matches": true,
+        "paired_rows": 25,
+        "paired_causes": {
+          "visible": 25
+        },
+        "post_handoff_retarget_rows": 0,
+        "post_handoff_retarget_causes": {},
+        "post_handoff_targets": [],
+        "owned_housekeeping": {
+          "pairs": [
+            {
+              "entity_id": 2,
+              "command_id": 1,
+              "execution_id": 2,
+              "game_ms": 16394,
+              "branch": "hit_lock",
+              "before_seq": 29,
+              "after_seq": 32,
+              "body_yaw_delta_deg": -0.003528600000009874,
+              "native_choice_or_new_command": false
+            },
+            {
+              "entity_id": 1,
+              "command_id": 1,
+              "execution_id": 3,
+              "game_ms": 16461,
+              "branch": "wait_move",
+              "before_seq": 50,
+              "after_seq": 52,
+              "body_yaw_delta_deg": 0.0,
+              "native_choice_or_new_command": false
+            }
+          ],
+          "branch_counts": {
+            "hit_lock": 1,
+            "wait_move": 1
+          },
+          "native_choice_or_new_command": false
+        }
+      },
+      "capture_integrity": {
+        "final_integrity_sha256": "252b6a42b6cf160af12a1e454aec8fcbfa53e828599fcd29d7d41204ff7f6577",
+        "visibility_records": 25,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "native_fallback_boundary": {
+        "restorations_before_final": [],
+        "same_final_native_continuations": []
+      },
+      "native_to_wire": {
+        "wire_rows": 12,
+        "float_differences": 12,
+        "observed_max_ulps": 1,
+        "allowed_max_ulps": 2
+      },
+      "actual_physics": {
+        "linked_attack_hits": 0,
+        "linked_opponent_hp_loss": 0,
+        "linked_blocked_hits": 1,
+        "primary_mapping": [
+          3
+        ],
+        "opponent_mapping": [
+          4
+        ],
+        "raw_counters": {
+          "primary": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 1
+          },
+          "opponent": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 0
+          }
+        },
+        "issues": []
+      }
+    },
+    {
+      "name": "block-reaction-223-1-gru",
+      "policy": "gru",
+      "task": "block",
+      "credited_success": true,
+      "quality_credit": true,
+      "outcome": "task_success",
+      "runtime": {
+        "processed_inputs": 4,
+        "runtime_fallbacks": 0,
+        "fallbacks": [],
+        "declared_runtime_fallbacks": 0,
+        "eligible_opportunities": 1,
+        "accepted_model_commands": 1,
+        "healthy_fraction": 1.0,
+        "terminal_memory_reset": true,
+        "command_fallback_cuts": [],
+        "neural_control_fraction": 1.0
+      },
+      "latency": {
+        "model_step_ms": {
+          "count": 4,
+          "p95": 1.433186
+        },
+        "observation_to_arbitration_ms": {
+          "count": 1,
+          "p95": 7.947311
+        },
+        "collector_to_command_send_ms": {
+          "count": 1,
+          "p95": 6.481863
+        },
+        "clock_domain": "linux-clock-monotonic",
+        "native_reply_bracketed": true
+      },
+      "defense_reactions": {
+        "linked_reactions": [
+          {
+            "observation_seq": 5,
+            "command_id": 1,
+            "execution_id": 8,
+            "action_id": 9,
+            "observed_windup_game_ms": 16361,
+            "actual_started_game_ms": 16427,
+            "incoming_attempt_game_ms": 16527,
+            "pose_change_seq": 40,
+            "hit_attempt_seq": 59,
+            "defence_result_seq": 60,
+            "reaction_game_ms": 66,
+            "actual_window_game_ms": 166,
+            "hp_preserved": true
+          }
+        ],
+        "censored": {},
+        "deadline_source": "same actual incoming native hit_attempt; separate journal pose-change order"
+      },
+      "preparation": {
+        "prepared_game_ms": 16361,
+        "anchor_observation_seq": 5,
+        "feature_sha256": "03194b86606c4af39a4f29f253960210364810a5cc6a9612b249771b84c39dc7",
+        "attacker_started_game_ms": 16361,
+        "first_dt_ms": 0,
+        "prep_model_updates": 0,
+        "prep_primary_actions": 0,
+        "prep_rng_unchanged": true,
+        "native_to_wire": {
+          "wire_rows": 12,
+          "float_differences": 18,
+          "observed_max_ulps": 1,
+          "allowed_max_ulps": 2
+        }
+      },
+      "softlocks": {
+        "inspected_finite_segments": 1,
+        "unbounded_movement_segments_excluded": 0,
+        "violations": [],
+        "allowance_game_ms": 67,
+        "terminal_or_fresh_hit_not_counted": true
+      },
+      "visibility": {
+        "rows": 25,
+        "actors": 2,
+        "causes": {
+          "visible": 25
+        },
+        "native_query_matches": true,
+        "paired_rows": 25,
+        "paired_causes": {
+          "visible": 25
+        },
+        "post_handoff_retarget_rows": 0,
+        "post_handoff_retarget_causes": {},
+        "post_handoff_targets": [],
+        "owned_housekeeping": {
+          "pairs": [
+            {
+              "entity_id": 2,
+              "command_id": 1,
+              "execution_id": 7,
+              "game_ms": 16394,
+              "branch": "hit_lock",
+              "before_seq": 29,
+              "after_seq": 32,
+              "body_yaw_delta_deg": -0.0035249999999962256,
+              "native_choice_or_new_command": false
+            },
+            {
+              "entity_id": 1,
+              "command_id": 1,
+              "execution_id": 8,
+              "game_ms": 16461,
+              "branch": "wait_move",
+              "before_seq": 50,
+              "after_seq": 52,
+              "body_yaw_delta_deg": 0.0,
+              "native_choice_or_new_command": false
+            }
+          ],
+          "branch_counts": {
+            "hit_lock": 1,
+            "wait_move": 1
+          },
+          "native_choice_or_new_command": false
+        }
+      },
+      "capture_integrity": {
+        "final_integrity_sha256": "2bf8e09154c746ffdcbf475d746587793407f1527be990c8bec3003143e237dd",
+        "visibility_records": 25,
+        "dropped": 0,
+        "capture_failed": false
+      },
+      "native_fallback_boundary": {
+        "restorations_before_final": [],
+        "same_final_native_continuations": []
+      },
+      "native_to_wire": {
+        "wire_rows": 12,
+        "float_differences": 18,
+        "observed_max_ulps": 1,
+        "allowed_max_ulps": 2
+      },
+      "actual_physics": {
+        "linked_attack_hits": 0,
+        "linked_opponent_hp_loss": 0,
+        "linked_blocked_hits": 1,
+        "primary_mapping": [
+          3
+        ],
+        "opponent_mapping": [
+          4
+        ],
+        "raw_counters": {
+          "primary": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 1
+          },
+          "opponent": {
+            "received_damage": 0,
+            "outgoing_damage": 0,
+            "blocked_hits": 0
+          }
+        },
+        "issues": []
+      }
+    }
+  ],
+  "failed_case_model_stats": {
+    "periodic_observations": 4,
+    "model_processed": 4,
+    "runtime_fallbacks": 0,
+    "latest_eligible_periodic_opportunities": 1,
+    "accepted_model_commands": 1,
+    "terminal_censored_commands": 0,
+    "rejected_model_commands": 0,
+    "action_9": 1
+  },
+  "failed_case_final": {
+    "game_ms": 16527,
+    "outcome": "task_success",
+    "reason": "melee_hit_blocked",
+    "terminated": true,
+    "truncated": false,
+    "infrastructure": false
+  },
+  "failed_case_primary_hp": 300,
+  "model_step_budget_ms": 5,
+  "model_steps": [
+    {
+      "stream_seq": 1,
+      "identity": {
+        "session_epoch": 1791987291151697685,
+        "world_epoch": 4,
+        "entity_id": 1,
+        "control_generation": 3
+      },
+      "observation_seq": 5,
+      "game_ms": 16361,
+      "periodic": true,
+      "memory_only": false,
+      "command_enabled": true,
+      "action_id": 9,
+      "selected_action_id": 9,
+      "new_decision": true,
+      "model_processed": true,
+      "hidden_reset": true,
+      "sequence_dt_game_ms": 0,
+      "reason": "decision",
+      "backend_inference_ms": 0.781786,
+      "recorded_latency_model_step_ms": 0.781786,
+      "process_wall_ms": 1.243341,
+      "receive_to_process_begin_ms": 4.743063,
+      "source_snapshot_wall_monotonic_ns": 1104298842288750,
+      "timing": {
+        "collector_received_wall_monotonic_ns": 1104298843643521,
+        "process_begin_wall_monotonic_ns": 1104298848386584,
+        "process_end_wall_monotonic_ns": 1104298849629925
+      },
+      "features_sha256": "0f57ff21aaad6558015d740e6be2cfe725ff65e7139ece2a721dcef5e1afb9b7",
+      "observation_sha256": "0093bbc09b79206d64c896ef90e99ef943f01f742b6b27332b882432d157c6ed"
+    },
+    {
+      "stream_seq": 2,
+      "identity": {
+        "session_epoch": 1791987291151697685,
+        "world_epoch": 4,
+        "entity_id": 1,
+        "control_generation": 3
+      },
+      "observation_seq": 7,
+      "game_ms": 16427,
+      "periodic": true,
+      "memory_only": true,
+      "command_enabled": true,
+      "action_id": null,
+      "selected_action_id": 0,
+      "new_decision": false,
+      "model_processed": true,
+      "hidden_reset": false,
+      "sequence_dt_game_ms": 66,
+      "reason": "locked",
+      "backend_inference_ms": 18.459441,
+      "recorded_latency_model_step_ms": 18.459441,
+      "process_wall_ms": 18.962995,
+      "receive_to_process_begin_ms": 0.166033,
+      "source_snapshot_wall_monotonic_ns": 1104298893484693,
+      "timing": {
+        "collector_received_wall_monotonic_ns": 1104298894949799,
+        "process_begin_wall_monotonic_ns": 1104298895115832,
+        "process_end_wall_monotonic_ns": 1104298914078827
+      },
+      "features_sha256": "795ad9149eec8e140897d84a395313c73b491bea0e135be2332d435a09cb2d54",
+      "observation_sha256": "85869832aeffda695a4b6d9810f4bb416efadc79b49186de861eff87e3942d28"
+    },
+    {
+      "stream_seq": 3,
+      "identity": {
+        "session_epoch": 1791987291151697685,
+        "world_epoch": 4,
+        "entity_id": 1,
+        "control_generation": 3
+      },
+      "observation_seq": 9,
+      "game_ms": 16461,
+      "periodic": true,
+      "memory_only": true,
+      "command_enabled": true,
+      "action_id": null,
+      "selected_action_id": 0,
+      "new_decision": false,
+      "model_processed": true,
+      "hidden_reset": false,
+      "sequence_dt_game_ms": 34,
+      "reason": "locked",
+      "backend_inference_ms": 0.385123,
+      "recorded_latency_model_step_ms": 0.385123,
+      "process_wall_ms": 0.792226,
+      "receive_to_process_begin_ms": 0.134932,
+      "source_snapshot_wall_monotonic_ns": 1104298920337382,
+      "timing": {
+        "collector_received_wall_monotonic_ns": 1104298921295328,
+        "process_begin_wall_monotonic_ns": 1104298921430260,
+        "process_end_wall_monotonic_ns": 1104298922222486
+      },
+      "features_sha256": "23d3783a3f144d5a2914597de6373b3fc7852a541ede178e40c0b51738a26e36",
+      "observation_sha256": "f086114214b542dbafffa0ed82a2bd50cba6f9244dac965fb3d80172260c7cbc"
+    },
+    {
+      "stream_seq": 4,
+      "identity": {
+        "session_epoch": 1791987291151697685,
+        "world_epoch": 4,
+        "entity_id": 1,
+        "control_generation": 3
+      },
+      "observation_seq": 11,
+      "game_ms": 16527,
+      "periodic": true,
+      "memory_only": true,
+      "command_enabled": false,
+      "action_id": null,
+      "selected_action_id": 0,
+      "new_decision": false,
+      "model_processed": true,
+      "hidden_reset": false,
+      "sequence_dt_game_ms": 66,
+      "reason": "locked",
+      "backend_inference_ms": 0.775954,
+      "recorded_latency_model_step_ms": 0.775954,
+      "process_wall_ms": 1.24812,
+      "receive_to_process_begin_ms": 0.272421,
+      "source_snapshot_wall_monotonic_ns": 1104298989099471,
+      "timing": {
+        "collector_received_wall_monotonic_ns": 1104298989993036,
+        "process_begin_wall_monotonic_ns": 1104298990265457,
+        "process_end_wall_monotonic_ns": 1104298991513577
+      },
+      "features_sha256": "c1d15c1762cee963a3c49bdf5098bbbacc7cf45d75ebc60a5660f84e3e8e3dc3",
+      "observation_sha256": "6c18f4445607a9dac9b10f13ed11c67a989e706ccf770f9cf3a8a27a1380696d"
+    }
+  ],
+  "first_action_arbitration": {
+    "timing": {
+      "collector_received_wall_monotonic_ns": 1104298843643521,
+      "arbitration_begin_wall_monotonic_ns": 1104298849692251,
+      "arbitration_end_wall_monotonic_ns": 1104298849791548,
+      "command_sent_wall_monotonic_ns": 1104298849801086
+    },
+    "command_request": {
+      "cmd": "body_action",
+      "entity_id": 1,
+      "session_epoch": 1791987291151697685,
+      "world_epoch": 4,
+      "control_generation": 3,
+      "provider": "stage8-evaluation-v2",
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 1,
+      "action_id": 9,
+      "observation_seq": 5,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100
+    },
+    "command_id": 1,
+    "execution_id": 3,
+    "collector_to_send_ms": 6.157565
+  },
+  "block_command_events": [
+    {
+      "schema_version": 1,
+      "event": "body_control_event",
+      "phase": "accepted",
+      "reason": "accepted",
+      "session_epoch": 1791987291151697685,
+      "world_epoch": 4,
+      "entity_id": 1,
+      "control_generation": 3,
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 1,
+      "execution_id": 3,
+      "owner": "scripted",
+      "release_pending": false,
+      "provider": "stage8-evaluation-v2",
+      "mode": "realtime",
+      "event_seq": 17,
+      "t_wall_ms": 1104298854,
+      "t_game_ms": 16394,
+      "wall_monotonic_ns": 1104298854115224,
+      "clock_domain": "linux-clock-monotonic",
+      "last_heartbeat_wall_ms": 1104298854,
+      "pose_identity": "S_1HRUN",
+      "sim_step": 19,
+      "observation_seq": 5,
+      "action_id": 9,
+      "effective_primitive": 9,
+      "segment_identity": "",
+      "pose_before": "",
+      "pose_after": "",
+      "release_reason": "",
+      "remaining_lock_game_ms": 0,
+      "segment_started": false,
+      "primitive_consumed": false,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100,
+      "watchdog_timeout_ms": 5000,
+      "infrastructure_failure": false
+    },
+    {
+      "schema_version": 1,
+      "event": "body_control_event",
+      "phase": "started",
+      "reason": "segment_started",
+      "session_epoch": 1791987291151697685,
+      "world_epoch": 4,
+      "entity_id": 1,
+      "control_generation": 3,
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 1,
+      "execution_id": 3,
+      "owner": "scripted",
+      "release_pending": false,
+      "provider": "stage8-evaluation-v2",
+      "mode": "realtime",
+      "event_seq": 18,
+      "t_wall_ms": 1104298882,
+      "t_game_ms": 16427,
+      "wall_monotonic_ns": 1104298882204292,
+      "clock_domain": "linux-clock-monotonic",
+      "last_heartbeat_wall_ms": 1104298854,
+      "pose_identity": "T_1HPARADE_0",
+      "sim_step": 20,
+      "observation_seq": 5,
+      "action_id": 9,
+      "effective_primitive": 9,
+      "segment_identity": "0|T_1HPARADE_0:16427:1.000000:0:27",
+      "pose_before": "0|S_1HRUN:16294:1.000000:0:98304",
+      "pose_after": "0|T_1HPARADE_0:16427:1.000000:0:27",
+      "release_reason": "",
+      "remaining_lock_game_ms": 601,
+      "segment_started": true,
+      "primitive_consumed": true,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100,
+      "watchdog_timeout_ms": 5000,
+      "infrastructure_failure": false
+    },
+    {
+      "schema_version": 1,
+      "event": "body_control_event",
+      "phase": "cancelled",
+      "reason": "reset",
+      "session_epoch": 1791987291151697685,
+      "world_epoch": 4,
+      "entity_id": 1,
+      "control_generation": 3,
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 1,
+      "execution_id": 3,
+      "owner": "scripted",
+      "release_pending": false,
+      "provider": "stage8-evaluation-v2",
+      "mode": "realtime",
+      "event_seq": 21,
+      "t_wall_ms": 1104299002,
+      "t_game_ms": 16527,
+      "wall_monotonic_ns": 1104299002699120,
+      "clock_domain": "linux-clock-monotonic",
+      "last_heartbeat_wall_ms": 1104298854,
+      "pose_identity": "T_1HPARADE_0",
+      "sim_step": 23,
+      "observation_seq": 5,
+      "action_id": 9,
+      "effective_primitive": 9,
+      "segment_identity": "0|T_1HPARADE_0:16427:1.000000:0:27",
+      "pose_before": "0|S_1HRUN:16294:1.000000:0:98304",
+      "pose_after": "0|T_1HPARADE_0:16427:1.000000:0:27",
+      "release_reason": "",
+      "remaining_lock_game_ms": 501,
+      "segment_started": true,
+      "primitive_consumed": true,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100,
+      "watchdog_timeout_ms": 5000,
+      "infrastructure_failure": false
+    },
+    {
+      "schema_version": 1,
+      "event": "body_control_event",
+      "phase": "ownership",
+      "reason": "reset",
+      "session_epoch": 1791987291151697685,
+      "world_epoch": 4,
+      "entity_id": 1,
+      "control_generation": 3,
+      "goal_version": 1,
+      "target_entity_id": 2,
+      "command_id": 0,
+      "execution_id": 0,
+      "owner": "scripted",
+      "release_pending": false,
+      "provider": "stage8-evaluation-v2",
+      "mode": "realtime",
+      "event_seq": 22,
+      "t_wall_ms": 1104299002,
+      "t_game_ms": 16527,
+      "wall_monotonic_ns": 1104299002702867,
+      "clock_domain": "linux-clock-monotonic",
+      "last_heartbeat_wall_ms": 1104298854,
+      "pose_identity": "T_1HPARADE_0",
+      "sim_step": 23,
+      "observation_seq": 0,
+      "action_id": 9,
+      "effective_primitive": 9,
+      "segment_identity": "0|T_1HPARADE_0:16427:1.000000:0:27",
+      "pose_before": "0|S_1HRUN:16294:1.000000:0:98304",
+      "pose_after": "0|T_1HPARADE_0:16427:1.000000:0:27",
+      "release_reason": "",
+      "remaining_lock_game_ms": 501,
+      "segment_started": true,
+      "primitive_consumed": true,
+      "issued_game_ms": 16361,
+      "ttl_ms": 100,
+      "watchdog_timeout_ms": 5000,
+      "infrastructure_failure": false
+    }
+  ],
+  "startup_warmup_gru": {
+    "kind": "body_policy_startup_warmup",
+    "steps": 2,
+    "timings": [
+      {
+        "step": 1,
+        "begin_wall_monotonic_ns": 1104290646237515,
+        "end_wall_monotonic_ns": 1104290647187156,
+        "elapsed_ms": 0.949641
+      },
+      {
+        "step": 2,
+        "begin_wall_monotonic_ns": 1104290647190312,
+        "end_wall_monotonic_ns": 1104290647397261,
+        "elapsed_ms": 0.206949
+      }
+    ],
+    "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+    "device": "cpu",
+    "feature_count": 184,
+    "feature_values": "synthetic_zero",
+    "head_mask": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "state_in": null,
+    "returned_hidden_discarded_each_step": true,
+    "model_process_calls": 0,
+    "commands": 0,
+    "quality_credit": false,
+    "runtime_before": {
+      "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+      "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+      "sampling_version": "periodic-v1",
+      "actors": 0,
+      "counters": {},
+      "expected_epochs": null,
+      "initial_game_ms": null,
+      "episode_closed": false
+    },
+    "runtime_after": {
+      "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+      "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+      "sampling_version": "periodic-v1",
+      "actors": 0,
+      "counters": {},
+      "expected_epochs": null,
+      "initial_game_ms": null,
+      "episode_closed": false
+    },
+    "backend_source_sha256": "e0ec4f2741fe72fabfe5f51b21183588e0b6c33c9fac35ac29189c6a1395de40"
+  },
+  "clock_domain": "linux-clock-monotonic",
+  "diagnostic_limits": {
+    "per_step_thread_cpu_samples_available": false,
+    "os_stall_cause_proven": false,
+    "latency_spike_excluded_from_gate": false,
+    "timely_block_does_not_override_latency_failure": true
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/environment.json",
+      "size_bytes": 14104,
+      "sha256": "d9ed8c225d5888928ca380de80f7cc2b56a746c2d78a597f38231c8b35ddc2e3"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/final-evaluation.json",
+      "size_bytes": 1158830,
+      "sha256": "0cd286db636dbba14921a6495805d5bdbe8490c6e3ae8e242a61b671931cf66d"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/validation/known-audit-v1/report.json",
+      "size_bytes": 256885,
+      "sha256": "b2b6c9a2e87ce023555f846443ff167141a7d4bf14b422bedd2b250cc357216e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/resources-known-audit.txt",
+      "size_bytes": 1175,
+      "sha256": "f864970b08958ad78a4c41233283cccc519c1319dc13fdf1b3ef37d333ef6309"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/launcher-known-audit.log",
+      "size_bytes": 440,
+      "sha256": "03279fd7180575f57e8954491632956280eb70a09d460b22c71ce63892304539"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/resources-realtime-reaction.txt",
+      "size_bytes": 2159,
+      "sha256": "d1d353dee65e41eb4846b96a69d6cc30c4ff4059e4f8db33cc8f92f9aee7efb7"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/launcher-realtime-reaction.log",
+      "size_bytes": 998,
+      "sha256": "36fa801c6d9dc8600ec0e3480d22e296e523421460d0634621a2a9030adbcbc0"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/startup-warmup.json",
+      "size_bytes": 3833,
+      "sha256": "0405c1025dcef7d1059764cdcbce6df71b99df70760a79815425fe3a01cce391"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/manifest.json",
+      "size_bytes": 64414,
+      "sha256": "5a226799aa251a6617888fef5196c5334f086200c7580bbe408ba1e43d1413ea"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/activation.json",
+      "size_bytes": 42719,
+      "sha256": "d239325fffa31c139293f6a87c6a9c7a71c0ebd6bc2f5b45886bd33a16b89e37"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/arena-events.jsonl",
+      "size_bytes": 52896,
+      "sha256": "8120a5ab9ba61368bd3aa6a2a4cdf8897d54449b582c1ad59691b77be95b4dfc"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/bench.log",
+      "size_bytes": 281,
+      "sha256": "988981e5571bb5a2c4e32d260b3aeecb74881bb592df4f9901fa228af5434d4e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/body-control-events.jsonl",
+      "size_bytes": 11021,
+      "sha256": "b92dcde96504961743d132af1ffdb7f6033b3022bb72a472b8a676aa8ad2c861"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/collector-transport.jsonl",
+      "size_bytes": 21586,
+      "sha256": "282239289808d8a70356bec037eb8c685c1f9e93eaefad8fc415ae7edffa065e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/episode.json",
+      "size_bytes": 230910,
+      "sha256": "9f37c151958e68664aa5a5f1847fb5513d81435369223fe6b3e82e9777d18a32"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/events.jsonl",
+      "size_bytes": 85687,
+      "sha256": "cc5ebb8eba13e729dc771358b63ea1665048fb21d764b0905a879f258f9c5177"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/ipc.jsonl",
+      "size_bytes": 1137979,
+      "sha256": "fec7538904422762cae2727c7f3abf9a5cbfe7bc14c896068060643eb30d586c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/latency.jsonl",
+      "size_bytes": 1504,
+      "sha256": "8169be6853da733112b6e2179cb07c898f79cfff342080e7712c19bc46294617"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/observations.jsonl",
+      "size_bytes": 46265,
+      "sha256": "a9d4e06b7b9f1c1e32c124043daddcdeb297cecc004ebf0a07a738495c400039"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/observer-timing.jsonl",
+      "size_bytes": 4362,
+      "sha256": "a3385b1f9e2af22d0b19a2beeffcc93722ef56c83294d6349f9d4c4d8ff9f6de"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/policy-final-before-clear.json",
+      "size_bytes": 12177,
+      "sha256": "7c6cbb887dd733e010e1ad113d187ce480029d5ba158a3d9c11395afbdd465e4"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/policy-inputs.jsonl",
+      "size_bytes": 123473,
+      "sha256": "9148cc5759f9d991b1cade8441aa429d2d9eb32c8e8817a5f658d830453532dd"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/preparation.json",
+      "size_bytes": 47404,
+      "sha256": "bf249c8762873de2a0687ddf0adce7f9be7f5b0c726a8e0fd7aa48b33b2face8"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/realtime-reaction/block-reaction-223-0-gru/runner-summary.json",
+      "size_bytes": 23178,
+      "sha256": "2139ade004575d1fdf6ef0e2f7c60ed1fefbd9cfa410e3ea20b44e5c826ecc81"
+    }
+  ],
+  "resource_and_log_fragments": {
+    "resources-known-audit.txt": "Command exited with non-zero status 2\n\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/code/scripts/body_stage8_known_report.py --run /home/kaifat/gothic-ai/body/data/stage8-final-gate-v5 --audit-manifest /home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/validation/final-audit-code/audit.json --output-dir /home/kaifat/gothic-ai/body/data/stage8-final-gate-v5/validation/known-audit-v1\"\n\tUser time (seconds): 33.48\n\tSystem time (seconds): 3.06\n\tPercent of CPU this job got: 93%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:38.93\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 473868\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 285753\n\tVoluntary context switches: 8355\n\tInvoluntary context switches: 1913\n\tSwaps: 0\n\tFile system inputs: 33490848\n\tFile system outputs: 1864\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 2\n",
+    "launcher-known-audit.log": "Running as unit: gothic-body-gate-v5-known-audit.service; invocation ID: 4f12aadc4471429fb714d220831574fa\n{\"passed\": false, \"issues\": [\"block-reaction-223-0-gru: model_step_ms missing/exceeds budget\"]}\n          Finished with result: exit-code\nMain processes terminated with: code=exited, status=2/INVALIDARGUMENT\n               Service runtime: 38.947s\n             CPU time consumed: 36.546s\n                   Memory peak: 6G (swap: 0B)\n"
+  },
+  "collection_method": {
+    "remote_reads_only": true,
+    "model_forward_executed": false,
+    "engine_started": false,
+    "tests_executed": false,
+    "original_source_or_raw_changed": false,
+    "weights_binaries_or_large_raw_downloaded": false
+  },
+  "next_declared_change": {
+    "gate": "gate-v6",
+    "private_cpu_threads": 1,
+    "default_cpu_threads_unchanged": 2,
+    "weights_normalizer_quality_thresholds_unchanged": true,
+    "status": "pending",
+    "no_new_model_quality_credit": true
+  }
+}

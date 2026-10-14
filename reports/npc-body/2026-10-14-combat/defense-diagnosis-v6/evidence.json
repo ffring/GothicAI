@@ -1,0 +1,423 @@
+{
+  "schema_version": 1,
+  "kind": "independent_defense_protocol_diagnosis",
+  "generated_at_utc": "2026-10-14T09:30:37.701420+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-combat-v6",
+  "source_bindings": {
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/dataset/normalization.json": "76fc89990193b087085787d0aada1cb4683db934a81be17cbf0bc51d96f459b6",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/code/scripts/body_trajectory_dataset.py": "e1d3289c2f2532865a15b4e69c10ca1cd1c542ffb8a5c001ac086ed708a84efe",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-gru/episode.json": "9635af3d56470de71caa46896560c5f0e13843d626e8e7210e8781379341e1e3",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-gru/policy-inputs.jsonl": "caadc8c1d7cb8bbb4d33ce42d72a5e530f7743cf9d780cc2ed782d3884160663",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-gru/body-control-events.jsonl": "3b543a55524ad8e7d3d709dd481947604fcabe2e73a2a718e05fb31f69412c0f",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-gru/events.jsonl": "1bb0cc5a470d7e597529a97a260c2744b15579c5b6cc8594e1d8505f3e772612",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-gru/episode.json": "1ed743ab5d6f1d39f3c9b5c1f6fa55fa0b850f7547f4ab0b8bcb329c08723346",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-gru/policy-inputs.jsonl": "dec49e7c7983ac6bef1e1ec9b5185ae03cf6b7551933e9dfced6333c2d9cfaad",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-gru/body-control-events.jsonl": "0e0eb5b9f7a2db0cb5000fa83982f1e3cc88ed9ed228ba825e65b743e2fa4878",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-gru/events.jsonl": "68c4f9dff5c8c25fb00ee17a23b127e66046e445f770cbbb90cfdd0b887ce939",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-mlp/episode.json": "653efda6f716957049f79741f82bf99b4b4d8ab135fd851d3d930f88acae51b0",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-mlp/policy-inputs.jsonl": "7c936371bfdc80e277a24a81bdb177664dc4a44ba6c38ada800176a34f852e30",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-mlp/body-control-events.jsonl": "78fd9dd064aba1e049db2710a15593e79cbf5388793c68873b7c97242c808435",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-0-mlp/events.jsonl": "12efa4fbe5a336ee1eeb933d9a392fd8096d16d5bf18fafe96154f3fec4628a4",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-mlp/episode.json": "895a101a9e82918d2f513c52b13493780c4182090998d185b80303049fba36a1",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-mlp/policy-inputs.jsonl": "e311ae515b864da43a67dd927e6044a55db5b3ef0c2f47f8ce372ec8a955a4eb",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-mlp/body-control-events.jsonl": "3fafff634c39759aa32b3051dc388b27eae9e01fca046ba2889d6cd237877107",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-0-mlp/events.jsonl": "c83f84b4165857542041afd190cbd5b9930b5053b6e3250723468656fc026151",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-gru/episode.json": "83323e5f380b890bf2fcc9e563bbc8029108de083947ced5a613ff4a858e025b",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-gru/policy-inputs.jsonl": "f93854535574bf3718ad933f26ca144affb72d7713e5887e962cdd078671a117",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-gru/body-control-events.jsonl": "635094bd9a2d056ad313c73069455d4d56bcb0d519b581ec5a6538e14a74121e",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-gru/events.jsonl": "37b1b072f60fea4bbb2e8047d487682792933275ed5f620ca063cb7c3f041b9c",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-gru/episode.json": "aef4dff6bdf0e697b12bbf619de7e05650baf9f95eceda5c9d4d8f3f4ce452a0",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-gru/policy-inputs.jsonl": "2747e8e92ec68b6321e318ffed2b78a4f08fce1f2303917be10adbab5b2e0e93",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-gru/body-control-events.jsonl": "2d94d46bb38e6ec8831c11024c2308be3ea90a5f4243807de62dfe40a4572aaa",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-gru/events.jsonl": "6a2f10a4248bbe815f67765082beffa795fe29ab7e9208ebd94308eb185a6562",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-mlp/episode.json": "0be88c7673b221f468676d4d349ba732a370f160e7445bb65d20ca06d5d0a3a0",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-mlp/policy-inputs.jsonl": "e1c7d4404e4b3f7167b65bba7a07b9082dca8dda1100db4b839e7381ef232187",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-mlp/body-control-events.jsonl": "e53a6e1590dcbf108554bf3034cfdd101721a11acd189136c4cfc9ae5a65f046",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-attack-223-1-mlp/events.jsonl": "bf5932e136ef09ce97736f0fceaf105482ae2f602a224d1d71f8dc5e1dccd125",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-mlp/episode.json": "3479de75c013b441996ff8754834dbafcc9cfd5d3622cc694448d604a1ed7aeb",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-mlp/policy-inputs.jsonl": "2aa76f1a51a2ac809bde8c8c49524c3aef965f98290ccba9aaf1a5f55af49251",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-mlp/body-control-events.jsonl": "51057eada707ac61e88437a28a078eaf13efb4f1cbb202fca96c681926591f3c",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/realtime/realtime-block-223-1-mlp/events.jsonl": "8f5830c5e8f34f4c69d84cdb5a7461bcf1b8fe01fbf2c2eeaec5631498b9bcd4",
+    "/home/kaifat/gothic-ai/body/data/stage7-bc-v4/demonstrations/episodes/demo-train-17-0/records-approved.jsonl": "a9e84146450bcb94abc76049171596e819923366ad7b2258bc9383319e0270d2",
+    "/home/kaifat/gothic-ai/body/data/stage7-bc-v4/demonstrations/episodes/demo-train-17-0/events.jsonl": "8e74e2d53f387edc3a9cc70ebd929ce3318e4bc41cd2743d7555351c29468fff",
+    "/home/kaifat/gothic-ai/body/data/stage7-bc-v4/demonstrations/episodes/demo-train-17-0/trajectory-manifest.json": "31fd0568f1842792b242b02c36cf5a24bcf0de27edb8aa4b04444000e95d2d13",
+    "/home/kaifat/gothic-ai/body/data/stage7-bc-v4/demonstrations/episodes/demo-train-17-0/teacher-source.py": "3a9f3d7bfff9927927164d49e4a2ef03cd6827b452f9ba5a291243c3e2f87a54",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/suite.json": "39df33f13452443482d8ea4efdd2c87663fd0fa4a15802e0c95a2a26a74eab88",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/teacher-registry.json": "ddd9d45a229964c2c2d664d0e17a1033eba0e47aa3968cdc9d32af831a660f93",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-181-open-0/trajectory-manifest.json": "fe665d6bf8a057bd50c816adfb8512eb9afb730a2976027ae5b113a999ced46d",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-181-open-1/trajectory-manifest.json": "247f7b9d083320b954b77d2fca59e38753640fc3f9ce4fcb2a6347ea4f0dd35f",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-181-near_wall-0/trajectory-manifest.json": "9a7b9bdd40e5224b7c37f05168a963061cd9200f038a49ebebf27bbd593eec4d",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-181-near_wall-1/trajectory-manifest.json": "a13e63d2fd965d64383f630d3c82150c8ace930786df10d0af44d22d6b53b7fa",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-191-open-0/trajectory-manifest.json": "80d91c5608f2287478c4ac7a22835404d6746fb1d3804dce3d31e3c7ee8c8fdd",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-191-open-1/trajectory-manifest.json": "4769b421aeb4f4687ec7f6061658b7118f706da00a0eb5d50fc8a6c1039a4c42",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-191-near_wall-0/trajectory-manifest.json": "5b95183f158b5cdd41d4c2b320dadbd35a754f5e53a060425321f1ee1e21a0cf",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-191-near_wall-1/trajectory-manifest.json": "d8340a825de85c9283133b64f2f6413518faf241770606a90970efeda6812534",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-193-open-0/trajectory-manifest.json": "8f875f1253ab31fb9738061ecfe5c8e8535d973bcb537a171a0dc687ca935623",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-193-open-1/trajectory-manifest.json": "dad7ed85b5e7cac0f8787a9297363add67f101b7260aa821d12960694385d0ef",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-193-near_wall-0/trajectory-manifest.json": "ca520a7271eb54f9813928f4b3416613bbe9bb192ce839b3a76bbeace40c0ef2",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-193-near_wall-1/trajectory-manifest.json": "bd4b36bcda4e4431dc1dd6cc9c33bfd69628487157faed52bcbb4e60e037299f",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-197-open-0/trajectory-manifest.json": "3cd90f0f3f19c635c047b19f418400627db6d16d04aa84ec7923f93c30d6fa6c",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-197-open-1/trajectory-manifest.json": "8f836276d3fa47662cbc5d3f667b063dd6b294b0e5cbd4b633799fc4ecbeab6d",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-197-near_wall-0/trajectory-manifest.json": "ffdca29969280ac082e9af72dfcb59ab653e45d8ae8d669125ae92a772e4e9ad",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-197-near_wall-1/trajectory-manifest.json": "f0194ef5c77225262f626839650e7210f718315814012e8e787cbc7cb0229fe8",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-199-open-0/trajectory-manifest.json": "ae175f6940624be6ca6a6c7de0eb1050d37057c2c43e839a73f4b1d4f09a476e",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-199-open-1/trajectory-manifest.json": "a84659b2bcf18013e31a391ceeb0e496587f19dfd28ed11c84df1c5249724274",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-199-near_wall-0/trajectory-manifest.json": "05f210bfaed66c2e28582094f59e2be3da7ac00a63364ebd27ce1076e1c7a28d",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-199-near_wall-1/trajectory-manifest.json": "a1e32d3346c65a00da465c1ebfddcf1aabac2626715dbf3bf8a4175859fcb553",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-211-open-0/trajectory-manifest.json": "6994800c53f21755aa687fa854d6f6163310511fc9c31f644b53c392fc7a6c01",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-211-open-1/trajectory-manifest.json": "d381ce372ce45ce6de1af1055befa61861d865dba2f2fe697133b15de1cc9d35",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-211-near_wall-0/trajectory-manifest.json": "4ba98f19aef2d54a93d46e63fb2f7f4afa5c8929b34eac8e975248d0d426097d",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-211-near_wall-1/trajectory-manifest.json": "bf257785f6665bf7c97a9905e8043c353bc0925a92e7175595295565e46ddb06",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-191-open-0/records-approved.jsonl": "169f1657b808bd3b666b012502ecf70dd124f2edac4e65fcb7d66e07f00d2f79",
+    "/home/kaifat/gothic-ai/body/data/stage8-combat-v6/combat-demonstrations/episodes/combat-train-191-open-0/events.jsonl": "1f9f0ac8c6ad9a9133b38ac849282c40875f0ab5aa2d2b7c9fef9ab3701f3f8d"
+  },
+  "analysis": {
+    "models_or_simulations_run": false,
+    "source_mutations": false,
+    "packing_only": "frozen shared stdlib periodic_actor_features and pack_features; no neural forward"
+  },
+  "quiet_input_ambiguity": [
+    {
+      "side": 0,
+      "model": "gru",
+      "raw_features_equal": true,
+      "normalized_features_equal": true,
+      "inputs": [
+        {
+          "task": "attack",
+          "mode": "gru",
+          "side": 0,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "eea112c316dd3d15309f74806707d31fef73f4417b60e07996cf230d1262d931",
+          "normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "logged_normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "forwarded": true
+        },
+        {
+          "task": "block",
+          "mode": "gru",
+          "side": 0,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "eea112c316dd3d15309f74806707d31fef73f4417b60e07996cf230d1262d931",
+          "normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "logged_normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "forwarded": true
+        }
+      ]
+    },
+    {
+      "side": 0,
+      "model": "mlp",
+      "raw_features_equal": true,
+      "normalized_features_equal": true,
+      "inputs": [
+        {
+          "task": "attack",
+          "mode": "mlp",
+          "side": 0,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "eea112c316dd3d15309f74806707d31fef73f4417b60e07996cf230d1262d931",
+          "normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "logged_normalized_feature_sha256": null,
+          "forwarded": false
+        },
+        {
+          "task": "block",
+          "mode": "mlp",
+          "side": 0,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "eea112c316dd3d15309f74806707d31fef73f4417b60e07996cf230d1262d931",
+          "normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "logged_normalized_feature_sha256": "d2d4d708f187a76dbeab7221b5de4745d60b15a4727787fd1b0df0d8b98184e7",
+          "forwarded": true
+        }
+      ]
+    },
+    {
+      "side": 1,
+      "model": "gru",
+      "raw_features_equal": true,
+      "normalized_features_equal": true,
+      "inputs": [
+        {
+          "task": "attack",
+          "mode": "gru",
+          "side": 1,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "013efa09cfdd6b54d4de7cb7071cd288658aad2d9400d65ea8114b01c31af19d",
+          "normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "logged_normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "forwarded": true
+        },
+        {
+          "task": "block",
+          "mode": "gru",
+          "side": 1,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "013efa09cfdd6b54d4de7cb7071cd288658aad2d9400d65ea8114b01c31af19d",
+          "normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "logged_normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "forwarded": true
+        }
+      ]
+    },
+    {
+      "side": 1,
+      "model": "mlp",
+      "raw_features_equal": true,
+      "normalized_features_equal": true,
+      "inputs": [
+        {
+          "task": "attack",
+          "mode": "mlp",
+          "side": 1,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "013efa09cfdd6b54d4de7cb7071cd288658aad2d9400d65ea8114b01c31af19d",
+          "normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "logged_normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "forwarded": true
+        },
+        {
+          "task": "block",
+          "mode": "mlp",
+          "side": 1,
+          "game_ms": 16327,
+          "initial_game_ms": 16294,
+          "sequence_dt_game_ms": 33,
+          "feature_count": 184,
+          "target_attack_anim": false,
+          "target_prehit": false,
+          "goal": {
+            "kind": "native_combat",
+            "version": 1,
+            "target_id": 2,
+            "move_hint": 0
+          },
+          "raw_feature_sha256": "013efa09cfdd6b54d4de7cb7071cd288658aad2d9400d65ea8114b01c31af19d",
+          "normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "logged_normalized_feature_sha256": "c0742c353e714d4f2d91ab26458bf581a79c8ef59a9d716f2c246aed3bf1c5ea",
+          "forwarded": true
+        }
+      ]
+    }
+  ],
+  "old_successful_defense_timing": {
+    "source_directory": "/home/kaifat/gothic-ai/body/data/stage7-bc-v4/demonstrations/episodes/demo-train-17-0",
+    "decisions": [
+      {
+        "action_id": 9,
+        "decision_id": "scripted:1:1:8",
+        "decision_game_ms": 20861,
+        "started_game_ms": 20894,
+        "completed_game_ms": 21527,
+        "target_at_decision": {
+          "attack_anim": true,
+          "prehit": true,
+          "in_w_range": true,
+          "focus_5": true,
+          "focus_30": true,
+          "fight_distance_cm": 200.8152008056641,
+          "hp": 154
+        },
+        "primary_hp_at_decision": 300,
+        "native_hits": [
+          {
+            "t": 5233,
+            "seg": "",
+            "frame": -1,
+            "kind": "body_combat",
+            "schema_version": 1,
+            "seq": 581,
+            "t_game": 21027,
+            "step": 158,
+            "actor_id": 4,
+            "actor": "PAL_255_RITTER",
+            "target_id": 3,
+            "target": "BDT_1003_BANDIT_M",
+            "phase": "hit_attempt",
+            "animation": "S_1HATTACK",
+            "result": "applied"
+          }
+        ],
+        "native_defenses": [
+          {
+            "t": 5233,
+            "seg": "",
+            "frame": -1,
+            "kind": "body_combat",
+            "schema_version": 1,
+            "seq": 582,
+            "t_game": 21027,
+            "step": 158,
+            "actor_id": 3,
+            "actor": "BDT_1003_BANDIT_M",
+            "target_id": 4,
+            "target": "PAL_255_RITTER",
+            "phase": "defence_result",
+            "animation": "T_1HPARADE_0",
+            "damage_kind": "melee",
+            "blocked": true,
+            "jumped_back": true
+          }
+        ],
+        "start_to_hit_ms": [
+          133
+        ]
+      },
+      {
+        "action_id": 5,
+        "decision_id": "scripted:1:1:9",
+        "decision_game_ms": 22061,
+        "started_game_ms": 22094,
+        "completed_game_ms": 22661,
+        "target_at_decision": {
+          "attack_anim": true,
+          "prehit": true,
+          "in_w_range": true,
+          "focus_5": true,
+          "focus_30": true,
+          "fight_distance_cm": 185.8446044921875,
+          "hp": 154
+        },
+        "primary_hp_at_decision": 300,
+        "native_hits": [
+          {
+            "t": 6433,
+            "seg": "",
+            "frame": -1,
+            "kind": "body_combat",
+            "schema_version": 1,
+            "seq": 713,
+            "t_game": 22227,
+            "step": 194,
+            "actor_id": 4,
+            "actor": "PAL_255_RITTER",
+            "target_id": 3,
+            "target": "BDT_1003_BANDIT_M",
+            "phase": "hit_attempt",
+            "animation": "S_1HATTACK",
+            "result": "applied"
+          }
+        ],
+        "native_defenses": [
+          {
+            "t": 6433,
+            "seg": "",
+            "frame": -1,
+            "kind": "body_combat",
+            "schema_version": 1,
+            "seq": 714,
+            "t_game": 22227,
+            "step": 194,
+            "actor_id": 3,
+            "actor": "BDT_1003_BANDIT_M",
+            "target_id": 4,
+            "target": "PAL_255_RITTER",
+            "phase": "defence_result",
+            "animation": "T_1HJUMPB",
+            "damage_kind": "melee",
+            "blocked": false,
+            "jumped_back": true
+          }
+        ],
+        "start_to_hit_ms": [
+          133
+        ]
+      }
+    ]
+  },
+  "new_full_train_defense": {
+    "completed_block_commands": 43,
+    "completed_jump_commands": 2,
+    "cancelled_jump_commands": 1,
+    "opponent_hit_attempts_during_completed_defense_commands": 0,
+    "example": {
+      "episode": "combat-train-191-open-0",
+      "block_started_game_ms": 17361,
+      "block_completed_game_ms": 17994,
+      "later_hit_game_ms": 18127,
+      "after_block_end_ms": 133,
+      "next_primary_action6_started_game_ms": 18061,
+      "next_primary_action6_cancelled_game_ms": 18127,
+      "cancel_reason": "hit_reaction"
+    }
+  },
+  "protocol_repair": "Separate preregistered block_reaction with genuine visible in-range attacker windup before every provider first chooser; passive primary preparation, native activation boundary and actual prepared model initial clock/context; unchanged blocked-hit plus HP300 criterion. Original v6 block failures retained."
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "scenario": "body-trajectories-v1",
+  "declared_before_measurement": "2026-10-13",
+  "trajectory_schema_version": 1,
+  "feature_schema_version": 1,
+  "action_schema_version": 1,
+  "actions": ["continue", "approach", "turn_to_target", "strafe_left", "strafe_right", "jump_back", "attack_front", "attack_left", "attack_right", "block", "wait_200", "wait_300"],
+  "native_duels": {
+    "seeds": [17, 29, 43, 61, 73, 89, 101, 113, 127],
+    "sides": [0, 1],
+    "distance_cm": 400,
+    "timeout_ms": 60000,
+    "setup_family": "arena-native-melee-v1"
+  },
+  "micro_cases": [
+    {"name": "distance", "task": "distance", "seed": 17, "side": 0, "distance_cm": 600, "timeout_ms": 10000},
+    {"name": "attack", "task": "attack", "seed": 17, "side": 0, "distance_cm": 150, "timeout_ms": 5000},
+    {"name": "block", "task": "block", "seed": 17, "side": 0, "distance_cm": 150, "timeout_ms": 5000}
+  ],
+  "ood_cases": [
+    {"name": "ood-distance-800", "task": "native_duel", "seed": 151, "side": 0, "distance_cm": 800, "timeout_ms": 60000, "ood_reason": "new initial separation 800 cm"},
+    {"name": "ood-distance-1000", "task": "native_duel", "seed": 163, "side": 1, "distance_cm": 1000, "timeout_ms": 60000, "ood_reason": "new initial separation 1000 cm"}
+  ],
+  "parity": {"seed": 17, "side": 0, "distance_cm": 400, "timeout_ms": 60000},
+  "parity_warmup_episodes": 1,
+  "splits": {
+    "ratios": {"train": 0.7, "eval": 0.15, "test": 0.15},
+    "seed": 20261013,
+    "group_rule": "setup family and seed across both actors, mirrored sides, providers and related repeats; OOD held separately",
+    "ood_for_checkpoint_selection": false
+  },
+  "coverage": {
+    "min_native_labels_per_class": 20,
+    "included_actions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    "required_conditions": ["wall", "target_visibility_lost", "bad_distance"],
+    "gate_scope": "Diagnostic BC coverage only; a valid initial corpus may explicitly report insufficient classes or conditions"
+  },
+  "budgets": {
+    "native_queue_capacity": 4096,
+    "drain_max": 256,
+    "writer_queue_capacity": 256,
+    "native_step_substeps": 2,
+    "max_episode_substeps": 2000,
+    "provider_watchdog_wall_ms": 5000,
+    "runner_wall_timeout_s": 2400,
+    "max_silent_gaps": 0,
+    "max_dropped_records": 0
+  },
+  "sequence_loader": {"chunk_length": 32, "burn_in": 8, "reset_at_episode_entity_generation": true},
+  "simulation": {"mode": "lockstep", "fps": 30, "time_multiplier": 1, "delay_substeps": 0, "model": null},
+  "storage": {"remote_data_root": "~/gothic-ai/body/data", "raw_in_git": false},
+  "limitations": [
+    "The collection is a diagnostic corpus, not an on-policy PPO rollout and not a trained model.",
+    "OOD covers new initial separations in the same arena; new geometry and opponents need later collection.",
+    "No duplicated labels or synthetic oversampling may satisfy the coverage threshold.",
+    "Class weights and normalization use train only; held-out test and OOD do not select checkpoints."
+  ]
+}

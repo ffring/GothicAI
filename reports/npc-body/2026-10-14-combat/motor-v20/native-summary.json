@@ -1,0 +1,1044 @@
+{
+  "schema_version": 1,
+  "kind": "stage8_motor_v20_closed_serial_native_proof_compact",
+  "created_at_utc": "2026-10-14T17:33:50.506289+00:00",
+  "source_run": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20",
+  "status": "passed",
+  "model": null,
+  "model_quality_credit": false,
+  "stage8_complete": false,
+  "native_binding": {
+    "binary_sha256": "a83efa28236ff9917b7e7d60a4a508de6feedd31d8d9ff4bc69adeb20ab777b7",
+    "engine_library_sha256": "4f2641f158f32e916e22dab5be835d6521ee4f27a64fbaa610b9eb2abcb89c08",
+    "source_sha256": "6659246453e02ab87349f77cfb5d7edbdce9e2152ced874df565e1511b43da6b"
+  },
+  "native_serial_workers": true,
+  "worker_execution": {
+    "serial": true,
+    "mode": "caller_serial",
+    "worker_pool_created": false,
+    "native_task_parallelism_cap": 1
+  },
+  "separate_native_cpu_v2_attestation": {
+    "source_run": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2",
+    "kind": "separate no-model observational CPU diagnostic",
+    "worker_profile": {
+      "serial_workers": true,
+      "attested_responses": 606,
+      "legacy_diagnostic_only_responses": 0,
+      "actual_worker_mode_attested": true
+    },
+    "all606_actual_response_worker_execution_equal": true,
+    "worker_execution": {
+      "serial": true,
+      "mode": "caller_serial",
+      "worker_pool_created": false,
+      "native_task_parallelism_cap": 1
+    },
+    "same_binary": true,
+    "ticks": 300,
+    "maximum_tick_wall_ms": 31.107499,
+    "slow_ticks_above_33ms": 0,
+    "causal_conclusion": "observational counters only",
+    "quality_credit": false,
+    "raw_sha256": {
+      "manifest.json": "1c4cd19bd477b0cfb6c89ec3cd9a1c4593b486ff297edda370ea4057d49ed313",
+      "probe.json": "c7ca1c9f21e2b08667d572f7d35cf201e03848b83af7fa4c489521558ac29a57",
+      "external-metadata.json": "34e90aa1cf13b0bd2aa2e2660c31f3f76ee243d924be43c156f8fe7dd5db309c",
+      "external-samples.jsonl": "e2f27b8e614d0545290c86cf6bb54fa6029b7e24705388c3582469e251d45500",
+      "ipc.jsonl": "30fd0f81a61aa535fc87179c4bac46d219228023bb858043fe05dcf014d85cc0",
+      "episode/observer-timing.jsonl": "3494043d539423ea24f5e1b5844c30ef1bd2781c983f2c4fecb717cf93d60fbd",
+      "episode/observations.jsonl": "67892f7e7593c411a049f94932d472e7b31c0f92c3a52d2d7e5066e63655476f",
+      "episode/events.jsonl": "d274f8edb8e4b74a1326077676688505c90fc28fdc67d494b532a8ed568aa18a"
+    },
+    "source_files": [
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2/probe/audit.json",
+        "size_bytes": 478061,
+        "sha256": "d9a5895bfd4c20a890ed6ea1a684e24bdb6d3cb488e88a9b066444f8a180e872"
+      },
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2/probe/manifest.json",
+        "size_bytes": 56803,
+        "sha256": "1c4cd19bd477b0cfb6c89ec3cd9a1c4593b486ff297edda370ea4057d49ed313"
+      },
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2/probe/probe.json",
+        "size_bytes": 118492,
+        "sha256": "c7ca1c9f21e2b08667d572f7d35cf201e03848b83af7fa4c489521558ac29a57"
+      },
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2/probe/external-metadata.json",
+        "size_bytes": 1345,
+        "sha256": "34e90aa1cf13b0bd2aa2e2660c31f3f76ee243d924be43c156f8fe7dd5db309c"
+      },
+      {
+        "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2/probe/ipc.jsonl",
+        "size_bytes": 5960236,
+        "sha256": "30fd0f81a61aa535fc87179c4bac46d219228023bb858043fe05dcf014d85cc0"
+      }
+    ],
+    "scope": "606 responses belong only to NativeCPUv2 diagnostic, not Motor20 proof count or total process thread count."
+  },
+  "native_parity": {
+    "profile": "full",
+    "status": "matched",
+    "comparison_kind": "headless_schedule_invariance",
+    "full_stage2_evidence": false,
+    "scope": "Same-source rendered/headless mechanics with per-tick CPU root motion and collision results, in addition to archived-reference comparison.",
+    "issues": [],
+    "trace_sha256": {
+      "reference": "d2784f4e5dde6e22c125a5641968d13dd4835914371883d00a2d94a98ead3dfd",
+      "candidate": "cc2773a1076a20991843381316eb8f659ed6a7a7a6cec7d3d3cbc67a43d7c649"
+    },
+    "episodes": [
+      {
+        "seed": 17,
+        "status": "matched",
+        "difference_count": 0,
+        "first_differences": [],
+        "evidence_gaps": [],
+        "reference_duration_ms": 14133,
+        "candidate_duration_ms": 14133
+      },
+      {
+        "seed": 29,
+        "status": "matched",
+        "difference_count": 0,
+        "first_differences": [],
+        "evidence_gaps": [],
+        "reference_duration_ms": 15600,
+        "candidate_duration_ms": 15600
+      },
+      {
+        "seed": 43,
+        "status": "matched",
+        "difference_count": 0,
+        "first_differences": [],
+        "evidence_gaps": [],
+        "reference_duration_ms": 23567,
+        "candidate_duration_ms": 23567
+      }
+    ]
+  },
+  "body_api": {
+    "status": "complete",
+    "full_stage4_evidence": true,
+    "issues": [],
+    "config_sha256": "f7addbde456365a81e5a6650e846ceb0e470887b18b617b3c564c9801dd6b76b",
+    "reporter_sha256": "6740ee839f6f554df8f7f7aebf9bef34a9115d5e220c49840ac010bfe74e1f99",
+    "limitations": [
+      "No neural model or training is part of this stage.",
+      "Fixture mutations establish test states; all action execution, animation, collision and damage use the native engine.",
+      "Continue is a continuation of an existing segment and does not claim a new animation start.",
+      "Wall watchdog timing is measured independently from simulation time."
+    ],
+    "cases": [
+      {
+        "name": "continue",
+        "status": "complete",
+        "issues": [],
+        "command_count": 2,
+        "completed_action_coverage": {
+          "0": 1
+        }
+      },
+      {
+        "name": "approach",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "1": 1
+        }
+      },
+      {
+        "name": "turn_to_target",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "2": 1
+        }
+      },
+      {
+        "name": "strafe_left",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "3": 1
+        }
+      },
+      {
+        "name": "strafe_right",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "4": 1
+        }
+      },
+      {
+        "name": "jump_back",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "5": 1
+        }
+      },
+      {
+        "name": "attack_front",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "6": 1
+        }
+      },
+      {
+        "name": "attack_left",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "7": 1
+        }
+      },
+      {
+        "name": "attack_right",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "8": 1
+        }
+      },
+      {
+        "name": "block",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "9": 1
+        }
+      },
+      {
+        "name": "wait_200",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "10": 1
+        }
+      },
+      {
+        "name": "wait_300",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "11": 1
+        }
+      },
+      {
+        "name": "mask_purity",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "mask_false",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "range_mask",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "collision_mask",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "duplicate",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "11": 1
+        }
+      },
+      {
+        "name": "out_of_order",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "11": 1
+        }
+      },
+      {
+        "name": "stale_session",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "stale_world",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "stale_generation",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "stale_disconnect",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "stale_goal",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "stale_observation",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "expired",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "unknown_target",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "death",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "target_gone",
+        "status": "complete",
+        "issues": [],
+        "command_count": 0,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "reset",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "pause_resume",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "ownership",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "accepted_expired",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "goal_changed_pending",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "realtime_timeout",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {
+          "11": 1
+        }
+      },
+      {
+        "name": "realtime_disconnect",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "lockstep_timeout",
+        "status": "complete",
+        "issues": [],
+        "command_count": 1,
+        "completed_action_coverage": {}
+      },
+      {
+        "name": "action_chain",
+        "status": "complete",
+        "issues": [],
+        "command_count": 3,
+        "completed_action_coverage": {
+          "6": 1,
+          "11": 1,
+          "8": 1
+        }
+      }
+    ],
+    "raw_sha256": {
+      "continue/ipc.jsonl": "17c4baea371e5d31341418a6bb7d48b77e7ef925d432956bf7c7f7dfd78a7c2a",
+      "continue/body-control-events.jsonl": "a5075e3241ab839d625b08941ec07cb4271e58a1a6acca4b719a17fa94af3a24",
+      "continue/events.jsonl": "834f635bd20e6cb44dc778b176f97a93f5bf1c57013410d6c28721818459c187",
+      "approach/ipc.jsonl": "341b7bfedc6e73ad5450a225b1b9c7e218fc7105c9cef3266857a6c3f8f8fd7a",
+      "approach/body-control-events.jsonl": "a3253b78480608639e4e16d681d95957dd80be8e9b9af82b89be57f00daa0785",
+      "approach/events.jsonl": "a61cd5c393dbed1f6f4535ea76982a91d344f6a3e1f579588b1b8026814c5da3",
+      "turn_to_target/ipc.jsonl": "59895aceabf4e2c751638d6226e6f13f9d224f0960af7dc2cd063d982ecba285",
+      "turn_to_target/body-control-events.jsonl": "f53f652b8c822a6ede80e781c0813db2951dcdc69ae4df1f57f7266c60ea6b8a",
+      "turn_to_target/events.jsonl": "525fd8a9df050a1b4206fe1129d72fe58f266605171eb0ed5c24f5098b848ad8",
+      "strafe_left/ipc.jsonl": "1a7ee3e2104ddc64a99554910c90960ec0a079127556d2a8b5eada28b6f1ceb5",
+      "strafe_left/body-control-events.jsonl": "1dca6befcdf09029e8826bcd169f478652a363871538fa91e292298d1cff2c66",
+      "strafe_left/events.jsonl": "d4936d56bbaed4a7eb29364d2a2a1290bb6ef819ce598b6cb12cc3a35f3f6b95",
+      "strafe_right/ipc.jsonl": "9adca8a8f42fa48f8bbf3d6f6ac2a8b3a192d34bd3e3d69c70fcaa0bfa0c5d69",
+      "strafe_right/body-control-events.jsonl": "f1c81fb7ec1dd470bdeb9c55c6c49a96a71e6f50e9545d35b5bdbdfbc24595e9",
+      "strafe_right/events.jsonl": "c2fb15210ab1530cda8d4416ab6d40f348638c9b40c4dab42a75f45205438ec5",
+      "jump_back/ipc.jsonl": "db528355e4b02355ed1d9033349d155b0a2368899e8cc4c3ad86e8fbdfd2519a",
+      "jump_back/body-control-events.jsonl": "fc41d481b85cb52f1ed3181265abb454cd0d41623141c06a44e1dda8871401c8",
+      "jump_back/events.jsonl": "5d09e8a0c120349cd034988bd227bccd2f7c1e701b7786af162ea315c9421583",
+      "attack_front/ipc.jsonl": "13851d737b34d22595a05908c35ffa00b01e1ca532db0ba4d89af73a0543d826",
+      "attack_front/body-control-events.jsonl": "b355d51c5f4c4991a26486d3381ab42b293623aa43682424d270ae36a9d670e6",
+      "attack_front/events.jsonl": "e160339994d013ae9b2e0e7a96f365631e8b7fcb281c4739d9f743ca253f55cb",
+      "attack_left/ipc.jsonl": "a1fb53518ac8b87fc624b80a6b5ad2fae0309827b39e62f74543c509b4eda613",
+      "attack_left/body-control-events.jsonl": "c7f6f85f530a0d834a2bbd8e1e8469601e32cc523f08ef6c015ef55afcfd9f28",
+      "attack_left/events.jsonl": "98b963ceb52f73afab86df48029d56a5f2e3330c26d2c30920dd08089cb5d22a",
+      "attack_right/ipc.jsonl": "2d4651e32043ad2d8a7c8f535b24b1e2e75b880deccf4723a6641916a09b02cc",
+      "attack_right/body-control-events.jsonl": "ce2d9a3e4d8888bbc4193dd1b769e2aa60ffbd792dcab6293866c507da6dd60a",
+      "attack_right/events.jsonl": "15c3565db1356ff53a09448a2785084af36cac07ca063768107c59356d302ce3",
+      "block/ipc.jsonl": "47b876efa824448272c1e3003eb728408f218c9b97d783fd15758f16eb2342eb",
+      "block/body-control-events.jsonl": "a7bc7c876280b0b339332cedd8b9737f32bd7496aab3dac410ebd79e64f6ebfc",
+      "block/events.jsonl": "f33385325d9dd76b15ae1150612b568990a128aaf2a5a4d6cb762a499db43964",
+      "wait_200/ipc.jsonl": "e9c73d363e17361ed0290262cefc9127fdacbc18243a5580a063de0f205fa246",
+      "wait_200/body-control-events.jsonl": "35093f38089edd31581c1bbc12d6a9a27592859ce406d1371b92efb8d26945a5",
+      "wait_200/events.jsonl": "a9b33066d23597d13b097803aa2df0ff2d22b27b7da095186ab1db0f3d35cb5d",
+      "wait_300/ipc.jsonl": "8be163d5a94b4d9eeab97e7b7ccef0fe6fc6136f01503bdd069cde0e17b8381b",
+      "wait_300/body-control-events.jsonl": "c105ad5ed428d0ef898906e1bb2ff32ccdb1901879b23b004384f69a65b903fa",
+      "wait_300/events.jsonl": "72a9450bfd1f6fce9cccc55bd99d5718828fc081d095a79e44248b3f015c736c",
+      "mask_purity/ipc.jsonl": "f3db7f723879b4963c80f51721af2b8a9f3d09f31f1ea8033129946a4ea67d34",
+      "mask_purity/body-control-events.jsonl": "3b3e061f513036845350530ca90624a6111b4eb6701e203a8e8a8011a370b087",
+      "mask_purity/events.jsonl": "a44146deb1e281cd27c8eec3eb510cfba848341478040ba9e490b22b4fec224e",
+      "mask_false/ipc.jsonl": "1c5906c20178bc43c99f200b5af77fa1a2768160898ee52ec863b8af164c34ed",
+      "mask_false/body-control-events.jsonl": "6b740792ab2a00117917763cbb3d82cd891199401d4def926a8a6ebd746c65af",
+      "mask_false/events.jsonl": "f1b009685e2373bcc0300befd76de1ed2dd0c54b82e15594c5c5e6a475c92419",
+      "range_mask/ipc.jsonl": "82ef79226b3996cbdbbd3ff922f90c414d1bcb11e84f03d1bfd366e743be7c2b",
+      "range_mask/body-control-events.jsonl": "a0244755f0bb5354eb402350caa6b6774ce417953c28d29f066e1b43ce9abbfa",
+      "range_mask/events.jsonl": "3596a0cd79d8bf2c42860e331065b4392b147424d6951c98f770b619b0992400",
+      "collision_mask/ipc.jsonl": "940aca23a90cf780eb9f6b130c2ce5c722bf12ee647e86c919f69aeb1b1487c3",
+      "collision_mask/body-control-events.jsonl": "bf95a52e1687f609fc09b62b339b2b584f928c768db4921dce3e13f82bd9ff47",
+      "collision_mask/events.jsonl": "92e15b492de4ed07ca392046c57e929ade97a35eea7e994b618868a47eea3c3f",
+      "duplicate/ipc.jsonl": "6c63eaf4da14c416195480c94fffede590200d2a895d1e1db1610f03e25eb10f",
+      "duplicate/body-control-events.jsonl": "f7ddb904fa6a36c8a19118928d040daa49f12006ec675cf5bea5c2d648ecfc0e",
+      "duplicate/events.jsonl": "451efa04c8b14795f4efc5f5c23ee5a25a634783249ecd5a4541381f83976bb9",
+      "out_of_order/ipc.jsonl": "bbcf07aaa9390ef4d55465d5ef3113edf90f9562d0798e505bb5bfeb8e36c053",
+      "out_of_order/body-control-events.jsonl": "872aa081e72c0f8b6eed99e05168543e4e0170e31453b94253663b2cefef654c",
+      "out_of_order/events.jsonl": "451efa04c8b14795f4efc5f5c23ee5a25a634783249ecd5a4541381f83976bb9",
+      "stale_session/ipc.jsonl": "7aeb4dc6a2655cb60b55d355df90cb408a2e70431563f4e0e09c92927507b476",
+      "stale_session/body-control-events.jsonl": "a32f7b246b3a99e631068e8e1b79e9425d085c2a6fdfb89ec1359d44e46583f4",
+      "stale_session/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "stale_world/ipc.jsonl": "0af4916d718ebaac5ea572e2d3d034f109f04aead70baf68ffd840ac029d2e41",
+      "stale_world/body-control-events.jsonl": "f5c9b682c0b9bd6de698de282a626a58739e5b3d4984742a56dc71e2f9f079e4",
+      "stale_world/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "stale_generation/ipc.jsonl": "8f911b84c323e5413a4cb3a4ae12de70089637465ababa5747142dffc8285b9e",
+      "stale_generation/body-control-events.jsonl": "a6cadf6502f85329c451a75e9a1a428ba6823cd7b28a4e0d5f86ea8198feeb7c",
+      "stale_generation/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "stale_disconnect/ipc.jsonl": "29d57b521e595395d63322c69fa04c4b07299740de093c7e0484eecb8164e196",
+      "stale_disconnect/body-control-events.jsonl": "c8b6504945b5998206191c24aa0ef225eb2f8760aa9b440dd607377d00b82ce1",
+      "stale_disconnect/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "stale_goal/ipc.jsonl": "ee8337c3cc689af126e80f9d4d837857493ede8d2e375f72c81f0cbdb93d35e8",
+      "stale_goal/body-control-events.jsonl": "fce6f010299b0fd4837517ca7c6096d85ca175a5ef871b5aec1e488d864d48b1",
+      "stale_goal/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "stale_observation/ipc.jsonl": "15a123b7bc7cc80fb590e29bce9f2c29a5766046acdbff75404bd88477716af8",
+      "stale_observation/body-control-events.jsonl": "cde67efcdd89ce285ab64abf5f84838fdabd1309558fa279ce2480dcffc1245c",
+      "stale_observation/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "expired/ipc.jsonl": "c5b494dcd2ea326bdaeb7b58b63352ad43d87fb8d326f4ecc14356368c2786d4",
+      "expired/body-control-events.jsonl": "c33ab2c0444ff94d94a3574fc40dfdc683d64f503c37a197364f89e3fae4d0d0",
+      "expired/events.jsonl": "1ed698b4ccae3a5d712689551ed97056677993abe24962c509d741c8bbb0ab20",
+      "unknown_target/ipc.jsonl": "e43182e83d7b04963e9d875634c351f5e2b7e597dc0d0755eed40de2830362c8",
+      "unknown_target/body-control-events.jsonl": "c6beb531757cb2d6b112333c8748a787d7873e19407141f3f4b9b1c44506b403",
+      "unknown_target/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "death/ipc.jsonl": "df74f5eb473f2a8a78c2045cb1c5fc67ddfe5884969e7cacf826744c16902ce8",
+      "death/body-control-events.jsonl": "3ea4d675319fa41b36d137c5429d663ffcf0fc7b23813b5fd5b8a386c2bb29cf",
+      "death/events.jsonl": "11f39bc0275fbecdb3c7555f5073c217587b2a5c335669764d01ccafc2c063b5",
+      "target_gone/ipc.jsonl": "a5f26134145eecd190f909de1437ea2f4d2a44c95f2e0703d68819a02bd29281",
+      "target_gone/body-control-events.jsonl": "755b72745a239529f7016eb3edd461f20f1b55629a80d450bf20dc0eb802d19d",
+      "target_gone/events.jsonl": "d9c845e218463e8d1b551ff76a72d38c1f3086c68729491660712e57c6f328a8",
+      "reset/ipc.jsonl": "60e0c9179879a574c86d298f3df043abe007d73d6e1f4602dab723e4342df1e5",
+      "reset/body-control-events.jsonl": "1da914d5516290e8fe1b98ea454b2ef16789b599f2986726f376682c83a21e67",
+      "reset/events.jsonl": "a44146deb1e281cd27c8eec3eb510cfba848341478040ba9e490b22b4fec224e",
+      "pause_resume/ipc.jsonl": "f75734d5aa5d5ac2c13faa1cbf2027a4361f6ba03d5bc13706183045fbd77705",
+      "pause_resume/body-control-events.jsonl": "d8297bb797f31e3baa3842624de43c4d4e9c57752f2007cdc62d42161afc2311",
+      "pause_resume/events.jsonl": "1d48fb4106ce29de8fa2ff8b72d01020a0c6a9a4fb61d0bb2a5f5b388a86c74e",
+      "ownership/ipc.jsonl": "b9ac502b65470a1002dfcc98e7233601e42311f340953ae98a4505fbdcdacadd",
+      "ownership/body-control-events.jsonl": "ba5aaf9468e29bb921d6ea882216a655931f7132282fcfb5fd9138fe8df9d841",
+      "ownership/events.jsonl": "f59fa65f71eb3c0be1410254c16d6248eab324ea56a16c8bd0d103e3077fc1c0",
+      "accepted_expired/ipc.jsonl": "c2cfd0f63c6db9298ad85b6a56c3adf1d173ff05b1966f1d0663e6f41c661bb3",
+      "accepted_expired/body-control-events.jsonl": "d5d5bdcef93d46b170619dabd75ccd9f75513534b74342273ad3f114b01c0fe8",
+      "accepted_expired/events.jsonl": "f5b2ec774daaa3e56726079727126a991bbd5661e5dcd0d02cfa1f59306c8f68",
+      "goal_changed_pending/ipc.jsonl": "e3d73461f90ae317563f6b790b9620ee6e554c674a0c6bd709440c8f21e1e850",
+      "goal_changed_pending/body-control-events.jsonl": "8fc0c84bcee766bb6c3ffc416c3049f2be3a104e3c17714b17d1974a3180c4c0",
+      "goal_changed_pending/events.jsonl": "44ea58644a9b539ae345fda82b4397bc96fbbb0f27eacf4efc5d6b64882f86c2",
+      "realtime_timeout/ipc.jsonl": "2cd9c9a37773dd2f6ec7e5a8bcbaf9c806a8d3180619865016e70c746e7a3782",
+      "realtime_timeout/body-control-events.jsonl": "9739fbb45d200a1a55a678a3a6f257c0ff7eaf129f209afcedbd24c2a1515aff",
+      "realtime_timeout/events.jsonl": "d64246d36b1258bb05b1f70bec861df17e28514088efaa4cec35e272913c7b86",
+      "realtime_disconnect/ipc.jsonl": "59a61c011f822ff1df0c6b5487936c5782f4715ebc475c83c35e1f52ff82daa1",
+      "realtime_disconnect/body-control-events.jsonl": "a5cbf59c209afce01176cdafc6306c6f91402cead7852e4f6ffed755a0756191",
+      "realtime_disconnect/events.jsonl": "ce18188d1776f927cceaca93742e308b9c5a2531c5b8064bd6bb9df49fc746b1",
+      "lockstep_timeout/ipc.jsonl": "d7cdc6cb5efd2658021f8c1fe0853b32e02c4e5b467eb5469c526a36a7bfcc22",
+      "lockstep_timeout/body-control-events.jsonl": "9550a8bb4d6efab484d0f92f5c03cd8a6b9501d30fc50465571c9e8ad4be7866",
+      "lockstep_timeout/events.jsonl": "1f959c18fd6a975d7de7786189d517fe3239334f0b496195b38143d676956618",
+      "action_chain/ipc.jsonl": "20abb70050c37fff5df9387418fe10971adf717b60e510358c78a5cfbd0d225e",
+      "action_chain/body-control-events.jsonl": "c2804d6db3aa32652a342051bce483cbb401f36adfdb432dd60cef77e703e46c",
+      "action_chain/events.jsonl": "c3680f5f1651a23f33494e0697a9e8b2e650839707ce07b25e58f7773be02db0",
+      "/home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off/events.jsonl": "d2784f4e5dde6e22c125a5641968d13dd4835914371883d00a2d94a98ead3dfd",
+      "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/faults/native-off/events.jsonl": "b1bc7bfe8d703c4c52abbe3d9205bdb06e8071aeb77a42c59308d13f79c049f8"
+    },
+    "raw_binding_source": "original independent report inventory; large raw journals remain remote"
+  },
+  "realtime": {
+    "status": "passed",
+    "declared_fps_bounds": [
+      27.0,
+      33.0
+    ],
+    "arena_status": "passed",
+    "generic_status": "passed",
+    "arena_free_tick_rate": {
+      "wall_s": 1.001629825,
+      "substeps": 30,
+      "simulated_ms": 1000,
+      "substeps_per_wall_s": 29.951184810216688
+    },
+    "generic_free_tick_rate": {
+      "wall_s": 1.008181984,
+      "substeps": 32,
+      "simulated_ms": 1067,
+      "substeps_per_wall_s": 31.740301362100123
+    },
+    "animation_stream_actor_indices": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "wall_clearance_cases": 12,
+    "clock_brackets": 557,
+    "imported_model_modules": []
+  },
+  "visibility": {
+    "status": "passed",
+    "source_accepted_commands": 64,
+    "declared_cutoff_ms": 7567,
+    "physical_prefix": {
+      "status": "matched",
+      "ordered_rows": 1801,
+      "through_offset_ms": 7567,
+      "position_tolerance_cm": 1,
+      "clock_pose_damage_mask_tolerance": "exact except float roundoff <=0.0001"
+    },
+    "boundary": {
+      "target_entity_id": 3,
+      "hit_offset_ms": 7567,
+      "damage_hp": 70,
+      "stumble_duration_ms": 360,
+      "damage_event_seq": 3309,
+      "stumble_event_seq": 3308,
+      "cancel_event_seq": 192,
+      "invisible_locked_observation_sequences": [
+        698,
+        700
+      ],
+      "recovered_offset_ms": 7633,
+      "release_during_forced_lock": false,
+      "policy_decisions_disabled_during_loss": true
+    },
+    "four_actors_retained": true,
+    "replayed_accepted_commands": 64,
+    "checks": {
+      "accepted_schedule_replayed": true,
+      "physical_prefix_matched": true,
+      "actual_hit_70_preserved": true,
+      "forced_stumble_360_preserved": true,
+      "no_unsafe_visibility_release": true,
+      "policy_decisions_disabled_during_loss": true,
+      "actual_visibility_recovered": true,
+      "four_owners_retained": true
+    },
+    "journal_sha256": {
+      "events.jsonl": "3bc03db2a4b4dc18ce3d2d1c5ca9fbfa57344d6a0377a6d8514e51176c43bff0",
+      "observations.jsonl": "ee04a1ab1c045aa262db0f5643e952f575a0d36ee0ad7969e6cbcfeedc3e4d0e",
+      "body-control-events.jsonl": "c1a07d2037e0379f27714ef29041e2e14251a28205656b7aceba1f781d848908",
+      "runner-summary.json": "f5b09477b5f7e9a4fbd405871a484c1ff37eab030323a3d10e7939c0ef325719",
+      "ipc.jsonl": "57269532017dcb4d796c7c82db806d4e9c2a44549f5025e63ff28de088c16220"
+    },
+    "imported_model_modules": []
+  },
+  "compact_reply": {
+    "status": "passed",
+    "historical_owned_equivalence": false,
+    "checks": {
+      "actual_compact_flag": true,
+      "held_and_armed_full_evidence": true,
+      "held_primary_rng_unchanged": true,
+      "no_primary_preparation_choices_or_commands": true,
+      "real_incoming_attack_anchor": true,
+      "activation_full_and_same_game_clock": true,
+      "active_reply_only_allowed_pruning": true,
+      "numeric_masks_pose_hp_clocks_preserved": true,
+      "terminal_full_evidence": true,
+      "no_rendering_devices": true
+    },
+    "journal_sha256": {
+      "events.jsonl": "8676dd98d78071a91b176bf62424ae48e145ce55c22e2f46a4e2628b77e6511f",
+      "observations.jsonl": "987c813a7fb8a89e7c62ec91333caa037a51d766a3d564f7a536b68c0c233681",
+      "body-control-events.jsonl": "d7578486ef99016929def2c84115a939c56d342c871075edd2223614f9271dc1",
+      "runner-summary.json": "80a2b859a537a267a6a3b2f718fa4f402a0ca7179a621898de270d6c0bca9598",
+      "ipc.jsonl": "fadd7218c350a69392740971678b5864deb952cd95e0d028510f087e780cb8b1"
+    },
+    "imported_model_modules": []
+  },
+  "resolver": {
+    "type": "body_resolver_test",
+    "passed": true,
+    "cases": 12,
+    "assertions": 2534,
+    "checks": [
+      {
+        "name": "all_policy_masks_and_primitives",
+        "passed": true
+      },
+      {
+        "name": "global_gates_and_continue",
+        "passed": true
+      },
+      {
+        "name": "individual_animation_availability",
+        "passed": true
+      },
+      {
+        "name": "attack_distance_orientation_collision",
+        "passed": true
+      },
+      {
+        "name": "defence_focus_and_parade",
+        "passed": true
+      },
+      {
+        "name": "explicit_wait_promotion",
+        "passed": true
+      },
+      {
+        "name": "native_normalization_preserves_ordinals",
+        "passed": true
+      },
+      {
+        "name": "repeat_value_and_queue_purity",
+        "passed": true
+      },
+      {
+        "name": "actual_arbiter_fake_state_checks",
+        "passed": true
+      },
+      {
+        "name": "optional_wall_normal_placement",
+        "passed": true
+      },
+      {
+        "name": "optional_wall_tangent_selection",
+        "passed": true
+      },
+      {
+        "name": "reaction_activation_gates",
+        "passed": true
+      }
+    ]
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/environment.json",
+      "size_bytes": 14587,
+      "sha256": "3c077c4624b4987e1b5279a39f568057c4a2e48f8dfc94013432a4261102806e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/source.tar.gz",
+      "size_bytes": 12341037,
+      "sha256": "ac50e3abfb4f1fc5af0ba0e8dcab5e8ef669615e7596406c323bbb7c4729b356"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/resolver-tests.json",
+      "size_bytes": 755,
+      "sha256": "cac5c0070495c1fbab8d184dec4f834afa1ca1358de382d0a23a44911cb20582"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/setup-probe/parity/headless-parity.json",
+      "size_bytes": 141491,
+      "sha256": "2aba4bd0a5d3a83fafb521986d780ca6273da1d94139c5062a5791ba300bc851"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/faults/validated/body-api.json",
+      "size_bytes": 174025,
+      "sha256": "9eafd4a175f681e8590582a3bc947306844cae72b11f10a00003fc108ec113f4"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/setup-probe/manifest.json",
+      "size_bytes": 55529,
+      "sha256": "eb25fa36b2009f68af996f3f798c8d4d5d0f52aae4d36ec50c0569c564ececb5"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/setup-probe/probe.json",
+      "size_bytes": 532882,
+      "sha256": "1f59656f276815fc6d71568f1b165591a5b7c385b387f1f330ab67f26931bdd6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/realtime-probe/manifest.json",
+      "size_bytes": 55945,
+      "sha256": "57c801532f64c7f82bec1741baaa35d28881bff4dbc93b5da7ad5d2bed1dc236"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/realtime-probe/probe.json",
+      "size_bytes": 3479600,
+      "sha256": "d78e0b7f31ee4b529196443a6dc1af5634c935d15d44c677c5ea6049f3158f9c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/visibility-boundary-probe/manifest.json",
+      "size_bytes": 56440,
+      "sha256": "7edddf775e8fff019979dc6b7a72108ed1fb5f3fd9c02f1156ff6a6b168e21e1"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/visibility-boundary-probe/probe.json",
+      "size_bytes": 4236470,
+      "sha256": "29585536ca1c34a6e8d85a4861ea6f8b7d83a00176644a629875ad5254a1c45c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/compact-reply-probe/manifest.json",
+      "size_bytes": 56670,
+      "sha256": "84b346bd0a72c2998f41aaab7b7dc147a3c2391bb24b35223802d39104632d04"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/compact-reply-probe/probe.json",
+      "size_bytes": 26268,
+      "sha256": "0a423ee5b4e5059360390dca4fd89934607d8ffddd10098960c24965e5e88388"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/faults/manifest.json",
+      "size_bytes": 56015,
+      "sha256": "6d5af949351cbc8350d1d3f6eb5fe6e16e2f3bd9324a7d70fa093963f143101c"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/faults/suite.json",
+      "size_bytes": 161704,
+      "sha256": "4b76d5e356968cdbaeed50846d2c04bf63af5fd206ac134d2a5359908d94afa6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-setup-before.json",
+      "size_bytes": 429,
+      "sha256": "73b7658b9655e3d4a17a6cb84dcba4a78f0451254643b4918ed7b76342d3e90f"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-setup-after.json",
+      "size_bytes": 429,
+      "sha256": "3f3807ea0c8a7b163317e48d12aca3fe676a17664022b001231f5e66df4b3d21"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/resources-setup.txt",
+      "size_bytes": 1773,
+      "sha256": "7dd88fa51998d30fb819f698b5f956055ea485b68ae0d9ce74b1f4cb1f500e78"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/launcher-setup.log",
+      "size_bytes": 519,
+      "sha256": "61248c78c5c9e8e1ad166ff43f3216e6bd79ede30c0286c49f399104f99fff0e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-realtime-probe-before.json",
+      "size_bytes": 429,
+      "sha256": "b1e0fcc2775cbe61d1cb3ea191073a81b0d100dc666b55ee4cbe67ac57df6a74"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-realtime-probe-after.json",
+      "size_bytes": 429,
+      "sha256": "d2fb93f97f01b6108eadac252790b238e1335754c1b26b509083bbe112fa1cae"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/resources-realtime-probe.txt",
+      "size_bytes": 1781,
+      "sha256": "0cc8346e1dd289984a4f7abf0b7aae1f0ac8c8e8d1d47aec3c69d3bde4253518"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/launcher-realtime-probe.log",
+      "size_bytes": 404,
+      "sha256": "ad48c959a0cdda4036f4f89953054e149f310fab8a07abfb4771199ec2e636d2"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-visibility-boundary-probe-before.json",
+      "size_bytes": 429,
+      "sha256": "78e198cc67a2192fa1c35923873f61f348a110c2aaa2e357788ed5f68ade7376"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-visibility-boundary-probe-after.json",
+      "size_bytes": 429,
+      "sha256": "e94805599605862076af6cdb3c56bff5673aa2e13ad00b73a262951a232b92ca"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/resources-visibility-boundary-probe.txt",
+      "size_bytes": 1899,
+      "sha256": "c624d5af5274f3b4161238dc80ebec3af41c99b5272877bfac5b1b70ac949b93"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/launcher-visibility-boundary-probe.log",
+      "size_bytes": 415,
+      "sha256": "33524f4f853f1054bdee01acc9eea72724dd4b45a7595bac25844f4800e2b772"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-compact-reply-probe-before.json",
+      "size_bytes": 429,
+      "sha256": "d7b8ecdd7cef9d29e38abcf05b5dc3582901e3a2a6c6285bc899a80e873e80e6"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-compact-reply-probe-after.json",
+      "size_bytes": 429,
+      "sha256": "5e8936b6b68203ad408f35fc9dd341b41f31244e4ce990ff03fd2e3f22882efc"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/resources-compact-reply-probe.txt",
+      "size_bytes": 1784,
+      "sha256": "d42694ad6d3093867c5e9613a981f8d82606b0314109ff8b50fcf8596c982229"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/launcher-compact-reply-probe.log",
+      "size_bytes": 407,
+      "sha256": "d1d53e1d862a4eb0937db90818b480228423d7212b8d267b9cee7bf1f3a9ceb3"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-stage8-faults-before.json",
+      "size_bytes": 429,
+      "sha256": "b270c040a3ed1eabde9cecc0fd243eeafb92a6b4c99ca657695a4d4183155adb"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/services-stage8-faults-after.json",
+      "size_bytes": 429,
+      "sha256": "e21ed12cf626e8a39de6f1d40a7576fde0897344873c34fca5b0958614131a22"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/resources-stage8-faults.txt",
+      "size_bytes": 1859,
+      "sha256": "7913f588355de7cc74f0944b387bf29542f9d7f9c6284d8fe1925cee82d3ed2a"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/launcher-stage8-faults.log",
+      "size_bytes": 2010,
+      "sha256": "b33fd518d7b0c0d7cc71841714fc1ca53b05e828560f8263ccdc8d0a3733297a"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_api_report.py",
+      "size_bytes": 36176,
+      "sha256": "6740ee839f6f554df8f7f7aebf9bef34a9115d5e220c49840ac010bfe74e1f99"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_realtime_probe.py",
+      "size_bytes": 29456,
+      "sha256": "35c78faaba00521f4734bd89715ebf104e9273d9d9cbf60336873de4badcef7d"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_visibility_boundary_probe.py",
+      "size_bytes": 20047,
+      "sha256": "a6bccacfac18ffb3c80047e01fa076a7d380897a8dd00afc5834ee55363f71bc"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_compact_reply_probe.py",
+      "size_bytes": 14076,
+      "sha256": "9ac20909449517dd67f1a3902859320ecbb76548287a78abe785f8fb6cd097dd"
+    }
+  ],
+  "closed_phase_resources_and_logs": {
+    "setup": {
+      "resources": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_setup_probe.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v20/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/evals/npc-body/body-bc-v1.json --output /home/kaifat/gothic-ai/body/data/stage8-motor-v20/setup-probe --serial-workers\"\n\tUser time (seconds): 44.31\n\tSystem time (seconds): 1.34\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:45.90\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 716096\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 20\n\tMinor (reclaiming a frame) page faults: 589963\n\tVoluntary context switches: 2652\n\tInvoluntary context switches: 445\n\tSwaps: 0\n\tFile system inputs: 6016744\n\tFile system outputs: 56704\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "launcher": "Running as unit: gothic-body-bc-stage8-motor-v20-setup.service; invocation ID: 6a93db35f54a424789c453144ed4fd88\nheadless parity matched (full): /home/kaifat/gothic-ai/body/data/stage8-motor-v20/setup-probe/parity/headless-parity.md\n{\"status\": \"complete\", \"cases\": 4, \"mixed_native\": true}\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 45.911s\n             CPU time consumed: 45.656s\n                   Memory peak: 3.4G (swap: 0B)\n"
+    },
+    "realtime-probe": {
+      "resources": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_realtime_probe.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v20/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/evals/npc-body/body-stage8-v1.json --output /home/kaifat/gothic-ai/body/data/stage8-motor-v20/realtime-probe --serial-workers\"\n\tUser time (seconds): 24.89\n\tSystem time (seconds): 1.31\n\tPercent of CPU this job got: 59%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:44.32\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 718596\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 825139\n\tVoluntary context switches: 4050\n\tInvoluntary context switches: 152\n\tSwaps: 0\n\tFile system inputs: 539136\n\tFile system outputs: 69840\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "launcher": "Running as unit: gothic-body-bc-stage8-motor-v20-realtime-probe.service; invocation ID: 65b27defb615484886e820be76283ce7\n{\"status\": \"passed\", \"error\": null, \"model\": null}\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 44.338s\n             CPU time consumed: 26.205s\n                   Memory peak: 830.9M (swap: 0B)\n"
+    },
+    "visibility-boundary-probe": {
+      "resources": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_visibility_boundary_probe.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v20/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/evals/npc-body/body-stage8-v1.json --reference-episode /home/kaifat/gothic-ai/body/data/stage8-final-gate-v1/load/four-actor-gru-0 --output /home/kaifat/gothic-ai/body/data/stage8-motor-v20/visibility-boundary-probe --serial-workers\"\n\tUser time (seconds): 10.81\n\tSystem time (seconds): 0.60\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:11.42\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 576156\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 200975\n\tVoluntary context switches: 3796\n\tInvoluntary context switches: 104\n\tSwaps: 0\n\tFile system inputs: 23776\n\tFile system outputs: 193136\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "launcher": "Running as unit: gothic-body-bc-stage8-motor-v20-visibility-boundary-probe.service; invocation ID: b68ca5853b0149e5b1827343177145c8\n{\"status\": \"passed\", \"error\": null, \"model\": null}\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 11.435s\n             CPU time consumed: 11.422s\n                   Memory peak: 525.1M (swap: 0B)\n"
+    },
+    "compact-reply-probe": {
+      "resources": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_compact_reply_probe.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v20/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/evals/npc-body/body-stage8-v1.json --output /home/kaifat/gothic-ai/body/data/stage8-motor-v20/compact-reply-probe --serial-workers\"\n\tUser time (seconds): 5.20\n\tSystem time (seconds): 0.43\n\tPercent of CPU this job got: 99%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 0:05.65\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 573928\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 176380\n\tVoluntary context switches: 184\n\tInvoluntary context switches: 63\n\tSwaps: 0\n\tFile system inputs: 336\n\tFile system outputs: 4720\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "launcher": "Running as unit: gothic-body-bc-stage8-motor-v20-compact-reply-probe.service; invocation ID: cff19a08b78c4bf4b05af2f20f65511c\n{\"status\": \"passed\", \"error\": null, \"model\": null}\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 5.670s\n             CPU time consumed: 5.639s\n                   Memory peak: 406.8M (swap: 0B)\n"
+    },
+    "stage8-faults": {
+      "resources": "\tCommand being timed: \"/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/body_api_suite.py --runner /home/kaifat/gothic-ai/body/data/stage8-motor-v20/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/evals/npc-body/body-api-v1.json --scenario /home/kaifat/gothic-ai/body/data/stage8-motor-v20/code/scripts/bench/body-api.bench --output /home/kaifat/gothic-ai/body/data/stage8-motor-v20/faults --serial-workers\"\n\tUser time (seconds): 97.39\n\tSystem time (seconds): 3.02\n\tPercent of CPU this job got: 95%\n\tElapsed (wall clock) time (h:mm:ss or m:ss): 1:44.89\n\tAverage shared text size (kbytes): 0\n\tAverage unshared data size (kbytes): 0\n\tAverage stack size (kbytes): 0\n\tAverage total size (kbytes): 0\n\tMaximum resident set size (kbytes): 729532\n\tAverage resident set size (kbytes): 0\n\tMajor (requiring I/O) page faults: 0\n\tMinor (reclaiming a frame) page faults: 2081669\n\tVoluntary context switches: 5561\n\tInvoluntary context switches: 957\n\tSwaps: 0\n\tFile system inputs: 144\n\tFile system outputs: 162424\n\tSocket messages sent: 0\n\tSocket messages received: 0\n\tSignals delivered: 0\n\tPage size (bytes): 4096\n\tExit status: 0\n",
+      "launcher": "Running as unit: gothic-body-bc-stage8-motor-v20-stage8-faults.service; invocation ID: 8658820cf9704ee6a03d818f814d941e\nbody API [continue] evidence recorded\nbody API [approach] evidence recorded\nbody API [turn_to_target] evidence recorded\nbody API [strafe_left] evidence recorded\nbody API [strafe_right] evidence recorded\nbody API [jump_back] evidence recorded\nbody API [attack_front] evidence recorded\nbody API [attack_left] evidence recorded\nbody API [attack_right] evidence recorded\nbody API [block] evidence recorded\nbody API [wait_200] evidence recorded\nbody API [wait_300] evidence recorded\nbody API [mask_purity] evidence recorded\nbody API [mask_false] evidence recorded\nbody API [range_mask] evidence recorded\nbody API [collision_mask] evidence recorded\nbody API [duplicate] evidence recorded\nbody API [out_of_order] evidence recorded\nbody API [stale_session] evidence recorded\nbody API [stale_world] evidence recorded\nbody API [stale_generation] evidence recorded\nbody API [stale_disconnect] evidence recorded\nbody API [stale_goal] evidence recorded\nbody API [stale_observation] evidence recorded\nbody API [expired] evidence recorded\nbody API [unknown_target] evidence recorded\nbody API [death] evidence recorded\nbody API [target_gone] evidence recorded\nbody API [reset] evidence recorded\nbody API [pause_resume] evidence recorded\nbody API [ownership] evidence recorded\nbody API [accepted_expired] evidence recorded\nbody API [goal_changed_pending] evidence recorded\nbody API [realtime_timeout] evidence recorded\nbody API [realtime_disconnect] evidence recorded\nbody API [lockstep_timeout] evidence recorded\nbody API [action_chain] evidence recorded\nbody API validation complete: /home/kaifat/gothic-ai/body/data/stage8-motor-v20/faults/validated/body-api.md\n          Finished with result: success\nMain processes terminated with: code=exited, status=0/SUCCESS\n               Service runtime: 1min 44.903s\n             CPU time consumed: 1min 40.430s\n                   Memory peak: 615.8M (swap: 0B)\n"
+    }
+  },
+  "service_identity": {
+    "setup": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T17:22:25.297682+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T17:23:11.285353+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    },
+    "realtime-probe": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T17:23:11.555484+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T17:23:55.968325+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    },
+    "visibility-boundary-probe": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T17:23:56.230636+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T17:24:07.741826+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    },
+    "compact-reply-probe": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T17:24:08.007400+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T17:24:13.753205+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    },
+    "stage8-faults": {
+      "before": {
+        "recorded_at_utc": "2026-10-14T17:24:14.164860+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      },
+      "after": {
+        "recorded_at_utc": "2026-10-14T17:25:59.143080+00:00",
+        "services": {
+          "gothic-voxtral": "ActiveState=active\nSubState=running\nMainPID=556920",
+          "gothic-voxcpm": "ActiveState=active\nSubState=running\nMainPID=3359086",
+          "gothic-decider": "ActiveState=active\nSubState=running\nMainPID=2712185",
+          "gothic-gemma": "ActiveState=active\nSubState=running\nMainPID=3333298"
+        },
+        "gpu": "19011 MiB, 5114 MiB, 0 %"
+      }
+    }
+  },
+  "limits": [
+    "Serial native task execution is on caller, worker pool not created, parallelism cap1; no whole-process Thread1 claim.",
+    "606 worker response attestations are a separate CPU diagnostic and not the native proof scenario count.",
+    "Observational CPU diagnostic does not establish Gate10 slowdown causality or GRU combat quality.",
+    "Queue17 and Gate10 failures stay unchanged; weights/normalizer/masks/quality thresholds unchanged.",
+    "Read-only closed data extraction only; no models/tests/simulation/service launch or weights/binary/large raw downloads."
+  ]
+}

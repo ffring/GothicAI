@@ -1,0 +1,41 @@
+{
+  "checks": [],
+  "closed_loop_quality_credit": false,
+  "error": "ValueError: Inherited group assignment changed",
+  "evidence": {
+    "configuration": {
+      "base_model_config_sha256": "6c33be0e110409ba4c532990543a4bbb821f3c1fe82960974750b2f5461c542f",
+      "effective_config_file": "effective-profile.json",
+      "effective_config_sha256": "7b4ec7873f87a7158b5214b8b5e7f2043fe332461474c999eeea737d9f6bcaa1",
+      "original_config_path": "/home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2/code/evals/npc-body/body-defence-bc-v1.json",
+      "original_config_sha256": "46b2881717a17baa0bdd6d1f0e2301f439d5aeadd8924d0ba2324c6c5b0cdbee",
+      "override": {
+        "allocation_cap_excludes_context_and_non_allocator_memory": true,
+        "cuda_memory_fraction": 0.04,
+        "cuda_memory_limit_mib": 1024,
+        "device": "cuda",
+        "explicit_phase_only": true,
+        "minimum_cuda_free_mib": 3072,
+        "restart_or_service_changes": false,
+        "same_selection_algorithm": true,
+        "verify_overfit_evaluate_device": "cpu"
+      },
+      "verification_device": "cpu"
+    },
+    "frozen": {
+      "binary_sha256": "04d45057b9e3393bb3e641c580008aec19283bff7c377eb8d6a0363f23d5c5d4",
+      "environment_sha256": "24c34b874536a9a0db3c187cb403d5e8f9a6e5434e64a29bc07c7efb91c13be3",
+      "files": 102,
+      "source_archive_sha256": "26218e597df30aefa0736c615144b446b351fa307561cc89ab8892f9736d5da2"
+    }
+  },
+  "kind": "body_defence_child_saved_data_audit",
+  "passed": false,
+  "recorded_at_utc": "2026-10-14T11:17:59.654370+00:00",
+  "reporter_path": "/home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2/validation/defence-audit-code/body_defence_report.py",
+  "reporter_sha256": "d39132c70a6f8f2a06f86fdadc387c376a053a22e384e6ebccfddd724a6e9ce8",
+  "run": "/home/kaifat/gothic-ai/body/data/stage8-defence-bc-v2",
+  "schema_version": 1,
+  "scope": "Saved-data integrity only; no fresh screen, models or simulations read/run.",
+  "status": "failed"
+}

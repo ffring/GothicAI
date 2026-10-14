@@ -19,6 +19,7 @@
 #include "world/fplock.h"
 #include "world/waypath.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -386,7 +387,7 @@ class Npc final {
       int32_t fightTactic = 0;
       int32_t primitive = 0;
       uint64_t choiceId = 0;
-      uint64_t faiWaitMs = 0, aniWaitMs = 0, aiWaitMs = 0, outputWaitMs = 0;
+      uint64_t faiWaitMs = 0, aniWaitMs = 0, aiWaitMs = 0, outputWaitMs = 0, segmentRemainingMs = 0;
       bool faiGate = false, aniGate = false, aiGate = false, outputGate = false;
       bool attackAnim = false, prehit = false, defence = false, jumpBack = false;
       bool defWindow = false, parWindow = false, interruptible = false;
@@ -401,6 +402,8 @@ class Npc final {
       };
     auto      bodyObservationState() const -> BodyObservationState;
     auto      bodyObservationTarget(const Npc& target) const -> BodyObservationTarget;
+    // Read-only debugging evidence; these privileged ray/pose fields are never actor inputs.
+    void      traceVisibilityDiagnostic(std::string_view sourcePhase, bool force=false) noexcept;
 
     void      setPerceptionTime   (uint64_t time);
     void      setPerceptionEnable (PercType t, size_t fn);
@@ -628,7 +631,7 @@ class Npc final {
     bool      implWhirlTo(const Npc& oth, uint64_t dt);
     bool      implGoTo   (uint64_t dt);
     bool      implGoTo   (uint64_t dt, float destDist);
-    bool      implAttack (uint64_t dt);
+    bool      implAttack (uint64_t dt, bool bodyOverride=false, FightAlgo::Action bodyAction=FightAlgo::MV_NULL);
     void      traceCombatSnapshot();
     struct BodyMovementTrace;
     void      traceCombatGate(std::string_view reason);
@@ -681,6 +684,9 @@ class Npc final {
     std::string                    bodyTraceState, bodyTraceGate;
     uint64_t                       bodyTraceSampleTime = 0;
     bool                           bodyTraceMovementActive = false;
+    uint64_t                       visibilityDiagnosticGeneration=0, visibilityDiagnosticCount=0;
+    std::array<uint64_t,2>          visibilityDiagnosticTime={};
+    std::array<std::string,2>       visibilityDiagnosticKey;
     // main props
     std::shared_ptr<zenkit::INpc>  hnpc={};
     float                          x=0.f;
@@ -798,4 +804,7 @@ class Npc final {
     Sound                          sfxWeapon;
 
   friend class MoveAlgo;
+  friend class BodyController;
+  friend class BodyArena;
+  friend class BodyTrajectory;
   };

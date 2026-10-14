@@ -2,6 +2,8 @@
 
 #include "playercontrol.h"
 #include "bodyobservations.h"
+#include "bodycontroller.h"
+#include "bodytrajectory.h"
 #include "gothic.h"
 #include "camera.h"
 #include "testbench.h"
@@ -9,6 +11,7 @@
 
 void SimulationStep::worldPlayerStep(uint64_t dt, PlayerControl& player,
                                       const std::function<void()>& afterFocus) {
+  BodyController::pumpWatchdogs();
   BodyObservations::beginStep(BodyObservations::currentStep()+1);
   Gothic::inst().tick(dt);
   player.tickFocus();
@@ -24,6 +27,8 @@ bool SimulationStep::finishStep(uint64_t dt, PlayerControl& player,
     updateCamera();
   else
     observerCamera(dt);
+  BodyController::postStep();
+  BodyTrajectory::postStep();
   BodyObservations::sampleAll();
   return TestBench::tick(dt,player);
   }

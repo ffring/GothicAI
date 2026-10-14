@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "selection_split": "eval",
+  "selection_view": "full_episode",
+  "evaluation_mode": "continuous",
+  "criterion": "macro_f1_then_unweighted_nll",
+  "config_sha256": "46b2881717a17baa0bdd6d1f0e2301f439d5aeadd8924d0ba2324c6c5b0cdbee",
+  "selection_profile_sha256": "58ff1bf6a89c934eed496768f6c2a382e01a3cfd5610f3da0d37e8b3d99586d9",
+  "dataset_sha256": "e61890483f66166e9717d700602c9469a30e6f3bd2531462f94fef6dd17542a8",
+  "normalization_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "selection_evaluation_episode_ids": [
+    "combat-eval-223-near_wall-0",
+    "combat-eval-223-near_wall-1",
+    "combat-eval-223-open-0",
+    "combat-eval-223-open-1",
+    "combat-eval-227-near_wall-0",
+    "combat-eval-227-near_wall-1",
+    "combat-eval-227-open-0",
+    "combat-eval-227-open-1",
+    "defence-eval-223-side0-distance140",
+    "defence-eval-223-side0-distance150",
+    "defence-eval-223-side0-distance180",
+    "defence-eval-223-side1-distance140",
+    "defence-eval-223-side1-distance150",
+    "defence-eval-223-side1-distance180",
+    "defence-eval-227-side0-distance140",
+    "defence-eval-227-side0-distance150",
+    "defence-eval-227-side0-distance180",
+    "defence-eval-227-side1-distance140",
+    "defence-eval-227-side1-distance150",
+    "defence-eval-227-side1-distance180"
+  ],
+  "selection_evaluation_groups": {
+    "[\"arena-native-melee-v1\",223]": "eval",
+    "[\"arena-native-melee-v1\",227]": "eval"
+  },
+  "training_device": "cuda",
+  "test_and_ood_used_for_selection": false,
+  "models": {
+    "gru": {
+      "candidates": [
+        {
+          "seed": 11,
+          "path": "models/gru/seed-11",
+          "epoch": 25,
+          "eval_macro_f1": 0.44529505582137163,
+          "eval_nll": 0.1414800153338466,
+          "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+          "training_sha256": "ebd4eda1b171840c0500cd5e47023ab05a88002452880c8683f7d798cb9ef1f8",
+          "history_sha256": "f5a2a378854d3b0ef70c643c84205e983bc6bca5f35850a6b868c916d0ebd0a2"
+        },
+        {
+          "seed": 29,
+          "path": "models/gru/seed-29",
+          "epoch": 21,
+          "eval_macro_f1": 0.4331738437001595,
+          "eval_nll": 0.13402663456853314,
+          "checkpoint_sha256": "5095d4052c61e86bb16a7c8c4f381f1abd99e50efaa13a14df2d8769c6c4738f",
+          "training_sha256": "82df58c31e39ca61dd5f3198f752464d2b587aeb783e5f8c07b59c2c98313f43",
+          "history_sha256": "01c1b32c33a8e30437146d26b50870c05fb263c9fa738984d2d52f79e55b503c"
+        },
+        {
+          "seed": 43,
+          "path": "models/gru/seed-43",
+          "epoch": 42,
+          "eval_macro_f1": 0.44529505582137163,
+          "eval_nll": 0.1999200630675417,
+          "checkpoint_sha256": "c5fde79936321e71df23fa9809920eee06f7b2a07f4f3d75aebb1ee37a5608c8",
+          "training_sha256": "24489e9979caf5a3d0de11a1736e903ef0dba20970b8a511ce8789918be05a90",
+          "history_sha256": "1af2e97d2c3051f85576a7d6e3c27c325e762b4cfc3c0c3377dea418541a0e83"
+        }
+      ],
+      "selected": {
+        "seed": 11,
+        "path": "models/gru/seed-11",
+        "epoch": 25,
+        "eval_macro_f1": 0.44529505582137163,
+        "eval_nll": 0.1414800153338466,
+        "checkpoint_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+        "training_sha256": "ebd4eda1b171840c0500cd5e47023ab05a88002452880c8683f7d798cb9ef1f8",
+        "history_sha256": "f5a2a378854d3b0ef70c643c84205e983bc6bca5f35850a6b868c916d0ebd0a2"
+      },
+      "checkpoint": "models/gru/best.pt",
+      "selection_split": "eval",
+      "selection_view": "full_episode",
+      "evaluation_mode": "continuous",
+      "selection_evaluation_episode_ids": [
+        "combat-eval-223-near_wall-0",
+        "combat-eval-223-near_wall-1",
+        "combat-eval-223-open-0",
+        "combat-eval-223-open-1",
+        "combat-eval-227-near_wall-0",
+        "combat-eval-227-near_wall-1",
+        "combat-eval-227-open-0",
+        "combat-eval-227-open-1",
+        "defence-eval-223-side0-distance140",
+        "defence-eval-223-side0-distance150",
+        "defence-eval-223-side0-distance180",
+        "defence-eval-223-side1-distance140",
+        "defence-eval-223-side1-distance150",
+        "defence-eval-223-side1-distance180",
+        "defence-eval-227-side0-distance140",
+        "defence-eval-227-side0-distance150",
+        "defence-eval-227-side0-distance180",
+        "defence-eval-227-side1-distance140",
+        "defence-eval-227-side1-distance150",
+        "defence-eval-227-side1-distance180"
+      ],
+      "selection_evaluation_groups": {
+        "[\"arena-native-melee-v1\",223]": "eval",
+        "[\"arena-native-melee-v1\",227]": "eval"
+      }
+    },
+    "mlp": {
+      "candidates": [
+        {
+          "seed": 11,
+          "path": "models/mlp/seed-11",
+          "epoch": 14,
+          "eval_macro_f1": 0.42431810613628795,
+          "eval_nll": 0.48684423422914813,
+          "checkpoint_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+          "training_sha256": "e870714d958511bedf2cf370498a5aa291f9b4967c60f255c6213e88b3544a73",
+          "history_sha256": "d676c8023c899e9aa3ca50d15013aefff54926882338f2df91601149533baa44"
+        },
+        {
+          "seed": 29,
+          "path": "models/mlp/seed-29",
+          "epoch": 23,
+          "eval_macro_f1": 0.411548855593345,
+          "eval_nll": 0.4939019724970529,
+          "checkpoint_sha256": "85e2c465d23813ce4777d7c13f1e46aa598aec3d54ed5c2f4961d10994dfd3c6",
+          "training_sha256": "a8032c4df26575eda5bc44fd130899653d858b4dac8594f3210b88bc29f3b2f1",
+          "history_sha256": "ad356b3f9cedd3bfbad3bae8aa60d7f1928e2209472e8bd39bf37e1ead507ceb"
+        },
+        {
+          "seed": 43,
+          "path": "models/mlp/seed-43",
+          "epoch": 8,
+          "eval_macro_f1": 0.41501188869609923,
+          "eval_nll": 0.2480265742178852,
+          "checkpoint_sha256": "a8ba0a808eabedbe0e54d02eeafa0e232a609180b60c45a8e224500e27d38bb9",
+          "training_sha256": "6d6ada747d738b9a578c67502785f482a53233b7cb6d230eae3d2178ef655917",
+          "history_sha256": "98f55f0fdb028d498ba2490c192313d67b82659b1215a73cb5c9912c71d21835"
+        }
+      ],
+      "selected": {
+        "seed": 11,
+        "path": "models/mlp/seed-11",
+        "epoch": 14,
+        "eval_macro_f1": 0.42431810613628795,
+        "eval_nll": 0.48684423422914813,
+        "checkpoint_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+        "training_sha256": "e870714d958511bedf2cf370498a5aa291f9b4967c60f255c6213e88b3544a73",
+        "history_sha256": "d676c8023c899e9aa3ca50d15013aefff54926882338f2df91601149533baa44"
+      },
+      "checkpoint": "models/mlp/best.pt",
+      "selection_split": "eval",
+      "selection_view": "full_episode",
+      "evaluation_mode": "continuous",
+      "selection_evaluation_episode_ids": [
+        "combat-eval-223-near_wall-0",
+        "combat-eval-223-near_wall-1",
+        "combat-eval-223-open-0",
+        "combat-eval-223-open-1",
+        "combat-eval-227-near_wall-0",
+        "combat-eval-227-near_wall-1",
+        "combat-eval-227-open-0",
+        "combat-eval-227-open-1",
+        "defence-eval-223-side0-distance140",
+        "defence-eval-223-side0-distance150",
+        "defence-eval-223-side0-distance180",
+        "defence-eval-223-side1-distance140",
+        "defence-eval-223-side1-distance150",
+        "defence-eval-223-side1-distance180",
+        "defence-eval-227-side0-distance140",
+        "defence-eval-227-side0-distance150",
+        "defence-eval-227-side0-distance180",
+        "defence-eval-227-side1-distance140",
+        "defence-eval-227-side1-distance150",
+        "defence-eval-227-side1-distance180"
+      ],
+      "selection_evaluation_groups": {
+        "[\"arena-native-melee-v1\",223]": "eval",
+        "[\"arena-native-melee-v1\",227]": "eval"
+      }
+    }
+  },
+  "weights_fixed_at_utc": "2026-10-14T11:15:23.540769+00:00"
+}

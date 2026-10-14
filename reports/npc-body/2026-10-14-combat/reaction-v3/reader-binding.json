@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "body_block_reaction_audit_snapshot",
+  "run_environment_sha256": "15a401c89e4da616fdc5723cce449ef223e21497c7c771c823e95e06be4be51d",
+  "declaration_sha256": "c0498c6507a47b7c1197a9d6698f72ffc55355fe31275f7b35d44f09e7491160",
+  "files": {
+    "body_block_reaction_report.py": "00269e9e2410b0268795d16e7c23ea1a8e25c2826b27a6c08a46cd197a4c8689",
+    "tests/test_body_block_reaction_report.py": "540f2defd39ba0fa07c4d94821d89e4e7c2ee6a9a6d89affd3f839bbe3b13a72"
+  },
+  "source_provenance_correction": {
+    "reason": "native_Path_component_order_vs_declaration_lexical_order",
+    "original_failed_report": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-reaction-v3/validation/block-reaction/body-block-reaction.json",
+      "sha256": "32c87f9be3978fbe3633c8a75fb21d46f34a6f11eb613e1fbb8bed7cd4e22c4d"
+    }
+  }
+}

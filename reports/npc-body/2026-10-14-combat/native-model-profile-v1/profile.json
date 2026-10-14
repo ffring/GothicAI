@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "kind": "body_native_model_profile",
+  "status": "collected",
+  "diagnostic_only": true,
+  "quality_credit": false,
+  "selection_credit": false,
+  "quality_gate_evaluated": false,
+  "target_episode": "realtime-native_duel-223-1-gru",
+  "driver": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_policy_diagnostics.py",
+    "sha256": "0c8b4fdd6a45cd756e60abc46e570b8f6209306f03d94d5940b09f81b9598b7d"
+  },
+  "sampler": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v1/code/scripts/body_native_causal_probe.py",
+    "sha256": "8137e8e9c6749e6f7d5cc57d3a8f418a25ab0c9eabe1529fc4bb95fb43093beb"
+  },
+  "wrapper_sha256": "912de3a06257c9f3fe986ff6278cc4aa38dcb90fd0ea0e011806060f207b4507",
+  "original_argv": [
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_policy_diagnostics.py",
+    "--runner",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/reference/gothic-body-runner",
+    "--assets",
+    "/home/kaifat/gothic-ai/body-baseline/assets",
+    "--save",
+    "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav",
+    "--reference",
+    "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4",
+    "--source",
+    "/home/kaifat/gothic-ai/body-api/source/OpenGothic",
+    "--engine-library",
+    "/home/kaifat/gothic-ai/body-api/build/libOpenGothic.a",
+    "--config",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/evals/npc-body/body-stage8-v1.json",
+    "--scenario",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/bench/body-arena.bench",
+    "--melee-scenario",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/bench/body-melee.bench",
+    "--native-reference",
+    "/home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off",
+    "--phase",
+    "realtime",
+    "--policy-code-root",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code",
+    "--gru-checkpoint",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/models/gru/best.pt",
+    "--mlp-checkpoint",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/models/mlp/best.pt",
+    "--device",
+    "cpu",
+    "--output",
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime"
+  ],
+  "sampler_profile_overrides": {
+    "max_samples": 4096,
+    "sampler_capacity_bytes": 33554432
+  },
+  "config": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/evals/npc-body/body-stage8-v1.json",
+    "sha256": "50824e1318cc62ef1b89f8c5996d390ae8b33f63c3ee686cd453630703713fc6"
+  },
+  "candidate_checkpoints": {
+    "gru": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/models/gru/best.pt",
+      "sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb"
+    },
+    "mlp": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/models/mlp/best.pt",
+      "sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+    }
+  },
+  "native_binary": {
+    "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/reference/gothic-body-runner",
+    "sha256": "681a1704364e07836f839c3e4382b16ae43b28ae3bf75fb46f7884e2b10a1359"
+  },
+  "native_launches": [
+    {
+      "original_argv": [
+        "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/reference/gothic-body-runner",
+        "-g",
+        "/home/kaifat/gothic-ai/body-baseline/assets",
+        "-g2",
+        "-devmode",
+        "--save",
+        "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav",
+        "--scenario",
+        "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/bench/body-arena.bench",
+        "--output",
+        "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/initial",
+        "--mode",
+        "lockstep",
+        "--stdio",
+        "--compact-replies"
+      ],
+      "instrumented_argv": [
+        "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/reference/gothic-body-runner",
+        "-g",
+        "/home/kaifat/gothic-ai/body-baseline/assets",
+        "-g2",
+        "-devmode",
+        "--save",
+        "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav",
+        "--scenario",
+        "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/bench/body-arena.bench",
+        "--output",
+        "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/initial",
+        "--mode",
+        "lockstep",
+        "--stdio",
+        "--compact-replies",
+        "--scheduling-diagnostics"
+      ],
+      "added_flags": [
+        "--scheduling-diagnostics"
+      ],
+      "wall_monotonic_ns": 1115003644610481,
+      "pid": 953057
+    }
+  ],
+  "target_matches": 1,
+  "sampling": {
+    "pid": 953057,
+    "episode_output": "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru",
+    "start_wall_monotonic_ns": 1115114647780976,
+    "before_target_reset": true,
+    "metadata": {
+      "pid": 953057,
+      "clock_domain": "linux-clock-monotonic",
+      "clock_ticks_per_second": 100,
+      "page_size_bytes": 4096,
+      "cgroup": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gothic-body-native-model-profile-v1.service",
+      "hierarchy_limits": [
+        {
+          "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gothic-body-native-model-profile-v1.service",
+          "cpu.max": "200000 100000",
+          "memory.max": "6442450944"
+        },
+        {
+          "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice",
+          "cpu.max": "max 100000",
+          "memory.max": "max"
+        },
+        {
+          "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service",
+          "cpu.max": "max 100000",
+          "memory.max": "max"
+        },
+        {
+          "path": "/sys/fs/cgroup/user.slice/user-1000.slice",
+          "cpu.max": "max 100000",
+          "memory.max": "max"
+        },
+        {
+          "path": "/sys/fs/cgroup/user.slice",
+          "cpu.max": "max 100000",
+          "memory.max": "max",
+          "cpuset.cpus.effective": "0-11"
+        },
+        {
+          "path": "/sys/fs/cgroup",
+          "cpuset.cpus.effective": "0-11"
+        }
+      ],
+      "cgroup_scope": "native runner plus collector/sampler and any children",
+      "process_scope": "native runner including its worker threads"
+    },
+    "stop_begin_wall_monotonic_ns": 1115129029180193,
+    "stop_end_wall_monotonic_ns": 1115129029894581,
+    "stop_reason": "next_episode",
+    "samples": 680,
+    "bytes": 1809055,
+    "error": null
+  },
+  "effective_sampler_profile": {
+    "sampler_ms": 20,
+    "thread_sampler_ms": 50,
+    "max_samples": 4096,
+    "max_threads": 64,
+    "sampler_capacity_bytes": 33554432
+  },
+  "imported_modules": {
+    "body_arena_env": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_arena_env.py",
+      "sha256": "1f2a72c4a280e961167f646cc8fcc7df1e7c383dbda7484fcc5a6b19a4671f3e"
+    },
+    "body_collector_gc": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_collector_gc.py",
+      "sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a"
+    },
+    "body_headless_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_headless_suite.py",
+      "sha256": "efd2e4a886baa12183b79fe9fd2ad8302a2a68cf1b3d20b21d441e767e961556"
+    },
+    "body_native_frozen_sampler": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v1/code/scripts/body_native_causal_probe.py",
+      "sha256": "8137e8e9c6749e6f7d5cc57d3a8f418a25ab0c9eabe1529fc4bb95fb43093beb"
+    },
+    "body_observe_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_observe_suite.py",
+      "sha256": "5a3f9c53e97f1ae77777489d4eaeb5dcec3f89bb3fe2c91f8052899daf69a5a4"
+    },
+    "body_policy_diagnostics": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_policy_diagnostics.py",
+      "sha256": "0c8b4fdd6a45cd756e60abc46e570b8f6209306f03d94d5940b09f81b9598b7d"
+    },
+    "body_policy_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_policy_suite.py",
+      "sha256": "c3012314ca4f1f5c5e7b182ea167fa47cbcaae93a856258ad4f3f70cd37018f0"
+    },
+    "body_trajectory_dataset": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_trajectory_dataset.py",
+      "sha256": "185966eed12f07350a230bba027a76c3133968acc6431de422dc7f7b11f6084a"
+    },
+    "gothic_body": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/__init__.py",
+      "sha256": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e"
+    },
+    "gothic_body.runtime": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/runtime.py",
+      "sha256": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1"
+    }
+  },
+  "original_driver_returncode": 0,
+  "imported_modules_final": {
+    "body_arena_env": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_arena_env.py",
+      "sha256": "1f2a72c4a280e961167f646cc8fcc7df1e7c383dbda7484fcc5a6b19a4671f3e"
+    },
+    "body_collector_gc": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_collector_gc.py",
+      "sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a"
+    },
+    "body_headless_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_headless_suite.py",
+      "sha256": "efd2e4a886baa12183b79fe9fd2ad8302a2a68cf1b3d20b21d441e767e961556"
+    },
+    "body_native_frozen_sampler": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v1/code/scripts/body_native_causal_probe.py",
+      "sha256": "8137e8e9c6749e6f7d5cc57d3a8f418a25ab0c9eabe1529fc4bb95fb43093beb"
+    },
+    "body_observe_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_observe_suite.py",
+      "sha256": "5a3f9c53e97f1ae77777489d4eaeb5dcec3f89bb3fe2c91f8052899daf69a5a4"
+    },
+    "body_policy_diagnostics": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_policy_diagnostics.py",
+      "sha256": "0c8b4fdd6a45cd756e60abc46e570b8f6209306f03d94d5940b09f81b9598b7d"
+    },
+    "body_policy_suite": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_policy_suite.py",
+      "sha256": "c3012314ca4f1f5c5e7b182ea167fa47cbcaae93a856258ad4f3f70cd37018f0"
+    },
+    "body_trajectory_dataset": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/scripts/body_trajectory_dataset.py",
+      "sha256": "185966eed12f07350a230bba027a76c3133968acc6431de422dc7f7b11f6084a"
+    },
+    "gothic_body": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/__init__.py",
+      "sha256": "c2247350dc860fc36ddbf6dd0b3baed9bcc9184a348d5dc92190c98f14a74e2e"
+    },
+    "gothic_body.checkpoint": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/checkpoint.py",
+      "sha256": "955feda62eda42cf199db7d2b65e163f993b149723bbfc0acd9804422cb07c81"
+    },
+    "gothic_body.models": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/models.py",
+      "sha256": "c5622960d9b9d2637d00a13bfdac9d72e88489e4dac1e4628e4e4249137c608f"
+    },
+    "gothic_body.runtime": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/runtime.py",
+      "sha256": "700f0876736425f520179269dc837e46612c339a9493588803a1eb9dc91bcce1"
+    },
+    "gothic_body.schema": {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v10/code/body-service/src/gothic_body/schema.py",
+      "sha256": "12cbea4c45cd1a2d05a794b9e4df955186aefa6b63bd158039f4a28c3dbe3b10"
+    }
+  },
+  "raw_artifacts": {
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/profile/external-samples.jsonl": {
+      "sha256": "284526a7d518d95cb8fe7bf94880ca0eac621d3dfd9fd0c96885416e0ae2f46b",
+      "bytes": 1809055
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/profile/external-metadata.json": {
+      "sha256": "9d1bfbb30a746b2f0bff35251b0af5b4c8078486eacf9a4b7c4f56e8f674f4a4",
+      "bytes": 1354
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/observer-timing.jsonl": {
+      "sha256": "e28aa1c0143b8f241f173445c79afd805102796e9ee2034bfa174aa878af971e",
+      "bytes": 708465
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/observations.jsonl": {
+      "sha256": "60803da62e0edf42e11d3b36ecf751cfe72e160b3da6563d929fff079df2d774",
+      "bytes": 2288026
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/events.jsonl": {
+      "sha256": "61dd98e7e5647f57067ff224e7c3b09b7777ee353458f76af0e47ca0654426d3",
+      "bytes": 3748023
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/ipc.jsonl": {
+      "sha256": "942dd5d08c0f9d0323409197f013f938c257408e91429b824639f02fe2f87440",
+      "bytes": 8653947
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/collector-transport.jsonl": {
+      "sha256": "b57e6dc45b756f04c2332de5b3db7e9602b0fb9a67022782696866d0b539dcb7",
+      "bytes": 282001
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/policy-inputs.jsonl": {
+      "sha256": "8cfb714782e30c6ded6e67000a24fbe03b757f6159b31f8400307821c0ffb529",
+      "bytes": 1921138
+    },
+    "/home/kaifat/gothic-ai/body/data/stage8-native-model-profile-v1/realtime/realtime-native_duel-223-1-gru/body-control-events.jsonl": {
+      "sha256": "2152cd5a695b104ec8251265795f7930be585cad5f44d37c2c6487f8c9e33a09",
+      "bytes": 70244
+    }
+  },
+  "end_wall_monotonic_ns": 1115140251423794
+}

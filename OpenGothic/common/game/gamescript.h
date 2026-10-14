@@ -509,4 +509,5 @@ class GameScript final {
     std::shared_ptr<zenkit::IGuildValues>                       cGuildVal;
 
   friend struct ScopeCtx;
+  friend class BodyController;
   };

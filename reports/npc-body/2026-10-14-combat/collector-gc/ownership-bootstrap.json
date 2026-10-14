@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "kind": "compact_gc_ownership_and_actual_activation",
+  "created_at_utc": "2026-10-14T15:35:30.500847+00:00",
+  "quality_credit": false,
+  "model_selection": false,
+  "training": false,
+  "fresh_screening_credit": false,
+  "ownership_source": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1",
+  "ownership_report": {
+    "kind": "collector_gc_ownership_diagnostic",
+    "quality_credit": false,
+    "engine_started": false,
+    "service_requests": false,
+    "states": [
+      {
+        "stage": "before_imports",
+        "gc_enabled": true,
+        "thresholds": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count": 375
+      },
+      {
+        "stage": "after_imports",
+        "gc_enabled": true,
+        "thresholds": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count": 375
+      },
+      {
+        "stage": "after_all8_pools_warm2",
+        "gc_enabled": true,
+        "thresholds": [
+          700,
+          10,
+          10
+        ],
+        "freeze_count": 375
+      }
+    ],
+    "changes": []
+  },
+  "isolated_interpreter_comparison": {
+    "kind": "isolated_interpreter_gc_readonly_comparison",
+    "created_at_utc": "2026-10-14T15:31:46.455971+00:00",
+    "quality_credit": false,
+    "models_engine_tests_services_started": false,
+    "gc_mutator_calls": false,
+    "resolved_private_executable": "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+    "private_executable_sha256": "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7",
+    "different_public_interpreter_default_thresholds_preserved": true,
+    "commands": [
+      {
+        "argv": [
+          "/home/kaifat/gothic-ai/body/.venv/bin/python",
+          "-I",
+          "-S",
+          "-c",
+          "import gc,sys; print(sys.version); print(sys.executable); print(gc.isenabled(),gc.get_freeze_count(),gc.get_threshold())"
+        ],
+        "returncode": 0,
+        "stdout": "3.12.13 (main, Aug  7 2026, 02:25:39) [Clang 22.1.3 ]\n/home/kaifat/gothic-ai/body/.venv/bin/python\nTrue 375 (700, 10, 10)\n",
+        "stderr": "",
+        "elapsed_wall_ms": 14.053977
+      },
+      {
+        "argv": [
+          "/usr/bin/python3",
+          "-I",
+          "-S",
+          "-c",
+          "import gc,sys; print(sys.version); print(sys.executable); print(gc.isenabled(),gc.get_freeze_count(),gc.get_threshold())"
+        ],
+        "returncode": 0,
+        "stdout": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]\n/usr/bin/python3\nTrue 0 (2000, 10, 0)\n",
+        "stderr": "",
+        "elapsed_wall_ms": 9.330559
+      },
+      {
+        "argv": [
+          "sha256sum",
+          "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12"
+        ],
+        "returncode": 0,
+        "stdout": "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7  /home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12\n",
+        "stderr": "",
+        "elapsed_wall_ms": 106.214236
+      }
+    ]
+  },
+  "activation_source": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2",
+  "actual_activation": {
+    "schema_version": 1,
+    "kind": "body_collector_static_gc_profile",
+    "mode": "freeze_static_keep_dynamic",
+    "enabled": true,
+    "normalize_bootstrap": true,
+    "helper_path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/scripts/body_collector_gc.py",
+    "helper_sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a",
+    "dynamic_gc_events": [],
+    "dropped_total": 0,
+    "max_events": 65536,
+    "bootstrap_normalization": {
+      "kind": "body_collector_bootstrap_gc_normalization",
+      "python_version": [
+        3,
+        12,
+        13
+      ],
+      "python_implementation": "cpython",
+      "sys_version": "3.12.13 (main, Aug  7 2026, 02:25:39) [Clang 22.1.3 ]",
+      "executable": "/home/kaifat/gothic-ai/body/.venv/bin/python",
+      "resolved_executable": "/home/kaifat/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+      "executable_sha256": "021044895e95be79dc2f110367607e684119afbc8ce75f6f0eec94844e0acec7",
+      "interpreter_metadata_source": "runtime_sys_and_executable_bytes",
+      "begin_wall_monotonic_ns": 1108453729644573,
+      "end_wall_monotonic_ns": 1108453729666183,
+      "gc_enabled_before": true,
+      "thresholds_before": [
+        700,
+        10,
+        10
+      ],
+      "freeze_count_before": 375,
+      "gc_enabled_after": true,
+      "thresholds_after": [
+        700,
+        10,
+        10
+      ],
+      "freeze_count_after": 0
+    },
+    "startup": {
+      "begin_wall_monotonic_ns": 1108453729675831,
+      "end_wall_monotonic_ns": 1108453730836899,
+      "collected_before_freeze": 0,
+      "gc_enabled_before": true,
+      "thresholds_before": [
+        700,
+        10,
+        10
+      ],
+      "freeze_count_before": 0,
+      "gc_enabled_after": true,
+      "thresholds_after": [
+        700,
+        10,
+        10
+      ],
+      "freeze_count_after": 8891
+    },
+    "restore": {
+      "begin_wall_monotonic_ns": 1108453730850775,
+      "end_wall_monotonic_ns": 1108453730877966,
+      "owned_freeze_released": true,
+      "gc_enabled_before": true,
+      "thresholds_before": [
+        700,
+        10,
+        10
+      ],
+      "freeze_count_before": 8891,
+      "gc_enabled_after": true,
+      "thresholds_after": [
+        700,
+        10,
+        10
+      ],
+      "freeze_count_after": 0
+    }
+  },
+  "unit_activation_wall_ms_parent_reported": 61,
+  "unit_activation_wall_source": "Parent closed-unit stdout; dedicated launcher log not persisted",
+  "internal_helper_clock_durations_ms": {
+    "bootstrap": 0.02161,
+    "freeze": 1.161068,
+    "close": 0.027191
+  },
+  "pure_test_counts": {
+    "tests": 28,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "source_files": [
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/isolated-interpreters.txt",
+      "size_bytes": 1849,
+      "sha256": "564c54fedbce2bac61c91fcfcb36c24096d5bddb2d19d0fb048c743b1eb0f972"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/launcher.log",
+      "size_bytes": 1000,
+      "sha256": "79e0737907621326ce97c2254a646ebf5ae836d6ba9d467e53f31055f46aee98"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/profile.py",
+      "size_bytes": 1420,
+      "sha256": "fa8b1a978ec77c9f9067be9f6798594a7f8b46c6fd176518e555f7fd89a1e35e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/report.json",
+      "size_bytes": 670,
+      "sha256": "606cf0b0ddd5c30a66f4c7f55dfc68a9bf870cdca091a0fb7a394c67ace6f3ec"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-ownership-profile-v1/resources.txt",
+      "size_bytes": 918,
+      "sha256": "5b6a31e5462e228461777fd57f88cc919716bca604dde045bb9f7469a87917da"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/activation.json",
+      "size_bytes": 2182,
+      "sha256": "aff62ccfd29481e7a415050b5f9d137f559096f72c7f336be53bc6491686a05e"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/launcher.log",
+      "size_bytes": 427,
+      "sha256": "c8baf9f400c9d0a32137a27f684b1a8122bc30e384989acb1f7d60506f902bee"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/resources.txt",
+      "size_bytes": 955,
+      "sha256": "3318589bb04a38aa50d7c76d04df0f8a8b3cace1794a845835dc56f67bc84c28"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/scripts/body_collector_gc.py",
+      "size_bytes": 10474,
+      "sha256": "72ce34c0bd8333cc54e62f81d51f4c6d3cee70589aa627af5f69a5f66c5c0c2a"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/scripts/tests/test_body_collector_gc.py",
+      "size_bytes": 15322,
+      "sha256": "e4905069b031c36dc6586aa5946a5088379c198e3f2ddf6e8a3035cbea77e169"
+    },
+    {
+      "path": "/home/kaifat/gothic-ai/body/data/stage8-gc-unit-tests-v2/tests.xml",
+      "size_bytes": 5640,
+      "sha256": "8d51cebf5a69793e5d03b45920a675f38cf4a47bba457661b73d202665c96ac3"
+    }
+  ],
+  "guards": {
+    "private_version_path_executable_sha_exact": true,
+    "unknown_nonzero_ownership_not_normalized": true,
+    "opt_in_only": true,
+    "dynamic_gc_enabled_and_private_thresholds_preserved": true
+  },
+  "extraction": {
+    "models_engine_tests_services_not_started": true,
+    "gc_normalization_not_rerun": true,
+    "read_only_isolated_comparison_explicitly_authorized": true
+  }
+}

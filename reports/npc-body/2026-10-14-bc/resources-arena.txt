@@ -1,0 +1,23 @@
+	Command being timed: "/home/kaifat/gothic-ai/body/.venv/bin/python /home/kaifat/gothic-ai/body/data/stage7-bc-v9/code/scripts/body_policy_suite.py --runner /home/kaifat/gothic-ai/body/data/stage7-bc-v9/reference/gothic-body-runner --assets /home/kaifat/gothic-ai/body-baseline/assets --save /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav --reference /home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4 --source /home/kaifat/gothic-ai/body-api/source/OpenGothic --engine-library /home/kaifat/gothic-ai/body-api/build/libOpenGothic.a --scenario /home/kaifat/gothic-ai/body/data/stage7-bc-v9/code/scripts/bench/body-arena.bench --melee-scenario /home/kaifat/gothic-ai/body/data/stage7-bc-v9/code/scripts/bench/body-melee.bench --native-reference /home/kaifat/gothic-ai/body-headless/runs/stage3-v1/native-off --config /home/kaifat/gothic-ai/body/data/stage7-bc-v9/code/evals/npc-body/body-bc-v1.json --gru-checkpoint /home/kaifat/gothic-ai/body/data/stage7-bc-v9/models/gru/best.pt --mlp-checkpoint /home/kaifat/gothic-ai/body/data/stage7-bc-v9/models/mlp/best.pt --device cpu --output /home/kaifat/gothic-ai/body/data/stage7-bc-v9/arena"
+	User time (seconds): 296.88
+	System time (seconds): 13.84
+	Percent of CPU this job got: 169%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:03.73
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 756620
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 65
+	Minor (reclaiming a frame) page faults: 3262190
+	Voluntary context switches: 294999
+	Involuntary context switches: 22567
+	Swaps: 0
+	File system inputs: 9173200
+	File system outputs: 1748752
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

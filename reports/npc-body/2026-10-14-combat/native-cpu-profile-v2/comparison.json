@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "kind": "native_serial_cpu_comparison",
+  "diagnostic_only": true,
+  "quality_credit": false,
+  "model_gate_credit": false,
+  "fresh_eval_credit": false,
+  "selection_credit": false,
+  "gate10_cause_proven": false,
+  "binary_sha256": "a83efa28236ff9917b7e7d60a4a508de6feedd31d8d9ff4bc69adeb20ab777b7",
+  "stored_source_sha256": "6659246453e02ab87349f77cfb5d7edbdce9e2152ced874df565e1511b43da6b",
+  "stored_engine_library_sha256": "4f2641f158f32e916e22dab5be835d6521ee4f27a64fbaa610b9eb2abcb89c08",
+  "stored_manifest_sha256": "1c4cd19bd477b0cfb6c89ec3cd9a1c4593b486ff297edda370ea4057d49ed313",
+  "driver_sha256": "a68468f6c9a41fa0e60537f6d61f6efa8d9e78ed0c5b14728240f0c3b0537597",
+  "actual_cli": [
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/reference/gothic-body-runner",
+    "-g",
+    "/home/kaifat/gothic-ai/body-baseline/assets",
+    "-g2",
+    "-devmode",
+    "--save",
+    "/home/kaifat/gothic-ai/body-baseline/runs/melee-reference-stage1-v4/run/save_slot_1.sav",
+    "--scenario",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/code/scripts/bench/body-arena.bench",
+    "--output",
+    "/home/kaifat/gothic-ai/body/data/stage8-native-cpu-profile-v2/probe/initial",
+    "--mode",
+    "realtime",
+    "--stdio",
+    "--scheduling-diagnostics",
+    "--compact-replies",
+    "--serial-workers"
+  ],
+  "declared_profile": {
+    "mode": "realtime",
+    "task": "native_duel",
+    "seed": 223,
+    "side": 1,
+    "distance_cm": 400,
+    "timeout_ms": 10000,
+    "poll_ms": 20,
+    "sampler_ms": 20,
+    "thread_sampler_ms": 50,
+    "max_samples": 2048,
+    "max_threads": 64,
+    "ipc_capacity_bytes": 33554432,
+    "sampler_capacity_bytes": 16777216,
+    "wall_timeout_s": 45,
+    "visibility_watch": true,
+    "model": null,
+    "quality_credit": false,
+    "serial_workers": true
+  },
+  "actual_worker_profile": {
+    "serial_workers": true,
+    "attested_responses": 606,
+    "legacy_diagnostic_only_responses": 0,
+    "actual_worker_mode_attested": true
+  },
+  "actual_limits": {
+    "path": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/gothic-body-native-cpu-probe-v2.service",
+    "cpu.max": "200000 100000",
+    "memory.max": "6442450944"
+  },
+  "environment_archive_bindings": {
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/environment.json": "3c077c4624b4987e1b5279a39f568057c4a2e48f8dfc94013432a4261102806e",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/source.tar.gz": "ac50e3abfb4f1fc5af0ba0e8dcab5e8ef669615e7596406c323bbb7c4729b356",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/source-head.txt": "4d7eece22cc8aa1de3275cf3663b7af6995c90431645fce01560aa07c98a4005",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/source.patch": "af10f060291932df5907b76074518fd87944cdc053a4e24e5773c49335461665",
+    "/home/kaifat/gothic-ai/body/data/stage8-final-gate-v11/reference/gothic-body-runner": "a83efa28236ff9917b7e7d60a4a508de6feedd31d8d9ff4bc69adeb20ab777b7"
+  },
+  "samples": 601,
+  "thread_sample_range": [
+    1,
+    2
+  ],
+  "worker_thread_names_observed": [],
+  "counter_scopes": {
+    "cgroup": "native runner plus collector/sampler and any children",
+    "native": "native runner including its worker threads"
+  },
+  "captured_cgroup_delta": {
+    "nice_usec": 8463474,
+    "nr_periods": 124,
+    "user_usec": 8482315,
+    "usage_usec": 8795425,
+    "throttled_usec": 0,
+    "burst_usec": 0,
+    "system_usec": 313111,
+    "nr_bursts": 0,
+    "nr_throttled": 0,
+    "core_sched.force_idle_usec": 0
+  },
+  "active_tick_wall_ms": {
+    "count": 300,
+    "median_ms": 18.258713,
+    "p95_ms": 24.126545,
+    "maximum_ms": 31.107499
+  },
+  "bootstrap_tick_wall_ms": {
+    "count": 16,
+    "median_ms": 19.267878500000002,
+    "p95_ms": 32.540743,
+    "maximum_ms": 87.292663
+  },
+  "active_ticks_gt33ms": 0,
+  "frozen_saved_audit_rederived_identical": true,
+  "outcome": "time_limit",
+  "service_phases": {
+    "stage8-native-cpu-profile-v1": {
+      "service_wall_s": 16.208,
+      "service_cpu_s": 16.383,
+      "source_log_sha256": "85c78a70e850b999fa6e7267a6c20e04287af0f5f26852ecc19be59143278d8c"
+    },
+    "stage8-native-cpu-profile-v2": {
+      "service_wall_s": 16.501,
+      "service_cpu_s": 12.564,
+      "source_log_sha256": "aeb5b7aa858bea9201292073d97bb188dc42982161d5f9f5070e3d39d69fd9f1"
+    }
+  },
+  "comparison": {
+    "same_sampler_poll_profile_except_explicit_serial_workers": true,
+    "same_observed_cpu_memory_limits": true,
+    "same_save_settings_scenarios": true,
+    "baseline_binary_sha256": "681a1704364e07836f839c3e4382b16ae43b28ae3bf75fb46f7884e2b10a1359",
+    "baseline_audit_sha256": "7085c2510f0158cb96afc2fc34a9f672df0c97b715b61890f00c9171673be4b8",
+    "baseline_active_tick_wall_ms": {
+      "count": 300,
+      "median_ms": 5.488937,
+      "p95_ms": 7.487066,
+      "maximum_ms": 15.84925
+    },
+    "baseline_active_ticks_gt33ms": 0,
+    "baseline_captured_cgroup_delta": {
+      "nice_usec": 11960823,
+      "nr_periods": 121,
+      "user_usec": 12200163,
+      "usage_usec": 12675860,
+      "throttled_usec": 228311,
+      "burst_usec": 0,
+      "system_usec": 475696,
+      "nr_bursts": 0,
+      "nr_throttled": 3,
+      "core_sched.force_idle_usec": 0
+    },
+    "service_cpu_reduction_percent": 23.310748947079286,
+    "service_wall_change_percent": 1.807749259624894
+  },
+  "raw_sha256": {
+    "manifest.json": "1c4cd19bd477b0cfb6c89ec3cd9a1c4593b486ff297edda370ea4057d49ed313",
+    "probe.json": "c7ca1c9f21e2b08667d572f7d35cf201e03848b83af7fa4c489521558ac29a57",
+    "external-metadata.json": "34e90aa1cf13b0bd2aa2e2660c31f3f76ee243d924be43c156f8fe7dd5db309c",
+    "external-samples.jsonl": "e2f27b8e614d0545290c86cf6bb54fa6029b7e24705388c3582469e251d45500",
+    "ipc.jsonl": "30fd0f81a61aa535fc87179c4bac46d219228023bb858043fe05dcf014d85cc0",
+    "episode/observer-timing.jsonl": "3494043d539423ea24f5e1b5844c30ef1bd2781c983f2c4fecb717cf93d60fbd",
+    "episode/observations.jsonl": "67892f7e7593c411a049f94932d472e7b31c0f92c3a52d2d7e5066e63655476f",
+    "episode/events.jsonl": "d274f8edb8e4b74a1326077676688505c90fc28fdc67d494b532a8ed568aa18a"
+  },
+  "conclusion": "The single serial no-model diagnostic uses less whole-service CPU and fewer observed threads than v1, at the same200%/6GiB limits. Both active fixtures have zero ticks above33ms; serial observed max31.107499ms exceeds old max15.84925ms. Whole-service costs include setup/collection. This is an observational profile comparison, not proof of Gate10 cause/fix or NN/model-quality/fresh-gate evidence.",
+  "actual_worker_execution": {
+    "serial": true,
+    "mode": "caller_serial",
+    "worker_pool_created": false,
+    "native_task_parallelism_cap": 1
+  }
+}

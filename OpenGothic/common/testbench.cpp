@@ -35,6 +35,7 @@
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
+#include "game/bodyarena.h"
 #include "game/definitions/sounddefinitions.h"
 #include "resources.h"
 #include "graphics/drawcommands.h"
@@ -487,7 +488,8 @@ struct BodyAnimationControl {
   bool totalsWritten = false;
   uint32_t seed = 0;
   uint64_t errors = 0, errorsAtStart = 0;
-  BodyAnimationActor actors[2];
+  BodyAnimationActor actors[4];
+  unsigned actorCount = 2;
   std::vector<BodyAnimationEntry> fixture;
   std::string sourceEventsHash;
   };
@@ -764,28 +766,51 @@ bool initializeAnimationControl() {
   return true;
   }
 
-bool beginAnimationControl(uint32_t seed, Npc& first, Npc& second) {
+bool beginAnimationControl(uint32_t seed, const std::vector<Npc*>& actors) {
   auto& control = bench.bodyAnimation;
   control.seed = seed;
+  if((actors.size()!=2 && actors.size()!=4) || std::any_of(actors.begin(),actors.end(),[](Npc* npc) { return npc==nullptr; }))
+    return false;
   if(!initializeAnimationControl())
     return false;
   if(control.mode==BodyAnimationControl::Default)
     return true;
+  if(actors.size()==4 && control.mode==BodyAnimationControl::Replay) {
+    animationControlError("four-actor animation replay requires a separate fixture contract");
+    return false;
+    }
   control.active = true;
   control.errorsAtStart = control.errors;
-  control.actors[0] = {};
-  control.actors[1] = {};
-  control.actors[0].npc = &first;
-  control.actors[1].npc = &second;
-  for(unsigned side=0; side<2; ++side) {
-    // Defined uint32 overflow; two independent streams, refreshed for every bodyduel/reset.
+  control.actorCount = unsigned(actors.size());
+  for(auto& actor:control.actors) actor = {};
+  for(unsigned side=0; side<control.actorCount; ++side) {
+    control.actors[side].npc = actors[side];
+    // Defined uint32 overflow; slots 0/1 preserve the archived two-actor streams.
+    // The four-actor load fixture gets two further independent streams, never std-RNG fallback.
     control.actors[side].rng = seed ^ (0x9e3779b9u*(side+1u));
     if(control.actors[side].rng==0)
       control.actors[side].rng = 0x6d2b79f5u;
     }
   event("body_animation_control_start","\"schema_version\":1,\"mode\":"+jsonStr(animationModeName())+
-        ",\"seed\":"+std::to_string(seed)+",\"source_events_sha256\":"+jsonStr(control.sourceEventsHash));
+        ",\"seed\":"+std::to_string(seed)+",\"source_events_sha256\":"+jsonStr(control.sourceEventsHash)+
+        (control.actorCount==4 ? ",\"actor_count\":4" : ""));
   return true;
+  }
+
+bool beginAnimationControl(uint32_t seed, Npc& first, Npc& second) {
+  return beginAnimationControl(seed,std::vector<Npc*>{&first,&second});
+  }
+
+unsigned animationActorIndex(const Npc& npc) {
+  const auto& control=bench.bodyAnimation;
+  for(unsigned index=0;index<control.actorCount;++index)
+    if(control.actors[index].npc==&npc) return index;
+  return control.actorCount;
+  }
+
+std::string animationActorFields(unsigned index) {
+  return bench.bodyAnimation.actorCount==4 ? ",\"pair_index\":"+std::to_string(index/2)+
+         ",\"animation_actor_index\":"+std::to_string(index) : "";
   }
 
 BodyAnimationEntry* animationFixtureEntry(unsigned side, uint64_t time) {
@@ -801,8 +826,8 @@ void observeAnimationAttempt(const Npc& npc, const std::string& fields, uint64_t
     return;
   if((npc.weaponState()!=WeaponState::W1H && npc.weaponState()!=WeaponState::W2H) || Gothic::inst().version().game!=2)
     return;
-  unsigned side = &npc==control.actors[0].npc ? 0 : 1;
-  if(&npc!=control.actors[side].npc)
+  const unsigned side = animationActorIndex(npc);
+  if(side>=control.actorCount)
     return;
   rapidjson::Document row;
   const auto json = "{"+fields+"}";
@@ -842,9 +867,9 @@ void observeAnimationAttempt(const Npc& npc, const std::string& fields, uint64_t
     }
   TestBench::bodyEvent(npc,npc.target(),"animation_branch_accept",gameTime,
                       "\"mode\":"+jsonStr(animationModeName())+",\"seed\":"+std::to_string(control.seed)+
-                      ",\"role\":"+jsonStr(side==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
+                      ",\"role\":"+jsonStr(side%2==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
                       ",\"selected_variant\":"+std::to_string(variant)+",\"animation_name\":"+jsonStr(animation)+
-                      ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq));
+                      ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq)+animationActorFields(side));
   }
 
 void endAnimationControl() {
@@ -2098,12 +2123,29 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     pl.archer().reseed(s);
     say("seed " + std::to_string(s));
     }
-  else if(c=="bodyobserve") {
+  else if(c=="bodyarena") {
+    try {
+      BodyArena::setup(w,pl);
+      const auto actors=BodyArena::actors();
+      bench.duelFrom=w.tickCount();
+      if(!beginAnimationControl(BodyArena::seed(),actors))
+        throw std::runtime_error("arena animation RNG setup failed");
+      event("body_arena_setup","\"arena\":"+BodyArena::statusJson());
+      }
+    catch(const std::exception& error) {
+      event("body_arena_error","\"reason\":"+jsonStr(error.what()));
+      bench.pc=bench.prog.size();
+      throw;
+      }
+    }
+  else if(c=="bodyobserve" || c=="bodyapi") {
+    const bool bodyApi = c=="bodyapi";
+    const size_t actorCount = bodyApi ? 2 : 4;
     // Four mortal native fighters. High HP keeps real damage/defence alive for the ten-minute
     // observation test; no healing, invulnerability, held input or policy owns their bodies.
     const auto fail = [&](const std::string& reason) {
-      event("body_observe_error","\"reason\":"+jsonStr(reason));
-      say("bodyobserve: "+reason);
+      event(bodyApi ? "body_api_error" : "body_observe_error","\"reason\":"+jsonStr(reason));
+      say(c+": "+reason);
       bench.pc = bench.prog.size();
       };
     const char* names[] = {"BDT_1003_BANDIT_M","PAL_255_RITTER","ItMw_1h_Common_01","ItAr_Leather_L",
@@ -2124,14 +2166,14 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const float an = pl.rotation()*float(M_PI)/180.f;
     const Vec3 forward(std::cos(an),0,std::sin(an)), side(-forward.z,0,forward.x);
     Vec3 positions[4];
-    for(size_t i=0;i<4;++i) {
+    for(size_t i=0;i<actorCount;++i) {
       auto p = pl.position()+forward*1200.f+side*((i<2 ? -550.f : 550.f)+(i%2==0 ? -150.f : 150.f));
       const float y = groundY(w,p.x,p.z,p.y);
       if(!std::isfinite(y)) { fail("arena ground not found"); return; }
       p.y = y;
       positions[i] = p;
       }
-    for(size_t i=0;i<4;++i) {
+    for(size_t i=0;i<actorCount;++i) {
       Npc* actor = w.addNpc(ids[i%2],positions[i]);
       if(actor==nullptr) { fail("NPC creation failed"); return; }
       bench.observeActors.push_back(actor);
@@ -2162,7 +2204,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     w.script().setSeed(seed);
     std::string actors = "[";
-    for(size_t i=0;i<4;++i) {
+    for(size_t i=0;i<actorCount;++i) {
       auto* actor = bench.observeActors[i];
       auto* target = bench.observeActors[i^1];
       actor->setExternalControl(false); actor->setTarget(target);
@@ -2174,8 +2216,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                 ",\"symbol\":"+jsonStr(names[i%2])+",\"hp\":1000000,\"hp_max\":1000000,\"immortal\":false}";
       }
     bench.observeFrom = w.tickCount(); bench.observeEnd = bench.observeFrom+duration;
-    bench.observeActive = true; bench.observeVisibleSaved = false;
-    event("body_observe_setup","\"seed\":"+std::to_string(seed)+",\"t_game_ms\":"+
+    // Stage 3 explicitly forbids external/frozen actors. Stage 4 intentionally tests those
+    // transitions and owns its assertions in the API suite, while retaining the same real setup.
+    bench.observeActive = !bodyApi; bench.observeVisibleSaved = false;
+    event(bodyApi ? "body_api_setup" : "body_observe_setup","\"seed\":"+std::to_string(seed)+",\"t_game_ms\":"+
           std::to_string(bench.observeFrom)+",\"duration_ms\":"+std::to_string(duration)+
           ",\"ownership\":\"native\",\"actors\":"+actors+"]");
     }
@@ -4234,6 +4278,8 @@ uint64_t TestBench::stepCount() { return bench.step; }
 uint64_t TestBench::nativeChoices() { return bench.nativeChoices; }
 
 std::vector<Npc*> TestBench::bodyObservationActors() {
+  if(BodyArena::enabled())
+    return BodyArena::actors();
   if(!bench.observeActors.empty())
     return bench.observeActors;
   if(bench.duelA!=nullptr && bench.duelB!=nullptr)
@@ -4269,6 +4315,7 @@ void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view 
                      (fields.empty() ? "" : ",") + fields);
   if(phase=="native_attempt")
     observeAnimationAttempt(actor,fields,gameTime);
+  BodyArena::noteCombat(actor,target,phase,fields);
   }
 
 void TestBench::bodyForget(const Npc* npc) {
@@ -4288,8 +4335,8 @@ int TestBench::bodyBlockVariant(const Npc& npc, int fallback) {
   auto& control = bench.bodyAnimation;
   if(!bodyTracing() || !control.active || control.mode==BodyAnimationControl::Default)
     return fallback;
-  const unsigned side = &npc==control.actors[0].npc ? 0 : 1;
-  if(&npc!=control.actors[side].npc)
+  const unsigned side = animationActorIndex(npc);
+  if(side>=control.actorCount)
     return fallback;
   auto& actor = control.actors[side];
   ++actor.solverCalls;
@@ -4317,10 +4364,10 @@ int TestBench::bodyBlockVariant(const Npc& npc, int fallback) {
   actor.lastVariant = variant;
   bodyEvent(npc,npc.target(),"animation_branch_draw",now,
             "\"mode\":"+jsonStr(animationModeName())+",\"seed\":"+std::to_string(control.seed)+
-            ",\"role\":"+jsonStr(side==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
+            ",\"role\":"+jsonStr(side%2==0 ? "actor" : "target")+",\"relative_time_ms\":"+std::to_string(time)+
             ",\"fallback_variant\":"+std::to_string(fallback)+",\"selected_variant\":"+std::to_string(variant)+
             ",\"fixture_matched\":"+(entry==nullptr ? "false" : "true")+
-            ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq));
+            ",\"source_seq\":"+std::to_string(entry==nullptr ? 0 : entry->sourceSeq)+animationActorFields(side));
   return variant;
   }
 
