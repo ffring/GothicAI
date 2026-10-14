@@ -271,6 +271,24 @@ struct StepReader final {
           st.text = TextCodec::fromUtf8(std::string_view(t->value.GetString(), t->value.GetStringLength()));
         if(st.line.empty()==st.text.empty())
           return fail("step " + std::to_string(at) + ": say takes a line or a text");
+        } else if(kind=="choice") {
+        st.kind = Step::Choice;
+        auto t  = s.FindMember("text");
+        auto id = s.FindMember("id");
+        if(t!=s.MemberEnd() && t->value.IsString())
+          st.text = TextCodec::fromUtf8(std::string_view(t->value.GetString(), t->value.GetStringLength()));
+        if(st.text.empty())
+          return fail("step " + std::to_string(at) + ": a choice needs its text");
+        if(id!=s.MemberEnd() && id->value.IsString()) {
+          st.id = symbolName(std::string_view(id->value.GetString(), id->value.GetStringLength()));
+          if(st.id.empty())
+            return fail("step " + std::to_string(at) + ": bad choice id");
+          }
+        auto body = s.FindMember("steps");
+        if(body==s.MemberEnd() || !steps(body->value, st.then, depth+1))
+          return fail("step " + std::to_string(at) + ": a choice needs its steps");
+        } else if(kind=="clear_choices") {
+        st.kind = Step::ClearChoices;
         } else {
         return fail("step " + std::to_string(at) + ": unknown step " + kind);
         }

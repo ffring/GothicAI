@@ -416,10 +416,15 @@ class GameLink:
         return list((await self._request(cmd, timeout)).value or [])
 
     async def story_program(
-        self, node: str, part: Literal["information", "condition"] = "information", timeout: float = 5.0
+        self,
+        node: str,
+        part: Literal["information", "condition"] = "information",
+        own: bool = False,
+        timeout: float = 5.0,
     ) -> dict[str, Any]:
-        """The program a dialog's function runs now (StoryProgramCmd): {node, fn, returns, patched, steps}."""
-        cmd = StoryProgramCmd(req=self._next_id("s"), node=node.upper(), part=part)
+        """The program a dialog's function runs now, or the scripts' own (StoryProgramCmd): {node, fn,
+        returns, patched, steps}."""
+        cmd = StoryProgramCmd(req=self._next_id("s"), node=node.upper(), part=part, own=own)
         return dict((await self._request(cmd, timeout)).value or {})
 
     async def story_tag(self, tag: str, npcs: list[str], timeout: float = 5.0) -> int:
@@ -437,6 +442,23 @@ class GameLink:
         await self._request(
             DebugCmd(req=self._next_id("r"), cmd="choose", npc=npc.upper(), node=node.upper()), timeout
         )
+
+    async def dialog_choices(self, npc: str, node: str, timeout: float = 5.0) -> list[dict[str, str]]:
+        """The choices dialog `node` offers after its lines, as the dialog window asks (game in -devmode)."""
+        cmd = DebugCmd(req=self._next_id("r"), cmd="choices", npc=npc.upper(), node=node.upper())
+        return list((await self._request(cmd, timeout)).value or [])
+
+    async def start_talk(self, npc: str, timeout: float = 5.0) -> None:
+        """The hero talks to the npc as with the action key: the dialog window opens (game in -devmode)."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd="talk", npc=npc.upper()), timeout)
+
+    async def dialog_menu(self, timeout: float = 5.0) -> list[str]:
+        """What the dialog window offers now, none while a line plays (game in -devmode)."""
+        return list((await self._request(DebugCmd(req=self._next_id("r"), cmd="menu"), timeout)).value or [])
+
+    async def pick_in_menu(self, text: str, timeout: float = 5.0) -> None:
+        """Pick the dialog window's entry `text` as the player does (game in -devmode)."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd="menu_pick", text=text), timeout)
 
     async def deal_window(self, timeout: float = 5.0) -> dict[str, Any] | None:
         """What the deal window shows (game in -devmode): {deal, version, npc, npc_gives, hero_gives,

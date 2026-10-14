@@ -25,6 +25,7 @@ from .brain.situation import SituationBuilder
 from .budget import Budget
 from .chronicle import Chronicle
 from .concerns import Concerns
+from .consequences import LieConsequences
 from .contracts import symbol_by_name
 from .daylife import DayDesk
 from .deals import Deals
@@ -176,6 +177,7 @@ class ServerState:
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
+        self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
         self.interject: Interjections | None = None
@@ -626,6 +628,9 @@ async def serve(args: argparse.Namespace) -> int:
             link, memory, perception, state.chronicle, knows_hero=knows_hero, journal=journal
         )
         state.dialogue.extensions.append(state.sightings)
+        # whom it saw lately is its intent's target too, and a companion goes where it saw him (step M2)
+        perception.remembered = state.sightings.targets
+        state.talk.orders.last_seen = state.sightings.where_seen
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle)
         state.dialogue.extensions.append(trust)
@@ -706,6 +711,16 @@ async def serve(args: argparse.Namespace) -> int:
                 state.chronicle,
                 state.director,
                 llm,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
+            # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
+            state.consequences = LieConsequences(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
                 dialogue=state.dialogue,
                 journal=journal,
             )
@@ -911,6 +926,15 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario interject: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "remembers":
+                assert state.dialogue is not None and state.talk is not None
+                assert state.sightings is not None and state.perception is not None
+                results = await scenarios.remembers_scenario(
+                    link, state.dialogue, state.talk, state.sightings, state.perception
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario remembers: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "calm":
                 assert state.dialogue is not None and state.talk is not None
@@ -1548,6 +1572,7 @@ def main() -> None:
             "ground",
             "group",
             "interject",
+            "remembers",
             "m6",
             "see",
             "seen",

@@ -658,7 +658,8 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   if(type=="debug") {
     const auto cmd = JsonRead::str(doc,"cmd");
-    if(cmd=="dialogs" || cmd=="choose" || cmd=="eval" || cmd=="check")
+    if(cmd=="dialogs" || cmd=="choices" || cmd=="choose" || cmd=="eval" || cmd=="check" || cmd=="talk" ||
+       cmd=="menu" || cmd=="menu_pick")
       onDialogDebug(world,doc); else
       onDebug(doc);
     return;
@@ -738,9 +739,9 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     onStoryEval(*world,doc);
     }
   else if(type=="story_program") {
-    // the program a dialog's function runs now (v23), for the director to edit
+    // the program a dialog's function runs now (v23), or the scripts' own (`own`, v25), for the director to edit
     std::string err;
-    auto json = graph.program(JsonRead::str(doc,"node"),JsonRead::str(doc,"part"),err);
+    auto json = graph.program(JsonRead::str(doc,"node"),JsonRead::str(doc,"part"),JsonRead::boolean(doc,"own",false),err);
     sendResult(req,!json.empty(),err,json);
     }
   else if(type=="story_effect") {
@@ -1244,6 +1245,30 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     sendResult(req,true,"",graph.checkWorld(*world));
     return;
     }
+  if(cmd=="menu") {
+    // the dialog window as the player sees it: what it offers now, none while a line plays
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    w.StartArray();
+    if(Gothic::inst().dialogEntriesFn)
+      for(auto& e : Gothic::inst().dialogEntriesFn()) {
+        auto text = TextCodec::toUtf8(e);
+        w.String(text.data(),rapidjson::SizeType(text.size()));
+        }
+    w.EndArray();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
+    return;
+    }
+  if(cmd=="menu_pick") {
+    // picks the entry with this text, as the player does with the keys
+    const auto text    = TextCodec::fromUtf8(JsonRead::str(msg,"text"));
+    auto       entries = Gothic::inst().dialogEntriesFn ? Gothic::inst().dialogEntriesFn() : std::vector<std::string>();
+    auto       at      = std::find(entries.begin(),entries.end(),text);
+    const bool ok      = at!=entries.end() && Gothic::inst().dialogPickFn &&
+                         Gothic::inst().dialogPickFn(size_t(at-entries.begin()));
+    sendResult(req,ok,"the window does not offer it now");
+    return;
+    }
   const auto symbol = JsonRead::str(msg,"npc");
   Npc*       npc    = symbol.empty() ? nullptr : npcBySymbol(*world,symbol);
   if(npc==nullptr && (cmd!="eval" || !symbol.empty())) {
@@ -1257,6 +1282,27 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     w.StartArray();
     for(auto& id : graph.offered(*world,*npc))
       w.String(id.data(),rapidjson::SizeType(id.size()));
+    w.EndArray();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
+    }
+  else if(cmd=="talk") {
+    // the hero talks to it, as with the action key: the dialog window opens
+    Npc* player = world->player();
+    if(player!=nullptr)
+      npc->startDialog(*player);
+    sendResult(req,player!=nullptr,"no player");
+    }
+  else if(cmd=="choices") {
+    // what the dialog menu offers after this dialog's lines: [{id, text}]
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    w.StartArray();
+    for(auto& [id,text] : graph.choices(*world,*npc,JsonRead::str(msg,"node"))) {
+      w.StartObject();
+      w.Key("id");   w.String(id.data(),rapidjson::SizeType(id.size()));
+      w.Key("text"); w.String(text.data(),rapidjson::SizeType(text.size()));
+      w.EndObject();
+      }
     w.EndArray();
     sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     }

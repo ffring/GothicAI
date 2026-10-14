@@ -14,19 +14,21 @@ namespace storygraph {
 
 class Bytecode;
 
-// One step of a program: a call, a store, a branch, a return, or a line said (programs the director writes).
+// One step of a program: a call, a store, a branch, a return; in programs the director writes also a line said,
+// and in its own dialogs a choice offered (as Info_AddChoice) or the choices cleared (as Info_ClearChoices).
 struct Step final {
-  enum Kind : uint8_t { Call, Store, If, Return, Say };
+  enum Kind : uint8_t { Call, Store, If, Return, Say, Choice, ClearChoices };
   Kind              kind = Call;
   uint32_t          pc   = 0;
   ExprP             call;              // Call: a call, or an expression with calls; its value is dropped
   ExprP             target;            // Store: Var, Field or Inst
   ExprP             value;             // Store: what is stored (`x += v` is `x = x + v`); Return: nullptr in void
   ExprP             cond;              // If
-  std::vector<Step> then, otherwise;   // If
+  std::vector<Step> then, otherwise;   // If; Choice: `then` runs when the hero picks it
   bool              hero = false;      // Say: the hero ("other") says it, else the npc ("self")
   std::string       line;              // Say: an original line (DIA_..._15_00), or empty
-  std::string       text;              // Say: a line of its own, game codepage
+  std::string       text;              // Say: a line of its own; Choice: its text in the menu; game codepage
+  std::string       id;                // Choice: its id (the dialog's id and its number, DIR_X.1, if not given)
   };
 
 // A script function as the graph runs it (docs/story-graph.md, «Исполнение без VM: расчёт»). Unlike the lifted
@@ -51,8 +53,9 @@ Program     liftProgram(const zenkit::DaedalusScript& script, const Bytecode& co
 // readable, UTF-8: one step per line, branches indented
 std::string describe(const Program& p);
 // steps as JSON: {"do":"call","call":<expr>}, {"do":"set","target":..,"value":..}, {"do":"if","cond":..,"then":[..],
-// "else":[..]}, {"do":"return","value":..}, {"do":"say","speaker":"self"|"other","line"|"text":..}; expressions as
-// in the model (toJson(ExprP)). readProgram (exprjson.h) reads it back.
+// "else":[..]}, {"do":"return","value":..}, {"do":"say","speaker":"self"|"other","line"|"text":..},
+// {"do":"choice","id":..,"text":..,"steps":[..]}, {"do":"clear_choices"}; expressions as in the model
+// (toJson(ExprP)). readProgram (exprjson.h) reads it back.
 std::string toJson(const Program& p);
 
 }

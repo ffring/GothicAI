@@ -581,6 +581,81 @@ async def graph_programs(
     after = await hero()
     check("node_program", after == (before[0] + 3, before[1] + 5), f"gold, exp {before} -> {after}")
 
+    # choices of a dialog of the director (v24): offered after its lines, as the dialog window asks; one
+    # that is picked is no longer offered and its steps run; a choice may offer others
+    ask = {
+        "id": "DIR_CHOICE_TEST",
+        "npc": npc,
+        "description": "Проверка вариантов",
+        "nr": 51,
+        "permanent": True,
+        "program": [
+            {"do": "say", "speaker": "self", "text": "Выбирай."},
+            {"do": "choice", "text": "Золото", "steps": [give(2)]},
+            {
+                "do": "choice",
+                "text": "Дальше",
+                "steps": [{"do": "clear_choices"}, {"do": "choice", "text": "Опыт", "steps": [xp(3)]}],
+            },
+        ],
+    }
+    await story.apply({"op": "add_node", "node": ask})
+    chosen = asyncio.ensure_future(wait_message(link, DialogChosen, lambda m: m.node == ask["id"], 10))
+    await link.choose_dialog(npc, ask["id"])
+    await chosen
+    offered = await link.dialog_choices(npc, ask["id"])
+    check(
+        "choices",
+        [(c["id"], c["text"]) for c in offered]
+        == [("DIR_CHOICE_TEST.1", "Золото"), ("DIR_CHOICE_TEST.2", "Дальше")],
+        str(offered),
+    )
+    before = await hero()
+    await link.choose_dialog(npc, "DIR_CHOICE_TEST.1")
+    after = await hero()
+    # the window asks with what was picked: the choice, whose dialog offers the rest
+    left = [c["text"] for c in await link.dialog_choices(npc, "DIR_CHOICE_TEST.1")]
+    check(
+        "choice_picked",
+        after[0] == before[0] + 2 and left == ["Дальше"],
+        f"gold {before[0]} -> {after[0]}, {left}",
+    )
+    await link.choose_dialog(npc, "DIR_CHOICE_TEST.2")
+    deeper = [c["text"] for c in await link.dialog_choices(npc, "DIR_CHOICE_TEST.2")]
+    check("choice_offers_more", deeper == ["Опыт"], str(deeper))
+
+    # the same in the dialog window, as the player has it: the dialog, after its line its choices, one that
+    # offers another, then the dialogs again
+    async def menu(ok: Callable[[list[str]], bool], timeout: float = 30) -> list[str]:
+        seen: list[str] = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            seen = await link.dialog_menu()
+            if ok(seen):
+                break
+            await asyncio.sleep(0.3)
+        return seen
+
+    await link.debug("teleport", near=npc, distance=150)
+    await link.start_talk(npc)
+    window: list[list[str]] = [await menu(lambda m: ask["description"] in m)]
+    exp_before = (await hero())[1]
+    for pick, then in ((ask["description"], ["Золото", "Дальше"]), ("Дальше", ["Опыт"]), ("Опыт", None)):
+        if pick not in window[-1]:
+            break
+        await link.pick_in_menu(pick)
+        # after the last choice the window offers the dialogs again
+        window.append(await menu(lambda m, then=then: m == then if then else ask["description"] in m))
+    gained = (await hero())[1] - exp_before
+    check(
+        "window",
+        window[1:3] == [["Золото", "Дальше"], ["Опыт"]] and gained == 3 and ask["description"] in window[-1],
+        f"{' -> '.join(map(str, window))}; exp +{gained}",
+    )
+    if window[-1]:
+        await link.pick_in_menu(window[-1][-1])  # the last one ends the talk
+        await menu(lambda m: not m, 15)
+
     # a program in place of a condition, made before a save, comes back after loading it
     await story.apply({"op": "program", "node": cond, "part": "condition", "steps": never})
     await asyncio.sleep(0.5)  # the game has the memory head of that change
@@ -2400,6 +2475,133 @@ async def interject_scenario(
     return _logged(results)
 
 
+async def remembers_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    perception: PerceptionDesk,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    steps: str = "BDT_1013_BANDIT_L",
+    cave: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+) -> dict[str, str]:
+    """Seen lately (step M2 of docs/npc-tools.md): Cavalorn goes into the bandits' cave first and sees them
+    there, then comes back out to the hero by the steps. Out of the cave the hero says «Кавалорн, там в
+    пещере бандиты, разберись с ними.»; its model (scripted, LLM=fake) sets it on Brago. Checks:
+    - sees_cave: in the cave it sees one of them;
+    - remembers: back out, it sees neither, but its situation has them «Недавно видел» with their ids,
+      and Brago is a target of its intent;
+    - goes_there: set on him, it walks into the cave first;
+    - fights: it fights Brago, and he is down."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    brago = cave[0]
+    calls: list[tuple[float, str, str, dict[str, Any]]] = []  # (sent, action, status, args)
+    act = link.act
+
+    async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
+        t = time.monotonic()
+        res = await act(who, action, **kw)
+        if who.upper() == npc:
+            calls.append((t, action, res.status, kw))
+        return res
+
+    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any]]]:
+        return [c for c in calls if c[0] >= t0 and c[1] == action]
+
+    def dist(who: str = npc) -> float:
+        return talk.people[who].distance / 100 if who in talk.people else -1.0
+
+    go = ToolCall("go_to", {"place": "XARDAS_BANDITS"})
+    fight = {"goal": "fight", "target": brago, "attitude": "friendly", "agenda": None}
+    dialogue.llm = _ByNpc(
+        {
+            "Кавалорн": _OnWords(
+                [
+                    ("пещеру первым", FakeStep("Пойду первым.", [go])),
+                    ("пришёл первым", FakeStep("Тут двое.")),
+                    ("разберись", FakeStep("Сейчас я им покажу!", [ToolCall("set_intent", fight)])),
+                ],
+                FakeStep("Идём."),
+            )
+        },
+        FakeBackend("Хм.", delay=0),
+    )
+    link.act = recorded  # type: ignore[method-assign]
+    try:
+        try:
+            await link.debug("player_equip", item="ITAR_PAL_H")
+        except GameError as err:
+            log.info("remembers: no armor for the hero: %s", err)
+        await link.debug("skip_important", near=npc)
+        for _ in range(2):  # the goblins by his fire
+            try:
+                await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+            except GameError as err:
+                log.info("remembers: goblin: %s", err)
+        await link.debug("player_goto", to=npc, distance=300)
+        if not await _until(lambda: 0 <= dist() <= 15, 20):
+            return _logged({"roster": f"failed ({npc} is not around the hero: {dist():.1f} m)"})
+        dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+        talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+        await _until(lambda: 0 <= dist() <= 5, 20)
+        await link.debug("player_goto", to=steps, distance=400)
+        await _until(lambda: 0 <= dist() <= 6, 30)
+
+        # in: it goes ahead, looks around and sees them
+        t0 = time.monotonic()
+        talk.hear("Кавалорн, иди в пещеру первым.", None, {"via": "scenario"})
+        await _until(lambda: any(c[2] == "done" for c in since(t0, "go_to_waypoint")), 100)
+        await _until(lambda: "Тут двое." in [m.content for m in dialogue.conversations[npc].history], 90)
+        view = await perception.fresh(npc)
+        seen = [o.id for o in view.sees if o.id.upper() in cave] if view is not None else []
+        check("sees_cave", bool(seen), seen or "nobody")
+
+        # out: back with the hero, it sees them no more and remembers them
+        talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+        await _until(lambda: 0 <= dist() <= 6, 40)
+        await asyncio.sleep(3)
+        view = await perception.fresh(npc)
+        in_sight = [o.id for o in view.sees if o.id.upper() in cave] if view is not None else []
+        situation = sightings.situation(npc) or ""
+        sight = perception.sight(npc)
+        targets = sight.targets if sight is not None else {}
+        noted = (
+            situation.split("Недавно видел, сейчас не видишь:")[-1] if "Недавно видел" in situation else ""
+        )
+        check(
+            "remembers",
+            not in_sight and any(c in noted for c in cave) and brago in targets,
+            noted.strip() or f"in sight {in_sight}; {situation[-200:]}",
+        )
+
+        # set on him: it goes in there first, then fights
+        t1 = time.monotonic()
+        talk.hear("Кавалорн, там в пещере бандиты, разберись с ними.", None, {"via": "scenario"})
+        fought = await _until(
+            lambda: any(c[3].get("npc", "").upper() == brago for c in since(t1, "fight")), 120
+        )
+        first_fight = min((c[0] for c in since(t1, "fight")), default=float("inf"))
+        walked = [c for c in since(t1, "go_to_waypoint") if c[0] < first_fight]
+        check(
+            "goes_there",
+            fought and bool(walked),
+            f"{len(walked)} walk(s) before the fight" if fought else "no fight",
+        )
+        down = await _until(lambda: brago not in talk.people or talk.people[brago].activity == "down", 90)
+        state = (await link.story_state(npcs=[brago])).get("npcs", {}).get(brago, {}).get("state")
+        check("fights", fought and (down or state == "dead"), f"Brago {state}, down {down}")
+    finally:
+        link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
 async def lie_found_out(
     link: GameLink,
     dialogue: DialogueManager,
@@ -2768,7 +2970,8 @@ async def vanilla_lie(
     the code plays Lobart's own ending: the quest is done, the hero gets the gold and the experience, the next
     step (bring them to Hilda) starts, and the lie is written down with the truth. The same day nothing
     happens; the next morning Lobart misses the turnips, turns against the hero and refuses to talk, and Jora,
-    standing by, hears it."""
+    standing by, hears it. From then on the turnips count for nothing in Lobart's other dialogs: his work
+    clothes cost what they would without them."""
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object = "") -> None:
@@ -2839,6 +3042,27 @@ async def vanilla_lie(
     refuses = await link.evaluate(["call", "NPC_REFUSETALK", ["inst", "SELF"]], giver)
     check("refuses_talk", bool(refuses), refuses)
     check("rumor", ok, [f for f in facts("rumor") if f.get("quest") == RUEBEN][-1:])
+
+    # Lobart's dialogs as the lie found out leaves them (consequences.py): the turnips count for nothing
+    # there, so his work clothes cost what they cost without them, though the scripts have the quest done
+    ok = await _until(lambda: any(f.get("npc") == giver for f in facts("lie_consequences")), 30)
+    clothes = await link.story_program("DIA_LOBART_BUYCLOTHES")
+    changed = next((f for f in facts("lie_consequences") if f.get("npc") == giver), None)
+    check(
+        "consequences", ok and clothes.get("patched") is True and RUEBEN not in str(clothes["steps"]), changed
+    )
+    if "DIA_LOBART_KLEIDUNG" in await link.offered_dialogs(giver):
+        await link.choose_dialog(giver, "DIA_LOBART_KLEIDUNG")
+    await link.choose_dialog(giver, "DIA_LOBART_BUYCLOTHES")
+    price = await var("WERT_LOBARTSRUESTUNG")
+    others = [await var(q) == 2 for q in ("MIS_HILDA_PFANNEKAUFEN", "MIS_VINO_WEIN", "MIS_MALETH_BANDITS")]
+    expected = 80 - 10 * (await var("LOBART_AGAINSTKING") == 1) - 10 * sum(others)
+    turnips = await var(RUEBEN)
+    check(
+        "no_discount",
+        price == expected and turnips == 2,
+        f"price {price}, {expected} expected; quest {turnips}",
+    )
     await link.detach(bystander)
     return _logged(results)
 

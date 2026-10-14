@@ -15,8 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v18: what npc's see of whom (att, from_hero...), v20: an npc calls its fight off (story_effect calm),
 # v21: wolves hear the hero (beasts, beast), v22: things lying about (npc_view items, take_item; follow has
 # no time limit unless asked), v23: programs in the story graph (graph_patch program, add_node.program,
-# story_program).
-PROTOCOL_VERSION = 23
+# story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
+# menu, menu_pick), v25: story_program.own (the scripts' program under the director's).
+PROTOCOL_VERSION = 25
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1103,7 +1104,11 @@ DebugCommand = Literal[
     "ptt",
     "type",
     "dialogs",
+    "choices",
     "choose",
+    "talk",
+    "menu",
+    "menu_pick",
     "eval",
     "check",
     "kill",
@@ -1148,7 +1153,11 @@ class DebugCmd(_Command):
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
     `eval` — computes `expr` (story graph expression) with self = `npc`, other = the hero (`value`);
     `check` — every npc of the world builds its dialog menu, each script condition is compared with its
-    lifted form (`value`: {npcs, computed, differ, differences})."""
+    lifted form (`value`: {npcs, computed, differ, differences}); v24: `choices` — the choices dialog `node`
+    of `npc` offers after its lines, as the dialog window asks (`value`: [{id, text}]); `choose` also takes
+    one of them. The dialog window as the player has it: `talk` — the hero talks to `npc` as with the action
+    key, `menu` — what the window offers now (`value`: the texts, none while a line plays), `menu_pick` —
+    picks the entry `text` as the player does with the keys."""
 
     type: Literal["debug"] = "debug"
     req: str
@@ -1181,6 +1190,7 @@ class GraphPatchCmd(_Command):
     description, nr, important, permanent, condition, lines, effects, program}); `remove_node`; `told`: the
     hero has chosen that added dialog; `program` (v23): `steps` in place of the scripts' program of a dialog's
     information or condition (`part`) or of a choice (`node`), `steps` null brings the scripts' one back.
+    The director's own dialogs offer choices with `choice` steps (v24).
     With `req`, the game answers `result` (`error` lists rejected ops)."""
 
     type: Literal["graph_patch"] = "graph_patch"
@@ -1325,13 +1335,15 @@ class StoryEvalCmd(_Command):
 
 class StoryProgramCmd(_Command):
     """The program a dialog's script function runs now (v23): `node` is a dialog (C_INFO, `part` picks its
-    "information" or "condition") or a choice's function. `result.value`: {"node", "fn", "returns", "patched":
-    the director's program is in place, "steps": [...]} (docs/protocol.md, «Программы»)."""
+    "information" or "condition") or a choice's function; `own` (v25): the scripts' program even when the
+    director's is in place. `result.value`: {"node", "fn", "returns", "patched": the director's program is in
+    place, "steps": [...]} (docs/protocol.md, «Программы»)."""
 
     type: Literal["story_program"] = "story_program"
     req: str
     node: str
     part: Literal["information", "condition"] = "information"
+    own: bool = False
 
 
 class StoryTagCmd(_Command):

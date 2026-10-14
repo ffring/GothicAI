@@ -118,6 +118,13 @@ Interpreter::Flow Interpreter::steps(const std::vector<Step>& s) {
         if(!say(st))
           return Flow::Fail;
         break;
+      case Step::Choice:
+      case Step::ClearChoices:
+        if(!choices || !choices(st)) {
+          fail("choices of its own are for the director's dialogs");
+          return Flow::Fail;
+          }
+        break;
       }
     }
   return Flow::Next;
