@@ -7,15 +7,14 @@ namespace {
 
 uint32_t le32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1])<<8 | uint32_t(p[2])<<16 | uint32_t(p[3])<<24; }
 
-// how long a line whose voice is still streaming in may last (the real length shortens it later)
-uint32_t streamedTime(const LineLibrary::Line& l) {
+}
+
+uint32_t LineLibrary::streamedTime(const Line& l) {
   const uint64_t audio = l.voice->durationMs();
   if(l.voice->isFinished())
-    return uint32_t(audio) + LineLibrary::VoicePauseMs;
-  return std::max<uint32_t>(LineLibrary::durationFor(l.text)*3/2, uint32_t(audio) + 1000);
+    return uint32_t(audio) + VoicePauseMs;
+  return std::max<uint32_t>(durationFor(l.text)*3/2, uint32_t(audio) + 1000);
   }
-
-}
 
 uint32_t LineLibrary::wavDuration(const std::vector<uint8_t>& wav) {
   if(wav.size()<12 || std::memcmp(wav.data(),"RIFF",4)!=0 || std::memcmp(wav.data()+8,"WAVE",4)!=0)

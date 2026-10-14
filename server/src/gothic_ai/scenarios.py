@@ -478,7 +478,11 @@ async def graph_dialogs(
 
 
 async def graph_programs(
-    link: GameLink, story: StoryPatches, npc: str = "NONE_100_XARDAS", slot: int = 8
+    link: GameLink,
+    story: StoryPatches,
+    npc: str = "NONE_100_XARDAS",
+    slot: int = 8,
+    dialogue: DialogueManager | None = None,
 ) -> dict[str, str]:
     """Level 1, step 2 of «Исполнение без VM» (docs/story-graph.md): the director's programs.
 
@@ -541,7 +545,12 @@ async def graph_programs(
     after = await hero()
     check("replaced", after == (before[0] + 7, before[1] + 10), f"gold, exp {before} -> {after}")
     try:
-        check("said", True, (await said).line)
+        own = await said
+        check("said", True, own.line)
+        # in the npc's voice (v26), when the server has one: it may come a moment after the line starts
+        if dialogue is not None and dialogue.tts is not None:
+            voiced = await _until(lambda: dialogue.story_voiced(own.line) is not None, 10)
+            check("voiced", voiced, f"{dialogue.story_voiced(own.line)} s, voiced at the start: {own.voiced}")
     except TimeoutError:
         check("said", False, "the line of its own did not start")
 

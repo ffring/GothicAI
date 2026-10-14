@@ -1138,7 +1138,7 @@ async def serve(args: argparse.Namespace) -> int:
                 exit_code = 1 if bad else 0
             elif args.scenario == "programs":
                 assert state.story is not None
-                results = await scenarios.graph_programs(link, state.story, args.npc)
+                results = await scenarios.graph_programs(link, state.story, args.npc, dialogue=state.dialogue)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario programs: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
