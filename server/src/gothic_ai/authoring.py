@@ -32,7 +32,7 @@ from .chronicle import Chronicle
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
 from .journal import Journal
-from .llm import LLMBackend, LLMError, Message, Tool, ToolCall
+from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .places import PlaceBook
 from .protocol import DialogChosen, GameMessage, Session, Snapshot
 from .story import StoryPatches
@@ -46,6 +46,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PROPOSE = "propose_quest"
+CACHE_KEY = (
+    "author"  # its requests' own connection (openai_responses.py): the prompt cache of its instructions
+)
 ATTEMPTS = 2
 # ordinary things anybody could lose; no dialog of the scripts asks for any of them
 ITEMS = (
@@ -230,6 +233,10 @@ class AuthorModel:
     def __init__(self, llm: LLMBackend) -> None:
         self.llm = llm
 
+    def warm(self) -> None:
+        """Its connection opened at once: the request after the brief does not wait for it."""
+        open_ahead(self.llm, CACHE_KEY, keep=True)
+
     async def propose(
         self, brief: Brief, previous: Proposal | None = None, errors: list[str] | None = None
     ) -> Proposal | None:
@@ -241,7 +248,7 @@ class AuthorModel:
         calls: list[ToolCall] = []
         try:
             async for ev in self.llm.stream(
-                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL]
+                instructions=INSTRUCTIONS, messages=messages, tools=[PROPOSE_TOOL], cache_key=CACHE_KEY
             ):
                 if isinstance(ev, ToolCall) and ev.name == PROPOSE:
                     calls.append(ev)
@@ -301,6 +308,7 @@ class Author:
     async def quest(self, npc: str) -> Quest | None:
         """A quest of the author's that `npc` gives the hero; None if the model has none that passes."""
         npc = npc.upper()
+        self.model.warm()
         brief = await self.brief(npc)
         if brief is None:
             return None
