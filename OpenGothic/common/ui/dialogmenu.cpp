@@ -218,6 +218,9 @@ bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
 
   if(current.time>0)
     return false;
+  // the other one may still be saying its line: a voice that streams in (ai_bridge) learns its length late
+  if(Npc* said = &npc==pl ? other : pl; said!=nullptr && said->speechLeft()>0)
+    return false;
 
   if(pl==&npc) {
     if(other!=nullptr)

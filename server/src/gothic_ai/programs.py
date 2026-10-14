@@ -49,7 +49,8 @@ def exprs_of(steps: list[Step] | None) -> Iterator[Expr]:
 def effects(steps: list[Step] | None) -> list[dict[str, Any]]:
     """What the program may do, as the lifted model writes it: stores into globals
     (`{"do": "set", "var", "value"}`, the value as an expression), experience (`xp`), the chapter
-    (`chapter`) and lines (`line`); a branch may or may not run, so each is what it may do."""
+    (`chapter`), what the hero gets (`give`: item, count or None) and lines (`line`); a branch may or may not
+    run, so each is what it may do."""
     out: list[dict[str, Any]] = []
     for s in steps_of(steps):
         match s.get("do"):
@@ -60,11 +61,34 @@ def effects(steps: list[Step] | None) -> list[dict[str, Any]]:
                 said = {"id": s.get("line", ""), "text": s.get("text", "")}
                 out.append({"do": "line", "speaker": speaker, **said})
     for e in exprs_of(steps):
-        if e[0] == "fn" and str(e[1]).upper() == CHAPTER_CHANGE:
+        name = str(e[1]).upper() if len(e) > 1 else ""
+        if e[0] == "fn" and name == CHAPTER_CHANGE:
             out.append({"do": "chapter", "chapter": e[2] if len(e) > 2 else None})
-        elif e[0] == "fn" and str(e[1]).upper() == "B_GIVEPLAYERXP" and len(e) > 2:
+        elif e[0] == "fn" and name == "B_GIVEPLAYERXP" and len(e) > 2:
             out.append({"do": "xp", "amount": e[2]})
+        elif (given := _given(e)) is not None:
+            out.append({"do": "give", "item": given[0], "count": given[1]})
     return out
+
+
+def _given(e: Expr) -> tuple[str, int | None] | None:
+    """What the hero gets from the npc: B_GiveInvItems(self, other, item, n) or CreateInvItems(other, item,
+    n); the count None if it is not a number."""
+    name = str(e[1]).upper() if len(e) > 1 else ""
+    if (
+        e[0] == "fn"
+        and name == "B_GIVEINVITEMS"
+        and len(e) == 6
+        and e[2:4] == [["inst", "SELF"], ["inst", "OTHER"]]
+    ):
+        item, count = e[4], e[5]
+    elif e[0] == "call" and name == "CREATEINVITEMS" and len(e) == 5 and e[2] == ["inst", "OTHER"]:
+        item, count = e[3], e[4]
+    else:
+        return None
+    if not (isinstance(item, list) and item[:1] == ["sym"]):
+        return None
+    return str(item[1]).upper(), _int(count)
 
 
 def condition(steps: list[Step] | None) -> Expr | None:

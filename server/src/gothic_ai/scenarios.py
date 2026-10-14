@@ -478,7 +478,11 @@ async def graph_dialogs(
 
 
 async def graph_programs(
-    link: GameLink, story: StoryPatches, npc: str = "NONE_100_XARDAS", slot: int = 8
+    link: GameLink,
+    story: StoryPatches,
+    npc: str = "NONE_100_XARDAS",
+    slot: int = 8,
+    dialogue: DialogueManager | None = None,
 ) -> dict[str, str]:
     """Level 1, step 2 of «Исполнение без VM» (docs/story-graph.md): the director's programs.
 
@@ -541,7 +545,12 @@ async def graph_programs(
     after = await hero()
     check("replaced", after == (before[0] + 7, before[1] + 10), f"gold, exp {before} -> {after}")
     try:
-        check("said", True, (await said).line)
+        own = await said
+        check("said", True, own.line)
+        # in the npc's voice (v26), when the server has one: it may come a moment after the line starts
+        if dialogue is not None and dialogue.tts is not None:
+            voiced = await _until(lambda: dialogue.story_voiced(own.line) is not None, 10)
+            check("voiced", voiced, f"{dialogue.story_voiced(own.line)} s, voiced at the start: {own.voiced}")
     except TimeoutError:
         check("said", False, "the line of its own did not start")
 
@@ -2819,12 +2828,18 @@ class RepairScript:
         brief = next(m.content for m in messages if isinstance(m, Message))
         self.calls.append(brief)
         ending = re.search(r"^1\. (\S+)", brief, re.M)
-        wanted = ("опыт +", "герою: ITMI_GOLD", "забрать у героя ITPL_BEET")
+        wanted = (
+            "опыт +",
+            "вариант ответа «Дай мне 5",
+            "вариант ответа «Лучше продай",
+            "забрать у героя ITPL_BEET",
+        )
         effects = [
             m.group(1)
             for m in re.finditer(r"^\s+(E\d+): (.*)$", brief, re.M)
             if m.group(2).startswith(wanted)
         ]
+        gold = next((e for e in effects if f"{e}: вариант ответа «Дай мне 5" in brief), "")
         args = {
             "kind": "handover",
             "ending": ending.group(1) if ending else "",
@@ -2838,6 +2853,7 @@ class RepairScript:
                 },
             ],
             "effects": effects,
+            "answers": [{"effect": gold, "text": "Держи. Пять монет, как он и обещал."}] if gold else [],
             "status": "obsolete",
             "journal_now": "Лобарт мёртв. Репу, наверное, теперь примет его жена Хильда.",
             "journal_done": "Я отдал репу Хильде, она заплатила за мужа.",
@@ -2918,11 +2934,19 @@ async def repair_after_death(
     node, successor = repair["node"], repair["npc"]
     # what the repair gives: Lobart's reward when scripted, what the model chose when not
     made = next(op["node"] for op in story.ops() if op.get("op") == "add_node" and op["node"]["id"] == node)
-    give_gold = sum(e["count"] for e in made["effects"] if e["do"] == "give" and e["item"] == "ITMI_GOLD")
+    gives = [*made["effects"], *programs.effects(made.get("program"))]
+    give_gold = sum(
+        e["count"] for e in gives if e["do"] == "give" and e["item"] == "ITMI_GOLD" and e.get("to") != "self"
+    )
     give_exp = sum(e["amount"] for e in made["effects"] if e["do"] == "xp")
     takes = any(e["do"] == "give" and e.get("to") == "self" for e in made["effects"])
+    choices = [c["text"] for c in programs.choices(made.get("program"))]
     if script is not None:
-        check("lobarts_reward", (give_gold, give_exp, takes) == (5, 50, True), made["effects"])
+        # Lobart's reward: the experience at once, the gold or the cheaper clothes as the hero's choice,
+        # as Lobart offered them
+        both = sorted(["Дай мне 5 золотых монет!", "Лучше продай одежду дешевле!"])
+        reward = (give_gold, give_exp, takes, sorted(choices))
+        check("lobarts_reward", reward == (5, 50, True, both), made)
 
     # the hero brings the turnips (Hilda's dialog wants 20)
     offered = await link.offered_dialogs(successor)
@@ -2945,6 +2969,12 @@ async def repair_after_death(
     await link.choose_dialog(successor, node)
     ok = await _until_async(lambda: var(RUEBEN), lambda v: v == 2, 15)
     check("quest_done", ok, await var(RUEBEN))
+    # after her lines the menu offers the hero his choices; he takes the gold
+    offers = await link.dialog_choices(successor, node)
+    check("choices", sorted(c["text"] for c in offers) == sorted(choices), offers)
+    gold_choice = next((c["id"] for c in offers if c["text"].startswith("Дай мне 5")), None)
+    if gold_choice is not None:
+        await link.choose_dialog(successor, gold_choice)
     after = (await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]), await has("ITPL_BEET"))
     check(
         "reward",
@@ -2971,7 +3001,8 @@ async def vanilla_lie(
     step (bring them to Hilda) starts, and the lie is written down with the truth. The same day nothing
     happens; the next morning Lobart misses the turnips, turns against the hero and refuses to talk, and Jora,
     standing by, hears it. From then on the turnips count for nothing in Lobart's other dialogs: his work
-    clothes cost what they would without them."""
+    clothes cost what they would without them. The hero makes amends: the turnips are his job again, the
+    ending pays nothing twice; he brings them for real, and the discount is back."""
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object = "") -> None:
@@ -3063,6 +3094,41 @@ async def vanilla_lie(
         price == expected and turnips == 2,
         f"price {price}, {expected} expected; quest {turnips}",
     )
+
+    # the hero makes amends (amends.py has Lobart ask for them; here they are made at once): the turnips are
+    # his job again, for real, and the ending pays nothing a second time
+    made = {"fact": "amends", "id": "E2E", "npc": giver, "to": giver, "gold": 0}
+    vanilla.chronicle.record({**made, "lie": f"found_out:{giver}:{RUEBEN}", "quest": RUEBEN, "about": giver})
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("quest_reopened")), 20)
+    await _until(lambda: any(f.get("second_chance") for f in facts("lie_consequences")), 30)
+    ending = await link.story_program("DIA_LOBART_RUEBENRUNNING")
+    reopened = await var(RUEBEN)
+    pays = any(p in str(ending.get("steps")) for p in ("B_GIVEPLAYERXP", "DIA_LOBART_RUEBENRUNNING_GOLD"))
+    check(
+        "reopened", ok and reopened == 1 and ending.get("patched") is True and not pays, f"quest {reopened}"
+    )
+
+    # the turnips, for real: the ending says what it says, pays nothing again, and the lie is made good
+    beets = [
+        {"do": "create", "item": "ITPL_BEET", "count": 20},
+        {"do": "give", "item": "ITPL_BEET", "count": 20},
+    ]
+    await link.story_effect(giver, beets)
+    gold_exp = (["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]], ["field", hero, "EXP"])
+    before = [await link.evaluate(e) for e in gold_exp]
+    await link.choose_dialog(giver, "DIA_LOBART_RUEBENRUNNING")
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("lie_made_good")), 20)
+    after = [await link.evaluate(e) for e in gold_exp]
+    check("made_good", ok and await var(RUEBEN) == 2 and after == before, f"gold, exp {before} -> {after}")
+
+    # the turnips count again: the discount for them is back
+    async def clothes() -> bool:
+        return bool((await link.story_program("DIA_LOBART_BUYCLOTHES")).get("patched"))
+
+    await _until_async(clothes, lambda patched: not patched, 30)
+    await link.choose_dialog(giver, "DIA_LOBART_BUYCLOTHES")
+    price = await var("WERT_LOBARTSRUESTUNG")
+    check("discount_back", price == expected - 10, f"price {price}, {expected - 10} expected")
     await link.detach(bystander)
     return _logged(results)
 

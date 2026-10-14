@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.consequences import LieConsequences, rewrite
+from gothic_ai.consequences import LieConsequences, rewrite, strip_reward
 from gothic_ai.director import Director, Pacing
 from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.llm.fake import FakeBackend
@@ -17,7 +17,7 @@ from tests.test_dialogue import _until
 from tests.test_director import GRAPH, HILDA, LOBART, NAMES, QUEST, SYMBOLS, _node
 
 CLOTHES, PRICE = "DIA_LOBART_BUYCLOTHES", "WERT_LOBARTSRUESTUNG"
-GOLD_CHOICE = "DIA_LOBART_RUEBENRUNNING_GOLD"
+ENDING, GOLD_CHOICE = "DIA_LOBART_RUEBENRUNNING", "DIA_LOBART_RUEBENRUNNING_GOLD"
 DONE = ["==", ["var", QUEST], ["int", 2, "LOG_SUCCESS"]]
 
 
@@ -45,7 +45,24 @@ CLOTHES_INFO = [
     {"do": "return"},
 ]
 GOLD_INFO = [_out("DIA_Lobart_RuebenRunning_Gold_05_01"), _gold(5), {"do": "return"}]
-ENDING_INFO = [{"do": "set", "target": ["var", QUEST], "value": ["int", 2, "LOG_SUCCESS"]}, {"do": "return"}]
+XP = {"do": "call", "call": ["fn", "B_GIVEPLAYERXP", ["int", 50, "XP_LOBARTHOLRUEBEN"]]}
+PAYING = {
+    "do": "call",
+    "call": [
+        "call",
+        "INFO_ADDCHOICE",
+        ["sym", "DIA_LOBART_RUEBENRUNNING"],
+        ["str", "Дай мне 5 золотых!"],
+        ["sym", GOLD_CHOICE],
+    ],
+}
+ENDING_INFO = [
+    {"do": "set", "target": ["var", QUEST], "value": ["int", 2, "LOG_SUCCESS"]},
+    {"do": "if", "cond": ["==", ["field", ["inst", "HERO"], "GUILD"], ["int", 0]], "then": [XP]},
+    _out("DIA_Lobart_RuebenRunning_05_04"),
+    PAYING,
+    {"do": "return"},
+]
 
 
 def test_the_quest_reads_as_running_and_the_pay_is_halved():
@@ -68,6 +85,15 @@ def test_the_quest_reads_as_running_and_the_pay_is_halved():
     choice = {"do": "choice", "text": "Плата", "steps": [_gold(20)]}
     steps, why = rewrite([choice], set(), halve=True) or ([], [])
     assert steps[0]["steps"] == [_gold(10)]
+
+
+def test_a_second_chance_pays_nothing_again():
+    steps = strip_reward(ENDING_INFO, {GOLD_CHOICE})
+    assert steps is not None
+    # the quest ends and the lines are said as the scripts have it; no experience, no choice that pays
+    assert steps == [ENDING_INFO[0], {**ENDING_INFO[1], "then": []}, ENDING_INFO[2], ENDING_INFO[4]]
+    assert strip_reward([_gold(5), _gold(80, "OTHER", "SELF")], set()) == [_gold(80, "OTHER", "SELF")]
+    assert strip_reward(GOLD_INFO[:1], set()) is None  # nothing paid: the scripts' own
 
 
 @pytest.fixture
@@ -95,7 +121,7 @@ async def test_a_lie_found_out_changes_the_dialogs_of_the_one_lied_to(graph):
         (CLOTHES, "information"): CLOTHES_INFO,
         (CLOTHES, "condition"): [{"do": "return", "value": ["int", 1]}],
         (GOLD_CHOICE, "information"): GOLD_INFO,
-        ("DIA_LOBART_RUEBENRUNNING", "information"): ENDING_INFO,  # the quest's own: left alone
+        (ENDING, "information"): ENDING_INFO,  # the quest's own: as the lie left it
         ("DIA_HILDA_HALLO", "condition"): [{"do": "return", "value": ["!=", ["var", QUEST], ["int", 2]]}],
     }
     store = MemoryStore(":memory:")
@@ -125,15 +151,35 @@ async def test_a_lie_found_out_changes_the_dialogs_of_the_one_lied_to(graph):
         assert (fact["npc"], fact["quests"], fact["halved"]) == (LOBART, [QUEST], True)
         assert HILDA not in {graph.nodes[n].npc for n, _ in ops}  # only the one lied to
 
-        # the hero makes amends: Lobart pays as before, the turnips still count for nothing
+        # the hero makes amends: Lobart pays as before, and the turnips are his job again, for real; the
+        # ending pays nothing a second time
         before = len(_ops(fake))
         chronicle.record(
             {"fact": "amends", "npc": LOBART, "to": LOBART, "about": LOBART, "quest": QUEST, "gold": 5}
         )
-        await _until(lambda: len(_ops(fake)) > before)
-        assert _ops(fake)[before:] == [
-            {"op": "program", "node": GOLD_CHOICE, "part": "information", "steps": None}
-        ]
-        assert lies.lies(LOBART) == ({QUEST}, False)
+        await _until(lambda: len(_ops(fake)) >= before + 2)
+        assert {(op["node"], op["steps"] is None) for op in _ops(fake)[before:]} == {
+            (GOLD_CHOICE, True),
+            (ENDING, False),
+        }
+        ending = next(op["steps"] for op in _ops(fake)[before:] if op["node"] == ENDING)
+        assert "B_GIVEPLAYERXP" not in str(ending) and PAYING not in ending and ending[0] == ENDING_INFO[0]
+        reopen = next(m for m in fake.story if m.get("type") == "story_effect")
+        assert reopen["npc"] == LOBART and reopen["effects"][0] == {"do": "set", "var": QUEST, "value": 1}
+        assert (
+            reopen["effects"][1]["topic"] == "Убрать поле репы"
+            and reopen["effects"][1]["status"] == "LOG_RUNNING"
+        )
+        lie = lies.lies(LOBART)
+        assert (lie.unbelieved, lie.halve, lie.second_chance) == ({QUEST}, False, {QUEST})
         # the branch has them: once more, nothing to change
         assert await lies.update(LOBART) == []
+
+        # he brings the turnips for real: the lie is made good, Lobart's dialogs are the scripts' own again
+        fake.vars[QUEST] = 2
+        before = len(_ops(fake))
+        await fake.send(type="dialog_chosen", npc=LOBART, node=ENDING, made=False)
+        await _until(lambda: chronicle.facts("lie_made_good") != [])
+        await _until(lambda: len(_ops(fake)) >= before + 2)
+        assert {(op["node"], op["steps"]) for op in _ops(fake)[before:]} == {(CLOTHES, None), (ENDING, None)}
+        assert lies.lies(LOBART).unbelieved == set()

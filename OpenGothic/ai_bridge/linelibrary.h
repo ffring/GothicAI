@@ -38,6 +38,8 @@ class LineLibrary final {
 
     static bool isExternal(std::string_view id) { return id.starts_with("AIB_"); }
     static uint32_t durationFor(std::string_view text);
+    // how long a line whose voice is still streaming in may last (the real length shortens it later)
+    static uint32_t streamedTime(const Line& l);
     // length of a 16-bit PCM WAV file in ms, 0 if it is not one
     static uint32_t wavDuration(const std::vector<uint8_t>& wav);
 

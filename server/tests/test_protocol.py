@@ -11,6 +11,7 @@ from gothic_ai.protocol import (
     DebugCmd,
     GraphPatchCmd,
     HushCmd,
+    LineVoice,
     NpcActCmd,
     NpcIdle,
     NpcViews,
@@ -202,8 +203,16 @@ def test_v24_choices_in_the_directors_dialogs():
 
 
 def test_v25_the_scripts_own_program():
-    assert PROTOCOL_VERSION == 25
+    assert PROTOCOL_VERSION >= 25
     ask = StoryProgramCmd(req="s1", node="DIA_LOBART_BUYCLOTHES", own=True)
     assert ask.to_json() == (
         '{"type":"story_program","req":"s1","node":"DIA_LOBART_BUYCLOTHES","part":"information","own":true}'
     )
+
+
+def test_v26_the_directors_lines_in_the_npcs_voice():
+    assert PROTOCOL_VERSION == 26
+    msg = parse_game_message(
+        '{"type":"line_voice","npc":"NONE_100_XARDAS","name":"Ксардас","line":"AIB_G1","text":"Выбирай."}'
+    )
+    assert isinstance(msg, LineVoice) and (msg.line, msg.text, msg.name) == ("AIB_G1", "Выбирай.", "Ксардас")
