@@ -88,6 +88,7 @@ class Workers final {
 
     std::mutex                        sync;
     std::condition_variable           workWait;
+    std::condition_variable           workDone;
     int32_t                           workTbd = 0;
 
     uint8_t*                          workSet=nullptr;

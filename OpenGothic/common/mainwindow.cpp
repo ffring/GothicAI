@@ -1,3 +1,4 @@
+#include "appcadence.h"
 #include "mainwindow.h"
 
 #include <Tempest/Except>
@@ -134,6 +135,9 @@ MainWindow::~MainWindow() {
   // unload
   Gothic::inst().setGame(std::unique_ptr<GameSession>());
   FrameProfile::flush();
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  AppCadence::flush();
+#endif
   }
 
 float MainWindow::uiScale() const {
@@ -1283,6 +1287,9 @@ void MainWindow::setFullscreen(bool fs) {
   }
 
 void MainWindow::render(){
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  AppCadence::beginAttempt();
+#endif
   FrameProfile::Attempt profile(cmdId);
   try {
     static uint64_t time=Application::tickCount();
@@ -1383,6 +1390,9 @@ void MainWindow::render(){
       t += delay;
       }
     fps.push(t-time);
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+    AppCadence::appFrame();
+#endif
     if(Gothic::inst().isBenchmarkMode() && Gothic::inst().world()!=nullptr && Gothic::inst().world()->currentCs()!=nullptr)
       benchmark.push(t-time);
     time = t;

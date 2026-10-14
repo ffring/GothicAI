@@ -410,7 +410,16 @@ moving and sleeping actors, explicit teleports and the actual Human knee/elbow l
 State 3 retains native COM/quaternion/velocity float values and immutable initial affine references,
 preserving positive nonuniform NPC scale and carrying nonphysical ancestor bones with a native child.
 
-The three `ragdoll20-{disabled,active,sleeping}.bench` scenarios use the same 20 actors and camera.
+The stage-2 game FPS check uses `ragdoll20-natural-{off,on}.bench` with
+`OPENGOTHIC_ENABLE_APP_CADENCE=ON` and `OPENGOTHIC_ENABLE_FRAME_PROFILE=OFF`.
+Twenty NPCs die together; the next 30 real seconds include body creation, falling and natural sleep.
+The ordinary application clock and render loop are used. There is no forced-awake mode or warm-up
+after death. Run three OFF/ON pairs and use `scripts/ragdoll_cadence_read.py` for the median results.
+The median mean FPS may fall by at most 5%; the ON median p95 frame interval must be at most 16.7 ms.
+Check `pgrep Gothic2Notr` before starting so another game does not overlap the measurement.
+
+The older `ragdoll20-{disabled,active,sleeping}.bench` scenarios are supplementary stress tools.
+They use the same 20 actors and camera, with an accelerated fixed simulation clock.
 Run with `OPENGOTHIC_RAGDOLL_TRACE=0 OPENGOTHIC_RAGDOLL_PERF=1`: lightweight counters and actual
 monotonic full-cycle/native-step times are buffered, then written to `ragdoll-performance.csv` at
 the end. Full pose JSON and ordinary per-frame metric writes are disabled during this measurement.
@@ -422,8 +431,8 @@ bulk-down event proves all 20 individual schemas; every warm-up and measured row
 `ragdoll-queued-ai.bench` and `scripts/ragdoll_queue_compare.py` separately check a knockout after an
 ordinary airborne tick, native settling, the full observed `AI_Wait` interval and normal wounded-to-stand
 recovery. This controlled queue test preserves the main acceptance fixture.
-The preregistered acceptance controls and honest results are in
-[`reports/physics/2026-10-14-jolt-stage2/`](../../reports/physics/2026-10-14-jolt-stage2/).
+The current stage-2 result is in
+[`validation-notes.md`](../../reports/physics/2026-10-14-jolt-stage2/validation-notes.md).
 
 Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
 clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into

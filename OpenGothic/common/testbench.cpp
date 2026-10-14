@@ -1,3 +1,4 @@
+#include "appcadence.h"
 #include "testbench.h"
 #include "frameprofile.h"
 
@@ -578,6 +579,10 @@ struct Bench {
   Npc*        waitRagdollNpc = nullptr;
   std::string waitRagdollState;
   uint64_t    waitRagdollEnd = 0;
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  bool        cadenceVerified=false,cadenceWait=false;
+  uint32_t    cadenceDown=0;
+#endif
   bool        ragdollChurn = false;
   uint64_t    ragdollPulseFrame = 0;
   std::vector<Vec3> ragdollArenaPlaces;
@@ -2506,6 +2511,37 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
     }
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="cadence" && a.size()==2 && a[1]=="normal") {
+    AppCadence::enable(outDir+"/appcadence.csv");FootIk::setProbing(false);
+    }
+  else if(c=="cadence" && a.size()==2 && a[1]=="check") {
+    uint32_t models=0,dead=0,parts=0;
+    const auto* skeleton=bench.crew.empty() ? nullptr : bench.crew.front()->visualSkeleton();
+    for(const auto* npc:bench.crew) {
+      if(skeleton!=nullptr && npc->visualSkeleton()==skeleton && TestBench::ragdollBodyDrawable(*npc)) ++models;
+      if(npc->isDead()) ++dead;
+      if(const auto* body=npc->ragdollBody()) parts+=uint32_t(body->partCount());
+      }
+    if(bench.crew.size()!=20 || models!=20 || dead!=0 || parts!=0) { arenaAbort("cadence requires twenty loaded live humans");return; }
+    bench.cadenceVerified=true;AppCadence::counts(true,models,dead,parts,0,0);
+    FrameProfile::setActors(bench.crew);
+    }
+  else if(c=="cadence" && a.size()==3 && a[1]=="die") {
+    if(!bench.cadenceVerified || !AppCadence::normalClock() || (a[2]!="on" && a[2]!="off") || !AppCadence::arm(a[2]=="on")) { arenaAbort("cadence death start failed");return; }
+    for(auto* npc:bench.crew) { npc->setLastHitBy(&pl);if(npc->setRagdollDown(true)) ++bench.cadenceDown;npc->prepareRagdoll(); }
+    }
+  else if(c=="cadence" && a.size()==2 && a[1]=="wait") bench.cadenceWait=true;
+  else if(c=="cadence" && a.size()==2 && a[1]=="report") {
+    uint32_t models=0,dead=0,parts=0,asleep=0;
+    for(const auto* npc:bench.crew) {
+      if(TestBench::ragdollBodyDrawable(*npc)) ++models;
+      if(npc->isDead()) ++dead;
+      if(const auto* body=npc->ragdollBody()) { parts+=uint32_t(body->partCount());if(body->isSleeping())++asleep; }
+      }
+    AppCadence::counts(false,models,dead,parts,asleep,bench.cadenceDown);
+    }
+#endif
   else if(c=="ragdoll" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","ragdoll",a[1]=="on" ? 1 : 0);
     say("ragdoll "+a[1]);
@@ -4994,6 +5030,9 @@ bool waitingForAi() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  if(bench.cadenceWait) { if(!AppCadence::done()) return;bench.cadenceWait=false; }
+#endif
   if(bench.observeActive) {
     const auto now = w.tickCount();
     bool invalid = false;
@@ -5086,6 +5125,9 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+    if(bench.cadenceWait) return;
+#endif
     }
   if(bench.time>=bench.waitUntil && !bench.waitArrive && bench.volleyLeft==0 && bench.downNpc==nullptr && bench.waitRagdollNpc==nullptr && !bench.duelWaiting)
     finish();
@@ -5666,6 +5708,9 @@ bool TestBench::filming() {
 uint64_t TestBench::frameDt(uint64_t dt) {
   if(!bench.started || bench.done)
     return dt;
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  if(AppCadence::normalClock()) { ++bench.step;bench.frameMs=dt;return dt; }
+#endif
   ++bench.step;
   if(realtime) {
     using namespace std::chrono;
@@ -5872,7 +5917,11 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     else event("ragdoll_error","\"reason\":\"birth body missing on the next native tick\"");
     bench.birthContinuation=nullptr;
     }
-  if(ragdollPerf || bench.ragdollArenaCamera) {
+  if((ragdollPerf || bench.ragdollArenaCamera)
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+     && !AppCadence::normalClock()
+#endif
+     ) {
     // Coverage is sampled after the actual world step and BEFORE fixture commands
     // can wake bodies. A post-impulse "awake" flag alone could hide a sleeping tick.
     bench.perfPhysicalBeforeImpulse=0; bench.perfSleepingBeforeImpulse=0;
