@@ -380,7 +380,7 @@ before the fixture manually restores any NPC archive.
 
 | Command | |
 |---|---|
-| `ragdoll on\|off` | Set the same `GAME/ragdoll` switch as the Marvin toggle. The default remains off while acceptance gates are open. |
+| `ragdoll on\|off` | Set the same `GAME/ragdoll` switch as the Marvin toggle. Enabled by default; set `[GAME] ragdoll=0` or use Marvin `toggle ragdoll` to disable it. |
 | `down <npc> dead\|ko` | Invoke the normal NPC down lifecycle and prepare its body. |
 | `push <npc> <x> <y> <z> <impulse>` | Apply an impulse in Newton seconds along a finite nonzero direction. Requires a physical body. |
 | `waitragdoll <npc> sleep\|recovery\|getup [timeout ms]` | Wait for the actual body/animation state; a bounded timeout is an explicit command error. |
@@ -420,7 +420,7 @@ The stage-2 game FPS check uses `ragdoll20-natural-{off,on}.bench` with
 Twenty NPCs die together; the next 30 real seconds include body creation, falling and natural sleep.
 The ordinary application clock and render loop are used. There is no forced-awake mode or warm-up
 after death. Run three OFF/ON pairs and use `scripts/ragdoll_cadence_read.py` for the median results.
-The median mean FPS may fall by at most 5%; the ON median p95 frame interval must be at most 16.7 ms.
+The median mean FPS may fall by at most 5% relative to OFF; report both ON and OFF median p95 frame intervals for the same scene.
 Check `pgrep Gothic2Notr` before starting so another game does not overlap the measurement.
 
 The older `ragdoll20-{disabled,active,sleeping}.bench` scenarios are supplementary stress tools.

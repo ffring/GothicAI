@@ -2,6 +2,7 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Log>
+#include <cstdlib>
 
 #include "graphics/mesh/skeleton.h"
 #include "graphics/visualfx.h"
@@ -814,11 +815,16 @@ bool Npc::createRagdoll() {
   physic.setEnable(false);
   mvAlgo.takeRagdollControl();
   syncRagdoll();
+  if(const auto* trace=std::getenv("OPENGOTHIC_RAGDOLL_TRACE");trace!=nullptr && trace[0]=='1')
+    Log::i("[ragdoll] created actor=",displayName()," hero=",isPlayer()," parts=",ragdoll->partCount()," dead=",isDead());
   return true;
   }
 
 void Npc::releaseRagdoll(bool blend) {
   const bool hadBody = ragdoll!=nullptr;
+  if(hadBody)
+    if(const auto* trace=std::getenv("OPENGOTHIC_RAGDOLL_TRACE");trace!=nullptr && trace[0]=='1')
+      Log::i("[ragdoll] released actor=",displayName()," hero=",isPlayer()," parts=",ragdoll->partCount()," dead=",isDead());
   visual.pose().clearRagdollPose(blend,owner.tickCount());
   ragdoll.reset();
   ragdollPose.clear();
