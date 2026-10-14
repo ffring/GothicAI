@@ -4,6 +4,8 @@ project(OpenGothic LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(BUILD_SHARED_LIBS OFF)
 
+option(OPENGOTHIC_ENABLE_FRAME_PROFILE "Compile opt-in frame profiling diagnostics" OFF)
+
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/opengothic)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/opengothic)
 set(CMAKE_DEBUG_POSTFIX "")
@@ -12,6 +14,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_SKIP_RPATH ON)
 
 add_library(${PROJECT_NAME} STATIC)
+if(OPENGOTHIC_ENABLE_FRAME_PROFILE)
+  target_compile_definitions(${PROJECT_NAME} PUBLIC OPENGOTHIC_ENABLE_FRAME_PROFILE=1)
+endif()
 if(ANDROID)
   add_library(Gothic2Notr SHARED)
   add_library(Spacer SHARED)
@@ -73,6 +78,9 @@ endif()
 
 # sources
 file(GLOB_RECURSE OPENGOTHIC_SOURCES "common/*.h" "common/*.cpp")
+if(NOT OPENGOTHIC_ENABLE_FRAME_PROFILE)
+  list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/frameprofile.cpp")
+endif()
 file(GLOB_RECURSE SPACER_SOURCES "spacer/*.h" "spacer/*.cpp")
 
 target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES})
@@ -245,6 +253,11 @@ if(NOT ANDROID AND NOT IOS)
     COMMAND $<TARGET_FILE:gothic-ragdoll-contract>
     COMMAND $<TARGET_FILE:gothic-ragdoll-save-contract>
     DEPENDS gothic-ragdoll-contract gothic-ragdoll-save-contract USES_TERMINAL)
+  add_executable(gothic-instance-storage-contract EXCLUDE_FROM_ALL tests/instance_storage_contract.cpp)
+  target_link_libraries(gothic-instance-storage-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-instance-storage
+    COMMAND $<TARGET_FILE:gothic-instance-storage-contract>
+    DEPENDS gothic-instance-storage-contract USES_TERMINAL)
 endif()
 
 # editor

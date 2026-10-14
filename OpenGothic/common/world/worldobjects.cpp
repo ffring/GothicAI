@@ -16,6 +16,7 @@
 #include "utils/workers.h"
 #include "utils/dbgpainter.h"
 #include "gothic.h"
+#include "frameprofile.h"
 
 #include <Tempest/Painter>
 #include <Tempest/Application>
@@ -441,6 +442,7 @@ void WorldObjects::syncRagdolls() {
   }
 
 void WorldObjects::updateAnimation(uint64_t dt) {
+  FrameProfile::Scope timing(FrameProfile::Zone::ParallelAnimation);
   static bool doAnim=true;
   if(!doAnim)
     return;

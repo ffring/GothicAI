@@ -24,6 +24,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #if defined(__GNUC__)
@@ -34,6 +35,34 @@
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
+
+static_assert(std::is_copy_constructible_v<Pose> && std::is_copy_assignable_v<Pose>,
+              "origin replay tag must preserve the complete public Pose value copy");
+
+// The contract keeps the legacy full-copy origin replay as an independent
+// baseline. It never reimplements the new constructor's member selection.
+class PoseOriginReplayContract final {
+  public:
+    static std::vector<Tempest::Matrix4x4> legacy(const Pose& source) {
+      Pose scratch=source;
+      scratch.clearRagdollPose();
+      return replay(scratch,source);
+      }
+    static std::vector<Tempest::Matrix4x4> prepared(const Pose& source) {
+      Pose scratch(source,Pose::OriginReplayTag{});
+      return replay(scratch,source);
+      }
+    static void seed(Pose& pose, size_t bone, const Tempest::Matrix4x4& value) {
+      pose.tr[bone]=value;
+      }
+  private:
+    static std::vector<Tempest::Matrix4x4> replay(Pose& scratch, const Pose& source) {
+      auto object=source.pos;
+      object.set(3,0,0.f); object.set(3,1,0.f); object.set(3,2,0.f);
+      scratch.mkSkeleton(object,source.pos.at(3,1));
+      return std::vector<Tempest::Matrix4x4>(scratch.tr,scratch.tr+source.numBones);
+      }
+  };
 
 namespace {
 
@@ -1200,6 +1229,90 @@ void testPhysicalVelocityHandoff() {
   near(velocity.z,0.f,.15f,"rebasing and scaled yaw must not inject horizontal world velocity");
   }
 
+std::vector<float> replayProducerState(Pose& pose) {
+  std::vector<float> result;
+  FootIk::Probe foot; pose.footIk().probe(foot,{});
+  result.insert(result.end(),{foot.valid ? 1.f : 0.f,foot.weight,foot.pelvis,foot.chest,foot.target,foot.crouch,foot.floorY});
+  for(const auto& leg:foot.leg) {
+    result.insert(result.end(),{leg.smoothY,leg.plant,leg.slack,leg.kneeDev,leg.tilt,leg.roll,leg.yaw});
+    for(size_t i=0;i<4;++i) {
+      result.insert(result.end(),{leg.anim[i].x,leg.anim[i].y,leg.anim[i].z,leg.final[i].x,leg.final[i].y,leg.final[i].z});
+      }
+    }
+  Gaze::Probe gaze; pose.gazeIk().probe(gaze);
+  result.insert(result.end(),{gaze.valid ? 1.f : 0.f,gaze.weight,gaze.yaw,gaze.pitch,gaze.animYaw,gaze.animPitch,
+                             gaze.headYaw,gaze.chestYaw,gaze.waistYaw,gaze.error,gaze.head.x,gaze.head.y,gaze.head.z,
+                             gaze.facing.x,gaze.facing.y,gaze.facing.z,float(pose.gazeIk().shiftCount())});
+  Lean::Probe lean; pose.leanIk().probe(lean);
+  result.insert(result.end(),{lean.valid ? 1.f : 0.f,lean.roll,lean.pitch,lean.speed,lean.turn,lean.slope});
+  Aim::Probe aim; pose.aimIk().probe(aim);
+  result.insert(result.end(),{aim.valid ? 1.f : 0.f,aim.weight,aim.yaw,aim.pitch,aim.animYaw,aim.animPitch,
+                             aim.turn,aim.bend,aim.lean,aim.side,aim.error});
+  AimWalk::Probe walk; pose.aimWalk().probe(walk);
+  result.insert(result.end(),{walk.valid ? 1.f : 0.f,walk.weight,walk.speed,walk.phase,walk.twist,walk.chest,walk.drop});
+  BowDraw::Probe bow; pose.bowDrawIk().probe(bow);
+  result.insert(result.end(),{bow.valid ? 1.f : 0.f,bow.weight,bow.draw,bow.span,bow.travel,bow.miss,bow.follow,
+                             bow.fit,bow.offset,bow.angle,bow.aligned,bow.holding ? 1.f : 0.f,bow.nock,
+                             bow.handAt.x,bow.handAt.y,bow.handAt.z});
+  Flinch::Probe flinch; pose.flinchIk().probe(flinch);
+  result.insert(result.end(),{flinch.valid ? 1.f : 0.f,flinch.bend,flinch.bendYaw,flinch.twist,flinch.head,
+                             float(flinch.hits),flinch.strength,flinch.height});
+  return result;
+  }
+
+void testOriginReplayCopy(Pose& pose) {
+  const bool probing=FootIk::isProbing(); FootIk::setProbing(true);
+  const auto before=std::vector<Tempest::Matrix4x4>(pose.transform(),pose.transform()+pose.boneCount());
+  const auto producers=replayProducerState(pose);
+  const auto expected=PoseOriginReplayContract::legacy(pose);
+  const auto actual=PoseOriginReplayContract::prepared(pose);
+  require(actual.size()==expected.size() && actual.size()==before.size(),"origin replay must preserve full skeleton indexing");
+  for(size_t b=0;b<actual.size();++b)
+    for(size_t i=0;i<16;++i) {
+      require(std::isfinite(actual[b].data()[i]) && std::isfinite(expected[b].data()[i]),"origin replay must retain finite complete frames");
+      exact(actual[b].data()[i],expected[b].data()[i],"replay-only scratch must match the preserved full-copy origin replay bit for bit");
+      exact(pose.bone(b).data()[i],before[b].data()[i],"origin scratch must not mutate the parent's shown world pose");
+      }
+  const auto after=replayProducerState(pose);
+  require(after.size()==producers.size(),"origin scratch must retain all producer probes");
+  for(size_t i=0;i<after.size();++i)
+    exact(after[i],producers[i],"origin scratch must not mutate the parent's retained procedural state");
+  FootIk::setProbing(probing);
+  }
+
+void testOriginReplayHierarchySeed() {
+  for(const bool unordered:{false,true}) {
+    zenkit::ModelHierarchy source;
+    const int16_t parentsOrdered[]={-1,0,1,2,1,4};
+    const int16_t parentsUnordered[]={1,-1,0,2,1,4};
+    for(int16_t i=0;i<6;++i) {
+      zenkit::ModelHierarchyNode node; node.name="REPLAY_NODE_"+std::to_string(i);
+      node.parent_index=unordered ? parentsUnordered[i] : parentsOrdered[i];
+      auto local=at(float(i)*3.f,float(i)*5.f,float(i)*2.f); local.rotateOY(float(i)*7.f);
+      std::memcpy(&node.transform,&local,sizeof(local)); source.nodes.push_back(node);
+      }
+    source.bbox.min={-30,0,-30}; source.bbox.max={30,80,30}; source.collision_bbox=source.bbox;
+    Skeleton skeleton(source,nullptr,unordered ? "REPLAY_UNORDERED.MDS" : "REPLAY_FULL_SEED.MDS");
+    require(skeleton.ordered!=unordered,"origin fixture must exercise the selected hierarchy branch");
+    Pose pose; pose.setSkeleton(&skeleton);
+    auto object=at(23446.3984375f,1122.7470703125f,-10364.30859375f); object.rotateOY(74); object.scale(.9f,1.f,1.f);
+    pose.setFlags(Pose::NoTranslation); pose.setObjectMatrix(object,true);
+    if(!unordered) {
+      // The generic ordered pass intentionally permits a parent in the fixed
+      // bank beyond numBones. Preserve its previously retained affine seed.
+      skeleton.nodes[2].parent=Resources::MAX_NUM_SKELETAL_NODES-1;
+      auto seed=at(17,-8,11); seed.rotateOY(23); seed.scale(1.05f,1.f,.95f);
+      PoseOriginReplayContract::seed(pose,Resources::MAX_NUM_SKELETAL_NODES-1,seed);
+      }
+    std::vector<Tempest::Matrix4x4> physical;
+    for(const auto& bone:skeleton.tr) physical.push_back(object*bone);
+    require(pose.setRagdollPose(&skeleton,physical,{1,2,4}),"origin hierarchy fixture must accept a mixed physical mask");
+    pose.update(1000,true); testOriginReplayCopy(pose);
+    pose.update(1000,false); testOriginReplayCopy(pose);
+    pose.update(1017,true); testOriginReplayCopy(pose);
+    }
+  }
+
 void testPoseFarWorldAttachments() {
   // Independent column-wise Gaussian solve of P * local = child; no homogeneous inverse.
   auto relative=[](const Tempest::Matrix4x4& parent, const Tempest::Matrix4x4& child) {
@@ -1287,15 +1400,19 @@ void testPoseFarWorldAttachments() {
   auto native=at(24020,1200,-10360); native.rotateOX(49); native.rotateOY(-33); native.scale(.9f,1,1);
   for(const auto& bone:skeleton.tr) physical.push_back(native*bone);
   const size_t slots[]={20,rightSlot,leftSlot,unkeyed};
-  for(const int producer:{0,1,2,3,4}) {
+  for(const int producer:{0,1,2,3,4,5,6,7,8,9}) {
     Pose far,reference;
     far.setSkeleton(&skeleton); reference.setSkeleton(&skeleton);
     far.setObjectMatrix(object,true); reference.setObjectMatrix(basis,true);
+    if(producer==9) {
+      far.setFlags(Pose::NoTranslation); reference.setFlags(Pose::NoTranslation);
+      far.setHeadRotation(11,-17); reference.setHeadRotation(11,-17);
+      }
     require(far.startAnim(solver,&stance,0,BS_UNCONSCIOUS,Pose::Force,1000) &&
             reference.startAnim(solver,&stance,0,BS_UNCONSCIOUS,Pose::Force,1000),"far-world keyed stance must start");
     far.update(1000,true); reference.update(1000,true);
     auto configure=[&](Pose& pose, float floorY) {
-      if(producer==1) {
+      if(producer==1 || producer==9) {
         FootIk::Input input; input.enable=true; input.dt=200; input.floorY=floorY;
         for(size_t i=0;i<2;++i) { input.ground[i].hasCol=true; input.ground[i].y=floorY+(i==0 ? 10.f : -6.f); input.ground[i].n={.1f,.99f,.02f}; }
         pose.updateFootIk(input);
@@ -1305,11 +1422,45 @@ void testPoseFarWorldAttachments() {
         AimWalk::Input input; input.legs=&steps; input.walk=1; input.dt=200; pose.updateAimWalk(input);
         require(pose.aimWalk().isActive(),"far-world fixture must exercise active AimWalk");
         }
-      if(producer>=3) {
+      if(producer==3 || producer==4) {
         require(pose.bowDrawIk().isValid(),"far-world fixture must have an actual bow draw chain");
         BowDraw::Input input; input.active=true; input.ready=true; input.draw=.55f; input.span=40; input.arrow=true;
         input.hasString=true; input.stringRest={0,0,0}; input.stringPull={-40,0,0}; input.stringHigh={0,2,0}; input.bowAxis={0,1,0}; input.dt=200;
         pose.updateBowDraw(input);
+        }
+      if(producer==5) {
+        require(pose.gazeIk().isValid(),"origin replay fixture must have a gaze hierarchy");
+        Gaze::Input input; input.active=true; input.source=Gaze::Source::Attention; input.forward={0,0,1}; input.dt=200;
+        input.target=position(pose.bone(5))+Tempest::Vec3(80,35,120); input.talk={.08f,.1f,-.04f}; pose.updateGaze(input);
+        require(pose.gazeIk().isActive(),"origin replay fixture must retain active gaze");
+        }
+      if(producer==6) {
+        require(pose.leanIk().isValid(),"origin replay fixture must have a lean hierarchy");
+        Lean::Input input; input.active=true; input.position={0,floorY,0}; input.forward={0,0,1}; input.dt=200; pose.updateLean(input);
+        input.position={40,floorY+15,80}; input.forward={.2f,0,.98f}; pose.updateLean(input);
+        Lean::Probe probe; pose.leanIk().probe(probe);
+        require(probe.active && std::abs(probe.pitch)+std::abs(probe.roll)>0,"origin replay fixture must retain a measured lean");
+        }
+      if(producer==7) {
+        require(pose.flinchIk().isValid(),"origin replay fixture must have a flinch hierarchy");
+        Flinch::Hit hit; hit.dir={.4f,0,-1}; hit.height=.9f; hit.twist=.4f; hit.strength=.8f; pose.flinchIk().hit(hit,{0,0,1});
+        Flinch::Input input; input.forward={0,0,1}; input.dt=32; pose.updateFlinch(input);
+        Flinch::Probe probe; pose.flinchIk().probe(probe);
+        require(probe.active && probe.hits==1,"origin replay fixture must retain a real flinch kick");
+        }
+      if(producer==8) {
+        require(pose.aimIk().isValid(),"origin replay fixture must have an aim hierarchy");
+        Aim::Input input; input.active=true; input.arrow=true; input.manual=true; input.slot=rightSlot;
+        input.dir={.3f,.15f,1}; input.forward={0,0,1}; input.lean=.2f; input.side=.1f;
+        input.sway={.02f,-.01f}; input.tremor={-.01f,.015f}; input.dt=200;
+        // Choosing the arrow slot resets its measurement. updateAim performs the
+        // real mkSkeleton/apply pass; the next four steady measured frames make
+        // the bow ready. A single large dt cannot replace that frame counter.
+        for(int frame=0;frame<5;++frame)
+          require(pose.updateAim(input),"manual aim initialization must rebuild each measured world pose");
+        Aim::Probe probe; pose.aimIk().probe(probe);
+        require(probe.active && probe.weight>0,"origin replay fixture must retain active manual aim");
+        require(probe.steady && probe.error>=0,"origin replay fixture must retain a measured and applied arrow aim");
         }
       };
     configure(far,object.at(3,1)); configure(reference,0);
@@ -1344,6 +1495,9 @@ void testPoseFarWorldAttachments() {
           near(far.bone(b).data()[i],half[b].data()[i],.0001f,"partial physical weight must blend two world frames without moving the NPC toward the origin");
       }
     require(far.setRagdollPose(&skeleton,physical,mapped),"far-world physical overlay must set"); far.update(1048,true);
+    testOriginReplayCopy(far);
+    Pose repeated=far; repeated.update(1048,false); testOriginReplayCopy(repeated);
+    if(producer>=5) continue; // New retained-state variants use the exact legacy replay oracle above.
     for(auto b:slots) {
       const auto expected=physical[skeleton.nodes[b].parent]*relative(reference.bone(skeleton.nodes[b].parent),reference.bone(b));
       require(far.bone(b).at(0,3)==0 && far.bone(b).at(1,3)==0 && far.bone(b).at(2,3)==0 && far.bone(b).at(3,3)==1,
@@ -1637,6 +1791,7 @@ int main(int argc, const char** argv) {
     testPoseAffineRecoveryAndSaves();
     testPhysicalVelocityHandoff();
     testPoseFarWorldAttachments();
+    testOriginReplayHierarchySeed();
     testFiniteRecoveryHierarchy();
     testBenchmarkSleepPolicy();
     testDropSleepWake();

@@ -21,6 +21,7 @@
 #include "testbench.h"
 #include "gothic.h"
 #include "resources.h"
+#include "frameprofile.h"
 
 using namespace Tempest;
 
@@ -934,7 +935,9 @@ void Npc::prepareRagdoll() {
   }
 
 void Npc::syncRagdoll() {
-  if(!ragdoll || !ragdoll->getPose(ragdollPose))
+  const bool hasPose=[&] { FrameProfile::Scope timing(FrameProfile::Zone::NativeExport,FrameProfile::watchedActor(this));
+    return ragdoll && ragdoll->getPose(ragdollPose); }();
+  if(!hasPose)
     return;
   ragdollObjectMatrix = ragdoll->rootTransform();
   x = ragdollObjectMatrix.at(3,0);
@@ -943,7 +946,7 @@ void Npc::syncRagdoll() {
   physic.setPosition(position());
   visual.pose().setRagdollPose(visual.visualSkeleton(),ragdollPose,ragdoll->poseIndices());
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
-  updateAnimation(0,true);
+  { FrameProfile::Scope timing(FrameProfile::Zone::ForcedSyncAnimation,FrameProfile::watchedActor(this)); updateAnimation(0,true); }
   }
 
 bool Npc::hasAutoroll() const {
@@ -5881,6 +5884,7 @@ void Npc::updateTransform() {
   }
 
 void Npc::updateAnimation(uint64_t dt, bool force) {
+  FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
     dt = 0;

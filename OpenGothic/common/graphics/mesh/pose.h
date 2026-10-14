@@ -162,6 +162,12 @@ class Pose final {
     auto               combatLayers(uint64_t tickCount) const -> std::vector<CombatLayer>;
 
   private:
+    friend class PoseOriginReplayContract;
+    // This tag is intentionally not defaulted: the ordinary public copy constructor
+    // still copies the complete animation/recovery state.
+    struct OriginReplayTag {};
+    Pose(const Pose& source, OriginReplayTag);
+
     // S_Old is only in old saves: AnimBlend does the blending now
     enum SampleStatus : uint8_t {
       S_None  = 0,

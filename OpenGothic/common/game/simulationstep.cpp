@@ -2,6 +2,7 @@
 
 #include "playercontrol.h"
 #include "bodyobservations.h"
+#include "frameprofile.h"
 #include "gothic.h"
 #include "camera.h"
 #include "testbench.h"
@@ -24,7 +25,7 @@ bool SimulationStep::finishStep(uint64_t dt, PlayerControl& player,
     updateCamera();
   else
     observerCamera(dt);
-  BodyObservations::sampleAll();
+  { FrameProfile::Scope timing(FrameProfile::Zone::Observations); BodyObservations::sampleAll(); }
   return TestBench::tick(dt,player);
   }
 

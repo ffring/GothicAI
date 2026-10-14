@@ -21,6 +21,7 @@
 #include "gothic.h"
 #include "focus.h"
 #include "resources.h"
+#include "frameprofile.h"
 
 const char* materialTag(ItemMaterial src) {
   switch(src) {
@@ -402,10 +403,11 @@ void World::tick(uint64_t dt) {
   static bool doTicks=true;
   if(!doTicks)
     return;
-  wobj.tick(dt,dt);
-  wobj.prepareRagdolls();
-  wdynamic->tick(dt);
-  wobj.syncRagdolls();
+  { FrameProfile::Scope timing(FrameProfile::Zone::WorldLogic); wobj.tick(dt,dt); }
+  { FrameProfile::Scope timing(FrameProfile::Zone::Prepare); wobj.prepareRagdolls(); }
+  { FrameProfile::Scope timing(FrameProfile::Zone::Physics); wdynamic->tick(dt); }
+  { FrameProfile::Scope timing(FrameProfile::Zone::Sync); wobj.syncRagdolls(); }
+  FrameProfile::Scope timing(FrameProfile::Zone::WorldMisc);
   if(auto pl = player())
     wsound.tick(*pl);
   globFx->tick(dt);

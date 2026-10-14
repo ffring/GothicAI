@@ -9,6 +9,7 @@
 #include "objvisual.h"
 #include "gothic.h"
 #include "graphics/mesh/animmath.h"
+#include "frameprofile.h"
 
 #include <algorithm>
 #include <array>
@@ -455,6 +456,7 @@ bool MdlVisual::setToFightMode(const WeaponState f) {
   }
 
 void MdlVisual::setObjMatrix(const Tempest::Matrix4x4 &m, bool syncAttach) {
+  FrameProfile::Scope timing(FrameProfile::Zone::PaletteCpu,FrameProfile::actorContext());
   pos = m;
   skInst->setObjectMatrix(m,syncAttach);
   view.setPose(m,*skInst);
@@ -545,7 +547,8 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
 
   solver.update(tickCount);
   pose.setObjectMatrix(pos,false);
-  const bool changed = pose.update(tickCount, force);
+  const bool changed=[&] { FrameProfile::Scope timing(FrameProfile::Zone::PoseCpu,FrameProfile::watchedActor(npc));
+    return pose.update(tickCount, force); }();
   if(npc!=nullptr && npc->isPlayer()) {
     static const bool log = std::getenv("OPENGOTHIC_ANIBLEND_LOG")!=nullptr;
     pose.setBlendLog(log);
@@ -556,8 +559,10 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
   if(npc!=nullptr && npc==Pose::probeNpc)
     pose.probe(Pose::subjectProbe);
 
-  if(changed)
+  if(changed) {
+    FrameProfile::Scope timing(FrameProfile::Zone::PaletteCpu,FrameProfile::watchedActor(npc));
     view.setPose(pos,pose);
+    }
   return changed;
   }
 

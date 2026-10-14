@@ -1,4 +1,5 @@
 #include "testbench.h"
+#include "frameprofile.h"
 
 #include <Tempest/Pixmap>
 #include <Tempest/SoundDevice>
@@ -1990,6 +1991,7 @@ Bench::PerfSample ragdollCoverageSample(World& world) {
   }
 
 void sampleRagdollPerformance(World& world) {
+  FrameProfile::sample(bench.recName,bench.recFrame);
   auto sample=ragdollCoverageSample(world);
   sample.segment=bench.recName; sample.frame=bench.recFrame; sample.wallMs=bench.perfWallMs;
   const auto stats=world.physic()->physicsStats();
@@ -5770,6 +5772,7 @@ void TestBench::aiHeard(std::string_view text, std::string_view to) {
   }
 
 bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
+  FrameProfile::Scope timing(FrameProfile::Zone::Bench);
   if(scenarioPath==nullptr || bench.done)
     return false;
   if(!bench.loaded)
@@ -5804,6 +5807,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     return false;
   if(ragdollPerf) {
     const auto now=std::chrono::steady_clock::now();
+    FrameProfile::observer(dt,now);
+    FrameProfile::setActors(bench.crew);
     bench.perfWallMs=bench.hasPerfFrame ? std::chrono::duration<float,std::milli>(now-bench.lastPerfFrame).count() : 0;
     bench.lastPerfFrame=now; bench.hasPerfFrame=true;
     }

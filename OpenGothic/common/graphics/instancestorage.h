@@ -80,4 +80,6 @@ class InstanceStorage {
     std::mutex              sync;
     std::condition_variable uploadCnd;
     int32_t                 uploadFId = -1;
+
+    friend struct InstanceStorageContractAccess;
   };

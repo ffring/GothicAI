@@ -143,6 +143,22 @@ Pose::Pose() {
   lay.reserve(4);
   }
 
+// Origin replay starts from the already sampled, blended pose. It needs the
+// retained procedural state, but never reads animation layers, blend drivers,
+// or the physical/recovery histories that a complete Pose copy would allocate.
+Pose::Pose(const Pose& source, OriginReplayTag)
+  :skeleton(source.skeleton), trY(source.trY), flag(source.flag), lastUpdate(source.lastUpdate),
+   headRotX(source.headRotX), headRotY(source.headRotY),
+   ik(source.ik), gaze(source.gaze), lean(source.lean), aim(source.aim),
+   walk(source.walk), bowDraw(source.bowDraw), flinch(source.flinch),
+   numBones(source.numBones), pos(source.pos) {
+  // Preserve the full bank: ordered hierarchy construction may read a parent
+  // below MAX_NUM_SKELETAL_NODES even when it is outside the current bone count.
+  std::copy_n(source.hasSamples,Resources::MAX_NUM_SKELETAL_NODES,hasSamples);
+  std::copy_n(source.base,Resources::MAX_NUM_SKELETAL_NODES,base);
+  std::copy_n(source.tr,Resources::MAX_NUM_SKELETAL_NODES,tr);
+  }
+
 uint8_t Pose::calcAniComb(const Vec3& dpos, float rotation) {
   float   l   = std::sqrt(dpos.x*dpos.x+dpos.z*dpos.z);
 
@@ -714,8 +730,7 @@ void Pose::applyRagdollPose() {
   // parent/child matrices have already rounded their attachment positions by that point: even a
   // double inverse cannot recover them. Replay the same procedural state on a private pose at the
   // origin, retaining the object's complete basis and the IK's original absolute ground offset.
-  Pose local=*this;
-  local.clearRagdollPose();
+  Pose local(*this,OriginReplayTag{});
   auto object=pos;
   object.set(3,0,0.f);
   object.set(3,1,0.f);
