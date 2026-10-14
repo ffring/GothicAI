@@ -142,9 +142,11 @@ def test_a_dialog_of_the_director_may_have_a_program(graph):
     assert validate(ops, story, Rules.of(graph), repairs=QUEST) == []
     assert story.then(ops).dead_ends() == []
     assert story.then(ops).effects_of("DIR_MIS_LOBART_RUEBEN_1")[2] == programs.effects(program)[2]
-    # a repair gives no more than the ending did: its effects say it, a program could do anything
-    errors = validate(ops, story, Rules.of(graph), repairs=QUEST, caps=CAPS)
-    assert "у ремонта нет своей программы: только эффекты исходной концовки" in errors
+    # a repair gives no more than the ending did: what its program gives counts too
+    assert validate(ops, story, Rules.of(graph), repairs=QUEST, caps=CAPS) == []
+    greedy = [_repair_node(lines=[], effects=[], program=[*program, XP, XP])]
+    errors = validate(greedy, story, Rules.of(graph), repairs=QUEST, caps=CAPS)
+    assert "опыта 150, а исходная концовка давала 50" in errors
     # the lines of its program count as lines
     bare = [_repair_node(npc=HILDA, lines=[], effects=[{"do": "set", "var": QUEST, "value": 2}])]
     assert any("реплик" in e for e in validate(bare, story, Rules.of(graph), repairs=QUEST))

@@ -13,6 +13,7 @@ The pace: one step at a time, a pause between steps, none while a dialog or a cu
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -63,7 +64,9 @@ INSTRUCTIONS = """\
 (description), короткий разговор (lines: 2–5 реплик; hero — герой, npc — преемник, он говорит своим голосом \
 и знает о смерти), выбираешь эффекты концовки по id из сводки (награда не больше исходной, можно меньше, \
 если так честнее) и две записи в журнал героя от первого лица: journal_now — что он узнаёт сразу (о смерти и \
-к кому теперь идти), journal_done — после сдачи.
+к кому теперь идти), journal_done — после сдачи. Эффект-«вариант ответа» — это выбор героя в меню после \
+разговора, как в оригинале (например, золото или скидка): выбери те варианты, что преемнику естественно \
+предложить, и, если нужно, напиши его ответ на каждый (answers: id варианта и одна реплика).
 - close: если передать концовку некому или это нелепо, квест закрывается (status: obsolete — потерял смысл, \
 failed — провален), с записью journal_now.
 
@@ -101,6 +104,16 @@ PROPOSE_TOOL = Tool(
                 },
             },
             "effects": {"type": "array", "items": {"type": "string"}, "description": "id эффектов: E1, E2…"},
+            "answers": {
+                "type": "array",
+                "description": "ответ преемника на вариант ответа героя; можно пусто",
+                "items": {
+                    "type": "object",
+                    "properties": {"effect": {"type": "string"}, "text": {"type": "string"}},
+                    "required": ["effect", "text"],
+                    "additionalProperties": False,
+                },
+            },
             "status": {"type": "string", "enum": ["obsolete", "failed"], "description": "для close"},
             "journal_now": {"type": "string"},
             "journal_done": {"type": "string", "description": "для handover"},
@@ -113,6 +126,7 @@ PROPOSE_TOOL = Tool(
             "description",
             "lines",
             "effects",
+            "answers",
             "status",
             "journal_now",
             "journal_done",
@@ -125,11 +139,15 @@ PROPOSE_TOOL = Tool(
 
 @dataclass
 class Offer:
-    """An effect of the lifted ending the repair may keep (the bridge's vocabulary)."""
+    """An effect of the lifted ending the repair may keep (the bridge's vocabulary), or a choice of it the
+    hero picks in the menu after the talk, as in the scripts (`choice`: its node; `inside`: what it gives)."""
 
     id: str
     effect: dict[str, Any]
     text: str
+    choice: str = ""
+    inside: list[dict[str, Any]] = field(default_factory=list)
+    when: Expr | None = None  # a choice: when the scripts offer it
 
 
 @dataclass
@@ -195,6 +213,7 @@ class Proposal:
     description: str = ""
     lines: list[dict[str, str]] = field(default_factory=list)
     effects: list[str] = field(default_factory=list)
+    answers: dict[str, str] = field(default_factory=dict)  # choice offer -> the successor's answer
     status: str = "obsolete"
     journal_now: str = ""
     journal_done: str = ""
@@ -209,6 +228,11 @@ class Proposal:
             description=str(args.get("description", "")),
             lines=[dict(x) for x in args.get("lines") or [] if isinstance(x, dict)],
             effects=[str(x).upper() for x in args.get("effects") or []],
+            answers={
+                str(a.get("effect", "")).upper(): str(a.get("text", ""))
+                for a in args.get("answers") or []
+                if isinstance(a, dict) and str(a.get("text", "")).strip()
+            },
             status=str(args.get("status") or "obsolete"),
             journal_now=str(args.get("journal_now", "")),
             journal_done=str(args.get("journal_done", "")),
@@ -508,8 +532,14 @@ class Director:
                 effect, text = made
                 out.append(Offer(f"E{first + len(out)}", effect, text + label))
             elif e["do"] == "choice" and depth == 0 and e.get("node") in self.graph.nodes:
+                # the hero's choice in the menu, as the scripts offer it: kept whole, its program played
                 choice = self.graph.nodes[e["node"]]
-                self._offers(choice, quest, story, needs, out, first, f" (вариант «{choice.description}»)", 1)
+                inside: list[Offer] = []
+                self._offers(choice, quest, story, needs, inside, 0, "", 1)
+                gives = ", ".join(o.text for o in inside)
+                text = f"вариант ответа «{choice.description}»" + (f" — {gives}" if gives else "")
+                effects = [o.effect for o in inside]
+                out.append(Offer(f"E{first + len(out)}", {}, text, choice.id, effects, e.get("when")))
 
     def _told(self, quest: str) -> list[str]:
         q = self.graph.quests[quest]
@@ -569,8 +599,23 @@ class Director:
         if not p.journal_now.strip() or not p.journal_done.strip():
             return None, ["нужны обе записи журнала: journal_now и journal_done"]
         id = self._node_id(brief.quest, story)
-        effects: list[dict[str, Any]] = [offers[x].effect for x in p.effects]
+        picked = [offers[x] for x in p.effects]
+        effects: list[dict[str, Any]] = [o.effect for o in picked if not o.choice]
         effects.append({"do": "set", "var": brief.quest, "value": ending.value})
+        program: list[dict[str, Any]] = []
+        for o in picked:
+            if o.choice:
+                try:
+                    own = await self.link.story_program(o.choice, own=True)
+                except (GameError, TimeoutError) as err:
+                    return None, [f"вариант ответа {o.id} не прочитать в игре: {err}"]
+                steps = borrowed(own.get("steps") or [], p.answers.get(o.id, ""))
+                text = self.graph.nodes[o.choice].description
+                choice: dict[str, Any] = {"do": "choice", "text": text, "steps": steps}
+                # offered when the scripts offer it, but for what the dialog already asked (it may have taken
+                # the things since: the turnips handed over)
+                when = _rest(o.when, ending.condition)
+                program.append({"do": "if", "cond": when, "then": [choice]} if when is not None else choice)
         if brief.title:
             status = {2: "LOG_SUCCESS", 3: "LOG_FAILED", 4: "LOG_OBSOLETE"}[ending.value]
             effects.append({"do": "journal", "topic": brief.title, "text": p.journal_done, "status": status})
@@ -586,9 +631,11 @@ class Director:
             ],
             "effects": effects,
         }
+        if program:
+            node["program"] = program
         ops = [{"op": "add_node", "node": node}]
         story = await self.with_symbols(story, names_in(ops))
-        caps = _caps([o.effect for o in ending.offers])
+        caps = _caps([x for o in ending.offers for x in ([o.effect] if not o.choice else o.inside)])
         errors = validate(ops, story, self.rules, repairs=brief.quest, caps=caps)
         if errors:
             return None, errors
@@ -705,6 +752,40 @@ def _effect(e: dict[str, Any], quest: str, titles: dict[str, str]) -> tuple[dict
     return None
 
 
+def borrowed(steps: list[dict[str, Any]], answer: str = "") -> list[dict[str, Any]]:
+    """A choice of the dead npc's dialog as its successor plays it: the hero says his own lines, the dead
+    one's are gone (the successor's `answer` comes after the hero's first line), the choices it would offer
+    next are not (a handover's menu has one level), and Info_ClearChoices clears the successor's."""
+
+    def block(ss: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for st in ss:
+            call = st.get("call") if st.get("do") == "call" else None
+            name = str(call[1]).upper() if isinstance(call, list) and len(call) > 1 else ""
+            if name == "AI_OUTPUT" and call[2] != ["inst", "OTHER"]:
+                continue  # the dead one's line
+            if name == "INFO_ADDCHOICE":
+                continue
+            if name == "INFO_CLEARCHOICES":
+                out.append({"do": "clear_choices"})
+                continue
+            st = dict(st)
+            for k in ("then", "else"):
+                if isinstance(st.get(k), list):
+                    st[k] = block(st[k])
+            pure = not any(x[0] in ("call", "fn") for x in walk(st.get("cond")))
+            if st.get("do") == "if" and not st.get("then") and not st.get("else") and pure:
+                continue  # it held only the dead one's lines
+            out.append(st)
+        return out
+
+    out = block(copy.deepcopy(steps))
+    if answer.strip():
+        said = next((i + 1 for i, st in enumerate(out) if st.get("do") == "call"), 0)
+        out.insert(said, {"do": "say", "speaker": "self", "text": answer.strip()})
+    return out
+
+
 def topic_titles(graph: StoryGraph) -> dict[str, str]:
     titles: dict[str, str] = {}
     for q in graph.quests.values():
@@ -738,6 +819,19 @@ def _caps(effects: list[dict[str, Any]]) -> Caps:
         elif e["do"] == "give" and e.get("to") != "self":
             caps.items[e["item"]] = caps.items.get(e["item"], 0) + int(e["count"])
     return caps
+
+
+def _rest(guard: Expr | None, condition: Expr | None) -> Expr | None:
+    """The terms of `guard` the condition does not have, as a program computes them; None if there are none
+    or they are not plain (cases, unknown parts: a program does not take them)."""
+    have = condition[1:] if condition is not None and condition[:1] == ["&&"] else [condition]
+    terms = [
+        t for t in (guard[1:] if guard is not None and guard[:1] == ["&&"] else [guard]) if t is not None
+    ]
+    rest = [t for t in terms if t not in have]
+    if not rest or any(x[0] in ("cases", "unknown", "param", "local") for t in rest for x in walk(t)):
+        return None
+    return rest[0] if len(rest) == 1 else ["&&", *rest]
 
 
 def _all(*parts: Expr | None) -> Expr | None:

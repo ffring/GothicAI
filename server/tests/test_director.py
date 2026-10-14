@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.director import Director, Pacing
+from gothic_ai.director import Director, Pacing, _rest
 from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
@@ -265,6 +265,7 @@ def _proposal(npc: str, **change: Any) -> ToolCall:
             {"speaker": "npc", "text": "Давай. Он бы заплатил."},
         ],
         "effects": ["E1", "E2", "E3"],
+        "answers": [{"effect": "E2", "text": "Держи, он бы так и сделал."}],
         "status": "obsolete",
         "journal_now": "Лобарт мёртв. Может, репу примет Хильда.",
         "journal_done": "Я отдал репу Хильде.",
@@ -273,11 +274,33 @@ def _proposal(npc: str, **change: Any) -> ToolCall:
     return ToolCall("propose_repair", {**args, **change}, "c1")
 
 
+def _out(speaker: str, line: str) -> dict[str, Any]:
+    listener = "SELF" if speaker == "OTHER" else "OTHER"
+    return {"do": "call", "call": ["call", "AI_OUTPUT", ["inst", speaker], ["inst", listener], ["str", line]]}
+
+
+GIVE_5 = ["fn", "B_GIVEINVITEMS", ["inst", "SELF"], ["inst", "OTHER"], ["sym", "ITMI_GOLD"], ["int", 5]]
+# Lobart's choice "Дай мне 5 золотых монет!" as story_program gives it
+GOLD_CHOICE = [
+    _out("OTHER", "DIA_Lobart_RuebenRunning_Gold_15_00"),
+    _out("SELF", "DIA_Lobart_RuebenRunning_Gold_05_01"),
+    {"do": "call", "call": GIVE_5},
+    {
+        "do": "if",
+        "cond": ["==", ["field", ["inst", "HERO"], "GUILD"], ["int", 0, "GIL_NONE"]],
+        "then": [_out("SELF", "DIA_Lobart_RuebenRunning_Gold_05_02")],
+    },
+    {"do": "call", "call": ["call", "INFO_CLEARCHOICES", ["sym", "DIA_LOBART_RUEBENRUNNING"]]},
+    {"do": "return"},
+]
+
+
 async def _director(fake: FakeGame, llm: FakeBackend, graph: StoryGraph, store: MemoryStore):
     fake.vars = {QUEST: 1, "KAPITEL": 1}
     fake.npc_states = {n: {"state": "alive", "name": name} for n, name in NAMES.items()}
     fake.npc_states[LOBART]["state"] = "dead"
-    fake.symbols = dict(SYMBOLS)
+    fake.symbols = {**SYMBOLS, "AI_OUTPUT": "func", "B_GIVEINVITEMS": "func"}
+    fake.programs = {("DIA_LOBART_RUEBENRUNNING_GOLD", "information"): GOLD_CHOICE}
     fake.people_near = [{"npc": VINO, "name": "Вино", "distance": 1200, "guild": 0}]
     link_cm = connected(fake)
     link = await link_cm.__aenter__()
@@ -298,7 +321,7 @@ async def test_the_director_repairs_after_a_rejected_proposal(graph):
 
         brief = llm.calls[0][1][0].content
         assert "Лобарт (BAU_950_LOBART) мёртв" in brief and "E1: опыт +50" in brief
-        assert "герою: ITMI_GOLD ×5 (вариант «Дай мне 5 золотых монет!»)" in brief
+        assert "E2: вариант ответа «Дай мне 5 золотых монет!» — герою: ITMI_GOLD ×5" in brief
         assert "забрать у героя ITPL_BEET ×20" in brief
         assert f"{HILDA} — Хильда: этот квест есть в диалогах" in brief
         assert f"{VINO} — Вино: был рядом (12 м)" in brief
@@ -316,7 +339,6 @@ async def test_the_director_repairs_after_a_rejected_proposal(graph):
         assert node["lines"][0] == {"speaker": "other", "text": "Я принёс репу."}
         assert node["effects"] == [
             {"do": "xp", "amount": 50},
-            {"do": "give", "item": "ITMI_GOLD", "count": 5},
             {"do": "give", "item": "ITPL_BEET", "count": 20, "to": "self"},
             {"do": "set", "var": QUEST, "value": 2},
             {
@@ -325,6 +347,16 @@ async def test_the_director_repairs_after_a_rejected_proposal(graph):
                 "text": "Я отдал репу Хильде.",
                 "status": "LOG_SUCCESS",
             },
+        ]
+        # the gold is the hero's choice, as Lobart offered it: his own line, Hilda's answer, her gold
+        (choice,) = node["program"]
+        assert (choice["do"], choice["text"]) == ("choice", "Дай мне 5 золотых монет!")
+        assert choice["steps"] == [
+            GOLD_CHOICE[0],
+            {"do": "say", "speaker": "self", "text": "Держи, он бы так и сделал."},
+            {"do": "call", "call": GIVE_5},
+            {"do": "clear_choices"},
+            {"do": "return"},
         ]
         await _until(lambda: any(m["type"] == "story_effect" for m in fake.story))
         effect = next(m for m in fake.story if m["type"] == "story_effect")
@@ -409,3 +441,11 @@ async def test_after_a_load_only_the_deaths_the_branch_saw_are_repaired(graph):
     finally:
         run.cancel()
         await link_cm.__aexit__(None, None, None)
+
+
+def test_a_choice_keeps_its_own_condition_but_what_the_dialog_asked():
+    # Lobart offers the cheaper clothes to a hero of no guild; the 20 turnips the dialog itself asks for
+    guild = ["==", ["field", ["inst", "HERO"], "GUILD"], ["int", 0, "GIL_NONE"]]
+    assert _rest(["&&", HAS_20, guild], ["&&", RUNNING, HAS_20]) == guild
+    assert _rest(HAS_20, ["&&", RUNNING, HAS_20]) is None
+    assert _rest(["&&", guild, ["cases", guild, ["int", 1]]], None) is None  # not a program's expression
