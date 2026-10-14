@@ -910,7 +910,7 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
       if(info.condition) {
         auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info.condition));
         if (conditionSymbol != nullptr) {
-          valid = vm.call_function<int>(conditionSymbol) != 0;
+          valid = dialogFunction(conditionSymbol,true) != 0;
           }
         }
       if(Gothic::inst().dialogFilterFn)
@@ -992,8 +992,18 @@ void GameScript::exec(const GameScript::DlgChoice &dlg, Npc& player, Npc& npc) {
         ++i;
       }
     }
-  vm.call_function(vm.find_symbol_by_index(dlg.scriptFn));
+  dialogFunction(vm.find_symbol_by_index(dlg.scriptFn),false);
   Gothic::inst().onDialogChosen(dlg,player,npc);
+  }
+
+int32_t GameScript::dialogFunction(zenkit::DaedalusSymbol* fn, bool returns) {
+  int32_t r = 0;
+  if(fn!=nullptr && Gothic::inst().dialogScriptFn && Gothic::inst().dialogScriptFn(*fn,r))
+    return r;
+  if(returns)
+    return vm.call_function<int>(fn);
+  vm.call_function(fn);
+  return 0;
   }
 
 void GameScript::printCannotUseError(Npc& npc, int32_t atr, int32_t nValue) {
@@ -2581,7 +2591,7 @@ bool GameScript::npc_checkinfo(std::shared_ptr<zenkit::INpc> npcRef, int imp) {
     if(info->condition) {
       auto* conditionSymbol = vm.find_symbol_by_index(uint32_t(info->condition));
       if (conditionSymbol != nullptr)
-        valid = vm.call_function<int>(conditionSymbol)!=0;
+        valid = dialogFunction(conditionSymbol,true)!=0;
       }
     if(Gothic::inst().dialogFilterFn)
       Gothic::inst().dialogFilterFn(*info,valid);

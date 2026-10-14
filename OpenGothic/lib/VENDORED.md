@@ -37,3 +37,6 @@ Keep these when updating a library from upstream.
 - `ZenKit/` `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine
   function the way the `BE` instruction does. The story graph (`ai_bridge/storygraph`) computes the AI
   director's conditions with the engine's own functions through it.
+- `ZenKit/` `DaedalusVm::unsafe_call_bl` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls a script function the way
+  the `BL` instruction does, so an override (`override_function`) runs instead of its code. The story
+  graph's Interpreter calls script functions from a dialog's program through it.

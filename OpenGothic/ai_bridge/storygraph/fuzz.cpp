@@ -9,6 +9,7 @@
 #include "check.h"
 #include "effects.h"
 #include "eval.h"
+#include "execcheck.h"
 #include "exprjson.h"
 #include "model.h"
 #include "vocab.h"
@@ -434,6 +435,58 @@ int fuzzEffects(const char* datPath, const Model& m, uint32_t rounds, const char
       t.add(n, res);
       if(res.outcome==EffectCheck::Outcome::Differ)
         break;  // one is enough to look at
+      }
+    }
+  std::printf("random states: %zu dialogs and choices x %u rounds\n", nodes, rounds);
+  t.print("random states", verbose);
+  return t.differ==0 ? 0 : 1;
+  }
+
+int fuzzExec(const char* datPath, const Model& m, uint32_t rounds, const char* only, bool verbose) {
+  std::unique_ptr<ExecCheck> xc;
+  Fuzz fz;
+  bool ok = fz.open(datPath, [&xc](zenkit::DaedalusVm& v, FuzzWorld& w) {
+    xc = std::make_unique<ExecCheck>(v, w);
+    bindExternals(v, xc->engine());
+    });
+  if(!ok)
+    return 1;
+  auto&       vm    = fz.vm;
+  FuzzWorld&  world = *fz.world;
+  Bytecode    code(*vm);
+  xc->vmFault = &fz.vmFault;
+  xc->npcOf   = [&world](uint32_t s) -> std::shared_ptr<zenkit::DaedalusInstance> { return world.npc(s); };
+  // every npc is built now: built during a run, its constructor would change the state of that run only
+  for(uint32_t i=0; i<vm->symbols().size(); ++i)
+    if(auto* s = vm->find_symbol_by_index(i); s && s->type()==DaedalusDataType::INSTANCE && s->is_const() && world.isNpc(*s))
+      world.npc(i);
+  ExecTotals t;
+  size_t nodes = 0;
+  for(auto& n : m.nodes) {
+    world.domain = nullptr;
+    if(only!=nullptr && n.id!=only)
+      continue;
+    auto* npcSym = vm->find_symbol_by_name(n.npc);
+    if(npcSym==nullptr)
+      continue;
+    nodes++;
+    if(only!=nullptr)
+      xc->trace = [](const std::string& s){ std::printf("   %s\n", s.c_str()); };
+    for(auto fn : nodeFunctions(*vm, n)) {
+      Domain d = domainOf(*vm, code, fn);
+      world.domain = &d;
+      world.self   = world.npc(npcSym->index());
+      world.rng.seed(uint32_t(std::hash<std::string>()(n.id)) + fn);
+      auto  owners = ownersOf(*vm, world, d);
+      auto* sym    = vm->find_symbol_by_index(fn);
+      for(uint32_t r=0; r<rounds; ++r) {
+        draw(*vm, world, d, owners);
+        auto res = xc->run(fn, world.self, world.hero);
+        t.add(sym ? sym->name() : n.id, fn, res);
+        if(res.outcome==ExecCheck::Outcome::Differ || res.outcome==ExecCheck::Outcome::NotProgram)
+          break;  // one is enough to look at
+        }
+      world.domain = nullptr;
       }
     }
   std::printf("random states: %zu dialogs and choices x %u rounds\n", nodes, rounds);

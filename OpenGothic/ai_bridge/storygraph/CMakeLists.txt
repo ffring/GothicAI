@@ -23,11 +23,13 @@ endif()
 set(STORYGRAPH_SOURCES
   bytecode.cpp bytecode.h
   eval.cpp     eval.h
+  exec.cpp     exec.h
   expr.cpp     expr.h
   exprjson.cpp exprjson.h
   lifter.cpp   lifter.h
   model.cpp    model.h
   predicates.cpp predicates.h
+  program.cpp  program.h
   vocab.h
   ../textcodec.cpp ../textcodec.h)
 if(PROJECT_IS_TOP_LEVEL)
@@ -52,7 +54,7 @@ endif()
 option(STORYGRAPH_TOOL "build the storygraph command line tool" ${PROJECT_IS_TOP_LEVEL})
 if(STORYGRAPH_TOOL)
   add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h
-                            effects.cpp effects.h snapshot.h)
+                            effects.cpp effects.h execcheck.cpp execcheck.h snapshot.h)
   target_link_libraries(storygraph PRIVATE StoryGraph)
   if(NOT MSVC)
     target_compile_options(storygraph PRIVATE -Wall -Wconversion -Werror)

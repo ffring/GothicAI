@@ -453,6 +453,8 @@ class GameScript final {
     void exitsession         ();
 
     void sort(std::vector<DlgChoice>& dlg);
+    // a dialog's condition, information or choice: the story graph runs it if it takes it, else the VM
+    int32_t dialogFunction(zenkit::DaedalusSymbol* fn, bool returns);
     void setNpcInfoKnown(const zenkit::INpc& npc, const zenkit::IInfo& info);
     bool doesNpcKnowInfo(const zenkit::INpc& npc, size_t infoInstance) const;
 
