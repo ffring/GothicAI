@@ -72,9 +72,9 @@ def quick_url(url: str | None, decider_url: str | None) -> str | None:
     return f"http://{host}:{QUICK_PORT}/v1" if host else None
 
 
-def make_quick(base_url: str, model: str = QUICK_MODEL) -> LLMBackend:
+def make_quick(base_url: str, model: str = QUICK_MODEL, max_tokens: int = QUICK_MAX_TOKENS) -> LLMBackend:
     """The quick model of a fight: an OpenAI-compatible server (llama.cpp), its answers capped."""
-    return OpenAICompatBackend(model, base_url, name="quick", max_tokens=QUICK_MAX_TOKENS)
+    return OpenAICompatBackend(model, base_url, name="quick", max_tokens=max_tokens)
 
 
 def make_backend(

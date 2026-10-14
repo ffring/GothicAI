@@ -16,6 +16,7 @@ from typing import Any
 
 from . import characters
 from .amends import Amends
+from .beasts import BeastDesk
 from .bodies import Bodies
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
@@ -1397,6 +1398,210 @@ async def orders_scenario(
     return results
 
 
+class _Rolls:
+    """The dice of a scenario: the rolls it is to come up with, in turn (0.5 once they run out)."""
+
+    def __init__(self) -> None:
+        self.queue: list[float] = []
+
+    def random(self) -> float:
+        return self.queue.pop(0) if self.queue else 0.5
+
+
+WOLF_HERO = "NW_XARDAS_PATH_FARM1_05"  # on the road from Xardas's tower to the farm
+
+
+async def wolf_scenario(link: GameLink, talk: TalkDesk, beasts: BeastDesk) -> dict[str, str]:
+    """Wolves hear the hero (docs/beasts.md) on the road below Xardas's tower. A wolf growls at him; once
+    he starts to speak it waits for his words past its four seconds; soothed, it lets him pass: sits down,
+    watches him go by, lets him be once he has gone and come back. Then a wolf each: a hostile phrase
+    (it attacks), «Стой!» with no one looked at (the wolf's, not a companion order) and then walking right
+    up to it (it bites), a threat (it runs), a soothing that fails (it attacks). The dice are the
+    scenario's; the tone is the quick model's with QUICK_URL, the rules' else."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+    rng, rolls = beasts.rng, _Rolls()
+    beasts.rng = rolls  # type: ignore[assignment]
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+        log.info("%-12s %s", name, results[name])
+
+    def state(wolf: str | None) -> str:
+        e = beasts.wolves.get(wolf or "")
+        return e.state if e is not None else "gone"
+
+    def dist(wolf: str | None) -> float:
+        e = beasts.wolves.get(wolf or "")
+        return round(e.distance / 100, 1) if e is not None else -1.0
+
+    async def hero_hp() -> int:
+        snap = await link.snapshot("NONE_100_XARDAS", fresh=True)
+        return snap.player.hp or 0 if snap.player is not None else 0
+
+    def cm(a: dict[str, Any], b: dict[str, Any]) -> float:
+        return float(((a["x"] - b["x"]) ** 2 + (a["z"] - b["z"]) ** 2) ** 0.5)
+
+    points = {p["name"]: p for p in await link.waypoints()}
+    hero = points[WOLF_HERO]
+    ground = [p for p in points.values() if abs(p["y"] - hero["y"]) < 250 and not p["fp"]]
+    at = min(ground, key=lambda p: abs(cm(p, hero) - 1000))  # ~10 m off: it growls at him
+    # beyond the wolf and 4.5 m aside of it (he walks by); back behind him, 19 m from it (gone, still listed)
+    dx, dz = (at["x"] - hero["x"]) / cm(at, hero), (at["z"] - hero["z"]) / cm(at, hero)
+    past = (at["x"] + dx * 300 - dz * 450, at["y"], at["z"] + dz * 300 + dx * 450)
+    away = (hero["x"] - dx * 1000, hero["y"], hero["z"] - dz * 1000)
+    log.info("wolf at %s, %.0f m from the hero", at["name"], cm(at, hero) / 100)
+
+    async def kill(wolf: str | None) -> None:
+        if wolf in beasts.wolves:
+            await link.debug("kill", instance=wolf.split("#", 1)[0], by="PLAYER")  # the nearest of its kind
+            await _until(lambda: wolf not in beasts.wolves, 5)
+
+    async def clear() -> list[str]:
+        """No wolf about but the scenario's (the road's own young wolf, a pack)."""
+        killed = []
+        for _ in range(8):
+            if not beasts.wolves:
+                break
+            wolf = min(beasts.wolves.values(), key=lambda w: w.distance).id
+            try:
+                await kill(wolf)
+            except GameError as err:
+                log.info("could not kill %s: %s", wolf, err)
+                break
+            killed.append(wolf)
+        return killed
+
+    async def wolf_at_him(n: int) -> str | None:
+        """A wolf at its point, the hero at his; the wolf, once it growls at him."""
+        await link.debug("player_goto", waypoint=WOLF_HERO)
+        await asyncio.sleep(1)
+        await clear()
+        before = set(beasts.wolves)
+        await link.story_spawn("WOLF", tag=f"beast_{n}", waypoint=at["name"])
+        await _until(lambda: any(w not in before for w in beasts.wolves), 10)
+        wolf = next((w for w in beasts.wolves if w not in before), None)
+        await _until(lambda: state(wolf) == "threaten", 15)
+        return wolf if state(wolf) == "threaten" else None
+
+    def said(text: str, focus: str | None = "WOLF") -> float:
+        talk.hear(text, focus, {"via": "scenario"})
+        return time.monotonic()
+
+    def verdict() -> str:
+        v, t = (beasts.verdicts[0] if beasts.verdicts else None), beasts.last_tone
+        if v is None or t is None:
+            return "no verdict"
+        return f"{v.outcome}, chance {v.chance:.2f}, tone {t[0]} by {t[1]} in {t[2]} ms"
+
+    await link.debug("player_hp", hp=5000)  # the bites of the failing tries do not kill him
+    await link.debug("player_goto", waypoint=WOLF_HERO)
+    await asyncio.sleep(2)
+    log.info("cleared: %s", await clear() or "nobody about")
+
+    # 1. a wolf growls at him, waits for his words, lets him pass and be
+    wolf = await wolf_at_him(1)
+    check("threatens", wolf is not None, f"{wolf} {state(wolf)} at {dist(wolf)} m")
+    listening = beasts.listen()  # as the talk key does
+    listens = await _until(lambda: state(wolf) == "listen", 3)
+    hp = await hero_hp()
+    await asyncio.sleep(6)  # past its four seconds of growling
+    still = state(wolf)
+    check(
+        "listens",
+        listens and still == "listen",
+        f"{listening}: {still} after 6 s, hp {hp} -> {await hero_hp()}",
+    )
+    rolls.queue = [0.0]
+    t0 = said("Тихо, тихо, хороший мальчик. Я просто мимо пройду.")
+    calm = await _until(lambda: state(wolf) == "calm", 5)
+    to = talk.last[0] if talk.last else None
+    check(
+        "calm",
+        calm and to is not None and to.why == "beast",
+        f"{verdict()}, in {time.monotonic() - t0:.1f} s, said to {to.id if to else None}",
+    )
+    sits = await _until(lambda: (e := beasts.wolves.get(wolf or "")) is not None and e.sitting, 10)
+    check("sits", sits, f"{state(wolf)}, sitting {sits}, hp {await hero_hp()}")
+    await link.debug("player_goto", pos=past)
+    await asyncio.sleep(4)
+    check("passes", state(wolf) == "calm" and await hero_hp() == hp, f"{state(wolf)} at {dist(wolf)} m")
+    await link.debug("player_goto", pos=away)
+    over = await _until(lambda: state(wolf) == "routine", 5)
+    await link.debug("player_goto", waypoint=WOLF_HERO)
+    await asyncio.sleep(8)
+    e = beasts.wolves.get(wolf or "")
+    check(
+        "lets_be",
+        over and e is not None and e.state == "routine" and e.tolerant and await hero_hp() == hp,
+        f"{state(wolf)} at {dist(wolf)} m, tolerant {e.tolerant if e else None}",
+    )
+    await kill(wolf)
+
+    # 2. hostility: it attacks at once, no dice
+    wolf = await wolf_at_him(2)
+    t0 = said("Иди сюда, тварь, я тебя прикончу!")
+    went = await _until(lambda: state(wolf) == "attack", 4)
+    check(
+        "hostile", wolf is not None and went, f"{verdict()}, {state(wolf)} in {time.monotonic() - t0:.1f} s"
+    )
+    await kill(wolf)
+
+    # 3. «Стой!» looking at no one is the wolf's; let pass, then walked right up to, it bites
+    wolf = await wolf_at_him(3)
+    rolls.queue = [0.0]
+    said("Стой!", None)
+    calm = await _until(lambda: state(wolf) == "calm", 5)
+    to = talk.last[0] if talk.last else None
+    check(
+        "halt_word", calm and to is not None and to.why == "beast", f"{verdict()}, to {to.id if to else None}"
+    )
+    await asyncio.sleep(1)
+    await link.debug("player_goto", waypoint=at["name"])
+    bit = await _until(lambda: state(wolf) == "attack", 4)
+    check("too_close", bit, f"{state(wolf)} at {dist(wolf)} m")
+    await kill(wolf)
+
+    # 4. a threat scares it off
+    wolf = await wolf_at_him(4)
+    rolls.queue = [0.0]
+    said("Пошёл вон! Брысь!")
+    ran = await _until(lambda: state(wolf) == "flee", 4)
+    d0 = dist(wolf)
+    await asyncio.sleep(3)
+    check(
+        "scared",
+        ran and (dist(wolf) > d0 or wolf not in beasts.wolves),
+        f"{verdict()}, {d0} -> {dist(wolf)} m",
+    )
+    await kill(wolf)
+
+    # 5. a soothing the dice say no to: it did not believe him
+    wolf = await wolf_at_him(5)
+    rolls.queue = [0.99]
+    said("Тихо, тихо, хороший. Я тебя не трону.")
+    went = await _until(lambda: state(wolf) == "attack", 4)
+    check("disbelief", wolf is not None and went, f"{verdict()}, {state(wolf)}")
+
+    # 6. the author's case: it bites him already, he talks it down; it steps back and lets him be
+    bites = await _until(lambda: state(wolf) == "attack" and dist(wolf) < 3, 10)
+    rolls.queue = [0.0]
+    said("Стой! Хороший мальчик, я тут мимо пройду.")
+    calm = await _until(lambda: state(wolf) == "calm", 4)
+    back = await _until(lambda: dist(wolf) >= 4, 5)
+    hp = await hero_hp()
+    await asyncio.sleep(4)
+    check(
+        "calm_bite",
+        bites and calm and back and state(wolf) == "calm" and await hero_hp() == hp,
+        f"{verdict()}, {state(wolf)} at {dist(wolf)} m, hp {hp} -> {await hero_hp()}",
+    )
+    await kill(wolf)
+
+    beasts.rng = rng
+    return results
+
+
 class _OnWords:
     """A scripted model that answers by what it is asked: the step of the first words found in the last
     message (the hero's phrase or an event's cue), `default` else."""
@@ -1419,7 +1624,7 @@ class _OnWords:
     ) -> AsyncIterator[LLMEvent]:
         last = messages[-1] if messages else None
         text = last.content if isinstance(last, Message) else ""
-        step = next((s for words, s in self.replies if words in text), self.default)
+        step = next((s for words, s in self.replies if words.lower() in text.lower()), self.default)
         return FakeBackend(script=[step], delay=0).stream(
             instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
         )
@@ -1640,6 +1845,107 @@ async def companion_scenario(
     defends = [e for e in entries if e["kind"] == "defend"]
     check("after", down and after, f"bandit down {down}, follows {after}, stood up {len(defends)} time(s)")
     link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
+async def calm_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    bandit: str = "BDT_1013_BANDIT_L",
+    gang: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+) -> dict[str, str]:
+    """Talking an attacker down (the user, 2026-10-14: attacked by a bandit, he spoke to him and was told
+    nobody heard; he wants to calm one with words). The bandit at the steps decides to attack the hero (its
+    model scripted); the hero, looking at no one, says «Воу, воу, ты чего? Спокуха!». Checks:
+    - attack: the scripts' attack, the bandit in ZS_ATTACK;
+    - addressed: the words go to whoever is at the hero, though not in his focus;
+    - calm: its model calls the fight off (scripted) and the effect `calm` goes to the game;
+    - stopped: it is out of the attack state;
+    - stays_calm: 15 s on it has not fallen on the hero again, and the hero has not lost health.
+    The gang in the cave is out of it (a fight's noise would bring them). The hero wears heavy armor."""
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    fight = {"goal": "fight", "target": "PLAYER", "attitude": "hostile", "agenda": None}
+    calm = {"goal": "none", "target": None, "attitude": "wary", "agenda": None}
+    dialogue.llm = _ByNpc(
+        {
+            "Бандит": _OnWords(
+                [
+                    ("отойди", FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])),
+                    ("спокуха", FakeStep("Ладно, ладно. Живи пока.", [ToolCall("set_intent", calm)])),
+                ],
+                FakeStep("Хм."),
+            )
+        },
+        FakeBackend("Хм.", delay=0),
+    )
+
+    def state() -> str:
+        e = talk.people.get(bandit)
+        return e.state.upper() if e is not None else "?"
+
+    async def hero_hp() -> int:
+        snap = await link.snapshot(bandit, fresh=True)
+        return snap.player.hp if snap.player is not None and snap.player.hp is not None else -1
+
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")
+    except GameError as err:
+        log.info("calm: no armor for the hero: %s", err)
+    for other in gang:
+        try:
+            await link.debug("kill", npc=other)
+        except GameError as err:
+            log.info("calm: kill %s: %s", other, err)
+    await link.debug("teleport", near=bandit, distance=250)
+    if not await _until(lambda: bandit in talk.people and talk.people[bandit].distance <= 500, 15):
+        return _logged({"near": f"failed ({bandit} is not near the hero)"})
+
+    talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
+    attacked = await _until(
+        lambda: any(e["kind"] == "attack" for e in entries) and state() == "ZS_ATTACK", 20
+    )
+    check("attack", attacked, f"state {state()}")
+
+    hp = await hero_hp()
+    talk.hear("Воу, воу, ты чего? Спокуха!", None, {"via": "scenario"})
+    to = talk.last[0] if talk.last else None
+    check(
+        "addressed",
+        to is not None and to.id == bandit and to.why == "attacker",
+        f"{to.why if to else 'nobody'}",
+    )
+    calmed = await _until(lambda: any(e["kind"] == "calm" for e in entries), 20)
+    check("calm", calmed, next((e["attitude"] for e in entries if e["kind"] == "calm"), "no effect"))
+    stopped = await _until(lambda: state() != "ZS_ATTACK", 10)
+    check("stopped", stopped, f"state {state()}")
+    after = await hero_hp()
+    again = False
+    t_end = time.monotonic() + 15
+    while time.monotonic() < t_end:
+        again = again or state() == "ZS_ATTACK"
+        await asyncio.sleep(0.5)
+    last = await hero_hp()
+    check(
+        "stays_calm",
+        stopped and not again and last >= after,
+        f"hero hp {hp} -> {after} -> {last}, state {state()}",
+    )
     return _logged(results)
 
 

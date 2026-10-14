@@ -210,7 +210,11 @@ class Orders:
 
     def take(self, order: Order, focus: str | None, to: Addressee | None) -> list[tuple[str, str]]:
         """Carry the order out at once, if anyone obeys it; who does ([]: nobody, it is words)."""
-        if order.kind in TO_FOE and to is not None and to.why == "focus" and self.foe(to.id):
+        if (
+            order.kind in TO_FOE
+            and to is not None
+            and (to.why == "attacker" or (to.why == "focus" and self.foe(to.id)))
+        ):
             return []  # "Стой!" to whoever is beating him
         target = None
         if order.kind == "attack" and to is not None and to.why == "name" and not self.companion(to.id):
@@ -396,6 +400,8 @@ class Orders:
                 )
                 self._stand_up(npc, other, did, struck=victim == npc)
         elif p.perc == "ASSESSENEMY" and p.distance <= ENEMY_CM and self._monster(npc, other):
+            if self.talk.beasts is not None and self.talk.beasts.spares(other):
+                return  # a wolf the hero talked round: it lets him pass, so do they (beasts.py)
             if npc in self.talk.attached and self.companion(npc):
                 self._stand_up(npc, other, "бросается на вас", struck=False)
 
@@ -433,6 +439,17 @@ class Orders:
             return True
         self._start(npc, target, self.standing.setdefault(npc, Standing("attack")))
         return True
+
+    def truce(self, npc: str) -> None:
+        """`npc` called off its fight with the hero (dialogue.py): it is no foe, and a companion fighting it
+        lets it be and goes on with the hero."""
+        npc = npc.upper()
+        self.foes.pop(npc, None)
+        for companion, fight in list(self.fights.items()):
+            if fight.target == npc:
+                log.info("%s lets %s be: it called off its fight", companion, npc)
+                del self.fights[companion]
+                self._spawn(self._resume(companion, self.standing.get(companion)))
 
     def fighting_ru(self, npc: str) -> str | None:
         """What the companion's body does in the fight, for its words (incidents.py)."""

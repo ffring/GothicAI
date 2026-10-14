@@ -79,6 +79,17 @@ CHAT_TEXT_EVERY = 0.06  # seconds between chat_text updates while a reply stream
 TTS_PAUSE = 30.0  # after a failure, lines go out silent for a while instead of each waiting to fail
 PREPARE_S = 3.0  # what an extension asks the game before a turn
 KILLERS = frozenset({9})  # GIL_BDT: bandits attack the hero to kill, as their scripts do
+# an intent's attitude -> the scripts' attitude to the hero of one that called off its fight (effect calm)
+CALM_ATTITUDES = {
+    "devoted": "ATT_FRIENDLY",
+    "friendly": "ATT_FRIENDLY",
+    "neutral": "ATT_NEUTRAL",
+    "wary": "ATT_NEUTRAL",
+}
+FIGHTS_HERO = (
+    "Ты дерёшься с героем. Прекратить драку — set_intent с целью none или keep_routine и отношением не "
+    "hostile; продолжать — намерение не меняй. Решай по своему характеру и по тому, что он говорит."
+)
 # the hero's phrase: the behavioral model's gesture in the pause is waited for no longer than this (~50 ms)
 FIRST_REACTION_S = 0.25
 # ...and the quick model's first words (~0.3 s warm, ~1 s cold): the answer starts after them and goes on
@@ -542,6 +553,11 @@ class DialogueManager:
         self.fighting: Callable[[str], bool] = lambda npc: False
         # the npc's guild (the roster's, talk.py), None if not known: whom it attacks to kill (`KILLERS`)
         self.guild_of: Callable[[str], int | None] = lambda npc: None
+        # the npc fights the hero right now (the scripts' attack, talk.py; companions are not asked): talked
+        # to, it may call it off (`_calm`)
+        self.fights_hero: Callable[[str], bool] = lambda npc: False
+        # an npc called off its fight with the hero (npc): a companion fighting it lets it be (orders.py)
+        self.on_calm: list[Callable[[str], None]] = []
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
         # an npc's turn is over and it said something (npc, name, the text said, the turn's kind): whoever
@@ -1612,6 +1628,8 @@ class DialogueManager:
             for ext in self.extensions:
                 if extra := ext.situation(conv.npc):
                     situation_text += "\n" + extra
+        if not brief and self.fights_hero(conv.npc):
+            situation_text += "\n" + FIGHTS_HERO
         if body:
             situation_text += f"\nТвоё тело сейчас: {body} — это уже происходит, не противоречь этому."
         if conv.pending:  # events that came during the last turn
@@ -1860,6 +1878,10 @@ class DialogueManager:
             self._free(conv, "follow")  # after `stop`, if it is still following (below)
         if not body:
             return
+        fighting = (old.goal, old.target) == ("fight", "PLAYER") or self.fights_hero(conv.npc)
+        if fighting and intent.goal != "fight" and intent.attitude != "hostile":
+            self._after_speech(conv, lambda: self._calm(conv, intent))  # talked down: it stops
+            return
         if (
             intent.goal == "fight"
             and intent.target == "PLAYER"
@@ -1918,6 +1940,22 @@ class DialogueManager:
         log.info("%s attacks the hero (%s)", conv.npc, reason)
         self.journal.add("attack", npc=conv.npc, name=conv.persona.name, target="PLAYER", reason=reason)
         return "Ты напал на героя.", True
+
+    async def _calm(self, conv: Conversation, intent: Intent) -> tuple[str, bool]:
+        """The npc calls off its fight with the hero, after its words, and keeps to it: its attitude to him
+        is set as the scripts set it (they would fall on him again otherwise), the fight ends now."""
+        if conv.intent is not intent:
+            return "", True  # it changed its mind before it was done talking
+        attitude = CALM_ATTITUDES.get(intent.attitude, "ATT_NEUTRAL")
+        try:
+            await self.link.story_effect(conv.npc, [{"do": "calm", "attitude": attitude}])
+        except (GameError, TimeoutError) as err:
+            return f"Тело не прекратило драку ({err})", False
+        log.info("%s calls off its fight with the hero (%s)", conv.npc, attitude)
+        self.journal.add("calm", npc=conv.npc, name=conv.persona.name, attitude=attitude)
+        for listener in self.on_calm:
+            listener(conv.npc)
+        return "Ты прекратил драку с героем.", True
 
     async def _body(self, conv: Conversation, acts: list[executor.Action]) -> tuple[str, bool]:
         """Game actions for an intent; only what did not work is noted."""

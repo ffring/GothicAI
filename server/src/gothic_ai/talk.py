@@ -20,7 +20,9 @@ event of the world:
 - what the hero **does** meanwhile (draws a weapon, strikes, walks off mid-reply) goes into the partner's
   memory, and so into its next turn;
 - an **order** to his companions ("Стой!", "За мной!") is no conversation: they obey at once, without
-  the conversational model (orders.py).
+  the conversational model (orders.py);
+- words to a **wolf** at him (he looks at it, or it growls at him and he names nobody) are no conversation
+  either: it hears their tone and lets him pass, runs or bites (beasts.py).
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ from .protocol import (
 from .trace import TraceWriter
 
 if TYPE_CHECKING:
+    from .beasts import BeastDesk
     from .orders import Orders
 
 log = logging.getLogger(__name__)
@@ -70,6 +73,8 @@ FOCUS_CM = 2500.0  # the npc the hero looks at, if not farther than this
 PARTNER_CM = 1500.0  # the current partner stays the addressee this close
 FRONT_CM = 1200.0  # the nearest npc in front of the hero
 SCENE_CM = 2000.0  # two npc's talking near him (gossip.py), if not farther than this
+ATTACKER_CM = 1000.0  # one fighting this close to the hero is the one he speaks to in the fight
+ATTACK_STATE = "ZS_ATTACK"
 OVERHEAR_CM = 1000.0  # witnesses
 END_CM = 1500.0  # farther than this and silent for END_SILENCE_S: the conversation is over
 END_SILENCE_S = 20.0
@@ -196,7 +201,7 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    why: str  # name | focus | partner | scene | front | order (companions who obey it)
+    why: str  # name | focus | partner | scene | front | order (companions who obey it) | beast (a wolf)
 
 
 def addressee(
@@ -205,9 +210,11 @@ def addressee(
     people: dict[str, RosterEntry],
     partner: str | None,
     scene: Sequence[str] = (),
+    ours: Callable[[str], bool] = lambda npc: False,
 ) -> Addressee | None:
-    """Whom the hero speaks to: a name in the phrase, his focus, the current partner, one of the npc's of
-    a `scene` (two who were just talking near him, the one who spoke last first), the nearest in front."""
+    """Whom the hero speaks to: a name in the phrase, his focus, the one fighting him close by («Воу, ты
+    чего?» — whoever is not `ours`, his companions), the current partner, one of the npc's of a `scene`
+    (two who were just talking near him, the one who spoke last first), the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
     near = [
@@ -221,6 +228,12 @@ def addressee(
         return Addressee(e.id.upper(), e.name, "name")
     if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
         return Addressee(e.id.upper(), e.name, "focus")
+    fighting = [
+        e for e in alive.values() if fights(e) and e.distance <= ATTACKER_CM and not ours(e.id.upper())
+    ]
+    if fighting:  # in a fight he speaks to whoever is at him, where he looks or not
+        e = min(fighting, key=lambda e: e.distance)
+        return Addressee(e.id.upper(), e.name, "attacker")
     if partner and (e := alive.get(partner)) is not None and e.distance <= PARTNER_CM:
         return Addressee(e.id.upper(), e.name, "partner")
     # a scene starts only while he has no partner, so this never takes words meant for one
@@ -287,6 +300,8 @@ class TalkDesk:
         self.on_phrase: list[Callable[[Addressee | None, str], None]] = []
         # orders to the hero's companions ("Стой!"), carried out at once, without an answer (orders.py)
         self.orders: Orders | None = None
+        # wolves at the hero hear his words (beasts.py)
+        self.beasts: BeastDesk | None = None
         link.listeners.append(self.on_message)
         dialogue.take_body = self.hold
         dialogue.free_body = self.free
@@ -335,10 +350,19 @@ class TalkDesk:
             return
         now = self.clock()
         to = addressee(
-            text, focus, self.people, self.partner.npc if self.partner else None, self.scene_hint()
+            text,
+            focus,
+            self.people,
+            self.partner.npc if self.partner else None,
+            self.scene_hint(),
+            ours=self.orders.companion if self.orders is not None else lambda npc: False,
         )
-        squad = self._order(text, focus, to)
-        if squad:  # said to the companions who obey it
+        order = commands.parse(text, self._is_name)
+        squad: list[tuple[str, str]] = []
+        beast = self.beasts.hears(text, focus, to, order) if self.beasts is not None else None
+        if beast is not None:  # said to a wolf: it is judging its tone already
+            to = beast
+        elif squad := self._order(order, focus, to):  # said to the companions who obey it
             to = Addressee(squad[0][0], squad[0][1], "order")
         self.last = (to, text)
         echo = TranscriptCmd(text=text, to=to.id if to else None, to_name=to.name if to else None)
@@ -353,12 +377,12 @@ class TalkDesk:
         )
         log.info("hero -> %s (%s): %s", to.id if to else "nobody", to.why if to else "-", text)
         for listener in self.on_phrase:
-            listener(to, text)
+            listener(None if beast is not None else to, text)  # a wolf joins no conversation
         self._witnesses(text, to, {npc for npc, _ in squad})
-        if self.planner is not None:
+        if self.planner is not None and beast is None:
             self.planner.on_player_text(to.id if to else "", text, now)
-        if squad:
-            return  # carried out already; the order is in their memories, no answer is asked
+        if squad or beast is not None:
+            return  # carried out already (an order is in their memories), no answer is asked
         if to is None:
             self._spawn(self.link.send(ChatStatusCmd(status="notice", detail="Рядом некому ответить")))
             return
@@ -370,12 +394,13 @@ class TalkDesk:
         talk.last_at = now
         self._spawn(self._answer(talk, text))
 
-    def _order(self, text: str, focus: str | None, to: Addressee | None) -> list[tuple[str, str]]:
+    def _order(
+        self, order: commands.Order | None, focus: str | None, to: Addressee | None
+    ) -> list[tuple[str, str]]:
         """If the phrase is an order and companions obey it, carry it out now; who obeys."""
-        if self.orders is None:
+        if self.orders is None or order is None:
             return []
-        order = commands.parse(text, self._is_name)
-        return self.orders.take(order, focus, to) if order is not None else []
+        return self.orders.take(order, focus, to)
 
     def _is_name(self, word: str) -> bool:
         """The word is the name of someone around ("Горн, стой!")."""
@@ -454,8 +479,8 @@ class TalkDesk:
     async def _posture(self, talk: Talk, text: str) -> str:
         entry = self.people.get(talk.npc)
         default = default_posture(entry)
-        if self.reflexes is None:
-            return default
+        if self.reflexes is None or fights(entry):
+            return default  # one in a fight fights on while it answers: whether to stop is its words' call
         conv = self.dialogue.conversations.get(talk.npc)
         ctx = NpcContext(
             talk.npc,
@@ -623,6 +648,11 @@ class TalkDesk:
         task = asyncio.get_running_loop().create_task(run())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+
+def fights(entry: RosterEntry | None) -> bool:
+    """The npc is in a fight (the scripts' attack state)."""
+    return entry is not None and entry.state.upper() == ATTACK_STATE
 
 
 def default_posture(entry: RosterEntry | None) -> str:

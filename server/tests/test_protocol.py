@@ -5,6 +5,9 @@ from gothic_ai.protocol import (
     PROTOCOL_VERSION,
     ActionCmd,
     ActionResult,
+    BeastCmd,
+    BeastEvent,
+    Beasts,
     DebugCmd,
     HushCmd,
     NpcActCmd,
@@ -49,7 +52,6 @@ def test_action_command_omits_empty_fields():
 
 
 def test_v15_npc_to_npc():
-    assert PROTOCOL_VERSION == 18
     say = SayCmd(
         npc="BAU_950_LOBART", line="AIB_1", text="Слыхала?", stream=True, rate=24000, to="BAU_951_HILDA"
     )
@@ -82,3 +84,50 @@ def _json(obj) -> str:
     import json
 
     return json.dumps(obj)
+
+
+def test_v21_wolves_hear_the_hero():
+    assert PROTOCOL_VERSION == 21
+    seen = parse_game_message(
+        _json(
+            {
+                "type": "beasts",
+                "t": 1000,
+                "hero_weapon": "melee",
+                "wolves": [
+                    {
+                        "id": "WOLF#3",
+                        "name": "Волк",
+                        "distance": 950,
+                        "state": "threaten",
+                        "hp": 60,
+                        "hp_max": 60,
+                    },
+                    {
+                        "id": "YWOLF#4",
+                        "name": "Молодой волк",
+                        "distance": 400,
+                        "state": "calm",
+                        "sitting": True,
+                        "focus": True,
+                        "hit_ms": 120000,
+                        "tolerant": True,
+                    },
+                ],
+            }
+        )
+    )
+    assert isinstance(seen, Beasts) and seen.hero_weapon == "melee"
+    assert [(w.id, w.state, w.sitting) for w in seen.wolves] == [
+        ("WOLF#3", "threaten", False),
+        ("YWOLF#4", "calm", True),
+    ]
+    ended = parse_game_message('{"type":"beast_event","npc":"WOLF#3","kind":"calm_broken","detail":"close"}')
+    assert isinstance(ended, BeastEvent) and (ended.kind, ended.detail) == ("calm_broken", "close")
+    calm = BeastCmd(req="b1", npc="WOLF#3", do="calm", ms=120000, sit=True)
+    assert calm.to_json() == '{"type":"beast","req":"b1","npc":"WOLF#3","do":"calm","ms":120000,"sit":true}'
+    assert BeastCmd(req="b2", npc="WOLF#3", do="attack").to_json() == (
+        '{"type":"beast","req":"b2","npc":"WOLF#3","do":"attack"}'
+    )
+    hp = DebugCmd(req="r1", cmd="player_hp", hp=5000)
+    assert hp.to_json() == '{"type":"debug","req":"r1","cmd":"player_hp","slot":0,"hp":5000}'

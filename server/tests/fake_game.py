@@ -99,7 +99,10 @@ class FakeGame:
         self.routine_errors: dict[str, str] = {}  # npc -> the error its routine is answered with
         self.routine_hang: set[str] = set()  # npc's whose routine is never answered (the server times out)
         self.routine_calls: list[str] = []  # every npc asked for, in order
+        self.beast_cmds: list[dict[str, Any]] = []  # the server's words on wolves (v21)
         self._later: set[asyncio.Task[None]] = set()
+        self.slow_actions: set[str] = set()  # actions that go on until the npc's next action cancels them
+        self.long_running: dict[str, str] = {}  # npc -> the id of its action going on
 
     async def perception(
         self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
@@ -111,6 +114,10 @@ class FakeGame:
     async def push_views(self, *views: dict[str, Any]) -> None:
         """What the npc's nearest to the player perceive, as the game pushes it once a second (v11)."""
         await self.send(type="npc_views", t=1000, views=list(views))
+
+    async def beasts(self, *wolves: dict[str, Any], hero_weapon: str = "none") -> None:
+        """The wolves near the hero (v21): id, name, distance, state, hp, hp_max, focus..."""
+        await self.send(type="beasts", t=1000, hero_weapon=hero_weapon, wolves=list(wolves))
 
     async def roster(self, *people: dict[str, Any]) -> None:
         """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
@@ -295,6 +302,9 @@ class FakeGame:
             case "story_tag":
                 self.story.append(msg)
                 await self.send(type="result", req=msg["req"], ok=True, value=len(msg["npcs"]))
+            case "beast":
+                self.beast_cmds.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True)
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):
@@ -443,6 +453,11 @@ class FakeGame:
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
+        if (running := self.long_running.pop(npc, None)) is not None:  # preempted, as the bridge does
+            await self.send(type="action_result", id=running, npc=npc, status="cancelled", detail="preempted")
+        if action in self.slow_actions and npc in self.attached:
+            self.long_running[npc] = msg["id"]  # goes on until the next action of this npc
+            return
         status, detail = "done", None
         if npc not in self.attached:
             status, detail = "rejected", "npc is not attached"
