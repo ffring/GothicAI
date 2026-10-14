@@ -77,6 +77,29 @@ def test_heartbeat_deadlines_use_actual_short_watchdog_and_new_generation_has_fr
     assert len(runner.requests) == 3 and runner.requests[-1]["control_generation"] == 8
 
 
+def test_due_heartbeats_go_one_per_call_until_a_lease_is_half_way_to_its_watchdog(monkeypatch):
+    runner = Runner()
+    runner.responses = [{"accepted": True}]*8
+    env = environment(runner)
+    env.watchdog_ms = 500  # the native lease watchdog used by stage 8
+    for entity in (6, 7, 8):
+        env.leases[entity] = {**env.leases[4], "entity_id": entity}
+    now = [1_000_000_000]
+    monkeypatch.setattr(delivery.time, "monotonic_ns", lambda: now[0])
+    for index, entity in enumerate((4, 6, 7, 8)):
+        identity = tuple(env.leases[entity][key] for key in delivery.LEASE_KEYS)
+        env._heartbeat_deadlines[identity] = now[0]-index*1_000_000
+    env.heartbeat()
+    # Four renewals due at once: only the most overdue one is sent.
+    assert [r["entity_id"] for r in runner.requests] == [8]
+    env.heartbeat()
+    assert [r["entity_id"] for r in runner.requests] == [8, 7]
+    # 125 ms past their deadlines (half the 500 ms watchdog since renewal) both go.
+    now[0] += 125_000_000
+    env.heartbeat()
+    assert [r["entity_id"] for r in runner.requests] == [8, 7, 6, 4]
+
+
 def stale(sequence=2, **updates):
     status = actor(sequence)
     status.update(updates)

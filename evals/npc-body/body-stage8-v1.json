@@ -9,7 +9,7 @@
     "gru_checkpoint_sha256": "7d48c8ddb9383c72aeea14e66b582702a40c70f7a15269efc828dfda58a52801",
     "mlp_checkpoint_sha256": "c377207c7e97fdc6258af6d3028ed444e38f0fbd2a017a75533e59735e2b5f4e",
     "old_arena_role": "development_regression",
-    "policy_code_run_name": "stage8-final-gate-v11"
+    "policy_code_run_name": "stage8-final-gate-v13"
   },
   "groups": {
     "[\"arena-native-melee-v1\",17]": "train",

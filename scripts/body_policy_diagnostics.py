@@ -298,15 +298,43 @@ class DiagnosticEpisodeEnv(PolicyEpisodeEnv):
         self._update_native_guard_waits(response)
         return arena
 
+    def _heartbeat_interval_ms(self, identity):
+        return min(self.heartbeat_interval_ms, 250, self._lease_watchdogs.get(identity, self.watchdog_ms)/4)
+
+    def acquire(self, entity):
+        super().acquire(entity)
+        # body_acquire renews the native lease watchdog exactly like a heartbeat,
+        # so the first renewal is due one interval later, not at arena start.
+        lease = self.leases.get(entity)
+        if lease is not None:
+            identity = tuple(lease[key] for key in LEASE_KEYS)
+            interval = self._heartbeat_interval_ms(identity)
+            if interval > 0:
+                self._heartbeat_deadlines[identity] = time.monotonic_ns()+int(interval*1e6)
+
     def heartbeat(self):
+        # While the engine catches up, each RPC costs a whole tick. Renew the most
+        # overdue lease plus any lease already half way to its watchdog; the rest
+        # wait for the next call, so four renewals never queue ahead of a read.
+        due, now = [], time.monotonic_ns()
         for entity, lease in list(self.leases.items()):
             if self.native_guard_waits.get(entity, {}).get("status") == "native_handoff":
                 continue
             identity = tuple(lease[key] for key in LEASE_KEYS)
-            now = time.monotonic_ns()
-            interval = min(self.heartbeat_interval_ms, 250, self._lease_watchdogs.get(identity, self.watchdog_ms)/4)
-            if interval > 0 and now < self._heartbeat_deadlines.get(identity, 0):
+            interval = self._heartbeat_interval_ms(identity)
+            deadline = self._heartbeat_deadlines.get(identity, 0)
+            if interval > 0 and now < deadline:
                 continue
+            due.append((deadline, entity, interval))
+        due.sort(key=lambda item: item[0])
+        for index, (deadline, entity, interval) in enumerate(due):
+            if index > 0 and interval > 0 and deadline > 0 and now < deadline+int(interval*1e6):
+                continue
+            if entity not in self.leases:
+                continue
+            lease = self.leases[entity]
+            identity = tuple(lease[key] for key in LEASE_KEYS)
+            now = time.monotonic_ns()
             response = self.runner.call({"cmd": "body_heartbeat", **lease, "provider": self.owner_provider})
             self._deadline_polling_counts["heartbeat_requests"] += 1
             native_actor = self.response_actor(response, entity)
