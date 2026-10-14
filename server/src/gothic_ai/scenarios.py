@@ -2971,7 +2971,8 @@ async def vanilla_lie(
     step (bring them to Hilda) starts, and the lie is written down with the truth. The same day nothing
     happens; the next morning Lobart misses the turnips, turns against the hero and refuses to talk, and Jora,
     standing by, hears it. From then on the turnips count for nothing in Lobart's other dialogs: his work
-    clothes cost what they would without them."""
+    clothes cost what they would without them. The hero makes amends: the turnips are his job again, the
+    ending pays nothing twice; he brings them for real, and the discount is back."""
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object = "") -> None:
@@ -3063,6 +3064,41 @@ async def vanilla_lie(
         price == expected and turnips == 2,
         f"price {price}, {expected} expected; quest {turnips}",
     )
+
+    # the hero makes amends (amends.py has Lobart ask for them; here they are made at once): the turnips are
+    # his job again, for real, and the ending pays nothing a second time
+    made = {"fact": "amends", "id": "E2E", "npc": giver, "to": giver, "gold": 0}
+    vanilla.chronicle.record({**made, "lie": f"found_out:{giver}:{RUEBEN}", "quest": RUEBEN, "about": giver})
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("quest_reopened")), 20)
+    await _until(lambda: any(f.get("second_chance") for f in facts("lie_consequences")), 30)
+    ending = await link.story_program("DIA_LOBART_RUEBENRUNNING")
+    reopened = await var(RUEBEN)
+    pays = any(p in str(ending.get("steps")) for p in ("B_GIVEPLAYERXP", "DIA_LOBART_RUEBENRUNNING_GOLD"))
+    check(
+        "reopened", ok and reopened == 1 and ending.get("patched") is True and not pays, f"quest {reopened}"
+    )
+
+    # the turnips, for real: the ending says what it says, pays nothing again, and the lie is made good
+    beets = [
+        {"do": "create", "item": "ITPL_BEET", "count": 20},
+        {"do": "give", "item": "ITPL_BEET", "count": 20},
+    ]
+    await link.story_effect(giver, beets)
+    gold_exp = (["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]], ["field", hero, "EXP"])
+    before = [await link.evaluate(e) for e in gold_exp]
+    await link.choose_dialog(giver, "DIA_LOBART_RUEBENRUNNING")
+    ok = await _until(lambda: any(f.get("quest") == RUEBEN for f in facts("lie_made_good")), 20)
+    after = [await link.evaluate(e) for e in gold_exp]
+    check("made_good", ok and await var(RUEBEN) == 2 and after == before, f"gold, exp {before} -> {after}")
+
+    # the turnips count again: the discount for them is back
+    async def clothes() -> bool:
+        return bool((await link.story_program("DIA_LOBART_BUYCLOTHES")).get("patched"))
+
+    await _until_async(clothes, lambda patched: not patched, 30)
+    await link.choose_dialog(giver, "DIA_LOBART_BUYCLOTHES")
+    price = await var("WERT_LOBARTSRUESTUNG")
+    check("discount_back", price == expected - 10, f"price {price}, {expected - 10} expected")
     await link.detach(bystander)
     return _logged(results)
 
