@@ -239,6 +239,15 @@ def test_programs_match_the_vm_in_random_states():
     assert "DIFFER 0;" in r.stdout and "VM failed 0" in r.stdout and "not a program 0 " in r.stdout
 
 
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_program_read_back_from_json_runs_as_the_vm():
+    # programs reach the game as JSON (story_program, graph_patch "program"): each one written and read back,
+    # then run against the VM; one that reads back otherwise would not be a program
+    r = _run("--fuzz", "2", "--exec", "--via-json")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout and "VM failed 0" in r.stdout and "not a program 0 " in r.stdout
+
+
 @pytest.mark.skipif(not (TOOL.exists() and DAT.exists() and _saves()), reason="needs the tool, game, saves")
 def test_programs_match_the_vm_on_original_saves():
     r = _run(*[a for s in _saves() for a in ("--check", str(s))], "--exec")

@@ -13,8 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
 # v16: opt-in passive numeric body observations (independently versioned schema), v17: contracts (hero_kill),
 # v18: what npc's see of whom (att, from_hero...), v20: an npc calls its fight off (story_effect calm),
-# v21: wolves hear the hero (beasts, beast).
-PROTOCOL_VERSION = 21
+# v21: wolves hear the hero (beasts, beast), v23: programs in the story graph (graph_patch program,
+# add_node.program, story_program).
+PROTOCOL_VERSION = 23
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1160,8 +1161,10 @@ class GraphPatchCmd(_Command):
 
     Operations (`op`): `disable` / `enable` a dialog or a choice (`node`); `condition`: add `expr` to the
     dialog's script condition (`expr` null drops the added ones); `add_node` (`node` = {id, npc,
-    description, nr, important, permanent, condition, lines, effects}); `remove_node`; `told`: the hero
-    has chosen that added dialog. With `req`, the game answers `result` (`error` lists rejected ops)."""
+    description, nr, important, permanent, condition, lines, effects, program}); `remove_node`; `told`: the
+    hero has chosen that added dialog; `program` (v23): `steps` in place of the scripts' program of a dialog's
+    information or condition (`part`) or of a choice (`node`), `steps` null brings the scripts' one back.
+    With `req`, the game answers `result` (`error` lists rejected ops)."""
 
     type: Literal["graph_patch"] = "graph_patch"
     req: str | None = None
@@ -1301,6 +1304,17 @@ class StoryEvalCmd(_Command):
     req: str
     npc: str
     exprs: list[Any]
+
+
+class StoryProgramCmd(_Command):
+    """The program a dialog's script function runs now (v23): `node` is a dialog (C_INFO, `part` picks its
+    "information" or "condition") or a choice's function. `result.value`: {"node", "fn", "returns", "patched":
+    the director's program is in place, "steps": [...]} (docs/protocol.md, «Программы»)."""
+
+    type: Literal["story_program"] = "story_program"
+    req: str
+    node: str
+    part: Literal["information", "condition"] = "information"
 
 
 class StoryTagCmd(_Command):

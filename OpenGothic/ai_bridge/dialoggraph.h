@@ -38,7 +38,9 @@ namespace storygraph {
 // and differences are logged: the check of stage 2, on the live game.
 // The script functions of dialogs (conditions, information, choices) run as their programs (program.h), by
 // the Interpreter, not by the VM; script functions they call still run in the VM. GOTHIC_AI_STORYEXEC=0 turns
-// it off; so do scripts with Ikarus, whose loops jump from engine functions.
+// it off; so do scripts with Ikarus, whose loops jump from engine functions. A patch may put a program of the
+// director in place of a dialog's own (op "program"), and a dialog of the director may have one: those run
+// in any case.
 class DialogGraph final {
   public:
     // send: a message to the server; addLine: registers a runtime line (npc symbol, text in the game
@@ -64,6 +66,10 @@ class DialogGraph final {
     // JSON: {"npcs", "computed", "differ", "differences": [dialog ids]}
     std::string checkWorld(World& world);
     std::string status() const;
+    // the program a dialog's script function runs now, as JSON: {"node", "fn", "returns", "patched", "steps"}.
+    // `node`: a dialog (C_INFO; `part` "condition" or "information") or a choice's function. Empty and `error`
+    // if there is none
+    std::string program(std::string_view node, std::string_view part, std::string& error);
 
   private:
     struct Line final {
@@ -81,6 +87,13 @@ class DialogGraph final {
       storygraph::ExprP                 condition;    // nullptr: always
       std::vector<Line>                 lines;
       std::vector<StoryEffect>          effects;
+      storygraph::Program               program;      // runs after the effects; no steps: none
+      };
+    // a program of the director in place of a script function's own (op "program")
+    struct Replaced final {
+      std::string                       node;
+      bool                              condition = false;  // the dialog's condition, else its information
+      storygraph::Program               program;
       };
 
     void        onFilter(const zenkit::IInfo& info, bool& visible);
@@ -95,6 +108,17 @@ class DialogGraph final {
     std::string readNode(const rapidjson::Value& v, Node& n);
     // the expression may be evaluated: names exist, script functions it calls can be lifted
     std::string checkExpr(const storygraph::ExprP& e);
+    // the names an expression uses exist; empty: they do
+    std::string checkNames(zenkit::DaedalusVm& v, const storygraph::ExprP& e) const;
+    // the program may run in place of `fn` (nullptr: a dialog of the director, no parameters): names exist,
+    // functions get as many arguments as they take, stores go into variables
+    std::string checkProgram(zenkit::DaedalusVm& v, const storygraph::Program& p, const zenkit::DaedalusSymbol* fn) const;
+    // the script function behind a dialog's condition or information, or a choice's function
+    zenkit::DaedalusSymbol* functionOf(zenkit::DaedalusVm& v, const std::string& node, bool condition,
+                                       std::string& error) const;
+    // the director's program in place of this function, nullptr if there is none
+    const storygraph::Program* replacedProgram(zenkit::DaedalusVm& v, uint32_t fn);
+    void        ensureInterp(zenkit::DaedalusVm& v);
     // nullopt: could not be computed (logged)
     std::optional<bool> test(const storygraph::ExprP& e, std::string_view what);
     void        check(const zenkit::IInfo& info, bool visible);
@@ -108,6 +132,9 @@ class DialogGraph final {
     std::map<std::string,std::vector<storygraph::ExprP>>   conditions;  // added to script dialogs
     std::map<std::string,Node>                             nodes;       // made by the director
     std::set<std::string>                                  told;        // of those, the ones the hero chose
+    std::map<std::string,Replaced>                         replaced;    // by node, or node + ":CONDITION"
+    std::unordered_map<uint32_t,const storygraph::Program*> replacedFns; // by function symbol, for replacedFor
+    zenkit::DaedalusVm*                                    replacedFor = nullptr;
 
     // lifting, for conditions of the director and the check
     zenkit::DaedalusVm*                                    liftedFor = nullptr;
@@ -121,7 +148,7 @@ class DialogGraph final {
     std::unordered_map<uint32_t,storygraph::Program>       programs;   // by function symbol, lifted when it first runs
     std::unique_ptr<storygraph::Externals>                 engine;
     std::unique_ptr<storygraph::Interpreter>               interp;
-    size_t                                                 ran = 0, notPrograms = 0, runErrors = 0;
+    size_t                                                 ran = 0, notPrograms = 0, runErrors = 0, replacedRuns = 0;
 
     bool                                                   checking = false;
     size_t                                                 checked = 0, differ = 0;

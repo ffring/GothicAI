@@ -9,11 +9,13 @@ from gothic_ai.protocol import (
     BeastEvent,
     Beasts,
     DebugCmd,
+    GraphPatchCmd,
     HushCmd,
     NpcActCmd,
     NpcIdle,
     SayCmd,
     Snapshot,
+    StoryProgramCmd,
     parse_game_message,
 )
 from tests.fake_game import FakeGame
@@ -87,7 +89,7 @@ def _json(obj) -> str:
 
 
 def test_v21_wolves_hear_the_hero():
-    assert PROTOCOL_VERSION == 21
+    assert PROTOCOL_VERSION >= 21
     seen = parse_game_message(
         _json(
             {
@@ -131,3 +133,16 @@ def test_v21_wolves_hear_the_hero():
     )
     hp = DebugCmd(req="r1", cmd="player_hp", hp=5000)
     assert hp.to_json() == '{"type":"debug","req":"r1","cmd":"player_hp","slot":0,"hp":5000}'
+
+
+def test_v23_programs_in_the_story_graph():
+    assert PROTOCOL_VERSION == 23
+    ask = StoryProgramCmd(req="s1", node="DIA_LOBART_RUEBENRUNNING")
+    assert ask.to_json() == (
+        '{"type":"story_program","req":"s1","node":"DIA_LOBART_RUEBENRUNNING","part":"information"}'
+    )
+    with pytest.raises(ValidationError):
+        StoryProgramCmd(req="s2", node="X", part="choice")
+    steps = [{"do": "say", "speaker": "self", "text": "Спасибо."}, {"do": "return"}]
+    patch = GraphPatchCmd(ops=[{"op": "program", "node": "DIA_X", "part": "condition", "steps": steps}])
+    assert '"steps":[{"do":"say","speaker":"self","text":"Спасибо."},{"do":"return"}]' in patch.to_json()

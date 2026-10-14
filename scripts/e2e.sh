@@ -104,6 +104,10 @@
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
+#   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
+#       and given back, the director's in place of an information (a line of its own, gold, experience) and of
+#       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, and
+#       a program kept across save/load
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.

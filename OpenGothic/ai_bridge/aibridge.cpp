@@ -737,6 +737,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_eval") {
     onStoryEval(*world,doc);
     }
+  else if(type=="story_program") {
+    // the program a dialog's function runs now (v23), for the director to edit
+    std::string err;
+    auto json = graph.program(JsonRead::str(doc,"node"),JsonRead::str(doc,"part"),err);
+    sendResult(req,!json.empty(),err,json);
+    }
   else if(type=="story_effect") {
     std::string err;
     const bool  ok = story.effects(*world,doc,err);

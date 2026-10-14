@@ -9,7 +9,7 @@ import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection, serve
@@ -55,6 +55,7 @@ from .protocol import (
     StoryEvalCmd,
     StoryNearbyCmd,
     StoryPeopleCmd,
+    StoryProgramCmd,
     StorySpawnCmd,
     StoryStateCmd,
     StoryTagCmd,
@@ -80,6 +81,7 @@ _Request = (
     | StoryNearbyCmd
     | StoryStateCmd
     | StoryEvalCmd
+    | StoryProgramCmd
     | StoryTagCmd
     | StoryPeopleCmd
 )
@@ -412,6 +414,13 @@ class GameLink:
         """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""
         cmd = StoryEvalCmd(req=self._next_id("s"), npc=npc.upper(), exprs=exprs)
         return list((await self._request(cmd, timeout)).value or [])
+
+    async def story_program(
+        self, node: str, part: Literal["information", "condition"] = "information", timeout: float = 5.0
+    ) -> dict[str, Any]:
+        """The program a dialog's function runs now (StoryProgramCmd): {node, fn, returns, patched, steps}."""
+        cmd = StoryProgramCmd(req=self._next_id("s"), node=node.upper(), part=part)
+        return dict((await self._request(cmd, timeout)).value or {})
 
     async def story_tag(self, tag: str, npcs: list[str], timeout: float = 5.0) -> int:
         """Npc's of the world watched under a tag (see StoryTagCmd); how many were found."""

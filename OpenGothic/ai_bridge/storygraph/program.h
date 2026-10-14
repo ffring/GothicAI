@@ -14,9 +14,9 @@ namespace storygraph {
 
 class Bytecode;
 
-// One step of a program: a call, a store, a branch or a return.
+// One step of a program: a call, a store, a branch, a return, or a line said (programs the director writes).
 struct Step final {
-  enum Kind : uint8_t { Call, Store, If, Return };
+  enum Kind : uint8_t { Call, Store, If, Return, Say };
   Kind              kind = Call;
   uint32_t          pc   = 0;
   ExprP             call;              // Call: a call, or an expression with calls; its value is dropped
@@ -24,6 +24,9 @@ struct Step final {
   ExprP             value;             // Store: what is stored (`x += v` is `x = x + v`); Return: nullptr in void
   ExprP             cond;              // If
   std::vector<Step> then, otherwise;   // If
+  bool              hero = false;      // Say: the hero ("other") says it, else the npc ("self")
+  std::string       line;              // Say: an original line (DIA_..._15_00), or empty
+  std::string       text;              // Say: a line of its own, game codepage
   };
 
 // A script function as the graph runs it (docs/story-graph.md, «Исполнение без VM: расчёт»). Unlike the lifted
@@ -48,7 +51,8 @@ Program     liftProgram(const zenkit::DaedalusScript& script, const Bytecode& co
 // readable, UTF-8: one step per line, branches indented
 std::string describe(const Program& p);
 // steps as JSON: {"do":"call","call":<expr>}, {"do":"set","target":..,"value":..}, {"do":"if","cond":..,"then":[..],
-// "else":[..]}, {"do":"return","value":..}; expressions as in the model (toJson(ExprP))
+// "else":[..]}, {"do":"return","value":..}, {"do":"say","speaker":"self"|"other","line"|"text":..}; expressions as
+// in the model (toJson(ExprP)). readProgram (exprjson.h) reads it back.
 std::string toJson(const Program& p);
 
 }

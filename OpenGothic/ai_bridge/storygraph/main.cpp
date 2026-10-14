@@ -12,7 +12,8 @@
 //   storygraph <GOTHIC.DAT> --fuzz N [--node ID] [--verbose]
 //                                  the same in N random states per dialog
 //   ... --check/--fuzz with --effects: what dialogs and choices do; with --exec: their programs run by the
-//                                  Interpreter against the VM (docs/story-graph.md, «Исполнение без VM»)
+//                                  Interpreter against the VM (docs/story-graph.md, «Исполнение без VM»); with
+//                                  --via-json too, each program written as JSON and read back first
 //   storygraph <GOTHIC.DAT> --program DIA_LOBART_WORKNOW   the programs of a dialog (condition, information)
 //                                  or of a script function
 //
@@ -20,6 +21,7 @@
 
 #include "bytecode.h"
 #include "check.h"
+#include "execcheck.h"
 #include "lifter.h"
 #include "model.h"
 #include "program.h"
@@ -187,13 +189,15 @@ int main(int argc, char** argv) {
       effects = true;
     else if(std::strcmp(argv[i],"--exec")==0)
       exec = true;
+    else if(std::strcmp(argv[i],"--via-json")==0)
+      storygraph::ExecCheck::viaJson = true;
     else
       datPath = argv[i];
     }
   if(datPath==nullptr) {
     std::fprintf(stderr, "usage: storygraph <GOTHIC.DAT> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
                          "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN] "
-                         "[--check <save dir>... [--verbose]] [--fuzz N] [--effects|--exec] [--program FN]\n");
+                         "[--check <save dir>... [--verbose]] [--fuzz N] [--effects|--exec [--via-json]] [--program FN]\n");
     return 2;
     }
 
