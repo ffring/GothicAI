@@ -26,7 +26,7 @@ from .concerns import Concerns
 from .contracts import gold_text
 from .daylife import DayDesk
 from .deals import GOLD, Deals
-from .dialogue import DialogueManager, SceneLine
+from .dialogue import DialogueManager, SceneLine, line_duration
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
 from .gossip import WORDS_CM, GossipDesk, Scene
@@ -2169,6 +2169,115 @@ async def ground_scenario(
         check("follows", following and back, f"{dist():.1f} m")
     finally:
         link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
+async def group_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    brago: str = "BDT_1014_BANDIT_L",
+    bandit: str = "BDT_1015_BANDIT_L",
+    steps: str = "BDT_1013_BANDIT_L",
+) -> dict[str, str]:
+    """One word at a time (step B2 of docs/npc-tools.md; the user, 2026-10-13: talking to two bandits and
+    Cavalorn, all three answered at once). The hero, Cavalorn with him, at the bandits' cave with Brago, his
+    mate and the bandit from the steps; the models are scripted (LLM=fake), lines voiced (TTS=fake). The hero
+    says «Пацаны, здорово!» to nobody in particular; at once three others ask for words, as the fast loop's
+    escalations do. Checks:
+    - first: Brago, who leads them, answers first;
+    - one_at_a_time: no voice starts before the one before it has been heard;
+    - heard: the second answers with the first's words in mind;
+    - three: three voices to the hero's phrase, the fourth says nothing."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    names = {npc: "Кавалорн", brago: "Браго", bandit: "Бандит", steps: "Бандит"}
+    models = {
+        brago: FakeBackend("Чего надо? Говори быстро.", delay=0.02, first=0.5),
+        bandit: FakeBackend("Ты кто такой вообще?", delay=0.02, first=0.5),
+        npc: FakeBackend("Спокойно, он со мной.", delay=0.02, first=0.5),
+        steps: FakeBackend("А я его знаю!", delay=0.02, first=0.5),
+    }
+    # whose instructions: «Ты — <the card's first words>» (the two bandits share a name)
+    keys = {
+        brago: "Браго",
+        bandit: "Бандит, который встречает",
+        npc: "Кавалорн",
+        steps: "Бандит, пронырливый",
+    }
+    dialogue.llm = _ByNpc({keys[n]: m for n, m in models.items()}, FakeBackend("Хм.", delay=0))
+    started: list[tuple[float, str, str]] = []  # (when, npc, line)
+    link.listeners.append(
+        lambda m: (
+            started.append((time.monotonic(), m.npc.upper(), m.line)) if isinstance(m, LineStarted) else None
+        )
+    )
+
+    def dist(who: str) -> float:
+        return talk.people[who].distance / 100 if who in talk.people else -1.0
+
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")
+    except GameError as err:
+        log.info("group: no armor for the hero: %s", err)
+    await link.debug("skip_important", near=npc)
+    for _ in range(2):  # the goblins by his fire
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("group: goblin: %s", err)
+    # Cavalorn goes with the hero on his own feet (put elsewhere, his routine takes him back) to the bandit
+    # at the steps; Brago and his mate come up from the cave
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: 0 <= dist(npc) <= 15, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero: {dist(npc):.1f} m)"})
+    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    await _until(lambda: 0 <= dist(npc) <= 5, 20)
+    await link.debug("player_goto", to=steps, distance=400)
+    await link.debug("npc_goto", npc=brago, to=steps, distance=300)
+    await link.debug("npc_goto", npc=bandit, to=steps, distance=500)
+    near = await _until(lambda: all(0 <= dist(n) <= 12 for n in names) and dist(npc) <= 6, 30)
+    if not near:
+        return _logged({"roster": "failed (" + ", ".join(f"{n} {dist(n):.1f} m" for n in names) + ")"})
+    await asyncio.sleep(2)
+
+    t0 = time.monotonic()
+    talk.hear("Пацаны, здорово!", None, {"via": "scenario"})
+    first = talk.last[0] if talk.last else None
+    check("first", first is not None and first.id == brago and first.why == "group", first)
+    for who in (bandit, npc, steps):  # as the fast loop's escalations would ask for words
+        dialogue.open(who, names[who])
+        dialogue.event_turn(who, "[Событие: герой сказал рядом: «Пацаны, здорово!»]", overlay=who != npc)
+    quiet = await _until(
+        lambda: time.monotonic() - t0 > 3 and not any(dialogue.speaking(n) for n in names), 40
+    )
+    voices = [n for n in names if models[n].calls]
+    order = sorted(names, key=lambda n: min((t for t, w, _ in started if w == n), default=1e9))
+    order = [n for n in order if any(w == n for _, w, _ in started)]
+    # each voice starts after the one before it has been heard: its lines' starts and lengths
+    overlaps = []
+    for a, b in zip(order, order[1:], strict=False):
+        ends = [
+            t + dialogue._audio.get(line, line_duration(dialogue._lines.get(line, ("", None))[0]))
+            for t, w, line in started
+            if w == a
+        ]
+        b_first = min(t for t, w, _ in started if w == b)
+        if b_first < max(ends) - 0.15:
+            overlaps.append(f"{names[b]} {max(ends) - b_first:.1f} s over {names[a]}")
+    check("one_at_a_time", quiet and len(order) >= 2 and not overlaps, overlaps or [names[n] for n in order])
+    second = models[order[1]].calls[0][1] if len(order) > 1 and models[order[1]].calls else []
+    heard = "Ты слышал, как Браго говорит герою" in " ".join(str(getattr(m, "content", "")) for m in second)
+    check("heard", heard, names[order[1]] if len(order) > 1 else "nobody second")
+    check("three", len(voices) == 3 and len(order) == 3, [names[n] for n in voices])
     return _logged(results)
 
 

@@ -554,6 +554,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
         # talk with several npc's: who takes part, and whose words the others heard (group.py)
         state.dialogue.extensions.append(GroupTalk(link, state.dialogue, state.talk))
+        state.talk.lead = lambda npc: card.lead if (card := personas.cards.get(npc)) is not None else 0
         state.incidents.companion = state.talk.orders.companion
         if args.beasts or args.scenario == "wolf":
             # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
@@ -885,6 +886,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.ground_scenario(link, state.dialogue, state.talk, state.perception)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario ground: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "group":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.group_scenario(link, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario group: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "calm":
                 assert state.dialogue is not None and state.talk is not None
@@ -1520,6 +1527,7 @@ def main() -> None:
             "wolf",
             "calm",
             "ground",
+            "group",
             "m6",
             "see",
             "seen",

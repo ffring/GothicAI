@@ -105,6 +105,12 @@
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
+#   ground: Cavalorn follows the hero, the hero throws his letter down: Cavalorn sees it lying there, picks it
+#       up when told «бери» (take_item, model scripted with LLM=fake) and follows the hero again (protocol v22)
+#   group: one word at a time (docs/npc-tools.md, step B2): «Пацаны, здорово!» at the bandits' cave, Cavalorn
+#       with the hero: Brago, who leads them, answers first, the others' words wait their turn and are heard
+#       after his, the second knows what he said, a fourth voice says nothing. Starts the TTS service
+#       (TTS=fake); models scripted with LLM=fake
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, and
@@ -145,7 +151,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

@@ -426,6 +426,22 @@ class Conversation:
         return [t for t in (self.reply, self.compacting, self.voicing, *self.actions) if t is not None]
 
 
+class Floor(Protocol):
+    """One voice at a time in the conversation around the hero (group.py, step B2 of docs/npc-tools.md).
+    A turn takes its seat before it thinks and gives it up when it is over; each line waits to be heard
+    until those before it have been."""
+
+    async def queue(self, npc: str, kind: str) -> bool:
+        """Before a turn: wait for those before it to have their text ready; False: no voice for it."""
+        ...
+
+    def done(self, npc: str) -> None:
+        """Its turn is over: its text is ready (or it said nothing)."""
+
+    async def hear(self, npc: str) -> None:
+        """Before a line of the npc's is heard: those before it have been."""
+
+
 class TurnExtension(Protocol):
     """More of the world for the conversational model (the director's quests, quests.py; the scripts'
     quests, vanilla.py; what the npc knows, knowledge.py): lines for the situation, tools to offer, and the
@@ -563,6 +579,8 @@ class DialogueManager:
         # an npc's turn is over and it said something (npc, name, the text said, the turn's kind): whoever
         # stood by heard it (group.py)
         self.on_said: list[Callable[[str, str, str, str], None]] = []
+        # one voice at a time around the hero (group.py): a seat before a turn thinks, before a line is heard
+        self.floor: Floor | None = None
         self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
         # the npc is in a fight (incidents.py): its lines come from the quick model, if there is one
         self.in_fight: Callable[[str], bool] = lambda npc: False
@@ -584,6 +602,7 @@ class DialogueManager:
         self._reply_ids = itertools.count(1)
         self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
         self._sent: dict[str, float] = {}  # line id -> when it was sent (a line that never starts is lost)
+        self._audio: dict[str, float] = {}  # line id -> how long its voice is, once it is known
         # scenes (play_scene): how long a line lasts without a voice (tests make it short), the lines
         # waiting for the game to start them, and a TTS connection of their own (made on first use): a
         # scene line does not wait behind an answer to the hero, nor the other way round
@@ -867,7 +886,7 @@ class DialogueManager:
                 unsaid = unsaid or now - self._sent.get(line, now) < LINE_LOST_S
                 continue
             said.append(text)
-            speaking = speaking or at + line_duration(text) > now
+            speaking = speaking or at + self._audio.get(line, line_duration(text)) > now
         return said, speaking, unsaid
 
     def speaking(self, npc: str) -> bool:
@@ -877,6 +896,14 @@ class DialogueManager:
             return False
         _, speaking, unsaid = self._said(conv)
         return speaking or unsaid or (conv.reply is not None and not conv.reply.done() and not conv.acting)
+
+    def audible(self, npc: str) -> bool:
+        """The npc's lines are being heard, or ones it has said are still to come (not its thinking)."""
+        conv = self.conversations.get(npc.upper())
+        if conv is None:
+            return False
+        _, speaking, unsaid = self._said(conv)
+        return speaking or unsaid
 
     def interrupt(self, npc: str) -> bool:
         """The hero speaks while the npc answers: it stops at once (its voice, the lines it did not say
@@ -931,6 +958,11 @@ class DialogueManager:
         conv = self.open(npc, name, warm=False)
         whom = f" собеседнику ({to_name})" if to_name else " вслух"
         self._note(conv, f"Ты слышал, как герой сказал{whom}: «{text}»")
+
+    def told_all(self, npc: str, name: str, text: str, first: str) -> None:
+        """The hero said something to several, the npc among them; `first` answers first (talk.py)."""
+        conv = self.open(npc, name, warm=False)
+        self._note(conv, f"Герой сказал всем вам, и тебе тоже: «{text}» (первым отвечает {first})")
 
     def heard(self, npc: str, name: str, speaker: str, text: str, whom: str) -> None:
         """A witness: the npc heard another npc (`speaker`, its name) say something, `whom`: "герою",
@@ -1065,6 +1097,9 @@ class DialogueManager:
         self._sent[line] = time.monotonic()
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
+            await self._wait_floor(conv, line)
+            if line in conv.hushed:
+                return  # the hero spoke while it waited to be heard
             if overlay:  # the game does not order lines said on the move
                 await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
                 conv.overlay_free_at = time.monotonic() + line_duration(text)
@@ -1097,6 +1132,7 @@ class DialogueManager:
             line, text, reply, overlay, mood, filler = await queue.get()
             started = False
             spoken_at = 0.0
+            await self._wait_floor(conv, line)
             if overlay:
                 await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
             try:
@@ -1149,6 +1185,7 @@ class DialogueManager:
                             chunk,
                             MOOD_DELIVERY[mood] if mood else "",
                         )
+                        self._audio[line] = speech.audio_s
                         await self.link.send(
                             SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
                         )
@@ -1185,6 +1222,16 @@ class DialogueManager:
                 pass
             finally:
                 queue.task_done()
+
+    async def _wait_floor(self, conv: Conversation, line: str) -> None:
+        """A line waits until those before the npc in the conversation have been heard (group.py); its clock
+        of a line that never starts begins after."""
+        if self.floor is None or line in conv.hushed:
+            return
+        try:
+            await self.floor.hear(conv.npc)
+        finally:
+            self._sent[line] = time.monotonic()
 
     def _tts_off(self, npc: str, name: str, err: TtsError) -> None:
         self._tts_paused_until = time.monotonic() + TTS_PAUSE
@@ -1374,6 +1421,34 @@ class DialogueManager:
             self.on_end(conv.npc)
 
     async def _turn(
+        self,
+        conv: Conversation,
+        trigger: Message,
+        kind: str,
+        relevant: Callable[[], bool] | None = None,
+        *,
+        overlay: bool = False,
+        tools: list[Tool] | None = None,
+        body: str | None = None,
+    ) -> None:
+        """A turn on the conversation's floor (group.py): it thinks once those before it have their text
+        ready; with no voice left for it (three to a phrase of the hero's) it says nothing."""
+        if self.floor is not None:
+            try:
+                seated = await self.floor.queue(conv.npc, kind)
+            except asyncio.CancelledError:
+                conv.cut = None  # cut off before it began: nothing said, nothing to remember
+                raise
+            if not seated:
+                log.info("%s: no voice left in the conversation, its %s turn is dropped", conv.npc, kind)
+                return
+        try:
+            await self._speak(conv, trigger, kind, relevant, overlay=overlay, tools=tools, body=body)
+        finally:
+            if self.floor is not None:
+                self.floor.done(conv.npc)
+
+    async def _speak(
         self,
         conv: Conversation,
         trigger: Message,
