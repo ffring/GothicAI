@@ -16,8 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # v21: wolves hear the hero (beasts, beast), v22: things lying about (npc_view items, take_item; follow has
 # no time limit unless asked), v23: programs in the story graph (graph_patch program, add_node.program,
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
-# menu, menu_pick), v25: story_program.own (the scripts' program under the director's).
-PROTOCOL_VERSION = 25
+# menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
+# lines in the npc's voice (line_voice).
+PROTOCOL_VERSION = 26
 
 # --- game -> server -----------------------------------------------------------
 
@@ -217,6 +218,18 @@ class PttStop(_GameMessage):
 class PttCancel(_GameMessage):
     type: Literal["ptt_cancel"]
     focus: str | None = None
+
+
+class LineVoice(_GameMessage):
+    """A line of the director's own (a dialog of the story graph, v26) the npc is about to say: the server
+    voices `text` in the npc's voice and streams it for this `line` (say with stream, say_audio, say_end), as
+    for the npc's own lines; without a voice it stays a subtitle. `name`: the npc's name in the game."""
+
+    type: Literal["line_voice"]
+    npc: str
+    name: str = ""
+    line: str
+    text: str
 
 
 class LineStarted(_GameMessage):
@@ -811,6 +824,7 @@ GameMessage = Annotated[
     | PttStop
     | PttCancel
     | LineStarted
+    | LineVoice
     | NpcRoster
     | NpcEvent
     | NpcIdle

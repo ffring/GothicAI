@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "game/gamescript.h"
@@ -208,6 +209,9 @@ struct AiBridge::Impl final {
   void onBodyWatch(World& world, const rapidjson::Value& msg);
   void resetBodyObservations();
   void onSay(World& world, const rapidjson::Value& msg);
+  // the director's lines (story graph) get the npc's voice from the server (v26)
+  void askVoice(const std::string& line, const std::string& npc, const std::string& text);
+  void voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& line);
   void onSayAudio(World& world, const rapidjson::Value& msg);
   // streamed voices: playback starts with the line, the line is shortened to the real length
   void startVoice(const LineLibrary::Line& line);
@@ -281,6 +285,7 @@ struct AiBridge::Impl final {
   LineLibrary                  lines;
   std::vector<struct Voice>    voices;
   std::unordered_map<std::string,std::string> lastLine;  // npc -> line it speaks (or spoke) last
+  std::unordered_set<std::string>             voicing;   // the director's lines the server is asked to voice
   std::unordered_map<std::string,std::string> originalLines;  // original line sent with `say` -> npc, until it starts
   std::unordered_map<std::string,std::string> originalTo;     // ...-> the npc it is said to (v15), if not the hero
   std::unique_ptr<ChatOverlay> chat;
@@ -297,6 +302,7 @@ struct AiBridge::Impl final {
                                      [this](const std::string& npc, const std::string& text) {
                                        auto id = "AIB_G" + std::to_string(++graphLines);
                                        lines.add(id,npc,text);
+                                       askVoice(id,npc,text);
                                        return id;
                                        }};
   // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
@@ -1472,9 +1478,45 @@ AiBridge::AiBridge() {
 
 AiBridge::~AiBridge() = default;
 
+void AiBridge::Impl::askVoice(const std::string& line, const std::string& npc, const std::string& text) {
+  World* world = Gothic::inst().world();
+  Npc*   who   = world!=nullptr ? npcBySymbol(*world,npc) : nullptr;
+  if(who==nullptr || who->isPlayer())
+    return;  // the hero's lines of the director's stay subtitles: his voice is the game's own
+  if(voicing.size()>256)
+    voicing.clear();  // asked long ago and never answered: no voice service
+  voicing.insert(line);
+  send(JsonWriter("line_voice")
+         .str("npc",npc)
+         .str("name",TextCodec::toUtf8(who->displayName()))
+         .str("line",line)
+         .str("text",TextCodec::toUtf8(text))
+         .finish());
+  }
+
+void AiBridge::Impl::voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& id) {
+  // the voice comes to the line that is there: queued, or already started without one
+  auto* l = lines.find(id);
+  if(l==nullptr || l->voice!=nullptr || !JsonRead::boolean(msg,"stream",false))
+    return;
+  if(l->started && lastLine[l->npc]!=id)
+    return;  // too late: the npc has moved on to its next line
+  l->voice = std::make_shared<VoiceBuffer>(uint32_t(JsonRead::integer(msg,"rate",24000)));
+  if(!l->started)
+    return;  // it starts with its voice
+  // it started as a subtitle: the voice starts now, and the npc waits for it (shortened once it is all in)
+  startVoice(*l);
+  if(Npc* npc = npcBySymbol(world,l->npc))
+    npc->setAiOutputBarrier(LineLibrary::streamedTime(*l),false);
+  }
+
 void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
   const auto symbol = std::string(JsonRead::str(msg,"npc"));
   const auto line   = std::string(JsonRead::str(msg,"line"));
+  if(voicing.erase(line)>0) {
+    voiceStoryLine(world,msg,line);
+    return;
+    }
   Npc*       pl     = world.player();
   Npc*       npc    = ctrl.find(world,symbol);
   if(npc==nullptr) {

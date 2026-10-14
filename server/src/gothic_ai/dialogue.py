@@ -57,6 +57,7 @@ from .protocol import (
     GameMessage,
     HushCmd,
     LineStarted,
+    LineVoice,
     MemoryCmd,
     Mood,
     PttStart,
@@ -611,6 +612,8 @@ class DialogueManager:
         self.scene_pace: Callable[[str], float] = line_duration
         self._starts: dict[str, asyncio.Event] = {}
         self._scene_tts: TtsClient | None = None
+        self._story_tts: TtsClient | None = None  # the director's lines (v26): not behind talk or scenes
+        self._story_voices: set[asyncio.Task[float | None]] = set()
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
         if link.session is not None:
@@ -627,6 +630,8 @@ class DialogueManager:
                     started.set()
             case PttStart():
                 self.prewarm_listeners(msg.focus)  # while he speaks
+            case LineVoice():
+                self._spawn_story_voice(msg)
 
     # --- memory -------------------------------------------------------------------------
 
@@ -1342,6 +1347,50 @@ class DialogueManager:
             speech.provider,
         )
         return rate, chunks, speech.audio_s
+
+    def _spawn_story_voice(self, msg: LineVoice) -> None:
+        task = asyncio.create_task(self.voice_story_line(msg.npc, msg.name or msg.npc, msg.line, msg.text))
+        self._story_voices.add(task)
+        task.add_done_callback(self._story_voices.discard)
+
+    async def voice_story_line(self, npc: str, name: str, line: str, text: str) -> float | None:
+        """A line of the director's (v26) in the npc's voice, streamed as it comes for the line the game has
+        queued; in the order they are asked for (one client, one line at a time). Its audio length, None
+        without a voice: the line stays a subtitle."""
+        if self.tts is None or time.monotonic() < self._tts_paused_until:
+            return None
+        if self._story_tts is None:
+            self._story_tts = TtsClient(self.tts.url, self.tts.timeout)
+
+        async def start(rate: int, _provider: str) -> None:
+            await self.link.send(SayCmd(npc=npc, line=line, text=text, stream=True, rate=rate))
+
+        async def chunk(pcm: bytes) -> None:
+            await self.link.send(SayAudioCmd(npc=npc, line=line, data=base64.b64encode(pcm).decode()))
+
+        voice = self.personas.get(npc, name).voice
+        try:
+            speech = await self._story_tts.stream(text, npc, voice, start, chunk)
+        except TtsError as err:
+            self._tts_off(npc, name, err)
+            return None
+        except GameError:
+            return None
+        await self.link.send(SayEndCmd(npc=npc, line=line, audio_s=round(speech.audio_s, 3)))
+        self._audio[line] = speech.audio_s
+        log.info(
+            "%s director's line %s: %.2fs of audio in %.2fs (%s)",
+            npc,
+            line,
+            speech.audio_s,
+            speech.latency_s,
+            speech.provider,
+        )
+        return speech.audio_s
+
+    def story_voiced(self, line: str) -> float | None:
+        """How long a director's line voiced here is, None if it was not."""
+        return self._audio.get(line)
 
     async def _send_scene_line(self, line: SceneLine, voice: Voice | None) -> None:
         """Say, all of its audio and its end at once: the game drains them in one tick, so the line starts
