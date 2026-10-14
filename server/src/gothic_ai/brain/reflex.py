@@ -1,12 +1,15 @@
 """The body's instant reactions for an npc we control (in a chat with the hero or following him), chosen
 by the behavioral model in ~0.1 s, while the conversational model may still be thinking.
 
-Three questions, all about the body (what the npc says at once is the quick model's, dialogue.py):
+Three questions about the body (what the npc says at once is the quick model's, dialogue.py):
 - `react` — an incident (attacked, the hero attacked, a murder nearby...): what the body does now. The
   menu is narrowed by the npc's intent (an npc that means to flee is not offered to fight);
 - `gesture` — the hero just spoke (`phrase`): a gesture in the pause before the npc answers, if any;
 - `posture` — the hero speaks to a free npc (M5e, talk.py): does it stop and listen, keep working, walk
   along or turn away. talk.py carries the choice out.
+
+And one about words: `interject` — others talk next to it (the hero and whom he spoke to): does it keep
+quiet, put in a word or step in (step B3 of docs/npc-tools.md, interject.py), by its character.
 
 Fighting and fleeing are carried out by the game's own script states (the bridge hands the npc over
 and takes it back). Until the model is trained on threats they are answered in *shadow* — traced, not
@@ -30,7 +33,15 @@ from .situation import NpcContext, SituationBuilder
 REACT = "What do you do right now?"
 GESTURE = "The hero is talking to you. What gesture do you make while you think of an answer?"
 POSTURE = "The hero is talking to you. What does your body do while you answer him?"
-INSTRUCTIONS = {"react": REACT, "gesture": GESTURE, "posture": POSTURE}
+# worded so that keeping out of it is the norm: asked «Do you join in?», the model had nearly everyone speak
+# (P 0.90–0.98, evals/npc-decisions/interject_probe.py); told the talk is not with it, Brago and the timid
+# bandit come apart. A phrase to them all is another matter: most add something
+INTERJECT = "The hero is talking with someone else, not with you. Most people let others talk. Do you cut in?"
+INTERJECT_ALL = (
+    "The hero spoke to all of you, and another answered him first. Most people leave it at that. Do you add "
+    "anything of your own?"
+)
+INSTRUCTIONS = {"react": REACT, "gesture": GESTURE, "posture": POSTURE, "interject": INTERJECT}
 
 
 @dataclass(frozen=True)
@@ -93,6 +104,19 @@ POSTURE_OPTIONS: dict[str, Option] = {
 }
 
 
+# whether it speaks is interject.py's: by how likely it is to speak at all, among all who were asked
+INTERJECT_OPTIONS: dict[str, Option] = {
+    "silent": Option("stay out of it, as most would"),
+    "word": Option("cut in with one short remark"),
+    "step_in": Option("cut in and take the talk over"),
+}
+INTERJECT_ALL_OPTIONS: dict[str, Option] = {
+    "silent": Option("leave it at that, as most would"),
+    "word": Option("add one short remark"),
+    "step_in": Option("speak up and take the talk over"),
+}
+
+
 def react_menu(intent: Intent | None, other: str | None) -> list[str]:
     """Options for an incident, narrowed by what the npc means to do."""
     goal = intent.goal if intent else "none"
@@ -121,6 +145,7 @@ class Reaction:
     state: str = ""
     options: list[str] = field(default_factory=list)
     why: str = ""  # why not applied
+    probabilities: dict[str, float] = field(default_factory=dict)  # of every option, as the model gave them
 
     def record(self) -> dict[str, Any]:
         return {
@@ -132,6 +157,11 @@ class Reaction:
             "options": self.options,
             "choice": self.choice,
             "confidence": round(self.confidence, 3),
+            **(
+                {"probabilities": {k: round(v, 3) for k, v in self.probabilities.items()}}
+                if self.probabilities
+                else {}
+            ),
             "applied": self.applied,
             "why": self.why,
             "actions": [list(a) for a in self.actions],
@@ -170,11 +200,39 @@ class Reflexes:
         state = self._state(npc, intent, clock, [f"Right now you {doing}.", f'The hero says: "{words}"'])
         return await self._ask(npc.id, "posture", state, criteria, POSTURE_OPTIONS, {})
 
-    def _state(self, npc: NpcContext, intent: Intent | None, clock: str | None, lines: list[str]) -> str:
+    async def interject(
+        self,
+        npc: NpcContext,
+        heard: list[str],
+        intent: Intent | None,
+        clock: str | None = None,
+        *,
+        to_all: bool = False,
+    ) -> Reaction | None:
+        """Others talk next to the npc (`heard`: what was said, English; `to_all`: the hero spoke to them
+        all): does it keep quiet, put in a word or step in. Never applied here: interject.py weighs it
+        against the others'."""
+        state = self._state(npc, intent, clock, heard, talking=False)
+        options = INTERJECT_ALL_OPTIONS if to_all else INTERJECT_OPTIONS
+        criteria = {k: o.text for k, o in options.items()}
+        return await self._ask(
+            npc.id, "interject", state, criteria, options, {}, INTERJECT_ALL if to_all else None
+        )
+
+    def _state(
+        self,
+        npc: NpcContext,
+        intent: Intent | None,
+        clock: str | None,
+        lines: list[str],
+        *,
+        talking: bool = True,
+    ) -> str:
         parts = [f"You are {npc.name}. {npc.traits}" if npc.traits else self.builder.who(npc)]
         if clock:
             parts.append(f"It is {clock}.")
-        parts.append(f"You are talking with the hero, {npc.distance_cm / 100:.0f} m away.")
+        metres = f"{npc.distance_cm / 100:.0f} m away"
+        parts.append(f"You are talking with the hero, {metres}." if talking else f"The hero is {metres}.")
         parts += npc.view
         if intent is not None:
             parts.append(intent.describe_en())
@@ -219,19 +277,30 @@ class Reflexes:
         criteria: dict[str, str],
         options: dict[str, Option],
         ids: dict[str, str],
+        instructions: str | None = None,
     ) -> Reaction | None:
-        return (await self._ask_all(npc, state, {question: (criteria, options, ids)})).get(question)
+        """One question; `instructions` in place of its usual ones."""
+        asks = {question: (criteria, options, ids)}
+        return (await self._ask_all(npc, state, asks, {question: instructions} if instructions else {})).get(
+            question
+        )
 
     async def _ask_all(
         self,
         npc: str,
         state: str,
         asks: dict[str, tuple[dict[str, str], dict[str, Option], dict[str, str]]],
+        instructions: dict[str, str] | None = None,
     ) -> dict[str, Reaction]:
         """Questions about one state in one request: question -> (criteria, options, ids for the actions)."""
         started = self.clock()
+        own = instructions or {}
         q = {
-            question: {"type": "choice", "instructions": INSTRUCTIONS[question], "criteria": criteria}
+            question: {
+                "type": "choice",
+                "instructions": own.get(question, INSTRUCTIONS[question]),
+                "criteria": criteria,
+            }
             for question, (criteria, _, _) in asks.items()
         }
         out: Outcome = await self.decider.decide(
@@ -247,6 +316,7 @@ class Reflexes:
             answer = out.answers[question]
             choice, conf = str(answer["choice"]), float(answer["confidence"])
             opt = options.get(choice)
+            probs = answer.get("probabilities") or {}
             reaction = Reaction(
                 npc,
                 question,
@@ -256,6 +326,7 @@ class Reflexes:
                 latency_ms=latency_ms,
                 state=state,
                 options=list(criteria),
+                probabilities={str(k): float(v) for k, v in probs.items()} if isinstance(probs, dict) else {},
             )
             if opt is None:
                 reaction.why = "unknown option"

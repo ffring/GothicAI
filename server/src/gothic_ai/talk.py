@@ -238,26 +238,39 @@ def addressee(
     talking near him, the one who spoke last first), the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
-    near = [
-        (d, e)
-        for e in alive.values()
-        if e.distance <= NAME_CM and (d := named(phrase, e.name, by)) is not None
-    ]
-    if near:
-        # the name heard best ("Лестер!" with Фестер near too), then the nearer one
-        _, e = min(near, key=lambda de: (de[0], de[1].distance))
-        return Addressee(e.id.upper(), e.name, "name")
     fighting = [
         e for e in alive.values() if fights(e) and e.distance <= ATTACKER_CM and not ours(e.id.upper())
     ]
     group = [e for e in alive.values() if e.distance <= PARTNER_CM]
     # in a fight «Стой, пацаны!» is to whoever is at him, as before: words to him, not an order to his own
-    if to_several(phrase) and len(group) >= 2 and not fighting:
+    several = len(group) >= 2 and not fighting
+
+    def to_group() -> Addressee:
         if focus and (e := alive.get(focus.upper())) is not None and e in group:
             return Addressee(e.id.upper(), e.name, "group")
         others = [e for e in group if not ours(e.id.upper())] or group
         e = min(others, key=lambda e: (-lead(e.id.upper()), e.distance))
         return Addressee(e.id.upper(), e.name, "group")
+
+    near = [
+        (d, e, named(by, e.name, by) is not None)
+        for e in alive.values()
+        if e.distance <= NAME_CM and (d := named(phrase, e.name, by)) is not None
+    ]
+    # a name called out («Браго, …») before one only spoken of («…кто ограбил Кавалорна»): 2026-10-14 the
+    # nearer Cavalorn took words meant for Brago
+    called = [(d, e) for d, e, out in near if out]
+    if called:
+        # the name heard best ("Лестер!" with Фестер near too), then the nearer one
+        _, e = min(called, key=lambda de: (de[0], de[1].distance))
+        return Addressee(e.id.upper(), e.name, "name")
+    if several and to_several(by):  # «Пацаны, …»: they are called out, whoever is spoken of
+        return to_group()
+    if near:
+        _, e, _ = min(near, key=lambda de: (de[0], de[1].distance))
+        return Addressee(e.id.upper(), e.name, "name")
+    if several and to_several(phrase):
+        return to_group()
     if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
         return Addressee(e.id.upper(), e.name, "focus")
     if fighting:  # in a fight he speaks to whoever is at him, where he looks or not
