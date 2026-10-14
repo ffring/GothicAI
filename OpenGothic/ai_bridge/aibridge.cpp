@@ -54,7 +54,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 21;
+constexpr int         ProtocolVersion = 22;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -869,7 +869,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp") {
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1173,6 +1173,24 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       pl->addItem(id,1);
     pl->useItem(id);
     sendResult(req,true,"");
+    return;
+    }
+  if(cmd=="player_drop") {
+    // the player throws a thing down, as with the game's own key (v22): he is given it first if he has none
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    if(!pl->inventory().itemCount(id))
+      pl->addItem(id,1);
+    const size_t before = pl->inventory().itemCount(id);
+    pl->dropItem(id,1);
+    const bool dropped = pl->inventory().itemCount(id)<before;
+    sendResult(req,dropped,dropped ? "" : "the hero could not drop it now");
     return;
     }
   if(cmd=="player_hp") {

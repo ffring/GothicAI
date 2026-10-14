@@ -13,8 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
 # v16: opt-in passive numeric body observations (independently versioned schema), v17: contracts (hero_kill),
 # v18: what npc's see of whom (att, from_hero...), v20: an npc calls its fight off (story_effect calm),
-# v21: wolves hear the hero (beasts, beast).
-PROTOCOL_VERSION = 21
+# v21: wolves hear the hero (beasts, beast), v22: things lying about (npc_view items, take_item; follow has
+# no time limit unless asked).
+PROTOCOL_VERSION = 22
 
 # --- game -> server -----------------------------------------------------------
 
@@ -400,6 +401,18 @@ class HeroLook(Look):
     focus: str | None = None  # v18: whom the hero looks at (his focus), an npc id
 
 
+class GroundItem(_GameMessage):
+    """A thing lying about that the npc sees (v22): in its field of view and not behind a wall, or right by
+    it; within 15 m."""
+
+    item: str  # the scripts' instance, what take_item takes
+    name: str
+    count: int = 1
+    distance: float = 0  # cm from the npc
+    hero_cm: float | None = None
+    from_hero: Side | None = None
+
+
 class NpcView(_GameMessage):
     """What an npc perceives (v11): where it is, what it does, the hero, whom it sees (the nearest first).
     Sight is the engine's own (the head's field of view and a ray), within the npc's senses range."""
@@ -420,6 +433,7 @@ class NpcView(_GameMessage):
     time: int | None = None  # the game's clock (v12): minutes since the first day began
     hero: HeroLook | None = None
     sees: list[Look] = Field(default_factory=list)
+    items: list[GroundItem] = Field(default_factory=list)  # v22: things lying about, the nearest first
 
 
 class NpcViews(_GameMessage):
@@ -833,6 +847,7 @@ ActionType = Literal[
     "stop",
     "follow",
     "give_item",
+    "take_item",  # v22: walk up to the nearest thing of args.item lying about (within 20 m) and pick it up
     "return_to_routine",
     "fight",  # v6: the game's own combat (ZS_ATTACK) against args.npc, then control comes back
     "flee",  # v6: the game's own fleeing (ZS_FLEE) from args.npc
@@ -1101,6 +1116,7 @@ DebugCommand = Literal[
     "waypoints",
     "npc_goto",
     "player_hp",
+    "player_drop",
 ]
 
 
@@ -1124,7 +1140,8 @@ class DebugCmd(_Command):
     z, fp}]); move an `npc` to a `waypoint` (or `distance` cm, default 300, in front of npc `to`) on the
     ground, facing npc `face` (`npc_goto`, v15: it stays free and goes on with what it does, so its
     routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v21);
-    `player_goto` to a point `pos` [x, y, z] on the ground there (v21).
+    `player_goto` to a point `pos` [x, y, z] on the ground there (v21); the player throws an `item` down, as
+    with the game's own key (`player_drop`, v22: he is given it first if he has none).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;

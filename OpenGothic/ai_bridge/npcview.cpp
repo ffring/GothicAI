@@ -29,6 +29,9 @@ constexpr size_t   SeenLimit    = 12;    // people and creatures in one view
 constexpr float    SightMax     = 3000;  // cm: never further, whatever the senses range says
 constexpr float    FacingCos    = 0.7f;  // within ~45 degrees: it faces you
 constexpr float    NoticeRange  = 1500;  // cm: this close it notices someone out of its field of view too
+constexpr size_t   ItemLimit    = 6;     // things lying about in one view (v22)
+constexpr float    ItemRange    = 1500;  // cm: things lying further off are not told of
+constexpr float    UnderFoot    = 300;   // cm: this close it notices a thing out of its field of view too
 
 using Writer = rapidjson::Writer<rapidjson::StringBuffer>;
 
@@ -121,8 +124,8 @@ std::string_view attitude(Attitude a) {
 
 // where `other` is from the player, as he faces (v18): ahead, left, right or behind him. Left and right
 // are as the player sees them on the screen: the side is checked against the camera when there is one
-std::string_view fromHero(const Npc& pl, const Npc& other) {
-  const auto  d   = other.position()-pl.position();
+std::string_view fromHero(const Npc& pl, const Tempest::Vec3& at) {
+  const auto  d   = at-pl.position();
   const float len = std::sqrt(d.x*d.x+d.z*d.z);
   if(len<1)
     return "ahead";
@@ -145,6 +148,10 @@ std::string_view fromHero(const Npc& pl, const Npc& other) {
   if(ahead<=-0.7f)
     return "behind";
   return right>0 ? "right" : "left";
+  }
+
+std::string_view fromHero(const Npc& pl, const Npc& other) {
+  return fromHero(pl,other.position());
   }
 
 void writeItem(Writer& w, World& world, std::string_view k, const Item* it) {
@@ -193,6 +200,36 @@ void writeLook(Writer& w, World& world, Npc& self, Npc& other, float dist) {
     w.Key("hero_cm"); w.Double(std::round(double(std::sqrt(other.qDistTo(*pl)))));
     str(w,"from_hero",fromHero(*pl,other));
     }
+  }
+
+// things lying about that it sees, the nearest first (v22): what the hero threw down, a body's loot, herbs
+void writeItems(Writer& w, World& world, Npc& npc, float range) {
+  struct Thing { Item* it; float dist; };
+  std::vector<Thing> things;
+  world.detectItem(npc.position(),std::min(range,ItemRange),[&](Item& it) {
+    const float dist = std::sqrt((it.position()-npc.position()).quadLength());
+    if(npc.canSeeItem(it,false) || (dist<=UnderFoot && npc.canSeeItem(it,true)))
+      things.push_back({&it,dist});
+    });
+  std::sort(things.begin(),things.end(),[](const Thing& a, const Thing& b){ return a.dist<b.dist; });
+  if(things.size()>ItemLimit)
+    things.resize(ItemLimit);
+  Npc* pl = world.player();
+  key(w,"items");
+  w.StartArray();
+  for(auto& t:things) {
+    w.StartObject();
+    str(w,"item",symbolOf(world,t.it->clsId()));
+    utf8(w,"name",t.it->displayName());
+    w.Key("count");    w.Uint64(uint64_t(t.it->count()));
+    w.Key("distance"); w.Double(std::round(double(t.dist)));
+    if(pl!=nullptr) {
+      w.Key("hero_cm"); w.Double(std::round(double(std::sqrt((t.it->position()-pl->position()).quadLength()))));
+      str(w,"from_hero",fromHero(*pl,t.it->position()));
+      }
+    w.EndObject();
+    }
+  w.EndArray();
   }
 
 void writeView(Writer& w, World& world, Npc& npc) {
@@ -260,6 +297,7 @@ void writeView(Writer& w, World& world, Npc& npc) {
     w.EndObject();
     }
   w.EndArray();
+  writeItems(w,world,npc,range);
   w.EndObject();
   }
 
