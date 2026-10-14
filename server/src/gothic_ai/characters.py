@@ -73,6 +73,12 @@ class Card:
     pushy: int
     strangers: int
 
+    @property
+    def lead(self) -> int:
+        """How much it takes the lead among others: bold and pushy (Brago among his bandits). The first to
+        answer a phrase to several (talk.py)."""
+        return self.courage + self.pushy
+
     def traits_ru(self) -> str:
         """Its traits in words, for the conversational model."""
         parts = [

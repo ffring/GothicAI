@@ -89,3 +89,29 @@ async def test_without_a_tts_service_lines_go_out_silent():
         await dialogue.say_as_player(XARDAS, "Привет")
         await _until(lambda: len(fake.said) == 2)
     assert fake.voiced == [False, False]
+
+
+async def test_a_line_of_the_director_gets_the_npcs_voice():
+    # the game asks (v26): the line is queued in a dialog of the story graph, the server only voices it
+    fake = FakeGame()
+    llm = FakeBackend("", delay=0)
+    async with fake_tts() as (url, requests), connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient(url))
+        await fake.send(type="line_voice", npc=XARDAS, name="Ксардас", line="AIB_G1", text="Выбирай.")
+        await fake.send(type="line_voice", npc=XARDAS, name="Ксардас", line="AIB_G2", text="Ну?")
+        await _until(lambda: sum(m["type"] == "say_end" for m in fake.received) == 2)
+
+    flow = [(m["type"], m["line"]) for m in fake.received if m["type"] in ("say", "say_audio", "say_end")]
+    assert flow == [(t, line) for line in ("AIB_G1", "AIB_G2") for t in ("say", "say_audio", "say_end")]
+    say = next(m for m in fake.received if m["type"] == "say")
+    assert say["stream"] is True and say["rate"] == 16000 and say["text"] == "Выбирай."
+    assert requests[0]["voice"]["id"] == XARDAS and "old man" in requests[0]["voice"]["description"]
+    assert dialogue.story_voiced("AIB_G1") == pytest.approx(0.05 * len("Выбирай."))
+
+
+async def test_without_a_voice_the_directors_line_stays_a_subtitle():
+    fake = FakeGame()
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend("", delay=0), PersonaProvider(None))
+        assert await dialogue.voice_story_line(XARDAS, "Ксардас", "AIB_G1", "Выбирай.") is None
+    assert not [m for m in fake.received if m["type"].startswith("say")]

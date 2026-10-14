@@ -48,6 +48,8 @@ class FakeGame:
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
+        # what story_program answers (v23): the scripts' programs of (node, part); missing ones are errors
+        self.programs: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect / raise_dead
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
         self.nearby_of: dict[str, list[dict[str, Any]]] = {}  # ...around this npc (else people_near)
@@ -99,7 +101,12 @@ class FakeGame:
         self.routine_errors: dict[str, str] = {}  # npc -> the error its routine is answered with
         self.routine_hang: set[str] = set()  # npc's whose routine is never answered (the server times out)
         self.routine_calls: list[str] = []  # every npc asked for, in order
+        self.beast_cmds: list[dict[str, Any]] = []  # the server's words on wolves (v21)
         self._later: set[asyncio.Task[None]] = set()
+        self.slow_actions: set[str] = set()  # actions that go on until the npc's next action cancels them
+        # v28: what npc_chests answers, npc -> its chests (protocol.Chest as JSON); use_chest moves items
+        self.chests: dict[str, list[dict[str, Any]]] = {}
+        self.long_running: dict[str, str] = {}  # npc -> the id of its action going on
 
     async def perception(
         self, npc: str, perc: str, other: str, distance: float = 300.0, victim: str | None = None
@@ -111,6 +118,10 @@ class FakeGame:
     async def push_views(self, *views: dict[str, Any]) -> None:
         """What the npc's nearest to the player perceive, as the game pushes it once a second (v11)."""
         await self.send(type="npc_views", t=1000, views=list(views))
+
+    async def beasts(self, *wolves: dict[str, Any], hero_weapon: str = "none") -> None:
+        """The wolves near the hero (v21): id, name, distance, state, hp, hp_max, focus..."""
+        await self.send(type="beasts", t=1000, hero_weapon=hero_weapon, wolves=list(wolves))
 
     async def roster(self, *people: dict[str, Any]) -> None:
         """The people around the player (npc_roster): id, name, distance, in_view, state, moving..."""
@@ -254,6 +265,8 @@ class FakeGame:
                 )
             case "deal_show" | "deal_hide":
                 self.deals.append(msg)
+            case "npc_chests":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.chests.get(msg["npc"], []))
             case "story_nearby":
                 if msg["npc"] in self.nearby_error:
                     await self.send(type="result", req=msg["req"], ok=False, error=f"no npc {msg['npc']}")
@@ -295,6 +308,18 @@ class FakeGame:
             case "story_tag":
                 self.story.append(msg)
                 await self.send(type="result", req=msg["req"], ok=True, value=len(msg["npcs"]))
+            case "beast":
+                self.beast_cmds.append(msg)
+                await self.send(type="result", req=msg["req"], ok=True)
+            case "story_program":
+                key = (msg["node"], msg.get("part", "information"))
+                if key not in self.programs:
+                    await self.send(type="result", req=msg["req"], ok=False, error=f"no dialog {key[0]}")
+                else:
+                    value = {"node": key[0], "fn": key[0], "returns": key[1] == "condition", "patched": False}
+                    await self.send(
+                        type="result", req=msg["req"], ok=True, value={**value, "steps": self.programs[key]}
+                    )
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):
@@ -443,6 +468,11 @@ class FakeGame:
 
     async def handle_action(self, msg: dict[str, Any]) -> None:
         npc, action, args = msg["npc"], msg["action"], msg.get("args", {})
+        if (running := self.long_running.pop(npc, None)) is not None:  # preempted, as the bridge does
+            await self.send(type="action_result", id=running, npc=npc, status="cancelled", detail="preempted")
+        if action in self.slow_actions and npc in self.attached:
+            self.long_running[npc] = msg["id"]  # goes on until the next action of this npc
+            return
         status, detail = "done", None
         if npc not in self.attached:
             status, detail = "rejected", "npc is not attached"
@@ -450,6 +480,8 @@ class FakeGame:
             status, detail = "rejected", "unknown animation"
         elif action == "go_to_waypoint" and args.get("waypoint") not in WAYPOINTS:
             status, detail = "rejected", "unknown waypoint"
+        elif action == "use_chest":
+            status, detail = self.use_chest(npc, args)
         elif action == "go_to_npc" and args.get("npc") in self.npc_states:
             # it gets there: the target is as far from it as it was to stop, and in sight
             self.npc_states[args["npc"]]["distance"] = args.get("radius", 400)
@@ -465,6 +497,30 @@ class FakeGame:
         if action == "return_to_routine" and status == "done":
             self.attached.discard(npc)
             await self.send(type="detached", npc=npc, reason="routine")
+
+    def use_chest(self, npc: str, args: dict[str, Any]) -> tuple[str, str | None]:
+        """As the bridge does: what is there moves, as much as there is; `detail` says what moved."""
+        chest = next((c for c in self.chests.get(npc, []) if c["id"] == args.get("chest")), None)
+        if chest is None:
+            return "rejected", "not its chest"
+        mine = self.npc_items.setdefault(npc, {})
+        moved: dict[str, list[str]] = {"took": [], "put": []}
+        for m in args.get("take", []):
+            it = next((i for i in chest["items"] if i["item"] == m["item"]), None)
+            n = min(m["count"], it["count"]) if it else 0
+            if it is not None and n > 0:
+                it["count"] -= n
+                mine[m["item"]] = mine.get(m["item"], 0) + n
+                moved["took"].append(f"{m['item']}:{n}")
+        for m in args.get("put", []):
+            n = min(m["count"], mine.get(m["item"], 0)) or m["count"]
+            it = next((i for i in chest["items"] if i["item"] == m["item"]), None)
+            if it is None:
+                chest["items"].append(it := {"item": m["item"], "name": m["item"], "count": 0})
+            it["count"] += n
+            moved["put"].append(f"{m['item']}:{n}")
+        chest["items"] = [i for i in chest["items"] if i["count"] > 0]
+        return "done", f"took={','.join(moved['took'])};put={','.join(moved['put'])}"
 
 
 @asynccontextmanager

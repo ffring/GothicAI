@@ -191,7 +191,8 @@ def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Pr
         "--llm", s.llm.backend, "--reasoning-effort", s.llm.reasoning_effort,
     ]  # fmt: skip
     server_args += _opt("--model", s.llm.model) + _opt("--base-url", s.llm.base_url)
-    server_args += _opt("--decider-url", s.llm.decider_url)
+    server_args += _opt("--decider-url", s.llm.decider_url) + _opt("--quick-url", s.llm.quick_url)
+    server_args += [] if s.llm.quick else ["--no-quick"]  # on by default, next to the decider
     openai_key = {"OPENAI_API_KEY": keys.openai_api_key} if keys.openai_api_key else {}
 
     if s.voice.enabled:

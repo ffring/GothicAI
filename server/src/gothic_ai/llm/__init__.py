@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 from .base import (
     Done,
@@ -28,9 +29,17 @@ from .siwc import ChatGPTAuth
 
 BACKENDS = ("chatgpt", "openai", "local", "fake")
 DEFAULT_MODELS = {"chatgpt": "gpt-6.1-sol", "openai": "gpt-6.1-sol", "local": "qwen3:8b", "fake": "fake"}
+# the quick model of a fight (dialogue.py): Gemma 4 12B on llama.cpp, as server/deploy/gemma names it. A line
+# is a sentence or two; the cap keeps a small model from looping until its context is full
+QUICK_MODEL = "gemma-4-12b"
+QUICK_MAX_TOKENS = 120
+QUICK_PORT = 47834  # on the GPU server, next to the decider (server/deploy/gemma)
 
 __all__ = [
     "BACKENDS",
+    "QUICK_MAX_TOKENS",
+    "QUICK_MODEL",
+    "QUICK_PORT",
     "Done",
     "FakeBackend",
     "FakeStep",
@@ -48,8 +57,24 @@ __all__ = [
     "ToolResult",
     "Usage",
     "make_backend",
+    "make_quick",
+    "quick_url",
     "with_deadlines",
 ]
+
+
+def quick_url(url: str | None, decider_url: str | None) -> str | None:
+    """Where the quick model is: `url` if given, else on the decider's host (the GPU server runs both,
+    so it is on wherever the decider is); None without either."""
+    if url:
+        return url
+    host = urlsplit(decider_url).hostname if decider_url else None
+    return f"http://{host}:{QUICK_PORT}/v1" if host else None
+
+
+def make_quick(base_url: str, model: str = QUICK_MODEL, max_tokens: int = QUICK_MAX_TOKENS) -> LLMBackend:
+    """The quick model of a fight: an OpenAI-compatible server (llama.cpp), its answers capped."""
+    return OpenAICompatBackend(model, base_url, name="quick", max_tokens=max_tokens)
 
 
 def make_backend(
@@ -58,12 +83,14 @@ def make_backend(
     *,
     base_url: str | None = None,
     reasoning_effort: str | None = "low",
+    websocket: bool = True,
 ) -> LLMBackend:
+    """`websocket`: an npc's requests go over a WebSocket of its own (openai_responses.py)."""
     model = model or DEFAULT_MODELS[kind]
     match kind:
         case "chatgpt":
             return OpenAIResponsesBackend(
-                model, ChatGPTAuth(), reasoning_effort=reasoning_effort, name="chatgpt"
+                model, ChatGPTAuth(), reasoning_effort=reasoning_effort, name="chatgpt", websocket=websocket
             )
         case "openai":
             key = os.environ.get("OPENAI_API_KEY")
@@ -78,6 +105,7 @@ def make_backend(
                 api_key,
                 reasoning_effort=reasoning_effort,
                 base_url=base_url or "https://api.openai.com/v1",
+                websocket=websocket,
             )
         case "local":
             return OpenAICompatBackend(model, base_url or "http://127.0.0.1:11434/v1", name="local")

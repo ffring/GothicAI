@@ -32,6 +32,23 @@ const std::set<std::string> Binary = {
 
 struct Reader final {
   std::string& error;
+  bool         exact = false;  // programs: operators as written, nothing folded
+
+  ExprP opr(const std::string& o, std::vector<ExprP> a) {
+    if(!exact) {
+      if(o=="&&") return ex::land(std::move(a));
+      if(o=="||") return ex::lor(std::move(a));
+      if(o=="!")  return ex::lnot(a[0]);
+      return ex::op(o, std::move(a));
+      }
+    // a && b && c is (a && b) && c
+    ExprP r = a[0];
+    if(a.size()==1)
+      return ex::exact(o, {r});
+    for(size_t i=1; i<a.size(); ++i)
+      r = ex::exact(o, {r, a[i]});
+    return r;
+    }
 
   ExprP fail(std::string why) {
     if(error.empty())
@@ -123,6 +140,8 @@ struct Reader final {
       return tag=="call" ? ex::call(nm, std::move(a)) : ex::fn(nm, std::move(a));
       }
     if(tag=="cases") {
+      if(exact)
+        return fail("cases are not in programs");
       auto a = args(1);
       if(a.size()!=n-1)
         return nullptr;
@@ -131,24 +150,26 @@ struct Reader final {
       return ex::cases(std::move(a));
       }
     if(tag=="unknown")
-      return ex::unknown(n>1 && v[1].IsString() ? v[1].GetString() : "");
+      return exact ? fail("unknown is not in programs") : ex::unknown(n>1 && v[1].IsString() ? v[1].GetString() : "");
     if(tag=="&&" || tag=="||") {
       auto a = args(1);
       if(a.size()!=n-1 || a.empty())
-        return a.empty() ? fail(tag + " without terms") : nullptr;
-      return tag=="&&" ? ex::land(std::move(a)) : ex::lor(std::move(a));
+        return a.empty() && error.empty() ? fail(tag + " without terms") : nullptr;
+      if(exact && a.size()<2)
+        return fail(tag + " takes two terms or more");
+      return opr(tag, std::move(a));
       }
     if(tag=="!" || tag=="neg" || tag=="~") {
       auto a = args(1);
       if(a.size()!=1)
         return error.empty() ? fail(tag + " takes one argument") : nullptr;
-      return tag=="!" ? ex::lnot(a[0]) : ex::op(tag, std::move(a));
+      return opr(tag, std::move(a));
       }
     if(Binary.count(tag)) {
       auto a = args(1);
       if(a.size()!=2)
         return error.empty() ? fail(tag + " takes two arguments") : nullptr;
-      return ex::op(tag, std::move(a));
+      return opr(tag, std::move(a));
       }
     return fail("unknown form " + tag);
     }
@@ -160,4 +181,133 @@ ExprP storygraph::readExpr(const rapidjson::Value& v, std::string& error) {
   error.clear();
   Reader r{error};
   return r.read(v, 0);
+  }
+
+namespace {
+
+struct StepReader final {
+  Reader       expr;
+  bool         returns = false;
+  std::string& error;
+
+  bool fail(std::string why) {
+    if(error.empty())
+      error = std::move(why);
+    return false;
+    }
+
+  ExprP value(const rapidjson::Value& v, const char* key, size_t at) {
+    auto it = v.FindMember(key);
+    if(it==v.MemberEnd()) {
+      fail("step " + std::to_string(at) + ": no " + key);
+      return nullptr;
+      }
+    auto e = expr.read(it->value, 0);
+    if(e==nullptr)
+      error = "step " + std::to_string(at) + ": " + error;
+    return e;
+    }
+
+  bool steps(const rapidjson::Value& v, std::vector<Step>& out, int depth) {
+    if(!v.IsArray())
+      return fail("steps are an array");
+    if(depth>50)
+      return fail("branches nested too deep");
+    size_t at = 0;
+    for(auto& s : v.GetArray()) {
+      if(!s.IsObject())
+        return fail("step " + std::to_string(at) + " is not an object");
+      auto it = s.FindMember("do");
+      const std::string kind = it!=s.MemberEnd() && it->value.IsString() ? it->value.GetString() : "";
+      Step st;
+      if(kind=="call") {
+        st.kind = Step::Call;
+        st.call = value(s, "call", at);
+        if(st.call==nullptr)
+          return false;
+        } else if(kind=="set") {
+        st.kind   = Step::Store;
+        st.target = value(s, "target", at);
+        if(st.target==nullptr)
+          return false;
+        if(st.target->kind!=Expr::Var && st.target->kind!=Expr::Field && st.target->kind!=Expr::Inst)
+          return fail("step " + std::to_string(at) + ": a store goes into a variable, a member or an instance variable");
+        st.value = value(s, "value", at);
+        if(st.value==nullptr)
+          return false;
+        } else if(kind=="if") {
+        st.kind = Step::If;
+        st.cond = value(s, "cond", at);
+        if(st.cond==nullptr)
+          return false;
+        auto th = s.FindMember("then");
+        if(th==s.MemberEnd() || !steps(th->value, st.then, depth+1))
+          return fail("step " + std::to_string(at) + ": no then");
+        auto el = s.FindMember("else");
+        if(el!=s.MemberEnd() && !el->value.IsNull() && !steps(el->value, st.otherwise, depth+1))
+          return false;
+        } else if(kind=="return") {
+        st.kind = Step::Return;
+        auto r = s.FindMember("value");
+        if(r!=s.MemberEnd() && !r->value.IsNull()) {
+          st.value = value(s, "value", at);
+          if(st.value==nullptr)
+            return false;
+          }
+        if(returns!=(st.value!=nullptr))
+          return fail("step " + std::to_string(at) + (returns ? ": the function returns a value" : ": the function returns nothing"));
+        } else if(kind=="say") {
+        st.kind = Step::Say;
+        auto sp = s.FindMember("speaker");
+        const std::string speaker = sp!=s.MemberEnd() && sp->value.IsString() ? sp->value.GetString() : "";
+        if(speaker!="self" && speaker!="other")
+          return fail("step " + std::to_string(at) + ": the speaker is self or other");
+        st.hero = speaker=="other";
+        auto l = s.FindMember("line");
+        auto t = s.FindMember("text");
+        if(l!=s.MemberEnd() && l->value.IsString())
+          st.line = symbolName(std::string_view(l->value.GetString(), l->value.GetStringLength()));
+        if(t!=s.MemberEnd() && t->value.IsString())
+          st.text = TextCodec::fromUtf8(std::string_view(t->value.GetString(), t->value.GetStringLength()));
+        if(st.line.empty()==st.text.empty())
+          return fail("step " + std::to_string(at) + ": say takes a line or a text");
+        } else if(kind=="choice") {
+        st.kind = Step::Choice;
+        auto t  = s.FindMember("text");
+        auto id = s.FindMember("id");
+        if(t!=s.MemberEnd() && t->value.IsString())
+          st.text = TextCodec::fromUtf8(std::string_view(t->value.GetString(), t->value.GetStringLength()));
+        if(st.text.empty())
+          return fail("step " + std::to_string(at) + ": a choice needs its text");
+        if(id!=s.MemberEnd() && id->value.IsString()) {
+          st.id = symbolName(std::string_view(id->value.GetString(), id->value.GetStringLength()));
+          if(st.id.empty())
+            return fail("step " + std::to_string(at) + ": bad choice id");
+          }
+        auto body = s.FindMember("steps");
+        if(body==s.MemberEnd() || !steps(body->value, st.then, depth+1))
+          return fail("step " + std::to_string(at) + ": a choice needs its steps");
+        } else if(kind=="clear_choices") {
+        st.kind = Step::ClearChoices;
+        } else {
+        return fail("step " + std::to_string(at) + ": unknown step " + kind);
+        }
+      out.push_back(std::move(st));
+      ++at;
+      }
+    return true;
+    }
+  };
+
+}
+
+Program storygraph::readProgram(const rapidjson::Value& v, bool returns) {
+  Program    p;
+  StepReader r{Reader{p.error, true}, returns, p.error};
+  p.returns = returns;
+  if(!r.steps(v, p.steps, 0) && p.error.empty())
+    p.error = "bad steps";
+  if(!p.error.empty())
+    p.steps.clear();
+  return p;
   }

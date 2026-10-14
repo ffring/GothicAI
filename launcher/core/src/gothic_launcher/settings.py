@@ -27,6 +27,7 @@ ENV_KEYS = {
     "GOTHIC_AI_CHAT_SCALE": "game.chat_scale",
     "GOTHIC_AI_LLM": "llm.backend",
     "GOTHIC_DECIDER_URL": "llm.decider_url",
+    "GOTHIC_QUICK_LLM_URL": "llm.quick_url",
     "GOTHIC_ASR_PROVIDER": "voice.provider",
     "GOTHIC_ASR_FALLBACK": "voice.fallback",
     "GOTHIC_VOXTRAL_URL": "voice.voxtral_url",
@@ -69,6 +70,16 @@ class LlmSettings(_Section):
         None,
         title="Адрес быстрой модели",
         description="Strands decider (ws://…): первый звук, жесты, тело, распорядок NPC. Пусто: выключена",
+    )
+    quick: bool = Field(
+        True,
+        title="Реплики в бою от Gemma",
+        description="Быстрая модель на GPU-сервере: NPC в бою отвечают сразу",
+    )
+    quick_url: str | None = Field(
+        None,
+        title="Адрес модели реплик в бою",
+        description="Gemma на llama.cpp (http://…/v1). Пусто: сервер decider, порт 47834",
     )
 
 

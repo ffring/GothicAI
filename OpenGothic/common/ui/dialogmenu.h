@@ -34,6 +34,11 @@ class DialogMenu : public Tempest::Widget {
     bool isActive() const;
     bool hasContent() const;
 
+    // what the window offers now, the dialogs or a dialog's choices (none while a line plays), and picking one
+    // of them as the player does with the keys: for the debug and test tools
+    std::vector<std::string> entries() const;
+    bool                     pick(size_t i);
+
     void print      (std::string_view msg);
     void printScreen(std::string_view msg, int x, int y, int time, const GthFont &font);
     void drawMsg    (Tempest::Painter& p, int offsetY);

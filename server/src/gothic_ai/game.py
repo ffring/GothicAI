@@ -9,7 +9,7 @@ import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 from websockets.asyncio.server import ServerConnection, serve
@@ -22,10 +22,13 @@ from .protocol import (
     ActionResult,
     ActionType,
     AttachCmd,
+    BeastCmd,
+    BeastDo,
     BodyObservation,
     BodyObservationPacket,
     BodyObservations,
     BodyWatchCmd,
+    Chest,
     DebugCmd,
     DebugCommand,
     DetachCmd,
@@ -38,6 +41,7 @@ from .protocol import (
     NpcActCmd,
     NpcActResult,
     NpcActType,
+    NpcChestsCmd,
     NpcView,
     NpcViewCmd,
     PingCmd,
@@ -53,6 +57,7 @@ from .protocol import (
     StoryEvalCmd,
     StoryNearbyCmd,
     StoryPeopleCmd,
+    StoryProgramCmd,
     StorySpawnCmd,
     StoryStateCmd,
     StoryTagCmd,
@@ -67,6 +72,7 @@ log = logging.getLogger(__name__)
 # requests answered with `result`
 _Request = (
     AttachCmd
+    | BeastCmd
     | BodyWatchCmd
     | DetachCmd
     | DebugCmd
@@ -75,8 +81,10 @@ _Request = (
     | StoryEffectCmd
     | RaiseDeadCmd
     | StoryNearbyCmd
+    | NpcChestsCmd
     | StoryStateCmd
     | StoryEvalCmd
+    | StoryProgramCmd
     | StoryTagCmd
     | StoryPeopleCmd
 )
@@ -350,6 +358,12 @@ class GameLink:
         cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
         await self._request(cmd, timeout)
 
+    async def beast(
+        self, npc: str, do: BeastDo, *, ms: int | None = None, sit: bool | None = None, timeout: float = 5.0
+    ) -> None:
+        """The server's word on a wolf (see BeastCmd): listen, calm, flee, attack, resume."""
+        await self._request(BeastCmd(req=self._next_id("b"), npc=npc, do=do, ms=ms, sit=sit), timeout)
+
     async def raise_dead(
         self, npc: str, card: EndCard, spell: str | None = None, timeout: float = 5.0
     ) -> None:
@@ -372,6 +386,11 @@ class GameLink:
         """People within `radius` cm of an npc."""
         res = await self._request(StoryNearbyCmd(req=self._next_id("s"), npc=npc.upper(), radius=radius), 5.0)
         return list(res.value or [])
+
+    async def npc_chests(self, npc: str) -> list[Chest]:
+        """The npc's chests and what lies in them (v28), nearest first."""
+        res = await self._request(NpcChestsCmd(req=self._next_id("c"), npc=npc.upper()), 5.0)
+        return [Chest.model_validate(c) for c in res.value or []]
 
     async def story_state(
         self,
@@ -404,6 +423,18 @@ class GameLink:
         cmd = StoryEvalCmd(req=self._next_id("s"), npc=npc.upper(), exprs=exprs)
         return list((await self._request(cmd, timeout)).value or [])
 
+    async def story_program(
+        self,
+        node: str,
+        part: Literal["information", "condition"] = "information",
+        own: bool = False,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
+        """The program a dialog's function runs now, or the scripts' own (StoryProgramCmd): {node, fn,
+        returns, patched, steps}."""
+        cmd = StoryProgramCmd(req=self._next_id("s"), node=node.upper(), part=part, own=own)
+        return dict((await self._request(cmd, timeout)).value or {})
+
     async def story_tag(self, tag: str, npcs: list[str], timeout: float = 5.0) -> int:
         """Npc's of the world watched under a tag (see StoryTagCmd); how many were found."""
         cmd = StoryTagCmd(req=self._next_id("s"), tag=tag, npcs=[n.upper() for n in npcs])
@@ -419,6 +450,23 @@ class GameLink:
         await self._request(
             DebugCmd(req=self._next_id("r"), cmd="choose", npc=npc.upper(), node=node.upper()), timeout
         )
+
+    async def dialog_choices(self, npc: str, node: str, timeout: float = 5.0) -> list[dict[str, str]]:
+        """The choices dialog `node` offers after its lines, as the dialog window asks (game in -devmode)."""
+        cmd = DebugCmd(req=self._next_id("r"), cmd="choices", npc=npc.upper(), node=node.upper())
+        return list((await self._request(cmd, timeout)).value or [])
+
+    async def start_talk(self, npc: str, timeout: float = 5.0) -> None:
+        """The hero talks to the npc as with the action key: the dialog window opens (game in -devmode)."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd="talk", npc=npc.upper()), timeout)
+
+    async def dialog_menu(self, timeout: float = 5.0) -> list[str]:
+        """What the dialog window offers now, none while a line plays (game in -devmode)."""
+        return list((await self._request(DebugCmd(req=self._next_id("r"), cmd="menu"), timeout)).value or [])
+
+    async def pick_in_menu(self, text: str, timeout: float = 5.0) -> None:
+        """Pick the dialog window's entry `text` as the player does (game in -devmode)."""
+        await self._request(DebugCmd(req=self._next_id("r"), cmd="menu_pick", text=text), timeout)
 
     async def deal_window(self, timeout: float = 5.0) -> dict[str, Any] | None:
         """What the deal window shows (game in -devmode): {deal, version, npc, npc_gives, hero_gives,

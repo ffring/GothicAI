@@ -60,6 +60,9 @@ Interactive::Interactive(Vob* parent, World &world, const zenkit::VMovableObject
     isLockCracked = !door.locked;
     }
 
+  if(isContainer())
+    startContents = reinterpret_cast<const zenkit::VContainer&>(vob).contents;
+
   if(isContainer() && (flags&Flags::Startup)==Flags::Startup) {
     auto& container = reinterpret_cast<const zenkit::VContainer&>(vob);
     locked        = container.locked;

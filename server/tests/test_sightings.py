@@ -134,6 +134,53 @@ async def test_the_people_it_knows_last_seen_and_a_body():
     assert seen.tools(LOBART) == []  # never saw the hero: nothing to catch him with
 
 
+async def test_strangers_and_beasts_worth_remembering():
+    # step M2: Cavalorn saw the bandits in their cave, came out, and «там бандиты, разберись»
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    clock = Clock()
+    seen = sightings(store, clock=clock)
+    bdt = armor("ITAR_BDT_M", "Доспех бандита")
+    hero = look("PLAYER", "Я", 9, seen=False)
+    brago = look(
+        "BDT_1014_BANDIT_L",
+        "Браго",
+        10,
+        guild=9,
+        att="hostile",
+        armor=bdt,
+        state="ZS_SIT_CAMPFIRE",
+        waypoint="NW_FARM1_PATH_01",
+    )
+    sheep = look("SHEEP", "Овца", 7, kind="monster", guild=40, state="ZS_MM_ALLSCHEDULER")
+    passer = look("VLK_400_X", "Горожанин", 8, guild=3)  # nobody to remember
+    push(seen, view(AT_8, hero, brago, sheep, passer))
+    push(seen, view(AT_8 + 2, hero, brago, sheep, passer))
+    push(seen, view(AT_8 + 20, hero, look(HILDA, "Хильда", 6, waypoint="NW_FARM1_OUT_02")))
+    clock.t += 1
+
+    assert seen.situation(LOBART) == (
+        "Что ты видел сам, своими глазами (не с чужих слов):\n"
+        "Недавно видел, сейчас не видишь:\n"
+        "- незнакомец, по виду бандит (id BDT_1014_BANDIT_L) — сегодня 08:10–08:12, 20 минут назад — на "
+        "пастбище у входа на ферму Лобарта; враг тебе; сидит у костра."
+    )  # fmt: skip
+    # its intent may point to him; a companion set on him goes there first (orders.py)
+    assert seen.targets(LOBART) == {
+        "BDT_1014_BANDIT_L": "незнакомец, по виду бандит, видел 20 минут назад — "
+        "на пастбище у входа на ферму Лобарта"
+    }
+    assert seen.where_seen(LOBART, "bdt_1014_bandit_l") == "FARM1_PASTURE"
+    assert "незнакомец, по виду бандит" in (seen.recall(LOBART, "где бандиты?") or "")
+    # it is kept across a load, and fades
+    again = sightings(store)
+    again._sweep(AT_8 + 20)
+    assert again.where_seen(LOBART, "BDT_1014_BANDIT_L") == "FARM1_PASTURE"
+    seen._sweep(AT_8 + 4 * 60)
+    assert seen.targets(LOBART) == {} and seen.where_seen(LOBART, "BDT_1014_BANDIT_L") is None
+    assert "Недавно видел" not in (seen.situation(LOBART) or "")
+
+
 def test_time_in_words():
     assert when(AT_8, AT_8 + 4, AT_8 + 6) == "сегодня 08:10–08:14, только что"
     assert when(AT_8, AT_8, AT_8 + 25) == "сегодня 08:10, 25 минут назад"

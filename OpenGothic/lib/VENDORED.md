@@ -74,3 +74,6 @@ Keep these when updating a library from upstream.
   and removes all 14 proven false winners. Full query dispatch is checked separately because a
   corrected early-out cutoff can expose additional BVH candidates. Evidence is in
   [the sphere report](../../reports/physics/2026-10-14-jolt-stage1/sphere-cause-diagnostic-v12.md).
+- `ZenKit/` `DaedalusVm::unsafe_call_bl` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls a script function the way
+  the `BL` instruction does, so an override (`override_function`) runs instead of its code. The story
+  graph's Interpreter calls script functions from a dialog's program through it.

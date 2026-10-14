@@ -160,6 +160,8 @@ void MainWindow::setupUi() {
 
   Gothic::inst().onDialogPipe  .bind(&dialogs,&DialogMenu::openPipe);
   Gothic::inst().isNpcInDialogFn = std::bind(&DialogMenu::isNpcInDialog, &dialogs, std::placeholders::_1);
+  Gothic::inst().dialogEntriesFn = [this]() { return dialogs.entries(); };
+  Gothic::inst().dialogPickFn    = [this](size_t i) { return dialogs.pick(i); };
 
   Gothic::inst().onPrintScreen .bind(&dialogs,&DialogMenu::printScreen);
   Gothic::inst().onPrint       .bind(&dialogs,&DialogMenu::print);

@@ -3,8 +3,9 @@
 Perception (perception.py) tells what the npc sees now; here what it saw stays. A sighting is someone seen
 without a break (GAP_MIN game minutes unseen end it): when, the places he was seen at (the book of places),
 how he looked (his armor) and anything notable — a weapon drawn, blood, a fight, a body. Kept are the hero
-(whoever sees him: one that does not know his name still knows his face) and the people the npc knows by
-name; strangers and creatures are not.
+(whoever sees him: one that does not know his name still knows his face), the people the npc knows by
+name, and (step M2 of docs/npc-tools.md, «Видел недавно») strangers and creatures worth remembering: a body,
+one hostile to it or to the hero, one with a weapon drawn, a beast at someone — with what they were doing.
 
 Sightings are the npc's own events in the memory log of the save branch (memory.py, kind `seen`), so a load
 brings back exactly what it had seen before that save. One is written when it starts, every SAVE_MIN game
@@ -17,7 +18,10 @@ For the conversational model (a TurnExtension):
   saw him on the farm an hour ago. The code checks both halves: the sighting is the npc's own, and the hero
   did say those words. Then it is a lie caught (quests.caught): the npc takes his word no more, is wary of
   him, the people around hear it. What a witness it asked saw (witnesses.py, a line С1…) counts the same;
-- recall: the sightings of whom or where the query names.
+- recall: the sightings of whom or where the query names;
+- «Недавно видел, сейчас не видишь»: the strangers and creatures of the last `FADE_MIN` game minutes, with
+  their ids: they may be its intent's target (perception.py), and a companion set on one goes where it saw
+  him first (orders.py: «там бандиты, разберись» after it came out of their cave).
 
 What npc's far from the hero see is not kept: the game pushes the views of those near him (npc_views).
 """
@@ -37,7 +41,7 @@ from .journal import Journal
 from .knowledge import roots
 from .llm import Tool, ToolCall
 from .memory import MemoryStore
-from .perception import WEAPON, armor_look
+from .perception import WEAPON, _doing, armor_look
 from .protocol import GameMessage, Loading, Look, MemoryCmd, NpcView, NpcViews, Session, Snapshot
 from .quests import Lie, caught
 from .turn import ToolOutcome
@@ -59,12 +63,17 @@ NEAREST = 6  # people it knows, kept from one view (the nearest)
 PLACES_MAX = 4
 HEARD = 8  # the hero's latest lines a lie must be in
 RECALLED = 8
+NOTED = 6  # strangers and creatures worth remembering, kept from one view (the nearest)
+NOTED_SHOWN = 5  # ...in the situation
+FADE_MIN = 180  # ...not longer ago than this (game minutes, about 12 minutes of real time)
+HOSTILE = ("hostile", "angry")
 
 NOTABLE = {
     "weapon": "с оружием наголо",
     "hurt": "в крови",
     "fight": "в драке",
     "down": "без сознания",
+    "hostile": "враг тебе",
 }
 
 CATCH = "catch_lie"
@@ -105,6 +114,8 @@ class Sighting:
     armor_names: list[str] = field(default_factory=list)
     notable: list[str] = field(default_factory=list)  # NOTABLE keys, and "dead": a body
     place_ids: list[str] = field(default_factory=list)  # the same places by the book's ids (FARM1_PASTURE)
+    known: bool = True  # the hero or one it knows by name; False: a stranger or a creature, by its look
+    doing: str = ""  # what it was doing when last seen: «сидит у костра»
     saved: int = -1  # the end last written down; -1: never
 
     @property
@@ -122,6 +133,8 @@ class Sighting:
             "armor": self.armor,
             "armor_names": self.armor_names,
             "notable": self.notable,
+            **({} if self.known else {"known": False}),
+            **({"doing": self.doing} if self.doing else {}),
         }
 
     @classmethod
@@ -136,6 +149,8 @@ class Sighting:
             [str(a) for a in record.get("armor_names", [])],
             [str(n) for n in record.get("notable", [])],
             place_ids=[str(p) for p in record.get("place_ids", [])],
+            known=bool(record.get("known", True)),
+            doing=str(record.get("doing", "")),
         )
         s.saved = s.end
         return s
@@ -230,13 +245,14 @@ class Sightings:
         self.now = max(self.now, now)
         viewer = view.npc.upper()
         mind = self.mind(viewer)
-        for who, look in self._subjects(view):
+        for who, look, known in self._subjects(view):
             s = mind.going.get(who)
             if s is not None and now - s.end > GAP_MIN:
                 self._close(viewer, mind, s)
                 s = None
             if s is None:
-                s = Sighting(who, "Герой" if who == HERO else look.name, now, now)
+                name = "Герой" if who == HERO else look.name if known else self.desk.label(viewer, look)
+                s = Sighting(who, name, now, now, known=known)
                 mind.sightings.append(s)
                 del mind.sightings[:-KEEP]
                 mind.going[who] = s
@@ -251,16 +267,21 @@ class Sightings:
                 s.armor_names.append(look.armor.name if look.armor else "")
             for flag in _notable(look):
                 _add(s.notable, flag)
+            if doing := _doing(look.state, look.body, 0):
+                s.doing = doing
             if s.saved < 0 or s.end - s.saved >= SAVE_MIN:
                 self._write(viewer, s)
 
-    def _subjects(self, view: NpcView) -> list[tuple[str, Look]]:
-        """Whom of those it sees it keeps: the hero, and the people it knows (the nearest)."""
-        out: list[tuple[str, Look]] = []
+    def _subjects(self, view: NpcView) -> list[tuple[str, Look, bool]]:
+        """Whom of those it sees it keeps: the hero, the people it knows (the nearest), and the strangers and
+        creatures worth remembering (the nearest); whether it knows them."""
+        out: list[tuple[str, Look, bool]] = []
         if view.hero is not None and view.hero.seen:
-            out.append((HERO, view.hero))
+            out.append((HERO, view.hero, True))
         known = [o for o in view.sees if o.kind in ("human", "body") and self.desk.knows(view.npc, o)]
-        out += [(o.id.upper(), o) for o in known[:NEAREST]]
+        out += [(o.id.upper(), o, True) for o in known[:NEAREST]]
+        others = [o for o in view.sees if o not in known and _noticeable(o)]
+        out += [(o.id.upper(), o, False) for o in others[:NOTED]]
         return out
 
     def _where(self, view: NpcView, look: Look) -> tuple[str, str]:
@@ -359,7 +380,7 @@ class Sightings:
         others: list[Sighting] = []
         told: set[str] = set()
         for s in reversed(self.mind(npc).sightings):
-            if s.who == HERO or s.who in told:
+            if s.who == HERO or s.who in told or not s.known:
                 continue
             told.add(s.who)
             if s.who not in in_sight and self.now - s.end <= FORGET_MIN:
@@ -369,10 +390,54 @@ class Sightings:
         if others:
             lines.append("Знакомых, последний раз:")
             lines += [f"- {self._other(s, self.now)}." for s in others]
+        if noted := self.noted(npc, in_sight):
+            lines.append("Недавно видел, сейчас не видишь:")
+            lines += [
+                f"- {s.name} (id {s.who}) — {self.words(s)}{f'; {s.doing}' if s.doing else ''}."
+                for s in noted
+            ]
         self._shown[npc] = shown
         if not lines:
             return None
         return "Что ты видел сам, своими глазами (не с чужих слов):\n" + "\n".join(lines)
+
+    def noted(self, npc: str, in_sight: set[str] | None = None) -> list[Sighting]:
+        """The strangers and creatures it saw lately and does not see now, the latest first: the latest
+        sighting of each, of the last FADE_MIN game minutes."""
+        if in_sight is None:
+            view = self.desk.view(npc)
+            in_sight = {o.id.upper() for o in view.sees} if view is not None else set()
+        out: list[Sighting] = []
+        told: set[str] = set()
+        for s in reversed(self.mind(npc).sightings):
+            if s.known or s.who in told:
+                continue
+            told.add(s.who)
+            if s.who not in in_sight and self.now - s.end <= FADE_MIN:
+                out.append(s)
+            if len(out) >= NOTED_SHOWN:
+                break
+        return out
+
+    def targets(self, npc: str) -> dict[str, str]:
+        """Whom it saw lately and may point its intent to though it does not see them now (perception.py):
+        id -> how it knows him. Not the dead."""
+        return {
+            s.who: f"{s.name}, видел {ago(self.now - s.end)} — {', потом '.join(s.places) or 'где-то'}"
+            for s in self.noted(npc)
+            if "dead" not in s.notable
+        }
+
+    def where_seen(self, npc: str, who: str) -> str | None:
+        """The place (the book's id) where the npc last saw `who`, lately."""
+        who = who.upper()
+        for s in reversed(self.mind(npc).sightings):
+            if s.who == who:
+                ok = self.now - s.end <= FADE_MIN and s.place_ids
+                return s.place_ids[-1] if ok else None
+        return None
+
+    all_tools: tuple[Tool, ...] = (CATCH_TOOL,)
 
     def tools(self, npc: str) -> list[Tool]:
         told = self.hearsay is not None and self.hearsay.any(npc)
@@ -446,8 +511,10 @@ class Sightings:
         for s in reversed(self.mind(npc).sightings):
             if s.who == HERO:
                 hit = "геро" in q
-            else:
+            elif s.known:
                 hit = s.name.lower()[:4] in q
+            else:  # «бандиты»: by its look
+                hit = any(w in words for w in roots(s.name) if len(w) >= 4)
             hit = hit or any(w in words for p in s.places for w in roots(p) if len(w) >= 5)
             if hit:
                 hits.append(s)
@@ -530,6 +597,18 @@ def _add(items: list[str], item: str, limit: int = 99) -> None:
         items.append(item)
 
 
+def _noticeable(o: Look) -> bool:
+    """A stranger or a creature worth remembering: a body, one hostile to the npc or the hero, one with a
+    weapon drawn, a beast at someone. Not the sheep at pasture nor the passers-by."""
+    if o.kind == "body":
+        return True
+    if o.att in HOSTILE or o.att_hero in HOSTILE:
+        return True
+    if o.kind == "human":
+        return o.weapon in WEAPON
+    return o.state == "ZS_MM_ATTACK"
+
+
 def _notable(look: Look) -> list[str]:
     flags = []
     if look.kind == "body" or look.body == "dead":
@@ -542,6 +621,8 @@ def _notable(look: Look) -> list[str]:
         flags.append("hurt")
     if look.state == "ZS_ATTACK":
         flags.append("fight")
+    if look.att in HOSTILE and look.kind != "body":
+        flags.append("hostile")
     return flags
 
 

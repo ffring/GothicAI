@@ -18,6 +18,7 @@ if [ ! -d audio.cpp/.git ]; then
 fi
 git -C audio.cpp fetch -q --depth 1 origin "$AUDIOCPP_COMMIT"
 git -C audio.cpp checkout -q --force FETCH_HEAD
+git -C audio.cpp apply ../audiocpp-language.patch  # language=ru keeps transcripts in Russian letters
 arch="${CUDA_ARCH:-$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d .)}"
 (cd audio.cpp && scripts/build_linux.sh --backend cuda --cuda-arch "$arch" \
   --model-set custom --models voxtral_realtime --target audiocpp_server -j "${JOBS:-8}")

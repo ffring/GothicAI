@@ -15,28 +15,32 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import npc_tools, places, scenarios
+from . import npc_tools, places, programs, scenarios
 from .amends import Amends
+from .beasts import TONE_MAX_TOKENS, BeastDesk
 from .bodies import Bodies
 from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
 from .budget import Budget
+from .chests import ChestDesk
 from .chronicle import Chronicle
 from .concerns import Concerns
+from .consequences import LieConsequences
 from .contracts import symbol_by_name
 from .daylife import DayDesk
 from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
 from .executor import Intent
-from .fillers import Fillers
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .gossip import GossipDesk
+from .group import GroupTalk
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
+from .interject import Interjections
 from .journal import Journal, print_sink
 from .knowledge import Knowledge
 from .llm import (
@@ -51,6 +55,8 @@ from .llm import (
     ToolCall,
     ToolResult,
     make_backend,
+    make_quick,
+    quick_url,
 )
 from .llm.siwc import AuthError, TokenStore, login
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
@@ -75,7 +81,7 @@ from .sightings import Sightings
 from .social import Rumors
 from .story import StoryPatches, freed
 from .storyguard import StoryGuard
-from .talk import TalkDesk
+from .talk import TalkDesk, fights
 from .trace import TraceWriter, find_turn, latest
 from .trust import Trust
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
@@ -113,6 +119,8 @@ HELP = """commands (npc defaults to the last attached one):
   graph cond <node> <json>    add a condition (story graph expression) to a dialog; "-" drops them
   graph add <json>            add a dialog: {"id", "npc", "description", "lines", "effects", ...}
   graph remove <id>           remove an added dialog
+  graph program <node> [condition] [<json>|-]   the program of a dialog's information (or condition) or of a
+                    choice; with steps, the director's program in its place; "-" brings the scripts' one back
   quest <instance> <n> <item> <n> <title>   the npc gives the hero a quest: kill n creatures
                     (they appear 30 m away), the reward is an item it has
   quests            the director's quests: paid, lied about, found out
@@ -170,8 +178,11 @@ class ServerState:
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
+        self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
+        self.chests: ChestDesk | None = None
+        self.interject: Interjections | None = None
         self.bodies: Bodies | None = None
         self.concerns: Concerns | None = None
         self.guard: StoryGuard | None = None
@@ -182,6 +193,7 @@ class ServerState:
         self.sightings: Sightings | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
+        self.beasts: BeastDesk | None = None
 
 
 class Console:
@@ -442,6 +454,16 @@ class Console:
                 op = {"op": "add_node", "node": json.loads(node)}
             case ["remove", node]:
                 op = {"op": "remove_node", "node": node.upper()}
+            case ["program", node, *more] if len(more) <= 2:
+                part = "condition" if more[:1] == ["condition"] else "information"
+                more = more[1:] if more[:1] == ["condition"] else more
+                if not more:
+                    p = await story.link.story_program(node, part)
+                    print(f"{p.get('fn')}{' (the director’s)' if p.get('patched') else ''}:")
+                    print(programs.render(p.get("steps")))
+                    return
+                steps = None if more[0] == "-" else json.loads(more[0])
+                op = {"op": "program", "node": node.upper(), "part": part, "steps": steps}
             case _:
                 print(HELP)
                 return
@@ -464,7 +486,13 @@ def _story_graph(args: argparse.Namespace, game_dir: Path | None) -> storygraph.
 
 
 def _backend(args: argparse.Namespace) -> LLMBackend:
-    return make_backend(args.llm, args.model, base_url=args.base_url, reasoning_effort=args.reasoning_effort)
+    return make_backend(
+        args.llm,
+        args.model,
+        base_url=args.base_url,
+        reasoning_effort=args.reasoning_effort,
+        websocket=not args.no_websocket,
+    )
 
 
 def _audio_source(args: argparse.Namespace) -> AudioSource:
@@ -484,10 +512,13 @@ async def serve(args: argparse.Namespace) -> int:
     memory = MemoryStore(args.memory_db)
     asr = None if args.no_voice else AsrClient(args.asr_url)
     decider = None if args.no_brain or not args.decider_url else DeciderClient(args.decider_url)
+    # npc lines in a fight: a local model, in a fraction of a second (dialogue.py)
+    quick_at = None if args.no_quick else quick_url(args.quick_url, args.decider_url)
+    quick = make_quick(quick_at) if quick_at else None
+    # how the hero's words sound to a wolf, in a word (beasts.py)
+    tone_quick = make_quick(quick_at, max_tokens=TONE_MAX_TOKENS) if quick_at and args.beasts else None
     source = None if args.no_voice else _audio_source(args)
     tts = None if args.no_tts else TtsClient(args.tts_url)
-    # "Хм..." while the model thinks: made with the npc's voices, kept across reconnections of the game
-    fillers = None if args.no_fillers else Fillers(None if tts is None else args.tts_url)
     journal = Journal(print_sink if args.journal else None)
     trace = None if args.no_trace else TraceWriter(Path(args.trace_dir))
     budget = Budget(per_npc_per_min=args.llm_per_npc_min, total_per_min=args.llm_total_min)
@@ -496,8 +527,9 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("turn traces: %s", "off" if trace is None else args.trace_dir)
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
-    log.info("fillers: %s", "off" if fillers is None else ("voiced" if tts is not None else "subtitles"))
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
+    log.info("lines in a fight: %s", quick_at or "the conversational model")
+    log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = None if args.no_director and args.no_knowledge else _story_graph(args, game_dir)
     place_book = places.PlaceBook.load()
     log.info("places: %s", f"{len(place_book.places)} named" if place_book else "no book, waypoints only")
@@ -516,10 +548,10 @@ async def serve(args: argparse.Namespace) -> int:
             personas,
             memory=memory,
             tts=tts,
-            fillers=fillers,
             journal=journal,
             trace=trace,
             budget=budget,
+            quick=quick,
         )
         # the bandits below Xardas's tower are freed of their scripted ambush: our models decide (story.py)
         static = freed(graph.nodes.__contains__) if graph is not None else freed()
@@ -532,8 +564,25 @@ async def serve(args: argparse.Namespace) -> int:
         # orders to the hero's companions ("Стой!", "За мной!"): carried out at once, no model call
         state.talk.orders = Orders(link, state.talk, state.dialogue, journal=journal, places=place_book)
         state.dialogue.extensions.append(state.talk.orders)  # places around a companion, go_to
+        # talk with several npc's: who takes part, and whose words the others heard (group.py)
+        group = GroupTalk(link, state.dialogue, state.talk)
+        state.dialogue.extensions.append(group)
+        state.talk.lead = lambda npc: card.lead if (card := personas.cards.get(npc)) is not None else 0
+        if reflexes is not None and args.interject:
+            # who speaks up after the one the hero spoke to, by character (step B3, on by default)
+            interject = Interjections(
+                state.dialogue, state.talk, group, reflexes, budget, trace=trace, journal=journal
+            )
+            interject.view_of = lambda npc: state.talk.view_of(npc)
+            state.interject = interject
+            state.incidents.speaks_up_there = interject.covers
         state.incidents.companion = state.talk.orders.companion
+        if args.beasts or args.scenario == "wolf":
+            # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
+            state.beasts = BeastDesk(link, quick=tone_quick, journal=journal, trace=trace)
+            state.talk.beasts = state.beasts
         state.incidents.fighting_ru = state.talk.orders.fighting_ru
+        state.incidents.foe = state.talk.orders.foe
         talk_desk = state.talk  # its roster is a new dict each time
 
         def guild_of(npc: str) -> int | None:
@@ -541,6 +590,12 @@ async def serve(args: argparse.Namespace) -> int:
             return e.guild if e is not None else None
 
         state.dialogue.guild_of = guild_of
+        orders = state.talk.orders
+        # one in a fight near the hero that is not his companion fights him: talked to, it may call it off
+        state.dialogue.fights_hero = lambda npc: (
+            fights(talk_desk.people.get(npc.upper())) and not orders.companion(npc)
+        )
+        state.dialogue.on_calm.append(orders.truce)
         if asr is not None and source is not None:
             state.voice = VoiceInput(
                 link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
@@ -570,6 +625,7 @@ async def serve(args: argparse.Namespace) -> int:
             places=place_book,
         )
         state.dialogue.extensions.append(perception)
+        state.talk.orders.view_of = perception.fresh  # a companion sent somewhere looks around there
         state.dialogue.sight = perception.sight
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
@@ -580,6 +636,9 @@ async def serve(args: argparse.Namespace) -> int:
             link, memory, perception, state.chronicle, knows_hero=knows_hero, journal=journal
         )
         state.dialogue.extensions.append(state.sightings)
+        # whom it saw lately is its intent's target too, and a companion goes where it saw him (step M2)
+        perception.remembered = state.sightings.targets
+        state.talk.orders.last_seen = state.sightings.where_seen
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle)
         state.dialogue.extensions.append(trust)
@@ -590,10 +649,16 @@ async def serve(args: argparse.Namespace) -> int:
             state.chronicle,
             journal=journal,
             names=lambda name: symbol_by_name(personas.cards, name),
+            things=graph.things_of if graph is not None else None,
         )
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
         state.dialogue.extensions.append(state.deals.contracts)
+        if args.chests:
+            # what lies in its chest, as it knows, and it goes to take it out (docs/npc-tools.md «Сундуки»)
+            state.chests = ChestDesk(link, memory, places=place_book, journal=journal)
+            state.dialogue.extensions.append(state.chests)
+            state.deals.in_chests = state.chests.in_chests
         talk.on_talk_end.append(state.deals.end)
         if args.wrath or args.scenario == "wrath":
             # insult Xardas enough and he raises you as a skeleton (on by default, --no-wrath turns it off)
@@ -659,6 +724,16 @@ async def serve(args: argparse.Namespace) -> int:
                 state.chronicle,
                 state.director,
                 llm,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
+            # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
+            state.consequences = LieConsequences(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
                 dialogue=state.dialogue,
                 journal=journal,
             )
@@ -797,7 +872,7 @@ async def serve(args: argparse.Namespace) -> int:
                 log.info("scenario m4: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m5":
-                results = await scenarios.m5_turn_loop(link, args.npc, decider, trace)
+                results = await scenarios.m5_turn_loop(link, args.npc, decider, trace, quick)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
@@ -831,11 +906,65 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario orders: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "wolf":
+                assert state.talk is not None and state.beasts is not None
+                results = await scenarios.wolf_scenario(link, state.talk, state.beasts)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario wolf: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
-                results = await scenarios.companion_scenario(link, state.dialogue, state.talk)
+                results = await scenarios.companion_scenario(
+                    link, state.dialogue, state.talk, perception=state.perception
+                )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "ground":
+                assert state.dialogue is not None and state.talk is not None and state.perception is not None
+                results = await scenarios.ground_scenario(link, state.dialogue, state.talk, state.perception)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario ground: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in ("chests", "chests_lobart"):
+                assert state.dialogue is not None and state.talk is not None
+                lobart = {"npc": "BAU_950_LOBART", "name": "Лобарт", "item": "ITAR_BAU_L"}
+                lobart["ask"] = "Лобарт, продай мне крестьянскую одежду."
+                more = lobart if args.scenario == "chests_lobart" else {}
+                results = await scenarios.chests_scenario(
+                    link, state.dialogue, state.talk, state.chests, **more
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario chests: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "group":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.group_scenario(link, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario group: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "interject":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.interject_scenario(
+                    link, state.dialogue, state.talk, state.interject
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario interject: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "remembers":
+                assert state.dialogue is not None and state.talk is not None
+                assert state.sightings is not None and state.perception is not None
+                results = await scenarios.remembers_scenario(
+                    link, state.dialogue, state.talk, state.sightings, state.perception
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario remembers: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "calm":
+                assert state.dialogue is not None and state.talk is not None
+                results = await scenarios.calm_scenario(link, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario calm: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "m6":
                 dialogue, talk, knowledge = state.dialogue, state.talk, state.knowledge
@@ -1031,6 +1160,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario graph: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "programs":
+                assert state.story is not None
+                results = await scenarios.graph_programs(link, state.story, args.npc, dialogue=state.dialogue)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario programs: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -1062,6 +1197,10 @@ async def serve(args: argparse.Namespace) -> int:
         await tts.aclose()
     if decider is not None:
         await decider.aclose()
+    if quick is not None:
+        await quick.aclose()
+    if tone_quick is not None:
+        await tone_quick.aclose()
     memory.close()
     for task in finished:
         if not task.cancelled() and (err := task.exception()) is not None:
@@ -1426,6 +1565,12 @@ def _add_llm_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model", help="model id (default depends on the backend)")
     p.add_argument("--base-url", help="API base url (openai/local backends)")
     p.add_argument("--reasoning-effort", default="low", help="reasoning effort for Responses models")
+    p.add_argument(
+        "--no-websocket",
+        action="store_true",
+        help="npc requests of Responses models over HTTP, not a WebSocket of each npc's own (no prompt cache "
+        "on the ChatGPT plan, first text ~1 s later)",
+    )
     p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
     p.add_argument("--npc", default="NONE_100_XARDAS", help="default npc for commands and scenarios")
 
@@ -1452,12 +1597,21 @@ def main() -> None:
             "m5e",
             "orders",
             "companion",
+            "wolf",
+            "calm",
+            "ground",
+            "chests",
+            "chests_lobart",
+            "group",
+            "interject",
+            "remembers",
             "m6",
             "see",
             "seen",
             "witness",
             "places",
             "graph",
+            "programs",
             "lie",
             "wrath",
             "repair",
@@ -1488,9 +1642,6 @@ def main() -> None:
     p.add_argument("--no-voice", action="store_true", help="disable push-to-talk")
     p.add_argument("--tts-url", default=os.environ.get("GOTHIC_TTS_URL", DEFAULT_TTS_URL))
     p.add_argument("--no-tts", action="store_true", help="npc's do not speak aloud (subtitles only)")
-    p.add_argument(
-        "--no-fillers", action="store_true", help='npc\'s say no "Хм..." while the model thinks of an answer'
-    )
     p.add_argument("--journal", action="store_true", help="print lines and actions as JOURNAL {json} lines")
     p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR), help="where turn traces go (a file a day)")
     p.add_argument("--no-trace", action="store_true", help="do not write turn traces")
@@ -1505,6 +1656,15 @@ def main() -> None:
         "--decider-url",
         default=os.environ.get("GOTHIC_DECIDER_URL"),
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
+    )
+    p.add_argument(
+        "--quick-url",
+        default=os.environ.get("GOTHIC_QUICK_LLM_URL"),
+        help="the quick model's server (llama.cpp, server/deploy/gemma): npc lines in a fight at once "
+        "(default: the decider's host, http://<gpu>:47834/v1)",
+    )
+    p.add_argument(
+        "--no-quick", action="store_true", help="npc lines in a fight from the conversational model"
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
@@ -1529,6 +1689,25 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="carry out the behavioral model's fights and flights (off: traced only, in shadow)",
+    )
+    p.add_argument(
+        "--beasts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="wolves hear the tone of the hero's words: they let him pass, run or bite (docs/beasts.md)",
+    )
+    p.add_argument(
+        "--chests",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's know what lies in their chests and go to take it out (docs/npc-tools.md «Сундуки»)",
+    )
+    p.add_argument(
+        "--interject",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="who speaks up in the conversation after the one the hero spoke to, by character: the "
+        "behavioral model's `interject` (docs/npc-tools.md, step B3)",
     )
     p.add_argument(
         "--free-bandits",

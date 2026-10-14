@@ -9,11 +9,15 @@
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
-#       DECIDER_URL, or a fixed stand-in)
+#       DECIDER_URL, or a fixed stand-in); with QUICK_URL the words are the quick model's line, at once
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
 #       runs from the wolf), words follow on the move; the hero kills the wolf (monster_killed): the shepherd
 #       reacts and speaks again (the live models with DECIDER_URL and LLM, or a fixed stand-in and scripted
 #       words). rescue_self: the shepherd kills the wolf himself and says a word about it
+#   wolf: wolves hear the hero (docs/beasts.md) on the road below Xardas's tower: a wolf growls at him, waits
+#       for his words while he holds the talk key, is soothed, sits, lets him pass and be; hostility, «Стой!»,
+#       walking right up to a calm one, a threat, a failed roll, and one talked down mid-bite (the tone is the
+#       quick model's with QUICK_URL, the rules' else; the dice are the scenario's)
 #   m5e: talking without a window: a typed line and the talk key (a wav through the ASR service) with the
 #       hero's own focus, the addressee, the npc's body, the hero's doings, an interruption, a witness, the end
 #       of a conversation when the hero walks away, a walking npc answering on the move
@@ -24,7 +28,8 @@
 #   see: what npc's perceive (npc_view, v11): Xardas sees the hero in front of him and not through the tower's
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
 #       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
-#       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#       a wolf killed in front of Lobart is a dead wolf to him; places by name at Xardas's tower, Lobart's
+#       and Onar's farms and in the city
 #   seen: what npc's saw (v12): Lobart keeps when, where and how he saw the hero on his farm; the hero goes to
 #       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
 #       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
@@ -100,6 +105,25 @@
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
+#   ground: Cavalorn follows the hero, the hero throws his letter down: Cavalorn sees it lying there, picks it
+#       up when told «бери» (take_item, model scripted with LLM=fake) and follows the hero again (protocol v22)
+#   group: one word at a time (docs/npc-tools.md, step B2): «Пацаны, здорово!» at the bandits' cave, Cavalorn
+#       with the hero: Brago, who leads them, answers first, the others' words wait their turn and are heard
+#       after his, the second knows what he said, a fourth voice says nothing. Starts the TTS service
+#       (TTS=fake); models scripted with LLM=fake
+#   interject: who speaks up, by character (docs/npc-tools.md, step B3), live only (LLM=chatgpt and
+#       DECIDER_URL): at the bandits' cave the hero says three phrases, to Brago, to his mate, to them all;
+#       no more than three voices to each, none over another, someone speaks up by the behavioral model's
+#       word; what each said is in the log, to be read. Starts the TTS service (TTS=fake)
+#   remembers: seen lately (docs/npc-tools.md, step M2): Cavalorn goes into the bandits' cave first, sees them,
+#       comes back out; «там в пещере бандиты, разберись» (model scripted with LLM=fake): it remembers them
+#       though it sees them no more, walks into the cave first and fights Brago
+#   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
+#       and given back, the director's in place of an information (a line of its own, gold, experience) and of
+#       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its
+#       choices (v24) through the debug commands and through the dialog window as the player has it, and a
+#       program kept across save/load; the director's own lines in the npc's voice (v26). Starts the TTS
+#       service (TTS=fake)
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
@@ -126,12 +150,17 @@ BRAIN_ARGS=(--no-brain)
 if [ -n "${DECIDER_URL:-}" ]; then
   BRAIN_ARGS=(--decider-url "$DECIDER_URL")
 fi
+# lines in a fight come from the quick model only when given (QUICK_URL=http://<gpu-host>:47834/v1; m5)
+QUICK_ARGS=(--no-quick)
+if [ -n "${QUICK_URL:-}" ]; then
+  QUICK_ARGS=(--quick-url "$QUICK_URL")
+fi
 
 ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")
@@ -143,7 +172,7 @@ if [ "$SCENARIO" = "m3" ] || [ "$SCENARIO" = "m5e" ]; then
 fi
 
 (cd "$ROOT/server" && exec uv run gothic-ai serve --port "$PORT" --scenario "$SCENARIO" --llm "$LLM" --exit-after --no-console \
-  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
+  --memory-db "$LOG_DIR/memory.sqlite3" --trace-dir "$LOG_DIR/traces" "${VOICE_ARGS[@]}" "${TTS_ARGS[@]}" "${BRAIN_ARGS[@]}" "${QUICK_ARGS[@]}") >"$LOG_DIR/server.log" 2>&1 &
 SRV=$!
 GAME=""
 # `|| true`: with set -e a failing kill of an already finished process would change the exit code

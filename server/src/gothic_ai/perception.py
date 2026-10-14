@@ -12,6 +12,18 @@ same for both models:
 
 The npc's nearest to the hero are pushed once a second (npc_views); before a turn of the conversational
 model its view is asked afresh.
+
+What it sees is told with the ids its intent may point to, where each is from the hero as he faces («слева
+от героя»: as on his screen) and who is its enemy or the hero's (protocol v18), and whom the hero looks at:
+so "вон тот бандит", "там" and "бей его" have something to point to. Those close by out of its field of
+view it notices all the same. Its intent may point only to whom it sees, saw a moment ago (`RECENT_S`) or
+the hero looks at: not to everyone within 15 m, wall or no wall, as the snapshot had it.
+
+The dead it sees by who they were: «туша: Волк» (a beast is a beast, dead or alive), «тело: Малет» if it
+knew him, else by the look of what he wears; with ids, so «вон тот мёртвый волк» has something to point to.
+
+It sees things lying about too (protocol v22): «На земле: Запечатанное послание (ITWR_…; 1 м, у ног
+героя).». What the hero threw down for it, it can pick up (`take_item`, npc_tools.py).
 """
 
 from __future__ import annotations
@@ -19,13 +31,13 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .npc_tools import guild_name
-from .protocol import GameMessage, HeroLook, Loading, Look, NpcView, NpcViews, Session, Snapshot
+from .protocol import GameMessage, GroundItem, HeroLook, Loading, Look, NpcView, NpcViews, Session, Snapshot
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -36,8 +48,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 FRESH_S = 3.0  # a pushed view older than this is not used
+RECENT_S = 60.0  # someone seen this long ago may still be its intent's target (out of sight for a moment)
 HEARD_CM = 1500  # the hero unseen but this close: it hears him
+AT_FEET_CM = 150  # a thing this close to the hero lies at his feet
 PEOPLE_MAX, EN_OTHERS_MAX = 8, 3
+BEASTS = 16  # GIL_SEPERATOR_HUM: the guilds from it up are animals and monsters, dead or alive
 # guilds whose members know each other wherever they meet: an order, a garrison, a band of mercenaries
 ORDERS = {1, 2, 4, 5, 6, 7, 14}
 
@@ -167,6 +182,21 @@ EN_DOING = {
 }
 
 
+# where someone is from the hero as he faces (v18), and how one treats the viewer and the hero
+SIDES = {
+    "ahead": "перед героем",
+    "left": "слева от героя",
+    "right": "справа от героя",
+    "behind": "за спиной героя",
+}
+EN_SIDES = {"ahead": "ahead of the hero", "left": "left of the hero", "right": "right of the hero",
+            "behind": "behind the hero"}  # fmt: skip
+TO_YOU = {"hostile": "враг тебе", "angry": "злится на тебя"}
+TO_HERO = {"hostile": "враждует с героем", "angry": "злится на героя"}
+# words by which one asks to look at the dead one, not the living
+DEAD_WORDS = ("мёрт", "мерт", "труп", "туш", "тело", "убит", "дохл", "dead", "body")
+
+
 @dataclass(frozen=True)
 class Sight:
     """The npc's view for the conversational model's situation, in place of the omniscient lines."""
@@ -174,6 +204,10 @@ class Sight:
     place: str
     hero: str | None
     people: str
+    # whom its intent may point to: id -> how it knows him (the hero, whom it sees or saw a moment ago)
+    targets: dict[str, str] = field(default_factory=dict)
+    ground: str | None = None  # «На земле: …», what it sees lying about
+    things: dict[str, GroundItem] = field(default_factory=dict)  # what take_item may pick up, by item id
 
 
 def armor_look(armor: str | None) -> tuple[str, str] | None:
@@ -204,18 +238,20 @@ class PerceptionDesk:
         self.places = places  # the book of place names (places.py); without it, waypoints
         self.clock = clock
         self._views: dict[str, tuple[float, NpcView]] = {}
+        self._recent: dict[str, dict[str, tuple[float, Look]]] = {}  # npc -> whom it saw, when
         self.on_view: list[Callable[[NpcView], None]] = []  # every view that comes, pushed or asked
+        # whom it saw lately and does not see now (sightings.py, step M2): id -> how it knows him
+        self.remembered: Callable[[str], dict[str, str]] = lambda npc: {}
         link.listeners.append(self._on_message)
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
             case NpcViews():
-                now = self.clock()
                 for v in msg.views:
-                    self._views[v.npc.upper()] = (now, v)
-                    self._seen(v)
+                    self._store(v)
             case Session() | Loading():
                 self._views.clear()
+                self._recent.clear()
 
     def view(self, npc: str) -> NpcView | None:
         """Its latest view, if fresh enough."""
@@ -231,9 +267,18 @@ class PerceptionDesk:
         """Its view asked from the game now (a free npc far from the hero is not pushed)."""
         views = await self.link.npc_view([npc])
         for v in views:
-            self._views[v.npc.upper()] = (self.clock(), v)
-            self._seen(v)
+            self._store(v)
         return self.view(npc)
+
+    def _store(self, view: NpcView) -> None:
+        now = self.clock()
+        self._views[view.npc.upper()] = (now, view)
+        recent = self._recent.setdefault(view.npc.upper(), {})
+        for o in view.sees:
+            recent[o.id.upper()] = (now, o)
+        for who in [w for w, (t, _) in recent.items() if now - t > RECENT_S]:
+            del recent[who]
+        self._seen(view)
 
     def _seen(self, view: NpcView) -> None:
         for listener in self.on_view:
@@ -255,11 +300,15 @@ class PerceptionDesk:
         return guild is not None and guild in ORDERS and guild == other.guild
 
     def label(self, viewer: str, other: Look) -> str:
-        """How the npc calls someone it sees, in Russian."""
-        if self.knows(viewer, other):
-            return other.name
-        look = armor_look(other.armor.item if other.armor else None)
-        return f"незнакомец, по виду {look[0]}" if look else "незнакомец"
+        """How the npc calls someone it sees, in Russian: «туша: Волк», «тело: Малет» if he is dead."""
+        if _beast(other) or self.knows(viewer, other):
+            who = other.name
+        else:
+            look = armor_look(other.armor.item if other.armor else None)
+            who = f"незнакомец, по виду {look[0]}" if look else "незнакомец"
+        if other.kind == "body":
+            return f"{'туша' if _beast(other) else 'тело'}: {who}"
+        return who
 
     # --- the conversational model ---------------------------------------------------------------
 
@@ -267,7 +316,33 @@ class PerceptionDesk:
         view = self.view(npc)
         if view is None:
             return None
-        return Sight(self._place(view), self._hero(view, snap), self._people(view))
+        return Sight(
+            self._place(view),
+            self._hero(view, snap),
+            self._people(view),
+            self.targets(view),
+            ground=_ground(view.items),
+            things={t.item.upper(): t for t in view.items},
+        )
+
+    def targets(self, view: NpcView) -> dict[str, str]:
+        """Whom its intent may point to: the hero, whom it sees, saw a moment ago, whom the hero looks at
+        (he points at him), and the strangers and creatures it saw lately (sightings.py); id -> how it
+        knows him."""
+        out = {"PLAYER": "герой"}
+        for o in view.sees:
+            out.setdefault(o.id.upper(), f"{self.label(view.npc, o)}, {_m(o.distance)} м")
+        now = self.clock()
+        for who, (t, o) in self._recent.get(view.npc.upper(), {}).items():
+            if who != view.npc.upper() and now - t <= RECENT_S:
+                out.setdefault(who, f"{self.label(view.npc, o)}, видел только что")
+        focus = view.hero.focus.upper() if view.hero is not None and view.hero.focus else None
+        if focus and focus not in out and focus != view.npc.upper():
+            out[focus] = "на него смотрит герой"
+        for who, how in self.remembered(view.npc).items():  # «там бандиты, разберись»
+            if who.upper() != view.npc.upper():
+                out.setdefault(who.upper(), how)
+        return out
 
     def place(self, view: NpcView) -> Place | None:
         """Where the npc is, by name."""
@@ -304,7 +379,9 @@ class PerceptionDesk:
                 return f"Героя ты сейчас не видишь, но слышишь: он в {metres} м."
             return f"Героя не видно, он в {metres} м."
         known = self.knows_hero(view.npc)
-        line = f"Герой в {metres} м" + (", смотрит на тебя" if hero.faces_you else "")
+        line = f"Герой в {metres} м" + (
+            ", смотрит на тебя" if hero.faces_you or hero.focus == view.npc else ""
+        )
         details = _details(hero)
         look = armor_look(hero.armor.item if hero.armor else None)
         if known:
@@ -314,35 +391,46 @@ class PerceptionDesk:
             details.insert(0, f"ты его не знаешь, по виду {look[0]}" if look else "ты его не знаешь")
         if hero.armor is None:
             details.append("без доспеха")
-        return line + (": " + "; ".join(details) if details else "") + "."
+        line += (": " + "; ".join(details) if details else "") + "."
+        if hero.focus and hero.focus.upper() != view.npc.upper():
+            seen = next((o for o in view.sees if o.id.upper() == hero.focus.upper()), None)
+            whom = (
+                f"{self.label(view.npc, seen)} (id {seen.id})"
+                if seen
+                else f"кого-то, кого ты не видишь (id {hero.focus})"
+            )
+            line += f" Герой смотрит на: {whom}."
+        return line
 
     def _people(self, view: NpcView) -> str:
-        # creatures of a kind that only stand about are told once: «Овца ×6 (6–14 м)»
-        herds: dict[str, list[Look]] = {}
+        # creatures of a kind that only stand about are told once: «Овца ×6 (6–14 м)», the dead of a kind
+        # too: «туша: Волк ×3 (5–9 м)»
+        herds: dict[tuple[str, str], list[Look]] = {}
         for o in view.sees:
-            if o.kind == "monster" and o.state != "ZS_MM_ATTACK":
-                herds.setdefault(o.name, []).append(o)
+            if _beast(o) and o.state != "ZS_MM_ATTACK":
+                herds.setdefault((o.kind, o.name), []).append(o)
         items: list[str] = []
-        told: set[str] = set()
+        told: set[tuple[str, str]] = set()
         for o in view.sees:
             if len(items) >= PEOPLE_MAX:
                 break
-            herd = herds.get(o.name, []) if o.kind == "monster" else []
+            herd = herds.get((o.kind, o.name), []) if _beast(o) else []
             if len(herd) > 1:
-                if o.name not in told:
-                    told.add(o.name)
+                if (o.kind, o.name) not in told:
+                    told.add((o.kind, o.name))
                     near, far = _m(herd[0].distance), _m(herd[-1].distance)
-                    items.append(
-                        f"{o.name} ×{len(herd)} ({near}–{far} м)"
-                        if near != far
-                        else f"{o.name} ×{len(herd)} ({near} м)"
-                    )
+                    span = f"{near}–{far} м" if near != far else f"{near} м"
+                    items.append(f"{self.label(view.npc, o)} ×{len(herd)} (id {o.id}; {span})")
                 continue
             if o.kind == "body":
-                who = o.name if self.knows(view.npc, o) else "чьё-то"
-                items.append(f"тело ({who}, {_m(o.distance)} м)")
+                items.append(f"{self.label(view.npc, o)} (id {o.id}; {_m(o.distance)} м{_side(o)})")
                 continue
-            parts = [f"{self.label(view.npc, o)} ({_m(o.distance)} м)", *_details(o, with_armor=False)]
+            parts = [f"{self.label(view.npc, o)} (id {o.id}; {_m(o.distance)} м{_side(o)})"]
+            if o.att in TO_YOU:
+                parts.append(TO_YOU[o.att])
+            elif o.att_hero in TO_HERO:
+                parts.append(TO_HERO[o.att_hero])
+            parts += _details(o, with_armor=False)
             if o.talking_to == view.npc:
                 parts.append("говорит с тобой")
             elif o.talking_to == "PLAYER":
@@ -384,9 +472,11 @@ class PerceptionDesk:
         text = who.lower().strip()
         if view.hero is not None and view.hero.seen and ("геро" in text or text in ("player", "hero")):
             return view.hero
-        for o in view.sees:
+        dead = any(w in text for w in DEAD_WORDS)
+        # «мёртвый волк» is the dead one, «волк» the living, the nearest of them first
+        for o in sorted(view.sees, key=lambda o: (o.kind == "body") != dead):
             if o.name.lower() in text or text in o.name.lower() or text == o.id.lower():
-                if self.knows(view.npc, o) or o.kind == "monster":
+                if self.knows(view.npc, o) or _beast(o):
                     return o
         strangers = [o for o in view.sees if o.kind == "human" and not self.knows(view.npc, o)]
         for o in strangers:  # a stranger, by what he looks like
@@ -407,6 +497,8 @@ class PerceptionDesk:
 
     def situation(self, npc: str) -> str | None:
         return None  # the view goes into the situation itself (npc_tools.render_situation)
+
+    all_tools: tuple[Tool, ...] = (LOOK_TOOL,)
 
     def tools(self, npc: str) -> list[Tool]:
         view = self.view(npc)
@@ -451,8 +543,18 @@ class PerceptionDesk:
                     lines.append("The hero: " + "; ".join(said) + ".")
         others = sorted(view.sees, key=lambda o: (_salience(o), o.distance))
         for o in others[:EN_OTHERS_MAX]:
+            where = f", {EN_SIDES[o.from_hero]}" if o.from_hero in EN_SIDES else ""
             if o.kind == "body":
-                lines.append(f"A dead body lies {_m(o.distance)} m away.")
+                if _beast(o):
+                    whose = f"A dead {o.name}"
+                elif self.knows(view.npc, o):
+                    whose = f"The body of {o.name}"
+                else:
+                    look = armor_look(o.armor.item if o.armor else None)
+                    whose = (
+                        f"The body of a stranger who looks like {look[1]}" if look else "A stranger's body"
+                    )
+                lines.append(f"{whose} lies {_m(o.distance)} m away{where}.")
                 continue
             if o.kind == "monster":
                 who = o.name  # a creature: its name as the game shows it
@@ -462,11 +564,20 @@ class PerceptionDesk:
                 look = armor_look(o.armor.item if o.armor else None)
                 who = f"A stranger who looks like {look[1]}," if look else "A stranger"
             what = []
+            if o.att == "hostile":
+                what.append("hostile to you")
+            elif o.att_hero == "hostile":
+                what.append("hostile to the hero")
             if o.weapon in WEAPON and o.kind == "human":
                 what.append(f"with {WEAPON[o.weapon][1]}")
             if o.state in EN_DOING:
                 what.append(EN_DOING[o.state])
-            lines.append(f"{who} is {_m(o.distance)} m away" + (", " + ", ".join(what) if what else "") + ".")
+            what_s = ", " + ", ".join(what) if what else ""
+            lines.append(f"{who} is {_m(o.distance)} m away{where}{what_s}.")
+        if view.items:
+            t = view.items[0]
+            at = " at the hero's feet" if t.hero_cm is not None and t.hero_cm <= AT_FEET_CM else ""
+            lines.append(f"On the ground: {t.name}, {_m(t.distance)} m away{at}.")
         return tuple(lines)
 
 
@@ -478,6 +589,36 @@ _EN_ROOMS = {
     7: "mercenaries'",
     9: "bandits'",
 }
+
+
+def _beast(o: Look) -> bool:
+    """An animal or a monster, dead or alive: told by its kind, not by a name one has to know."""
+    return o.kind == "monster" or o.guild >= BEASTS
+
+
+def _side(o: Look) -> str:
+    """Where it is: from the hero as he faces, and whether the viewer has it only out of the corner of its
+    eye (close by, out of its field of view)."""
+    parts = [SIDES[o.from_hero]] if o.from_hero in SIDES else []
+    if o.noticed:
+        parts.append("сбоку или у тебя за спиной")
+    return "".join(f", {p}" for p in parts)
+
+
+def _ground(items: list[GroundItem]) -> str | None:
+    """«На земле: Запечатанное послание (ITWR_…; 1 м, у ног героя); Луговой горец ×3 (ITPL_…; 8 м).»"""
+    if not items:
+        return None
+    told = []
+    for t in items:
+        where = [f"{_m(t.distance)} м"]
+        if t.hero_cm is not None and t.hero_cm <= AT_FEET_CM:
+            where.append("у ног героя")
+        elif t.from_hero in SIDES:
+            where.append(SIDES[t.from_hero])
+        count = f" ×{t.count}" if t.count > 1 else ""
+        told.append(f"{t.name}{count} ({t.item}; {', '.join(where)})")
+    return "На земле: " + "; ".join(told) + "."
 
 
 def _salience(o: Look) -> int:

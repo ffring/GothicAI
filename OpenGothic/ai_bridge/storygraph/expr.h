@@ -66,6 +66,8 @@ namespace ex {
   ExprP lnot(const ExprP& a);
   ExprP land(std::vector<ExprP> terms);
   ExprP lor(std::vector<ExprP> terms);
+  // an operator as the bytecode computes it: nothing folded, flattened or dropped (programs, program.h)
+  ExprP exact(const std::string& o, std::vector<ExprP> args);
 
   // true when `a` contains an Unknown
   bool  opaque(const ExprP& a);

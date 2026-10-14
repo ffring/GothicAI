@@ -371,6 +371,8 @@ class VanillaQuests:
                 lines.append(f"Ты засчитал герою дело «{t.title}» и отдал награду: {t.reward}.")
         return "\n".join(lines) or None
 
+    all_tools: tuple[Tool, ...] = (ACCEPT_TOOL, CHECK_TOOL, EXPOSE_TOOL)
+
     def tools(self, npc: str) -> list[Tool]:
         offers = list(self.offers.get(npc.upper(), {}).values())
         tools = [ACCEPT_TOOL] if offers else []

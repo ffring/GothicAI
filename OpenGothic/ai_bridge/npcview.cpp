@@ -9,6 +9,8 @@
 
 #include "game/constants.h"
 #include "game/gamescript.h"
+#include "camera.h"
+#include "gothic.h"
 #include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -26,6 +28,10 @@ constexpr size_t   PushLimit    = 12;
 constexpr size_t   SeenLimit    = 12;    // people and creatures in one view
 constexpr float    SightMax     = 3000;  // cm: never further, whatever the senses range says
 constexpr float    FacingCos    = 0.7f;  // within ~45 degrees: it faces you
+constexpr float    NoticeRange  = 1500;  // cm: this close it notices someone out of its field of view too
+constexpr size_t   ItemLimit    = 6;     // things lying about in one view (v22)
+constexpr float    ItemRange    = 1500;  // cm: things lying further off are not told of
+constexpr float    UnderFoot    = 300;   // cm: this close it notices a thing out of its field of view too
 
 using Writer = rapidjson::Writer<rapidjson::StringBuffer>;
 
@@ -105,6 +111,49 @@ bool faces(const Npc& other, const Npc& self) {
   return (d.x*std::cos(rot)+d.z*std::sin(rot))/len>=FacingCos;
   }
 
+std::string_view attitude(Attitude a) {
+  switch(a) {
+    case ATT_HOSTILE:  return "hostile";
+    case ATT_ANGRY:    return "angry";
+    case ATT_FRIENDLY: return "friendly";
+    case ATT_NEUTRAL:
+    case ATT_NULL:     break;
+    }
+  return "neutral";
+  }
+
+// where `other` is from the player, as he faces (v18): ahead, left, right or behind him. Left and right
+// are as the player sees them on the screen: the side is checked against the camera when there is one
+std::string_view fromHero(const Npc& pl, const Tempest::Vec3& at) {
+  const auto  d   = at-pl.position();
+  const float len = std::sqrt(d.x*d.x+d.z*d.z);
+  if(len<1)
+    return "ahead";
+  const float a     = pl.rotationRad();
+  const float ahead = (d.x*std::cos(a)+d.z*std::sin(a))/len;
+  float       right = (d.x*std::sin(a)-d.z*std::cos(a))/len;  // left-handed, y up: the world's own
+  if(auto cam = Gothic::inst().camera()) {
+    // a point to that side of the player must come out to the right of him on the screen
+    auto  vp   = cam->viewProj();
+    auto  at   = pl.position()+Tempest::Vec3(0,100,0);
+    auto  side = at+Tempest::Vec3(std::sin(a),0,-std::cos(a))*100.f;
+    float w0 = 1, w1 = 1;
+    vp.project(at.x,at.y,at.z,w0);
+    vp.project(side.x,side.y,side.z,w1);
+    if(w0>0 && w1>0 && side.x/w1<at.x/w0)
+      right = -right;
+    }
+  if(ahead>=0.7f)
+    return "ahead";
+  if(ahead<=-0.7f)
+    return "behind";
+  return right>0 ? "right" : "left";
+  }
+
+std::string_view fromHero(const Npc& pl, const Npc& other) {
+  return fromHero(pl,other.position());
+  }
+
 void writeItem(Writer& w, World& world, std::string_view k, const Item* it) {
   if(it==nullptr)
     return;
@@ -141,6 +190,46 @@ void writeLook(Writer& w, World& world, Npc& self, Npc& other, float dist) {
     if(auto wp = world.findWayPoint(other.position()))
       str(w,"waypoint",wp->name);
     }
+  if(other.isPlayer())
+    return;
+  // v18: how it treats the viewer and the hero, and where it is from the hero
+  auto& vm = world.script();
+  str(w,"att",attitude(vm.personAttitude(other,self)));
+  if(Npc* pl = world.player()) {
+    str(w,"att_hero",attitude(vm.personAttitude(other,*pl)));
+    w.Key("hero_cm"); w.Double(std::round(double(std::sqrt(other.qDistTo(*pl)))));
+    str(w,"from_hero",fromHero(*pl,other));
+    }
+  }
+
+// things lying about that it sees, the nearest first (v22): what the hero threw down, a body's loot, herbs
+void writeItems(Writer& w, World& world, Npc& npc, float range) {
+  struct Thing { Item* it; float dist; };
+  std::vector<Thing> things;
+  world.detectItem(npc.position(),std::min(range,ItemRange),[&](Item& it) {
+    const float dist = std::sqrt((it.position()-npc.position()).quadLength());
+    if(npc.canSeeItem(it,false) || (dist<=UnderFoot && npc.canSeeItem(it,true)))
+      things.push_back({&it,dist});
+    });
+  std::sort(things.begin(),things.end(),[](const Thing& a, const Thing& b){ return a.dist<b.dist; });
+  if(things.size()>ItemLimit)
+    things.resize(ItemLimit);
+  Npc* pl = world.player();
+  key(w,"items");
+  w.StartArray();
+  for(auto& t:things) {
+    w.StartObject();
+    str(w,"item",symbolOf(world,t.it->clsId()));
+    utf8(w,"name",t.it->displayName());
+    w.Key("count");    w.Uint64(uint64_t(t.it->count()));
+    w.Key("distance"); w.Double(std::round(double(t.dist)));
+    if(pl!=nullptr) {
+      w.Key("hero_cm"); w.Double(std::round(double(std::sqrt((t.it->position()-pl->position()).quadLength()))));
+      str(w,"from_hero",fromHero(*pl,t.it->position()));
+      }
+    w.EndObject();
+    }
+  w.EndArray();
   }
 
 void writeView(Writer& w, World& world, Npc& npc) {
@@ -175,18 +264,24 @@ void writeView(Writer& w, World& world, Npc& npc) {
     w.StartObject();
     writeLook(w,world,npc,*pl,dist);
     w.Key("seen"); w.Bool(npcSees(npc,*pl));
+    if(Npc* focus = pl->target(); focus!=nullptr && focus!=pl)
+      str(w,"focus",npcId(world,*focus));  // whom the hero looks at (v18)
     w.EndObject();
     }
 
   // whom it sees: the nearest first
-  struct Seen { Npc* npc; float dist; };
+  // and close by, out of its field of view: it notices them all the same, if nothing is in between (v18)
+  struct Seen { Npc* npc; float dist; bool noticed; };
   std::vector<Seen> seen;
   const float range = std::min(float(npc.handle().senses_range),SightMax);
   world.detectNpc(npc.position(),range,[&](Npc& other) {
     if(&other==&npc || other.isPlayer())
       return;
+    const float dist = std::sqrt(npc.qDistTo(other));
     if(npc.canSeeNpc(other,false))
-      seen.push_back({&other,std::sqrt(npc.qDistTo(other))});
+      seen.push_back({&other,dist,false});
+    else if(dist<=NoticeRange && npc.canSeeNpc(other,true))
+      seen.push_back({&other,dist,true});
     });
   std::sort(seen.begin(),seen.end(),[](const Seen& a, const Seen& b){ return a.dist<b.dist; });
   if(seen.size()>SeenLimit)
@@ -196,9 +291,13 @@ void writeView(Writer& w, World& world, Npc& npc) {
   for(auto& s:seen) {
     w.StartObject();
     writeLook(w,world,npc,*s.npc,s.dist);
+    if(s.noticed) {
+      w.Key("noticed"); w.Bool(true);  // out of its field of view: behind it or to the side
+      }
     w.EndObject();
     }
   w.EndArray();
+  writeItems(w,world,npc,range);
   w.EndObject();
   }
 

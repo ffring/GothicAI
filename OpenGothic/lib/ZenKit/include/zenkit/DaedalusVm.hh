@@ -646,6 +646,12 @@ namespace zenkit {
 		///         dropped, nothing is pushed).
 		/// \note Local addition (OpenGothic ai_bridge), see lib/VENDORED.md.
 		ZKAPI bool unsafe_call_external(DaedalusSymbol const* sym);
+
+		/// \brief Calls a script function the way the `BL` instruction does: an override registered with
+		///        #override_function runs instead of its code. The arguments must be on the stack, the
+		///        return value is left there.
+		/// \note Local addition (OpenGothic ai_bridge), see lib/VENDORED.md.
+		ZKAPI void unsafe_call_bl(DaedalusSymbol const* sym);
 		ZKAPI std::shared_ptr<DaedalusInstance> unsafe_get_gi();
 		ZKAPI void unsafe_set_gi(std::shared_ptr<DaedalusInstance> i);
 

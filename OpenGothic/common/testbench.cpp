@@ -1334,7 +1334,9 @@ Vec3 rotY(const Vec3& v, float deg) {
 
 // a shot of the hero and camNpc; false if the npc is not there
 bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
-  Npc* npc = npcBySymbol(w,bench.camNpc);
+  Npc* npc = findNpc(w,pl,bench.camNpc);  // of several (wolves) the nearest living one
+  if(npc==&pl)
+    return false;
   if(npc==nullptr)
     return false;
   const Vec3 hero  = pl.mapHeadBone();

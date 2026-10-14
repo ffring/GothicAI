@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from gothic_ai.llm import (
+    QUICK_MAX_TOKENS,
     Done,
     FakeBackend,
     FakeStep,
@@ -11,6 +12,8 @@ from gothic_ai.llm import (
     ToolCall,
     ToolResult,
     Usage,
+    make_quick,
+    quick_url,
 )
 from gothic_ai.llm.openai_compat import chat_messages
 from gothic_ai.llm.openai_responses import OpenAIResponsesBackend, input_items
@@ -120,6 +123,51 @@ async def test_responses_stream_returns_the_response_as_items_and_usage():
     assert done.usage == Usage(input_tokens=1200, cached_tokens=1024, output_tokens=40, reasoning_tokens=12)
 
 
+async def test_responses_keep_every_tool_and_allow_some_of_them():
+    """All the tools stay in the request, so its start (and the prompt cache) is the same whatever is
+    offered; `allowed` narrows what may be called."""
+    sent: list[dict] = []
+    done = SimpleNamespace(type="response.completed", response=SimpleNamespace(usage=None))
+
+    async def create(**kwargs):
+        sent.append(kwargs)
+        return _Stream([done])
+
+    async def token() -> str:
+        return "t"
+
+    backend = OpenAIResponsesBackend("m", token)
+    backend._client.responses.create = create  # type: ignore[method-assign]
+    intent = Tool("set_intent", "intent")
+    for allowed, choice in (
+        (["set_intent"], None),
+        (["set_intent", "give_item"], None),
+        ([], None),
+        (None, None),
+        (["set_intent"], "none"),
+    ):
+        async for _ in backend.stream(
+            instructions="i",
+            messages=[],
+            tools=[GIVE, intent],
+            tool_choice=choice,
+            allowed=allowed,
+            cache_key="NONE_100_XARDAS",
+        ):
+            pass
+    await backend.aclose()
+
+    assert all([t["name"] for t in s["tools"]] == ["give_item", "set_intent"] for s in sent)
+    assert all(s["prompt_cache_key"] == "NONE_100_XARDAS" for s in sent)
+    assert [s.get("tool_choice") for s in sent] == [
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "set_intent"}]},
+        None,  # all of them
+        "none",  # none of them
+        None,
+        "none",
+    ]
+
+
 def test_chat_messages_attach_tool_calls_to_the_assistant_message():
     chat = chat_messages(
         [
@@ -174,3 +222,35 @@ async def test_fake_backend_makes_no_calls_with_tool_choice_none():
     events = [e async for e in llm.stream(instructions="", messages=[], tools=[GIVE], tool_choice="none")]
     assert not any(isinstance(e, ToolCall) for e in events)
     assert llm.tool_choices == ["none"]
+
+
+async def test_the_quick_backend_caps_its_answers_and_warms_the_servers_cache():
+    backend = make_quick("http://127.0.0.1:9/v1")
+    sent: list[dict] = []
+
+    async def create(**kwargs):
+        sent.append(kwargs)
+        if not kwargs.get("stream"):
+            return SimpleNamespace()
+
+        async def chunks():
+            delta = SimpleNamespace(content="Держись!", tool_calls=None)
+            yield SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+        return chunks()
+
+    backend._client.chat.completions.create = create  # type: ignore[attr-defined]
+    messages = [Message("user", "Волк!")]
+    await backend.prewarm(instructions="Ты Кавалорн.", messages=messages)
+    events = [e async for e in backend.stream(instructions="Ты Кавалорн.", messages=messages)]
+
+    chat = [{"role": "system", "content": "Ты Кавалорн."}, {"role": "user", "content": "Волк!"}]
+    assert sent[0]["messages"] == chat and sent[0]["max_tokens"] == 1  # the same prefix, nothing said
+    assert sent[1]["messages"] == chat and sent[1]["max_tokens"] == QUICK_MAX_TOKENS and sent[1]["stream"]
+    assert isinstance(events[-1], Done) and events[-1].text == "Держись!"
+
+
+def test_the_quick_model_is_on_wherever_the_decider_is():
+    assert quick_url(None, "ws://gpu-host:47832") == "http://gpu-host:47834/v1"  # the same GPU server
+    assert quick_url("http://other:9000/v1", "ws://gpu-host:47832") == "http://other:9000/v1"
+    assert quick_url(None, None) is None

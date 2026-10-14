@@ -20,19 +20,24 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "game/gamescript.h"
 #include "game/bodyobservations.h"
+#include "game/inventory.h"
 #include "game/serialize.h"
 #include "camera.h"
 #include "commandline.h"
 #include "physics/dynamicworld.h"
+#include "world/objects/interactive.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "world/worldsound.h"
+#include "npcchests.h"
 #include "gothic.h"
 
+#include "beasts.h"
 #include "chatoverlay.h"
 #include "dialoggraph.h"
 #include "storyworld.h"
@@ -53,7 +58,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 17;
+constexpr int         ProtocolVersion = 28;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -207,6 +212,9 @@ struct AiBridge::Impl final {
   void onBodyWatch(World& world, const rapidjson::Value& msg);
   void resetBodyObservations();
   void onSay(World& world, const rapidjson::Value& msg);
+  // the director's lines (story graph) get the npc's voice from the server (v26)
+  void askVoice(const std::string& line, const std::string& npc, const std::string& text);
+  void voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& line);
   void onSayAudio(World& world, const rapidjson::Value& msg);
   // streamed voices: playback starts with the line, the line is shortened to the real length
   void startVoice(const LineLibrary::Line& line);
@@ -260,6 +268,8 @@ struct AiBridge::Impl final {
   NpcObserver          observer{[this](std::string&& s){ send(std::move(s)); },
                                 [this](std::string_view symbol){ return npcOwner(symbol); }};
   NpcView              view{[this](std::string&& s){ send(std::move(s)); }};
+  // wolves hear the hero's voice (v21, docs/beasts.md)
+  BeastWatch           beasts{[this](std::string&& s){ send(std::move(s)); }};
 
   Session              session;
   bool                 saving = false;  // a save is in progress: the same world comes back
@@ -278,6 +288,7 @@ struct AiBridge::Impl final {
   LineLibrary                  lines;
   std::vector<struct Voice>    voices;
   std::unordered_map<std::string,std::string> lastLine;  // npc -> line it speaks (or spoke) last
+  std::unordered_set<std::string>             voicing;   // the director's lines the server is asked to voice
   std::unordered_map<std::string,std::string> originalLines;  // original line sent with `say` -> npc, until it starts
   std::unordered_map<std::string,std::string> originalTo;     // ...-> the npc it is said to (v15), if not the hero
   std::unique_ptr<ChatOverlay> chat;
@@ -294,6 +305,7 @@ struct AiBridge::Impl final {
                                      [this](const std::string& npc, const std::string& text) {
                                        auto id = "AIB_G" + std::to_string(++graphLines);
                                        lines.add(id,npc,text);
+                                       askVoice(id,npc,text);
                                        return id;
                                        }};
   // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
@@ -320,7 +332,10 @@ AiBridge::Impl::Impl() {
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
   gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
     World* world = Gothic::inst().world();
-    return connected && world!=nullptr && observer.intercept(*world,self,other,victim,perc);
+    // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
+    return world!=nullptr &&
+           (beasts.intercept(*world,self,other,victim,perc) ||
+            (connected && observer.intercept(*world,self,other,victim,perc)));
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -464,6 +479,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
           if(world!=nullptr) {
             ctrl.detachAll(*world,"server_disconnected");
             observer.releaseAll(*world);
+            beasts.releaseAll(*world);
             }
           observer.setHoldThreats(false);
           if(chat!=nullptr)
@@ -484,6 +500,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
 
   if(world!=nullptr) {
     ctrl.tick(*world);
+    beasts.tick(*world);  // its reports go nowhere without the server; the console drives it then
     if(connected) {
       observer.tick(*world);
       view.tick(*world);
@@ -529,9 +546,13 @@ void AiBridge::Impl::onStartLoading() {
   graph.clear();  // the server sends the patches of the new branch
   story.clear();
   necro.clear();
-  if(auto world = Gothic::inst().world())
-    ctrl.detachAll(*world,"loading"); else
+  if(auto world = Gothic::inst().world()) {
+    ctrl.detachAll(*world,"loading");
+    beasts.releaseAll(*world);
+    } else {
     ctrl.dropAll("loading");
+    }
+  beasts.clear();
   send(JsonWriter("loading").finish());
   }
 
@@ -646,7 +667,8 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   if(type=="debug") {
     const auto cmd = JsonRead::str(doc,"cmd");
-    if(cmd=="dialogs" || cmd=="choose" || cmd=="eval" || cmd=="check")
+    if(cmd=="dialogs" || cmd=="choices" || cmd=="choose" || cmd=="eval" || cmd=="check" || cmd=="talk" ||
+       cmd=="menu" || cmd=="menu_pick")
       onDialogDebug(world,doc); else
       onDebug(doc);
     return;
@@ -715,6 +737,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   else if(type=="story_state") {
     sendResult(req,true,"",story.state(*world,doc));
     }
+  else if(type=="npc_chests") {
+    // v28: the npc's chests and what lies in them
+    if(Npc* npc = npcBySymbol(*world,JsonRead::str(doc,"npc")))
+      sendResult(req,true,"",NpcChests::of(*world,*npc)); else
+      sendResult(req,false,"no npc " + std::string(JsonRead::str(doc,"npc")));
+    }
   else if(type=="story_people") {
     sendResult(req,true,"",story.people(*world));
     }
@@ -724,6 +752,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="story_eval") {
     onStoryEval(*world,doc);
+    }
+  else if(type=="story_program") {
+    // the program a dialog's function runs now (v23), or the scripts' own (`own`, v25), for the director to edit
+    std::string err;
+    auto json = graph.program(JsonRead::str(doc,"node"),JsonRead::str(doc,"part"),JsonRead::boolean(doc,"own",false),err);
+    sendResult(req,!json.empty(),err,json);
     }
   else if(type=="story_effect") {
     std::string err;
@@ -749,6 +783,11 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="hold_verdict") {
     observer.verdict(*world,doc);
+    }
+  else if(type=="beast") {
+    std::string err;
+    const bool  ok = beasts.command(*world,doc,err);
+    sendResult(req,ok,err);
     }
   else if(type=="say") {
     onSay(*world,doc);
@@ -852,7 +891,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto") {
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1074,6 +1113,18 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     // the hero steps to a waypoint (walking away from a conversation): a named one, the nearest one at
     // least `distance` cm away from an npc (`near`), or one next to an npc (`to`, `distance` cm off)
     const WayPoint* wp = nullptr;
+    if(auto pos = msg.FindMember("pos"); pos!=msg.MemberEnd() && pos->value.IsArray() && pos->value.Size()==3) {
+      // a point of the world (v21), on the ground there
+      Tempest::Vec3 at(float(pos->value[0].GetDouble()),float(pos->value[1].GetDouble()),
+                       float(pos->value[2].GetDouble()));
+      const auto land = world->physic()->landRay(at+Tempest::Vec3(0,500,0),1500);
+      if(land.hasCol)
+        at.y = land.v.y;
+      pl->setPosition(at);
+      pl->updateTransform();
+      sendResult(req,true,"");
+      return;
+      }
     if(auto name = JsonRead::str(msg,"waypoint"); !name.empty()) {
       wp = world->findPoint(name,false);
       }
@@ -1146,6 +1197,49 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     sendResult(req,true,"");
     return;
     }
+  if(cmd=="player_drop") {
+    // the player throws a thing down, as with the game's own key (v22): he is given it first if he has none
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    if(!pl->inventory().itemCount(id))
+      pl->addItem(id,1);
+    const size_t before = pl->inventory().itemCount(id);
+    pl->dropItem(id,1);
+    const bool dropped = pl->inventory().itemCount(id)<before;
+    sendResult(req,dropped,dropped ? "" : "the hero could not drop it now");
+    return;
+    }
+  if(cmd=="chest_take") {
+    // the hero takes things out of a chest unseen (v28): what its owner remembers is no longer there
+    Interactive* chest = NpcChests::find(*world,JsonRead::str(msg,"chest"));
+    std::string  inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(chest==nullptr || id==size_t(-1)) {
+      sendResult(req,false,chest==nullptr ? "no such chest" : "unknown item " + inst);
+      return;
+      }
+    const size_t n = std::min(chest->inventory().itemCount(id),size_t(std::max<int64_t>(1,JsonRead::integer(msg,"count",1))));
+    if(n>0)
+      Inventory::transfer(const_cast<Inventory&>(pl->inventory()),chest->inventory(),nullptr,id,n,*world);
+    sendResult(req,n>0,"it is not in the chest",std::to_string(n));
+    return;
+    }
+  if(cmd=="player_hp") {
+    // the player's health and its maximum (v21): a test of creatures that bite lets him live through it
+    const auto hp = int32_t(std::clamp<int64_t>(JsonRead::integer(msg,"hp",1000),1,100000));
+    pl->changeAttribute(ATR_HITPOINTSMAX,hp-pl->attribute(ATR_HITPOINTSMAX),false);
+    pl->changeAttribute(ATR_HITPOINTS,hp-pl->attribute(ATR_HITPOINTS),false);
+    sendResult(req,true,"");
+    return;
+    }
   // player_weapon: the player draws ("melee") or puts away ("none") a weapon
   const auto state = JsonRead::str(msg,"state");
   const bool ok    = state=="none" ? pl->closeWeapon(false) : pl->drawWeaponMelee();
@@ -1183,6 +1277,30 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     sendResult(req,true,"",graph.checkWorld(*world));
     return;
     }
+  if(cmd=="menu") {
+    // the dialog window as the player sees it: what it offers now, none while a line plays
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    w.StartArray();
+    if(Gothic::inst().dialogEntriesFn)
+      for(auto& e : Gothic::inst().dialogEntriesFn()) {
+        auto text = TextCodec::toUtf8(e);
+        w.String(text.data(),rapidjson::SizeType(text.size()));
+        }
+    w.EndArray();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
+    return;
+    }
+  if(cmd=="menu_pick") {
+    // picks the entry with this text, as the player does with the keys
+    const auto text    = TextCodec::fromUtf8(JsonRead::str(msg,"text"));
+    auto       entries = Gothic::inst().dialogEntriesFn ? Gothic::inst().dialogEntriesFn() : std::vector<std::string>();
+    auto       at      = std::find(entries.begin(),entries.end(),text);
+    const bool ok      = at!=entries.end() && Gothic::inst().dialogPickFn &&
+                         Gothic::inst().dialogPickFn(size_t(at-entries.begin()));
+    sendResult(req,ok,"the window does not offer it now");
+    return;
+    }
   const auto symbol = JsonRead::str(msg,"npc");
   Npc*       npc    = symbol.empty() ? nullptr : npcBySymbol(*world,symbol);
   if(npc==nullptr && (cmd!="eval" || !symbol.empty())) {
@@ -1196,6 +1314,27 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     w.StartArray();
     for(auto& id : graph.offered(*world,*npc))
       w.String(id.data(),rapidjson::SizeType(id.size()));
+    w.EndArray();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
+    }
+  else if(cmd=="talk") {
+    // the hero talks to it, as with the action key: the dialog window opens
+    Npc* player = world->player();
+    if(player!=nullptr)
+      npc->startDialog(*player);
+    sendResult(req,player!=nullptr,"no player");
+    }
+  else if(cmd=="choices") {
+    // what the dialog menu offers after this dialog's lines: [{id, text}]
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    w.StartArray();
+    for(auto& [id,text] : graph.choices(*world,*npc,JsonRead::str(msg,"node"))) {
+      w.StartObject();
+      w.Key("id");   w.String(id.data(),rapidjson::SizeType(id.size()));
+      w.Key("text"); w.String(text.data(),rapidjson::SizeType(text.size()));
+      w.EndObject();
+      }
     w.EndArray();
     sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     }
@@ -1269,6 +1408,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     reply += "; " + ctrl.status(world);
     reply += "; " + graph.status();
     reply += "; necro " + necro.status();
+    reply += "; " + beasts.status();
     return true;
     }
 
@@ -1306,6 +1446,14 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     card.title = TextCodec::fromUtf8("Конец");
     const auto spell = args.size()>3 ? upperSymbol(args[3]) : std::string("SPL_SKULL");
     reply = necro.start(*world,*npc,std::move(card),spell,err) ? "necro " + spell : err;
+    return true;
+    }
+  if(sub=="beast" && args.size()>2) {
+    // ai beast listen|calm|sit|flee|attack|resume [ms]: the word on the wolf nearest the hero (docs/beasts.md),
+    // without the server; sit is calm sitting down
+    const auto what = lower(args[2]);
+    const auto ms   = args.size()>3 ? int64_t(std::atoll(args[3].c_str())) : int64_t(0);
+    reply = beasts.console(*world,what=="sit" ? "calm" : what,ms,what=="sit");
     return true;
     }
   if(sub=="ptt" && args.size()>2) {
@@ -1356,9 +1504,45 @@ AiBridge::AiBridge() {
 
 AiBridge::~AiBridge() = default;
 
+void AiBridge::Impl::askVoice(const std::string& line, const std::string& npc, const std::string& text) {
+  World* world = Gothic::inst().world();
+  Npc*   who   = world!=nullptr ? npcBySymbol(*world,npc) : nullptr;
+  if(who==nullptr || who->isPlayer())
+    return;  // the hero's lines of the director's stay subtitles: his voice is the game's own
+  if(voicing.size()>256)
+    voicing.clear();  // asked long ago and never answered: no voice service
+  voicing.insert(line);
+  send(JsonWriter("line_voice")
+         .str("npc",npc)
+         .str("name",TextCodec::toUtf8(who->displayName()))
+         .str("line",line)
+         .str("text",TextCodec::toUtf8(text))
+         .finish());
+  }
+
+void AiBridge::Impl::voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& id) {
+  // the voice comes to the line that is there: queued, or already started without one
+  auto* l = lines.find(id);
+  if(l==nullptr || l->voice!=nullptr || !JsonRead::boolean(msg,"stream",false))
+    return;
+  if(l->started && lastLine[l->npc]!=id)
+    return;  // too late: the npc has moved on to its next line
+  l->voice = std::make_shared<VoiceBuffer>(uint32_t(JsonRead::integer(msg,"rate",24000)));
+  if(!l->started)
+    return;  // it starts with its voice
+  // it started as a subtitle: the voice starts now, and the npc waits for it (shortened once it is all in)
+  startVoice(*l);
+  if(Npc* npc = npcBySymbol(world,l->npc))
+    npc->setAiOutputBarrier(LineLibrary::streamedTime(*l),false);
+  }
+
 void AiBridge::Impl::onSay(World& world, const rapidjson::Value& msg) {
   const auto symbol = std::string(JsonRead::str(msg,"npc"));
   const auto line   = std::string(JsonRead::str(msg,"line"));
+  if(voicing.erase(line)>0) {
+    voiceStoryLine(world,msg,line);
+    return;
+    }
   Npc*       pl     = world.player();
   Npc*       npc    = ctrl.find(world,symbol);
   if(npc==nullptr) {

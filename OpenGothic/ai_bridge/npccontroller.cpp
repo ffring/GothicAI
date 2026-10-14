@@ -1,12 +1,16 @@
 #include "npccontroller.h"
 
+#include <Tempest/Log>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 
 #include "game/gamescript.h"
 #include "game/inventory.h"
+#include "world/objects/interactive.h"
 #include "world/objects/item.h"
+#include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
 #include "world/waypoint.h"
 #include "world/world.h"
@@ -15,6 +19,7 @@
 
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "npcchests.h"
 #include "npcfind.h"
 #include "textcodec.h"
 
@@ -32,7 +37,10 @@ constexpr float    FollowNear       = 400;   // stop closing in
 constexpr float    FollowCatchUp    = 800;   // farther than this it runs, whatever the leader does
 constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
-constexpr uint64_t FollowMaxMs      = 10*60*1000;
+constexpr uint64_t FollowStuckMs    = 2000;  // walking, but it has not moved FollowMovedCm in this long: stuck
+constexpr float    FollowMovedCm    = 75;
+constexpr float    TakeRange        = 2000;  // cm: take_item picks up the nearest such thing within this
+constexpr float    ChestNear        = 300;   // cm: use_chest walks to the chest's waypoint from farther
 constexpr uint64_t StateStartMs     = 3000;  // fight/flee: the script state must begin within this
 
 std::string upper(std::string_view s) {
@@ -281,7 +289,10 @@ void NpcController::action(World& world, const rapidjson::Value& msg) {
     Follow f;
     f.toPlayer = target->isPlayer();
     f.target   = target->instanceSymbol();
-    f.until    = world.tickCount() + uint64_t(integer(args,"timeout_ms",int64_t(FollowMaxMs)));
+    // a companion goes with him for as long as it means to (v22): the server stops it; timeout_ms is
+    // for whoever wants a limit (Cavalorn gave up after 10 minutes, 2026-10-14)
+    const int64_t limit = integer(args,"timeout_ms",0);
+    f.until    = limit>0 ? world.tickCount() + uint64_t(limit) : 0;
     c->follow  = f;
     emitActionResult(id,symbol,"done","",-1);
     return;
@@ -426,6 +437,81 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     if(npc.qDistTo(*target)>AiNpc::GiveRange*AiNpc::GiveRange)
       npc.aiPush(AiQueue::aiGoToNpc(target));
     npc.aiPush(AiQueue::aiTurnToNpc(target));
+    return true;
+    }
+
+  if(a.type=="take_item") {
+    // a thing lying about (v22): it walks up to the nearest of that kind and picks it up, as the scripts'
+    // AI_GotoItem and AI_TakeItem do
+    const auto   name = upper(str(args,"item"));
+    const size_t cls  = world.script().findSymbolIndex(name);
+    Item*        it   = nullptr;
+    float        best = TakeRange*TakeRange;
+    if(cls!=size_t(-1)) {
+      world.detectItem(npc.position(),TakeRange,[&](Item& i) {
+        const float d = (i.position()-npc.position()).quadLength();
+        if(i.clsId()==cls && d<best) {
+          it   = &i;
+          best = d;
+          }
+        });
+      }
+    if(it==nullptr) {
+      err = "no " + name + " lying nearby";
+      return false;
+      }
+    a.item     = cls;
+    a.count    = npc.inventory().itemCount(cls);  // what it had: it took the thing once it has more
+    a.deadline = 30000;
+    npc.aiPush(AiQueue::aiGotoItem(*it));
+    npc.aiPush(AiQueue::aiTakeItem(*it));
+    return true;
+    }
+
+  if(a.type=="use_chest") {
+    // v28: it walks up to its chest, opens it as the scripts' AI_UseMob does, takes out and puts in, closes it
+    Interactive* chest = NpcChests::find(world,str(args,"chest"));
+    if(chest==nullptr) {
+      err = "no chest " + std::string(str(args,"chest"));
+      return false;
+      }
+    if(NpcChests::whose(world,npc,*chest).empty()) {
+      err = "not its chest";
+      return false;
+      }
+    auto moves = [&](std::string_view key, std::vector<std::pair<size_t,size_t>>& out) {
+      if(!args.HasMember(key.data()) || !args[key.data()].IsArray())
+        return true;
+      for(auto& m:args[key.data()].GetArray()) {
+        const auto   name = upper(str(m,"item"));
+        const size_t cls  = world.script().findSymbolIndex(name);
+        if(cls==size_t(-1)) {
+          err = "unknown item " + name;
+          return false;
+          }
+        out.emplace_back(cls,size_t(std::max<int64_t>(1,integer(m,"count",1))));
+        }
+      return true;
+      };
+    if(!moves("take",a.take) || !moves("put",a.put))
+      return false;
+    for(auto& [cls,count]:a.put)
+      if(npc.inventory().itemCount(cls)==0) {
+        err = "npc has no item " + itemSymbol(world,cls);
+        return false;
+        }
+    a.chest    = chest;
+    a.deadline = 60000;
+    // its owner opens it as if it had the key (the lock stays for the hero)
+    if(chest->needToLockpick(npc)) {
+      chest->setAsCracked(true);
+      a.relock = true;
+      }
+    // AI_UseMob takes the nearest chest: it goes up to this one first
+    if(npc.qDistTo(chest->position())>ChestNear*ChestNear)
+      if(auto wp = world.findWayPoint(chest->position()))
+        npc.aiPush(AiQueue::aiGoToPoint(*wp));
+    npc.aiPush(AiQueue::aiUseMob(chest->schemeName(),1));
     return true;
     }
 
@@ -579,6 +665,18 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
     return;
     }
 
+  if(a.type=="use_chest") {
+    useChest(world,c,a);
+    return;
+    }
+
+  if(a.type=="take_item") {
+    if(c.npc->inventory().itemCount(a.item)>a.count)
+      finishAction(c,"done",""); else
+      finishAction(c,"failed","it is not in its hands: gone, or out of reach");
+    return;
+    }
+
   if(a.type=="give_item") {
     std::string err;
     if(giveItem(world,c,a,err))
@@ -638,7 +736,7 @@ void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
     stopFollow(c,"target_too_far");
     return;
     }
-  if(now>=f.until) {
+  if(f.until!=0 && now>=f.until) {
     stopFollow(c,"timeout");
     return;
     }
@@ -648,9 +746,34 @@ void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
                                     : target->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak);
   if((c.npc->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak))!=pace)
     c.npc->setWalkMode(pace);
+  // a walk to an npc goes straight at him: past a cave's bend or a tower's wall it runs into the rock and
+  // stays there. Got nowhere for a while: by the waynet, to the point nearest him that he can see from where
+  // he is (as the engine's own fights do), then straight at him again
+  const auto pos = c.npc->position();
+  if(f.movedAt==0 || (pos-f.movedFrom).quadLength()>=FollowMovedCm*FollowMovedCm) {
+    f.movedFrom = pos;
+    f.movedAt   = now;
+    }
+  if(c.npc->isAiBusy() && !c.npc->haveOutput() && d>FollowNear && now>=f.movedAt+FollowStuckMs) {
+    c.npc->clearAiQueue();
+    c.npc->clearGoTo();
+    f.movedAt = now;
+    if(!f.byWay) {
+      auto wp = world.findWayPoint(target->position(),[&](const WayPoint& w) {
+        return target->canRayHitPoint(w.position(),true);
+        });
+      if(wp!=nullptr) {
+        f.byWay = true;
+        c.npc->aiPush(AiQueue::aiGoToPoint(*wp));
+        return;
+        }
+      }
+    f.byWay = false;  // stuck on the waynet too: straight again
+    }
   if(d<=FollowNear || now<f.nextStep || c.npc->isAiBusy())
     return;
   f.nextStep = now + FollowStepMs;
+  f.byWay    = false;
   c.npc->aiPush(AiQueue::aiGoToNpc(target));
   }
 
@@ -666,9 +789,53 @@ void NpcController::stopFollow(Controlled& c, std::string_view reason) {
     onFollowEnded(c.symbol,reason);
   }
 
+void NpcController::useChest(World& world, Controlled& c, Action& a) {
+  Npc& npc = *c.npc;
+  if(a.opened) {  // closed again
+    finishAction(c,"done",a.moved);
+    return;
+    }
+  if(npc.interactive()!=a.chest) {
+    finishAction(c,"failed",npc.interactive()!=nullptr ? "opened another chest" : "could not open the chest");
+    return;
+    }
+  auto list = [&](const std::vector<std::pair<size_t,size_t>>& moved) {
+    std::string out;
+    for(auto& [cls,count]:moved)
+      out += (out.empty() ? "" : ",") + itemSymbol(world,cls) + ":" + std::to_string(count);
+    return out;
+    };
+  std::vector<std::pair<size_t,size_t>> took, put;
+  auto& inv = const_cast<Inventory&>(npc.inventory());  // as the scripts' own transfers do
+  for(auto& [cls,want]:a.take) {
+    const size_t n = std::min(want,a.chest->inventory().itemCount(cls));
+    if(n>0) {
+      Inventory::transfer(inv,a.chest->inventory(),nullptr,cls,n,world);
+      took.emplace_back(cls,n);
+      }
+    }
+  for(auto& [cls,want]:a.put) {
+    const size_t n = std::min(want,npc.inventory().itemCount(cls));
+    if(n>0) {
+      Inventory::transfer(a.chest->inventory(),inv,&npc,cls,n,world);
+      put.emplace_back(cls,n);
+      }
+    }
+  a.moved  = "took=" + list(took) + ";put=" + list(put);
+  a.opened = true;
+  Tempest::Log::i("[ai] ",c.symbol," chest ",NpcChests::id(*a.chest),": ",a.moved);
+  npc.aiPush(AiQueue::aiUseMob(a.chest->schemeName(),-1));
+  }
+
 void NpcController::finishAction(Controlled& c, std::string_view status, std::string_view detail, double distance) {
   if(!c.act)
     return;
+  if(c.act->type=="use_chest" && c.act->chest!=nullptr) {
+    if(c.npc!=nullptr && c.npc->interactive()==c.act->chest && status!="done")
+      c.npc->setInteraction(nullptr,true);  // cut off at the open chest: it lets go of it
+    if(c.act->relock)
+      c.act->chest->setAsCracked(false);
+    }
   regainControl(c);
   emitActionResult(c.act->id,c.symbol,status,detail,distance);
   c.act.reset();
@@ -812,6 +979,15 @@ void NpcController::emitSnapshot(World& world, Npc& npc, std::string_view symbol
     j.str("action",action); else
     j.null("action");
   j.boolean("following",following);
+  // v27: whom its eyes are on: the one it talks to, a script's look, its attention (a point: nobody)
+  Tempest::Vec3 at;
+  const auto    gaze = npc.gazeTarget(at);
+  Npc*          who  = gaze==Gaze::Source::Talk      ? npc.talkPartner()     :
+                       gaze==Gaze::Source::Script    ? npc.lookAtTarget()    :
+                       gaze==Gaze::Source::Attention ? npc.attentionTarget() : nullptr;
+  if(who!=nullptr)
+    j.str("gaze",npcId(world,*who)); else
+    j.null("gaze");
   if(auto wp = npc.currentWayPoint())
     j.str("waypoint",wp->name); else
     j.null("waypoint");

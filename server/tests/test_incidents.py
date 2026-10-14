@@ -205,6 +205,9 @@ async def test_the_body_gestures_while_the_npc_thinks_of_an_answer(tmp_path):
     assert kinds[0] == ("action", "play_ani")
     nod = next(m for m in fake.received if m["type"] == "action")
     assert nod["args"] == {"name": "T_YES"}
+    # the behavioral model is asked about the body only: what is said at once is the quick model's
+    phrase = next(c for c in desk.reflexes.decider.calls if c["rid"].startswith("chat:"))
+    assert list(phrase["questions"]) == ["gesture"]
 
 
 async def test_a_fight_ends_with_the_incident_and_the_old_intent_comes_back(tmp_path):
@@ -317,6 +320,58 @@ async def test_a_free_npc_speaks_on_the_move_when_the_moment_calls_for_it(tmp_pa
     cue = request[-1].content
     assert "Волк идёт на тебя" in cue and "ты убегаешь" in cue  # what happened and what the body did
     assert {t.name for t in tools} == {"set_intent", "recall"}  # a free npc cannot hand over items
+
+
+async def test_near_the_conversation_the_heros_words_alone_are_its_question(tmp_path):
+    # step B3: whether a free npc by the hero speaks up at his words is asked in the conversation
+    # (interject.py), by its character, not by the fast loop's own escalation
+    from gothic_ai.brain import LogApplier, NpcPlanner, PlannerConfig
+    from gothic_ai.protocol import RosterEntry
+
+    class Decider(FakeDecider):
+        async def decide(self, rid, lane, priority, deadline_ms, state, questions):
+            out = await super().decide(rid, lane, priority, deadline_ms, state, questions)
+            if "escalate" in questions and out.answers:
+                out.answers["escalate"] = {
+                    "type": "score",
+                    "score": 3.6,
+                    "probabilities": {},
+                    "confidence": 0.8,
+                }
+            return out
+
+    fake = FakeGame()
+    llm = FakeBackend("Это ты мне?", delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        planner = NpcPlanner(Decider("stay", 0.9), LogApplier(), config=PlannerConfig(ask_attitude=False))
+        link.listeners.append(planner.on_message)
+        desk = IncidentDesk(link, dialogue, None, Budget(), None, planner=planner)
+        desk.speaks_up_there = lambda npc: True
+        planner.on_roster(
+            [RosterEntry(id="SHEPHERD", name="Пастух", guild=8, distance=600, in_view=True)], 0.0
+        )
+        planner.on_player_text("BAU_950_LOBART", "Лобарт, где твоя репа?", planner.clock())
+        for _ in range(40):
+            planner.tick(planner.clock())
+            await asyncio.sleep(0.02)
+        quiet = list(fake.said)
+        # a wolf is another matter: it shouts
+        await fake.send(
+            type="npc_event",
+            npc="SHEPHERD",
+            kind="monster_near",
+            other="WOLF",
+            other_name="Волк",
+            distance=600,
+        )
+        for _ in range(100):
+            planner.tick(planner.clock())
+            await asyncio.sleep(0.02)
+            if fake.said:
+                break
+
+    assert quiet == [] and fake.said == ["Это ты мне?"]
 
 
 async def test_the_hero_saves_a_free_npc_and_it_thanks_him(tmp_path):
@@ -487,7 +542,7 @@ async def test_a_stuck_turn_gives_way_to_the_end_of_the_danger(tmp_path, monkeyp
     from gothic_ai.protocol import RosterEntry
 
     class Hangs(FakeBackend):
-        async def stream(self, *, instructions, messages, tools=None, tool_choice=None):
+        async def stream(self, *, instructions, messages, tools=None, tool_choice=None, **_):
             self.calls.append((instructions, list(messages), list(tools or [])))
             if len(self.calls) == 1:
                 await asyncio.Event().wait()  # never answers
@@ -519,3 +574,25 @@ async def test_a_stuck_turn_gives_way_to_the_end_of_the_danger(tmp_path, monkeyp
                 break
 
     assert fake.said == ["Спасибо, выручил."] and len(llm.calls) == 2
+
+
+async def test_an_npc_in_a_fight_says_its_line_through_the_quick_model(tmp_path):
+    """A threat to its life makes the npc's lines quick ones while it goes on; the quick model is warmed
+    as the fight begins and after each line."""
+    fake = FakeGame()
+    fake.nearby.append(WOLF)
+    quick = FakeBackend("Прочь, тварь!", delay=0)
+    cm, link, dialogue, desk, trace = await _scene(None, FakeBackend("", delay=0), fake, tmp_path)
+    dialogue.quick = quick
+    try:
+        assert not desk.in_fight(XARDAS) and not dialogue.in_fight(XARDAS)
+        await link.snapshot(XARDAS, fresh=True)
+        await fake.perception(XARDAS, "ASSESSDAMAGE", "WOLF")
+        await _until(lambda: fake.said and quick.prewarms, timeout=5)
+        assert desk.in_fight(XARDAS) and dialogue.in_fight(XARDAS)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    assert fake.said == ["Прочь, тварь!"] and len(quick.calls) == 1
+    desk.foe = lambda npc: npc == "BDT_1014_BANDIT_L"  # struck the hero a moment ago (orders.py)
+    assert desk.in_fight("BDT_1014_BANDIT_L") and not desk.in_fight("BAU_950_LOBART")

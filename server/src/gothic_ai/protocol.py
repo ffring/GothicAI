@@ -11,8 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 # v10: deals, v11: what npc's perceive, v12: when and where (memory of the seen), v13: the necromancer's
 # answer (raise_dead), v14: sounds at once (say.filler), v15: npc to npc (say.to, give, arrival),
-# v16: opt-in passive numeric body observations (independently versioned schema).
-PROTOCOL_VERSION = 17
+# v16: opt-in passive numeric body observations (independently versioned schema), v17: contracts (hero_kill),
+# v18: what npc's see of whom (att, from_hero...), v20: an npc calls its fight off (story_effect calm),
+# v21: wolves hear the hero (beasts, beast), v22: things lying about (npc_view items, take_item; follow has
+# no time limit unless asked), v23: programs in the story graph (graph_patch program, add_node.program,
+# story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
+# menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
+# lines in the npc's voice (line_voice).
+PROTOCOL_VERSION = 28
 
 # --- game -> server -----------------------------------------------------------
 
@@ -121,6 +127,7 @@ class NpcState(_GameMessage):
     busy: bool
     action: str | None = None
     following: bool = False
+    gaze: str | None = None  # v27: whom its eyes are on (an npc id, PLAYER), none: nobody
     waypoint: str | None = None
     nearest_waypoint: str | None = None
     inventory: list[InventoryItem] = Field(default_factory=list)
@@ -214,6 +221,18 @@ class PttCancel(_GameMessage):
     focus: str | None = None
 
 
+class LineVoice(_GameMessage):
+    """A line of the director's own (a dialog of the story graph, v26) the npc is about to say: the server
+    voices `text` in the npc's voice and streams it for this `line` (say with stream, say_audio, say_end), as
+    for the npc's own lines; without a voice it stays a subtitle. `name`: the npc's name in the game."""
+
+    type: Literal["line_voice"]
+    npc: str
+    name: str = ""
+    line: str
+    text: str
+
+
 class LineStarted(_GameMessage):
     """The npc started speaking a line sent with `say` (`voiced`: aloud, with its audio)."""
 
@@ -277,6 +296,42 @@ class StoryWorld(_GameMessage):
     tags: list[TagState]
 
 
+BeastState = Literal["threaten", "attack", "listen", "calm", "flee", "fight", "routine"]
+
+
+class BeastEntry(_GameMessage):
+    id: str  # its symbol and a number of this session ("WOLF#3"): wolves share their symbols
+    name: str
+    distance: float  # to the hero, cm
+    state: BeastState  # what it does about the hero; fight: with someone else
+    hp: int = 0
+    hp_max: int = 0
+    focus: bool = False  # the hero looks at it
+    sitting: bool = False  # calm and sure of him
+    hit_ms: int | None = None  # since the hero hit it last
+    tolerant: bool = False  # it lets him be (after a calm or a flight)
+
+
+class Beasts(_GameMessage):
+    """Wolves within 25 m of the hero, twice a second while there are any, one empty list after (v21,
+    docs/beasts.md). `hero_weapon`: what he holds ready (none, fists, melee, ranged, magic)."""
+
+    type: Literal["beasts"]
+    t: int
+    hero_weapon: str = "none"
+    wolves: list[BeastEntry]
+
+
+class BeastEvent(_GameMessage):
+    """What the game ended itself (v21): `listen_over` (close: he came too near, it attacks; left; time)
+    and `calm_over` (left, time: it lets him be a while) or `calm_broken` (close, hit: it attacks; dead)."""
+
+    type: Literal["beast_event"]
+    npc: str
+    kind: Literal["listen_over", "calm_over", "calm_broken"]
+    detail: str = ""
+
+
 class DealAccept(_GameMessage):
     """The player accepted the deal in the window (v10): Y, once the hero has all he gives and the terms
     have not changed for a moment. `version` is the one he saw: an older one is not carried out."""
@@ -325,6 +380,10 @@ class ItemRef(_GameMessage):
     name: str
 
 
+Attitude = Literal["hostile", "angry", "neutral", "friendly"]
+Side = Literal["ahead", "left", "right", "behind"]
+
+
 class Look(_GameMessage):
     """What an npc can tell of someone it sees (v11): who it is (shown name and guild, for the server to
     decide whether the npc knows it), what it does and looks like."""
@@ -344,10 +403,30 @@ class Look(_GameMessage):
     in_hands: ItemRef | None = None
     talking_to: str | None = None
     waypoint: str | None = None  # a person's nearest waypoint (v12): where it was seen
+    # v18: how it treats the viewer and the hero (hostile, angry, neutral, friendly), where it is from the
+    # hero as he faces (ahead, left, right, behind; left and right as on his screen) and how far from him
+    att: Attitude | None = None
+    att_hero: Attitude | None = None
+    from_hero: Side | None = None
+    hero_cm: float | None = None
+    noticed: bool = False  # v18: close by, out of the viewer's field of view: it notices it all the same
 
 
 class HeroLook(Look):
     seen: bool = False  # in its field of view and not behind a wall; it hears him anyway
+    focus: str | None = None  # v18: whom the hero looks at (his focus), an npc id
+
+
+class GroundItem(_GameMessage):
+    """A thing lying about that the npc sees (v22): in its field of view and not behind a wall, or right by
+    it; within 15 m."""
+
+    item: str  # the scripts' instance, what take_item takes
+    name: str
+    count: int = 1
+    distance: float = 0  # cm from the npc
+    hero_cm: float | None = None
+    from_hero: Side | None = None
 
 
 class NpcView(_GameMessage):
@@ -370,6 +449,7 @@ class NpcView(_GameMessage):
     time: int | None = None  # the game's clock (v12): minutes since the first day began
     hero: HeroLook | None = None
     sees: list[Look] = Field(default_factory=list)
+    items: list[GroundItem] = Field(default_factory=list)  # v22: things lying about, the nearest first
 
 
 class NpcViews(_GameMessage):
@@ -578,10 +658,18 @@ class BodyTarget(_BodyModel):
             raise ValueError("current target features need a present visible target")
         if not self.current_valid:
             allowed = {
-                "entity_id", "present", "visible", "current_valid", "last_known_position_world_cm",
-                "last_known_velocity_cm_s", "last_seen_game_ms", "last_known_age_ms",
+                "entity_id",
+                "present",
+                "visible",
+                "current_valid",
+                "last_known_position_world_cm",
+                "last_known_velocity_cm_s",
+                "last_seen_game_ms",
+                "last_known_age_ms",
             }
-            if any(getattr(self, name) is not None for name in type(self).model_fields if name not in allowed):
+            if any(
+                getattr(self, name) is not None for name in type(self).model_fields if name not in allowed
+            ):
                 raise ValueError("an unseen target must not contain current features")
         elif self.position_world_cm is None or self.relative_position_cm is None:
             raise ValueError("a valid current target needs its position")
@@ -737,6 +825,7 @@ GameMessage = Annotated[
     | PttStop
     | PttCancel
     | LineStarted
+    | LineVoice
     | NpcRoster
     | NpcEvent
     | NpcIdle
@@ -749,6 +838,8 @@ GameMessage = Annotated[
     | StoryWorld
     | DealAccept
     | DealDecline
+    | Beasts
+    | BeastEvent
     | NpcViews
     | BodyObservations,
     Field(discriminator="type"),
@@ -773,6 +864,10 @@ ActionType = Literal[
     "stop",
     "follow",
     "give_item",
+    "take_item",  # v22: walk up to the nearest thing of args.item lying about (within 20 m) and pick it up
+    # v28: walk up to its chest args.chest, open it, take out args.take and put in args.put ([{item, count}]),
+    # close it; `detail`: what moved, "took=ITEM:N,…;put=ITEM:N,…"
+    "use_chest",
     "return_to_routine",
     "fight",  # v6: the game's own combat (ZS_ATTACK) against args.npc, then control comes back
     "flee",  # v6: the game's own fleeing (ZS_FLEE) from args.npc
@@ -807,7 +902,9 @@ class BodyWatchCmd(_Command):
 
     type: Literal["body_watch"] = "body_watch"
     req: str
-    npcs: Annotated[list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)]
+    npcs: Annotated[
+        list[Annotated[str, Field(strict=True, min_length=1, max_length=128)]], Field(max_length=4)
+    ]
     rate_hz: BodyInt = 20
 
     @model_validator(mode="after")
@@ -862,6 +959,23 @@ class HoldVerdictCmd(_Command):
     type: Literal["hold_verdict"] = "hold_verdict"
     hold: str
     to: Literal["server", "scripts"]
+
+
+BeastDo = Literal["listen", "calm", "flee", "attack", "resume"]
+
+
+class BeastCmd(_Command):
+    """The server's word on a wolf (v21): `listen` — it waits for the hero's words (`ms`, 6 s by default,
+    15 s at most), `calm` — it lets him pass (`ms`, 2 min at most; `sit`: it sits down while he keeps his
+    distance), `flee` — it runs from him, `attack` — it attacks him now, `resume` — back to its scripts.
+    The game answers `result`."""
+
+    type: Literal["beast"] = "beast"
+    req: str
+    npc: str
+    do: BeastDo
+    ms: int | None = None
+    sit: bool | None = None
 
 
 class RoutineCmd(_Command):
@@ -1008,7 +1122,11 @@ DebugCommand = Literal[
     "ptt",
     "type",
     "dialogs",
+    "choices",
     "choose",
+    "talk",
+    "menu",
+    "menu_pick",
     "eval",
     "check",
     "kill",
@@ -1021,6 +1139,9 @@ DebugCommand = Literal[
     "player_equip",
     "waypoints",
     "npc_goto",
+    "player_hp",
+    "player_drop",
+    "chest_take",
 ]
 
 
@@ -1043,13 +1164,20 @@ class DebugCmd(_Command):
     (`player_equip`, v11); every waypoint and freepoint of the world (`waypoints`, `value`: [{name, x, y,
     z, fp}]); move an `npc` to a `waypoint` (or `distance` cm, default 300, in front of npc `to`) on the
     ground, facing npc `face` (`npc_goto`, v15: it stays free and goes on with what it does, so its
-    routine may walk it back).
+    routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v21);
+    `player_goto` to a point `pos` [x, y, z] on the ground there (v21); the player throws an `item` down, as
+    with the game's own key (`player_drop`, v22: he is given it first if he has none); the player takes
+    `count` of an `item` out of a `chest` unseen (`chest_take`, v28, `value`: how many).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
     `eval` — computes `expr` (story graph expression) with self = `npc`, other = the hero (`value`);
     `check` — every npc of the world builds its dialog menu, each script condition is compared with its
-    lifted form (`value`: {npcs, computed, differ, differences})."""
+    lifted form (`value`: {npcs, computed, differ, differences}); v24: `choices` — the choices dialog `node`
+    of `npc` offers after its lines, as the dialog window asks (`value`: [{id, text}]); `choose` also takes
+    one of them. The dialog window as the player has it: `talk` — the hero talks to `npc` as with the action
+    key, `menu` — what the window offers now (`value`: the texts, none while a line plays), `menu_pick` —
+    picks the entry `text` as the player does with the keys."""
 
     type: Literal["debug"] = "debug"
     req: str
@@ -1070,6 +1198,10 @@ class DebugCmd(_Command):
     expr: list[Any] | None = None
     item: str | None = None
     face: str | None = None  # npc_goto: the npc it turns to
+    hp: int | None = None  # player_hp
+    pos: tuple[float, float, float] | None = None  # player_goto: a point of the world (v21), on the ground
+    chest: str | None = None  # chest_take: the chest's id (v28)
+    count: int | None = None  # chest_take
 
 
 class GraphPatchCmd(_Command):
@@ -1077,8 +1209,11 @@ class GraphPatchCmd(_Command):
 
     Operations (`op`): `disable` / `enable` a dialog or a choice (`node`); `condition`: add `expr` to the
     dialog's script condition (`expr` null drops the added ones); `add_node` (`node` = {id, npc,
-    description, nr, important, permanent, condition, lines, effects}); `remove_node`; `told`: the hero
-    has chosen that added dialog. With `req`, the game answers `result` (`error` lists rejected ops)."""
+    description, nr, important, permanent, condition, lines, effects, program}); `remove_node`; `told`: the
+    hero has chosen that added dialog; `program` (v23): `steps` in place of the scripts' program of a dialog's
+    information or condition (`part`) or of a choice (`node`), `steps` null brings the scripts' one back.
+    The director's own dialogs offer choices with `choice` steps (v24).
+    With `req`, the game answers `result` (`error` lists rejected ops)."""
 
     type: Literal["graph_patch"] = "graph_patch"
     req: str | None = None
@@ -1115,7 +1250,9 @@ class StoryEffectCmd(_Command):
     the same as in a dialog of the director (give, xp, set, journal, end) and `attack` (`reason`: an AR_*
     constant, AR_NONE by default: until the hero is down) and `refuse_talk` (`seconds`) — an npc held by
     the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
-    START...) through B_StartOtherRoutine, as the dialogs change routines. The game answers `result`.
+    START...) through B_StartOtherRoutine, as the dialogs change routines; `calm` (v20; `attitude`: an
+    ATT_* constant, ATT_NEUTRAL by default): the npc calls off its fight with the hero and keeps to it, its
+    attitude to him set through B_SetAttitude, a held npc let go too. The game answers `result`.
 
     `check` (v10): the gives are checked first, and nothing happens unless each giver has all it gives
     (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)")."""
@@ -1218,6 +1355,19 @@ class StoryEvalCmd(_Command):
     exprs: list[Any]
 
 
+class StoryProgramCmd(_Command):
+    """The program a dialog's script function runs now (v23): `node` is a dialog (C_INFO, `part` picks its
+    "information" or "condition") or a choice's function; `own` (v25): the scripts' program even when the
+    director's is in place. `result.value`: {"node", "fn", "returns", "patched": the director's program is in
+    place, "steps": [...]} (docs/protocol.md, «Программы»)."""
+
+    type: Literal["story_program"] = "story_program"
+    req: str
+    node: str
+    part: Literal["information", "condition"] = "information"
+    own: bool = False
+
+
 class StoryTagCmd(_Command):
     """Npc's already in the world (`npcs`, symbols) watched under `tag` like the director's creatures (v8):
     their deaths and how near they are come in npc_died and story_world. `result.value`: how many were
@@ -1235,6 +1385,36 @@ class NpcViewCmd(_Command):
     type: Literal["npc_view"] = "npc_view"
     req: str
     npcs: list[str]
+
+
+class ChestItem(_GameMessage):
+    item: str  # the scripts' instance
+    name: str
+    count: int = 1
+
+
+class Chest(_GameMessage):
+    """A chest the npc may call its own (v28): it owns it (`why` "owner", the world's data), carries its key
+    ("key"), or nobody owns it and it stands by a point of the npc's routine ("home")."""
+
+    id: str  # its name in the world (CHEST_LOBART), else where it stands (MOB_17950_3240_-21850)
+    why: Literal["owner", "key", "home"]
+    pos: tuple[float, float, float]
+    distance: float  # cm from the npc
+    waypoint: str | None = None  # the nearest
+    locked: bool = False
+    key: str | None = None  # the key's instance, if it has a lock with a key
+    has_key: bool = False
+    items: list[ChestItem] = Field(default_factory=list)
+    start: list[ChestItem] = Field(default_factory=list)  # what the world's data put in it at the start
+
+
+class NpcChestsCmd(_Command):
+    """The npc's chests and what lies in them (v28); `result.value`: [Chest], nearest first."""
+
+    type: Literal["npc_chests"] = "npc_chests"
+    req: str
+    npc: str
 
 
 class StoryNearbyCmd(_Command):

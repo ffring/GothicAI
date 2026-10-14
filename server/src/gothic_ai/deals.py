@@ -13,7 +13,10 @@ of the chronicle.
 
 The terms are what the code can carry out and check (step 2: deals in the story):
 - gold and items, either way. The npc gives only what it has. What the hero has, the npc does not see (his
-  purse is his): the window marks what he lacks;
+  purse is his): the window marks what he lacks. It asks for his things by the scripts' ids, and it can
+  only guess them: a guessed id that is no item («ITWR_CAVALORNLETTER») is the thing of its own story
+  (the story graph) of that kind the hero carries, when he carries just one: Cavalorn's letter is
+  ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED. Else it is told the things of its story;
 - the npc forgives a lie of the hero's it knows of (`forgive`): trust.py no longer counts it against his
   word with it, and a storylet of amends for it at it (amends.py) is settled;
 - the npc keeps silent about it (`silence`): it no longer passes the rumor on (social.py); whom it told
@@ -32,7 +35,7 @@ import asyncio
 import itertools
 import logging
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Collection, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -79,6 +82,7 @@ WITHDRAW_DEAL = "withdraw_deal"
 MAX_COUNT = 100_000  # a sanity bound, not a price limit: what is fair is the npc's to judge
 MAX_TERMS = 6  # things on one side
 MAX_DAYS = 10  # the furthest a debt may be due
+STORY_ITEMS = 8  # the things of its story an npc is told of, when it asked for one that is not
 DEBTS_EVERY_S = 10.0  # how often the debts' days are checked
 LIE_KINDS = ("found_out", "caught")
 
@@ -129,8 +133,10 @@ PROPOSE_TOOL = Tool(
     "Предложить герою сделку. Герой увидит условия и примет их сам, если согласен, — тогда всё сразу "
     "перейдёт из рук в руки. Торгуетесь — вызови снова с новыми условиями, они заменят прежние. "
     "Отдать можешь только то, что есть в твоём инвентаре (он в обстановке); у героя проси предметы по "
-    "идентификатору, золото — ITMI_GOLD. Сколько у него с собой, ты не знаешь, но сделка сама тебя "
-    "защищает: если у него нет того, что он отдаёт, она не состоится — осматривать вещь заранее не нужно. "
+    "идентификатору, золото — ITMI_GOLD. Не знаешь точного — пиши догадку того же вида (ITWR_… письма и "
+    "книги, ITMI_… прочие вещи): вещь из твоих дел, которая у него с собой, код подставит сам. Сколько у "
+    "него с собой, ты не знаешь, но сделка сама тебя защищает: если у него нет того, что он отдаёт, она "
+    "не состоится — осматривать вещь заранее не нужно. "
     "Кроме вещей: простить ему ложь, о которой ты знаешь (forgive), пообещать о ней молчать (silence), дать "
     "в долг — он отдаст позже, к сроку (hero_later), принять возврат его долга тебе (repay); id лжи и долгов "
     "— в обстановке. Вещи из твоего тайника (если он есть, он в обстановке) отдаёшь так же, через npc_gives. "
@@ -365,13 +371,17 @@ class Deals:
         *,
         journal: Journal | None = None,
         names: Callable[[str], str | None] | None = None,
+        things: Callable[[str], Collection[str]] | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
         self.chronicle = chronicle
         self.journal = journal or dialogue.journal
         self.names = names  # an npc's name -> its symbol, for whom a task is to kill (the character cards)
+        self.things = things  # an npc -> the item ids of its story (StoryGraph.things_of), for a guessed id
         self.stash = Stash(chronicle)
+        # what the npc knows it keeps in its chests (chests.py): a thing it offers may be there
+        self.in_chests: Callable[[str], dict[str, tuple[int, str]]] = lambda npc: {}
         # the tasks of the deals and their rewards: a TurnExtension of its own (cli.py)
         self.contracts = Contracts(link, dialogue, chronicle, self.stash, journal=self.journal)
         self.open: dict[str, Deal] = {}  # npc -> its offer, while the conversation lasts
@@ -423,6 +433,8 @@ class Deals:
                 state = " — срок прошёл, он не сдержал слово" if d.broken else ""
                 lines.append(f"- {d.id}: {d.what()}{state}")
         return "\n".join(lines) or None
+
+    all_tools: tuple[Tool, ...] = (PROPOSE_TOOL, WITHDRAW_TOOL)
 
     def tools(self, npc: str) -> list[Tool]:
         return [PROPOSE_TOOL, WITHDRAW_TOOL] if npc.upper() in self.open else [PROPOSE_TOOL]
@@ -498,9 +510,12 @@ class Deals:
         wanted, why = _parse(args.get("hero_gives"))
         if wanted is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
-        things, day, why = await self._items({*wanted, *bring, *(i for i, _, _ in later_raw)})
+        later_ids = {i for i, _, _ in later_raw}
+        asked = {*wanted, *bring, *later_ids}
+        things, swaps, day, why = await self._items(npc, asked, set(wanted) - set(bring) - later_ids)
         if things is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
+        wanted = _swapped(wanted, swaps)
         hero_gives = tuple(Give(i, c, things[i]) for i, c in wanted.items())
         later = tuple(Later(Give(i, c, things[i]), day + d) for i, c, d in later_raw)
         task = None
@@ -541,6 +556,11 @@ class Deals:
         self.journal.add("deal_offer", npc=npc, name=name, deal=deal.id, version=deal.version, terms=terms)
         changed = "Условия изменились" if current is not None else "Герой видит твоё предложение"
         after = "Он примет его сам, если согласен; пока не принял, можно торговаться."
+        if swaps:
+            after += " " + " ".join(
+                f"Предмета {guess} нет: вписано то, что герой держит из твоих дел, — {things[i]} ({i})."
+                for guess, i in swaps.items()
+            )
         twice = [g for g in hero_gives if any(d.give.item == g.item for d in repay)]
         if twice:  # the debt brings its own: what was added on top is more, not the debt again
             total = ", ".join(
@@ -607,6 +627,12 @@ class Deals:
             if got is None:
                 listed = "; ".join(f"{nm} ({i}) ×{c}" for i, (c, nm) in have.items()) or "пусто"
                 hidden = f" Твой тайник: {self.stash.text(npc)}." if kept else ""
+                stored = self.in_chests(npc).get(item)
+                if stored is not None:
+                    hidden += (
+                        f" {stored[1]} ({item}) ×{stored[0]} лежит у тебя в сундуке: сначала достань "
+                        "(инструмент chest), потом предлагай."
+                    )
                 if n or kept.get(item):
                     return None, f"у тебя только {n + kept.get(item, 0)} — {name or item} ({item}).{hidden}"
                 return None, f"у тебя нет {item}. Твой инвентарь: {listed}.{hidden}"
@@ -639,17 +665,43 @@ class Deals:
             return None, f"у героя нет такого долга тебе: {', '.join(unknown)}. Его долги тебе: {listed}."
         return tuple(mine[i] for i in dict.fromkeys(ids)), ""
 
-    async def _items(self, items: set[str]) -> tuple[dict[str, str] | None, int, str]:
-        """The names of the items in the game, and today's game day; or why not."""
+    async def _items(
+        self, npc: str, items: set[str], hero: set[str]
+    ) -> tuple[dict[str, str] | None, dict[str, str], int, str]:
+        """The names of the items in the game, what stands for an id the npc guessed for a thing the hero
+        gives now (`hero`: the guess -> the one of that kind of its story he carries), and today's game
+        day; or why not."""
+        story = sorted(set(self.things(npc)) - items) if self.things is not None else []
         try:
-            state = await self.link.story_state(symbols=list(items), items=list(items))
+            state = await self.link.story_state(symbols=[*items, *story], items=[*items, *story])
         except (GameError, TimeoutError) as err:
-            return None, 0, f"не выходит проверить предметы: {err}"
+            return None, {}, 0, f"не выходит проверить предметы: {err}"
         kinds, names = state.get("symbols", {}), state.get("items", {})
-        unknown = [i for i in items if kinds.get(i) != "item"]
+        story = [i for i in story if kinds.get(i) == "item"]
+        unknown = sorted(i for i in items if kinds.get(i) != "item")
+        swaps: dict[str, str] = {}
+        for guess in (i for i in unknown if i in hero):
+            alike = [i for i in story if _kind(i) == _kind(guess)]
+            try:
+                have = await self.link.story_eval(npc, [_has(i) for i in alike]) if alike else []
+            except (GameError, TimeoutError) as err:
+                log.info("deal: what %s means by %s: %s", npc, guess, err or type(err).__name__)
+                have = []
+            held = [i for i, n in zip(alike, have, strict=False) if isinstance(n, int) and n > 0]
+            if len(held) == 1:
+                log.info("deal: %s guessed %s for %s", npc, guess, held[0])
+                swaps[guess] = held[0]
+        unknown = [i for i in unknown if i not in swaps]
         if unknown:
-            return None, 0, f"нет таких предметов: {', '.join(sorted(unknown))}."
-        return {i: str(names.get(i) or i) for i in items}, int(state.get("day", 0)), ""
+            why = f"нет таких предметов: {', '.join(unknown)}."
+            if story:
+                kinds_asked = {_kind(i) for i in unknown}
+                story.sort(key=lambda i: (_kind(i) not in kinds_asked, i))
+                listed = "; ".join(f"{names.get(i) or i} ({i})" for i in story[:STORY_ITEMS])
+                why += f" Вещи из твоих дел: {listed}."
+            return None, {}, 0, why
+        known = {*(i for i in items if i not in swaps), *swaps.values()}
+        return {i: str(names.get(i) or i) for i in known}, swaps, int(state.get("day", 0)), ""
 
     # --- the hero accepts ------------------------------------------------------------------------
 
@@ -892,6 +944,24 @@ def _parse(raw: Any) -> tuple[dict[str, int] | None, str]:
     if any(c > MAX_COUNT for c in out.values()):
         return None, f"не больше {MAX_COUNT} штук."
     return out, ""
+
+
+def _kind(item: str) -> str:
+    """The kind of an item by its id's prefix: ITWR_ writings, ITMI_ things, ITAR_ armour..."""
+    return item.split("_", 1)[0]
+
+
+def _has(item: str) -> list[Any]:
+    """How many the hero has (story_eval, self = the npc)."""
+    return ["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", item]]
+
+
+def _swapped(wanted: dict[str, int], swaps: dict[str, str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for item, count in wanted.items():
+        item = swaps.get(item, item)
+        out[item] = out.get(item, 0) + count
+    return out
 
 
 def _parse_xp(raw: Any) -> tuple[int | None, str]:

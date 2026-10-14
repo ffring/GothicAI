@@ -46,7 +46,9 @@ def _object(properties: dict | None = None) -> dict:
 
 SET_INTENT = "set_intent"
 GIVE_ITEM = "give_item"
+TAKE_ITEM = "take_item"
 RECALL = "recall"
+TAKE_S = 40.0  # the bridge gives a pick-up 30 s once the npc has said its lines
 
 TOOLS = [
     Tool(
@@ -87,6 +89,20 @@ TOOLS = [
         ),
     ),
     Tool(
+        TAKE_ITEM,
+        "Поднять предмет, который лежит на земле и который ты видишь (строка «На земле» в обстановке): "
+        "тело подойдёт и поднимет его после твоей реплики, и он станет твоим. Например, то, что герой "
+        "бросил тебе под ноги.",
+        _object(
+            {
+                "item": {
+                    "type": "string",
+                    "description": "идентификатор предмета из строки «На земле», например ITPL_BEET",
+                },
+            }
+        ),
+    ),
+    Tool(
         RECALL,
         "Вспомнить подробности: прежние встречи с героем, которых нет в сводке твоей памяти (что он "
         "рассказывал, о чём просил, что ты обещал), и что ты знаешь о мире и своих делах — темы из "
@@ -122,6 +138,11 @@ async def execute(link: GameLink, npc: str, call: ToolCall, snapshot: Snapshot |
                 name = _item_name(snapshot, item)
                 res = await link.act(npc, "give_item", item=item, count=count)
                 return _outcome(res, f"Ты отдал герою: {name} ×{count}", f"Не вышло отдать {name}")
+            case "take_item":
+                item = str(args.get("item", "")).upper()
+                name = str(args.get("name") or item)
+                res = await link.act(npc, "take_item", item=item, timeout=TAKE_S)
+                return _outcome(res, f"Ты поднял с земли: {name}", f"Не вышло поднять {name}")
     except (GameError, TimeoutError, ValueError) as err:
         return Outcome(f"Действие {call.name} не выполнено: {err}", ok=False)
     return Outcome(f"Неизвестное действие {call.name}", ok=False)
@@ -180,15 +201,19 @@ def _metres(cm: float) -> str:
     return f"{max(1, round(cm / 100))} м"
 
 
-def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight: Sight | None = None) -> str:
+def render_situation(
+    snap: Snapshot | None, intent: Intent | None = None, sight: Sight | None = None, *, brief: bool = False
+) -> str:
     """What the npc perceives right now; sent with every turn, not kept in history. With `sight` (what it
     sees, perception.py) the place, the hero and the people around are as it perceives them; without, as
-    the snapshot has them (everyone within 15 m, seen or not)."""
+    the snapshot has them (everyone within 15 m, seen or not). `brief`: for a line in a fight (the quick
+    model, dialogue.py), without the inventory and the targets of intents: only words, no acts."""
     if snap is None:
         if sight is None:
             return "[Обстановка неизвестна]" + (f"\nТвоё намерение: {intent.describe()}." if intent else "")
         # a free npc nobody asked a snapshot of: what it sees is all there is
         seen = [sight.place, *([sight.hero] if sight.hero else []), sight.people]
+        seen += [sight.ground] if sight.ground else []
         intent_line = [f"Твоё намерение: {intent.describe()}."] if intent else []
         return "\n".join(["[Обстановка — видна только тебе, герою её не пересказывай]", *seen, *intent_line])
     w, npc, pl = snap.world, snap.npc, snap.player
@@ -209,15 +234,20 @@ def render_situation(snap: Snapshot | None, intent: Intent | None = None, sight:
             f"{f', {pl.ranged}' if pl.ranged else ''}."
             + (f" Здоровье героя: {pl.hp}/{pl.hp_max}." if pl.hp is not None and pl.hp_max else "")
         )
-    items = [f"{it.name} ({it.item}) ×{it.count}" for it in npc.inventory if not it.equipped]
-    lines.append("Твой инвентарь: " + ("; ".join(items) if items else "пусто") + ".")
+    if not brief:
+        items = [f"{it.name} ({it.item}) ×{it.count}" for it in npc.inventory if not it.equipped]
+        lines.append("Твой инвентарь: " + ("; ".join(items) if items else "пусто") + ".")
     if sight is not None:
         lines.append(sight.people)
+        if sight.ground:
+            lines.append(sight.ground)
     else:
         near = [f"{o.name} ({_metres(o.distance)}{', мёртв' if o.dead else ''})" for o in snap.nearby_npcs]
         lines.append("Рядом: " + (", ".join(near) if near else "никого") + ".")
     lines.append("Сейчас ты идёшь за героем." if npc.following else "Сейчас ты стоишь на месте.")
     if intent is not None:
         lines.append(f"Твоё намерение: {intent.describe()}.")
-        lines.append(f"Цели для намерения (target): {describe_targets(snap)}.")
+        if not brief:
+            targets = sight.targets if sight is not None and sight.targets else None
+            lines.append(f"Цели для намерения (target): {describe_targets(snap, targets)}.")
     return "\n".join(lines)
