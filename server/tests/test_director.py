@@ -85,6 +85,12 @@ GRAPH = {
                     "text": "Дай 5 золотых!",
                     "when": HAS_20,
                 },
+                {
+                    "do": "choice",
+                    "node": "DIA_LOBART_RUEBENRUNNING_BILLIGER",
+                    "text": "Лучше продай одежду дешевле!",
+                    "when": HAS_20,
+                },
                 _line("Но ты не собрал и двадцати!", when=LESS_20),
                 {"do": "end", "when": LESS_20},
             ],
@@ -96,17 +102,29 @@ GRAPH = {
             "DIA_LOBART_RUEBENRUNNING_GOLD",
             LOBART,
             [
+                _line("Держи."),
                 {
                     "do": "give",
                     "from": ["inst", "SELF"],
                     "to": ["inst", "OTHER"],
                     "item": ["sym", "ITMI_GOLD"],
                     "amount": ["int", 5],
-                }
+                },
             ],
             kind="choice",
             parents=["DIA_LOBART_RUEBENRUNNING"],
             description="Дай мне 5 золотых монет!",
+        ),
+        _node(
+            "DIA_LOBART_RUEBENRUNNING_BILLIGER",
+            LOBART,
+            [
+                _line("Лучше продай одежду дешевле!", "OTHER"),
+                _line("Хорошо! Я отдам тебе ее на 10 золотых дешевле."),
+            ],
+            kind="choice",
+            parents=["DIA_LOBART_RUEBENRUNNING"],
+            description="Лучше продай одежду дешевле!",
         ),
         _node("DIA_HILDA_HALLO", HILDA, [], condition=["!=", ["var", QUEST], ["int", 2]], important=True),
         _node("DIA_XARDAS_FIRSTEXIT", XARDAS, [{"do": "chapter", "value": ["int", 1]}], condition=None),
@@ -264,7 +282,7 @@ def _proposal(npc: str, **change: Any) -> ToolCall:
             {"speaker": "hero", "text": "Я принёс репу."},
             {"speaker": "npc", "text": "Давай. Он бы заплатил."},
         ],
-        "effects": ["E1", "E2", "E3"],
+        "effects": ["E1", "E2", "E4"],
         "answers": [{"effect": "E2", "text": "Держи, он бы так и сделал."}],
         "status": "obsolete",
         "journal_now": "Лобарт мёртв. Может, репу примет Хильда.",
@@ -321,8 +339,13 @@ async def test_the_director_repairs_after_a_rejected_proposal(graph):
 
         brief = llm.calls[0][1][0].content
         assert "Лобарт (BAU_950_LOBART) мёртв" in brief and "E1: опыт +50" in brief
-        assert "E2: вариант ответа «Дай мне 5 золотых монет!» — герою: ITMI_GOLD ×5" in brief
-        assert "забрать у героя ITPL_BEET ×20" in brief
+        # a choice with what the dead said to it, so that the model sees what it promised
+        assert (
+            "E2: вариант ответа «Дай мне 5 золотых монет!», в ответ: «Держи.» — герою: ITMI_GOLD ×5" in brief
+        )
+        cheaper = "E3: вариант ответа «Лучше продай одежду дешевле!», в ответ: «Хорошо! Я отдам тебе ее на 10"
+        assert cheaper in brief and "дешевле.» — сам ничего не даёт" in brief
+        assert "E4: забрать у героя ITPL_BEET ×20" in brief
         assert f"{HILDA} — Хильда: этот квест есть в диалогах" in brief
         assert f"{VINO} — Вино: был рядом (12 м)" in brief
 

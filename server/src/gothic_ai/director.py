@@ -66,7 +66,9 @@ INSTRUCTIONS = """\
 если так честнее) и две записи в журнал героя от первого лица: journal_now — что он узнаёт сразу (о смерти и \
 к кому теперь идти), journal_done — после сдачи. Эффект-«вариант ответа» — это выбор героя в меню после \
 разговора, как в оригинале (например, золото или скидка): выбери те варианты, что преемнику естественно \
-предложить, и, если нужно, напиши его ответ на каждый (answers: id варианта и одна реплика).
+предложить, и, если нужно, напиши его ответ на каждый (answers: id варианта и одна реплика). Вариант, \
+который обещает то, что мог дать только умерший, не бери. То, что даёт вариант, преемник отдаёт в ответе \
+на него, а не раньше, в разговоре.
 - close: если передать концовку некому или это нелепо, квест закрывается (status: obsolete — потерял смысл, \
 failed — провален), с записью journal_now.
 
@@ -536,8 +538,16 @@ class Director:
                 choice = self.graph.nodes[e["node"]]
                 inside: list[Offer] = []
                 self._offers(choice, quest, story, needs, inside, 0, "", 1)
-                gives = ", ".join(o.text for o in inside)
-                text = f"вариант ответа «{choice.description}»" + (f" — {gives}" if gives else "")
+                gives = ", ".join(o.text for o in inside) or "сам ничего не даёт"
+                said = " ".join(
+                    f"«{x.get('text', '')}»"
+                    for x in choice.effects
+                    if x["do"] == "line"
+                    and x.get("speaker") == ["inst", "SELF"]
+                    and story.possible(x.get("when"), self_npc=node.npc, hero_items=needs)
+                )
+                text = f"вариант ответа «{choice.description}»" + (f", в ответ: {said}" if said else "")
+                text += f" — {gives}"
                 effects = [o.effect for o in inside]
                 out.append(Offer(f"E{first + len(out)}", {}, text, choice.id, effects, e.get("when")))
 
