@@ -2384,6 +2384,133 @@ async def interject_scenario(
     return _logged(results)
 
 
+async def remembers_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    sightings: Sightings,
+    perception: PerceptionDesk,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    steps: str = "BDT_1013_BANDIT_L",
+    cave: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+) -> dict[str, str]:
+    """Seen lately (step M2 of docs/npc-tools.md): Cavalorn goes into the bandits' cave first and sees them
+    there, then comes back out to the hero by the steps. Out of the cave the hero says «Кавалорн, там в
+    пещере бандиты, разберись с ними.»; its model (scripted, LLM=fake) sets it on Brago. Checks:
+    - sees_cave: in the cave it sees one of them;
+    - remembers: back out, it sees neither, but its situation has them «Недавно видел» with their ids,
+      and Brago is a target of its intent;
+    - goes_there: set on him, it walks into the cave first;
+    - fights: it fights Brago, and he is down."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    brago = cave[0]
+    calls: list[tuple[float, str, str, dict[str, Any]]] = []  # (sent, action, status, args)
+    act = link.act
+
+    async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
+        t = time.monotonic()
+        res = await act(who, action, **kw)
+        if who.upper() == npc:
+            calls.append((t, action, res.status, kw))
+        return res
+
+    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any]]]:
+        return [c for c in calls if c[0] >= t0 and c[1] == action]
+
+    def dist(who: str = npc) -> float:
+        return talk.people[who].distance / 100 if who in talk.people else -1.0
+
+    go = ToolCall("go_to", {"place": "XARDAS_BANDITS"})
+    fight = {"goal": "fight", "target": brago, "attitude": "friendly", "agenda": None}
+    dialogue.llm = _ByNpc(
+        {
+            "Кавалорн": _OnWords(
+                [
+                    ("пещеру первым", FakeStep("Пойду первым.", [go])),
+                    ("пришёл первым", FakeStep("Тут двое.")),
+                    ("разберись", FakeStep("Сейчас я им покажу!", [ToolCall("set_intent", fight)])),
+                ],
+                FakeStep("Идём."),
+            )
+        },
+        FakeBackend("Хм.", delay=0),
+    )
+    link.act = recorded  # type: ignore[method-assign]
+    try:
+        try:
+            await link.debug("player_equip", item="ITAR_PAL_H")
+        except GameError as err:
+            log.info("remembers: no armor for the hero: %s", err)
+        await link.debug("skip_important", near=npc)
+        for _ in range(2):  # the goblins by his fire
+            try:
+                await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+            except GameError as err:
+                log.info("remembers: goblin: %s", err)
+        await link.debug("player_goto", to=npc, distance=300)
+        if not await _until(lambda: 0 <= dist() <= 15, 20):
+            return _logged({"roster": f"failed ({npc} is not around the hero: {dist():.1f} m)"})
+        dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+        talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+        await _until(lambda: 0 <= dist() <= 5, 20)
+        await link.debug("player_goto", to=steps, distance=400)
+        await _until(lambda: 0 <= dist() <= 6, 30)
+
+        # in: it goes ahead, looks around and sees them
+        t0 = time.monotonic()
+        talk.hear("Кавалорн, иди в пещеру первым.", None, {"via": "scenario"})
+        await _until(lambda: any(c[2] == "done" for c in since(t0, "go_to_waypoint")), 100)
+        await _until(lambda: "Тут двое." in [m.content for m in dialogue.conversations[npc].history], 90)
+        view = await perception.fresh(npc)
+        seen = [o.id for o in view.sees if o.id.upper() in cave] if view is not None else []
+        check("sees_cave", bool(seen), seen or "nobody")
+
+        # out: back with the hero, it sees them no more and remembers them
+        talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+        await _until(lambda: 0 <= dist() <= 6, 40)
+        await asyncio.sleep(3)
+        view = await perception.fresh(npc)
+        in_sight = [o.id for o in view.sees if o.id.upper() in cave] if view is not None else []
+        situation = sightings.situation(npc) or ""
+        sight = perception.sight(npc)
+        targets = sight.targets if sight is not None else {}
+        noted = (
+            situation.split("Недавно видел, сейчас не видишь:")[-1] if "Недавно видел" in situation else ""
+        )
+        check(
+            "remembers",
+            not in_sight and any(c in noted for c in cave) and brago in targets,
+            noted.strip() or f"in sight {in_sight}; {situation[-200:]}",
+        )
+
+        # set on him: it goes in there first, then fights
+        t1 = time.monotonic()
+        talk.hear("Кавалорн, там в пещере бандиты, разберись с ними.", None, {"via": "scenario"})
+        fought = await _until(
+            lambda: any(c[3].get("npc", "").upper() == brago for c in since(t1, "fight")), 120
+        )
+        first_fight = min((c[0] for c in since(t1, "fight")), default=float("inf"))
+        walked = [c for c in since(t1, "go_to_waypoint") if c[0] < first_fight]
+        check(
+            "goes_there",
+            fought and bool(walked),
+            f"{len(walked)} walk(s) before the fight" if fought else "no fight",
+        )
+        down = await _until(lambda: brago not in talk.people or talk.people[brago].activity == "down", 90)
+        state = (await link.story_state(npcs=[brago])).get("npcs", {}).get(brago, {}).get("state")
+        check("fights", fought and (down or state == "dead"), f"Brago {state}, down {down}")
+    finally:
+        link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
 async def lie_found_out(
     link: GameLink,
     dialogue: DialogueManager,

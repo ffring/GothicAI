@@ -115,6 +115,9 @@
 #       DECIDER_URL): at the bandits' cave the hero says three phrases, to Brago, to his mate, to them all;
 #       no more than three voices to each, none over another, someone speaks up by the behavioral model's
 #       word; what each said is in the log, to be read. Starts the TTS service (TTS=fake)
+#   remembers: seen lately (docs/npc-tools.md, step M2): Cavalorn goes into the bandits' cave first, sees them,
+#       comes back out; «там в пещере бандиты, разберись» (model scripted with LLM=fake): it remembers them
+#       though it sees them no more, walks into the cave first and fights Brago
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, and

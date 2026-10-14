@@ -146,6 +146,8 @@ class Orders:
         self.fights: dict[str, Fight] = {}  # companion -> its fight now
         # what an npc sees now, asked afresh (perception.py): a companion sent somewhere looks around there
         self.view_of: Callable[[str], Awaitable[NpcView | None]] | None = None
+        # where the npc last saw someone, lately (sightings.py): the place's id in the book
+        self.last_seen: Callable[[str, str], str | None] = lambda npc, who: None
         self._tasks: set[asyncio.Task[Any]] = set()
         link.listeners.append(self.on_message)
         # the conversational model's "fight X" for a companion is carried out here (dialogue.py)
@@ -340,9 +342,14 @@ class Orders:
         return failed(status)
 
     async def _fights(self, npc: str, fight: Fight, standing: Standing | None) -> str | None:
-        """The fights themselves: the last one's status, None if something else took over."""
+        """The fights themselves: the last one's status, None if something else took over. One it does not
+        see now but saw lately somewhere it goes after there first («там бандиты, разберись»)."""
         if not await self.talk.hold(npc, "order"):
             return "тебя не отпускают"
+        if (place := await self._where_it_saw(npc, fight.target)) is not None:
+            log.info("%s goes after %s to %s, where it saw him", npc, fight.target, place.id)
+            if not await self._seek(npc, fight, place):
+                return None  # something else took over
         while True:
             status = await self._act(npc, "fight", npc=fight.target, timeout=FIGHT_S)
             if status == "cancelled" or self.fights.get(npc) is not fight:
@@ -356,6 +363,48 @@ class Orders:
                 return status
             fight.target = nxt
             log.info("%s fights on: %s", npc, nxt)
+
+    async def _where_it_saw(self, npc: str, target: str) -> Place | None:
+        """The place it last saw `target` at, if it does not see him now."""
+        if self.places is None or self.view_of is None:
+            return None
+        try:
+            view = await self.view_of(npc)
+        except (GameError, TimeoutError):
+            return None
+        if view is None or any(o.id.upper() == target.upper() for o in view.sees):
+            return None  # in sight: at him at once
+        pid = self.last_seen(npc, target)
+        place = self.places.get(pid) if pid else None
+        return place if place is not None and place.center is not None and place.points else None
+
+    async def _seek(self, npc: str, fight: Fight, place: Place) -> bool:
+        """Go to the place and through its points until it sees the target; False if something else took
+        over meanwhile."""
+        assert place.center is not None
+        status = await self._act(
+            npc,
+            "go_to_waypoint",
+            waypoint=place.points[0],
+            points=list(place.points),
+            pos=list(place.center),
+            radius=GO_RADIUS_CM,
+            timeout_ms=int(GO_S * 1000),
+            timeout=GO_S + 10,
+        )
+        for wp in place.points[:LOOK_POINTS]:
+            if status == "cancelled" or self.fights.get(npc) is not fight:
+                return False
+            try:
+                view = await self.view_of(npc) if self.view_of is not None else None
+            except (GameError, TimeoutError):
+                view = None
+            if view is not None and any(o.id.upper() == fight.target.upper() for o in view.sees):
+                return True
+            status = await self._act(
+                npc, "go_to_waypoint", waypoint=wp, radius=LOOK_RADIUS_CM, timeout_ms=20000, timeout=30
+            )
+        return status != "cancelled" and self.fights.get(npc) is fight
 
     async def _resume(self, npc: str, standing: Standing | None) -> None:
         """After an order that ends (attack, halt): a companion follows the hero again, an npc that only
@@ -494,6 +543,18 @@ class Orders:
         near = self.places.near(snap.npc.pos, PLACES_CM, PLACES_MAX + 1)
         return [(p, d) for p, d in near if here is None or p.id != here.id][:PLACES_MAX]
 
+    def _within(self, npc: str, pid: str) -> Place | None:
+        """A place of that id within PLACES_CM of the companion: any, not only the few nearest it is shown
+        (2026-10-14: by the steps the bandits' cave was the seventh, and «иди в пещеру» was refused)."""
+        snap = self.link.snapshots.get(npc.upper())
+        if self.places is None or snap is None or not pid:
+            return None
+        here = self.places.of(snap.npc.waypoint, snap.npc.nearest_waypoint)
+        for p, _ in self.places.near(snap.npc.pos, PLACES_CM, len(self.places.places)):
+            if p.id == pid and (here is None or p.id != here.id):
+                return p
+        return None
+
     def situation(self, npc: str) -> str | None:
         if not self.companion(npc):
             return None
@@ -518,10 +579,9 @@ class Orders:
             return None
         if not self.companion(conv.npc):
             return ToolOutcome("Отклонено: ты не идёшь с героем.", "rejected")
-        near = {p.id: p for p, _ in self.nearby(conv.npc)}
-        place = near.get(str(call.arguments.get("place", "")).strip().upper())
+        place = self._within(conv.npc, str(call.arguments.get("place", "")).strip().upper())
         if place is None:
-            listed = ", ".join(f"{k} ({p.ru})" for k, p in near.items()) or "нет"
+            listed = ", ".join(f"{p.id} ({p.ru})" for p, _ in self.nearby(conv.npc)) or "нет"
             return ToolOutcome(f"Отклонено: такого места рядом нет. Места рядом: {listed}.", "rejected")
         self.journal.add(
             "action", npc=conv.npc, name=conv.persona.name, action=GO_TO, arguments={"place": place.id}
