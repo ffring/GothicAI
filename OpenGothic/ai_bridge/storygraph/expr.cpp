@@ -306,6 +306,8 @@ static ExprP junction(const std::string& o, std::vector<ExprP> terms) {
   return make(Expr::Op, o, std::move(out));
   }
 
+ExprP ex::exact(const std::string& o, std::vector<ExprP> args) { return make(Expr::Op, o, std::move(args)); }
+
 ExprP ex::land(std::vector<ExprP> terms) { return junction("&&", std::move(terms)); }
 ExprP ex::lor (std::vector<ExprP> terms) { return junction("||", std::move(terms)); }
 

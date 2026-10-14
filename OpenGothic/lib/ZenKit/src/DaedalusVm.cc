@@ -114,6 +114,17 @@ namespace zenkit {
 		pop_call();
 	}
 
+	void DaedalusVm::unsafe_call_bl(DaedalusSymbol const* sym) {
+		// the same as the BL instruction
+		if (auto cb = _m_function_overrides.find(sym->address()); cb != _m_function_overrides.end()) {
+			StackGuard guard {this, sym->rtype()};
+			cb->second(*this);
+			guard.inhibit();
+			return;
+		}
+		unsafe_call(sym);
+	}
+
 	bool DaedalusVm::unsafe_call_external(DaedalusSymbol const* external) {
 		auto* sym = external == nullptr ? nullptr : find_symbol_by_index(external->index());
 		if (sym == nullptr || !sym->is_external()) {

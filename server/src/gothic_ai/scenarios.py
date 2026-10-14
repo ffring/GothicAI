@@ -386,6 +386,15 @@ async def graph_dialogs(
 
     live = await link.check_conditions()
     check("live_check", live.get("computed", 0) > 0 and live.get("differ") == 0, str(live))
+    # the graph runs the dialogs' functions in place of the VM (docs/story-graph.md, «Исполнение без VM»):
+    # every condition of the check ran as a program, none failed, none was left to the VM
+    programs = live.get("programs") or {}
+    check(
+        "programs",
+        bool(programs.get("on")) and programs.get("runs", 0) > 0 and programs.get("failed") == 0
+        and programs.get("vm") == 0,
+        str(programs),
+    )
     base = await link.offered_dialogs(npc)
     check("vanilla", bool(base), " ".join(base))
     if len(base) < 2:

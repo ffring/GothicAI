@@ -312,7 +312,7 @@ WebSocket, одно JSON-сообщение на кадр, кодировка UT
 | `dialogs` | `npc` | диалоги, которые NPC предлагает сейчас, в порядке меню; `important` вместе с обычными |
 | `choose` | `npc`, `node` | — ; играет диалог так, будто его выбрали в меню |
 | `eval` | `expr`, `npc?` | значение выражения: число, строка, символ экземпляра или `null` |
-| `check` | — | каждый NPC мира собирает меню, каждое условие сверяется с поднятым: `{npcs, computed, differ, differences}`. Условия при этом исполняются вместе со своими эффектами (`C_Beklauen`, `Npc_SetRefuseTalk`) |
+| `check` | — | каждый NPC мира собирает меню, каждое условие сверяется с поднятым: `{npcs, computed, differ, differences, programs}`. Условия при этом исполняются вместе со своими эффектами (`C_Beklauen`, `Npc_SetRefuseTalk`). `programs` — функции диалогов, которые исполнил граф, а не VM ([Исполнение без VM](story-graph.md#исполнение-без-vm-расчёт)): `{on, runs, failed, vm}`, где `vm` — функции, которые не прочитались программой и остались VM. Поле необязательное |
 
 Консоль сервера: `graph`, `graph hide|show <node>`, `graph cond <node> <json>`, `graph add <json>`, `graph remove <id>`, `dialogs`, `choose <node>`, `eval <json>`. Консоль Marvin: `ai dialogs <npc>`, а `ai status` показывает и граф.
 

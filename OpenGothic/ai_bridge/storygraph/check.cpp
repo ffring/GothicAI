@@ -7,6 +7,7 @@
 #include "check.h"
 #include "effects.h"
 #include "eval.h"
+#include "execcheck.h"
 #include "model.h"
 #include "saveworld.h"
 #include "snapshot.h"
@@ -99,7 +100,7 @@ std::string shorten(std::string s, size_t n) {
 
 // one save: false if it could not be read
 bool checkSave(const char* datPath, const Model& m, const fs::path& dir, const char* traceNode, bool verbose,
-               bool effects, Totals& t, EffectTotals& et) {
+               bool effects, bool exec, Totals& t, EffectTotals& et, ExecTotals& xt) {
   auto vm = loadVm(datPath);
   if(vm==nullptr) {
     std::fprintf(stderr, "can't open %s\n", datPath);
@@ -107,9 +108,12 @@ bool checkSave(const char* datPath, const Model& m, const fs::path& dir, const c
     }
   SaveWorld world(*vm);
   std::unique_ptr<EffectCheck> fx;
-  if(effects)
+  std::unique_ptr<ExecCheck>   xc;
+  if(exec)
+    xc = std::make_unique<ExecCheck>(*vm, world);
+  else if(effects)
     fx = std::make_unique<EffectCheck>(*vm, world);
-  bindExternals(*vm, fx ? fx->engine() : world);
+  bindExternals(*vm, xc ? xc->engine() : fx ? fx->engine() : world);
   std::string error;
   if(!world.load(dir, error)) {
     std::printf("== %s: can't read the save: %s\n\n", dir.filename().string().c_str(), error.c_str());
@@ -171,6 +175,47 @@ bool checkSave(const char* datPath, const Model& m, const fs::path& dir, const c
     checks.push_back({&n, vm->find_symbol_by_index(uint32_t(info->condition)), self});
     }
   world.resetCounts();  // the instance functions above called the engine too
+
+  if(xc!=nullptr) {
+    // the functions of every dialog and choice, with its npc as self, against the save's state
+    xc->npcOf = [&world](uint32_t s) -> std::shared_ptr<zenkit::DaedalusInstance> {
+      auto* n = world.npc(s);
+      return n ? n->script : nullptr;
+      };
+    ExecTotals here;
+    for(auto& n : m.nodes) {
+      if(traceNode!=nullptr && n.id!=traceNode)
+        continue;
+      auto* npcSym = vm->find_symbol_by_name(n.npc);
+      if(npcSym==nullptr)
+        continue;
+      auto* npc = world.npc(npcSym->index());
+      std::shared_ptr<zenkit::INpc> self = npc ? npc->script : nullptr;
+      if(self==nullptr) {
+        if(!absentNpcs.count(npcSym->index())) {
+          try {
+            absentNpcs[npcSym->index()] = vm->init_instance<zenkit::INpc>(npcSym);
+            }
+          catch(const std::exception&) {
+            absentNpcs[npcSym->index()] = nullptr;
+            }
+          }
+        self = absentNpcs[npcSym->index()];
+        }
+      world.talkingTo(self.get());
+      if(traceNode!=nullptr)
+        xc->trace = [](const std::string& s){ std::printf("     %s\n", s.c_str()); };
+      for(auto fn : nodeFunctions(*vm, n)) {
+        auto* sym = vm->find_symbol_by_index(fn);
+        here.add(sym ? sym->name() : n.id, fn, xc->run(fn, self, world.hero));
+        }
+      }
+    here.print((dir.filename().empty() ? dir.parent_path() : dir).filename().string().c_str(), verbose);
+    std::printf("\n");
+    xt.merge(here);
+    t.saves++;
+    return true;
+    }
 
   if(fx!=nullptr) {
     // every dialog and choice runs once, with its npc as self, against the save's state
@@ -308,13 +353,19 @@ std::unique_ptr<zenkit::DaedalusVm> loadVm(const char* datPath) {
   }
 
 int checkSaves(const char* datPath, const Model& m, const std::vector<std::string>& saves, const char* traceNode,
-               bool verbose, bool effects) {
+               bool verbose, bool effects, bool exec) {
   // member access on null instances is normal in the scripts and logged by ZenKit on every call
   zenkit::Logger::use_logger([](zenkit::LogLevel, const std::string&){});
   Totals       t;
   EffectTotals et;
+  ExecTotals   xt;
   for(auto& s : saves)
-    checkSave(datPath, m, fs::path(s), traceNode, verbose, effects, t, et);
+    checkSave(datPath, m, fs::path(s), traceNode, verbose, effects, exec, t, et, xt);
+  if(exec) {
+    std::printf("total: %zu saves\n", t.saves);
+    xt.print("all saves", false);
+    return xt.differ==0 && t.saves==saves.size() ? 0 : 1;
+    }
   if(effects) {
     std::printf("total: %zu saves\n", t.saves);
     et.print("all saves", false);

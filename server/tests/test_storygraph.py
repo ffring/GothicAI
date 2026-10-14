@@ -225,3 +225,45 @@ def test_a_read_after_a_call_that_writes_it_is_not_known():
     # effects check; the value after the call is not the one before it
     r = _run("--node", "DIA_ADDON_VATRAS_FREE")
     assert "set other.ATTRIBUTE[ATR_MANA] = ?other.attribute[ATR_MANA_MAX] after B_RAISEATTRIBUTE" in r.stdout
+
+
+# programs: the graph runs a function itself (docs/story-graph.md, «Исполнение без VM»)
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_programs_match_the_vm_in_random_states():
+    # every condition, dialog and choice run by the Interpreter against the VM, 5 states each; the engine
+    # remembers items given and taken, so reading the inventory after changing it is checked too
+    r = _run("--fuzz", "5", "--exec")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout and "VM failed 0" in r.stdout and "not a program 0 " in r.stdout
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists() and _saves()), reason="needs the tool, game, saves")
+def test_programs_match_the_vm_on_original_saves():
+    r = _run(*[a for s in _saves() for a in ("--check", str(s))], "--exec")
+    assert r.returncode == 0, r.stdout[-3000:]
+    total = next(line for line in r.stdout.splitlines() if "programs (all saves)" in line)
+    assert "DIFFER 0;" in total and "not a program 0 " in total
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_program_keeps_the_order_of_the_script():
+    # Alrik takes 50 gold, then removes all his gold: the count comes after the gift, where the VM makes it
+    r = _run("--program", "DIA_ALRIK_WANNAFIGHT_GOLD")
+    lines = r.stdout.splitlines()
+    give = lines.index("B_GIVEINVITEMS(other, self, ITMI_GOLD, 50)")
+    assert lines[give + 3] == "NPC_REMOVEINVITEMS(self, ITMI_GOLD, NPC_HASITEMS(self, ITMI_GOLD))"
+    # `Bullco_Leave_Day == B_GetDayPlus();`, a typo for `=` in the original: nobody takes the comparison,
+    # but the call in it still runs
+    r = _run("--program", "DIA_BULLCO_DAILYCHECK")
+    assert "BULLCO_LEAVE_DAY == B_GETDAYPLUS()" in r.stdout
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_a_returned_local_is_read_when_it_is_taken():
+    # B_GetLearnCostTalent returns its static local: the VM reads it after all three calls, so the original
+    # prices "all thief talents" at three times the last one; the program does the same
+    r = _run("--fuzz", "20", "--exec", "--node", "DIA_CH_DIEB_ALLE")
+    assert r.returncode == 0, r.stdout[-3000:]
+    assert "DIFFER 0;" in r.stdout
