@@ -120,8 +120,9 @@
 #       though it sees them no more, walks into the cave first and fights Brago
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
-#       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, and
-#       a program kept across save/load
+#       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its
+#       choices (v24) through the debug commands and through the dialog window as the player has it, and a
+#       program kept across save/load
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.

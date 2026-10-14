@@ -127,6 +127,7 @@ def test_a_condition_the_director_writes_can_close_the_ending(graph):
         (_program({"do": "return"}), "список шагов"),
         (_program([{"do": "say", "speaker": "hero", "text": "Эй"}, SUCCESS]), "кто говорит"),
         (_program([{"do": "say", "speaker": "self", "text": " "}, SUCCESS]), "пустая"),
+        (_program([{"do": "choice", "text": "Золото", "steps": []}, SUCCESS]), "INFO_ADDCHOICE"),
     ],
 )
 def test_the_validator_says_why_not_for_programs(graph, op, why):
@@ -147,3 +148,24 @@ def test_a_dialog_of_the_director_may_have_a_program(graph):
     # the lines of its program count as lines
     bare = [_repair_node(npc=HILDA, lines=[], effects=[{"do": "set", "var": QUEST, "value": 2}])]
     assert any("реплик" in e for e in validate(bare, story, Rules.of(graph), repairs=QUEST))
+
+
+def test_a_choice_of_the_director_may_end_the_quest(graph):
+    # the quest ends if the hero picks it: an ending that may happen
+    pick = {"do": "choice", "text": "Отдать репу", "steps": [SAY, SUCCESS]}
+    other = {"do": "choice", "text": "Потом", "steps": [{"do": "clear_choices"}]}
+    program = [{"do": "say", "speaker": "self", "text": "Ну что, принёс?"}, pick, other]
+    ops = [_repair_node(lines=[], effects=[], program=program)]
+    story = _story(graph, dead=frozenset({LOBART}))
+    assert validate(ops, story, Rules.of(graph), repairs=QUEST) == []
+    assert story.then(ops).endings(QUEST) == ["DIA_LOBART_RUEBENRUNNING", "DIR_MIS_LOBART_RUEBEN_1"]
+    assert [c["text"] for c in programs.choices(program)] == ["Отдать репу", "Потом"]
+    assert programs.render(program).splitlines()[1:4] == [
+        "choice «Отдать репу»",
+        "  self says «Спасибо за репу.»",
+        "  MIS_LOBART_RUEBEN = LOG_SUCCESS",
+    ]
+    empty = [
+        _repair_node(lines=[], effects=[], program=[SAY, {"do": "choice", "text": "", "steps": [SUCCESS]}])
+    ]
+    assert any("строка варианта" in e for e in validate(empty, story, Rules.of(graph), repairs=QUEST))

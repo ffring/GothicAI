@@ -938,12 +938,15 @@ std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zen
   }
 
 std::vector<GameScript::DlgChoice> GameScript::updateDialog(const GameScript::DlgChoice &dlg, Npc& player,Npc& npc) {
-  if(dlg.handle==nullptr)
-    return {};
-  if(dlg.handle==nullptr)
-    return {};  // made at runtime, without choices
-  const zenkit::IInfo&               info = *dlg.handle;
   std::vector<GameScript::DlgChoice> ret;
+  if(dlg.handle==nullptr) {
+    // made at runtime (ai_bridge): its choices, if it has any
+    if(!dlg.external.empty() && Gothic::inst().dialogExtraChoicesFn)
+      Gothic::inst().dialogExtraChoicesFn(dlg,ret);
+    sort(ret);
+    return ret;
+    }
+  const zenkit::IInfo&               info = *dlg.handle;
 
   ScopeVar self (*vm.global_self(), npc.handlePtr());
   ScopeVar other(*vm.global_other(), player.handlePtr());

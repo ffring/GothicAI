@@ -603,7 +603,10 @@ def _check_program(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
         return []  # the scripts' own program again
     if not isinstance(steps, list):
         return ["программа — список шагов"]
-    return _check_steps(steps, story.state.symbols, rules)
+    errors = _check_steps(steps, story.state.symbols, rules)
+    if programs.choices(steps) or any(s.get("do") == "clear_choices" for s in programs.steps_of(steps)):
+        errors.append("у диалога скриптов варианты ответа — через INFO_ADDCHOICE с функцией варианта")
+    return errors
 
 
 def _check_steps(steps: list[dict[str, Any]], symbols: dict[str, str], rules: Rules) -> list[str]:
@@ -616,6 +619,12 @@ def _check_steps(steps: list[dict[str, Any]], symbols: dict[str, str], rules: Ru
             errors.append(f"{e['var']} ведёт главы сюжета, её не трогаем")
         elif e["do"] == "chapter":
             errors.append("программа меняет главу: это сюжет, его не трогаем")
+    for choice in programs.choices(steps):
+        text = str(choice.get("text", ""))
+        if not text.strip() or len(text) > MAX_DESCRIPTION:
+            errors.append(f"строка варианта ответа пустая или длиннее {MAX_DESCRIPTION} знаков")
+        if not isinstance(choice.get("steps"), list):
+            errors.append(f"у варианта «{text}» нет шагов")
     for line in programs.lines(steps):
         text = str(line.get("text", ""))
         if line.get("speaker") not in ("self", "other"):

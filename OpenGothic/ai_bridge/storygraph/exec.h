@@ -37,6 +37,9 @@ class Interpreter final {
     // a line of its own (Step::Say with text): the speaker's symbol and the text in the game codepage -> the id
     // of a line AI_Output plays; empty if it can't be had. Original lines need nothing.
     std::function<std::string(const std::string& npc, const std::string& text)> ownLine;
+    // a Choice or ClearChoices step: the dialog that runs offers it or clears its choices; false if there is no
+    // dialog of the director to take it
+    std::function<bool(const Step& s)> choices;
 
   private:
     enum class Flow : uint8_t { Next, Return, Fail };

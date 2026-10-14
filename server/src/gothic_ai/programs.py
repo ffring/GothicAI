@@ -5,7 +5,9 @@ may put a program of its own in place of one (graph_patch `program`, v23) or giv
 (`add_node.program`). Steps are JSON, as `story_program` returns them:
 `{"do": "call", "call": expr}`, `{"do": "set", "target": expr, "value": expr}`,
 `{"do": "if", "cond": expr, "then": [...], "else": [...]}`, `{"do": "return", "value": expr}` and
-`{"do": "say", "speaker": "self" | "other", "line": id}` or with `"text"` for a line of its own.
+`{"do": "say", "speaker": "self" | "other", "line": id}` or with `"text"` for a line of its own; in the
+director's own dialogs also `{"do": "choice", "id"?, "text": ..., "steps": [...]}` — a choice the dialog
+offers after its lines, its steps run when the hero picks it (v24) — and `{"do": "clear_choices"}`.
 Expressions are those of the graph (gamedata/storygraph.py), taken as written: nothing is folded.
 
 Here: what a program does, in the terms the validator reads (the lifted model's effects).
@@ -32,6 +34,8 @@ def steps_of(steps: list[Step] | None) -> Iterator[Step]:
         if s.get("do") == "if":
             yield from steps_of(s.get("then"))
             yield from steps_of(s.get("else"))
+        elif s.get("do") == "choice":
+            yield from steps_of(s.get("steps"))
 
 
 def exprs_of(steps: list[Step] | None) -> Iterator[Expr]:
@@ -94,8 +98,13 @@ def names(steps: list[Step] | None) -> set[str]:
 
 
 def lines(steps: list[Step] | None) -> list[Step]:
-    """The say steps."""
+    """The say steps, those of choices too."""
     return [s for s in steps_of(steps) if s.get("do") == "say"]
+
+
+def choices(steps: list[Step] | None) -> list[Step]:
+    """The choice steps, those of choices too."""
+    return [s for s in steps_of(steps) if s.get("do") == "choice"]
 
 
 def render(steps: list[Step] | None, indent: str = "") -> str:
@@ -113,6 +122,11 @@ def render(steps: list[Step] | None, indent: str = "") -> str:
             case "say":
                 said = s.get("line") or f"«{s.get('text', '')}»"
                 out.append(f"{indent}{s.get('speaker', 'self')} says {said}")
+            case "choice":
+                out.append(f"{indent}choice «{s.get('text', '')}»" + (f" {s['id']}" if s.get("id") else ""))
+                out.append(render(s.get("steps"), indent + "  "))
+            case "clear_choices":
+                out.append(f"{indent}clear choices")
             case "if":
                 out.append(f"{indent}if {render_expr(s.get('cond'))}")
                 out.append(render(s.get("then"), indent + "  "))

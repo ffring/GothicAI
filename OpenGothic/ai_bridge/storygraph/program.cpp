@@ -457,6 +457,13 @@ void describe(const std::vector<Step>& steps, const std::string& indent, std::st
         out += indent + (s.hero ? "other" : "self") + " says " +
                (s.line.empty() ? "\"" + TextCodec::toUtf8(s.text) + "\"" : s.line) + "\n";
         break;
+      case Step::Choice:
+        out += indent + "choice " + s.id + " \"" + TextCodec::toUtf8(s.text) + "\"\n";
+        describe(s.then, indent + "  ", out);
+        break;
+      case Step::ClearChoices:
+        out += indent + "clear choices\n";
+        break;
       }
     }
   }
@@ -504,6 +511,19 @@ void writeSteps(W& w, const std::vector<Step>& steps) {
         w.String(text.c_str(), rapidjson::SizeType(text.size()));
         break;
         }
+      case Step::Choice: {
+        w.Key("do"); w.String("choice");
+        if(!s.id.empty()) {
+          w.Key("id"); w.String(s.id.c_str(), rapidjson::SizeType(s.id.size()));
+          }
+        auto text = TextCodec::toUtf8(s.text);
+        w.Key("text");  w.String(text.c_str(), rapidjson::SizeType(text.size()));
+        w.Key("steps"); writeSteps(w, s.then);
+        break;
+        }
+      case Step::ClearChoices:
+        w.Key("do"); w.String("clear_choices");
+        break;
       }
     w.EndObject();
     }

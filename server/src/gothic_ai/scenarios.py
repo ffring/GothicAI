@@ -581,6 +581,81 @@ async def graph_programs(
     after = await hero()
     check("node_program", after == (before[0] + 3, before[1] + 5), f"gold, exp {before} -> {after}")
 
+    # choices of a dialog of the director (v24): offered after its lines, as the dialog window asks; one
+    # that is picked is no longer offered and its steps run; a choice may offer others
+    ask = {
+        "id": "DIR_CHOICE_TEST",
+        "npc": npc,
+        "description": "Проверка вариантов",
+        "nr": 51,
+        "permanent": True,
+        "program": [
+            {"do": "say", "speaker": "self", "text": "Выбирай."},
+            {"do": "choice", "text": "Золото", "steps": [give(2)]},
+            {
+                "do": "choice",
+                "text": "Дальше",
+                "steps": [{"do": "clear_choices"}, {"do": "choice", "text": "Опыт", "steps": [xp(3)]}],
+            },
+        ],
+    }
+    await story.apply({"op": "add_node", "node": ask})
+    chosen = asyncio.ensure_future(wait_message(link, DialogChosen, lambda m: m.node == ask["id"], 10))
+    await link.choose_dialog(npc, ask["id"])
+    await chosen
+    offered = await link.dialog_choices(npc, ask["id"])
+    check(
+        "choices",
+        [(c["id"], c["text"]) for c in offered]
+        == [("DIR_CHOICE_TEST.1", "Золото"), ("DIR_CHOICE_TEST.2", "Дальше")],
+        str(offered),
+    )
+    before = await hero()
+    await link.choose_dialog(npc, "DIR_CHOICE_TEST.1")
+    after = await hero()
+    # the window asks with what was picked: the choice, whose dialog offers the rest
+    left = [c["text"] for c in await link.dialog_choices(npc, "DIR_CHOICE_TEST.1")]
+    check(
+        "choice_picked",
+        after[0] == before[0] + 2 and left == ["Дальше"],
+        f"gold {before[0]} -> {after[0]}, {left}",
+    )
+    await link.choose_dialog(npc, "DIR_CHOICE_TEST.2")
+    deeper = [c["text"] for c in await link.dialog_choices(npc, "DIR_CHOICE_TEST.2")]
+    check("choice_offers_more", deeper == ["Опыт"], str(deeper))
+
+    # the same in the dialog window, as the player has it: the dialog, after its line its choices, one that
+    # offers another, then the dialogs again
+    async def menu(ok: Callable[[list[str]], bool], timeout: float = 30) -> list[str]:
+        seen: list[str] = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            seen = await link.dialog_menu()
+            if ok(seen):
+                break
+            await asyncio.sleep(0.3)
+        return seen
+
+    await link.debug("teleport", near=npc, distance=150)
+    await link.start_talk(npc)
+    window: list[list[str]] = [await menu(lambda m: ask["description"] in m)]
+    exp_before = (await hero())[1]
+    for pick, then in ((ask["description"], ["Золото", "Дальше"]), ("Дальше", ["Опыт"]), ("Опыт", None)):
+        if pick not in window[-1]:
+            break
+        await link.pick_in_menu(pick)
+        # after the last choice the window offers the dialogs again
+        window.append(await menu(lambda m, then=then: m == then if then else ask["description"] in m))
+    gained = (await hero())[1] - exp_before
+    check(
+        "window",
+        window[1:3] == [["Золото", "Дальше"], ["Опыт"]] and gained == 3 and ask["description"] in window[-1],
+        f"{' -> '.join(map(str, window))}; exp +{gained}",
+    )
+    if window[-1]:
+        await link.pick_in_menu(window[-1][-1])  # the last one ends the talk
+        await menu(lambda m: not m, 15)
+
     # a program in place of a condition, made before a save, comes back after loading it
     await story.apply({"op": "program", "node": cond, "part": "condition", "steps": never})
     await asyncio.sleep(0.5)  # the game has the memory head of that change
