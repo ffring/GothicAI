@@ -339,6 +339,8 @@ class GroupTalk:
             line += f" Сейчас говорит: {', '.join(speaking)}."
         return line
 
+    all_tools: tuple[Tool, ...] = ()
+
     def tools(self, npc: str) -> list[Tool]:
         return []
 

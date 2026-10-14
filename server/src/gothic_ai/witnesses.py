@@ -310,6 +310,8 @@ class Witnesses:
             )
         return "\n".join(parts) or None
 
+    all_tools: tuple[Tool, ...] = (ASK_TOOL,)
+
     def tools(self, npc: str) -> list[Tool]:
         return [ASK_TOOL] if self._near.get(npc.upper()) else []
 

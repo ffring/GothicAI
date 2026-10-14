@@ -126,6 +126,8 @@ class Wrath:
             )
         return "\n".join(lines)
 
+    all_tools: tuple[Tool, ...] = (TOOL,)
+
     def tools(self, npc: str) -> list[Tool]:
         if npc.upper() not in TEMPERS or self.of(npc).tipped:
             return []

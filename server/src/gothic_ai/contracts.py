@@ -565,6 +565,8 @@ class Contracts:
                 )
         return "\n".join(lines) or None
 
+    all_tools: tuple[Tool, ...] = ()
+
     def tools(self, npc: str) -> list[Tool]:
         return []
 

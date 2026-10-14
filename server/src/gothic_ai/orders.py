@@ -508,6 +508,8 @@ class Orders:
             lines.append(f"Ты пошёл первым и ждёшь героя: {standing.where}.")
         return "\n".join(lines)
 
+    all_tools: tuple[Tool, ...] = (GO_TO_TOOL,)
+
     def tools(self, npc: str) -> list[Tool]:
         return [GO_TO_TOOL] if self.places is not None and self.companion(npc) else []
 

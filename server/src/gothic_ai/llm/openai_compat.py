@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Sequence
 from typing import Any
 
 import openai
@@ -65,9 +65,13 @@ class OpenAICompatBackend:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,  # unused: llama.cpp reuses the prompts of its slots by itself
     ) -> AsyncIterator[LLMEvent]:
         chat = [{"role": "system", "content": instructions}, *chat_messages(messages)]
         kwargs: dict[str, Any] = {}
+        if allowed is not None:  # no allowed_tools here: the others are left out
+            tools = [t for t in tools or [] if t.name in allowed]
         if tools:
             kwargs["tools"] = [
                 {

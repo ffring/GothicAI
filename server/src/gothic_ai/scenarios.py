@@ -1752,12 +1752,19 @@ class _OnWords:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         last = messages[-1] if messages else None
         text = last.content if isinstance(last, Message) else ""
         step = next((s for words, s in self.replies if words.lower() in text.lower()), self.default)
         return FakeBackend(script=[step], delay=0).stream(
-            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+            instructions=instructions,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            allowed=allowed,
+            cache_key=cache_key,
         )
 
 
@@ -1779,9 +1786,18 @@ class _ByNpc:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         llm = next((b for name, b in self.by.items() if f"Ты — {name}" in instructions), self.default)
-        return llm.stream(instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice)
+        return llm.stream(
+            instructions=instructions,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            allowed=allowed,
+            cache_key=cache_key,
+        )
 
 
 async def companion_scenario(
@@ -2595,6 +2611,8 @@ class RepairScript:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         brief = next(m.content for m in messages if isinstance(m, Message))
         self.calls.append(brief)
@@ -2868,14 +2886,23 @@ class ClaimScript:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         if self.others is not None and self.only is not None and f"по имени {self.only}" not in instructions:
             async for event in self.others.stream(
-                instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+                instructions=instructions,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                allowed=allowed,
+                cache_key=cache_key,
             ):
                 yield event
             return
-        self.calls.append((instructions, list(messages), list(tools or [])))
+        self.calls.append(
+            (instructions, list(messages), [t for t in tools or [] if allowed is None or t.name in allowed])
+        )
         last = messages[-1] if messages else None
         if isinstance(last, ToolResult):
             self.outputs.append(last.output)
@@ -2885,7 +2912,12 @@ class ClaimScript:
         step = next((s for k, s in rules if k in text), FakeStep(self.default))
         fake = FakeBackend(script=[step], delay=0)
         async for event in fake.stream(
-            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+            instructions=instructions,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            allowed=allowed,
+            cache_key=cache_key,
         ):
             yield event
 
@@ -3154,6 +3186,8 @@ class AmendsScript:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         brief = next(m.content for m in messages if isinstance(m, Message))
         self.calls.append(brief)
@@ -4537,6 +4571,8 @@ class GossipScript:
         messages: Sequence[Item],
         tools: list[Tool] | None = None,
         tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         lines = next((t for t in tools or [] if t.name == "lines"), None)
         backend: LLMBackend
@@ -4549,7 +4585,12 @@ class GossipScript:
         else:
             backend = self.claim
         async for event in backend.stream(
-            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+            instructions=instructions,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            allowed=allowed,
+            cache_key=cache_key,
         ):
             yield event
 

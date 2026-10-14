@@ -129,6 +129,11 @@ async def test_declined_the_npc_offers_otherwise():
         await _until(lambda: len(llm.calls) == 2)
         assert "Герой отказался от сделки" in llm.calls[1][1][-1].content
         assert [t.name for t in llm.calls[1][2]] == ["propose_deal"]
+        # offered less, the request's tools are the same: the start of the npc's requests does not change
+        every = [t.name for t in llm.sent_tools[0]]
+        assert "propose_deal" in every and "withdraw_deal" in every and "set_intent" in every
+        assert [[t.name for t in tools] for tools in llm.sent_tools] == [every, every]
+        assert llm.cache_keys == [XARDAS, XARDAS]
         await _until(lambda: len(_shown(fake)) == 2)
         again = _shown(fake)[1]
         assert (again["deal"], again["version"], again["hero_gives"][0]["count"]) == ("D2", 1, 40)
@@ -521,4 +526,33 @@ async def test_day_is_told_when_it_changes(monkeypatch):
     finally:
         if watch is not None:
             watch.cancel()
+        await link_cm.__aexit__(None, None, None)
+
+
+class _IgnoresAllowed(FakeBackend):
+    """A model that calls what it sees in the request, whether it is offered or not."""
+
+    async def stream(
+        self, *, instructions, messages, tools=None, tool_choice=None, allowed=None, cache_key=None
+    ):
+        async for event in super().stream(
+            instructions=instructions, messages=messages, tools=tools, tool_choice=tool_choice
+        ):
+            yield event
+
+
+async def test_a_tool_not_offered_in_the_turn_is_rejected():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = _IgnoresAllowed(
+        script=[FakeStep("Эликсир — за пятьдесят.", [_offer(1, 50)]), FakeStep("Ладно.")], delay=0
+    )
+    link_cm, dialogue, _, deals = await _setup(fake, llm, store)
+    try:
+        dialogue.event_turn(XARDAS, "[Герой кивнул.]", tools=("set_intent",))
+        await _until(lambda: len(llm.calls) == 2)
+        assert "propose_deal" in [t.name for t in llm.calls[0][2]]  # in the request
+        assert "сейчас propose_deal тебе недоступен" in llm.calls[1][1][-1].output
+        assert XARDAS not in deals.open and _shown(fake) == []
+    finally:
         await link_cm.__aexit__(None, None, None)

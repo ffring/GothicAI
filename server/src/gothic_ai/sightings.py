@@ -374,6 +374,8 @@ class Sightings:
             return None
         return "Что ты видел сам, своими глазами (не с чужих слов):\n" + "\n".join(lines)
 
+    all_tools: tuple[Tool, ...] = (CATCH_TOOL,)
+
     def tools(self, npc: str) -> list[Tool]:
         told = self.hearsay is not None and self.hearsay.any(npc)
         return [CATCH_TOOL] if self.hero_trail(npc) or told else []
