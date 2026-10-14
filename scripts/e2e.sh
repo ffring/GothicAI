@@ -28,7 +28,8 @@
 #   see: what npc's perceive (npc_view, v11): Xardas sees the hero in front of him and not through the tower's
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
 #       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
-#       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#       a wolf killed in front of Lobart is a dead wolf to him; places by name at Xardas's tower, Lobart's
+#       and Onar's farms and in the city
 #   seen: what npc's saw (v12): Lobart keeps when, where and how he saw the hero on his farm; the hero goes to
 #       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
 #       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
