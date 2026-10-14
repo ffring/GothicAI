@@ -2828,12 +2828,18 @@ class RepairScript:
         brief = next(m.content for m in messages if isinstance(m, Message))
         self.calls.append(brief)
         ending = re.search(r"^1\. (\S+)", brief, re.M)
-        wanted = ("опыт +", "герою: ITMI_GOLD", "забрать у героя ITPL_BEET")
+        wanted = (
+            "опыт +",
+            "вариант ответа «Дай мне 5",
+            "вариант ответа «Лучше продай",
+            "забрать у героя ITPL_BEET",
+        )
         effects = [
             m.group(1)
             for m in re.finditer(r"^\s+(E\d+): (.*)$", brief, re.M)
             if m.group(2).startswith(wanted)
         ]
+        gold = next((e for e in effects if f"{e}: вариант ответа «Дай мне 5" in brief), "")
         args = {
             "kind": "handover",
             "ending": ending.group(1) if ending else "",
@@ -2847,6 +2853,7 @@ class RepairScript:
                 },
             ],
             "effects": effects,
+            "answers": [{"effect": gold, "text": "Держи. Пять монет, как он и обещал."}] if gold else [],
             "status": "obsolete",
             "journal_now": "Лобарт мёртв. Репу, наверное, теперь примет его жена Хильда.",
             "journal_done": "Я отдал репу Хильде, она заплатила за мужа.",
@@ -2927,11 +2934,19 @@ async def repair_after_death(
     node, successor = repair["node"], repair["npc"]
     # what the repair gives: Lobart's reward when scripted, what the model chose when not
     made = next(op["node"] for op in story.ops() if op.get("op") == "add_node" and op["node"]["id"] == node)
-    give_gold = sum(e["count"] for e in made["effects"] if e["do"] == "give" and e["item"] == "ITMI_GOLD")
+    gives = [*made["effects"], *programs.effects(made.get("program"))]
+    give_gold = sum(
+        e["count"] for e in gives if e["do"] == "give" and e["item"] == "ITMI_GOLD" and e.get("to") != "self"
+    )
     give_exp = sum(e["amount"] for e in made["effects"] if e["do"] == "xp")
     takes = any(e["do"] == "give" and e.get("to") == "self" for e in made["effects"])
+    choices = [c["text"] for c in programs.choices(made.get("program"))]
     if script is not None:
-        check("lobarts_reward", (give_gold, give_exp, takes) == (5, 50, True), made["effects"])
+        # Lobart's reward: the experience at once, the gold or the cheaper clothes as the hero's choice,
+        # as Lobart offered them
+        both = sorted(["Дай мне 5 золотых монет!", "Лучше продай одежду дешевле!"])
+        reward = (give_gold, give_exp, takes, sorted(choices))
+        check("lobarts_reward", reward == (5, 50, True, both), made)
 
     # the hero brings the turnips (Hilda's dialog wants 20)
     offered = await link.offered_dialogs(successor)
@@ -2954,6 +2969,12 @@ async def repair_after_death(
     await link.choose_dialog(successor, node)
     ok = await _until_async(lambda: var(RUEBEN), lambda v: v == 2, 15)
     check("quest_done", ok, await var(RUEBEN))
+    # after her lines the menu offers the hero his choices; he takes the gold
+    offers = await link.dialog_choices(successor, node)
+    check("choices", sorted(c["text"] for c in offers) == sorted(choices), offers)
+    gold_choice = next((c["id"] for c in offers if c["text"].startswith("Дай мне 5")), None)
+    if gold_choice is not None:
+        await link.choose_dialog(successor, gold_choice)
     after = (await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]), await has("ITPL_BEET"))
     check(
         "reward",

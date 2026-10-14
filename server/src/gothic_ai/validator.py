@@ -514,11 +514,12 @@ def _check_node(
             errors.append(f"кто говорит: self или other, а не {line.get('speaker')!r}")
         if (not line.get("line") and not text.strip()) or len(text) > MAX_TEXT:
             errors.append(f"реплика пустая или длиннее {MAX_TEXT} знаков")
-    errors += check_effects(made.get("effects") or [], symbols, rules, caps)
+    errors += check_effects(made.get("effects") or [], symbols, rules, None)
     if program:
-        if caps is not None:
-            errors.append("у ремонта нет своей программы: только эффекты исходной концовки")
         errors += _check_steps(program, symbols, rules)
+    if caps is not None:
+        # a repair gives no more than the ending it replaces: its effects and what its program gives
+        errors += _over_caps([*(made.get("effects") or []), *programs.effects(program)], caps)
     errors += _check_names(made.get("condition"), symbols)
     if not errors and not after.can_offer(id):
         errors.append(
@@ -564,11 +565,30 @@ def check_effects(
             if str(e.get("status") or "LOG_RUNNING").upper() not in JOURNAL_STATUS:
                 errors.append(f"статус темы журнала: {e.get('status')}")
     if caps is not None:
-        if xp > caps.xp:
-            errors.append(f"опыта {xp}, а исходная концовка давала {caps.xp}")
-        for item, n in given.items():
-            if n > caps.items.get(item, 0):
-                errors.append(f"{item} ×{n}, а исходная концовка давала ×{caps.items.get(item, 0)}")
+        errors += _over_caps(effects, caps)
+    return errors
+
+
+def _over_caps(effects: list[dict[str, Any]], caps: Caps) -> list[str]:
+    """What gives more than `caps`: experience and things for the hero, from the bridge's effects and from a
+    program's (programs.effects; a count that is not a number gives more than any cap)."""
+    xp = 0
+    given: dict[str, int] = {}
+    for e in effects:
+        kind = e.get("do")
+        if kind == "xp":
+            amount = _constant(e.get("amount"))
+            xp += amount if amount is not None else caps.xp + 1
+        elif kind == "give" and e.get("to") != "self":
+            item = str(e.get("item", "")).upper()
+            count = _constant(e.get("count")) if "count" in e else _count(e)
+            given[item] = given.get(item, 0) + (count if count is not None else caps.items.get(item, 0) + 1)
+    errors = []
+    if xp > caps.xp:
+        errors.append(f"опыта {xp}, а исходная концовка давала {caps.xp}")
+    for item, n in given.items():
+        if n > caps.items.get(item, 0):
+            errors.append(f"{item} ×{n}, а исходная концовка давала ×{caps.items.get(item, 0)}")
     return errors
 
 
