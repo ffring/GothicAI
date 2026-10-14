@@ -922,7 +922,7 @@ std::string DialogGraph::status() const {
          std::to_string(replaced.size()) + " replaced, " + std::to_string(replacedRuns) + " director's runs";
   }
 
-std::string DialogGraph::program(std::string_view node, std::string_view part, std::string& error) {
+std::string DialogGraph::program(std::string_view node, std::string_view part, bool own, std::string& error) {
   auto* v = vm();
   if(v==nullptr) {
     error = "no world";
@@ -937,12 +937,12 @@ std::string DialogGraph::program(std::string_view node, std::string_view part, s
   auto* fn = functionOf(*v,id,part=="condition",error);
   if(fn==nullptr)
     return {};
-  storygraph::Program own;
+  storygraph::Program scripts;
   const storygraph::Program* p = replaced.empty() ? nullptr : replacedProgram(*v,fn->index());
   const bool patched = p!=nullptr;
-  if(p==nullptr) {
-    own = storygraph::liftProgram(*v,*code,fn->index());
-    p   = &own;
+  if(p==nullptr || own) {
+    scripts = storygraph::liftProgram(*v,*code,fn->index());
+    p       = &scripts;
     }
   if(!p->error.empty()) {
     error = fn->name() + " is not a program: " + p->error;

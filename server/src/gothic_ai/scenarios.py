@@ -2952,7 +2952,8 @@ async def vanilla_lie(
     the code plays Lobart's own ending: the quest is done, the hero gets the gold and the experience, the next
     step (bring them to Hilda) starts, and the lie is written down with the truth. The same day nothing
     happens; the next morning Lobart misses the turnips, turns against the hero and refuses to talk, and Jora,
-    standing by, hears it."""
+    standing by, hears it. From then on the turnips count for nothing in Lobart's other dialogs: his work
+    clothes cost what they would without them."""
     results: dict[str, str] = {}
 
     def check(name: str, ok: bool, detail: object = "") -> None:
@@ -3023,6 +3024,27 @@ async def vanilla_lie(
     refuses = await link.evaluate(["call", "NPC_REFUSETALK", ["inst", "SELF"]], giver)
     check("refuses_talk", bool(refuses), refuses)
     check("rumor", ok, [f for f in facts("rumor") if f.get("quest") == RUEBEN][-1:])
+
+    # Lobart's dialogs as the lie found out leaves them (consequences.py): the turnips count for nothing
+    # there, so his work clothes cost what they cost without them, though the scripts have the quest done
+    ok = await _until(lambda: any(f.get("npc") == giver for f in facts("lie_consequences")), 30)
+    clothes = await link.story_program("DIA_LOBART_BUYCLOTHES")
+    changed = next((f for f in facts("lie_consequences") if f.get("npc") == giver), None)
+    check(
+        "consequences", ok and clothes.get("patched") is True and RUEBEN not in str(clothes["steps"]), changed
+    )
+    if "DIA_LOBART_KLEIDUNG" in await link.offered_dialogs(giver):
+        await link.choose_dialog(giver, "DIA_LOBART_KLEIDUNG")
+    await link.choose_dialog(giver, "DIA_LOBART_BUYCLOTHES")
+    price = await var("WERT_LOBARTSRUESTUNG")
+    others = [await var(q) == 2 for q in ("MIS_HILDA_PFANNEKAUFEN", "MIS_VINO_WEIN", "MIS_MALETH_BANDITS")]
+    expected = 80 - 10 * (await var("LOBART_AGAINSTKING") == 1) - 10 * sum(others)
+    turnips = await var(RUEBEN)
+    check(
+        "no_discount",
+        price == expected and turnips == 2,
+        f"price {price}, {expected} expected; quest {turnips}",
+    )
     await link.detach(bystander)
     return _logged(results)
 

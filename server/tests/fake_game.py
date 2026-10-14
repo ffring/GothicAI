@@ -48,6 +48,8 @@ class FakeGame:
         self.transcripts: list[str] = []  # final ones
         self.partials: list[str] = []
         self.graph: list[dict[str, Any]] = []  # graph_patch messages; ops on node "BAD" are rejected
+        # what story_program answers (v23): the scripts' programs of (node, part); missing ones are errors
+        self.programs: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect / raise_dead
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
         self.nearby_of: dict[str, list[dict[str, Any]]] = {}  # ...around this npc (else people_near)
@@ -305,6 +307,15 @@ class FakeGame:
             case "beast":
                 self.beast_cmds.append(msg)
                 await self.send(type="result", req=msg["req"], ok=True)
+            case "story_program":
+                key = (msg["node"], msg.get("part", "information"))
+                if key not in self.programs:
+                    await self.send(type="result", req=msg["req"], ok=False, error=f"no dialog {key[0]}")
+                else:
+                    value = {"node": key[0], "fn": key[0], "returns": key[1] == "condition", "patched": False}
+                    await self.send(
+                        type="result", req=msg["req"], ok=True, value={**value, "steps": self.programs[key]}
+                    )
             case "graph_patch":
                 self.graph.append(msg)
                 if msg.get("req"):

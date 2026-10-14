@@ -25,6 +25,7 @@ from .brain.situation import SituationBuilder
 from .budget import Budget
 from .chronicle import Chronicle
 from .concerns import Concerns
+from .consequences import LieConsequences
 from .contracts import symbol_by_name
 from .daylife import DayDesk
 from .deals import Deals
@@ -176,6 +177,7 @@ class ServerState:
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
+        self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
         self.interject: Interjections | None = None
@@ -709,6 +711,16 @@ async def serve(args: argparse.Namespace) -> int:
                 state.chronicle,
                 state.director,
                 llm,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
+            # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
+            state.consequences = LieConsequences(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
                 dialogue=state.dialogue,
                 journal=journal,
             )
