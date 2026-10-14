@@ -69,6 +69,36 @@ def test_a_name_as_speech_recognition_heard_it():
     assert addressee("Скажи Торусу, что я пришёл", None, guards, None).id == "VLK_TORUS"
 
 
+def test_words_about_bandits_are_not_to_a_bandit():
+    # 2026-10-14 at Cavalorn's fire: «…помогу тебе с бандитами» went to a bandit called «Бандит»
+    people = roster(
+        person("BAU_4300_ADDON_CAVALORN", "Кавалорн", 1.4, True),
+        person("BDT_1013_BANDIT_L", "Бандит", 9),
+    )
+    hit = addressee("Лучше за обещание помочь тебе с бандитами.", "BAU_4300_ADDON_CAVALORN", people, None)
+    assert hit.id == "BAU_4300_ADDON_CAVALORN" and hit.why == "focus"
+    assert addressee("Бандиты там остались?", None, people, "BAU_4300_ADDON_CAVALORN").why == "partner"
+    # one of them, by any case of the name, is still him
+    assert addressee("Скажи бандиту, чтобы ушёл", None, people, None).id == "BDT_1013_BANDIT_L"
+    assert addressee("Эй, бандит, стой!", None, people, None).id == "BDT_1013_BANDIT_L"
+
+
+def test_the_heros_voice_does_not_go_through_rock():
+    # the bandit 35 m off in the cave behind the rock: the voice goes round it, too far for him to hear
+    people = roster(
+        person("BAU_4300_ADDON_CAVALORN", "Кавалорн", 1.4, True, heard=140),
+        person("BDT_1014_BANDIT_L", "Браго", 35, heard=20000),
+        person("BDT_1015_BANDIT_L", "Бандит", 6, heard=20000),
+    )
+    assert addressee("Браго, выходи!", None, people, None) is None  # Cavalorn does not take words for Brago
+    assert addressee("Бандит, ты меня слышишь?", None, people, None) is None
+    assert addressee("Ты меня слышишь?", None, people, None).id == "BAU_4300_ADDON_CAVALORN"  # the one near
+    # round the corner of a passage his voice carries on: a call is heard, words to whoever is near are not
+    corner = roster(person("BAU_4300_ADDON_CAVALORN", "Кавалорн", 8, heard=3000))
+    assert addressee("Кавалорн, сюда!", None, corner, None).id == "BAU_4300_ADDON_CAVALORN"
+    assert addressee("Ну что, идём?", None, corner, "BAU_4300_ADDON_CAVALORN") is None
+
+
 def test_the_codes_posture_when_the_behavioral_model_is_unsure():
     stand = RosterEntry(id="A", name="A", distance=300, state="ZS_STAND_ARMSCROSSED")
     assert default_posture(stand) == "listen"

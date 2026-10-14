@@ -8,6 +8,8 @@ def kind(text: str, names: tuple[str, ...] = ()) -> str | None:
 
 def test_the_forms_of_an_order_in_what_the_hero_says_around_them():
     assert kind("Стой!") == "halt"
+    assert kind("Погоди.") == "halt" and kind("Подожди здесь.") == "wait"
+    assert kind("Погоди, я спросить хотел.") is None  # words
     assert kind("Стой здесь.") == "wait"
     assert kind("За мной!") == "follow"
     assert kind("Горн, за мной!", ("горн",)) == "follow"

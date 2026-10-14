@@ -592,6 +592,8 @@ class DialogueManager:
         self.fights_hero: Callable[[str], bool] = lambda npc: False
         # an npc called off its fight with the hero (npc): a companion fighting it lets it be (orders.py)
         self.on_calm: list[Callable[[str], None]] = []
+        # an npc turned on the hero by its own decision (npc): his companions stand up for him (orders.py)
+        self.on_attack: list[Callable[[str], None]] = []
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
         # an npc's turn is over and it said something (npc, name, the text said, the turn's kind, the npc it
@@ -2196,6 +2198,8 @@ class DialogueManager:
             return f"Тело не напало на героя ({err})", False
         log.info("%s attacks the hero (%s)", conv.npc, reason)
         self.journal.add("attack", npc=conv.npc, name=conv.persona.name, target="PLAYER", reason=reason)
+        for listener in self.on_attack:
+            listener(conv.npc)
         return "Ты напал на героя.", True
 
     async def _calm(self, conv: Conversation, intent: Intent) -> tuple[str, bool]:

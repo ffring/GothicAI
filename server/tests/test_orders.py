@@ -468,3 +468,83 @@ async def test_a_foe_that_called_off_its_fight_is_let_be():
     finally:
         await cm.__aexit__(None, None, None)
     assert GORN not in talk.orders.fights and not talk.orders.foe(BANDIT)
+
+
+async def test_a_blow_at_the_hero_heard_from_afar_brings_it_into_the_fight():
+    # 2026-10-14 the bandits beat the hero 20 m from Cavalorn: the blow was out of sight, not out of earshot
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue, person(BANDIT, "Бандит", 20))
+        await fake.perception(GORN, "ASSESSFIGHTSOUND", BANDIT, victim="PLAYER", distance=1800)
+        await _until(lambda: fights(fake) == [BANDIT])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_one_who_turns_on_the_hero_is_fought_before_its_first_blow():
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue, person(BANDIT, "Бандит", 8))
+        await fake.roster(person(GORN, "Горн", 40), person(BANDIT, "Бандит", 8))
+        await _until(lambda: talk.people[GORN].distance == 4000)
+        dialogue.on_attack[0](BANDIT)  # its model's own attack (dialogue._attack_hero)
+        await asyncio.sleep(0.1)
+        assert fights(fake) == [] and talk.orders.foe(BANDIT)  # too far off to hear the fight
+        await fake.roster(person(GORN, "Горн", 25), person(BANDIT, "Бандит", 8))
+        await _until(lambda: talk.people[GORN].distance == 2500)
+        dialogue.on_attack[0](BANDIT)
+        await _until(lambda: fights(fake) == [BANDIT])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_sent_ahead_it_goes_on_with_the_hero_once_he_comes_up():
+    fake = FakeGame()
+    go = ToolCall("go_to", {"place": "CAVE"})
+    llm = FakeBackend(script=[FakeStep("Пойду первым.", [go]), FakeStep("Тут пусто.", [])], delay=0)
+    cm, dialogue, talk = await _desk(fake, llm, places=PlaceBook(BOOK))
+    dialogue.extensions.append(talk.orders)
+    talk.orders.view_of = None
+    try:
+        await _follows(fake, dialogue)
+        await fake.send(type="player_text", text="Горн, иди в пещеру первым.")
+        await _until(lambda: len(llm.calls) == 2)
+        assert talk.orders.standing[GORN].kind == "go"
+        await fake.roster(person(GORN, "Горн", 30))  # it waits in the cave
+        await asyncio.sleep(1.2)
+        await fake.roster(person(GORN, "Горн", 3))  # the hero comes in
+        await _until(lambda: GORN not in talk.orders.standing and acts(fake)[-1] == (GORN, "follow"), 5)
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def test_a_companion_is_the_scripts_party_member_while_it_goes_with_the_hero():
+    # 2026-10-14 Cavalorn killed three bandits and the hero got no experience: ZS_Dead gives it for a party
+    # member's kills only
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        await _follows(fake, dialogue)
+        await fake.roster(person(GORN, "Горн", 4))
+        await _until(lambda: party(fake) == [(GORN, 1)])
+        await fake.send(type="player_text", text="Свободен.")
+        await _until(lambda: GORN not in fake.attached)
+        await fake.roster(person(GORN, "Горн", 4))
+        await _until(lambda: party(fake) == [(GORN, 1), (GORN, 0)])
+        await fake.roster(person(LOBART, "Лобарт", 4))
+        await asyncio.sleep(0.05)
+    finally:
+        await cm.__aexit__(None, None, None)
+    assert party(fake) == [(GORN, 1), (GORN, 0)]  # nobody else is touched
+
+
+def party(fake: FakeGame) -> list[tuple[str, int]]:
+    return [
+        (m["npc"], e["value"])
+        for m in fake.received
+        if m["type"] == "story_effect"
+        for e in m["effects"]
+        if e["do"] == "party"
+    ]
