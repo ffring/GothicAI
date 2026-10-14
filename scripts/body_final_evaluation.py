@@ -535,6 +535,61 @@ def visibility_load_failure_snapshot(prior,candidate):
             "fresh_screening_started":False,"selected_weights_changed":False,"prior_failures_replaced":False}
 
 
+def start_age_load_failure_snapshot(prior,candidate):
+    """Known pass, four closed native cohorts, then the first GRU cohort's age-guard fallback.
+
+    Gate v12: right after arena start four back-to-back heartbeats each cost a catch-up
+    tick, the first numeric rows reached the model past the 100 ms age guard, and the
+    resulting release aborted the suite. Bound as evidence, never re-evaluated.
+    """
+    repair.frozen_environment(prior)
+    require(not (prior/"screening").exists(),"start-age load failure exposed fresh screening")
+    declaration=read(prior/"final-evaluation.json");known_path=prior/"validation/known-audit-v1/report.json";known=read(known_path)
+    require(declaration.get("kind")==KIND and declaration["candidate"]["checkpoint_sha256"]==known.get("candidate_checkpoint_sha256")==candidate["checkpoint_sha256"] and
+            declaration["candidate"]["normalizer_sha256"]==known.get("normalization_sha256")==candidate["normalizer_sha256"] and
+            known.get("kind")=="body_stage8_known_saved_runtime_report" and known.get("environment_sha256")==sha(prior/"environment.json") and
+            known.get("declaration_sha256")==sha(prior/"final-evaluation.json") and known.get("passed") is True and known.get("issues")==[] and known.get("load_read") is False and
+            known.get("fresh_screening_read") is False and known.get("stage8_quality_credit") is False,
+            "start-age load retry dropped its known pass or changed fixed models")
+    repair.verify_inventory(prior,known["raw_sha256"])
+    suite=read(prior/"load/suite.json");expected=[f"four-actor-native-{index}" for index in range(4)]
+    require(suite.get("status")=="infrastructure_failure" and suite.get("error")=="native arena infrastructure failure: unexpected_control_loss:released" and
+            suite.get("behavioral_quality_evaluated") is False and [record.get("name") for record in suite.get("cases",[])]==expected,
+            "prior is not the exact four-native start-age load failure")
+    for record in suite["cases"]:
+        folder=prior/"load"/record["name"]
+        require(read(folder/"episode.json")==record and len(set(record.get("physical_actor_ids",[])))==4 and
+                record["final"].get("outcome")=="time_limit" and record["final"].get("elapsed_game_ms")==20000,"start-age failure native cohort changed")
+    partial=prior/"load/four-actor-gru-0"
+    require(not (partial/"episode.json").exists(),"failed GRU start cohort promoted")
+    entries=[json.loads(line) for line in (partial/"policy-inputs.jsonl").read_text().splitlines()]
+    fallbacks=[entry for entry in entries if entry.get("kind")=="model_input" and entry.get("response",{}).get("status")=="fallback"]
+    require(fallbacks and all(entry["response"].get("reason")=="observation_too_old" for entry in fallbacks) and
+            not any(entry.get("kind")=="arbitration" for entry in entries),"partial GRU start failure is not a pre-decision age fallback")
+    first=fallbacks[0]["request"];age=first["now_game_ms"]-first["observation"]["t_game_ms"]
+    require(age>100,"partial GRU start fallback is not past the 100 ms age guard")
+    terminals=[entry["arena"] for line in (partial/"arena-events.jsonl").read_text().splitlines() if (entry:=json.loads(line)).get("kind")=="terminal"]
+    require(len(terminals)==1 and terminals[0].get("outcome")=="infrastructure" and terminals[0].get("reason")=="unexpected_control_loss:released",
+            "partial GRU start infrastructure terminal changed")
+    names=["environment.json","source.tar.gz","reference/gothic-body-runner","final-evaluation.json","dataset/normalization.json"]
+    require(sha(prior/"dataset/normalization.json")==candidate["normalizer_sha256"],"start-age failure normalizer changed")
+    for architecture in ("gru","mlp"):
+        file=prior/"models"/architecture/"best.pt";require(sha(file)==candidate["checkpoint_sha256"][architecture],"start-age failure selected weights changed")
+        names.extend((str(file.relative_to(prior)),str((file.parent/"best.pt.json").relative_to(prior))))
+    for phase,count in (("shadow",3),("realtime",24),("realtime-reaction",6),("load",4)):
+        closed=read(prior/phase/"suite.json")
+        require(len(closed.get("cases",[]))==count and (phase=="load" or closed.get("status")=="collected" and not closed.get("error")),"start-age failure lost its closed known matrix")
+        names.extend(str(file.relative_to(prior)) for file in (prior/phase).rglob("*") if file.is_file())
+        for stem,suffix in (("services","-before.json"),("services","-after.json"),("resources",".txt"),("launcher",".log")):
+            file=prior/(stem+"-"+phase+suffix);require(file.is_file(),"start-age load failure resource/service/log missing")
+            names.append(str(file.relative_to(prior)))
+    names.extend(str(file.relative_to(prior)) for file in (prior/"validation").rglob("*") if file.is_file())
+    return {"kind":"known_pass_gru_start_observation_age_load_failure","run":str(prior),"files":repair.inventory(prior,names),
+            "known_passed":True,"completed_native_cohorts":4,"partial_case":"four-actor-gru-0","partial_fallback":"observation_too_old",
+            "partial_first_row_age_game_ms":age,"partial_native_terminal":terminals[0],"model_decisions_before_abort":0,
+            "load_quality_credit":False,"fresh_screening_started":False,"selected_weights_changed":False,"prior_failures_replaced":False}
+
+
 def collector_startup_failure_snapshot(prior,candidate):
     """A refused static scope followed only synthetic warmup, with no runner."""
     repair.frozen_environment(prior)
@@ -684,6 +739,9 @@ def additional_failure_snapshot(prior,candidate):
         return preparation_failure_snapshot(prior,candidate)
     if (prior/"load/suite.json").is_file() and read(prior/"validation/known-audit-v1/report.json").get("passed") is True:
         if len(read(prior/"load/suite.json").get("cases",[]))==8:return visibility_load_failure_snapshot(prior,candidate)
+        if ([case.get("name") for case in read(prior/"load/suite.json").get("cases",[])]==[f"four-actor-native-{index}" for index in range(4)] and
+                not (prior/"load/four-actor-gru-0/episode.json").exists()):
+            return start_age_load_failure_snapshot(prior,candidate)
         return known_load_failure_snapshot(prior,candidate)
     if read(prior/"validation/known-audit-v1/report.json").get("issues")==["block-reaction-223-0-gru: model_step_ms missing/exceeds budget"]:
         return model_latency_failure_snapshot(prior,candidate)
