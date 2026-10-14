@@ -62,7 +62,7 @@ def report(root,snapshot,load_snapshot):
         if record["policy"]=="gru" and (record.get("fallback_events") or record.get("model_stats",{}).get("runtime_fallbacks",0)):
             issues.append(record["name"]+": actual runtime fallback during neural load")
     startup=reader.load_startup_evidence(root,declared,bc)
-    services,service_issues=combat.protected_service_load(root,current,load);issues.extend(service_issues)
+    services,service_issues=combat.protected_service_load(root,current,load)
     cadence=reader.service_cadence(root,current,bc)
     execution=declared["runtime_execution_phases"]["load"]
     before=bc.read_json(root/f"services-{execution}-before.json");after=bc.read_json(root/f"services-{execution}-after.json")
@@ -76,7 +76,14 @@ def report(root,snapshot,load_snapshot):
     paths=[file for file in (root/"load").rglob("*") if file.is_file()]
     paths.extend(root/f"{stem}-{execution}{suffix}" for stem,suffix in (("services","-before.json"),("services","-after.json"),("resources",".txt"),("launcher",".log")))
     raw={str(file.relative_to(root)):digest(file) for file in paths}
+    service_report=combat.service_gate_summary(current,services,service_issues)
+    service_report["raw_sha256"]=raw
+    service_report["environment_sha256"]=digest(root/"environment.json")
+    service_report["declaration_sha256"]=digest(root/"final-evaluation.json")
+    issues.extend(service_report["combat_budget_issues"])
     return {"schema_version":1,"kind":"body_stage8_load_saved_runtime_report","passed":not issues,"issues":issues,
+            "combat_load_ready":not issues,"service_gate_ready":service_report["service_gate_ready"],
+            "service_gate_role":service_report["service_gate_role"],"service_report":service_report,
             "closed_load_only":True,"load_read":True,"fresh_screening_read":False,"stage8_quality_credit":False,
             "behavioral_quality_credit":False,"model_forward_executed":False,"engine_started":False,
             "created_at_utc":dt.datetime.now(dt.timezone.utc).isoformat(),"audit_wall_s":time.monotonic()-started,
@@ -98,6 +105,9 @@ def main():
                "load_read":True,"fresh_screening_read":False,"stage8_quality_credit":False,"behavioral_quality_credit":False,
                "model_forward_executed":False,"engine_started":False}
     (args.output_dir/"report.json").write_text(json.dumps(value,indent=2,allow_nan=False)+"\n")
+    (args.output_dir/"body-stage8-services.json").write_text(json.dumps(value.get("service_report",{
+        "kind":"body_stage8_protected_service_report","status":"incomplete","measurement_ready":False,"service_gate_ready":False,
+        "measurement_issues":value.get("issues",[]),"physical_quality_credit":False}),indent=2,allow_nan=False)+"\n")
     print(json.dumps({"passed":value["passed"],"issues":value["issues"]}),flush=True)
     return 0 if value["passed"] else 2
 

@@ -116,6 +116,16 @@ def test_healthy_control_and_physical_softlock_are_independent_gates():
     assert len(failures)==2
 
 
+def test_standalone_service_routing_preserves_physical_control_and_latency_failure():
+    import body_combat_report as combat
+    cfg=json.loads((Path(__file__).parents[2]/"evals/npc-body/body-stage8-v1.json").read_text())
+    service=combat.service_gate_summary(cfg,measurement_issues=["healthy four-actor window missing"])
+    row=episode();row["runtime"]["neural_control_fraction"]=.94
+    row["latency"]["model_step_ms"]["p95"]=5.1
+    physical=reader.quality([row],cfg)+service["combat_budget_issues"]
+    assert len(physical)==2 and not service["service_gate_ready"]
+
+
 def test_mlp_comparison_does_not_select_or_gate_primary_candidate():
     row=episode();row["policy"]="mlp";row["runtime"]["neural_control_fraction"]=0
     assert reader.quality([row],config())==[]

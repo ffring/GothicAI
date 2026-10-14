@@ -48,6 +48,36 @@ def test_final_protocol_keeps_original_80_case_order_and_quality(tmp_path):
     assert len(final.declared_protocol(root,reference,candidate)["screening"]["cases"])==80
 
 
+def test_standalone_service_role_is_explicit_and_legacy_absence_stays_coupled(tmp_path):
+    root,reference,_,candidate,config=protocol(tmp_path)
+    assert final.service_gate_role(final.declared_protocol(root,reference,candidate))=="standalone_report"
+    current=final.read(root/"code/evals/npc-body/body-stage8-v1.json")
+    for value in (config,current):
+        value.pop("service_gate_role");value.pop("service_gate_protocol_version")
+    write(root/final.CONFIG,config);write(root/"code/evals/npc-body/body-stage8-v1.json",current)
+    assert final.service_gate_role(final.declared_protocol(root,reference,candidate))=="combat_gate"
+
+
+def test_service_role_must_match_the_actual_ordinary_and_load_configuration(tmp_path):
+    root,reference,_,candidate,config=protocol(tmp_path)
+    config["service_gate_role"]="combat_gate";write(root/final.CONFIG,config)
+    with pytest.raises(ValueError,match="service gate role differs"):
+        final.declared_protocol(root,reference,candidate)
+
+
+def test_service_separation_cannot_raise_the_ten_percent_budget(tmp_path):
+    root,reference,_,candidate,config=protocol(tmp_path)
+    config["quality"]["maximum_service_p95_degradation_fraction"]=.11;write(root/final.CONFIG,config)
+    with pytest.raises(ValueError,match="thresholds changed"):
+        final.declared_protocol(root,reference,candidate)
+
+
+@pytest.mark.parametrize("role,version",[("ignored",1),("standalone_report",0),("standalone_report",True)])
+def test_unknown_or_unversioned_service_separation_is_rejected(role,version):
+    with pytest.raises(ValueError,match="service gate role/version"):
+        final.service_gate_role({"service_gate_role":role,"service_gate_protocol_version":version})
+
+
 def test_reordered_fresh_cases_are_not_admitted(tmp_path):
     root,reference,_,candidate,config=protocol(tmp_path)
     config["screening"]["cases"][0],config["screening"]["cases"][1]=config["screening"]["cases"][1],config["screening"]["cases"][0]

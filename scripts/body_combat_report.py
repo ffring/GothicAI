@@ -1363,6 +1363,44 @@ def decider_deployment(fixtures):
     return {"checkpoint_path":str(checkpoint),"source_sha256":DECIDER_DEPLOYMENT_SOURCE_SHA,"startup_record":binding["startup_record"]}
 
 
+def service_gate_role(config):
+    role=config.get("service_gate_role","combat_gate")
+    version=config.get("service_gate_protocol_version",0)
+    require(role in ("combat_gate","standalone_report") and type(version) is int and version in (0,1) and
+            (role!="standalone_report" or version==1),"invalid declared service gate role/version")
+    return role
+
+
+def service_gate_summary(config,measurement=None,candidate_budget_issues=(),measurement_issues=()):
+    """Separate only measured p95 budget failures; source/window checks stay strict."""
+    role=service_gate_role(config);budget=config["quality"]["maximum_service_p95_degradation_fraction"]
+    failures=[]
+    if measurement is not None:
+        require(set(measurement.get("comparisons",{}))==set(config["load"]["policies"]),
+                "service budget comparison omitted a provider")
+        for provider,metrics in measurement["comparisons"].items():
+            require(set(metrics)=={"asr","tts","decider","gemma"},"service budget comparison omitted a service")
+            for service,row in metrics.items():
+                baseline,during=row["baseline_p95_ms"],row["during_p95_ms"]
+                require(all(type(value) in (int,float) and math.isfinite(value) and value>0 for value in (baseline,during)) and
+                        type(row["samples"]) is int and row["samples"]==config["services"]["measured_requests"],
+                        "service budget comparison has invalid p95/sample count")
+                delta=during/baseline-1
+                require(math.isclose(row["degradation_fraction"],delta,rel_tol=0,abs_tol=1e-12) and
+                        row["passed"] is (delta<=budget),"service budget result differs from measured p95")
+                if delta>budget:failures.append(f"{provider}: protected {service} p95 degraded {delta:.6f}")
+    valid=measurement is not None and not measurement_issues
+    return {"schema_version":1,"kind":"body_stage8_protected_service_report","service_gate_role":role,
+            "service_gate_protocol_version":config.get("service_gate_protocol_version",0),
+            "measurement_ready":valid,"service_gate_ready":valid and not failures,
+            "status":"incomplete" if not valid else "failed" if failures else "passed",
+            "maximum_p95_degradation_fraction":budget,"measured_requests_per_service":config["services"]["measured_requests"],
+            "budget_issues":failures,"measurement_issues":list(measurement_issues),
+            "candidate_budget_issues":list(candidate_budget_issues),
+            "combat_budget_issues":list(candidate_budget_issues) if role=="combat_gate" else [],
+            "physical_quality_credit":False,"model_causation_claim":False,"evidence":measurement}
+
+
 def protected_service_load(root,config,load):
     directory=root/"load/services";fixtures=read(directory/"fixtures.json");summary=read(directory/"services.json")
     require(fixtures.get("kind")=="body_stage8_fixed_service_fixtures" and fixtures.get("clock_domain")=="linux-clock-monotonic" and
@@ -1546,6 +1584,7 @@ def phase_evidence(root,phase,config,reference):
 def report(root,config_path,phase,reference,native_reference=None):
     config = read(config_path)
     issues,quality_issues,evidence=[],[],{}
+    service_report=service_gate_summary(config)
     def gate(name,operation):
         try:evidence[name]=operation();return evidence[name]
         except (OSError,ValueError,KeyError,TypeError,IndexError) as error:issues.append(name+": "+str(error));return None
@@ -1577,7 +1616,10 @@ def report(root,config_path,phase,reference,native_reference=None):
             evidence["combat_quality"]=comparison;quality_issues.extend(failures)
         load=gate("four_actor_load",lambda:four_actor_evidence(root,config))
         workload=gate("protected_services",lambda:protected_service_load(root,config,load)) if load is not None else None
-        if workload is not None:evidence["protected_services"],failures=workload;quality_issues.extend(failures)
+        if workload is not None:
+            evidence["protected_services"],failures=workload
+            service_report=service_gate_summary(config,evidence["protected_services"],failures)
+            quality_issues.extend(service_report["combat_budget_issues"])
         if phases["realtime"] is not None:
             fault=gate("model_faults",lambda:{policy:bc.service_probe(root/"realtime"/("serve-probe-"+policy),digest(root/"models"/policy/"best.pt")) for policy in ("gru","mlp")})
             reaction=[];locks=[]
@@ -1612,7 +1654,9 @@ def report(root,config_path,phase,reference,native_reference=None):
         gate("resources",lambda:resource_evidence(root,config))
         implementation=not issues;full_ready=implementation and not quality_issues;pending=[] if full_ready else [*issues,*quality_issues]
     return {"schema_version":1,"kind":"body_combat_stage8_report","scope":phase,"phase_ready":implementation,
-            "implementation_ready":implementation,"stage8_ready":full_ready,"checkpoint_ready":full_ready,"release_ready":False,
+            "implementation_ready":implementation,"stage8_ready":full_ready,"checkpoint_ready":full_ready,"combat_gate_ready":full_ready,
+            "service_gate_ready":service_report["service_gate_ready"],"service_gate_role":service_report["service_gate_role"],
+            "service_report":service_report,"release_ready":False,
             "issues":issues,"checkpoint_issues":quality_issues,"config_sha256":digest(config_path),"reporter_sha256":digest(Path(__file__)),
             "evidence":evidence,"remaining_gates":pending,"limitations":[
                 "Perception/shadow probes do not establish learner quality or checkpoint readiness.",
@@ -1629,6 +1673,7 @@ def main():
     value = report(root,args.config.resolve(),args.phase,(args.reference_run or root.parent/"stage7-bc-v9").resolve(),args.native_reference)
     args.output_dir.mkdir(parents=True,exist_ok=True)
     (args.output_dir/"body-combat.json").write_text(json.dumps(value,ensure_ascii=False,indent=2)+"\n")
+    (args.output_dir/"body-stage8-services.json").write_text(json.dumps(value["service_report"],ensure_ascii=False,indent=2)+"\n")
     (args.output_dir/"body-combat.md").write_text("# Stage 8 independent evidence\n\nImplementation ready: **"+str(value["implementation_ready"])+"**. Stage8 checkpoint ready: **"+str(value["checkpoint_ready"])+"**. Release ready: **False**.\n\n"+"\n".join("- "+issue for issue in value["issues"]+value["checkpoint_issues"])+"\n")
     return 0 if value["phase_ready"] else 2
 

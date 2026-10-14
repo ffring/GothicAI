@@ -478,9 +478,14 @@ refused Approach1 while owned; receive→send4.848299 ms, native snapshot→send
 Native20/20 protected ASR/TTS −1.24908%/+8.36735% PASS,
 Decider/Gemma +10.59663%/+31.21631% FAIL. All GRU populations16/15/20/20 are
 invalid windows; actual before/after4PIDs match, no restart is claimed.
-TRAIN-only safe-peer child279 (parent207+planned72,220/20/19/20) and private
-placement diagnostic are in progress; no new data/checkpoint is declared ready
-and native perception/visibility100 or quality thresholds are not loosened.
+Stage8 is now **STOPPED_AT_PREFLIGHT**. The single SafePeer calibration closed
+six HP-preserving episodes without infrastructure failure, but approved actions
+2/5/11 were0/2/0 against2/2/2. The72-episode collection, child279, new training
+and a new combat gate never started; the private placement diagnostic is
+cancelled. There is no retry or follow-on run scheduled. Selected207 weights,
+normalizer, strict masks/freshness/visibility100 and combat thresholds remain
+unchanged. Protected services are reported separately with the unchanged10%
+budget. [Final stop report](../../docs/npc-body-stage8-stop-report.md).
 Partial results do not establish the gate. The earlier exact lock refusal had no
 launcher-load/service baseline/output/requests and remains historical startup
 waiting, not a quality failure. Fresh screening has never started.

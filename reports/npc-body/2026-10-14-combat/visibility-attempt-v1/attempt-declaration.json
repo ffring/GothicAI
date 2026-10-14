@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "body_visibility_single_attempt",
+  "declared_at_utc": "2026-10-14T18:39:10.064400+00:00",
+  "worktree_commit": "f17e5d625fea643ed463b9f2aab10b3498c2b4f6",
+  "environment_sha256": "9ff88389c27231f4155575ed4491fcb1d0f37b2f8a42cb4dcddf52cf2281afbd",
+  "collection_config_sha256": "7f0b0afa8f4a7cc02f77dcddf5925f0995b02898e4fc65993b6f3525d015e72f",
+  "maximum_physical_calibration_runs": 1,
+  "maximum_full_collection_runs": 1,
+  "maximum_training_protocol_runs": 1,
+  "maximum_combat_gate_runs": 1,
+  "stop_on_physical_calibration_failure": true,
+  "stop_on_combat_gate_failure": true,
+  "fresh_screening_exposed": false,
+  "service_gate_role": "standalone_report",
+  "combat_thresholds_relaxed": false
+}

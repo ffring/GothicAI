@@ -1122,5 +1122,7 @@
     "proof_run": "stage8-motor-v7",
     "historical_owned_trajectory_equivalence": false,
     "new_teacher_capture_requires_current_binary": true
-  }
+  },
+  "service_gate_role": "standalone_report",
+  "service_gate_protocol_version": 1
 }

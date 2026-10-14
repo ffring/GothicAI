@@ -843,5 +843,7 @@
     "expected_episodes": 240,
     "case_matrix_relation": "all original 80 case dictionaries and ordering exact; only 20 block initializers changed",
     "service_probes": false
-  }
+  },
+  "service_gate_role": "standalone_report",
+  "service_gate_protocol_version": 1
 }

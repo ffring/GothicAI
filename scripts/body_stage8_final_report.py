@@ -557,6 +557,7 @@ def report(root,snapshot,native_faults,native_reference):
     original=bc.read_json(Path(declared["reference_run"])/"code/evals/npc-body/body-stage8-v1.json")
     current=bc.read_json(root/"code/evals/npc-body/body-stage8-v1.json")
     issues=[];checkpoint_issues=[];evidence={"preregistration":declared,"audit_source":provenance}
+    service_measurement=None;service_budget_issues=[]
     def gate(name,operation):
         try:value=operation();evidence[name]=value;return value
         except (OSError,ValueError,KeyError,TypeError,IndexError,StopIteration) as error:issues.append(name+": "+str(error));return None
@@ -592,7 +593,7 @@ def report(root,snapshot,native_faults,native_reference):
         checkpoint_issues.extend(quality(load_evidence["cases"],config))
         gate("load_backend_startup",lambda:load_startup_evidence(root,declared,bc))
         service=gate("protected_services",lambda:combat.protected_service_load(root,current,load_evidence))
-        if service:evidence["protected_services"],failures=service;checkpoint_issues.extend(failures)
+        if service:evidence["protected_services"],service_budget_issues=service;service_measurement=evidence["protected_services"]
         if current["services"].get("request_cadence") is not None:gate("service_cadence",lambda:service_cadence(root,current,bc))
     def faults():
         import body_api_report as api
@@ -618,9 +619,16 @@ def report(root,snapshot,native_faults,native_reference):
                     "time_sha256":bc.digest(root/f"resources-{execution}.txt"),"before_sha256":bc.digest(root/f"services-{execution}-before.json"),
                     "after_sha256":bc.digest(root/f"services-{execution}-after.json"),"launcher_log_sha256":bc.digest(root/f"launcher-{execution}.log")}
         resources[phase]=gate("resources-"+phase,resource)
+    service_report=combat.service_gate_summary(current,service_measurement,service_budget_issues,
+        [issue for issue in issues if issue.startswith(("protected_services:","service_cadence:","resources-load:"))])
+    checkpoint_issues.extend(service_report["combat_budget_issues"])
     ready=not issues and not checkpoint_issues
     return {"schema_version":1,"kind":"body_stage8_final_runtime_report","implementation_ready":not issues,"stage8_ready":ready,
-            "checkpoint_ready":ready,"release_ready":False,"issues":issues,"checkpoint_issues":checkpoint_issues,"evidence":evidence,
+            "checkpoint_ready":ready,"combat_gate_ready":ready,"service_gate_ready":service_report["service_gate_ready"],
+            "service_gate_role":service_report["service_gate_role"],"service_report":service_report,
+            "stage8_readiness_scope":"combat_runtime" if service_report["service_gate_role"]=="standalone_report" else "combat_runtime_and_candidate_services",
+            "combined_runtime_and_service_ready":ready and service_report["service_gate_ready"],
+            "release_ready":False,"issues":issues,"checkpoint_issues":checkpoint_issues,"evidence":evidence,
             "resources":resources,"original_neutral_block_failures_replaced":False,"fresh_selection_allowed":False,
             "limitations":["Known reaction cases do not replace original v6 neutral-block failures.",
                 "Preparation is included in the native held-start timeout; active duration is separate.",
@@ -637,6 +645,9 @@ def main():
         value={"kind":"body_stage8_final_runtime_report","implementation_ready":False,"stage8_ready":False,"checkpoint_ready":False,"issues":[str(error)]}
     args.output_dir.mkdir(parents=True,exist_ok=True)
     (args.output_dir/"body-stage8-final.json").write_text(json.dumps(value,indent=2,allow_nan=False)+"\n")
+    (args.output_dir/"body-stage8-services.json").write_text(json.dumps(value.get("service_report",{
+        "kind":"body_stage8_protected_service_report","status":"incomplete","measurement_ready":False,"service_gate_ready":False,
+        "measurement_issues":value.get("issues",[]),"physical_quality_credit":False}),indent=2,allow_nan=False)+"\n")
     print(json.dumps({key:value.get(key) for key in ("implementation_ready","checkpoint_ready","issues","checkpoint_issues")}))
     return 0 if value.get("stage8_ready") else 2
 

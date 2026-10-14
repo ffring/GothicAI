@@ -1,6 +1,9 @@
 # Этап 8: боевой gate GRU
 
-Статус: **IN_PROGRESS (в работе)**. В child `stage8-defence-bc-v2` собраны
+Статус: **STOPPED_AT_PREFLIGHT**. Единственная дополнительная SafePeer
+калибровка не прошла критерии физически подтверждённого покрытия; работа
+остановлена по ограничению пользователя. [Итог остановки](npc-body-stage8-stop-report.md).
+В child `stage8-defence-bc-v2` собраны
 72/72 настоящих завершённых блока, завершены все шесть BC кандидатов,
 зафиксированы веса GRU/MLP и пройден независимый числовой аудит.
 Gate-v3 known audit R2 — PASS: GRU выполнил два настоящих блока с HP300,
@@ -52,9 +55,12 @@ worker profile проверен. Последующий
 `unexpected_control_loss:released`. [Causal report](../reports/npc-body/2026-10-14-combat/gate-v11/load-failure.md)
 подтвердил GRU handoff после completed RightStrafe/Idle без runtime fallback
 и native protected Decider/Gemma +10,59663%/+31,21631% при бюджете10%.
-TRAIN-only safe-peer child279 и private placement diagnostic — IN_PROGRESS;
-новые данные/обучение не объявлены готовыми. Fresh не запускался. Веса,
-normalizer и thresholds прежние.
+Последняя SafePeer калибровка закрыла шесть эпизодов без infrastructure failure
+и с сохранением HP, но дала approved action2/5/11 = 0/2/0 при требовании
+2/2/2. Child279 не создан, новые веса не обучены; дополнительный боевой gate
+этой попытки не запускался. Fresh не запускался. Выбранные веса207,
+normalizer и боевые thresholds прежние. Защищённые сервисы рассматриваются
+отдельным отчётом с прежним бюджетом10%; их FAIL сохранён.
 Общего боевого gate PASS нет, fresh screening не запускался.
 
 Проверенный backend `stage8-motor-v7`:
@@ -363,7 +369,7 @@ unknown nonzero ownership не снимается. Actual helper:375→0, freeze
 close0, GC enabled/thresholds700/10/10 сохранены; pure tests28 PASS.
 Это operational proof, без модельного quality credit и без объяснения старых169 мс.
 
-Этап 8 — **IN_PROGRESS**. Gate-v8 bootstrap profile заморожен,
+На момент gate-v8 этап 8 был IN_PROGRESS. Gate-v8 bootstrap profile заморожен,
 preregistration PASS50,177 с, targeted runtime76/final70 PASS. Known3/24/6
 прошёл audit за 62,755 с, issues пусты. GRU max case model p95 — 2,209114 мс,
 observation→arbitration18,053185 мс, collector→send8,422820 мс; repaired
@@ -467,15 +473,13 @@ deadline следующего tick, включая уже прошедший dea
 только в active/unpaused realtime. Polling запрашивает slices не более5 мс,
 сохраняет actual overshoot и все periodic/event observations и latency counts.
 Поле служит транспортному ожиданию, схема184 model features прежняя.
-Ближайшая работа: проверить классификацию target_invalid и TRAIN-only dual-peer
-SafeDemos с новым child279: immutable parent207 +72 физически подтверждённых
-новых train эпизода, planned train220/eval20/test19/OOD20, train-only normalizer.
-Сбор/approval и новый checkpoint пока не готовы; private placement diagnostic
-IN_PROGRESS, без автоматического training credit. Потеря native visibility
-не объявляется исправленной, perception/100 мс и quality thresholds прежние.
-Motor20/Queue21 и known audit PASS сохранены. После будущего load
-PASS впервые открыть fresh screening, затем final report. Прежние отказы сохраняются в declaration; ни native
-proof, ни отдельная CPU диагностика не заменяют проверки модельного качества.
+Работа остановлена на SafePeer preflight. Сбор72, child279, пересчёт normalizer,
+новое обучение и новый боевой gate не выполнялись. Private placement diagnostic
+отменён, повторной калибровки и следующих запусков не запланировано.
+Потеря native visibility не объявляется исправленной; perception/100 мс и
+боевые thresholds прежние. Motor20/Queue21 и known audit PASS сохранены в
+своём scope, прежние отказы остаются в raw и отчётах. Возобновление требует
+нового указания пользователя. [Финальный статус](npc-body-stage8-stop-report.md).
 Команды и reader snapshots описаны в [evals README](../evals/npc-body/README.md).
 Исходные block failures и reaction-v3 сохранены.
 

@@ -38,6 +38,14 @@ def read(path):return json.loads(Path(path).read_text())
 def sha(path):return repair.sha(Path(path))
 
 
+def service_gate_role(config):
+    role=config.get("service_gate_role","combat_gate")
+    version=config.get("service_gate_protocol_version",0)
+    require(role in ("combat_gate","standalone_report") and type(version) is int and version in (0,1) and
+            (role!="standalone_report" or version==1),"invalid declared service gate role/version")
+    return role
+
+
 def fixed_child(root):
     environment=repair.frozen_environment(root);selected=read(root/"selection.json")
     config=read(root/"code/evals/npc-body/body-defence-bc-v1.json")
@@ -85,6 +93,9 @@ def declared_protocol(root,reference,candidate):
     require(sum(row["task"]=="block" for row in config["screening"]["cases"])==20 and
             config["quality"]==old["quality"],"task coverage or quality/performance thresholds changed")
     current=read(root/"code/evals/npc-body/body-stage8-v1.json")
+    require(service_gate_role(current)==service_gate_role(config) and
+            current.get("service_gate_protocol_version",0)==config.get("service_gate_protocol_version",0),
+            "ordinary/load service gate role differs from declared evaluator")
     require(type(current["runtime"].get("native_deadline_polling",False)) is bool and
             current["runtime"].get("native_deadline_polling",False)==config["runtime"].get("native_deadline_polling",False),
             "ordinary/load native deadline polling differs from declared evaluator")
@@ -1005,6 +1016,7 @@ def declare(root,reference,models,proof,child_report,prior_failed_run=None,addit
            "candidate_policy":"gru","mlp_role":"comparison_only","repaired_task":"block",
            "original_neutral_block_results_replaced":False,"screening_case_count":80,"screening_seeds":config["screening"]["seeds"],
            "quality":config["quality"],"runtime_execution_phases":EXECUTION_PHASES,
+           "service_gate_role":service_gate_role(config),"service_gate_protocol_version":config.get("service_gate_protocol_version",0),
            "inference_cpu_threads":config["runtime"].get("inference_cpu_threads",2),
            "collector_static_gc_freeze":config["runtime"].get("collector_static_gc_freeze",False),
            "collector_bootstrap_gc_reset":config["runtime"].get("collector_bootstrap_gc_reset",False),
@@ -1042,6 +1054,9 @@ def validate_declaration(root):
     require(value["child_independent_numerical_audit"]==numerical_report(Path(value["child_independent_numerical_audit"]["path"]),models),
             "child numerical audit changed after preregistration")
     config=declared_protocol(root,reference,value["candidate"])
+    require(value.get("service_gate_role","combat_gate")==service_gate_role(config) and
+            value.get("service_gate_protocol_version",0)==config.get("service_gate_protocol_version",0),
+            "service gate separation changed after preregistration")
     if "prior_failed_evaluation" in value:
         require(value["prior_failed_evaluation"]==prior_failure_snapshot(Path(value["prior_failed_evaluation"]["run"]),value["candidate"]),
                 "prior failed evaluation changed or screening became exposed")

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "body_service_gate_separation_validation_receipts",
+  "tests": {
+    "tests": 175,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "protected_services_unchanged": true,
+  "snapshot_manifest_sha256": "d0033f2e0f41ab4d48728ab69b4f9451902960712b962fa368de8672bcb3408f",
+  "frozen_sources_unchanged": true,
+  "no_model_forward": true,
+  "no_game_started": true,
+  "no_service_workload_started": true,
+  "combat_quality_credit": false,
+  "source_receipts": {
+    "code/evals/npc-body/body-stage8-evaluation-v2.json": "06aed81aa8cc35e2a83150584978f9a13104fc204e9aef7125181592b46cab9b",
+    "code/evals/npc-body/body-stage8-v1.json": "e9d984e2880124a83b900d626e115c518e31ba8c4bccd0531734deec5e1f9445",
+    "code/scripts/body_combat_report.py": "7a0d641a1e8ea39b38aa3d12c7ea780745a3f877168723e57866ea5ab48c7e09",
+    "code/scripts/body_final_evaluation.py": "7dd7d43d3cbee3513e7470f4075e9d3d01e00041d39631fc7bb03af9c8fa5bc9",
+    "code/scripts/body_stage8_final_report.py": "23076d29e1d3237eafafbf92374b5b3176dfb238c714ba32b7c6289755889192",
+    "code/scripts/body_stage8_load_report.py": "b6e288774e496ad831e618eb6bac5d9ad56aad49b4c292eb54a7eaa2bf86e89b",
+    "code/scripts/tests/test_body_combat_report.py": "321cb3ef0e71492e8b91486ead2fbb7044040f09b31091c8505978b9e820550e",
+    "code/scripts/tests/test_body_final_evaluation.py": "1a6d7b05e2f8c09d17e0e68e6eaa4b3aa42bd38f7bfdedc93f96d0c2faf699b9",
+    "code/scripts/tests/test_body_stage8_final_report.py": "25a5512b31ee6a8276712a6572a68556400a245de291bdd9a83e1e9a6c15ef52",
+    "junit.xml": "7fed0392cd31d640fb12c1b7dfe4e7bd8b0a98122ab79cc308d4a19439b97b19",
+    "launcher.log": "f682c89239895d2a52e5cc501d12a590ce9b3b82eacb87a0e134643553890aa8",
+    "manifest.json": "d0033f2e0f41ab4d48728ab69b4f9451902960712b962fa368de8672bcb3408f",
+    "resources.txt": "9fb00909e1fd2b630d770a6c54d6659f0ea3e7bd3bb38c9f75c9d8d73d1156fd",
+    "run-tests.sh": "15e17a696ae8fc4b3ea290bcceab1f89745cdb11934824eb826264b65debd829",
+    "services-after.json": "0e0e65c2d7eab6c9e217bbce38fb469ad850a63c10a1d4caa32361c3150bdb79",
+    "services-before.json": "36246e23f1da2a2873b7eda53ccf7717ee9b127ff3e0a74fedc35e8bf9e0f4d3"
+  }
+}

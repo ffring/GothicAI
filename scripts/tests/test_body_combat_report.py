@@ -14,6 +14,40 @@ def config():
     return json.loads((Path(__file__).parents[2]/"evals/npc-body/body-stage8-v1.json").read_text())
 
 
+def service_measurement():
+    comparisons={provider:{service:{"baseline_p95_ms":100.,"during_p95_ms":100.,"degradation_fraction":0.,"passed":True,"samples":20}
+                            for service in ("asr","tts","decider","gemma")} for provider in ("native","gru","mlp")}
+    for provider in ("native","gru"):
+        comparisons[provider]["gemma"].update(during_p95_ms=125.,degradation_fraction=.25,passed=False)
+    return {"comparisons":comparisons}
+
+
+def test_standalone_service_budget_failure_is_reported_without_combat_credit_or_model_causation():
+    value=report.service_gate_summary(config(),service_measurement(),["legacy GRU budget failure"])
+    assert value["measurement_ready"] and not value["service_gate_ready"] and value["status"]=="failed"
+    assert len(value["budget_issues"])==2 and value["combat_budget_issues"]==[]
+    assert not value["physical_quality_credit"] and not value["model_causation_claim"]
+
+
+def test_absent_service_role_preserves_legacy_candidate_coupling():
+    cfg=config();cfg.pop("service_gate_role");cfg.pop("service_gate_protocol_version")
+    value=report.service_gate_summary(cfg,service_measurement(),["legacy GRU budget failure"])
+    assert value["service_gate_role"]=="combat_gate" and value["combat_budget_issues"]==["legacy GRU budget failure"]
+
+
+def test_standalone_service_report_cannot_claim_a_missing_or_invalid_healthy_window():
+    value=report.service_gate_summary(config(),service_measurement(),measurement_issues=["healthy window invalid"])
+    assert not value["measurement_ready"] and not value["service_gate_ready"] and value["status"]=="incomplete"
+    missing=report.service_gate_summary(config())
+    assert not missing["measurement_ready"] and not missing["service_gate_ready"]
+
+
+def test_service_separation_preserves_exact_twenty_sample_receipts():
+    value=service_measurement();value["comparisons"]["native"]["tts"]["samples"]=19
+    with pytest.raises(ValueError,match="sample count"):
+        report.service_gate_summary(config(),value)
+
+
 def test_declared_matrix_separates_exposed_data_from_twenty_fresh_screen_groups():
     value=report.validate_config(config())
     assert value["screening_cases"] == 80
