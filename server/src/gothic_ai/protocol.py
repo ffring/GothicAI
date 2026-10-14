@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 27
+PROTOCOL_VERSION = 28
 
 # --- game -> server -----------------------------------------------------------
 
@@ -865,6 +865,9 @@ ActionType = Literal[
     "follow",
     "give_item",
     "take_item",  # v22: walk up to the nearest thing of args.item lying about (within 20 m) and pick it up
+    # v28: walk up to its chest args.chest, open it, take out args.take and put in args.put ([{item, count}]),
+    # close it; `detail`: what moved, "took=ITEM:N,…;put=ITEM:N,…"
+    "use_chest",
     "return_to_routine",
     "fight",  # v6: the game's own combat (ZS_ATTACK) against args.npc, then control comes back
     "flee",  # v6: the game's own fleeing (ZS_FLEE) from args.npc
@@ -1138,6 +1141,7 @@ DebugCommand = Literal[
     "npc_goto",
     "player_hp",
     "player_drop",
+    "chest_take",
 ]
 
 
@@ -1162,7 +1166,8 @@ class DebugCmd(_Command):
     ground, facing npc `face` (`npc_goto`, v15: it stays free and goes on with what it does, so its
     routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v21);
     `player_goto` to a point `pos` [x, y, z] on the ground there (v21); the player throws an `item` down, as
-    with the game's own key (`player_drop`, v22: he is given it first if he has none).
+    with the game's own key (`player_drop`, v22: he is given it first if he has none); the player takes
+    `count` of an `item` out of a `chest` unseen (`chest_take`, v28, `value`: how many).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -1195,6 +1200,8 @@ class DebugCmd(_Command):
     face: str | None = None  # npc_goto: the npc it turns to
     hp: int | None = None  # player_hp
     pos: tuple[float, float, float] | None = None  # player_goto: a point of the world (v21), on the ground
+    chest: str | None = None  # chest_take: the chest's id (v28)
+    count: int | None = None  # chest_take
 
 
 class GraphPatchCmd(_Command):
@@ -1378,6 +1385,36 @@ class NpcViewCmd(_Command):
     type: Literal["npc_view"] = "npc_view"
     req: str
     npcs: list[str]
+
+
+class ChestItem(_GameMessage):
+    item: str  # the scripts' instance
+    name: str
+    count: int = 1
+
+
+class Chest(_GameMessage):
+    """A chest the npc may call its own (v28): it owns it (`why` "owner", the world's data), carries its key
+    ("key"), or nobody owns it and it stands by a point of the npc's routine ("home")."""
+
+    id: str  # its name in the world (CHEST_LOBART), else where it stands (MOB_17950_3240_-21850)
+    why: Literal["owner", "key", "home"]
+    pos: tuple[float, float, float]
+    distance: float  # cm from the npc
+    waypoint: str | None = None  # the nearest
+    locked: bool = False
+    key: str | None = None  # the key's instance, if it has a lock with a key
+    has_key: bool = False
+    items: list[ChestItem] = Field(default_factory=list)
+    start: list[ChestItem] = Field(default_factory=list)  # what the world's data put in it at the start
+
+
+class NpcChestsCmd(_Command):
+    """The npc's chests and what lies in them (v28); `result.value`: [Chest], nearest first."""
+
+    type: Literal["npc_chests"] = "npc_chests"
+    req: str
+    npc: str
 
 
 class StoryNearbyCmd(_Command):

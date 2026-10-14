@@ -104,6 +104,8 @@ class FakeGame:
         self.beast_cmds: list[dict[str, Any]] = []  # the server's words on wolves (v21)
         self._later: set[asyncio.Task[None]] = set()
         self.slow_actions: set[str] = set()  # actions that go on until the npc's next action cancels them
+        # v28: what npc_chests answers, npc -> its chests (protocol.Chest as JSON); use_chest moves items
+        self.chests: dict[str, list[dict[str, Any]]] = {}
         self.long_running: dict[str, str] = {}  # npc -> the id of its action going on
 
     async def perception(
@@ -263,6 +265,8 @@ class FakeGame:
                 )
             case "deal_show" | "deal_hide":
                 self.deals.append(msg)
+            case "npc_chests":
+                await self.send(type="result", req=msg["req"], ok=True, value=self.chests.get(msg["npc"], []))
             case "story_nearby":
                 if msg["npc"] in self.nearby_error:
                     await self.send(type="result", req=msg["req"], ok=False, error=f"no npc {msg['npc']}")
@@ -476,6 +480,8 @@ class FakeGame:
             status, detail = "rejected", "unknown animation"
         elif action == "go_to_waypoint" and args.get("waypoint") not in WAYPOINTS:
             status, detail = "rejected", "unknown waypoint"
+        elif action == "use_chest":
+            status, detail = self.use_chest(npc, args)
         elif action == "go_to_npc" and args.get("npc") in self.npc_states:
             # it gets there: the target is as far from it as it was to stop, and in sight
             self.npc_states[args["npc"]]["distance"] = args.get("radius", 400)
@@ -491,6 +497,30 @@ class FakeGame:
         if action == "return_to_routine" and status == "done":
             self.attached.discard(npc)
             await self.send(type="detached", npc=npc, reason="routine")
+
+    def use_chest(self, npc: str, args: dict[str, Any]) -> tuple[str, str | None]:
+        """As the bridge does: what is there moves, as much as there is; `detail` says what moved."""
+        chest = next((c for c in self.chests.get(npc, []) if c["id"] == args.get("chest")), None)
+        if chest is None:
+            return "rejected", "not its chest"
+        mine = self.npc_items.setdefault(npc, {})
+        moved: dict[str, list[str]] = {"took": [], "put": []}
+        for m in args.get("take", []):
+            it = next((i for i in chest["items"] if i["item"] == m["item"]), None)
+            n = min(m["count"], it["count"]) if it else 0
+            if it is not None and n > 0:
+                it["count"] -= n
+                mine[m["item"]] = mine.get(m["item"], 0) + n
+                moved["took"].append(f"{m['item']}:{n}")
+        for m in args.get("put", []):
+            n = min(m["count"], mine.get(m["item"], 0)) or m["count"]
+            it = next((i for i in chest["items"] if i["item"] == m["item"]), None)
+            if it is None:
+                chest["items"].append(it := {"item": m["item"], "name": m["item"], "count": 0})
+            it["count"] += n
+            moved["put"].append(f"{m['item']}:{n}")
+        chest["items"] = [i for i in chest["items"] if i["count"] > 0]
+        return "done", f"took={','.join(moved['took'])};put={','.join(moved['put'])}"
 
 
 @asynccontextmanager

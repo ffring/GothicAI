@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator, Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import characters, programs
 from .amends import Amends
@@ -21,6 +21,7 @@ from .bodies import Bodies
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
+from .chests import BACK, CHEST, OWNED, ChestDesk
 from .chronicle import Fact
 from .concerns import Concerns
 from .contracts import gold_text
@@ -2323,6 +2324,139 @@ def _overlaps(
         if a != b and tb < end - 0.15:
             out.append(f"{names.get(b, b)} {end - tb:.1f} s over {names.get(a, a)}")
     return order, out
+
+
+async def chests_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    chests: ChestDesk | None,
+    npc: str = "BDT_1014_BANDIT_L",
+    name: str = "Браго",
+    item: str = "ITRW_BOW_L_01",
+    ask: str = "Браго, продай мне лук.",
+) -> dict[str, str]:
+    """Npc's chests (docs/npc-tools.md «Сундуки»; the user, 2026-10-14: Brago should remember what lies in his
+    chest, and go to take it out). The hero goes up to Brago in the bandits' cave below Xardas's tower and,
+    unseen, takes the gold out of the chest there; then asks Brago for a bow. Brago's model is scripted
+    (LLM=fake); with a real one (`chests_lobart`: Lobart, his farmer's clothes in his chest) whether it goes
+    to the chest is the model's own call. Checks:
+    - chest: the bridge counts the cave's chest as Brago's (nobody owns it, it stands by his routine), with
+      a bow in it;
+    - knows: Brago's situation tells what lies in it, as he knows: the bow and the gold too;
+    - fetched: told «продай лук», his model calls `chest`: he walks to the chest, opens it and takes the bow
+      out; the bow is in his hands and no longer in the chest;
+    - missing: having looked, he knows the gold is gone;
+    - back: back from the chest, he goes on talking to the hero."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+    if chests is None:
+        return _logged({"chests": "failed (run with --chests)"})
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    bow, gold = item, "ITMI_GOLD"
+    asked: list[str] = []  # the situation of each of Brago's requests
+    cues: list[str] = []  # ...and what each was about
+    fetch = ToolCall(CHEST, {"take": [{"item": bow, "count": 1}], "put": [], "chest": None})
+    # scripted (LLM=fake), or the real model (LLM=chatgpt): then what it does is its own call, to be read
+    inner: Any = dialogue.llm
+    if inner.name == "fake":
+        say = FakeStep("В сундуке лежит. Сейчас принесу.", [fetch])
+        inner = _ByNpc({name: _OnWords([("продай", say)], FakeStep("Ну."))}, FakeBackend("Хм.", delay=0))
+
+    class Recorded:
+        name = inner.name
+        model = getattr(inner, "model", None)
+
+        def __getattr__(self, attr: str) -> Any:
+            return getattr(inner, attr)
+
+        def stream(self, **kw: Any) -> AsyncIterator[LLMEvent]:
+            if f"Ты — {name}" in kw["instructions"]:
+                msgs = kw["messages"]
+                last = msgs[-1] if msgs else None
+                cues.append(last.content if isinstance(last, Message) else "")
+                asked.append(
+                    "\n".join(m.content for m in msgs if isinstance(m, Message) and m.role == "developer")
+                )
+            return cast(AsyncIterator[LLMEvent], inner.stream(**kw))
+
+    dialogue.llm = Recorded()  # type: ignore[assignment]
+
+    def dist() -> float:
+        return talk.people[npc].distance / 100 if npc in talk.people else -1.0
+
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")
+    except GameError as err:
+        log.info("chests: no armor for the hero: %s", err)
+    await link.debug("skip_important", near=npc)
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: 0 <= dist() <= 8, 20):
+        return _logged({"roster": f"failed ({npc} {dist():.1f} m from the hero)"})
+
+    found = await link.npc_chests(npc)
+    log.info(
+        "chests: %s's: %s",
+        npc,
+        [(c.id, c.why, c.waypoint, [(i.item, i.count) for i in c.items]) for c in found],
+    )
+    cave = next((c for c in found if any(i.item == bow for i in c.items)), None)
+    check("chest", cave is not None, [(c.id, c.why, c.waypoint) for c in found] or "none")
+    if cave is None:
+        return _logged(results)
+    await link.debug("chest_take", chest=cave.id, item=gold, count=1000)
+    log.info("chests: the hero took the gold out of %s unseen", cave.id)
+
+    talk.hear(ask, npc, {"via": "scenario"})
+    await _until(lambda: bool(asked), 30)
+    situation = asked[0] if asked else ""
+    line = next((s for s in situation.split("\n") if s.startswith(tuple(OWNED.values()))), "")
+    check("knows", bow in line and gold in line, line or situation[-300:])
+
+    conv = dialogue.conversations.get(npc)
+
+    def note() -> str:
+        # the body's note of the walk (not its own words «схожу к сундуку»)
+        done = ("[Ты сходил к своему сундуку", "[Не вышло", "[Тело не смогло")
+        return next((m.content for m in conv.history if m.content.startswith(done)), "") if conv else ""
+
+    async def where() -> None:  # how far it is from the hero while it goes, for the log
+        while True:
+            await asyncio.sleep(3)
+            snap = link.snapshots.get(npc)
+            log.info(
+                "chests: %s %.1f m from the hero, at %s",
+                npc,
+                dist(),
+                snap.npc.nearest_waypoint if snap else "?",
+            )
+
+    watch = asyncio.create_task(where())
+    # there and back: a chest across a house takes a minute and a half (Lobart's)
+    await _until(lambda: bool(note()) or chests._going, 5)
+    await _until(lambda: bool(note()) or chests._going or not dialogue.speaking(npc), 40)
+    if not note() and inner.name != "fake" and not chests._going:  # a real one names its price first
+        talk.hear("Да, беру, по рукам.", npc, {"via": "scenario"})
+        await _until(lambda: bool(chests._going), 30)
+    await _until(lambda: bool(note()), 180)
+    snap = await link.snapshot(npc, fresh=True)
+    after = next((c for c in await link.npc_chests(npc) if c.id == cave.id), None)
+    in_hands = any(i.item == bow for i in snap.npc.inventory)
+    still = after is not None and any(i.item == bow for i in after.items)
+    check(
+        "fetched",
+        in_hands and not still and "достал" in note(),
+        f"in hands {in_hands}, in the chest {still}: {note()}",
+    )
+    check("missing", "пропало" in note() and "Золото" in note(), note())
+    await _until(lambda: BACK in cues, 20)
+    await _until(lambda: not dialogue.speaking(npc), 30)  # what it says back from the chest, for the log
+    watch.cancel()
+    check("back", BACK in cues and 0 <= dist() <= 5, f"{dist():.1f} m from the hero; {cues}")
+    return _logged(results)
 
 
 async def group_scenario(
