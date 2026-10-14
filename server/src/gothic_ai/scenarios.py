@@ -16,6 +16,8 @@ from typing import Any, cast
 
 from . import characters, programs
 from .amends import Amends
+from .authoring import PROPOSE as PROPOSE_QUEST
+from .authoring import Author
 from .beasts import BeastDesk
 from .bodies import Bodies
 from .brain import Decider, NpcPlanner, Outcome
@@ -3200,6 +3202,162 @@ async def repair_after_death(
     await asyncio.sleep(1)
     check("once", node not in await link.offered_dialogs(successor))
     check("kept", any(op.get("op") == "add_node" for op in story.ops()))
+    return _logged(results)
+
+
+class AuthoredScript:
+    """The director's model for its own quests, scripted: the first thing and the first place the brief
+    offers, the most experience and a little gold."""
+
+    name = "authored-script"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+        item = re.search(r"^- (\S+) — ([^,\n]+)$", brief, re.M)
+        spot = re.search(r"^- (\S+) — (.+), \d+ м$", brief, re.M)
+        caps = re.search(r"опыт до (\d+), золото до (\d+)", brief)
+        xp, gold = (int(caps.group(1)), int(caps.group(2))) if caps else (0, 0)
+        name, where = (item.group(2) if item else "вещь"), (spot.group(2) if spot else "")
+        args = {
+            "title": f"Пропажа: {name}"[:40],
+            "item": item.group(1) if item else "",
+            "place": spot.group(1) if spot else "",
+            "give_description": "Ты чем-то озабочена?",
+            "give_lines": [
+                {"speaker": "hero", "text": "Ты чем-то озабочена?"},
+                {"speaker": "npc", "text": f"Пропала у меня одна вещь — {name}. Лежит, верно, {where}."},
+                {"speaker": "npc", "text": "Принесёшь — не обижу."},
+            ],
+            "done_description": f"Я нашёл: {name}."[:60],
+            "done_lines": [
+                {"speaker": "hero", "text": "Вот, нашёл."},
+                {"speaker": "npc", "text": "Ну надо же. Держи за труды."},
+            ],
+            "gold": min(gold, 10),
+            "xp": xp,
+            "journal_given": f"У Хильды пропала одна вещь — {name}. Она думает, что та лежит {where}.",
+            "journal_done": "Я нашёл пропажу и отдал её Хильде.",
+            "reason": "мелкая пропажа по хозяйству",
+        }
+        call = ToolCall(PROPOSE_QUEST, args, f"a{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
+async def authored_quest(
+    link: GameLink, author: Author, story: StoryPatches, giver: str = HILDA, slot: int = 7
+) -> dict[str, str]:
+    """Stage 1 of the director as author (docs/director.md) on the game: a quest of its own for Hilda.
+
+    The director makes it up (its model scripted unless the server runs a real one, LLM=chatgpt): she has lost
+    a thing, it lies at a place near the farm. Checks:
+    - made: the quest passes the validator; its variable is in the game, 0;
+    - offered: her menu has the dialog that gives it, not the one that ends it;
+    - given: the hero asks her, the quest runs;
+    - found: the thing lies at the place's point, the hero picks it up;
+    - after_load: a save and a load in between keep the variable, and the dialog that ends it is offered;
+    - done: he brings it, she takes it and pays (her gold and experience as proposed), the quest is done;
+    - once: neither dialog is offered again; knows: her conversational model knows he brought it."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    if isinstance(author.model.llm, FakeBackend):
+        author.model.llm = AuthoredScript()
+    hero = ["inst", "HERO"]
+
+    async def var(name: str) -> int | None:
+        return (await link.story_state(vars=[name])).get("vars", {}).get(name)
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    async def come_to_her() -> None:
+        await link.debug("player_goto", to=giver, distance=300)
+        for _ in range(40):  # her own greeting may start as he comes in
+            if not (await link.story_state()).get("dialog"):
+                break
+            await asyncio.sleep(0.5)
+
+    q = await author.quest(giver)
+    rejected = author.chronicle.facts("authored_rejected")
+    check("made", q is not None, q or rejected[-1:])
+    if q is None:
+        return _logged(results)
+    point = next(f["point"] for f in reversed(author.chronicle.facts("authored")) if f.get("id") == q.id)
+    check("var", await var(q.id) == 0, f"{q.id} = {await var(q.id)}")
+    offered = await link.offered_dialogs(giver)
+    check("offered", q.give in offered and q.done not in offered, " ".join(offered))
+
+    # the hero asks her what is wrong
+    await come_to_her()
+    await link.choose_dialog(giver, q.give)
+    ok = await _until_async(lambda: var(q.id), lambda v: v == 1, 15)
+    await _until(lambda: author.quests[q.id].stage == "given", 5)
+    check("given", ok and author.quests[q.id].stage == "given", f"{q.id} = {await var(q.id)}")
+
+    # the thing lies where she said
+    before = await has(q.item)
+    await link.debug("player_goto", waypoint=point)
+    await asyncio.sleep(1)
+    error = ""
+    try:
+        await link.debug("player_take", item=q.item, distance=800)
+    except GameError as err:
+        error = str(err)
+    ok = await _until_async(lambda: has(q.item), lambda n: n > before, 10)
+    check("found", ok, f"{q.item} at {point}" + (f": {error}" if error else ""))
+
+    # a save and a load in between
+    await asyncio.sleep(0.5)  # the game has the memory head of the quest
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(1)
+    now = await link.offered_dialogs(giver)
+    kept = await var(q.id)
+    check(
+        "after_load", kept == 1 and q.done in now and q.give not in now, f"{q.id} = {kept}; {' '.join(now)}"
+    )
+
+    # he brings it
+    gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
+    await come_to_her()
+    await link.choose_dialog(giver, q.done)
+    ok = await _until_async(lambda: var(q.id), lambda v: v == 2, 15)
+    after = (await has(q.item), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
+    paid = after[0] == before and after[1] >= gold + q.gold and after[2] >= exp + q.xp
+    check("done", ok and paid, f"thing, gold, exp {(before + 1, gold, exp)} -> {after}")
+    await asyncio.sleep(1)
+    left = await link.offered_dialogs(giver)
+    check("once", q.give not in left and q.done not in left, " ".join(left))
+    await _until(lambda: author.quests[q.id].stage == "done", 5)
+    check("knows", "ты заплатил" in (author.situation(giver) or ""), author.situation(giver) or "")
     return _logged(results)
 
 

@@ -17,6 +17,7 @@ from typing import Any
 
 from . import npc_tools, places, programs, scenarios
 from .amends import Amends
+from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
 from .bodies import Bodies
 from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
@@ -138,6 +139,7 @@ HELP = """commands (npc defaults to the last attached one):
   gossip            the latest scene of two talking about the hero near him: its lines, how it ended
   day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
+  author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
   deal              offers open to the hero, and what the game's deal window shows (needs -devmode)
   deal <npc gives> / <hero gives>   the npc offers a deal, e.g. deal ITPO_HEALTH_01:2 / ITMI_GOLD:30
   deal accept       press Y on the deal window as the player does (game needs -devmode)
@@ -178,6 +180,7 @@ class ServerState:
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
+        self.author: Author | None = None
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
@@ -333,6 +336,14 @@ class Console:
                 for s in self.state.amends.storylets.values():
                     closed = ", ".join(s.close)
                     print(f"{s.id} {s.name}: {s.stage}; closed {closed}; {s.gold} gold to {s.to_name}")
+            case "author" if self.state.author is not None:
+                if rest:
+                    q = await self.state.author.quest(rest[0])
+                    print(
+                        "(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.item} {q.where}"
+                    )
+                for q in self.state.author.quests.values():
+                    print(f"{q.id} {q.name}: «{q.title}» {q.stage}; {q.item_name} {q.where}; {q.reward()}")
             case "deal" if self.state.deals is not None:
                 await self.deal(link, npc, rest)
             case "rumors" if self.state.rumors is not None:
@@ -721,6 +732,19 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue=state.dialogue,
                 journal=journal,
             )
+            # quests of the director's own (docs/director.md, stage 1): for now on the console's word
+            state.author = Author(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
+                llm,
+                places=place_book,
+                cards=personas.cards,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
             # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
             state.consequences = LieConsequences(
                 link,
@@ -1033,6 +1057,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.repair_after_death(link, state.director, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario repair: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "authored":
+                assert state.author is not None and state.story is not None
+                results = await scenarios.authored_quest(link, state.author, state.story)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario authored: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario in ("amends", "amends_deal"):
                 dialogue, talk, amends = state.dialogue, state.talk, state.amends
@@ -1603,6 +1633,7 @@ def main() -> None:
             "lie",
             "wrath",
             "repair",
+            "authored",
             "vlie",
             "vcheck",
             "rumor",

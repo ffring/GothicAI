@@ -48,6 +48,10 @@
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
+#   authored: the director makes Hilda a quest of its own (docs/director.md, stage 1; model scripted with
+#       LLM=fake): a thing she lost lies near the farm; the hero takes the quest, finds the thing, saves and
+#       loads, brings it and is paid; its variable DIR_Q1 lives in the save (protocol v29). On a save of
+#       Lobart's farm: SAVE=save_slot_1.sav
 #   vlie: a lie about a quest of the scripts: the hero tells Lobart the turnips are in the barn, Lobart's
 #       model (scripted with LLM=fake) believes him and his own ending plays; the next morning he misses the
 #       turnips, turns against the hero, and the people around hear it (story graph, stage 5)

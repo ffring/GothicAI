@@ -91,6 +91,8 @@ namespace zenkit {
 		this->_m_version = r->read_ubyte();
 		auto symbol_count = r->read_uint();
 
+		// room for the temporary strings and the variables add_int_symbol adds: the symbols never move
+		this->_m_symbols.reserve(symbol_count + 1 + MAX_ADDED_SYMBOLS);
 		this->_m_symbols.resize(symbol_count);
 		this->_m_symbols_by_name.reserve(symbol_count + 1);
 		this->_m_symbols_by_address.reserve(symbol_count);
@@ -274,6 +276,24 @@ namespace zenkit {
 		sym._m_count = 1;
 		sym._m_value = std::unique_ptr<std::string[]> {new std::string[sym._m_count]};
 		sym._m_index = static_cast<std::uint32_t>(_m_symbols.size());
+
+		return &_m_symbols.emplace_back(std::move(sym));
+	}
+
+	DaedalusSymbol* DaedalusScript::add_int_symbol(std::string_view name) {
+		std::string up {name};
+		std::transform(up.begin(), up.end(), up.begin(), toupper);
+		if (up.empty() || _m_symbols_by_name.find(up) != _m_symbols_by_name.end()) return nullptr;
+		if (_m_symbols.size() >= _m_symbols.capacity()) return nullptr; // growing would move every symbol
+
+		DaedalusSymbol sym {};
+		sym._m_name = up;
+		sym._m_generated = true;
+		sym._m_type = DaedalusDataType::INT;
+		sym._m_count = 1;
+		sym._m_value = std::unique_ptr<std::int32_t[]> {new std::int32_t[1] {0}};
+		sym._m_index = static_cast<std::uint32_t>(_m_symbols.size());
+		_m_symbols_by_name[up] = sym._m_index;
 
 		return &_m_symbols.emplace_back(std::move(sym));
 	}

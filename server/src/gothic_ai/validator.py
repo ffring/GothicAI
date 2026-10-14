@@ -121,6 +121,7 @@ class Patches:
     told: set[str] = field(default_factory=set)
     # the director's programs in place of the scripts': by dialog or choice, NODE:CONDITION for a condition
     programs: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    vars: dict[str, int] = field(default_factory=dict)  # the director's story variables (vars): first values
 
     @classmethod
     def of(cls, ops: Iterable[dict[str, Any]]) -> Patches:
@@ -155,6 +156,9 @@ class Patches:
                         out.programs.pop(key, None)
                     else:
                         out.programs[key] = op["steps"]
+                case "vars":
+                    for name, value in (op.get("vars") or {}).items():
+                        out.vars.setdefault(str(name).upper(), value)
         return out
 
 
@@ -173,6 +177,11 @@ class Story:
     def then(self, ops: Iterable[dict[str, Any]]) -> Story:
         """The story with these changes made."""
         return Story(self.graph, self.state, self.patches.then(ops))
+
+    @property
+    def symbols(self) -> dict[str, str]:
+        """The names the game knows (state.symbols), with the director's story variables."""
+        return {**{v: "var" for v in self.patches.vars}, **self.state.symbols}
 
     # --- quests -------------------------------------------------------------------------------
 
@@ -273,6 +282,8 @@ class Story:
         if var in self._values:
             return self._values[var]
         now = self.state.vars.get(var)
+        if now is None:
+            now = self.patches.vars.get(var)  # the director's, not reported by the game: as it was made
         if now is None:
             vals: Vals = None
         elif var == "KAPITEL":
@@ -440,6 +451,7 @@ def names_in(ops: Iterable[dict[str, Any]]) -> set[str]:
                     if e.get(k):
                         out.add(str(e[k]).upper())
             out |= programs.names(made.get("program"))
+        out |= {str(v).upper() for v in op.get("vars") or {}}
         out |= _expr_names(op.get("expr"))
         if isinstance(op.get("steps"), list):
             out |= programs.names(op["steps"])
@@ -463,9 +475,11 @@ def validate(
         if kind == "add_node":
             errors += _check_node(op.get("node") or {}, story, after, rules, caps)
         elif kind in ("disable", "enable", "condition", "remove_node"):
-            errors += _check_change(op, story, rules)
+            errors += _check_change(op, story, after.symbols, rules)
         elif kind == "program":
-            errors += _check_program(op, story, rules)
+            errors += _check_program(op, story, after.symbols, rules)
+        elif kind == "vars":
+            errors += _check_vars(op, story)
         else:
             errors.append(f"операция {kind!r} режиссёру недоступна")
     if errors:
@@ -485,7 +499,7 @@ def _check_node(
     errors = []
     id = str(made.get("id", "")).upper()
     npc = str(made.get("npc", "")).upper()
-    symbols = story.state.symbols
+    symbols = after.symbols
     if not id.startswith(DIRECTOR_PREFIX):
         errors.append(f"id диалога режиссёра начинается с {DIRECTOR_PREFIX}: {id}")
     if id in story.graph.nodes or id in symbols or id in story.patches.nodes:
@@ -592,7 +606,23 @@ def _over_caps(effects: list[dict[str, Any]], caps: Caps) -> list[str]:
     return errors
 
 
-def _check_change(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
+def _check_vars(op: dict[str, Any], story: Story) -> list[str]:
+    vars = op.get("vars")
+    if not isinstance(vars, dict) or not vars:
+        return ["переменные режиссёра — словарь имя: начальное значение"]
+    errors = []
+    for name, value in vars.items():
+        name = str(name).upper()
+        if not name.startswith(DIRECTOR_PREFIX):
+            errors.append(f"переменная режиссёра называется {DIRECTOR_PREFIX}…: {name}")
+        elif story.state.symbols.get(name, "var") != "var" or name in story.graph.nodes:
+            errors.append(f"имя {name} уже занято")
+        if not isinstance(value, int) or isinstance(value, bool):
+            errors.append(f"{name}: начальное значение — целое число")
+    return errors
+
+
+def _check_change(op: dict[str, Any], story: Story, symbols: dict[str, str], rules: Rules) -> list[str]:
     node = str(op.get("node", "")).upper()
     owner = story.owner(node)
     if owner is None:
@@ -601,10 +631,10 @@ def _check_change(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
         return [f"{node} меняет главу, его не трогаем"]
     if rules.plot_npc(owner):
         return [f"{node} — диалог сюжетного NPC {owner}, его не трогаем"]
-    return _check_names(op.get("expr"), story.state.symbols)
+    return _check_names(op.get("expr"), symbols)
 
 
-def _check_program(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
+def _check_program(op: dict[str, Any], story: Story, symbols: dict[str, str], rules: Rules) -> list[str]:
     node = str(op.get("node", "")).upper()
     part = op.get("part", "information")
     if part not in ("information", "condition"):
@@ -623,7 +653,7 @@ def _check_program(op: dict[str, Any], story: Story, rules: Rules) -> list[str]:
         return []  # the scripts' own program again
     if not isinstance(steps, list):
         return ["программа — список шагов"]
-    errors = _check_steps(steps, story.state.symbols, rules)
+    errors = _check_steps(steps, symbols, rules)
     if programs.choices(steps) or any(s.get("do") == "clear_choices" for s in programs.steps_of(steps)):
         errors.append("у диалога скриптов варианты ответа — через INFO_ADDCHOICE с функцией варианта")
     return errors

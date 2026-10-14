@@ -232,7 +232,7 @@ def test_v27_whom_the_npc_looks_at():
 
 
 def test_v28_npc_chests():
-    assert PROTOCOL_VERSION == 28
+    assert PROTOCOL_VERSION >= 28
     ask = NpcChestsCmd(req="c1", npc="BDT_1014_BANDIT_L")
     assert ask.to_json() == '{"type":"npc_chests","req":"c1","npc":"BDT_1014_BANDIT_L"}'
     chest = Chest.model_validate(
@@ -252,3 +252,11 @@ def test_v28_npc_chests():
     assert chest.why == "key" and chest.items[0].item == "ITRW_BOW_L_01" and chest.start[0].count == 29
     take = DebugCmd(req="r1", cmd="chest_take", chest=chest.id, item="ITMI_GOLD", count=29)
     assert '"cmd":"chest_take"' in take.to_json() and '"count":29' in take.to_json()
+
+
+def test_v29_the_directors_story_variables():
+    assert PROTOCOL_VERSION == 29
+    patch = GraphPatchCmd(ops=[{"op": "vars", "vars": {"DIR_Q1": 0}}])
+    assert '"ops":[{"op":"vars","vars":{"DIR_Q1":0}}]' in patch.to_json()
+    take = DebugCmd(req="r1", cmd="player_take", item="ITMI_PAN", distance=300)
+    assert '"cmd":"player_take"' in take.to_json() and '"distance":300' in take.to_json()
