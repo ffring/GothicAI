@@ -534,6 +534,23 @@ void DialogMenu::paintChoice(PaintEvent &e) {
     }
   }
 
+std::vector<std::string> DialogMenu::entries() const {
+  std::vector<std::string> ret;
+  if(state==State::Idle || !isChoiceMenuActive())
+    return ret;
+  for(auto& c : choice)
+    ret.push_back(c.title);
+  return ret;
+  }
+
+bool DialogMenu::pick(size_t i) {
+  if(state==State::Idle || !isChoiceMenuActive() || i>=choice.size())
+    return false;
+  dlgSel = i;
+  onSelect();
+  return true;
+  }
+
 bool DialogMenu::isChoiceMenuActive() const {
   return choice.size()!=0 && current.time==0 && !haveToWaitOutput() && trade.isOpen()==InventoryMenu::State::Closed;
   }

@@ -56,8 +56,11 @@ class DialogGraph final {
 
     // the dialogs the npc offers the player now, as the menu would list them (node ids)
     std::vector<std::string> offered(World& world, Npc& npc);
-    // a dialog the npc offers now, as if the player chose it in the menu; false if it is not offered
+    // a dialog the npc offers now, or a choice of a dialog of the director it offers now, as if the player chose
+    // it in the menu; false if it is not offered
     bool choose(World& world, Npc& npc, std::string_view node, std::string& error);
+    // the choices a dialog of the director offers after its lines, as the menu asks for them: (id, text UTF-8)
+    std::vector<std::pair<std::string,std::string>> choices(World& world, Npc& npc, std::string_view node);
     // an expression with self = npc, other = the hero, as JSON (5, "text", null, "PC_HERO"); false and `error`
     // if it can't be computed
     bool evaluate(World& world, Npc* npc, const rapidjson::Value& expr, std::string& json, std::string& error);
@@ -89,6 +92,13 @@ class DialogGraph final {
       std::vector<StoryEffect>          effects;
       storygraph::Program               program;      // runs after the effects; no steps: none
       };
+    // a choice a dialog of the director offers now (a Choice step of its program ran)
+    struct Choice final {
+      std::string                       id;
+      std::string                       node;         // the dialog that offers it
+      std::string                       text;         // game codepage
+      std::vector<storygraph::Step>     steps;        // run when the hero picks it
+      };
     // a program of the director in place of a script function's own (op "program")
     struct Replaced final {
       std::string                       node;
@@ -100,6 +110,9 @@ class DialogGraph final {
     bool        onChoiceFilter(const zenkit::IInfo& info, int32_t fn);
     void        onExtra(const zenkit::INpc& npc, bool important, std::vector<GameScript::DlgChoice>& out);
     void        onExec(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc);
+    void        onChoices(const GameScript::DlgChoice& dlg, std::vector<GameScript::DlgChoice>& out);
+    // runs steps of a dialog of the director: its program, or a choice it offered; `node` gets the choices
+    void        runOwn(const std::string& node, const std::vector<storygraph::Step>& steps);
     void        onChosen(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc);
     // a dialog's condition, information or choice: run as its program (docs/story-graph.md, «Исполнение без VM»)
     bool        onScript(zenkit::DaedalusSymbol& fn, int32_t& result);
@@ -132,6 +145,9 @@ class DialogGraph final {
     std::map<std::string,std::vector<storygraph::ExprP>>   conditions;  // added to script dialogs
     std::map<std::string,Node>                             nodes;       // made by the director
     std::set<std::string>                                  told;        // of those, the ones the hero chose
+    std::map<std::string,std::vector<Choice>>              offering;    // the choices each dialog of the director offers
+    std::map<std::string,std::string>                      choiceOf;    // choice id -> its dialog, also once picked
+    std::string                                            runningOwn;  // the dialog of the director whose steps run
     std::map<std::string,Replaced>                         replaced;    // by node, or node + ":CONDITION"
     std::unordered_map<uint32_t,const storygraph::Program*> replacedFns; // by function symbol, for replacedFor
     zenkit::DaedalusVm*                                    replacedFor = nullptr;

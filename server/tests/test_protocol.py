@@ -178,7 +178,7 @@ def test_v21_wolves_hear_the_hero():
 
 
 def test_v23_programs_in_the_story_graph():
-    assert PROTOCOL_VERSION == 23
+    assert PROTOCOL_VERSION >= 23
     ask = StoryProgramCmd(req="s1", node="DIA_LOBART_RUEBENRUNNING")
     assert ask.to_json() == (
         '{"type":"story_program","req":"s1","node":"DIA_LOBART_RUEBENRUNNING","part":"information"}'
@@ -188,3 +188,14 @@ def test_v23_programs_in_the_story_graph():
     steps = [{"do": "say", "speaker": "self", "text": "Спасибо."}, {"do": "return"}]
     patch = GraphPatchCmd(ops=[{"op": "program", "node": "DIA_X", "part": "condition", "steps": steps}])
     assert '"steps":[{"do":"say","speaker":"self","text":"Спасибо."},{"do":"return"}]' in patch.to_json()
+
+
+def test_v24_choices_in_the_directors_dialogs():
+    assert PROTOCOL_VERSION == 24
+    pick = DebugCmd(req="r1", cmd="menu_pick", text="Золото")
+    assert pick.to_json() == '{"type":"debug","req":"r1","cmd":"menu_pick","slot":0,"text":"Золото"}'
+    assert DebugCmd(req="r2", cmd="choices", npc="X", node="DIR_X").to_json() == (
+        '{"type":"debug","req":"r2","cmd":"choices","slot":0,"npc":"X","node":"DIR_X"}'
+    )
+    for cmd in ("talk", "menu"):
+        assert DebugCmd(req="r3", cmd=cmd).cmd == cmd

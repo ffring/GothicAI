@@ -171,6 +171,9 @@ class Gothic final {
 
     Tempest::Signal<void(Npc&,Npc&,AiOuputPipe*&)>                      onDialogPipe;
     std::function<bool(const Npc*)>                                     isNpcInDialogFn;
+    // the dialog window: what it offers now and picking the i-th as the player does (debug and test tools)
+    std::function<std::vector<std::string>()>                           dialogEntriesFn;
+    std::function<bool(size_t)>                                         dialogPickFn;
 
     Tempest::Signal<void(std::string_view,int,int,int,const GthFont&)>  onPrintScreen;
     Tempest::Signal<void(std::string_view)>                             onPrint;
@@ -213,6 +216,8 @@ class Gothic final {
     std::function<void(const zenkit::INpc&,bool,std::vector<GameScript::DlgChoice>&)> dialogExtraFn;
     // one of those was chosen: play it
     std::function<void(const GameScript::DlgChoice&,Npc&,Npc&)>         dialogExtraExecFn;
+    // the choices one of those offers now, after its lines (as Info_AddChoice's after a script dialog)
+    std::function<void(const GameScript::DlgChoice&,std::vector<GameScript::DlgChoice>&)> dialogExtraChoicesFn;
     // a dialog or a choice was chosen and has run
     Tempest::Signal<void(const GameScript::DlgChoice&,Npc&,Npc&)>       onDialogChosen;
     // a dialog's script function (its condition, its information or a choice) is about to run, self and other
