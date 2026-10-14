@@ -336,6 +336,41 @@ async def test_an_npc_held_for_a_scene_listens_to_the_hero():
 BANDIT = "BDT_1013_BANDIT_L"
 
 
+def test_a_phrase_to_several():
+    # 2026-10-13: «Здарова, пацаны» to two bandits went to Cavalorn, who follows the hero, the nearest
+    brago, bandit, cavalorn = "BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L", "BAU_4300_ADDON_CAVALORN"
+    people = roster(
+        person(cavalorn, "Кавалорн", 2, True),
+        person(bandit, "Бандит", 4, True),
+        person(brago, "Браго", 6, True),
+    )
+    lead = {brago: 8, bandit: 6, cavalorn: 8}.get
+
+    def to(text: str, focus: str | None = None, ours=lambda npc: npc == cavalorn):
+        a = addressee(text, focus, people, None, ours=ours, lead=lambda npc: lead(npc, 0))
+        return (a.id, a.why) if a else None
+
+    assert to("Здарова, пацаны.") == (brago, "group")  # the leader, not the companion, not the nearest
+    assert to("Ребята, вы откуда?", focus=bandit) == (bandit, "group")  # the one he looks at
+    assert to("Эй, вы двое, стоять!") == (brago, "group")
+    assert to("Всем привет") == (brago, "group")
+    assert to("Пацаны, Браго тут главный?") == (brago, "name")  # a name comes first
+    # a bare «вы» is the polite one to one person
+    assert to("Вы не подскажете дорогу?", focus=bandit) == (bandit, "focus")
+    # nobody but companions: one of them; nobody but one: not a phrase to several
+    assert to("Ребята, привет", ours=lambda npc: True) == (cavalorn, "group")
+    # in a fight it is to whoever is at him: words to him, not an order to the companions
+    fight = roster(
+        person(cavalorn, "Кавалорн", 2, True, state="ZS_ATTACK"),
+        person(bandit, "Бандит", 4, True, state="ZS_ATTACK"),
+        person(brago, "Браго", 6, True),
+    )
+    stop = addressee("Стой, пацаны, стой!", None, fight, None, ours=lambda npc: npc == cavalorn)
+    assert stop is not None and (stop.id, stop.why) == (bandit, "attacker")
+    alone = roster(person(bandit, "Бандит", 4, True))
+    assert addressee("Пацаны, здорово", None, alone, None) == addressee("Здорово", None, alone, None)
+
+
 def test_in_a_fight_he_speaks_to_whoever_is_at_him():
     at_him = person(BANDIT, "Бандит", 4, state="ZS_ATTACK", activity="fight")
     people = roster(

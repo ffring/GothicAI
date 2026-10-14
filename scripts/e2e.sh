@@ -104,6 +104,12 @@
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)
+#   ground: Cavalorn follows the hero, the hero throws his letter down: Cavalorn sees it lying there, picks it
+#       up when told «бери» (take_item, model scripted with LLM=fake) and follows the hero again (protocol v22)
+#   group: one word at a time (docs/npc-tools.md, step B2): «Пацаны, здорово!» at the bandits' cave, Cavalorn
+#       with the hero: Brago, who leads them, answers first, the others' words wait their turn and are heard
+#       after his, the second knows what he said, a fourth voice says nothing. Starts the TTS service
+#       (TTS=fake); models scripted with LLM=fake
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
@@ -140,7 +146,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

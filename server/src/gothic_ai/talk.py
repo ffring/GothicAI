@@ -175,6 +175,22 @@ _ADDRESS = frozenset(
 )
 
 
+# a phrase to several of those around («Пацаны, здорово», «Всем привет», «Эй, вы двое»): to the conversation.
+# A bare «вы» is the polite one to one person as often: only with a count of them («вы все», «вы двое»)
+_SEVERAL = frozenset(
+    "пацаны пацанва ребята ребят ребятки мужики парни братва народ господа друзья братцы все всем".split()
+)
+_COUNTS = frozenset("все двое трое оба обе".split())
+_YOU = frozenset("вы вас вам".split())
+
+
+def to_several(phrase: list[str]) -> bool:
+    """The hero speaks to several at once."""
+    return any(w in _SEVERAL for w in phrase) or (
+        any(w in _YOU for w in phrase) and any(w in _COUNTS for w in phrase)
+    )
+
+
 def calls(text: str) -> list[str]:
     """Words the hero may be calling someone by: a word alone between commas or at an end of the phrase
     ("Сардас, как..." "..., Ксардас?"), not an address of its own ("мастер")."""
@@ -201,7 +217,9 @@ def named(phrase: list[str], name: str, called: list[str] | None = None) -> floa
 class Addressee:
     id: str
     name: str
-    why: str  # name | focus | partner | scene | front | order (companions who obey it) | beast (a wolf)
+    # name | focus | partner | scene | front | group (to several: it answers first) | order (companions who
+    # obey it) | beast (a wolf)
+    why: str
 
 
 def addressee(
@@ -211,10 +229,13 @@ def addressee(
     partner: str | None,
     scene: Sequence[str] = (),
     ours: Callable[[str], bool] = lambda npc: False,
+    lead: Callable[[str], int] = lambda npc: 0,
 ) -> Addressee | None:
-    """Whom the hero speaks to: a name in the phrase, his focus, the one fighting him close by («Воу, ты
-    чего?» — whoever is not `ours`, his companions), the current partner, one of the npc's of a `scene`
-    (two who were just talking near him, the one who spoke last first), the nearest in front."""
+    """Whom the hero speaks to: a name in the phrase; to several of those around («пацаны»), outside a
+    fight, the one he looks at, else the one who leads (`lead`, by its character card), else the nearest,
+    his companions (`ours`) only when there is nobody else; his focus, the one fighting him close by («Воу,
+    ты чего?» — whoever is not ours), the current partner, one of the npc's of a `scene` (two who were just
+    talking near him, the one who spoke last first), the nearest in front."""
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
     near = [
@@ -226,11 +247,19 @@ def addressee(
         # the name heard best ("Лестер!" with Фестер near too), then the nearer one
         _, e = min(near, key=lambda de: (de[0], de[1].distance))
         return Addressee(e.id.upper(), e.name, "name")
-    if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
-        return Addressee(e.id.upper(), e.name, "focus")
     fighting = [
         e for e in alive.values() if fights(e) and e.distance <= ATTACKER_CM and not ours(e.id.upper())
     ]
+    group = [e for e in alive.values() if e.distance <= PARTNER_CM]
+    # in a fight «Стой, пацаны!» is to whoever is at him, as before: words to him, not an order to his own
+    if to_several(phrase) and len(group) >= 2 and not fighting:
+        if focus and (e := alive.get(focus.upper())) is not None and e in group:
+            return Addressee(e.id.upper(), e.name, "group")
+        others = [e for e in group if not ours(e.id.upper())] or group
+        e = min(others, key=lambda e: (-lead(e.id.upper()), e.distance))
+        return Addressee(e.id.upper(), e.name, "group")
+    if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
+        return Addressee(e.id.upper(), e.name, "focus")
     if fighting:  # in a fight he speaks to whoever is at him, where he looks or not
         e = min(fighting, key=lambda e: e.distance)
         return Addressee(e.id.upper(), e.name, "attacker")
@@ -296,6 +325,8 @@ class TalkDesk:
         self.on_hero_voice: list[Callable[[], bool]] = []
         # npc's of a scene near the hero his next words may go to, the one who spoke last first (gossip.py)
         self.scene_hint: Callable[[], list[str]] = lambda: []
+        # how much an npc leads others (its character card, cli.py): the first to answer a phrase to several
+        self.lead: Callable[[str], int] = lambda npc: 0
         # the hero said something, to whom (None: into the air): the conversation around him (group.py)
         self.on_phrase: list[Callable[[Addressee | None, str], None]] = []
         # orders to the hero's companions ("Стой!"), carried out at once, without an answer (orders.py)
@@ -356,6 +387,7 @@ class TalkDesk:
             self.partner.npc if self.partner else None,
             self.scene_hint(),
             ours=self.orders.companion if self.orders is not None else lambda npc: False,
+            lead=self.lead,
         )
         order = commands.parse(text, self._is_name)
         squad: list[tuple[str, str]] = []
@@ -625,7 +657,10 @@ class TalkDesk:
             if npc in obeying:
                 continue  # an order: it remembers that it was given one (orders.py)
             if (to is None or npc != to.id) and e.distance <= OVERHEAR_CM and e.activity != "down":
-                self.dialogue.overheard(npc, e.name, text, to.name if to else None)
+                if to is not None and to.why == "group" and e.distance <= PARTNER_CM:
+                    self.dialogue.told_all(npc, e.name, text, to.name)  # to it too
+                else:
+                    self.dialogue.overheard(npc, e.name, text, to.name if to else None)
 
     def _hero_act(self, npc: str, kind: str, detail: str | None) -> None:
         talk = self.partner

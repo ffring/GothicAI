@@ -12,22 +12,34 @@ knowing what his mate had just said to the hero. Now:
   («В разговоре с героем ещё: Браго, Кавалорн. Сейчас говорит: Браго.»). It is over when nobody has said
   a word in it for `QUIET_S`.
 
-One floor and who interjects are steps B2–B3.
+Step B2: one word at a time. The conversation has one floor (`Floor`, dialogue.py):
+- **the addressee speaks first**: the hero's phrase opens a round, its seat is the first;
+- **whoever else speaks waits its turn**: a turn of an npc near the hero (an urgent shout of the fast
+  loop, «Держи его!», an incident, one coming up to him) takes the next seat and thinks only once those
+  before it have their text ready (not their sound): it answers with their words in mind, and each next
+  voice adds a second or two, not four. Its lines are heard after theirs;
+- **three voices to a phrase of the hero's** (`MAX_VOICES`): a fourth says nothing. The round ends with
+  his next phrase, or once nobody has spoken for `ROUND_GAP_S` (a fight's shouts go on);
+- **the hero's voice cuts all**: whoever speaks stops, whoever waits says nothing. Seats asked while he
+  speaks wait for his phrase: the one he speaks to comes first.
+
+Who interjects is step B3; a phrase to several («пацаны», «вы все») is the addressee rule of talk.py.
 """
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import time
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .dialogue import DialogueManager
 from .game import GameError, GameLink
 from .llm import Tool, ToolCall
-from .protocol import GameMessage, Loading, Snapshot
+from .protocol import GameMessage, Loading, PttCancel, PttStop, Snapshot
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -40,6 +52,14 @@ SAID_CM = 1500  # an npc's words are heard this far (talk.PARTNER_CM: the hero h
 GROUP_CM = 1500.0  # a participant farther than this from the hero is out of the conversation
 QUIET_S = 60.0  # nobody has said a word in it this long: the conversation is over
 TO_HERO = frozenset({"player", "initiative"})  # turns said to the hero, whoever else stands by
+MAX_VOICES = 3  # to one phrase of the hero's: the addressee and two more (the user, 2026-10-13)
+ROUND_GAP_S = 5.0  # nobody has spoken this long: the next voice opens a round of its own
+THINK_WAIT_S = 30.0  # a seat waits this long at most for those before it to have their text ready
+HEAR_WAIT_S = 30.0  # ...and its line this long at most for them to have been heard
+HERO_TALK_S = 15.0  # the hero has started to speak: seats wait for his phrase this long at most
+HEARD_S = 3.0  # ...and once he has stopped, this long for it to be recognized (it may come to nothing)
+RESERVED_S = 5.0  # the addressee's seat waits this long for its turn (it may never come: he turned away)
+POLL_S = 0.05
 
 
 @dataclass
@@ -47,6 +67,19 @@ class Member:
     name: str
     since: float  # when it joined
     last: float  # when it last spoke or was spoken to
+
+
+@dataclass
+class Seat:
+    """A voice of the round: an npc's turn on the floor, in order."""
+
+    npc: str
+    at: float  # when it was taken (or reserved for the addressee)
+    taken: bool = True  # its turn has come to it (the addressee's is reserved by the hero's phrase)
+    ready: bool = False  # its turn is over: its text is ready
+    dropped: bool = False  # it will not speak: the hero spoke first
+    ready_at: float = 0.0
+    id: int = field(default=0)
 
 
 class GroupTalk:
@@ -67,33 +100,64 @@ class GroupTalk:
         self.clock = clock
         self.members: dict[str, Member] = {}
         self.last = float("-inf")  # when a word was last said in the conversation, by anyone
+        self.seats: list[Seat] = []  # the round: the voices since the hero's phrase, in order
+        self.hero_speaks_until = float("-inf")  # he has begun to speak: new seats wait for his phrase
+        self.to_all: str | None = None  # his last phrase was to several: who answers first
+        self._ids = itertools.count(1)
         self._tasks: set[asyncio.Task[Any]] = set()
         link.listeners.append(self.on_message)
         dialogue.on_said.append(self.on_said)
+        dialogue.floor = self
         talk.on_phrase.append(self.on_phrase)
+        talk.on_hero_voice.append(self.cut)
 
     # --- who is in it --------------------------------------------------------------------------
 
     def on_message(self, msg: GameMessage) -> None:
-        if isinstance(msg, Loading):
-            self.members.clear()
+        match msg:
+            case Loading():
+                self.members.clear()
+                self._new_round()
+            case PttStop():  # his words are being recognized
+                self.hero_speaks_until = min(self.hero_speaks_until, self.clock() + HEARD_S)
+            case PttCancel():  # a short tap: he said nothing
+                self.hero_speaks_until = float("-inf")
 
     def on_phrase(self, to: Addressee | None, text: str) -> None:
-        """The hero said something: whom he said it to joins the conversation."""
+        """The hero said something: whom he said it to joins the conversation and answers first; to several
+        («пацаны»), everyone near him joins it."""
         now = self.clock()
         self.last = now
-        if to is not None:
-            self._join(to.id, to.name, now)
+        self.hero_speaks_until = float("-inf")
+        self._new_round()
+        self.to_all = to.id.upper() if to is not None and to.why == "group" else None
+        if to is None:
+            return
+        self._join(to.id, to.name, now)
+        if to.why != "order":  # companions obey an order without a turn: nobody waits for one
+            self.seats.append(Seat(to.id.upper(), now, taken=False, id=next(self._ids)))
+        if to.why == "group":
+            for npc, e in self.talk.people.items():
+                if npc != to.id.upper() and self._near_hero(npc):
+                    self._join(npc, e.name, now)
 
     def on_said(self, npc: str, name: str, text: str, kind: str) -> None:
-        """An npc said its lines: it takes part if it is near the hero, and whoever stands by hears it."""
+        """An npc said its lines: it takes part if it is near the hero, and whoever stands by hears it. Those
+        in the conversation hear it at once: the next voice thinks with these words in mind."""
         npc = npc.upper()
         now = self.clock()
         if self._near_hero(npc):
             self.last = now
             self._join(npc, name, now)
         to_hero = kind in TO_HERO or (self.talk.partner is not None and self.talk.partner.npc == npc)
-        self._spawn(self._heard(npc, name, text, "герою" if to_hero else "вслух"))
+        whom = "герою" if to_hero else "вслух"
+        told = {npc}
+        for other in [*self.participants(), *(s.npc for s in self.seats)]:
+            if other not in told:
+                told.add(other)
+                e = self.talk.people.get(other)
+                self.dialogue.heard(other, e.name if e is not None else other, name, text, whom)
+        self._spawn(self._heard(npc, name, text, whom, told))
 
     def participants(self) -> dict[str, Member]:
         """Those in the conversation now: near the hero and on their feet, while it goes on."""
@@ -122,7 +186,7 @@ class GroupTalk:
 
     # --- who hears it --------------------------------------------------------------------------
 
-    async def _heard(self, npc: str, name: str, text: str, whom: str) -> None:
+    async def _heard(self, npc: str, name: str, text: str, whom: str, told: set[str]) -> None:
         try:
             near = await self.link.story_nearby(npc, SAID_CM)
         except (GameError, TimeoutError) as err:
@@ -130,9 +194,127 @@ class GroupTalk:
             return
         for p in near:
             hearer = str(p.get("npc", "")).upper()
-            if not hearer or hearer == npc or p.get("dead"):
+            if not hearer or hearer in told or p.get("dead"):
                 continue
             self.dialogue.heard(hearer, str(p.get("name") or hearer), name, text, whom)
+
+    # --- the floor: one voice at a time ---------------------------------------------------------
+
+    async def queue(self, npc: str, kind: str) -> bool:
+        """A turn of the npc's takes its seat. The hero's words to it: the first, reserved by his phrase. Any
+        other of an npc near the hero: the next one, if there is a voice left, once those before it have
+        their text ready. An npc away from the conversation is not on its floor."""
+        npc = npc.upper()
+        if kind == "player":
+            seat = next((s for s in self.seats if s.npc == npc and not s.taken), None)
+            if seat is None:  # words to it not through talk.py (the console, a scenario): a round of its own
+                self._new_round()
+                seat = Seat(npc, self.clock(), id=next(self._ids))
+                self.seats.append(seat)
+            seat.taken = True
+            return True
+        if not self._near_hero(npc):
+            return True
+        # he speaks: his phrase opens the round, and first. Polled, as below: the floor's state is time (who
+        # is still heard) and other desks'
+        while self.clock() < self.hero_speaks_until:  # noqa: ASYNC110
+            await asyncio.sleep(POLL_S)
+        if self._quiet():
+            self._new_round()
+        if len([s for s in self.seats if not s.dropped]) >= MAX_VOICES:
+            log.info("%s: no voice left for it in this round (%s)", npc, ", ".join(s.npc for s in self.seats))
+            return False
+        seat = Seat(npc, self.clock(), id=next(self._ids))
+        self.seats.append(seat)
+        if len(self.seats) > 1:
+            log.info("%s waits its turn: %s", npc, ", ".join(s.npc for s in self.seats))
+        deadline = self.clock() + THINK_WAIT_S
+        try:
+            while not seat.dropped and not self._thought(seat) and self.clock() < deadline:  # noqa: ASYNC110
+                await asyncio.sleep(POLL_S)
+        except asyncio.CancelledError:
+            self._give_up(seat)
+            raise
+        return not seat.dropped
+
+    def done(self, npc: str) -> None:
+        seat = next(
+            (s for s in reversed(self.seats) if s.npc == npc.upper() and s.taken and not s.ready), None
+        )
+        if seat is not None:
+            self._give_up(seat)
+
+    async def hear(self, npc: str) -> None:
+        """A line of the npc's waits until those before it in the round have been heard."""
+        npc = npc.upper()
+        deadline = self.clock() + HEAR_WAIT_S
+        while self.clock() < deadline:
+            seat = next((s for s in reversed(self.seats) if s.npc == npc and s.taken), None)
+            if seat is None or not self._before(seat, heard=True):
+                return
+            await asyncio.sleep(POLL_S)
+
+    def cut(self) -> bool:
+        """The hero starts to speak: in the conversation whoever speaks stops and whoever waits says nothing
+        (his partner talk.py stops itself). True if anyone did."""
+        self.hero_speaks_until = self.clock() + HERO_TALK_S
+        partner = self.talk.partner.npc if self.talk.partner is not None else None
+        cut = False
+        for seat in self.seats:
+            if seat.npc != partner and not seat.ready and not self._thought(seat) and not seat.dropped:
+                seat.dropped = True  # still waiting: it will not speak
+                cut = True
+        for npc in {s.npc for s in self.seats if not s.dropped} | set(self.members):
+            if npc != partner and self.dialogue.interrupt(npc):
+                cut = True
+        self._new_round()
+        return cut
+
+    def _thought(self, seat: Seat) -> bool:
+        """Its turn may think: those before it have their text ready."""
+        return not self._before(seat, heard=False)
+
+    def _before(self, seat: Seat, *, heard: bool) -> bool:
+        """Someone before the seat is still at it: thinking, or (`heard`) still being heard."""
+        if seat not in self.seats:
+            return False  # a round gone: the hero spoke, it was cut
+        now = self.clock()
+        for s in self.seats[: self.seats.index(seat)]:
+            if s.dropped or s.npc == seat.npc:
+                continue
+            if not s.taken and now - s.at > RESERVED_S:
+                continue  # his words went to it, but its turn never came
+            if not s.ready or (heard and self.dialogue.audible(s.npc)):
+                return True
+        return False
+
+    def _give_up(self, seat: Seat) -> None:
+        seat.ready, seat.ready_at = True, self.clock()
+
+    def _quiet(self) -> bool:
+        """The round is over: everyone in it has spoken and been heard a while ago."""
+        if not self.seats:
+            return True
+        if any(
+            not s.ready and not s.dropped and (s.taken or self.clock() - s.at <= RESERVED_S)
+            for s in self.seats
+        ):
+            return False
+        if any(self.dialogue.audible(s.npc) for s in self.seats):
+            return False
+        last = max((s.ready_at for s in self.seats), default=float("-inf"))
+        return self.clock() - last >= ROUND_GAP_S
+
+    def _new_round(self) -> None:
+        for seat in self.seats:
+            if not seat.ready and not self._thought(seat):
+                seat.dropped = True  # the hero spoke: whoever still waited says nothing
+        self.seats = []
+
+    def waiting(self, npc: str) -> bool:
+        """Its turn waits for the floor: it is not speaking yet."""
+        npc = npc.upper()
+        return any(s.npc == npc and s.taken and not s.ready and not self._thought(s) for s in self.seats)
 
     # --- the turn extension --------------------------------------------------------------------
 
@@ -146,7 +328,13 @@ class GroupTalk:
             return None
         others = [m.name for n, m in members.items() if n != npc]
         line = f"В разговоре с героем ещё: {', '.join(others)}."
-        speaking = [m.name for n, m in members.items() if n != npc and self.dialogue.speaking(n)]
+        if self.to_all == npc and self.seats and self.seats[0].npc == npc and not self.seats[0].ready:
+            line += " Последнюю фразу герой сказал всем вам, ты отвечаешь первым."
+        speaking = [
+            m.name
+            for n, m in members.items()
+            if n != npc and self.dialogue.speaking(n) and not self.waiting(n)
+        ]
         if speaking:
             line += f" Сейчас говорит: {', '.join(speaking)}."
         return line
