@@ -23,7 +23,8 @@ at a time and lives up to an hour. A request that goes on from the connection's 
 a turn: that response's items and the tool results added) sends only what was added, with
 `previous_response_id`: the connection keeps its last response, `store=False` or not. An answer nobody
 reads to its end any more is read in the background, so the connection stays. Where no connection opens,
-the request goes over HTTP.
+the request goes over HTTP. The keys of rare requests (the director's, the gossip's) keep their
+connection while unused: opening one takes the gateway 1.3-1.8 s.
 """
 
 from __future__ import annotations
@@ -62,7 +63,7 @@ TokenProvider = Callable[[], Awaitable[str]]
 
 WS_BETA = "responses_websockets=2026-02-06"  # Codex's header for the WebSocket transport
 WS_MAX_AGE_S = 55 * 60.0  # the server closes a connection after an hour
-WS_IDLE_S = 300.0  # a connection unused this long is closed
+WS_IDLE_S = 300.0  # a connection unused this long is closed (not one of a kept key)
 WS_DRAIN_S = 30.0  # an answer nobody reads is read to its end within this, else its connection is closed
 WS_OFF_S = 60.0  # no connection could be opened: requests go over HTTP this long
 END_EVENTS = ("response.completed", "response.failed", "response.incomplete", "error")
@@ -156,6 +157,7 @@ class OpenAIResponsesBackend:
         self._websocket = websocket
         self._sockets: dict[str, list[_Socket]] = {}
         self._opening: dict[str, asyncio.Task[None]] = {}
+        self._kept: set[str] = set()  # keys whose connections stay open while unused
         self._ws_off_until = 0.0
         self._tasks: set[asyncio.Task[None]] = set()  # connections being read to an answer's end or closed
 
@@ -200,9 +202,12 @@ class OpenAIResponsesBackend:
             async for event in events:
                 yield event
 
-    def open_ahead(self, key: str) -> None:
+    def open_ahead(self, key: str, *, keep: bool = False) -> None:
         """Open a connection for `key` now if it has no free one (an npc the hero is about to talk to):
-        its next request does not wait for the handshake. Nothing is sent over it."""
+        its next request does not wait for the handshake. Nothing is sent over it. `keep`: the key's
+        connections are not closed while unused (its requests are rare)."""
+        if keep:
+            self._kept.add(key)
         if not self._ws_on() or key in self._opening or any(not s.busy for s in self._sockets.get(key, [])):
             return
         task = asyncio.create_task(self._open_free(key))
@@ -327,11 +332,13 @@ class OpenAIResponsesBackend:
         sock.busy, sock.used = False, time.monotonic()
 
     def _sweep(self) -> None:
-        """Close the connections unused for WS_IDLE_S and those near the server's limit of an hour."""
+        """Close the connections unused for WS_IDLE_S (but a kept key's) and those near the server's limit
+        of an hour."""
         now = time.monotonic()
-        for socks in list(self._sockets.values()):
+        for key, socks in list(self._sockets.items()):
             for sock in [s for s in socks if not s.busy]:
-                if now - sock.used > WS_IDLE_S or now - sock.opened > WS_MAX_AGE_S:
+                idle = now - sock.used > WS_IDLE_S and key not in self._kept
+                if idle or now - sock.opened > WS_MAX_AGE_S:
                     self._drop(sock)
 
     def _drop(self, sock: _Socket) -> None:

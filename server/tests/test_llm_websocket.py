@@ -9,7 +9,7 @@ import pytest
 from websockets.asyncio.server import ServerConnection, serve
 
 from gothic_ai.llm import Done, LLMError, Message, TextDelta, ToolCall, ToolResult
-from gothic_ai.llm.openai_responses import PLAN_LIMIT, OpenAIResponsesBackend
+from gothic_ai.llm.openai_responses import PLAN_LIMIT, WS_IDLE_S, OpenAIResponsesBackend
 from tests.test_dialogue import _until
 
 
@@ -250,6 +250,24 @@ async def test_no_websocket_the_request_goes_over_http():
         await backend.aclose()
     assert out[-1].text == "По HTTP." and sent["prompt_cache_key"] == "NONE_100_XARDAS"
     assert not backend._ws_on()  # HTTP for a while, not a failed connect each time
+
+
+async def test_a_kept_key_stays_open_while_unused():
+    """The director's requests are rare: its connection is not closed with an npc's unused one."""
+    server = Server()
+    ws, backend = await _start(server)
+    try:
+        backend.open_ahead("director", keep=True)
+        await _ask(backend, [Message("user", "1")], key="director")
+        await _ask(backend, [Message("user", "2")], key="NONE_100_XARDAS")
+        for socks in backend._sockets.values():
+            for sock in socks:
+                sock.used -= WS_IDLE_S + 1  # unused for longer than an npc's may be
+        backend._sweep()
+        assert list(backend._sockets) == ["director"]
+    finally:
+        await backend.aclose()
+        ws.close()
 
 
 async def test_a_connection_is_opened_ahead_of_the_turn():

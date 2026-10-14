@@ -96,6 +96,7 @@ async def test_andre_hears_of_the_lie_and_asks_for_amends(graph):
         s = await amends.consider(LIE, ANDRE, "Лобарт")
         assert s is not None
         brief = llm.calls[0][1][0].content
+        assert llm.cache_keys == ["amends"]  # its own connection (openai_responses.py)
         assert "Человек: Андре (MIL_311_ANDRE)" in brief and "Откуда: слух, рассказал Лобарт" in brief
         assert f"- {JOIN}: «Я готов вступить в ополчение!» — принимает в гильдию" in brief
         assert f"- {MISSION}: «Есть задание?» — даёт работу" in brief

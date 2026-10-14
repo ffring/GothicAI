@@ -119,6 +119,13 @@ async def with_deadlines(
             await close()
 
 
+def open_ahead(llm: object, key: str, *, keep: bool = False) -> None:
+    """Open `llm`'s connection for the requests of `key` before they come, if it keeps connections
+    (openai_responses.py); `keep`: it stays open while unused (rare requests: the director's)."""
+    if (open_ := getattr(llm, "open_ahead", None)) is not None:
+        open_(key, keep=keep)
+
+
 class LLMBackend(Protocol):
     name: str
 
