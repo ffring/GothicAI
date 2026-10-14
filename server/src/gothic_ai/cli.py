@@ -484,7 +484,13 @@ def _story_graph(args: argparse.Namespace, game_dir: Path | None) -> storygraph.
 
 
 def _backend(args: argparse.Namespace) -> LLMBackend:
-    return make_backend(args.llm, args.model, base_url=args.base_url, reasoning_effort=args.reasoning_effort)
+    return make_backend(
+        args.llm,
+        args.model,
+        base_url=args.base_url,
+        reasoning_effort=args.reasoning_effort,
+        websocket=not args.no_websocket,
+    )
 
 
 def _audio_source(args: argparse.Namespace) -> AudioSource:
@@ -1541,6 +1547,12 @@ def _add_llm_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model", help="model id (default depends on the backend)")
     p.add_argument("--base-url", help="API base url (openai/local backends)")
     p.add_argument("--reasoning-effort", default="low", help="reasoning effort for Responses models")
+    p.add_argument(
+        "--no-websocket",
+        action="store_true",
+        help="npc requests of Responses models over HTTP, not a WebSocket of each npc's own (no prompt cache "
+        "on the ChatGPT plan, first text ~1 s later)",
+    )
     p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
     p.add_argument("--npc", default="NONE_100_XARDAS", help="default npc for commands and scenarios")
 
