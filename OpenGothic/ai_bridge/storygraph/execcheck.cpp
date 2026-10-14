@@ -1,6 +1,7 @@
 #include "execcheck.h"
 
 #include "bytecode.h"
+#include "exprjson.h"
 #include "model.h"
 #include "snapshot.h"
 
@@ -109,7 +110,18 @@ const Program& ExecCheck::program(uint32_t fnSymbol) {
   auto it = programs.find(fnSymbol);
   if(it!=programs.end())
     return it->second;
-  return programs[fnSymbol] = liftProgram(vm, *code, fnSymbol);
+  auto p = liftProgram(vm, *code, fnSymbol);
+  if(viaJson && p.error.empty()) {
+    rapidjson::Document doc;
+    doc.Parse(toJson(p).c_str());
+    auto back = readProgram(doc, p.returns);
+    if(back.error.empty() && describe(back)!=describe(p))
+      back.error = "reads back otherwise";
+    if(!back.error.empty())
+      back.error = "json: " + back.error;
+    p = std::move(back);
+    }
+  return programs[fnSymbol] = std::move(p);
   }
 
 // instances the function and the script functions it calls name

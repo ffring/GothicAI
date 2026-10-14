@@ -2,6 +2,7 @@
 
 #include "bytecode.h"
 #include "model.h"
+#include "textcodec.h"
 #include "vocab.h"
 
 #include <zenkit/DaedalusScript.hh>
@@ -452,6 +453,10 @@ void describe(const std::vector<Step>& steps, const std::string& indent, std::st
           describe(s.otherwise, indent + "  ", out);
           }
         break;
+      case Step::Say:
+        out += indent + (s.hero ? "other" : "self") + " says " +
+               (s.line.empty() ? "\"" + TextCodec::toUtf8(s.text) + "\"" : s.line) + "\n";
+        break;
       }
     }
   }
@@ -491,6 +496,14 @@ void writeSteps(W& w, const std::vector<Step>& steps) {
           w.Key("else"); writeSteps(w, s.otherwise);
           }
         break;
+      case Step::Say: {
+        w.Key("do");      w.String("say");
+        w.Key("speaker"); w.String(s.hero ? "other" : "self");
+        auto text = s.line.empty() ? TextCodec::toUtf8(s.text) : s.line;
+        w.Key(s.line.empty() ? "text" : "line");
+        w.String(text.c_str(), rapidjson::SizeType(text.size()));
+        break;
+        }
       }
     w.EndObject();
     }

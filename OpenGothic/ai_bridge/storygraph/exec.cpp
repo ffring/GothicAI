@@ -114,9 +114,35 @@ Interpreter::Flow Interpreter::steps(const std::vector<Step>& s) {
           returned = *v;
           }
         return Flow::Return;
+      case Step::Say:
+        if(!say(st))
+          return Flow::Fail;
+        break;
       }
     }
   return Flow::Next;
+  }
+
+bool Interpreter::say(const Step& s) {
+  // as a script says it: AI_Output(self, other, line), or the other way round for the hero
+  auto* out   = vm.find_symbol_by_name("AI_OUTPUT");
+  auto* self  = vm.global_self();
+  auto* other = vm.global_other();
+  if(out==nullptr || !out->is_external() || self==nullptr || other==nullptr)
+    return bool(fail("say: the scripts have no AI_Output"));
+  auto speaker  = s.hero ? other->get_instance() : self->get_instance();
+  auto listener = s.hero ? self->get_instance() : other->get_instance();
+  if(speaker==nullptr || listener==nullptr)
+    return bool(fail("say: no one to say it"));
+  std::string id = s.line;
+  if(id.empty()) {
+    auto* who = vm.find_symbol_by_index(speaker->symbol_index());
+    id = ownLine ? ownLine(who!=nullptr ? who->name() : std::string(), s.text) : std::string();
+    if(id.empty())
+      return bool(fail("say: a line of its own can't be said here"));
+    }
+  ext.call(*out, {Value::instance(speaker), Value::instance(listener), Value::str(id)});
+  return true;
   }
 
 bool Interpreter::store(const Step& s) {

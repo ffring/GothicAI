@@ -4,6 +4,7 @@
 #include "program.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,6 +34,10 @@ class Interpreter final {
       };
     Result run(const Program& p, const std::vector<Value>& args = {});
 
+    // a line of its own (Step::Say with text): the speaker's symbol and the text in the game codepage -> the id
+    // of a line AI_Output plays; empty if it can't be had. Original lines need nothing.
+    std::function<std::string(const std::string& npc, const std::string& text)> ownLine;
+
   private:
     enum class Flow : uint8_t { Next, Return, Fail };
     // A value on the VM's stack: a computed value, or a variable or member it reads when the value is popped.
@@ -46,6 +51,7 @@ class Interpreter final {
 
     Flow                 steps(const std::vector<Step>& s);
     bool                 store(const Step& s);
+    bool                 say(const Step& s);
     std::optional<Value> eval(const Expr& e);
     std::optional<Item>  item(const Expr& e);
     std::optional<Value> read(const Item& it);

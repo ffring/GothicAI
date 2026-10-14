@@ -15,7 +15,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import npc_tools, places, scenarios
+from . import npc_tools, places, programs, scenarios
 from .amends import Amends
 from .beasts import TONE_MAX_TOKENS, BeastDesk
 from .bodies import Bodies
@@ -116,6 +116,8 @@ HELP = """commands (npc defaults to the last attached one):
   graph cond <node> <json>    add a condition (story graph expression) to a dialog; "-" drops them
   graph add <json>            add a dialog: {"id", "npc", "description", "lines", "effects", ...}
   graph remove <id>           remove an added dialog
+  graph program <node> [condition] [<json>|-]   the program of a dialog's information (or condition) or of a
+                    choice; with steps, the director's program in its place; "-" brings the scripts' one back
   quest <instance> <n> <item> <n> <title>   the npc gives the hero a quest: kill n creatures
                     (they appear 30 m away), the reward is an item it has
   quests            the director's quests: paid, lied about, found out
@@ -446,6 +448,16 @@ class Console:
                 op = {"op": "add_node", "node": json.loads(node)}
             case ["remove", node]:
                 op = {"op": "remove_node", "node": node.upper()}
+            case ["program", node, *more] if len(more) <= 2:
+                part = "condition" if more[:1] == ["condition"] else "information"
+                more = more[1:] if more[:1] == ["condition"] else more
+                if not more:
+                    p = await story.link.story_program(node, part)
+                    print(f"{p.get('fn')}{' (the director’s)' if p.get('patched') else ''}:")
+                    print(programs.render(p.get("steps")))
+                    return
+                steps = None if more[0] == "-" else json.loads(more[0])
+                op = {"op": "program", "node": node.upper(), "part": part, "steps": steps}
             case _:
                 print(HELP)
                 return
@@ -1074,6 +1086,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario graph: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "programs":
+                assert state.story is not None
+                results = await scenarios.graph_programs(link, state.story, args.npc)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario programs: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "tts":
                 results = await scenarios.tts_lines(link, state.dialogue, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
@@ -1508,6 +1526,7 @@ def main() -> None:
             "witness",
             "places",
             "graph",
+            "programs",
             "lie",
             "wrath",
             "repair",
