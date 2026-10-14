@@ -74,6 +74,9 @@ class ExecCheck final {
     std::string*   vmFault = nullptr;
     // when set, run() reports both sides' engine calls
     std::function<void(const std::string&)> trace;
+    // --via-json: every program is written as JSON and read back before it runs, as the director's programs
+    // reach the game (readProgram); one that reads back otherwise is not a program
+    static inline bool viaJson = false;
 
     Result         run(uint32_t fnSymbol, const std::shared_ptr<zenkit::INpc>& self,
                        const std::shared_ptr<zenkit::INpc>& hero);

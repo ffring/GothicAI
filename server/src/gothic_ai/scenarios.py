@@ -14,7 +14,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from . import characters
+from . import characters, programs
 from .amends import Amends
 from .beasts import BeastDesk
 from .bodies import Bodies
@@ -470,6 +470,134 @@ async def graph_dialogs(
         second not in offered and first in offered and "DIR_M5_TEST" not in offered,
         " ".join(offered),
     )
+
+    for name, outcome in results.items():
+        log.info("%-18s %s", name, outcome)
+    return results
+
+
+async def graph_programs(
+    link: GameLink, story: StoryPatches, npc: str = "NONE_100_XARDAS", slot: int = 8
+) -> dict[str, str]:
+    """Level 1, step 2 of «Исполнение без VM» (docs/story-graph.md): the director's programs.
+
+    The game gives a dialog's program as JSON and takes it back unchanged. The director's program in place of
+    a dialog's information runs when the hero chooses it: a line of its own, gold and experience. One in place
+    of a condition hides the dialog; null brings the scripts' program back; a program the game can't run is
+    rejected with the reason. A dialog of the director runs a program of its own. A change made before a save
+    comes back after loading it.
+    """
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)  # the session's patches are in the game
+
+    base = await link.offered_dialogs(npc)
+    check("vanilla", len(base) >= 2, " ".join(base))
+    if len(base) < 2:
+        return results
+    info, cond = base[0], base[1]
+
+    own = await link.story_program(info)
+    steps = own.get("steps") or []
+    calls = [s for s in programs.steps_of(steps) if s.get("do") == "call"]
+    check(
+        "read",
+        own.get("patched") is False and own.get("returns") is False and bool(calls),
+        f"{own.get('fn')}: {len(steps)} steps",
+    )
+    await story.apply({"op": "program", "node": info, "steps": steps})
+    same = await link.story_program(info)
+    check("same", same.get("patched") is True and same.get("steps") == steps)
+
+    gold = ["call", "NPC_HASITEMS", ["inst", "HERO"], ["sym", "ITMI_GOLD"]]
+    exp = ["field", ["inst", "HERO"], "EXP"]
+
+    async def hero() -> tuple[int, int]:
+        return int(await link.evaluate(gold)), int(await link.evaluate(exp))
+
+    def give(count: int) -> dict[str, Any]:
+        made = ["call", "CREATEINVITEMS", ["inst", "OTHER"], ["sym", "ITMI_GOLD"], ["int", count]]
+        return {"do": "call", "call": made}
+
+    def xp(amount: int) -> dict[str, Any]:
+        return {"do": "call", "call": ["fn", "B_GIVEPLAYERXP", ["int", amount]]}
+
+    mine = [{"do": "say", "speaker": "self", "text": "Это говорит программа режиссёра."}, give(7), xp(10)]
+    await story.apply({"op": "program", "node": info, "steps": [*mine, {"do": "return"}]})
+    before = await hero()
+    said = asyncio.ensure_future(
+        wait_message(link, LineStarted, lambda m: m.npc == npc and m.line.startswith("AIB_G"), 30)
+    )
+    chosen = asyncio.ensure_future(wait_message(link, DialogChosen, lambda m: m.node == info, 10))
+    await link.choose_dialog(npc, info)
+    await chosen
+    after = await hero()
+    check("replaced", after == (before[0] + 7, before[1] + 10), f"gold, exp {before} -> {after}")
+    try:
+        check("said", True, (await said).line)
+    except TimeoutError:
+        check("said", False, "the line of its own did not start")
+
+    never = [{"do": "return", "value": ["int", 0]}]
+    await story.apply({"op": "program", "node": cond, "part": "condition", "steps": never})
+    check("condition", cond not in await link.offered_dialogs(npc), cond)
+    await story.apply({"op": "program", "node": cond, "part": "condition", "steps": None})
+    check("condition_back", cond in await link.offered_dialogs(npc), cond)
+
+    await story.apply({"op": "program", "node": info, "steps": None})
+    back = await link.story_program(info)
+    check("restored", back.get("patched") is False and back.get("steps") == steps)
+    try:
+        bad = [{"do": "call", "call": ["call", "CREATEINVITEMS", ["inst", "OTHER"]]}]
+        await story.apply({"op": "program", "node": info, "steps": bad})
+        check("bad_program", False, "taken")
+    except GameError as err:
+        check("bad_program", "takes 3 arguments" in str(err), str(err))
+
+    # a dialog of the director runs a program of its own: lines, gold, a branch
+    node = {
+        "id": "DIR_PROGRAM_TEST",
+        "npc": npc,
+        "description": "Проверка программы режиссёра",
+        "nr": 50,
+        "program": [
+            {"do": "say", "speaker": "other", "text": "Проверка программы."},
+            give(3),
+            {"do": "if", "cond": [">=", gold, ["int", 3]], "then": [xp(5)], "else": [xp(1000)]},
+        ],
+    }
+    await story.apply({"op": "add_node", "node": node})
+    before = await hero()
+    chosen = asyncio.ensure_future(wait_message(link, DialogChosen, lambda m: m.node == node["id"], 10))
+    await link.choose_dialog(npc, "DIR_PROGRAM_TEST")
+    await chosen
+    after = await hero()
+    check("node_program", after == (before[0] + 3, before[1] + 5), f"gold, exp {before} -> {after}")
+
+    # a program in place of a condition, made before a save, comes back after loading it
+    await story.apply({"op": "program", "node": cond, "part": "condition", "steps": never})
+    await asyncio.sleep(0.5)  # the game has the memory head of that change
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(1)
+    offered = await link.offered_dialogs(npc)
+    kept = await link.story_program(cond, "condition")
+    check("after_load", cond not in offered and kept.get("patched") is True, " ".join(offered))
+
+    live = await link.check_conditions()
+    counts = live.get("programs") or {}
+    check("counters", counts.get("replaced", 0) >= 1 and counts.get("failed") == 0, str(counts))
 
     for name, outcome in results.items():
         log.info("%-18s %s", name, outcome)
@@ -3375,7 +3503,19 @@ async def see_perception(
     pushed = await _until(lambda: perception.view(farmer) is not None, 5)
     check("pushed", pushed, "; ".join(perception.english(farmer)))
 
-    # 6. places by name (step 5): at Xardas's tower, on Lobart's and Onar's farms, in the city
+    # 6. the dead: a wolf the hero kills in front of Lobart is a wolf to him still, a dead one («о, мёртвый
+    # волк»), with its id; `look` at «мёртвый волк» finds it
+    await link.debug("spawn", instance="WOLF", near=farmer, distance=600)
+    await asyncio.sleep(0.5)
+    await link.debug("kill", instance="WOLF", near=farmer)
+    await asyncio.sleep(1)
+    await perception.fresh(farmer)
+    sight = perception.sight(farmer)
+    people = sight.people if sight else "(no view)"
+    looked = perception.look(farmer, "мёртвый волк")
+    check("dead_beast", "туша: Волк" in people and looked.startswith("туша: Волк"), f"{people} | {looked}")
+
+    # 7. places by name (step 5): at Xardas's tower, on Lobart's and Onar's farms, in the city
     if perception.places is None:
         check("places", False, "no book of places (gamedata/places.json)")
         return _logged(results)

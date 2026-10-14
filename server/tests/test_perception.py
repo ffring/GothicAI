@@ -79,7 +79,8 @@ def test_lobart_sees_whom_it_knows_by_name_and_strangers_by_their_look():
     )
     assert sight.people == (
         "Видишь: Хильда (id BAU_951_HILDA; 6 м), готовит у котла; незнакомец, по виду наёмник "
-        "(id SLD_800_X; 15 м), оружие наголо; Волк (id WOLF; 18 м), бежит; тело (Малет, 10 м)."
+        "(id SLD_800_X; 15 м), оружие наголо; Волк (id WOLF; 18 м), бежит; "
+        "тело: Малет (id BAU_954_MALETH; 10 м)."
     )
 
 
@@ -169,6 +170,29 @@ def test_a_herd_is_told_once_and_creatures_draw_no_weapons():
     bare = lobarts_view(look("PLAYER", "Я", 3, seen=True))
     sight = desk([bare]).sight(LOBART)
     assert sight is not None and sight.hero == "Герой в 3 м: ты его не знаешь; без доспеха."
+
+
+def test_the_dead_are_told_by_who_they_were():
+    """«О, смотри, мёртвый волк»: a dead beast is still a wolf, a dead stranger is told by his look."""
+    d = desk([lobarts_view(
+        None,
+        look("WOLF_1", "Волк", 12, kind="monster", guild=36, body="run", from_hero="ahead", att="hostile"),
+        look("WOLF_2", "Волк", 6, kind="body", guild=36, body="dead", from_hero="left"),
+        look("WOLF_3", "Волк", 9, kind="body", guild=36, body="dead"),
+        look("BDT_1", "Бандит", 7, kind="body", guild=GIL_OUT, body="dead", armor=BDT_ARMOR),
+    )])  # fmt: skip
+    sight = d.sight(LOBART)
+    assert sight is not None and sight.people == (
+        "Видишь: Волк (id WOLF_1; 12 м, перед героем), враг тебе; туша: Волк ×2 (id WOLF_2; 6–9 м); "
+        "тело: незнакомец, по виду бандит (id BDT_1; 7 м)."
+    )
+    assert sight.targets["WOLF_2"] == "туша: Волк, 6 м"  # its intent may point to it
+    assert d.look(LOBART, "мёртвый волк").startswith("туша: Волк, 6 м: мёртв")
+    assert d.look(LOBART, "волк").startswith("Волк, 12 м")
+    assert d.english(LOBART)[2:] == (  # the live wolf first, then the nearest of the dead
+        "A dead Волк lies 6 m away, left of the hero.",
+        "The body of a stranger who looks like a bandit lies 7 m away.",
+    )
 
 
 CAVALORN, BRAGO, BANDIT = "BAU_4300_ADDON_CAVALORN", "BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"

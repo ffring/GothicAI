@@ -28,7 +28,8 @@
 #   see: what npc's perceive (npc_view, v11): Xardas sees the hero in front of him and not through the tower's
 #       walls; Lobart names whom he knows and tells the hero by his look, in militia armor a militiaman; the
 #       view is in the model's request, `look` answers, the views of the nearest npc's are pushed each second;
-#       places by name at Xardas's tower, Lobart's and Onar's farms and in the city
+#       a wolf killed in front of Lobart is a dead wolf to him; places by name at Xardas's tower, Lobart's
+#       and Onar's farms and in the city
 #   seen: what npc's saw (v12): Lobart keeps when, where and how he saw the hero on his farm; the hero goes to
 #       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
 #       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
@@ -110,6 +111,10 @@
 #       with the hero: Brago, who leads them, answers first, the others' words wait their turn and are heard
 #       after his, the second knows what he said, a fourth voice says nothing. Starts the TTS service
 #       (TTS=fake); models scripted with LLM=fake
+#   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
+#       and given back, the director's in place of an information (a line of its own, gold, experience) and of
+#       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, and
+#       a program kept across save/load
 # A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
 # instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
