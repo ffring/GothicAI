@@ -1,0 +1,38 @@
+{
+  "scope": "report_only_nonfinite_exact_gate_hardening",
+  "comparator_before_sha256": "5f6af1e9b4eca6d0ff39e56e97d48123e0a91f8ac72c52d369b1cc71c90c7c3a",
+  "comparator_after_sha256": "e2cdbdc2c2ee00efee43604dbb52b9e0f35d08c6860bb12530796766ec8e56f9",
+  "engine_or_runtime_changes": false,
+  "comparisons": {
+    "original": {
+      "only_semantic_change": "ik-sweep all_numeric_columns_exact true -> false; new comparator SHA provenance added",
+      "all_other_fields_canonical_byte_identical": true,
+      "unchanged_fields_canonical_sha256": "fc299883eb0cff04780532f966be8418cf6ba76a509e537af60a1f3bc7d0094d",
+      "overall_structural_gate_before": false,
+      "overall_structural_gate_after": false,
+      "overall_document_gate_before": false,
+      "overall_document_gate_after": false
+    },
+    "safe": {
+      "only_semantic_change": "ik-sweep all_numeric_columns_exact true -> false; new comparator SHA provenance added",
+      "all_other_fields_canonical_byte_identical": true,
+      "unchanged_fields_canonical_sha256": "e4c38c6275c6f0ff34ae92474274547ae358499c811e3bfad9074e9610c9a130",
+      "overall_structural_gate_before": false,
+      "overall_structural_gate_after": false,
+      "overall_document_gate_before": false,
+      "overall_document_gate_after": false
+    }
+  },
+  "matched_legitimate_inactive_negative_infinity_values": 3446,
+  "unmatched_height_values": [
+    {
+      "scenario": "ik-sweep",
+      "segment": "s2_down",
+      "frame": "1",
+      "field": "l_toey",
+      "original": "4182.77",
+      "jolt": "-inf",
+      "both_inactive": true
+    }
+  ]
+}

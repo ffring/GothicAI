@@ -1,0 +1,2022 @@
+{
+  "schema_version": 1,
+  "scope": "read_only_bounded_native_id_wolf_perception_v12",
+  "window": [
+    1060,
+    1160
+  ],
+  "gameplay_prefix": {
+    "original_scenario_unchanged": true,
+    "seed": 73013,
+    "full_foreach": "slope 12 35 6",
+    "natural_stop": "18th rec_stop: w4_down60",
+    "metric_rows": 960,
+    "same_backend_formal_CSV_exact": true,
+    "same_backend_body_combat_payloads_exact": true,
+    "other_original_event_fields_exact_except_wall_throughput_rec_stop_speed": true,
+    "fidelity_source": "physics_validation full paired-prefix checks; source overlay does not call bodyEvent or add queries"
+  },
+  "quality": {
+    "both_full_101_step_windows_complete": true,
+    "actors_per_backend": {
+      "bullet-safe": 57,
+      "jolt": 57
+    },
+    "records_per_backend": {
+      "bullet-safe": 18696,
+      "jolt": 18654
+    },
+    "native_snapshot_keysets_identical": true,
+    "per_backend_no_array_id_reassignment": true,
+    "miss_point_y_sentinel": "Native hit=false point_cm[1]=-inf is preserved as the string -inf during strict extraction; all other nonfinite fields are rejected."
+  },
+  "conclusions": {
+    "first_body_event_compared_different_actors": {
+      "original_world_id": 948,
+      "jolt_world_id": 952,
+      "enemy_world_id": 723
+    },
+    "initial_relevant_actor_captured_fields_equal": true,
+    "first_baseline_periodic_schedule_equal": [
+      1067,
+      1097,
+      1127,
+      1157
+    ],
+    "warg948_1127_difference": "Original squared sense range2108982.25 is inside1500cm; Jolt2453953 exceeds2250000 and returns SENSE_NONE before cone/LOS. Existing actor and target geometry already differ.",
+    "warg952_1157_difference": "Both callbacks run, but existing sight rays use different endpoint geometry; original occluded, Jolt unobstructed, and Jolt sets currentTarget723. This is not a same-input ray comparison.",
+    "first_observed_warg948_pose_difference": "step1074 post Npc::tick, with matching captured pre-tick XYZ/yaw/policy/deadline/target; no sense/LOS call for actor948 at that step.",
+    "perception_timer_delay_proved": false,
+    "same_input_collision_or_LOS_bug_proved": false,
+    "migration_gate_waiver": false
+  },
+  "initial_witnesses": {
+    "723": {
+      "bullet-safe": {
+        "actor": "MOLERAT",
+        "script_id": 12451,
+        "symbol_id": 12451,
+        "position_cm": [
+          14533.4326,
+          4086.58667,
+          18960.2227
+        ],
+        "yaw_deg": 90,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "MOLERAT",
+        "script_id": 12451,
+        "symbol_id": 12451,
+        "position_cm": [
+          14533.4326,
+          4086.58667,
+          18960.2227
+        ],
+        "yaw_deg": 90,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      }
+    },
+    "724": {
+      "bullet-safe": {
+        "actor": "MOLERAT",
+        "script_id": 12451,
+        "symbol_id": 12451,
+        "position_cm": [
+          14611.0078,
+          4011.05151,
+          18745.6445
+        ],
+        "yaw_deg": 89.999939,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "MOLERAT",
+        "script_id": 12451,
+        "symbol_id": 12451,
+        "position_cm": [
+          14611.0078,
+          4011.05151,
+          18745.6445
+        ],
+        "yaw_deg": 89.999939,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      }
+    },
+    "947": {
+      "bullet-safe": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          12991.4873,
+          3739.20557,
+          18658.4648
+        ],
+        "yaw_deg": 90,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          12991.4873,
+          3739.20557,
+          18658.4648
+        ],
+        "yaw_deg": 90,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      }
+    },
+    "948": {
+      "bullet-safe": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          13126.5137,
+          3822.01855,
+          18377.623
+        ],
+        "yaw_deg": 79.9999008,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          13126.5137,
+          3822.01855,
+          18377.623
+        ],
+        "yaw_deg": 79.9999008,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      }
+    },
+    "952": {
+      "bullet-safe": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          15070.7402,
+          4345.57129,
+          20146.6289
+        ],
+        "yaw_deg": 179.248154,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          15070.7402,
+          4345.57129,
+          20146.6289
+        ],
+        "yaw_deg": 179.248154,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      }
+    },
+    "960": {
+      "bullet-safe": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          14894.7051,
+          4374.48975,
+          20447.5918
+        ],
+        "yaw_deg": 178.845581,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          14894.7051,
+          4374.48975,
+          20447.5918
+        ],
+        "yaw_deg": 178.845581,
+        "policy": 1,
+        "next_time": 51327,
+        "current_target_id": 4294967295
+      }
+    },
+    "961": {
+      "bullet-safe": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          8700.08496,
+          3258.50757,
+          20742.8203
+        ],
+        "yaw_deg": 18.0000629,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "actor": "WARG",
+        "script_id": 12554,
+        "symbol_id": 12554,
+        "position_cm": [
+          8700.08496,
+          3258.50757,
+          20742.8203
+        ],
+        "yaw_deg": 18.0000629,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      }
+    }
+  },
+  "first_captured_field_differences": {
+    "723": {
+      "step": 1077,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          14533.417,
+          4088.01831,
+          18964.4961
+        ],
+        "yaw_deg": 94.0800018,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          14534.1064,
+          4088.01831,
+          18964.2734
+        ],
+        "yaw_deg": 90,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    },
+    "724": {
+      "step": 1097,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          14611.0244,
+          4012.37402,
+          18746.5449
+        ],
+        "yaw_deg": 93.959938,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          14611.0078,
+          4012.37402,
+          18746.543
+        ],
+        "yaw_deg": 89.999939,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    },
+    "947": {
+      "step": 1070,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          12991.8301,
+          3739.20557,
+          18659.1328
+        ],
+        "yaw_deg": 90.9407883,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          12991.4873,
+          3739.20557,
+          18658.4727
+        ],
+        "yaw_deg": 90,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    },
+    "948": {
+      "step": 1074,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          13127.0527,
+          3822.01855,
+          18377.9863
+        ],
+        "yaw_deg": 70.1829071,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          13126.4863,
+          3822.01855,
+          18377.4629
+        ],
+        "yaw_deg": 79.9999008,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    },
+    "952": {
+      "step": 1097,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          15070.2412,
+          4345.57129,
+          20146.6348
+        ],
+        "yaw_deg": 171.328156,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          15070.2412,
+          4345.57129,
+          20146.6289
+        ],
+        "yaw_deg": 179.248154,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    },
+    "960": {
+      "step": 1096,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          14894.165,
+          4374.48975,
+          20447.5957
+        ],
+        "yaw_deg": 186.765579,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          14894.165,
+          4374.48975,
+          20447.5996
+        ],
+        "yaw_deg": 178.845581,
+        "policy": 1,
+        "next_time": 52327,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    },
+    "961": {
+      "step": 1069,
+      "phase": "actor_tick_after",
+      "original": {
+        "position_cm": [
+          8700.12695,
+          3258.50757,
+          20742.8281
+        ],
+        "yaw_deg": 25.920063,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          8700.125,
+          3258.50757,
+          20742.832
+        ],
+        "yaw_deg": 18.0000629,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      },
+      "earlier_same_captured_fields": true,
+      "controller_private_state_captured": false,
+      "same_captured_pre_tick_fields": true
+    }
+  },
+  "already_different_at_window_start": [
+    {
+      "world_id": 718,
+      "actor": "MOLERAT",
+      "original": {
+        "position_cm": [
+          17483.2051,
+          2709.58545,
+          17180.1699
+        ],
+        "yaw_deg": -151.849319,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          17482.7988,
+          2719.4248,
+          17242.3262
+        ],
+        "yaw_deg": 91.4984512,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      }
+    },
+    {
+      "world_id": 719,
+      "actor": "MOLERAT",
+      "original": {
+        "position_cm": [
+          17461.9844,
+          2733.70435,
+          17325.2324
+        ],
+        "yaw_deg": -11.2529478,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      },
+      "jolt": {
+        "position_cm": [
+          17381.5723,
+          2729.89453,
+          17273.3555
+        ],
+        "yaw_deg": -48.3400536,
+        "policy": 2,
+        "next_time": 15861,
+        "current_target_id": 4294967295
+      }
+    }
+  ],
+  "periodic_entry_steps": {
+    "bullet-safe": {
+      "723": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "724": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "947": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "948": [
+        1067,
+        1097,
+        1127,
+        1129,
+        1159
+      ],
+      "952": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "960": [
+        1067,
+        1097,
+        1127,
+        1157
+      ]
+    },
+    "jolt": {
+      "723": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "724": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "947": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "948": [
+        1067,
+        1097,
+        1127,
+        1157
+      ],
+      "952": [
+        1067,
+        1097,
+        1127,
+        1157,
+        1159
+      ],
+      "960": [
+        1067,
+        1097,
+        1127,
+        1157
+      ]
+    }
+  },
+  "selected_causal_records": {
+    "bullet-safe": {
+      "warg948_1127": {
+        "periodic_enter": [
+          {
+            "seq": 12553,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "periodic_enter",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 42,
+            "deadline_before": 53327,
+            "interval_ms": 1000,
+            "cached_enemy_id": 4294967295,
+            "external_control": false
+          }
+        ],
+        "sense_range_gate": [
+          {
+            "seq": 12562,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "sense_range_gate",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 42,
+            "point_cm": [
+              14537.2754,
+              4140.48584,
+              18961.5391
+            ],
+            "quad_distance_cm2": 2108982.25,
+            "range_cm": 1500,
+            "free_los": true,
+            "is_noisy": false,
+            "see_enabled": true,
+            "within_range": true
+          }
+        ],
+        "los_ray_result": [
+          {
+            "seq": 12565,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "los_ray_result",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 42,
+            "from_cm": [
+              13211.29,
+              3893.32861,
+              18610.3125
+            ],
+            "to_cm": [
+              14537.2754,
+              4140.48584,
+              18961.5391
+            ],
+            "free_los": true,
+            "hit": false,
+            "fraction": 1,
+            "point_cm": [
+              14537.2754,
+              "-inf",
+              18961.5391
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "material": 0
+          },
+          {
+            "seq": 12583,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "los_ray_result",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "see_npc",
+            "context_depth": 3,
+            "context_call": 42,
+            "from_cm": [
+              13211.29,
+              3893.32861,
+              18610.3125
+            ],
+            "to_cm": [
+              14537.2754,
+              4153.84375,
+              18961.5391
+            ],
+            "free_los": true,
+            "hit": false,
+            "fraction": 1,
+            "point_cm": [
+              14537.2754,
+              "-inf",
+              18961.5391
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "material": 0
+          }
+        ],
+        "periodic_selected_enemy": [
+          {
+            "seq": 12577,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "periodic_selected_enemy",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 42,
+            "selected_enemy_id": 723,
+            "assess_enemy_enabled": true
+          }
+        ],
+        "dispatch_result": [
+          {
+            "seq": 12580,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "dispatch_result",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "perception_dispatch",
+            "context_depth": 2,
+            "context_call": 42,
+            "gate": "native_callback",
+            "perception": 2,
+            "result": true,
+            "callback_dispatched": true
+          }
+        ],
+        "current_target_set": [
+          {
+            "seq": 12584,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "current_target_set",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 723,
+            "current_target": "MOLERAT",
+            "target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "perception_dispatch",
+            "context_depth": 2,
+            "context_call": 42,
+            "previous_target_id": 4294967295,
+            "assigned_target_id": 723
+          }
+        ],
+        "periodic_result": [
+          {
+            "seq": 12585,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "periodic_result",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13175.3135,
+              3823.14526,
+              18517.6992
+            ],
+            "yaw_deg": 69.5281143,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 723,
+            "current_target": "MOLERAT",
+            "target_cm": [
+              14537.2754,
+              4086.81372,
+              18961.5391
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 42,
+            "gate": "normal",
+            "result": true,
+            "sensed_player": 0,
+            "cached_enemy_id": 723,
+            "interval_ms": 1000
+          }
+        ]
+      },
+      "warg952_1157": {
+        "periodic_enter": [
+          {
+            "seq": 18058,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "periodic_enter",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15000.8711,
+              4361.85986,
+              20281.6543
+            ],
+            "yaw_deg": 115.946022,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 52,
+            "deadline_before": 54327,
+            "interval_ms": 1000,
+            "cached_enemy_id": 723,
+            "external_control": false
+          }
+        ],
+        "sense_range_gate": [
+          {
+            "seq": 18063,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "sense_range_gate",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15000.8711,
+              4361.85986,
+              20281.6543
+            ],
+            "yaw_deg": 115.946022,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14511.793,
+              4072.53491,
+              18902.6152
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 52,
+            "point_cm": [
+              14511.793,
+              4126.20703,
+              18902.6152
+            ],
+            "quad_distance_cm2": 2239634,
+            "range_cm": 1500,
+            "free_los": true,
+            "is_noisy": false,
+            "see_enabled": true,
+            "within_range": true
+          }
+        ],
+        "los_ray_result": [
+          {
+            "seq": 18066,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "los_ray_result",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15000.8711,
+              4361.85986,
+              20281.6543
+            ],
+            "yaw_deg": 115.946022,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14511.793,
+              4072.53491,
+              18902.6152
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 52,
+            "from_cm": [
+              14957.3975,
+              4437.82422,
+              20371.3887
+            ],
+            "to_cm": [
+              14511.793,
+              4126.20703,
+              18902.6152
+            ],
+            "free_los": true,
+            "hit": true,
+            "fraction": 0.611904085,
+            "point_cm": [
+              14684.7285,
+              4247.14453,
+              19472.6406
+            ],
+            "normal": [
+              0.0740084872,
+              0.357547969,
+              0.930957735
+            ],
+            "material": 3
+          },
+          {
+            "seq": 18088,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "los_ray_result",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15000.8711,
+              4361.85986,
+              20281.6543
+            ],
+            "yaw_deg": 115.946022,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14511.793,
+              4072.53491,
+              18902.6152
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "see_npc",
+            "context_depth": 3,
+            "context_call": 52,
+            "from_cm": [
+              14957.3975,
+              4437.82422,
+              20371.3887
+            ],
+            "to_cm": [
+              14512.6924,
+              4136.85059,
+              18903.9609
+            ],
+            "free_los": true,
+            "hit": true,
+            "fraction": 0.613986254,
+            "point_cm": [
+              14684.3535,
+              4253.03027,
+              19470.4082
+            ],
+            "normal": [
+              0.0740084872,
+              0.357547969,
+              0.930957735
+            ],
+            "material": 3
+          }
+        ],
+        "current_target_set": [],
+        "periodic_result": [
+          {
+            "seq": 18090,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "periodic_result",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15000.8711,
+              4361.85986,
+              20281.6543
+            ],
+            "yaw_deg": 115.946022,
+            "policy": 1,
+            "next_time": 55327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 52,
+            "gate": "normal",
+            "result": true,
+            "sensed_player": 0,
+            "cached_enemy_id": 723,
+            "interval_ms": 1000
+          }
+        ]
+      }
+    },
+    "jolt": {
+      "warg948_1127": {
+        "periodic_enter": [
+          {
+            "seq": 12481,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "periodic_enter",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13126.5215,
+              3822.01855,
+              18377.6484
+            ],
+            "yaw_deg": 79.9999008,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 42,
+            "deadline_before": 53327,
+            "interval_ms": 1000,
+            "cached_enemy_id": 4294967295,
+            "external_control": false
+          }
+        ],
+        "sense_range_gate": [
+          {
+            "seq": 12490,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "sense_range_gate",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13126.5215,
+              3822.01855,
+              18377.6484
+            ],
+            "yaw_deg": 79.9999008,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14557.459,
+              4084.59692,
+              18969.123
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 42,
+            "point_cm": [
+              14557.459,
+              4138.26904,
+              18969.123
+            ],
+            "quad_distance_cm2": 2453953,
+            "range_cm": 1500,
+            "free_los": true,
+            "is_noisy": false,
+            "see_enabled": true,
+            "within_range": false
+          },
+          {
+            "seq": 12494,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "sense_range_gate",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13126.5215,
+              3822.01855,
+              18377.6484
+            ],
+            "yaw_deg": 79.9999008,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 724,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14610.9961,
+              4011.04883,
+              18744.8496
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 42,
+            "point_cm": [
+              14610.9961,
+              4064.7207,
+              18744.8496
+            ],
+            "quad_distance_cm2": 2365466.25,
+            "range_cm": 1500,
+            "free_los": true,
+            "is_noisy": false,
+            "see_enabled": true,
+            "within_range": false
+          }
+        ],
+        "los_ray_result": [],
+        "periodic_selected_enemy": [
+          {
+            "seq": 12503,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "periodic_selected_enemy",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13126.5215,
+              3822.01855,
+              18377.6484
+            ],
+            "yaw_deg": 79.9999008,
+            "policy": 1,
+            "next_time": 53327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 42,
+            "selected_enemy_id": 4294967295,
+            "assess_enemy_enabled": true
+          }
+        ],
+        "dispatch_result": [],
+        "current_target_set": [],
+        "periodic_result": [
+          {
+            "seq": 12504,
+            "step": 1127,
+            "game_ms": 53327,
+            "phase": "periodic_result",
+            "world_id": 948,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              13126.5215,
+              3822.01855,
+              18377.6484
+            ],
+            "yaw_deg": 79.9999008,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13680.6748,
+              3998.86328,
+              18096.4082
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 948,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 42,
+            "gate": "normal",
+            "result": false,
+            "sensed_player": 0,
+            "cached_enemy_id": 4294967295,
+            "interval_ms": 1000
+          }
+        ]
+      },
+      "warg952_1157": {
+        "periodic_enter": [
+          {
+            "seq": 18025,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "periodic_enter",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15089.4697,
+              4350.16943,
+              20173.4902
+            ],
+            "yaw_deg": 54.2980537,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 53,
+            "deadline_before": 54327,
+            "interval_ms": 1000,
+            "cached_enemy_id": 723,
+            "external_control": false
+          }
+        ],
+        "sense_range_gate": [
+          {
+            "seq": 18030,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "sense_range_gate",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15089.4697,
+              4350.16943,
+              20173.4902
+            ],
+            "yaw_deg": 54.2980537,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14556.9414,
+              4084.59692,
+              18968.5488
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 53,
+            "point_cm": [
+              14556.9414,
+              4138.26904,
+              18968.5488
+            ],
+            "quad_distance_cm2": 1819798.5,
+            "range_cm": 1500,
+            "free_los": true,
+            "is_noisy": false,
+            "see_enabled": true,
+            "within_range": true
+          }
+        ],
+        "los_ray_result": [
+          {
+            "seq": 18033,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "los_ray_result",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15089.4697,
+              4350.16943,
+              20173.4902
+            ],
+            "yaw_deg": 54.2980537,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14556.9414,
+              4084.59692,
+              18968.5488
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "sense_npc",
+            "context_depth": 3,
+            "context_call": 53,
+            "from_cm": [
+              15148.4385,
+              4432.23926,
+              20254.0254
+            ],
+            "to_cm": [
+              14556.9414,
+              4138.26904,
+              18968.5488
+            ],
+            "free_los": true,
+            "hit": false,
+            "fraction": 1,
+            "point_cm": [
+              14556.9414,
+              "-inf",
+              18968.5488
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "material": 0
+          },
+          {
+            "seq": 18055,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "los_ray_result",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15089.4697,
+              4350.16943,
+              20173.4902
+            ],
+            "yaw_deg": 54.2980537,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 4294967295,
+            "current_target": "none",
+            "target_cm": [
+              0,
+              0,
+              0
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14556.9414,
+              4084.59692,
+              18968.5488
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "see_npc",
+            "context_depth": 3,
+            "context_call": 53,
+            "from_cm": [
+              15148.4385,
+              4432.23926,
+              20254.0254
+            ],
+            "to_cm": [
+              14557.7568,
+              4148.91602,
+              18968.1699
+            ],
+            "free_los": true,
+            "hit": false,
+            "fraction": 1,
+            "point_cm": [
+              14557.7568,
+              "-inf",
+              18968.1699
+            ],
+            "normal": [
+              0,
+              0,
+              0
+            ],
+            "material": 0
+          }
+        ],
+        "current_target_set": [
+          {
+            "seq": 18056,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "current_target_set",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15089.4697,
+              4350.16943,
+              20173.4902
+            ],
+            "yaw_deg": 54.2980537,
+            "policy": 1,
+            "next_time": 54327,
+            "current_target_id": 723,
+            "current_target": "MOLERAT",
+            "target_cm": [
+              14556.9414,
+              4084.59692,
+              18968.5488
+            ],
+            "query_target_id": 723,
+            "query_target": "MOLERAT",
+            "query_target_cm": [
+              14556.9414,
+              4084.59692,
+              18968.5488
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "perception_dispatch",
+            "context_depth": 2,
+            "context_call": 53,
+            "previous_target_id": 4294967295,
+            "assigned_target_id": 723
+          }
+        ],
+        "periodic_result": [
+          {
+            "seq": 18057,
+            "step": 1157,
+            "game_ms": 54327,
+            "phase": "periodic_result",
+            "world_id": 952,
+            "script_id": 12554,
+            "symbol_id": 12554,
+            "actor": "WARG",
+            "position_cm": [
+              15089.4697,
+              4350.16943,
+              20173.4902
+            ],
+            "yaw_deg": 54.2980537,
+            "policy": 1,
+            "next_time": 55327,
+            "current_target_id": 723,
+            "current_target": "MOLERAT",
+            "target_cm": [
+              14556.9414,
+              4084.59692,
+              18968.5488
+            ],
+            "query_target_id": 0,
+            "query_target": "WOLF",
+            "query_target_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "player_id": 0,
+            "player_cm": [
+              13554.8486,
+              3949.32324,
+              17886.0938
+            ],
+            "senses": 7,
+            "senses_range": 1500,
+            "context_root": "periodic_perception",
+            "context_root_actor_id": 952,
+            "context_label": "periodic_perception",
+            "context_depth": 1,
+            "context_call": 53,
+            "gate": "normal",
+            "result": true,
+            "sensed_player": 0,
+            "cached_enemy_id": 723,
+            "interval_ms": 1000
+          }
+        ]
+      }
+    }
+  },
+  "limits": [
+    "Private AI queue/go-to/animation/controller inputs were not captured, so matching pre-tick visible fields do not prove equal movement-controller inputs.",
+    "Two other observed actors already differ at1060; this bounded window does not establish the globally first hidden-state divergence.",
+    "The origin of the initial movement difference remains unproved; no production or comparator change is justified from different-input perception results."
+  ],
+  "inputs": {
+    "data/physics/stage1/wolf-v12-prefix/quad-wolf/bullet-safe/stable-trace/wolf-trace.jsonl": {
+      "sha256": "37245d778096bd8c2039e9a5822fac71cc5e83ce765648a9cb2cdf46b340a5c0"
+    },
+    "data/physics/stage1/wolf-v12-prefix/quad-wolf/jolt/stable-trace/wolf-trace.jsonl": {
+      "sha256": "34c791bbc6d23affc4142037cdc4056e71da2ec68128e5b2ab52e6b1b7749934"
+    },
+    "data/physics/stage1/wolf-v12-prefix/quad-wolf/bullet-safe/stable-trace/summary.json": {
+      "sha256": "e473dd2096077c9623fa6058996e7c6b1d966268b451c42c861ab1f824991776"
+    },
+    "data/physics/stage1/wolf-v12-prefix/quad-wolf/jolt/stable-trace/summary.json": {
+      "sha256": "cc1755e199cce4e9138dcc450bf40713f512322a43f69ddc0f6383bb30a4d6d2"
+    },
+    "data/physics/stage1/wolf-v12-prefix/manifest.json": {
+      "sha256": "994d0a2fbee54e059e76d55d169c204df89db2ce3f3814733d351ffd12d2b694"
+    },
+    "data/physics/stage1/wolf-v12-prefix/wolf-v12-build-manifest.json": {
+      "sha256": "88d976ad31380be2e990dc3987fcea6df3ae52257a3dda58738d037050fe1b1d"
+    }
+  },
+  "parser_provenance": {
+    "path": "data/physics/stage1/wolf-perception-v12-prepared/parse_trace.py",
+    "sha256": "140f14f406307903be0b9521fb91876d24b9203109b9c0eccd54d712ff9f0f93"
+  },
+  "prepared_overlay_provenance": {
+    "path": "reports/physics/2026-10-14-jolt-stage1/wolf-perception-diagnostic-preparation.json",
+    "sha256": "dd3e885f582ca64b69ac8e38b31cffb884f24c679a7df504113eb6c6229c057e"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "scope": "safe_original_numeric_reference",
+  "change": "Only per-Broadphase mutex serializes shared rayTestStk traversals; no diagnostic logging/counters/query/geometry/controller modifications. OriginalV7 archive preserves identical default profile and both headless UI guards.",
+  "baseline_for_performance": "unmodified bullet-headless-v7 reference; this safe reference does not replace the declared timing oracle",
+  "original_archive_sha256": "dd7cd90ca6975864eddd4dfaacac55a127fc14b3f532bb134f20f2a075600522",
+  "source_sha256": "dcf52fa43bb46644f363a7c8f360b5c920fd2b0dd41e818326d30b834ba787a5",
+  "patch_sha256": "9dddfc7a20c83f3897b31db6a2367ea86715fda763b9ff54b343a3b143b6a337",
+  "runner_sha256": "47b9c43cd5d778368e61b35ecb8ccb7a1c0ce98d1d90dc8c79133104d86c0f00",
+  "original_CollisionWorld_source_sha256": "eef988e13238eb8d68232c1198996d66aa717505c18b4eacfbab87749ec08279",
+  "patch": "data/physics/stage1/bullet-safe-reference/ray-stack-mutex.patch",
+  "complete_build_manifest": "data/physics/stage1/bullet-safe-reference/manifest.json"
+}

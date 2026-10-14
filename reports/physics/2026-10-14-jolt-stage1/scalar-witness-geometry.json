@@ -1,0 +1,108 @@
+{
+  "kind": "diagnostic_noasset_scalar_witness",
+  "host": "local Apple ARM64; original Bullet NEON disabled explicitly",
+  "compile_flags": "-std=c++17 -O2 -DNDEBUG -DJPH_CROSS_PLATFORM_DETERMINISTIC -U__ARM_NEON__ -ffp-contract=off -pthread",
+  "scalar_reference_config": "original Bullet with -U__ARM_NEON__ -ffp-contract=off",
+  "scope": "native GJK selected features/loop/support unchanged; guarded scalar witness axis option",
+  "grid": {
+    "cases": 4851,
+    "bullet_hits": 3190,
+    "current_false_positive": 139,
+    "current_false_negative": 0,
+    "candidate_false_positive": 0,
+    "candidate_false_negative": 0
+  },
+  "random": {
+    "cases_per_kind_center": 30000,
+    "centers_m": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        367.166107,
+        44.7955017,
+        -326.922913
+      ],
+      [
+        10000,
+        1000,
+        -10000
+      ]
+    ],
+    "seed": 73013,
+    "same_seed_per_center": true,
+    "small_capsule_radius_halfheight": [
+      0.08,
+      0.3
+    ],
+    "wide_capsule_radius_halfheight": [
+      0.0817193016,
+      0.231234491
+    ],
+    "origin_367m_candidate_mismatches": 0,
+    "10km_small_candidate_mismatches": 1,
+    "10km_wide_candidate_mismatches": 1
+  },
+  "limitation": "Local diagnostic proof; universal Bullet parity is not claimed. Actual Linux original/current-native q44/q45 mismatch separately confirmed before this prototype.",
+  "files": {
+    "prototype_frozen": {
+      "path": "/tmp/gothic-physics-v11-scalar-witness/OpenGothic/common/physics/gjkclosestpoint-scalar-witness-prototype.h",
+      "sha256": "1f8dde34f58e22f8b3f3ccdabfd8bbc942a1aa46edc3f86c89fedaa252149cd7"
+    },
+    "prototype_compiled": {
+      "path": "/tmp/gothic-jolt-scalar-witness-guarded/Jolt/Geometry/GJKClosestPointScalarWitness.h",
+      "sha256": "1f8dde34f58e22f8b3f3ccdabfd8bbc942a1aa46edc3f86c89fedaa252149cd7"
+    },
+    "bullet_collision": {
+      "path": "/tmp/gothic-contact-gap-bullet-scalar-build/src/BulletCollision/libBulletCollision.a",
+      "sha256": "fafe63e6b13a3a24b3cfb87427b27442537181b19a0af88018c32ba6ae403058"
+    },
+    "bullet_math": {
+      "path": "/tmp/gothic-contact-gap-bullet-scalar-build/src/LinearMath/libLinearMath.a",
+      "sha256": "5199cb9a461c561e71ad247d276b622fd3fff74d0841d050b9d535ab4262cc38"
+    },
+    "jolt": {
+      "path": "/Users/kaifat/.codex/worktrees/1618/gothic/OpenGothic/build/lib/JoltPhysics/Build/libJolt.a",
+      "sha256": "062f78262f4697d78367b9a52b1f87e15629b3e4db4c5d3d7cead6e8d620451b"
+    },
+    "grid_source": {
+      "path": "/tmp/gothic-capsule-gjk-witness-grid.cpp",
+      "sha256": "5f5e8502785a48b543bf985c56608e6a61066beb5a2b34d9d1a018996c7eb077"
+    },
+    "grid_binary": {
+      "path": "/tmp/gothic-capsule-gjk-witness-guarded-grid",
+      "sha256": "edef888716600ac94a9e5ece025640d12d22dcfcd48afcf3d6872fb2b7739ba4"
+    },
+    "grid_log": {
+      "path": "/tmp/gothic-capsule-gjk-witness-guarded-grid.log",
+      "sha256": "246074cc723a8f5a98a9799e32a9c69b2eddf88a5b2973706247370e54ba11a0"
+    },
+    "broad_source": {
+      "path": "/tmp/gothic-capsule-gjk-witness-broad.cpp",
+      "sha256": "aa3734a32f9b8eb257b0f2646a7f70093238152fd5b68fc19203cc8bd66d0200"
+    },
+    "broad_binary": {
+      "path": "/tmp/gothic-capsule-gjk-witness-guarded-broad",
+      "sha256": "dd772be8291b95a55d00e1353704ed6a5c487b460f00730a760e30a69e24fe36"
+    },
+    "broad_log": {
+      "path": "/tmp/gothic-capsule-gjk-witness-guarded-broad.log",
+      "sha256": "3bcb99f9015dc887f731e7800d87728a81bb445fcaac41ab771e9baea3a9a8a9"
+    },
+    "wide_source": {
+      "path": "/tmp/gothic-capsule-gjk-witness-wide.cpp",
+      "sha256": "3e8f85eb148663354c3a23c7d9f0248f024f085de8f2e742bd60b3d052797de9"
+    },
+    "wide_binary": {
+      "path": "/tmp/gothic-capsule-gjk-witness-guarded-wide",
+      "sha256": "7d0d33bad844ce479dcc95264100eaa093f9eb2a99ac61451311a02503c12e57"
+    },
+    "wide_log": {
+      "path": "/tmp/gothic-capsule-gjk-witness-guarded-wide.log",
+      "sha256": "ee1a86f2a756792df09fdfd3ca0437fc1a99bbb44229fe499e67824c481fa141"
+    }
+  },
+  "prototype_revision": "Guarded faceweights with native GetClosestPointsSimplex size_t warning correction; rebuilt and rerun all three local fixtures."
+}

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 
 project(OpenGothic LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
@@ -141,39 +141,45 @@ add_definitions(-DMINIZ_NO_STDIO)
 add_library(miniz STATIC EXCLUDE_FROM_ALL "lib/miniz/miniz.h" "lib/miniz/miniz.c")
 target_link_libraries(${PROJECT_NAME} miniz)
 
-# bullet physics
-set(BULLET2_MULTITHREADING       ON  CACHE INTERNAL "")
-set(USE_MSVC_RUNTIME_LIBRARY_DLL ON  CACHE INTERNAL "")
-set(USE_GRAPHICAL_BENCHMARK      OFF CACHE INTERNAL "")
-set(BUILD_BULLET2_DEMOS          OFF CACHE INTERNAL "") # No samples
-set(BUILD_OPENGL3_DEMOS          OFF CACHE INTERNAL "") # No samples
-set(BUILD_UNIT_TESTS             OFF CACHE INTERNAL "") # No tests
-set(BUILD_CPU_DEMOS              OFF CACHE INTERNAL "") # No samples
-set(BUILD_EXTRAS                 OFF CACHE INTERNAL "") # No bugs
-set(GLFW_BUILD_EXAMPLES          OFF CACHE INTERNAL "")
-set(GLFW_BUILD_TESTS             OFF CACHE INTERNAL "")
-set(GLFW_BUILD_DOCS              OFF CACHE INTERNAL "")
-set(BUILD_BULLET3                OFF CACHE INTERNAL "") # Can use bullet2, bullet3 wants to build examples...
-add_subdirectory(lib/bullet3)
-if(NOT MSVC)
-  target_compile_options(BulletDynamics         PRIVATE -Wno-argument-outside-range)
-  target_compile_options(BulletInverseDynamics  PRIVATE -Wno-argument-outside-range)
-  target_compile_options(BulletSoftBody         PRIVATE -Wno-argument-outside-range)
-  target_compile_options(Bullet3Common          PRIVATE -Wno-argument-outside-range)
-  target_compile_options(BulletCollision        PRIVATE -Wno-argument-outside-range)
-  target_compile_options(LinearMath             PRIVATE -Wno-argument-outside-range)
-endif()
-if(NOT MSVC AND NOT APPLE AND NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
-  target_compile_options(BulletDynamics         PRIVATE -Wno-stringop-overflow)
-  target_compile_options(BulletInverseDynamics  PRIVATE -Wno-stringop-overflow)
-  target_compile_options(BulletSoftBody         PRIVATE -Wno-stringop-overflow)
-  target_compile_options(Bullet3Common          PRIVATE -Wno-stringop-overflow)
-  target_compile_options(BulletCollision        PRIVATE -Wno-stringop-overflow)
-  target_compile_options(LinearMath             PRIVATE -Wno-stringop-overflow)
-endif()
+# Jolt Physics: single precision, static library, portable instruction sets.
+set(JPH_BUILD_SHARED_LIBS                OFF CACHE INTERNAL "")
+set(DOUBLE_PRECISION                     OFF CACHE INTERNAL "")
+set(CROSS_PLATFORM_DETERMINISTIC          ON CACHE INTERNAL "")
+set(OVERRIDE_CXX_FLAGS                    OFF CACHE INTERNAL "")
+set(INTERPROCEDURAL_OPTIMIZATION          OFF CACHE INTERNAL "")
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY       OFF CACHE INTERNAL "")
+set(ENABLE_ALL_WARNINGS                   OFF CACHE INTERNAL "")
+set(ENABLE_INSTALL                       OFF CACHE INTERNAL "")
+set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE   OFF CACHE INTERNAL "")
+set(DEBUG_RENDERER_IN_DISTRIBUTION        OFF CACHE INTERNAL "")
+set(PROFILER_IN_DEBUG_AND_RELEASE         OFF CACHE INTERNAL "")
+set(PROFILER_IN_DISTRIBUTION              OFF CACHE INTERNAL "")
+set(ENABLE_OBJECT_STREAM                 OFF CACHE INTERNAL "")
+set(JPH_USE_DX12                         OFF CACHE INTERNAL "")
+set(JPH_USE_VK                           OFF CACHE INTERNAL "")
+set(JPH_USE_MTL                          OFF CACHE INTERNAL "")
+set(JPH_USE_CPU_COMPUTE                  OFF CACHE INTERNAL "")
+foreach(JOLT_X86_FEATURE SSE4_1 SSE4_2 AVX AVX2 AVX512 LZCNT TZCNT F16C FMADD)
+  set(USE_${JOLT_X86_FEATURE} OFF CACHE INTERNAL "")
+endforeach()
+add_subdirectory(lib/JoltPhysics/Build)
 
-include_directories(lib/bullet3/src)
-target_link_libraries(${PROJECT_NAME} BulletDynamics BulletCollision LinearMath)
+# Jolt's inline headers inherit the same floating point behavior as its library.
+# Treat the upstream headers as system headers under the engine's -Werror policy.
+get_target_property(JOLT_INCLUDE_DIRECTORIES Jolt INTERFACE_INCLUDE_DIRECTORIES)
+set_property(TARGET Jolt PROPERTY INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+  "${JOLT_INCLUDE_DIRECTORIES}")
+if(XCODE)
+  # Upstream adds SSE4.2 for Xcode unconditionally; retain the portable x86 baseline.
+  set_property(TARGET Jolt PROPERTY XCODE_ATTRIBUTE_OTHER_CPLUSPLUSFLAGS[arch=x86_64]
+    "$(inherited) -msse2")
+endif()
+if(MSVC)
+  target_compile_options(Jolt PUBLIC /fp:precise)
+else()
+  target_compile_options(Jolt PUBLIC -ffp-contract=off)
+endif()
+target_link_libraries(${PROJECT_NAME} Jolt)
 
 # script for launching in binary directory
 if(WIN32)
@@ -218,6 +224,16 @@ target_link_libraries(Gothic2Notr PRIVATE AiBridge)
 if(UNIX AND NOT APPLE AND NOT ANDROID)
   add_executable(gothic-body-runner game/bodyrunner.cpp)
   target_link_libraries(gothic-body-runner PRIVATE OpenGothic AiBridge)
+endif()
+
+# Asset-free backend contracts; run explicitly with --target check-physics.
+if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-physics-contract EXCLUDE_FROM_ALL tests/physics_contract.cpp)
+  target_link_libraries(gothic-physics-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-physics
+    COMMAND $<TARGET_FILE:gothic-physics-contract>
+    DEPENDS gothic-physics-contract
+    USES_TERMINAL)
 endif()
 
 # editor

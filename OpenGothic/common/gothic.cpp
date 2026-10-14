@@ -1047,6 +1047,9 @@ bool Gothic::playvideoex(std::string_view name, bool, bool) {
   }
 
 bool Gothic::printscreen(std::string_view msg, int posx, int posy, std::string_view font, int timesec) {
+  // Script notifications still return normally in the CPU runner, which has no fonts or UI.
+  if(Resources::isHeadless())
+    return false;
   onPrintScreen(msg,posx,posy,timesec,Resources::font(font, Resources::FontType::Normal, 1));
   return false;
   }

@@ -1,0 +1,403 @@
+{
+  "schema_version": 1,
+  "kind": "closest_terrain_source_normal_compatibility",
+  "date_moscow": "2026-10-14",
+  "candidate": "jolt-final-v13",
+  "status": "integrated_local_build_and_contracts_passed",
+  "full_migration_acceptance": false,
+  "proof_scope": "Archived actual v12 landscape ray inputs; no new game or remote run for arithmetic proof.",
+  "observed": {
+    "face_count": 107,
+    "unique_source_triangles": 12,
+    "landscape_pairs": 107,
+    "same_raw_vertices_bits": 107,
+    "same_ray_input_bits": 51,
+    "source_exact_to_bullet": 107,
+    "decoded_exact_to_bullet": 0,
+    "maximum_decoded_normal_error": 9.977514671893382e-06,
+    "source_fraction_exact_to_public": 107,
+    "ground_count": 194,
+    "ground_source_normal_matches": 107,
+    "ground_decoded_exact_to_bullet": 87
+  },
+  "exact_normal_components": 321,
+  "arithmetic": "Binary32 subtract/cross; scalar left-associated ((x*x+y*y)+z*z); sqrtf; separately rounded 1.f/length; component reciprocal multiplication; source winding retained.",
+  "independent_verifier": {
+    "rows": 107,
+    "reciprocal_mismatches": 0,
+    "direct_division_mismatches": 37,
+    "host": "Apple ARM64",
+    "compiler": "Apple clang21.0.0",
+    "flags": "-std=c++20 -O2 -ffp-contract=off",
+    "direct_division_different_source_faces": 6
+  },
+  "guards": [
+    "source triangle exists",
+    "all source vertices finite",
+    "scalar lengthSq finite and >0",
+    "normalized output finite",
+    "unchanged output on rejection",
+    "existing source fraction valid0<f<1"
+  ],
+  "guard_controls": [
+    "coincident",
+    "collinear",
+    "area_underflow",
+    "area_overflow",
+    "infinity",
+    "NaN",
+    "invalid_triangle",
+    "source_fraction_parallel",
+    "source_fraction_endpoint",
+    "source_fraction_backface",
+    "source_fraction_outside"
+  ],
+  "integration": {
+    "query": "closest only (all==nullptr)",
+    "category": "C_Landscape",
+    "body_rotation": "identity",
+    "body_scale": "unit",
+    "triangle": "final selected/resolved original source triangle",
+    "all_hit": "native ordering/fractions/points/normals",
+    "objects": "native query normals; DynamicWorld movement object normals stay zero",
+    "solver": "unchanged"
+  },
+  "maintained_tests": [
+    "testSourceTerrainNormals",
+    "testTerrainRayNormalScope"
+  ],
+  "maintained_actual_fixtures": [
+    {
+      "source_triangle": 243603,
+      "source_vertices": [
+        [
+          88.69860076904297,
+          5.177656173706055,
+          121.8666763305664
+        ],
+        [
+          91.41365814208984,
+          2.3425610065460205,
+          112.21076202392578
+        ],
+        [
+          86.9217529296875,
+          5.546886444091797,
+          119.33853912353516
+        ]
+      ],
+      "source_bits": [
+        "0x3ece733d",
+        "0x3f67077e",
+        "0xbe1b3b85"
+      ]
+    },
+    {
+      "source_triangle": 243690,
+      "source_vertices": [
+        [
+          86.9217529296875,
+          5.546886444091797,
+          119.33853912353516
+        ],
+        [
+          83.56010437011719,
+          7.126079559326172,
+          127.19075012207031
+        ],
+        [
+          88.69860076904297,
+          5.177656173706055,
+          121.8666763305664
+        ]
+      ],
+      "source_bits": [
+        "0x3e95ea55",
+        "0x3f743014",
+        "0xbd882751"
+      ]
+    },
+    {
+      "source_triangle": 243717,
+      "source_vertices": [
+        [
+          83.56010437011719,
+          7.126079559326172,
+          127.19075012207031
+        ],
+        [
+          86.9217529296875,
+          5.546886444091797,
+          119.33853912353516
+        ],
+        [
+          81.04136657714844,
+          7.495310306549072,
+          124.3539047241211
+        ]
+      ],
+      "source_bits": [
+        "0x3e78f42a",
+        "0x3f773e8a",
+        "0xbdb8a232"
+      ]
+    },
+    {
+      "source_triangle": 243511,
+      "source_vertices": [
+        [
+          86.9217529296875,
+          5.546886444091797,
+          119.33853912353516
+        ],
+        [
+          91.41365814208984,
+          2.3425610065460205,
+          112.21076202392578
+        ],
+        [
+          86.24507904052734,
+          5.064957618713379,
+          118.2988052368164
+        ]
+      ],
+      "source_bits": [
+        "0xbc2262c0",
+        "0x3f68e0a7",
+        "0xbed49493"
+      ]
+    },
+    {
+      "source_triangle": 243513,
+      "source_vertices": [
+        [
+          80.36468505859375,
+          7.013380527496338,
+          123.3141860961914
+        ],
+        [
+          86.9217529296875,
+          5.546886444091797,
+          119.33853912353516
+        ],
+        [
+          86.24507904052734,
+          5.064957618713379,
+          118.2988052368164
+        ]
+      ],
+      "source_bits": [
+        "0xbd1a570c",
+        "0x3f6a6f8c",
+        "0xbeccc585"
+      ]
+    },
+    {
+      "source_triangle": 50088,
+      "source_vertices": [
+        [
+          86.24507904052734,
+          3.8840179443359375,
+          118.298828125
+        ],
+        [
+          79.83599853515625,
+          4.358402252197266,
+          123.52847290039062
+        ],
+        [
+          80.36468505859375,
+          5.8324408531188965,
+          123.3141860961914
+        ]
+      ],
+      "source_bits": [
+        "0xbf1f942b",
+        "0x3de37085",
+        "0xbf4625b5"
+      ]
+    },
+    {
+      "source_triangle": 243510,
+      "source_vertices": [
+        [
+          79.83599853515625,
+          4.358402252197266,
+          123.52847290039062
+        ],
+        [
+          86.24507904052734,
+          3.8840179443359375,
+          118.298828125
+        ],
+        [
+          83.16087341308594,
+          3.531229257583618,
+          116.41390991210938
+        ]
+      ],
+      "source_bits": [
+        "0xbd08c995",
+        "0x3f7da809",
+        "0xbe05f250"
+      ]
+    },
+    {
+      "source_triangle": 243512,
+      "source_vertices": [
+        [
+          86.9217529296875,
+          5.546886444091797,
+          119.33853912353516
+        ],
+        [
+          80.36468505859375,
+          7.013380527496338,
+          123.3141860961914
+        ],
+        [
+          81.04136657714844,
+          7.495310306549072,
+          124.3539047241211
+        ]
+      ],
+      "source_bits": [
+        "0xbd1a59e8",
+        "0x3f6a6f6d",
+        "0xbeccc606"
+      ]
+    },
+    {
+      "source_triangle": 243504,
+      "source_vertices": [
+        [
+          79.83599853515625,
+          4.358402252197266,
+          123.52847290039062
+        ],
+        [
+          83.16087341308594,
+          3.531229257583618,
+          116.41390991210938
+        ],
+        [
+          78.01558685302734,
+          3.5571117401123047,
+          116.9742431640625
+        ]
+      ],
+      "source_bits": [
+        "0xbc02ca6a",
+        "0x3f7e2aef",
+        "0xbdf40bde"
+      ]
+    },
+    {
+      "source_triangle": 243502,
+      "source_vertices": [
+        [
+          83.16087341308594,
+          3.531229257583618,
+          116.41390991210938
+        ],
+        [
+          83.48257446289062,
+          3.918980598449707,
+          108.03680419921875
+        ],
+        [
+          78.01558685302734,
+          3.5571117401123047,
+          116.9742431640625
+        ]
+      ],
+      "source_bits": [
+        "0x3c258252",
+        "0x3f7fb563",
+        "0x3d3ef6fe"
+      ]
+    },
+    {
+      "source_triangle": 50059,
+      "source_vertices": [
+        [
+          78.01558685302734,
+          3.5571117401123047,
+          116.9742431640625
+        ],
+        [
+          72.76860809326172,
+          1.267125129699707,
+          120.60808563232422
+        ],
+        [
+          72.76280212402344,
+          4.551147937774658,
+          122.41781616210938
+        ]
+      ],
+      "source_bits": [
+        "0xbf21fc20",
+        "0x3ebee96d",
+        "0xbf2dbd0e"
+      ]
+    },
+    {
+      "source_triangle": 243531,
+      "source_vertices": [
+        [
+          72.76280212402344,
+          4.551147937774658,
+          122.41781616210938
+        ],
+        [
+          79.83599853515625,
+          4.358402252197266,
+          123.52847290039062
+        ],
+        [
+          78.01558685302734,
+          3.5571117401123047,
+          116.9742431640625
+        ]
+      ],
+      "source_bits": [
+        "0x3d44e327",
+        "0x3f7d615a",
+        "0xbe099467"
+      ]
+    }
+  ],
+  "local_build": {
+    "path": "../../../data/physics/stage1/jolt-final-v13/local-validation.json",
+    "exit_code": 0,
+    "targets": [
+      "Gothic2Notr",
+      "Spacer",
+      "check-physics"
+    ],
+    "contract_output": "Physics contracts passed"
+  },
+  "production_source_sha256": {
+    "OpenGothic/common/physics/collisionworld.cpp": "f823c47f2d50b18d649d60a67860a334fd804ec9dacaf89d67e58c1023aaeb5e",
+    "OpenGothic/common/physics/physicvbo.cpp": "0f50ffa108b5d3577d79d6b6d88ceed2b3b7880cb0051732c8ae2b30172b3fca",
+    "OpenGothic/common/physics/physicvbo.h": "e3b8a06b67a2090e861f56852248c5d9622f024e0002154db2214796cb829b63",
+    "OpenGothic/tests/physics_contract.cpp": "9ff641f1855f97d096d283ea68094329c25278767fc1ed990edab50d61f4ec66"
+  },
+  "input_hashes": {
+    "data/physics/stage1/heading-v12-prefix/ik-sweep/bullet-safe/launcher.log": "85ebc86d2faccf5ba338b5a056ef57023d2d8e8e857cab28b3f802443ac09894",
+    "data/physics/stage1/heading-v12-prefix/ik-sweep/jolt/launcher.log": "d4929b6d03af7ba5f86c8028d2640b3898ef816418bbe408164d1a2bb5dfb751"
+  },
+  "raw_proof": {
+    "path": "../../../data/physics/stage1/source-ray-normal-proof/normal-proof.json",
+    "sha256": "14f89868991aab344b5a2c2b77f76efddbe56aee91fd60a05e1d6f7d4ffcc18b"
+  },
+  "limitations": [
+    "No direct NPC fall-cache snapshots in this archive.",
+    "Decoded child vertex positions are not logged.",
+    "Only51 paired ray endpoints remain identical after earlier movement divergence; source normal math is independent of ray inputs.",
+    "Unlogged87 ground records already have equal normals; their original triangle identity is not established.",
+    "No causal claim that this fixes wolf leg yaw or full movement differences.",
+    "Final query/movement/timing/E2E acceptance is evaluated separately."
+  ]
+}

@@ -5,10 +5,18 @@
 #include "physicvbo.h"
 #include "graphics/mesh/skeleton.h"
 
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cassert>
 #include <cstddef>
+#include <list>
 
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "world/objects/item.h"
@@ -19,63 +27,66 @@
 
 const float DynamicWorld::worldHeight = 20000; //TODO: remove
 
-static DynamicWorld::RayLandResult toResult(btCollisionWorld::ClosestRayResultCallback& cb, const Tempest::Vec3& to, zenkit::MaterialGroup matId, const char* sector) {
-  DynamicWorld::RayLandResult ret = {};
-  ret.hasCol      = cb.hasHit();
-  ret.v           = to;
-  ret.hitFraction = cb.m_closestHitFraction;
+namespace {
+constexpr uint32_t landscapeMask = (1u << DynamicWorld::C_Landscape) | (1u << DynamicWorld::C_Object);
+constexpr uint32_t waterMask     = 1u << DynamicWorld::C_Water;
 
-  if(!cb.hasHit()) {
+DynamicWorld::RayLandResult toResult(const CollisionWorld::QueryResult& hit, const Tempest::Vec3& to) {
+  DynamicWorld::RayLandResult ret = {};
+  ret.hasCol      = hit.hasHit;
+  ret.v           = to;
+  ret.hitFraction = hit.fraction;
+
+  if(!hit.hasHit) {
     ret.v.y = -std::numeric_limits<float>::infinity();
     return ret;
     }
-  if(cb.m_collisionObject==nullptr) {
-    ret.v = CollisionWorld::toCentimeters(cb.m_hitPointWorld);
-    return ret;
-    }
 
-  const auto colCat = DynamicWorld::Category(cb.m_collisionObject->getUserIndex());
-  if(colCat==DynamicWorld::C_Landscape) {
-    ret.n.x = cb.m_hitNormalWorld.x();
-    ret.n.y = cb.m_hitNormalWorld.y();
-    ret.n.z = cb.m_hitNormalWorld.z();
-    }
-  else if(colCat==DynamicWorld::C_Object) {
-    // ignore normal, for sake of sliding
-    }
-  ret.v      = CollisionWorld::toCentimeters(cb.m_hitPointWorld);
-  ret.mat    = matId;
-  ret.sector = sector;
-  if(cb.m_collisionObject->getUserIndex2()==DynamicWorld::P_Editor) {
-    ret.uptr = cb.m_collisionObject->getUserPointer();
-    }
-  else if(colCat==DynamicWorld::C_Object) {
-    ret.vob = reinterpret_cast<Interactive*>(cb.m_collisionObject->getUserPointer());
-    }
+  ret.v      = hit.point;
+  ret.mat    = hit.material;
+  ret.sector = hit.sector;
+  if(hit.body==nullptr)
+    return ret;
+
+  if(hit.body->category()==DynamicWorld::C_Landscape)
+    ret.n = hit.normal;
+  // Object normals stay zero: the movement code relies on this for sliding.
+  if(hit.body->ptrType()==DynamicWorld::P_Editor)
+    ret.uptr = hit.body->payload();
+  else if(hit.body->category()==DynamicWorld::C_Object)
+    ret.vob = reinterpret_cast<Interactive*>(hit.body->payload());
   return ret;
   }
+}
 
-struct DynamicWorld::HumShape:btCapsuleShape {
-  //NOTE: total height is height+2*radius
-  HumShape(btScalar radius, btScalar height):btCapsuleShape(CollisionWorld::toMeters(radius),
-                                                            CollisionWorld::toMeters(height)) {}
-
-  // "human" object mush have identyty scale/rotation matrix. Only translation allowed.
-  void getAabb(const btTransform& t, btVector3& aabbMin, btVector3& aabbMax) const override {
-    const btScalar rad = getRadius();
-    btVector3      extent(rad,rad,rad);
-    extent[m_upAxis]  = getHalfHeight() + rad;
-    btVector3  center = t.getOrigin();
-
-    aabbMin = center - extent;
-    aabbMax = center + extent;
-    }
+struct DynamicWorld::BodyData {
+  std::unique_ptr<CollisionWorld::CollisionBody> body;
   };
 
-struct DynamicWorld::NpcBody : btRigidBody {
-  NpcBody(btCollisionShape* shape):btRigidBody(0,nullptr,shape){}
-  ~NpcBody() { delete m_collisionShape; }
+struct DynamicWorld::WorldBodies {
+  std::vector<JPH::Vec3>                        vertices;
+  std::unique_ptr<CollisionWorld::CollisionBody> landscape;
+  std::unique_ptr<CollisionWorld::CollisionBody> water;
+  };
 
+struct DynamicWorld::BBoxShape {
+  std::unique_ptr<CollisionWorld::CollisionBody> body;
+  };
+
+struct DynamicWorld::NpcBody {
+  NpcBody(float radius, float height):radius(radius),cylinderHeight(height) {
+    if(radius>0.f) {
+      if(height>0.f)
+        shape = new JPH::CapsuleShape(CollisionWorld::toMeters(height*0.5f), CollisionWorld::toMeters(radius));
+      else
+        shape = new JPH::SphereShape(CollisionWorld::toMeters(radius));
+      }
+    }
+
+  JPH::ShapeRefC shape;
+  void*         userPointer = nullptr;
+  float         radius      = 0.f;
+  float         cylinderHeight = 0.f;
   Tempest::Vec3 pos      = {};
   float         h        = 0;
   float         gPadd    = 0.f;
@@ -84,7 +95,7 @@ struct DynamicWorld::NpcBody : btRigidBody {
   size_t        frozen   = size_t(-1);
   uint64_t      lastMove = 0;
 
-  // relevant for npc-to-npc collison
+  // Relevant for npc-to-npc collision; Jolt does not move these ellipsoids.
   float         angle    = 0;
   Tempest::Vec3 bboxCen  = {};
   Tempest::Vec3 bboxSize = {};
@@ -111,7 +122,7 @@ struct DynamicWorld::NpcBody : btRigidBody {
     }
 
   Npc* toNpc() {
-    return reinterpret_cast<Npc*>(getUserPointer());
+    return reinterpret_cast<Npc*>(userPointer);
     }
 
   auto groundOffset() const {
@@ -126,12 +137,6 @@ struct DynamicWorld::NpcBody : btRigidBody {
 
   void setPosition(const Tempest::Vec3& p) {
     pos = p;
-
-    auto m = p + Tempest::Vec3(0,groundOffset(),0);
-    btTransform trans;
-    trans.setIdentity();
-    trans.setOrigin(CollisionWorld::toMeters(m));
-    setWorldTransform(trans);
     }
   };
 
@@ -155,17 +160,8 @@ struct DynamicWorld::NpcBodyList final {
     float ghostPadding = height*0.5f;
     float cHeight      = std::max(height-2.f*radius-ghostPadding, 0.f);
 
-    //NOTE: it seem vanilla uses elipsoids at some point, at least for npc-2-npc collisions
-    btCollisionShape* shape = new HumShape(radius, cHeight);
-    //btCollisionShape* shape = new btCylinderShape(CollisionWorld::toMeters(Tempest::Vec3(radius, height*0.5f, radius)));
-    //btCollisionShape* shape = new btCapsuleShape(CollisionWorld::toMeters(radius), CollisionWorld::toMeters(height));
-    NpcBody*          obj   = new NpcBody(shape);
-
-    btTransform trans;
-    trans.setIdentity();
-    obj->setWorldTransform(trans);
-    obj->setUserIndex(C_Ghost);
-    obj->setCollisionFlags(btCollisionObject::CF_NO_CONTACT_RESPONSE);
+    // The custom movement controller queries this capsule without registering a simulated body.
+    NpcBody* obj = new NpcBody(radius, cHeight);
 
     obj->h      = height;
     obj->gPadd  = ghostPadding;
@@ -566,31 +562,18 @@ struct DynamicWorld::BBoxList final {
       }
     }
 
-  BBoxBody* rayTest(const btVector3& s, const btVector3& e) {
-    struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-      using ClosestRayResultCallback::ClosestRayResultCallback;
-      };
-    CallBack callback{s,e};
-
-    btTransform rayFromTrans,rayToTrans;
-    rayFromTrans.setIdentity();
-    rayFromTrans.setOrigin(s);
-    rayToTrans.setIdentity();
-    rayToTrans.setOrigin(e);
-    for(auto& i:body)
-      if(rayTestSingle(rayFromTrans, rayToTrans, *i, callback))
+  BBoxBody* rayTest(const Tempest::Vec3& from, const Tempest::Vec3& to) {
+    for(auto* i:body) {
+      const auto& obj = *i->shape->body;
+      const JPH::RayCast ray(CollisionWorld::toMeters(from-obj.position()), CollisionWorld::toMeters(to-from));
+      JPH::RayCastSettings settings;
+      settings.mTreatConvexAsSolid = false;
+      JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> hits;
+      obj.shape()->CastRay(ray,settings,JPH::SubShapeIDCreator(),hits);
+      if(hits.HadHit())
         return i;
+      }
     return nullptr;
-    }
-
-  bool rayTestSingle(const btTransform& s,
-                     const btTransform& e, BBoxBody& npc,
-                     btCollisionWorld::RayResultCallback& callback){
-    wrld.world->rayTestSingle(s, e, npc.obj,
-                              npc.shape,
-                              npc.obj->getWorldTransform(),
-                              callback);
-    return callback.hasHit();
     }
 
   std::vector<BBoxBody*> body;
@@ -599,6 +582,7 @@ struct DynamicWorld::BBoxList final {
 
 DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   world.reset(new CollisionWorld());
+  bodies.reset(new WorldBodies());
 
   {
   PackedMesh pkg(worldMesh,PackedMesh::PK_Physic);
@@ -606,14 +590,14 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   for(size_t i=0;i<sectors.size();++i)
     sectors[i] = pkg.subMeshes[i].material.name;
 
-  landVbo.resize(pkg.vertices.size());
+  bodies->vertices.resize(pkg.vertices.size());
   for(size_t i=0;i<pkg.vertices.size();++i) {
     auto v = pkg.vertices[i];
-    landVbo[i] = CollisionWorld::toMeters(Tempest::Vec3(v.pos[0],v.pos[1],v.pos[2]));
+    bodies->vertices[i] = CollisionWorld::toMeters(Tempest::Vec3(v.pos[0],v.pos[1],v.pos[2]));
     }
 
-  landMesh .reset(new PhysicVbo(&landVbo));
-  waterMesh.reset(new PhysicVbo(&landVbo));
+  landMesh .reset(new PhysicVbo(&bodies->vertices));
+  waterMesh.reset(new PhysicVbo(&bodies->vertices));
 
   for(size_t i=0;i<pkg.subMeshes.size();++i) {
     auto& sm = pkg.subMeshes[i];
@@ -627,33 +611,24 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
     }
   }
 
-  btVector3 bbox[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-  if(!landMesh->isEmpty()) {
-    Tempest::Matrix4x4 mt;
-    mt.identity();
-    landShape.reset(new btMultimaterialTriangleMeshShape(landMesh.get(),landMesh->useQuantization(),true));
-    landBody = world->addCollisionBody(*landShape,mt,DynamicWorld::materialFriction(zenkit::MaterialGroup::NONE));
-    landBody->setUserIndex(C_Landscape);
-
-    btVector3 b[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-    landBody->getAabb(b[0],b[1]);
-    bbox[0].setMin(b[0]);
-    bbox[1].setMax(b[1]);
+  JPH::Vec3 bbox[2] = {JPH::Vec3::sZero(), JPH::Vec3::sZero()};
+  Tempest::Matrix4x4 mt;
+  mt.identity();
+  if(!landMesh->isEmpty() && landMesh->shape()!=nullptr) {
+    bodies->landscape = world->addCollisionBody(landMesh->shape(),mt,materialFriction(zenkit::MaterialGroup::NONE),
+                                               C_Landscape,false,false,landMesh.get());
+    JPH::Vec3 min, max;
+    bodies->landscape->getAabb(min,max);
+    bbox[0] = JPH::Vec3::sMin(bbox[0],min);
+    bbox[1] = JPH::Vec3::sMax(bbox[1],max);
     }
 
-  if(!waterMesh->isEmpty()) {
-    Tempest::Matrix4x4 mt;
-    mt.identity();
-    waterShape.reset(new btMultimaterialTriangleMeshShape(waterMesh.get(),waterMesh->useQuantization(),true));
-    waterBody = world->addCollisionBody(*waterShape,mt,0);
-    waterBody->setUserIndex(C_Water);
-    waterBody->setCollisionFlags(btCollisionObject::CF_STATIC_OBJECT | btCollisionObject::CF_NO_CONTACT_RESPONSE);
-    // waterBody->setCollisionFlags(btCollisionObject::CO_HF_FLUID);
-
-    btVector3 b[2] = {btVector3(0,0,0), btVector3(0,0,0)};
-    landBody->getAabb(b[0],b[1]);
-    bbox[0].setMin(b[0]);
-    bbox[1].setMax(b[1]);
+  if(!waterMesh->isEmpty() && waterMesh->shape()!=nullptr) {
+    bodies->water = world->addCollisionBody(waterMesh->shape(),mt,0,C_Water,false,true,waterMesh.get());
+    JPH::Vec3 min, max;
+    bodies->water->getAabb(min,max);
+    bbox[0] = JPH::Vec3::sMin(bbox[0],min);
+    bbox[1] = JPH::Vec3::sMax(bbox[1],max);
     }
 
   world->setBBox(bbox[0],bbox[1]);
@@ -690,37 +665,7 @@ DynamicWorld::RayLandResult DynamicWorld::landSweep(const Tempest::Vec3& from, f
   }
 
 DynamicWorld::RayLandResult DynamicWorld::sweep(const Tempest::Vec3& from, const Tempest::Vec3& to, float R) const {
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-    zenkit::MaterialGroup matId  = zenkit::MaterialGroup::UNDEFINED;
-    const char*           sector = nullptr;
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      if(obj->getUserIndex()==C_Landscape || obj->getUserIndex()==C_Object)
-        return ClosestRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      auto shape = rayResult.m_collisionObject->getCollisionShape();
-      if(shape!=nullptr) {
-        auto s  = reinterpret_cast<const btMultimaterialTriangleMeshShape*>(shape);
-        auto mt = reinterpret_cast<const PhysicVbo*>(s->getMeshInterface());
-
-        size_t id = size_t(rayResult.m_localShapeInfo->m_shapePart);
-        matId  = mt->materialId(id);
-        sector = mt->sectorName(id);
-        }
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  CallBack callback{CollisionWorld::toMeters(from), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  world->raySweep(from,to,R,callback);
-  return toResult(callback, to, callback.matId, callback.sector);
+  return toResult(world->raySweep(from,to,R,landscapeMask,false), to);
   }
 
 DynamicWorld::RayWaterResult DynamicWorld::waterRay(const Tempest::Vec3& from, float stepHeight) const {
@@ -729,34 +674,12 @@ DynamicWorld::RayWaterResult DynamicWorld::waterRay(const Tempest::Vec3& from, f
   }
 
 DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const {
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
   const auto sFrom = from-Tempest::Vec3(0,stepHeight,0);
-  CallBack callback{CollisionWorld::toMeters(sFrom), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  if(waterBody!=nullptr) {
-    btTransform rayFromTrans,rayToTrans;
-    rayFromTrans.setIdentity();
-    rayFromTrans.setOrigin(callback.m_rayFromWorld);
-    rayToTrans.setIdentity();
-    rayToTrans.setOrigin(callback.m_rayToWorld);
-    world->rayTestSingle(rayFromTrans, rayToTrans,
-                         waterBody.get(),
-                         waterBody->getCollisionShape(),
-                         waterBody->getWorldTransform(),
-                         callback);
-    }
+  const auto hit = world->rayCast(sFrom,to,waterMask,false);
 
   RayWaterResult ret;
-  if(callback.hasHit()) {
-    const float waterY = callback.m_hitPointWorld.y()*100.f;
+  if(hit.hasHit) {
+    const float waterY = hit.point.y;
     const auto  cave   = ray(from,Tempest::Vec3(to.x,std::max(waterY,from.y),to.z));
     if(cave.hasCol && cave.v.y<waterY) {
       ret.wdepth = -std::numeric_limits<float>::infinity();
@@ -774,70 +697,15 @@ DynamicWorld::RayWaterResult DynamicWorld::implWaterRay(const Tempest::Vec3& fro
   }
 
 DynamicWorld::RayCamResult DynamicWorld::cameraRay(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
-  struct CallBack:btCollisionWorld::AllHitsRayResultCallback {
-    using AllHitsRayResultCallback::AllHitsRayResultCallback;
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      hits++;
-      return AllHitsRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-
-    uint32_t hits = 0;
-    };
-
-  CallBack callback{CollisionWorld::toMeters(from), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  if(waterBody!=nullptr) {
-    btTransform rayFromTrans,rayToTrans;
-    rayFromTrans.setIdentity();
-    rayFromTrans.setOrigin(callback.m_rayFromWorld);
-    rayToTrans.setIdentity();
-    rayToTrans.setOrigin(callback.m_rayToWorld);
-    world->rayTestSingle(rayFromTrans, rayToTrans,
-                         waterBody.get(),
-                         waterBody->getCollisionShape(),
-                         waterBody->getWorldTransform(),
-                         callback);
-    }
-
+  std::vector<CollisionWorld::QueryResult> hits;
+  world->rayCast(from,to,waterMask,false,&hits);
   RayCamResult ret;
-  ret.waterCol = int(callback.m_collisionObjects.size());
+  ret.waterCol = int(hits.size());
   return ret;
   }
 
 DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-    zenkit::MaterialGroup matId  = zenkit::MaterialGroup::UNDEFINED;
-    const char*           sector = nullptr;
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      if(obj->getUserIndex()==C_Landscape || obj->getUserIndex()==C_Object)
-        return ClosestRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      auto shape = rayResult.m_collisionObject->getCollisionShape();
-      if(shape!=nullptr) {
-        auto s  = reinterpret_cast<const btMultimaterialTriangleMeshShape*>(shape);
-        auto mt = reinterpret_cast<const PhysicVbo*>(s->getMeshInterface());
-
-        size_t id = size_t(rayResult.m_localShapeInfo->m_shapePart);
-        matId  = mt->materialId(id);
-        sector = mt->sectorName(id);
-        }
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  CallBack callback{CollisionWorld::toMeters(from), CollisionWorld::toMeters(to)};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  world->rayCast(from,to,callback);
-  return toResult(callback, to, callback.matId, callback.sector);
+  return toResult(world->rayCast(from,to,landscapeMask,false), to);
   }
 
 DynamicWorld::RayQueryResult DynamicWorld::rayNpc(const Tempest::Vec3& from, const Tempest::Vec3& to, const Npc* except) const {
@@ -868,47 +736,19 @@ DynamicWorld::RayQueryResult DynamicWorld::rayArrow(const Tempest::Vec3& from, c
   }
 
 float DynamicWorld::soundOclusion(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
-  struct CallBack:btCollisionWorld::AllHitsRayResultCallback {
-    using AllHitsRayResultCallback::AllHitsRayResultCallback;
-
-    enum { FRAC_MAX=16 };
-    uint32_t           cnt            = 0;
-    float              frac[FRAC_MAX] = {};
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      int id = obj->getUserIndex();
-      if(id==C_Landscape || id==C_Water || id==C_Object)
-        return AllHitsRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      if(cnt<FRAC_MAX)
-        frac[cnt] = rayResult.m_hitFraction;
-      cnt++;
-      return AllHitsRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  CallBack callback(CollisionWorld::toMeters(from), CollisionWorld::toMeters(to));
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal;
-
-  world->rayCast(from,to,callback);
-  const uint32_t count = callback.cnt;
+  std::vector<CollisionWorld::QueryResult> hits;
+  world->rayCast(from,to,landscapeMask | waterMask,true,&hits);
+  const size_t count = hits.size();
   if(count<2)
     return 0;
-
-  if(count>=CallBack::FRAC_MAX)
+  if(count>=16)
     return 1;
 
-  float tlen = (callback.m_rayFromWorld-callback.m_rayToWorld).length();
-  float tr   = 1.f;
-  std::sort(callback.frac, callback.frac+count);
-  for(size_t i=1; i<count; i+=2) {
-    auto t = std::exp(-(callback.frac[i]-callback.frac[i-1])*tlen/3.5f);
-    tr *= t;
-    }
+  std::sort(hits.begin(),hits.end(),[](const auto& a, const auto& b) { return a.fraction<b.fraction; });
+  const float tlen = CollisionWorld::toMeters((from-to).length());
+  float tr = 1.f;
+  for(size_t i=1; i<count; i+=2)
+    tr *= std::exp(-(hits[i].fraction-hits[i-1].fraction)*tlen/3.5f);
   return std::clamp(1.f-tr, 0.f, 1.f);
   }
 
@@ -925,46 +765,30 @@ DynamicWorld::NpcItem DynamicWorld::addGhostObj(const Skeleton* src) {
   return NpcItem(this,obj);
   }
 
-DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape *shape, const Tempest::Matrix4x4 &m) {
-  if(shape==nullptr)
+DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
+  if(shape==nullptr || shape->shape==nullptr)
     return Item();
-  return createObj(&shape->shape,false,m,0,shape->friction(),IT_Static);
+  auto obj = std::make_unique<BodyData>();
+  obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,false,false,&shape->mesh);
+  return Item(this,obj.release());
   }
 
 DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
-  if(shape==nullptr)
+  if(shape==nullptr || shape->shape==nullptr)
     return Item();
-  return createObj(&shape->shape,false,m,0,shape->friction(),IT_Movable);
+  auto obj = std::make_unique<BodyData>();
+  obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,true,false,&shape->mesh);
+  return Item(this,obj.release());
   }
 
 DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, zenkit::MaterialGroup mat) {
-  btVector3 hExt = {b.bbox[1].x-b.bbox[0].x, b.bbox[1].y-b.bbox[0].y, b.bbox[1].z-b.bbox[0].z};
-  hExt *= 0.01f;
-
-  float density = DynamicWorld::materialDensity(mat);
-  float mass    = density*(hExt[0])*(hExt[1])*(hExt[2]);
-  //mass = 0.1f;
-  for(int i=0;i<3;++i)
-    hExt[i] = std::max(hExt[i]*0.5f,0.15f);
-
-  std::unique_ptr<btCollisionShape> shape { new btBoxShape(hExt) };
-  return createObj(shape.release(),true,pos,mass,materialFriction(mat),IT_Dynamic);
-  }
-
-DynamicWorld::Item DynamicWorld::createObj(btCollisionShape* shape, bool ownShape, const Tempest::Matrix4x4& m, float mass, float friction, ItemType type) {
-  std::unique_ptr<CollisionWorld::CollisionBody> obj;
-  switch(type) {
-    case IT_Movable:
-    case IT_Static:
-      obj = world->addCollisionBody(*shape,m,friction);
-      obj->setUserIndex(C_Object);
-      break;
-    case IT_Dynamic:
-      obj = world->addDynamicBody(*shape,m,friction,mass);
-      obj->setUserIndex(C_Item);
-      break;
-    }
-  return Item(this,obj.release(),ownShape ? shape : nullptr);
+  auto extent = CollisionWorld::toMeters(b.bbox[1]-b.bbox[0]);
+  const float mass = materialDensity(mat)*extent.GetX()*extent.GetY()*extent.GetZ();
+  const auto halfExtent = JPH::Vec3::sMax(extent*0.5f,JPH::Vec3::sReplicate(0.15f));
+  JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
+  auto obj = std::make_unique<BodyData>();
+  obj->body = world->addDynamicBody(shape,pos,materialFriction(mat),mass);
+  return Item(this,obj.release());
   }
 
 DynamicWorld::BulletBody* DynamicWorld::bulletObj(BulletCallback* cb) {
@@ -986,48 +810,18 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   auto  pos = b.pos;
   auto  to  = pos + dir*dtF - Tempest::Vec3(0,(isSpell ? 0 : 0.5f*gravity*dtF*dtF),0);
 
-  struct CallBack:btCollisionWorld::ClosestRayResultCallback {
-    using ClosestRayResultCallback::ClosestRayResultCallback;
-    zenkit::MaterialGroup matId = zenkit::MaterialGroup::NONE;
-
-    bool needsCollision(btBroadphaseProxy* proxy0) const override {
-      auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
-      if(obj->getUserIndex()==C_Landscape || obj->getUserIndex()==C_Object)
-        return ClosestRayResultCallback::needsCollision(proxy0);
-      return false;
-      }
-
-    btScalar addSingleResult(btCollisionWorld::LocalRayResult& rayResult, bool normalInWorldSpace) override {
-      auto shape = rayResult.m_collisionObject->getCollisionShape();
-      if(shape) {
-        auto s  = reinterpret_cast<const btMultimaterialTriangleMeshShape*>(shape);
-        auto mt = reinterpret_cast<const PhysicVbo*>(s->getMeshInterface());
-
-        size_t id = size_t(rayResult.m_localShapeInfo->m_shapePart);
-        matId  = mt->materialId(id);
-        }
-      return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
-      }
-    };
-
-  btVector3 s=CollisionWorld::toMeters(pos), e=CollisionWorld::toMeters(to);
-
-  CallBack callback{s,e};
-  callback.m_flags = btTriangleRaycastCallback::kF_KeepUnflippedNormal | btTriangleRaycastCallback::kF_FilterBackfaces;
-
-  if(auto ptr = bboxList->rayTest(s,e)) {
-    if(ptr->cb!=nullptr) {
+  if(auto ptr = bboxList->rayTest(pos,to)) {
+    if(ptr->cb!=nullptr)
       ptr->cb->onCollide(b);
-      }
     }
-
-  world->rayCast(pos, to, callback);
+  const auto hit = world->rayCast(pos,to,landscapeMask,false);
+  const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
 
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
   // where their bones are
   const bool precise = !isSpell && b.cb!=nullptr && b.cb->isPrecise();
   if(precise) {
-    const float a   = callback.matId!=zenkit::MaterialGroup::NONE ? callback.m_closestHitFraction : 1.f;
+    const float a   = matId!=zenkit::MaterialGroup::NONE ? hit.fraction : 1.f;
     const auto  end = pos + (to-pos)*a;
     if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
       b.cb->onStop();
@@ -1036,41 +830,38 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   bool stopBullet = false;
-  if(callback.matId != zenkit::MaterialGroup::NONE) {
+  if(matId != zenkit::MaterialGroup::NONE) {
     if(isSpell){
       if(b.cb!=nullptr)
-        b.cb->onCollide(callback.matId);
+        b.cb->onCollide(matId);
       stopBullet = true;
       } else {
-      if(callback.matId==zenkit::MaterialGroup::METAL ||
-         callback.matId==zenkit::MaterialGroup::STONE) {
-        auto d = b.dir;
-        btVector3 m = {d.x,d.y,d.z};
-        btVector3 n = callback.m_hitNormalWorld;
-
-        n.normalize();
+      if(matId==zenkit::MaterialGroup::METAL ||
+         matId==zenkit::MaterialGroup::STONE) {
+        auto m = b.dir;
+        auto n = Tempest::Vec3::normalize(hit.normal);
         const float l = b.speed();
         m/=l;
 
-        btVector3 dir = m - 2*m.dot(n)*n;
-        dir*=(l*0.5f); //slow-down
+        auto reflected = m - n*(2.f*Tempest::Vec3::dotProduct(m,n));
+        reflected*=(l*0.5f); // slow-down
 
-        float a = callback.m_closestHitFraction;
+        float a = hit.fraction;
         b.move(pos + (to-pos)*a);
         if(l*a>0.1f) {
-          b.setDirection({dir.x(),dir.y(),dir.z()});
+          b.setDirection(reflected);
           b.addPathLen((to-pos).length()*a);
           b.addHit();
           if(b.cb!=nullptr)
-            b.cb->onCollide(callback.matId);
+            b.cb->onCollide(matId);
           }
         } else {
-        float a = callback.m_closestHitFraction;
+        float a = hit.fraction;
         b.move(pos + (to-pos)*a);
         b.addPathLen((to-pos).length()*a);
         b.addHit();
         if(b.cb!=nullptr)
-          b.cb->onCollide(callback.matId);
+          b.cb->onCollide(matId);
         stopBullet = true;
         }
       }
@@ -1204,7 +995,7 @@ bool DynamicWorld::hasCollision(const NpcItem& it, CollisionTest& out) {
   if(npcList->hasCollision(it,out.normal,out.npc,out.npcCol)){
     ret = true;
     }
-  if(world->hasCollision(*it.obj,out.normal,out.vob)) {
+  if(it.obj->shape!=nullptr && world->hasCollision(it.obj->shape.GetPtr(),it.obj->centerPosition(),out.normal,out.vob)) {
     out.landCol = true;
     ret = true;
     }
@@ -1218,10 +1009,8 @@ bool DynamicWorld::hasCollision(const NpcItem& it, CollisionTest& out) {
 DynamicWorld::NpcItem::~NpcItem() {
   if(owner==nullptr || obj==nullptr)
     return;
-  owner->world->touchAabbs();
-  if(!owner->npcList->del(obj))
-    owner->world->removeCollisionObject(obj);
-  delete obj; // The handle owns both the body and its capsule; unregistering alone leaked them.
+  owner->npcList->del(obj);
+  delete obj;
   }
 
 void DynamicWorld::NpcItem::setPosition(const Tempest::Vec3& pos) {
@@ -1245,25 +1034,15 @@ void DynamicWorld::NpcItem::setEnable(bool e) {
   }
 
 void DynamicWorld::NpcItem::setUserPointer(void *p) {
-  obj->setUserPointer(p);
+  obj->userPointer = p;
   }
 
 auto DynamicWorld::NpcItem::center() const -> Tempest::Vec3 {
-  if(obj) {
-    const btTransform&  tr  = obj->getWorldTransform();
-    const Tempest::Vec3 ret = {tr.getOrigin().x(), tr.getOrigin().y(), tr.getOrigin().z()};
-    return ret*100.f;
-    }
-  return {};
+  return obj!=nullptr ? obj->centerPosition() : Tempest::Vec3();
   }
 
 float DynamicWorld::NpcItem::centerY() const {
-  if(obj) {
-    const btTransform& tr = obj->getWorldTransform();
-    return tr.getOrigin().y()*100.f;
-    //return obj->h*0.5f;
-    }
-  return 0;
+  return center().y;
   }
 
 auto DynamicWorld::NpcItem::centerAsym() const -> Tempest::Vec3 {
@@ -1292,13 +1071,10 @@ void DynamicWorld::NpcItem::setScale(const Tempest::Vec3&) {
   }
 
 void DynamicWorld::NpcItem::debugDraw(DbgPainter& p) const {
-  btVector3 aabb0, aabb1;
-  obj->getAabb(aabb0, aabb1);
-
-  const auto min = Tempest::Vec3(aabb0.x()*100.f, aabb0.y()*100.f, aabb0.z()*100.f);
-  const auto max = Tempest::Vec3(aabb1.x()*100.f, aabb1.y()*100.f, aabb1.z()*100.f);
+  const auto extent = Tempest::Vec3(obj->radius, obj->cylinderHeight*0.5f+obj->radius, obj->radius);
+  const auto center = obj->centerPosition();
   p.setPen(Tempest::Color(1,0.5f,0));
-  p.drawAabb(min, max);
+  p.drawAabb(center-extent,center+extent);
   /*
   auto tr = Tempest::Matrix4x4::mkIdentity();
   tr.translate(obj->pos);
@@ -1420,39 +1196,26 @@ bool DynamicWorld::NpcItem::hasCollision() const {
 
 DynamicWorld::Item::~Item() {
   delete obj;
-  delete shp;
   }
 
-void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4 &m) {
-  if(obj!=nullptr) {
-    btTransform trans;
-    trans.setFromOpenGLMatrix(reinterpret_cast<const btScalar*>(&m));
-    trans.getOrigin()*=0.01f;
-    if(obj->getWorldTransform()==trans)
-      return;
-    obj->setWorldTransform(trans);
-    //owner->world->touchAabbs(); // TOO SLOW!
-    owner->world->updateSingleAabb(obj);
-    }
+void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4& m) {
+  if(obj!=nullptr)
+    obj->body->setObjMatrix(m);
   }
 
 void DynamicWorld::Item::setItem(::Item* it) {
-  assert(obj->getUserIndex()==DynamicWorld::C_Item);
-  obj->setUserPointer(it);
-  obj->setUserIndex2(P_Item);
+  assert(obj->body->category()==DynamicWorld::C_Item);
+  obj->body->setPayload(it,P_Item);
   }
 
 void DynamicWorld::Item::setInteractive(Interactive* it) {
-  assert(obj->getUserIndex()==DynamicWorld::C_Object);
-  obj->setUserPointer(it);
-  obj->setUserIndex2(P_Interactive);
+  assert(obj->body->category()==DynamicWorld::C_Object);
+  obj->body->setPayload(it,P_Interactive);
   }
 
 void DynamicWorld::Item::setPayloadPtr(void* ptr) {
-  if(obj==nullptr)
-    return;
-  obj->setUserPointer(ptr);
-  obj->setUserIndex2(P_Editor);
+  if(obj!=nullptr)
+    obj->body->setPayload(ptr,P_Editor);
   }
 
 DynamicWorld::BulletBody::BulletBody(DynamicWorld* wrld, DynamicWorld::BulletCallback* cb)
@@ -1514,48 +1277,38 @@ Tempest::Matrix4x4 DynamicWorld::BulletBody::matrix() const {
   }
 
 DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox)
-  : owner(ow), cb(cb) {
-  btVector3 hExt = CollisionWorld::toMeters(Tempest::Vec3{bbox.max.x-bbox.min.x, bbox.max.y-bbox.min.y, bbox.max.z-bbox.min.z})*0.5f;
-  btVector3 pos  = CollisionWorld::toMeters(Tempest::Vec3{bbox.max.x+bbox.min.x, bbox.max.y+bbox.min.y, bbox.max.z+bbox.min.z})*0.5f;
-
-  shape = new btBoxShape(hExt);
-  obj   = new btRigidBody(btRigidBody::btRigidBodyConstructionInfo(0,nullptr,shape));
-
-  btTransform trans;
-  trans.setIdentity();
-  trans.setOrigin(pos);
-
-  obj->setWorldTransform(trans);
-  obj->setUserIndex(C_Ghost);
-  obj->setCollisionFlags(btCollisionObject::CF_NO_CONTACT_RESPONSE);
-
+  :owner(ow),cb(cb) {
+  const auto extent = Tempest::Vec3(bbox.max.x-bbox.min.x,bbox.max.y-bbox.min.y,bbox.max.z-bbox.min.z)*0.5f;
+  const auto center = Tempest::Vec3(bbox.max.x+bbox.min.x,bbox.max.y+bbox.min.y,bbox.max.z+bbox.min.z)*0.5f;
+  const auto halfExtent = JPH::Vec3::sMax(CollisionWorld::toMeters(extent),JPH::Vec3::sReplicate(0.0001f));
+  JPH::ShapeRefC box = new JPH::BoxShape(halfExtent,0.f);
+  Tempest::Matrix4x4 m;
+  m.identity();
+  m.translate(center);
+  auto data = std::make_unique<BBoxShape>();
+  data->body = owner->world->addCollisionBody(box,m,0,C_Ghost,false,true);
+  shape = data.release();
   owner->bboxList->add(this);
-}
+  }
 
-DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const Tempest::Vec3& p, float R)
-  : owner(ow), cb(cb) {
-  btVector3 pos = CollisionWorld::toMeters(p);
-
-  shape = new btCapsuleShape(R,4.f);
-  obj   = new btRigidBody(btRigidBody::btRigidBodyConstructionInfo(0,nullptr,shape));
-
-  btTransform trans;
-  trans.setIdentity();
-  trans.setOrigin(pos);
-
-  obj->setWorldTransform(trans);
-  obj->setUserIndex(C_Ghost);
-  obj->setCollisionFlags(btCollisionObject::CF_NO_CONTACT_RESPONSE);
-
+DynamicWorld::BBoxBody::BBoxBody(DynamicWorld* ow, BBoxCallback* cb, const Tempest::Vec3& pos, float R)
+  :owner(ow),cb(cb) {
+  // This overload historically takes its radius in meters and its cylinder height is four meters.
+  JPH::ShapeRefC capsule = new JPH::CapsuleShape(2.f,std::max(R,0.0001f));
+  Tempest::Matrix4x4 m;
+  m.identity();
+  m.translate(pos);
+  auto data = std::make_unique<BBoxShape>();
+  data->body = owner->world->addCollisionBody(capsule,m,0,C_Ghost,false,true);
+  shape = data.release();
   owner->bboxList->add(this);
   }
 
 DynamicWorld::BBoxBody::BBoxBody(BBoxBody&& other)
-  :owner(other.owner),cb(other.cb),shape(other.shape),obj(other.obj) {
+  :owner(other.owner),cb(other.cb),shape(other.shape) {
   other.owner = nullptr;
   other.cb    = nullptr;
   other.shape = nullptr;
-  other.obj   = nullptr;
 
   if(owner!=nullptr) {
     owner->bboxList->del(&other);
@@ -1572,7 +1325,6 @@ DynamicWorld::BBoxBody& DynamicWorld::BBoxBody::operator=(BBoxBody&& other) {
   std::swap(owner,other.owner);
   std::swap(cb,   other.cb);
   std::swap(shape,other.shape);
-  std::swap(obj,  other.obj);
 
   if(other.owner!=nullptr)
     other.owner->bboxList->add(&other);
@@ -1586,6 +1338,5 @@ DynamicWorld::BBoxBody::~BBoxBody() {
   if(owner==nullptr)
     return;
   owner->bboxList->del(this);
-  delete obj;
   delete shape;
   }

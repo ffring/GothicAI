@@ -1,0 +1,52 @@
+{
+  "scope": "isolated_rawplane_ray_diagnostic",
+  "rows": 210,
+  "max_player_delta_cm": 0.0,
+  "first_over_0_1cm": null,
+  "last_frame_player": {
+    "x": [
+      "32726.50",
+      "32726.50"
+    ],
+    "y": [
+      "3759.97",
+      "3759.97"
+    ],
+    "z": [
+      "-21267.21",
+      "-21267.21"
+    ]
+  },
+  "raw_outputs": "data/physics/stage1/contact-v10-rawplane-firstspot/jolt-rawplane",
+  "different_csv_values_by_column": {
+    "l_knee": 18,
+    "l_toef_z": 33,
+    "r_toef_x": 67,
+    "l_kneef_x": 47,
+    "l_toef_y": 28,
+    "r_kneef_x": 42,
+    "l_toef_x": 61,
+    "r_yaw": 30,
+    "r_kneef_z": 19,
+    "r_ankf_x": 40,
+    "r_ankf_z": 25,
+    "r_err": 14,
+    "l_yaw": 13,
+    "l_ankf_z": 19,
+    "r_knee": 16,
+    "l_err": 14,
+    "l_kneef_y": 3,
+    "l_ankf_y": 5,
+    "l_hip_y": 2,
+    "l_ankf_x": 30,
+    "r_toef_z": 35,
+    "r_ankf_y": 5,
+    "r_toef_y": 21,
+    "r_tilt": 2,
+    "l_kneef_z": 24,
+    "r_kneef_y": 3,
+    "g_hipsyaw": 1,
+    "r_hip_z": 1,
+    "l_roll": 1
+  }
+}

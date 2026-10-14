@@ -1,0 +1,622 @@
+{
+  "schema_version": 1,
+  "kind": "physics_stage1_physical_tolerance_diagnostic_classification",
+  "name": "physical_tolerance_diagnostic",
+  "status": "declared_not_applied",
+  "declared_at_utc": "2026-10-14T01:11:02Z",
+  "declared_at_moscow": "2026-10-14T04:11:02+03:00",
+  "declaration_scope": "Declared before v12 full results. Classification uses TestBench exports and source units; thresholds were not fitted to v11 or v12 deltas.",
+  "document_gate_changed": false,
+  "document_gate": "Existing exact serialized numeric comparison remains unchanged; this diagnostic never grants a document pass.",
+  "tiny_sphere_normal_waiver_applied": false,
+  "source": {
+    "path": "../../../OpenGothic/common/testbench.cpp",
+    "sha256": "ff199946cac1f829c2dba920395e776e066b54252004bd593f6a8707deb45d3e",
+    "lines": "1378-1567; speed calculation at 4870",
+    "column_count": 323,
+    "csv_header_sha256": "b34a666e0245e2c32ae20a7f5ef101d83ae197d2b0d4a98650d4c499c1e4cc22"
+  },
+  "coverage_validation": {
+    "classified_columns": 323,
+    "unclassified_columns": [],
+    "duplicate_columns": [],
+    "source_printf_format_order_verified": true,
+    "actual_csv_header_match_verified": "bullet-numeric-v7/smoke header only; no result values used"
+  },
+  "application_requirements": [
+    "Diagnostic only. Keep the existing exact document bench gate and strict p50/p95 timing gates unchanged.",
+    "Require complete successful execution and validated metrics/log/events/timing evidence before discussing agreement.",
+    "Require this complete ordered header. Missing, duplicate, extra/unknown columns or changed source export precision fail until explicitly reclassified.",
+    "Compare every matched frame; every classified field must satisfy its rule. No p95, majority, inactive-column or near-singularity exemption.",
+    "Hero x,y,z form one Euclidean vector with delta strictly less than 0.1 cm. Do not accept equality at the boundary.",
+    "Other spatial scalars are bounded individually by 0.1 cm; this alone does not imply a 0.1 cm Euclidean bound on a three-component derived point.",
+    "Orientation rules use direct absolute serialized-degree differences; no modulo/wrapping exemption is introduced here.",
+    "Every integer, discrete, whole-number export, time value and text value remains exact.",
+    "Finite/nonfinite status and all semantic invalid-value sentinels must match exactly before applying any continuous tolerance. Missed-ray -inf heights are allowed only in both rows with the corresponding exact has/toehas=0 flag.",
+    "Use decimal arithmetic for serialized scalar boundaries, avoiding binary parsing residue. For hero distance compare squared decimal distance strictly against 0.01 cm^2.",
+    "Report exact equality separately, plus per-field diagnostic exceedance counts, maximum deltas, thresholds and first failing rows. Never relabel an exact-gate failure as a document pass."
+  ],
+  "outside_csv_exact_invariants": [
+    "Event/shot ordering and counts, actor/target/victim identity, hit/miss/zone, damage, integer HP and dice outcomes remain exact.",
+    "Game/event/shot/damage/fight timestamps remain exact and present; missing timestamps cannot compare equal merely because both are absent.",
+    "Existing ordered-combat continuous-value gates remain required and are never replaced by these CSV physical tolerances.",
+    "E2E assertions/readiness and physics p50/p95 <= Bullet remain independently required."
+  ],
+  "rules": {
+    "text_exact": {
+      "unit": "text",
+      "comparison": "exact",
+      "rationale": "Keep segment identity, selected bone and playing animation layers."
+    },
+    "integer_exact": {
+      "unit": "integer/state/count",
+      "comparison": "exact",
+      "rationale": "All integer exports, flags, states, indices, counters and HP are exact."
+    },
+    "time_ms_exact": {
+      "unit": "ms",
+      "comparison": "exact",
+      "rationale": "Keep frame and game-time alignment; no time tolerance."
+    },
+    "time_seconds_exact": {
+      "unit": "s",
+      "comparison": "exact",
+      "rationale": "Float-valued time measurements also remain exact."
+    },
+    "hero_xyz": {
+      "unit": "cm",
+      "comparison": "vector_l2_strict_lt",
+      "vector_fields": [
+        "x",
+        "y",
+        "z"
+      ],
+      "threshold": 0.1,
+      "rationale": "Every hero position vector must differ by strictly less than one millimetre, not merely each coordinate."
+    },
+    "spatial": {
+      "unit": "cm",
+      "comparison": "absolute_le",
+      "threshold": 0.1,
+      "rationale": "One millimetre per exported spatial scalar. This is a physical diagnostic bound, not a claim that larger-than-quantum differences are rounding alone."
+    },
+    "orientation": {
+      "unit": "degree",
+      "comparison": "absolute_le",
+      "threshold": 0.1,
+      "rationale": "One tenth of a degree for every orientation scalar, without percentile exceptions or automatic suppression near singular configurations."
+    },
+    "normal_component": {
+      "unit": "unit-vector component",
+      "comparison": "absolute_le",
+      "threshold": 0.001,
+      "rationale": "One thousandth per ray-normal component; all contact flags and missing-ray markers must still match exactly."
+    },
+    "normalized": {
+      "unit": "dimensionless fraction/weight",
+      "comparison": "absolute_le",
+      "threshold": 0.001,
+      "rationale": "One thousandth for normalized weights, progress, stance amounts and probabilities; some are exported only to 0.01, so any one-digit change then still fails."
+    },
+    "speed_cm_s": {
+      "unit": "cm/s",
+      "comparison": "absolute_le",
+      "threshold": 0.1,
+      "rationale": "One quantum of the source %.1f speed export; the separate hero-position bound prevents accumulated displacement from being excused."
+    },
+    "speed_degree_s": {
+      "unit": "degree/s",
+      "comparison": "absolute_le",
+      "threshold": 0.1,
+      "rationale": "One quantum of Lean turn-rate %.1f export; this is angular speed, not an orientation angle."
+    },
+    "screen_percent": {
+      "unit": "percentage point of screen height",
+      "comparison": "absolute_le",
+      "threshold": 0.001,
+      "rationale": "One quantum of the %.3f screen-motion export. It cannot be converted to cm without camera/resolution assumptions."
+    },
+    "dimensionless_exact": {
+      "unit": "dimensionless disturbance (0..2)",
+      "comparison": "exact",
+      "rationale": "Archer disturbance is bounded by MaxDisturb=2, not a normalized weight. Keep it exact rather than infer a physical tolerance."
+    },
+    "phase_exact": {
+      "unit": "dimensionless reload phase (0..2)",
+      "comparison": "exact",
+      "rationale": "Bow nock phase crosses quiver/string phases; keep this mixed semantic progress exact."
+    },
+    "whole_speed_exact": {
+      "unit": "cm/s (whole-number export)",
+      "comparison": "exact",
+      "rationale": "Continuous animation speed is serialized with %.0f; preserve all whole-number serialized values exactly."
+    },
+    "whole_spatial_exact": {
+      "unit": "cm (whole-number export)",
+      "comparison": "exact",
+      "rationale": "NPC archer lead is serialized with %.0f; preserve whole-number serialized values exactly."
+    }
+  },
+  "field_groups": [
+    {
+      "rule": "text_exact",
+      "export_format": "%s",
+      "fields": [
+        "seg",
+        "an_bone",
+        "an_layers"
+      ]
+    },
+    {
+      "rule": "integer_exact",
+      "export_format": "%llu",
+      "fields": [
+        "frame"
+      ]
+    },
+    {
+      "rule": "time_ms_exact",
+      "export_format": "%llu",
+      "fields": [
+        "t",
+        "lip_t"
+      ]
+    },
+    {
+      "rule": "hero_xyz",
+      "export_format": "%.2f",
+      "fields": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    {
+      "rule": "orientation",
+      "export_format": "%.1f",
+      "fields": [
+        "rot",
+        "l_knee",
+        "l_tilt",
+        "l_roll",
+        "l_yaw",
+        "l_out",
+        "r_knee",
+        "r_tilt",
+        "r_roll",
+        "r_yaw",
+        "r_out",
+        "fl_knee",
+        "fl_tilt",
+        "fl_roll",
+        "fl_yaw",
+        "fl_out",
+        "fr_knee",
+        "fr_tilt",
+        "fr_roll",
+        "fr_yaw",
+        "fr_out",
+        "ln_slope",
+        "bl_angle",
+        "aw_twist",
+        "aw_chest",
+        "bd_angle",
+        "bd_square",
+        "bd_cant",
+        "f_yaw"
+      ]
+    },
+    {
+      "rule": "speed_cm_s",
+      "export_format": "%.1f",
+      "fields": [
+        "speed",
+        "ln_speed",
+        "aw_speed"
+      ]
+    },
+    {
+      "rule": "integer_exact",
+      "export_format": "%u",
+      "fields": [
+        "bs",
+        "walk",
+        "occl",
+        "nlegs",
+        "bad",
+        "bl_active",
+        "bl_started",
+        "lip_f0",
+        "lip_f1",
+        "lip_picks",
+        "ge_id",
+        "ge_mood",
+        "ge_starts",
+        "ge_cuts",
+        "ge_stops",
+        "ge_nods",
+        "ge_lnods",
+        "bk_n",
+        "bk_pause",
+        "bk_shift",
+        "bk_double",
+        "f_hits"
+      ]
+    },
+    {
+      "rule": "integer_exact",
+      "export_format": "%d",
+      "fields": [
+        "ik_valid",
+        "ik_on",
+        "ik_hardoff",
+        "l_has",
+        "l_toehas",
+        "r_has",
+        "r_toehas",
+        "fl_has",
+        "fl_toehas",
+        "fr_has",
+        "fr_toehas",
+        "g_on",
+        "g_src",
+        "pg_on",
+        "pg_src",
+        "ln_on",
+        "bl_on",
+        "a_on",
+        "a_steady",
+        "m_stage",
+        "m_holding",
+        "m_short",
+        "bd_hold",
+        "lip_valid",
+        "lip_on",
+        "ge_on",
+        "ge_talk",
+        "ge_listen",
+        "ge_think",
+        "bk_on",
+        "f_on",
+        "hp_player",
+        "hp_subject",
+        "ai_on",
+        "ai_want"
+      ]
+    },
+    {
+      "rule": "normalized",
+      "export_format": "%.3f",
+      "fields": [
+        "ik_w",
+        "l_plant",
+        "r_plant",
+        "fl_plant",
+        "fr_plant",
+        "g_w",
+        "pg_w",
+        "a_w",
+        "m_draw",
+        "m_fatigue",
+        "bd_w",
+        "bd_draw",
+        "lip_level",
+        "lip_mouth",
+        "lip_open",
+        "lip_int",
+        "ge_aside",
+        "bk_w",
+        "face_neutral",
+        "face_friendly",
+        "face_angry",
+        "face_hostile",
+        "face_afraid",
+        "face_pain"
+      ]
+    },
+    {
+      "rule": "spatial",
+      "export_format": "%.2f",
+      "fields": [
+        "pelvis",
+        "chest",
+        "pelvis_target",
+        "pelvis_limit",
+        "floor",
+        "l_gy",
+        "l_toey",
+        "l_smooth",
+        "l_err",
+        "l_slack",
+        "l_hip_x",
+        "l_hip_y",
+        "l_hip_z",
+        "l_kneea_x",
+        "l_kneea_y",
+        "l_kneea_z",
+        "l_anka_x",
+        "l_anka_y",
+        "l_anka_z",
+        "l_toea_x",
+        "l_toea_y",
+        "l_toea_z",
+        "l_kneef_x",
+        "l_kneef_y",
+        "l_kneef_z",
+        "l_ankf_x",
+        "l_ankf_y",
+        "l_ankf_z",
+        "l_toef_x",
+        "l_toef_y",
+        "l_toef_z",
+        "r_gy",
+        "r_toey",
+        "r_smooth",
+        "r_err",
+        "r_slack",
+        "r_hip_x",
+        "r_hip_y",
+        "r_hip_z",
+        "r_kneea_x",
+        "r_kneea_y",
+        "r_kneea_z",
+        "r_anka_x",
+        "r_anka_y",
+        "r_anka_z",
+        "r_toea_x",
+        "r_toea_y",
+        "r_toea_z",
+        "r_kneef_x",
+        "r_kneef_y",
+        "r_kneef_z",
+        "r_ankf_x",
+        "r_ankf_y",
+        "r_ankf_z",
+        "r_toef_x",
+        "r_toef_y",
+        "r_toef_z",
+        "fl_gy",
+        "fl_toey",
+        "fl_smooth",
+        "fl_err",
+        "fl_slack",
+        "fl_hip_x",
+        "fl_hip_y",
+        "fl_hip_z",
+        "fl_kneea_x",
+        "fl_kneea_y",
+        "fl_kneea_z",
+        "fl_anka_x",
+        "fl_anka_y",
+        "fl_anka_z",
+        "fl_toea_x",
+        "fl_toea_y",
+        "fl_toea_z",
+        "fl_kneef_x",
+        "fl_kneef_y",
+        "fl_kneef_z",
+        "fl_ankf_x",
+        "fl_ankf_y",
+        "fl_ankf_z",
+        "fl_toef_x",
+        "fl_toef_y",
+        "fl_toef_z",
+        "fr_gy",
+        "fr_toey",
+        "fr_smooth",
+        "fr_err",
+        "fr_slack",
+        "fr_hip_x",
+        "fr_hip_y",
+        "fr_hip_z",
+        "fr_kneea_x",
+        "fr_kneea_y",
+        "fr_kneea_z",
+        "fr_anka_x",
+        "fr_anka_y",
+        "fr_anka_z",
+        "fr_toea_x",
+        "fr_toea_y",
+        "fr_toea_z",
+        "fr_kneef_x",
+        "fr_kneef_y",
+        "fr_kneef_z",
+        "fr_ankf_x",
+        "fr_ankf_y",
+        "fr_ankf_z",
+        "fr_toef_x",
+        "fr_toef_y",
+        "fr_toef_z",
+        "an_pop",
+        "rh_x",
+        "rh_y",
+        "rh_z"
+      ]
+    },
+    {
+      "rule": "normal_component",
+      "export_format": "%.3f",
+      "fields": [
+        "l_nx",
+        "l_ny",
+        "l_nz",
+        "r_nx",
+        "r_ny",
+        "r_nz",
+        "fl_nx",
+        "fl_ny",
+        "fl_nz",
+        "fr_nx",
+        "fr_ny",
+        "fr_nz"
+      ]
+    },
+    {
+      "rule": "orientation",
+      "export_format": "%.2f",
+      "fields": [
+        "g_err",
+        "g_yaw",
+        "g_pitch",
+        "g_yawgoal",
+        "g_pitchgoal",
+        "g_head",
+        "g_chest",
+        "g_waist",
+        "g_animyaw",
+        "g_animpitch",
+        "g_hipsyaw",
+        "g_fyaw",
+        "g_fpitch",
+        "pg_err",
+        "pg_yaw",
+        "ln_roll",
+        "ln_pitch",
+        "a_yaw",
+        "a_pitch",
+        "a_animyaw",
+        "a_animpitch",
+        "a_turn",
+        "a_bend",
+        "a_err",
+        "a_lean",
+        "a_side",
+        "ge_pitch",
+        "ge_yaw",
+        "ge_roll",
+        "f_bend",
+        "f_twist",
+        "f_head"
+      ]
+    },
+    {
+      "rule": "speed_degree_s",
+      "export_format": "%.1f",
+      "fields": [
+        "ln_turn"
+      ]
+    },
+    {
+      "rule": "whole_speed_exact",
+      "export_format": "%.0f",
+      "fields": [
+        "an_speed"
+      ]
+    },
+    {
+      "rule": "time_seconds_exact",
+      "export_format": "%.3f",
+      "fields": [
+        "bl_time"
+      ]
+    },
+    {
+      "rule": "spatial",
+      "export_format": "%.1f",
+      "fields": [
+        "ik_crouch",
+        "aw_drop",
+        "bd_span",
+        "bd_travel",
+        "bd_miss",
+        "bd_follow",
+        "bd_fit",
+        "bd_offset",
+        "hd_hand",
+        "hd_fore",
+        "hd_arrow",
+        "bd_overgrip",
+        "bd_atmiddle",
+        "bd_nockgap",
+        "bd_bowmove",
+        "bd_bowmiss"
+      ]
+    },
+    {
+      "rule": "normalized",
+      "export_format": "%.2f",
+      "fields": [
+        "m_crouch",
+        "m_peek",
+        "m_cant",
+        "m_walk",
+        "aw_w",
+        "bd_held",
+        "lip_alpha",
+        "f_str",
+        "f_ht",
+        "ai_pv",
+        "ai_ps"
+      ]
+    },
+    {
+      "rule": "time_seconds_exact",
+      "export_format": "%.2f",
+      "fields": [
+        "m_hold",
+        "m_breath"
+      ]
+    },
+    {
+      "rule": "dimensionless_exact",
+      "export_format": "%.3f",
+      "fields": [
+        "m_disturb"
+      ]
+    },
+    {
+      "rule": "orientation",
+      "export_format": "%.3f",
+      "fields": [
+        "m_amp",
+        "m_sway_yaw",
+        "m_sway_pitch",
+        "m_off",
+        "m_spread",
+        "ai_sigma",
+        "ai_errx",
+        "ai_erry"
+      ]
+    },
+    {
+      "rule": "screen_percent",
+      "export_format": "%.3f",
+      "fields": [
+        "m_cross"
+      ]
+    },
+    {
+      "rule": "phase_exact",
+      "export_format": "%.2f",
+      "fields": [
+        "bd_nock"
+      ]
+    },
+    {
+      "rule": "whole_spatial_exact",
+      "export_format": "%.0f",
+      "fields": [
+        "ai_lead"
+      ]
+    }
+  ],
+  "rationale": [
+    "Physical bounds (1 mm spatial, 0.1 degree orientation, 0.001 normalized/component) differ deliberately from serialization resolution. They explain bounded continuous variation; they do not prove that differing numbers arose only from rounding.",
+    "Speed and angular-speed bounds use one %.1f source quantum, not a generic distance/angle threshold. Whole-number speed/lead exports remain exact. Time, screen-motion, disturbance and phase have distinct conservative rules.",
+    "At a 1 m lever arm, 0.1 degree corresponds to about 1.75 mm of transverse motion, so the angle rule is not interchangeable with the 1 mm spatial rule.",
+    "The user waiver for correct tiny-sphere normals concerns the separate sphere-query oracle. It does not authorize this physical diagnostic, relax its contact flags, or waive foot ray-normal differences.",
+    "A passing diagnostic means only bounded classified differences with all required discrete/gameplay invariants intact. The current document gate still requires exact serialized numerical equality."
+  ],
+  "application_references": [
+    {
+      "name": "physical_tolerance_diagnostic",
+      "candidate": "jolt-v13",
+      "evaluated_at_utc": "2026-10-14T02:38:13+00:00",
+      "report": "physical-tolerance-v13.json",
+      "summary": "physical-tolerance-v13.md",
+      "status": "failed",
+      "document_gate_changed": false,
+      "historical_rules_changed": false
+    }
+  ]
+}

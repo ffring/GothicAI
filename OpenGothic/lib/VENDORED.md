@@ -10,13 +10,23 @@ automatically; to update one, copy the needed parts of a newer upstream version 
 | `ZenKit/` | https://github.com/GothicKit/ZenKit | 083cc5f5592726aed435f8e863a6e09e92748a4d (v1.3.0-63) | MIT | `tests/`, `docs/`, `examples/`, `assets/` |
 | `ZenKit/vendor/libsquish/` | https://github.com/lmichaelis/phoenix-libsquish | 53167b39beee3c7ff441c4ee6ba522c2db27dad4 | MIT | — |
 | `ZenKit/vendor/doctest/` | https://github.com/doctest/doctest | 1da23a3e8119ec5cce4f9388e91b065e20bf06f5 (v2.4.12) | MIT | `scripts/data/` (kept because ZenKit's CMake would download it otherwise) |
-| `bullet3/` | https://github.com/bulletphysics/bullet3 | d1a4256b3a019117f2bb6cb8c63d6367aaf512e2 (3.25-26) | zlib | `examples/`, `data/`, `docs/`, `test/`, `Extras/`, `build3/` |
+| `JoltPhysics/` | https://github.com/jrouwe/JoltPhysics | e77f175595e64cb44218cc9d9d56fc365ad0e36a (v5.6.0) | MIT | everything but `Jolt/`, `Build/CMakeLists.txt` and `LICENSE` (examples, test framework, unit/performance tests, viewer, documentation, assets and build helper scripts omitted) |
 | `dmusic/` | https://github.com/GothicKit/dmusic | b73b270b94714b8ec8d9d0b2a9f3a5c445da52d1 | MIT | `docs/`, `examples/` |
 | `rapidjson/` | https://github.com/Tencent/rapidjson | f54b0e47a08782a6131cc3d60f94d038fa6e0a51 (v1.1.0) | MIT | everything but `include/` (header-only) |
 | `TinySoundFont/` | https://github.com/schellingb/TinySoundFont | 92a8f0e9fe3c98358be7d8564db21fc4b1142d04 | MIT | `examples/`, `sfotool/` |
 | `edd-dbg/`, `miniz/` | as in upstream OpenGothic | — | see the directories | — |
 
 Git metadata of the libraries (`.git`, `.github`, `.gitmodules`, `.gitignore`) was not copied.
+
+The Bullet backend has been removed. The scalar plane/edge operation order in
+`common/physics/physicvbo.cpp` adapts the former `btTriangleRaycastCallback::processTriangle` to
+resolve ambiguous native Jolt hits. This is modified compatibility code, not an upstream Bullet
+library or collision backend. The optional scalar witness interpolation in Jolt's
+`Geometry/GJKClosestPoint.h` also preserves the former query's scalar barycentric operation,
+tetrahedron face-weight order and triangle-to-edge witness interpolation. The native GJK loop and
+closest-feature selection remain Jolt code;
+there is no additional solver. The original zlib notice for the adapted compatibility arithmetic is
+retained in `BulletCompat.LICENSE`; the Jolt library and its existing code retain their MIT license.
 
 ## Local changes
 
@@ -37,3 +47,30 @@ Keep these when updating a library from upstream.
 - `ZenKit/` `DaedalusVm::unsafe_call_external` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls an engine
   function the way the `BE` instruction does. The story graph (`ai_bridge/storygraph`) computes the AI
   director's conditions with the engine's own functions through it.
+- `JoltPhysics/Jolt/Geometry/RayTriangle.h`, `Physics/Collision/RayCast.h` and
+  `Physics/Collision/Shape/MeshShape.cpp`: optional `RayCastSettings::mTriangleEdgeTolerance` adds a
+  barycentric edge tolerance only to mesh ray queries, with matching expansion of the ray traversal
+  bounds. Its default is zero; OpenGothic queries opt in to `0.0001f` to preserve the previous ray edge
+  behavior. Shape casts, contacts, body bounds and other shapes keep the upstream tests. Preserve this
+  patch when updating the pinned Jolt version.
+- `JoltPhysics/Jolt/Geometry/GJKClosestPoint.h`: `GetClosestPoints<A,B,true>` optionally reconstructs
+  the separation axis from scalar interpolation of the native selected feature's witnesses. The
+  default third template argument is `false`, retaining upstream behavior. Only NPC contact
+  eligibility opts in. Accepted separated NPC–mesh contacts also expose the previous conservative
+  scalar witness direction to the controller, including early distance termination; this need not
+  be the exact closest-surface normal. Penetrating contact axes, simulation and shape casts remain
+  native Jolt. The controller retains the former scalar unit-axis and aggregate normalization order.
+  Finite/monotonic checks retain the native axis when reconstruction cannot be used. Finite opt-in
+  results return the same witness points used for the axis and distance. Preserve this patch and
+  its compatibility license notice when updating Jolt; regression fixtures are in
+  `tests/physics_contract.cpp` and evidence is in `reports/physics/2026-10-14-jolt-stage1/`.
+- `JoltPhysics/Jolt/Physics/Collision/ShapeCast.h` and `CastSphereVsTriangles.cpp`:
+  `ShapeCastSettings::mUsePreciseSphereTriangleCast` defaults to false. The engine sphere query opts
+  into double closest-approach tests for triangle edges and vertices, and double cross-product plane
+  barycentrics, to avoid false contacts from cancellation in float quadratic and Gram products.
+  Components are promoted before the products; sphere radius and bounds are unchanged. Initial
+  overlap, final closest-point calculation, contact generation and normals retain native behavior.
+  The 765-invocation decoded fixture reproduces native hit, fraction, contact and axis bit for bit
+  and removes all 14 proven false winners. Full query dispatch is checked separately because a
+  corrected early-out cutoff can expose additional BVH candidates. Evidence is in
+  [the sphere report](../../reports/physics/2026-10-14-jolt-stage1/sphere-cause-diagnostic-v12.md).

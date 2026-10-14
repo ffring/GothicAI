@@ -348,6 +348,21 @@ textures; by default those of `scripts/hd-textures.sh` when they have been made,
 empty: the game's own), `SOUND` and `MUSIC` (volumes 0..1, default 0; with `TEMPEST_AUDIO_LOOPBACK=48000` a
 segment's sound goes into `<segment>.wav`).
 
+For the Bullet → Jolt stage 1 oracle, `physics dump [count=100000] [seed=73013] [input.tsv]`
+casts that many rays **and** spheres through `DynamicWorld` in the loaded world. It writes
+`physics-queries.tsv` (centimeters: from xyz, to xyz, radius) and `physics-results.jsonl` (hit,
+point, normal, material, sector, fraction). Half the generated queries go vertically down near
+waypoints; the rest go obliquely nearby or between waypoints all over the world. Replay the exact
+Bullet input file with Jolt: waypoint ground adjustment itself can differ between backends.
+The log reports p50/p95 of warmed batches of 256 queries, excluding result/file writes.
+`scripts/physics_compare.py <bullet-output> <jolt-output> --output <comparison-dir>` checks
+the identical inputs and reports mismatches. `scripts/physics_suite.py --help` runs the same
+eleven stage 1 scenarios without rendering. Temporary frame timing instrumentation belongs only
+in isolated source copies (`scripts/physics_profile.py`); its output is not a renderer benchmark.
+Frame timing sums public physics work across worker threads, so it can exceed elapsed frame time.
+For a hotspot diagnostic, `--method-breakdown` additionally writes per-method inclusive and outer
+work to `OPENGOTHIC_PHYSICS_TRACE_METHODS`. Keep this extra instrumentation out of formal timing runs.
+
 Film mode (what `gothic-shorts film` sets): `OPENGOTHIC_BENCH_REALTIME=1` keeps the fixed steps to the wall
 clock and draws only the captured frame; `TEMPEST_AUDIO_LOOPBACK=48000` records the game's sound into
 `<segment>.wav` instead of playing it; `TEMPEST_WINDOW_SIZE=<w>x<h>` (points) sets the frame;

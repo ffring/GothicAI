@@ -1642,13 +1642,126 @@ void face(Npc& pl, const Vec3& dir) {
   pl.updateTransform();
   }
 
+// The migration oracle deliberately uses the public game API. A generated input file is replayed
+// verbatim by the other backend: even waypoint ground adjustment must not change the queries.
+void physicsDump(World& w, const Npc& pl, size_t count, uint32_t seed, const std::string& input) {
+  struct Query { Vec3 from, to; float radius=0; };
+  std::vector<Query> queries;
+  if(!input.empty()) {
+    std::ifstream file(input);
+    Query q;
+    while(file >> q.from.x >> q.from.y >> q.from.z >> q.to.x >> q.to.y >> q.to.z >> q.radius)
+      queries.push_back(q);
+    if(queries.empty() || !file.eof()) {
+      say("physics dump failed: malformed or empty query file " + input);
+      return;
+      }
+    } else {
+    std::vector<Spot> points;
+    w.findWayPoint(pl.position(),[&](const WayPoint& wp) {
+      Spot point;
+      point.name=wp.name;
+      point.pos=wp.pos;
+      points.push_back(point);
+      return false;
+      });
+    std::sort(points.begin(),points.end(),[](const Spot& a, const Spot& b) { return a.name<b.name; });
+    if(points.empty()) {
+      say("physics dump failed: no waypoints");
+      return;
+      }
+    auto next = [&]() {
+      seed ^= seed<<13;
+      seed ^= seed>>17;
+      seed ^= seed<<5;
+      return seed;
+      };
+    if(seed==0) seed=1;
+    auto random = [&](float lo, float hi) { return lo+(hi-lo)*(float(next()>>8)/16777216.f); };
+    queries.reserve(count);
+    for(size_t i=0;i<count;++i) {
+      const auto& point=points[next()%points.size()];
+      Query q;
+      q.from=point.pos+Vec3(random(-500,500),random(50,1500),random(-500,500));
+      if(i%4<2) {
+        // Vertical ground probes cover the directions used by Foot IK and locomotion.
+        q.to=q.from-Vec3(0,random(500,4000),0);
+        }
+      else if(i%4==2) {
+        q.to=q.from+Vec3(random(-5000,5000),random(-1000,1000),random(-5000,5000));
+        }
+      else {
+        q.to=points[next()%points.size()].pos+Vec3(random(-500,500),random(50,1500),random(-500,500));
+        }
+      static constexpr float radii[]={0.1f,1.f,5.f,25.f,50.f,100.f};
+      q.radius=radii[next()%6];
+      queries.push_back(q);
+      }
+    say("physics dump waypoints " + std::to_string(points.size()));
+    }
+  std::FILE* queryFile=std::fopen((outDir+"/physics-queries.tsv").c_str(),"w");
+  std::FILE* resultFile=std::fopen((outDir+"/physics-results.jsonl").c_str(),"w");
+  if(queryFile==nullptr || resultFile==nullptr) {
+    if(queryFile!=nullptr) std::fclose(queryFile);
+    if(resultFile!=nullptr) std::fclose(resultFile);
+    say("physics dump failed: cannot create output files");
+    return;
+    }
+  for(const auto& q:queries)
+    std::fprintf(queryFile,"%.9g %.9g %.9g %.9g %.9g %.9g %.9g\n",double(q.from.x),double(q.from.y),double(q.from.z),
+                 double(q.to.x),double(q.to.y),double(q.to.z),double(q.radius));
+  std::fclose(queryFile);
+  for(int kind=0;kind<2;++kind) {
+    const char* name=kind==0 ? "ray" : "sphere";
+    auto cast = [&](const Query& q) { return kind==0 ? w.physic()->ray(q.from,q.to) : w.physic()->sweep(q.from,q.to,q.radius); };
+    for(size_t i=0;i<std::min<size_t>(4096,queries.size());++i)
+      (void)cast(queries[i]);
+    std::vector<double> batchTimes;
+    // Timing batches avoids the clock overhead dominating cheap individual queries. JSON/file IO
+    // happens outside the timed block, and every batch has the same mixture in both backends.
+    constexpr size_t batchSize=256;
+    for(size_t begin=0;begin<queries.size();begin+=batchSize) {
+      const size_t end=std::min(begin+batchSize,queries.size());
+      std::vector<DynamicWorld::RayLandResult> results(end-begin);
+      const auto start=std::chrono::steady_clock::now();
+      for(size_t i=begin;i<end;++i)
+        results[i-begin]=cast(queries[i]);
+      const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-start).count();
+      batchTimes.push_back(double(elapsed)/double(end-begin));
+      for(size_t i=begin;i<end;++i) {
+        const auto& r=results[i-begin];
+        const std::string sector=jsonStr(r.sector!=nullptr ? r.sector : "");
+        std::fprintf(resultFile,"{\"kind\":\"%s\",\"id\":%zu,\"hit\":%s,\"point\":[%.9g,%.9g,%.9g],\"normal\":[%.9g,%.9g,%.9g],\"material\":%u,\"sector\":%s,\"fraction\":%.9g}\n",
+                     name,i,r.hasCol ? "true" : "false",r.hasCol ? double(r.v.x) : 0.0,r.hasCol ? double(r.v.y) : 0.0,r.hasCol ? double(r.v.z) : 0.0,
+                     double(r.n.x),double(r.n.y),double(r.n.z),unsigned(r.mat),sector.c_str(),double(r.hitFraction));
+        }
+      }
+    std::sort(batchTimes.begin(),batchTimes.end());
+    if(!batchTimes.empty()) {
+      const auto percentile=[&](double p) { return batchTimes[size_t(p*double(batchTimes.size()-1))]; };
+      say(std::string("physics timing ")+name+" count "+std::to_string(queries.size())+
+          " batch 256 ns/query p50 "+std::to_string(percentile(0.5))+" p95 "+std::to_string(percentile(0.95)));
+      }
+    }
+  std::fclose(resultFile);
+  say("physics dump complete " + std::to_string(queries.size()) + " rays and spheres");
+  }
+
 void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   const auto a = split(line);
   if(a.empty())
     return;
   const std::string& c = a[0];
 
-  if(c=="wait") {
+  if(Resources::isHeadless() && c=="cheat" && a.size()==2 && a[1]=="god") {
+    // Marvin also draws a notification with a GPU font. The CPU runner needs the same game flag.
+    Gothic::inst().setGodMode(!Gothic::inst().isGodMode());
+    say("cheat god");
+    }
+  else if(c=="physics" && a.size()>1 && a[1]=="dump") {
+    physicsDump(w,pl,size_t(std::clamp(num(a,2,100000),1.f,1000000.f)),uint32_t(num(a,3,73013)),a.size()>4 ? a[4] : "");
+    }
+  else if(c=="wait") {
     bench.waitUntil = bench.time + uint64_t(num(a,1,1000));
     }
   else if(c=="waitarrive") {
