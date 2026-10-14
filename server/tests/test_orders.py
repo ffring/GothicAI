@@ -329,6 +329,40 @@ async def test_a_companion_goes_ahead_to_a_place_near_and_says_what_is_there():
     assert "ты пришёл первым — в пещере бандитов" in cue
 
 
+async def test_set_on_one_it_saw_a_while_ago_it_goes_there_first():
+    # step M2: Cavalorn saw the bandits in their cave and came out; «там бандиты, разберись»
+    fake = FakeGame()
+    fake.nearby = [{"id": BANDIT, "name": "Бандит", "distance": 900.0, "guild": 9, "dead": False}]
+    fight = {"goal": "fight", "target": BANDIT, "attitude": "friendly", "agenda": None}
+    llm = FakeBackend("Сейчас я им!", delay=0, tool_calls=[ToolCall("set_intent", fight)])
+    cm, dialogue, talk = await _desk(fake, llm, places=PlaceBook(BOOK))
+    looked: list[int] = []
+
+    async def view_of(npc: str) -> NpcView:
+        looked.append(len(acts(fake)))
+        there = [{"id": BANDIT, "name": "Бандит", "distance": 500}] if len(looked) >= 3 else []
+        return NpcView.model_validate({"npc": npc, "name": "Горн", "sees": there})
+
+    talk.orders.view_of = view_of
+    talk.orders.last_seen = lambda npc, who: "CAVE" if who == BANDIT else None
+    try:
+        await _follows(fake, dialogue)
+        await fake.send(type="player_text", text="Горн, там бандиты, разберись.")
+        await _until(lambda: fights(fake) == [BANDIT])
+    finally:
+        await cm.__aexit__(None, None, None)
+
+    # to the cave, on through its point (it does not see him from the middle), then at him
+    assert acts(fake)[:4] == [
+        (GORN, "follow"),
+        (GORN, "go_to_waypoint"),
+        (GORN, "go_to_waypoint"),
+        (GORN, "fight"),
+    ]
+    walk = next(m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_waypoint")
+    assert walk["args"]["pos"] == [500, 2, 3]
+
+
 async def test_go_to_a_place_that_is_not_near_is_rejected():
     fake = FakeGame()
     go = ToolCall("go_to", {"place": "FARM"})
@@ -342,6 +376,39 @@ async def test_go_to_a_place_that_is_not_near_is_rejected():
     finally:
         await cm.__aexit__(None, None, None)
     assert not any(m["type"] == "action" and m["action"] == "go_to_waypoint" for m in fake.received)
+
+
+async def test_go_to_any_place_near_though_not_among_the_nearest_shown():
+    # 2026-10-14: by the steps the bandits' cave was the seventh place near, and «иди в пещеру» was refused
+    fake = FakeGame()
+    many = {
+        **BOOK,
+        "places": [
+            *[
+                {"id": f"SPOT{i}", "ru": f"место {i}", "where_ru": f"у места {i}", "en": "spot",
+                 "where_en": "at a spot", "center": [100 + 50 * i, 2, 3]}
+                for i in range(7)
+            ],
+            {"id": "CAVE", "ru": "пещера бандитов", "where_ru": "в пещере бандитов", "en": "cave",
+             "where_en": "in the cave", "center": [2000, 2, 3]},
+        ],
+        "points": {f"WP{i}": i for i in range(8)},
+    }  # fmt: skip
+    go = ToolCall("go_to", {"place": "CAVE"})
+    llm = FakeBackend(script=[FakeStep("Пойду первым.", [go]), FakeStep("Тут пусто.", [])], delay=0)
+    cm, dialogue, talk = await _desk(fake, llm, places=PlaceBook(many))
+    dialogue.extensions.append(talk.orders)
+    try:
+        await _follows(fake, dialogue)
+        assert "CAVE" not in [p.id for p, _ in talk.orders.nearby(GORN)]  # not shown
+        await fake.send(type="player_text", text="Горн, иди в пещеру первым.")
+        await _until(
+            lambda: any(m["type"] == "action" and m["action"] == "go_to_waypoint" for m in fake.received)
+        )
+    finally:
+        await cm.__aexit__(None, None, None)
+    walk = next(m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_waypoint")
+    assert walk["args"]["pos"] == [2000, 2, 3]
 
 
 async def test_a_companion_sent_ahead_hears_its_name_from_afar():

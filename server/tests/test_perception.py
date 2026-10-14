@@ -256,6 +256,10 @@ def test_its_intent_points_only_to_whom_it_sees_or_saw_a_moment_ago():
     d._store(NpcView.model_validate(cavalorns_view()))
     sight = d.sight(CAVALORN)
     assert sight is not None and sight.targets == {"PLAYER": "герой"}
+    # what it saw lately stays a target (step M2: sightings.py): «там бандиты, разберись»
+    d.remembered = lambda npc: {BRAGO: "незнакомец, по виду бандит, видел 20 минут назад — в пещере бандитов"}
+    sight = d.sight(CAVALORN)
+    assert sight is not None and sight.targets[BRAGO].endswith("видел 20 минут назад — в пещере бандитов")
 
 
 LETTER = "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED"

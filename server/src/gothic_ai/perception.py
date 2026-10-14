@@ -240,6 +240,8 @@ class PerceptionDesk:
         self._views: dict[str, tuple[float, NpcView]] = {}
         self._recent: dict[str, dict[str, tuple[float, Look]]] = {}  # npc -> whom it saw, when
         self.on_view: list[Callable[[NpcView], None]] = []  # every view that comes, pushed or asked
+        # whom it saw lately and does not see now (sightings.py, step M2): id -> how it knows him
+        self.remembered: Callable[[str], dict[str, str]] = lambda npc: {}
         link.listeners.append(self._on_message)
 
     def _on_message(self, msg: GameMessage) -> None:
@@ -324,8 +326,9 @@ class PerceptionDesk:
         )
 
     def targets(self, view: NpcView) -> dict[str, str]:
-        """Whom its intent may point to: the hero, whom it sees, saw a moment ago, and whom the hero looks
-        at (he points at him); id -> how it knows him."""
+        """Whom its intent may point to: the hero, whom it sees, saw a moment ago, whom the hero looks at
+        (he points at him), and the strangers and creatures it saw lately (sightings.py); id -> how it
+        knows him."""
         out = {"PLAYER": "герой"}
         for o in view.sees:
             out.setdefault(o.id.upper(), f"{self.label(view.npc, o)}, {_m(o.distance)} м")
@@ -336,6 +339,9 @@ class PerceptionDesk:
         focus = view.hero.focus.upper() if view.hero is not None and view.hero.focus else None
         if focus and focus not in out and focus != view.npc.upper():
             out[focus] = "на него смотрит герой"
+        for who, how in self.remembered(view.npc).items():  # «там бандиты, разберись»
+            if who.upper() != view.npc.upper():
+                out.setdefault(who.upper(), how)
         return out
 
     def place(self, view: NpcView) -> Place | None:
