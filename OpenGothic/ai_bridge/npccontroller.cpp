@@ -1,11 +1,14 @@
 #include "npccontroller.h"
 
+#include <Tempest/Log>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 
 #include "game/gamescript.h"
 #include "game/inventory.h"
+#include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
@@ -16,6 +19,7 @@
 
 #include "jsonread.h"
 #include "jsonwriter.h"
+#include "npcchests.h"
 #include "npcfind.h"
 #include "textcodec.h"
 
@@ -36,6 +40,7 @@ constexpr uint64_t FollowStepMs     = 500;
 constexpr uint64_t FollowStuckMs    = 2000;  // walking, but it has not moved FollowMovedCm in this long: stuck
 constexpr float    FollowMovedCm    = 75;
 constexpr float    TakeRange        = 2000;  // cm: take_item picks up the nearest such thing within this
+constexpr float    ChestNear        = 300;   // cm: use_chest walks to the chest's waypoint from farther
 constexpr uint64_t StateStartMs     = 3000;  // fight/flee: the script state must begin within this
 
 std::string upper(std::string_view s) {
@@ -463,6 +468,53 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     return true;
     }
 
+  if(a.type=="use_chest") {
+    // v28: it walks up to its chest, opens it as the scripts' AI_UseMob does, takes out and puts in, closes it
+    Interactive* chest = NpcChests::find(world,str(args,"chest"));
+    if(chest==nullptr) {
+      err = "no chest " + std::string(str(args,"chest"));
+      return false;
+      }
+    if(NpcChests::whose(world,npc,*chest).empty()) {
+      err = "not its chest";
+      return false;
+      }
+    auto moves = [&](std::string_view key, std::vector<std::pair<size_t,size_t>>& out) {
+      if(!args.HasMember(key.data()) || !args[key.data()].IsArray())
+        return true;
+      for(auto& m:args[key.data()].GetArray()) {
+        const auto   name = upper(str(m,"item"));
+        const size_t cls  = world.script().findSymbolIndex(name);
+        if(cls==size_t(-1)) {
+          err = "unknown item " + name;
+          return false;
+          }
+        out.emplace_back(cls,size_t(std::max<int64_t>(1,integer(m,"count",1))));
+        }
+      return true;
+      };
+    if(!moves("take",a.take) || !moves("put",a.put))
+      return false;
+    for(auto& [cls,count]:a.put)
+      if(npc.inventory().itemCount(cls)==0) {
+        err = "npc has no item " + itemSymbol(world,cls);
+        return false;
+        }
+    a.chest    = chest;
+    a.deadline = 60000;
+    // its owner opens it as if it had the key (the lock stays for the hero)
+    if(chest->needToLockpick(npc)) {
+      chest->setAsCracked(true);
+      a.relock = true;
+      }
+    // AI_UseMob takes the nearest chest: it goes up to this one first
+    if(npc.qDistTo(chest->position())>ChestNear*ChestNear)
+      if(auto wp = world.findWayPoint(chest->position()))
+        npc.aiPush(AiQueue::aiGoToPoint(*wp));
+    npc.aiPush(AiQueue::aiUseMob(chest->schemeName(),1));
+    return true;
+    }
+
   if(a.type=="fight")
     return startScriptState(world,c,a,"ZS_ATTACK",args,err);
   if(a.type=="flee")
@@ -613,6 +665,11 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
     return;
     }
 
+  if(a.type=="use_chest") {
+    useChest(world,c,a);
+    return;
+    }
+
   if(a.type=="take_item") {
     if(c.npc->inventory().itemCount(a.item)>a.count)
       finishAction(c,"done",""); else
@@ -732,9 +789,53 @@ void NpcController::stopFollow(Controlled& c, std::string_view reason) {
     onFollowEnded(c.symbol,reason);
   }
 
+void NpcController::useChest(World& world, Controlled& c, Action& a) {
+  Npc& npc = *c.npc;
+  if(a.opened) {  // closed again
+    finishAction(c,"done",a.moved);
+    return;
+    }
+  if(npc.interactive()!=a.chest) {
+    finishAction(c,"failed",npc.interactive()!=nullptr ? "opened another chest" : "could not open the chest");
+    return;
+    }
+  auto list = [&](const std::vector<std::pair<size_t,size_t>>& moved) {
+    std::string out;
+    for(auto& [cls,count]:moved)
+      out += (out.empty() ? "" : ",") + itemSymbol(world,cls) + ":" + std::to_string(count);
+    return out;
+    };
+  std::vector<std::pair<size_t,size_t>> took, put;
+  auto& inv = const_cast<Inventory&>(npc.inventory());  // as the scripts' own transfers do
+  for(auto& [cls,want]:a.take) {
+    const size_t n = std::min(want,a.chest->inventory().itemCount(cls));
+    if(n>0) {
+      Inventory::transfer(inv,a.chest->inventory(),nullptr,cls,n,world);
+      took.emplace_back(cls,n);
+      }
+    }
+  for(auto& [cls,want]:a.put) {
+    const size_t n = std::min(want,npc.inventory().itemCount(cls));
+    if(n>0) {
+      Inventory::transfer(a.chest->inventory(),inv,&npc,cls,n,world);
+      put.emplace_back(cls,n);
+      }
+    }
+  a.moved  = "took=" + list(took) + ";put=" + list(put);
+  a.opened = true;
+  Tempest::Log::i("[ai] ",c.symbol," chest ",NpcChests::id(*a.chest),": ",a.moved);
+  npc.aiPush(AiQueue::aiUseMob(a.chest->schemeName(),-1));
+  }
+
 void NpcController::finishAction(Controlled& c, std::string_view status, std::string_view detail, double distance) {
   if(!c.act)
     return;
+  if(c.act->type=="use_chest" && c.act->chest!=nullptr) {
+    if(c.npc!=nullptr && c.npc->interactive()==c.act->chest && status!="done")
+      c.npc->setInteraction(nullptr,true);  // cut off at the open chest: it lets go of it
+    if(c.act->relock)
+      c.act->chest->setAsCracked(false);
+    }
   regainControl(c);
   emitActionResult(c.act->id,c.symbol,status,detail,distance);
   c.act.reset();

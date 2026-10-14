@@ -23,6 +23,7 @@ from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
 from .budget import Budget
+from .chests import ChestDesk
 from .chronicle import Chronicle
 from .concerns import Concerns
 from .consequences import LieConsequences
@@ -180,6 +181,7 @@ class ServerState:
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
+        self.chests: ChestDesk | None = None
         self.interject: Interjections | None = None
         self.bodies: Bodies | None = None
         self.concerns: Concerns | None = None
@@ -646,6 +648,11 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
         state.dialogue.extensions.append(state.deals.contracts)
+        if args.chests:
+            # what lies in its chest, as it knows, and it goes to take it out (docs/npc-tools.md «Сундуки»)
+            state.chests = ChestDesk(link, memory, places=place_book, journal=journal)
+            state.dialogue.extensions.append(state.chests)
+            state.deals.in_chests = state.chests.in_chests
         talk.on_talk_end.append(state.deals.end)
         if args.wrath or args.scenario == "wrath":
             # insult Xardas enough and he raises you as a skeleton (on by default, --no-wrath turns it off)
@@ -912,6 +919,17 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.ground_scenario(link, state.dialogue, state.talk, state.perception)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario ground: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in ("chests", "chests_lobart"):
+                assert state.dialogue is not None and state.talk is not None
+                lobart = {"npc": "BAU_950_LOBART", "name": "Лобарт", "item": "ITAR_BAU_L"}
+                lobart["ask"] = "Лобарт, продай мне крестьянскую одежду."
+                more = lobart if args.scenario == "chests_lobart" else {}
+                results = await scenarios.chests_scenario(
+                    link, state.dialogue, state.talk, state.chests, **more
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario chests: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "group":
                 assert state.dialogue is not None and state.talk is not None
@@ -1570,6 +1588,8 @@ def main() -> None:
             "wolf",
             "calm",
             "ground",
+            "chests",
+            "chests_lobart",
             "group",
             "interject",
             "remembers",
@@ -1663,6 +1683,12 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="wolves hear the tone of the hero's words: they let him pass, run or bite (docs/beasts.md)",
+    )
+    p.add_argument(
+        "--chests",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's know what lies in their chests and go to take it out (docs/npc-tools.md «Сундуки»)",
     )
     p.add_argument(
         "--interject",

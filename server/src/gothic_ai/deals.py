@@ -380,6 +380,8 @@ class Deals:
         self.names = names  # an npc's name -> its symbol, for whom a task is to kill (the character cards)
         self.things = things  # an npc -> the item ids of its story (StoryGraph.things_of), for a guessed id
         self.stash = Stash(chronicle)
+        # what the npc knows it keeps in its chests (chests.py): a thing it offers may be there
+        self.in_chests: Callable[[str], dict[str, tuple[int, str]]] = lambda npc: {}
         # the tasks of the deals and their rewards: a TurnExtension of its own (cli.py)
         self.contracts = Contracts(link, dialogue, chronicle, self.stash, journal=self.journal)
         self.open: dict[str, Deal] = {}  # npc -> its offer, while the conversation lasts
@@ -625,6 +627,12 @@ class Deals:
             if got is None:
                 listed = "; ".join(f"{nm} ({i}) ×{c}" for i, (c, nm) in have.items()) or "пусто"
                 hidden = f" Твой тайник: {self.stash.text(npc)}." if kept else ""
+                stored = self.in_chests(npc).get(item)
+                if stored is not None:
+                    hidden += (
+                        f" {stored[1]} ({item}) ×{stored[0]} лежит у тебя в сундуке: сначала достань "
+                        "(инструмент chest), потом предлагай."
+                    )
                 if n or kept.get(item):
                     return None, f"у тебя только {n + kept.get(item, 0)} — {name or item} ({item}).{hidden}"
                 return None, f"у тебя нет {item}. Твой инвентарь: {listed}.{hidden}"

@@ -28,6 +28,7 @@ from .protocol import (
     BodyObservationPacket,
     BodyObservations,
     BodyWatchCmd,
+    Chest,
     DebugCmd,
     DebugCommand,
     DetachCmd,
@@ -40,6 +41,7 @@ from .protocol import (
     NpcActCmd,
     NpcActResult,
     NpcActType,
+    NpcChestsCmd,
     NpcView,
     NpcViewCmd,
     PingCmd,
@@ -79,6 +81,7 @@ _Request = (
     | StoryEffectCmd
     | RaiseDeadCmd
     | StoryNearbyCmd
+    | NpcChestsCmd
     | StoryStateCmd
     | StoryEvalCmd
     | StoryProgramCmd
@@ -383,6 +386,11 @@ class GameLink:
         """People within `radius` cm of an npc."""
         res = await self._request(StoryNearbyCmd(req=self._next_id("s"), npc=npc.upper(), radius=radius), 5.0)
         return list(res.value or [])
+
+    async def npc_chests(self, npc: str) -> list[Chest]:
+        """The npc's chests and what lies in them (v28), nearest first."""
+        res = await self._request(NpcChestsCmd(req=self._next_id("c"), npc=npc.upper()), 5.0)
+        return [Chest.model_validate(c) for c in res.value or []]
 
     async def story_state(
         self,
