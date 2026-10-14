@@ -6,6 +6,8 @@ Document ray gate: **True** (at least 99.9% within 0.1cm, all materials/sectors)
 
 User accepted native Jolt normals for 0.1<=radius<=1cm (1–10mm); raw normal differences remain reported. Points, hits, material and sector receive no exception.
 
+The user subsequently chose to retain Jolt as the recorded working candidate, with these differences explicitly kept in reports and checks. Sphere parity, exact bench compatibility and the frame-time criterion remain open; thresholds, the normal-only exception and all recorded verdicts are unchanged. The earlier question quoted historical counts; the table below is the final v13 result. [Recorded decision](validation-notes.md).
+
 | Query | Count | Hit mismatch | Point mismatch | Raw normal mismatch | Exempt normal | Nonexempt normal | Material mismatch | Sector mismatch | Point match |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | ray | 100000 | 0 | 3 | 0 | 0 | 0 | 0 | 0 | 99.997000% |
