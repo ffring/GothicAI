@@ -542,7 +542,7 @@ async def test_a_stuck_turn_gives_way_to_the_end_of_the_danger(tmp_path, monkeyp
     from gothic_ai.protocol import RosterEntry
 
     class Hangs(FakeBackend):
-        async def stream(self, *, instructions, messages, tools=None, tool_choice=None):
+        async def stream(self, *, instructions, messages, tools=None, tool_choice=None, **_):
             self.calls.append((instructions, list(messages), list(tools or [])))
             if len(self.calls) == 1:
                 await asyncio.Event().wait()  # never answers

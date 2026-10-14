@@ -189,6 +189,8 @@ class QuestBoard:
             lines.append(f"Твоё поручение герою (id {q.id}): {q.title}. Награда: {q.reward()}. {state}")
         return "\n".join(lines) or None
 
+    all_tools: tuple[Tool, ...] = (PAY_TOOL,)
+
     def tools(self, npc: str) -> list[Tool]:
         open_ = any(q.giver == npc.upper() and not q.paid for q in self.quests.values())
         return [PAY_TOOL] if open_ else []

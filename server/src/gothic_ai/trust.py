@@ -122,6 +122,8 @@ class Trust:
             lines.append(f"- он загладил вину за ложь: {'; '.join(r.amended)}")
         return "Что ты знаешь о честности героя:\n" + "\n".join(lines) if lines else None
 
+    all_tools: tuple[Tool, ...] = ()
+
     def tools(self, npc: str) -> list[Tool]:
         return []
 
