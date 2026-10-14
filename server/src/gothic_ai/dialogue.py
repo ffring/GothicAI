@@ -971,7 +971,11 @@ class DialogueManager:
         if conv.reply is not None and not conv.reply.done():
             conv.pending.append(cue)
             return None
-        offered = self.tools if tools is None else [t for t in self._offered(npc) if t.name in tools]
+        offered = self._offered(npc)
+        if tools is None:
+            offered = [t for t in offered if t in self.tools]  # its own, not the extensions'
+        else:
+            offered = [t for t in offered if t.name in tools]
         return self._reply(
             conv, self._turn(conv, Message("developer", cue), kind, relevant, overlay=overlay, tools=offered)
         )
@@ -1788,6 +1792,21 @@ class DialogueManager:
                 give = ToolCall(call.name, args, call.call_id)
                 self._after_speech(conv, lambda: self._give(conv, give, snap))
                 return ToolOutcome("Принято: отдашь после реплики.", "accepted")
+            case npc_tools.TAKE_ITEM:
+                sight = self.sight(conv.npc, snap) if self.sight is not None else None
+                item = str(call.arguments.get("item", "")).strip().upper()
+                thing = sight.things.get(item) if sight is not None else None
+                if thing is None:
+                    seen = ", ".join(sight.things) if sight is not None and sight.things else "ничего"
+                    why = f"Отклонено: на земле нет {item or '?'}; ты видишь там: {seen}."
+                    return ToolOutcome(why, "rejected")
+                if item in state.taken:
+                    return ToolOutcome("Его ты уже поднимаешь.", "accepted")
+                state.taken.add(item)
+                self._journal_call(conv, call.name, {"item": item})
+                take = ToolCall(call.name, {"item": item, "name": thing.name}, call.call_id)
+                self._after_speech(conv, lambda: self._take(conv, take, snap))
+                return ToolOutcome("Принято: поднимешь после реплики.", "accepted")
         for ext in self.extensions:
             if (outcome := await ext.handle(self, conv, call, snap)) is not None:
                 return outcome
@@ -1795,7 +1814,11 @@ class DialogueManager:
 
     def _offered(self, npc: str) -> list[Tool]:
         """The tools for a turn with the hero: the npc's own and those of the extensions."""
-        return [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
+        tools = [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
+        sight = self.sight(npc, None) if self.sight is not None else None
+        if sight is None or not sight.things:  # nothing lying about that it sees: nothing to pick up
+            tools = [t for t in tools if t.name != npc_tools.TAKE_ITEM]
+        return tools
 
     def _recall(self, conv: Conversation, query: str) -> str:
         """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded), and
@@ -1824,6 +1847,19 @@ class DialogueManager:
             outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
         finally:
             self._free(conv, "give")
+        return outcome.note, outcome.ok
+
+    async def _take(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> tuple[str, bool]:
+        """Pick a thing up off the ground. Walking up to it ends a companion's following: it goes with the
+        hero again after."""
+        if not await self._hold(conv, "take"):
+            return "Тело не смогло поднять предмет: ты занят", False
+        try:
+            outcome = await npc_tools.execute(self.link, conv.npc, call, snap)
+            if conv.intent.goal in executor.COMPANION_GOALS:
+                await self._body(conv, [("follow", {"npc": "PLAYER"})])
+        finally:
+            self._free(conv, "take")
         return outcome.note, outcome.ok
 
     def _controlled(self, npc: str) -> bool:
@@ -1998,6 +2034,7 @@ class TurnState:
     first_line: float | None = None
     end_requested: bool = False
     given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
+    taken: set[str] = field(default_factory=set)  # things picked up off the ground in this turn
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
     recalled: bool = False  # recall is used once per turn
     filler: str = ""  # said at once (the quick model's "Хм...", "Что?!"): the answer does not repeat it

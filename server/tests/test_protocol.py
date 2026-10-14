@@ -12,6 +12,7 @@ from gothic_ai.protocol import (
     HushCmd,
     NpcActCmd,
     NpcIdle,
+    NpcViews,
     SayCmd,
     Snapshot,
     parse_game_message,
@@ -86,8 +87,49 @@ def _json(obj) -> str:
     return json.dumps(obj)
 
 
+def test_v22_things_lying_about():
+    assert PROTOCOL_VERSION == 22
+    seen = parse_game_message(
+        _json(
+            {
+                "type": "npc_views",
+                "t": 1000,
+                "views": [
+                    {
+                        "npc": "BAU_4300_ADDON_CAVALORN",
+                        "name": "Кавалорн",
+                        "items": [
+                            {
+                                "item": "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+                                "name": "Запечатанное послание",
+                                "count": 1,
+                                "distance": 120,
+                                "hero_cm": 80,
+                                "from_hero": "ahead",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert isinstance(seen, NpcViews)
+    thing = seen.views[0].items[0]
+    assert (thing.item, thing.hero_cm, thing.from_hero) == (
+        "ITWR_SATURASFIRSTMESSAGE_ADDON_SEALED",
+        80,
+        "ahead",
+    )
+    assert (
+        NpcViews.model_validate({"type": "npc_views", "t": 1, "views": [{"npc": "X", "name": "x"}]})
+        .views[0]
+        .items
+        == []
+    )
+    assert ActionCmd(id="a1", npc="X", action="take_item", args={"item": "ITPL_BEET"}).action == "take_item"
+
+
 def test_v21_wolves_hear_the_hero():
-    assert PROTOCOL_VERSION == 21
     seen = parse_game_message(
         _json(
             {

@@ -58,7 +58,7 @@ class NpcController final {
       size_t          target   = 0;     // instance of target npc
       bool            toPlayer = false;
       float           radius   = 0;     // success radius for movement, cm
-      size_t          item     = 0;     // give_item: item instance and count
+      size_t          item     = 0;     // give_item, take_item: item instance and count (take: what it had)
       size_t          count    = 0;
       ScriptFn        state;            // fight/flee: the script state that runs it
       const Npc*      targetNpc = nullptr; // fight/flee: exactly whom (symbols of monsters are shared)

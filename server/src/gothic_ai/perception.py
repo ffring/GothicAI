@@ -18,6 +18,9 @@ What it sees is told with the ids its intent may point to, where each is from th
 so "вон тот бандит", "там" and "бей его" have something to point to. Those close by out of its field of
 view it notices all the same. Its intent may point only to whom it sees, saw a moment ago (`RECENT_S`) or
 the hero looks at: not to everyone within 15 m, wall or no wall, as the snapshot had it.
+
+It sees things lying about too (protocol v22): «На земле: Запечатанное послание (ITWR_…; 1 м, у ног
+героя).». What the hero threw down for it, it can pick up (`take_item`, npc_tools.py).
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from typing import TYPE_CHECKING
 from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .npc_tools import guild_name
-from .protocol import GameMessage, HeroLook, Loading, Look, NpcView, NpcViews, Session, Snapshot
+from .protocol import GameMessage, GroundItem, HeroLook, Loading, Look, NpcView, NpcViews, Session, Snapshot
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
@@ -44,6 +47,7 @@ log = logging.getLogger(__name__)
 FRESH_S = 3.0  # a pushed view older than this is not used
 RECENT_S = 60.0  # someone seen this long ago may still be its intent's target (out of sight for a moment)
 HEARD_CM = 1500  # the hero unseen but this close: it hears him
+AT_FEET_CM = 150  # a thing this close to the hero lies at his feet
 PEOPLE_MAX, EN_OTHERS_MAX = 8, 3
 # guilds whose members know each other wherever they meet: an order, a garrison, a band of mercenaries
 ORDERS = {1, 2, 4, 5, 6, 7, 14}
@@ -196,6 +200,8 @@ class Sight:
     people: str
     # whom its intent may point to: id -> how it knows him (the hero, whom it sees or saw a moment ago)
     targets: dict[str, str] = field(default_factory=dict)
+    ground: str | None = None  # «На земле: …», what it sees lying about
+    things: dict[str, GroundItem] = field(default_factory=dict)  # what take_item may pick up, by item id
 
 
 def armor_look(armor: str | None) -> tuple[str, str] | None:
@@ -298,7 +304,14 @@ class PerceptionDesk:
         view = self.view(npc)
         if view is None:
             return None
-        return Sight(self._place(view), self._hero(view, snap), self._people(view), self.targets(view))
+        return Sight(
+            self._place(view),
+            self._hero(view, snap),
+            self._people(view),
+            self.targets(view),
+            ground=_ground(view.items),
+            things={t.item.upper(): t for t in view.items},
+        )
 
     def targets(self, view: NpcView) -> dict[str, str]:
         """Whom its intent may point to: the hero, whom it sees, saw a moment ago, and whom the hero looks
@@ -532,6 +545,10 @@ class PerceptionDesk:
             where = f", {EN_SIDES[o.from_hero]}" if o.from_hero in EN_SIDES else ""
             what_s = ", " + ", ".join(what) if what else ""
             lines.append(f"{who} is {_m(o.distance)} m away{where}{what_s}.")
+        if view.items:
+            t = view.items[0]
+            at = " at the hero's feet" if t.hero_cm is not None and t.hero_cm <= AT_FEET_CM else ""
+            lines.append(f"On the ground: {t.name}, {_m(t.distance)} m away{at}.")
         return tuple(lines)
 
 
@@ -552,6 +569,22 @@ def _side(o: Look) -> str:
     if o.noticed:
         parts.append("сбоку или у тебя за спиной")
     return "".join(f", {p}" for p in parts)
+
+
+def _ground(items: list[GroundItem]) -> str | None:
+    """«На земле: Запечатанное послание (ITWR_…; 1 м, у ног героя); Луговой горец ×3 (ITPL_…; 8 м).»"""
+    if not items:
+        return None
+    told = []
+    for t in items:
+        where = [f"{_m(t.distance)} м"]
+        if t.hero_cm is not None and t.hero_cm <= AT_FEET_CM:
+            where.append("у ног героя")
+        elif t.from_hero in SIDES:
+            where.append(SIDES[t.from_hero])
+        count = f" ×{t.count}" if t.count > 1 else ""
+        told.append(f"{t.name}{count} ({t.item}; {', '.join(where)})")
+    return "На земле: " + "; ".join(told) + "."
 
 
 def _salience(o: Look) -> int:

@@ -35,7 +35,7 @@ constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
 constexpr uint64_t FollowStuckMs    = 2000;  // walking, but it has not moved FollowMovedCm in this long: stuck
 constexpr float    FollowMovedCm    = 75;
-constexpr uint64_t FollowMaxMs      = 10*60*1000;
+constexpr float    TakeRange        = 2000;  // cm: take_item picks up the nearest such thing within this
 constexpr uint64_t StateStartMs     = 3000;  // fight/flee: the script state must begin within this
 
 std::string upper(std::string_view s) {
@@ -284,7 +284,10 @@ void NpcController::action(World& world, const rapidjson::Value& msg) {
     Follow f;
     f.toPlayer = target->isPlayer();
     f.target   = target->instanceSymbol();
-    f.until    = world.tickCount() + uint64_t(integer(args,"timeout_ms",int64_t(FollowMaxMs)));
+    // a companion goes with him for as long as it means to (v22): the server stops it; timeout_ms is
+    // for whoever wants a limit (Cavalorn gave up after 10 minutes, 2026-10-14)
+    const int64_t limit = integer(args,"timeout_ms",0);
+    f.until    = limit>0 ? world.tickCount() + uint64_t(limit) : 0;
     c->follow  = f;
     emitActionResult(id,symbol,"done","",-1);
     return;
@@ -429,6 +432,34 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     if(npc.qDistTo(*target)>AiNpc::GiveRange*AiNpc::GiveRange)
       npc.aiPush(AiQueue::aiGoToNpc(target));
     npc.aiPush(AiQueue::aiTurnToNpc(target));
+    return true;
+    }
+
+  if(a.type=="take_item") {
+    // a thing lying about (v22): it walks up to the nearest of that kind and picks it up, as the scripts'
+    // AI_GotoItem and AI_TakeItem do
+    const auto   name = upper(str(args,"item"));
+    const size_t cls  = world.script().findSymbolIndex(name);
+    Item*        it   = nullptr;
+    float        best = TakeRange*TakeRange;
+    if(cls!=size_t(-1)) {
+      world.detectItem(npc.position(),TakeRange,[&](Item& i) {
+        const float d = (i.position()-npc.position()).quadLength();
+        if(i.clsId()==cls && d<best) {
+          it   = &i;
+          best = d;
+          }
+        });
+      }
+    if(it==nullptr) {
+      err = "no " + name + " lying nearby";
+      return false;
+      }
+    a.item     = cls;
+    a.count    = npc.inventory().itemCount(cls);  // what it had: it took the thing once it has more
+    a.deadline = 30000;
+    npc.aiPush(AiQueue::aiGotoItem(*it));
+    npc.aiPush(AiQueue::aiTakeItem(*it));
     return true;
     }
 
@@ -582,6 +613,13 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
     return;
     }
 
+  if(a.type=="take_item") {
+    if(c.npc->inventory().itemCount(a.item)>a.count)
+      finishAction(c,"done",""); else
+      finishAction(c,"failed","it is not in its hands: gone, or out of reach");
+    return;
+    }
+
   if(a.type=="give_item") {
     std::string err;
     if(giveItem(world,c,a,err))
@@ -641,7 +679,7 @@ void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
     stopFollow(c,"target_too_far");
     return;
     }
-  if(now>=f.until) {
+  if(f.until!=0 && now>=f.until) {
     stopFollow(c,"timeout");
     return;
     }

@@ -612,6 +612,7 @@ async def serve(args: argparse.Namespace) -> int:
             state.chronicle,
             journal=journal,
             names=lambda name: symbol_by_name(personas.cards, name),
+            things=graph.things_of if graph is not None else None,
         )
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
@@ -866,6 +867,12 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "ground":
+                assert state.dialogue is not None and state.talk is not None and state.perception is not None
+                results = await scenarios.ground_scenario(link, state.dialogue, state.talk, state.perception)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario ground: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "calm":
                 assert state.dialogue is not None and state.talk is not None
@@ -1494,6 +1501,7 @@ def main() -> None:
             "companion",
             "wolf",
             "calm",
+            "ground",
             "m6",
             "see",
             "seen",
