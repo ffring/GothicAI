@@ -16,6 +16,7 @@
 #include "game/gamescript.h"
 
 #include "expr.h"
+#include "program.h"
 #include "storyeffects.h"
 
 class Npc;
@@ -23,6 +24,8 @@ class World;
 
 namespace storygraph {
   class Bytecode;
+  class Externals;
+  class Interpreter;
   class Lifter;
   class Predicates;
   }
@@ -33,6 +36,9 @@ namespace storygraph {
 // or add dialogs of its own, whose lines and effects the bridge plays.
 // With -devmode (or GOTHIC_AI_STORYCHECK=1) every script condition is also computed from its lifted form
 // and differences are logged: the check of stage 2, on the live game.
+// The script functions of dialogs (conditions, information, choices) run as their programs (program.h), by
+// the Interpreter, not by the VM; script functions they call still run in the VM. GOTHIC_AI_STORYEXEC=0 turns
+// it off; so do scripts with Ikarus, whose loops jump from engine functions.
 class DialogGraph final {
   public:
     // send: a message to the server; addLine: registers a runtime line (npc symbol, text in the game
@@ -82,6 +88,8 @@ class DialogGraph final {
     void        onExtra(const zenkit::INpc& npc, bool important, std::vector<GameScript::DlgChoice>& out);
     void        onExec(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc);
     void        onChosen(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc);
+    // a dialog's condition, information or choice: run as its program (docs/story-graph.md, «Исполнение без VM»)
+    bool        onScript(zenkit::DaedalusSymbol& fn, int32_t& result);
 
     std::string applyOp(const rapidjson::Value& op);
     std::string readNode(const rapidjson::Value& v, Node& n);
@@ -106,6 +114,14 @@ class DialogGraph final {
     std::unique_ptr<storygraph::Bytecode>                  code;
     std::unique_ptr<storygraph::Lifter>                    lifter;
     std::unique_ptr<storygraph::Predicates>                predicates;
+
+    // the graph runs dialogs' script functions in place of the VM; GOTHIC_AI_STORYEXEC=0: the VM runs them
+    bool                                                   running = true;
+    zenkit::DaedalusVm*                                    runFor = nullptr;
+    std::unordered_map<uint32_t,storygraph::Program>       programs;   // by function symbol, lifted when it first runs
+    std::unique_ptr<storygraph::Externals>                 engine;
+    std::unique_ptr<storygraph::Interpreter>               interp;
+    size_t                                                 ran = 0, notPrograms = 0, runErrors = 0;
 
     bool                                                   checking = false;
     size_t                                                 checked = 0, differ = 0;

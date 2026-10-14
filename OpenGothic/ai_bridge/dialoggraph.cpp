@@ -7,6 +7,7 @@
 #include <cstdlib>
 
 #include "commandline.h"
+#include "game/compatibility/directmemory.h"
 #include "gothic.h"
 #include "world/aiqueue.h"
 #include "world/objects/npc.h"
@@ -14,6 +15,7 @@
 
 #include "bytecode.h"
 #include "eval.h"
+#include "exec.h"
 #include "exprjson.h"
 #include "lifter.h"
 #include "predicates.h"
@@ -56,6 +58,8 @@ DialogGraph::DialogGraph(std::function<void(std::string&&)> send,
   :send(std::move(send)), addLine(std::move(addLine)) {
   const char* env = std::getenv("GOTHIC_AI_STORYCHECK");
   checking = env!=nullptr ? std::string_view(env)=="1" : CommandLine::inst().isDevMode();
+  const char* exec = std::getenv("GOTHIC_AI_STORYEXEC");
+  running  = exec==nullptr || std::string_view(exec)!="0";
 
   auto& g = Gothic::inst();
   g.dialogFilterFn       = [this](const zenkit::IInfo& info, bool& visible) { onFilter(info,visible); };
@@ -65,6 +69,9 @@ DialogGraph::DialogGraph(std::function<void(std::string&&)> send,
     };
   g.dialogExtraExecFn    = [this](const GameScript::DlgChoice& dlg, Npc& player, Npc& npc) { onExec(dlg,player,npc); };
   g.onDialogChosen.bind(this,&DialogGraph::onChosen);
+  g.dialogScriptFn       = [this](zenkit::DaedalusSymbol& fn, int32_t& result) { return onScript(fn,result); };
+  if(running)
+    Log::i("[story] dialogs run as their programs");
   if(checking)
     Log::i("[story] conditions are checked against their lifted form");
   }
@@ -75,6 +82,7 @@ DialogGraph::~DialogGraph() {
   g.dialogChoiceFilterFn = nullptr;
   g.dialogExtraFn        = nullptr;
   g.dialogExtraExecFn    = nullptr;
+  g.dialogScriptFn       = nullptr;
   g.onDialogChosen.ubind(this,&DialogGraph::onChosen);
   }
 
@@ -106,6 +114,10 @@ void DialogGraph::clear() {
   lifter.reset();
   code.reset();
   liftedFor = nullptr;
+  interp.reset();
+  engine.reset();
+  programs.clear();
+  runFor = nullptr;
   }
 
 std::vector<std::string> DialogGraph::apply(const rapidjson::Value& msg) {
@@ -409,6 +421,45 @@ void DialogGraph::onExec(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc
     e.run(*v,npc,player,n.id);
   }
 
+bool DialogGraph::onScript(zenkit::DaedalusSymbol& fn, int32_t& result) {
+  auto* v = vm();
+  if(!running || v==nullptr)
+    return false;
+  ensureLifter();
+  if(runFor!=v) {
+    // Ikarus loops move the VM's program counter from engine functions (DirectMemory): a program has none
+    if(DirectMemory::isRequired(*v)) {
+      Log::i("[story] Ikarus scripts: dialogs run in the VM");
+      running = false;
+      return false;
+      }
+    interp.reset();
+    programs.clear();
+    engine = std::make_unique<storygraph::VmExternals>(*v);  // the engine's own functions, as the VM calls them
+    interp = std::make_unique<storygraph::Interpreter>(*v,*engine);
+    runFor = v;
+    }
+  auto it = programs.find(fn.index());
+  if(it==programs.end()) {
+    it = programs.emplace(fn.index(), storygraph::liftProgram(*v,*code,fn.index())).first;
+    if(!it->second.error.empty()) {
+      notPrograms++;
+      Log::e("[story] ", fn.name(), " is not a program (", it->second.error, "): the VM runs it");
+      }
+    }
+  if(!it->second.error.empty())
+    return false;
+  auto r = interp->run(it->second);
+  ran++;
+  if(!r.ok) {
+    // what ran before the error is done: the VM can't run it again
+    runErrors++;
+    Log::e("[story] program ", fn.name(), ": ", r.error);
+    }
+  result = r.returned.type==storygraph::Value::Int ? r.returned.i : 0;
+  return true;
+  }
+
 void DialogGraph::onChosen(const GameScript::DlgChoice& dlg, Npc& player, Npc& npc) {
   auto* v = vm();
   if(v==nullptr || &player==&npc)
@@ -549,6 +600,14 @@ std::string DialogGraph::checkWorld(World& world) {
   for(auto& d : differences)
     w.String(d.data(),rapidjson::SizeType(d.size()));
   w.EndArray();
+  // dialogs' script functions run as programs: how many runs so far, failed, and functions left to the VM
+  w.Key("programs");
+  w.StartObject();
+  w.Key("on");     w.Bool(running);
+  w.Key("runs");   w.Uint64(ran);
+  w.Key("failed"); w.Uint64(runErrors);
+  w.Key("vm");     w.Uint64(notPrograms);
+  w.EndObject();
   w.EndObject();
   Log::i("[story] check of the world: ",npcs," npcs, ",checked-before," conditions computed, ",
          differ-differBefore," differ");
@@ -559,5 +618,6 @@ std::string DialogGraph::status() const {
   return "story graph: " + std::to_string(disabled.size()) + " off, " + std::to_string(conditions.size()) +
          " with conditions, " + std::to_string(nodes.size()) + " new (" + std::to_string(told.size()) +
          " told); check " + (checking ? "on" : "off") + ": " + std::to_string(checked) + " computed, " +
-         std::to_string(differ) + " differ";
+         std::to_string(differ) + " differ; programs " + (running ? "on" : "off") + ": " + std::to_string(ran) +
+         " runs, " + std::to_string(runErrors) + " failed, " + std::to_string(notPrograms) + " not programs";
   }

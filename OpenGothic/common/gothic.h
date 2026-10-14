@@ -215,6 +215,9 @@ class Gothic final {
     std::function<void(const GameScript::DlgChoice&,Npc&,Npc&)>         dialogExtraExecFn;
     // a dialog or a choice was chosen and has run
     Tempest::Signal<void(const GameScript::DlgChoice&,Npc&,Npc&)>       onDialogChosen;
+    // a dialog's script function (its condition, its information or a choice) is about to run, self and other
+    // set: true if the story graph ran it in place of the VM, a condition's answer in `result`
+    std::function<bool(zenkit::DaedalusSymbol&,int32_t&)>               dialogScriptFn;
 
     std::string_view                      messageFromSvm(std::string_view id, int voice) const;
     std::string_view                      messageByName (std::string_view id) const;

@@ -22,13 +22,16 @@ struct Node;
 std::unique_ptr<zenkit::DaedalusVm> loadVm(const char* datPath);
 
 // on original saves (check.cpp); with `traceNode`, both computations of that dialog are printed. With
-// `effects`, what the dialogs and choices do is checked instead of when they are offered (effects.h).
+// `effects`, what the dialogs and choices do is checked instead of when they are offered (effects.h); with
+// `exec`, their programs run by the Interpreter against the VM (execcheck.h).
 int checkSaves(const char* datPath, const Model& m, const std::vector<std::string>& saves, const char* traceNode,
-               bool verbose, bool effects = false);
+               bool verbose, bool effects = false, bool exec = false);
 // in `rounds` random states per dialog (fuzz.cpp); `only`: one dialog
 int fuzzConditions(const char* datPath, const Model& m, uint32_t rounds, const char* only, bool verbose);
 // what dialogs and choices do, in `rounds` random states each (fuzz.cpp)
 int fuzzEffects(const char* datPath, const Model& m, uint32_t rounds, const char* only, bool verbose);
+// the programs of conditions, dialogs and choices against the VM, in `rounds` random states each (fuzz.cpp)
+int fuzzExec(const char* datPath, const Model& m, uint32_t rounds, const char* only, bool verbose);
 
 // tallies of the effects check
 struct EffectTotals final {
