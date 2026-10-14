@@ -878,6 +878,15 @@ void NpcController::emitSnapshot(World& world, Npc& npc, std::string_view symbol
     j.str("action",action); else
     j.null("action");
   j.boolean("following",following);
+  // v27: whom its eyes are on: the one it talks to, a script's look, its attention (a point: nobody)
+  Tempest::Vec3 at;
+  const auto    gaze = npc.gazeTarget(at);
+  Npc*          who  = gaze==Gaze::Source::Talk      ? npc.talkPartner()     :
+                       gaze==Gaze::Source::Script    ? npc.lookAtTarget()    :
+                       gaze==Gaze::Source::Attention ? npc.attentionTarget() : nullptr;
+  if(who!=nullptr)
+    j.str("gaze",npcId(world,*who)); else
+    j.null("gaze");
   if(auto wp = npc.currentWayPoint())
     j.str("waypoint",wp->name); else
     j.null("waypoint");

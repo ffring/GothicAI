@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 26
+PROTOCOL_VERSION = 27
 
 # --- game -> server -----------------------------------------------------------
 
@@ -127,6 +127,7 @@ class NpcState(_GameMessage):
     busy: bool
     action: str | None = None
     following: bool = False
+    gaze: str | None = None  # v27: whom its eyes are on (an npc id, PLAYER), none: nobody
     waypoint: str | None = None
     nearest_waypoint: str | None = None
     inventory: list[InventoryItem] = Field(default_factory=list)

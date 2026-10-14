@@ -100,7 +100,7 @@ class Interjections:
     def on_phrase(self, to: Addressee | None, text: str) -> None:
         self._before, self.spoke = self.spoke, set()
 
-    def on_said(self, npc: str, name: str, text: str, kind: str) -> None:
+    def on_said(self, npc: str, name: str, text: str, kind: str, to: str | None = None) -> None:
         """The one the hero spoke to has answered him: the others are asked whether they speak up."""
         phrase = self.talk.last
         if kind != "player" or phrase is None or phrase[0] is None or phrase[0].id != npc.upper():

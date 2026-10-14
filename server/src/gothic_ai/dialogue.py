@@ -395,11 +395,14 @@ class Conversation:
     memory: NpcMemory = field(default_factory=NpcMemory)
     reply: asyncio.Task[None] | None = None
     last_lines: list[str] = field(default_factory=list)  # line ids of the latest reply
+    # lines of earlier replies still to be heard when the latest began (its next turn on the floor while
+    # the voice of the one before is made): others wait for them too
+    earlier_lines: list[str] = field(default_factory=list)
     actions: set[asyncio.Task[None]] = field(default_factory=set)
     new_meeting: bool = True  # the next reply starts a new meeting (noted in memory)
     compacting: asyncio.Task[None] | None = None
     # lines waiting for their audio, sent to the game strictly in order (with tts)
-    voice: asyncio.Queue[tuple[str, str, str, bool]] | None = None  # (line, text, reply, overlay)
+    voice: asyncio.Queue[QueuedLine] | None = None
     voicing: asyncio.Task[None] | None = None
     intent: Intent = field(default_factory=Intent)  # what the npc wants now (set by the model)
     pending: list[str] = field(default_factory=list)  # events that came while a turn was running
@@ -427,6 +430,10 @@ class Conversation:
         return [t for t in (self.reply, self.compacting, self.voicing, *self.actions) if t is not None]
 
 
+# a line waiting for its voice: line id, text, reply, overlay, mood, filler, the npc it is said to
+QueuedLine = tuple[str, str, str | None, bool, Mood | None, bool, str | None]
+
+
 class Floor(Protocol):
     """One voice at a time in the conversation around the hero (group.py, step B2 of docs/npc-tools.md).
     A turn takes its seat before it thinks and gives it up when it is over; each line waits to be heard
@@ -439,8 +446,15 @@ class Floor(Protocol):
     def done(self, npc: str) -> None:
         """Its turn is over: its text is ready (or it said nothing)."""
 
-    async def hear(self, npc: str) -> None:
-        """Before a line of the npc's is heard: those before it have been."""
+    def seat(self, npc: str) -> int | None:
+        """The npc's seat now, None: none. A line said now is heard by it, though the npc may have taken
+        another by the time the line's voice is ready."""
+
+    async def hear(self, npc: str, seat: int | None) -> None:
+        """Before a line of the npc's is heard: those before its seat have been."""
+
+    def called(self, npc: str, line: str) -> str | None:
+        """Whom of those around the hero the npc's line calls by name («Браго, …»): its id, None: nobody."""
 
 
 class TurnExtension(Protocol):
@@ -579,11 +593,12 @@ class DialogueManager:
         self.on_calm: list[Callable[[str], None]] = []
         # the npc ended the conversation (its goodbye has been said)
         self.on_end: Callable[[str], None] | None = None
-        # an npc's turn is over and it said something (npc, name, the text said, the turn's kind): whoever
-        # stood by heard it (group.py)
-        self.on_said: list[Callable[[str, str, str, str], None]] = []
+        # an npc's turn is over and it said something (npc, name, the text said, the turn's kind, the npc it
+        # said it to: None for the hero or aloud): whoever stood by heard it (group.py)
+        self.on_said: list[Callable[[str, str, str, str, str | None], None]] = []
         # one voice at a time around the hero (group.py): a seat before a turn thinks, before a line is heard
         self.floor: Floor | None = None
+        self._line_seats: dict[str, int | None] = {}  # a line -> the seat of the turn that said it
         self.llm_first_s, self.llm_idle_s = LLM_FIRST_S, LLM_IDLE_S
         # the npc is in a fight (incidents.py): its lines come from the quick model, if there is one
         self.in_fight: Callable[[str], bool] = lambda npc: False
@@ -901,16 +916,30 @@ class DialogueManager:
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return False
-        _, speaking, unsaid = self._said(conv)
-        return speaking or unsaid or (conv.reply is not None and not conv.reply.done() and not conv.acting)
+        thinking = conv.reply is not None and not conv.reply.done() and not conv.acting
+        return thinking or self.audible(npc)
 
-    def audible(self, npc: str) -> bool:
-        """The npc's lines are being heard, or ones it has said are still to come (not its thinking)."""
+    def audible(self, npc: str, seat: int | None = None) -> bool:
+        """The npc's lines are being heard, or ones it has said are still to come (not its thinking); with
+        `seat`, those said in that seat of the floor's (not those of its next turn, waiting for others)."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return False
-        _, speaking, unsaid = self._said(conv)
-        return speaking or unsaid
+        now = time.monotonic()
+        return any(
+            self._to_hear(conv, line, now)
+            for line in (*conv.earlier_lines, *conv.last_lines)
+            if seat is None or self._line_seats.get(line) == seat
+        )
+
+    def _to_hear(self, conv: Conversation, line: str, now: float) -> bool:
+        """The line is being heard, or is still to come."""
+        text, at = self._lines.get(line, ("", None))
+        if line in conv.hushed:
+            return False
+        if at is None:
+            return now - self._sent.get(line, now) < LINE_LOST_S
+        return at + self._audio.get(line, line_duration(text)) > now
 
     def interrupt(self, npc: str) -> bool:
         """The hero speaks while the npc answers: it stops at once (its voice, the lines it did not say
@@ -920,7 +949,12 @@ class DialogueManager:
             return False
         said, _, _ = self._said(conv)
         spoken = " ".join(said)
-        conv.hushed.update(line for line in conv.last_lines if self._lines.get(line, ("", None))[1] is None)
+        conv.hushed.update(
+            line
+            for line in (*conv.earlier_lines, *conv.last_lines)
+            if self._lines.get(line, ("", None))[1] is None
+        )
+        conv.earlier_lines = []
         running = conv.reply is not None and not conv.reply.done()
         if running:
             conv.cut = spoken  # the turn remembers only this (see _turn)
@@ -998,12 +1032,14 @@ class DialogueManager:
         overlay: bool = False,
         tools: Collection[str] | None = None,
         kind: str = "incident",
+        to: str | None = None,
     ) -> asyncio.Task[None] | None:
         """A turn about something that happened (an incident): the npc may speak and change its intent.
         While a turn is running the event waits for the next one's situation instead of interrupting.
         `tools` limits what the model is offered (an npc nobody controls cannot hand over items); the names
         may be of the extensions' tools too (deals.py: an offer declined, the npc may offer again). `kind`
-        names the trigger in the turn's trace (an npc that comes up to the hero: "initiative")."""
+        names the trigger in the turn's trace (an npc that comes up to the hero: "initiative"); `to`: the
+        npc its lines are said to (another spoke to it, group.py), unless one of them calls someone else."""
         conv = self.conversations.get(npc.upper())
         if conv is None:
             return None
@@ -1015,9 +1051,10 @@ class DialogueManager:
             offered = [t for t in offered if t in self.tools]  # its own, not the extensions'
         else:
             offered = [t for t in offered if t.name in tools]
-        return self._reply(
-            conv, self._turn(conv, Message("developer", cue), kind, relevant, overlay=overlay, tools=offered)
+        turn = self._turn(
+            conv, Message("developer", cue), kind, relevant, overlay=overlay, tools=offered, to=to
         )
+        return self._reply(conv, turn)
 
     def note(self, npc: str, text: str) -> None:
         """A remark in the npc's history (what happened to it)."""
@@ -1091,9 +1128,11 @@ class DialogueManager:
         mood: Mood | None = None,
         *,
         filler: bool = False,
+        to: str | None = None,
     ) -> None:
         """A line of the npc's, voiced if there is TTS. `filler`: its first words before the answer (the
-        npc goes on thinking after them, protocol v14); `reply` None: not a line of a reply's text."""
+        npc goes on thinking after them, protocol v14); `reply` None: not a line of a reply's text; `to`:
+        the npc it is said to (v15: the two look at each other), None: the hero."""
         text = to_game_text(text)
         if not text:
             return
@@ -1102,6 +1141,8 @@ class DialogueManager:
             conv.last_lines.append(line)
         self._lines[line] = (text, None)
         self._sent[line] = time.monotonic()
+        if self.floor is not None:
+            self._line_seats[line] = self.floor.seat(conv.npc)
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
             await self._wait_floor(conv, line)
@@ -1119,24 +1160,23 @@ class DialogueManager:
                     overlay=overlay or None,
                     mood=mood,
                     filler=filler or None,
+                    to=to,
                 )
             )
             return
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
-        conv.voice.put_nowait((line, text, reply, overlay, mood, filler))
+        conv.voice.put_nowait((line, text, reply, overlay, mood, filler, to))
 
-    async def _voice(
-        self, conv: Conversation, queue: asyncio.Queue[tuple[str, str, str | None, bool, Mood | None, bool]]
-    ) -> None:
+    async def _voice(self, conv: Conversation, queue: asyncio.Queue[QueuedLine]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
         audio still goes out, silent. Lines said on the move are not ordered by the game: the next one
         waits until the previous has been said."""
         assert self.tts is not None
         while True:
-            line, text, reply, overlay, mood, filler = await queue.get()
+            line, text, reply, overlay, mood, filler, to = await queue.get()
             started = False
             spoken_at = 0.0
             await self._wait_floor(conv, line)
@@ -1156,6 +1196,7 @@ class DialogueManager:
                         overlay: bool = overlay,
                         mood: Mood | None = mood,
                         filler: bool = filler,
+                        to: str | None = to,
                     ) -> None:
                         nonlocal started, spoken_at
                         if line in conv.hushed:
@@ -1173,6 +1214,7 @@ class DialogueManager:
                                 overlay=overlay or None,
                                 mood=mood,
                                 filler=filler or None,
+                                to=to,
                             )
                         )
 
@@ -1223,6 +1265,7 @@ class DialogueManager:
                             overlay=overlay or None,
                             mood=mood,
                             filler=filler or None,
+                            to=to,
                         )
                     )
             except GameError:
@@ -1233,10 +1276,11 @@ class DialogueManager:
     async def _wait_floor(self, conv: Conversation, line: str) -> None:
         """A line waits until those before the npc in the conversation have been heard (group.py); its clock
         of a line that never starts begins after."""
+        seat = self._line_seats.get(line)
         if self.floor is None or line in conv.hushed:
             return
         try:
-            await self.floor.hear(conv.npc)
+            await self.floor.hear(conv.npc, seat)
         finally:
             self._sent[line] = time.monotonic()
 
@@ -1419,14 +1463,16 @@ class DialogueManager:
             )
         await self.link.send(SayEndCmd(npc=line.npc, line=line.line, audio_s=round(audio_s, 3)))
 
-    def _commit(self, conv: Conversation, trigger: Message, text: str, kind: str) -> None:
+    def _commit(
+        self, conv: Conversation, trigger: Message, text: str, kind: str, to: str | None = None
+    ) -> None:
         # one synchronous step: an interrupted reply and its replacement cannot interleave here.
         # What started the turn is remembered even when the npc said nothing (it may have acted).
         self._remember(conv, trigger.role, trigger.content)
         if text := text.strip():
             self._remember(conv, "assistant", text)
             for listener in self.on_said:
-                listener(conv.npc, conv.persona.name, to_game_text(text), kind)
+                listener(conv.npc, conv.persona.name, to_game_text(text), kind, to)
         self._maybe_compact(conv)
 
     def _note(self, conv: Conversation, note: str) -> None:
@@ -1481,6 +1527,7 @@ class DialogueManager:
         overlay: bool = False,
         tools: list[Tool] | None = None,
         body: str | None = None,
+        to: str | None = None,
     ) -> None:
         """A turn on the conversation's floor (group.py): it thinks once those before it have their text
         ready; with no voice left for it (three to a phrase of the hero's) it says nothing."""
@@ -1494,7 +1541,7 @@ class DialogueManager:
                 log.info("%s: no voice left in the conversation, its %s turn is dropped", conv.npc, kind)
                 return
         try:
-            await self._speak(conv, trigger, kind, relevant, overlay=overlay, tools=tools, body=body)
+            await self._speak(conv, trigger, kind, relevant, overlay=overlay, tools=tools, body=body, to=to)
         finally:
             if self.floor is not None:
                 self.floor.done(conv.npc)
@@ -1509,6 +1556,7 @@ class DialogueManager:
         overlay: bool = False,
         tools: list[Tool] | None = None,
         body: str | None = None,
+        to: str | None = None,
     ) -> None:
         """One turn of the conversational model: up to MAX_STEPS calls (see turn.py). Text streams to the
         subtitles and the voice as it comes; tool calls are handled after their step. `body`: what the
@@ -1545,6 +1593,9 @@ class DialogueManager:
         if quick:
             situation_text += "\n" + QUICK_HINT
         request: list[Item] = [*conv.history, Message("developer", situation_text), trigger]
+        now = time.monotonic()
+        lines = (*conv.earlier_lines, *conv.last_lines)
+        conv.earlier_lines = [line for line in lines if self._to_hear(conv, line, now)]
         conv.last_lines = []
         state = TurnState(
             relevant=relevant,
@@ -1555,6 +1606,7 @@ class DialogueManager:
             splitter=SentenceSplitter(first_clause=self.tts is not None),
             started=time.monotonic(),
             filler=sound,
+            to=to.upper() if to else None,
         )
         conv.reply_id = state.reply
         trace = TurnTrace(
@@ -1591,13 +1643,13 @@ class DialogueManager:
             log.error("%s: %s", conv.npc, err)
             self.journal.add("llm_error", npc=conv.npc, name=conv.persona.name, detail=str(err))
             if state.text:  # a turn that failed before a word was said is not remembered
-                self._commit(conv, trigger, state.text, kind)
+                self._commit(conv, trigger, state.text, kind, state.to)
             trace.close("llm_error")
             await self._status(conv, "error", str(err))
             return
         except StaleTurn:
             # what the turn was about is over: words now would be out of place
-            self._commit(conv, trigger, state.text, kind)
+            self._commit(conv, trigger, state.text, kind, state.to)
             trace.close("stale")
             await self._status(conv, "idle")
             return
@@ -1606,11 +1658,11 @@ class DialogueManager:
                 first.cancel()  # its gesture too: the hero speaks again
             if conv.cut is not None:  # the hero interrupted: only what was said counts
                 said, conv.cut = conv.cut, None
-                self._commit(conv, trigger, said, kind)
+                self._commit(conv, trigger, said, kind, state.to)
                 self._note(conv, "Герой перебил тебя" + ("" if said else ", ты не успел ничего сказать"))
                 trace.close("interrupted")
                 raise
-            self._commit(conv, trigger, state.text, kind)  # the npc remembers what it already said
+            self._commit(conv, trigger, state.text, kind, state.to)  # the npc remembers what it already said
             trace.close("cancelled")
             raise
         finally:
@@ -1618,7 +1670,7 @@ class DialogueManager:
             if full is not None:
                 full.cancel()  # done by now, unless the turn ended before the line
 
-        self._commit(conv, trigger, state.text, kind)
+        self._commit(conv, trigger, state.text, kind, state.to)
         trace.close(status)
         total = time.monotonic() - state.started
         if state.text:
@@ -1891,7 +1943,10 @@ class DialogueManager:
             if not line:
                 return
             state.filler = ""
-        await self._say(conv, line, state.reply, state.overlay, state.mood)
+        # «Браго, …»: from this line on it speaks to him (the two look at each other), and he may answer
+        if self.floor is not None and (who := self.floor.called(conv.npc, line)) is not None:
+            state.to = who
+        await self._say(conv, line, state.reply, state.overlay, state.mood, to=state.to)
 
     async def _tool(self, conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
         """Handle a call of the model. Checks run here, against what the npc has and sees: a rejection
@@ -2178,3 +2233,4 @@ class TurnState:
     filler: str = ""  # said at once (the quick model's "Хм...", "Что?!"): the answer does not repeat it
     overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it
     tools: list[Tool] = field(default_factory=list)  # offered to the model in this turn
+    to: str | None = None  # the npc its lines are said to now, None: the hero
