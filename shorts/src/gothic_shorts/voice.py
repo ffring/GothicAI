@@ -1,13 +1,15 @@
 """The hero's lines as recordings: the TTS service (tts-service/, `gothic-tts say`) with a voice designed
 from a description, never cloned. Recordings are kept by voice and text, so a line is voiced once and
-every take of a shot says exactly the same audio."""
+every take of a shot says exactly the same audio. The dub (dub.py) voices its English lines the same way."""
 
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
 import tempfile
 import wave
+from collections.abc import Callable
 from pathlib import Path
 
 from gothic_launcher.commands import child_env, tools
@@ -30,9 +32,27 @@ def voice_lines(config: Config, cache: Path, description: str, lines: list[str])
     """Every line's recording; the missing ones are made in one `gothic-tts say`."""
     cache.mkdir(parents=True, exist_ok=True)
     out = {text: recording(cache, description, text) for text in lines}
-    missing = list(dict.fromkeys(t for t, p in out.items() if not p.is_file()))
-    if not missing:
-        return out
+    missing = {t: p for t, p in out.items() if not p.is_file()}
+    if missing:
+        say(config, VOICE_ID, description, missing, keep=_lead_in)
+    return out
+
+
+def say(
+    config: Config,
+    voice_id: str,
+    description: str,
+    lines: dict[str, Path],
+    *,
+    provider: str | None = None,
+    fallback: str | None = None,
+    keep: Callable[[Path, Path], object] = shutil.copyfile,
+) -> None:
+    """Voices each text into its file, in one `gothic-tts say`: the voice `voice_id` designed from
+    `description`, by the launcher's providers unless `provider`/`fallback` name others."""
+    texts = list(dict.fromkeys(lines))
+    if not texts:
+        return
     repo, uv = tools(config)
     s, keys = config.settings, config.secrets
     env: dict[str, str] = {}
@@ -46,19 +66,19 @@ def voice_lines(config: Config, cache: Path, description: str, lines: list[str])
         target = Path(tmp) / "line.wav"
         argv = [
             str(uv), "run", "--project", str(repo / "tts-service"), "gothic-tts", "say",
-            "--provider", s.tts.provider, "--fallback", s.tts.fallback,
-            "--voice-id", VOICE_ID, "--voice", description, "--out", str(target), *missing,
+            "--provider", provider or s.tts.provider, "--fallback", fallback or s.tts.fallback,
+            "--voice-id", voice_id, "--voice", description, "--out", str(target), *texts,
         ]  # fmt: skip
         done = subprocess.run(argv, cwd=tmp, env=child_env(env), capture_output=True, text=True)
         print(done.stdout.strip())
         if done.returncode != 0:
             raise VoiceError(f"gothic-tts say failed:\n{done.stderr.strip()[-2000:]}")
-        for i, text in enumerate(missing):
-            made = target if len(missing) == 1 else target.with_name(f"line_{i}.wav")
+        for i, text in enumerate(texts):
+            made = target if len(texts) == 1 else target.with_name(f"line_{i}.wav")
             if not made.is_file():
                 raise VoiceError(f"gothic-tts made no {made.name} for: {text}")
-            _lead_in(made, out[text])
-    return out
+            lines[text].parent.mkdir(parents=True, exist_ok=True)
+            keep(made, lines[text])
 
 
 def _lead_in(src: Path, dst: Path) -> None:

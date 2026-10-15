@@ -10,7 +10,7 @@ import pytest
 from gothic_tts.cli import load_env_file
 from gothic_tts.providers import TtsError, Voice
 from gothic_tts.providers.fake import FakeProvider
-from gothic_tts.providers.inworld import CHECK_VOICE, InworldTTS
+from gothic_tts.providers.inworld import CHECK_VOICE, PREVIEW_TEXTS, InworldTTS
 from gothic_tts.synthesizer import Synthesizer
 
 XARDAS = Voice("NONE_100_XARDAS", "An old man with a deep voice")
@@ -123,6 +123,22 @@ async def test_voice_designed_once_then_reused(api, tmp_path) -> None:
     await _speak(again, Voice(XARDAS.id, "A young woman"))
     assert api.designed == 2
     await again.aclose()
+
+
+async def test_voice_designed_in_its_language(api, tmp_path) -> None:
+    """An English voice (the shorts' dub) is designed on an English script; the language is part of the
+    voice, so the same id in another language is designed again."""
+    english = _provider(api, tmp_path, language="en-US")
+    await _speak(english)
+    russian = _provider(api, tmp_path)
+    await _speak(russian)
+    for p in (english, russian):
+        await p.aclose()
+    en, ru = [body for _, path, body in api.requests if path == "/voices/v1/voices:design"]
+    assert en["languageCode"] == "en-US" and en["previewText"] == PREVIEW_TEXTS["en"]
+    assert ru["languageCode"] == "ru-RU" and ru["previewText"] == PREVIEW_TEXTS["ru"]
+    first, second = api.streams()
+    assert first["language"] == "en-US" and second["language"] == "ru-RU"
 
 
 async def test_library_voice_steered_by_the_description(api, tmp_path) -> None:

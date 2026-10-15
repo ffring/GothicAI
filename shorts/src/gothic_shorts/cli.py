@@ -14,7 +14,9 @@ from gothic_launcher.settings import Config, SettingsError
 from . import cut as cutting
 from . import srt, youtube
 from .align import AlignError, align
+from .dub import DubError, dub_explainer, dub_take
 from .film import FilmError, film, shorts_dir
+from .gpu import GpuError
 from .shot import Shot, ShotError, load
 from .studio import StudioError, serve, workspace
 from .timeline import build, read_events
@@ -114,6 +116,37 @@ def cmd_srt(args: argparse.Namespace) -> int:
     out.write_text(srt.render(cues))
     print(out)
     return 0
+
+
+def cmd_dub(args: argparse.Namespace) -> int:
+    """A shot's take, or an explainer's workspace: its English sound track"""
+    try:
+        shot = _shot(args.short)
+    except ShotError:
+        shot = None
+    if shot is not None:
+        config = _config()
+        done = dub_take(config, shot, _take(config, shot, args.take), args.lang, args.tts)
+    else:
+        done = dub_explainer(workspace(args.short), args.lang, args.plan)
+    print("  start who            length/slot  tempo  gain  text")
+    for row in done.rows:
+        print(f"  {row}")
+    ru = f"{done.ru_duration:.3f} s" if done.ru_duration is not None else "no Russian short to compare"
+    print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), {_lufs(done.lufs)} "
+          f"(the Russian: {_lufs(done.ru_lufs)})")  # fmt: skip
+    if done.preview:
+        print(f"{done.preview}: the Russian short with it as the first sound track, the Russian second")
+    if done.too_long:
+        print("too long even sped up: shorten them in the translation and run dub again")
+        for row in done.too_long:
+            print(f"  {row}")
+        return 1
+    return 0
+
+
+def _lufs(value: float | None) -> str:
+    return "?" if value is None else f"{value:.1f} LUFS"
 
 
 def cmd_align(args: argparse.Namespace) -> int:
@@ -299,6 +332,14 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_srt)
 
+    s = sub.add_parser("dub", help="the English sound track of a short: a take of a shot, or an explainer")
+    s.add_argument("short", help="a shot (its newest take, or `take`), or an explainer's workspace or name")
+    s.add_argument("take", nargs="?", help="the shot's take folder or number")
+    s.add_argument("--lang", default="en", help="the track's language: en")
+    s.add_argument("--tts", help="inworld or voxcpm for a shot's voices (default: the launcher's, fallback)")
+    s.add_argument("--plan", default="plan.json", help="the explainer's plan, the one of its Russian render")
+    s.set_defaults(fn=cmd_dub)
+
     s = sub.add_parser("align", help="word timings of a known text in a recording (on the GPU server)")
     s.add_argument("wav", help="the recording (any format ffmpeg reads)")
     s.add_argument("text", nargs="?", help="exactly what is said")
@@ -353,6 +394,6 @@ def main() -> None:
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError, AlignError, StudioError) as err:
+            YouTubeError, AlignError, StudioError, DubError, GpuError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)

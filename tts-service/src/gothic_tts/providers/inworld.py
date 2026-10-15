@@ -29,10 +29,12 @@ KEEP_WARM_S = 60.0
 # warmup's check: a line for a voice that does not exist, refused before anything is spoken or billed
 CHECK_VOICE = "gothic-ai-no-such-voice"
 CHECK_TEXT = "Да."
-# Voice Design shapes the voice on a 1-30 s script in the voice's language
-PREVIEW_TEXT = (
-    "Ты снова здесь. Значит, Иннос ещё не отвернулся от тебя. Слушай внимательно, у нас мало времени."
-)
+# Voice Design shapes the voice on a 1-30 s script in the voice's language (the shorts' English dub designs
+# en-US voices)
+PREVIEW_TEXTS = {
+    "ru": "Ты снова здесь. Значит, Иннос ещё не отвернулся от тебя. Слушай внимательно, у нас мало времени.",
+    "en": "You're back. So Innos hasn't turned away from you yet. Listen carefully, we don't have much time.",
+}
 
 
 class _UnknownVoice(TtsError):
@@ -202,7 +204,7 @@ class InworldTTS:
                 json={
                     "languageCode": self.language,
                     "designPrompt": voice.description[:1000],
-                    "previewText": PREVIEW_TEXT,
+                    "previewText": preview_text(self.language),
                     "voiceDesignConfig": {"numberOfSamples": 1},
                 },
             )
@@ -273,6 +275,12 @@ class InworldTTS:
             await asyncio.gather(self._keeper, return_exceptions=True)
             self._keeper = None
         await self._client.aclose()
+
+
+def preview_text(language: str) -> str:
+    """The script a voice is designed on, in its language (ru-RU, en-US); a language without one gets the
+    English."""
+    return PREVIEW_TEXTS.get(language.split("-")[0].lower(), PREVIEW_TEXTS["en"])
 
 
 def _describe(err: Exception) -> str:
