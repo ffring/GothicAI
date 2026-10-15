@@ -12,7 +12,7 @@ def validate_case(events, case):
     assert len(setup) == 1, f'missing or repeated {case} setup'
     setup = setup[0]
     stable = setup['stable_cm']
-    assert setup['support_margin_cm'] >= 25, f'{case} anchor has insufficient dry support'
+    assert setup['support_margin_cm'] >= 50, f'{case} anchor has insufficient dry support'
     if case == 'cliff':
         assert stable[1]-setup['cliff_floor_cm'][1] > 1200, 'fixture has no real cliff'
     else:
