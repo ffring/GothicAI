@@ -1,7 +1,9 @@
 """Inworld Realtime TTS-2 by API key (`INWORLD_API_KEY`, the Base64 key from the Inworld portal).
 
 An npc's voice is designed once from its description (Voice Design), published to the workspace's
-voice library and remembered in a local file, so every line of that npc has the same voice. A library
+voice library and remembered in a local file, so every line of that npc has the same voice. A voice
+with a `sample` is cloned from that recording instead (Instant Voice Cloning), and remembered the same
+way: the shorts' English dub speaks in the user's own voice, or in an npc's Russian voice. A library
 voice can be used instead: `voice=Dmitry` for every npc, or a request's `preset`; its description then
 steers the delivery. A line's `style` steers it too (an angry line), whichever the voice. Steering is
 the request's `instruction`, in English; TTS-2 only, Flash has none.
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -26,13 +29,16 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CACHE = Path.home() / ".local/share/gothic-ai/inworld-voices.json"
 KEEP_WARM_S = 60.0
+CLONE_TIMEOUT = httpx.Timeout(120.0, connect=3.0)
 # warmup's check: a line for a voice that does not exist, refused before anything is spoken or billed
 CHECK_VOICE = "gothic-ai-no-such-voice"
 CHECK_TEXT = "Да."
-# Voice Design shapes the voice on a 1-30 s script in the voice's language
-PREVIEW_TEXT = (
-    "Ты снова здесь. Значит, Иннос ещё не отвернулся от тебя. Слушай внимательно, у нас мало времени."
-)
+# Voice Design shapes the voice on a 1-30 s script in the voice's language (the shorts' English dub designs
+# en-US voices)
+PREVIEW_TEXTS = {
+    "ru": "Ты снова здесь. Значит, Иннос ещё не отвернулся от тебя. Слушай внимательно, у нас мало времени.",
+    "en": "You're back. So Innos hasn't turned away from you yet. Listen carefully, we don't have much time.",
+}
 
 
 class _UnknownVoice(TtsError):
@@ -126,14 +132,17 @@ class InworldTTS:
         preset = voice.preset or self.voice
         if preset:
             return await self._stream(text, preset, self._instruction(voice, preset=True), on_chunk)
-        voice_id = await self._designed(voice)
+        voice_id = await self._library(voice)
         instruction = self._instruction(voice, preset=False)  # the description is in the voice itself
         try:
             return await self._stream(text, voice_id, instruction, on_chunk)
         except _UnknownVoice:
-            log.warning("inworld: designed voice %s of %s is gone, designing again", voice_id, voice.id)
+            log.warning("inworld: voice %s of %s is gone, making it again", voice_id, voice.id)
             self._forget(voice.id)
-            return await self._stream(text, await self._designed(voice), instruction, on_chunk)
+            return await self._stream(text, await self._library(voice), instruction, on_chunk)
+
+    async def _library(self, voice: Voice) -> str:
+        return await (self._cloned(voice) if voice.sample else self._designed(voice))
 
     def _instruction(self, voice: Voice, preset: bool) -> str:
         if not self.steerable:
@@ -202,7 +211,7 @@ class InworldTTS:
                 json={
                     "languageCode": self.language,
                     "designPrompt": voice.description[:1000],
-                    "previewText": PREVIEW_TEXT,
+                    "previewText": preview_text(self.language),
                     "voiceDesignConfig": {"numberOfSamples": 1},
                 },
             )
@@ -226,6 +235,49 @@ class InworldTTS:
                 "voice_id": voice_id,
                 "description": voice.description,
                 "language": self.language,
+            }
+            self._save(entries)
+            return voice_id
+
+    async def _cloned(self, voice: Voice) -> str:
+        """The library voice cloned from `voice.sample` (made on its first line, again when the recording
+        changes). Inworld detects the recording's language; the lines are said in the provider's
+        `language`, so a Russian recording speaks English. Its best length is 10-30 s."""
+        async with self._designing:
+            try:
+                audio = await asyncio.to_thread(Path(voice.sample).read_bytes)
+            except OSError as err:
+                raise TtsError(f"inworld: no sample to clone {voice.id!r} from: {err}") from err
+            digest = hashlib.sha1(audio).hexdigest()[:16]
+            entry = self._load().get(voice.id, {})
+            if entry.get("sample") == digest:
+                return str(entry["voice_id"])
+            body: dict[str, Any] = {
+                "displayName": f"gothic-ai {voice.id}",
+                "voiceSamples": [{"audioData": base64.b64encode(audio).decode()}],
+                "tags": ["gothic-ai"],
+                "audioProcessingConfig": {"removeBackgroundNoise": False},  # the samples are clean
+            }
+            if voice.description:
+                body["description"] = voice.description[:500]
+            # cloning takes 10-20 s before the answer comes: longer than a line's timeout
+            cloned = await self._call("POST", "/voices/v1/voices:clone", json=body, timeout=CLONE_TIMEOUT)
+            for checked in cloned.get("audioSamplesValidated", []):
+                if errors := [e.get("text", e) for e in checked.get("errors", [])]:
+                    raise TtsError(f"inworld: the sample of {voice.id!r} was refused: {errors}")
+                for warning in checked.get("warnings", []):
+                    log.warning("inworld: sample of %s: %s", voice.id, warning.get("text", warning))
+            try:
+                voice_id = str(cloned["voice"]["voiceId"])
+            except (KeyError, TypeError) as err:
+                raise TtsError(f"inworld: voice cloning returned no voice: {str(cloned)[:300]}") from err
+            log.info("inworld: cloned voice %s for %s", voice_id, voice.id)
+            entries = self._load()
+            entries[voice.id] = {
+                "voice_id": voice_id,
+                "sample": digest,
+                "description": voice.description,
+                "language": str(cloned["voice"].get("languageCode", "")),  # the sample's
             }
             self._save(entries)
             return voice_id
@@ -273,6 +325,12 @@ class InworldTTS:
             await asyncio.gather(self._keeper, return_exceptions=True)
             self._keeper = None
         await self._client.aclose()
+
+
+def preview_text(language: str) -> str:
+    """The script a voice is designed on, in its language (ru-RU, en-US); a language without one gets the
+    English."""
+    return PREVIEW_TEXTS.get(language.split("-")[0].lower(), PREVIEW_TEXTS["en"])
 
 
 def _describe(err: Exception) -> str:

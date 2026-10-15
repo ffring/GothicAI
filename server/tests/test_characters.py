@@ -106,3 +106,16 @@ def test_a_card_in_the_persona(tmp_path):
     p = personas.get(TRADER, "Маттео")
     assert p.traits == "A proud, tight-fisted market trader." and card.ru in p.instructions
     assert "житель острова" in personas.get(LOBART, "Лобарт").instructions  # no card
+
+
+def test_the_voices_command_prints_the_tts_voices(capsys):
+    """`gothic-ai voices`: what the shorts' dub designs its English voices from."""
+    import argparse
+
+    from gothic_ai import cli
+    from gothic_ai.persona import DEFAULT_VOICE, VOICES
+
+    assert cli.voices(argparse.Namespace(npc=["none_100_xardas", "NO_SUCH_NPC"], game_dir=None)) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["NONE_100_XARDAS"] == {"voice_id": "NONE_100_XARDAS", "voice": VOICES["NONE_100_XARDAS"]}
+    assert got["NO_SUCH_NPC"]["voice"] == DEFAULT_VOICE

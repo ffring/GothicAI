@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -11,9 +12,11 @@ from gothic_launcher.commands import LaunchError, find_layout, load_config, tool
 from gothic_launcher.settings import Config, SettingsError
 
 from . import cut as cutting
-from . import youtube
+from . import srt, youtube
 from .align import AlignError, align
+from .dub import DubError, dub_explainer, dub_take
 from .film import FilmError, film, shorts_dir
+from .gpu import GpuError
 from .shot import Shot, ShotError, load
 from .studio import StudioError, serve, workspace
 from .timeline import build, read_events
@@ -91,6 +94,61 @@ def cmd_subs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_srt(args: argparse.Namespace) -> int:
+    """A shot's take, or an explainer's workspace: its Russian voice timed, the translated script"""
+    try:
+        shot = _shot(args.short)
+    except ShotError:
+        shot = None
+    if shot is not None:
+        print(cutting.subtitles(shot, _take(_config(), shot, args.take), args.lang))
+        return 0
+    ws = workspace(args.short)
+    words, script = ws / "words.ru.json", ws / f"script.{args.lang}.txt"
+    for f in (words, script):
+        if not f.is_file():
+            raise StudioError(f"{args.short} is no shot, and its workspace has no {f.name}")
+    try:
+        cues = srt.explainer(json.loads(words.read_text()), script.read_text().strip().splitlines())
+    except ValueError as err:
+        raise StudioError(f"{script}: {err}") from err
+    out = ws / f"subs.{args.lang}.srt"
+    out.write_text(srt.render(cues))
+    print(out)
+    return 0
+
+
+def cmd_dub(args: argparse.Namespace) -> int:
+    """A shot's take, or an explainer's workspace: its English sound track"""
+    try:
+        shot = _shot(args.short)
+    except ShotError:
+        shot = None
+    if shot is not None:
+        config = _config()
+        done = dub_take(config, shot, _take(config, shot, args.take), args.lang, args.tts)
+    else:
+        done = dub_explainer(_config(), workspace(args.short), args.lang, args.plan, args.tts, args.reclone)
+    print("  start who            length/slot  tempo  gain  text")
+    for row in done.rows:
+        print(f"  {row}")
+    ru = f"{done.ru_duration:.3f} s" if done.ru_duration is not None else "no Russian short to compare"
+    print(f"{done.wav}: {done.duration:.3f} s (the Russian short: {ru}), {_lufs(done.lufs)} "
+          f"(the Russian: {_lufs(done.ru_lufs)})")  # fmt: skip
+    if done.preview:
+        print(f"{done.preview}: the Russian short with it as the first sound track, the Russian second")
+    if done.too_long:
+        print("too long even sped up: shorten them in the translation and run dub again")
+        for row in done.too_long:
+            print(f"  {row}")
+        return 1
+    return 0
+
+
+def _lufs(value: float | None) -> str:
+    return "?" if value is None else f"{value:.1f} LUFS"
+
+
 def cmd_align(args: argparse.Namespace) -> int:
     wav = Path(args.wav)
     if (args.text is None) == (args.text_file is None):
@@ -136,18 +194,52 @@ def cmd_youtube_login(args: argparse.Namespace) -> int:
     return 0
 
 
+def _captions(given: list[str]) -> dict[str, Path]:
+    """--captions en=subs.en.srt ..."""
+    out: dict[str, Path] = {}
+    for item in given:
+        lang, sep, file = item.partition("=")
+        if not sep or not lang or not file:
+            raise YouTubeError(f"--captions {item}: give it as <lang>=<file>, e.g. en=subs.en.srt")
+        if not Path(file).is_file():
+            raise YouTubeError(f"no subtitles {file}")
+        out[lang] = Path(file)
+    return out
+
+
+def _channel(expected: str) -> str:
+    token = youtube.access_token()
+    cid, title = youtube.channel(token)
+    youtube.check_channel(cid, title, expected)
+    print(f"channel: {title} ({cid})")
+    return token
+
+
+def _add_captions(vid: str, captions: dict[str, Path]) -> None:
+    for lang, file in captions.items():
+        try:
+            youtube.add_captions(youtube.access_token(), vid, lang, file)
+        except YouTubeError as err:
+            raise YouTubeError(f"{err}\nthe video is up; add the track again with: "
+                               f"gothic-shorts captions {vid} {file} --lang {lang}") from err
+        print(f"captions: {lang} ({file.name})")
+
+
 def cmd_upload(args: argparse.Namespace) -> int:
     video = Path(args.video)
     if not video.is_file():
         raise YouTubeError(f"no video {video}")
     meta = youtube.load_meta(Path(args.meta), args.lang)
     meta.privacy = args.privacy
-    token = youtube.access_token()
-    cid, title = youtube.channel(token)
-    youtube.check_channel(cid, title, args.channel)
-    print(f"channel: {title} ({cid})")
+    captions = _captions(args.captions or [])
+    token = _channel(args.channel)
+    if captions:
+        youtube.check_captions_scope(youtube.granted())
     print(f"video:   {video} ({video.stat().st_size / 1e6:.1f} MB)")
     print(f"title:   {meta.title}")
+    print(f"sound:   {youtube.AUDIO_LANGUAGE}; title and description also in: "
+          f"{', '.join(meta.localizations) or 'no other language'}")
+    print(f"captions: {', '.join(f'{k} ({v.name})' for k, v in captions.items()) or 'none'}")
     print(f"privacy: {meta.privacy}, synthetic media: {meta.synthetic}")
     if not args.yes and input("upload? [y/N] ").strip().lower() != "y":
         print("not uploaded")
@@ -159,6 +251,24 @@ def cmd_upload(args: argparse.Namespace) -> int:
         raise YouTubeError(f"YouTube made the video {got}, not {meta.privacy}: the project may need "
                            f"YouTube's audit (an email about a video locked as private says so)")
     print(f"privacy: {got}")
+    if meta.localizations:
+        missing = set(meta.localizations) - youtube.translated(youtube.access_token(), vid)
+        if missing:
+            raise YouTubeError(f"YouTube kept no translation into {', '.join(sorted(missing))}")
+        print(f"translations: {', '.join(meta.localizations)}")
+    _add_captions(vid, captions)
+    return 0
+
+
+def cmd_captions(args: argparse.Namespace) -> int:
+    captions = _captions([f"{args.lang}={args.file}"])
+    _channel(args.channel)
+    youtube.check_captions_scope(youtube.granted())
+    print(f"video:   https://youtu.be/{args.video}")
+    if not args.yes and input(f"add the {args.lang} captions? [y/N] ").strip().lower() != "y":
+        print("not added")
+        return 1
+    _add_captions(args.video, captions)
     return 0
 
 
@@ -215,6 +325,23 @@ def main() -> None:
     s.add_argument("--lang", default="en")
     s.set_defaults(fn=cmd_subs)
 
+    s = sub.add_parser("srt", help="the short's texts in another language as a caption track (SubRip): "
+                                   "<take>/subs.<lang>.srt, or subs.<lang>.srt in an explainer's workspace")
+    s.add_argument("short", help="a shot (its take's subs.<lang>.json), or an explainer (script.<lang>.txt)")
+    s.add_argument("take", nargs="?", help="a shot's take folder or number (default: the newest)")
+    s.add_argument("--lang", default="en")
+    s.set_defaults(fn=cmd_srt)
+
+    s = sub.add_parser("dub", help="the English sound track of a short: a take of a shot, or an explainer")
+    s.add_argument("short", help="a shot (its newest take, or `take`), or an explainer's workspace or name")
+    s.add_argument("take", nargs="?", help="the shot's take folder or number")
+    s.add_argument("--lang", default="en", help="the track's language: en")
+    s.add_argument("--tts", help="inworld or voxcpm (default: the launcher's provider, then its fallback)")
+    s.add_argument("--plan", default="plan.json", help="the explainer's plan, the one of its Russian render")
+    s.add_argument("--reclone", action="store_true",
+                   help="an explainer: the user's voice made anew from its recordings (cloned again)")
+    s.set_defaults(fn=cmd_dub)
+
     s = sub.add_parser("align", help="word timings of a known text in a recording (on the GPU server)")
     s.add_argument("wav", help="the recording (any format ffmpeg reads)")
     s.add_argument("text", nargs="?", help="exactly what is said")
@@ -245,7 +372,11 @@ def main() -> None:
     s.add_argument("--meta", required=True,
                    help="the short's .shorts/<name>/youtube.json: <lang>: title, description, tags, "
                         "synthetic")
-    s.add_argument("--lang", default="ru")
+    s.add_argument("--lang", default="ru",
+                   help="the section of youtube.json for the title and the description; the others go in as "
+                        "their translations")
+    s.add_argument("--captions", action="append", metavar="LANG=FILE",
+                   help="a caption track to add, e.g. en=<take>/subs.en.srt (gothic-shorts srt); repeatable")
     s.add_argument("--privacy", default="private", choices=["private", "unlisted", "public"],
                    help="public goes straight out, no audit needed; the status is read back after the upload")
     s.add_argument("--channel", default=youtube.CHANNEL,
@@ -253,10 +384,18 @@ def main() -> None:
     s.add_argument("--yes", action="store_true", help="do not ask before uploading")
     s.set_defaults(fn=cmd_upload)
 
+    s = sub.add_parser("captions", help="add a caption track to a video already on the channel")
+    s.add_argument("video", help="the video's id")
+    s.add_argument("file", help="a SubRip or WebVTT file (gothic-shorts srt)")
+    s.add_argument("--lang", default="en")
+    s.add_argument("--channel", default=youtube.CHANNEL, help="the channel (GOTHIC_YOUTUBE_CHANNEL)")
+    s.add_argument("--yes", action="store_true", help="do not ask before adding")
+    s.set_defaults(fn=cmd_captions)
+
     args = p.parse_args()
     try:
         sys.exit(args.fn(args))
     except (ShotError, FilmError, VoiceError, cutting.CutError, LaunchError, SettingsError,
-            YouTubeError, AlignError, StudioError) as err:
+            YouTubeError, AlignError, StudioError, DubError, GpuError) as err:
         print(f"error: {err}", file=sys.stderr)
         sys.exit(1)

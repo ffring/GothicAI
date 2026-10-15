@@ -14,12 +14,14 @@ class Voice:
     """Who speaks, and how this line is said. Providers use what they understand: VoxCPM designs a
     voice from `description` (and keeps it per `id`), preset-voice APIs take `preset`. `style` is an
     English instruction for this line's delivery ("say angrily with force"), empty for the voice's
-    usual manner; the voice stays the same."""
+    usual manner; the voice stays the same. `sample`: a recording (WAV or MP3) to clone the voice from
+    instead (Inworld; the shorts' English dub), in any language the provider's lines are not."""
 
     id: str
     description: str = ""
     preset: str | None = None
     style: str = ""
+    sample: str = ""
 
 
 class TtsError(RuntimeError):
