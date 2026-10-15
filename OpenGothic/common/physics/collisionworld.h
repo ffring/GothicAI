@@ -43,6 +43,11 @@ class CollisionWorld final {
         Tempest::Vec3       position() const;
         Tempest::Matrix4x4  matrix() const;
         void                getAabb(JPH::Vec3& min, JPH::Vec3& max) const;
+        float               mass() const; // kilograms; zero for non-dynamic bodies
+        Tempest::Vec3        velocity() const; // centimetres/second
+        bool                isSleeping() const;
+        // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
+        bool                addImpulse(const Tempest::Vec3& impulseNs);
 
         int                 category() const { return categoryId; }
         int                 ptrType() const { return pointerType; }
@@ -68,7 +73,7 @@ class CollisionWorld final {
     class DynamicBody final : public CollisionBody {
       private:
         DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass);
-        const float mass;
+        const float bodyMass;
       friend class CollisionWorld;
       };
 
@@ -80,6 +85,8 @@ class CollisionWorld final {
       CollisionBody*       body = nullptr;
       zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
       const char*          sector = nullptr;
+      Ragdoll*             ragdoll = nullptr;
+      size_t               bone = size_t(-1);
       };
 
     void tick(uint64_t dt);
@@ -99,6 +106,9 @@ class CollisionWorld final {
                                          const Tempest::Matrix4x4* worldPose, size_t numBones,
                                          const Tempest::Matrix4x4& objectMatrix,
                                          const Tempest::Vec3& initialVelocity = {});
+    std::unique_ptr<Ragdoll> createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                               const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                               const Tempest::Matrix4x4& objectMatrix);
     size_t bodyCount() const;
     float stepMilliseconds() const;
     uint64_t rayCount() const;
@@ -115,6 +125,7 @@ class CollisionWorld final {
                  bool movable, bool sensor, float mass);
     void removeBody(CollisionBody& body);
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
+    void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
     uint32_t registerRagdoll(Ragdoll& body);
     void unregisterRagdoll(Ragdoll& body);

@@ -25,6 +25,7 @@ from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
 from .budget import Budget
 from .cast import Cast
+from .casting import Casting
 from .characters import Cards, Traits
 from .chests import ChestDesk
 from .chronicle import Chronicle
@@ -144,6 +145,7 @@ HELP = """commands (npc defaults to the last attached one):
   amends            the director's storylets of amends for the hero's lies, and where they stand
   author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
   cast              the director's own characters on this branch (docs/director.md, stage 2)
+  character <place> the director makes up a character for the place (places.py id), and a quest he gives
   deal              offers open to the hero, and what the game's deal window shows (needs -devmode)
   deal <npc gives> / <hero gives>   the npc offers a deal, e.g. deal ITPO_HEALTH_01:2 / ITMI_GOLD:30
   deal accept       press Y on the deal window as the player does (game needs -devmode)
@@ -186,6 +188,7 @@ class ServerState:
         self.amends: Amends | None = None
         self.author: Author | None = None
         self.cast: Cast | None = None
+        self.casting: Casting | None = None
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
@@ -354,6 +357,19 @@ class Console:
             case "cast" if self.state.cast is not None:
                 for c in self.state.cast.characters():
                     print(f"{c.npc} «{c.name}» like {c.like} at {c.at}")
+            case "character" if self.state.casting is not None and rest:
+                # a new character for the place, and a quest of the author's for him to give
+                spec = await self.state.casting.character(rest[0])
+                print(
+                    "(no character: see the log)"
+                    if spec is None
+                    else f"{spec.npc} «{spec.name}» at {spec.at}"
+                )
+                if spec is not None and self.state.author is not None:
+                    q = await self.state.author.quest(spec.npc)
+                    print(
+                        "(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.item} {q.where}"
+                    )
             case "deal" if self.state.deals is not None:
                 await self.deal(link, npc, rest)
             case "rumors" if self.state.rumors is not None:
@@ -763,6 +779,9 @@ async def serve(args: argparse.Namespace) -> int:
             state.cast = Cast(link, state.story, state.chronicle)
             personas.cards = Cards(personas.cards, state.cast.cards)
             personas.people = state.cast.person
+            # the director's model makes characters up for a place (layer 4): for now on the console's word
+            if place_book is not None:
+                state.casting = Casting(link, state.cast, llm, place_book, state.chronicle, journal=journal)
             # quests of the director's own (docs/director.md, stage 1): for now on the console's word
             state.author = Author(
                 link,
@@ -1119,6 +1138,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.authored_quest(link, state.author, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario authored: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "character":
+                casting, author, story = state.casting, state.author, state.story
+                assert casting is not None and author is not None and story is not None and place_book
+                results = await scenarios.director_casts(link, casting, author, story, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario character: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "person":
                 assert state.cast is not None and state.dialogue is not None and state.rumors is not None
@@ -1799,6 +1825,7 @@ def main() -> None:
             "own",
             "cast",
             "person",
+            "character",
             "vlie",
             "vgive",
             "vcheck",

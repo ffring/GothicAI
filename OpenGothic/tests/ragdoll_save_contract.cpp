@@ -671,7 +671,47 @@ namespace {
     }
   }
 
+namespace {
+  void testQuestReturn() {
+    constexpr const char* entry = "worlds/NEWWORLD.ZEN/npc/0/ragdoll-quest-return";
+    RagdollSave::QuestReturn before;
+    before.anchor = {37124.25f,-2048.5f,-74629.125f};
+    before.angle = -57.25f;
+    before.hasAnchor = true;
+    before.armed = true;
+    before.hazards = RagdollSave::QuestReturn::water | RagdollSave::QuestReturn::fell;
+    const auto bytes = archive([&](Serialize& output) {
+      output.setEntry(entry);
+      RagdollSave::saveQuestReturn(output,before);
+      });
+    Tempest::MemReader reader(bytes);
+    Serialize input(reader);
+    require(input.setEntry(entry),"quest return entry must exist");
+    RagdollSave::QuestReturn after;
+    require(RagdollSave::loadQuestReturn(input,after),"pending dangerous KO must load");
+    require(after.anchor==before.anchor && after.angle==before.angle && after.hasAnchor && after.armed &&
+            after.hazards==before.hazards,"return point and both hazards must survive a save");
+
+    for(bool truncated : {false,true}) {
+      const auto malformed = archive([&](Serialize& output) {
+        output.setEntry(entry);
+        output.write(uint32_t(1));
+        if(!truncated)
+          output.write(Tempest::Vec3(std::numeric_limits<float>::quiet_NaN(),0,0),0.f,true,true,uint8_t(1));
+        });
+      Tempest::MemReader badReader(malformed);
+      Serialize badInput(badReader);
+      badInput.setEntry(entry);
+      auto unchanged = before;
+      require(!RagdollSave::loadQuestReturn(badInput,unchanged),"bad return entries must be rejected");
+      require(unchanged.anchor==before.anchor && unchanged.armed && unchanged.hazards==before.hazards,
+              "bad return entries must not overwrite the last valid point");
+      }
+    }
+  }
+
 int main() {
+  testQuestReturn();
   testRoundTrip();
   testInactiveAndOldSave();
   testLegacyUniformState();

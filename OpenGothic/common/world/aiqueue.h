@@ -34,6 +34,7 @@ class AiQueue {
     void     load(Serialize& fin);
 
     size_t   size() const { return aiActions.size(); }
+    const AiAction* front() const { return aiActions.empty() ? nullptr : &aiActions.front(); }
     void     clear();
     void     pushBack (AiAction&& a);
     void     pushFront(AiAction&& a);

@@ -520,6 +520,7 @@ struct DynamicWorld::BulletsList final {
 
   void tick(uint64_t dt) {
     for(auto& i:body) {
+      if(i.worldStopped) continue;
       wrld.moveBullet(i,i.dir,dt);
       if(i.cb!=nullptr)
         i.cb->onMove();
@@ -530,7 +531,7 @@ struct DynamicWorld::BulletsList final {
     for(auto& i:body) {
       float proj = 0;
       auto  dp = i.pos - i.lastPos; // move is symetrical: move of npc and move of projectile is the same
-      if(i.cb==nullptr)
+      if(i.cb==nullptr || i.worldStopped)
         continue;
       const bool precise = i.cb->isPrecise();
       if(precise ? list.nearTest(npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)
@@ -784,7 +785,12 @@ DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, con
 
 DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, zenkit::MaterialGroup mat) {
   auto extent = CollisionWorld::toMeters(b.bbox[1]-b.bbox[0]);
-  const float mass = materialDensity(mat)*extent.GetX()*extent.GetY()*extent.GetZ();
+  const auto* m=pos.data();
+  const double volumeScale=std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
+                                    double(m[4])*(double(m[1])*m[10]-double(m[9])*m[2])+
+                                    double(m[8])*(double(m[1])*m[6]-double(m[5])*m[2]));
+  // Use the visual bounds' volume, before the minimum collision proxy padding.
+  const float mass = float(materialDensity(mat)*double(extent.GetX())*extent.GetY()*extent.GetZ()*volumeScale);
   const auto halfExtent = JPH::Vec3::sMax(extent*0.5f,JPH::Vec3::sReplicate(0.15f));
   JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
   auto obj = std::make_unique<BodyData>();
@@ -815,6 +821,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(ptr->cb!=nullptr)
       ptr->cb->onCollide(b);
     }
+  const bool attachAtWorldStop=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
   const auto hit = world->rayCast(pos,to,landscapeMask,false);
   const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
 
@@ -833,8 +840,17 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   bool stopBullet = false;
   if(matId != zenkit::MaterialGroup::NONE) {
     if(isSpell){
-      if(b.cb!=nullptr)
-        b.cb->onCollide(matId);
+      if(b.cb!=nullptr) {
+        BulletWorldHit result;
+        result.point=hit.point;
+        result.normal=hit.normal;
+        result.material=matId;
+        result.ragdoll=hit.ragdoll;
+        result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+          result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+        b.cb->onSpellWorldHit(result);
+        }
       stopBullet = true;
       } else {
       if(matId==zenkit::MaterialGroup::METAL ||
@@ -884,8 +900,23 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   if(stopBullet || b.hitCount()>3 || b.pathLength()>10000) {
-    if(b.cb!=nullptr)
+    if(b.cb!=nullptr) {
+      // Pin only after the unchanged flight code has decided to stop at a solid
+      // world contact. In particular, stone/metal still reflect before this test.
+      if(attachAtWorldStop && matId!=zenkit::MaterialGroup::NONE) {
+        BulletWorldHit result;
+        result.point=b.position();
+        result.normal=hit.normal;
+        result.material=matId;
+        result.ragdoll=hit.ragdoll;
+        result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+          result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+        b.worldStopped=true;
+        b.cb->onWorldHit(result);
+        }
       b.cb->onStop();
+      }
     }
   }
 
@@ -900,6 +931,12 @@ std::unique_ptr<Ragdoll> DynamicWorld::createRagdoll(const Skeleton& skeleton, c
                                                    const Tempest::Matrix4x4& objectMatrix,
                                                    const Tempest::Vec3& initialVelocity) {
   return world->createRagdoll(skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity);
+  }
+
+std::unique_ptr<Ragdoll> DynamicWorld::createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                                        const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                        const Tempest::Matrix4x4& objectMatrix) {
+  return world->createKinematicBody(skeleton,zones,worldPose,numBones,objectMatrix);
   }
 
 DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
@@ -1230,13 +1267,29 @@ void DynamicWorld::Item::setPayloadPtr(void* ptr) {
     obj->body->setPayload(ptr,P_Editor);
   }
 
+float DynamicWorld::Item::mass() const {
+  return obj!=nullptr ? obj->body->mass() : 0.f;
+  }
+
+Tempest::Vec3 DynamicWorld::Item::velocity() const {
+  return obj!=nullptr ? obj->body->velocity() : Tempest::Vec3{};
+  }
+
+bool DynamicWorld::Item::isSleeping() const {
+  return obj==nullptr || obj->body->isSleeping();
+  }
+
+bool DynamicWorld::Item::addImpulse(const Tempest::Vec3& impulseNs) {
+  return obj!=nullptr && obj->body->addImpulse(impulseNs);
+  }
+
 DynamicWorld::BulletBody::BulletBody(DynamicWorld* wrld, DynamicWorld::BulletCallback* cb)
   :owner(wrld), cb(cb) {
   }
 
 DynamicWorld::BulletBody::BulletBody(DynamicWorld::BulletBody&& other)
   : pos(other.pos), lastPos(other.lastPos),
-    dir(other.dir), dirL(other.dirL), totalL(other.totalL), spl(other.spl){
+    dir(other.dir), dirL(other.dirL), totalL(other.totalL), spl(other.spl), worldStopped(other.worldStopped){
   std::swap(owner,other.owner);
   std::swap(cb,other.cb);
   }

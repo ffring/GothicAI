@@ -93,6 +93,11 @@ Gothic::Gothic() {
   defaults->set("GAME", "manualAim",           1); // the bow aimed by hand (game/archery)
   defaults->set("GAME", "npcManualAim",        1); // npc archers aim by hand too (game/archerai)
   defaults->set("GAME", "ragdoll",             1); // physical death/KO bodies; GAME/ragdoll=0 keeps animation-only behavior
+  defaults->set("GAME", "ragdoll_quest_guard", 1);
+  defaults->set("GAME", "living_bodies",       1);
+  defaults->set("GAME", "arrow_physics",       1);
+  defaults->set("GAME", "arrow_sticking",      1);
+  defaults->set("GAME", "spell_physics",       1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -590,6 +595,7 @@ void Gothic::tick(uint64_t dt) {
 
   // before world tick: queued external AI commands apply in the same frame
   onTick(dt);
+  refreshPhysicsFlags();
   if(game)
     game->tick(dt);
   }
@@ -892,7 +898,21 @@ void Gothic::detectGothicVersion() {
     }
   }
 
+void Gothic::refreshPhysicsFlags() {
+  physicsFlagsCache = {
+    settingsGetI("GAME","ragdoll")!=0,
+    settingsGetI("GAME","ragdoll_quest_guard")!=0,
+    settingsGetI("GAME","living_bodies")!=0,
+    settingsGetI("GAME","arrow_physics")!=0,
+    settingsGetI("GAME","arrow_sticking")!=0,
+    settingsGetI("GAME","spell_physics")!=0
+    };
+  }
+
 void Gothic::setupSettings() {
+  // settingsSetI/S/F emit onSettingsChanged synchronously. Publish before any
+  // same-dispatch actor creation, prepare or input query can consume the change.
+  refreshPhysicsFlags();
   if(game!=nullptr)
     game->setupSettings();
 

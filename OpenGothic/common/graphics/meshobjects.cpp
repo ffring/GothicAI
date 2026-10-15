@@ -56,9 +56,13 @@ void MeshObjects::Mesh::setSkeleton(const Skeleton *sk) {
   }
 
 void MeshObjects::Mesh::setPose(const Tempest::Matrix4x4& obj, const Pose &p) {
+  setPose(obj,p.transform());
+  }
+
+void MeshObjects::Mesh::setPose(const Tempest::Matrix4x4& obj, const Tempest::Matrix4x4* bones) {
   if(anim!=nullptr)
-    anim->set(p.transform());
-  implSetObjMatrix(obj,p.transform());
+    anim->set(bones);
+  implSetObjMatrix(obj,bones);
   }
 
 void MeshObjects::Mesh::setAsGhost(bool g) {

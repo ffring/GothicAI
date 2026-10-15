@@ -17,6 +17,15 @@ needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg
 CONFIG = SimpleNamespace(settings=SimpleNamespace(tts=SimpleNamespace(provider="inworld", fallback="voxcpm")))
 HERO = {"hero": ("SHORTS_HERO", "A man")}
 
+
+@pytest.fixture(autouse=True)
+def voices(tmp_path, monkeypatch):
+    """The kept voices in the test's own folder, never the real ~/.local/share/gothic-ai/voices."""
+    kept = tmp_path / "kept-voices"
+    monkeypatch.setattr(dub, "VOICES", kept)
+    return kept
+
+
 SUBS = {
     "Ксардас": "Xardas",
     "Меня прислал Ли.": "Lee sent me.",
@@ -108,7 +117,7 @@ def test_the_english_script_without_its_caption_breaks(tmp_path):
     assert dub.english_script(tmp_path, "en") == ["In Gothic you don't aim", "Yes"]
 
 
-def test_inworld_clones_the_voice_the_game_speaks_russian_in(tmp_path, monkeypatch):
+def test_inworld_clones_the_voice_the_game_speaks_russian_in(tmp_path, monkeypatch, voices):
     calls = []
 
     def say(config, voice_id, description, lines, *, provider=None, fallback=None, clone=None, keep=None):
@@ -116,6 +125,7 @@ def test_inworld_clones_the_voice_the_game_speaks_russian_in(tmp_path, monkeypat
             return  # as voice.say: nothing to voice, no gothic-tts
         calls.append((voice_id, provider, clone, list(lines)))
         for path in lines.values():
+            path.parent.mkdir(parents=True, exist_ok=True)  # as voice.say
             path.write_bytes(b"wav " + voice_id.encode())
 
     monkeypatch.setattr(dub, "say", say)
@@ -129,6 +139,7 @@ def test_inworld_clones_the_voice_the_game_speaks_russian_in(tmp_path, monkeypat
     assert (english, texts) == ("SHORTS_HERO@en~ru", ["Hi."])
     assert en_spec == "inworld:delivery=stable,language=en-US"
     assert clone.read_bytes() == b"wav SHORTS_HERO" and got[("hero", "Hi.")].is_file()
+    assert clone.parent == voices  # kept for every checkout: cloned once
     dub.english_voices(config, HERO, {"hero": ["Hi."]}, tmp_path, "en")
     assert len(calls) == 2  # kept: nothing voiced again
 
@@ -202,7 +213,7 @@ def test_a_take_dub_is_as_long_as_the_cut_and_as_loud(tmp_path, monkeypatch):
 
 
 @needs_ffmpeg
-def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch):
+def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch, voices):
     ws = tmp_path
     for n in ("01", "02"):
         _sound(ws / f"voice/clean/{n}.wav", 1.5)
@@ -219,7 +230,7 @@ def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch):
     asked = []
 
     def say(config, voice_id, description, lines, *, provider=None, fallback=None, clone=None, keep=None):
-        assert clone.name == "reference.inworld.wav" and provider == "inworld:language=en-US"
+        assert (voice_id, clone, provider) == ("USER", voices / "user.inworld.wav", "inworld:language=en-US")
         asked.extend(lines)
         for path in lines.values():
             _sound(path, 1.0)
@@ -239,7 +250,7 @@ def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch):
         raise VoiceError("error: no voice: inworld unavailable")
 
     def voxcpm(ref, lines, work, design=None):
-        assert ref.name == "reference.wav" and design is None  # the user's own voice: never designed
+        assert ref == voices / "user.voxcpm.wav" and design is None  # the user's own voice: never designed
         asked.extend(lines)
         for path in lines.values():
             _sound(path, 1.0)
@@ -253,3 +264,19 @@ def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch):
     (ws / "plan.json").write_text(json.dumps(plan))
     with pytest.raises(dub.DubError, match="footage's own sound"):
         dub.dub_explainer(CONFIG, ws)
+
+
+@needs_ffmpeg
+def test_the_users_voice_is_kept_for_every_short_and_replaced_only_on_demand(tmp_path, voices):
+    first, second = tmp_path / "first", tmp_path / "second"
+    _sound(first / "voice/clean/01.wav", 9.0, "0.1*sin(2*PI*200*t)")
+    _sound(second / "voice/clean/01.wav", 9.0, "0.1*sin(2*PI*300*t)")
+    ref = dub.user_voice(first, "voxcpm", dub.REFERENCE_S)
+    assert ref == voices / "user.voxcpm.wav"
+    kept = ref.read_bytes()
+    # another short: the same voice
+    assert dub.user_voice(second, "voxcpm", dub.REFERENCE_S).read_bytes() == kept
+    dub.user_voice(second, "voxcpm", dub.REFERENCE_S, anew=True)
+    assert ref.read_bytes() != kept  # --reclone: from this short's recordings
+    with pytest.raises(dub.DubError, match="no recorded lines"):
+        dub.user_voice(tmp_path / "empty", "inworld", dub.REFERENCE_INWORLD_S)

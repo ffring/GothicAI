@@ -2,6 +2,7 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Log>
+#include <cctype>
 #include <cstdlib>
 
 #include "graphics/mesh/skeleton.h"
@@ -308,6 +309,8 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   RagdollSave::save(fout,state);
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-recovery");
   visual.pose().saveRagdollRecovery(fout);
+  fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-quest-return");
+  RagdollSave::saveQuestReturn(fout,ragdollQuestReturn);
   }
 
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
@@ -316,6 +319,11 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
   ragdollRecovering = false;
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
+  ragdollQuestReturn = {};
+  ragdollQuestSpellThrow = false;
+  ragdollQuestSampleTick = 0;
+  ragdollQuestReturns = 0;
+  ragdollQuestFrom = {};
   fin.setEntry("worlds/",fin.worldName(),directory,id,"/data");
 
   hnpc = std::make_shared<zenkit::INpc>();
@@ -390,6 +398,10 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
   if(isDead())
     physic.setEnable(false);
 
+  if(fin.setEntry("worlds/",fin.worldName(),directory,id,"/ragdoll-quest-return") &&
+     !RagdollSave::loadQuestReturn(fin,ragdollQuestReturn))
+    Log::e("ragdoll: invalid quest NPC return point");
+
   // Absence denotes an old save: existing dead/KO poses stay animated until a new down event.
   ragdollLegacyDown = isDown();
   if(fin.setEntry("worlds/",fin.worldName(),directory,id,"/ragdoll")) {
@@ -407,7 +419,7 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
           Log::e("ragdoll recovery load: ",e.what());
           }
         }
-      if(ragdollDormant && Gothic::settingsGetI("GAME","ragdoll")!=0)
+      if(ragdollDormant && Gothic::physicsFlags().ragdoll)
         prepareRagdoll();
       else if(visual.pose().isRagdollBlending())
         updateAnimation(0,true); // Optional recovery must be visible before the first loaded frame.
@@ -415,6 +427,12 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
       Log::e("ragdoll: invalid saved body, keeping the animated pose");
       }
     }
+  // Existing save entries distinguish a live airborne throw from KO recovery.
+  const auto movement = mvAlgo.state();
+  ragdollQuestSpellThrow = ragdollQuestReturn.armed && !isDown() &&
+      !ragdollLegacyDown && !ragdollRecovering &&
+      (movement==MoveAlgo::InAir || movement==MoveAlgo::Falling ||
+       movement==MoveAlgo::Swim || movement==MoveAlgo::Dive);
   }
 
 void Npc::postValidate() {
@@ -445,11 +463,10 @@ void Npc::loadAiState(Serialize& fin) {
   fin.read(aiState.funcIni,aiState.funcLoop,aiState.funcEnd,aiState.sTime,aiState.eTime,aiState.started,aiState.loopNextTime);
   fin.read(aiPrevState);
 
-#ifndef NDEBUG
+  aiState.hint = "";
   if(auto s = owner.script().findSymbol(aiState.funcIni.ptr)) {
     aiState.hint = s->name().c_str();
     }
-#endif
 
   aiQueue.load(fin);
   aiQueueOverlay.load(fin);
@@ -483,6 +500,7 @@ void Npc::loadTrState(Serialize& fin) {
 bool Npc::setPosition(float ix, float iy, float iz) {
   if(x==ix && y==iy && z==iz)
     return false;
+  const bool liveTeleport = !isDown() && !ragdoll && (position()-Vec3(ix,iy,iz)).length()>300.f;
   const auto* skeleton = visual.visualSkeleton();
   std::optional<Ragdoll::State> movedBody, movedDormant;
   auto relocate = [&](Ragdoll::State& state) {
@@ -512,6 +530,17 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   x = ix;
   y = iy;
   z = iz;
+  if(liveTeleport) {
+    // Recreate at the destination instead of sweeping a kinematic body through
+    // every item between a scripted teleport's endpoints.
+    living.reset();
+    arrowImpacts.clear();
+    // Large scripted relocations start a new history; normal movement samples
+    // must retain the last supported position when the NPC steps off an edge.
+    ragdollQuestReturn = {};
+    ragdollQuestSpellThrow = false;
+    ragdollQuestSampleTick = 0;
+    }
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
   durtyTranform |= TR_Pos;
@@ -713,8 +742,16 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
   }
 
 void Npc::onNoHealth(bool death, HitSound sndMask) {
-  if(!isDown())
+  living.reset();
+  ragdollQuestSpellThrow = false;
+  if(!isDown()) {
+    updateRagdollQuestAnchor();
+    const auto hazards = ragdollQuestReturn.armed ? ragdollQuestReturn.hazards : uint8_t(0);
+    ragdollQuestReturn.armed = !death && !isPlayer() && isHuman() &&
+        Gothic::physicsFlags().questGuard && ragdollQuestReturn.hasAnchor;
+    ragdollQuestReturn.hazards = ragdollQuestReturn.armed ? hazards : 0;
     ragdollDormant.reset();
+    }
   ragdollLegacyDown = false;
   ragdollRecovering = false;
   invent.switchActiveWeapon(*this,Item::NSLOT);
@@ -771,7 +808,47 @@ void Npc::addRagdollImpulse(const Vec3& impulse) {
     ragdoll->addImpulse(impulse);
   }
 
+float Npc::physicsMass() const {
+  if(ragdoll)
+    return ragdoll->mass();
+  if(living)
+    return living->mass();
+  const auto* skeleton = visual.visualSkeleton();
+  const float base = skeleton!=nullptr ? Ragdoll::speciesMass(skeleton->name()) : 75.f;
+  return std::max(0.01f,base*std::abs(sz[0]*sz[1]*sz[2]));
+  }
+
+bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
+  if(!Gothic::physicsFlags().spellPhysics || spellFrozen() ||
+     !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     impulseNs.quadLength()<=0.f)
+    return false;
+  if(ragdoll) {
+    ragdoll->addImpulse(impulseNs);
+    return true;
+    }
+  if(isDown()) {
+    pendingSpellImpulse += impulseNs;
+    return true;
+    }
+  updateRagdollQuestAnchor();
+  if(!mvAlgo.addSpellImpulse(impulseNs,physicsMass(),reaction))
+    return false;
+  if(!isPlayer() && isHuman() && ragdollQuestReturn.hasAnchor &&
+     Gothic::physicsFlags().questGuard) {
+    if(!ragdollQuestReturn.armed)
+      ragdollQuestReturn.hazards = 0;
+    ragdollQuestReturn.armed = true;
+    ragdollQuestSpellThrow = true;
+    }
+  return true;
+  }
+
 void Npc::suspendRagdoll() {
+  pendingSpellImpulse = {};
+  visual.clearStuckArrows();
+  living.reset();
+  arrowImpacts.clear();
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
   const bool hadBody = ragdoll!=nullptr;
@@ -811,6 +888,10 @@ bool Npc::createRagdoll() {
     }
   ragdollDormant.reset();
   ragdoll = std::move(body);
+  dispatchArrowPhysics(*ragdoll);
+  if(Gothic::physicsFlags().spellPhysics && pendingSpellImpulse.quadLength()>0.f)
+    ragdoll->addImpulse(pendingSpellImpulse);
+  pendingSpellImpulse = {};
   ragdollStartTick = owner.tickCount();
   physic.setEnable(false);
   mvAlgo.takeRagdollControl();
@@ -837,7 +918,9 @@ bool Npc::recoverRagdoll() {
     return true;
   if(isDead())
     return false;
-  if(!ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
+  checkRagdollQuestHazard();
+  const bool returnToAnchor = needsRagdollQuestReturn();
+  if(!returnToAnchor && !ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
     return false;
 
   const bool onBack = ragdoll->onBack();
@@ -847,10 +930,18 @@ bool Npc::recoverRagdoll() {
   if(floor.hasCol && floor.n.y>0.25f)
     at.y = floor.v.y;
 
+  if(returnToAnchor) {
+    ragdollQuestFrom = position();
+    at = ragdollQuestReturn.anchor;
+    ++ragdollQuestReturns;
+    }
+
   // Rebase the animated frame while the physical overlay still holds the shown pose.
   const auto physicalRoot = ragdoll->rootTransform();
   const float fx = physicalRoot.at(2,0), fz = physicalRoot.at(2,2);
-  if(fx*fx+fz*fz>1e-6f)
+  if(returnToAnchor)
+    angle = ragdollQuestReturn.angle;
+  else if(fx*fx+fz*fz>1e-6f)
     angle = 90.f-std::atan2(fx,fz)*180.f/float(M_PI);
   x = at.x; y = at.y; z = at.z;
   physic.setPosition(at);
@@ -865,8 +956,11 @@ bool Npc::recoverRagdoll() {
     // Creatures without wounded poses retain the standard idle fallback.
     visual.startAnimAndGet("S_RUN",owner.tickCount(),true);
     }
-  releaseRagdoll(true);
+  // Do not interpolate a world-space corpse pose across the whole ravine.
+  releaseRagdoll(!returnToAnchor);
   ragdollDormant.reset();
+  if(!returnToAnchor)
+    ragdollQuestReturn.armed = false;
   ragdollRecovering = true;
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
@@ -875,9 +969,108 @@ bool Npc::recoverRagdoll() {
   return true;
   }
 
+void Npc::updateRagdollQuestAnchor() {
+  if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
+     ragdollQuestReturn.armed ||
+     !Gothic::physicsFlags().questGuard ||
+     !Gothic::physicsFlags().ragdoll || mvAlgo.state()!=MoveAlgo::Run)
+    return;
+  const auto now = owner.tickCount();
+  if(ragdollQuestReturn.hasAnchor && now>=ragdollQuestSampleTick && now-ragdollQuestSampleTick<250)
+    return;
+  ragdollQuestSampleTick = now;
+  const auto at = position();
+  const auto floor = owner.physic()->landRay(at+Vec3(0,15,0),45.f);
+  if(!floor.hasCol || floor.n.y<0.7f || std::abs(floor.v.y-at.y)>30.f)
+    return;
+  const auto water = owner.physic()->waterRay(at,15.f);
+  if(water.hasCol)
+    return;
+  ragdollQuestReturn.anchor = {at.x,floor.v.y,at.z};
+  ragdollQuestReturn.angle = angle;
+  ragdollQuestReturn.hasAnchor = true;
+  }
+
+bool Npc::needsRagdollQuestReturn() const {
+  return ragdollQuestReturn.armed && ragdollQuestReturn.hasAnchor && ragdollQuestReturn.hazards!=0 &&
+         !isPlayer() && isHuman() && !isDead() && Gothic::physicsFlags().questGuard;
+  }
+
+void Npc::checkRagdollQuestHazard() {
+  if(!ragdollQuestReturn.armed || !Gothic::physicsFlags().questGuard)
+    return;
+  auto at = position();
+  if(ragdoll) {
+    const auto pelvis = ragdoll->pelvisTransform();
+    at = Vec3(pelvis.at(3,0),pelvis.at(3,1),pelvis.at(3,2));
+    }
+  if(at.y<ragdollQuestReturn.anchor.y-RagdollSave::QuestReturn::maxFall)
+    ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::fell;
+  if((ragdollQuestReturn.hazards & RagdollSave::QuestReturn::water)==0) {
+    const auto water = owner.physic()->waterRay(at,60.f);
+    if(water.hasCol) {
+      // The padded water ray can start below a dry bank or bridge. A solid
+      // support between the pelvis and that lower surface keeps the body dry.
+      const auto support = water.wdepth<at.y ? owner.physic()->landRay(at,at.y-water.wdepth) : DynamicWorld::RayLandResult();
+      if(!support.hasCol || support.v.y<=water.wdepth)
+        ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::water;
+      }
+    }
+  }
+
+bool Npc::recoverSpellThrow() {
+  if(!ragdollQuestSpellThrow || ragdoll || isDown() || !ragdollQuestReturn.armed)
+    return false;
+  checkRagdollQuestHazard();
+  const bool returnToAnchor = needsRagdollQuestReturn();
+  ragdollQuestReturn.armed = false;
+  ragdollQuestSpellThrow = false;
+  if(!returnToAnchor)
+    return false;
+  ragdollQuestFrom = position();
+  ++ragdollQuestReturns;
+  angle = ragdollQuestReturn.angle;
+  const auto at = ragdollQuestReturn.anchor;
+  x = at.x; y = at.y; z = at.z;
+  physic.setPosition(at);
+  living.reset();
+  arrowImpacts.clear();
+  mvAlgo.takeRagdollControl();
+  ragdollHasLastPosition = false;
+  ragdollLastVelocity = {};
+  setAnim(Anim::Idle);
+  durtyTranform = TR_Pos|TR_Rot|TR_Scale;
+  return true;
+  }
+
 void Npc::prepareRagdoll() {
-  const bool enabled = Gothic::settingsGetI("GAME","ragdoll")!=0;
+  if(!isDown() || !Gothic::physicsFlags().spellPhysics)
+    pendingSpellImpulse = {};
+  if(!Gothic::physicsFlags().arrowSticking)
+    visual.clearStuckArrows();
+  if(!Gothic::physicsFlags().arrowPhysics)
+    arrowImpacts.clear();
+  if(!ragdollQuestSpellThrow && !ragdoll && !isDown() &&
+     ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) {
+    if(!needsRagdollQuestReturn()) {
+      ragdollQuestReturn.armed = false;
+      }
+    else if(visual.pose().isStanding()) {
+      // Finish at the dry point too: get-up root motion must not carry a quest
+      // NPC straight over the same edge again. 'armed' also survives a mid-rise save.
+      const auto at = ragdollQuestReturn.anchor;
+      x = at.x; y = at.y; z = at.z;
+      physic.setPosition(at);
+      mvAlgo.clearSpeed();
+      durtyTranform |= TR_Pos;
+      ragdollQuestReturn.armed = false;
+      }
+    }
+  updateRagdollQuestAnchor();
+  const bool enabled = Gothic::physicsFlags().ragdoll;
   if(!enabled) {
+    if(isDown())
+      arrowImpacts.clear();
     if(ragdollHasLastPosition) {
       ragdollHasLastPosition = false;
       ragdollLastVelocity = {};
@@ -932,12 +1125,132 @@ void Npc::prepareRagdoll() {
     ragdollHasLastPosition = true;
     return;
     }
-  if(ragdoll || ragdollLegacyDown || (ragdollRecovering && !ragdollDormant))
+  if(ragdoll || ragdollLegacyDown || (ragdollRecovering && !ragdollDormant)) {
+    if(ragdoll)
+      dispatchArrowPhysics(*ragdoll);
+    else
+      arrowImpacts.clear();
     return;
+    }
   if(!createRagdoll()) {
     ragdollLegacyDown = true;
+    arrowImpacts.clear();
     Log::e("ragdoll: unsupported skeleton or body state for ",displayName());
     }
+  }
+
+void Npc::prepareLivingBody() {
+  constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
+  const bool frozen = spellFrozen();
+  if(frozen!=livingWasFrozen) {
+    // Enter with a completely kinematic rig, discarding any active hit reaction.
+    // On thaw the ordinary living-body policy decides whether this rig is still needed.
+    living.reset();
+    livingRetryTick = 0;
+    livingNeedsRebuild = false;
+    livingWasFrozen = frozen;
+    arrowImpacts.clear();
+    }
+  const auto* hero = owner.player();
+  const bool outside = hero!=nullptr && (living ? qDistTo(*hero)>leaveRadius*leaveRadius
+                                               : qDistTo(*hero)>=enterRadius*enterRadius);
+  if(isDown() || ragdoll || (!frozen && (isPlayer() || hero==nullptr ||
+     !Gothic::physicsFlags().livingBodies || outside))) {
+    living.reset();
+    livingRetryTick = 0;
+    arrowImpacts.clear();
+    return;
+    }
+  if(frozen)
+    arrowImpacts.clear();
+  if(livingNeedsRebuild || (living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
+    living.reset();
+    livingNeedsRebuild = false;
+    }
+  if(living) {
+    if(!frozen)
+      dispatchArrowPhysics(*living);
+    return;
+    }
+  if(owner.tickCount()<livingRetryTick) {
+    arrowImpacts.clear();
+    return;
+    }
+  const auto* skeleton = visual.visualSkeleton();
+  if(skeleton==nullptr || !visual.hitZoneShape().isValid()) {
+    arrowImpacts.clear();
+    return;
+    }
+  // Only birth needs a forced solve. Subsequent targets come from the normal
+  // animation update, including IK/aim/flinch, without solving the pose twice.
+  updateAnimation(0,true);
+  living = owner.physic()->createKinematicBody(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
+                                             visual.pose().boneCount(),visual.transform());
+  if(!living)
+    livingRetryTick = owner.tickCount()+1000;
+  if(living && !frozen)
+    dispatchArrowPhysics(*living);
+  else
+    arrowImpacts.clear();
+  }
+
+bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix) {
+  // A corpse hit is selected after the native step, before the usual pose export.
+  // Bind against that same current pose so the first sync cannot move the pin twice.
+  if(ragdoll)
+    syncRagdoll();
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    const Vec3 at(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
+    }
+  return visual.stickArrow(std::move(arrow),bone,worldMatrix);
+  }
+
+void Npc::addCorpseArrowImpulse(const Bullet& bullet) {
+  if(ragdoll && isDown())
+    queueArrowPhysics(bullet);
+  }
+
+void Npc::queueArrowPhysics(const Bullet& bullet) {
+  if(bullet.isSpell() || !Gothic::physicsFlags().arrowPhysics)
+    return;
+  const auto direction = bullet.direction(); // cm/ms, as used by the projectile integrator
+  const float speed = direction.length();
+  const auto point = bullet.impactPoint();
+  if(!std::isfinite(speed) || speed<1.e-3f ||
+     !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+    return;
+  size_t bone = bullet.impactBone();
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,point);
+    }
+  if(bone>=visual.pose().boneCount())
+    return;
+  // An 80 g projectile: cm/ms -> m/s gives momentum in N*s. Draw and weapon
+  // strength already determine the actual projectile speed; damage dice do not.
+  const float momentum = std::clamp(0.08f*speed*10.f,0.2f,12.f);
+  const float strength = std::clamp(momentum/8.f,0.1f,1.f);
+  const Vec3 impulse = direction*(momentum/speed);
+  arrowImpacts.push_back({bone,point,impulse,strength});
+  arrowPhysics.bone = bone;
+  arrowPhysics.point = point;
+  arrowPhysics.impulseNs = impulse;
+  arrowPhysics.strength = strength;
+  ++arrowPhysics.hits;
+  }
+
+void Npc::dispatchArrowPhysics(Ragdoll& body) {
+  for(const auto& hit:arrowImpacts)
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength)) {
+      ++arrowPhysics.applied;
+      if(&body==ragdoll.get())
+        ++arrowPhysics.corpseImpulses;
+      }
+  arrowImpacts.clear();
   }
 
 void Npc::syncRagdoll() {
@@ -949,6 +1262,7 @@ void Npc::syncRagdoll() {
   x = ragdollObjectMatrix.at(3,0);
   y = ragdollObjectMatrix.at(3,1);
   z = ragdollObjectMatrix.at(3,2);
+  checkRagdollQuestHazard();
   physic.setPosition(position());
   visual.pose().setRagdollPose(visual.visualSkeleton(),ragdollPose,ragdoll->poseIndices());
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
@@ -1210,11 +1524,15 @@ void Npc::dropTorch(bool burnout) {
   }
 
 Tempest::Vec3 Npc::animMoveSpeed(uint64_t dt) const {
+  if(!ragdoll && needsRagdollQuestReturn() && !visual.pose().isStanding())
+    return {};
   return visual.pose().animMoveSpeed(owner.tickCount(),dt);
   }
 
 void Npc::setVisual(const Skeleton* v) {
   if(visual.visualSkeleton()!=v) {
+    living.reset();
+    arrowImpacts.clear();
     releaseRagdoll(false);
     ragdollDormant.reset();
     ragdollRecovering = false;
@@ -1244,6 +1562,7 @@ void Npc::setVisualBody(int32_t headTexNr, int32_t teethTexNr, int32_t bodyTexNr
   }
 
 void Npc::updateArmor() {
+  living.reset();
   auto  ar = invent.currentArmor();
   auto& w  = owner;
 
@@ -1318,6 +1637,8 @@ void Npc::setFatness(float f) {
 
 void Npc::setScale(float x, float y, float z) {
   if(sz[0]!=x || sz[1]!=y || sz[2]!=z) {
+    living.reset();
+    arrowImpacts.clear();
     releaseRagdoll(false);
     ragdollDormant.reset();
     ragdollLegacyDown = false;
@@ -2723,6 +3044,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  if(hitResult.hasHit && !isSpell && b!=nullptr)
+    queueArrowPhysics(*b);
   const auto traceDamage = [&] {
     BodyObservations::noteEvent(*this,&other,hitResult.value>0 ? "damage_received" : "damage_no_loss",owner.tickCount());
     if(TestBench::bodyTracing())
@@ -2780,7 +3103,9 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   // throw enemy
-  if(hitResult.hasHit && (damageType & (1<<zenkit::DamageType::FLY))) {
+  const bool physicalWind = isSpell && Gothic::physicsFlags().spellPhysics &&
+                            owner.script().physicalSpell(splId)==GameScript::PhysicalSpell::WindFist;
+  if(hitResult.hasHit && (damageType & (1<<zenkit::DamageType::FLY)) && !physicalWind) {
     mvAlgo.accessDamFly(x-other.x, z-other.z, lastHitType);
     }
 
@@ -3073,6 +3398,27 @@ void Npc::tick(uint64_t dt) {
 
   BodyMovementTrace movementTrace(*this,dt);
   traceCombatSnapshot();
+  // A field can lift an actor before its turn in the NPC list. Admit the queued
+  // magical state before ordinary airborne/animation waits, independent of tick order.
+  if(isInAir() && hasQueuedPhysicalSpellState(aiQueue))
+    nextAiAction(aiQueue,dt);
+  if(spellFrozen()) {
+    // Script time and the real state callbacks keep running even if the queued freeze
+    // animation is waiting in mid-air. B_StopMagicFreeze owns queue cleanup and StandUp.
+    lastEventTime = owner.tickCount();
+    visual.setNpcEffect(owner,*this,hnpc->effect,hnpc->flags);
+    mvAlgo.clearSpeed();
+    tickRoutine();
+    return;
+    }
+  if(spellWhirling()) {
+    // The vortex may keep the actor airborne for the entire state. Its script
+    // loop must still reach B_StopWhirlwind while queued animations wait to land.
+    lastEventTime = owner.tickCount();
+    tickRoutine();
+    mvAlgo.tick(dt);
+    return;
+    }
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
@@ -3118,7 +3464,7 @@ void Npc::tick(uint64_t dt) {
     archAi.tick(*this,dt);
 
   const bool physicalMovement = ragdoll ||
-      (Gothic::settingsGetI("GAME","ragdoll")!=0 && isDown() && !ragdollLegacyDown && !ragdollRecovering);
+      (Gothic::physicsFlags().ragdoll && isDown() && !ragdollLegacyDown && !ragdollRecovering);
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
@@ -3174,8 +3520,18 @@ bool Npc::prepareTurn() {
   return true;
   }
 
+bool Npc::hasQueuedPhysicalSpellState(const AiQueue& queue) const {
+  if(!Gothic::physicsFlags().spellPhysics)
+    return false;
+  const auto* action = queue.front();
+  if(action==nullptr || action->act!=AI_StartState)
+    return false;
+  const auto* symbol = owner.script().findSymbol(action->func.ptr);
+  return symbol!=nullptr && (symbol->name()=="ZS_MAGICFREEZE" || symbol->name()=="ZS_WHIRLWIND");
+  }
+
 void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
-  if(isInAir())
+  if(isInAir() && !hasQueuedPhysicalSpellState(queue))
     return;
   if(queue.size()==0)
     return;
@@ -3999,6 +4355,8 @@ void Npc::commitSpell() {
       currentTarget->lastHitSpell = splId;
       currentTarget->perceptionProcess(*this,nullptr,0,PERC_ASSESSMAGIC);
       }
+    if(owner.script().physicalSpell(splId)==GameScript::PhysicalSpell::Whirlwind)
+      owner.startSpellField(splId,currentTarget!=nullptr ? currentTarget->position() : position(),this,currentTarget);
     }
 
   if(active->isSpell()) {
@@ -4139,6 +4497,32 @@ bool Npc::hasStateFlag(BodyState flg) const {
   if(auto i = interactive())
     return flg==(i->stateMask() & (BS_FLAG_MASK|BS_MOD_MASK));
   return false;
+  }
+
+bool Npc::spellWhirling() const {
+  if(!Gothic::physicsFlags().spellPhysics || !aiState.funcIni.isValid() || isDown())
+    return false;
+  constexpr std::string_view whirlwind="ZS_WHIRLWIND";
+  const std::string_view state=aiState.hint;
+  if(state.size()!=whirlwind.size())
+    return false;
+  for(size_t i=0;i<whirlwind.size();++i)
+    if(std::toupper(static_cast<unsigned char>(state[i]))!=whirlwind[i])
+      return false;
+  return true;
+  }
+
+bool Npc::spellFrozen() const {
+  if(!Gothic::physicsFlags().spellPhysics || !aiState.funcIni.isValid() || isDown())
+    return false;
+  constexpr std::string_view frozen="ZS_MAGICFREEZE";
+  const std::string_view state=aiState.hint;
+  if(state.size()!=frozen.size())
+    return false;
+  for(size_t i=0; i<frozen.size(); ++i)
+    if(std::toupper(static_cast<unsigned char>(state[i]))!=frozen[i])
+      return false;
+  return true;
   }
 
 void Npc::setToFightMode(const size_t item) {
@@ -5011,6 +5395,7 @@ void Npc::endManualAim(bool idle) {
     }
   setManualAim(false);
   setAimStance(0,0,0,0);
+  setAimLook({});
   }
 
 bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
@@ -5060,8 +5445,8 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
   return true;
   }
 
-HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const {
-  return visual.rayHitZone(from,to,t);
+HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t, size_t* bone) const {
+  return visual.rayHitZone(from,to,t,bone);
   }
 
 bool Npc::hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const {
@@ -5345,6 +5730,10 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
+    // Mob attachment aligns the root discretely, even over short distances.
+    // Rebuild in the sequential physics handoff instead of sweeping the old
+    // kinematic pose into this alignment with a fictitious contact velocity.
+    livingNeedsRebuild = true;
     attachToPoint(nullptr); //NOTE: Fajeth campfire
     if(!quick) {
       visual.stopAnim(*this,"");
@@ -5895,6 +6284,8 @@ void Npc::updateTransform() {
 
 void Npc::updateAnimation(uint64_t dt, bool force) {
   FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
+  const bool frozen = spellFrozen();
+  const bool clearedPhysicalPose = visual.clearPhysicalPose();
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
     dt = 0;
@@ -5921,7 +6312,15 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     durtyTranform = 0;
     }
 
-  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
+  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force,frozen) || clearedPhysicalPose;
+  if(frozen) {
+    if(living)
+      livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
+                                                float(std::max<uint64_t>(dt,1))*0.001f);
+    if(syncAtt || force)
+      visual.syncAttaches();
+    return;
+    }
   if(ragdoll) {
     if(syncAtt || force)
       visual.syncAttaches();
@@ -5932,6 +6331,11 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   syncAtt |= visual.updateFlinch(*this,dt);
+  if(living)
+    livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
+                                              float(std::max<uint64_t>(dt,1))*0.001f);
+  if(living && living->reactionWeight()>0.f && living->getPose(arrowPhysicalPose))
+    syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)
     visual.syncAttaches();
   }
