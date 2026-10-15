@@ -9,6 +9,7 @@ noise setup
 overlay off
 view full
 wait 1000
+noise listeners
 cadence normal
 wait 34
 movable measure off

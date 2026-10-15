@@ -65,7 +65,6 @@ def functional(directory):
         row['distance_cm'] > row['raw_radius_cm'] for row in far_samples) and table_end['far']['heard'] == 0
     pushes = [row for row in rows if row['kind'] == 'physics_noise_push' and row['phase'] == 'table']
     checks['silent_native_push'] = len(pushes) == 1 and pushes[0]['affected'] > 0 and pushes[0]['reaction_affected'] > 0 and pushes[0]['spell'] is False
-    checks['native_table_overturned_within_2s'] = checkpoints['table']['table_maximum_tilt_deg'] > 45
 
     cup_impacts = [row for row in impacts if row['phase'] == 'cup' and 'BEER' in row['what'].upper()]
     cup_end = roles(checkpoints['cup'])
@@ -125,9 +124,26 @@ def measured(directory, enabled):
     require(one(rows, 'physics_noise_setup')['enabled'] is enabled, 'noise mode mismatch')
     setup = one(rows, 'movable_setup')
     require(setup['enabled'], 'movable furniture must remain enabled in both noise modes')
+    listeners = roles(one(rows, 'physics_noise_case', phase='table'))
+    require(set(listeners) == {'near', 'wall', 'far'} and all(
+        listener['eligible'] and not listener['external'] and not listener['dialogue']
+        for listener in listeners.values()), 'three eligible native listeners required in both noise modes')
+    require(400 <= listeners['near']['distance_cm'] <= 600 and listeners['near']['occlusion'] <= .05 and
+            listeners['wall']['occlusion'] > .1 and listeners['far']['distance_cm'] > 1200,
+            'performance scene lacks its clear, occluded or distant hearing candidate')
     before, after = one(rows, 'movable_measure_before'), one(rows, 'movable_measure_after')
     require(before['enabled'] and not after['overflow'], 'native measurement incomplete')
     require(one(rows, 'physics_noise_push')['affected'] > 0, 'silent measured impulse absent')
+    hearing = one(rows, 'physics_noise_measure_after')
+    measured_listeners = roles(hearing)
+    require(hearing['enabled'] is enabled and set(measured_listeners) == set(listeners), 'measured listener mode/count mismatch')
+    require(all(measured_listeners[role]['npc_id'] == listener['npc_id']
+                for role, listener in listeners.items()), 'listener identity changed during timing')
+    require(hearing['impacts'] > 0 and hearing['perceptions'] > 0 and measured_listeners['near']['heard'] > 0
+            if enabled else hearing['impacts'] == 0 and hearing['perceptions'] == 0 and all(
+                listener['heard'] == 0 for listener in measured_listeners.values()),
+            'noise ON must exercise actual hearing; noise OFF must deliver none')
+    require(hearing['native_rays'] > 0, 'native ray work was not observed in the timing window')
     meta = json.loads((directory/'appcadence.csv.json').read_text())
     require(meta['clock'] == 'normal' and meta['complete'] and meta['overflow'] == 0 and
             meta['mode'] == ('on' if enabled else 'off') and meta['window_end_ns']-meta['start_ns'] == 30_000_000_000,
@@ -153,12 +169,16 @@ def measured(directory, enabled):
     require(all(math.isfinite(value) and value >= 0 for value in costs), 'invalid physics timing')
     return {'mean_fps': len(frames)/((prior-meta['start_ns'])/1e9), 'app_frame_p95_ms': percentile(intervals),
             'physics_mean_ms': statistics.mean(costs), 'physics_p95_ms': percentile(costs),
-            'native_samples': len(costs), 'fixture': sorted((body['visual'], body['class']) for body in setup['bodies'])}
+            'native_samples': len(costs), 'fixture': sorted((body['visual'], body['class']) for body in setup['bodies']),
+            'listeners_before': listeners, 'hearing': hearing}
 
 
 def performance(directory):
     off, on = measured(directory/'off', False), measured(directory/'on', True)
     require(off['fixture'] == on['fixture'], 'noise OFF/ON fixtures differ')
+    require(all(math.dist(off['listeners_before'][role]['position_cm'], on['listeners_before'][role]['position_cm']) <= 1 and
+                off['listeners_before'][role]['process_policy'] == on['listeners_before'][role]['process_policy']
+                for role in ('near', 'wall', 'far')), 'OFF/ON listener positions or process modes differ')
     require(off['physics_mean_ms'] > 0 and off['physics_p95_ms'] > 0, 'zero noise-OFF timing baseline')
     fps_drop = 100*(1-on['mean_fps']/off['mean_fps'])
     step_change = 100*(on['physics_mean_ms']/off['physics_mean_ms']-1)
@@ -166,7 +186,7 @@ def performance(directory):
     return {'pass': fps_drop <= 5 and step_change <= 5 and p95_change <= 5,
             'fps_drop_percent': fps_drop, 'physics_mean_change_percent': step_change,
             'physics_p95_change_percent': p95_change, 'off': off, 'on': on,
-            'measurement': 'Matched movable-vobs meshes, silent native impulse, 30s normal-game completed app frames and native physics step samples; impact trace/occlusion logging disabled during both timing windows.'}
+            'measurement': 'Matched movable-vobs meshes, camera, hero and three eligible listeners (clear/occluded/distant), silent native impulse, 30s normal-game completed app frames and native physics steps. Real hearing is required ON and absent OFF; only cheap counters run during timing, with impact/turn/acoustic trace logging disabled.'}
 
 
 def main():

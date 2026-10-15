@@ -347,9 +347,11 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
                             b.GetObjectLayer()==DynamicWorld::C_Ragdoll;
         const bool secondNpc=a.GetObjectLayer()==DynamicWorld::C_LivingBody || a.GetObjectLayer()==DynamicWorld::C_ActiveBody ||
                              a.GetObjectLayer()==DynamicWorld::C_Ragdoll;
+        const bool firstPushed=first && firstNpc && secondVelocity.Dot(manifold.mWorldSpaceNormal)<-.05f;
+        const bool secondPushed=second && secondNpc && firstVelocity.Dot(manifold.mWorldSpaceNormal)>.05f;
         // Resting contacts do not need the native impulse solver. Slow contact
         // with an NPC rig still retains who pushed a body before its fall.
-        if(speed>=.9f || (first && firstNpc) || (second && secondNpc)) {
+        if(speed>=.9f || firstPushed || secondPushed) {
           float impulse=0.f;
           if(speed>=.9f) {
             JPH::CollisionEstimationResult response;
@@ -373,12 +375,12 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
             return body.GetID().GetIndexAndSequenceNumber();
             };
           std::lock_guard<std::mutex> guard(impactMutex);
-          if(first && (impulse>=.08f || firstNpc))
+          if(first && (impulse>=.08f || firstPushed))
             noises.push_back({a.GetID(),b.GetID(),toCentimeters(point),surface(b,manifold.mSubShapeID2),impulse,simulationStep,identity(a),
-                              secondVelocity.Dot(manifold.mWorldSpaceNormal)<-.05f});
-          if(second && (impulse>=.08f || secondNpc))
+                              firstPushed});
+          if(second && (impulse>=.08f || secondPushed))
             noises.push_back({b.GetID(),a.GetID(),toCentimeters(point),surface(a,manifold.mSubShapeID1),impulse,simulationStep,identity(b),
-                              firstVelocity.Dot(manifold.mWorldSpaceNormal)>.05f});
+                              secondPushed});
           }
         }
       }
