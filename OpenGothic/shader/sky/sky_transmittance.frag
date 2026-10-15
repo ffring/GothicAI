@@ -45,5 +45,5 @@ void main() {
   vec3  pos         = vec3(0.0, height, 0.0);
   vec3  sunDir      = normalize(vec3(0.0, sunCosTheta, -sin(sunTheta)));
 
-  outColor          = vec4(sunTransmittance(pos, sunDir), 1.0);
+  outColor          = finiteOrZero(vec4(sunTransmittance(pos, sunDir), 1.0));
   }

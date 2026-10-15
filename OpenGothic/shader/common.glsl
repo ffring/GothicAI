@@ -82,6 +82,15 @@ float safeacos(const float x) {
   return acos(clamp(x, -1.0, 1.0));
   }
 
+// Sky LUT texels: a NaN/Inf (seen on lavapipe) would spread through exposure and irradiance to the
+// whole frame. Bit test, since a compiler may fold isnan() away.
+vec4 finiteOrZero(vec4 c) {
+  for(int i=0; i<4; ++i)
+    if((floatBitsToUint(c[i]) & 0x7F800000u)==0x7F800000u)
+      c[i] = 0.0;
+  return c;
+  }
+
 vec3 srgbDecode(vec3 color){
   return pow(color,vec3(2.2));
   }

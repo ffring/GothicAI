@@ -4,6 +4,7 @@
 #include "bodyobservations.h"
 #include "bodycontroller.h"
 #include "bodytrajectory.h"
+#include "bodyreplay.h"
 #include "gothic.h"
 #include "camera.h"
 #include "testbench.h"
@@ -30,7 +31,10 @@ bool SimulationStep::finishStep(uint64_t dt, PlayerControl& player,
   BodyController::postStep();
   BodyTrajectory::postStep();
   BodyObservations::sampleAll();
-  return TestBench::tick(dt,player);
+  const bool capture = TestBench::tick(dt,player);
+  if(dt>0)
+    BodyReplay::postStep();
+  return capture;
   }
 
 void SimulationStep::observerCamera(uint64_t dt) {

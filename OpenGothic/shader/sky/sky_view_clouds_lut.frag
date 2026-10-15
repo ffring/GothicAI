@@ -65,5 +65,5 @@ void main() {
   vec3 sky = textureLod(skyLUT, uv, 0).rgb;
   sky = applyClouds(sky, rayDir);
 
-  outColor = vec4(sky, 1.0);
+  outColor = finiteOrZero(vec4(sky, 1.0));
   }

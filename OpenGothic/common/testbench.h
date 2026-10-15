@@ -28,6 +28,8 @@ namespace TestBench {
   void     retarget(std::string output);
   void     resumeHeld();
   bool     done();
+  // A running `wait` ends now (a bench-driven episode is over)
+  void     endWait(std::string_view reason);
   uint64_t stepCount();
   uint64_t nativeChoices();
   // Explicit scenario participants for a passive body_watch, including duplicate script symbols.

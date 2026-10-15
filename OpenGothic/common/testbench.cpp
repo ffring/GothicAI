@@ -36,6 +36,7 @@
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
 #include "game/bodyarena.h"
+#include "game/bodyreplay.h"
 #include "game/definitions/sounddefinitions.h"
 #include "resources.h"
 #include "graphics/drawcommands.h"
@@ -925,6 +926,23 @@ Npc* npcBySymbol(World& w, std::string_view symbol) {
   return id==size_t(-1) ? nullptr : w.findNpcByInstance(id);
   }
 
+// `bodyarena`, `bodyreplay`: the configured arena's participants, with isolated animation RNG
+void setupArena(World& w, Npc& pl) {
+  try {
+    BodyArena::setup(w,pl);
+    const auto actors=BodyArena::actors();
+    bench.duelFrom=w.tickCount();
+    if(!beginAnimationControl(BodyArena::seed(),actors))
+      throw std::runtime_error("arena animation RNG setup failed");
+    event("body_arena_setup","\"arena\":"+BodyArena::statusJson());
+    }
+  catch(const std::exception& error) {
+    event("body_arena_error","\"reason\":"+jsonStr(error.what()));
+    bench.pc=bench.prog.size();
+    throw;
+    }
+  }
+
 bool aiCommand(const std::string& cmd, std::string& reply) {
   auto& fn = Gothic::inst().consoleCommandFn;
   return fn && fn(cmd,reply);
@@ -1236,11 +1254,23 @@ Vec3 rotY(const Vec3& v, float deg) {
   return {v.x*c - v.z*s, v.y, v.x*s + v.z*c};
   }
 
-// a shot of the hero and camNpc; false if the npc is not there
-bool npcShot(World& w, Npc& pl, Vec3& org, Vec3& tgt) {
-  Npc* npc = npcBySymbol(w,bench.camNpc);
+// a shot of the hero and camNpc; false if the npc is not there. camNpc `arena`: the arena's primary
+// in place of the hero and its opponent
+bool npcShot(World& w, Npc& player, Vec3& org, Vec3& tgt) {
+  Npc* npc = nullptr;
+  Npc* own = &player;
+  if(bench.camNpc=="arena") {
+    const auto actors = BodyArena::actors();
+    if(actors.size()<2)
+      return false;
+    own = actors[0];
+    npc = actors[1];
+    } else {
+    npc = npcBySymbol(w,bench.camNpc);
+    }
   if(npc==nullptr)
     return false;
+  Npc& pl = *own;
   const Vec3 hero  = pl.mapHeadBone();
   const Vec3 other = npc->mapHeadBone();
   Vec3 d = other-hero;
@@ -1757,7 +1787,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.camDist   = num(a,3,m=="shoulder" ? 120 : (m=="face" ? 140 : 250));
       bench.camHeight = num(a,4,m=="shoulder" ? 15 : (m=="face" ? 0 : 10));
       bench.camAngle  = num(a,5,m=="face" ? 30 : 1);
-      if(npcBySymbol(w,bench.camNpc)==nullptr)
+      if(bench.camNpc!="arena" && npcBySymbol(w,bench.camNpc)==nullptr)
         say("cam " + m + ": no npc " + bench.camNpc);
       }
     else if(m=="cut") {
@@ -2126,18 +2156,20 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("seed " + std::to_string(s));
     }
   else if(c=="bodyarena") {
+    setupArena(w,pl);
+    }
+  else if(c=="bodyreplay") {
+    // bodyreplay <file> [tail ms 3000]: a recorded lockstep arena episode, replayed for the camera
+    // (game/bodyreplay.h); put it in place of `bodyarena`, the following `wait` ends with the replay
     try {
-      BodyArena::setup(w,pl);
-      const auto actors=BodyArena::actors();
-      bench.duelFrom=w.tickCount();
-      if(!beginAnimationControl(BodyArena::seed(),actors))
-        throw std::runtime_error("arena animation RNG setup failed");
-      event("body_arena_setup","\"arena\":"+BodyArena::statusJson());
+      BodyReplay::load(a.size()>1 ? a[1] : "",outDir,uint64_t(num(a,2,3000)));
+      setupArena(w,pl);
       }
     catch(const std::exception& error) {
-      event("body_arena_error","\"reason\":"+jsonStr(error.what()));
+      event("body_replay_error","\"reason\":"+jsonStr(error.what()));
+      say("bodyreplay: "+std::string(error.what()));
+      BodyReplay::stop("error");
       bench.pc=bench.prog.size();
-      throw;
       }
     }
   else if(c=="bodyobserve" || c=="bodyapi") {
@@ -3992,6 +4024,24 @@ void drawZones(Canvas& cv, Camera* cam) {
     }
   }
 
+// `cam two arena`: a mark over the arena's primary, the body under test (the opponent is native)
+void drawArenaMark(Pixmap& pm) {
+  const auto actors = BodyArena::actors();
+  auto       cam    = Gothic::inst().camera();
+  if(actors.size()<2 || cam==nullptr)
+    return;
+  Canvas cv;
+  cv.px = reinterpret_cast<uint8_t*>(pm.data());
+  cv.w  = int(pm.w());
+  cv.h  = int(pm.h());
+  const Vec3 at = actors[0]->mapHeadBone() + Vec3(0,40,0);
+  float x = at.x, y = at.y, z = at.z, ww = 1;
+  cam->viewProj().project(x,y,z,ww);
+  if(ww<=1e-3f)
+    return;
+  cv.dot((0.5f*x/ww+0.5f)*float(cv.w),(0.5f*y/ww+0.5f)*float(cv.h),6,{255,200,30,255});
+  }
+
 void drawOverlay(Pixmap& pm) {
   Canvas cv;
   cv.px = reinterpret_cast<uint8_t*>(pm.data());
@@ -4313,6 +4363,14 @@ void TestBench::resumeHeld() {
   }
 
 bool TestBench::done() { return bench.done; }
+
+void TestBench::endWait(std::string_view reason) {
+  if(scenarioPath==nullptr || bench.done)
+    return;
+  bench.waitUntil = bench.time;
+  say("wait ended: " + std::string(reason));
+  }
+
 uint64_t TestBench::stepCount() { return bench.step; }
 uint64_t TestBench::nativeChoices() { return bench.nativeChoices; }
 
@@ -4689,6 +4747,8 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
 
   if(pm.w()>0 && bench.overlay)
     drawOverlay(pm);
+  if(pm.w()>0 && bench.cam==C_Two && bench.camNpc=="arena")
+    drawArenaMark(pm);
   if(!bench.shot.empty()) {
     if(pm.w()>0)
       pm.save((outDir+"/"+bench.shot+".png").c_str());
