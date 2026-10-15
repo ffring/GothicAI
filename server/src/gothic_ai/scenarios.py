@@ -39,9 +39,10 @@ from .incidents import IncidentDesk
 from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
 from .interject import Interjections
 from .journal import Journal
-from .knowledge import Knowledge, Topic
+from .knowledge import Knowledge, Topic, roots
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
+from .lore import Lore
 from .npc_tools import GESTURES as NPC_GESTURES
 from .perception import PerceptionDesk, Sight
 from .persona import PersonaProvider, habits_of
@@ -1859,6 +1860,25 @@ class _OnWords:
         )
 
 
+class _Recorded:
+    """A model as it is, and what it was given: each request's messages, for a scenario to read."""
+
+    def __init__(self, llm: Any) -> None:
+        self.llm = llm
+        self.name = llm.name
+        self.asked: list[str] = []
+
+    async def aclose(self) -> None:
+        await self.llm.aclose()
+
+    def stream(self, *, messages: Sequence[Item], **kw: Any) -> AsyncIterator[LLMEvent]:
+        self.asked.append("\n".join(m.content for m in messages if isinstance(m, Message)))
+        return self.llm.stream(messages=messages, **kw)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.llm, name)
+
+
 class _ByNpc:
     """A scripted model for each npc: the one whose «Ты — {name}» its instructions have; `default` else."""
 
@@ -2436,6 +2456,70 @@ async def cave_scenario(
     )
     said = [e.get("text", "") for e in entries[t0:] if e.get("kind") == "npc" and e.get("npc") == npc]
     log.info("cave: %s said %s", npc, said)
+    return _logged(results)
+
+
+async def knows_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    knowledge: Knowledge,
+    lore: Lore,
+    whereabouts: Whereabouts,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+) -> dict[str, str]:
+    """What an npc knows of where people are (docs/npc-tools.md М4): Cavalorn by his fire knows the bandits
+    who robbed him sit in the cave below the steps, though the hero has told him nothing. Checks:
+    - known: among his facts the story lets him tell now, one of the bandits' cave (XARDAS_BANDITS);
+    - situation: the hero asks «что тут поблизости опасного?»; the fact is in the situation of his turn;
+    - where: `where{пещера}` tells it too;
+    - said (live model only): his answer speaks of the bandits or the cave.
+    The model is scripted with LLM=fake; LLM=chatgpt answers itself."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    live = dialogue.llm.name != "fake"
+    model = _Recorded(dialogue.llm if live else FakeBackend("Держи ухо востро.", delay=0))
+    dialogue.llm = model
+    await link.debug("skip_important", near=npc)  # Cavalorn's own greeting would stop the hero
+    for _ in range(2):  # the goblins by his fire
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("knows: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: npc in talk.people and talk.people[npc].distance <= 600, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    await knowledge.prepare(npc)
+    cave = [f for f in lore.known(npc) if f.place == "XARDAS_BANDITS"]
+    check("known", bool(cave), cave[0].ru if cave else [f.ru for f in lore.known(npc)])
+
+    t0 = len(entries)
+    talk.hear("Кавалорн, что тут поблизости опасного?", npc, {"via": "scenario"})
+    answered = await _until(
+        lambda: any(e.get("kind") == "npc" and e.get("npc") == npc for e in entries[t0:]), 60
+    )
+    said = " ".join(e.get("text", "") for e in entries[t0:] if e.get("kind") == "npc" and e.get("npc") == npc)
+    shown = bool(cave) and any(cave[0].ru in asked for asked in model.asked)
+    check("situation", answered and shown, said or "no answer")
+    answer = whereabouts.where(npc, "пещера")
+    check("where", "Ты знаешь:" in answer and bool(cave) and cave[0].ru in answer, answer.split("\n")[-1])
+    if live:
+        words = roots(said)
+        check("said", any(w.startswith(("бандит", "пещер", "дыр")) for w in words), said)
     return _logged(results)
 
 

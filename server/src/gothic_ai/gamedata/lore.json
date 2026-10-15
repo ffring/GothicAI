@@ -1,0 +1,4388 @@
+{
+ "version": 1,
+ "world": "NEWWORLD.ZEN",
+ "npcs": {
+  "BAU_4300_ADDON_CAVALORN": [
+   {
+    "dialog": "DIA_ADDON_CAVALORN_HELFEN",
+    "place": "XARDAS_BANDITS",
+    "who": [
+     "BDT_1014_BANDIT_L",
+     "BDT_1015_BANDIT_L"
+    ],
+    "ru": "Бандиты, которые тебя ограбили, прячутся в пещере под лестницей к башне Ксардаса — вниз по дороге от твоего костра.",
+    "en": "The bandits who robbed you are hiding in the cave beneath the stairs to Xardas's tower, down the road from your campfire."
+   },
+   {
+    "dialog": "DIA_ADDON_CAVALORN_BRAGOKILLED",
+    "place": "XARDAS_BANDITS",
+    "who": [
+     "BDT_1014_BANDIT_L",
+     "BDT_1015_BANDIT_L"
+    ],
+    "ru": "Твоё письмо должно быть в кармане у одного из бандитов в пещере под лестницей к башне Ксардаса.",
+    "en": "Your letter should be in the pocket of one of the bandits in the cave beneath the stairs to Xardas's tower."
+   },
+   {
+    "dialog": "DIA_ADDON_CAVALORN_BRAGOKILLED",
+    "place": "CITY_MERCHANT_TEMPLE",
+    "who": [
+     "VLK_439_VATRAS"
+    ],
+    "ru": "Ватрас, маг воды, весь день проповедует в храме Аданоса у рыночной площади Хориниса.",
+    "en": "Vatras, the Water Mage, preaches all day at the temple of Adanos by the market square in Khorinis."
+   },
+   {
+    "dialog": "DIA_ADDON_CAVALORN_HALLO",
+    "place": "XARDAS_TOWER_VALLEY",
+    "who": [],
+    "ru": "Бывший заключённый, который умеет свободно выходить из Хориниса и возвращаться, ушёл в долину под белой башней. Возможно, у водопада есть проход.",
+    "en": "A former prisoner who knows how to leave and re-enter Khorinis freely went into the valley below the white tower. There may be a passage near the waterfall."
+   },
+   {
+    "dialog": "DIA_ADDON_CAVALORN_GOTORNAFROMHAGEN",
+    "place": "PALADIN",
+    "who": [],
+    "ru": "Пропавший орнамент оказался у паладинов в верхнем квартале Хориниса.",
+    "en": "The missing ornament turned out to be with the paladins in the upper quarter of Khorinis."
+   }
+  ],
+  "BAU_900_ONAR": [
+   {
+    "dialog": "DIA_ONAR_PERM",
+    "place": "BIGFARM_PATH",
+    "who": [
+     "SLD_801_TORLOF"
+    ],
+    "ru": "У Торлофа может быть работа; его можно найти на дорожке у кузницы большой фермы.",
+    "en": "Torlof may have work available; you can find him on the path by the big farm's smithy."
+   },
+   {
+    "dialog": "DIA_ONAR_WEGENSEKOB",
+    "place": "BIGFARM_PATH",
+    "who": [
+     "SLD_801_TORLOF"
+    ],
+    "ru": "Торлоф принимает деньги за ренту; его можно найти на дорожке у кузницы.",
+    "en": "Torlof collects rent payments; you can find him on the path by the smithy."
+   },
+   {
+    "dialog": "DIA_ONAR_WEGENPEPE",
+    "place": "BIGFARM_HOUSE_UP2",
+    "who": [
+     "SLD_800_LEE"
+    ],
+    "ru": "Ли отвечает за дисциплину наёмников, в том числе за ущерб твоим овцам; его можно найти в покоях Ли и Халеда.",
+    "en": "Lee handles discipline among the mercenaries, including damage to your sheep; you can find him in the quarters he shares with Khaled."
+   },
+   {
+    "dialog": "DIA_ONAR_WANNASHEEP",
+    "place": "BIGFARM_SHEEP2",
+    "who": [],
+    "ru": "Справа от твоего дома находится овечье пастбище, где можно купить овцу у Пепе.",
+    "en": "To the right of your house is a sheep pasture where sheep can be bought from Pepe."
+   },
+   {
+    "dialog": "DIA_ONAR_BUYLIESEL",
+    "place": "BIGFARM_SHEEP2",
+    "who": [],
+    "ru": "Большинство твоих овец на пастбище отзываются на имя Бетси.",
+    "en": "Most of your sheep in the pasture answer to the name Betsy."
+   }
+  ],
+  "BAU_902_GUNNAR": [
+   {
+    "dialog": "DIA_GUNNAR_HALLO",
+    "place": null,
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Онар набирает наёмников; на его ферму отовсюду стекаются бандиты. Людей из города здесь не жалуют.",
+    "en": "Onar is recruiting mercenaries; bandits are flocking to his farm from all over. People from the city are not welcome here."
+   },
+   {
+    "dialog": "DIA_GUNNAR_SOUTH",
+    "place": null,
+    "who": [
+     "SLD_806_SYLVIO",
+     "SLD_807_BULLCO",
+     "SLD_814_SENTENZA",
+     "SLD_822_RAOUL"
+    ],
+    "ru": "Сильвио возглавляет наёмников с юга; на него работают Булко, Сентенза и Рауль. Насколько тебе известно, на юге они охотились на орков.",
+    "en": "Sylvio leads the mercenaries from the south; Bullco, Sentenza and Raoul work for him. As far as you know, they hunted orcs in the south."
+   },
+   {
+    "dialog": "DIA_GUNNAR_COLONY",
+    "place": null,
+    "who": [
+     "SLD_800_LEE",
+     "SLD_801_TORLOF",
+     "SLD_805_CORD",
+     "SLD_808_JARVIS",
+     "SLD_811_WOLF"
+    ],
+    "ru": "Ли и его люди — Торлоф, Корд, Джарвис и Вульф — пришли сюда из колонии.",
+    "en": "Lee and his men—Torlof, Cord, Jarvis and Wolf—came here from the colony."
+   }
+  ],
+  "BAU_903_BODO": [
+   {
+    "dialog": "DIA_BODO_BETT",
+    "place": "BIGFARM_STABLE",
+    "who": [],
+    "ru": "В сарае большого двора можно поспать, но занимать кровать наёмника опасно.",
+    "en": "You can sleep in the big farm's barn, but taking a mercenary's bed is dangerous."
+   },
+   {
+    "dialog": "DIA_BODO_BETT",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Онар следит, чтобы наёмники не трогали вас, фермеров. Чужаков, не работающих на ферме, эта защита не касается.",
+    "en": "Onar makes sure the mercenaries leave you farmers alone. Outsiders who do not work on the farm have no such protection."
+   }
+  ],
+  "BAU_907_WASILI": [
+   {
+    "dialog": "DIA_WASILI_JOB",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Ты целыми днями присматриваешь за добром Онара в его доме: среди нанятых им наёмников много бывших заключённых, готовых украсть всё, что плохо лежит.",
+    "en": "You spend your days watching over Onar's possessions in his house: many of his hired mercenaries are former prisoners ready to steal anything that is not nailed down."
+   },
+   {
+    "dialog": "DIA_WASILI_SAMMLER",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "В доме Онара хранится его коллекция ценных предметов.",
+    "en": "Onar's collection of valuable objects is kept in his house."
+   },
+   {
+    "dialog": "DIA_WASILI_PERM",
+    "place": "BIGFARM_HOUSE",
+    "who": [],
+    "ru": "Несколько дней назад в дом Онара пробрался наёмник в чёрной рясе с капюшоном; ты видел, как он убегал, но не разглядел его лица.",
+    "en": "A few days ago, a mercenary in a black hooded robe sneaked into Onar's house; you saw him flee but could not make out his face."
+   }
+  ],
+  "BAU_908_HODGES": [
+   {
+    "dialog": "DIA_HODGES_HALLO",
+    "place": "BIGFARM_SMITH",
+    "who": [
+     "SLD_809_BENNET"
+    ],
+    "ru": "В кузнице Беннет делает оружие, а ты его полируешь.",
+    "en": "Bennet makes weapons at the smithy, and you polish them."
+   },
+   {
+    "dialog": "DIA_HODGES_TELLABOUTFARM",
+    "place": "BIGFARM_HOUSE_SLD",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Онар отвёл одно крыло своего большого дома под жильё наёмникам.",
+    "en": "Onar has set aside a wing of his large house for the mercenaries to live in."
+   },
+   {
+    "dialog": "DIA_HODGES_TELLABOUTFARM",
+    "place": "BIGFARM_STABLE",
+    "who": [],
+    "ru": "Ты и остальные фермеры переселились в сарай.",
+    "en": "You and the other farmers have moved into the barn."
+   },
+   {
+    "dialog": "DIA_HODGES_TELLABOUTFARM",
+    "place": "BIGFARM_SMITH",
+    "who": [],
+    "ru": "Кузница находится перед кухней большой фермы.",
+    "en": "The smithy stands in front of the large farm's kitchen."
+   },
+   {
+    "dialog": "DIA_HODGES_TRADE",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Почти все мечи и топоры вы относите в дом Онара.",
+    "en": "You take almost all the swords and axes to Onar's house."
+   },
+   {
+    "dialog": "DIA_HODGES_DONTWORK",
+    "place": null,
+    "who": [
+     "SLD_809_BENNET"
+    ],
+    "ru": "Беннет арестован паладинами.",
+    "en": "Bennet has been arrested by the paladins."
+   }
+  ],
+  "BAU_910_MARIA": [
+   {
+    "dialog": "DIA_MARIA_UMSEHEN",
+    "place": "BIGFARM_HOUSE",
+    "who": [],
+    "ru": "На ферме живёт много людей, и они постоянно заходят в дом.",
+    "en": "Many people live on the farm, and they keep coming into the house."
+   },
+   {
+    "dialog": "DIA_MARIA_ABOUTONAR",
+    "place": null,
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Твой муж Онар нанял наёмников для защиты от городских солдат.",
+    "en": "Your husband Onar hired mercenaries for protection against the town soldiers."
+   },
+   {
+    "dialog": "DIA_MARIA_PERM",
+    "place": null,
+    "who": [
+     "BAU_907_WASILI"
+    ],
+    "ru": "Василий несколько дней назад поймал вора.",
+    "en": "Wasili caught a thief a few days ago."
+   }
+  ],
+  "BAU_911_ELENA": [
+   {
+    "dialog": "DIA_ELENA_PERM",
+    "place": "BIGFARM_STABLE",
+    "who": [],
+    "ru": "Ты теперь всё время на большой ферме и продаёшь выращенные здесь продукты только на месте: твой отец запретил продавать что-либо городу.",
+    "en": "You now stay on the big farm and sell its produce only here: your father has forbidden selling anything to the city."
+   },
+   {
+    "dialog": "DIA_ELENA_PERM",
+    "place": null,
+    "who": [
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Сильвио со своими парнями ушёл с большой фермы; после их ухода остальные наёмники немного успокоились.",
+    "en": "Sylvio and his men have left the big farm; since their departure, the other mercenaries have calmed down a little."
+   }
+  ],
+  "BAU_912_PEPE": [
+   {
+    "dialog": "DIA_PEPE_HALLO",
+    "place": "BIGFARM_SHEEP2",
+    "who": [],
+    "ru": "Ты стерегёшь овец на пастбище у главного дома.",
+    "en": "You tend the sheep in the pasture by the main house."
+   },
+   {
+    "dialog": "DIA_PEPE_KILLWOLVES",
+    "place": "BIGFARM_FOREST",
+    "who": [],
+    "ru": "В лесу около твоего пастбища обычно шныряют волки — по твоим подсчётам, их четверо.",
+    "en": "Wolves usually prowl in the woods near your pasture—you reckon there are four of them."
+   },
+   {
+    "dialog": "DIA_PEPE_DANGER",
+    "place": "BIGFARM_SHEEP2",
+    "who": [],
+    "ru": "Неподалёку от твоего пастбища бродит стая волков, почти каждый день утаскивающая по овце.",
+    "en": "A pack of wolves roams near your pasture, carrying off a sheep almost every day."
+   },
+   {
+    "dialog": "DIA_PEPE_BULLCO",
+    "place": "BIGFARM_KITCHEN",
+    "who": [
+     "SLD_807_BULLCO",
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Булко должен охранять твоё пастбище, но вместо этого целыми днями ошивается с Сильвио на кухне у Теклы.",
+    "en": "Bullco is supposed to guard your pasture, but instead he spends all day hanging around Thekla's kitchen with Sylvio."
+   },
+   {
+    "dialog": "DIA_PEPE_LIESEL",
+    "place": "BIGFARM_SHEEP2",
+    "who": [],
+    "ru": "У тебя на пастбище можно купить овцу за 100 золотых монет.",
+    "en": "A sheep can be bought from you at your pasture for 100 gold coins."
+   },
+   {
+    "dialog": "DIA_PEPE_BUYLIESEL",
+    "place": "BIGFARM_SHEEP2",
+    "who": [],
+    "ru": "Бетси находится на твоём пастбище; всех твоих овец зовут Бетси, а баранов — Брюс.",
+    "en": "Betsy is in your pasture; all your ewes are called Betsy, and all your rams are called Bruce."
+   }
+  ],
+  "BAU_913_THEKLA": [
+   {
+    "dialog": "DIA_THEKLA_HUNGER",
+    "place": "BIGFARM_KITCHEN",
+    "who": [],
+    "ru": "На своей кухне ты кормишь работников и наёмников; бродяг и ополчение не обслуживаешь.",
+    "en": "In your kitchen, you feed workers and mercenaries; you do not serve vagrants or the militia."
+   },
+   {
+    "dialog": "DIA_THEKLA_ARBEIT",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Онару принадлежат большая ферма и вся долина; только он решает, кого брать на работу на ферме.",
+    "en": "Onar owns the large farm and the entire valley; he alone decides whom to hire on the farm."
+   },
+   {
+    "dialog": "DIA_THEKLA_SCHLAFEN",
+    "place": "BIGFARM_STABLE",
+    "who": [],
+    "ru": "В сарае можно найти место для ночлега; на своей кухне ты спать не разрешаешь.",
+    "en": "There is room to sleep in the barn; you do not allow anyone to sleep in your kitchen."
+   },
+   {
+    "dialog": "DIA_THEKLA_PROBLEM",
+    "place": "BIGFARM_KITCHEN",
+    "who": [
+     "SLD_806_SYLVIO",
+     "SLD_807_BULLCO"
+    ],
+    "ru": "Сильвио и Булко целыми днями сидят в углу твоей кухни и придираются к еде; на удар они могут ответить мечом.",
+    "en": "Sylvio and Bullco sit in the corner of your kitchen all day, complaining about the food; they may answer a blow with their swords."
+   },
+   {
+    "dialog": "DIA_THEKLA_MANIEREN",
+    "place": "BIGFARM_KITCHEN",
+    "who": [
+     "SLD_806_SYLVIO",
+     "SLD_807_BULLCO"
+    ],
+    "ru": "По твоим сведениям, у Сильвио магические доспехи и его нельзя победить. Булко силён как бык и легко справлялся со всеми, кто выступал против него или Сильвио.",
+    "en": "As far as you know, Sylvio has magical armor and cannot be beaten. Bullco is as strong as an ox and has easily defeated everyone who challenged him or Sylvio."
+   },
+   {
+    "dialog": "DIA_THEKLA_PERM",
+    "place": null,
+    "who": [
+     "SLD_809_BENNET"
+    ],
+    "ru": "Ополчение бросило Беннета в тюрьму.",
+    "en": "The militia threw Bennet in prison."
+   }
+  ],
+  "BAU_930_SEKOB": [
+   {
+    "dialog": "DIA_SEKOB_DMT",
+    "place": "FARM4_IN",
+    "who": [],
+    "ru": "Твой дом заняли люди в черных рясах; они говорят, что кого-то ищут.",
+    "en": "People in black robes have occupied your house; they say they are looking for someone."
+   },
+   {
+    "dialog": "DIA_SEKOB_PERM",
+    "place": null,
+    "who": [
+     "BAU_936_ROSI"
+    ],
+    "ru": "Твоя жена Рози пропала и не вернулась; ты подозреваешь, что она убежала в лес, спасаясь от полевых хищников.",
+    "en": "Your wife Rosi has disappeared and has not returned; you suspect she fled into the woods to escape field raiders."
+   }
+  ],
+  "BAU_931_TILL": [
+   {
+    "dialog": "DIA_TILL_BRONKO",
+    "place": "FARM4_FLEEDMT",
+    "who": [
+     "BAU_935_BRONKO"
+    ],
+    "ru": "Бронко, работник вашей фермы, находится на окраине у поля и отказывается работать.",
+    "en": "Bronko, a worker on your farm, is at the edge of the farm by the field and refuses to work."
+   },
+   {
+    "dialog": "DIA_TILL_WASMACHSTDU",
+    "place": "FARM4",
+    "who": [],
+    "ru": "Ты сторожишь ферму Секоба: городские ополченцы все чаще заходят на ваши земли и воруют вещи. На прошлой неделе они украли овец.",
+    "en": "You guard Sekob's farm: the town militia increasingly trespass on your land and steal things. Last week they stole sheep."
+   }
+  ],
+  "BAU_932_BALTHASAR": [
+   {
+    "dialog": "DIA_BALTHASAR_WASMACHSTDU",
+    "place": "FARM4_SHEEP",
+    "who": [],
+    "ru": "Ты пасёшь овец на пастбище фермы Секоба.",
+    "en": "You tend sheep on Sekob's farm pasture."
+   },
+   {
+    "dialog": "DIA_ADDON_BALTHASAR_RANGERBANDITS",
+    "place": "FARM4_FIELD",
+    "who": [],
+    "ru": "Бандиты прошли краем поля фермы Секоба в лес на севере. Они несли много оружия и, насколько ты разглядел, уводили молодую женщину.",
+    "en": "Bandits passed along the edge of Sekob's farm field into the forest to the north. They carried a great deal of weapons and, as far as you could make out, were taking a young woman with them."
+   },
+   {
+    "dialog": "DIA_BALTHASAR_AERGERMITNACHBARN",
+    "place": "FARM4_SHEEP",
+    "who": [],
+    "ru": "Трава на твоём пастбище чахлая и пожухлая, поэтому ты часто пасёшь овец на пастбищах других ферм.",
+    "en": "The grass on your pasture is sparse and withered, so you often graze your sheep on other farms' pastures."
+   },
+   {
+    "dialog": "DIA_BALTHASAR_AERGERMITNACHBARN",
+    "place": null,
+    "who": [
+     "BAU_960_BENGAR",
+     "BAU_930_SEKOB"
+    ],
+    "ru": "Бенгар владеет высокогорными пастбищами и требует от Секоба плату за выпас твоих овец. Секоб платить не желает, поэтому ты перестал водить овец на плато.",
+    "en": "Bengar owns the highland pastures and demands payment from Sekob for grazing your sheep. Sekob refuses to pay, so you have stopped taking the sheep onto the plateau."
+   },
+   {
+    "dialog": "DIA_BALTHASAR_WOBENGAR",
+    "place": null,
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "К высокогорным пастбищам и ферме Бенгара ведёт дорога через перекрёсток: там нужно повернуть направо. За большой скалой справа находятся пастбища и Проход.",
+    "en": "The road to Bengar's farm and highland pastures goes through the crossroads, where you turn right. The pastures and the Pass are behind the large rock on the right."
+   }
+  ],
+  "BAU_933_REGA": [
+   {
+    "dialog": "DIA_REGA_HALLO",
+    "place": "FARM4",
+    "who": [],
+    "ru": "В окрестностях фермы Секоба повсюду бандиты.",
+    "en": "Bandits are everywhere around Sekob's farm."
+   },
+   {
+    "dialog": "DIA_REGA_HALLO",
+    "place": "FARM4_FIELD",
+    "who": [],
+    "ru": "Полевые хищники уничтожают ваш урожай на полях фермы Секоба.",
+    "en": "Field raiders are destroying your crops in the fields of Sekob's farm."
+   }
+  ],
+  "BAU_934_BABERA": [
+   {
+    "dialog": "DIA_BABERA_WIESIEHTSAUS",
+    "place": "FARM4_FIELD",
+    "who": [],
+    "ru": "Ты работаешь на огромных полях фермы Секоба, которые нужно обработать.",
+    "en": "You work in the vast fields of Sekob's farm, which need tending."
+   },
+   {
+    "dialog": "DIA_BABERA_WIESIEHTSAUS",
+    "place": "FARM4_IN",
+    "who": [
+     "BAU_930_SEKOB"
+    ],
+    "ru": "Ваш фермер — Секоб; у него может найтись работа.",
+    "en": "Sekob is your farmer; he may have work available."
+   },
+   {
+    "dialog": "DIA_BABERA_BRONKO",
+    "place": "FARM4_FLEEDMT",
+    "who": [
+     "BAU_935_BRONKO"
+    ],
+    "ru": "Бронко стоит на окраине фермы у поля и не работает. Только наемники могут заставить его работать: их он боится.",
+    "en": "Bronko stands at the edge of the farm by the field and does no work. Only the mercenaries can make him work: he is afraid of them."
+   },
+   {
+    "dialog": "DIA_BABERA_ROSI",
+    "place": null,
+    "who": [
+     "BAU_936_ROSI"
+    ],
+    "ru": "Рози ушла на север, в лес.",
+    "en": "Rosi has left for the forest to the north."
+   }
+  ],
+  "BAU_935_BRONKO": [
+   {
+    "dialog": "DIA_BRONKO_HALLO",
+    "place": "FARM4_FLEEDMT",
+    "who": [],
+    "ru": "На окраине фермы Секоба ты требуешь с прохожих 5 золотых за проход и грозишь избить тех, кто не заплатит.",
+    "en": "On the outskirts of Sekob's farm, you demand 5 gold from passersby and threaten to beat up anyone who refuses to pay."
+   }
+  ],
+  "BAU_936_ROSI": [
+   {
+    "dialog": "DIA_ROSI_HALLO",
+    "place": "FARM4",
+    "who": [],
+    "ru": "На вашу ферму приходят головорезы с гор и городское ополчение; последнее время ополченцы наведываются очень часто.",
+    "en": "Thugs from the mountains and the city militia visit your farm; lately, the militia have been coming very often."
+   },
+   {
+    "dialog": "DIA_ROSI_WASMACHSTDU",
+    "place": "FARM4",
+    "who": [
+     "BAU_930_SEKOB"
+    ],
+    "ru": "Твой муж Секоб заставляет работников фермы трудиться до полного изнеможения.",
+    "en": "Your husband Sekob forces the farm workers to work to exhaustion."
+   },
+   {
+    "dialog": "DIA_ROSI_MILIZ",
+    "place": "FARM4",
+    "who": [],
+    "ru": "Ополчение грабит вашу ферму вместо того, чтобы покупать продукты.",
+    "en": "The militia plunder your farm instead of buying its produce."
+   },
+   {
+    "dialog": "DIA_ROSI_ONAR",
+    "place": "FARM4",
+    "who": [],
+    "ru": "Если заранее попросить Онара о помощи перед приходом ополчения, он обычно присылает на вашу ферму наемников, чтобы прогнать ополченцев.",
+    "en": "If Onar is asked for help before the militia arrive, he usually sends mercenaries to your farm to drive them off."
+   },
+   {
+    "dialog": "DIA_ROSI_DUINBARRIERE",
+    "place": "FARM3_HOUSE",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Бенгар — фермер с высокогорных пастбищ; его ферма находится совсем близко от прохода в Долину Рудников.",
+    "en": "Bengar is a farmer in the high pastures; his farm is very close to the pass leading into the Valley of Mines."
+   },
+   {
+    "dialog": "DIA_ROSI_BENGAR",
+    "place": "FARM4_SHEEP",
+    "who": [
+     "BAU_932_BALTHASAR",
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Бальтазар — ваш пастух. Он иногда водит овец на пастбища Бенгара и знает дорогу к его ферме.",
+    "en": "Balthasar is your shepherd. He sometimes takes his sheep to Bengar's pastures and knows the way to his farm."
+   }
+  ],
+  "BAU_940_AKIL": [
+   {
+    "dialog": "DIA_AKIL_SCHAFDIEB",
+    "place": "CITYFOREST_CAVE",
+    "who": [],
+    "ru": "В пещере в лесу обосновались тёмные личности; ты подозреваешь, что именно они крадут твоих овец.",
+    "en": "Some shady characters have settled in the forest cave; you suspect they are stealing your sheep."
+   },
+   {
+    "dialog": "DIA_AKIL_NACHKAMPF",
+    "place": "FARM2_PATH",
+    "who": [
+     "BAU_941_KATI"
+    ],
+    "ru": "У Кати на твоей ферме можно получить еду.",
+    "en": "Kati at your farm can provide food."
+   },
+   {
+    "dialog": "DIA_AKIL_TAVERNE",
+    "place": "FARM2_FIELD#2",
+    "who": [
+     "BAU_942_RANDOLPH"
+    ],
+    "ru": "Рендольф знает таверну к востоку от твоей фермы: он бывал там несколько раз.",
+    "en": "Randolph knows the tavern east of your farm: he has been there several times."
+   },
+   {
+    "dialog": "DIA_AKIL_HOF",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "Таверна находится к востоку от твоей фермы: к ней ведёт дорога от каменной лестницы вниз.",
+    "en": "The tavern is east of your farm, along the road from the bottom of the stone steps."
+   },
+   {
+    "dialog": "DIA_AKIL_WALD",
+    "place": "FOREST_PATH_MONSTER#2",
+    "who": [],
+    "ru": "В лесу за твоей фермой бродят монстры; волки — ещё самые безобидные из них.",
+    "en": "Monsters roam the forest behind your farm; wolves are among the least dangerous of them."
+   },
+   {
+    "dialog": "DIA_AKIL_PERM",
+    "place": "FARM1_SHEEP",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "Фермер Лобарт может знать о предполагаемой штаб-квартире орков в округе.",
+    "en": "Farmer Lobart may know about the orcs' rumored headquarters in the area."
+   }
+  ],
+  "BAU_941_KATI": [
+   {
+    "dialog": "DIA_KATI_SLDNOCHDA",
+    "place": "FARM2_PATH",
+    "who": [
+     "BAU_940_AKIL",
+     "SLD_840_ALVARES",
+     "SLD_841_ENGARDO"
+    ],
+    "ru": "Наёмники у твоей фермы угрожают твоему мужу Акилу и хотят вас ограбить.",
+    "en": "The mercenaries at your farm are threatening your husband Akil and want to rob you."
+   },
+   {
+    "dialog": "DIA_KATI_PERM",
+    "place": "FARM2_HOUSE",
+    "who": [
+     "SLD_840_ALVARES",
+     "SLD_841_ENGARDO"
+    ],
+    "ru": "Наёмники в чёрном шныряют вокруг твоего дома и везде суют нос.",
+    "en": "The mercenaries in black prowl around your house and poke their noses into everything."
+   },
+   {
+    "dialog": "DIA_KATI_BALTRAM",
+    "place": "FARM2_HOUSE",
+    "who": [
+     "VLK_410_BALTRAM"
+    ],
+    "ru": "У тебя приготовлена и упакована посылка для Бальтрама.",
+    "en": "You have a parcel packed and ready for Baltram."
+   },
+   {
+    "dialog": "DIA_KATI_ANDEREHOEFE",
+    "place": "FARM3_HOUSE",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Фермы Бенгара и Секоба находятся к востоку от твоей фермы, неподалёку от фермы лендлорда.",
+    "en": "Bengar's and Sekob's farms lie east of your farm, near the landowner's farm."
+   },
+   {
+    "dialog": "DIA_KATI_PASS",
+    "place": null,
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Проход находится где-то неподалёку от фермы Бенгара, на высокогорных пастбищах.",
+    "en": "The pass is somewhere near Bengar's farm, in the highland pastures."
+   },
+   {
+    "dialog": "DIA_KATI_ESSEN",
+    "place": "FARM2_HOUSE",
+    "who": [],
+    "ru": "После падения Барьера жить на твоей ферме стало небезопасно.",
+    "en": "Since the Barrier fell, living on your farm has become unsafe."
+   }
+  ],
+  "BAU_942_RANDOLPH": [
+   {
+    "dialog": "DIA_RANDOLPH_HALLO",
+    "place": "FARM2_PATH",
+    "who": [
+     "BAU_940_AKIL",
+     "BAU_941_KATI"
+    ],
+    "ru": "Акил и Кати умерли; теперь ты будешь управлять их фермой.",
+    "en": "Akil and Kati are dead; you will now run their farm."
+   },
+   {
+    "dialog": "DIA_RANDOLPH_SCHWERELUFT",
+    "place": "FARM2_PATH",
+    "who": [],
+    "ru": "На ферме достаточно одного неверного слова, чтобы началась резня.",
+    "en": "At the farm, a single wrong word could spark a slaughter."
+   },
+   {
+    "dialog": "DIA_RANDOLPH_WASISTINTAVERNE",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "В таверне проводят состязания на деньги: двое пьют пиво, и побеждает тот, кто выпьет больше.",
+    "en": "The tavern holds drinking contests for money: two people drink beer, and whoever drinks more wins."
+   },
+   {
+    "dialog": "DIA_RANDOLPH_GEGENWEN",
+    "place": "TAVERNE",
+    "who": [
+     "BAU_973_RUKHAR"
+    ],
+    "ru": "Рухар участвует в состязаниях по выпивке в таверне и прежде всегда тебя побеждал.",
+    "en": "Rukhar competes in the tavern's drinking contests and has always beaten you before."
+   },
+   {
+    "dialog": "DIA_RANDOLPH_GEGENWEN",
+    "place": null,
+    "who": [
+     "BAU_973_RUKHAR"
+    ],
+    "ru": "Ты подозреваешь, что Рухар подмешивает джин в пиво соперника и хранит его в своём сундуке.",
+    "en": "You suspect that Rukhar spikes his opponent's beer with gin and keeps it in his chest."
+   },
+   {
+    "dialog": "DIA_RANDOLPH_PERM",
+    "place": "WOOD_MONSTER",
+    "who": [],
+    "ru": "Возле пещеры Сагитты повсюду орки; добираться до целительницы опасно.",
+    "en": "Orcs are everywhere near Sagitta's cave; reaching the healer is dangerous."
+   }
+  ],
+  "BAU_944_EHNIM": [
+   {
+    "dialog": "DIA_EHNIM_HALLO",
+    "place": "FARM2_FIELD",
+    "who": [
+     "BAU_945_EGILL"
+    ],
+    "ru": "Твой брат Эгилл работает вместе с тобой на ферме Акила уже несколько лет; его можно найти на поле у дороги из города.",
+    "en": "Your brother Egill has worked alongside you on Akil's farm for several years; he can be found in the field by the road from town."
+   },
+   {
+    "dialog": "DIA_EHNIM_FELDARBEIT",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "На поле фермы Акила есть запасная мотыга.",
+    "en": "There is a spare hoe in the field at Akil's farm."
+   },
+   {
+    "dialog": "DIA_EHNIM_FELDARBEIT",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "На поле фермы Акила опасны полевые хищники: они могут незаметно подкрасться и быстро сожрать человека.",
+    "en": "Field raiders are a danger in the field at Akil's farm: they can creep up unnoticed and devour a person in moments."
+   },
+   {
+    "dialog": "DIA_EHNIM_FELDRAEUBER",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "На место убитых полевых хищников у фермы Акила постоянно приходят новые.",
+    "en": "New field raiders keep replacing those killed around Akil's farm."
+   }
+  ],
+  "BAU_945_EGILL": [
+   {
+    "dialog": "DIA_EGILL_HALLO",
+    "place": "FARM2_FIELD",
+    "who": [
+     "BAU_944_EHNIM"
+    ],
+    "ru": "Твой брат Эним находится на поле фермы Акила у дороги из города.",
+    "en": "Your brother Ehnim is in the field at Akil's farm beside the road from town."
+   },
+   {
+    "dialog": "DIA_EGILL_FELDARBEIT",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "Полевые хищники портят ваш урожай на поле фермы Акила у дороги из города.",
+    "en": "Field raiders are damaging your crops in the field at Akil's farm beside the road from town."
+   }
+  ],
+  "BAU_950_LOBART": [
+   {
+    "dialog": "DIA_LOBART_WORKNOW",
+    "place": "FARM1_FIELD",
+    "who": [],
+    "ru": "На небольшом поле за твоим амбаром растет репа.",
+    "en": "Turnips grow in the small field behind your barn."
+   },
+   {
+    "dialog": "DIA_LOBART_BUYCLOTHES",
+    "place": "FARM1_INHOUSE",
+    "who": [],
+    "ru": "В сундуке в твоем доме лежит постиранная рабочая одежда.",
+    "en": "Clean work clothes are kept in a chest in your house."
+   },
+   {
+    "dialog": "DIA_LOBART_DMT",
+    "place": "FARM1_INHOUSE",
+    "who": [
+     "BAU_951_HILDA"
+    ],
+    "ru": "Твоя жена Хильда тяжело больна и почти не встает с постели.",
+    "en": "Your wife Hilda is seriously ill and hardly gets out of bed."
+   },
+   {
+    "dialog": "DIA_LOBART_DMT",
+    "place": "CITY_MERCHANT_TEMPLE",
+    "who": [
+     "VLK_439_VATRAS"
+    ],
+    "ru": "Ватрас в городе, в храме у рыночной площади; к нему можно обратиться за лечением.",
+    "en": "Vatras is in town, at the temple by the market square; you can turn to him for healing."
+   },
+   {
+    "dialog": "DIA_LOBART_DMT",
+    "place": null,
+    "who": [
+     "BAU_952_VINO"
+    ],
+    "ru": "Люди в черных рясах увели Вино вверх на холм.",
+    "en": "The men in black robes took Vino up the hill."
+   },
+   {
+    "dialog": "DIA_LOBART_DMT",
+    "place": "FARM1_PATH",
+    "who": [],
+    "ru": "Люди в черных рясах расположились на дороге и на твоей ферме. Они опасны: ты видел, как они заживо сожгли горожанина.",
+    "en": "Men in black robes have stationed themselves on the road and on your farm. They are dangerous: you saw them burn a townsman alive."
+   }
+  ],
+  "BAU_951_HILDA": [
+   {
+    "dialog": "DIA_HILDA_BRINGBEET",
+    "place": "FARM1_PATH_CITY",
+    "who": [
+     "VLK_468_CANTHAR"
+    ],
+    "ru": "Странствующий торговец Кантар недавно прошел мимо тебя; ты думаешь, он остановился где-нибудь по дороге в город.",
+    "en": "The traveling merchant Canthar passed by you a few minutes ago; you think he has stopped somewhere along the road to town."
+   },
+   {
+    "dialog": "DIA_HILDA_BRINGBEET",
+    "place": "FARM1_FIELD",
+    "who": [],
+    "ru": "На полях фермы Лобарта растет репа.",
+    "en": "Turnips grow in the fields of Lobart's farm."
+   },
+   {
+    "dialog": "DIA_HILDA_WASZUESSEN",
+    "place": "FARM1_INHOUSE",
+    "who": [],
+    "ru": "У себя в доме ты кормишь работников фермы.",
+    "en": "You feed the farm workers in your house."
+   },
+   {
+    "dialog": "DIA_HILDA_KRANK",
+    "place": "CITY_MERCHANT_TEMPLE",
+    "who": [
+     "VLK_439_VATRAS"
+    ],
+    "ru": "У Ватраса в храме у рыночной площади можно получить лекарство от твоей лихорадки; он знает, что тебе нужно.",
+    "en": "Vatras, at the temple by the market square, can provide medicine for your fever; he knows what you need."
+   }
+  ],
+  "BAU_952_VINO": [
+   {
+    "dialog": "DIA_VINO_SEEKWORK",
+    "place": "FARM1_FIELD",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "На полях фермы Лобарта работают подёнщики; Лобарт платит им сущие гроши.",
+    "en": "Day laborers work in Lobart's fields; Lobart pays them a pittance."
+   },
+   {
+    "dialog": "DIA_VINO_TOTHECITY",
+    "place": null,
+    "who": [
+     "BAU_954_MALETH"
+    ],
+    "ru": "Малет часто ходит в город и может знать городские новости.",
+    "en": "Maleth often visits the city and may know news from there."
+   },
+   {
+    "dialog": "DIA_VINO_PERM",
+    "place": "FARM1_FIELD",
+    "who": [],
+    "ru": "На полях вашей фермы полно огромных насекомых, угрожающих урожаю; одно из них сожрало твой ботинок, пока ты лежал в траве.",
+    "en": "Your farm's fields are crawling with huge insects that threaten the crops; one ate your boot while you were lying in the grass."
+   },
+   {
+    "dialog": "DIA_VINO_PERM45UND6",
+    "place": "FARM1_OUT",
+    "who": [],
+    "ru": "Окрестности вашей фермы кишат орками.",
+    "en": "The area around your farm is swarming with orcs."
+   }
+  ],
+  "BAU_954_MALETH": [
+   {
+    "dialog": "DIA_MALETH_LOBART",
+    "place": "FARM1_SHEEP",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "Лобарта можно найти на его ферме. Он уже избил и вышвырнул оттуда немало бездельников.",
+    "en": "You can find Lobart on his farm. He has beaten up and thrown out plenty of layabouts."
+   },
+   {
+    "dialog": "DIA_MALETH_EQUIPMENT",
+    "place": "FARM1_SHEEP",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "У Лобарта на ферме можно купить кое-что из снаряжения или спросить о работе.",
+    "en": "At Lobart's farm, you can buy some equipment from him or ask him for work."
+   },
+   {
+    "dialog": "DIA_MALETH_TOTHECITY",
+    "place": "CITY_ENTRANCE",
+    "who": [
+     "MIL_309_STADTWACHE",
+     "MIL_310_STADTWACHE"
+    ],
+    "ru": "Стражу у входа в Хоринис можно подкупить. Она также может пропустить того, кто представится работником фермы Лобарта, идущим к городскому кузнецу.",
+    "en": "You can bribe the guards at the entrance to Khorinis. They may also admit someone who claims to work on Lobart's farm and be visiting the city smith."
+   },
+   {
+    "dialog": "DIA_MALETH_PROBLEME",
+    "place": "FARM1_PATH_CITY",
+    "who": [],
+    "ru": "На дороге в город можно встретить человека в черной рясе. Люди в таких рясах несколько дней назад приходили на вашу ферму.",
+    "en": "You may encounter a man in a black robe on the road to town. People in such robes visited your farm a few days ago."
+   }
+  ],
+  "BAU_960_BENGAR": [
+   {
+    "dialog": "DIA_ADDON_BENGAR_MISSINGPEOPLE",
+    "place": "BIGMILL_FARM3",
+    "who": [],
+    "ru": "Бандиты обосновались в небольшой лощине у лестницы за краем твоих полей. Ты видел, как они тащили туда горожанина. От их лагеря лучше держаться подальше.",
+    "en": "Bandits have settled in a small hollow down the stairs beyond your fields. You saw them dragging a townsman there. Their camp is best avoided."
+   },
+   {
+    "dialog": "DIA_ADDON_BENGAR_RETURNPARDOS",
+    "place": "FARM3_HOUSE",
+    "who": [],
+    "ru": "Пардос вернулся и отдыхает в твоём доме.",
+    "en": "Pardos has returned and is resting in your house."
+   },
+   {
+    "dialog": "DIA_BENGAR_PASS",
+    "place": null,
+    "who": [
+     "BAU_963_MALAK"
+    ],
+    "ru": "Проход в старую Долину Рудников находится у водопада на другом конце твоего плоскогорья. Малак бывает там пару раз в неделю.",
+    "en": "The pass into the old Valley of Mines is by the waterfall at the other end of your plateau. Malak goes there a couple of times a week."
+   },
+   {
+    "dialog": "DIA_BENGAR_ALLEIN",
+    "place": null,
+    "who": [
+     "BAU_963_MALAK"
+    ],
+    "ru": "Малак ушёл с твоей фермы, забрав всех работников; по его словам, он направлялся в горы.",
+    "en": "Malak left your farm with all the workers; he said he was heading into the mountains."
+   },
+   {
+    "dialog": "DIA_BENGAR_PERM",
+    "place": "FARM3_OUT",
+    "who": [
+     "BAU_963_MALAK"
+    ],
+    "ru": "Малак снова на твоей ферме.",
+    "en": "Malak is back on your farm."
+   },
+   {
+    "dialog": "DIA_BENGAR_BALTHASARDARFAUFWEIDE",
+    "place": "FARM3_FIELD",
+    "who": [
+     "BAU_932_BALTHASAR"
+    ],
+    "ru": "Ты разрешил Бальтазару снова пасти овец на твоей земле, но только за полем.",
+    "en": "You have allowed Balthasar to graze his sheep on your land again, but only beyond the field."
+   }
+  ],
+  "BAU_961_GAAN": [
+   {
+    "dialog": "DIA_ADDON_GAAN_AUFGABEBEIMRING",
+    "place": "TO_PASS",
+    "who": [],
+    "ru": "Ты наблюдаешь за проходом и сообщаешь, кто приходит и уходит. По приказу паладинов ворота прохода закрыты, поэтому людей здесь мало.",
+    "en": "You watch the pass and report who comes and goes. The gates of the pass are closed on the paladins' orders, so few people come through."
+   },
+   {
+    "dialog": "DIA_GAAN_WASMACHSTDU",
+    "place": "FARM3_FIELD",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Высокогорные пастбища принадлежат фермеру Бенгару; ты работаешь на него охотником.",
+    "en": "The highland pastures belong to Bengar the farmer; you work for him as a hunter."
+   },
+   {
+    "dialog": "DIA_GAAN_JAGD",
+    "place": "FARM3_PATH_MONSTER",
+    "who": [],
+    "ru": "У дороги бродит фыркающий зверь: он убивает всё, что движется, и мешает тебе охотиться.",
+    "en": "A snorting beast roams near the road, killing everything that moves and disrupting your hunting."
+   },
+   {
+    "dialog": "DIA_GAAN_JAGD",
+    "place": "TO_PASS",
+    "who": [],
+    "ru": "Через проход толпами идут фыркающие твари, из-за которых охотиться становится всё сложнее.",
+    "en": "Snorting creatures pour through the pass in packs, making it increasingly difficult for you to hunt."
+   },
+   {
+    "dialog": "DIA_GAAN_ASKTEACHER",
+    "place": "CITY_MERCHANT",
+    "who": [],
+    "ru": "На рынке можно выгодно продать шкуры и другие охотничьи трофеи.",
+    "en": "You can sell hides and other hunting trophies for a good price at the market."
+   }
+  ],
+  "BAU_963_MALAK": [
+   {
+    "dialog": "DIA_MALAK_HALLO",
+    "place": "FARM3_HOUSE",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Бенгар — ваш фермер; его можно найти в доме на ферме.",
+    "en": "Bengar is your farmer; he can be found in the farmhouse."
+   },
+   {
+    "dialog": "DIA_MALAK_WASMACHSTDU",
+    "place": "TO_PASS",
+    "who": [],
+    "ru": "Ты пасёшь овец; возле Прохода нужно быть особенно внимательным.",
+    "en": "You tend sheep; you need to be especially watchful near the Pass."
+   },
+   {
+    "dialog": "DIA_MALAK_WOPASS",
+    "place": "TO_PASS",
+    "who": [],
+    "ru": "Проход в старую Долину Рудников находится около двух водопадов на другой стороне твоего пастбища.",
+    "en": "The Pass into the old Valley of Mines is near two waterfalls on the far side of your pasture."
+   },
+   {
+    "dialog": "DIA_MALAK_WARSTDUSCHONDA",
+    "place": "TO_PASS",
+    "who": [],
+    "ru": "У Прохода, возле которого ты иногда пасёшь овец, стоят на страже два паладина.",
+    "en": "Two paladins stand guard at the Pass, where you sometimes tend sheep."
+   },
+   {
+    "dialog": "DIA_MALAK_KEINEFRAUEN",
+    "place": "FARM3_OUT",
+    "who": [],
+    "ru": "На вашей ферме живут только мужчины, женщин здесь нет.",
+    "en": "Only men live on your farm; there are no women here."
+   },
+   {
+    "dialog": "DIA_MALAK_FLEEFROMPASS",
+    "place": "TO_PASS",
+    "who": [],
+    "ru": "Из Прохода толпами выходят опасные твари; из-за них ты сбежал с фермы Бенгара.",
+    "en": "Dangerous creatures are pouring out of the Pass; they drove you to flee Bengar's farm."
+   }
+  ],
+  "BAU_970_ORLAN": [
+   {
+    "dialog": "DIA_ADDON_ORLAN_RANGER",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "В твоей таверне находится штаб-квартира Кольца Воды.",
+    "en": "Your tavern houses the headquarters of the Ring of Water."
+   },
+   {
+    "dialog": "DIA_ADDON_ORLAN_TELEPORTSTEIN",
+    "place": "WP_BIGFARM",
+    "who": [],
+    "ru": "В пещере к югу от твоей таверны находится телепорт, обнаруженный магами воды. Ты запер вход на ключ.",
+    "en": "The cave south of your tavern contains a teleporter discovered by the Water Mages. You locked the entrance."
+   },
+   {
+    "dialog": "DIA_ORLAN_WERBISTDU",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "В своей таверне ты продаёшь оружие, доспехи, вино и информацию.",
+    "en": "At your tavern, you sell weapons, armor, wine, and information."
+   },
+   {
+    "dialog": "DIA_ORLAN_HOTELZIMMER",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "Комнаты в твоей таверне находятся наверху по лестнице. Недельная плата — 50 золотых; братьям по Кольцу, рыцарям короля и представителям Инноса ты предоставляешь ночлег бесплатно.",
+    "en": "The guest rooms in your tavern are upstairs. The weekly rent is 50 gold; you provide free lodging to brothers of the Ring, the king's knights, and representatives of Innos."
+   },
+   {
+    "dialog": "DIA_ADDON_ORLAN_WHENRANGERMEETING",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "В твоей таверне сегодня должна начаться встреча Кольца Воды; остальные участники задерживаются.",
+    "en": "A meeting of the Ring of Water is due to begin at your tavern today; the other members are running late."
+   },
+   {
+    "dialog": "DIA_ORLAN_WETTKAMPFLAEUFT",
+    "place": "TAVERNE_IN",
+    "who": [
+     "BAU_942_RANDOLPH"
+    ],
+    "ru": "В твоей таверне Рендольф и Рухар участвовали в состязании по выпивке.",
+    "en": "Randolph and Rukhar took part in a drinking contest at your tavern."
+   }
+  ],
+  "BAU_973_RUKHAR": [
+   {
+    "dialog": "DIA_RUKHAR_WASMACHSTDU",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "Все твои пожитки находятся в сундуке в зале таверны.",
+    "en": "All your belongings are in a chest in the tavern hall."
+   },
+   {
+    "dialog": "DIA_RUKHAR_WETTKAMPF",
+    "place": "TAVERNE_IN",
+    "who": [
+     "BAU_970_ORLAN"
+    ],
+    "ru": "Орлан подаёт пиво в таверне. Ты устраиваешь здесь состязание «Пей до дна»: побеждает тот, кто дольше держится на ногах, а проигравший оплачивает пиво и ставку.",
+    "en": "Orlan serves beer in the tavern. You hold a drinking contest here: whoever stays on their feet longest wins, and the loser pays for the beer and the wager."
+   }
+  ],
+  "BAU_980_SAGITTA": [
+   {
+    "dialog": "DIA_SAGITTA_HALLO",
+    "place": "SAGITTA_CAVE",
+    "who": [],
+    "ru": "Ты живёшь в пещере Саггиты и занимаешься целебными травами, которые собираешь в окрестном лесу.",
+    "en": "You live in Sagitta's cave and work with healing herbs gathered in the surrounding forest."
+   },
+   {
+    "dialog": "DIA_SAGITTA_OBSESSION",
+    "place": "MONASTERY_THRONE",
+    "who": [
+     "KDF_500_PYROKAR"
+    ],
+    "ru": "Пирокар — высший маг монастыря; его можно найти у мест Высшего совета в монастырской церкви. К нему обращаются за помощью против воздействия чёрного взгляда Ищущих.",
+    "en": "Pyrokar is the monastery's highest mage; he can be found at the High Council's seats in the monastery church. He is someone to turn to for help against the influence of the Seekers' black gaze."
+   }
+  ],
+  "BAU_981_GROM": [
+   {
+    "dialog": "DIA_GROM_HALLO",
+    "place": "FOREST_PATH_NAVIGATION16",
+    "who": [],
+    "ru": "В глубине здешнего леса водятся опасные волосатые великаны около десяти футов ростом; слабому туда лучше не ходить.",
+    "en": "Deep in the local forest roam dangerous, hairy giants about ten feet tall; you had better stay away unless you are strong enough."
+   },
+   {
+    "dialog": "DIA_GROM_HALLO",
+    "place": "CASTLEMINE_TROLL",
+    "who": [],
+    "ru": "На своей стоянке ты работаешь дровосеком и охотишься.",
+    "en": "At your camp, you work as a woodcutter and hunt."
+   }
+  ],
+  "BAU_982_GRIMBALD": [
+   {
+    "dialog": "DIA_GRIMBALD_NOVCHASE",
+    "place": null,
+    "who": [
+     "NOV_609_NOVIZE"
+    ],
+    "ru": "У каменной арки стоят двое незнакомцев; недавно с ними разговаривал послушник магов Огня.",
+    "en": "Two strangers are standing by the stone arch; a novice of the Fire Mages spoke with them recently."
+   }
+  ],
+  "BAU_983_DRAGOMIR": [
+   {
+    "dialog": "DIA_DRAGOMIR_OUTHERE",
+    "place": "TAVERNE_IN",
+    "who": [],
+    "ru": "В таверне можно переночевать, но ночлег там для тебя слишком дорог.",
+    "en": "The tavern offers lodging, but staying there is too expensive for you."
+   }
+  ],
+  "BAU_984_NICLAS": [
+   {
+    "dialog": "DIA_NICLAS_SHOULDNTWORK",
+    "place": "CITY_JAEGER",
+    "who": [],
+    "ru": "На охотничьей стоянке у дороги к маяку ты сам вырезаешь стрелы и охотишься только ради пропитания, а не на продажу.",
+    "en": "At the hunting camp by the road to the lighthouse, you carve your own arrows and hunt only for food, not for profit."
+   },
+   {
+    "dialog": "DIA_NICLAS_CANTEACHME",
+    "place": "CITY_JAEGER",
+    "who": [],
+    "ru": "На охотничьей стоянке у дороги к маяку ты можешь научить обращаться с луком.",
+    "en": "At the hunting camp by the road to the lighthouse, you can teach people how to handle a bow."
+   }
+  ],
+  "BDT_1013_BANDIT_L": [
+   {
+    "dialog": "DIA_1013_BANDIT_DEXTER",
+    "place": "CASTLEMINE_HUT",
+    "who": [
+     "BDT_1060_DEXTER"
+    ],
+    "ru": "Декстер устроил логово на крутой скале около большой фермы, где стоят сторожевая башня и несколько шахт.",
+    "en": "Dexter has made his hideout on a steep cliff near the big farm, where there are a watchtower and several mines."
+   },
+   {
+    "dialog": "DIA_BDT_1013_BANDIT_WHERE",
+    "place": "XARDAS_BANDITS",
+    "who": [
+     "BDT_1014_BANDIT_L"
+    ],
+    "ru": "Твой главарь Браго находится в пещере под лестницей к башне Ксардаса.",
+    "en": "Your leader Brago is in the cave beneath the stairs leading to Xardas's tower."
+   },
+   {
+    "dialog": "DIA_BDT_1013_BANDIT_FIRSTEXIT",
+    "place": "XARDAS_BANDITS",
+    "who": [
+     "BDT_1014_BANDIT_L",
+     "BDT_1015_BANDIT_L"
+    ],
+    "ru": "В пещере под лестницей к башне Ксардаса живут твои приятели-бандиты; они готовы жестоко расправиться с чужаком.",
+    "en": "Your bandit companions live in the cave beneath the stairs leading to Xardas's tower; they are ready to deal brutally with an outsider."
+   },
+   {
+    "dialog": "DIA_1013_BANDIT_PERM",
+    "place": "XARDAS_PATH",
+    "who": [],
+    "ru": "На дороге от башни Ксардаса к ферме безопаснее: чем дальше от неё в глушь, тем опаснее.",
+    "en": "The road from Xardas's tower to the farm is safer: the farther you stray into the wilderness, the more dangerous it gets."
+   }
+  ],
+  "BDT_1014_BANDIT_L": [],
+  "BDT_1015_BANDIT_L": [],
+  "BDT_1060_DEXTER": [],
+  "BDT_1061_WACHE": [
+   {
+    "dialog": "DIA_1061_WACHE_HALLO",
+    "place": "CASTLEMINE_HUT",
+    "who": [],
+    "ru": "Твой главарь Декстер находится в доме у шахты.",
+    "en": "Your boss Dexter is in the house by the mine."
+   },
+   {
+    "dialog": "DIA_1061_WACHE_HALLO",
+    "place": "CASTLEMINE_TOWER",
+    "who": [],
+    "ru": "В вашем лагере у башни убивают чужаков, если те подходят к кому-нибудь слишком близко.",
+    "en": "In your camp by the tower, outsiders are killed if they get too close to anyone."
+   }
+  ],
+  "BDT_1064_BANDIT_L": [
+   {
+    "dialog": "DIA_BDT_1064_BANDITGUARD_FIRSTWARN",
+    "place": "CASTLEMINE_TOWER",
+    "who": [],
+    "ru": "В ваш лагерь у башни рудника можно попасть живым только через мост.",
+    "en": "The only way to enter your camp by the mine tower alive is across the bridge."
+   }
+  ],
+  "KDF_500_PYROKAR": [
+   {
+    "dialog": "DIA_PYROKAR_LERNEN",
+    "place": "MONASTERY_RUNEMAKER",
+    "who": [
+     "KDF_503_KARRAS"
+    ],
+    "ru": "Каррас — мастер магии вызова; у него в рунической мастерской монастыря можно изучить формулы заклинаний.",
+    "en": "Karras is a master of summoning magic; you can learn spell formulas from him in the monastery's rune workshop."
+   },
+   {
+    "dialog": "DIA_PYROKAR_LERNEN",
+    "place": "MONASTERY_PLACE",
+    "who": [
+     "KDF_504_PARLAN"
+    ],
+    "ru": "Парлан во дворе монастыря обучает первым кругам магии и формулам различных заклинаний.",
+    "en": "Parlan teaches the first circles of magic and various spell formulas in the monastery courtyard."
+   },
+   {
+    "dialog": "DIA_PYROKAR_BACKFROMOW",
+    "place": "MONASTERY",
+    "who": [
+     "KDF_503_KARRAS"
+    ],
+    "ru": "В твоём монастыре помогают одержимым Ищущими; Каррас по твоей просьбе исследует эту одержимость.",
+    "en": "Those possessed by the Seekers can find help in your monastery; Karras is researching this possession at your request."
+   },
+   {
+    "dialog": "DIA_PYROKAR_BUCHIRDORATH",
+    "place": "MONASTERY_SEALROOM",
+    "who": [
+     "NONE_100_XARDAS"
+    ],
+    "ru": "Ты отнёс древнюю книгу Ксардаса в подвал монастыря. Она запечатана магией, и магам монастыря не удалось её открыть.",
+    "en": "You took Xardas's ancient book to the monastery cellar. It is magically sealed, and the monastery's mages have been unable to open it."
+   },
+   {
+    "dialog": "DIA_PYROKAR_FOUNDINNOSEYE",
+    "place": "CITY_MERCHANT_TEMPLE",
+    "who": [
+     "VLK_439_VATRAS"
+    ],
+    "ru": "Ватрас — маг Воды и слуга Аданоса в городе, у храма возле рыночной площади; он знает, что делать с повреждённым Глазом Инноса.",
+    "en": "Vatras is a Water Mage and servant of Adanos in the city, at the temple near the market square; he knows what to do about the damaged Eye of Innos."
+   },
+   {
+    "dialog": "DIA_PYROKAR_MACHDTFREI",
+    "place": "XARDAS_TOWER_IN1",
+    "who": [
+     "NONE_100_XARDAS"
+    ],
+    "ru": "В башне Ксардаса последние несколько дней творятся странные вещи: люди слышат оттуда ночные вопли и видят странный свет над башней.",
+    "en": "Strange things have been happening in Xardas's tower over the last few days: people hear screams from it at night and see strange lights above it."
+   }
+  ],
+  "KDF_501_SERPENTES": [
+   {
+    "dialog": "DIA_SERPENTES_MINENANTEILE",
+    "place": "CITY_SHOP",
+    "who": [
+     "VLK_422_SALANDRIL"
+    ],
+    "ru": "Саландрил — алхимик из верхнего квартала города; его можно найти в алхимической лавке.",
+    "en": "Salandril is an alchemist in the city's upper quarter; you can find him in his alchemy shop."
+   },
+   {
+    "dialog": "DIA_SERPENTES_SALANDRILHERE",
+    "place": "MONASTERY",
+    "who": [
+     "VLK_422_SALANDRIL"
+    ],
+    "ru": "Саландрил уже в твоём монастыре и ожидает разбирательства.",
+    "en": "Salandril is now in your monastery, awaiting judgment."
+   }
+  ],
+  "KDF_502_ULTHAR": [
+   {
+    "dialog": "DIA_ULTHAR_GREET",
+    "place": "MONASTERY_THRONE",
+    "who": [],
+    "ru": "Высший Совет в монастырской церкви провозглашает волю Инноса и выбирает послушников для Испытания Магией.",
+    "en": "The High Council in the monastery church proclaims Innos's will and selects novices for the Test of Magic."
+   },
+   {
+    "dialog": "DIA_ULTHAR_TEST",
+    "place": "MONASTERY_THRONE",
+    "who": [
+     "KDF_501_SERPENTES"
+    ],
+    "ru": "Серпентес — давний член Высшего Совета в монастырской церкви; он единственный, кто прошёл Испытание Огнём и остался в живых.",
+    "en": "Serpentes is a longstanding member of the High Council in the monastery church; he is the only person to have passed the Test of Fire and survived."
+   },
+   {
+    "dialog": "DIA_ULTHAR_SCHREINEVERGIFTET",
+    "place": "MONASTERY_WINEMAKER",
+    "who": [
+     "KDF_508_GORAX"
+    ],
+    "ru": "Горакс в монастырской винодельне может продать карту с отмеченными алтарями Инноса.",
+    "en": "Gorax at the monastery winery can sell a map marking the shrines of Innos."
+   }
+  ],
+  "KDF_503_KARRAS": [
+   {
+    "dialog": "DIA_KARRAS_RESEARCHDMTEND",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "Ищущие, похоже, боятся священных стен монастыря Инноса, но если их сила продолжит расти, безопасность здесь не гарантирована.",
+    "en": "The Seekers seem to fear the sacred walls of the Monastery of Innos, but if their power keeps growing, safety here is not guaranteed."
+   },
+   {
+    "dialog": "DIA_KARRAS_SUCCESS",
+    "place": "KDF_LIBRARY",
+    "who": [],
+    "ru": "В библиотеке монастыря можно заниматься обучением.",
+    "en": "You can study in the monastery library."
+   },
+   {
+    "dialog": "DIA_KARRAS_CIRCLE5",
+    "place": "MONASTERY_THRONE",
+    "who": [
+     "KDF_500_PYROKAR"
+    ],
+    "ru": "Пирокар вводит в шестой, наивысший Круг Магии; его можно найти у мест Высшего совета в монастырской церкви.",
+    "en": "Pyrokar grants entry to the sixth and highest Circle of Magic; you can find him at the High Council's seats in the monastery church."
+   },
+   {
+    "dialog": "DIA_KARRAS_KAP3_PERM",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "Демоническая сущность в стенах монастыря представляла бы слишком большую опасность.",
+    "en": "A demonic entity within the monastery walls would pose too great a danger."
+   }
+  ],
+  "KDF_504_PARLAN": [
+   {
+    "dialog": "DIA_PARLAN_WELCOME",
+    "place": "MONASTERY_SHEEP",
+    "who": [
+     "NOV_605_OPOLOS"
+    ],
+    "ru": "Ополос заботится об овцах в монастырском овечьем загоне.",
+    "en": "Opolos tends the sheep in the monastery sheep pen."
+   },
+   {
+    "dialog": "DIA_PARLAN_WELCOME",
+    "place": "MONASTERY_WINEMAKER",
+    "who": [
+     "KDF_508_GORAX"
+    ],
+    "ru": "Горакс — управляющий монастыря; его можно найти в винодельне.",
+    "en": "Gorax is the monastery's steward; you can find him in the winery."
+   },
+   {
+    "dialog": "DIA_PARLAN_KAP3U4U5_PERM",
+    "place": "KDF_LIBRARY",
+    "who": [],
+    "ru": "Библиотека находится в конце левой колоннады, прямо напротив церкви.",
+    "en": "The library is at the end of the left colonnade, directly opposite the church."
+   },
+   {
+    "dialog": "DIA_PARLAN_KAP3U4U5_PERM",
+    "place": "MONASTERY_CHAPELL",
+    "who": [],
+    "ru": "Часовня находится в комнате посередине левой колоннады; там паладины молятся Инносу.",
+    "en": "The chapel is in the room halfway along the left colonnade; paladins pray to Innos there."
+   },
+   {
+    "dialog": "DIA_PARLAN_KAP3U4U5_PERM",
+    "place": "MONASTERY_CELLAR",
+    "who": [],
+    "ru": "Вход в подвал находится посередине правой колоннады.",
+    "en": "The entrance to the cellar is halfway along the right colonnade."
+   },
+   {
+    "dialog": "DIA_PARLAN_BIBLIOTHEK",
+    "place": "KDF_LIBRARY",
+    "who": [
+     "KDF_503_KARRAS",
+     "KDF_510_HYGLAS"
+    ],
+    "ru": "Братьев Карраса и Хигласа можно найти в библиотеке.",
+    "en": "You can find Brothers Karras and Hyglas in the library."
+   }
+  ],
+  "KDF_505_MARDUK": [
+   {
+    "dialog": "DIA_MARDUK_JOB",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "В монастыре ты готовишь паладинов к сражению против Зла.",
+    "en": "At the monastery, you prepare paladins for battle against evil."
+   },
+   {
+    "dialog": "DIA_MARDUK_PAL",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "В монастыре живут маги и послушники.",
+    "en": "Mages and novices live in the monastery."
+   },
+   {
+    "dialog": "DIA_MARDUK_BEFORETEACH",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "В монастыре ты обучаешь магии льда и грома, но только магов.",
+    "en": "At the monastery, you teach ice and lightning magic, but only to mages."
+   },
+   {
+    "dialog": "DIA_MARDUK_SWORDBLESSING",
+    "place": "MONASTERY_CHAPELL",
+    "who": [],
+    "ru": "В часовне монастыря можно освятить магический меч молитвой Инносу и пожертвованием в 5000 монет.",
+    "en": "In the monastery chapel, a magical sword can be blessed through prayer to Innos and a donation of 5,000 gold coins."
+   },
+   {
+    "dialog": "DIA_MARDUK_SWORDBLESSING",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "Гарад, кузнец в городе, снабжает паладинов магическими клинками, пока они находятся на острове.",
+    "en": "Harad, the smith in town, supplies paladins with magical blades while they are on the island."
+   }
+  ],
+  "KDF_506_NEORAS": [
+   {
+    "dialog": "DIA_NEORAS_ARBEIT",
+    "place": "MONASTERY_HERB",
+    "who": [],
+    "ru": "В монастыре выращивают травы для твоих экспериментов, но запасы огненной крапивы закончились.",
+    "en": "Herbs for your experiments are grown at the monastery, but the stock of fire nettle has run out."
+   },
+   {
+    "dialog": "DIA_NEORAS_BREWPOTION",
+    "place": "MONASTERY_WINEMAKER",
+    "who": [
+     "KDF_508_GORAX"
+    ],
+    "ru": "У Горакса в монастырской винодельне можно купить зелья.",
+    "en": "Gorax sells potions at the monastery winery."
+   },
+   {
+    "dialog": "DIA_NEORAS_TEACH",
+    "place": "MONASTERY_CELLAR",
+    "who": [],
+    "ru": "Ты обучаешь алхимии в подвале монастыря, но передаёшь свои знания только членам церкви.",
+    "en": "You teach alchemy in the monastery cellar, but share your knowledge only with members of the church."
+   },
+   {
+    "dialog": "DIA_NEORAS_BREWPOTION",
+    "place": "MONASTERY_CELLAR",
+    "who": [],
+    "ru": "В подвале монастыря ты варишь зелья за принесённые ингредиенты и плату в 10 золотых.",
+    "en": "In the monastery cellar, you brew potions for supplied ingredients and a fee of 10 gold."
+   }
+  ],
+  "KDF_507_TALAMON": [
+   {
+    "dialog": "DIA_TALAMON_KAP5_STOP",
+    "place": "MONASTERY_SEALROOM",
+    "who": [],
+    "ru": "Книга Ксардаса лежит на алхимическом столе в комнате с запечатанной книгой.",
+    "en": "Xardas's book lies on the alchemy table in the room with the sealed book."
+   }
+  ],
+  "KDF_508_GORAX": [
+   {
+    "dialog": "DIA_GORAX_AUFGABE2",
+    "place": "MONASTERY_WINEMAKER",
+    "who": [],
+    "ru": "В монастыре вы делаете превосходное вино и часть его продаёте.",
+    "en": "You make excellent wine at the monastery and sell some of it."
+   },
+   {
+    "dialog": "DIA_GORAX_AUFGABE2",
+    "place": "TAVERNE_IN",
+    "who": [
+     "BAU_970_ORLAN"
+    ],
+    "ru": "Орлан — хозяин трактира «Мёртвая гарпия»; он заказал у монастыря партию вина за 240 золотых.",
+    "en": "Orlan runs the Dead Harpy tavern; he ordered a shipment of wine from your monastery for 240 gold."
+   },
+   {
+    "dialog": "DIA_GORAX_SLEEP",
+    "place": "KDF_LIBRARY",
+    "who": [],
+    "ru": "В монастырскую библиотеку нельзя входить без соответствующего разрешения.",
+    "en": "Entry to your monastery's library requires the appropriate permission."
+   },
+   {
+    "dialog": "DIA_GORAX_JOB",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "Ты управляющий и казначей монастыря, заведуешь винным погребом и съестными припасами; у тебя можно получить необходимое за пожертвование.",
+    "en": "You are the monastery's steward and treasurer, responsible for its wine cellar and food supplies; you provide necessities in exchange for a donation."
+   }
+  ],
+  "KDF_509_ISGAROTH": [
+   {
+    "dialog": "DIA_ISGAROTH_WOLF",
+    "place": "PATH_TO_MONASTERY",
+    "who": [],
+    "ru": "У дороги к монастырю недавно появился чёрный волк.",
+    "en": "A black wolf has recently appeared by the road to the monastery."
+   },
+   {
+    "dialog": "DIA_ISGAROTH_KLOSTER",
+    "place": "PATH_TO_MONASTERY",
+    "who": [],
+    "ru": "Дорога у твоего святилища ведёт в монастырь Магов Огня; вход туда разрешён только слугам Инноса.",
+    "en": "The road by your shrine leads to the monastery of the Fire Mages; only servants of Innos are allowed inside."
+   },
+   {
+    "dialog": "DIA_ISGAROTH_JOB",
+    "place": "MONASTERY_SHRINE",
+    "who": [],
+    "ru": "Алтарь у твоего святилища посвящён Инносу. Люди приходят к тебе помолиться и получить благословение; за небольшое пожертвование у тебя можно получить полезные вещи.",
+    "en": "The altar at your shrine is dedicated to Innos. People come to you to pray and receive a blessing; useful items are available from you for a small donation."
+   }
+  ],
+  "KDF_510_HYGLAS": [
+   {
+    "dialog": "DIA_HYGLAS_JOB",
+    "place": "MONASTERY_RUNEMAKER",
+    "who": [],
+    "ru": "В своей рунической мастерской ты изучаешь огонь — силу Инноса — и создаёшь руны, содержащие частицу этой силы.",
+    "en": "In your rune workshop, you study fire—the power of Innos—and create runes containing a fragment of that power."
+   },
+   {
+    "dialog": "DIA_HYGLAS_FIREBOLT",
+    "place": "MONASTERY_RUNEMAKER",
+    "who": [],
+    "ru": "В книгах у тебя в рунической мастерской есть сведения об ингредиентах для руны огненной стрелы.",
+    "en": "The books in your rune workshop contain information about the ingredients for a Fire Arrow rune."
+   }
+  ],
+  "KDF_511_DARON": [
+   {
+    "dialog": "DIA_DARON_PALADINE",
+    "place": "PALADIN",
+    "who": [],
+    "ru": "Паладинов можно найти в Верхнем квартале.",
+    "en": "You can find the paladins in the Upper Quarter."
+   },
+   {
+    "dialog": "DIA_DARON_PALADINE",
+    "place": "CITY_UPTOWN_GUARD",
+    "who": [],
+    "ru": "В Верхний квартал разрешено входить только гражданам, городской страже и Магам Огня.",
+    "en": "Only citizens, the city militia, and Fire Mages are allowed into the Upper Quarter."
+   }
+  ],
+  "KDW_1400_ADDON_SATURAS_NW": [
+   {
+    "dialog": "DIA_ADDON_SATURAS_HALLO",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [],
+    "ru": "Под сводами храма древнего портала опасно для начинающих искателей приключений.",
+    "en": "Beneath the vaults of the ancient portal temple, it is dangerous for novice adventurers."
+   },
+   {
+    "dialog": "DIA_ADDON_SATURAS_WASMACHSTDU",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [],
+    "ru": "В храме сохранились фрески и надписи очень древней культуры на неизвестном языке; ты с другими магами только начинаешь его изучать и расшифровал лишь малую часть.",
+    "en": "The temple preserves frescoes and inscriptions from a very ancient culture in an unknown language; you and the other mages have only begun studying it and have deciphered just a small part."
+   },
+   {
+    "dialog": "DIA_ADDON_SATURAS_WHATSORNAMENT",
+    "place": "TROLLAREA_PORTAL",
+    "who": [],
+    "ru": "Орнамент — ключ к древнему порталу.",
+    "en": "The ornament is the key to the ancient portal."
+   },
+   {
+    "dialog": "DIA_ADDON_SATURAS_OPENPORTAL",
+    "place": "TROLLAREA_PORTAL",
+    "who": [
+     "KDW_1402_ADDON_NEFARIUS_NW"
+    ],
+    "ru": "По предположению Нефариуса, древний портал откроется, когда в него вставят кольцо.",
+    "en": "According to Nefarius's hypothesis, the ancient portal will open when the ring is inserted into it."
+   },
+   {
+    "dialog": "DIA_ADDON_SATURAS_EXIT",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [
+     "KDW_1404_ADDON_RIORDIAN_NW"
+    ],
+    "ru": "Риордиана можно найти в задней части хранилища в храме древнего портала.",
+    "en": "Riordian can be found at the back of the storage chamber in the ancient portal temple."
+   }
+  ],
+  "KDW_1401_ADDON_CRONOS_NW": [
+   {
+    "dialog": "DIA_ADDON_CRONOS_WAECHTER",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [],
+    "ru": "Каменные стражи храма уничтожены вашими общими силами и больше не опасны.",
+    "en": "The temple's stone guardians were destroyed by you and your companions and are no longer dangerous."
+   },
+   {
+    "dialog": "DIA_ADDON_CRONOS_WASMACHSTDU",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [],
+    "ru": "Ты изучаешь каменных стражей храма: их приводит в движение магическая сила, а неподвижная статуя может внезапно напасть.",
+    "en": "You study the temple's stone guardians: a magical force animates them, and a motionless statue can suddenly attack."
+   }
+  ],
+  "KDW_1402_ADDON_NEFARIUS_NW": [
+   {
+    "dialog": "DIA_ADDON_NEFARIUS_KEINEAHNUNG",
+    "place": "TROLLAREA_PORTAL",
+    "who": [],
+    "ru": "За древним порталом пока лишь многометровая толща камня; следов магии телепортации вы не обнаружили.",
+    "en": "For now, there is only a mass of rock many metres thick behind the ancient portal; you have found no traces of teleportation magic."
+   },
+   {
+    "dialog": "DIA_ADDON_NEFARIUS_RINGRITUALENDS",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [
+     "KDW_1400_ADDON_SATURAS_NW"
+    ],
+    "ru": "Собранное кольцо-ключ от портала находится у Сатураса в храме древнего портала.",
+    "en": "Saturas has the reassembled ring that serves as the portal key in the ancient portal temple."
+   },
+   {
+    "dialog": "DIA_ADDON_NEFARIUS_WIEMECHANIK",
+    "place": "TROLLAREA_PORTAL",
+    "who": [],
+    "ru": "Рядом с древним порталом есть кольцевидное углубление для ключа, собранного из частей орнамента.",
+    "en": "Beside the ancient portal is a ring-shaped recess for the key assembled from the ornament fragments."
+   }
+  ],
+  "KDW_1403_ADDON_MYXIR_NW": [
+   {
+    "dialog": "DIA_ADDON_MYXIR_WASMACHSTDU",
+    "place": "TROLLAREA_PORTAL",
+    "who": [],
+    "ru": "Ты изучаешь язык зодчих у древнего портала.",
+    "en": "You are studying the language of the builders at the ancient portal."
+   }
+  ],
+  "KDW_1404_ADDON_RIORDIAN_NW": [
+   {
+    "dialog": "DIA_ADDON_RIORDIAN_HALLO",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [],
+    "ru": "Ты изучаешь культуру древнего народа в храме портала. Эти залы были построены им в далёком прошлом.",
+    "en": "You study the culture of an ancient people in the portal temple. They built these halls in the distant past."
+   },
+   {
+    "dialog": "DIA_ADDON_RIORDIAN_SATURASWANTYOU",
+    "place": "TROLLAREA_PORTAL",
+    "who": [
+     "KDW_1402_ADDON_NEFARIUS_NW"
+    ],
+    "ru": "Нефариус находится в дальней части залов, у древнего портала. У него можно узнать больше об этих строениях.",
+    "en": "Nefarius is in the far part of the halls, by the ancient portal. You can learn more about these structures from him."
+   }
+  ],
+  "KDW_1405_ADDON_MERDARION_NW": [
+   {
+    "dialog": "DIA_ADDON_MERDARION_AUFGABE",
+    "place": "TROLLAREA_PORTAL",
+    "who": [
+     "KDW_1402_ADDON_NEFARIUS_NW"
+    ],
+    "ru": "У древнего портала ты выясняешь, куда он ведёт, и помогаешь Нефариусу искать потерянный орнамент.",
+    "en": "At the ancient portal, you are investigating where it leads and helping Nefarius search for the lost ornament."
+   },
+   {
+    "dialog": "DIA_ADDON_MERDARION_AUFGABE",
+    "place": "TROLLAREA_PORTAL",
+    "who": [],
+    "ru": "Древний портал ведёт в прежде неизвестную вам часть острова.",
+    "en": "The ancient portal leads to a part of the island previously unknown to you."
+   },
+   {
+    "dialog": "DIA_ADDON_MERDARION_BEDROHUNG",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [
+     "KDW_1400_ADDON_SATURAS_NW",
+     "KDW_1401_ADDON_CRONOS_NW"
+    ],
+    "ru": "Сатурас и Кронос в храме древнего портала знают больше о землетрясениях, причина которых находится по другую сторону портала.",
+    "en": "Saturas and Cronos, in the ancient portal temple, know more about the earthquakes, whose cause lies on the other side of the portal."
+   },
+   {
+    "dialog": "DIA_ADDON_MERDARION_TELEPORTSTEIN",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [],
+    "ru": "В залах храма, за дверью в комнате с бассейном, ты запер телепортационный камень. Возможно, он ведёт в город, но пользоваться им опасно: его ещё никто из вас не проверял.",
+    "en": "In the temple halls, you locked a teleportation stone behind a door in the room with the pool. It may lead to the city, but using it is dangerous: none of you has tested it yet."
+   }
+  ],
+  "MIL_304_TORWACHE": [],
+  "MIL_305_TORWACHE": [
+   {
+    "dialog": "DIA_MIL_305_TORWACHE_FIRSTWARN",
+    "place": "CITY_UPTOWN_GUARD",
+    "who": [],
+    "ru": "Через ворота Верхнего квартала ты пропускаешь только граждан города и служащих королевских войск; обвиняемым в убийстве, воровстве и нарушителям спокойствия вход закрыт.",
+    "en": "At the Upper Quarter gates, you admit only citizens and members of the royal forces; those accused of murder or theft, and troublemakers, are barred from entry."
+   },
+   {
+    "dialog": "DIA_MIL_305_TORWACHE_PASSASMAGE",
+    "place": "CITY_UPTOWN_GUARD",
+    "who": [],
+    "ru": "Для магов, избранных Инноса, вход в Верхний квартал открыт.",
+    "en": "Mages, the chosen of Innos, are allowed through your gates into the Upper Quarter."
+   }
+  ],
+  "MIL_309_STADTWACHE": [
+   {
+    "dialog": "DIA_MIL_309_STADTWACHE_HALLO",
+    "place": "MEDIUMFOREST_KAP2#2",
+    "who": [],
+    "ru": "В лесу впереди городских ворот бродят полчища ужасных монстров — тебе стоит держаться от него подальше.",
+    "en": "Hordes of terrible monsters roam the forest ahead of the city gates—you should stay away from it."
+   }
+  ],
+  "MIL_310_STADTWACHE": [
+   {
+    "dialog": "DIA_MIL_310_STADTWACHE_ZUMSCHMIED",
+    "place": "FARM1_SHEEP",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "У Лобарта на ферме есть овцы; ты с другими стражниками собираешься скоро зайти за ними.",
+    "en": "Lobart has sheep on his farm; you and the other guards plan to come and take them soon."
+   }
+  ],
+  "MIL_311_ANDRE": [
+   {
+    "dialog": "DIA_ANDRE_FIRSTMISSION",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "По сведениям, которые дошли до тебя через Мортиса, где-то в порту находится целый тюк болотной травы.",
+    "en": "According to information that reached you through Mortis, there is a whole package of swampweed somewhere in the harbor."
+   },
+   {
+    "dialog": "DIA_ANDRE_FIND_DEALER",
+    "place": "CITY_PATH",
+    "who": [],
+    "ru": "Ты предполагаешь, что распространитель болотной травы находится в портовом квартале: часто приходящего в город торговца уже поймали бы.",
+    "en": "You suspect that the swampweed dealer is based in the harbor district: a dealer who frequently entered the city would have been caught by now."
+   },
+   {
+    "dialog": "DIA_ANDRE_WAFFE",
+    "place": "CITY_BARRACK01",
+    "who": [],
+    "ru": "В твоих казармах есть койки для сна; можно выбрать любую.",
+    "en": "There are beds to sleep in at your barracks; any bed may be used."
+   },
+   {
+    "dialog": "DIA_ANDRE_DGRUNNING",
+    "place": "CITY_KANAL",
+    "who": [],
+    "ru": "Ты отправил своих людей в канализацию; гильдия воров там разгромлена.",
+    "en": "You sent your men into the sewers; the thieves' guild there has been crushed."
+   },
+   {
+    "dialog": "DIA_ANDRE_AUSLIEFERUNG",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "Сара торгует оружием на рыночной площади.",
+    "en": "Sarah sells weapons in the market square."
+   }
+  ],
+  "MIL_312_WULFGAR": [
+   {
+    "dialog": "DIA_WULFGAR_HALLO",
+    "place": "CITY_HABOUR_KASERN",
+    "who": [],
+    "ru": "Во дворе казарм ты обучаешь ополченцев владению мечом.",
+    "en": "You train militiamen in swordsmanship in the barracks courtyard."
+   },
+   {
+    "dialog": "DIA_WULFGAR_CANYOUTRAIN",
+    "place": "CITY_HABOUR_KASERN",
+    "who": [],
+    "ru": "Во дворе казарм ты проводишь боевое обучение для всех, кто способен защищать город, кроме наёмников; остальные виды обучения доступны только ополчению.",
+    "en": "In the barracks courtyard, you provide combat training to anyone capable of defending the city except mercenaries; other kinds of training are reserved for the militia."
+   }
+  ],
+  "MIL_313_BOLTAN": [],
+  "MIL_314_MORTIS": [
+   {
+    "dialog": "DIA_MORTIS_PAKET",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [
+     "VLK_431_KARDIF"
+    ],
+    "ru": "В портовой таверне ты слышал, как Кардиф обсуждал тюк болотной травы с неизвестным парнем; тот говорил, что нашёл отличное место для её хранения.",
+    "en": "At the harbor tavern, you heard Kardif discussing a package of swampweed with an unknown man, who said he had found an excellent place to store it."
+   },
+   {
+    "dialog": "DIA_MORTIS_WAFFE",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [
+     "MIL_324_PECK"
+    ],
+    "ru": "Пек давно ушёл в город; ты предполагаешь, что он обхаживает Ваню в борделе «Красный Фонарь».",
+    "en": "Peck left for town a while ago; you suspect he is courting Vanja at the Red Lantern brothel."
+   }
+  ],
+  "MIL_316_WAMBO": [
+   {
+    "dialog": "DIA_WAMBO_JOB",
+    "place": "CITY_UPTOWN_HUT",
+    "who": [
+     "PAL_200_HAGEN"
+    ],
+    "ru": "Ты охраняешь дома Верхнего квартала у площади и никого не впускаешь — по личному приказу лорда Хагена.",
+    "en": "You guard the Upper Quarter houses by the square and let no one enter, on Lord Hagen's personal orders."
+   }
+  ],
+  "MIL_317_RUGA": [
+   {
+    "dialog": "DIA_RUGA_HALLO",
+    "place": "CITY_HABOUR_KASERN",
+    "who": [],
+    "ru": "Во дворе казарм ты обучаешь стрельбе из арбалета и помогаешь развивать ловкость.",
+    "en": "In the barracks courtyard, you teach crossbow shooting and help improve dexterity."
+   },
+   {
+    "dialog": "DIA_RUGA_TRAIN",
+    "place": "CITY_HABOUR_KASERN",
+    "who": [
+     "MIL_311_ANDRE"
+    ],
+    "ru": "Лорд Андрэ во дворе казарм принимает людей в ополчение.",
+    "en": "Lord Andre in the barracks courtyard recruits people into the militia."
+   }
+  ],
+  "MIL_319_PABLO": [
+   {
+    "dialog": "DIA_PABLO_HAKONBANDITS",
+    "place": "MEDIUMFOREST_KAP2#2",
+    "who": [],
+    "ru": "В лесу у города бродит много опасных зверей — тебе и другим стражникам пришлось прекратить там погоню за бандитами.",
+    "en": "Many dangerous beasts roam the woods near the city—you and the other guards had to abandon your pursuit of the bandits there."
+   }
+  ],
+  "MIL_321_RANGAR": [],
+  "MIL_324_PECK": [
+   {
+    "dialog": "DIA_PECK_WEAPON",
+    "place": "CITY_PUFF",
+    "who": [],
+    "ru": "Ты бывал в борделе «Красный фонарь».",
+    "en": "You have been to the Red Lantern brothel."
+   }
+  ],
+  "MIL_325_MILIZ": [],
+  "MIL_328_MILIZ": [
+   {
+    "dialog": "DIA_328_MILIZ_HI",
+    "place": "CITY_HABOUR_HUT",
+    "who": [],
+    "ru": "Склад у гавани находится в твоём ведении; посторонним ты угрожаешь расправой.",
+    "en": "The warehouse by the harbour is under your supervision; you threaten intruders with violence."
+   }
+  ],
+  "MIL_332_STADTWACHE": [
+   {
+    "dialog": "DIA_MIL_332_STADTWACHE_PERM",
+    "place": "CITY_ENTRANCE#2",
+    "who": [],
+    "ru": "Ты стоишь на посту у задних ворот Хориниса.",
+    "en": "You are on guard duty at the rear gates of Khorinis."
+   }
+  ],
+  "MIL_333_STADTWACHE": [],
+  "MIL_337_MIKA": [
+   {
+    "dialog": "DIA_MIKA_WASGEFAEHRLICH",
+    "place": "CITY_TO_FOREST",
+    "who": [],
+    "ru": "На дороге за городскими стенами опасно: бандиты подстерегают путников, вокруг бродят наемники, а из леса выходят дикие звери.",
+    "en": "The road outside the city walls is dangerous: bandits lie in wait for travelers, mercenaries roam nearby, and wild beasts come out of the forest."
+   },
+   {
+    "dialog": "DIA_MIKA_HILFE",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "Вокруг фермы Акила ошиваются наемники.",
+    "en": "Mercenaries are hanging around Akil's farm."
+   }
+  ],
+  "MIL_350_ADDON_MARTIN": [
+   {
+    "dialog": "DIA_ADDON_MARTIN_WASMACHSTDU",
+    "place": "CITY_PALCAMP",
+    "who": [],
+    "ru": "В лагере паладинов хранятся запасы королевской гвардии; ты отвечаешь за них как интендант.",
+    "en": "The royal paladin guard's supplies are stored in the paladin camp; you are responsible for them as quartermaster."
+   },
+   {
+    "dialog": "DIA_ADDON_MARTIN_HALLO",
+    "place": "CITY_PALCAMP",
+    "who": [],
+    "ru": "В лагере паладинов разрешено находиться только паладинам и ополченцам.",
+    "en": "Only paladins and militia members are allowed in the paladin camp."
+   },
+   {
+    "dialog": "DIA_ADDON_MARTIN_RANGERHELP",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [
+     "VLK_431_KARDIF"
+    ],
+    "ru": "После работы ты отдыхаешь в таверне Кардифа.",
+    "en": "After work, you relax in Kardif's tavern."
+   },
+   {
+    "dialog": "DIA_ADDON_MARTIN_RANGERHELP",
+    "place": "CITY_PALCAMP",
+    "who": [],
+    "ru": "Пока ты отдыхаешь в таверне, кто-то роется в ящиках с запасами и крадёт вещи; паладины этого не замечают.",
+    "en": "While you relax at the tavern, someone rummages through the supply crates and steals things; the paladins do not notice."
+   },
+   {
+    "dialog": "DIA_ADDON_MARTIN_TELLALL",
+    "place": "OV",
+    "who": [],
+    "ru": "За поставками оружия бандитам стоит влиятельный торговец из верхнего квартала; часть оружия взята из запасов ополчения.",
+    "en": "An influential merchant living in the upper quarter is behind the weapon deliveries to the bandits; some of the weapons came from militia stores."
+   }
+  ],
+  "NONE_100_XARDAS": [
+   {
+    "dialog": "DIA_XARDAS_WHEREEX",
+    "place": "XARDAS_TOWER_IN1",
+    "who": [],
+    "ru": "Твоя башня построена неподалёку от города Хоринис.",
+    "en": "Your tower stands not far from the city of Khorinis."
+   },
+   {
+    "dialog": "DIA_XARDAS_WEAPON",
+    "place": "XARDAS_TOWER_IN1",
+    "who": [],
+    "ru": "В твоей башне есть немного оружия и другие полезные вещи.",
+    "en": "There are a few weapons and other useful items in your tower."
+   },
+   {
+    "dialog": "DIA_XARDAS_EQUIPMENT",
+    "place": "XARDAS_TOWER_VALLEY",
+    "who": [],
+    "ru": "В долине внизу под твоей башней растут целебные травы.",
+    "en": "Healing herbs grow in the valley below your tower."
+   },
+   {
+    "dialog": "DIA_XARDAS_DMTSINDDA",
+    "place": "MONASTERY_THRONE",
+    "who": [
+     "KDF_500_PYROKAR"
+    ],
+    "ru": "Пирокар находится в монастыре; у него можно получить Глаз Инноса.",
+    "en": "Pyrokar is at the monastery; the Eye of Innos can be obtained from him."
+   },
+   {
+    "dialog": "DIA_XARDAS_INNOSEYEBROKEN",
+    "place": "CITY_MERCHANT_TEMPLE",
+    "who": [
+     "VLK_439_VATRAS"
+    ],
+    "ru": "Маг Воды Ватрас находится в Хоринисе, в храме у рыночной площади.",
+    "en": "Vatras, the Water Mage, is in Khorinis, at the temple by the market square."
+   }
+  ],
+  "NOV_600_PEDRO": [
+   {
+    "dialog": "DIA_PEDRO_WURST",
+    "place": "MONASTERY_BRIDGE",
+    "who": [],
+    "ru": "Огненная крапива растет слева и справа по другую сторону моста к монастырю.",
+    "en": "Fire nettle grows on both sides at the far end of the bridge to the monastery."
+   },
+   {
+    "dialog": "DIA_PEDRO_WURST",
+    "place": "KDF_LIBRARY",
+    "who": [
+     "KDF_506_NEORAS"
+    ],
+    "ru": "У Неораса можно получить ключ от монастырской библиотеки за огненную крапиву.",
+    "en": "Neoras will probably give you a key to the monastery library in exchange for fire nettle."
+   },
+   {
+    "dialog": "DIA_PEDRO_MONASTERY",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "В монастыре послушники выполняют разные работы и в свободное время изучают писания; маги присматривают за ними и изучают магию.",
+    "en": "In the monastery, novices do various jobs and study the scriptures when they have time; the mages supervise them and study magic."
+   }
+  ],
+  "NOV_601_IGARAZ": [
+   {
+    "dialog": "DIA_IGARANZ_STUDYINNOS",
+    "place": "KDF_LIBRARY",
+    "who": [
+     "KDF_504_PARLAN"
+    ],
+    "ru": "Ключ от монастырской библиотеки находится у Парлана; он выдаёт его только после выполнения всех его заданий.",
+    "en": "Parlan holds the key to the monastery library; he only hands it over once all his tasks have been completed."
+   },
+   {
+    "dialog": "DIA_IGARANZ_WHEREDOCS",
+    "place": "MONASTERY_NOVICE02",
+    "who": [
+     "NOV_612_BABO"
+    ],
+    "ru": "Бумаги Бабо заперты в твоём сундуке в твоей келье.",
+    "en": "Babo's papers are locked in your chest in your cell."
+   },
+   {
+    "dialog": "DIA_IGARAZ_METOO",
+    "place": null,
+    "who": [
+     "NOV_603_AGON"
+    ],
+    "ru": "У таверны Агон и Ульф отделились от тебя и пошли вместе; куда они направились, ты не знаешь.",
+    "en": "Agon and Ulf parted ways with you at the tavern and went on together; you do not know where they headed."
+   }
+  ],
+  "NOV_602_ULF": [
+   {
+    "dialog": "DIA_ULF_WIRTE",
+    "place": "CITY_TAVERN",
+    "who": [],
+    "ru": "Корагон держит таверну на храмовой площади.",
+    "en": "Coragon runs the tavern on Temple Square."
+   },
+   {
+    "dialog": "DIA_ULF_WIRTE",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [],
+    "ru": "Кардиф владеет баром в портовом районе.",
+    "en": "Kardif owns the bar in the harbor district."
+   }
+  ],
+  "NOV_603_AGON": [
+   {
+    "dialog": "DIA_AGON_GETHERB",
+    "place": "MONASTERY_HERB",
+    "who": [
+     "KDF_506_NEORAS"
+    ],
+    "ru": "На монастырских грядках ты выращиваешь лечебные травы, из которых мастер Неорас готовит зелья.",
+    "en": "You grow medicinal herbs in the monastery's herb beds, which Master Neoras uses to make potions."
+   },
+   {
+    "dialog": "DIA_AGON_NEW",
+    "place": "MONASTERY_PLACE",
+    "who": [
+     "KDF_504_PARLAN"
+    ],
+    "ru": "Парлан раздаёт работу послушникам; его можно найти во дворе монастыря.",
+    "en": "Parlan assigns work to novices; you can find him in the monastery courtyard."
+   }
+  ],
+  "NOV_604_DYRIAN": [
+   {
+    "dialog": "DIA_DYRIAN_JOB",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "Ты находишься в монастыре и ждёшь решения Высшего совета о том, позволят ли тебе остаться после нарушения правил.",
+    "en": "You are in the monastery, awaiting the High Council's decision on whether you may stay after breaking the rules."
+   },
+   {
+    "dialog": "DIA_DYRIAN_SCROLL",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "У тебя в монастыре есть свиток заклинания «Сон», который ты можешь отдать.",
+    "en": "You have a Sleep spell scroll at the monastery that you can give away."
+   }
+  ],
+  "NOV_605_OPOLOS": [
+   {
+    "dialog": "DIA_OPOLOS_HELLO",
+    "place": "MONASTERY_SHEEP",
+    "who": [],
+    "ru": "Ты присматриваешь за овцами в овечьем загоне монастыря.",
+    "en": "You tend the sheep in the monastery's sheep pen."
+   },
+   {
+    "dialog": "DIA_OPOLOS_BIBLOTHEK",
+    "place": "KDF_LIBRARY",
+    "who": [
+     "KDF_504_PARLAN"
+    ],
+    "ru": "Библиотека — запертая комната слева рядом с воротами монастыря. Ключ можно получить, только когда Парлан разрешит изучать писания.",
+    "en": "The library is the locked room on the left beside the monastery gates. You can only obtain a key when Parlan permits you to study the scriptures."
+   },
+   {
+    "dialog": "DIA_OPOLOS_AGON",
+    "place": "MONASTERY_HERB",
+    "who": [
+     "NOV_603_AGON"
+    ],
+    "ru": "Агон заведует монастырским садом; он послушник и племянник губернатора.",
+    "en": "Agon runs the monastery garden; he is a novice and the governor's nephew."
+   },
+   {
+    "dialog": "DIA_OPOLOS_AGON",
+    "place": "MONASTERY_PLACE",
+    "who": [
+     "NOV_612_BABO",
+     "NOV_603_AGON"
+    ],
+    "ru": "Бабо подметает двор монастыря. Раньше он помогал Агону в саду, но после их размолвки его работа изменилась.",
+    "en": "Babo sweeps the monastery courtyard. He used to help Agon in the garden, but his work changed after their falling-out."
+   },
+   {
+    "dialog": "DIA_OPOLOS_MONASTERY",
+    "place": "MONASTERY",
+    "who": [
+     "KDF_504_PARLAN"
+    ],
+    "ru": "За ложь магам, неуважение к братьям и нарушение прав собственности монастыря приходится отвечать перед Парланом.",
+    "en": "If you lie to the mages, disrespect your brothers, or violate the monastery's property rights, you must answer to Parlan."
+   },
+   {
+    "dialog": "DIA_OPOLOS_MONASTERY",
+    "place": "MONASTERY_HERB",
+    "who": [
+     "NOV_603_AGON",
+     "NOV_612_BABO"
+    ],
+    "ru": "С Агоном стоит быть осторожнее: неосторожный послушник может оказаться в положении Бабо.",
+    "en": "You should be careful around Agon: an unwary novice can end up in Babo's position."
+   }
+  ],
+  "NOV_608_GARWIG": [
+   {
+    "dialog": "DIA_GARWIG_ROOM",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "В монастыре хранятся священные реликвии: Молот Инноса и Щит Огня.",
+    "en": "The monastery houses sacred relics: the Hammer of Innos and the Shield of Fire."
+   },
+   {
+    "dialog": "DIA_GARWIG_SHIELD",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "Щит Огня прибит к стене монастыря, чтобы его сила больше не использовалась.",
+    "en": "The Shield of Fire is nailed to a wall in the monastery so that its power will no longer be used."
+   },
+   {
+    "dialog": "DIA_GARWIG_SLEEP",
+    "place": "MONASTERY",
+    "who": [],
+    "ru": "Ты охраняешь священные артефакты монастыря и никогда не спишь на страже.",
+    "en": "You guard the monastery's sacred artifacts and never sleep on watch."
+   }
+  ],
+  "NOV_612_BABO": [
+   {
+    "dialog": "DIA_BABO_ANLIEGEN",
+    "place": "MONASTERY",
+    "who": [
+     "PAL_299_SERGIO"
+    ],
+    "ru": "Паладин Сержио сейчас живёт в монастыре.",
+    "en": "The paladin Sergio is currently living in the monastery."
+   },
+   {
+    "dialog": "DIA_BABO_YOUANDAGON",
+    "place": "MONASTERY_PLACE",
+    "who": [],
+    "ru": "Тебя постоянно заставляют подметать монастырский двор в наказание.",
+    "en": "You are constantly made to sweep the monastery courtyard as punishment."
+   },
+   {
+    "dialog": "DIA_BABO_YOUANDAGON",
+    "place": "MONASTERY_HERB",
+    "who": [
+     "NOV_603_AGON"
+    ],
+    "ru": "Агон поливал огненную крапиву на монастырских грядках так, что её корни сгнили.",
+    "en": "Agon watered the fire nettle in the monastery herb beds so much that its roots rotted."
+   },
+   {
+    "dialog": "DIA_BABO_LIFE",
+    "place": "MONASTERY_GRASS",
+    "who": [
+     "NOV_601_IGARAZ"
+    ],
+    "ru": "Игарац знает об избранных и испытании магией; его можно найти на монастырской лужайке.",
+    "en": "Igaraz knows about the chosen ones and the test of magic; you can find him on the monastery lawn."
+   },
+   {
+    "dialog": "DIA_BABO_KAP3_UNHAPPY",
+    "place": null,
+    "who": [
+     "NOV_601_IGARAZ"
+    ],
+    "ru": "У Игараца находятся твои личные записи; он шантажирует тебя, угрожая передать их магам.",
+    "en": "Igaraz has your personal notes and is blackmailing you, threatening to hand them over to the mages."
+   }
+  ],
+  "PAL_200_HAGEN": [
+   {
+    "dialog": "DIA_LORD_HAGEN_PASS",
+    "place": "PASS",
+    "who": [],
+    "ru": "Проход в Долину Рудников занят толпами орков; ворота Прохода заперты, ключ у тебя.",
+    "en": "The pass into the Valley of Mines is occupied by hordes of orcs; its gate is locked, and you have the key."
+   },
+   {
+    "dialog": "DIA_LORD_HAGEN_ANTIPALADINE",
+    "place": "CITY_CITYHALL",
+    "who": [
+     "PAL_201_INGMAR"
+    ],
+    "ru": "Ингмар в ратуше может дать тактические советы по сражению с предводителями орков: элитные воины орков — его специализация.",
+    "en": "Ingmar at the town hall can offer tactical advice on fighting orc leaders: elite orc warriors are his specialty."
+   },
+   {
+    "dialog": "DIA_LORD_HAGEN_KNIGHT",
+    "place": "CITY_CITYHALL",
+    "who": [
+     "PAL_202_ALBRECHT"
+    ],
+    "ru": "Альбрехт в ратуше обучает магии воинов ордена.",
+    "en": "Albrecht at the town hall teaches magic to warriors of the order."
+   },
+   {
+    "dialog": "DIA_LORD_HAGEN_KNIGHT",
+    "place": "CITY_LEOMAR",
+    "who": [],
+    "ru": "Казармы паладинов находятся в верхней части города и открыты для воинов ордена.",
+    "en": "The paladins' barracks are in the upper part of town and are open to warriors of the order."
+   }
+  ],
+  "PAL_201_INGMAR": [
+   {
+    "dialog": "DIA_INGMAR_ORKELITE",
+    "place": "FARM1_SHEEP",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "У фермы Лобарта замечено несколько орков.",
+    "en": "Several orcs have been spotted near Lobart's farm."
+   }
+  ],
+  "PAL_202_ALBRECHT": [
+   {
+    "dialog": "DIA_ALBRECHT_HAGEN",
+    "place": "CITY_CITYHALL",
+    "who": [
+     "PAL_200_HAGEN"
+    ],
+    "ru": "Лорд Хаген находится в главном зале ратуши — прямо от тебя.",
+    "en": "Lord Hagen is in the main hall of the town hall—straight ahead from you."
+   }
+  ],
+  "PAL_203_LOTHAR": [
+   {
+    "dialog": "DIA_LOTHAR_REGELN",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "Лорд Хаген со своими войсками расквартирован в Верхнем квартале.",
+    "en": "Lord Hagen and his troops are quartered in the Upper Quarter."
+   },
+   {
+    "dialog": "DIA_LOTHAR_REGELN",
+    "place": "CITYHALL_UPSTAIRS",
+    "who": [],
+    "ru": "Ратуша в Верхнем квартале служит командным пунктом паладинов; туда допускают только паладинов и ополченцев.",
+    "en": "The town hall in the Upper Quarter serves as the paladins' command post; only paladins and militia members are admitted."
+   },
+   {
+    "dialog": "DIA_LOTHAR_HELLOAGAIN",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "В Верхнем квартале живут знатные горожане. Дома торговцев здесь можно узнать по вывескам над дверями.",
+    "en": "Wealthy citizens live in the Upper Quarter. You can recognize the merchants' houses here by the signs above their doors."
+   },
+   {
+    "dialog": "DIA_LOTHAR_WOARBEIT",
+    "place": "CITY_PATH",
+    "who": [],
+    "ru": "В портовом квартале живут отбросы общества; туда лучше не соваться.",
+    "en": "The dregs of society live in the harbor district; you had better stay away."
+   },
+   {
+    "dialog": "DIA_LOTHAR_WOANDRE",
+    "place": "CITY_HABOUR_KASERN",
+    "who": [],
+    "ru": "Командира городской стражи, лорда Андрэ, можно найти в казармах на противоположном конце города.",
+    "en": "You can find Lord Andre, commander of the city guard, at the barracks on the opposite side of town."
+   },
+   {
+    "dialog": "DIA_LOTHAR_TOOV",
+    "place": "CITY_UPTOWN_GUARD",
+    "who": [],
+    "ru": "Стража у внутренних ворот не пропускает в Верхний квартал тех, кто не является гражданином города.",
+    "en": "The guards at the inner gates do not let non-citizens into the Upper Quarter."
+   }
+  ],
+  "PAL_205_TORWACHE": [
+   {
+    "dialog": "DIA_PAL_205_TORWACHE_FIRSTWARN",
+    "place": "CITY_CITYHALL",
+    "who": [],
+    "ru": "Ты охраняешь вход в ратушу: внутрь допускаются только люди на службе у короля.",
+    "en": "You guard the entrance to the town hall: only those serving the king are allowed inside."
+   }
+  ],
+  "PAL_207_GIRION": [
+   {
+    "dialog": "DIA_GIRION_TEACH",
+    "place": "CITY_CITYHALL",
+    "who": [
+     "PAL_200_HAGEN"
+    ],
+    "ru": "Лорд Хаген в ратуше Хориниса — мастер-мечник, у которого можно совершенствовать владение мечом.",
+    "en": "Lord Hagen at Khorinis town hall is a master swordsman who can help you hone your swordsmanship."
+   },
+   {
+    "dialog": "DIA_GIRION_CATCHPLAYERSTOLENSHIP",
+    "place": "SHIP",
+    "who": [],
+    "ru": "Корабль в гавани Хориниса принадлежит королю и предназначен для перевозки руды.",
+    "en": "The ship in Khorinis harbor belongs to the king and is intended to transport ore."
+   }
+  ],
+  "PAL_212_SCHIFFSWACHE": [
+   {
+    "dialog": "DIA_PAL_212_SCHIFFSWACHE_WASMACHSTDU2",
+    "place": "CITY_WAY",
+    "who": [
+     "PAL_213_SCHIFFSWACHE"
+    ],
+    "ru": "Ты с другими стражниками охраняешь подход к кораблю в гавани Хориниса. Вход на корабль запрещён всем.",
+    "en": "You and the other guards watch the approach to the ship in Khorinis harbour. No one is allowed aboard."
+   }
+  ],
+  "PAL_213_SCHIFFSWACHE": [
+   {
+    "dialog": "DIA_PAL_213_SCHIFFSWACHE_GOONBOARD",
+    "place": "SHIP",
+    "who": [],
+    "ru": "Ты охраняешь корабль в гавани: вход без разрешения запрещён, и у тебя приказ убивать нарушителей.",
+    "en": "You guard the ship in the harbor: boarding without permission is forbidden, and your orders are to kill trespassers."
+   }
+  ],
+  "PAL_216_CEDRIC": [],
+  "PAL_220_SCHIFFSWACHE": [],
+  "PAL_221_SCHIFFSWACHE": [],
+  "PAL_222_SCHIFFSWACHE": [],
+  "PAL_223_SCHIFFSWACHE": [],
+  "PAL_224_SCHIFFSWACHE": [],
+  "PAL_225_SCHIFFSWACHE": [],
+  "PAL_226_SCHIFFSWACHE": [],
+  "PAL_227_SCHIFFSWACHE": [],
+  "PAL_228_SCHIFFSWACHE": [],
+  "PAL_297_RITTER": [
+   {
+    "dialog": "DIA_PAL_297_TRESPAS",
+    "place": "PASS",
+    "who": [],
+    "ru": "У входа на перевал, где ты стоишь на страже, очень опасно.",
+    "en": "It is very dangerous at the entrance to the pass, where you stand guard."
+   },
+   {
+    "dialog": "DIA_ADDON_PAL_297_RANGERBANDITS",
+    "place": "PASS",
+    "who": [],
+    "ru": "Пока ты стоял на страже у входа на перевал, здесь никто не проходил, и бандитов здесь не было.",
+    "en": "While you were guarding the entrance to the pass, nobody passed through, and there were no bandits here."
+   }
+  ],
+  "PAL_298_RITTER": [
+   {
+    "dialog": "DIA_PAL_298_PASS",
+    "place": "PASS",
+    "who": [],
+    "ru": "За воротами у входа на перевал лежит проход в Долину Рудников.",
+    "en": "Beyond the gates at the pass entrance lies the route to the Valley of Mines."
+   },
+   {
+    "dialog": "DIA_PAL_298_PASS",
+    "place": "PASS",
+    "who": [
+     "PAL_297_RITTER"
+    ],
+    "ru": "Ты и другой рыцарь стоите по эту сторону ворот; по другую сторону — орки, и пройти там опасно.",
+    "en": "You and the other knight stand on this side of the gates; orcs are on the other side, making the route dangerous."
+   }
+  ],
+  "PAL_299_SERGIO": [
+   {
+    "dialog": "DIA_SERGIO_PERM",
+    "place": "MONASTERY_CORRIDOR",
+    "who": [
+     "KDF_505_MARDUK"
+    ],
+    "ru": "Мардук знает об Освящении Меча; его можно найти в коридоре монастыря у часовни.",
+    "en": "Marduk knows about sword consecration; you can find him in the monastery corridor by the chapel."
+   },
+   {
+    "dialog": "DIA_SERGIO_AUFGABE",
+    "place": "MONASTERY_SHRINE",
+    "who": [
+     "KDF_509_ISGAROTH"
+    ],
+    "ru": "Ты слышал, что мастеру Исгароту нужна помощь. Его можно найти в святилище у дороги к монастырю.",
+    "en": "You have heard that Master Isgaroth needs help. He can be found at the shrine by the road to the monastery."
+   },
+   {
+    "dialog": "DIA_SERGIO_BABO",
+    "place": null,
+    "who": [
+     "NOV_612_BABO"
+    ],
+    "ru": "Ты будешь тренировать Бабо каждое утро с пяти до семи.",
+    "en": "You will train Babo every morning from five to seven."
+   },
+   {
+    "dialog": "DIA_SERGIO_WHAT",
+    "place": "MONASTERY_CHAPELL",
+    "who": [],
+    "ru": "В часовне монастыря ты молишься Инносу об укреплении руки и воли.",
+    "en": "In the monastery chapel, you pray to Innos to strengthen your arm and your will."
+   },
+   {
+    "dialog": "DIA_SERGIO_WHY",
+    "place": "MONASTERY_CHAPELL",
+    "who": [],
+    "ru": "Ты находишься в часовне монастыря и ждёшь новых приказов от магов.",
+    "en": "You are in the monastery chapel, waiting for new orders from the mages."
+   }
+  ],
+  "PC_PSIONIC": [
+   {
+    "dialog": "DIA_ADDON_LESTER_VORSCHLAG",
+    "place": "CITY_ENTRANCE",
+    "who": [
+     "VLK_417_CONSTANTINO",
+     "MIL_309_STADTWACHE",
+     "MIL_310_STADTWACHE"
+    ],
+    "ru": "Константино добился, чтобы стражники у ворот пропускали в город сборщиков редких трав для него. По твоей оценке, охапки из десяти одинаковых растений достаточно.",
+    "en": "Constantino arranged for the gate guards to admit people bringing him rare herbs. You reckon a bundle of ten identical plants is enough."
+   },
+   {
+    "dialog": "DIA_LESTER_MINECOLONY",
+    "place": "XARDAS_TOWER_IN1",
+    "who": [],
+    "ru": "Башня на горе над твоей долиной появилась за одну ночь; вечером на её месте стояло лишь несколько деревьев.",
+    "en": "The tower on the mountain above your valley appeared overnight; the evening before, only a few trees stood there."
+   },
+   {
+    "dialog": "DIA_LESTER_XARDASWEG",
+    "place": "XARDAS_TOWER_IN1",
+    "who": [
+     "NONE_100_XARDAS"
+    ],
+    "ru": "Ксардас ушёл, а его башню заняли демонические создания. Куда он отправился, он тебе не сказал.",
+    "en": "Xardas has left, and demonic creatures have occupied his tower. He did not tell you where he was going."
+   },
+   {
+    "dialog": "DIA_LESTER_PERM",
+    "place": "FARM1_OUT",
+    "who": [],
+    "ru": "Тропинка из твоей долины ведёт к ферме; дальше за ней начинается город.",
+    "en": "The path from your valley leads to a farm; the city lies farther beyond it."
+   },
+   {
+    "dialog": "DIA_LESTER_PERM",
+    "place": "CITY_TO_FOREST#4",
+    "who": [],
+    "ru": "По дороге от твоей долины к ферме и городу встречаются волки, крысы, гоблины и бандиты.",
+    "en": "Wolves, rats, goblins and bandits can be encountered on the road from your valley toward the farm and the city."
+   },
+   {
+    "dialog": "DIA_LESTER_PERM3",
+    "place": "XARDAS_TOWER_VALLEY",
+    "who": [],
+    "ru": "В твоей долине появляются люди в чёрных рясах, а люди-ящеры постоянно на тебя нападают.",
+    "en": "People in black robes appear in your valley, and lizard men repeatedly attack you."
+   }
+  ],
+  "PIR_1300_ADDON_GREG_NW": [
+   {
+    "dialog": "DIA_ADDON_GREG_NW_HALLO",
+    "place": "CITY_ENTRANCE",
+    "who": [
+     "MIL_309_STADTWACHE",
+     "MIL_310_STADTWACHE"
+    ],
+    "ru": "Стражники у главных ворот Хориниса не пускают в город простых путников.",
+    "en": "The guards at Khorinis's main gate do not let ordinary travelers into the city."
+   }
+  ],
+  "PIR_1301_ADDON_SKIP_NW": [
+   {
+    "dialog": "DIA_ADDON_SKIP_NW_BALTRAM",
+    "place": null,
+    "who": [
+     "VLK_410_BALTRAM"
+    ],
+    "ru": "Бальтрам — городской торговец всяким хламом, с которым ты ведёшь дела.",
+    "en": "Baltram is a city trader dealing in assorted junk, and you do business with him."
+   }
+  ],
+  "SLD_800_LEE": [
+   {
+    "dialog": "DIA_LEE_OTHERSLD",
+    "place": "BIGFARM_HOUSE_OUT",
+    "who": [],
+    "ru": "Торлоф обычно находится перед домом Онара и проводит испытания для желающих стать наёмниками.",
+    "en": "Torlof is usually outside Onar's house and gives trials to those who want to become mercenaries."
+   },
+   {
+    "dialog": "DIA_LEE_GETSHIP",
+    "place": "SHIP",
+    "who": [],
+    "ru": "Корабль паладинов в гавани охраняют сильнее, чем транспорты с рудой в старой колонии. Корабельная стража пропускает на борт по официальному письму о полномочиях; у тебя есть поддельное такое письмо.",
+    "en": "The paladins' ship in the harbor is guarded more heavily than the ore transports in the old colony. The ship's guards allow boarding with an official letter of authorization; you have a forged one."
+   },
+   {
+    "dialog": "DIA_LEE_CANTEACH",
+    "place": "BIGFARM_HOUSE_LEE",
+    "who": [],
+    "ru": "У тебя можно обучиться бою двуручным оружием, но основам ты не учишь — берёшь только уже подготовленных бойцов.",
+    "en": "You teach two-handed combat, but not the basics—you only train fighters who already have some skill."
+   },
+   {
+    "dialog": "DIA_LEE_ARMORH",
+    "place": "BIGFARM_HOUSE_LEE",
+    "who": [],
+    "ru": "У тебя есть тяжёлые доспехи на продажу.",
+    "en": "You have heavy armor for sale."
+   }
+  ],
+  "SLD_801_TORLOF": [
+   {
+    "dialog": "DIA_TORLOF_RUF",
+    "place": "BIGFARM_HUT",
+    "who": [
+     "SLD_802_BUSTER"
+    ],
+    "ru": "Бастера можно найти на аванпосте у хижины возле озера перед большой фермой.",
+    "en": "You can find Buster at the outpost by the hut near the lake in front of the big farm."
+   },
+   {
+    "dialog": "DIA_TORLOF_AUFGABEN",
+    "place": "FARM3_HOUSE",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Ферма Бенгара находится на горном плато: туда ведёт большая лестница на юго-западе долины. Городские ополченцы давят на Бенгара, возможно, пытаясь заставить его порвать отношения с Онаром.",
+    "en": "Bengar's farm is on a mountain plateau, reached by a large staircase in the southwest of the valley. The town militia are putting pressure on Bengar, possibly trying to make him break ties with Onar."
+   },
+   {
+    "dialog": "DIA_TORLOF_WOISTSYLVIO",
+    "place": null,
+    "who": [
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Сильвио увёл нескольких наёмников через проход, услышав слухи о появившихся там драконах.",
+    "en": "Sylvio took several mercenaries through the pass after hearing rumors of dragons appearing there."
+   }
+  ],
+  "SLD_802_BUSTER": [
+   {
+    "dialog": "DIA_BUSTER_OTHERSLD",
+    "place": "BIGFARM_ALLEE#2",
+    "who": [
+     "SLD_814_SENTENZA"
+    ],
+    "ru": "Сентенза охраняет вход на большую ферму; с ним лучше не связываться.",
+    "en": "Sentenza guards the entrance to the big farm; you had better not mess with him."
+   },
+   {
+    "dialog": "DIA_BUSTER_ABOUTSENTENZA",
+    "place": "BIGFARM_ALLEE#2",
+    "who": [
+     "SLD_814_SENTENZA"
+    ],
+    "ru": "Сентенза вымогает золото у всех, кто входит на большую ферму, и избивает тех, кто отказывается платить.",
+    "en": "Sentenza extorts gold from everyone entering the big farm and beats up those who refuse to pay."
+   },
+   {
+    "dialog": "DIA_BUSTER_SHADOWBEASTS",
+    "place": "BIGFARM_HUT",
+    "who": [],
+    "ru": "Ты остаёшься у хижины перед большой фермой и присматриваешь за фермерами.",
+    "en": "You stay by the hut in front of the big farm and keep an eye on the farmers."
+   },
+   {
+    "dialog": "DIA_BUSTER_TEACH",
+    "place": "BIGFARM_HUT",
+    "who": [],
+    "ru": "У хижины перед большой фермой ты обучаешь приёмам боя.",
+    "en": "You teach fighting techniques at the hut in front of the big farm."
+   }
+  ],
+  "SLD_803_CIPHER": [
+   {
+    "dialog": "DIA_CIPHER_TRADEWHAT",
+    "place": "BIGFARM_HOUSE_SLD",
+    "who": [
+     "BAU_903_BODO"
+    ],
+    "ru": "Бодо спит с тобой в одной комнате — в спальне наёмников в доме Онара.",
+    "en": "Bodo sleeps in the same room as you — in the mercenaries' bedroom in Onar's house."
+   },
+   {
+    "dialog": "DIA_CIPHER_DOWITHTHIEF",
+    "place": "BIGFARM_HOUSE_OUT",
+    "who": [
+     "SLD_800_LEE",
+     "BAU_900_ONAR"
+    ],
+    "ru": "За драку посреди двора на глазах у фермеров Ли может взыскать с тебя солидный штраф: Онар запретил досаждать крестьянам. Чем больше свидетелей, тем больше штраф.",
+    "en": "If you start a fight in the middle of the courtyard in front of the farmers, Lee may make you pay a hefty fine: Onar has forbidden harassing the farmers. The more witnesses, the larger the fine."
+   }
+  ],
+  "SLD_804_ROD": [],
+  "SLD_805_CORD": [
+   {
+    "dialog": "DIA_ADDON_CORD_RANGERHELP2GETSLD",
+    "place": "BIGFARM_PATH",
+    "who": [
+     "SLD_801_TORLOF"
+    ],
+    "ru": "По вопросам вступления в наёмники ты советуешь обращаться к Торлофу — его можно найти на дорожке у кузницы большой фермы.",
+    "en": "You recommend speaking to Torlof about joining the mercenaries — he can be found on the path by the smithy at the big farm."
+   }
+  ],
+  "SLD_806_SYLVIO": [],
+  "SLD_807_BULLCO": [],
+  "SLD_808_JARVIS": [
+   {
+    "dialog": "DIA_JARVIS_DUELLREGELN",
+    "place": "BIGFARM_PATH",
+    "who": [
+     "SLD_801_TORLOF"
+    ],
+    "ru": "Торлоф на дорожке у кузницы большой фермы знает правила дуэлей и может их объяснить.",
+    "en": "Torlof, on the path by the big farm's smithy, knows the dueling rules and can explain them to you."
+   },
+   {
+    "dialog": "DIA_JARVIS_HOWMANY",
+    "place": "BIGFARM_KITCHEN",
+    "who": [
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Сильвио можно найти на кухне большой фермы; в бою он крайне опасен — лучше с ним не связываться.",
+    "en": "You can find Sylvio in the big farm's kitchen; he is extremely dangerous in a fight, so you had better not take him on."
+   },
+   {
+    "dialog": "DIA_JARVIS_PERM",
+    "place": null,
+    "who": [
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Услышав о драконах, Сильвио со своими парнями отправился в бывшую колонию.",
+    "en": "After hearing about the dragons, Sylvio left for the former colony with his men."
+   }
+  ],
+  "SLD_809_BENNET": [
+   {
+    "dialog": "DIA_BENNET_HALLO",
+    "place": "BIGFARM_HOUSE_UP2",
+    "who": [],
+    "ru": "Халед продаёт оружие в доме Онара.",
+    "en": "Khaled sells weapons in Onar's house."
+   },
+   {
+    "dialog": "DIA_BENNET_WHICHWEAPONS",
+    "place": "BIGFARM_SMITH",
+    "who": [],
+    "ru": "В своей кузнице ты сейчас куёшь только обычные мечи.",
+    "en": "At your smithy, you currently forge only ordinary swords."
+   },
+   {
+    "dialog": "DIA_BENNET_SHOWINNOSEYE",
+    "place": "BIGFARM_SMITH",
+    "who": [],
+    "ru": "В своей кузнице ты можешь за один день починить сломанную оправу амулета.",
+    "en": "At your smithy, you can repair an amulet's broken setting in one day."
+   },
+   {
+    "dialog": "DIA_BENNET_VICTIM",
+    "place": null,
+    "who": [
+     "PAL_203_LOTHAR"
+    ],
+    "ru": "Убит один из паладинов; насколько тебе известно, его звали Лотар, но ты не уверен.",
+    "en": "One of the paladins has been murdered; you think his name was Lothar, but you are not sure."
+   },
+   {
+    "dialog": "DIA_BENNET_BETTERARMOR",
+    "place": "BIGFARM_SMITH",
+    "who": [],
+    "ru": "У тебя в кузнице можно купить новые лёгкие и прочные доспехи с покрытием из магической руды.",
+    "en": "At your smithy, you sell new, light and strong armor coated with magic ore."
+   }
+  ],
+  "SLD_810_DAR": [],
+  "SLD_811_WOLF": [
+   {
+    "dialog": "DIA_WOLF_WANNABUY",
+    "place": "BIGFARM_SMITH",
+    "who": [
+     "SLD_809_BENNET"
+    ],
+    "ru": "Беннет — кузнец, который теперь заведует оружием и доспехами; найти его можно в кузнице большой фермы.",
+    "en": "Bennet is the smith now in charge of weapons and armor; you can find him at the big farm's smithy."
+   },
+   {
+    "dialog": "DIA_WOLF_BENGAR",
+    "place": "FARM3_HOUSE",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Ты отправляешься на ферму Бенгара охранять её от зверей.",
+    "en": "You are heading to Bengar's farm to guard it against beasts."
+   }
+  ],
+  "SLD_814_SENTENZA": [],
+  "SLD_816_FESTER": [
+   {
+    "dialog": "DIA_FESTER_AUFTRAG",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Онар, который живёт на нижнем этаже главного дома большой фермы, уже неделю не платит вам, наёмникам, жалование.",
+    "en": "Onar, who lives on the ground floor of the large farm's main house, has not paid you mercenaries your wages for a week."
+   }
+  ],
+  "SLD_820_SOELDNER": [
+   {
+    "dialog": "DIA_SLD_820_HALT",
+    "place": "BIGFARM_HOUSE",
+    "who": [
+     "BAU_900_ONAR"
+    ],
+    "ru": "Онар платит тебе и другим наёмникам за охрану своего дома: ополчение внутрь не пускают.",
+    "en": "Onar pays you and the other mercenaries to guard his house: the militia are not allowed inside."
+   },
+   {
+    "dialog": "DIA_SLD_820_HALT",
+    "place": "BIGFARM_HOUSE_UP2",
+    "who": [
+     "SLD_800_LEE"
+    ],
+    "ru": "Ли можно найти в доме Онара, в покоях Ли и Халеда.",
+    "en": "You can find Lee in Onar's house, in Lee and Khaled's quarters."
+   }
+  ],
+  "SLD_822_RAOUL": [
+   {
+    "dialog": "DIA_RAOUL_WANNAJOIN",
+    "place": null,
+    "who": [
+     "SLD_800_LEE"
+    ],
+    "ru": "Ли держит наёмников на ферме без дела; иногда они задают взбучку фермерам.",
+    "en": "Lee keeps the mercenaries idle on the farm; occasionally they give the farmers a beating."
+   }
+  ],
+  "SLD_823_KHALED": [
+   {
+    "dialog": "DIA_KHALED_ABOUTSYLVIO",
+    "place": "BIGFARM_KITCHEN",
+    "who": [
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Сильвио — опасный тип; многие пришедшие с ним наёмники прислушиваются к нему. Найти его можно на кухне большой фермы.",
+    "en": "Sylvio is dangerous; many of the mercenaries who came with him listen to him. You can find him in the big farm's kitchen."
+   },
+   {
+    "dialog": "DIA_KHALED_ABOUTLEE",
+    "place": "BIGFARM_HOUSE_UP2",
+    "who": [
+     "SLD_800_LEE"
+    ],
+    "ru": "Ли руководит наёмниками; найти его можно в ваших общих покоях в доме Онара.",
+    "en": "Lee leads the mercenaries; you can find him in the quarters you share in Onar's house."
+   },
+   {
+    "dialog": "DIA_KHALED_WOHER",
+    "place": null,
+    "who": [
+     "SLD_806_SYLVIO"
+    ],
+    "ru": "Ты пришёл с юга вместе с Сильвио; там вы состояли в армии наёмников, сражавшейся с орками.",
+    "en": "You came from the south with Sylvio; there you served in a mercenary army that fought the orcs."
+   }
+  ],
+  "SLD_840_ALVARES": [
+   {
+    "dialog": "DIA_ALVARES_ATTACK",
+    "place": "FARM2_PATH",
+    "who": [
+     "SLD_841_ENGARDO"
+    ],
+    "ru": "Эндарго рядом с тобой на подходе к ферме Акила; в драке он должен напасть на фермера.",
+    "en": "Engardo is beside you on the approach to Akil's farm; in a fight, he is to attack the farmer."
+   }
+  ],
+  "SLD_841_ENGARDO": [],
+  "VLK_400_LARIUS": [
+   {
+    "dialog": "DIA_LARIUS_DIELAGE",
+    "place": "CITY_CITYHALL",
+    "who": [
+     "PAL_200_HAGEN"
+    ],
+    "ru": "Лорд Хаген находится в ратуше и ведает всеми городскими делами, пока паладины в городе.",
+    "en": "Lord Hagen is at the town hall and handles all city affairs while the paladins are in town."
+   }
+  ],
+  "VLK_401_CORNELIUS": [],
+  "VLK_402_RICHTER": [],
+  "VLK_403_GERBRANDT": [
+   {
+    "dialog": "DIA_GERBRANDT_PERM",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "В Верхнем квартале живут состоятельные и уважаемые члены общества.",
+    "en": "The Upper Quarter is home to wealthy, respected members of society."
+   }
+  ],
+  "VLK_404_LUTERO": [
+   {
+    "dialog": "DIA_LUTERO_HALLO",
+    "place": "CITY_LUTERO",
+    "who": [],
+    "ru": "В своей лавке ты торгуешь практически всем, главным образом редкими и необычными вещами.",
+    "en": "At your shop, you trade in almost everything, mainly rare and unusual items."
+   }
+  ],
+  "VLK_405_FERNANDO": [],
+  "VLK_406_HEROLD": [],
+  "VLK_407_HAKON": [
+   {
+    "dialog": "DIA_HAKON_HALLO",
+    "place": "WEAPON",
+    "who": [],
+    "ru": "Ты торгуешь оружием у оружейных прилавков на рыночной площади.",
+    "en": "You sell weapons at the weapon stalls in the market square."
+   },
+   {
+    "dialog": "DIA_HAKON_PALADINE",
+    "place": "CITY_HOTEL",
+    "who": [],
+    "ru": "Ты можешь бесплатно жить в городской гостинице — это всё, что ты получил взамен оружия, забранного паладинами.",
+    "en": "You can stay at the city hotel for free—that is all you received in return for the weapons taken by the paladins."
+   },
+   {
+    "dialog": "DIA_HAKON_MILIZ",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [
+     "MIL_319_PABLO"
+    ],
+    "ru": "Пабло патрулирует город; его можно найти на рыночной площади. Он с несколькими ополченцами искал бандитов, но не нашёл.",
+    "en": "Pablo patrols the city and can be found in the market square. He and several militiamen searched for the bandits but failed to find them."
+   },
+   {
+    "dialog": "DIA_HAKON_MILIZ",
+    "place": "CITY_MAINSTREET",
+    "who": [
+     "MIL_319_PABLO"
+    ],
+    "ru": "Пабло можно найти и в нижней части города, которую он патрулирует.",
+    "en": "Pablo can also be found in the lower part of the city, which he patrols."
+   },
+   {
+    "dialog": "DIA_ADDON_HAKON_MISSINGPEOPLE",
+    "place": "CITY_ENTRANCE#2",
+    "who": [],
+    "ru": "Через восточные ворота проходит много людей: среди входящих бывают незнакомцы, а некоторые из уходящих больше не возвращаются.",
+    "en": "Many people pass through the eastern gate: some arriving faces are unfamiliar, and some people who leave never return."
+   }
+  ],
+  "VLK_408_JORA": [
+   {
+    "dialog": "DIA_JORA_BESTOHLEN",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "Ренгару, которого ты подозреваешь в краже кошелька, уже несколько дней ошивается на рыночной площади.",
+    "en": "Rengaru, whom you suspect of stealing your purse, has been hanging around the market square for several days."
+   },
+   {
+    "dialog": "DIA_JORA_BESTOHLEN",
+    "place": "CITY_BEER",
+    "who": [],
+    "ru": "Каждый вечер Ренгару сидит у пивной бочки вниз по улице от рынка.",
+    "en": "Every evening, Rengaru hangs around the beer barrel down the street from the market."
+   },
+   {
+    "dialog": "DIA_JORA_BELOHNUNG",
+    "place": "CITY_HABOUR_KASERN",
+    "who": [
+     "MIL_311_ANDRE"
+    ],
+    "ru": "У лорда Андре во дворе казарм можно получить награду за поимку воров.",
+    "en": "Lord Andre, in the barracks courtyard, pays rewards for catching thieves."
+   },
+   {
+    "dialog": "DIA_JORA_HOLDEINGOLD",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "После прибытия паладинов стража на рынке набрасывается на любого, кто вступает в драку; на кражу она реагирует, только если вора поймали с поличным.",
+    "en": "Since the paladins arrived, the guards at the market attack anyone who starts a fight; they only act against theft if the thief is caught in the act."
+   }
+  ],
+  "VLK_409_ZURIS": [
+   {
+    "dialog": "DIA_ZURIS_WHERE",
+    "place": "CITY_BED",
+    "who": [
+     "VLK_417_CONSTANTINO",
+     "VLK_412_HARAD"
+    ],
+    "ru": "Константино живёт в туннеле около кузницы Гарада.",
+    "en": "Constantino lives in the tunnel near Harad's smithy."
+   },
+   {
+    "dialog": "DIA_ZURIS_GREET",
+    "place": "CITY_ZURIS",
+    "who": [],
+    "ru": "У тебя в лавке продаются лечебные эссенции и магические эликсиры.",
+    "en": "You sell healing essences and magic elixirs in your shop."
+   },
+   {
+    "dialog": "DIA_ZURIS_KRAUT",
+    "place": "MEDIUMFOREST_KAP2#2",
+    "who": [
+     "VLK_417_CONSTANTINO"
+    ],
+    "ru": "Константино собирает травы в лесу налево за восточными воротами города. Там растёт почти всё, что ему нужно, кроме царского щавеля.",
+    "en": "Constantino gathers herbs in the forest to the left outside the city's eastern gate. Almost everything he needs grows there, except king's sorrel."
+   },
+   {
+    "dialog": "DIA_ZURIS_KRONSTOECKEL",
+    "place": "LITTLESTONEHENDGE",
+    "who": [
+     "BAU_950_LOBART"
+    ],
+    "ru": "Царский щавель растёт около каменных кругов; один такой круг стоит на холме около фермы Лобарта, неподалёку от других городских ворот. Там когда-то была могила или что-то подобное.",
+    "en": "King's sorrel grows near stone circles; one such circle stands on a hill near Lobart's farm, not far from the other city gate. There used to be a grave or something similar there."
+   },
+   {
+    "dialog": "DIA_ZURIS_POTIONS",
+    "place": "CITY_BED",
+    "who": [
+     "VLK_417_CONSTANTINO"
+    ],
+    "ru": "Алхимик Константино продаёт тебе зелья, знает рецепты их приготовления и нуждается в помощнике.",
+    "en": "Constantino the alchemist sells you potions, knows how to brew them, and needs an assistant."
+   },
+   {
+    "dialog": "DIA_ZURIS_MINENANTEIL",
+    "place": "CITY_ZURIS",
+    "who": [],
+    "ru": "У тебя в лавке продаются шахтёрские акции.",
+    "en": "You sell mining shares in your shop."
+   }
+  ],
+  "VLK_410_BALTRAM": [
+   {
+    "dialog": "DIA_BALTRAM_AKILSHOF",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "К ферме Акила ведёт дорога на юго-восток от восточных ворот Хориниса. Вскоре у дороги будет каменная лестница; сверху уже видна ферма.",
+    "en": "To reach Akil's farm, take the road southeast from Khorinis's eastern gate. You will soon come to stone steps beside the road; the farm is visible from the top."
+   }
+  ],
+  "VLK_411_GAERTNER": [
+   {
+    "dialog": "DIA_GAERTNER_JOB",
+    "place": "GAERTNER",
+    "who": [],
+    "ru": "Ты живёшь в саду у ратуши и ухаживаешь за ним.",
+    "en": "You live in the garden by the town hall and tend it."
+   },
+   {
+    "dialog": "DIA_GAERTNER_PLANTS",
+    "place": "GAERTNER",
+    "who": [],
+    "ru": "В саду у ратуши ты выращиваешь огненную траву и огненную крапиву. Урожай уже собран; болотная трава здесь не приживается.",
+    "en": "You grow fireweed and fire nettle in the garden by the town hall. You have already harvested them; swampweed does not take root here."
+   },
+   {
+    "dialog": "DIA_GAERTNER_SIGN",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "В некоторых домах Верхнего квартала есть секретные панели, открываемые скрытыми выключателями. За ними жители хранят самые ценные вещи.",
+    "en": "Some houses in the Upper Quarter have secret panels opened by hidden switches. The residents keep their most valuable possessions behind them."
+   }
+  ],
+  "VLK_412_HARAD": [
+   {
+    "dialog": "DIA_HARAD_AUFGABEN",
+    "place": "CITY_SMITH",
+    "who": [],
+    "ru": "В твоем доме есть место для сна.",
+    "en": "There is room to sleep in your house."
+   },
+   {
+    "dialog": "DIA_HARAD_LEHRLING",
+    "place": "CITY_SMITH",
+    "who": [],
+    "ru": "Брайан еще некоторое время работает у тебя в кузнице.",
+    "en": "Brian is still working at your smithy for a while."
+   },
+   {
+    "dialog": "DIA_HARAD_ERZKLINGEN",
+    "place": "CITY_SMITH",
+    "who": [],
+    "ru": "В своей кузнице ты продаешь мечи из магической руды только паладинам, по одному в одни руки.",
+    "en": "At your smithy, you sell magic ore swords only to paladins, one per person."
+   },
+   {
+    "dialog": "DIA_HARAD_IMMERNOCH",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "У торговцев на рыночной площади можно купить хорошие мечи, которые ты куешь.",
+    "en": "The merchants on the market square sell good swords that you forge."
+   }
+  ],
+  "VLK_413_BOSPER": [
+   {
+    "dialog": "DIA_BOSPER_HALLO",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [],
+    "ru": "В своей лавке ты делаешь луки и торгуешь шкурами.",
+    "en": "You make bows and trade in skins at your shop."
+   },
+   {
+    "dialog": "DIA_BOSPER_BARTOK",
+    "place": "CITYKNEIPE",
+    "who": [],
+    "ru": "Твой бывший ученик Барток, вероятно, ошивается у таверны Корагона; туда ведёт подземный проход у кузницы.",
+    "en": "Your former apprentice Bartok is probably hanging around outside Coragon's tavern; the underground passage by the smithy leads there."
+   },
+   {
+    "dialog": "DIA_BOSPER_OTHERMASTERS",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "У Гарада в кузнице уже есть ученик.",
+    "en": "Harad already has an apprentice at his smithy."
+   },
+   {
+    "dialog": "DIA_BOSPER_OTHERMASTERS",
+    "place": "CITY_SHOP02",
+    "who": [
+     "VLK_416_MATTEO"
+    ],
+    "ru": "У Маттео в лавке уже есть ученик.",
+    "en": "Matteo already has an apprentice at his shop."
+   },
+   {
+    "dialog": "DIA_BOSPER_OTHERMASTERS",
+    "place": "CITY_BED",
+    "who": [
+     "VLK_417_CONSTANTINO"
+    ],
+    "ru": "Алхимик Константино живёт в ремесленном квартале; у него уже много лет нет ученика.",
+    "en": "Constantino the alchemist lives in the craftsmen's quarter; he has not had an apprentice for many years."
+   },
+   {
+    "dialog": "DIA_BOSPER_PERM",
+    "place": "SHIP",
+    "who": [],
+    "ru": "В гавани стоит только один корабль, и его охраняют паладины.",
+    "en": "There is only one ship in the harbor, and paladins guard it."
+   }
+  ],
+  "VLK_414_HANNA": [
+   {
+    "dialog": "DIA_HANNA_ROOM",
+    "place": "CITY_HOTEL",
+    "who": [],
+    "ru": "Наверху по лестнице в твоей гостинице есть свободные койки. Ночлег для путешественников бесплатный — его оплачивают паладины.",
+    "en": "Upstairs in your hotel, there are beds available. Travellers stay free of charge—the paladins pay for their lodging."
+   },
+   {
+    "dialog": "DIA_HANNA_WERHIER",
+    "place": "CITY_HOTEL",
+    "who": [],
+    "ru": "В твоей гостинице живут в основном странствующие торговцы с рынка.",
+    "en": "Most guests staying in your hotel are travelling merchants from the market."
+   },
+   {
+    "dialog": "DIA_HANNA_CITY",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "Рынок находится прямо перед парадным входом в твою гостиницу; там можно купить всё необходимое.",
+    "en": "The market is directly outside the main entrance to your hotel; everyday necessities can be bought there."
+   },
+   {
+    "dialog": "DIA_HANNA_CITY",
+    "place": "CITY_ENTRANCE",
+    "who": [],
+    "ru": "Большинство лавок ремесленников находится недалеко от городских ворот.",
+    "en": "Most craftsmen's shops are near the city gates."
+   },
+   {
+    "dialog": "DIA_HANNA_WHYPAY",
+    "place": "CITY_BEER",
+    "who": [
+     "MIL_311_ANDRE"
+    ],
+    "ru": "На Площади Правосудия по приказу лорда Андрэ раздают бесплатное пиво.",
+    "en": "Free beer is being handed out in Justice Square on Lord André's orders."
+   }
+  ],
+  "VLK_415_MELDOR": [
+   {
+    "dialog": "DIA_MELDOR_INTERESSANTES",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [],
+    "ru": "В портовом квартале есть бордель.",
+    "en": "There is a brothel in your harbor district."
+   },
+   {
+    "dialog": "DIA_MELDOR_INTERESSANTES",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [],
+    "ru": "Кардиф держит кабак в портовом квартале; у него можно узнать полезную информацию.",
+    "en": "Kardif runs the tavern in your harbor district; he is a good source of information."
+   },
+   {
+    "dialog": "DIA_MELDOR_INSOV",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "С прибытия паладинов тебе и людям твоего положения закрыт доступ в Верхний квартал.",
+    "en": "Since the paladins arrived, you and people of your standing have been barred from the upper quarter."
+   },
+   {
+    "dialog": "DIA_MELDOR_CITIZEN",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "В Верхний квартал допускают знать, а также торговцев и ремесленников из нижнего города.",
+    "en": "The upper quarter admits the elite, as well as merchants and craftsmen from the lower town."
+   },
+   {
+    "dialog": "DIA_MELDOR_CITIZEN",
+    "place": "CITY_PATH",
+    "who": [],
+    "ru": "В твой портовый квартал патрули ополчения почти никогда не заходят.",
+    "en": "Militia patrols almost never enter your harbor district."
+   },
+   {
+    "dialog": "DIA_MELDOR_PERM",
+    "place": "CITY_KANAL",
+    "who": [],
+    "ru": "По твоим сведениям, в канализации поймали банду воров; всех её участников убили.",
+    "en": "You have heard that a gang of thieves was caught in the sewers and all its members were killed."
+   }
+  ],
+  "VLK_416_MATTEO": [
+   {
+    "dialog": "DIA_MATTEO_SELLWHAT",
+    "place": "CITY_SHOP02",
+    "who": [],
+    "ru": "В твоей лавке продаются оружие, факелы, провизия и доспехи. На складе есть новые двойные усиленные доспехи из кожи снеппера.",
+    "en": "Your shop sells weapons, torches, provisions and armor. You have a new suit of double-reinforced snapper leather armor in storage."
+   },
+   {
+    "dialog": "DIA_MATTEO_CONFISCATED",
+    "place": "CITY_SHOP02",
+    "who": [],
+    "ru": "Паладины конфисковали все товары на заднем дворе твоей лавки и поставили стражника у входа во двор. Доспехи они оставили.",
+    "en": "The paladins confiscated all the goods in your shop's backyard and posted a guard at its entrance. They left you the armor."
+   },
+   {
+    "dialog": "DIA_MATTEO_PALADINE",
+    "place": "CITY_UPTOWN_GUARD",
+    "who": [],
+    "ru": "Стражники у входа в Верхний квартал проверяют, зачем туда идут посетители; тебя они пропустили после расспросов.",
+    "en": "The guards at the entrance to the Upper Quarter question visitors about their business there; they let you through after questioning you."
+   },
+   {
+    "dialog": "DIA_MATTEO_WOALSLEHRLING",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "Гарад — кузнец и один из мастеров на твоей улице, к которым можно поступить в ученики.",
+    "en": "Harad is a blacksmith and one of the masters on your street who can take on an apprentice."
+   },
+   {
+    "dialog": "DIA_MATTEO_WOALSLEHRLING",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "Боспер — мастер-лучник на твоей улице, к которому можно поступить в ученики.",
+    "en": "Bosper is a bowyer on your street who can take on an apprentice."
+   },
+   {
+    "dialog": "DIA_MATTEO_TRADE",
+    "place": "SHIP",
+    "who": [],
+    "ru": "Паладины сократили охрану своего корабля.",
+    "en": "The paladins have reduced the guard on their ship."
+   }
+  ],
+  "VLK_417_CONSTANTINO": [
+   {
+    "dialog": "DIA_CONSTANTINO_LEHRLING",
+    "place": "CITY_SHOP02",
+    "who": [],
+    "ru": "У Маттео есть своя лавка в городе.",
+    "en": "Matteo has his own shop in town."
+   }
+  ],
+  "VLK_418_GRITTA": [],
+  "VLK_4201_WIRT": [
+   {
+    "dialog": "DIA_WIRT_HALLO",
+    "place": "CITY_BEER",
+    "who": [
+     "MIL_311_ANDRE"
+    ],
+    "ru": "У тебя на пивной площади можно выпить бесплатного пива: лорд Андрэ выделил несколько бочек.",
+    "en": "Free beer is available at your beer square: Lord Andre provided several barrels."
+   }
+  ],
+  "VLK_420_CORAGON": [
+   {
+    "dialog": "DIA_CORAGON_HALLO",
+    "place": "CITY_TAVERN",
+    "who": [],
+    "ru": "В твоей таверне можно выпить и поесть за деньги.",
+    "en": "Your tavern serves drinks and food for money."
+   },
+   {
+    "dialog": "DIA_CORAGON_WHATSUP",
+    "place": "CITY_BEER",
+    "who": [],
+    "ru": "На висельной площади по приказу лорда Андре раздают бесплатное пиво.",
+    "en": "Free beer is being handed out on the gallows square on Lord Andre's orders."
+   },
+   {
+    "dialog": "DIA_CORAGON_VALENTINO",
+    "place": "CITY_TAVERN",
+    "who": [
+     "VLK_421_VALENTINO"
+    ],
+    "ru": "Валентино каждый день пьет в твоей таверне и остается до самого утра.",
+    "en": "Valentino drinks in your tavern every day and stays until morning."
+   },
+   {
+    "dialog": "DIA_CORAGON_VALENTINO",
+    "place": "OV",
+    "who": [
+     "VLK_421_VALENTINO"
+    ],
+    "ru": "Валентино живет в верхнем квартале; утром он возвращается туда после выпивки у тебя.",
+    "en": "Valentino lives in the upper quarter; in the morning he returns there after drinking at your tavern."
+   },
+   {
+    "dialog": "DIA_ADDON_CORAGON_MISSINGPEOPLE",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [
+     "VLK_407_HAKON"
+    ],
+    "ru": "Хакон торгует на рынке. Парень, которого он встречал каждый день, исчез, и Хакон обратился в ополчение.",
+    "en": "Hakon trades at the market. A fellow he used to see every day disappeared, and Hakon reported it to the militia."
+   },
+   {
+    "dialog": "DIA_ADDON_CORAGON_MISSINGPEOPLE",
+    "place": null,
+    "who": [
+     "VLK_462_THORBEN"
+    ],
+    "ru": "Плотник Торбен работает в нижней части города; его ученик пропал.",
+    "en": "Thorben is a carpenter in the lower part of town; his apprentice has disappeared."
+   }
+  ],
+  "VLK_421_VALENTINO": [],
+  "VLK_422_SALANDRIL": [
+   {
+    "dialog": "DIA_SALANDRIL_HALLO",
+    "place": "CITY_SHOP",
+    "who": [],
+    "ru": "В твоей алхимической лавке большой выбор зелий по умеренным ценам.",
+    "en": "Your alchemy shop offers a wide selection of potions at moderate prices."
+   },
+   {
+    "dialog": "DIA_SALANDRIL_HALLO",
+    "place": "CITY_ZURIS",
+    "who": [
+     "VLK_409_ZURIS"
+    ],
+    "ru": "Зурис продаёт зелья в своей лавке.",
+    "en": "Zuris sells potions in his shop."
+   },
+   {
+    "dialog": "DIA_SALANDRIL_TRANK",
+    "place": "CITY_SHOP",
+    "who": [],
+    "ru": "Сейчас у тебя в лавке есть особенное зелье.",
+    "en": "You currently have a special potion in your shop."
+   }
+  ],
+  "VLK_424_ALWIN": [
+   {
+    "dialog": "DIA_ALWIN_FELLAN",
+    "place": "CITY_HABOUR_HUT",
+    "who": [],
+    "ru": "Феллан каждый день стучит молотком по своей хижине в портовом квартале.",
+    "en": "Fellan hammers away at his hut in the harbor district every day."
+   },
+   {
+    "dialog": "DIA_ALWIN_FELLANRUNNING",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "В порту на драки никто не обращает внимания, но за кражу или убийство овцы будут большие проблемы.",
+    "en": "Nobody pays attention to fights in the harbor, but stealing or killing a sheep will get you into serious trouble."
+   },
+   {
+    "dialog": "DIA_ALWIN_SHEEP",
+    "place": "CITY_SHEEP",
+    "who": [],
+    "ru": "Овцы в твоём загоне принадлежат ополчению: их забирают у фермеров и приводят к тебе.",
+    "en": "The sheep in your pen belong to the militia: they take them from farmers and bring them to you."
+   },
+   {
+    "dialog": "DIA_ALWIN_ENDLOS",
+    "place": "CITY_SHEEP",
+    "who": [],
+    "ru": "Овца Люси осталась жива: её собирались забить для последней трапезы Беннета, но всё обошлось.",
+    "en": "Lucy the sheep survived: she was going to be slaughtered for Bennet's last meal, but things turned out well."
+   },
+   {
+    "dialog": "DIA_ALWIN_ENDLOS",
+    "place": "CITY_SHEEP",
+    "who": [],
+    "ru": "Лорд Хаген приказал отправить всех овец из твоего загона на провиант для его армии.",
+    "en": "Lord Hagen ordered all the sheep in your pen to be used as provisions for his army."
+   }
+  ],
+  "VLK_425_REGIS": [
+   {
+    "dialog": "DIA_REGIS_VALENTINO",
+    "place": "CITY_TAVERN",
+    "who": [],
+    "ru": "Валентино часто ошивается в таверне около храма.",
+    "en": "Valentino often hangs around the tavern near the temple."
+   },
+   {
+    "dialog": "DIA_REGIS_PERM",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "У Боспера, мастера-лучника, средь бела дня украли лук из лавки, но позже лук нашли и вернули ему.",
+    "en": "Bosper, the bowyer, had a bow stolen from his shop in broad daylight, but it was later found and returned to him."
+   },
+   {
+    "dialog": "DIA_REGIS_PERM",
+    "place": "CITY_MAINSTREET",
+    "who": [
+     "PAL_203_LOTHAR"
+    ],
+    "ru": "Паладин Лотар убит прямо на улице; в убийстве подозревают наемников.",
+    "en": "Lothar the paladin was killed in the street; the mercenaries are suspected of his murder."
+   }
+  ],
+  "VLK_4301_ADDON_FARIM": [
+   {
+    "dialog": "DIA_ADDON_FARIM_WILLIAM",
+    "place": "CITY_PIRATESCAMP",
+    "who": [],
+    "ru": "К северу от тебя есть небольшая бухта с рыбацким лагерем на берегу. Туда можно добраться вплавь или на лодке; там ты видел Вильяма с подозрительными людьми.",
+    "en": "North of you is a small bay with a fishing camp on its shore. You can reach it by swimming or by boat; that is where you saw William with suspicious people."
+   }
+  ],
+  "VLK_4302_ADDON_ELVRICH": [
+   {
+    "dialog": "DIA_ADDON_ELVRICH_WASNUN",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_462_THORBEN"
+    ],
+    "ru": "Мастер Торбен, к которому ты собираешься вернуться, находится в лавке Боспера в городе.",
+    "en": "Master Thorben, whom you intend to return to, is at Bosper's shop in town."
+   },
+   {
+    "dialog": "DIA_ADDON_ELVRICH_WHATEXACTLY",
+    "place": "CITY_PUFF",
+    "who": [
+     "VLK_433_BROMOR"
+    ],
+    "ru": "Люсия — девушка из портового района, работавшая на Бромора в его борделе.",
+    "en": "Lucia is a girl from the harbor district who used to work for Bromor at his brothel."
+   }
+  ],
+  "VLK_4303_ADDON_EROL": [
+   {
+    "dialog": "DIA_ADDON_EROL_FERNANDOSWEAPONS",
+    "place": "TAVERNE_IN",
+    "who": [
+     "BAU_970_ORLAN"
+    ],
+    "ru": "Таверна Орлана «Мертвая Гарпия» находится в центральной части Хориниса. От неё на юг идёт дорога через верхние пастбища к проходу в Долину Рудников.",
+    "en": "Orlan's tavern, the Dead Harpy, is in central Khorinis. A road leads south from it through the high pastures to the pass into the Valley of Mines."
+   },
+   {
+    "dialog": "DIA_ADDON_EROL_FERNANDOSWEAPONS",
+    "place": "FARM3_HOUSE",
+    "who": [
+     "BAU_960_BENGAR"
+    ],
+    "ru": "Часть проданного бандитам оружия увезли в сторону фермы Бенгара на верхних пастбищах.",
+    "en": "Some of the weapons sold to the bandits were taken toward Bengar's farm in the high pastures."
+   }
+  ],
+  "VLK_431_KARDIF": [
+   {
+    "dialog": "DIA_ADDON_KARDIF_MISSINGPEOPLE",
+    "place": "CITY_TAVERN",
+    "who": [
+     "VLK_420_CORAGON"
+    ],
+    "ru": "У Корагона пивная в нижней части города; он может знать о пропавших горожанах.",
+    "en": "Coragon runs a tavern in the lower town; he may know about the missing townspeople."
+   },
+   {
+    "dialog": "DIA_KARDIF_ARBEIT",
+    "place": "CITY_PATH",
+    "who": [
+     "VLK_438_ALRIK"
+    ],
+    "ru": "Альрика можно найти за складом в порту — он сражается за золото.",
+    "en": "Alrik can be found behind the warehouse in the harbor — he fights for gold."
+   },
+   {
+    "dialog": "DIA_KARDIF_DIEBESWERK2",
+    "place": "CITY_ZURIS",
+    "who": [
+     "VLK_409_ZURIS"
+    ],
+    "ru": "У Зуриса, торговца зельями на рынке, гостит маг Огня Дарон. При нем новый сундучок, сделанный Торбеном; говорят, Дарон носит с собой несметные сокровища.",
+    "en": "Daron, a Fire Mage, is staying with Zuris, the potion merchant at the market. He has a new little chest made by Thorben; rumor has it that Daron carries enormous riches."
+   },
+   {
+    "dialog": "DIA_KARDIF_DOPE",
+    "place": "CITY_HABOUR_POOR",
+    "who": [
+     "VLK_415_MELDOR"
+    ],
+    "ru": "Мелдор в портовом квартале дымит днями напролет; у него можно спросить, где купить болотную траву.",
+    "en": "Meldor smokes all day long in the harbor district; he is someone to ask about buying swampweed."
+   },
+   {
+    "dialog": "DIA_KARDIF_LERNEN",
+    "place": "CITY_HABOUR_HUT",
+    "who": [
+     "VLK_437_BRAHIM"
+    ],
+    "ru": "Ибрагим живет в соседнем доме справа от твоего трактира и продает карты.",
+    "en": "Brahim lives in the house next door to the right of your tavern and sells maps."
+   },
+   {
+    "dialog": "DIA_KARDIF_CREW",
+    "place": "CITY_HABOUR",
+    "who": [
+     "VLK_444_JACK"
+    ],
+    "ru": "Старый Джек давно ошивается в порту и хорошо разбирается в морском деле.",
+    "en": "Old Jack has been hanging around the harbor for ages and knows his seamanship."
+   }
+  ],
+  "VLK_432_MOE": [
+   {
+    "dialog": "DIA_MOE_HALLO",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [],
+    "ru": "Ты требуешь 50 золотых за вход в портовый трактир и угрожаешь избить тех, кто отказывается платить.",
+    "en": "You demand 50 gold for entry to the harbor tavern and threaten to beat anyone who refuses to pay."
+   },
+   {
+    "dialog": "DIA_MOE_HALLO",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [],
+    "ru": "Ополченцы иногда заглядывают в бордель «Красный Фонарь».",
+    "en": "The militia occasionally visit the Red Lantern brothel."
+   },
+   {
+    "dialog": "DIA_MOE_HARBOR",
+    "place": "SHIP",
+    "who": [],
+    "ru": "Корабль паладинов стоит за скалами к юго-западу от тебя. Это единственный корабль, пришедший за последнее время.",
+    "en": "The paladins' ship lies beyond the rocks southwest of you. It is the only ship to have arrived recently."
+   },
+   {
+    "dialog": "DIA_MOE_HARBOR",
+    "place": "CITY",
+    "who": [],
+    "ru": "Ополчение не осмеливается соваться в портовый квартал: здесь свои порядки.",
+    "en": "The militia do not dare venture into the harbor district: it has its own rules."
+   }
+  ],
+  "VLK_433_BROMOR": [
+   {
+    "dialog": "DIA_BROMOR_GIRLS",
+    "place": "CITY_PUFF",
+    "who": [],
+    "ru": "Ты владеешь борделем; твои девочки принимают клиентов за 50 золотых монет.",
+    "en": "You own the brothel; your girls entertain clients for 50 gold coins."
+   },
+   {
+    "dialog": "DIA_BROMOR_PAY",
+    "place": "CITY_PUFF",
+    "who": [],
+    "ru": "Надя принимает клиентов наверху в твоём борделе.",
+    "en": "Nadja entertains clients upstairs in your brothel."
+   },
+   {
+    "dialog": "DIA_ADDON_BROMOR_MISSINGPEOPLE",
+    "place": "CITY_PUFF",
+    "who": [],
+    "ru": "Из твоего борделя пропала Люсия; ополчение не нашло её следов.",
+    "en": "Lucia has gone missing from your brothel; the militia found no trace of her."
+   },
+   {
+    "dialog": "DIA_ADDON_BROMOR_LUCIAGOLD",
+    "place": "CITY_PUFF",
+    "who": [],
+    "ru": "Твоё драгоценное золотое блюдо снова у тебя в борделе.",
+    "en": "Your precious golden platter is back with you at your brothel."
+   }
+  ],
+  "VLK_434_BORKA": [
+   {
+    "dialog": "DIA_BORKA_PISSOFF",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [],
+    "ru": "У входа, где ты стоишь, находится бордель «Красный Фонарь»; сюда приплывают моряки из дальних краёв.",
+    "en": "The entrance where you stand leads to the Red Lantern brothel; sailors sail here from distant lands."
+   },
+   {
+    "dialog": "DIA_BORKA_TROUBLE",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [],
+    "ru": "Внутри твоего борделя работает Надя — с ней можно провести ночь.",
+    "en": "Nadja works inside your brothel, where customers can spend the night with her."
+   },
+   {
+    "dialog": "DIA_BORKA_BUYHERB",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [],
+    "ru": "У входа в бордель ты продаёшь болотную травку по 50 золотых, без торга.",
+    "en": "At the brothel entrance, you sell swampweed for 50 gold, with no haggling."
+   }
+  ],
+  "VLK_435_NADJA": [
+   {
+    "dialog": "DIA_NADJA_WANT_HERB",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [
+     "VLK_434_BORKA"
+    ],
+    "ru": "У Борки в борделе портового квартала можно достать травку.",
+    "en": "Borka at the harbor district brothel has swampweed for sale."
+   },
+   {
+    "dialog": "DIA_NADJA_STANDARD",
+    "place": "CITY_PUFF",
+    "who": [
+     "VLK_433_BROMOR"
+    ],
+    "ru": "С Бромором в борделе нужно договариваться об услугах девушек.",
+    "en": "Arrangements for the girls' services must be made with Bromor at the brothel."
+   },
+   {
+    "dialog": "DIA_ADDON_NADJA_LUCIAINFO",
+    "place": null,
+    "who": [
+     "VLK_462_THORBEN"
+    ],
+    "ru": "Торбен — плотник из нижней части города; Элврих работает у него подмастерьем.",
+    "en": "Thorben is a carpenter in the lower part of town; Elvrich works as his apprentice."
+   }
+  ],
+  "VLK_436_SONJA": [
+   {
+    "dialog": "DIA_SONJA_STANDARD",
+    "place": "CITY_PUFF",
+    "who": [
+     "VLK_433_BROMOR"
+    ],
+    "ru": "В твоём борделе развлечения устраивает Бромор — об этом можно поговорить с ним.",
+    "en": "Bromor arranges entertainment at the brothel where you work — he is the one to talk to about it."
+   }
+  ],
+  "VLK_437_BRAHIM": [
+   {
+    "dialog": "DIA_BRAHIM_GREET",
+    "place": "CITY_HABOUR_HUT",
+    "who": [],
+    "ru": "У себя дома у гавани ты рисуешь и продаёшь карты, в том числе недорогую карту города.",
+    "en": "At your home by the harbour, you draw and sell maps, including an inexpensive map of the city."
+   }
+  ],
+  "VLK_438_ALRIK": [
+   {
+    "dialog": "DIA_ALRIK_YOUFIGHT",
+    "place": "CITY_HABOUR_HUT",
+    "who": [],
+    "ru": "Ты живёшь за складом в портовом квартале и каждый день с полудня до вечера устраиваешь там бои.",
+    "en": "You live behind the warehouse in the harbor district and hold fights there every day from noon until evening."
+   },
+   {
+    "dialog": "DIA_ALRIK_AFTERFIGHT",
+    "place": "CITY_HABOUR_HUT",
+    "who": [],
+    "ru": "За складом делают ставки на бои; ополчение этого не одобряет и может посадить за решётку.",
+    "en": "People bet on fights behind the warehouse; the militia disapproves and can put people behind bars for it."
+   },
+   {
+    "dialog": "DIA_ALRIK_WERSCHWERT",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "Ты обменял свой старый меч у Джоры, торговца с рыночной площади, на факелы и мясо.",
+    "en": "You traded your old sword to Jora, a merchant in the market square, for torches and meat."
+   }
+  ],
+  "VLK_439_VATRAS": [
+   {
+    "dialog": "DIA_ADDON_VATRAS_WAFFEN",
+    "place": "CITY_PALCAMP",
+    "who": [
+     "MIL_350_ADDON_MARTIN"
+    ],
+    "ru": "Мартин, интендант паладинов, находится в портовом районе, возле кучи ящиков и множества паладинов. Он расследует поставки оружия бандитам.",
+    "en": "Martin, the paladins' quartermaster, is in the harbor district, near a pile of crates and a large group of paladins. He is investigating weapons supplied to the bandits."
+   },
+   {
+    "dialog": "DIA_ADDON_VATRAS_GUILDHELP",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "Маг огня Дарон большую часть времени собирает пожертвования на рыночной площади, но иногда отлучается из города.",
+    "en": "The Fire Mage Daron spends most of his time collecting donations in the market square, but sometimes leaves town."
+   },
+   {
+    "dialog": "DIA_VATRAS_OBSESSION",
+    "place": "MONASTERY_THRONE",
+    "who": [
+     "KDF_500_PYROKAR"
+    ],
+    "ru": "Пирокар в монастыре может очистить душу от воздействия Ищущих.",
+    "en": "Pyrokar at the monastery can cleanse a soul of the Seekers' influence."
+   },
+   {
+    "dialog": "DIA_VATRAS_RITUALINNOSEYEREPAIR",
+    "place": null,
+    "who": [
+     "NONE_100_XARDAS",
+     "KDF_500_PYROKAR"
+    ],
+    "ru": "В Круге Солнца ты вместе с Ксардасом и Пирокаром можешь восстановить силу Глаза Инноса ритуалом обращения; его оправа должна быть заранее починена.",
+    "en": "At the Circle of the Sun, you, Xardas, and Pyrokar can restore the Eye of Innos through a ritual of invocation; its setting must be repaired beforehand."
+   },
+   {
+    "dialog": "DIA_VATRAS_HILDAKRANK",
+    "place": "FARM1_INHOUSE",
+    "who": [
+     "BAU_951_HILDA"
+    ],
+    "ru": "Хильда, жена Лобарта, живущая в его доме, снова страдает от лихорадки. У тебя есть лекарство, способное её облегчить.",
+    "en": "Hilda, Lobart's wife, who lives in his house, is suffering from fever again. You have medicine that can ease it."
+   }
+  ],
+  "VLK_440_BARTOK": [
+   {
+    "dialog": "DIA_BARTOK_WANNALEARN",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "Боспер в своей лавке учит снимать шкуры с животных — тебя этому научил он.",
+    "en": "Bosper teaches how to skin animals at his shop — he is the one who taught you."
+   },
+   {
+    "dialog": "DIA_BARTOK_ANGEKOMMEN",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "Боспер в своей лавке покупает звериные шкуры.",
+    "en": "Bosper buys animal skins at his shop."
+   },
+   {
+    "dialog": "DIA_BARTOK_BOSPER",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "Из лавки Боспера недавно украли лук средь бела дня.",
+    "en": "A bow was recently stolen from Bosper's shop in broad daylight."
+   },
+   {
+    "dialog": "DIA_ADDON_BARTOK_MISSINGPEOPLE",
+    "place": "CITY_TAVERN",
+    "who": [],
+    "ru": "Несколько дней назад ты выпивал с охотником Трокаром в таверне Корагона. Он собирался добыть косяки болотной травы; с тех пор ты его не видел, и ополчение его пока не нашло.",
+    "en": "A few days ago, you drank with the hunter Trokar at Coragon's tavern. He planned to get some swampweed joints; you have not seen him since, and the militia has not found him yet."
+   }
+  ],
+  "VLK_441_GARVELL": [
+   {
+    "dialog": "DIA_GARVELL_GREET",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "Ты строишь корабль в гавани Хориниса, но работа продвигается медленно.",
+    "en": "You are building a ship in Khorinis harbour, but the work is progressing slowly."
+   },
+   {
+    "dialog": "DIA_GARVELL_PERM",
+    "place": "SHIP",
+    "who": [],
+    "ru": "В гавани есть только один готовый корабль. Он принадлежит паладинам, и они не позволят горожанам им воспользоваться.",
+    "en": "There is only one completed ship in the harbour. It belongs to the paladins, and they will not let the townspeople use it."
+   },
+   {
+    "dialog": "DIA_GARVELL_SCHIFF",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "У твоего строящегося корабля пока непрочный остов; досок на обшивку не хватает, а последняя партия материалов была поедена жучком.",
+    "en": "The ship you are building still has an unstable frame; there are not enough planks for the hull, and the latest batch of materials was worm-eaten."
+   }
+  ],
+  "VLK_444_JACK": [
+   {
+    "dialog": "DIA_JACK_BEMYCAPTAIN",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "У кузнеца Гарада есть подмастерье Брайан; найти его можно у Гарада в кузнице.",
+    "en": "The smith Harad has an apprentice named Brian; you can find him at Harad's smithy."
+   },
+   {
+    "dialog": "DIA_JACK_HARBOR",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "В порт Хориниса больше не заходят корабли, торговля пришла в упадок.",
+    "en": "Ships no longer call at Khorinis harbour, and trade has fallen into decline."
+   },
+   {
+    "dialog": "DIA_JACK_HARBOR",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "В порту остались бездельники: они пьют днями напролет и спускают последние гроши в борделе.",
+    "en": "The harbour is left with idlers who drink all day and spend their last coins at the brothel."
+   }
+  ],
+  "VLK_445_RAMIREZ": [
+   {
+    "dialog": "DIA_RAMIREZ_HALLO",
+    "place": "CITY_KANAL_ROOM",
+    "who": [],
+    "ru": "В жилых комнатах канализации собираются воры; если здесь что-нибудь случится, никто не придёт на помощь.",
+    "en": "Thieves gather in the sewer living quarters; if anything happens down here, no one will come to help."
+   },
+   {
+    "dialog": "DIA_RAMIREZ_BEUTE",
+    "place": "CITY_KANAL_ROOM",
+    "who": [],
+    "ru": "В жилых комнатах канализации есть золото вашей гильдии, но основные сокровища вы храните в другом, надёжном месте.",
+    "en": "There is gold belonging to your guild in the sewer living quarters, but you keep your main treasure somewhere else, in a secure place."
+   },
+   {
+    "dialog": "DIA_RAMIREZ_VIERTEL",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "В Верхнем квартале можно поживиться в домах. Ночью жители спят, но городская стража продолжает патрулировать улицы.",
+    "en": "The houses in the Upper Quarter offer opportunities for theft. At night the residents sleep, but the city watch keeps patrolling the streets."
+   }
+  ],
+  "VLK_446_JESPER": [
+   {
+    "dialog": "DIA_JESPER_HALLO",
+    "place": "CITY_KANAL",
+    "who": [],
+    "ru": "Ты живёшь в канализации Хориниса; гулять здесь опасно.",
+    "en": "You live in the sewers of Khorinis; wandering around here is dangerous."
+   },
+   {
+    "dialog": "DIA_JESPER_HALLO",
+    "place": "CITY_KANAL_ROOM",
+    "who": [
+     "VLK_447_CASSIA"
+    ],
+    "ru": "Кассию можно найти в жилых комнатах канализации под рынком.",
+    "en": "Cassia can be found in the living quarters in the sewers beneath the marketplace."
+   },
+   {
+    "dialog": "DIA_JESPER_BOGEN",
+    "place": "KANAL_RATTEN",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "Ты спрятал лук Боспера в запертом сундуке в канализации под казармами. Вокруг полно крыс.",
+    "en": "You stashed Bosper's bow in a locked chest in the sewers beneath the barracks. There are rats all around it."
+   },
+   {
+    "dialog": "DIA_JESPER_TUER",
+    "place": "CITY_KANAL_ROOM#2",
+    "who": [],
+    "ru": "За запертой дверью комнаты в канализации под казармами стоит сундук Фингера. Его замок настолько сложен, что до сих пор никто не смог его открыть; ключ от комнаты у тебя.",
+    "en": "Behind the locked door of the room in the sewers beneath the barracks stands Fingers' chest. Its lock is so complicated that no one has managed to open it; you have the key to the room."
+   }
+  ],
+  "VLK_447_CASSIA": [
+   {
+    "dialog": "DIA_CASSIA_BEWEISEN",
+    "place": "CITY_BED",
+    "who": [
+     "VLK_417_CONSTANTINO"
+    ],
+    "ru": "У алхимика Константино в жилых комнатах ремесленного квартала есть прекрасное кольцо.",
+    "en": "Constantino, the alchemist in the craftsmen's quarter living rooms, has a fine ring."
+   },
+   {
+    "dialog": "DIA_CASSIA_BLUTKELCHE",
+    "place": "OV",
+    "who": [],
+    "ru": "Шесть Кровавых Кубков находятся у богатых торговцев верхнего квартала; вместе они стоят целое состояние.",
+    "en": "The six Blood Chalices are held by wealthy merchants in the upper quarter; together they are worth a fortune."
+   },
+   {
+    "dialog": "DIA_CASSIA_MEHR",
+    "place": "CITY_KANAL",
+    "who": [],
+    "ru": "Ваше укрытие находится в канализации. Горожане не знают, где оно, а немногие знающие о канализации считают её закрытой и недоступной.",
+    "en": "Your hideout is in the sewers. The townspeople do not know its location, and the few who know about the sewers believe they are closed and inaccessible."
+   },
+   {
+    "dialog": "DIA_CASSIA_AUFNAHME",
+    "place": "CITY_TO_KANAL",
+    "who": [],
+    "ru": "В канализацию можно попасть через дверь в гостинице; у тебя есть ключ от неё.",
+    "en": "The sewers can be reached through a door in the hotel; you have a key to it."
+   },
+   {
+    "dialog": "DIA_CASSIA_REGELN",
+    "place": "CITY_KANAL_ROOM",
+    "who": [],
+    "ru": "В вашем укрытии убивают тех, кто обнажает оружие, чтобы напасть на кого-нибудь.",
+    "en": "In your hideout, anyone who draws a weapon to attack someone is killed."
+   }
+  ],
+  "VLK_448_JOE": [],
+  "VLK_449_LARES": [
+   {
+    "dialog": "DIA_ADDON_LARES_ARRIVEDPORTAL",
+    "place": "TROLLAREA_PORTALTEMPEL",
+    "who": [
+     "KDW_1400_ADDON_SATURAS_NW"
+    ],
+    "ru": "Сатурас находится внизу, в храме древнего портала; он способен справиться с дикими зверями поблизости.",
+    "en": "Saturas is down below in the ancient portal temple; he can deal with the wild beasts nearby."
+   },
+   {
+    "dialog": "DIA_ADDON_LARES_RANGERHELP",
+    "place": "CITY_SHOP02",
+    "who": [
+     "VLK_416_MATTEO"
+    ],
+    "ru": "Маттео продаёт дорогую броню. Рядом с его домом есть небольшой открытый склад с товарами, конфискованными ополчением; среди них есть броня, а склад охраняется.",
+    "en": "Matteo sells expensive armor. Beside his house is a small open warehouse holding goods confiscated by the militia, including armor; the warehouse is guarded."
+   },
+   {
+    "dialog": "DIA_ADDON_LARES_RANGERHELP",
+    "place": "CITY_ZURIS",
+    "who": [],
+    "ru": "У Зуриса на рынке продаётся заклинание сна, которым можно усыпить охранника.",
+    "en": "Zuris sells a Sleep spell at the market that can put a guard to sleep."
+   },
+   {
+    "dialog": "DIA_ADDON_LARES_YOURMISSION",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "На рынке постоянно дежурит кто-нибудь из Кольца Воды; ты не знаешь, чья сейчас смена. Члены Кольца узнают своих по аквамариновому кольцу.",
+    "en": "Someone from the Ring of Water is always on duty at the market; you do not know whose shift it is now. Members recognize their own by an aquamarine ring."
+   },
+   {
+    "dialog": "DIA_ADDON_LARES_YOURMISSION",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "Ты наблюдаешь за гаванью по заданию магов воды: некоторые рыбаки исчезли вместе со своими лодками.",
+    "en": "You watch the harbor on the Water Mages' orders: some fishermen have disappeared along with their boats."
+   },
+   {
+    "dialog": "DIA_ADDON_LARES_GETRANGERARMOR",
+    "place": "XARDAS_GOBBO",
+    "who": [
+     "BAU_4300_ADDON_CAVALORN"
+    ],
+    "ru": "Кавалорна можно найти у его костра; он обучает подкрадыванию, бою одноручным оружием и стрельбе из лука.",
+    "en": "Cavalorn can be found at his campfire; he teaches sneaking, one-handed combat, and archery."
+   }
+  ],
+  "VLK_456_ABUYIN": [
+   {
+    "dialog": "DIA_ABUYIN_WOHER",
+    "place": "CITY_ZURIS",
+    "who": [
+     "VLK_409_ZURIS"
+    ],
+    "ru": "Зурис производит и продаёт яблочный табак в своей лавке.",
+    "en": "Zuris makes and sells apple tobacco in his shop."
+   },
+   {
+    "dialog": "DIA_ABUYIN_KRAUT",
+    "place": "CITY_RAUCH",
+    "who": [],
+    "ru": "У тебя в кальянной трубки набиты острым, освежающим яблочным табаком.",
+    "en": "The pipes at your smoking spot are filled with spicy, refreshing apple tobacco."
+   },
+   {
+    "dialog": "DIA_ABUYIN_DU",
+    "place": "CITY_RAUCH",
+    "who": [],
+    "ru": "В своей кальянной ты торгуешь табаком и предлагаешь предсказания.",
+    "en": "At your smoking spot, you sell tobacco and offer predictions."
+   }
+  ],
+  "VLK_457_BRIAN": [
+   {
+    "dialog": "DIA_BRIAN_OTHERMASTERS",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "Боспер — мастер-лучник; его дом и лавка находятся на улице мастеров.",
+    "en": "Bosper is a master bowyer; his house and shop are on the craftsmen's street."
+   },
+   {
+    "dialog": "DIA_BRIAN_OTHERMASTERS",
+    "place": "CITY_SHOP02",
+    "who": [
+     "VLK_416_MATTEO"
+    ],
+    "ru": "Маттео — торговец, продающий доспехи; его дом находится на улице мастеров.",
+    "en": "Matteo is a merchant who sells armor; his house is on the craftsmen's street."
+   },
+   {
+    "dialog": "DIA_BRIAN_OTHERMASTERS",
+    "place": null,
+    "who": [
+     "VLK_417_CONSTANTINO"
+    ],
+    "ru": "Лавка алхимика Константино находится в подземном проходе, ведущем к храму.",
+    "en": "Constantino the alchemist's shop is in the underground passage leading to the temple."
+   },
+   {
+    "dialog": "DIA_BRIAN_ABOUTHARAD",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "Гарад в своей кузнице днями и ночами куёт мечи по приказу паладинов; продавать их кому-либо ещё ему запрещено.",
+    "en": "Harad forges swords day and night in his smithy on the paladins' orders; he is forbidden to sell them to anyone else."
+   },
+   {
+    "dialog": "DIA_BRIAN_NEEDWEAPONS",
+    "place": "CITY_SMITH",
+    "who": [],
+    "ru": "Оружие, изготовленное в кузнице, забирает ополчение и уносит на хранение в башни.",
+    "en": "The militia takes the weapons made in the smithy and carries them to the towers for storage."
+   },
+   {
+    "dialog": "DIA_BRIAN_WASKAUFEN",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "После ухода Гарада ополчение следит за тобой и не позволяет тебе работать в кузнице; у тебя можно купить стальные заготовки.",
+    "en": "Since Harad left, the militia has been watching you and forbidding you to work in the smithy; you still sell steel billets."
+   }
+  ],
+  "VLK_458_RUPERT": [
+   {
+    "dialog": "DIA_RUPERT_WOMATTEO",
+    "place": "CITY_SHOP02",
+    "who": [
+     "VLK_416_MATTEO"
+    ],
+    "ru": "Маттео почти всегда находится внутри своей лавки.",
+    "en": "Matteo is almost always inside his shop."
+   },
+   {
+    "dialog": "DIA_RUPERT_ZUPAL",
+    "place": "CITY_UPTOWN_PATH",
+    "who": [],
+    "ru": "Паладины обосновались в Верхнем квартале; с тех пор туда трудно попасть.",
+    "en": "The paladins have settled in the Upper Quarter; getting in has been difficult ever since."
+   },
+   {
+    "dialog": "DIA_RUPERT_WEREINFLUSS",
+    "place": "CITY_MAINSTREET",
+    "who": [],
+    "ru": "На главной улице работают торговцы и мастера-ремесленники — самые влиятельные горожане.",
+    "en": "The merchants and master craftsmen on the main street are the city's most influential citizens."
+   },
+   {
+    "dialog": "DIA_RUPERT_WORK",
+    "place": "CITY_MERCHANT_SHOP01",
+    "who": [
+     "VLK_413_BOSPER"
+    ],
+    "ru": "У Боспера есть лавка; по твоим сведениям, у него проблемы с поставщиками и он хорошо платит.",
+    "en": "Bosper has a shop; you have heard that he has trouble with his suppliers and pays well."
+   },
+   {
+    "dialog": "DIA_RUPERT_HELPMEINTOOV",
+    "place": "CITY_UPTOWN_GUARD",
+    "who": [
+     "VLK_416_MATTEO"
+    ],
+    "ru": "Маттео — твой босс и один из немногих жителей нижнего города, чьего слова достаточно, чтобы стража пропустила человека в Верхний квартал.",
+    "en": "Matteo is your boss and one of the few people in the lower city whose word can persuade the guards to let someone into the Upper Quarter."
+   }
+  ],
+  "VLK_461_CARL": [
+   {
+    "dialog": "DIA_CARL_HALLO",
+    "place": "CITY_HABOUR_POOR",
+    "who": [],
+    "ru": "В бедном районе порта могут ограбить: зазеваешься — лишишься кошелька.",
+    "en": "You can get robbed in the poor harbor quarter: let your guard down and you may lose your purse."
+   },
+   {
+    "dialog": "DIA_CARL_LERNEN",
+    "place": "CITY_POOR",
+    "who": [],
+    "ru": "В своей мастерской ты куёшь скобяные изделия и гвозди, чинишь железяки и можешь тренировать силу.",
+    "en": "At your workshop, you forge iron fittings and nails, repair ironware, and can offer strength training."
+   },
+   {
+    "dialog": "DIA_CARL_LERNEN",
+    "place": "CITY_SMITH",
+    "who": [
+     "VLK_412_HARAD"
+    ],
+    "ru": "Гарад умеет ковать оружие и может обучить этому ремеслу; найти его можно в его кузнице.",
+    "en": "Harad knows how to forge weapons and can teach the craft; you can find him at his smithy."
+   }
+  ],
+  "VLK_462_THORBEN": [
+   {
+    "dialog": "DIA_THORBEN_OTHERMASTERS",
+    "place": "CITY_MERCHANT_TEMPLE",
+    "who": [
+     "VLK_439_VATRAS"
+    ],
+    "ru": "Ватрас — жрец Аданоса в храме у рыночной площади. Он даёт благословение и знает, где найти жреца Инноса.",
+    "en": "Vatras is a priest of Adanos at the temple near the market square. He gives blessings and knows where to find a priest of Innos."
+   },
+   {
+    "dialog": "DIA_ADDON_THORBEN_MISSINGPEOPLE",
+    "place": "CITY_HABOUR_PUFF",
+    "who": [
+     "VLK_4302_ADDON_ELVRICH"
+    ],
+    "ru": "Твой племянник и ученик Элврих в последнее время часто появлялся у борделя в порту. Где он сейчас, ты не знаешь.",
+    "en": "Your nephew and apprentice Elvrich was often seen at the brothel in the harbor lately. You do not know where he is now."
+   },
+   {
+    "dialog": "DIA_THORBEN_BAUERNAUFSTAND",
+    "place": "CITY_MERCHANT_PATH",
+    "who": [],
+    "ru": "Торговцы на рыночной площади знают обстановку на острове лучше тебя; у них можно узнать больше о восстании фермеров.",
+    "en": "The traders in the market square know more about the situation on the island than you do; they can provide more information about the farmers' rebellion."
+   },
+   {
+    "dialog": "DIA_THORBEN_PALADINE",
+    "place": "PALADIN",
+    "who": [],
+    "ru": "Паладины прибыли с материка на корабле две недели назад и с тех пор заперлись в Верхнем квартале.",
+    "en": "The paladins arrived by ship from the mainland two weeks ago and have shut themselves away in the upper quarter ever since."
+   }
+  ],
+  "VLK_466_GERNOD": [],
+  "VLK_468_CANTHAR": [
+   {
+    "dialog": "DIA_CANTHAR_PAYPRICEINCITY",
+    "place": "WEAPON",
+    "who": [],
+    "ru": "На рыночной площади Сара торгует у прилавка, который раньше принадлежал тебе.",
+    "en": "On the market square, Sarah trades at the stall that used to belong to you."
+   },
+   {
+    "dialog": "DIA_CANTHAR_SUCCESS",
+    "place": "WEAPON",
+    "who": [],
+    "ru": "Ты забрал товары Сары и теперь продаёшь оружие у своего прилавка на рыночной площади.",
+    "en": "You have taken Sarah's goods and now sell weapons at your stall on the market square."
+   }
+  ],
+  "VLK_469_HALVOR": [
+   {
+    "dialog": "DIA_ADDON_HALVOR_MISSINGPEOPLE",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "В последнее время корабли в гавань Хориниса не заходят.",
+    "en": "Ships have not been calling at Khorinis harbor lately."
+   },
+   {
+    "dialog": "DIA_HALVOR_CREW",
+    "place": "SHIP",
+    "who": [],
+    "ru": "За попытку уплыть на корабле в гавани паладины жестоко расправятся с захватчиком, если поймают.",
+    "en": "The paladins will deal brutally with anyone trying to sail away on the ship in the harbor if they catch them."
+   },
+   {
+    "dialog": "DIA_HALVOR_CREW",
+    "place": "CITY_HABOUR",
+    "who": [
+     "VLK_444_JACK"
+    ],
+    "ru": "Джек ошивается где-то в гавани и знает, что нужно для морского путешествия.",
+    "en": "Jack should be hanging around somewhere in the harbor and knows what is needed for a sea voyage."
+   }
+  ],
+  "VLK_470_SARAH": [
+   {
+    "dialog": "DIA_SARAH_HALLO",
+    "place": "CITY_HOTEL",
+    "who": [],
+    "ru": "Паладины оплачивают твою комнату в городской гостинице.",
+    "en": "The paladins pay for your room at the city hotel."
+   },
+   {
+    "dialog": "DIA_SARAH_AKILSHOF",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "К ферме Акила ведёт каменная лестница: за восточными воротами нужно идти по дороге направо.",
+    "en": "A stone staircase leads to Akil's farm: outside the eastern gate, you take the road to the right."
+   },
+   {
+    "dialog": "DIA_SARAH_BAUERN",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "Ты видела наёмников Онара на ферме Акила. Они запугивают владельцев маленьких ферм у города.",
+    "en": "You saw Onar's mercenaries at Akil's farm. They intimidate the owners of the small farms near the city."
+   }
+  ],
+  "VLK_471_EDDA": [],
+  "VLK_476_FENIA": [
+   {
+    "dialog": "DIA_FENIA_MORETRADERS",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "Твой муж Халвор торгует рыбой у причала — налево от тебя вдоль набережной.",
+    "en": "Your husband Halvor sells fish by the quay, to your left along the waterfront."
+   },
+   {
+    "dialog": "DIA_FENIA_MORETRADERS",
+    "place": "CITY_HABOUR",
+    "who": [],
+    "ru": "Картограф Ибрагим живет у гавани — в противоположной от Халвора стороне.",
+    "en": "Ibrahim the cartographer lives by the harbor, in the opposite direction from Halvor."
+   },
+   {
+    "dialog": "DIA_FENIA_INTERESTING",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [
+     "VLK_431_KARDIF"
+    ],
+    "ru": "Кабак Кардифа находится у причала; там всегда что-нибудь затевается.",
+    "en": "Kardif's tavern is by the quay; something is always brewing there."
+   },
+   {
+    "dialog": "DIA_FENIA_INTERESTING",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [
+     "VLK_432_MOE"
+    ],
+    "ru": "Мо стоит перед входом в кабак Кардифа.",
+    "en": "Moe stands outside the entrance to Kardif's tavern."
+   },
+   {
+    "dialog": "DIA_FENIA_INTERESTING",
+    "place": "CITY_WAY#2",
+    "who": [],
+    "ru": "В порту стоит большой корабль паладинов — королевская военная галера. От тебя к нему идут налево вдоль причала, затем под большой скалой.",
+    "en": "A large paladin ship, a royal war galley, is moored in the harbor. From where you stand, the way leads left along the quay and then beneath a large rock."
+   }
+  ],
+  "VLK_480_FELLAN": [],
+  "VLK_484_LEHMAR": [],
+  "VLK_491_VANJA": [],
+  "VLK_492_RENGARU": [],
+  "VLK_493_NAGUR": [
+   {
+    "dialog": "DIA_NAGUR_HALLO",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [
+     "VLK_431_KARDIF"
+    ],
+    "ru": "У Кардифа в портовой таверне можно получить информацию.",
+    "en": "Kardif at the harbor tavern is a source of information."
+   },
+   {
+    "dialog": "DIA_NAGUR_AUFTRAG",
+    "place": "FARM2_FIELD",
+    "who": [],
+    "ru": "К ферме Акила ведёт вырезанная в скале лестница: от восточных ворот города на рыночной площади нужно идти по дороге направо.",
+    "en": "Akil's farm is reached by stairs cut into the rock: from the city's eastern gate on the market square, take the road to the right."
+   },
+   {
+    "dialog": "DIA_NAGUR_DEAL",
+    "place": "CITY_HABOUR_TAVERN01",
+    "who": [
+     "VLK_431_KARDIF"
+    ],
+    "ru": "Кардиф получает обычный процент от твоих сделок и отдельную плату за поиск людей для работы.",
+    "en": "Kardif gets his usual cut of your deals and a separate payment for finding people for jobs."
+   }
+  ],
+  "VLK_498_IGNAZ": []
+ },
+ "names": {
+  "BAU_4300_ADDON_CAVALORN": "Кавалорн",
+  "BAU_900_ONAR": "Онар",
+  "BAU_903_BODO": "Бодо",
+  "BAU_907_WASILI": "Василий",
+  "BAU_930_SEKOB": "Секоб",
+  "BAU_932_BALTHASAR": "Бальтазар",
+  "BAU_935_BRONKO": "Бронко",
+  "BAU_936_ROSI": "Рози",
+  "BAU_940_AKIL": "Акил",
+  "BAU_941_KATI": "Кати",
+  "BAU_942_RANDOLPH": "Рендольф",
+  "BAU_944_EHNIM": "Эним",
+  "BAU_945_EGILL": "Эгилл",
+  "BAU_950_LOBART": "Лобарт",
+  "BAU_951_HILDA": "Хильда",
+  "BAU_952_VINO": "Вино",
+  "BAU_954_MALETH": "Малет",
+  "BAU_960_BENGAR": "Бенгар",
+  "BAU_963_MALAK": "Малак",
+  "BAU_970_ORLAN": "Орлан",
+  "BAU_973_RUKHAR": "Рухар",
+  "BDT_1014_BANDIT_L": "Браго",
+  "BDT_1015_BANDIT_L": "Бандит",
+  "BDT_1060_DEXTER": "Декстер",
+  "KDF_500_PYROKAR": "Пирокар",
+  "KDF_501_SERPENTES": "Серпентес",
+  "KDF_503_KARRAS": "Каррас",
+  "KDF_504_PARLAN": "Парлан",
+  "KDF_505_MARDUK": "Мардук",
+  "KDF_506_NEORAS": "Неорас",
+  "KDF_508_GORAX": "Горакс",
+  "KDF_509_ISGAROTH": "Исгарот",
+  "KDF_510_HYGLAS": "Хиглас",
+  "KDW_1400_ADDON_SATURAS_NW": "Сатурас",
+  "KDW_1401_ADDON_CRONOS_NW": "Кронос",
+  "KDW_1402_ADDON_NEFARIUS_NW": "Нефариус",
+  "KDW_1404_ADDON_RIORDIAN_NW": "Риордиан",
+  "MIL_309_STADTWACHE": "Городской стражник",
+  "MIL_310_STADTWACHE": "Городской стражник",
+  "MIL_311_ANDRE": "Андре",
+  "MIL_319_PABLO": "Пабло",
+  "MIL_324_PECK": "Пек",
+  "MIL_350_ADDON_MARTIN": "Мартин",
+  "NONE_100_XARDAS": "Ксардас",
+  "NOV_601_IGARAZ": "Игарац",
+  "NOV_603_AGON": "Агон",
+  "NOV_605_OPOLOS": "Ополос",
+  "NOV_609_NOVIZE": "Послушник",
+  "NOV_612_BABO": "Бабо",
+  "PAL_200_HAGEN": "Лорд Хаген",
+  "PAL_201_INGMAR": "Ингмар",
+  "PAL_202_ALBRECHT": "Альбрехт",
+  "PAL_203_LOTHAR": "Лотар",
+  "PAL_213_SCHIFFSWACHE": "Корабельный стражник",
+  "PAL_297_RITTER": "Рыцарь",
+  "PAL_299_SERGIO": "Сержио",
+  "SLD_800_LEE": "Ли",
+  "SLD_801_TORLOF": "Торлоф",
+  "SLD_802_BUSTER": "Бастер",
+  "SLD_805_CORD": "Корд",
+  "SLD_806_SYLVIO": "Сильвио",
+  "SLD_807_BULLCO": "Булко",
+  "SLD_808_JARVIS": "Джарвис",
+  "SLD_809_BENNET": "Беннет",
+  "SLD_811_WOLF": "Вульф",
+  "SLD_814_SENTENZA": "Сентенза",
+  "SLD_822_RAOUL": "Рауль",
+  "SLD_840_ALVARES": "Альварес",
+  "SLD_841_ENGARDO": "Эндарго",
+  "VLK_407_HAKON": "Хакон",
+  "VLK_409_ZURIS": "Зурис",
+  "VLK_410_BALTRAM": "Бальтрам",
+  "VLK_412_HARAD": "Гарад",
+  "VLK_413_BOSPER": "Боспер",
+  "VLK_415_MELDOR": "Мелдор",
+  "VLK_416_MATTEO": "Маттео",
+  "VLK_417_CONSTANTINO": "Константино",
+  "VLK_420_CORAGON": "Корагон",
+  "VLK_421_VALENTINO": "Валентино",
+  "VLK_422_SALANDRIL": "Саландрил",
+  "VLK_4302_ADDON_ELVRICH": "Элврих",
+  "VLK_431_KARDIF": "Кардиф",
+  "VLK_432_MOE": "Мо",
+  "VLK_433_BROMOR": "Бромор",
+  "VLK_434_BORKA": "Борка",
+  "VLK_437_BRAHIM": "Ибрагим",
+  "VLK_438_ALRIK": "Альрик",
+  "VLK_439_VATRAS": "Ватрас",
+  "VLK_444_JACK": "Джек",
+  "VLK_447_CASSIA": "Кассия",
+  "VLK_462_THORBEN": "Торбен",
+  "VLK_468_CANTHAR": "Кантар"
+ }
+}
