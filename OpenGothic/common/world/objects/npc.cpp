@@ -1669,6 +1669,23 @@ const Animation::Sequence* Npc::setAnimAngGet(Anim a, uint8_t comb) {
   const auto before = trace ? combatPoseIdentity() : std::string();
   auto st  = weaponState();
   auto wlk = walkMode();
+  if(isPlayer() && (st==WeaponState::Bow || st==WeaponState::CBow) && !hasManualAim()) {
+    const auto bs = bodyStateMasked() & BS_MAX;
+    if(bs!=BS_AIMNEAR && bs!=BS_AIMFAR) {
+      Tempest::Vec3 dir = {};
+      switch(a) {
+        case Anim::Move:     dir = { 0,0, 1}; break;
+        case Anim::MoveBack: dir = { 0,0,-1}; break;
+        case Anim::MoveL:    dir = {-1,0, 0}; break;
+        case Anim::MoveR:    dir = { 1,0, 0}; break;
+        default: break;
+        }
+      // Input is processed after movement: prevent it from restarting the carried-weapon walk
+      // at the edge every frame. A drawn aim keeps its own animation.
+      if(isEdgeMoveBlocked(dir))
+        a = Anim::Idle;
+      }
+    }
   const auto result = visual.startAnimAndGet(*this,a,comb,st,wlk);
   if(trace)
     traceCombatAttempt(a,result!=nullptr,before,"set_anim");

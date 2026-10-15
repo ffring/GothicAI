@@ -97,6 +97,8 @@ class MoveAlgo final {
     bool    canFallByGravity() const;
 
     bool    checkLastBounce() const;
+    // A short virtual step keeps an edge stop active even when the legs no longer produce root motion.
+    bool    isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const;
 
   private:
     // Opt-in native movement observation, scoped to one tick; absent outside a body trace.

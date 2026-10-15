@@ -749,6 +749,26 @@ float MoveAlgo::stepHeight() const {
   return 50;
   }
 
+bool MoveAlgo::isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const {
+  if(!npc.isPlayer() || npc.isDown() || (flags!=Run && flags!=Slide) || npc.bodyStateMasked()==BS_JUMP)
+    return false;
+  const auto weapon = npc.weaponState();
+  if(weapon!=WeaponState::Bow && weapon!=WeaponState::CBow)
+    return false;
+
+  Tempest::Vec3 dir;
+  applyRotation(dir,modelDirection);
+  dir.y = 0;
+  const float len = dir.length();
+  if(len==0.f)
+    return false;
+
+  const auto pos = npc.position();
+  // Less than 2 mm of an independent 2 cm probe can pass: the guard is holding this direction.
+  // Rechecking geometry lets retreating, strafing or turning away resume without a stale blocked flag.
+  return edgeMoveFraction(pos,pos+dir*(2.f/len))<0.1f;
+  }
+
 float MoveAlgo::edgeMoveFraction(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
   static constexpr float margin  = 30.f;
   static constexpr float maxDrop = 100.f;

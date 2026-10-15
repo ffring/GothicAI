@@ -294,3 +294,37 @@ stop
 release action
 wait 600
 walkmode run
+
+# Leaving an edge stop: drawn manual steps can retreat, then the carried crossbow can step sideways.
+manual on
+aimat WOLF body
+rec retreat_manual_cbow
+press action
+wait 1200
+hold forward 600
+wait 600
+pos
+edgedist 247.5
+hold back 800
+wait 800
+pos
+edgedist 247.5
+stop
+release action
+aimat off
+manual off
+wait 800
+walkmode walk
+rec escape_classic_cbow
+pos
+edgedist 247.5
+hold back 600
+wait 600
+pos
+edgedist 247.5
+hold right 600
+wait 600
+pos
+edgedist 247.5
+stop
+walkmode run
