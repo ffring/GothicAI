@@ -97,6 +97,7 @@ from .voice import (
     VoiceInput,
     WavSource,
 )
+from .whereabouts import Whereabouts
 from .witnesses import Witnesses
 from .wrath import Wrath
 
@@ -194,6 +195,7 @@ class ServerState:
         self.day: DayDesk | None = None
         self.perception: PerceptionDesk | None = None
         self.sightings: Sightings | None = None
+        self.whereabouts: Whereabouts | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
         self.beasts: BeastDesk | None = None
@@ -650,6 +652,9 @@ async def serve(args: argparse.Namespace) -> int:
         # whom it saw lately is its intent's target too, and a companion goes where it saw him (step M2)
         perception.remembered = state.sightings.targets
         state.talk.orders.last_seen = state.sightings.where_seen
+        # where a place or someone is, as the npc knows it: `where` (docs/npc-tools.md М3)
+        state.whereabouts = Whereabouts(link, place_book, sightings=state.sightings, desk=perception)
+        state.dialogue.extensions.append(state.whereabouts)
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle)
         state.dialogue.extensions.append(trust)
@@ -960,6 +965,12 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario chests: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "cave":
+                assert state.dialogue is not None and state.talk is not None and state.whereabouts is not None
+                results = await scenarios.cave_scenario(link, state.dialogue, state.talk, state.whereabouts)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario cave: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "hearing":
                 assert state.talk is not None
@@ -1356,22 +1367,41 @@ async def llm_test(args: argparse.Namespace) -> int:
 
 
 async def places_cmd(args: argparse.Namespace) -> int:
-    """The book of places from a dump of the world (SCENARIO=places): grouped, named by the model, written."""
+    """The book of places from a dump of the world (SCENARIO=places): grouped, surveyed (rooms, ways in,
+    neighbours), named and its kinds confirmed by the model, written. `--names`: the names of a book read
+    through already, kept; only places it lacks are named afresh."""
     data = json.loads(await asyncio.to_thread(Path(args.dump).read_text, encoding="utf-8"))
     groups = places.group(data["points"], data.get("people", []))
     if args.area:
         groups = [g for g in groups if g.area in {a.upper() for a in args.area}]
+    surveys = places.survey(groups)
     print(f"{len(data['points'])} points -> {len(groups)} places", flush=True)
     if args.dry_run:
         for g in sorted(groups, key=lambda g: g.id):
-            print(f"  {g.id:40s} {len(g.points):4d} points  {'; '.join(g.residents[:3])}")
+            s = surveys[g.id]
+            ways = ", ".join(str(w["side"]) for w in s.entrances)
+            print(
+                f"  {g.id:40s} {len(g.points):4d} points  {s.guess:6s} in {s.inside:4.0%}"
+                f"{f'  in from {ways}' if ways else ''}  {'; '.join(g.residents[:2])}"
+            )
         return 0
+    names: dict[str, dict[str, str]] = {}
+    if args.names:
+        kept = json.loads(await asyncio.to_thread(Path(args.names).read_text, encoding="utf-8"))
+        ids = {g.id for g in groups}
+        for p in kept.get("places", []):
+            if p.get("id") in ids:
+                names[p["id"]] = {k: str(p.get(k, "")) for k in ("ru", "where_ru", "en", "where_en")}
+        print(f"{len(names)} names kept from {args.names}", flush=True)
     llm = _backend(args)
     try:
-        names = await places.label(groups, llm)
+        fresh = [g for g in groups if g.id not in names]
+        if fresh:
+            names |= await places.label(fresh, llm, among=groups)
+        kind = await places.kinds(groups, names, surveys, llm)
     finally:
         await llm.aclose()
-    book = places.book(groups, names, data.get("world"))
+    book = places.book(groups, names, data.get("world"), surveys, kind)
     text = json.dumps(book, ensure_ascii=False, indent=1)
     await asyncio.to_thread(Path(args.out).write_text, text, encoding="utf-8")
     print(f"{len(book['places'])} of {len(groups)} places named -> {args.out}")
@@ -1644,6 +1674,7 @@ def main() -> None:
             "calm",
             "ground",
             "hearing",
+            "cave",
             "chests",
             "chests_lobart",
             "group",
@@ -1800,6 +1831,7 @@ def main() -> None:
     p.add_argument("--out", default=str(places.BOOK), help="the book to write")
     p.add_argument("--area", action="append", help="only these parts of the world (FARM1, CITY...)")
     p.add_argument("--dry-run", action="store_true", help="only show the groups, no model calls")
+    p.add_argument("--names", help="keep the names of this book (read through already), name only the rest")
     _add_llm_args(p)
 
     p = sub.add_parser("login", help="sign in to a provider")

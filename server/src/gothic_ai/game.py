@@ -45,6 +45,7 @@ from .protocol import (
     NpcView,
     NpcViewCmd,
     PingCmd,
+    PlayerState,
     Pong,
     RaiseDeadCmd,
     Result,
@@ -116,6 +117,7 @@ class GameLink:
         self.world: str | None = None
         self.session: Session | None = None
         self.snapshots: dict[str, Snapshot] = {}
+        self.player: PlayerState | None = None  # the hero, as the latest snapshot of any npc had him
         # the last `party` effect sent to each npc, by anyone: its number and value (orders.py unmarks only
         # its own mark, not a companion dialog's)
         self.party: dict[str, tuple[int, int]] = {}
@@ -166,6 +168,7 @@ class GameLink:
                 self.world = None
                 self._world_ready.clear()
                 self.snapshots.clear()
+                self.player = None
                 self.party.clear()
             case Result():
                 _resolve(self._requests.pop(msg.req, None), msg)
@@ -177,6 +180,8 @@ class GameLink:
                 _resolve(self._routines.pop(msg.req, None), msg)
             case Snapshot():
                 self.snapshots[msg.npc.id] = msg
+                if msg.player is not None:
+                    self.player = msg.player
                 for fut in self._snapshot_waiters.pop(msg.npc.id, []):
                     _resolve(fut, msg)
             case BodyObservations():

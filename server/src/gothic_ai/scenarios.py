@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 import time
@@ -44,6 +45,7 @@ from .llm.fake import FakeBackend, FakeStep
 from .npc_tools import GESTURES as NPC_GESTURES
 from .perception import PerceptionDesk, Sight
 from .persona import PersonaProvider, habits_of
+from .places import SIDES
 from .protocol import (
     ActionResult,
     Detached,
@@ -81,6 +83,7 @@ from .trace import read as read_trace
 from .trust import Trust
 from .vanilla import CHECK_CM, VanillaQuests
 from .voice import VoiceInput
+from .whereabouts import Whereabouts
 from .witnesses import Witnesses
 from .wrath import TAKE_OFFENSE, TEMPERS, Wrath
 
@@ -2301,6 +2304,138 @@ async def ground_scenario(
         check("follows", following and back, f"{dist():.1f} m")
     finally:
         link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
+async def cave_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    whereabouts: Whereabouts,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+) -> dict[str, str]:
+    """The map of places (docs/npc-tools.md М3): Cavalorn goes with the hero to the steps below Xardas's
+    tower and is told «зайди в пещеру», no place named. Checks:
+    - follow: he goes with the hero;
+    - listed: among the places around him, the bandits' cave, of the kind «пещера», which way from the hero,
+      its way in on the steps;
+    - where: `where{пещера}` finds the same cave, its way in and what is next to it;
+    - go_to: «Кавалорн, зайди в пещеру.» — he goes into the bandits' cave and waits there.
+    The model is scripted with LLM=fake (it is sent to XARDAS_BANDITS on «зайди в пещеру»); a live one
+    (LLM=chatgpt) chooses the cave itself from the places around."""
+    from .executor import Intent
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    def dist() -> float:
+        return talk.people[npc].distance / 100 if npc in talk.people else -1.0
+
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    live = dialogue.llm.name != "fake"
+    if not live:
+        go = ToolCall("go_to", {"place": "XARDAS_BANDITS"})
+        dialogue.llm = _ByNpc(
+            {
+                "Кавалорн": _OnWords(
+                    [("зайди в пещеру", FakeStep("Иду.", [go])), ("пришёл первым", FakeStep("Тут пусто."))],
+                    FakeStep("Да."),
+                )
+            },
+            FakeBackend("Хм.", delay=0),
+        )
+    try:
+        await link.debug("player_equip", item="ITAR_PAL_H")  # the bandits by the steps may fall on him
+    except GameError as err:
+        log.info("cave: no armor for the hero: %s", err)
+    await link.debug("skip_important", near=npc)  # Cavalorn's own greeting would stop the hero
+    for _ in range(2):  # the goblins by his fire
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("cave: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=300)
+    if not await _until(lambda: 0 <= dist() <= 15, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero: {dist():.1f} m)"})
+    dialogue.open(npc, "Кавалорн").intent = Intent("follow_hero", "PLAYER", "friendly")
+    talk.hear("Кавалорн, за мной!", None, {"via": "scenario"})
+    following = await _until(
+        lambda: talk.orders is not None and talk.orders.companion(npc) and dist() <= 5, 20
+    )
+    check("follow", following, f"{dist():.1f} m")
+
+    # the hero walks to the steps below the tower; Cavalorn comes after him
+    book = whereabouts.book
+    steps = book.get("XARDAS_STAIRS") if book is not None else None
+    if steps is None or steps.center is None:
+        return _logged({**results, "book": "failed (no XARDAS_STAIRS in the book of places)"})
+    await link.debug("player_goto", waypoint="NW_XARDAS_STAIRS_02")
+
+    middle = steps.center
+
+    def by_steps(who: Snapshot | None) -> bool:
+        return who is not None and math.dist(who.npc.pos, middle) < 1500
+
+    there = await _until_async(lambda: link.snapshot(npc, fresh=True), by_steps, 40)
+    await asyncio.sleep(1)
+    await link.snapshot(npc, fresh=True)
+    log.info("cave: %s by the steps: %s, %.1f m from the hero", npc, there, dist())
+    situation = talk.orders.situation(npc) if talk.orders is not None else None
+    line = next((x for x in (situation or "").splitlines() if x.startswith("Места рядом")), "")
+    cave = next((part for part in line.split("; XARDAS") if "пещера бандитов" in part), "")
+    check(
+        "listed",
+        "пещера бандитов" in cave
+        and ": пещера," in cave
+        and any(side in cave for side in SIDES.values())
+        and "вход — на ступенях" in line,
+        line or "no places around",
+    )
+    answer = whereabouts.where(npc, "пещера")
+    check(
+        "where",
+        answer.startswith("XARDAS_BANDITS — ") and "вход — на ступенях" in answer and "Рядом:" in answer,
+        answer.replace("\n", " / "),
+    )
+
+    # «зайди в пещеру», no place named
+    t0 = len(entries)
+    talk.hear("Кавалорн, зайди в пещеру.", None, {"via": "scenario"})
+
+    def sent() -> list[dict[str, Any]]:
+        return [e for e in entries[t0:] if e.get("kind") == "action" and e.get("action") == "go_to"]
+
+    went = await _until(sent, 60)
+    where = sent()[0].get("arguments", {}).get("place") if went else None
+    standing = talk.orders.standing.get(npc) if talk.orders is not None else None
+
+    def place_of(snap: Snapshot) -> str | None:
+        # where it stands: its nearest point (`waypoint` is where it walks to)
+        place = book.of(snap.npc.nearest_waypoint) if book is not None else None
+        return place.id if place is not None else None
+
+    inside = await _until_async(
+        lambda: link.snapshot(npc, fresh=True), lambda snap: place_of(snap) == "XARDAS_BANDITS", 120
+    )
+    snap = await link.snapshot(npc, fresh=True)
+    check(
+        "go_to",
+        where == "XARDAS_BANDITS" and standing is not None and standing.kind == "go" and inside,
+        f"go_to {where or 'not called'}, at {snap.npc.nearest_waypoint} ({place_of(snap)})",
+    )
+    said = [e.get("text", "") for e in entries[t0:] if e.get("kind") == "npc" and e.get("npc") == npc]
+    log.info("cave: %s said %s", npc, said)
     return _logged(results)
 
 

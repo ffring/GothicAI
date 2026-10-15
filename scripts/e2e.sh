@@ -125,6 +125,10 @@
 #   remembers: seen lately (docs/npc-tools.md, step M2): Cavalorn goes into the bandits' cave first, sees them,
 #       comes back out; «там в пещере бандиты, разберись» (model scripted with LLM=fake): it remembers them
 #       though it sees them no more, walks into the cave first and fights Brago
+#   cave: the map of places (docs/npc-tools.md, step M3): Cavalorn goes with the hero to the steps below
+#       Xardas's tower; the bandits' cave is among the places around him, a cave entered from the steps, and
+#       `where{пещера}` finds it; «Кавалорн, зайди в пещеру.» with no place named takes him into it (model
+#       scripted with LLM=fake; LLM=chatgpt: the model chooses the cave itself)
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its

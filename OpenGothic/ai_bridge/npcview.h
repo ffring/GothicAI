@@ -34,3 +34,11 @@ class NpcView final {
 
 // whether `self` sees `other` now: the engine's own sight, never further than npc_view looks
 bool npcSees(const Npc& self, const Npc& other);
+
+// where the player faces, on the ground (x, z): ahead of him and to his right as the screen shows it (a
+// mirrored camera swaps the world's right), unit vectors
+struct HeroAxes {
+  float aheadX = 0, aheadZ = 0;
+  float rightX = 0, rightZ = 0;
+  };
+HeroAxes heroAxes(const Npc& pl);

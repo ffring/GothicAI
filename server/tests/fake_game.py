@@ -158,6 +158,8 @@ class FakeGame:
             "player": {
                 "name": "Я",
                 "pos": [100.0, 2.0, 3.0],
+                "ahead": [1.0, 0.0],  # he faces +x, his right is -z (v32)
+                "right": [0.0, -1.0],
                 "distance": 99.0,
                 "guild": 0,
                 "hp": 40,

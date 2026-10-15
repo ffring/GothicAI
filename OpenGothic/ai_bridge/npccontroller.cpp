@@ -21,6 +21,7 @@
 #include "jsonwriter.h"
 #include "npcchests.h"
 #include "npcfind.h"
+#include "npcview.h"
 #include "textcodec.h"
 
 namespace {
@@ -1017,6 +1018,10 @@ void NpcController::emitSnapshot(World& world, Npc& npc, std::string_view symbol
     j.object("player")
        .str("name",TextCodec::toUtf8(pl->displayName()));
     writePos(j,"pos",pl->position());
+    // v32: where he faces, for where places are from him (places.py)
+    const auto ax = heroAxes(*pl);
+    j.array("ahead").item(double(ax.aheadX)).item(double(ax.aheadZ)).endArray();
+    j.array("right").item(double(ax.rightX)).item(double(ax.rightZ)).endArray();
     j.num("distance",std::sqrt(double(npc.qDistTo(*pl))))
      .integer("guild",int64_t(pl->guild()))
      .integer("hp",pl->attribute(ATR_HITPOINTS))

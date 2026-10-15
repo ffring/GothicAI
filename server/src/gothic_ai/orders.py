@@ -613,13 +613,13 @@ class Orders:
         return None
 
     def nearby(self, npc: str) -> list[tuple[Place, float]]:
-        """The places around a companion, nearest first, but the one it is in."""
+        """The places around a companion, nearest first, and the nearest of each other kind (a cave), but
+        the one it is in."""
         snap = self.link.snapshots.get(npc.upper())
         if self.places is None or snap is None:
             return []
         here = self.places.of(snap.npc.waypoint, snap.npc.nearest_waypoint)
-        near = self.places.near(snap.npc.pos, PLACES_CM, PLACES_MAX + 1)
-        return [(p, d) for p, d in near if here is None or p.id != here.id][:PLACES_MAX]
+        return self.places.around(snap.npc.pos, PLACES_CM, PLACES_MAX, but=here.id if here else None)
 
     def _within(self, npc: str, pid: str) -> Place | None:
         """A place of that id within PLACES_CM of the companion: any, not only the few nearest it is shown
@@ -640,8 +640,11 @@ class Orders:
             "Ты идёшь с героем. В драке тело само защищает его и тебя; напасть на кого-то — set_intent "
             "с целью fight и его id из целей."
         ]
-        if near := self.nearby(npc):
-            listed = "; ".join(f"{p.id} — {p.ru}, {max(1, round(d / 100))} м" for p, d in near)
+        if (near := self.nearby(npc)) and self.places is not None:
+            snap = self.link.snapshots.get(npc.upper())
+            hero = snap.player if snap is not None else None
+            axes = (hero.pos, hero.ahead, hero.right) if hero is not None else ()
+            listed = "; ".join(self.places.line_ru(p, d, *axes) for p, d in near)
             lines.append(f"Места рядом (go_to — пойти туда первым и ждать героя): {listed}.")
         if (standing := self.standing.get(npc.upper())) is not None and standing.kind == "go":
             lines.append(f"Ты пошёл первым и ждёшь героя: {standing.where}.")
