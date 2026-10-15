@@ -68,8 +68,9 @@
 #include "world/objects/item.h"
 #include "world/objects/interactive.h"
 #include "world/objects/sound.h"
-#include "world/objects/staticobj.h"
+#include "graphics/objvisual.h"
 #include "graphics/mesh/protomesh.h"
+#include "world/movablevobs.h"
 #include "world/world.h"
 #include "world/waypoint.h"
 #include "world/aiqueue.h"
@@ -594,8 +595,11 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
-  // The tavern adds only temporary real mesh vobs; original map furniture remains world-owned.
-  std::vector<std::unique_ptr<StaticObj>> movableFixtures;
+  // Test-only props use the body API directly; the map allowlist contains only
+  // visuals actually authored in the stock worlds, not these Item mesh copies.
+  struct MovableFixture { ObjVisual visual; DynamicWorld::Item body; };
+  std::vector<std::unique_ptr<MovableFixture>> movableFixtures;
+  std::unordered_set<uintptr_t> movableMapIds;
   std::vector<uintptr_t> movableIds;
   std::unordered_map<uintptr_t,Vec3> movableReference;
   std::unordered_map<uintptr_t,float> movableTravel;
@@ -2529,6 +2533,8 @@ std::string movableRows(World& world) {
     if(result.size()>1) result+=',';
     result+="{\"id\":"+std::to_string(body.id)+",\"visual\":"+jsonStr(body.visual)+
       ",\"class\":"+jsonStr(body.className)+",\"blocks_walking\":"+(body.blocksWalking?"true":"false")+
+      ",\"legacy_collision\":"+(body.legacyCollision?"true":"false")+
+      ",\"from_map\":"+(bench.movableMapIds.contains(body.id)?"true":"false")+
       ",\"mass_kg\":"+ragdollNumber(body.mass)+",\"enabled\":"+(body.enabled?"true":"false")+
       ",\"sleeping\":"+(body.sleeping?"true":"false")+",\"npc_contact\":"+(body.touchedByNpc?"true":"false")+
       ",\"position_cm\":"+ragdollVector(movablePosition(body.transform))+
@@ -2584,6 +2590,17 @@ void prepareMovableFixture(World& world,Npc& player) {
     }
   if(!host) {arenaAbort("movable fixture requires Coragon in the loaded Khorinis world");return;}
   const auto all=world.physic()->movableVobSnapshot();
+  std::map<std::string,size_t> noncollidingClasses,mapClasses;
+  for(const auto& body:all)
+    if(!body.legacyCollision)++noncollidingClasses[body.className];
+  const auto classCounts=[](const std::map<std::string,size_t>& counts) {
+    std::string result="{";
+    for(const auto& [name,count]:counts) {
+      if(result.size()>1)result+=',';
+      result+=jsonStr(name)+":"+std::to_string(count);
+      }
+    return result+"}";
+    };
   uintptr_t tableId=0;std::string tableVisual,utensilVisual="ITFO_BEER.3DS",barrelVisual="NW_HARBOUR_BARREL_01.3DS";
   if(!Resources::loadMesh(utensilVisual))utensilVisual.clear();
   if(!Resources::loadMesh(barrelVisual))barrelVisual.clear();
@@ -2609,7 +2626,9 @@ void prepareMovableFixture(World& world,Npc& player) {
   bench.movableTable=tableId;bench.movableCenter=tableCenter;
   for(const auto& body:all) {
     const auto delta=movablePosition(body.transform)-tableCenter;
-    if(delta.x*delta.x+delta.z*delta.z<900.f*900.f && std::abs(delta.y)<350) bench.movableIds.push_back(body.id);
+    if(delta.x*delta.x+delta.z*delta.z<900.f*900.f && std::abs(delta.y)<350) {
+      bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);++mapClasses[body.className];
+      }
     }
   const auto add=[&](const std::string& visual,const Vec3& support) {
     const auto* mesh=Resources::loadMesh(visual);if(!mesh)return uintptr_t(0);
@@ -2619,7 +2638,18 @@ void prepareMovableFixture(World& world,Npc& player) {
     data.position={support.x-(bounds[0].x+bounds[1].x)*.5f,support.y-bounds[0].y+.2f,support.z-(bounds[0].z+bounds[1].z)*.5f};
     data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
     const auto before=world.physic()->movableVobSnapshot();
-    bench.movableFixtures.emplace_back(std::make_unique<StaticObj>(nullptr,world,data,Vob::None));
+    auto fixture=std::make_unique<Bench::MovableFixture>();
+    fixture->visual.setVisual(data,world,false,false);
+    auto matrix=Matrix4x4::mkIdentity();matrix.translate(data.position.x,data.position.y,data.position.z);
+    fixture->visual.setObjMatrix(matrix);
+    const auto* rule=MovableVobs::classifyVisual(visual);
+    const bool testMug=visual==utensilVisual;
+    if(!testMug && rule==nullptr)return uintptr_t(0);
+    fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,testMug?.12f:rule->massMultiplier,
+                                              testMug?false:rule->blocksWalking,testMug?"utensil":rule->className,true);
+    if(fixture->body.isEmpty())return uintptr_t(0);
+    fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& matrix) {view->setObjMatrix(matrix);});
+    bench.movableFixtures.emplace_back(std::move(fixture));
     for(const auto& body:world.physic()->movableVobSnapshot())
       if(std::none_of(before.begin(),before.end(),[&](const auto& previous){return previous.id==body.id;})) {
         bench.movableIds.push_back(body.id);return body.id;
@@ -2673,6 +2703,8 @@ void prepareMovableFixture(World& world,Npc& player) {
     ",\"host_cm\":"+ragdollVector(host->position())+",\"table_id\":"+std::to_string(tableId)+
     ",\"floor_dish_id\":"+std::to_string(bench.movableDish)+",\"tabletop_utensils\":6,\"temporary_vobs\":"+
     std::to_string(bench.movableFixtures.size())+",\"world_load_ms\":"+ragdollNumber(float(world.loadMilliseconds()))+
+    ",\"map_vobs\":"+std::to_string(bench.movableMapIds.size())+",\"map_classes\":"+classCounts(mapClasses)+
+    ",\"noncolliding_map_classes\":"+classCounts(noncollidingClasses)+
     ",\"enabled\":"+(world.physic()->movableVobsEnabled()?"true":"false")+
     ",\"walk_start_cm\":"+ragdollVector(laneStart)+",\"walk_end_cm\":"+ragdollVector(laneEnd)+
     ",\"mass_examples\":"+massExamples+"],\"bodies\":"+movableRows(world));

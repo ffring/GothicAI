@@ -50,6 +50,9 @@ def setup(rows, enabled):
     require(result['tabletop_utensils'] >= 6, 'tabletop dishes absent')
     require(math.isfinite(loaded['world_load_ms']) and loaded['world_load_ms'] > 0, 'world construction timing absent')
     catalog = bodies(result)
+    if 'map_vobs' in result:
+        require(result['map_vobs'] == sum(row['from_map'] for row in catalog.values()), 'fixture changed the authored map-vob count')
+        require(result['temporary_vobs'] == sum(not row['from_map'] for row in catalog.values()), 'temporary props must be distinguished from map furniture')
     require(catalog[result['table_id']]['class'] == 'table', 'fixture lacks its actual map table')
     require(catalog[result['floor_dish_id']]['class'] == 'utensil', 'fixture floor dish missing')
     require(all(row['enabled'] is enabled for row in catalog.values()), 'native body mode differs from requested setting')
@@ -103,6 +106,8 @@ def functional(directory):
     require(masses and len({row['class'] for row in masses}) == len(masses), 'mass catalog is empty or duplicates classes')
     require(all(math.isfinite(row['kg']) and row['kg'] > 0 for row in masses), 'mass catalog contains invalid hull mass')
     return {'pass': True, 'world_load_ms': load_ms, 'observed_vobs': len(catalog),
+            'map_vobs': initial.get('map_vobs'), 'map_classes': initial.get('map_classes'),
+            'noncolliding_map_classes': initial.get('noncolliding_map_classes'),
             'untouched_ms': untouched['elapsed_ms'],
             'maximum_unprovoked_drift_cm': max((row['max_displacement_cm'] for key, row in resting.items() if key not in touched), default=0),
             'npc_caused_moved_vobs': npc_moved, 'npc_walk_progress_cm': progress,

@@ -453,6 +453,9 @@ Stage 4 movable vobs use the real Coragon tavern in a Khorinis save. The fixture
 Coragon and the nearest original map table, adds six real beer-mug meshes on its tabletop,
 a floor mug on a supported walking lane, and a real barrel only if none is nearby. The
 original tavern population keeps its routines during the untouched 60 simulation seconds.
+The seven mugs are explicit test bodies created through `addMovableVob`; they are not
+authored map props and do not add unused item-visual rules to the stock-world allowlist.
+The setup records map/fixture counts separately, plus actual map `cd_dynamic=0` bodies by class.
 Native NPC contacts, including their propagation through other movable bodies, mark the
 items excluded from spontaneous drift. After that observation actors stop for a controlled
 walking test and an actual equipped instant fireball (`spellId=23`). No fixture command
