@@ -1222,8 +1222,9 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     const float side = std::sin(Aim::playerProbe.side*float(M_PI)/180.f)*HeadOverHips;
     camera->setAimStance(crouchK*FootIk::aimCrouchDepth(),side,1.f-2.f*std::max(0.f,-peekK));
     // over an edge ahead and down as the head goes (as far as the trunk bends: eased, no room no lean)
-    const float lean = Aim::playerProbe.lean/Aim::LeanMax;
-    camera->setAimLean(lean*Aim::LeanReach,lean*Aim::LeanDrop);
+    const auto shift = pl.aimLeanShift();
+    const float facing = pl.rotationRad();
+    camera->setAimLean(shift.x*std::cos(facing)+shift.z*std::sin(facing),-shift.y);
     }
   return true;
   }

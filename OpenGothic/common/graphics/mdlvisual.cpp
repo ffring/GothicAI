@@ -888,12 +888,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       if(manual) {
         // by hand: the arrow straight at the crosshair (the archer holds over by himself), from where
         // the arrow is (not too close: the turn moves it)
-        const Tempest::Vec3 at = aimAt();
-        Tempest::Vec3       ap, ad;
-        Tempest::Vec3       o  = from;
-        if(arrowRay(ap,ad) && (at-ap).length()>150.f)
-          o = ap;
-        in.dir    = at - o;
+        in.dir    = npc.aimDirection(aimAt());
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
@@ -922,21 +917,25 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
-      // steeply down: lean over the edge, if there is room in front of the head; by hand as steeply as the
-      // hero looks down too (the center of the screen on the edge right in front: leaning looks past it)
-      const Tempest::Vec3 d    = in.dir;
-      const Tempest::Vec3 look = manual ? npc.aimLook() : Tempest::Vec3();
-      float               down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
-      if(look.y<0.f)
-        down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
-      in.lean = Aim::leanFor(down);
-      if(in.lean>0.f) {
-        const float         k    = in.lean/(Aim::LeanMax*float(M_PI)/180.f);
-        const Tempest::Vec3 dir  = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
-        const Tempest::Vec3 head = mapHeadBone();
-        const Tempest::Vec3 to   = head + dir*(Aim::LeanReach*k) - Tempest::Vec3(0,Aim::LeanDrop*k,0);
-        if(npc.world().physic()->ray(head,to).hasCol)
-          in.lean = 0;
+      if(npc.isPlayer() && manual) {
+        in.leanDirection = npc.aimLeanDirection(aimAt());
+        in.lean = npc.aimLean(aimAt(),true).angle;
+        if(Aim::playerLeanOverride>=0.f)
+          in.lean = Aim::playerLeanOverride;
+        } else {
+        // Classic aiming and NPCs keep their original angular rule and room check.
+        static constexpr float reach = 58.f, drop = 28.f;
+        const Tempest::Vec3 d = in.dir;
+        const float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+        in.lean = Aim::leanForNpc(down);
+        if(in.lean>0.f) {
+          const float k = in.lean/(Aim::NpcLeanMax*float(M_PI)/180.f);
+          const auto dir = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
+          const auto head = mapHeadBone();
+          const auto to = head + dir*(reach*k) - Tempest::Vec3(0,drop*k,0);
+          if(npc.world().physic()->ray(head,to).hasCol)
+            in.lean = 0;
+          }
         }
       }
     }
