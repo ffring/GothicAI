@@ -12,6 +12,8 @@ cam follow 300 35 70
 rec living_seat novideo
 living-seat sit
 wait 3500
+living-seat stand
+wait 2500
 living-seat shift
 wait 1500
 stop

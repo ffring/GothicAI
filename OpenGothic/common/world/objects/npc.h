@@ -759,6 +759,7 @@ class Npc final {
     uint64_t                      livingRetryTick = 0;
     bool                          livingNeedsRebuild = false;
     bool                          livingWasFrozen = false;
+    bool                          livingWasInteracting = false;
     ArrowPhysicsProbe             arrowPhysics;
     struct ArrowImpact {
       size_t bone;

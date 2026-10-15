@@ -4,6 +4,7 @@
 #include "physicmeshshape.h"
 #include "physicvbo.h"
 #include "ragdoll.h"
+#include "arrowtrace.h"
 #include "graphics/mesh/skeleton.h"
 
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -512,6 +513,7 @@ struct DynamicWorld::BulletsList final {
   void del(BulletBody* b) {
     for(auto i=body.begin(), e=body.end();i!=e;++i){
       if(&(*i)==b) {
+        ArrowTrace::forget(*i);
         body.erase(i);
         return;
         }
@@ -536,7 +538,9 @@ struct DynamicWorld::BulletsList final {
       const bool precise = i.cb->isPrecise();
       if(precise ? list.nearTest(npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)
                  : list.rayTest (npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)) {
+        ArrowTrace::write(i,i.cb,"moving_npc",0,npc.toNpc());
         const bool hit = precise ? i.cb->onCollidePrecise(*npc.toNpc(),i.lastPos,i.pos) : i.cb->onCollide(*npc.toNpc());
+        ArrowTrace::write(i,i.cb,hit ? "moving_npc_hit" : "moving_npc_pass",0,npc.toNpc());
         if(hit)
           i.cb->onStop();
         }
@@ -811,6 +815,7 @@ DynamicWorld::BBoxBody DynamicWorld::bboxObj(BBoxCallback* cb, const Tempest::Ve
   }
 
 void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t dt) {
+  ArrowTrace::write(b,b.cb,"begin",dt);
   const float dtF     = float(dt);
   const bool  isSpell = b.isSpell();
 
@@ -824,6 +829,8 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   const bool attachAtWorldStop=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
   const auto hit = world->rayCast(pos,to,landscapeMask,false);
   const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
+  ArrowTrace::write(b,b.cb,"world_query",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
+                    unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
 
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
   // where their bones are
@@ -833,6 +840,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     const auto  end = pos + (to-pos)*a;
     if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
       b.cb->onStop();
+      ArrowTrace::write(b,b.cb,"end",dt);
       return;
       }
     }
@@ -886,6 +894,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(precise)
       ; // tested above
     else if(auto ptr = npcList->rayTest(pos,to,b.targetRange(),nullptr)) {
+      ArrowTrace::write(b,b.cb,"npc_collision",dt,ptr->toNpc());
       if(b.cb!=nullptr)
         stopBullet |= b.cb->onCollide(*ptr->toNpc()); else
         stopBullet  = true;
@@ -900,6 +909,8 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   if(stopBullet || b.hitCount()>3 || b.pathLength()>10000) {
+    ArrowTrace::write(b,b.cb,"stop",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
+                      unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
     if(b.cb!=nullptr) {
       // Pin only after the unchanged flight code has decided to stop at a solid
       // world contact. In particular, stone/metal still reflect before this test.
@@ -918,6 +929,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
       b.cb->onStop();
       }
     }
+  ArrowTrace::write(b,b.cb,"end",dt);
   }
 
 void DynamicWorld::tick(uint64_t dt) {

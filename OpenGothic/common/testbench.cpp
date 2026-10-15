@@ -616,6 +616,7 @@ struct Bench {
   uint64_t spellEquipUntil=0;
   int spellWaitFrozen=-1;
   bool spellGuardTrace=false;
+  std::string spellGuardCase;
   uint32_t spellGuardObservedReturns=0;
   Npc* seatNpc=nullptr;
   Npc* seatCorpse=nullptr;
@@ -2162,8 +2163,10 @@ const char* questReason(uint8_t hazards) {
   return hazards==3 ? "drop+water" : hazards==2 ? "water" : hazards==1 ? "drop" : "none";
   }
 
-bool chooseQuestSite(World& world, bool water, Bench::QuestSite& site) {
-  if(site.ready) return true;
+bool chooseQuestSite(World& world, bool water, Bench::QuestSite& site,
+                     const std::function<bool(Bench::QuestSite&)>& accept={}) {
+  if(site.ready && (!accept || accept(site))) return true;
+  site.ready=false;
   std::vector<const WayPoint*> points;
   if(!water)
     if(const auto* point=world.findPoint("NW_XARDAS_TOWER_VALLEY_02",false)) points.push_back(point);
@@ -2201,6 +2204,7 @@ bool chooseQuestSite(World& world, bool water, Bench::QuestSite& site) {
           continue;
         if(physics->ray(dry+Vec3(0,110,0),edge+Vec3(0,110,0)).hasCol) continue;
         site={true,dry,direction,water ? liquid.wdepth : 0,point->name};
+        if(accept && !accept(site)) {site.ready=false;continue;}
         return true;
         }
       }
@@ -2393,18 +2397,25 @@ void spellFields(World& world) {
     const auto& q=npc.ragdollQuestReturnState();
     const auto returns=npc.ragdollQuestReturnCount();
     event("spell_guard_frame","\"position_cm\":"+ragdollVector(npc.position())+
+      ",\"case\":"+jsonStr(bench.spellGuardCase)+
       ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"return_from_cm\":"+ragdollVector(npc.ragdollQuestReturnFrom())+
       ",\"hp\":"+std::to_string(npc.attribute(ATR_HITPOINTS))+
       ",\"human\":"+(npc.isHuman()?"true":"false")+",\"hero\":"+(npc.isPlayer()?"true":"false")+
       ",\"immortal\":"+(npc.isImmortal()?"true":"false")+
-      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"standing\":"+(npc.isStanding()?"true":"false")+
+      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"falling\":"+(npc.isFalling()?"true":"false")+
+      ",\"standing\":"+(npc.isStanding()?"true":"false")+
       ",\"unconscious\":"+(npc.isUnconscious()?"true":"false")+",\"dead\":"+(npc.isDead()?"true":"false")+
       ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
       ",\"hazards\":"+std::to_string(q.hazards)+",\"returns\":"+std::to_string(returns));
     if(returns>bench.spellGuardObservedReturns) {
       const auto from=npc.ragdollQuestReturnFrom();
       const auto floor=world.physic()->landRay(from+Vec3(0,200,0),6000);
+      const auto water=world.physic()->waterRay(from,200.f);
       event("spell_guard_landing","\"from_cm\":"+ragdollVector(from)+",\"to_cm\":"+ragdollVector(npc.position())+
+        ",\"case\":"+jsonStr(bench.spellGuardCase)+",\"hazards\":"+std::to_string(q.hazards)+
+        ",\"has_water\":"+(water.hasCol?"true":"false")+
+        ",\"water_y_cm\":"+ragdollNumber(water.wdepth)+
+        ",\"water_depth_cm\":"+ragdollNumber(water.wdepth-from.y)+
         ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"returns\":"+std::to_string(returns)+
         ",\"has_floor\":"+(floor.hasCol?"true":"false")+
         ",\"floor_cm\":"+(floor.hasCol?ragdollVector(floor.v):"null")+
@@ -2563,11 +2574,15 @@ void livingSeatFields(World& world) {
     bench.seatPreviousParts.resize(pose.size());
     for(auto bone:body->boneIndices()) bench.seatPreviousParts[bone]={pose[bone].at(3,0),pose[bone].at(3,1),pose[bone].at(3,2)};
     }
+  else {
+    bench.seatPreviousParts.clear();
+    }
   const auto* corpse=bench.seatCorpse ? bench.seatCorpse->ragdollBody() : nullptr;
   if(corpse) for(const auto& part:corpse->state().parts) corpseSpeed=std::max(corpseSpeed,part.linearVelocity.length());
   std::string items="[";
   for(size_t i=0;i<bench.seatItems.size();++i) {
     const auto p=bench.seatItems[i]->position();
+    itemSpeed=std::max(itemSpeed,bench.seatItems[i]->physicsVelocity().length());
     if(bench.seatPreviousItems.size()==bench.seatItems.size() && seconds>0)
       itemSpeed=std::max(itemSpeed,(p-bench.seatPreviousItems[i]).length()/seconds);
     if(i) items+=',';
@@ -3082,59 +3097,115 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     prepareSpellFixture(w,pl,a[2]);
     if(!bench.spellActors.empty()) exec("watch watched",w,pl,ctrl);
     }
-  else if(c=="spell" && a.size()==2 && a[1]=="guard-fixture") {
+  else if(c=="spell" && (a.size()==2 || a.size()==3) && a[1]=="guard-fixture") {
     prepareSpellFixture(w,pl,"wind");
     if(bench.spellActors.empty()) return;
-    if(!chooseQuestSite(w,false,bench.questCliff)) {arenaAbort("wind guard needs a real cliff");return;}
-    auto& site=bench.questCliff;
-    // Retain at least 50 cm of dry, flat support in front of the starting body.
-    const auto original=site.dry;
-    bool foundSupport=false;
-    for(float advance=-150;advance<=700;advance+=10) {
-      const auto at=original+site.direction*advance;
+    const bool water=a.size()==3 && a[2]=="water";
+    bench.spellGuardCase=water?"water":"cliff";
+    auto& site=water?bench.questWater:bench.questCliff;
+    // Find a supported lip within reach of the finite wind impulse. Include
+    // caster height and intermediate shelves when choosing the trajectory.
+    Vec3 cliffFloor,hero;
+    const auto targetOffset=bench.spellActors[0].npc->collosionCenter()-bench.spellActors[0].npc->position();
+    const auto casterOffset=pl.collosionCenter()-pl.position();
+    const auto reachesHazard=[&](const Vec3& start,const Vec3& caster) {
+      const auto delta=start+targetOffset-caster-casterOffset;
+      const float distance=delta.length();
+      if(distance<1.f || distance>=1000.f) return false;
+      auto velocity=Vec3::normalize(delta/distance+Vec3(0,.35f,0))*(450.f*(1.f-distance/1000.f)/75.f*100.f);
+      auto at=start;
+      // Reject short landings on the lip or an intermediate shelf. This only
+      // chooses a fixture; the recorded throw still comes from the real spell.
+      for(unsigned frame=0;frame<180;++frame) {
+        at+=velocity/30.f;
+        velocity.y-=DynamicWorld::gravityMS*100.f/30.f;
+        const auto floor=w.physic()->landRay(Vec3(at.x,start.y+150.f,at.z),6000);
+        if(!floor.hasCol) return false;
+        if(water) {
+          const auto liquid=w.physic()->waterRay(floor.v+Vec3(0,5,0),0);
+          if(liquid.hasCol && at.y<liquid.wdepth-150.f && floor.v.y<liquid.wdepth-150.f) return true;
+          }
+        if(at.y<=floor.v.y)
+          return !water && start.y-floor.v.y>1000.f && floor.n.y>.5f;
+        }
+      return false;
+      };
+    const auto findLip=[&](Bench::QuestSite& site) {
+      const auto original=site.dry;
       const auto side=Vec3(-site.direction.z,0,site.direction.x);
-      const auto center=w.physic()->landRay(at+Vec3(0,40,0),100);
-      bool supported=center.hasCol && center.n.y>.85f;
-      for(const auto delta:{Vec3(),site.direction*50.f,side*35.f,side*-35.f,site.direction*-35.f}) {
-        const auto floor=w.physic()->landRay(at+delta+Vec3(0,40,0),100);
-        supported=supported && floor.hasCol && floor.n.y>.85f && std::abs(floor.v.y-center.v.y)<15.f &&
-                  !w.physic()->waterRay(at+delta,15.f).hasCol;
+      for(float lateral : {0.f,-50.f,50.f,-100.f,100.f,-200.f,200.f}) {
+        for(float advance=700;advance>=-150;advance-=10) {
+          const auto at=original+site.direction*advance+side*lateral;
+          const auto center=w.physic()->landRay(at+Vec3(0,150,0),500);
+          bool supported=center.hasCol && center.n.y>.85f;
+          for(const auto delta:{Vec3(),site.direction*50.f,side*35.f,side*-35.f,site.direction*-35.f}) {
+            const auto floor=w.physic()->landRay(Vec3(at.x,center.v.y,at.z)+delta+Vec3(0,40,0),100);
+            supported=supported && floor.hasCol && floor.n.y>.85f && std::abs(floor.v.y-center.v.y)<15.f &&
+                      !w.physic()->waterRay(floor.v,15.f).hasCol;
+            }
+          for(float distance:{25.f,50.f,75.f}) {
+            const auto floor=w.physic()->landRay(center.v+site.direction*distance+Vec3(0,40,0),100);
+            // A low upward hop can land on a rising lip before reaching the drop.
+            supported=supported && (!floor.hasCol || floor.v.y<=center.v.y+2.f);
+            }
+          if(!supported) continue;
+          bool reachableEdge=false;
+          for(float distance:{100.f,125.f,150.f}) {
+            const auto floor=w.physic()->landRay(center.v+site.direction*distance+Vec3(0,40,0),500);
+            if(!floor.hasCol || center.v.y-floor.v.y>60.f) {reachableEdge=true;break;}
+            }
+          if(!reachableEdge) continue;
+          bool hazard=false;
+          for(float distance:{100.f,150.f,200.f,350.f,500.f,700.f}) {
+            const auto edge=center.v+site.direction*distance;
+            const auto floor=w.physic()->landRay(edge+Vec3(0,100,0),6000);
+            if(!floor.hasCol || w.physic()->ray(center.v+Vec3(0,110,0),edge+Vec3(0,110,0)).hasCol) continue;
+            const auto liquid=w.physic()->waterRay(floor.v+Vec3(0,5,0),0);
+            if(water ? !liquid.hasCol || liquid.wdepth-floor.v.y<150.f || liquid.wdepth>center.v.y : center.v.y-floor.v.y<=1200.f) continue;
+            cliffFloor=floor.v;
+            if(water) site.waterY=liquid.wdepth;
+            hazard=true;break;
+            }
+          if(!hazard) continue;
+          for(float distance:{150.f,200.f,250.f,300.f}) {
+            const auto caster=center.v-site.direction*distance;
+            const auto floor=w.physic()->landRay(caster+Vec3(0,100,0),300);
+            if(!floor.hasCol || floor.n.y<.85f ||
+               w.physic()->waterRay(floor.v,15.f).hasCol ||
+               w.physic()->ray(floor.v+Vec3(0,110,0),center.v+Vec3(0,110,0)).hasCol) continue;
+            if(!reachesHazard(center.v,floor.v)) continue;
+            site.dry=center.v;hero=floor.v;return true;
+            }
+          }
         }
-      if(!supported) {
-        if(foundSupport) break;
-        continue;
-        }
-      site.dry=center.v;foundSupport=true;
-      }
-    if(!foundSupport) {arenaAbort("wind guard lacks 50 cm supported cliff margin");return;}
-    bool visibleDrop=false;
-    Vec3 cliffFloor;
-    for(float distance:{100.f,150.f,200.f,350.f,500.f,700.f}) {
-      const auto edge=site.dry+site.direction*distance;
-      const auto floor=w.physic()->landRay(edge+Vec3(0,100,0),6000);
-      if(floor.hasCol && site.dry.y-floor.v.y>1200.f &&
-         !w.physic()->ray(site.dry+Vec3(0,110,0),edge+Vec3(0,110,0)).hasCol) {
-        visibleDrop=true;cliffFloor=floor.v;break;
-        }
-      }
-    if(!visibleDrop) {arenaAbort("wind guard cliff lacks a visible 12 m drop");return;}
+      return false;
+    };
+    if(!chooseQuestSite(w,water,site,findLip)) {arenaAbort("wind guard lacks supported lip and viable throw");return;}
     auto* npc=bench.spellActors[0].npc;
     for(size_t i=1;i<bench.spellActors.size();++i) w.removeNpc(*bench.spellActors[i].npc);
     bench.spellActors.resize(1);bench.crew.clear();bench.crew.push_back(npc);
+    // The hazard site is separate from the spell arena cleared above. Keep
+    // nearby monsters from interrupting the real cast with a hurt animation.
+    constexpr float clearRadius=3500.f;
+    std::vector<Npc*> monsters;
+    for(uint32_t i=0;i<w.npcCount();++i)
+      if(auto* other=w.npcById(i);other && other->isMonster() &&
+         ((other->position()-hero).length()<clearRadius || (other->position()-site.dry).length()<clearRadius))
+        monsters.push_back(other);
+    for(auto* monster:monsters) w.removeNpc(*monster);
     npc->handle().flags=zenkit::NpcFlag(uint32_t(npc->handle().flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
     npc->handle().attribute[ATR_HITPOINTS]=npc->handle().attribute[ATR_HITPOINTSMAX]=50000;
     npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
     npc->setPosition(site.dry);npc->setDirection(site.direction);npc->updateTransform();
-    auto hero=site.dry-site.direction*300.f;
-    const auto floor=w.physic()->landRay(hero+Vec3(0,300,0),1500);
-    if(!floor.hasCol) {arenaAbort("wind caster lacks real ground support");return;}
-    hero.y=floor.v.y;pl.setPosition(hero);pl.setDirection(site.direction);pl.updateTransform();
+    pl.setPosition(hero);pl.setDirection(site.direction);pl.updateTransform();
     Gothic::settingsSetI("GAME","spell_physics",1);Gothic::settingsSetI("GAME","ragdoll_quest_guard",1);
     bench.spellGuardTrace=true;bench.spellGuardObservedReturns=0;
     bench.subject=npc;exec("watch watched",w,pl,ctrl);
     event("spell_guard_setup","\"actor_id\":"+std::to_string(w.npcId(npc))+
+      ",\"case\":"+jsonStr(bench.spellGuardCase)+",\"water_y_cm\":"+ragdollNumber(site.waterY)+
       ",\"site\":"+jsonStr(site.waypoint)+",\"stable_cm\":"+ragdollVector(site.dry)+
       ",\"hero_cm\":"+ragdollVector(hero)+",\"direction\":"+ragdollVector(site.direction)+
+      ",\"cleared_monsters\":"+std::to_string(monsters.size())+",\"clear_radius_cm\":"+ragdollNumber(clearRadius)+
       ",\"cliff_floor_cm\":"+ragdollVector(cliffFloor)+",\"support_margin_cm\":50");
     }
   else if(c=="spell" && a.size()==3 && a[1]=="target") {
@@ -3336,6 +3407,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("living_seat_attach",std::string("\"attached\":")+(attached?"true":"false")+",\"jump_cm\":"+
       ragdollNumber((bench.seatNpc->position()-from).length()));
     if(!attached) arenaAbort("real NPC bench attachment failed");
+    }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="stand") {
+    if(!bench.seatNpc) return;
+    bench.seatNpc->setInteraction(nullptr,false);
+    bench.seatPhase="stand";
     }
   else if(c=="living-seat" && a.size()==2 && a[1]=="shift") {
     if(!bench.seatNpc) return;
@@ -3969,8 +4045,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.smValid = false;
     if(m=="game") {
       bench.cam = C_Game;
-      if(auto cam = Gothic::inst().camera())
+      // the game's camera as the player has it: without the near clip `view clean` gives the bench's shots
+      // (130 cm after `cam follow 230`: the hero was clipped away, the aim camera's collision rays hit
+      // the ground under him)
+      if(auto cam = Gothic::inst().camera()) {
         cam->setMarvinMode(Camera::M_Normal);
+        cam->setNearClip(10);
+        }
       }
     else if(m=="follow" || m=="front" || m=="auto") {
       bench.cam       = C_Follow;
