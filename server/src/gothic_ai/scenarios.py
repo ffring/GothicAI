@@ -1903,7 +1903,11 @@ async def companion_scenario(
     - go_to: told to go into the cave first, it walks into the bandits' cave and waits there; the freed
       bandits in it do not fall on it;
     - attack: the bandit's own model decides to attack the hero (scripted): the scripts' attack;
-    - defend: the companion fights him at once, with no order, and follows the hero again after;
+    - defend: the companion, told «Погоди.» 20 m off (an order now: 2026-10-14 the model took it for «I
+      no longer need you», and Cavalorn stood by while the bandits beat the hero 20 m from him), fights
+      him at once, with no order, and follows the hero again after;
+    - party: it is the scripts' party member while it goes with the hero, so that
+    - xp: the bandit it beats gives the hero the experience (ZS_Dead, ZS_Unconscious);
     - sees_cave, focus (with `perception`, step M1 of docs/npc-tools.md): in the cave, having looked around,
       it sees a bandit there (the other may be behind the cave's bend), with its id for its intent; whom the
       hero faces is his focus in its view, and a target.
@@ -2064,6 +2068,20 @@ async def companion_scenario(
             focus == bandit and sight is not None and bandit in sight.targets,
             f"hero looks at {focus}",
         )
+    # «Погоди.» 20 m from the bandit, then the hero goes up to him alone
+    hero = ["inst", "HERO"]
+    party = await link.evaluate(["field", ["inst", npc], "AIVAR", 15])
+    check("party", party == 1, f"AIV_PARTYMEMBER {party}")
+    await link.debug("player_goto", near=bandit, distance=2000)
+    await _until(lambda: 0 <= dist() <= 6 and dist(bandit) >= 15, 20)
+    talk.hear("Кавалорн, погоди.", None, {"via": "scenario"})
+    halted = await _until(
+        lambda: talk.orders is not None and getattr(talk.orders.standing.get(npc), "kind", "") == "halt", 5
+    )
+    await link.debug("teleport", near=bandit, distance=250)
+    await _until(lambda: 0 <= dist(bandit) <= 5 and dist() >= 12, 15)
+    far = dist()
+    exp = await link.evaluate(["field", hero, "EXP"])
     t0 = time.monotonic()
     talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
     attacked = await _until(lambda: any(e["kind"] == "attack" for e in entries), 20)
@@ -2072,8 +2090,17 @@ async def companion_scenario(
         lambda: any(c[3].get("npc", "").upper() == bandit for c in since(t0, "fight")), 30
     )
     started = since(t0, "fight")
-    check("defend", defended, f"{started[0][0] - t0:.1f} s after the words" if started else "no fight")
+    check(
+        "defend",
+        halted and defended and far >= 12,
+        f"halted {halted} {far:.1f} m off, fights {started[0][0] - t0:.1f} s after the words"
+        if started
+        else f"halted {halted} {far:.1f} m off, no fight",
+    )
     down = await _until(lambda: bandit not in talk.people or talk.people[bandit].activity == "down", 90)
+    await asyncio.sleep(1)
+    gained = await link.evaluate(["field", hero, "EXP"])
+    check("xp", down and gained > exp, f"exp {exp} -> {gained}")
     after = await _until(lambda: calls[-1][1] == "follow" and 0 <= dist() <= 8, 30)
     defends = [e for e in entries if e["kind"] == "defend"]
     check("after", down and after, f"bandit down {down}, follows {after}, stood up {len(defends)} time(s)")
@@ -2272,6 +2299,88 @@ async def ground_scenario(
         check("follows", following and back, f"{dist():.1f} m")
     finally:
         link.act = act  # type: ignore[method-assign]
+    return _logged(results)
+
+
+async def hearing_scenario(
+    link: GameLink,
+    talk: TalkDesk,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    bandit: str = "BDT_1013_BANDIT_L",
+    brago: str = "BDT_1014_BANDIT_L",
+) -> dict[str, str]:
+    """Who hears the hero (the user, 2026-10-14: at Cavalorn's fire his words went to a bandit he thought
+    was in the cave behind the rock). The hero by Cavalorn's fire. Checks:
+    - free: nothing between him and Cavalorn, his voice goes straight on (`heard` = `distance`);
+    - line: the bandit by the steps below the tower, 36 m off, is in a straight line from him (the words
+      that went to it on 2026-10-14 went by its name, not through the rock);
+    - words: «…помочь тебе с бандитами», looking at Cavalorn, are to Cavalorn, not to the bandit;
+    - cave: the hero in the bandits' cave by Brago: the bandit by the steps outside does not hear him;
+    - round: the hero in the passage to the cave: his voice goes round the bend to Brago, farther than
+      straight on."""
+
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    def at(who: str) -> str:
+        e = talk.people.get(who)
+        return f"{e.distance / 100:.1f} m, heard {e.earshot / 100:.1f} m" if e is not None else "not around"
+
+    await link.debug("skip_important", near=npc)  # Cavalorn's own greeting would stop the hero
+    for _ in range(2):  # the goblins by his fire
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("hearing: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=150)
+    near = await _until(
+        lambda: npc in talk.people and talk.people[npc].distance <= 500 and bandit in talk.people, 20
+    )
+    if not near:
+        return _logged({"roster": f"failed ({npc}: {at(npc)}, {bandit}: {at(bandit)})"})
+    await asyncio.sleep(1.5)  # a roster or two where he stands
+    log.info(
+        "hearing: %s",
+        [
+            (e.id, round(e.distance), round(e.earshot))
+            for e in sorted(talk.people.values(), key=lambda e: e.distance)
+        ],
+    )
+    me, him = talk.people[npc], talk.people[bandit]
+    check("free", me.heard is not None and abs(me.earshot - me.distance) < 1, at(npc))
+    check("line", him.heard is not None and abs(him.earshot - him.distance) < 1, at(bandit))
+    talk.hear("Можешь отдать за моё обещание помочь тебе с бандитами?", npc, {"via": "scenario"})
+    to = talk.last[0] if talk.last is not None else None
+    check("words", to is not None and to.id == npc, f"to {to.id if to else None} ({to.why if to else ''})")
+
+    await link.debug("skip_important", near=brago)
+    await link.debug("player_goto", to=brago, distance=300)
+    inside = await _until(lambda: brago in talk.people and talk.people[brago].distance <= 600, 20)
+    await asyncio.sleep(1.5)
+    log.info(
+        "hearing in the cave: %s",
+        [
+            (e.id, round(e.distance), round(e.earshot))
+            for e in sorted(talk.people.values(), key=lambda e: e.distance)
+        ],
+    )
+    out = talk.people.get(bandit)
+    walled = out is not None and out.earshot > out.distance + 100
+    check("cave", inside and walled, f"{brago}: {at(brago)}, {bandit}: {at(bandit)}")
+    await link.debug("player_goto", waypoint="NW_XARDAS_BANDITS_02")  # in the passage, the cave round a bend
+    await asyncio.sleep(1.5)
+    log.info(
+        "hearing in the passage: %s",
+        [
+            (e.id, round(e.distance), round(e.earshot))
+            for e in sorted(talk.people.values(), key=lambda e: e.distance)
+        ],
+    )
+    e = talk.people.get(brago)
+    check("round", e is not None and e.distance + 100 < e.earshot < 20000, at(brago))
     return _logged(results)
 
 

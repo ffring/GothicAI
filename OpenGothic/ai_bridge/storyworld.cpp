@@ -26,6 +26,15 @@ using namespace Tempest;
 
 namespace {
 
+// the npc goes with the hero: a companion's dialog, or the server's `party` effect (v30), marked it
+bool partyMember(World& world, const Npc& npc) {
+  auto* s = world.script().getVm().find_symbol_by_name("AIV_PARTYMEMBER");
+  if(s==nullptr || s->type()!=zenkit::DaedalusDataType::INT)
+    return false;
+  const int32_t aiv = s->get_int(0);
+  return aiv>=0 && uint32_t(aiv)<zenkit::INpc::aivar_count && npc.handlePtr()->aivar[size_t(aiv)]!=0;
+  }
+
 constexpr uint64_t ScanMs   = 500;   // how often deaths are looked for
 constexpr uint64_t ReportMs = 1000;  // how often tags are reported
 
@@ -424,8 +433,9 @@ void StoryWorld::tick(World& world) {
       if(n==nullptr || !n->isDead() || n->isPlayer() || !dead.insert(n).second || !primed)
         continue;
       Npc* by = n->lastHitBy();
-      if(by!=nullptr && by->isPlayer()) {
-        // whoever the hero killed, person or creature (v17): an npc's contract may count it
+      if(by!=nullptr && (by->isPlayer() || partyMember(world,*by))) {
+        // whoever the hero killed, person or creature (v17): an npc's contract may count it. One of his
+        // companions killed counts too (v30), as the scripts give him the experience for it (ZS_Dead)
         JsonWriter k("hero_kill");
         k.str("npc",symbolOf(world,*n)).str("name",TextCodec::toUtf8(n->displayName()))
          .integer("guild",int64_t(n->guild())).boolean("monster",n->isMonster());

@@ -15,7 +15,8 @@ namespace zenkit {
 // What the director makes happen, through the scripts' own functions (docs/story-graph.md, stages 3–4):
 // in a dialog of its own, or as the consequence of a lie found out.
 struct StoryEffect final {
-  std::string kind;     // give, xp, set, journal, end, attack, refuse_talk, routine, create, teach, calm, knows
+  std::string kind;     // give, xp, set, journal, end, attack, refuse_talk, routine, create, teach, calm, party,
+                        // knows
   std::string item;     // give, create: item instance
   std::string teach;    // teach: attribute, fight, circle, rune, thief, alchemy, smith, trophy (v17)
   std::string arg;      // teach: the scripts' constant (ATR_STRENGTH, NPC_TALENT_1H, SPL_*, POTION_*...)
@@ -29,7 +30,7 @@ struct StoryEffect final {
   std::string attitude; // calm: ATT_* constant, how it treats the hero from now on (default ATT_NEUTRAL; v20)
   std::string info;     // knows: a dialog (C_INFO) the hero has heard from now on, as when it is played (v31)
   int32_t     count  = 1;  // give, create: count; xp: amount; set: value; refuse_talk: seconds;
-                           // teach: points (attribute), percent (fight), circle (circle)
+                           // teach: points (attribute), percent (fight), circle (circle); party: 1 on, 0 off
   bool        toHero = true;  // give: the npc gives to the hero, else the hero to the npc
 
   // `{"do": "give", "item": ..., ...}`; an error if it is malformed or, with a VM, names something

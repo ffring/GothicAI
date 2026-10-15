@@ -67,7 +67,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # how far the hero is heard (user, 2026-10-13: 20 m for a name and 8 m for the partner lost words said on
-# the run, to a companion a few steps behind or to one he called from afar)
+# the run, to a companion a few steps behind or to one he called from afar). Along the way his voice goes
+# (RosterEntry.earshot, v30): round rock and walls, never through them
 NAME_CM = 4000.0  # a name is heard this far: it is called out
 FOCUS_CM = 2500.0  # the npc the hero looks at, if not farther than this
 PARTNER_CM = 1500.0  # the current partner stays the addressee this close
@@ -141,10 +142,16 @@ def edits(a: str, b: str, limit: float) -> float:
     return min(prev[-1], limit + 1)
 
 
-def _forms(word: str) -> list[tuple[str, bool]]:
-    """The word, and the word without a case ending (True)."""
-    return [(word, False)] + [
-        (word[: -len(e)], True) for e in _ENDINGS if word.endswith(e) and len(word) - len(e) >= 3
+# plural case endings of a name that ends in a consonant: such a word is those like it, never the one npc
+# (2026-10-14 «помогу тебе с бандитами», said to Cavalorn, went to a bandit called «Бандит»)
+_PLURAL = frozenset(("ами", "ам", "ах", "ы", "и"))
+_SOFT = frozenset("аеиоуыэюяйь")
+
+
+def _forms(word: str) -> list[tuple[str, str]]:
+    """The word, and the word without a case ending (with the ending)."""
+    return [(word, "")] + [
+        (word[: -len(e)], e) for e in _ENDINGS if word.endswith(e) and len(word) - len(e) >= 3
     ]
 
 
@@ -160,8 +167,14 @@ def name_edits(word: str, part: str, misheard: bool = False) -> float | None:
         slack = 0.0 if n <= 3 else 0.5 if n == 4 else 1.0 if n <= 7 else 2.0
     else:
         slack = 0.5 if n >= 5 else 0.0
+    plural = part[-1] not in _SOFT  # «Бандит»: «бандиты», «с бандитами» are not it
     best = min(
-        (edits(w, p, slack) for w, w_cut in _forms(word) for p, p_cut in _forms(part) if w_cut or not p_cut),
+        (
+            edits(w, p, slack)
+            for w, w_cut in _forms(word)
+            for p, p_cut in _forms(part)
+            if (w_cut or not p_cut) and not (plural and not p_cut and w_cut in _PLURAL)
+        ),
         default=slack + 1,
     )
     return best if best <= slack else None
@@ -239,9 +252,9 @@ def addressee(
     alive = {k: e for k, e in people.items() if e.activity != "down"}
     phrase, by = words(text), calls(text)
     fighting = [
-        e for e in alive.values() if fights(e) and e.distance <= ATTACKER_CM and not ours(e.id.upper())
+        e for e in alive.values() if fights(e) and e.earshot <= ATTACKER_CM and not ours(e.id.upper())
     ]
-    group = [e for e in alive.values() if e.distance <= PARTNER_CM]
+    group = [e for e in alive.values() if e.earshot <= PARTNER_CM]
     # in a fight «Стой, пацаны!» is to whoever is at him, as before: words to him, not an order to his own
     several = len(group) >= 2 and not fighting
 
@@ -249,44 +262,46 @@ def addressee(
         if focus and (e := alive.get(focus.upper())) is not None and e in group:
             return Addressee(e.id.upper(), e.name, "group")
         others = [e for e in group if not ours(e.id.upper())] or group
-        e = min(others, key=lambda e: (-lead(e.id.upper()), e.distance))
+        e = min(others, key=lambda e: (-lead(e.id.upper()), e.earshot))
         return Addressee(e.id.upper(), e.name, "group")
 
     near = [
         (d, e, named(by, e.name, by) is not None)
         for e in alive.values()
-        if e.distance <= NAME_CM and (d := named(phrase, e.name, by)) is not None
+        if e.earshot <= NAME_CM and (d := named(phrase, e.name, by)) is not None
     ]
     # a name called out («Браго, …») before one only spoken of («…кто ограбил Кавалорна»): 2026-10-14 the
     # nearer Cavalorn took words meant for Brago
     called = [(d, e) for d, e, out in near if out]
     if called:
         # the name heard best ("Лестер!" with Фестер near too), then the nearer one
-        _, e = min(called, key=lambda de: (de[0], de[1].distance))
+        _, e = min(called, key=lambda de: (de[0], de[1].earshot))
         return Addressee(e.id.upper(), e.name, "name")
+    if by and any(e.earshot > NAME_CM and named(by, e.name) is not None for e in alive.values()):
+        return None  # called out to one who does not hear it: nobody near takes the words meant for it
     if several and to_several(by):  # «Пацаны, …»: they are called out, whoever is spoken of
         return to_group()
     if near:
-        _, e, _ = min(near, key=lambda de: (de[0], de[1].distance))
+        _, e, _ = min(near, key=lambda de: (de[0], de[1].earshot))
         return Addressee(e.id.upper(), e.name, "name")
     if several and to_several(phrase):
         return to_group()
-    if focus and (e := alive.get(focus.upper())) is not None and e.distance <= FOCUS_CM:
+    if focus and (e := alive.get(focus.upper())) is not None and e.earshot <= FOCUS_CM:
         return Addressee(e.id.upper(), e.name, "focus")
     if fighting:  # in a fight he speaks to whoever is at him, where he looks or not
-        e = min(fighting, key=lambda e: e.distance)
+        e = min(fighting, key=lambda e: e.earshot)
         return Addressee(e.id.upper(), e.name, "attacker")
-    if partner and (e := alive.get(partner)) is not None and e.distance <= PARTNER_CM:
+    if partner and (e := alive.get(partner)) is not None and e.earshot <= PARTNER_CM:
         return Addressee(e.id.upper(), e.name, "partner")
     # a scene starts only while he has no partner, so this never takes words meant for one
-    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.distance <= SCENE_CM]
+    near = [e for n in scene if (e := alive.get(n.upper())) is not None and e.earshot <= SCENE_CM]
     if near:
         seen = [e for e in near if e.in_view]
-        e = min(seen, key=lambda e: e.distance) if seen else near[0]
+        e = min(seen, key=lambda e: e.earshot) if seen else near[0]
         return Addressee(e.id.upper(), e.name, "scene")
-    front = [e for e in alive.values() if e.in_view and e.distance <= FRONT_CM]
+    front = [e for e in alive.values() if e.in_view and e.earshot <= FRONT_CM]
     if front:
-        e = min(front, key=lambda e: e.distance)
+        e = min(front, key=lambda e: e.earshot)
         return Addressee(e.id.upper(), e.name, "front")
     return None
 
@@ -669,8 +684,8 @@ class TalkDesk:
             npc = e.id.upper()
             if npc in obeying:
                 continue  # an order: it remembers that it was given one (orders.py)
-            if (to is None or npc != to.id) and e.distance <= OVERHEAR_CM and e.activity != "down":
-                if to is not None and to.why == "group" and e.distance <= PARTNER_CM:
+            if (to is None or npc != to.id) and e.earshot <= OVERHEAR_CM and e.activity != "down":
+                if to is not None and to.why == "group" and e.earshot <= PARTNER_CM:
                     self.dialogue.told_all(npc, e.name, text, to.name)  # to it too
                 else:
                     self.dialogue.overheard(npc, e.name, text, to.name if to else None)

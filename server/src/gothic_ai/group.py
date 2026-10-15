@@ -211,7 +211,7 @@ class GroupTalk:
 
     def _near_hero(self, npc: str) -> bool:
         e = self.talk.people.get(npc.upper())
-        return e is not None and e.activity != "down" and e.distance <= GROUP_CM
+        return e is not None and e.activity != "down" and e.earshot <= GROUP_CM
 
     # --- to each other ---------------------------------------------------------------------------
 
@@ -374,7 +374,9 @@ class GroupTalk:
                 seat.dropped = True  # still waiting: it will not speak
                 cut = True
         for npc in {s.npc for s in self.seats if not s.dropped} | set(self.members):
-            if npc != partner and self.dialogue.interrupt(npc):
+            # one who does not hear him goes on (2026-10-14 the hero's words to a bandit cut Cavalorn's «Они
+            # уже обнажили оружие» 20 m from him, and the fight it was about to set itself on)
+            if npc != partner and self._near_hero(npc) and self.dialogue.interrupt(npc):
                 cut = True
         self._new_round()
         return cut

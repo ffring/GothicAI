@@ -110,7 +110,7 @@ class Interjections:
     def covers(self, npc: str) -> bool:
         """The npc is near the hero: whether it speaks up at his words is asked here."""
         e = self.talk.people.get(npc.upper())
-        return e is not None and e.activity != "down" and e.distance <= GROUP_CM
+        return e is not None and e.activity != "down" and e.earshot <= GROUP_CM
 
     def candidates(self, speaker: str) -> list[RosterEntry]:
         """Who is asked: the nearest near the hero, but not the one who answered, whoever is fighting,
@@ -124,7 +124,7 @@ class Interjections:
             and npc not in self._before
             and not self.dialogue.speaking(npc)
         ]
-        return sorted(out, key=lambda e: e.distance)[:ASK_MAX]
+        return sorted(out, key=lambda e: e.earshot)[:ASK_MAX]
 
     async def _ask(self, speaker: str, name: str, answer: str, phrase: tuple[Addressee | None, str]) -> None:
         to, said = phrase

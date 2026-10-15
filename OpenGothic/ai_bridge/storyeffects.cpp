@@ -151,6 +151,11 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
       return "knows: no dialog " + e.info;
     return e.info.empty() ? "knows: needs a dialog" : "";
     }
+  if(e.kind=="party") {
+    if(vm && vm->find_symbol_by_name("AIV_PARTYMEMBER")==nullptr)
+      return "party: the scripts have no AIV_PARTYMEMBER";
+    return {};
+    }
   if(e.kind=="xp" || e.kind=="end")
     return {};
   return "unknown effect " + e.kind;
@@ -249,6 +254,13 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
     if(dlg!=nullptr && w!=nullptr)
       w->script().setNpcInfoKnown(player.handle(),*dlg); else
       Log::e("[story] ",who,": knows ",info,": no such dialog in the world");
+    }
+  else if(kind=="party") {
+    // the npc goes with the hero (v30), as a companion's dialog marks it: whom it kills gives him the
+    // experience (ZS_Dead), its blows at him are friendly fire
+    const int32_t aiv = intConst(vm,"AIV_PARTYMEMBER");
+    if(aiv>=0 && uint32_t(aiv)<zenkit::INpc::aivar_count)
+      npc.handlePtr()->aivar[size_t(aiv)] = count!=0 ? 1 : 0;
     }
   else if(kind=="refuse_talk") {
     call("NPC_SETREFUSETALK",{Value::instance(npc.handlePtr()),Value::integer(count)});
