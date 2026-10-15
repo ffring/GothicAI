@@ -978,8 +978,18 @@ void Ragdoll::prepareKinematicStep(float deltaSeconds) {
     impl->dirty[i]=false;
     if(impl->activeParts[i]) continue;
     const auto& target=impl->targets[i];
-    interface.MoveKinematic(impl->native->GetBodyID(int(i)),target.GetTranslation(),target.GetQuaternion(),deltaSeconds);
-    impl->moving.push_back(i);
+    const auto id=impl->native->GetBodyID(int(i));
+    // Interaction attachment and script repositioning can change a ready pose
+    // abruptly. Teleport instead of turning that discontinuity into contact
+    // velocity; compare against the native pose even if targets were coalesced.
+    if((JPH::Vec3(interface.GetPosition(id))-target.GetTranslation()).LengthSq()>.5f*.5f) {
+      interface.SetPositionAndRotation(id,target.GetTranslation(),target.GetQuaternion(),JPH::EActivation::DontActivate);
+      interface.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+      }
+    else {
+      interface.MoveKinematic(id,target.GetTranslation(),target.GetQuaternion(),deltaSeconds);
+      impl->moving.push_back(i);
+      }
     }
   }
 

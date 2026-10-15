@@ -1059,10 +1059,12 @@ void Npc::prepareRagdoll() {
   }
 
 void Npc::prepareLivingBody() {
-  constexpr float radius = 2000.f;
+  constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
   const auto* hero = owner.player();
+  const bool outside = hero!=nullptr && (living ? qDistTo(*hero)>leaveRadius*leaveRadius
+                                               : qDistTo(*hero)>=enterRadius*enterRadius);
   if(isPlayer() || isDown() || ragdoll || hero==nullptr ||
-     Gothic::settingsGetI("GAME","living_bodies")==0 || qDistTo(*hero)>radius*radius) {
+     Gothic::settingsGetI("GAME","living_bodies")==0 || outside) {
     living.reset();
     livingRetryTick = 0;
     arrowImpacts.clear();
@@ -5572,6 +5574,10 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
+    // Mob attachment aligns the root discretely, even over short distances.
+    // Rebuild in the sequential physics handoff instead of sweeping the old
+    // kinematic pose into this alignment with a fictitious contact velocity.
+    livingNeedsRebuild = true;
     attachToPoint(nullptr); //NOTE: Fajeth campfire
     if(!quick) {
       visual.stopAnim(*this,"");

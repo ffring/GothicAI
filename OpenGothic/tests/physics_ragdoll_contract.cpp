@@ -317,6 +317,39 @@ void testKinematicPoseAndInteraction() {
       }
     require(item->position().x>15.f,"moving live capsules must transfer motion to a dynamic item through native contacts");
     }
+  {
+    CollisionWorld world,control;
+    auto ground=floor(world,.1f),controlGround=floor(control,.1f);
+    auto item=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto reference=control.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto object=at(-25,-75,0);
+    auto pose=fixture.skeleton.tr;
+    for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i];
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(bool(body),"teleport contact check needs a live rig touching a dynamic item");
+    const auto parts=world.bodyCount();
+    // Each queued change is below the guard. Only the accumulated distance
+    // from the real native frame reveals the 80 cm script/interaction jump.
+    for(int step=0;step<2;++step) {
+      object.set(3,0,object.at(3,0)+40.f);
+      for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i];
+      require(body->moveKinematic(pose.data(),pose.size(),object,.017f),"script jumps must queue ordinary solved poses");
+      }
+    float maxItemError=0;
+    for(int frame=0;frame<12;++frame) {
+      world.tick(17);control.tick(17);
+      maxItemError=std::max(maxItemError,(item->position()-reference->position()).length());
+      require(world.bodyCount()==parts,"teleporting must preserve native part count");
+      }
+    std::vector<Tempest::Matrix4x4> actual;
+    require(body->getPose(actual),"teleported native pose must remain available");
+    for(auto bone:body->poseIndices())
+      for(size_t component=0;component<16;++component)
+        near(actual[bone].data()[component],pose[bone].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+             "a teleport must reach the full requested pose and retain zero residual motion");
+    near(maxItemError,0,.01f,"an 80 cm kinematic jump must not launch a touching item along its old swept path");
+    std::printf("kinematic teleport distance_cm=80 queued_steps=2 item_delta_cm=%.9g parts=%zu\n",double(maxItemError),body->partCount());
+    }
   }
 
 void testLocalMotorReactions() {
