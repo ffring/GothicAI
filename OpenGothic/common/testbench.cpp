@@ -7961,7 +7961,44 @@ void aimCameraFrame(const std::string& shot) {
       }
     equipment+='}';
     }
+  // Check the rendered near plane and a 10 cm shell around the optical origin.
+  // Cast both ways so a wall's triangle winding cannot hide an embedded camera.
+  int wallHits = 0;
+  auto* world = Gothic::inst().world();
+  auto nearView = camera->viewProj();
+  nearView.inverse();
+  if(world!=nullptr) {
+    auto probe = [&](const Vec3& point) {
+      if(world->physic()->ray(origin,point).hasCol || world->physic()->ray(point,origin).hasCol)
+        ++wallHits;
+      };
+    for(float x:{-1.f,1.f})
+      for(float y:{-1.f,1.f}) {
+        Vec3 corner(x,y,0);
+        nearView.project(corner);
+        probe(corner);
+        }
+    for(const Vec3 axis:{Vec3(1,0,0),Vec3(0,1,0),Vec3(0,0,1)}) {
+      probe(origin+axis*10.f);
+      probe(origin-axis*10.f);
+      }
+    }
+  const Vec3 forward = facing(*pl);
+  const Vec3 shoulder = Camera::aimShoulder(pl->position(),forward);
+  Vec3 pivot, direction;
+  camera->aimRay(pivot,direction);
+  const bool wallAhead = world!=nullptr && world->physic()->ray(shoulder,shoulder+forward*85.f).hasCol;
+  const Vec3 look = pl->aimLook();
+  const Vec3 head = pl->mapHeadBone();
+  const auto edge = pl->aimEdge(look);
+  const auto headRay = pl->world().physic()->ray(head,head+look*200.f);
+  const bool headClear = !headRay.hasCol || (edge.found && headRay.v.y<edge.supportY-100.f);
   event("aim-camera","\"shot\":"+jsonStr(shot)+",\"origin\":"+ragdollVector(origin)+",\"front\":"+ragdollVector(front)+
+        ",\"camera_wall_hits\":"+std::to_string(wallHits)+",\"wall_ahead\":"+(wallAhead ? "true" : "false")+
+        ",\"pivot_reach_cm\":"+ragdollNumber(Vec3::dotProduct(pivot-shoulder,forward))+
+        ",\"feet\":"+ragdollVector(pl->position())+",\"head\":"+ragdollVector(head)+",\"stance_look\":"+ragdollVector(look)+
+        ",\"lean_deg\":"+ragdollNumber(Aim::playerProbe.lean)+",\"stance_head_clear\":"+(headClear ? "true" : "false")+
+        ",\"edge_distance_cm\":"+ragdollNumber(edge.found ? edge.distance : -1.f)+
         ",\"aim_point\":"+ragdollVector(aim)+",\"manual_aim_point\":"+ragdollVector(pl->manualAimPoint())+
         ",\"crosshair_point\":"+ragdollVector(crosshair)+",\"centered\":"+(centered ? "true" : "false")+
         ",\"pitch_deg\":"+ragdollNumber(pitch)+",\"draw\":"+ragdollNumber(Archer::playerProbe.draw)+",\"distance_cm\":"+ragdollNumber(distance)+

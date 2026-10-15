@@ -327,8 +327,8 @@ class Npc final {
     bool      isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const {
       return mvAlgo.isEdgeMoveBlocked(modelDirection);
       }
-    // where the hero looks aiming by hand (the center of the screen), zero if not known (an npc): leaning
-    // over an edge goes by it too
+    // The manual stance looks from the hero's shoulder toward the crosshair, independently of the camera.
+    auto      aimLookAt(const Tempest::Vec3& target) const -> Tempest::Vec3;
     void      setAimLook(const Tempest::Vec3& dir) { stanceLook = dir; }
     auto      aimLook()   const -> Tempest::Vec3 { return stanceLook; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
