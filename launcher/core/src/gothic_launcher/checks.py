@@ -19,6 +19,16 @@ from .settings import Config
 
 CHATGPT_TOKENS = Path.home() / ".config" / "gothic-ai" / "chatgpt.json"
 INWORLD_VOICES = "https://api.inworld.ai/tts/v1/voices"
+INWORLD_STREAM = "https://api.inworld.ai/tts/v1/voice:stream"
+# a line for a voice that does not exist: Inworld refuses it before speaking, so nothing is billed, and it
+# looks at the credits before the voice (402 on an empty account, then 404 for the voice), as tts-service does
+INWORLD_CHECK = {
+    "text": "Да.",
+    "voiceId": "gothic-ai-no-such-voice",
+    "modelId": "inworld-tts-2",
+    "language": "ru-RU",
+    "audioConfig": {"audioEncoding": "PCM", "sampleRateHertz": 24000},
+}
 DEFAULT_VOXTRAL_URL = "http://127.0.0.1:47830"  # the services' own defaults
 DEFAULT_VOXCPM_URL = "ws://127.0.0.1:47831"
 # share of cp1251 Cyrillic letters among the letters of OU.BIN: 0.27 in the Russian game, where line names
@@ -116,10 +126,10 @@ def game_folder(folder: Path | None) -> list[Check]:
     return checks
 
 
-async def providers(config: Config) -> dict[str, Any]:
+async def providers(config: Config, transport: httpx.AsyncBaseTransport | None = None) -> dict[str, Any]:
     """For each part (brain, voice, speech): its primary and fallback provider and whether they answer."""
     s = config.settings
-    async with httpx.AsyncClient(timeout=TIMEOUT_S, trust_env=False) as http:
+    async with httpx.AsyncClient(timeout=TIMEOUT_S, trust_env=False, transport=transport) as http:
         brain = asyncio.create_task(_llm(config, http))
         voice = asyncio.gather(
             *(_asr(name, config, http) for name in (s.voice.provider, s.voice.fallback) if name != "none")
@@ -174,15 +184,7 @@ async def _tts(name: str, config: Config, http: httpx.AsyncClient) -> Check:
             key = config.secrets.inworld_api_key
             if not key:
                 return Check("inworld", False, "Inworld", "Ключ не задан")
-            try:
-                auth = {"Authorization": f"Basic {key}"}
-                resp = await http.get(INWORLD_VOICES, params={"filter": "language=ru"}, headers=auth)
-            except httpx.HTTPError as err:
-                return Check("inworld", False, "Inworld", f"Не отвечает: {type(err).__name__}")
-            if resp.status_code in (401, 403):
-                return Check("inworld", False, "Inworld", "Ключ не подходит")
-            ok = resp.status_code == 200
-            return Check("inworld", ok, "Inworld", "Доступен" if ok else f"Ответил {resp.status_code}")
+            return await _inworld(key, http)
         case "voxcpm":
             url = config.settings.tts.voxcpm_url or DEFAULT_VOXCPM_URL
             return await _tcp("voxcpm", "VoxCPM2 на своём сервере", url)
@@ -191,6 +193,29 @@ async def _tts(name: str, config: Config, http: httpx.AsyncClient) -> Check:
             return Check("openai", ok, "Ключ OpenAI", "Ключ задан" if ok else "Ключ не задан")
         case _:
             return Check(provider, True, name, "Не проверяется")
+
+
+async def _inworld(key: str, http: httpx.AsyncClient) -> Check:
+    """The key and the credits, at no cost. The free voice list is no such check: an account without
+    credits still gets it, while every line is refused with 402."""
+    auth = {"Authorization": f"Basic {key}"}
+    try:
+        resp = await http.post(INWORLD_STREAM, json=INWORLD_CHECK, headers=auth)
+        status = resp.status_code
+        if status == 200 or (status == 404 and "Unknown voice" in resp.text):
+            return Check("inworld", True, "Inworld", "Доступен")  # refused for the voice alone
+        if status == 402:
+            return Check("inworld", False, "Inworld", "Нет кредитов: пополните счёт Inworld")
+        if status not in (401, 403) and status < 500:
+            # an answer this check does not know (Inworld changed?): the voice list decides, as before
+            resp = await http.get(INWORLD_VOICES, params={"filter": "language=ru"}, headers=auth)
+            status = resp.status_code
+    except httpx.HTTPError as err:
+        return Check("inworld", False, "Inworld", f"Не отвечает: {type(err).__name__}")
+    if status in (401, 403):
+        return Check("inworld", False, "Inworld", "Ключ не подходит")
+    ok = status == 200
+    return Check("inworld", ok, "Inworld", "Доступен" if ok else f"Ответил {status}")
 
 
 def _chatgpt(id_: str, title: str) -> Check:
