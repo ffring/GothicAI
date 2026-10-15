@@ -1248,7 +1248,7 @@ class DialogueManager:
                     try:
                         speech = await self.tts.stream(
                             text,
-                            conv.npc,
+                            conv.persona.voice_id,
                             conv.persona.voice,
                             start,
                             chunk,
@@ -1396,9 +1396,11 @@ class DialogueManager:
 
         mood = MOOD_DELIVERY[line.mood] if line.mood else ""
         style = "; ".join(s for s in (mood, QUIET_STYLE if quiet else "") if s)
-        voice = self.personas.get(line.npc, line.name).voice
+        persona = self.personas.get(line.npc, line.name)
         try:
-            speech = await self._scene_tts.stream(line.text, line.npc, voice, start, chunk, style)
+            speech = await self._scene_tts.stream(
+                line.text, persona.voice_id, persona.voice, start, chunk, style
+            )
         except TtsError as err:
             self._tts_off(line.npc, line.name, err)
             return None
@@ -1432,9 +1434,9 @@ class DialogueManager:
         async def chunk(pcm: bytes) -> None:
             await self.link.send(SayAudioCmd(npc=npc, line=line, data=base64.b64encode(pcm).decode()))
 
-        voice = self.personas.get(npc, name).voice
+        persona = self.personas.get(npc, name)
         try:
-            speech = await self._story_tts.stream(text, npc, voice, start, chunk)
+            speech = await self._story_tts.stream(text, persona.voice_id, persona.voice, start, chunk)
         except TtsError as err:
             self._tts_off(npc, name, err)
             return None

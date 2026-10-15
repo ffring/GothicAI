@@ -55,6 +55,7 @@ class StoryPatches:
         self.memory = memory
         self.static = static or []  # changes on every branch, never recorded
         self.branch: str | None = None
+        self.version = 0  # grows with every change of the log or of the branch: for readers that cache it
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
         if link.session is not None:
@@ -66,15 +67,23 @@ class StoryPatches:
 
     def characters(self) -> list[NpcSpec]:
         """The director's characters on the current branch, in the order they came."""
-        return [NpcSpec.model_validate(op["spec"]) for op in self._log() if op.get("op") == NPC]
+        return [NpcSpec.model_validate(op["spec"]) for op in self.cast()]
 
-    async def introduce(self, spec: NpcSpec) -> dict[str, Any]:
+    def cast(self) -> list[Op]:
+        """The records of the director's characters on the current branch: {"op", "spec", "person"?}."""
+        return [op for op in self._log() if op.get("op") == NPC]
+
+    async def introduce(self, spec: NpcSpec, person: dict[str, Any] | None = None) -> dict[str, Any]:
         """A character of the director's: the game makes it (or GameError says why not), then the branch
-        remembers it. The game's answer: {npc, state, index}."""
+        remembers it, with who it is as a person (cast.Person) if given. The game's answer: {npc, state,
+        index}."""
         if self.branch is None:
             raise GameError("the game has not reported a session yet")
         made = await self.link.story_npc(spec)
-        self._record({"op": NPC, "spec": spec.model_dump(exclude_none=True)})
+        record: Op = {"op": NPC, "spec": spec.model_dump(exclude_none=True)}
+        if person is not None:
+            record["person"] = person
+        self._record(record)
         return made
 
     def _log(self) -> list[Op]:
@@ -99,6 +108,7 @@ class StoryPatches:
 
     def _on_session(self, session: Session) -> None:
         self.branch = session.branch
+        self.version += 1
         self.memory.ensure_branch(session.branch, session.parent, session.parent_seq)
         ops, cast = self.ops(), self.characters()
         if ops or cast:
@@ -121,6 +131,7 @@ class StoryPatches:
         if self.branch is None:
             return
         seq = self.memory.add_patch(self.branch, json.dumps(op, ensure_ascii=False))
+        self.version += 1
         # the head goes into the next save: a load must bring this change back
         self._spawn(self.link.send(MemoryCmd(branch=self.branch, seq=seq)))
 

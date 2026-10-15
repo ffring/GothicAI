@@ -6,16 +6,22 @@ provider can cache it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import characters
 from .brain.day import Habit
 from .characters import Card
 from .gamedata.ou import load_npc_lines, voice_index
 from .protocol import Mood
+
+if TYPE_CHECKING:
+    from .cast import Person
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +158,29 @@ class Persona:
     instructions: str
     voice: str = DEFAULT_VOICE
     traits: str | None = None  # English, for the behavioral model
+    voice_key: str = ""  # the speech's voice id, when it is not the npc's own (a character of the director's)
+
+    @property
+    def voice_id(self) -> str:
+        """The TTS's id of the voice: it designs one per id and keeps it."""
+        return self.voice_key or self.npc
+
+
+def voice_key(npc: str, voice: str) -> str:
+    """A director's character's voice id: its symbol is reused by another character on another branch, its
+    voice is its own."""
+    return f"{npc}~{hashlib.sha1(voice.encode()).hexdigest()[:8]}"
+
+
+def person_parts(person: Person) -> list[str]:
+    """What a character of the director's knows of itself, besides its card: its past, what it knows, whom
+    it knows (cast.Person)."""
+    parts = [person.past] if person.past else []
+    if person.knows:
+        parts.append("Что ты знаешь:\n" + "\n".join(f"- {fact}" for fact in person.knows))
+    if person.ties:
+        parts.append("Кого ты знаешь:\n" + "\n".join(f"- {tie.how}" for tie in person.ties))
+    return parts
 
 
 def biography(npc: str, name: str, card: Card | None = None) -> str:
@@ -163,11 +192,14 @@ def biography(npc: str, name: str, card: Card | None = None) -> str:
     return f"{card.ru}\n{card.traits_ru()}" if card is not None else f"Ты — {name}, житель острова Хоринис."
 
 
-def render_instructions(npc: str, name: str, sample_lines: list[str], card: Card | None = None) -> str:
+def render_instructions(
+    npc: str, name: str, sample_lines: list[str], card: Card | None = None, about: list[str] | None = None
+) -> str:
     parts = [
         f"Ты играешь персонажа по имени {name} в мире Gothic 2: Ночь Ворона (остров Хоринис). "
         "С тобой говорит главный герой — безымянный герой.",
         biography(npc, name, card),
+        *(about or []),
         RULES.format(name=name),
     ]
     if sample_lines:
@@ -186,17 +218,34 @@ def pick_samples(lines: list[str], n: int = SAMPLE_LINES) -> list[str]:
 
 
 class PersonaProvider:
-    def __init__(self, game_dir: Path | None, cards: dict[str, Card] | None = None) -> None:
+    def __init__(
+        self,
+        game_dir: Path | None,
+        cards: Mapping[str, Card] | None = None,
+        people: Callable[[str], Person | None] = lambda npc: None,
+    ) -> None:
         self.game_dir = game_dir
         self.cards = characters.load() if cards is None else cards  # gamedata/characters.json
+        self.people = people  # the director's characters on this branch (cast.py), by id
 
     def get(self, npc: str, name: str) -> Persona:
-        return self._get(npc.upper(), name)
+        npc = npc.upper()
+        person = self.people(npc)
+        return self._get(npc, name) if person is None else self._person(npc, name, person)
 
     def brief(self, npc: str, name: str) -> str:
         """Who the npc is, for a prompt written for someone else (a scene of two, gossip.py). Its card speaks
         to it in the second person, hence the header."""
         npc = npc.upper()
+        if (person := self.people(npc)) is not None:
+            whom = "неё самой" if "woman" in person.voice.lower() else "него самого"
+            return "\n".join(
+                [
+                    f"Карточка {name} (написана для {whom}: «ты» — это {name}):",
+                    biography(npc, name, person.card(npc, name)),
+                ]
+                + ([person.past] if person.past else [])
+            )
         samples, index = self._original(npc)
         whom = "неё самой" if index in FEMALE_INDEXES else "него самого"
         parts = [
@@ -228,6 +277,19 @@ class PersonaProvider:
             render_instructions(npc, name, list(samples), card),
             self._voice(npc, index),
             TRAITS.get(npc) or (card.en if card else None),
+        )
+
+    @cache  # noqa: B019 - one provider per server run; a character of another branch is another person
+    def _person(self, npc: str, name: str, person: Person) -> Persona:
+        """A character of the director's: no lines of its own in the game, its card, past, knowledge and
+        acquaintances in its instructions, a voice of its own."""
+        return Persona(
+            npc,
+            name,
+            render_instructions(npc, name, [], person.card(npc, name), person_parts(person)),
+            person.voice,
+            person.en,
+            voice_key(npc, person.voice),
         )
 
     @cache  # noqa: B019 - one provider per server run

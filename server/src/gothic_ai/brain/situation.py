@@ -7,6 +7,7 @@ Npc-specific menus (trader, guard, smith) and voiced SVM lines are the next step
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from .stimuli import Stimulus
@@ -103,7 +104,7 @@ class Situation:
 
 
 class SituationBuilder:
-    def __init__(self, traits: dict[str, str] | None = None) -> None:
+    def __init__(self, traits: Mapping[str, str] | None = None) -> None:
         self.traits = traits or {}
 
     def who(self, npc: NpcContext) -> str:

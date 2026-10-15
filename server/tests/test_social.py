@@ -14,7 +14,9 @@ from gothic_ai.dialogue import DialogueManager
 from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
+from gothic_ai.perception import PerceptionDesk
 from gothic_ai.persona import PersonaProvider
+from gothic_ai.protocol import Look
 from gothic_ai.social import DAY, Rumor, Rumors, Social, Spot
 from gothic_ai.trust import Trust
 from tests.fake_game import FakeGame, connected
@@ -753,3 +755,28 @@ def test_a_failing_stage_leaves_a_plain_fact(graph, monkeypatch):
     _staged(r2, "words")
     r2.on_staged = lambda *args: 1 / 0
     assert r2.spread(DAY + _h(9), DAY + _h(9) + 1) == 1 and [f["how"] for f in facts2] == ["talked"]
+
+
+def test_whom_a_character_of_the_directors_knows(graph, monkeypatch):
+    monkeypatch.setattr(social, "P_DEAL", 1.0)
+    garet = _person("DIR_NPC_1", "Гарет", (_h(6), _h(21), CITY))  # in the city: he never meets Hilda
+    s = Social(
+        [*PEOPLE, garet], graph, bonds={"DIR_NPC_1": {HILDA: "берёт у неё молоко"}, "DIR_NPC_2": {HILDA: "x"}}
+    )
+    tie = s.ties["DIR_NPC_1"][HILDA]
+    assert tie is s.ties[HILDA]["DIR_NPC_1"] and tie.bonds == ["берёт у неё молоко"] and tie.meets == []
+    assert "DIR_NPC_2" not in s.ties  # not in the world
+    assert "Хильда (BAU_951_HILDA): знакомы: берёт у неё молоко" in s.describe("DIR_NPC_1")
+    # news goes between them once a day, as through dealings
+    assert len(list(tie.occasions("DIR_NPC_1", HILDA, 0, 3 * DAY))) == 3
+
+
+def test_hilda_calls_a_character_she_knows_by_name():
+    class Link:
+        listeners: list = []
+
+    garet = _person("DIR_NPC_1", "Гарет", (_h(6), _h(21), CITY))
+    look = Look(id="DIR_NPC_1", name="Гарет", distance=150)
+    for bonds, label in (({}, "незнакомец"), ({"DIR_NPC_1": {HILDA: "берёт у неё молоко"}}, "Гарет")):
+        s = Social([*PEOPLE, garet], None, bonds=bonds)
+        assert PerceptionDesk(Link(), social=lambda s=s: s).label(HILDA, look) == label  # type: ignore[arg-type]
