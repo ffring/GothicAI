@@ -1,6 +1,7 @@
 #include "graphics/mesh/aim.h"
 #include "graphics/mesh/skeleton.h"
 #include "game/aimstep.h"
+#include "game/aimcamera.h"
 
 #include <algorithm>
 #include <array>
@@ -444,6 +445,38 @@ void testEdgeApproach() {
   std::puts("aim approach: distance, pitch, movement, yaw, draw and edge cancellation passed");
   }
 
+void testSteepCameraPath() {
+  for(float pitch=-80.f; pitch<=30.f; pitch+=.25f)
+    near(AimCamera::advance(pitch),0.f,0.f,"ordinary aim must retain the exact shoulder position");
+  float worst = 0.f;
+  for(const float fps:{30.f,60.f,120.f}) {
+    const float dt = 1.f/fps;
+    float shift = 0.f;
+    Vec3 previous;
+    bool first = true;
+    // A normal mouse sweep at 45 degrees/second, including reversal through the transition.
+    for(int frame=0; frame<=int(6.f*fps); ++frame) {
+      const float time = float(frame)*dt;
+      const float pitch = time<=3.f ? -50.f+45.f*time : 85.f-45.f*(time-3.f);
+      shift = AimCamera::follow(shift,pitch,dt);
+      const float radians = pitch*Deg;
+      const Vec3 camera(shift-115.f*std::cos(radians),165.f+115.f*std::sin(radians),40.f);
+      if(!first) {
+        const float step = length(camera-previous);
+        require(step<=10.f,"mouse sweep must move the camera by no more than 10 cm/frame");
+        worst = std::max(worst,step);
+        }
+      first = false;
+      previous = camera;
+      if(pitch<=30.f)
+        near(shift,0.f,.01f,"ordinary mouse sweep must return to the original shoulder position");
+      }
+    }
+  near(AimCamera::follow(0.f,85.f,1.f/30.f),6.f,.001f,"a sudden pitch change must limit the new displacement");
+  near(AimCamera::follow(0.f,85.f,2.f),9.f,.001f,"a stalled frame must not jump to the steep position");
+  std::printf("aim camera: unchanged through 30 deg, mouse sweep max %.3f cm/frame\n",double(worst));
+  }
+
 }
 
 int main() {
@@ -454,5 +487,6 @@ int main() {
   testTransientSnapshot();
   testLegacyNpcLimit();
   testEdgeApproach();
+  testSteepCameraPath();
   std::puts("aim geometry contract: passed");
   }

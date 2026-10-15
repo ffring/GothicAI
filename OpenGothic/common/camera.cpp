@@ -9,6 +9,7 @@
 #include "game/definitions/cameradefinitions.h"
 #include "graphics/mesh/animmath.h"
 #include "game/serialize.h"
+#include "game/aimcamera.h"
 #include "utils/gthfont.h"
 #include "utils/dbgpainter.h"
 #include "gothic.h"
@@ -389,6 +390,8 @@ void Camera::tickAim(float dtF) {
     aimLeanDrop = 0;
     aimLeanRoom = 1;
     aimRangeRoom = 1;
+    aimSteepAdvance = 0;
+    aimSteepRoom = 1;
     }
   const float k = 1.f - fovZoom*aimZoomS;
   if(std::abs(k-fovK)>1e-4f) {
@@ -989,6 +992,22 @@ void Camera::tickThirdPerson(float dtF) {
       } else {
       aimLeanRoom = 1;
       }
+    // At steep downward angles the old shoulder ray runs through the bow and hands.
+    // Move its pivot ahead instead of moving along that same obstructed ray. An existing
+    // lean already supplies part of the reach; do not add another full reach to it.
+    aimSteepAdvance = AimCamera::follow(aimSteepAdvance,state.spin.x,dtF);
+    const float advance = std::max(0.f,aimSteepAdvance-aimReach*aimLeanRoom);
+    if(advance>1e-3f) {
+      const Vec3 shift = ahead*advance;
+      const float room = def.collision!=0 ? calcCameraColision(at,shift).length()/advance : 1.f;
+      if(room<aimSteepRoom)
+        aimSteepRoom = room;
+      else
+        aimSteepRoom += (room-aimSteepRoom)*std::clamp(dtF*roomRate,0.f,1.f);
+      at += shift*aimSteepRoom;
+      } else {
+      aimSteepRoom = 1;
+      }
     // behind the shoulder not into a wall either: closer at once, back out eased (at once the camera went a
     // metre in one frame as the rays behind stopped hitting the wall)
     float      r  = aimRange - aimZoomIn*aimZoomS;
@@ -1093,7 +1112,9 @@ Vec3 Camera::calcCameraColision(const Tempest::Vec3& from, const Tempest::Vec3& 
 
 Vec3 Camera::clampRotation(Tempest::Vec3 spin) {
   //NOTE: min elevation is zero for nomal camera. assume that it's ignored by vanilla
-  float       maxElev = +85;
+  // The advanced manual pivot can be almost above a nearby target. Keep it under the
+  // crosshair instead of clamping several degrees short after moving in front of the hands.
+  float       maxElev = aimOn || aimBlend>0.f ? 89.f : 85.f;
   float       minElev = aimOn || aimBlend>0.f ? -80 : -60; // a bow aimed by hand: high up too (and going back)
   float       maxAzim = +180;
   float       minAzim = -180;
