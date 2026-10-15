@@ -12,6 +12,7 @@
 #include <Tempest/MemWriter>
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 
 #include <algorithm>
 #include <cmath>
@@ -409,6 +410,112 @@ void testLimpBoneImpulseOnce() {
   hitWorld.tick(17); controlWorld.tick(17);
   same(hit->state(),control->state(),.01f);
   require(hitWorld.bodyCount()==hit->partCount(),"a limp point impulse must not allocate living or replacement parts");
+  }
+
+void testCorpseRayMetadata() {
+  Fixture fixture;
+  CollisionWorld world,reference;
+  auto nearBody=fixture.create(world,at(0,300,0));
+  auto farBody=fixture.create(world,at(0,300,-100));
+  const auto a=position(fixture.skeleton.tr[7]),b=position(fixture.skeleton.tr[8]);
+  std::vector<HitZones::Posed> capsules;
+  fixture.zones.posed(fixture.skeleton.tr.data(),fixture.skeleton.tr.size(),1.f,capsules);
+  const auto cap=std::find_if(capsules.begin(),capsules.end(),[&](const auto& c) { return (c.a-a).quadLength()<.0001f && (c.b-b).quadLength()<.0001f; });
+  require(cap!=capsules.end(),"corpse query oracle needs the public posed forearm capsule");
+  const auto center=(a+b)*.5f+Tempest::Vec3(0,300,0);
+  auto frame=at(center.x,center.y,center.z); frame.rotateOZ(-90);
+  auto plain=reference.addCollisionBody(new JPH::CapsuleShape((b-a).length()*.005f,cap->r*.01f),frame,.5f,DynamicWorld::C_Ragdoll);
+  const Tempest::Vec3 from{center.x,center.y,300},to{center.x,center.y,-300};
+  const uint32_t mask=1u<<DynamicWorld::C_Ragdoll;
+  const auto expected=reference.rayCast(from,to,mask);
+  require(expected.hasHit && expected.ragdoll==nullptr,"plain native primitive must give an independent geometry oracle without owner metadata");
+  const auto compare=[&] {
+    const auto hit=world.rayCast(from,to,mask);
+    require(hit.hasHit && hit.ragdoll==nearBody.get() && hit.bone==7,"the selected corpse hit must identify its current owner and exact forearm bone");
+    near(hit.fraction,expected.fraction,.000001f,"adding corpse ownership must preserve the selected native fraction");
+    near((hit.point-expected.point).length(),0,.001f,"corpse metadata must preserve the selected world point");
+    near((hit.normal-expected.normal).length(),0,.000001f,"corpse metadata must preserve the selected native normal");
+    require(hit.material==expected.material,"corpse ownership must preserve the selected material");
+    };
+  compare();
+  const auto saved=nearBody->state();
+  require(nearBody->restore(saved),"corpse metadata oracle must survive native BodyID replacement on restore");
+  compare();
+  std::vector<CollisionWorld::QueryResult> all;
+  world.rayCast(from,to,mask,false,&all);
+  require(std::any_of(all.begin(),all.end(),[&](const auto& hit) { return hit.ragdoll==farBody.get() && hit.bone==7; }),
+          "all-hit metadata must identify the far corpse independently of the closest one");
+  nearBody.reset();
+  require(world.rayCast(from,to,mask).ragdoll==farBody.get(),"destroyed corpse parts must never leave stale owner metadata");
+  require(!world.rayCast(from,to,(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)).hasHit,
+          "ordinary ray masks must remain unchanged by corpse metadata");
+  }
+
+void testProjectileWorldStopOptIn() {
+  struct Callback final : DynamicWorld::BulletCallback {
+    bool enabled=false;
+    DynamicWorld::BulletBody* body=nullptr;
+    DynamicWorld::BulletWorldHit hit;
+    std::string order;
+    int worlds=0,materials=0,stops=0,moves=0;
+    bool stopsAtWorldHit() const override { return enabled; }
+    void onMove() override { ++moves; order+='M'; }
+    void onCollide(zenkit::MaterialGroup) override { ++materials; order+='C'; }
+    void onWorldHit(const DynamicWorld::BulletWorldHit& value) override {
+      ++worlds; order+='W'; hit=value;
+      near((body->position()-value.point).length(),0,0,"world-hit callback must observe the exact selected projectile position");
+      require(body->pathLength()>0 && body->hitCount()==1,"world-hit callback must observe updated travelled distance and hit count");
+      DynamicWorld::BulletCallback::onWorldHit(value);
+      }
+    void onStop() override { ++stops; order+='S'; }
+    };
+  zenkit::Mesh wall;
+  wall.vertices={{100,-2000,-2000},{100,2000,-2000},{100,0,2000}};
+  wall.materials.resize(1); wall.materials[0].group=zenkit::MaterialGroup::STONE;
+  wall.polygons.material_indices={0}; wall.polygons.vertex_indices={0,1,2};
+  for(const bool enabled:{false,true}) {
+    DynamicWorld world(nullptr,wall);
+    Callback callback; callback.enabled=enabled;
+    auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+    const Tempest::Vec3 from{0,500,0},direction{3,0,0};
+    const auto to=from+direction*100.f-Tempest::Vec3(0,.5f*DynamicWorld::gravity*100.f*100.f,0);
+    const auto expected=world.ray(from,to);
+    require(expected.hasCol && expected.mat==zenkit::MaterialGroup::STONE,"projectile contract needs the same selected stone wall ray");
+    arrow->setPosition(from); arrow->setDirection(direction);
+    world.tick(100);
+    if(enabled) {
+      require(callback.worlds==1 && callback.materials==1 && callback.stops==1 && callback.moves==1 && callback.order=="MWCS",
+              "opt-in world stop must deliver move, world/material and one stop in order");
+      near((callback.hit.point-expected.v).length(),0,0,"sticking must use the exact pre-existing selected world hit point");
+      near((callback.hit.normal-expected.n).length(),0,0,"sticking must preserve the selected world normal");
+      near(arrow->pathLength(),(to-from).length()*expected.hitFraction,.0001f,"sticking must account for only the travelled segment");
+      require(arrow->direction().x==3 && callback.hit.ragdoll==nullptr,"world sticking must retain incoming orientation without a metal/stone bounce");
+      for(int frame=0;frame<4;++frame) world.tick(17);
+      require(callback.worlds==1 && callback.stops==1 && callback.moves==1,"a terminal world stop must not repeat callbacks while game-side deletion is deferred");
+      }
+    else {
+      require(callback.worlds==0 && callback.stops==0 && callback.materials==1 && callback.moves==1 && callback.order=="CM",
+              "OFF must preserve the old stone bounce callbacks and move order");
+      require(arrow->direction().x<0 && arrow->speed()<3,"OFF must preserve the old reflected arrow velocity");
+      }
+    world.deleteObj(arrow);
+    }
+  Fixture fixture;
+  for(const bool enabled:{false,true}) {
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    auto pose=fixture.skeleton.tr;
+    const auto object=at(0,300,0);
+    for(auto& frame:pose) frame=object*frame;
+    auto corpse=world.createRagdoll(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    Callback callback; callback.enabled=enabled;
+    auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+    arrow->setPosition({200,439,0}); arrow->setDirection({-3,0,0});
+    world.tick(100);
+    require(enabled ? callback.worlds==1 && callback.stops==1 && callback.hit.ragdoll==corpse.get() && callback.hit.bone!=size_t(-1) :
+                      callback.worlds==0 && callback.stops==0 && arrow->position().x<0,
+            "only the sticking opt-in may add corpse parts to the projectile world-hit mask");
+    world.deleteObj(arrow);
+    }
   }
 
 void testDropSleepWake() {
@@ -1953,6 +2060,8 @@ int main(int argc, const char** argv) {
     testKinematicPoseAndInteraction();
     testLocalMotorReactions();
     testLimpBoneImpulseOnce();
+    testCorpseRayMetadata();
+    testProjectileWorldStopOptIn();
     testPoseOverlayAndRecovery();
     testRecoveryMatchesAnimBlendAndSaves();
     testMalformedRecoveryArchive();

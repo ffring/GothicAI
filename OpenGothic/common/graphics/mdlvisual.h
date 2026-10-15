@@ -91,6 +91,15 @@ class MdlVisual final {
                                                    const std::vector<size_t>& bones, float weight);
     bool                           clearPhysicalPose();
     const Tempest::Matrix4x4&       renderedBone(size_t bone) const;
+    struct ArrowPinProbe {
+      size_t             bone=size_t(-1);
+      Tempest::Matrix4x4 local, world;
+      };
+    bool                           stickArrow(MeshObjects::Mesh&& arrow, size_t bone,
+                                              const Tempest::Matrix4x4& worldMatrix);
+    void                           clearStuckArrows();
+    size_t                         stuckArrowCount() const { return stuckArrows.size(); }
+    bool                           stuckArrowProbe(size_t index, ArrowPinProbe& out) const;
     const HitZones&                hitZoneShape() const { return hitZones; }
     // the animation of that name plays k times as fast from its next start (1: as it is)
     void                           setAnimSpeed(std::string_view name, float k);
@@ -211,6 +220,12 @@ class MdlVisual final {
       size_t                     boneId=size_t(-1);
       };
 
+    struct ArrowPin {
+      MeshObjects::Mesh  view;
+      size_t             bone=size_t(-1);
+      Tempest::Matrix4x4 local;
+      };
+
     void implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, const int32_t version);
     void setSlotAttachment(MeshObjects::Mesh&& itm, std::string_view bone);
 
@@ -240,6 +255,7 @@ class MdlVisual final {
     MeshAttach                     ammunition, stateItm;
     std::vector<MeshAttach>        item;
     std::vector<MeshAttach>        attach;
+    std::vector<ArrowPin>          stuckArrows;
 
     std::vector<PfxSlot>           effects;
     PfxSlot                        pfx;

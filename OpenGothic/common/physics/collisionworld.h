@@ -80,6 +80,8 @@ class CollisionWorld final {
       CollisionBody*       body = nullptr;
       zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
       const char*          sector = nullptr;
+      Ragdoll*             ragdoll = nullptr;
+      size_t               bone = size_t(-1);
       };
 
     void tick(uint64_t dt);
@@ -118,6 +120,7 @@ class CollisionWorld final {
                  bool movable, bool sensor, float mass);
     void removeBody(CollisionBody& body);
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
+    void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
     uint32_t registerRagdoll(Ragdoll& body);
     void unregisterRagdoll(Ragdoll& body);

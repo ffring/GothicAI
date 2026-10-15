@@ -536,6 +536,18 @@ void CollisionWorld::fillMaterial(QueryResult& result, const JPH::Shape& shape, 
   result.sector = result.body->mesh->sectorName(segment);
   }
 
+void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const {
+  // Metadata for this selected native hit only: never cast another ray or keep
+  // a stale BodyID table across corpse restores and native rig replacements.
+  for(auto* body:ragdolls) {
+    const size_t bone=body->boneForBodyId(native.GetIndexAndSequenceNumber());
+    if(bone==size_t(-1)) continue;
+    result.ragdoll=body;
+    result.bone=bone;
+    return;
+    }
+  }
+
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                                                     bool backfaces, std::vector<QueryResult>* all) const {
   impl->rayCount.fetch_add(1,std::memory_order_relaxed);
@@ -615,6 +627,8 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
       value.material = mesh->materialId(triangle);
       value.sector = mesh->sectorName(triangle);
       }
+    if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll)
+      fillRagdoll(value,hit.mBodyID);
     return value;
     };
   if(all!=nullptr) {
@@ -718,6 +732,8 @@ CollisionWorld::QueryResult CollisionWorld::raySweep(const Tempest::Vec3& from, 
   result.normal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
   result.body = reinterpret_cast<CollisionBody*>(body.GetUserData());
   fillMaterial(result,*body.GetShape(),hit.mSubShapeID2);
+  if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll)
+    fillRagdoll(result,hit.mBodyID2);
   // A failed center ray kept the old sphere hit, while resetting only its fraction.
   if(fallback) {
     lock.ReleaseLock();

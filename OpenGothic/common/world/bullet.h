@@ -71,6 +71,8 @@ class Bullet final : public DynamicWorld::BulletCallback {
     bool     onEffectCollide(Npc& other);
 
   protected:
+    bool     stopsAtWorldHit() const override;
+    void     onWorldHit(const DynamicWorld::BulletWorldHit& hit) override;
     void     onStop() override;
     void     onMove() override;
     void     onCollide(zenkit::MaterialGroup matId) override;

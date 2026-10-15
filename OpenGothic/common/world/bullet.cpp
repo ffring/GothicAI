@@ -7,6 +7,7 @@
 #include "world/objects/npc.h"
 #include "world.h"
 #include "testbench.h"
+#include "gothic.h"
 
 using namespace Tempest;
 
@@ -144,6 +145,35 @@ void Bullet::onMove() {
     }
   }
 
+bool Bullet::stopsAtWorldHit() const {
+  return !isSpell() && Gothic::settingsGetI("GAME","arrow_sticking")!=0;
+  }
+
+void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
+  impactAt = hit.point;
+  impactOwner = hit.bone;
+  impactKnown = true;
+  onCollide(hit.material);
+  auto matrix = obj->matrix();
+  if(auto* npc = wrld->npcForRagdoll(hit.ragdoll)) {
+    npc->addCorpseArrowImpulse(*this);
+    if(npc->stickArrow(std::move(view),hit.bone,matrix)) {
+      char buf[160];
+      const auto who = TestBench::who(npc);
+      std::snprintf(buf,sizeof(buf),"arrow stuck corpse %.*s bone %zu",int(who.size()),who.data(),hit.bone);
+      TestBench::note(buf);
+      return;
+      }
+    }
+  if(wrld->stickArrow(std::move(view),matrix)) {
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"arrow stuck world: at %.9g %.9g %.9g normal %.9g %.9g %.9g material %u",
+                  double(hit.point.x),double(hit.point.y),double(hit.point.z),
+                  double(hit.normal.x),double(hit.normal.y),double(hit.normal.z),unsigned(hit.material));
+    TestBench::note(buf);
+    }
+  }
+
 void Bullet::onCollide(zenkit::MaterialGroup matId) {
   if(isFinished())
     return;
@@ -202,6 +232,24 @@ bool Bullet::onCollide(Npc& npc) {
   if(&npc==origin() || isFinished())
     return false;
 
+  if(stopsAtWorldHit() && !impactKnown) {
+    // The legacy capsule query has already accepted this NPC. Resolve only the
+    // attachment frame; this secondary bone lookup cannot change that outcome.
+    const auto from = position();
+    const auto dir = direction();
+    float distance = 0;
+    size_t bone = size_t(-1);
+    if(dir.length()>1.e-3f &&
+       npc.rayHitZone(from,from+Vec3::normalize(dir)*500.f,distance,&bone)!=HitZones::None) {
+      impactOwner = bone;
+      impactAt = from+Vec3::normalize(dir)*distance;
+      }
+    else {
+      impactAt = npc.collosionCenter();
+      }
+    impactKnown = true;
+    }
+
   if(ow!=nullptr) {
     // no damage between ally npc's, only emit pfx effect
     const bool friendlyFire = wrld->script().isFriendlyFire(*ow, npc);
@@ -216,6 +264,21 @@ bool Bullet::onCollide(Npc& npc) {
   vfx.setPhysicsDisable();
   wrld->runEffect(std::move(vfx));
 
+  if(stopsAtWorldHit()) {
+    auto matrix = obj->matrix();
+    const auto point = impactPoint();
+    matrix.set(3,0,point.x);
+    matrix.set(3,1,point.y);
+    matrix.set(3,2,point.z);
+    if(npc.stickArrow(std::move(view),impactOwner,matrix)) {
+      Npc::ArrowPinProbe pin;
+      npc.stuckArrowProbe(npc.stuckArrowCount()-1,pin);
+      char buf[160];
+      const auto who = TestBench::who(&npc);
+      std::snprintf(buf,sizeof(buf),"arrow stuck npc %.*s bone %zu",int(who.size()),who.data(),pin.bone);
+      TestBench::note(buf);
+      }
+    }
   return true;
   }
 

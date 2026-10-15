@@ -1,0 +1,127 @@
+# Every pin is created by a real manual projectile; no stickArrow calls here.
+seed 73013
+cheat god
+set time 12 0
+view clean
+overlay off
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+living on
+arrow setup
+wait 600
+sticking setup
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 30
+stats str 150 dex 150 bow 100
+tap bow
+wait 1500
+cam follow 260 30 55
+cam look 105
+
+sticking feature off
+wait 100
+arrow aim shoulder 1
+sticking case off_npc
+rec off_npc novideo
+volley 1 300
+wait 2000
+stop
+sticking world
+sticking case off_world
+rec off_world novideo
+volley 1 300
+wait 1800
+stop
+
+sticking feature on
+wait 100
+cam follow 260 30 55
+cam look 105
+arrow aim shoulder 1
+sticking case live
+rec live
+volley 1 300
+wait 2000
+stop
+
+sticking case motion
+rec motion
+sticking motion
+wait 2800
+sticking turn
+wait 800
+stop
+sticking still
+
+# KO is forced only after the next real projectile queues its normal hit.
+arrow aim shoulder 1
+arrow ko-on-hit
+sticking case ko
+rec ko
+volley 1 300
+wait 2000
+stop
+waitragdoll watched sleep 30000
+
+# The primary NPC capsule is disabled: this arrow must hit native corpse parts.
+arrow aim corpse 1
+sticking case corpse
+rec corpse novideo
+volley 1 300
+wait 1800
+stop
+waitragdoll watched sleep 30000
+
+sticking case getup
+cam follow 290 30 55
+cam look 90
+rec getup
+standup watched
+waitragdoll watched getup 10000
+wait 600
+stop
+sticking still
+
+# Ordinary lethal damage, then a second projectile into the dead native body.
+stats npc watched hp 1 hpmax 160
+arrow aim shoulder 1
+sticking case death
+rec death novideo
+volley 1 300
+wait 1800
+stop
+waitragdoll watched sleep 30000
+arrow aim corpse 1
+sticking case dead_corpse
+rec dead_corpse novideo
+volley 1 300
+wait 1800
+stop
+
+sticking world
+sticking case world
+rec world
+volley 1 300
+wait 2200
+stop
+
+sticking case toggle_off
+rec toggle_off novideo
+sticking feature off
+wait 200
+stop
+sticking feature on
+wait 100
+arrow aim corpse 1
+sticking case rearm
+rec rearm novideo
+volley 1 300
+wait 1800
+stop
+sticking case remove
+rec remove novideo
+sticking remove
+wait 200
+stop
+sticking stop

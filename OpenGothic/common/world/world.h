@@ -47,6 +47,10 @@ class World final {
     uint32_t             npcId(const Npc* ptr) const;
     Npc*                 npcById(uint32_t id);
     uint32_t             npcCount() const;
+    Npc*                 npcForRagdoll(const Ragdoll* body);
+    bool                 stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix);
+    size_t               stuckArrowCount() const { return stuckArrows.size(); }
+    bool                 stuckArrowTransform(size_t index, Tempest::Matrix4x4& out) const;
 
     uint32_t             mobsiId(const Interactive* ptr) const;
     Interactive*         mobsiById(uint32_t id);
@@ -224,6 +228,7 @@ class World final {
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;
     WorldObjects                          wobj;
+    std::vector<MeshObjects::Mesh>        stuckArrows;
     std::unique_ptr<Npc>                  lvlInspector;
 
     auto         roomAt(const zenkit::BspNode &node) -> std::string_view;

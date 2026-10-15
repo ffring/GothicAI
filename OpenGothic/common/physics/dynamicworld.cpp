@@ -520,8 +520,9 @@ struct DynamicWorld::BulletsList final {
 
   void tick(uint64_t dt) {
     for(auto& i:body) {
-      wrld.moveBullet(i,i.dir,dt);
-      if(i.cb!=nullptr)
+      if(i.worldStopped) continue;
+      const bool moveNotified=wrld.moveBullet(i,i.dir,dt);
+      if(!moveNotified && i.cb!=nullptr)
         i.cb->onMove();
       }
     }
@@ -530,7 +531,7 @@ struct DynamicWorld::BulletsList final {
     for(auto& i:body) {
       float proj = 0;
       auto  dp = i.pos - i.lastPos; // move is symetrical: move of npc and move of projectile is the same
-      if(i.cb==nullptr)
+      if(i.cb==nullptr || i.worldStopped)
         continue;
       const bool precise = i.cb->isPrecise();
       if(precise ? list.nearTest(npc, i.pos, Tempest::Vec3::normalize(dp), dp.length(), i.tgRange, proj)
@@ -804,7 +805,7 @@ DynamicWorld::BBoxBody DynamicWorld::bboxObj(BBoxCallback* cb, const Tempest::Ve
   return BBoxBody(this,cb,pos,R);
   }
 
-void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t dt) {
+bool DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t dt) {
   const float dtF     = float(dt);
   const bool  isSpell = b.isSpell();
 
@@ -815,7 +816,9 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(ptr->cb!=nullptr)
       ptr->cb->onCollide(b);
     }
-  const auto hit = world->rayCast(pos,to,landscapeMask,false);
+  const bool stopAtWorld=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
+  const uint32_t mask=landscapeMask | (stopAtWorld ? 1u<<C_Ragdoll : 0u);
+  const auto hit = world->rayCast(pos,to,mask,false);
   const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
 
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
@@ -826,8 +829,29 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     const auto  end = pos + (to-pos)*a;
     if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
       b.cb->onStop();
-      return;
+      return false;
       }
+    }
+
+  if(stopAtWorld && matId!=zenkit::MaterialGroup::NONE) {
+    BulletWorldHit result;
+    result.point=hit.point;
+    result.normal=hit.normal;
+    result.material=matId;
+    result.ragdoll=hit.ragdoll;
+    result.bone=hit.bone;
+    if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+      result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+    b.move(hit.point);
+    b.addPathLen((to-pos).length()*hit.fraction);
+    b.addHit();
+    b.worldStopped=true;
+    // Attachment code sees the exact selected hit pose and incoming direction.
+    // The terminal branch never reflects the arrow or queues a physics impulse.
+    b.cb->onMove();
+    b.cb->onWorldHit(result);
+    b.cb->onStop();
+    return true;
     }
 
   bool stopBullet = false;
@@ -887,6 +911,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(b.cb!=nullptr)
       b.cb->onStop();
     }
+  return false;
   }
 
 void DynamicWorld::tick(uint64_t dt) {
@@ -1242,7 +1267,7 @@ DynamicWorld::BulletBody::BulletBody(DynamicWorld* wrld, DynamicWorld::BulletCal
 
 DynamicWorld::BulletBody::BulletBody(DynamicWorld::BulletBody&& other)
   : pos(other.pos), lastPos(other.lastPos),
-    dir(other.dir), dirL(other.dirL), totalL(other.totalL), spl(other.spl){
+    dir(other.dir), dirL(other.dirL), totalL(other.totalL), spl(other.spl), worldStopped(other.worldStopped){
   std::swap(owner,other.owner);
   std::swap(cb,other.cb);
   }

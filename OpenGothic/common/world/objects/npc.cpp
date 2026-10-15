@@ -799,6 +799,7 @@ void Npc::addRagdollImpulse(const Vec3& impulse) {
   }
 
 void Npc::suspendRagdoll() {
+  visual.clearStuckArrows();
   living.reset();
   arrowImpacts.clear();
   ragdollHasLastPosition = false;
@@ -965,6 +966,8 @@ void Npc::checkRagdollQuestHazard() {
   }
 
 void Npc::prepareRagdoll() {
+  if(Gothic::settingsGetI("GAME","arrow_sticking")==0)
+    visual.clearStuckArrows();
   if(Gothic::settingsGetI("GAME","arrow_physics")==0)
     arrowImpacts.clear();
   if(!ragdoll && !isDown() && ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) {
@@ -1093,6 +1096,25 @@ void Npc::prepareLivingBody() {
     dispatchArrowPhysics(*living);
   else
     arrowImpacts.clear();
+  }
+
+bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix) {
+  // A corpse hit is selected after the native step, before the usual pose export.
+  // Bind against that same current pose so the first sync cannot move the pin twice.
+  if(ragdoll)
+    syncRagdoll();
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    const Vec3 at(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
+    }
+  return visual.stickArrow(std::move(arrow),bone,worldMatrix);
+  }
+
+void Npc::addCorpseArrowImpulse(const Bullet& bullet) {
+  if(ragdoll && isDown())
+    queueArrowPhysics(bullet);
   }
 
 void Npc::queueArrowPhysics(const Bullet& bullet) {

@@ -174,6 +174,7 @@ void World::postInit() {
   }
 
 void World::load(Serialize &fin) {
+  stuckArrows.clear();
   fin.setContext(this);
   fin.setEntry("worlds/",wname,"/world");
 
@@ -215,6 +216,32 @@ Npc *World::npcById(uint32_t id) {
 
 uint32_t World::npcCount() const {
   return uint32_t(wobj.npcCount());
+  }
+
+Npc* World::npcForRagdoll(const Ragdoll* body) {
+  if(body==nullptr)
+    return nullptr;
+  for(size_t i=0;i<wobj.npcCount();++i)
+    if(wobj.npc(i).ragdollBody()==body)
+      return &wobj.npc(i);
+  return nullptr;
+  }
+
+bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix) {
+  if(arrow.isEmpty())
+    return false;
+  if(stuckArrows.size()>=512)
+    stuckArrows.erase(stuckArrows.begin());
+  arrow.setObjMatrix(worldMatrix);
+  stuckArrows.push_back(std::move(arrow));
+  return true;
+  }
+
+bool World::stuckArrowTransform(size_t index, Tempest::Matrix4x4& out) const {
+  if(index>=stuckArrows.size() || stuckArrows[index].isEmpty())
+    return false;
+  out = stuckArrows[index].node(0).position();
+  return true;
   }
 
 uint32_t World::mobsiId(const Interactive* ptr) const {
@@ -400,6 +427,8 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
+  if(Gothic::settingsGetI("GAME","arrow_sticking")==0)
+    stuckArrows.clear();
   static bool doTicks=true;
   if(!doTicks)
     return;
