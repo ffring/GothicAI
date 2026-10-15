@@ -316,6 +316,7 @@ class DynamicWorld final {
     void           saveMovableVobs(Serialize& fout) const;
     void           loadMovableVobs(Serialize& fin);
     std::shared_ptr<const MovableVobPose> movableVobPose(uint32_t zenId) const;
+    std::shared_ptr<const MovableVobPose> rayMovableVob(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
     struct MovableVobSnapshot {
       uintptr_t          id = 0;
       uint32_t           zenId = uint32_t(-1);

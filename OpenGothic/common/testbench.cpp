@@ -2817,24 +2817,55 @@ void movablePin(World& world,Npc& player,std::string_view target) {
   if(symbol==size_t(-1)) {arenaAbort("movable save fixture arrow instance missing");return;}
   Item arrow(world,symbol,Item::T_Inventory);
   Vec3 from,to;
+  const auto npcHit=[&](Npc& npc,const Vec3& start,const Vec3& end,float& distance) {
+    return &npc!=&player && npc.rayHitZone(start,end,distance)!=HitZones::None;
+    };
   if(target=="table") {
     bool found=false;
     for(const auto& body:world.physic()->movableVobSnapshot()) {
       if(body.id!=bench.movableTable)continue;
       const auto* mesh=Resources::loadMesh(body.visual);
       if(!mesh)break;
-      const auto* bounds=mesh->bbox();to=(bounds[0]+bounds[1])*.5f;
-      body.transform.project(to);from=to+Vec3(0,150,0);found=true;break;
+      const auto* bounds=mesh->bbox();
+      const float infinity=std::numeric_limits<float>::infinity();
+      Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);
+      for(unsigned corner=0;corner<8;++corner) {
+        Vec3 point(bounds[corner&1].x,bounds[(corner>>1)&1].y,bounds[(corner>>2)&1].z);
+        body.transform.project(point);
+        low.x=std::min(low.x,point.x);low.y=std::min(low.y,point.y);low.z=std::min(low.z,point.z);
+        high.x=std::max(high.x,point.x);high.y=std::max(high.y,point.y);high.z=std::max(high.z,point.z);
+        }
+      // The fireball leaves test dishes on and around the table. Select an
+      // exposed part of this exact map body, using the production visual query.
+      for(float x:{.5f,.2f,.8f,.35f,.65f,.1f,.9f}) {
+        for(float z:{.5f,.2f,.8f,.35f,.65f,.1f,.9f}) {
+          const Vec3 start(low.x+(high.x-low.x)*x,high.y+80.f,low.z+(high.z-low.z)*z);
+          const Vec3 end(start.x,low.y-10.f,start.z);
+          const auto hit=world.physic()->rayMovableVob(start,end);
+          if(!hit || hit->zenId!=body.zenId || world.physic()->rayArrow(start,end,npcHit).npcHit)continue;
+          from=start;to=end;found=true;break;
+          }
+        if(found)break;
+        }
+      break;
       }
-    if(!found) {arenaAbort("movable save table is absent");return;}
+    if(!found) {arenaAbort("movable save table has no exposed native shot path");return;}
     }
   else if(target=="npc") {
     if(bench.spellActors.empty()) {arenaAbort("movable save NPC is absent");return;}
-    const auto& npc=*bench.spellActors[0].npc;
+    auto& npc=*bench.spellActors[0].npc;
+    if(npc.isDown()) {arenaAbort("movable save arrow needs its living NPC target");return;}
     const auto* skeleton=npc.visualSkeleton();
     const auto bone=skeleton?arrowBone(*skeleton,"SPINE2"):size_t(-1);
     if(bone==size_t(-1)) {arenaAbort("movable save NPC has no chest bone");return;}
-    const auto matrix=npc.renderedBone(bone);to=movablePosition(matrix);from=to+Vec3(0,100,0);
+    const auto chest=movablePosition(npc.renderedBone(bone));
+    bool found=false;
+    for(const auto direction:{Vec3(0,1,0),Vec3(1,0,0),Vec3(-1,0,0),Vec3(0,0,1),Vec3(0,0,-1)}) {
+      const auto start=chest+direction*100.f,end=chest-direction*50.f;
+      if(world.physic()->rayArrow(start,end,npcHit).npcHit!=&npc)continue;
+      from=start;to=end;found=true;break;
+      }
+    if(!found) {arenaAbort("movable save NPC has no exposed precise shot path");return;}
     }
   else if(target=="world") {
     const auto point=bench.movableWalkStart;
@@ -3486,6 +3517,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="movable" && a.size()==2 && a[1]=="settle-target") {
     if(bench.spellActors.empty()) {arenaAbort("movable save NPC is absent");return;}
     bench.subject=bench.spellActors[0].npc;
+    if(!bench.subject->stuckArrowCount()) {arenaAbort("movable save NPC arrow did not pin before death");return;}
     bench.subject->setRagdollDown(true);bench.subject->prepareRagdoll();
     }
   else if(c=="movable" && a.size()==2 && a[1]=="push-pinned") pushMovablePinnedTable(w);

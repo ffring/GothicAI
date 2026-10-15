@@ -1013,6 +1013,14 @@ std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::movableVobPose
   return {};
   }
 
+std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::rayMovableVob(const Tempest::Vec3& from,
+                                                                           const Tempest::Vec3& to) const {
+  const auto hit = world->rayCast(from,to,visualMask,false);
+  if(!hit.hasHit || hit.body==nullptr || hit.body->ptrType()!=P_MovableVob)
+    return {};
+  return static_cast<BodyData*>(hit.body->payload())->pose;
+  }
+
 void DynamicWorld::saveMovableVobs(Serialize& fout) const {
   if(!movableVobs->enabled)
     return;

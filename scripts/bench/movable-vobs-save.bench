@@ -12,13 +12,14 @@ view full
 movable blast
 wait 15000
 movable checkpoint
-movable settle-target
-waitragdoll watched sleep 30000
 movable pin table
 wait 600
 movable pin world
 wait 600
 movable pin npc
+wait 2000
+movable settle-target
+waitragdoll watched sleep 30000
 wait 15000
 movable snapshot pinned
 movable push-pinned
