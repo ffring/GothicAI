@@ -944,8 +944,15 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   // (the crossbow), slowly
   AimWalk::Input wk;
   wk.dt   = dt;
-  wk.walk = manual && in.active ? npc.aimWalk() : 0.f;
-  if(wk.walk!=0.f || pose.aimWalk().isActive()) {
+  const float requestedWalk = manual && in.active ? npc.aimWalk() : 0.f;
+  Tempest::Vec3 walkDirection(0,0,requestedWalk);
+  if(requestedWalk==0.f && pose.aimWalk().isActive())
+    walkDirection = pose.aimWalk().move(dt);
+  const bool edgeBlocked = manual && in.active && npc.isEdgeMoveBlocked(walkDirection);
+  wk.walk = edgeBlocked ? 0.f : requestedWalk;
+  // At an edge the legs must stop with the body, including their normal release fade.
+  // No leg sequence resets their weight immediately instead of walking in place while fading out.
+  if(!edgeBlocked && (wk.walk!=0.f || pose.aimWalk().isActive())) {
     const bool cbow = ws==WeaponState::CBow;
     wk.legs = solver.solveFrm(cbow ? "S_CBOWSNEAKL" : "S_BOWSNEAKL");
     if(wk.legs==nullptr)
