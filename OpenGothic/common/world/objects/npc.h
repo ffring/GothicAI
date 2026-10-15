@@ -430,6 +430,8 @@ class Npc final {
     void      setStateTime(int64_t time);
 
     void      addRoutine(gtime s, gtime e, uint32_t callback, std::string_view point);
+    // a day the scripts did not give (ai_bridge, the director's npc's): entries added after this replace it
+    void      clearRoutine();
     void      excRoutine(size_t callback);
 
     // the daily routine, read-only: for tools outside the scripts (the AI bridge)

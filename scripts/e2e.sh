@@ -56,6 +56,10 @@
 #       director's made like a nameless farmer, another variable; two saves and loads keep them all, the npc
 #       bound to its own symbol, the farmer and Hilda untouched (protocol v33: debug own_npc). On a save of
 #       Lobart's farm: SAVE=save_slot_1.sav
+#   cast: a character of the director's (docs/director.md, stage 2, layer 2): a peddler at Lobart's farm made
+#       like a nameless townsman, with his own name, guild, clothes, things and day; a description with a plot
+#       person as template is refused; saved and loaded he is the same, a save from before he came has none
+#       (protocol v34: story_npc). On a save of Lobart's farm: SAVE=save_slot_1.sav
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

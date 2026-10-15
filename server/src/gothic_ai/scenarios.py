@@ -24,6 +24,7 @@ from .bodies import Bodies
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
+from .cast import TEMPLATES, Cast
 from .chests import BACK, CHEST, OWNED, ChestDesk
 from .chronicle import Fact
 from .concerns import Concerns
@@ -61,12 +62,16 @@ from .protocol import (
     NpcActType,
     NpcEvent,
     NpcIdle,
+    NpcLook,
     NpcRoster,
+    NpcSpec,
+    NpcThing,
     NpcView,
     Perception,
     PerceptionHeld,
     PlayerText,
     RoutineCmd,
+    RoutineEntry,
     Saved,
     SayCmd,
     Session,
@@ -3686,6 +3691,158 @@ async def authored_quest(
     check("once", q.give not in left and q.done not in left, " ".join(left))
     await _until(lambda: author.quests[q.id].stage == "done", 5)
     check("knows", "ты заплатил" in (author.situation(giver) or ""), author.situation(giver) or "")
+    return _logged(results)
+
+
+async def cast_character(link: GameLink, actors: Cast, slot: int = 7) -> dict[str, str]:
+    """Stage 2 of the director as author, layer 2 (docs/director.md): a character of the director's, on the
+    game.
+
+    A peddler at Lobart's farm, made like a nameless townsman: his own name, guild, look, things and day.
+    A save before he comes (`slot`), one after (`slot` + 1). Checks:
+    - rejected: a description with a person of the plot as the template and a known face is refused, and
+      nothing is made;
+    - made: he is in the world by his name, at his point;
+    - guild, look, things: of the guild, in the clothes and with the things he was given;
+    - day: his routine is the one given, not the template's;
+    - again: asked for once more, the game leaves him as he is (`there`), still one;
+    - after_load: after a load of the save made after he came, the server asks for him again and the game
+      has him from the save: one, the same name, guild, clothes, things and day;
+    - before: after a load of the save made before he came, he is not in the world and not on the branch."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+
+    people = {p["npc"]: p for p in await link.story_people()}
+    towns = sorted(n for n in people if n.startswith("VLK_") and TEMPLATES.fullmatch(n))
+    hilda = people.get(HILDA)
+    if not towns or hilda is None:
+        return _logged({"made": f"failed (no townsman {towns} or no Hilda)"})
+    # two points of the farm near Hilda's day, none of hers: he stands at one by day and at the other by night
+    home = next((e["pos"] for e in hilda.get("routine", []) if e.get("pos")), None)
+    hers = {e["waypoint"] for e in hilda.get("routine", [])}
+    points = [w for w in await link.waypoints() if not w.get("fp") and w["name"].startswith("NW_FARM1_")]
+    if home is None or len(points) < 2:
+        return _logged({"made": "failed (no points of the farm)"})
+    by_day, by_night = [
+        w["name"]
+        for w in sorted(points, key=lambda w: math.dist((w["x"], w["y"], w["z"]), home))
+        if w["name"] not in hers
+    ][:2]
+
+    spec = NpcSpec(
+        npc=actors.next_id(),
+        like=towns[0],
+        at=by_day,
+        name="Гарет",
+        guild="GIL_BAU",
+        look=NpcLook(
+            gender="MALE", head="Hum_Head_Pony", face="FACE_N_NORMAL05", skin="BODYTEX_N", armor="ITAR_BAU_M"
+        ),
+        items=[NpcThing(item="ITMI_GOLD", count=40), NpcThing(item="ITFO_APPLE", count=5)],
+        routine=[
+            RoutineEntry(start="06:00", end="21:00", state="ZS_STAND_ARMSCROSSED", waypoint=by_day),
+            RoutineEntry(start="21:00", end="06:00", state="ZS_STAND_WP", waypoint=by_night),
+        ],
+    )
+    me = spec.npc
+
+    async def save(at: int) -> None:
+        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+        await link.debug("save", at)
+        await saving
+
+    async def load(at: int) -> None:
+        loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+        await link.debug("load", at)
+        await loaded
+        await link.wait_world()
+        await asyncio.sleep(2)  # the server asks the game for the branch's characters again
+
+    async def seen() -> tuple[str, str]:
+        n = (await link.story_state(npcs=[me])).get("npcs", {}).get(me, {})
+        return n.get("state", "absent"), n.get("name", "")
+
+    async def count() -> int:
+        return sum(1 for p in await link.story_people() if p["npc"] == me)
+
+    async def his() -> dict[str, Any]:
+        self_ = ["inst", "SELF"]
+        armor = ["call", "HLP_GETINSTANCEID", ["call", "NPC_GETEQUIPPEDARMOR", self_]]
+        return {
+            "guild": await link.evaluate(["==", ["field", self_, "GUILD"], ["var", "GIL_BAU"]], npc=me),
+            "armor": await link.evaluate(["==", armor, ["sym", "ITAR_BAU_M"]], npc=me),
+            "gold": await link.evaluate(["call", "NPC_HASITEMS", self_, ["sym", "ITMI_GOLD"]], npc=me),
+            "apples": await link.evaluate(["call", "NPC_HASITEMS", self_, ["sym", "ITFO_APPLE"]], npc=me),
+        }
+
+    def minutes(clock: str) -> int:
+        return int(clock[:2]) * 60 + int(clock[3:])
+
+    given = [(minutes(e.start), minutes(e.end), e.state, e.waypoint) for e in spec.routine]
+
+    async def day() -> list[tuple[Any, ...]]:
+        person = next((p for p in await link.story_people() if p["npc"] == me), {})
+        return [(e["start"], e["end"], e["state"], e["waypoint"]) for e in person.get("routine", [])]
+
+    def dressed(h: dict[str, Any]) -> bool:
+        return bool(h["guild"]) and bool(h["armor"]) and h["gold"] >= 40 and h["apples"] >= 5
+
+    await save(slot)  # before he comes
+
+    assert spec.look is not None
+    # a person of the plot to be made like, the face of one: refused before the game hears of it
+    bad = spec.model_copy(
+        update={"like": "BAU_950_LOBART", "look": spec.look.model_copy(update={"face": "FACE_N_LEE"})}
+    )
+    refused, why = await actors.introduce(bad)
+    check("rejected", refused is None and len(why) == 2 and await seen() == ("absent", ""), "; ".join(why))
+
+    made, why = await actors.introduce(spec)
+    check(
+        "made",
+        made is not None and made.get("state") == "made" and await seen() == ("alive", "Гарет"),
+        made or why,
+    )
+    if made is None:
+        return _logged(results)
+    await link.debug("player_goto", waypoint=by_day)
+    await asyncio.sleep(1)
+    near = (await link.story_state(npcs=[me], near="PC_HERO")).get("npcs", {}).get(me, {})
+    check("at", near.get("distance", 1e9) < 1500, f"{near} from {by_day}")
+    ok = await _until_async(his, dressed, 10)  # the clothes go on with his first steps (AI_EquipArmor)
+    h = await his()
+    check("look", ok, h)
+    now = await day()
+    check("day", now == given, f"{now} for {given}")
+    again = await link.story_npc(spec)
+    check("again", again.get("state") == "there" and await count() == 1, again)
+
+    await save(slot + 1)
+    await load(slot + 1)
+    h, now, n = await his(), await day(), await count()
+    check(
+        "after_load",
+        await seen() == ("alive", "Гарет")
+        and n == 1
+        and dressed(h)
+        and now == given
+        and actors.characters() == [spec],
+        f"{n} of him; {h}; {now}",
+    )
+
+    await load(slot)
+    check(
+        "before",
+        await seen() == ("absent", "") and actors.characters() == [],
+        f"{await seen()}; {[c.npc for c in actors.characters()]}",
+    )
     return _logged(results)
 
 

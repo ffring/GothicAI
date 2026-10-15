@@ -22,11 +22,15 @@ from typing import Any
 
 from .game import GameError, GameLink
 from .memory import MemoryStore
-from .protocol import DialogChosen, GameMessage, MemoryCmd, Session
+from .protocol import DialogChosen, GameMessage, MemoryCmd, NpcSpec, Session
 
 log = logging.getLogger(__name__)
 
 Op = dict[str, Any]
+
+# a character of the director's in the branch's log, {"op": "npc", "spec": NpcSpec} (docs/director.md,
+# stage 2): not a change of the graph, the game makes it once (story_npc)
+NPC = "npc"
 
 # the bandits below the steps to Xardas's tower (user, 2026-10-13): the lure's "Where are you going?" that
 # ends in his attack or leads the hero into the cave, the cave's ambush, Brago's and his mate's attack, and
@@ -57,7 +61,23 @@ class StoryPatches:
             self._on_session(link.session)
 
     def ops(self) -> list[Op]:
-        """The changes on the current branch, oldest first."""
+        """The changes of the graph on the current branch, oldest first."""
+        return [op for op in self._log() if op.get("op") != NPC]
+
+    def characters(self) -> list[NpcSpec]:
+        """The director's characters on the current branch, in the order they came."""
+        return [NpcSpec.model_validate(op["spec"]) for op in self._log() if op.get("op") == NPC]
+
+    async def introduce(self, spec: NpcSpec) -> dict[str, Any]:
+        """A character of the director's: the game makes it (or GameError says why not), then the branch
+        remembers it. The game's answer: {npc, state, index}."""
+        if self.branch is None:
+            raise GameError("the game has not reported a session yet")
+        made = await self.link.story_npc(spec)
+        self._record({"op": NPC, "spec": spec.model_dump(exclude_none=True)})
+        return made
+
+    def _log(self) -> list[Op]:
         return [json.loads(op) for op in self.memory.patches(self.branch)] if self.branch else []
 
     async def apply(self, op: Op) -> None:
@@ -80,11 +100,22 @@ class StoryPatches:
     def _on_session(self, session: Session) -> None:
         self.branch = session.branch
         self.memory.ensure_branch(session.branch, session.parent, session.parent_seq)
-        ops = self.ops()
-        if ops:
-            log.info("story graph: %d change(s) on branch %s", len(ops), session.branch)
+        ops, cast = self.ops(), self.characters()
+        if ops or cast:
+            log.info(
+                "story graph: %d change(s), %d character(s) on branch %s", len(ops), len(cast), session.branch
+            )
+        self._spawn(self._replay(cast, ops))
+
+    async def _replay(self, cast: list[NpcSpec], ops: list[Op]) -> None:
+        # the characters first, the graph's dialogs name them; one the save has stays as it is
+        for spec in cast:
+            try:
+                await self.link.story_npc(spec)
+            except (GameError, TimeoutError) as err:
+                log.warning("story: %s: %s", spec.npc, err)
         # also when there are none: whatever the game had belongs to another line of play
-        self._spawn(self.link.patch_graph([*self.static, *ops], replace=True))
+        await self.link.patch_graph([*self.static, *ops], replace=True)
 
     def _record(self, op: Op) -> None:
         if self.branch is None:
