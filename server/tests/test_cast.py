@@ -1,6 +1,8 @@
-from gothic_ai.cast import Cast, problems
+from gothic_ai.cast import Cast, Person, PersonTie, person_problems, problems
+from gothic_ai.characters import Card, Cards, Traits
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.memory import MemoryStore
+from gothic_ai.persona import PersonaProvider
 from gothic_ai.protocol import NpcLook, NpcSpec, NpcThing, RoutineEntry
 from gothic_ai.story import StoryPatches
 from tests.fake_game import FakeGame, connected
@@ -130,3 +132,82 @@ async def test_a_rejected_character_is_not_kept():
         await _until(lambda: patches.branch is not None)
         made, issues = await cast.introduce(_peddler(like="BAU_950_LOBART"))
         assert made is None and issues and fake.cast == {} and cast.characters() == []
+
+
+GARET = Person(
+    ru="Ты — Гарет, бродячий торговец. Скуп на слова, но честен в цене.",
+    en="A taciturn peddler who keeps his prices fair.",
+    greed=3,
+    honesty=4,
+    courage=2,
+    talk=2,
+    pushy=3,
+    strangers=4,
+    voice="A weathered peddler in his forties with a low, dry male voice, speaking unhurriedly",
+    past="Ты пришёл из Венгарда с последним кораблём и торгуешь по фермам.",
+    knows=("У ступеней к башне Ксардаса сидят бандиты.",),
+    ties=(PersonTie(npc="BAU_951_HILDA", how="Хильда с фермы Лобарта: берёшь у неё молоко"),),
+)
+
+
+def test_who_a_character_is_is_checked():
+    alive = {"BAU_951_HILDA"}
+    assert person_problems(GARET, _peddler(), alive) == []
+    bad = GARET.model_copy(
+        update={
+            "ru": "Гарет — торговец.",
+            "greed": 7,
+            "voice": "A young woman with a bright voice, speaking fast",
+            "ties": (PersonTie(npc="BAU_950_LOBART", how="он"),),
+        }
+    )
+    assert person_problems(bad, _peddler(), alive) == [
+        "greed: от 1 до 5",
+        "карточка: от 20 до 600 знаков, начинается с «Ты — …»",
+        "голос: скажи, что это голос мужчины (man)",
+        "знакомый BAU_950_LOBART: такого живого человека нет",
+        "знакомый BAU_950_LOBART: как знакомы — от 5 до 200 знаков",
+    ]
+    # a townswoman without a look of her own is a woman
+    her = _peddler(like="VLK_4001_BUERGERIN", look=None)
+    assert person_problems(GARET, her, alive) == ["голос: скажи, что это голос женщины (woman)"]
+
+
+async def test_a_character_is_a_person_to_whoever_reads_npcs():
+    fake = FakeGame(branch="A")
+    fake.symbols = dict(SYMBOLS)
+    fake.npc_states = {"BAU_951_HILDA": {"state": "alive", "name": "Хильда"}}
+    async with connected(fake) as link:
+        patches = StoryPatches(link, MemoryStore(":memory:"))
+        cast = Cast(link, patches)
+        changed: list[str] = []
+        cast.on_change.append(lambda: changed.append("cast"))
+        await _until(lambda: patches.branch is not None)
+        cards = Cards({"BAU_951_HILDA": _hilda()}, cast.cards)
+        personas = PersonaProvider(None, cards=cards, people=cast.person)
+        assert "DIR_NPC_1" not in cards and personas.get("DIR_NPC_1", "Гарет").voice_key == ""
+
+        made, issues = await cast.introduce(_peddler(), GARET)
+        assert issues == [] and made is not None and changed == ["cast"]
+        assert cast.person("DIR_NPC_1") == GARET and cast.bonds() == {
+            "DIR_NPC_1": {"BAU_951_HILDA": GARET.ties[0].how}
+        }
+        # his card, as a card of the scripts' npc's
+        assert cards["DIR_NPC_1"].name == "Гарет" and cards["DIR_NPC_1"].greed == 3 and len(cards) == 2
+        assert Traits(cards)["DIR_NPC_1"] == GARET.en
+        # his persona: his card, past, knowledge and acquaintances; a voice of his own
+        persona = personas.get("DIR_NPC_1", "Гарет")
+        for text in (GARET.ru, GARET.past, GARET.knows[0], GARET.ties[0].how):
+            assert text in persona.instructions
+        assert persona.voice == GARET.voice and persona.traits == GARET.en
+        assert persona.voice_id.startswith("DIR_NPC_1~") and persona.voice_id != "DIR_NPC_1"
+        assert "написана для него самого" in personas.brief("DIR_NPC_1", "Гарет")
+        # one with another voice is another voice, though the same symbol (another branch)
+        other = GARET.model_copy(
+            update={"voice": "An old man with a thin, shaky male voice, speaking slowly"}
+        )
+        assert personas._person("DIR_NPC_1", "Гарет", other).voice_id != persona.voice_id
+
+
+def _hilda() -> Card:
+    return Card("BAU_951_HILDA", "Хильда", "Ты — Хильда.", "A farm wife.", 3, 3, 3, 3, 3, 3)

@@ -24,7 +24,7 @@ from .bodies import Bodies
 from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
-from .cast import TEMPLATES, Cast
+from .cast import TEMPLATES, Cast, Person, PersonTie
 from .chests import BACK, CHEST, OWNED, ChestDesk
 from .chronicle import Fact
 from .concerns import Concerns
@@ -3694,6 +3694,43 @@ async def authored_quest(
     return _logged(results)
 
 
+async def _peddler(link: GameLink, actors: Cast) -> tuple[NpcSpec, str] | str:
+    """Garet, a peddler at Lobart's farm made like a nameless townsman, standing by day at the farm's point
+    nearest Hilda's day and by night at the next one; and his point by day. Or why there is none."""
+    people = {p["npc"]: p for p in await link.story_people()}
+    towns = sorted(n for n in people if n.startswith("VLK_") and TEMPLATES.fullmatch(n))
+    hilda = people.get(HILDA)
+    if not towns or hilda is None:
+        return f"no townsman {towns} or no Hilda"
+    # two points of the farm near Hilda's day, none of hers: he stands at one by day and at the other by night
+    home = next((e["pos"] for e in hilda.get("routine", []) if e.get("pos")), None)
+    hers = {e["waypoint"] for e in hilda.get("routine", [])}
+    points = [w for w in await link.waypoints() if not w.get("fp") and w["name"].startswith("NW_FARM1_")]
+    if home is None or len(points) < 2:
+        return "no points of the farm"
+    by_day, by_night = [
+        w["name"]
+        for w in sorted(points, key=lambda w: math.dist((w["x"], w["y"], w["z"]), home))
+        if w["name"] not in hers
+    ][:2]
+    spec = NpcSpec(
+        npc=actors.next_id(),
+        like=towns[0],
+        at=by_day,
+        name="Гарет",
+        guild="GIL_BAU",
+        look=NpcLook(
+            gender="MALE", head="Hum_Head_Pony", face="FACE_N_NORMAL05", skin="BODYTEX_N", armor="ITAR_BAU_M"
+        ),
+        items=[NpcThing(item="ITMI_GOLD", count=40), NpcThing(item="ITFO_APPLE", count=5)],
+        routine=[
+            RoutineEntry(start="06:00", end="21:00", state="ZS_STAND_ARMSCROSSED", waypoint=by_day),
+            RoutineEntry(start="21:00", end="06:00", state="ZS_STAND_WP", waypoint=by_night),
+        ],
+    )
+    return spec, by_day
+
+
 async def cast_character(link: GameLink, actors: Cast, slot: int = 7) -> dict[str, str]:
     """Stage 2 of the director as author, layer 2 (docs/director.md): a character of the director's, on the
     game.
@@ -3719,38 +3756,10 @@ async def cast_character(link: GameLink, actors: Cast, slot: int = 7) -> dict[st
         await wait_message(link, Session, timeout=10)
     await asyncio.sleep(1)
 
-    people = {p["npc"]: p for p in await link.story_people()}
-    towns = sorted(n for n in people if n.startswith("VLK_") and TEMPLATES.fullmatch(n))
-    hilda = people.get(HILDA)
-    if not towns or hilda is None:
-        return _logged({"made": f"failed (no townsman {towns} or no Hilda)"})
-    # two points of the farm near Hilda's day, none of hers: he stands at one by day and at the other by night
-    home = next((e["pos"] for e in hilda.get("routine", []) if e.get("pos")), None)
-    hers = {e["waypoint"] for e in hilda.get("routine", [])}
-    points = [w for w in await link.waypoints() if not w.get("fp") and w["name"].startswith("NW_FARM1_")]
-    if home is None or len(points) < 2:
-        return _logged({"made": "failed (no points of the farm)"})
-    by_day, by_night = [
-        w["name"]
-        for w in sorted(points, key=lambda w: math.dist((w["x"], w["y"], w["z"]), home))
-        if w["name"] not in hers
-    ][:2]
-
-    spec = NpcSpec(
-        npc=actors.next_id(),
-        like=towns[0],
-        at=by_day,
-        name="Гарет",
-        guild="GIL_BAU",
-        look=NpcLook(
-            gender="MALE", head="Hum_Head_Pony", face="FACE_N_NORMAL05", skin="BODYTEX_N", armor="ITAR_BAU_M"
-        ),
-        items=[NpcThing(item="ITMI_GOLD", count=40), NpcThing(item="ITFO_APPLE", count=5)],
-        routine=[
-            RoutineEntry(start="06:00", end="21:00", state="ZS_STAND_ARMSCROSSED", waypoint=by_day),
-            RoutineEntry(start="21:00", end="06:00", state="ZS_STAND_WP", waypoint=by_night),
-        ],
-    )
+    found = await _peddler(link, actors)
+    if isinstance(found, str):
+        return _logged({"made": f"failed ({found})"})
+    spec, by_day = found
     me = spec.npc
 
     async def save(at: int) -> None:
@@ -3842,6 +3851,124 @@ async def cast_character(link: GameLink, actors: Cast, slot: int = 7) -> dict[st
         "before",
         await seen() == ("absent", "") and actors.characters() == [],
         f"{await seen()}; {[c.npc for c in actors.characters()]}",
+    )
+    return _logged(results)
+
+
+# Garet as a person (layer 3): a card, a voice, a past, what he knows, whom he knows
+GARET = Person(
+    ru="Ты — Гарет, бродячий торговец. Скуп на слова, но честен в цене и не любит, когда торгуются зря.",
+    en="A taciturn peddler who keeps his prices fair.",
+    greed=3,
+    honesty=4,
+    courage=2,
+    talk=2,
+    pushy=3,
+    strangers=4,
+    voice="A weathered peddler in his forties with a low, dry male voice, speaking unhurriedly",
+    past="Ты пришёл из Венгарда с последним кораблём и с тех пор торгуешь по фермам.",
+    knows=("У каменных ступеней к башне Ксардаса засели бандиты.",),
+    ties=(PersonTie(npc=HILDA, how="Хильда с фермы Лобарта: берёшь у неё молоко и сыр"),),
+)
+
+
+async def cast_person(
+    link: GameLink, actors: Cast, dialogue: DialogueManager, rumors: Rumors, slot: int = 7
+) -> dict[str, str]:
+    """Stage 2 of the director as author, layer 3 (docs/director.md): a character of the director's is a
+    person, on the game. Garet the peddler (as in `cast`) comes with who he is (GARET). Checks:
+    - persona: his persona is his card, past, knowledge and acquaintances, in a voice of his own;
+    - talk: the hero speaks to him, and his model has all that in front of it;
+    - knows_hilda: Hilda and he are acquainted (the rumors' ties), and with him beside her she calls him by
+      name, not «незнакомец»;
+    - after_load: after a save and a load he is the same person, in the same voice."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    found = await _peddler(link, actors)
+    if isinstance(found, str):
+        return _logged({"made": f"failed ({found})"})
+    spec, by_day = found
+    me = spec.npc
+    made, why = await actors.introduce(spec, GARET)
+    check("made", made is not None and made.get("state") == "made", made or why)
+    if made is None:
+        return _logged(results)
+
+    persona = dialogue.personas.get(me, spec.name)
+    parts = (GARET.ru, GARET.past, GARET.knows[0], GARET.ties[0].how)
+    check(
+        "persona",
+        all(t in persona.instructions for t in parts)
+        and persona.voice == GARET.voice
+        and "~" in persona.voice_id,
+        persona.voice_id,
+    )
+
+    def told(llm: FakeBackend) -> str:
+        return "\n".join([llm.calls[0][0], *(str(getattr(m, "content", "")) for m in llm.calls[0][1])])
+
+    # the hero speaks to him
+    await link.debug("player_goto", waypoint=by_day)
+    await asyncio.sleep(1)
+    dialogue.llm = llm = FakeBackend("Гарет я. Торгую понемногу.", delay=0)
+    await link.debug("type", text="Гарет, кто ты такой?")
+    ok = await _until(lambda: bool(llm.calls), 20)
+    prompt = told(llm) if ok else ""
+    check("talk", ok and all(t in prompt for t in parts), f"{len(llm.calls)} call(s)")
+    await _until(lambda: not dialogue.speaking(me), 15)
+
+    # Hilda knows him: beside her, he is Garet to her
+    ok = await _until(lambda: rumors.social is not None and me in rumors.social.ties.get(HILDA, {}), 15)
+    bonds = rumors.social.ties[HILDA][me].bonds if ok and rumors.social is not None else []
+    check("tie", ok and bonds == [GARET.ties[0].how], bonds)
+    await link.debug("player_goto", to=HILDA, distance=250)
+    # the talk held him to listen: free, he steps beside her
+    for _ in range(20):
+        try:
+            await link.detach(me)
+        except GameError:
+            pass
+        try:
+            await link.debug("npc_goto", npc=me, to=HILDA, distance=150, face=HILDA)
+            break
+        except GameError:
+            await asyncio.sleep(0.5)
+    await asyncio.sleep(2)
+    for _ in range(40):  # her own greeting may start as he comes in
+        if not (await link.story_state()).get("dialog"):
+            break
+        await asyncio.sleep(0.5)
+    dialogue.llm = llm = FakeBackend("Это Гарет, торговец.", delay=0)
+    await link.debug("type", text="Хильда, кто это рядом с тобой?")
+    ok = await _until(lambda: bool(llm.calls), 20)
+    prompt = told(llm) if ok else ""
+    seen = [line for line in prompt.split("\n") if "Гарет" in line or "незнакомец" in line]
+    check("knows_hilda", ok and any("Гарет" in line for line in seen), seen[:4])
+    await _until(lambda: not dialogue.speaking(HILDA), 15)
+
+    # a save and a load
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(2)
+    again = dialogue.personas.get(me, spec.name)
+    check(
+        "after_load",
+        actors.person(me) == GARET
+        and again.voice_id == persona.voice_id
+        and again.instructions == persona.instructions,
+        again.voice_id,
     )
     return _logged(results)
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -86,6 +87,45 @@ class Card:
         ]
         parts.append(f"к чужакам — {STRANGERS[self.strangers - 1]}")
         return "Твой характер: " + "; ".join(parts) + "."
+
+
+class Cards(Mapping[str, Card]):
+    """The cards of the scripts' npc's (characters.json) and of the director's own characters, as one: the
+    readers of cards (persona, deals, the behavioral model, the author) see a character the director brings
+    in like any other, as soon as it comes. `extra` gives the current branch's own; its cards win."""
+
+    def __init__(self, static: Mapping[str, Card], extra: Callable[[], Mapping[str, Card]] = dict) -> None:
+        self.static = static
+        self.extra = extra
+
+    def __getitem__(self, npc: str) -> Card:
+        own = self.extra()
+        return own[npc] if npc in own else self.static[npc]
+
+    def __iter__(self) -> Iterator[str]:
+        own = self.extra()
+        yield from own
+        yield from (npc for npc in self.static if npc not in own)
+
+    def __len__(self) -> int:
+        own = self.extra()
+        return len(own) + sum(1 for npc in self.static if npc not in own)
+
+
+class Traits(Mapping[str, str]):
+    """The cards' English lines (the behavioral model's), by npc: live, as the cards are."""
+
+    def __init__(self, cards: Mapping[str, Card]) -> None:
+        self.cards = cards
+
+    def __getitem__(self, npc: str) -> str:
+        return self.cards[npc].en
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.cards)
+
+    def __len__(self) -> int:
+        return len(self.cards)
 
 
 def load(path: Path = CARDS_FILE) -> dict[str, Card]:

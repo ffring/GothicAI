@@ -25,6 +25,7 @@ from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
 from .budget import Budget
 from .cast import Cast
+from .characters import Cards, Traits
 from .chests import ChestDesk
 from .chronicle import Chronicle
 from .concerns import Concerns
@@ -757,8 +758,11 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue=state.dialogue,
                 journal=journal,
             )
-            # the director's own characters (docs/director.md, stage 2): the branch keeps them
+            # the director's own characters (docs/director.md, stage 2): the branch keeps them, and whoever
+            # reads npc's by id reads them as the scripts' own: their cards, persona and voice
             state.cast = Cast(link, state.story, state.chronicle)
+            personas.cards = Cards(personas.cards, state.cast.cards)
+            personas.people = state.cast.person
             # quests of the director's own (docs/director.md, stage 1): for now on the console's word
             state.author = Author(
                 link,
@@ -788,7 +792,11 @@ async def serve(args: argparse.Namespace) -> int:
                 asyncio.create_task(state.amends.run()),
             ]
         # rumors of the hero's lies go round the people that know each other (story graph, stage 5)
-        state.rumors = Rumors(link, state.dialogue, state.chronicle, graph)
+        state.rumors = Rumors(
+            link, state.dialogue, state.chronicle, graph, bonds=state.cast.bonds if state.cast else dict
+        )
+        if state.cast is not None:
+            state.cast.on_change.append(state.rumors.people_changed)
         directing.append(asyncio.create_task(state.rumors.run()))
         # near the hero a retelling is said aloud, in the two's own voices, or seen (wave 2 step 2)
         state.gossip = GossipDesk(
@@ -837,7 +845,7 @@ async def serve(args: argparse.Namespace) -> int:
                 habits_of=habits_of,
                 view_of=perception.english,
                 # each npc's character, from its card (characters.py)
-                builder=SituationBuilder(traits={npc: card.en for npc, card in personas.cards.items()}),
+                builder=SituationBuilder(traits=Traits(personas.cards)),
                 # the new day menu applied, or still asked in shadow beside the old one
                 config=PlannerConfig(apply_day=args.apply_day),
                 trace=trace,  # its decisions: data for fine-tuning (M5d)
@@ -1111,6 +1119,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.authored_quest(link, state.author, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario authored: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "person":
+                assert state.cast is not None and state.dialogue is not None and state.rumors is not None
+                results = await scenarios.cast_person(link, state.cast, state.dialogue, state.rumors)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario person: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cast":
                 assert state.cast is not None
@@ -1653,7 +1667,7 @@ async def speech_test(args: argparse.Namespace) -> int:
             await asyncio.to_thread(player.write, data[: len(data) // 2 * 2])
 
         style = MOOD_DELIVERY[args.mood] if args.mood else ""
-        speech = await tts.stream(args.text, args.npc.upper(), persona.voice, start, chunk, style)
+        speech = await tts.stream(args.text, persona.voice_id, persona.voice, start, chunk, style)
         if player is not None:
             await asyncio.to_thread(player.stop)  # waits until the last chunk is heard
     except Exception as err:  # TtsError, or sounddevice's own errors when playing
@@ -1771,6 +1785,7 @@ def main() -> None:
             "authored",
             "own",
             "cast",
+            "person",
             "vlie",
             "vgive",
             "vcheck",

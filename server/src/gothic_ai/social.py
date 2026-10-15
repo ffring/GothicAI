@@ -33,7 +33,7 @@ import heapq
 import logging
 import math
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -76,6 +76,8 @@ class Tie:
     deals: list[str] = field(default_factory=list)  # quests they share
     # daily, when both stand in ZS_SMALLTALK, and the first one's waypoint (in story_people's order)
     talks: list[tuple[int, int, str]] = field(default_factory=list)
+    # how they know each other, in words: a character of the director's knows them (cast.Person.ties)
+    bonds: list[str] = field(default_factory=list)
 
     def occasions(self, a: str, b: str, after: int, until: int) -> Iterator[int]:
         """The game minutes in [after, until] they talk: their meetings (from when one already goes on),
@@ -85,7 +87,7 @@ class Tie:
             for s, e in self.meets:
                 if base + e > after and base + s <= until:
                     yield max(base + s, after)
-            if self.deals:
+            if self.deals or self.bonds:
                 at = (
                     base + DEAL_FROM + int(_chance("deal", *sorted((a, b)), str(day)) * (DEAL_TO - DEAL_FROM))
                 )
@@ -108,7 +110,12 @@ class Social:
     """The acquaintances of the world's people: whom each meets, and when; whom each has dealings with.
     And each one's day by its routine: where it is at a minute, how many a place holds (daylife.py)."""
 
-    def __init__(self, people: list[dict[str, Any]], graph: StoryGraph | None = None) -> None:
+    def __init__(
+        self,
+        people: list[dict[str, Any]],
+        graph: StoryGraph | None = None,
+        bonds: Mapping[str, Mapping[str, str]] | None = None,
+    ) -> None:
         self.names = {p["npc"]: p.get("name") or p["npc"] for p in people}
         self.guilds = {p["npc"]: int(p.get("guild", 0)) for p in people}
         self.ties: dict[str, dict[str, Tie]] = defaultdict(dict)
@@ -136,6 +143,11 @@ class Social:
         self._meetings()
         if graph is not None:
             self._dealings(graph)
+        # whom the director's characters know, by their description: news goes between them once a day
+        for a, known in (bonds or {}).items():
+            for b, how in known.items():
+                if a in self.names and b in self.names and (tie := self.tie(a, b)) is not None:
+                    tie.bonds.append(how)
 
     def tie(self, a: str, b: str) -> Tie | None:
         """Their tie, made if there is none yet; None if they can't be acquainted (an outlaw and the rest)."""
@@ -202,6 +214,7 @@ class Social:
             how = [f"{_hm(s)}–{_hm(e)}" for s, e in sorted(t.meets)]
             how += [f"дела: {q}" for q in t.deals]
             how += [f"болтают {_hm(s)}–{_hm(e)} у {wp}" for s, e, wp in t.talks]
+            how += [f"знакомы: {b}" for b in t.bonds]
             out.append(f"{self.names.get(other, other)} ({other}): {', '.join(how)}")
         return out
 
@@ -301,11 +314,13 @@ class Rumors:
         dialogue: DialogueManager,
         chronicle: Chronicle,
         graph: StoryGraph | None = None,
+        bonds: Callable[[], Mapping[str, Mapping[str, str]]] = dict,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
         self.chronicle = chronicle
         self.graph = graph
+        self.bonds = bonds  # whom the director's characters know (cast.py)
         self.social: Social | None = None
         self.rumors: dict[str, Rumor] = {}
         self.dead: set[str] = set()
@@ -327,7 +342,7 @@ class Rumors:
     async def tick(self) -> None:
         """Who met whom since the last tick, and what they told each other."""
         if self.social is None:
-            self.social = Social(await self.link.story_people(), self.graph)
+            self.social = Social(await self.link.story_people(), self.graph, self.bonds())
             log.info("rumors: %d people, %d ties", len(self.social.names), _count(self.social))
         state = await self.link.story_state()
         now = int(state.get("day", 0)) * DAY + int(state.get("hour", 0)) * 60 + int(state.get("minute", 0))
@@ -533,6 +548,11 @@ class Rumors:
             self._load()
             self.social = None  # the people of the new world
             self.clock = None
+
+    def people_changed(self) -> None:
+        """Someone came into the world (a character of the director's): the next tick takes the people again,
+        its day and ties with them."""
+        self.social = None
 
     def describe(self) -> list[str]:
         """The rumors and who knows them (for the console)."""
