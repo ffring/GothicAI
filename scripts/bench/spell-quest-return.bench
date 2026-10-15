@@ -1,4 +1,4 @@
-# One real WindFist hit: living mortal human falls over a real cliff and returns on landing.
+# Real WindFist hits: a living mortal human falls over a cliff and into water, then returns.
 seed 73013
 cheat god
 set time 12 0
@@ -6,12 +6,23 @@ view full
 overlay off
 ragdoll on
 living on
-spell guard-fixture
+spell guard-fixture cliff
 wait 1200
 spell equip 26
 wait 1200
 spell case wind_cliff
 rec wind_cliff novideo
+wait 300
+spell cast 600
+spell wait-return 20000
+stop
+spell clear
+spell guard-fixture water
+wait 1200
+spell equip 26
+wait 1200
+spell case wind_water
+rec wind_water novideo
 wait 300
 spell cast 600
 spell wait-return 20000
