@@ -388,6 +388,7 @@ void Camera::tickAim(float dtF) {
     aimReach    = 0;
     aimLeanDrop = 0;
     aimLeanRoom = 1;
+    aimRangeRoom = 1;
     }
   const float k = 1.f - fovZoom*aimZoomS;
   if(std::abs(k-fovK)>1e-4f) {
@@ -988,9 +989,17 @@ void Camera::tickThirdPerson(float dtF) {
       } else {
       aimLeanRoom = 1;
       }
+    // behind the shoulder not into a wall either: closer at once, back out eased (at once the camera went a
+    // metre in one frame as the rays behind stopped hitting the wall)
     float      r  = aimRange - aimZoomIn*aimZoomS;
-    if(def.collision!=0)
-      r = calcCameraColision(at, back, calcLookAtAngles(at+back*r, at, Vec3(), state.spin), r);
+    if(def.collision!=0) {
+      const float room = calcCameraColision(at, back, calcLookAtAngles(at+back*r, at, Vec3(), state.spin), r)/r;
+      if(room<aimRangeRoom)
+        aimRangeRoom = room;
+      else
+        aimRangeRoom += (room-aimRangeRoom)*std::clamp(dtF*roomRate,0.f,1.f);
+      r *= aimRangeRoom;
+      }
     const Vec3 o = at + back*std::max(r,20.f);
     const Vec3 a = calcLookAtAngles(o, at, Vec3(), state.spin);
     aimFrom  = at;
