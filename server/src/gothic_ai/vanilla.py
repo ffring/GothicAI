@@ -64,7 +64,7 @@ MORNING_EVERY_S = 5.0
 HERO = (["inst", "OTHER"], ["inst", "HERO"])
 # engine calls in an ending that only show something: they don't keep the ending from being played
 COSMETIC_CALLS = ("AI_", "PRINT", "SND_", "WLD_PLAYEFFECT", "MDL_", "B_SAY", "B_ENDPRODUCTIONDIALOG")
-# the npc goes with the hero, in the scripts' words: the orders' business here (orders.py), not a quest's
+# the npc in the hero's party, as a companion's dialog marks it (story_effect `party`, v30)
 PARTY = ["int", 15, "AIV_PARTYMEMBER"]
 MAX_SAID = 600  # characters of the scripts' lines of a dialog shown to the npc's model
 
@@ -679,8 +679,6 @@ class VanillaQuests:
                     continue
                 if e["do"] in ("create_items", "remove_items") and e.get("npc") == ["inst", "SELF"]:
                     continue  # the npc's own stock: B_GiveInvItems makes what it gives
-                if e["do"] == "set_field" and e.get("of") == ["inst", "SELF"] and e.get("index") == PARTY:
-                    continue  # whether it goes with the hero: the orders' business
                 log.info("vanilla: %s can't be played: %s %s", quest, node.id, e["do"])
                 return False
             out.append(made)
@@ -1025,6 +1023,10 @@ def _bridge(e: dict[str, Any], titles: dict[str, str], graph: StoryGraph) -> dic
             return {"do": "routine", "npc": who, "routine": str(e["routine"]).upper()}
         case "set" if _int(e.get("value")) is not None:
             return {"do": "set", "var": e["var"], "value": _int(e["value"])}
+        case "set_field" if (
+            e.get("of") == ["inst", "SELF"] and e.get("index") == PARTY and _int(e.get("value")) is not None
+        ):
+            return {"do": "party", "value": 1 if _int(e["value"]) else 0}
         case "xp" if _int(e.get("amount")) is not None:
             return {"do": "xp", "amount": _int(e["amount"])}
         case "give" if _sym(e.get("item")) and _int(e.get("amount")) is not None:

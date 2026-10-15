@@ -530,7 +530,7 @@ async def _cavalorn(fake: FakeGame, llm: FakeBackend, graph: StoryGraph):
 
 async def test_a_quest_of_the_scripts_given_in_a_conversation(cavalorn):
     # the hero offers Cavalorn his help in his own words; Cavalorn gives the quest as HELFEN does: it runs,
-    # the journal has it, the dialog counts as heard; whether he goes with the hero is the orders' business
+    # the journal has it, the dialog counts as heard, he is in the hero's party
     fake = FakeGame(branch="A")
     give = FakeStep("Ладно, пошли.", [ToolCall("give_quest", {"quest": KILLBRAGO}, "g1")])
     llm = FakeBackend(script=[give, FakeStep("Ну?")], delay=0)
@@ -556,7 +556,7 @@ async def test_a_quest_of_the_scripts_given_in_a_conversation(cavalorn):
             "text": "Бандиты украли у Кавалорна.",
         } in effects
         assert {"do": "knows", "info": HELFEN} in effects and HELFEN in fake.known
-        assert not any(e["do"] == "set_field" for e in effects)
+        assert {"do": "party", "value": 1} in effects  # he goes with the hero, as the scripts mark it
         # given: not offered again; and the ending for the unasked is not one any more
         fake.vars[KILLBRAGO] = 1
         await vanilla.prepare(CAVALORN)
@@ -590,8 +590,7 @@ async def test_an_ending_that_wants_its_quest_not_begun(cavalorn):
             "do": "xp",
             "amount": 100,
         } in effects
-        assert {"do": "knows", "info": KILLED} in effects
-        assert not any(e["do"] == "set_field" for e in effects)
+        assert {"do": "knows", "info": KILLED} in effects and {"do": "party", "value": 0} in effects
         # what he told of the bandits only in the conversation is no lie of the hero's
         assert chronicle.facts("claim")[-1]["truth"] is True and chronicle.facts("lie") == []
     finally:
