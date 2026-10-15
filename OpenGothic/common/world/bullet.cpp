@@ -153,7 +153,6 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
   impactAt = hit.point;
   impactOwner = hit.bone;
   impactKnown = true;
-  onCollide(hit.material);
   auto matrix = obj->matrix();
   if(auto* npc = wrld->npcForRagdoll(hit.ragdoll)) {
     npc->addCorpseArrowImpulse(*this);
@@ -232,9 +231,23 @@ bool Bullet::onCollide(Npc& npc) {
   if(&npc==origin() || isFinished())
     return false;
 
+  if(ow!=nullptr) {
+    // no damage between ally npc's, only emit pfx effect
+    const bool friendlyFire = wrld->script().isFriendlyFire(*ow, npc);
+    if(!friendlyFire) {
+      if(isSpell())
+        npc.takeDamage(*ow,this,vfx.handle(),spellId()); else
+        npc.takeDamage(*ow,this);
+      }
+    }
+  vfx.setKey(*wrld,SpellFxKey::Collide);
+  vfx.setLooped(false);
+  vfx.setPhysicsDisable();
+  wrld->runEffect(std::move(vfx));
+
   if(stopsAtWorldHit() && !impactKnown) {
-    // The legacy capsule query has already accepted this NPC. Resolve only the
-    // attachment frame; this secondary bone lookup cannot change that outcome.
+    // Damage and the existing physical reaction consumed the legacy impact
+    // metadata above. Resolve this additional frame only for the visual pin.
     const auto from = position();
     const auto dir = direction();
     float distance = 0;
@@ -249,20 +262,6 @@ bool Bullet::onCollide(Npc& npc) {
       }
     impactKnown = true;
     }
-
-  if(ow!=nullptr) {
-    // no damage between ally npc's, only emit pfx effect
-    const bool friendlyFire = wrld->script().isFriendlyFire(*ow, npc);
-    if(!friendlyFire) {
-      if(isSpell())
-        npc.takeDamage(*ow,this,vfx.handle(),spellId()); else
-        npc.takeDamage(*ow,this);
-      }
-    }
-  vfx.setKey(*wrld,SpellFxKey::Collide);
-  vfx.setLooped(false);
-  vfx.setPhysicsDisable();
-  wrld->runEffect(std::move(vfx));
 
   if(stopsAtWorldHit()) {
     auto matrix = obj->matrix();

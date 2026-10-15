@@ -36,8 +36,8 @@ def validate(run):
     assert len(setup) == 1 and setup[0]['default_enabled'], 'feature default must be ON'
     names = ('off_npc', 'off_world', 'live', 'motion', 'ko', 'corpse', 'getup',
              'death', 'dead_corpse', 'world', 'toggle_off', 'rearm', 'remove')
-    expected_npc = (0, 0, 1, 1, 2, 3, 3, 4, 5, 5, 0, 1, 0)
-    expected_world = (0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0)
+    expected_npc = (0, 0, 1, 1, 2, 2, 2, 3, 3, 3, 0, 1, 0)
+    expected_world = (0, 0, 0, 0, 0, 1, 1, 1, 2, 3, 0, 0, 0)
     cases = [e for e in data if e['kind'] == 'arrow_sticking_case']
     assert [e['case'] for e in cases] == list(names), 'missing or reordered cases'
     frames = [e for e in data if e['kind'] == 'arrow_sticking_frame' and e['case'] == e['seg']]
@@ -88,12 +88,13 @@ def validate(run):
     note = lambda name: [e.get('text', '') for e in data if e['kind'] == 'note' and e['seg'] == name]
     assert any(s.startswith('arrow hit BAU_904_BAUER:') for s in note('off_npc')), 'OFF NPC projectile never hit'
     assert any(s.startswith('arrow missed: came down') for s in note('off_world')), 'OFF world projectile never collided'
-    for name in ('live', 'ko', 'death'):
+    for name in ('live', 'ko', 'death', 'rearm'):
         assert sum(s.startswith('arrow stuck npc BAU_904_BAUER bone ') for s in note(name)) == 1, (name, 'missing real NPC projectile pin')
-    for name in ('corpse', 'dead_corpse', 'rearm'):
-        assert sum(s.startswith('arrow stuck corpse BAU_904_BAUER bone ') for s in note(name)) == 1, (name, 'missing native corpse projectile hit')
-        assert all((r['ko'] or r['dead']) and r['corpse_parts'] == 24 for r in rows[name]), (name, 'native corpse hit without a physical down body')
-    assert all(r['npc_pin_count'] == 3 for r in rows['getup']), 'getup lost an attached arrow'
+    for name in ('corpse', 'dead_corpse'):
+        assert not any(s.startswith(('arrow stuck corpse ', 'arrow stuck npc ', 'arrow hit BAU_904_BAUER:')) for s in note(name)), (name, 'new arrow intercepted by a down body')
+        assert all((r['ko'] or r['dead']) and r['corpse_parts'] == 24 for r in rows[name]), (name, 'missing physical down body')
+        assert sum(s.startswith('arrow stuck world: at ') for s in note(name)) == 1, (name, 'projectile did not reach the landscape behind the body')
+    assert all(r['npc_pin_count'] == 2 for r in rows['getup']), 'getup lost an attached arrow'
     assert rows['getup'][-1]['living_parts'] == 24 and not rows['getup'][-1]['ko'] and not rows['getup'][-1]['dead'], 'getup did not finish'
     assert any(r['recovering'] for r in rows['getup']), 'recovery blend was not observed'
     assert rows['ko'][-1]['ko'] and rows['ko'][-1]['corpse_parts'] == 24, 'KO handoff failed'
@@ -112,11 +113,12 @@ def validate(run):
     match = re.match(r'arrow stuck world: at (\S+) (\S+) (\S+) normal (\S+) (\S+) (\S+) material (\d+)', world_notes[0])
     assert match, 'world hit lacks point/normal/material'
     point = [float(match[i]) for i in (1, 2, 3)]
-    actual = next(r['world_pins'][0]['world'] for r in rows['world'] if r['world_pins'])
+    world_before = cases[names.index('world')]['world_pins_before']
+    actual = next(r['world_pins'][world_before]['world'] for r in rows['world'] if len(r['world_pins']) > world_before)
     hit_error = math.dist(actual[12:15], point)
     assert hit_error < 2, ('world draw was not pinned at actual hit point', hit_error)
     toggle = cases[names.index('toggle_off')]
-    assert toggle['npc_pins_before'] == 5 and toggle['world_pins_before'] == 1, 'toggle did not cover both owner types'
+    assert toggle['npc_pins_before'] == 3 and toggle['world_pins_before'] >= 1, 'toggle did not cover both owner types'
     assert not rows['toggle_off'][-1]['feature'] and rows['toggle_off'][-1]['all_npc_pin_count'] == 0
     removed = [e for e in data if e['kind'] == 'arrow_sticking_remove']
     assert len(removed) == 1 and removed[0]['npc_pins_before'] == 1 and removed[0]['npc_pins_after'] == 0
@@ -127,7 +129,7 @@ def validate(run):
             'motion_turn_deg': turned, 'motion_arrow_travel_cm': arrow_travel,
             'physical_render_vs_query_arrow_delta_cm': physical_draw_delta,
             'physics_step': {mode: costs([r for r in frames if r['feature'] == (mode == 'on')]) for mode in ('off', 'on')},
-            'remove': removed[0], 'note': 'Actual mesh draw nodes; every pin comes from a real projectile. The corpse note identifies the selected native ragdoll part after the ordinary precise NPC pass. The original capture field primary_collision is an overlap query, renamed collision_overlap in source; it does not measure collider enabled state. KO is bench-forced after a real hit. Pin persistence across saves is outside this fixture.'}
+            'remove': removed[0], 'note': 'Actual mesh draw nodes; every pin comes from a real projectile. Existing NPC pins follow KO, getup and death; new arrows do not intercept down bodies and can stop in the landscape behind them. World pins are created only after the original terminal collision, preserving ricochets. Native contracts separately prove corpse passage and reflection. KO is bench-forced after a real hit. Pin persistence across saves is outside this fixture.'}
 
 
 def main():
