@@ -627,10 +627,13 @@ struct Ragdoll::Impl final {
       }
     const size_t root=reactionRoot(hitPart);
     if(root==0) return noBone;
+    const bool torso=named(rig->parts[hitPart].name,"SPINE");
     for(size_t i=1;i<rig->parts.size();++i) {
       size_t ancestor=i;
       while(ancestor>root && rig->parts[ancestor].parent>=0) ancestor=size_t(rig->parts[ancestor].parent);
-      if(ancestor!=root || activeParts[i]) continue;
+      // A torso impact bends the spine without dropping the whole head/arm
+      // subtree under gravity. Direct head and limb hits retain their chains.
+      if(ancestor!=root || activeParts[i] || (torso && !named(rig->parts[i].name,"SPINE"))) continue;
       activeParts[i]=true;
       const auto id=native->GetBodyID(int(i));
       interface.SetObjectLayer(id,DynamicWorld::C_ActiveBody);
@@ -643,8 +646,9 @@ struct Ragdoll::Impl final {
     for(size_t i=1;i<rig->parts.size();++i) {
       const int index=native->GetRagdollSettings()->GetConstraintIndexForBodyIndex(int(i));
       if(index<0) continue;
-      const int parent=rig->parts[i].parent;
-      native->GetConstraint(index)->SetEnabled(activeParts[i] || (parent>=0 && activeParts[size_t(parent)]));
+      // A kinematic child follows animation independently; constraining it to
+      // a dynamic spine would pin the spine to the head and both shoulders.
+      native->GetConstraint(index)->SetEnabled(activeParts[i]);
       }
     native->ResetWarmStart();
     reactionAge=0.f;

@@ -44,9 +44,57 @@ def pose_error(bone):
     return angle, math.dist(native[12:15], animation[12:15])
 
 
+def chest_recovery(active, rows):
+    """Recover the dynamic spine while head/arms retain the ready world pose."""
+    groups = {'spine': [], 'head': [], 'left_arm': [], 'right_arm': []}
+    previous = {row['t_game_ms']: before for before, row in zip(rows, rows[1:])}
+    for bone in active[-1]['bones']:
+        name = bone['name'].upper().replace('_', ' ')
+        if 'SPINE' in name:
+            group = 'spine'
+        elif any(token in name for token in ('NECK', 'HEAD', 'JAW', 'KIEFER')):
+            group = 'head'
+        elif any(token in name for token in ('CLAVICLE', 'UPPERARM', 'FOREARM', 'HAND', 'FINGER')):
+            group = 'left_arm' if ' L ' in name else 'right_arm' if ' R ' in name else None
+        else:
+            group = None
+        if group is None:
+            continue
+        values = [pose_error(b) for row in active for b in row['bones'] if b['id'] == bone['id']]
+        peak_angle, peak_cm = max(v[0] for v in values), max(v[1] for v in values)
+        last_angle, last_cm = values[-1]
+        dynamic = any(bone['id'] in row['reaction_bones'] for row in active)
+        entry = {'name': bone['name'], 'peak_angle_deg': peak_angle, 'peak_cm': peak_cm,
+                 'last_angle_deg': last_angle, 'last_cm': last_cm, 'active': dynamic}
+        if group == 'spine':
+            assert last_angle < peak_angle*.6+.5 and last_cm < peak_cm*.6+.5, (
+                'chest spine did not recover before reset', bone['name'], peak_angle, peak_cm, last_angle, last_cm)
+        else:
+            assert not dynamic, ('chest activated head or arms', bone['name'])
+            # Physics consumes the last completed animation solve. Compare to
+            # that ready WORLD frame, without a rotating physical parent basis.
+            # The current row's animation is already queued for the next step.
+            world_errors = []
+            for row in active:
+                before = previous.get(row['t_game_ms'])
+                if before is None:
+                    continue
+                native = next(b['native'] for b in row['bones'] if b['id'] == bone['id'])
+                target = next(b['animation'] for b in before['bones'] if b['id'] == bone['id'])
+                world_errors.append(pose_error({'native': native, 'animation': target}))
+            assert world_errors, ('missing ready animation reference', bone['name'])
+            angle = max(v[0] for v in world_errors)
+            distance = max(v[1] for v in world_errors)
+            assert angle < 1 and distance < .05, ('chest head/arm world pose sag', bone['name'], angle, distance)
+            entry.update(world_kinematic_angle_deg=angle, world_kinematic_error_cm=distance)
+        groups[group].append(entry)
+    assert all(groups.values()), ('chest upper-body groups missing', groups)
+    return groups
+
+
 def functional(run):
     data = events(run)
-    cases = ('off', 'weak_shoulder', 'strong_shoulder', 'leg', 'repeated', 'ko', 'death')
+    cases = ('off', 'weak_shoulder', 'strong_shoulder', 'chest', 'leg', 'repeated', 'ko', 'death')
     assert [e['case'] for e in data if e['kind'] == 'arrow_reaction_case'] == list(cases)
     # Feature/setup commands between recordings may still carry the old case
     # label. A case's evidence is its explicitly recorded segment only.
@@ -83,7 +131,16 @@ def functional(run):
         assert len({r['world_bodies'] for r in rows}) == 1, (name, 'native body count changed')
         active = [r for r in rows if r['weight'] > 0 and not r['kinematic'] and r['reaction_bones']]
         assert active, (name, 'no actual native dynamic chain')
-        anatomical = ('CALF', 'THIGH', 'FOOT') if name in ('leg', 'repeated') else ('UPPERARM', 'FOREARM', 'CLAVICLE')
+        anatomical = (('SPINE',)
+                      if name == 'chest' else ('CALF', 'THIGH', 'FOOT') if name in ('leg', 'repeated')
+                      else ('UPPERARM', 'FOREARM', 'CLAVICLE'))
+        upper = None
+        if name == 'chest':
+            assert any('SPINE' in b['name'].upper() for row in active for b in row['bones'] if b['id'] == row['hit_bone']), 'real chest arrow did not hit a spine capsule'
+            assert all(not any(('PELVIS' in b['name'].upper() or any(t in b['name'].upper() for t in ('THIGH', 'CALF', 'FOOT', 'TOE')))
+                               and b['id'] in row['reaction_bones'] for b in row['bones']) for row in active), 'chest made pelvis or legs dynamic'
+            assert all(all('SPINE' in b['name'].upper() for b in row['bones'] if b['id'] in row['reaction_bones']) for row in active), 'chest activated a non-spine subtree'
+            upper = chest_recovery(active, rows)
         errors = []
         for row in active:
             affected = [b for b in row['bones'] if b['id'] in row['reaction_bones'] and any(t in b['name'].upper() for t in anatomical)]
@@ -104,6 +161,8 @@ def functional(run):
                         'last_active_local_angle_deg': errors[-1][1], 'last_active_displacement_cm': errors[-1][2],
                         'root_max_step_cm': max(steps), 'root_travel_cm': root_travel,
                         'purekin_after': True, 'world_bodies': rows[-1]['world_bodies']}
+        if upper is not None:
+            result[name]['upper_body_recovery'] = upper
     assert result['strong_shoulder']['peak_weight'] > result['weak_shoulder']['peak_weight'] + .03, 'draw strengths did not change native weight'
     cleanup = [e for e in data if e['kind'] == 'arrow_reaction_cleanup']
     assert len(cleanup) == 2 and all(e['parts'] == 24 and e['before']-e['after'] == 24 for e in cleanup), cleanup

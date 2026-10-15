@@ -45,6 +45,14 @@ volley 1 300
 wait 2800
 stop
 
+arrow aim chest 1
+arrow case chest
+label FULL DRAW - CHEST
+rec chest
+volley 1 300
+wait 2800
+stop
+
 cam follow 310 20 55
 cam look 75
 arrow aim leg 1
