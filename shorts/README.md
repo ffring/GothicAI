@@ -12,7 +12,8 @@ uv run gothic-shorts film xardas-lie --takes 3  # three takes in a row (the answ
 uv run gothic-shorts cut xardas-lie             # the newest take -> short-ru.mp4 (+ .png sheet, .md transcript)
 uv run gothic-shorts cut xardas-lie 2           # take-02
 uv run gothic-shorts subs xardas-lie --lang en  # subs.en.json of the take: fill in the translations, then
-uv run gothic-shorts cut xardas-lie --lang en   # -> short-en.mp4
+uv run gothic-shorts srt xardas-lie             # -> subs.en.srt: English captions for the Russian short
+uv run gothic-shorts cut xardas-lie --lang en   # -> short-en.mp4 (English burnt in; no longer uploaded)
 ```
 
 What it uses: the launcher's settings and keys (`gothic-launcher config`: ChatGPT sign-in, the ASR and TTS
@@ -76,7 +77,8 @@ shots:
    the sheet (`short-ru.png`); look at single frames when something is off
    (`ffmpeg -ss 12 -i short-ru.mp4 -frames:v 1 f.png`).
 4. If the answers miss: change the hero's lines (the npc answers what it heard), not the cut.
-5. For an English short: `subs`, translate every text in `subs.en.json`, `cut --lang en`.
+5. English: `subs`, translate every text in `subs.en.json`, `srt` -> `subs.en.srt`, the caption track the
+   upload adds to the Russian short. A short is one video in every language (see Uploading to YouTube).
 
 Honesty: the npc's answers are not edited, only the pauses while the model thinks are cut down (to ~0.5 s).
 Say so in the description.
@@ -185,8 +187,23 @@ take, text and cleaning have not changed is not aligned again.
 
 ```bash
 uv run gothic-shorts youtube login                     # once: the browser opens Google's consent page
-uv run gothic-shorts upload .shorts/compare/bodies/short-ru.mp4 --meta .shorts/compare/bodies/youtube.json --lang ru --privacy public
+uv run gothic-shorts upload .shorts/compare/bodies/short-ru.mp4 --meta .shorts/compare/bodies/youtube.json --privacy public
+uv run gothic-shorts upload .shorts/xardas-lie/take-02/short-ru.mp4 --meta .shorts/xardas-lie/youtube.json \
+    --captions en=.shorts/xardas-lie/take-02/subs.en.srt
+uv run gothic-shorts srt bow                           # an explainer: subs.en.srt from script.en.txt
+uv run gothic-shorts captions <video id> subs.en.srt --lang en   # a track on a video already up
 ```
+
+A short is one video in every language, not one upload per language: its sound is Russian (the game is;
+`defaultAudioLanguage` is always `ru`), the `--lang` section of `youtube.json` (`ru`) gives the title and the
+description, every other section goes in as their translation (YouTube shows a viewer the title in their
+language), and `--captions <lang>=<file>` adds subtitle tracks after the upload. `gothic-shorts srt` makes
+them: a shot's take from its `subs.<lang>.json` on the cut's time (an npc's line starts with its name, the
+burnt-in hook and captions in brackets), an explainer from `script.<lang>.txt` over its Russian voice
+(`words.ru.json`, the `|` chunks one after another). Caption tracks need the `youtube.force-ssl` scope: a
+sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
+anything. An English audio track is added in Studio (Subtitles, the video, the language's Audio column); the
+API has no call for it, and Studio shows the column only to channels with YouTube's advanced features.
 
 The OAuth client is a Desktop app client of a Google Cloud project (YouTube Data API v3); its JSON and the
 token live in `~/.local/share/gothic-ai/` (`youtube-client.json`, `youtube-token.json`), never in the

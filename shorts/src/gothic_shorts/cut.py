@@ -3,7 +3,8 @@ sound, subtitles, the hook over the first seconds; 1080x1920, loudness for phone
 
 The texts are burnt in as images (Pillow), so ffmpeg needs no libass. A cut in another language takes
 `subs.<lang>.json` from the take: every text of the short (hook, captions, lines) mapped to its translation;
-`gothic-shorts subs` writes the list of texts to fill in.
+`gothic-shorts subs` writes the list of texts to fill in. The same translations make a caption track for
+the Russian short (`subtitles`, a SubRip file YouTube takes).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import srt
 from .shot import Shot
 from .timeline import Timeline, build, read_events
 
@@ -39,6 +41,18 @@ class Overlay:
     start: float
     end: float
     y: int  # top of the image on the frame
+
+
+@dataclass(frozen=True)
+class Shown:
+    """A text of the cut, translated, and when it is on screen (seconds of the cut)"""
+
+    kind: str  # "hook", "caption" or "line"
+    text: str
+    start: float
+    end: float
+    name: str = ""  # the npc's, over its line
+    hero: bool = False
 
 
 def texts(shot: Shot, tl: Timeline) -> list[str]:
@@ -70,6 +84,37 @@ def write_subs_template(shot: Shot, take: Path, lang: str) -> Path:
     return path
 
 
+def shown(shot: Shot, tl: Timeline, subs: dict[str, str]) -> list[Shown]:
+    out: list[Shown] = []
+    if shot.hook:
+        out.append(Shown("hook", subs[shot.hook], 0.0, min(HOOK_S, tl.cut_duration)))
+    for c in tl.captions:
+        start = max(tl.to_cut(c.start), HOOK_S if shot.hook else 0.0)
+        out.append(Shown("caption", subs[c.text], start, tl.to_cut(c.end)))
+    for line in tl.lines:
+        start, stop = tl.to_cut(line.start), tl.to_cut(line.end)
+        name = "" if line.hero else subs.get(line.name, line.name)
+        out.append(Shown("line", subs[line.text], start, max(stop, start + 0.6), name, line.hero))
+    return out
+
+
+def subtitles(shot: Shot, take: Path, lang: str) -> Path:
+    """The take's texts in `lang` as a caption track over its Russian cut: <take>/subs.<lang>.srt. A line
+    says whose it is (no colours there); the hook and the captions, burnt in in Russian, go in brackets."""
+    events = take / "events.jsonl"
+    if not events.is_file():
+        raise CutError(f"the take has no {events.name}")
+    tl = build(read_events(events))
+    subs = load_subs(take, lang, texts(shot, tl))
+    cues = []
+    for s in shown(shot, tl, subs):
+        text = s.text if s.kind == "line" else f"[{s.text}]"
+        cues.append(srt.Cue(s.start, s.end, f"{s.name}: {text}" if s.name else text))
+    path = take / f"subs.{lang}.srt"
+    path.write_text(srt.render(cues))
+    return path
+
+
 def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Path:
     events = take / "events.jsonl"
     video, audio = take / "main.mp4", take / "main.wav"
@@ -83,7 +128,7 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
 
-    overlays = _overlays(shot, tl, subs, work)
+    overlays = _overlays(shown(shot, tl, subs), work)
     keep = tl.keep()
     hero = [line for line in tl.lines if line.hero and line.wav and Path(line.wav).is_file()]
 
@@ -139,25 +184,21 @@ def cut(shot: Shot, take: Path, lang: str = "ru", out: Path | None = None) -> Pa
     return out
 
 
-def _overlays(shot: Shot, tl: Timeline, subs: dict[str, str], work: Path) -> list[Overlay]:
+def _overlays(on_screen: list[Shown], work: Path) -> list[Overlay]:
     out: list[Overlay] = []
-    end = tl.cut_duration
-    if shot.hook:
-        png = work / "hook.png"
-        h = _text_png(subs[shot.hook], png, HOOK_FONT, 84, (255, 255, 255), max_chars=18, stroke=7)
-        out.append(Overlay(png, 0.0, min(HOOK_S, end), 300 - h // 2))
-    for i, c in enumerate(tl.captions):
-        png = work / f"caption{i}.png"
-        h = _text_png(subs[c.text], png, HOOK_FONT, 64, HERO_COLOR, max_chars=22, stroke=6)
-        start = max(tl.to_cut(c.start), HOOK_S if shot.hook else 0.0)
-        out.append(Overlay(png, start, tl.to_cut(c.end), 300 - h // 2))
-    for i, line in enumerate(tl.lines):
-        png = work / f"line{i}.png"
-        name = "" if line.hero else subs.get(line.name, line.name)
-        color = HERO_COLOR if line.hero else NPC_COLOR
-        h = _text_png(subs[line.text], png, SUB_FONT, 62, color, max_chars=26, name=name)
-        start, stop = tl.to_cut(line.start), tl.to_cut(line.end)
-        out.append(Overlay(png, start, max(stop, start + 0.6), 1290 - h // 2))
+    for i, s in enumerate(on_screen):
+        png = work / f"{s.kind}{i}.png"
+        if s.kind == "hook":
+            h = _text_png(s.text, png, HOOK_FONT, 84, (255, 255, 255), max_chars=18, stroke=7)
+            y = 300 - h // 2
+        elif s.kind == "caption":
+            h = _text_png(s.text, png, HOOK_FONT, 64, HERO_COLOR, max_chars=22, stroke=6)
+            y = 300 - h // 2
+        else:
+            color = HERO_COLOR if s.hero else NPC_COLOR
+            h = _text_png(s.text, png, SUB_FONT, 62, color, max_chars=26, name=s.name)
+            y = 1290 - h // 2
+        out.append(Overlay(png, s.start, s.end, y))
     return out
 
 
