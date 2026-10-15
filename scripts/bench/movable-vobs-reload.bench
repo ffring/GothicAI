@@ -1,0 +1,4 @@
+# A fresh process loads session-scattered.sav via -save 1.
+movable reload
+wait 1000
+movable reload

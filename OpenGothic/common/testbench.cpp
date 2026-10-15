@@ -68,6 +68,9 @@
 #include "world/objects/item.h"
 #include "world/objects/interactive.h"
 #include "world/objects/sound.h"
+#include "graphics/objvisual.h"
+#include "graphics/mesh/protomesh.h"
+#include "world/movablevobs.h"
 #include "world/world.h"
 #include "world/waypoint.h"
 #include "world/aiqueue.h"
@@ -592,6 +595,23 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
+  // Test-only props use the body API directly; the map allowlist contains only
+  // visuals actually authored in the stock worlds, not these Item mesh copies.
+  struct MovableFixture { ObjVisual visual; DynamicWorld::Item body; };
+  std::vector<std::unique_ptr<MovableFixture>> movableFixtures;
+  std::unordered_set<uintptr_t> movableMapIds;
+  std::vector<uintptr_t> movableIds;
+  std::unordered_map<uintptr_t,Vec3> movableReference;
+  std::unordered_map<uintptr_t,float> movableTravel;
+  std::unordered_set<uintptr_t> movableNpcTouched;
+  uintptr_t movableTable=0,movableDish=0;
+  Vec3 movableCenter,movableWalkStart,movableWalkEnd;
+  Npc* movableWalker=nullptr;
+  WayPoint movableDestination;
+  bool movableReady=false,movableTrace=false,movableMeasuring=false,movableOverflow=false;
+  std::string movablePhase;
+  uint64_t movablePhaseStart=0,movableSampleTick=0;
+  std::vector<LivingPhysics> movablePhysics;
   Npc* arrowNpc=nullptr;
   std::string arrowCase,arrowAim;
   float arrowDraw=1.f;
@@ -1128,6 +1148,7 @@ void finish() {
     bench.speaking = false;
     }
   stopRecording();
+  bench.movableFixtures.clear();
   if(ragdollPerf) {
     std::FILE* perf=std::fopen((outDir+"/ragdoll-performance.csv").c_str(),"w");
     if(perf!=nullptr) {
@@ -2501,6 +2522,277 @@ void prepareSpellFixture(World& world,Npc& player,std::string_view fixture) {
     std::string(Gothic::settingsGetI("GAME","spell_physics")?"true":"false"));
   }
 
+Vec3 movablePosition(const Matrix4x4& matrix) {
+  return {matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)};
+  }
+
+std::string movableRows(World& world) {
+  std::string result="[";
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    if(std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)==bench.movableIds.end()) continue;
+    if(result.size()>1) result+=',';
+    result+="{\"id\":"+std::to_string(body.id)+",\"visual\":"+jsonStr(body.visual)+
+      ",\"class\":"+jsonStr(body.className)+",\"blocks_walking\":"+(body.blocksWalking?"true":"false")+
+      ",\"legacy_collision\":"+(body.legacyCollision?"true":"false")+
+      ",\"from_map\":"+(bench.movableMapIds.contains(body.id)?"true":"false")+
+      ",\"mass_kg\":"+ragdollNumber(body.mass)+",\"enabled\":"+(body.enabled?"true":"false")+
+      ",\"sleeping\":"+(body.sleeping?"true":"false")+",\"npc_contact\":"+(body.touchedByNpc?"true":"false")+
+      ",\"position_cm\":"+ragdollVector(movablePosition(body.transform))+
+      ",\"transform\":"+ragdollMatrix(body.transform)+",\"velocity_cm_s\":"+ragdollVector(body.velocity)+
+      ",\"max_displacement_cm\":"+ragdollNumber(bench.movableTravel[body.id])+"}";
+    }
+  return result+"]";
+  }
+
+void movableBegin(World& world,std::string phase) {
+  bench.movableReference.clear();bench.movableTravel.clear();bench.movableNpcTouched.clear();
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)!=bench.movableIds.end()) {
+      bench.movableReference[body.id]=movablePosition(body.transform);
+      bench.movableTravel[body.id]=0;
+      }
+  bench.movablePhase=std::move(phase);bench.movablePhaseStart=world.tickCount();bench.movableTrace=true;
+  event("movable_begin","\"phase\":"+jsonStr(bench.movablePhase)+",\"t_game_ms\":"+
+    std::to_string(world.tickCount())+",\"bodies\":"+movableRows(world));
+  }
+
+void movableFields(World& world) {
+  if(!bench.movableTrace || bench.movableMeasuring || bench.movableSampleTick==world.tickCount()) return;
+  bench.movableSampleTick=world.tickCount();
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    const auto initial=bench.movableReference.find(body.id);
+    if(initial==bench.movableReference.end()) continue;
+    bench.movableTravel[body.id]=std::max(bench.movableTravel[body.id],(movablePosition(body.transform)-initial->second).length());
+    if(body.touchedByNpc) bench.movableNpcTouched.insert(body.id);
+    }
+  // Every native step is observed, but large JSON is emitted only at checkpoints.
+  }
+
+void movableCheckpoint(World& world) {
+  movableFields(world);
+  std::string touched="[";
+  for(const auto id:bench.movableNpcTouched) {if(touched.size()>1)touched+=',';touched+=std::to_string(id);}
+  event("movable_checkpoint","\"phase\":"+jsonStr(bench.movablePhase)+",\"elapsed_ms\":"+
+    std::to_string(world.tickCount()-bench.movablePhaseStart)+",\"npc_touched_ids\":"+touched+
+    "],\"bodies\":"+movableRows(world)+",\"walker_cm\":"+
+    (bench.movableWalker?ragdollVector(bench.movableWalker->position()):"null"));
+  bench.movableTrace=false;
+  }
+
+void prepareMovableFixture(World& world,Npc& player) {
+  if(bench.movableReady) {arenaAbort("movable tavern fixture already exists");return;}
+  Npc* host=nullptr;
+  for(uint32_t i=0;i<world.npcCount();++i) {
+    auto* npc=world.npcById(i);if(!npc)continue;
+    auto name=symName(world,npc);
+    for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+    if(name.find("CORAGON")!=std::string::npos || name.find("KORAGON")!=std::string::npos) {host=npc;break;}
+    }
+  if(!host) {arenaAbort("movable fixture requires Coragon in the loaded Khorinis world");return;}
+  const auto all=world.physic()->movableVobSnapshot();
+  std::map<std::string,size_t> noncollidingClasses,mapClasses;
+  for(const auto& body:all)
+    if(!body.legacyCollision)++noncollidingClasses[body.className];
+  const auto classCounts=[](const std::map<std::string,size_t>& counts) {
+    std::string result="{";
+    for(const auto& [name,count]:counts) {
+      if(result.size()>1)result+=',';
+      result+=jsonStr(name)+":"+std::to_string(count);
+      }
+    return result+"}";
+    };
+  uintptr_t tableId=0;std::string tableVisual,utensilVisual="ITFO_BEER.3DS",barrelVisual="NW_HARBOUR_BARREL_01.3DS";
+  if(!Resources::loadMesh(utensilVisual))utensilVisual.clear();
+  if(!Resources::loadMesh(barrelVisual))barrelVisual.clear();
+  Matrix4x4 tableTransform;float nearest=1400.f*1400.f;
+  for(const auto& body:all) {
+    if(body.className=="utensil" && utensilVisual.empty()) utensilVisual=body.visual;
+    if(body.className=="barrel" && barrelVisual.empty()) barrelVisual=body.visual;
+    if(body.className!="table")continue;
+    const auto distance=(movablePosition(body.transform)-host->position()).quadLength();
+    if(distance<nearest) {nearest=distance;tableId=body.id;tableVisual=body.visual;tableTransform=body.transform;}
+    }
+  if(!tableId || utensilVisual.empty()) {arenaAbort("Coragon tavern needs a real table and an available utensil mesh");return;}
+  const auto* tableMesh=Resources::loadMesh(tableVisual);
+  const auto* dishMesh=Resources::loadMesh(utensilVisual);
+  if(!tableMesh || !dishMesh) {arenaAbort("movable fixture real mesh unavailable");return;}
+  const auto* tableBounds=tableMesh->bbox();const auto* dishBounds=dishMesh->bbox();
+  auto tableCenter=(tableBounds[0]+tableBounds[1])*.5f;tableTransform.project(tableCenter);
+  auto tableTop=tableCenter;tableTop.y=-std::numeric_limits<float>::infinity();
+  for(unsigned i=0;i<8;++i) {
+    Vec3 point((i&1)?tableBounds[1].x:tableBounds[0].x,(i&2)?tableBounds[1].y:tableBounds[0].y,(i&4)?tableBounds[1].z:tableBounds[0].z);
+    tableTransform.project(point);tableTop.y=std::max(tableTop.y,point.y);
+    }
+  bench.movableTable=tableId;bench.movableCenter=tableCenter;
+  for(const auto& body:all) {
+    const auto delta=movablePosition(body.transform)-tableCenter;
+    if(delta.x*delta.x+delta.z*delta.z<900.f*900.f && std::abs(delta.y)<350) {
+      bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);++mapClasses[body.className];
+      }
+    }
+  const auto add=[&](const std::string& visual,const Vec3& support) {
+    const auto* mesh=Resources::loadMesh(visual);if(!mesh)return uintptr_t(0);
+    const auto* bounds=mesh->bbox();
+    zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+    data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
+    data.position={support.x-(bounds[0].x+bounds[1].x)*.5f,support.y-bounds[0].y+.2f,support.z-(bounds[0].z+bounds[1].z)*.5f};
+    data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+    const auto before=world.physic()->movableVobSnapshot();
+    auto fixture=std::make_unique<Bench::MovableFixture>();
+    fixture->visual.setVisual(data,world,false,false);
+    auto matrix=Matrix4x4::mkIdentity();matrix.translate(data.position.x,data.position.y,data.position.z);
+    fixture->visual.setObjMatrix(matrix);
+    const auto* rule=MovableVobs::classifyVisual(visual);
+    const bool testMug=visual==utensilVisual;
+    if(!testMug && rule==nullptr)return uintptr_t(0);
+    fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,testMug?.12f:rule->massMultiplier,
+                                              testMug?false:rule->blocksWalking,testMug?"utensil":rule->className,true);
+    if(fixture->body.isEmpty())return uintptr_t(0);
+    fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& matrix) {view->setObjMatrix(matrix);});
+    bench.movableFixtures.emplace_back(std::move(fixture));
+    for(const auto& body:world.physic()->movableVobSnapshot())
+      if(std::none_of(before.begin(),before.end(),[&](const auto& previous){return previous.id==body.id;})) {
+        bench.movableIds.push_back(body.id);return body.id;
+        }
+    return uintptr_t(0);
+    };
+  // Same real mesh instances in both modes, supported by the actual tavern tabletop.
+  const float spacing=std::max(22.f,std::max(dishBounds[1].x-dishBounds[0].x,dishBounds[1].z-dishBounds[0].z)+3.f);
+  for(unsigned i=0;i<6;++i)
+    if(!add(utensilVisual,tableTop+Vec3((float(i%3)-1)*spacing,0,(float(i/3)-.5f)*spacing))) {
+      arenaAbort("movable tabletop utensil insertion failed");return;
+      }
+  Vec3 laneStart,laneEnd;bool laneFound=false;
+  for(unsigned i=0;i<16 && !laneFound;++i) {
+    const float angle=float(i)*float(M_PI)/8.f;
+    const Vec3 direction(std::cos(angle),0,std::sin(angle)),side(-direction.z,0,direction.x);
+    const auto center=Vec3(tableCenter.x,host->position().y,tableCenter.z)+direction*300.f;
+    laneStart=center-side*150.f;laneEnd=center+side*150.f;
+    bool supported=true;
+    for(auto* point:{&laneStart,&laneEnd}) {
+      const auto floor=world.physic()->landRay(*point+Vec3(0,80,0),180);
+      if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-host->position().y)>60) {supported=false;break;}
+      point->y=floor.v.y;
+      }
+    if(supported && !world.physic()->ray(laneStart+Vec3(0,50,0),laneEnd+Vec3(0,50,0)).hasCol &&
+       !world.physic()->ray(laneStart+Vec3(0,120,0),laneEnd+Vec3(0,120,0)).hasCol) laneFound=true;
+    }
+  if(!laneFound) {arenaAbort("Coragon tavern lacks a supported 3m walking lane");return;}
+  bench.movableWalkStart=laneStart;bench.movableWalkEnd=laneEnd;
+  bench.movableDish=add(utensilVisual,(laneStart+laneEnd)*.5f);
+  if(!bench.movableDish) {arenaAbort("movable floor utensil insertion failed");return;}
+  bool hasBarrel=false;
+  for(const auto& body:all)if(body.className=="barrel" && std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)!=bench.movableIds.end())hasBarrel=true;
+  if(!hasBarrel && !barrelVisual.empty()) {
+    const auto side=Vec3::normalize(laneEnd-laneStart);
+    const auto point=(laneStart+laneEnd)*.5f+side*110.f;
+    add(barrelVisual,point);
+    }
+  // Keep the original tavern population active during the untouched interval.
+  player.setPosition(laneStart);player.setDirection(tableCenter-laneStart);player.updateTransform();
+  bench.cam=C_Hold;lookFrom(laneStart+Vec3(0,180,0),tableTop);
+  bench.movableReady=true;
+  std::string massExamples="[";std::unordered_set<std::string> massClasses;
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    if(!body.enabled || !massClasses.insert(body.className).second)continue;
+    if(massExamples.size()>1)massExamples+=',';
+    massExamples+="{\"class\":"+jsonStr(body.className)+",\"visual\":"+jsonStr(body.visual)+
+      ",\"kg\":"+ragdollNumber(body.mass)+"}";
+    }
+  event("movable_setup","\"world\":"+jsonStr(world.name())+",\"host\":"+jsonStr(symName(world,host))+
+    ",\"host_cm\":"+ragdollVector(host->position())+",\"table_id\":"+std::to_string(tableId)+
+    ",\"floor_dish_id\":"+std::to_string(bench.movableDish)+",\"tabletop_utensils\":6,\"temporary_vobs\":"+
+    std::to_string(bench.movableFixtures.size())+",\"world_load_ms\":"+ragdollNumber(float(world.loadMilliseconds()))+
+    ",\"map_vobs\":"+std::to_string(bench.movableMapIds.size())+",\"map_classes\":"+classCounts(mapClasses)+
+    ",\"noncolliding_map_classes\":"+classCounts(noncollidingClasses)+
+    ",\"enabled\":"+(world.physic()->movableVobsEnabled()?"true":"false")+
+    ",\"walk_start_cm\":"+ragdollVector(laneStart)+",\"walk_end_cm\":"+ragdollVector(laneEnd)+
+    ",\"mass_examples\":"+massExamples+"],\"bodies\":"+movableRows(world));
+  }
+
+void prepareMovableCast(World& world,Npc& player) {
+  // Existing native actors stop only after the 60-second untouched observation.
+  for(uint32_t i=0;i<world.npcCount();++i) {
+    auto* npc=world.npcById(i);
+    if(npc && npc!=&player && (npc->position()-bench.movableCenter).length()<1400) {
+      npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+      }
+    }
+  player.closeWeapon(true);
+  Vec3 target,caster;bool found=false;
+  const auto npcFreeLane=[&](const Vec3& from,const Vec3& to) {
+    const auto segment=to-from;
+    const float lengthSquared=segment.x*segment.x+segment.z*segment.z;
+    if(lengthSquared<=1.f)return false;
+    // A stopped NPC still intercepts the real projectile. Check every actor,
+    // including the caster endpoint, with a conservative 100 cm lane radius.
+    // Height separates the tavern floor from actors upstairs or downstairs.
+    for(uint32_t id=0;id<world.npcCount();++id) {
+      const auto* other=world.npcById(id);if(!other || other==&player)continue;
+      const auto center=other->collosionCenter();
+      const float t=std::clamp(((center.x-from.x)*segment.x+(center.z-from.z)*segment.z)/lengthSquared,0.f,1.f);
+      const auto closest=from+segment*t+Vec3(0,100,0);
+      const float dx=center.x-closest.x,dz=center.z-closest.z;
+      if(dx*dx+dz*dz<100.f*100.f && std::abs(center.y-closest.y)<160.f)return false;
+      }
+    const auto side=Vec3(-segment.z,0,segment.x)*(60.f/std::sqrt(lengthSquared));
+    for(const auto offset:{Vec3(),side,side*-1.f}) {
+      const auto hit=world.physic()->rayNpc(from+offset+Vec3(0,100,0),to+offset+Vec3(0,100,0),&player);
+      if(hit.npcHit!=nullptr)return false;
+      }
+    return true;
+    };
+  for(unsigned i=0;i<16 && !found;++i) {
+    const float angle=float(i)*float(M_PI)/8.f;
+    const Vec3 direction(std::cos(angle),0,std::sin(angle));
+    caster=Vec3(bench.movableCenter.x,bench.movableWalkStart.y,bench.movableCenter.z)-direction*400.f;
+    target=Vec3(bench.movableCenter.x,bench.movableWalkStart.y,bench.movableCenter.z)+direction*180.f;
+    bool valid=true;
+    for(auto* point:{&caster,&target}) {
+      const auto floor=world.physic()->landRay(*point+Vec3(0,80,0),180);
+      if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-bench.movableWalkStart.y)>40) {valid=false;break;}
+      point->y=floor.v.y;
+      // Endpoint body volumes must not be hidden in furniture or walls.
+      for(const auto side:{Vec3(25,0,0),Vec3(-25,0,0),Vec3(0,0,25),Vec3(0,0,-25)})
+        if(world.physic()->ray(*point+Vec3(0,85,0),*point+side+Vec3(0,85,0)).hasCol)valid=false;
+      }
+    if(valid && npcFreeLane(caster,target) &&
+       !world.physic()->ray(caster+Vec3(0,145,0),target+Vec3(0,145,0)).hasCol)found=true;
+    }
+  if(!found) {arenaAbort("tavern fireball needs supported clear caster/target endpoints across furniture");return;}
+  player.setPosition(caster);player.setDirection(target-caster);player.updateTransform();
+  bench.cam=C_Hold;lookFrom(caster+Vec3(0,185,0),bench.movableCenter+Vec3(0,40,0));
+  auto* npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),target);
+  if(!npc) {arenaAbort("movable real fireball target insertion failed");return;}
+  npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
+  npc->handle().attribute[ATR_HITPOINTS]=npc->handle().attribute[ATR_HITPOINTSMAX]=50000;
+  npc->setDirection(player.position()-target);npc->updateTransform();bench.spellActors.push_back({npc,"movable_target"});
+  for(size_t i=0;i<world.script().symbolsCount() && !bench.spellRunes.contains(23);++i) {
+    const auto* symbol=world.script().findSymbol(i);if(!symbol || symbol->type()!=zenkit::DaedalusDataType::INSTANCE)continue;
+    auto name=symbol->name();for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+    if(!name.starts_with("ITRU_") && !name.starts_with("ITSC_"))continue;
+    auto item=std::make_unique<Item>(world,i,Item::T_Inventory);
+    if(item->spellId()==23) {bench.spellRunes[23]=i;player.addItem(i,item->isRune()?1:5);}
+    }
+  player.handle().attribute[ATR_MANA]=player.handle().attribute[ATR_MANAMAX]=50000;player.setTalentSkill(TALENT_MAGE,6);
+  Gothic::settingsSetI("GAME","spell_physics",1);
+  event("movable_cast_setup","\"spell_id\":23,\"npc_free_lane_radius_cm\":100,\"target_cm\":"+
+    ragdollVector(target)+",\"caster_cm\":"+ragdollVector(player.position()));
+  }
+
+void saveMovableSession(World& world,const std::string& label) {
+  if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
+    throw std::runtime_error("invalid movable save label");
+  std::vector<uint8_t> bytes;
+  {MemWriter writer(bytes);Serialize out(writer);Pixmap preview(1,1,TextureFormat::RGBA8);std::memset(preview.data(),0,4);
+  Gothic::inst().gameSession()->save(out,"movable "+label,preview);}
+  std::ofstream file(outDir+"/session-"+label+".sav",std::ios::binary);
+  file.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+  if(!file)throw std::runtime_error("cannot write complete movable GameSession archive");
+  event("movable_session_save","\"archive\":"+jsonStr("session-"+label+".sav")+",\"bytes\":"+
+    std::to_string(bytes.size())+",\"world\":"+jsonStr(world.name())+",\"bodies\":"+movableRows(world));
+  }
+
 void arrowFields(World& world) {
   auto* npc=bench.arrowNpc;
   if(!bench.arrowTrace || npc==nullptr || world.tickCount()==bench.arrowSampleTick) return;
@@ -3053,7 +3345,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       {"living_bodies",&Gothic::PhysicsFlags::livingBodies},
       {"arrow_physics",&Gothic::PhysicsFlags::arrowPhysics},
       {"arrow_sticking",&Gothic::PhysicsFlags::arrowSticking},
-      {"spell_physics",&Gothic::PhysicsFlags::spellPhysics}
+      {"spell_physics",&Gothic::PhysicsFlags::spellPhysics},
+      {"movable_vobs",&Gothic::PhysicsFlags::movableVobs}
       };
     auto& npc=subjectOf(pl);
     const auto tick=w.tickCount();
@@ -3086,6 +3379,76 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
     }
+  else if(c=="movable" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","movable_vobs",a[1]=="on");
+    w.physic()->setMovableVobsEnabled(a[1]=="on");
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="setup") prepareMovableFixture(w,pl);
+  else if(c=="movable" && a.size()==3 && a[1]=="begin") movableBegin(w,a[2]);
+  else if(c=="movable" && a.size()==2 && a[1]=="checkpoint") movableCheckpoint(w);
+  else if(c=="movable" && a.size()==2 && a[1]=="walk") {
+    if(!bench.movableReady) {arenaAbort("movable walking test needs the tavern fixture");return;}
+    auto* npc=w.addNpc(w.script().findSymbolIndex("BAU_904_BAUER"),bench.movableWalkStart);
+    if(!npc) {arenaAbort("movable walker insertion failed");return;}
+    npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
+    npc->setDirection(bench.movableWalkEnd-bench.movableWalkStart);npc->updateTransform();npc->setWalkMode(WalkBit::WM_Walk);
+    bench.movableWalker=npc;
+    const auto side=Vec3::normalize(bench.movableWalkEnd-bench.movableWalkStart);
+    pl.setPosition(bench.movableWalkStart+Vec3(-side.z,0,side.x)*110.f);pl.updateTransform();
+    const auto target=Vec3(bench.movableCenter.x,bench.movableWalkStart.y,bench.movableCenter.z);
+    const bool enabled=w.physic()->movableVobsEnabled();
+    w.physic()->setMovableVobsEnabled(false);const bool off=npc->testMove(target);
+    w.physic()->setMovableVobsEnabled(true);const bool on=npc->testMove(target);
+    w.physic()->setMovableVobsEnabled(enabled);
+    event("movable_walk_setup","\"off_passable\":"+std::string(off?"true":"false")+
+      ",\"on_passable\":"+(on?"true":"false")+",\"actor_id\":"+std::to_string(w.npcId(npc))+
+      ",\"table_target_cm\":"+ragdollVector(target)+",\"floor_dish_id\":"+std::to_string(bench.movableDish));
+    bench.movableDestination=WayPoint(bench.movableWalkEnd,"FP_MOVABLE_TAVERN_WALK");
+    bench.movableDestination.groundPos=bench.movableWalkEnd;
+    movableBegin(w,"walk");npc->aiPush(AiQueue::aiGoToPoint(bench.movableDestination));
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="cast-ready") prepareMovableCast(w,pl);
+  else if(c=="movable" && a.size()==2 && a[1]=="blast") {
+    movableBegin(w,"blast");exec("spell cast 600",w,pl,ctrl);
+    event("movable_blast","\"spell_id\":"+std::to_string(bench.spellCastingId));
+    }
+  else if(c=="movable" && a.size()==3 && a[1]=="save") {
+    try {saveMovableSession(w,a[2]);}
+    catch(const std::exception& error) {arenaAbort(error.what());}
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="reload") {
+    size_t tables=0,utensils=0;
+    for(const auto& body:w.physic()->movableVobSnapshot()) {tables+=body.className=="table";utensils+=body.className=="utensil";}
+    event("movable_session_reload","\"world\":"+jsonStr(w.name())+",\"world_load_ms\":"+
+      ragdollNumber(float(w.loadMilliseconds()))+",\"tables\":"+std::to_string(tables)+",\"utensils\":"+
+      std::to_string(utensils)+",\"bodies\":"+std::to_string(w.physic()->physicsStats().bodies));
+    // The fixture's extra dishes are temporary vobs, outside the map's saved
+    // tree. A complete reload must recreate the authored map furniture.
+    if(!tables)arenaAbort("full movable save reload has no registered map furniture");
+    }
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="movable" && a.size()==3 && a[1]=="measure") {
+    if(!bench.movableReady || !AppCadence::normalClock() || !AppCadence::arm(a[2]=="on")) {
+      arenaAbort("movable normal-game cadence measurement cannot start");return;
+      }
+    bench.movableMeasuring=true;bench.movablePhysics.clear();bench.movablePhysics.reserve(20000);bench.movableOverflow=false;
+    AppCadence::counts(true,uint32_t(bench.movableIds.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("movable_measure_before","\"enabled\":"+std::string(w.physic()->movableVobsEnabled()?"true":"false")+
+      ",\"bodies\":"+movableRows(w));
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="report") {
+    bench.movableMeasuring=false;
+    AppCadence::counts(false,uint32_t(bench.movableIds.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("movable_measure_after","\"overflow\":"+std::string(bench.movableOverflow?"true":"false")+
+      ",\"bodies\":"+movableRows(w));
+    if(auto* file=std::fopen((outDir+"/movable-physics.csv").c_str(),"w")) {
+      std::fprintf(file,"sample,t_game_ms,dt_ms,step_ms,native_bodies\n");
+      for(size_t i=0;i<bench.movablePhysics.size();++i) {const auto& row=bench.movablePhysics[i];
+        std::fprintf(file,"%zu,%llu,%llu,%.9g,%zu\n",i,(unsigned long long)row.time,(unsigned long long)row.dt,double(row.milliseconds),row.bodies);}
+      std::fclose(file);
+      } else arenaAbort("cannot write movable native step timing samples");
+    }
+#endif
   else if(c=="spell" && a.size()==3 && a[1]=="fixture") {
     prepareSpellFixture(w,pl,a[2]);
     if(!bench.spellActors.empty()) exec("watch watched",w,pl,ctrl);
@@ -7015,6 +7378,10 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     bench.started = true;
     FootIk::setProbing(true);
     say("start");
+    if(std::string_view(scenarioPath).find("movable-vobs")!=std::string_view::npos)
+      event("movable_loaded","\"world\":"+jsonStr(world->name())+",\"world_load_ms\":"+
+        ragdollNumber(float(world->loadMilliseconds()))+",\"enabled\":"+
+        (Gothic::settingsGetI("GAME","movable_vobs")?"true":"false"));
     if(bench.pc<bench.prog.size()) {
       const auto args=split(bench.prog[bench.pc]);
       if(args.size()>1 && args[0]=="ragdoll" && args[1]=="session-initial") {
@@ -7035,6 +7402,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);
+  movableFields(*world);
   if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
     player->endCastSpell(false);bench.spellReleaseAt=0;
     event("spell_physics_release","\"id\":"+std::to_string(bench.spellCastingId));
@@ -7121,6 +7489,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
     }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  if(bench.movableMeasuring && !AppCadence::done()) {
+    const auto stats=world->physic()->physicsStats();
+    if(bench.movablePhysics.size()<20000)
+      bench.movablePhysics.push_back({world->tickCount(),dt,stats.stepMilliseconds,stats.bodies});
+    else bench.movableOverflow=true;
+    }
   if(bench.livingMeasuring && !AppCadence::done()) {
     const auto stats=world->physic()->physicsStats();
     if(bench.livingPhysics.size()<20000)

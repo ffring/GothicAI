@@ -84,6 +84,7 @@ class Marvin {
       C_ToggleArrowPhysics,
       C_ToggleArrowSticking,
       C_ToggleSpellPhysics,
+      C_ToggleMovableVobs,
       };
 
     struct Cmd {

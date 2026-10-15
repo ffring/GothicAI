@@ -18,6 +18,7 @@ secrets/
 *.sqlite
 *.sqlite3
 data/
+!OpenGothic/data/
 
 # OS
 .DS_Store

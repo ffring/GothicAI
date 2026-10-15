@@ -12,6 +12,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
@@ -45,9 +46,9 @@ namespace {
   struct LayerInterface final : JPH::BroadPhaseLayerInterface {
     JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody)
+      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_MovableVob)
         return dynamicLayer;
-      if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost)
+      if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost || layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
         return sensorLayer;
       return staticLayer;
       }
@@ -60,16 +61,20 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+      if(a==DynamicWorld::C_MovableQuery || a==DynamicWorld::C_SmallVobQuery ||
+         b==DynamicWorld::C_MovableQuery || b==DynamicWorld::C_SmallVobQuery)
+        return false;
       if(a==DynamicWorld::C_ActiveBody)
-        return b==DynamicWorld::C_Landscape || b==DynamicWorld::C_Object || b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+        return b==DynamicWorld::C_Landscape || b==DynamicWorld::C_Object || b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_MovableVob;
       if(b==DynamicWorld::C_ActiveBody)
-        return a==DynamicWorld::C_Landscape || a==DynamicWorld::C_Object || a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
+        return a==DynamicWorld::C_Landscape || a==DynamicWorld::C_Object || a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll || a==DynamicWorld::C_MovableVob;
       if(a==DynamicWorld::C_LivingBody)
-        return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+        return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_MovableVob;
       if(b==DynamicWorld::C_LivingBody)
-        return a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
+        return a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll || a==DynamicWorld::C_MovableVob;
       return (a==DynamicWorld::C_Item || b==DynamicWorld::C_Item ||
-              a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll) &&
+              a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll ||
+              a==DynamicWorld::C_MovableVob || b==DynamicWorld::C_MovableVob) &&
              a!=DynamicWorld::C_Null && b!=DynamicWorld::C_Null;
       }
     };
@@ -78,7 +83,9 @@ namespace {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
       if(layer==DynamicWorld::C_LivingBody)
         return broad==dynamicLayer;
-      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody ||
+      if(layer==DynamicWorld::C_MovableQuery || layer==DynamicWorld::C_SmallVobQuery)
+        return false;
+      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_MovableVob ||
              (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
       }
     };
@@ -95,8 +102,9 @@ namespace {
     explicit QueryBroadPhaseFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
       constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|
-                                    (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody);
-      constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost);
+                                    (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody)|(1u<<DynamicWorld::C_MovableVob);
+      constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost)|
+                                      (1u<<DynamicWorld::C_MovableQuery)|(1u<<DynamicWorld::C_SmallVobQuery);
       if(layer==dynamicLayer)
         return (mask & itemMask)!=0;
       if(layer==sensorLayer)
@@ -296,6 +304,24 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
 
   void onContact(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold,
                  const JPH::ContactSettings& settings) {
+    auto markNpcContact = [](const JPH::Body& movable, const JPH::Body& other) {
+      if(movable.GetObjectLayer()!=DynamicWorld::C_MovableVob ||
+         (other.GetObjectLayer()!=DynamicWorld::C_LivingBody && other.GetObjectLayer()!=DynamicWorld::C_ActiveBody))
+        return;
+      auto* body = reinterpret_cast<CollisionBody*>(movable.GetUserData());
+      if(body!=nullptr)
+        body->npcContact.store(true,std::memory_order_relaxed);
+      };
+    markNpcContact(a,b);
+    markNpcContact(b,a);
+    if(a.GetObjectLayer()==DynamicWorld::C_MovableVob && b.GetObjectLayer()==DynamicWorld::C_MovableVob) {
+      auto* first = reinterpret_cast<CollisionBody*>(a.GetUserData());
+      auto* second = reinterpret_cast<CollisionBody*>(b.GetUserData());
+      if(first!=nullptr && second!=nullptr && (first->touchedByNpc() || second->touchedByNpc())) {
+        first->npcContact.store(true,std::memory_order_relaxed);
+        second->npcContact.store(true,std::memory_order_relaxed);
+        }
+      }
     if(!emitImpacts)
       return;
     const JPH::Body* item = nullptr;
@@ -391,8 +417,8 @@ CollisionWorld::CollisionBody::~CollisionBody() {
     owner->removeBody(*this);
   }
 
-CollisionWorld::DynamicBody::DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass)
-  :CollisionBody(owner,std::move(shape),DynamicWorld::C_Item), bodyMass(mass) {
+CollisionWorld::DynamicBody::DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass, int category)
+  :CollisionBody(owner,std::move(shape),category), bodyMass(mass) {
   }
 
 void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matrix) {
@@ -435,6 +461,10 @@ void CollisionWorld::CollisionBody::setPayload(void* payload, int type) {
 
 Tempest::Vec3 CollisionWorld::CollisionBody::position() const {
   return toCentimeters(owner->impl->system.GetBodyInterface().GetPosition(id));
+  }
+
+Tempest::Vec3 CollisionWorld::CollisionBody::centerOfMass() const {
+  return toCentimeters(owner->impl->system.GetBodyInterface().GetCenterOfMassPosition(id));
   }
 
 Tempest::Matrix4x4 CollisionWorld::CollisionBody::matrix() const {
@@ -500,7 +530,7 @@ bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs) {
   }
 
 void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
-                             bool movable, bool sensor, float mass) {
+                             bool movable, bool sensor, float mass, bool startSleeping) {
   const auto transform = toTransform(matrix);
   body.scale = transform.scale;
   body.scaledShape = ::scaledShape(body.baseShape.GetPtr(),body.scale);
@@ -521,13 +551,17 @@ void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matr
     settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
     settings.mLinearDamping = 0.f;
     settings.mAngularDamping = 0.f;
+    if(body.categoryId==DynamicWorld::C_MovableVob) {
+      settings.mLinearDamping = 0.1f;
+      settings.mAngularDamping = 0.2f;
+      }
     }
   auto& interface = impl->system.GetBodyInterface();
   auto* native = interface.CreateBody(settings);
   if(native==nullptr)
     throw std::runtime_error("Jolt body capacity exhausted");
   body.id = native->GetID();
-  interface.AddBody(body.id,type==JPH::EMotionType::Dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+  interface.AddBody(body.id,type==JPH::EMotionType::Dynamic && !startSleeping ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
   bodies.push_back(&body);
   }
 
@@ -541,10 +575,10 @@ std::unique_ptr<CollisionWorld::CollisionBody> CollisionWorld::addCollisionBody(
   }
 
 std::unique_ptr<CollisionWorld::DynamicBody> CollisionWorld::addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix,
-                                                                           float friction, float mass) {
+                                                                           float friction, float mass, int category, bool startSleeping) {
   mass = std::isfinite(mass) && mass>0.f ? mass : 1.f;
-  auto result = std::unique_ptr<DynamicBody>(new DynamicBody(*this,std::move(shape),mass));
-  addBody(*result,matrix,friction,false,false,mass);
+  auto result = std::unique_ptr<DynamicBody>(new DynamicBody(*this,std::move(shape),mass,category));
+  addBody(*result,matrix,friction,false,false,mass,startSleeping);
   rigid.push_back(result.get());
   return result;
   }
@@ -581,7 +615,8 @@ void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const 
   }
 
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
-                                                    bool backfaces, std::vector<QueryResult>* all) const {
+                                                    bool backfaces, std::vector<QueryResult>* all,
+                                                    const std::vector<const CollisionBody*>* excluded) const {
   impl->rayCount.fetch_add(1,std::memory_order_relaxed);
   QueryResult result;
   if(all!=nullptr)
@@ -597,6 +632,11 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
   settings.SetBackFaceMode(backfaces ? JPH::EBackFaceMode::CollideWithBackFaces : JPH::EBackFaceMode::IgnoreBackFaces);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
+  JPH::IgnoreMultipleBodiesFilter bodyFilter;
+  if(excluded!=nullptr)
+    for(auto* body:*excluded)
+      if(body!=nullptr)
+        bodyFilter.IgnoreBody(body->id);
   struct RayEdge {
     const PhysicVbo* mesh = nullptr;
     JPH::TransformedShape shape;
@@ -665,7 +705,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
     };
   if(all!=nullptr) {
     JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
-    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter);
+    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter,bodyFilter);
     collector.Sort();
     for(const auto& hit:collector.mHits) {
       auto value = convert(hit);
@@ -677,7 +717,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
     }
   else {
     JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
-    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter);
+    impl->system.GetNarrowPhaseQuery().CastRay(ray,settings,collector,broadFilter,filter,bodyFilter);
     if(collector.HadHit()) {
       result = convert(collector.mHit,true);
       if(edge.mesh!=nullptr) {
@@ -792,7 +832,8 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
   // Keep that query tolerance without changing the physical capsule.
   settings.mMaxSeparationDistance = radius+disc*0.02f;
   JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
-  constexpr uint32_t mask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll);
+  constexpr uint32_t mask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll)|
+                            (1u<<DynamicWorld::C_MovableQuery);
   QueryLayerFilter filter(mask);
   QueryBroadPhaseFilter broadFilter(mask);
   const auto position = toMeters(center);

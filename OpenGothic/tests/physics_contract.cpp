@@ -1,6 +1,9 @@
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicvbo.h"
+#include "graphics/mesh/protomesh.h"
+#include "graphics/mesh/skeleton.h"
+#include "graphics/mesh/submesh/packedmesh.h"
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -11,6 +14,7 @@
 
 #include <Jolt/Physics/Collision/CastSphereVsTriangles.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -47,6 +51,145 @@ namespace {
     auto matrix = Tempest::Matrix4x4::mkIdentity();
     matrix.translate(x,y,z);
     return matrix;
+    }
+
+  zenkit::MultiResolutionMesh movableCube() {
+    zenkit::MultiResolutionMesh mesh;
+    mesh.positions = {{-10,-10,-10},{10,-10,-10},{10,10,-10},{-10,10,-10},
+                      {-10,-10,10},{10,-10,10},{10,10,10},{-10,10,10}};
+    mesh.bbox = {{-10,-10,-10},{10,10,10}};
+    mesh.sub_meshes.resize(1);
+    auto& part = mesh.sub_meshes[0];
+    part.mat.group = zenkit::MaterialGroup::WOOD;
+    for(size_t i=0;i<mesh.positions.size();++i)
+      part.wedges.push_back({{0,1,0},{0,0},uint16_t(i)});
+    part.triangles = {{{0,2,1}},{{0,3,2}},{{4,5,6}},{{4,6,7}},
+                      {{0,4,7}},{{0,7,3}},{{1,2,6}},{{1,6,5}},
+                      {{0,1,5}},{{0,5,4}},{{3,7,6}},{{3,6,2}}};
+    return mesh;
+    }
+
+  void testMovableVobLegacyCollision() {
+    // Exercise the real mesh cache and rebuild/toggle path, rather than constructing
+    // query proxies directly. No game assets or graphics device are required.
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox = {{-5,-10,-5},{5,10,5}};
+    Skeleton walkerShape(hierarchy,nullptr,"CONTRACT_WALKER");
+    for(const bool blocksWalking:{false,true}) {
+      for(const bool legacyCollision:{false,true}) {
+        DynamicWorld world(nullptr,zenkit::Mesh{});
+        world.setMovableVobsEnabled(false);
+        auto object = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,
+                                          blocksWalking,blocksWalking ? "table" : "utensil",legacyCollision);
+        require(!object.isEmpty(),"disabled movable vobs must retain their handle for re-enabling");
+        for(const bool enabled:{false,true,false,true}) {
+          world.setMovableVobsEnabled(enabled);
+          const auto snapshot = world.movableVobSnapshot();
+          require(snapshot.size()==1 && snapshot[0].legacyCollision==legacyCollision,
+                  "movable snapshots must retain the original cd_dynamic flag across toggles");
+          require(snapshot[0].enabled==enabled && (object.mass()>0)==enabled,
+                  "cd_dynamic must not suppress an enabled movable simulation hull");
+          require(world.physicsStats().bodies==size_t(enabled)+size_t(legacyCollision),
+                  "only cd_dynamic vobs may create query bodies in either mode");
+          require(object.isSleeping(),"rebuilding a movable vob must start its simulation asleep");
+          const Tempest::Vec3 from{-30,100,0},to{30,100,0};
+          require(world.ray(from,to).hasCol==legacyCollision,
+                  "camera, foot IK and visibility rays must preserve original mesh collision eligibility");
+          require(world.rayArrow(from,to,[](Npc&,const Tempest::Vec3&,const Tempest::Vec3&,float&) { return false; }).hasCol==legacyCollision,
+                  "arrow rays must preserve original mesh collision eligibility");
+          const bool groundHit = legacyCollision && (!enabled || blocksWalking);
+          require(world.landRay({0,130,0},60).hasCol==groundHit,
+                  "landRay must ignore non-colliding vobs and enabled small utensils");
+          require(world.sweep({-30,100,0},{30,100,0},2).hasCol==groundHit,
+                  "movement sweeps must preserve original mesh collision eligibility");
+          auto walker = world.addGhostObj(&walkerShape);
+          walker.setPosition({12,70,0});
+          require(walker.hasCollision()==groundHit,
+                  "walking must ignore cd_dynamic=0 vobs for large furniture and utensils alike");
+          if(enabled) {
+            require(object.addImpulse({object.mass(),0,0}),
+                    "both colliding and non-colliding movable vobs must accept physical impulses");
+            require(!object.isSleeping() && object.velocity().x>0,
+                    "cd_dynamic=0 hulls must remain active simulation bodies after an impulse");
+            }
+          }
+        }
+
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto moving = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,
+                                        blocksWalking,"impactor",false);
+      auto target = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(30,100,0),.25f,
+                                        blocksWalking,"target",false);
+      require(!moving.isEmpty() && !target.isEmpty() && target.isSleeping(),
+              "physical contact fixture must start with two sleeping cd_dynamic=0 hulls");
+      require(moving.addImpulse({moving.mass()*2.f,0,0}),"contact fixture must wake the impactor");
+      for(int i=0;i<15;++i)
+        world.tick(17);
+      require(!target.isSleeping() && target.velocity().x>1.f,
+              "a cd_dynamic=0 movable hull must wake and push another hull through physical contact");
+      require(world.physicsStats().bodies==2,
+              "physical contact between cd_dynamic=0 hulls must not require query proxies");
+      }
+    }
+
+  void testMovableVobBodies() {
+    CollisionWorld world;
+    const JPH::Vec3 points[] = {
+      {-.1f,-.1f,-.1f},{-.1f,-.1f,.1f},{-.1f,.1f,-.1f},{-.1f,.1f,.1f},
+      {.1f,-.1f,-.1f},{.1f,-.1f,.1f},{.1f,.1f,-.1f},{.1f,.1f,.1f}
+      };
+    const auto hull = JPH::ConvexHullShapeSettings(points,8,0.f).Create();
+    require(!hull.HasError(),"movable vob convex hull must be constructible");
+    const float mass = hull.Get()->GetVolume()*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD)*.25f;
+    requireNear(mass,.008f*700.f*.25f,.00001f,"mass must use convex hull volume and class multiplier");
+    auto floor = world.addCollisionBody(new JPH::BoxShape({10,.1f,10}),at(0,-10,0),.65f,DynamicWorld::C_Landscape);
+    auto movable = world.addDynamicBody(hull.Get(),at(0,100,0),.5f,mass,DynamicWorld::C_MovableVob,true);
+    const auto initial = movable->position();
+    for(int i=0;i<3600;++i)
+      world.tick(17);
+    require(movable->isSleeping(),"fresh movable vobs must stay asleep for 60 seconds");
+    require((movable->position()-initial).length()<=.001f,"sleeping movable vobs must not drift under gravity");
+    require(world.bodyCount()==2,"sleeping movable vobs must remain registered bodies");
+    Tempest::Vec3 normal;
+    Interactive* vob = nullptr;
+    JPH::SphereShape walker(.05f);
+    require(!world.hasCollision(&walker,{0,100,0},normal,vob),"convex simulation hull must not replace legacy walking queries");
+
+    JPH::TriangleList triangles;
+    triangles.emplace_back(JPH::Float3(-.2f,0,-.2f),JPH::Float3(0,0,.2f),JPH::Float3(.2f,0,-.2f));
+    const auto queryMesh = JPH::MeshShapeSettings(triangles).Create();
+    require(!queryMesh.HasError(),"movable source query mesh must be constructible");
+    auto smallQuery = world.addCollisionBody(queryMesh.Get(),at(0,100,0),.5f,DynamicWorld::C_SmallVobQuery,true,true);
+    require(!world.hasCollision(&walker,{0,101,0},normal,vob),"small utensil mesh must not obstruct walking");
+    auto largeQuery = world.addCollisionBody(queryMesh.Get(),at(50,100,0),.5f,DynamicWorld::C_MovableQuery,true,true);
+    require(world.hasCollision(&walker,{50,101,0},normal,vob),"large furniture must obstruct walking through its source mesh");
+    const uint32_t queryMask = (1u<<DynamicWorld::C_MovableQuery)|(1u<<DynamicWorld::C_SmallVobQuery);
+    require(world.rayCast({0,130,0},{0,90,0},queryMask).hasHit,"small vob source mesh must remain aimable");
+    const std::vector<const CollisionWorld::CollisionBody*> excluded = {smallQuery.get()};
+    require(!world.rayCast({0,130,0},{0,90,0},queryMask,false,nullptr,&excluded).hasHit,
+            "spell visibility must exclude the target's own source mesh");
+    require(movable->addImpulse({mass*2.f,mass*.5f,0}),"spell impulse must wake a movable vob");
+    require(!movable->isSleeping(),"an impulse must activate a sleeping movable vob");
+    for(int i=0;i<900;++i)
+      world.tick(17);
+    require(std::abs(movable->position().x-initial.x)>20.f,"a movable vob impulse must produce physical displacement");
+    require(movable->isSleeping(),"movable vob must settle within 15 seconds after an impulse");
+    require(world.bodyCount()==4,"settled movable vob must retain its registered body");
+
+    // Source vertices keep attachment-local transforms before hull creation.
+    std::vector<JPH::Vec3> source = {{1,2,3},{2,2,3},{1,3,3}};
+    PhysicVbo sourceMesh(&source);
+    sourceMesh.addIndex({0,1,2},0,3,zenkit::MaterialGroup::WOOD);
+    auto local = at(100,200,300);
+    local.scale(2,3,4);
+    std::vector<JPH::Vec3> transformed;
+    sourceMesh.appendVertices(transformed,local);
+    require(transformed.size()==3,"hull input must retain every referenced source vertex");
+    requireNear(transformed[0].GetX(),3.f,.00001f,"hull source input must apply local attachment X transform");
+    requireNear(transformed[0].GetY(),8.f,.00001f,"hull source input must apply local attachment Y transform");
+    requireNear(transformed[0].GetZ(),15.f,.00001f,"hull source input must apply local attachment Z transform");
     }
 
   struct SpherePrecisionCollector final : JPH::CastShapeCollector {
@@ -747,6 +890,8 @@ int main() {
     testFixedStepCarry();
     testFixedStepCadence();
     testContracts();
+    testMovableVobBodies();
+    testMovableVobLegacyCollision();
     std::puts("Physics contracts passed");
     return EXIT_SUCCESS;
     }

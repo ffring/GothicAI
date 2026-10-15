@@ -14,6 +14,7 @@ class Skeleton;
 class Bounds;
 class HitZones;
 class Ragdoll;
+class ProtoMesh;
 
 class World;
 class Bullet;
@@ -33,6 +34,7 @@ class DynamicWorld final {
     struct NpcBodyList;
     struct BulletsList;
     struct BBoxList;
+    struct MovableVobs;
 
   public:
     static constexpr float gravityMS   = 9.8f; // meters per second^2
@@ -54,6 +56,9 @@ class DynamicWorld final {
       C_Ragdoll   = 7,
       C_LivingBody= 8,
       C_ActiveBody= 9,
+      C_MovableVob = 10,
+      C_MovableQuery = 11,
+      C_SmallVobQuery = 12,
       };
 
     enum PtrType {
@@ -151,6 +156,7 @@ class DynamicWorld final {
         bool isSleeping() const;
         // World-space newton seconds (kg * metres/second), with native wake.
         bool addImpulse(const Tempest::Vec3& impulseNs);
+        void setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback);
 
       private:
         DynamicWorld*       owner  = nullptr;
@@ -293,6 +299,25 @@ class DynamicWorld final {
     Item           addStaticObj (const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
     Item           addMovableObj(const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
     Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, zenkit::MaterialGroup mat);
+    Item           addMovableVob(const ProtoMesh& mesh, std::string_view visual, const Tempest::Matrix4x4& matrix,
+                                 float massMultiplier, bool blocksWalking, std::string_view className = {},
+                                 bool legacyCollision = true);
+    void           setMovableVobsEnabled(bool enabled);
+    bool           movableVobsEnabled() const;
+    struct MovableVobSnapshot {
+      uintptr_t          id = 0;
+      std::string        visual, className;
+      bool               blocksWalking = false, legacyCollision = true, enabled = false, sleeping = true, touchedByNpc = false;
+      float              mass = 0;
+      Tempest::Matrix4x4 transform;
+      Tempest::Vec3      velocity;
+      };
+    std::vector<MovableVobSnapshot> movableVobSnapshot() const;
+    // callback returns a world-space impulse in newton seconds; target is the
+    // centre of mass in world centimetres. Geometry occludes the blast, with the
+    // target's own mesh excluded from the visibility query.
+    size_t applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
+                                 const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse);
     std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
                                           const Tempest::Matrix4x4* worldPose, size_t numBones,
                                           const Tempest::Matrix4x4& objectMatrix,
@@ -332,6 +357,8 @@ class DynamicWorld final {
     void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const;
     bool           hasCollision(const NpcItem &it, CollisionTest& out);
+    void           rebuildMovableVob(BodyData& body);
+    void           syncMovableVob(BodyData& body);
 
     std::unique_ptr<CollisionWorld>    world;
 
@@ -344,6 +371,7 @@ class DynamicWorld final {
     std::unique_ptr<NpcBodyList>       npcList;
     std::unique_ptr<BulletsList>       bulletList;
     std::unique_ptr<BBoxList>          bboxList;
+    std::unique_ptr<MovableVobs>       movableVobs;
 
     static const float                 worldHeight;
   };

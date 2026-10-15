@@ -125,10 +125,10 @@ void ObjVisual::setVisual(const zenkit::IItem& hitem, World& world, bool staticD
     }
   }
 
-void ObjVisual::setVisual(const zenkit::VirtualObject& vob, World& world, bool staticDraw) {
+void ObjVisual::setVisual(const zenkit::VirtualObject& vob, World& world, bool staticDraw, bool enablePhysics) {
   cleanup();
 
-  const bool       enableCollision = vob.cd_dynamic;    // collide with player
+  const bool       enableCollision = vob.cd_dynamic && enablePhysics; // collide with player
   std::string_view visName         = vob.visual->name;  // *.PFX; *.TGA; *.3DS; *.MDS; *.ASC; *.MMS
 
   if(visName.empty())

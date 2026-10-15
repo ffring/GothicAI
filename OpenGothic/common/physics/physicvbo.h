@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
+#include <Tempest/Matrix4x4>
 
 #include <zenkit/Material.hh>
 
@@ -35,6 +36,9 @@ class PhysicVbo final {
                                               bool backfaces=false) const;
     bool                    isEmpty() const;
     JPH::ShapeRefC          shape() const;
+    // Exact source geometry, before Jolt's triangle BVH quantization.
+    void                    appendVertices(std::vector<JPH::Vec3>& points, const Tempest::Matrix4x4& transform) const;
+    size_t                  vertexCount() const { return vert.size(); }
 
     std::string_view        validateSectorName(std::string_view name) const;
 

@@ -92,6 +92,13 @@ file(GLOB_RECURSE SPACER_SOURCES "spacer/*.h" "spacer/*.cpp")
 
 target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES})
 
+# The movable-vob allowlist is data, embedded so installed builds do not depend
+# on their working directory. Editing the CSV also triggers reconfiguration.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/movable-vobs.csv")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/movable-vobs.csv" MOVABLE_VOBS_CSV)
+configure_file(common/world/movablevobsdata.h.in generated/movablevobsdata.h @ONLY)
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 # shaders
 add_subdirectory(shader)
 target_link_libraries(${PROJECT_NAME} GothicShaders)
