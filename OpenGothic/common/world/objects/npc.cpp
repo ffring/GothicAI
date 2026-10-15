@@ -6151,11 +6151,22 @@ Vec3 Npc::aimDirection(const Vec3& target) const {
   return target-from;
   }
 
+Vec3 Npc::aimLookAt(const Vec3& target) const {
+  const float a = rotationRad();
+  const Vec3 facing(std::cos(a),0,std::sin(a));
+  // Follow the hero's physical shoulder as the original aim camera did, without the
+  // camera's extra forward displacement. Read the last applied pose, not the hand.
+  const Vec3 shift = aimLeanShift();
+  const Vec3 offset = facing*std::max(Vec3::dotProduct(shift,facing),0.f) + Vec3(0,std::min(shift.y,0.f),0);
+  // A crosshair on the nearby roof edge still looks down from this elevated origin;
+  // the directional clearance rays continue past the hit to find a pose over the edge.
+  const Vec3 direction = target-(Camera::aimShoulder(position(),facing)+offset);
+  return direction.length()>1e-3f ? Vec3::normalize(direction) : facing;
+  }
+
 Vec3 Npc::aimLeanDirection(const Vec3& target) const {
-  // A near crosshair hit can lie behind the already extended nock. Lean toward the view,
-  // rather than following that reversed shot vector over the roof.
-  if(hasManualAim() && aimLook().length()>0.5f)
-    return aimLook();
+  if(hasManualAim())
+    return aimLookAt(target);
   return target-position();
   }
 
@@ -6199,7 +6210,7 @@ Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
     result.angle = Aim::leanForNpc(-std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z)));
     return result;
     }
-  const auto look = aimLook();
+  const auto look = aimLookAt(target);
   const float down = -std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z));
   return visual.pose().aimIk().leanNeeded(*this,look,look,down,aimEdge(look));
   }

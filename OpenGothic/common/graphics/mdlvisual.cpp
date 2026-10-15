@@ -1144,6 +1144,25 @@ bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
   return true;
   }
 
+bool MdlVisual::aimAttachmentBounds(bool ammo, Matrix4x4& matrix, Vec3 (&bounds)[2]) const {
+  const auto& mesh = ammo ? ammunition.view : bow.view;
+  const auto* proto = mesh.protoMesh();
+  if(mesh.isEmpty() || proto==nullptr)
+    return false;
+  matrix = mesh.node(0).position();
+  bounds[0] = proto->bboxMesh[0];
+  bounds[1] = proto->bboxMesh[1];
+  // Frame interpolation stays within each morph's component bounds. Sum the currently
+  // shown morphs, as the vertex shader does; a string pulled along the arrow must not
+  // expand the bow by its full draw length sideways as well.
+  for(const auto& morph:proto->morph) {
+    const float weight = mesh.morphWeight(morph.name);
+    bounds[0] += morph.moveMin*weight;
+    bounds[1] += morph.moveMax*weight;
+    }
+  return true;
+  }
+
 HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t, size_t* bone) const {
   if(bone!=nullptr)
     *bone=size_t(-1);

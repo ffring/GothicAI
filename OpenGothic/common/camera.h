@@ -199,6 +199,8 @@ class Camera final {
     float                 aimLeanDrop= 0;   // ...and down
     float                 aimLeanRoom= 1;   // 0..1 of it there is room for (a roof, a wall in the way)
     float                 aimRangeRoom = 1; // 0..1 of the range behind the shoulder there is room for
+    float                 aimSteepAdvance = 0; // ahead of the hands when looking steeply down
+    float                 aimSteepRoom = 1; // room for that extra displacement
     Tempest::Vec3         aimFrom    = {};  // the shoulder point the center of the screen passes
     float                 fovK       = 1;   // of the field of view, the aim narrows it
 

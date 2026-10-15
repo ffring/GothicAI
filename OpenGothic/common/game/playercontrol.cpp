@@ -1183,11 +1183,9 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   Tempest::Vec3 at;
   aimRayHit(pl,at);
-  // where the hero looks: the lean over an edge goes by it too (the center of the screen may fall on the
-  // edge right in front, leaning over is what looks past it); the test bench aiming: by where it aims
-  Tempest::Vec3 lookFrom, look;
-  if(camera!=nullptr && !aimOverride)
-    camera->aimRay(lookFrom,look);
+  // Lean and approach toward the crosshair from the hero, not parallel to the camera:
+  // its forward offset must not make the stance aim more steeply at the same target.
+  const auto look = pl.aimLookAt(at);
   pl.setAimLook(look);
 
   AimStep::Input approach;

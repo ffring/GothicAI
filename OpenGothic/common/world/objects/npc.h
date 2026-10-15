@@ -327,8 +327,8 @@ class Npc final {
     bool      isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const {
       return mvAlgo.isEdgeMoveBlocked(modelDirection);
       }
-    // where the hero looks aiming by hand (the center of the screen), zero if not known (an npc): leaning
-    // over an edge goes by it too
+    // The manual stance looks from the hero's shoulder toward the crosshair, independently of the camera.
+    auto      aimLookAt(const Tempest::Vec3& target) const -> Tempest::Vec3;
     void      setAimLook(const Tempest::Vec3& dir) { stanceLook = dir; }
     auto      aimLook()   const -> Tempest::Vec3 { return stanceLook; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
@@ -342,6 +342,9 @@ class Npc final {
     float     aimTrackError() const { return visual.aimTrackError(); }
     // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
     bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    bool      aimAttachmentBounds(bool ammo, Tempest::Matrix4x4& matrix, Tempest::Vec3 (&bounds)[2]) const {
+      return visual.aimAttachmentBounds(ammo,matrix,bounds);
+      }
     // lets the arrow go along the arrow: drawn that far, thrown off by the release
     bool      releaseArrow(float draw, const Archery::Stats& st);
     // one frame of the bow aimed by hand at `at`, the hero's (PlayerControl) or an npc's (ArcherAi): the

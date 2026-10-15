@@ -120,6 +120,8 @@ class MdlVisual final {
     auto                           mapHeadBone() const -> Tempest::Vec3;
     // the arrow on the string as posed: its nock, where it points
     bool                           arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    // Rendered bow/arrow attachment bounds for the camera's test-bench visibility diagnostic.
+    bool                           aimAttachmentBounds(bool ammo, Tempest::Matrix4x4& matrix, Tempest::Vec3 (&bounds)[2]) const;
     // where an arrow passing from-to hits the body (its bones), t: how far from 'from'
     auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t,
                                               size_t* bone=nullptr) const -> HitZones::Zone;
