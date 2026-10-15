@@ -66,8 +66,10 @@
 #include "physics/ragdoll.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
+#include "world/objects/interactive.h"
 #include "world/objects/sound.h"
 #include "world/world.h"
+#include "world/waypoint.h"
 #include "world/aiqueue.h"
 #include "ui/crosshair.h"
 #include "utils/keycodec.h"
@@ -582,6 +584,21 @@ struct Bench {
   uint64_t    volleyHoldNow = 0;
   uint32_t    lcg          = 1;  // the bench's own random numbers (seed)
   std::vector<Npc*> crew;        // arc: the npcs set out, `all` of fight
+  struct LivingWalker { Npc* npc=nullptr; WayPoint ends[2]; bool next=false,queued=false; };
+  std::deque<LivingWalker> livingWalkers;
+  bool livingFixture=false,livingDebug=false,livingMotion=false,livingMeasuring=false,livingMode=false;
+  std::string livingPhase;
+  Vec3 livingHero;
+  struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
+  std::vector<LivingPhysics> livingPhysics;
+  bool livingOverflow=false;
+  Npc* seatNpc=nullptr;
+  Npc* seatCorpse=nullptr;
+  Interactive* seatMob=nullptr;
+  std::vector<Item*> seatItems;
+  std::vector<Vec3> seatPreviousParts,seatPreviousItems;
+  uint64_t seatSampleTick=0;
+  std::string seatPhase;
   Npc*        downNpc      = nullptr; // waitdown: till it falls
   uint64_t    downFrom = 0, downEnd = 0;
   Npc*        waitRagdollNpc = nullptr;
@@ -1553,6 +1570,8 @@ void writeHeader() {
     std::fprintf(bench.csv,",ph_ms,ph_bodies,ph_rays,rd_mode,rd_weight,rd_sleep");
   if(bench.questTrace)
     std::fprintf(bench.csv,",ig_immortal,ig_enabled,ig_anchor,ig_armed,ig_hazards,ig_returns,ig_reason,ig_anchor_x,ig_anchor_y,ig_anchor_z,ig_x,ig_y,ig_z,ig_drop_cm,ig_in_water,ig_ko,ig_wall_ms");
+  if(bench.livingFixture)
+    std::fprintf(bench.csv,",lb_models,lb_alive,lb_kinematic,lb_parts,lb_dynamic,lb_dynamic_parts,lb_duplicates,lb_world_bodies,lb_ph_ms");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -2159,6 +2178,83 @@ bool chooseQuestSite(World& world, bool water, Bench::QuestSite& site) {
   return false;
   }
 
+struct LivingCounts {
+  size_t models=0,alive=0,kinematic=0,parts=0,dynamic=0,dynamicParts=0,duplicates=0;
+  };
+
+LivingCounts livingCounts() {
+  LivingCounts result;
+  for(const auto* npc:bench.crew) {
+    if(TestBench::ragdollBodyDrawable(*npc)) ++result.models;
+    if(!npc->isDown()) ++result.alive;
+    const auto* living=npc->livingBody();const auto* dynamic=npc->ragdollBody();
+    if(living) {if(living->isKinematic()) ++result.kinematic;result.parts+=living->partCount();}
+    if(dynamic) {++result.dynamic;result.dynamicParts+=dynamic->partCount();}
+    if(living && dynamic) ++result.duplicates;
+    }
+  return result;
+  }
+
+std::string livingCountFields(const LivingCounts& s, World& world) {
+  return "\"models\":"+std::to_string(s.models)+",\"alive\":"+std::to_string(s.alive)+
+    ",\"kinematic\":"+std::to_string(s.kinematic)+",\"parts\":"+std::to_string(s.parts)+
+    ",\"dynamic\":"+std::to_string(s.dynamic)+",\"dynamic_parts\":"+std::to_string(s.dynamicParts)+
+    ",\"duplicates\":"+std::to_string(s.duplicates)+",\"world_bodies\":"+std::to_string(world.physic()->physicsStats().bodies);
+  }
+
+void livingFields(World& world) {
+  const auto s=livingCounts();const auto stats=world.physic()->physicsStats();
+  std::fprintf(bench.csv,",%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%.6f",s.models,s.alive,s.kinematic,s.parts,
+    s.dynamic,s.dynamicParts,s.duplicates,stats.bodies,double(stats.stepMilliseconds));
+  std::string actors="[";
+  for(size_t i=0;i<bench.crew.size();++i) {
+    const auto* npc=bench.crew[i];if(i) actors+=',';
+    actors+="{\"index\":"+std::to_string(i)+",\"position_cm\":"+ragdollVector(npc->position())+
+      ",\"animations\":"+jsonStr(npc->animNames());
+    if(const auto* body=npc->livingBody()) {
+      const auto pelvis=body->pelvisTransform();
+      actors+=",\"native_pelvis_cm\":"+ragdollVector({pelvis.at(3,0),pelvis.at(3,1),pelvis.at(3,2)});
+      }
+    actors+='}';
+    }
+  event("living_frame",livingCountFields(s,world)+",\"phase\":"+jsonStr(bench.livingPhase)+",\"actors\":"+actors+"]");
+  }
+
+void livingSeatFields(World& world) {
+  auto* npc=bench.seatNpc;
+  if(npc==nullptr || bench.seatPhase.empty() || bench.seatSampleTick==world.tickCount()) return;
+  const float seconds=float(world.tickCount()-bench.seatSampleTick)*.001f;
+  bench.seatSampleTick=world.tickCount();
+  std::vector<Matrix4x4> pose;
+  const auto* body=npc->livingBody();
+  float nativeStep=0,corpseSpeed=0,itemSpeed=0;
+  if(body && body->getPose(pose)) {
+    if(bench.seatPreviousParts.size()==pose.size())
+      for(auto bone:body->boneIndices()) nativeStep=std::max(nativeStep,(Vec3(pose[bone].at(3,0),pose[bone].at(3,1),pose[bone].at(3,2))-bench.seatPreviousParts[bone]).length());
+    bench.seatPreviousParts.resize(pose.size());
+    for(auto bone:body->boneIndices()) bench.seatPreviousParts[bone]={pose[bone].at(3,0),pose[bone].at(3,1),pose[bone].at(3,2)};
+    }
+  const auto* corpse=bench.seatCorpse ? bench.seatCorpse->ragdollBody() : nullptr;
+  if(corpse) for(const auto& part:corpse->state().parts) corpseSpeed=std::max(corpseSpeed,part.linearVelocity.length());
+  std::string items="[";
+  for(size_t i=0;i<bench.seatItems.size();++i) {
+    const auto p=bench.seatItems[i]->position();
+    if(bench.seatPreviousItems.size()==bench.seatItems.size() && seconds>0)
+      itemSpeed=std::max(itemSpeed,(p-bench.seatPreviousItems[i]).length()/seconds);
+    if(i) items+=',';
+    items+=ragdollVector(p);
+    }
+  bench.seatPreviousItems.clear();
+  for(const auto* item:bench.seatItems) bench.seatPreviousItems.push_back(item->position());
+  const auto* mob=npc->interactive();
+  event("living_seat_frame","\"phase\":"+jsonStr(bench.seatPhase)+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"attached\":"+(mob==bench.seatMob?"true":"false")+",\"seated\":"+(mob==bench.seatMob && npc->bodyStateMasked()==BS_SIT?"true":"false")+
+    ",\"mob_state\":"+std::to_string(mob?mob->stateId():-99)+",\"animations\":"+jsonStr(npc->animNames())+
+    ",\"living_parts\":"+std::to_string(body?body->partCount():0)+",\"corpse_parts\":"+std::to_string(corpse?corpse->partCount():0)+
+    ",\"native_step_cm\":"+ragdollNumber(nativeStep)+",\"corpse_speed_cm_s\":"+ragdollNumber(corpseSpeed)+
+    ",\"item_speed_cm_s\":"+ragdollNumber(itemSpeed)+",\"items_cm\":"+items+"]");
+  }
+
 void questFields(World& world, Npc& npc, bool csv) {
   const auto& q=npc.ragdollQuestReturnState();
   const auto pos=npc.position();
@@ -2307,6 +2403,9 @@ void writeRow(Npc& pl) {
     writeRagdoll(pl);
   if(bench.questTrace && bench.questNpc!=nullptr)
     questFields(*Gothic::inst().world(),*bench.questNpc,true);
+  if(bench.livingFixture)
+    livingFields(*Gothic::inst().world());
+  livingSeatFields(*Gothic::inst().world());
   std::fprintf(bench.csv,"\n");
   }
 
@@ -2540,9 +2639,9 @@ bool chooseRagdollArena(World& world, Npc& player) {
   return false;
   }
 
-bool frameRagdollArena() {
+bool frameRagdollArena(size_t expected=20) {
   auto* camera=Gothic::inst().camera();
-  if(camera==nullptr || bench.crew.size()!=20) return false;
+  if(camera==nullptr || bench.crew.size()!=expected) return false;
   const float infinity=std::numeric_limits<float>::infinity();
   Vec3 low{infinity,infinity,infinity},high{-infinity,-infinity,-infinity};
   auto add=[&](const Vec3& point) {
@@ -2616,7 +2715,155 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
     }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="setup") {
+    Interactive* mob=w.availableMob(pl,"BENCH");
+    if(!mob) mob=w.availableMob(pl,"CHAIR");
+    if(!mob) {arenaAbort("sitting fixture needs an available real BENCH or CHAIR nearby");return;}
+    bench.seatMob=mob;
+    auto stand=mob->nearestPoint(pl)+Vec3(0,0,-80);
+    const auto ground=w.physic()->landRay(stand+Vec3(0,200,0),500);
+    if(!ground.hasCol) {arenaAbort("sitting fixture has no supported floor");return;}
+    stand.y=ground.v.y;
+    pl.setPosition(stand-Vec3(0,0,350));pl.updateTransform();
+    exec("clear 600",w,pl,ctrl);
+    const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
+    auto* npc=w.addNpc(symbol,stand);
+    auto* corpse=w.addNpc(symbol,stand+Vec3(100,0,60));
+    if(!npc || !corpse) {arenaAbort("sitting fixture actors unavailable");return;}
+    for(auto* actor:{npc,corpse}) {actor->clearAiQueue();actor->clearState(false);actor->setExternalControl(true);}
+    npc->setDirection(mob->position()-stand);npc->updateTransform();
+    corpse->setLastHitBy(&pl);corpse->setRagdollDown(true);corpse->prepareRagdoll();
+    bench.seatNpc=npc;bench.seatCorpse=corpse;bench.subject=npc;
+    for(const float x:{-35.f,35.f}) {
+      auto matrix=Matrix4x4::mkIdentity();matrix.translate(stand+Vec3(x,25,35));
+      auto* item=w.addItemDyn(w.script().findSymbolIndex("ItPo_Health_01"),matrix,size_t(-1));
+      if(!item) {arenaAbort("sitting fixture dropped item unavailable");return;}
+      bench.seatItems.push_back(item);
+      }
+    Gothic::settingsSetI("GAME","living_bodies",1);
+    event("living_seat_setup","\"scheme\":"+jsonStr(mob->schemeName())+",\"mob_cm\":"+ragdollVector(mob->position())+
+      ",\"start_cm\":"+ragdollVector(stand)+",\"items\":2");
+    }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="sit") {
+    if(!bench.seatNpc || !bench.seatNpc->livingBody()) {arenaAbort("sitting fixture requires its existing native living rig");return;}
+    for(auto* item:bench.seatItems) item->setPhysicsEnable(w);
+    bench.seatPhase="sit";bench.seatPreviousItems.clear();bench.seatSampleTick=w.tickCount();
+    for(const auto* item:bench.seatItems) bench.seatPreviousItems.push_back(item->position());
+    std::vector<Matrix4x4> native;
+    if(bench.seatNpc->livingBody()->getPose(native)) {
+      bench.seatPreviousParts.resize(native.size());
+      for(auto bone:bench.seatNpc->livingBody()->boneIndices()) bench.seatPreviousParts[bone]={native[bone].at(3,0),native[bone].at(3,1),native[bone].at(3,2)};
+      }
+    const auto from=bench.seatNpc->position();
+    const bool attached=bench.seatNpc->setInteraction(bench.seatMob);
+    event("living_seat_attach",std::string("\"attached\":")+(attached?"true":"false")+",\"jump_cm\":"+
+      ragdollNumber((bench.seatNpc->position()-from).length()));
+    if(!attached) arenaAbort("real NPC bench attachment failed");
+    }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="shift") {
+    if(!bench.seatNpc) return;
+    bench.seatNpc->setInteraction(nullptr,true);
+    bench.seatNpc->setPosition(bench.seatNpc->position()+Vec3(80,0,0));bench.seatNpc->updateTransform();
+    bench.seatPhase="shift";
+    event("living_seat_shift","\"distance_cm\":80");
+    }
+  else if(c=="living" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","living_bodies",a[1]=="on");bench.livingPhase=a[1];
+    }
+  else if(c=="living" && a.size()==2 && a[1]=="radius-check") {
+    auto* npc=bench.subject;
+    if(!npc || npc->isDown()) {arenaAbort("living radius needs a live watched actor");return;}
+    const auto hero=pl.position();
+    const auto offset=pl.centerPosition()-pl.position();
+    const float distances[]{1950,2010,2190,2210,2100,2010,1990,2010};
+    const bool expected[]{true,true,true,false,false,false,true,true};
+    bool pass=true;
+    for(size_t i=0;i<8;++i) {
+      pl.setPosition(npc->centerPosition()+Vec3(distances[i],0,0)-offset);pl.updateTransform();
+      npc->prepareLivingBody();
+      const bool present=npc->livingBody()!=nullptr;
+      pass&=present==expected[i];
+      event("living_radius_check","\"distance_cm\":"+ragdollNumber((pl.centerPosition()-npc->centerPosition()).length())+
+        ",\"expected\":"+(expected[i]?"true":"false")+",\"present\":"+(present?"true":"false"));
+      }
+    pl.setPosition(hero);pl.updateTransform();npc->prepareLivingBody();
+    if(!pass) arenaAbort("living radius hysteresis check failed");
+    }
+  else if(c=="living" && a.size()==2 && a[1]=="setup") {
+    if(!chooseRagdollArena(w,pl)) {arenaAbort("living fixture needs an empty supported arena");return;}
+    exec("clear 2500",w,pl,ctrl);
+    const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
+    for(size_t i=0;i<10;++i) {
+      auto* npc=w.addNpc(symbol,bench.ragdollArenaPlaces[i+5]);
+      if(!npc) {arenaAbort("living ten-NPC insertion failed");return;}
+      npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
+      npc->setDirection(pl.position()-npc->position());npc->updateTransform();bench.crew.push_back(npc);
+      if(i<4) {
+        bench.livingWalkers.emplace_back();auto& walker=bench.livingWalkers.back();walker.npc=npc;
+        walker.ends[0]=WayPoint(npc->position()-Vec3(0,0,300),"FP_LIVING_BENCH_A");
+        walker.ends[1]=WayPoint(npc->position(),"FP_LIVING_BENCH_B");
+        for(auto& point:walker.ends) {
+          const auto floor=w.physic()->landRay(point.pos+Vec3(0,200,0),500);
+          if(!floor.hasCol) {arenaAbort("living walking path has no floor");return;}
+          point.pos.y=floor.v.y;point.groundPos=point.pos;
+          }
+        npc->setWalkMode(WalkBit::WM_Walk);
+        }
+      }
+    bench.livingFixture=true;bench.livingHero=pl.position();bench.subject=bench.crew.back();
+    exec("watch watched",w,pl,ctrl);
+    if(!frameRagdollArena(10)) {arenaAbort("living ten-model camera failed");return;}
+    event("living_setup","\"actors\":10,\"walkers\":4,\"hero_cm\":"+ragdollVector(bench.livingHero));
+    }
+  else if(c=="living" && a.size()==2 && a[1]=="motion") bench.livingMotion=true;
+  else if(c=="living" && a.size()==3 && a[1]=="debug") bench.livingDebug=a[2]=="on";
+  else if(c=="living" && a.size()==2 && (a[1]=="far" || a[1]=="near")) {
+    pl.setPosition(bench.livingHero+(a[1]=="far" ? Vec3(0,0,-6000) : Vec3()));pl.updateTransform();
+    bench.livingPhase=a[1]=="far" ? "far" : "on";
+    }
+  else if(c=="living" && a.size()==2 && a[1]=="ko") {
+    auto* npc=bench.subject;if(!npc || npc->isDown()) {arenaAbort("living handoff needs a live watched NPC");return;}
+    npc->setLastHitBy(&pl);npc->setRagdollDown(false);npc->prepareRagdoll();bench.livingPhase="ko";
+    }
+  else if(c=="living" && a.size()==3 && a[1]=="check") {
+    const auto counts=livingCounts();const bool ko=a[2]=="ko",on=a[2]=="on" || ko;
+    size_t hits=0;
+    for(const auto* npc:bench.crew) if(!npc->isDown()) {
+      const auto head=npc->mapHeadBone();float fraction=1;
+      if(npc->rayHitZone(head+Vec3(100,0,0),head-Vec3(100,0,0),fraction)!=HitZones::None) ++hits;
+      }
+    const bool pass=counts.models==10 && counts.alive==(ko?9u:10u) && counts.duplicates==0 &&
+      counts.kinematic==(on?(ko?9u:10u):0u) && counts.parts==(on?(ko?216u:240u):0u) &&
+      counts.dynamic==(ko?1u:0u) && counts.dynamicParts==(ko?24u:0u) && hits==counts.alive;
+    event("living_check","\"mode\":"+jsonStr(a[2])+",\"pass\":"+(pass?"true":"false")+
+      ",\"ordinary_hits\":"+std::to_string(hits)+","+livingCountFields(counts,w));
+    bench.livingPhase=a[2];
+    if(!pass) arenaAbort("living body/count/hit checkpoint failed");
+    }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="living" && a.size()==3 && a[1]=="measure") {
+    const auto counts=livingCounts();bench.livingMode=a[2]=="on";
+    if(!bench.livingFixture || counts.models!=10 || counts.alive!=10 ||
+       counts.parts!=(bench.livingMode?240u:0u) || !AppCadence::normalClock()) {arenaAbort("living measurement precondition failed");return;}
+    bench.livingPhysics.reserve(20000);bench.livingPhysics.clear();bench.livingOverflow=false;
+    AppCadence::counts(true,10,0,uint32_t(counts.parts),0,0);
+    if(!AppCadence::arm(bench.livingMode)) {arenaAbort("living cadence arm failed");return;}
+    bench.livingMeasuring=true;
+    event("living_measure_before",livingCountFields(counts,w));
+    }
+  else if(c=="living" && a.size()==2 && a[1]=="report") {
+    bench.livingMeasuring=false;const auto counts=livingCounts();
+    AppCadence::counts(false,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
+    event("living_measure_after",livingCountFields(counts,w)+",\"overflow\":"+(bench.livingOverflow?"true":"false"));
+    if(auto* file=std::fopen((outDir+"/living-physics.csv").c_str(),"w")) {
+      std::fprintf(file,"sample,t_game_ms,dt_ms,step_ms,native_bodies\n");
+      for(size_t i=0;i<bench.livingPhysics.size();++i) {
+        const auto& sample=bench.livingPhysics[i];std::fprintf(file,"%zu,%llu,%llu,%.9g,%zu\n",i,
+          (unsigned long long)sample.time,(unsigned long long)sample.dt,double(sample.milliseconds),sample.bodies);
+        }
+      std::fclose(file);
+      }
+    }
   else if(c=="cadence" && a.size()==2 && a[1]=="normal") {
     AppCadence::enable(outDir+"/appcadence.csv");FootIk::setProbing(false);
     }
@@ -5243,6 +5490,15 @@ bool waitingForAi() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+  if(bench.livingMotion)
+    for(auto& walker:bench.livingWalkers) {
+      if(walker.npc->isDown()) continue;
+      const auto& target=walker.ends[walker.next?1:0];
+      if(!walker.queued || ((walker.npc->position()-target.pos).length()<120 && walker.npc->isAiQueueEmpty())) {
+        if(walker.queued) walker.next=!walker.next;
+        walker.npc->aiPush(AiQueue::aiGoToPoint(walker.ends[walker.next?1:0]));walker.queued=true;
+        }
+      }
   if(bench.questNpc!=nullptr && !bench.questCase.empty()) questFields(w,*bench.questNpc,false);
   if(bench.questStandingWait) {
     const auto* npc=bench.questNpc;
@@ -5453,10 +5709,10 @@ void autoExposure(Canvas& cv) {
 
 // hit zones of an npc (showzones): capsule outlines, the head red, the trunk yellow, the limbs blue
 void drawZones(Canvas& cv, Camera* cam) {
-  if(cam!=nullptr && !bench.zonesNpc.empty()) {
+  if(cam!=nullptr && (!bench.zonesNpc.empty() || bench.livingDebug)) {
     auto* w = Gothic::inst().world();
-    Npc*  n = bench.zonesNpc=="player" ? Gothic::inst().player() : (w!=nullptr ? npcBySymbol(*w,bench.zonesNpc) : nullptr);
-    if(n!=nullptr) {
+    const auto actors=bench.livingDebug ? bench.crew : std::vector<Npc*>{bench.zonesNpc=="player" ? Gothic::inst().player() : (w!=nullptr ? npcBySymbol(*w,bench.zonesNpc) : nullptr)};
+    for(auto* n:actors) if(n!=nullptr) {
       const Matrix4x4 vp = cam->viewProj();
       auto proj = [&](const Vec3& p, float& x, float& y) {
         float px = p.x, py = p.y, pz = p.z, pw = 1;
@@ -6176,6 +6432,14 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         if(body->isSleeping()) ++bench.perfSleepingBeforeImpulse;
         }
     }
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  if(bench.livingMeasuring && !AppCadence::done()) {
+    const auto stats=world->physic()->physicsStats();
+    if(bench.livingPhysics.size()<20000)
+      bench.livingPhysics.push_back({world->tickCount(),dt,stats.stepMilliseconds,stats.bodies});
+    else bench.livingOverflow=true;
+    }
+#endif
   run(*world,*player,ctrl);
   renderSound(dt);
   if(bench.done)
@@ -6405,6 +6669,15 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
 
   if(pm.w()>0 && bench.overlay)
     drawOverlay(pm);
+  if(pm.w()>0 && bench.livingDebug) {
+    Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
+    if(!bench.overlay) drawZones(cv,Gothic::inst().camera());
+    const auto counts=livingCounts();char label[200];
+    cv.rect(0,0,std::min(cv.w,790),66,{0,0,0,190});
+    cv.text(6,6,"LIVING BODIES: "+bench.livingPhase,2,Text);
+    std::snprintf(label,sizeof(label),"LIVE %zu  NATIVE KIN %zu / %zu PARTS  DYNAMIC %zu",counts.alive,counts.kinematic,counts.parts,counts.dynamic);
+    cv.text(6,26,label,2,Text);cv.text(6,46,"OVERLAY = GAME HIT ZONES (NOT NATIVE SHAPES)",2,Text);
+    }
   if(pm.w()>0 && bench.questTrace && bench.questNpc!=nullptr) {
     Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
     cv.rect(0,0,std::min(cv.w,640),66,{0,0,0,190});

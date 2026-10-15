@@ -99,6 +99,9 @@ class CollisionWorld final {
                                          const Tempest::Matrix4x4* worldPose, size_t numBones,
                                          const Tempest::Matrix4x4& objectMatrix,
                                          const Tempest::Vec3& initialVelocity = {});
+    std::unique_ptr<Ragdoll> createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                               const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                               const Tempest::Matrix4x4& objectMatrix);
     size_t bodyCount() const;
     float stepMilliseconds() const;
     uint64_t rayCount() const;

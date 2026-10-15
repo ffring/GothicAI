@@ -80,6 +80,7 @@ class Marvin {
       C_ToggleFlinch,
       C_ToggleRagdoll,
       C_ToggleRagdollQuestGuard,
+      C_ToggleLivingBodies,
       };
 
     struct Cmd {

@@ -45,7 +45,7 @@ namespace {
   struct LayerInterface final : JPH::BroadPhaseLayerInterface {
     JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll)
+      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody)
         return dynamicLayer;
       if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost)
         return sensorLayer;
@@ -60,6 +60,10 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+      if(a==DynamicWorld::C_LivingBody)
+        return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+      if(b==DynamicWorld::C_LivingBody)
+        return a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
       return (a==DynamicWorld::C_Item || b==DynamicWorld::C_Item ||
               a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll) &&
              a!=DynamicWorld::C_Null && b!=DynamicWorld::C_Null;
@@ -68,6 +72,8 @@ namespace {
 
   struct BroadPhaseFilter final : JPH::ObjectVsBroadPhaseLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
+      if(layer==DynamicWorld::C_LivingBody)
+        return broad==dynamicLayer;
       return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
       }
     };
@@ -83,7 +89,7 @@ namespace {
   struct QueryBroadPhaseFilter final : JPH::BroadPhaseLayerFilter {
     explicit QueryBroadPhaseFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
-      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll);
+      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|(1u<<DynamicWorld::C_LivingBody);
       constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost);
       if(layer==dynamicLayer)
         return (mask & itemMask)!=0;
@@ -806,6 +812,7 @@ void CollisionWorld::tick(uint64_t dt) {
   constexpr float step = 1.f/60.f;
   bool advanced = false;
   if(!rigid.empty() || !ragdolls.empty()) {
+    const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
     accumulatedTime += float(dt)/1000.f;
     int wholeSteps = 0;
     if(accumulatedTime>=step) {
@@ -817,12 +824,14 @@ void CollisionWorld::tick(uint64_t dt) {
     const int count = std::min(wholeSteps,2);
     for(int i=0;i<count;++i) {
       ++impl->simulationStep;
+      for(auto* body:ragdolls) body->prepareKinematicStep(step);
       // A capsule stopped by CCD otherwise compresses its connected limb while
       // the rest of the rig finishes the 1/60 s step. Two native collision steps
       // keep that late-contact displacement small. The public fixed-step clock
       // and two-update frame budget stay unchanged; worlds without corpses keep
       // their original single collision step.
-      impl->system.Update(float(step),ragdolls.empty() ? 1 : 2,&impl->allocator,&impl->jobs);
+      impl->system.Update(float(step),dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
+      for(auto* body:ragdolls) body->finishKinematicStep();
       advanced = true;
       }
     }
@@ -908,6 +917,19 @@ std::unique_ptr<Ragdoll> CollisionWorld::createRagdoll(const Skeleton& skeleton,
   std::unique_ptr<Ragdoll> result;
   try {
     result.reset(new Ragdoll(*this,skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity));
+    }
+  catch(const std::runtime_error&) {
+    return nullptr;
+    }
+  return result->valid() ? std::move(result) : nullptr;
+  }
+
+std::unique_ptr<Ragdoll> CollisionWorld::createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                                            const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                            const Tempest::Matrix4x4& objectMatrix) {
+  std::unique_ptr<Ragdoll> result;
+  try {
+    result.reset(new Ragdoll(*this,skeleton,zones,worldPose,numBones,objectMatrix,{},true));
     }
   catch(const std::runtime_error&) {
     return nullptr;

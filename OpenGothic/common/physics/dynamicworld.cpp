@@ -902,6 +902,12 @@ std::unique_ptr<Ragdoll> DynamicWorld::createRagdoll(const Skeleton& skeleton, c
   return world->createRagdoll(skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity);
   }
 
+std::unique_ptr<Ragdoll> DynamicWorld::createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                                        const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                        const Tempest::Matrix4x4& objectMatrix) {
+  return world->createKinematicBody(skeleton,zones,worldPose,numBones,objectMatrix);
+  }
+
 DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
   return {world->stepMilliseconds(),world->bodyCount(),world->rayCount()};
   }

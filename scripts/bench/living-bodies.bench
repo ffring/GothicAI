@@ -1,0 +1,44 @@
+# Ten living humans; four use ordinary AI walking paths. Functional capture only.
+seed 73013
+cheat god
+set time 12 0
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+living off
+living setup
+wait 600
+overlay off
+view nopfx
+living debug on
+living motion
+rec living_off
+wait 2500
+living check off
+stop
+living on
+wait 100
+rec living_on
+wait 5000
+living check on
+living far
+wait 100
+living check far
+wait 1000
+living near
+wait 100
+living check on
+toggle living_bodies
+wait 100
+living check off
+wait 500
+toggle living_bodies
+wait 100
+living check on
+living ko
+wait 500
+living check ko
+standup watched
+waitragdoll watched getup 10000
+wait 4500
+living check on
+stop

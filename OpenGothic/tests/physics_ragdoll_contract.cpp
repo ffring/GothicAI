@@ -245,6 +245,112 @@ auto floor(CollisionWorld& world, float friction=.75f) {
                                 friction,DynamicWorld::C_Landscape);
   }
 
+void testKinematicPoseAndInteraction() {
+  Fixture fixture;
+  {
+    CollisionWorld world;
+    const auto emptyCount=world.bodyCount();
+    auto thinSource=hierarchy(); thinSource.nodes.resize(1);
+    Skeleton thin(thinSource,nullptr,"NO_PHYSICAL_BONES.MDS");
+    HitZones thinZones; thinZones.setSkeleton(&thin);
+    require(!world.createKinematicBody(thin,thinZones,thin.tr.data(),thin.tr.size(),at(0,0,0)),
+            "a skeleton without compatible physical owners must safely decline a live rig");
+    require(world.bodyCount()==emptyCount,"an incompatible living skeleton must leave no native parts");
+    auto object=at(23000,500,-18000); object.rotateOY(31); object.scale(.9f,1.f,1.f);
+    auto pose=fixture.skeleton.tr;
+    for(auto& bone:pose) bone=object*bone;
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(body && body->isKinematic(),"an animation-driven rig must create independent kinematic parts");
+    require(world.bodyCount()==emptyCount+body->partCount(),"every live capsule owner must belong to the shared physics world");
+    const auto compare=[&] {
+      std::vector<Tempest::Matrix4x4> actual;
+      require(body->getPose(actual),"kinematic native pose must be readable");
+      for(auto bone:body->poseIndices())
+        for(size_t component=0;component<16;++component)
+          near(actual[bone].data()[component],pose[bone].data()[component],
+               component>=12 && component<=14 ? .02f : .00002f,
+               "kinematic parts and ancestor frames must reproduce the requested animation pose");
+      };
+    compare();
+    for(int frame=0;frame<6;++frame) {
+      // Independent changes to head, forearm and calf detect rigs that update
+      // only their root or accidentally retain the initial capsule orientation.
+      for(size_t bone:{size_t(5),size_t(7),size_t(13)}) {
+        pose[bone].rotateOZ(7.f);
+        pose[bone].set(3,0,pose[bone].at(3,0)+float(bone));
+        }
+      require(body->moveKinematic(pose.data(),pose.size(),object,.007f),"a ready animation pose must queue without another solve");
+      world.tick(17);
+      compare();
+      }
+    for(int frame=0;frame<120;++frame) world.tick(17);
+    compare();
+    auto invalid=pose;
+    invalid[7].set(3,0,std::numeric_limits<float>::quiet_NaN());
+    require(!body->moveKinematic(invalid.data(),invalid.size(),object,.017f),"invalid live poses must be rejected atomically");
+    world.tick(17); compare();
+    const auto pelvis=position(body->pelvisTransform());
+    require(world.rayCast(pelvis+Tempest::Vec3(0,0,300),pelvis-Tempest::Vec3(0,0,300),1u<<DynamicWorld::C_LivingBody).hasHit,
+            "live geometry must be queryable only when its layer is explicitly requested");
+    require(!world.rayCast(pelvis+Tempest::Vec3(0,0,300),pelvis-Tempest::Vec3(0,0,300),
+                          (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll)).hasHit,
+            "the established world and corpse hit layers must exclude living rigs");
+    require(body->state().parts.empty(),"transient animation rigs must not export corpse save data");
+    body.reset();
+    require(world.bodyCount()==emptyCount,"destroying a live rig must remove every kinematic part");
+    }
+  {
+    CollisionWorld world;
+    auto ground=floor(world,.1f);
+    auto item=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto object=at(-100,-75,0);
+    auto pose=fixture.skeleton.tr;
+    const auto update=[&] { for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i]; };
+    update();
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(bool(body),"a live rig must be created for native contact checks");
+    for(int frame=0;frame<50;++frame) {
+      object.set(3,0,-100.f+2.f*float(frame+1)); update();
+      require(body->moveKinematic(pose.data(),pose.size(),object,.017f),"a translated live rig must accept the next animation pose");
+      world.tick(17);
+      }
+    require(item->position().x>15.f,"moving live capsules must transfer motion to a dynamic item through native contacts");
+    }
+  {
+    CollisionWorld world,control;
+    auto ground=floor(world,.1f),controlGround=floor(control,.1f);
+    auto item=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto reference=control.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto object=at(-25,-75,0);
+    auto pose=fixture.skeleton.tr;
+    for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i];
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(bool(body),"teleport contact check needs a live rig touching a dynamic item");
+    const auto parts=world.bodyCount();
+    // Each queued change is below the guard. Only the accumulated distance
+    // from the real native frame reveals the 80 cm script/interaction jump.
+    for(int step=0;step<2;++step) {
+      object.set(3,0,object.at(3,0)+40.f);
+      for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i];
+      require(body->moveKinematic(pose.data(),pose.size(),object,.017f),"script jumps must queue ordinary solved poses");
+      }
+    float maxItemError=0;
+    for(int frame=0;frame<12;++frame) {
+      world.tick(17);control.tick(17);
+      maxItemError=std::max(maxItemError,(item->position()-reference->position()).length());
+      require(world.bodyCount()==parts,"teleporting must preserve native part count");
+      }
+    std::vector<Tempest::Matrix4x4> actual;
+    require(body->getPose(actual),"teleported native pose must remain available");
+    for(auto bone:body->poseIndices())
+      for(size_t component=0;component<16;++component)
+        near(actual[bone].data()[component],pose[bone].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+             "a teleport must reach the full requested pose and retain zero residual motion");
+    near(maxItemError,0,.01f,"an 80 cm kinematic jump must not launch a touching item along its old swept path");
+    std::printf("kinematic teleport distance_cm=80 queued_steps=2 item_delta_cm=%.9g parts=%zu\n",double(maxItemError),body->partCount());
+    }
+  }
+
 void testDropSleepWake() {
   Fixture fixture;
   CollisionWorld world;
@@ -1784,6 +1890,7 @@ int main(int argc, const char** argv) {
       }
     require(argc==1,"usage: gothic-ragdoll-contract [--benchmark20 output.json | --preflight20 output.json | --replay-creation captured.jsonl]");
     testInvalidCreationAndScale();
+    testKinematicPoseAndInteraction();
     testPoseOverlayAndRecovery();
     testRecoveryMatchesAnimBlendAndSaves();
     testMalformedRecoveryArchive();

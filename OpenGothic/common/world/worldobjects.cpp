@@ -432,8 +432,10 @@ bool WorldObjects::execTriggerEvent(const TriggerEvent& e) {
   }
 
 void WorldObjects::prepareRagdolls() {
-  for(auto& npc:npcArr)
+  for(auto& npc:npcArr) {
     npc->prepareRagdoll();
+    npc->prepareLivingBody();
+    }
   }
 
 void WorldObjects::syncRagdolls() {

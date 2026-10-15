@@ -535,6 +535,24 @@ struct Ragdoll::Impl final {
     return frame.GetRotation().Transposed3x3()*basis;
     }
 
+  static JPH::Ref<JPH::RagdollSettings> kinematicSettings(const JPH::RagdollSettings& source) {
+    JPH::Ref<JPH::RagdollSettings> result=new JPH::RagdollSettings();
+    result->mSkeleton=source.mSkeleton;
+    result->mParts=source.mParts;
+    for(auto& part:result->mParts) {
+      part.mMotionType=JPH::EMotionType::Kinematic;
+      part.mObjectLayer=DynamicWorld::C_LivingBody;
+      part.mGravityFactor=0.f;
+      part.mMotionQuality=JPH::EMotionQuality::Discrete;
+      part.mToParent=nullptr;
+      part.mNumVelocityStepsOverride=0;
+      part.mNumPositionStepsOverride=0;
+      }
+    result->CalculateBodyIndexToConstraintIndex();
+    result->CalculateConstraintIndexToBodyIdxPair();
+    return result;
+    }
+
   static std::mutex& cacheMutex() { static std::mutex value; return value; }
   CollisionWorld* world=nullptr;
   std::shared_ptr<Schema> rig;
@@ -549,15 +567,19 @@ struct Ragdoll::Impl final {
   std::vector<size_t> poseBones;
   bool legacyAncestors=false;
   uint32_t group=0;
+  bool kinematic=false;
+  std::vector<JPH::Mat44> targets, scratch;
+  std::vector<bool> dirty;
+  std::vector<size_t> changed, moving;
   };
 
 Ragdoll::Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones& zones,
                  const Tempest::Matrix4x4* worldPose, size_t numBones,
-                 const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity)
+                 const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity, bool kinematic)
   :impl(std::make_unique<Impl>()) {
   // Opt-in input capture for reproducing creation failures with the exact game
   // skeleton and rendered pose. It neither queries nor mutates the physics world.
-  if(const char* path=std::getenv("OPENGOTHIC_RAGDOLL_CREATION_DUMP");path!=nullptr && path[0]!=0) {
+  if(const char* path=std::getenv("OPENGOTHIC_RAGDOLL_CREATION_DUMP");!kinematic && path!=nullptr && path[0]!=0) {
     rapidjson::StringBuffer buffer;
     rapidjson::Writer<rapidjson::StringBuffer> w(buffer);
     auto number=[&](float value) {
@@ -699,6 +721,15 @@ Ragdoll::Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones
     settings=impl->object.uniform ? Impl::settings(*impl->rig,impl->object.scale.GetX()) :
                                    Impl::bakedSettings(*impl->rig,impl->object,impl->references,pose);
     }
+  impl->kinematic=kinematic;
+  if(kinematic) {
+    settings=Impl::kinematicSettings(*settings);
+    impl->targets=pose;
+    impl->scratch.resize(pose.size());
+    impl->dirty.resize(pose.size(),false);
+    impl->changed.reserve(pose.size());
+    impl->moving.reserve(pose.size());
+    }
   impl->group=world.registerRagdoll(*this);
   impl->world=&world;
   try {
@@ -714,7 +745,7 @@ Ragdoll::Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones
   impl->native->SetLinearVelocity(CollisionWorld::toMeters(initialVelocity));
   impl->initialObject=objectMatrix;
   impl->initialPelvis=JPH::Vec3(world.physicsSystem().GetBodyInterface().GetPosition(impl->native->GetBodyID(0)));
-  impl->native->AddToPhysicsSystem(JPH::EActivation::Activate);
+  impl->native->AddToPhysicsSystem(kinematic ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
   }
 
 Ragdoll::~Ragdoll() { detach(); }
@@ -729,6 +760,81 @@ void Ragdoll::detach() {
   }
 
 bool Ragdoll::valid() const { return impl->world!=nullptr && impl->native!=nullptr; }
+bool Ragdoll::isKinematic() const { return impl->kinematic; }
+
+bool Ragdoll::moveKinematic(const Tempest::Matrix4x4* worldPose, size_t numBones,
+                            const Tempest::Matrix4x4& objectMatrix, float deltaSeconds) {
+  if(!valid() || !isKinematic() || worldPose==nullptr || numBones!=boneCount() ||
+     !std::isfinite(deltaSeconds) || deltaSeconds<=0.f) return false;
+  ObjectFrame object;
+  if(!objectFrame(objectMatrix,object)) return false;
+  for(JPH::uint axis=0;axis<3;++axis)
+    if(std::abs(object.scale[axis]-impl->object.scale[axis])>impl->object.scale[axis]*1.e-3f) return false;
+  // Reuse the solved pose. Only changed native owners need matrix decomposition
+  // or a later BodyInterface update; slots and animation-only bones are ignored.
+  impl->changed.clear();
+  for(size_t i=0;i<impl->references.size();++i) {
+    const auto& frame=worldPose[impl->rig->boneIndices[i]];
+    if(std::equal(frame.data(),frame.data()+16,impl->references[i].data())) continue;
+    if(!posedFrame(frame,object,impl->scratch[i])) return false;
+    impl->changed.push_back(i);
+    }
+  for(const auto& ancestor:impl->ancestors) {
+    JPH::Mat44 frame;
+    if(!posedFrame(worldPose[ancestor.bone],object,frame)) return false;
+    }
+  // Validation is complete before any target or public pose is changed.
+  for(size_t i:impl->changed) {
+    const auto& frame=worldPose[impl->rig->boneIndices[i]];
+    impl->references[i]=frame;
+    impl->targets[i]=impl->scratch[i];
+    impl->corrections[i]=Impl::visualCorrection(frame,impl->targets[i]);
+    impl->dirty[i]=true;
+    }
+  for(size_t i=0;i<impl->ancestors.size();++i) {
+    auto& ancestor=impl->ancestors[i];
+    const size_t part=impl->rig->ancestors[i].anchorPart;
+    const auto& frame=worldPose[ancestor.bone];
+    if(!impl->dirty[part] && std::equal(frame.data(),frame.data()+16,ancestor.referenceTransform.data())) continue;
+    ancestor.referenceTransform=frame;
+    impl->ancestorCorrections[i]=impl->targets[part].InversedRotationTranslation()*affineMeters(frame);
+    }
+  impl->initialObject=objectMatrix;
+  return true;
+  }
+
+void Ragdoll::prepareKinematicStep(float deltaSeconds) {
+  if(!valid() || !isKinematic()) return;
+  auto& interface=impl->world->physicsSystem().GetBodyInterface();
+  for(size_t i=0;i<impl->dirty.size();++i) {
+    if(!impl->dirty[i]) continue;
+    const auto& target=impl->targets[i];
+    const auto id=impl->native->GetBodyID(int(i));
+    // Interaction attachment and script repositioning can change a ready pose
+    // abruptly. Teleport instead of turning that discontinuity into contact
+    // velocity; compare against the native pose even if targets were coalesced.
+    if((JPH::Vec3(interface.GetPosition(id))-target.GetTranslation()).LengthSq()>.5f*.5f) {
+      interface.SetPositionAndRotation(id,target.GetTranslation(),target.GetQuaternion(),JPH::EActivation::DontActivate);
+      interface.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+      }
+    else {
+      interface.MoveKinematic(id,target.GetTranslation(),target.GetQuaternion(),deltaSeconds);
+      impl->moving.push_back(i);
+      }
+    impl->dirty[i]=false;
+    }
+  }
+
+void Ragdoll::finishKinematicStep() {
+  if(!valid() || !isKinematic()) return;
+  auto& interface=impl->world->physicsSystem().GetBodyInterface();
+  // MoveKinematic sets velocities rather than a persistent destination. Stop
+  // once the fixed step reaches it, including when no new animation arrives.
+  for(size_t i:impl->moving)
+    interface.SetLinearAndAngularVelocity(impl->native->GetBodyID(int(i)),JPH::Vec3::sZero(),JPH::Vec3::sZero());
+  impl->moving.clear();
+  }
+
 size_t Ragdoll::partCount() const { return valid() ? impl->native->GetBodyCount() : 0; }
 size_t Ragdoll::boneCount() const { return impl->rig!=nullptr ? impl->rig->numBones : 0; }
 float Ragdoll::mass() const { return impl->rig!=nullptr ? impl->rig->totalMass : 0.f; }
@@ -762,6 +868,7 @@ Tempest::Matrix4x4 Ragdoll::pelvisTransform() const {
 
 Tempest::Matrix4x4 Ragdoll::rootTransform() const {
   if(!valid()) return Tempest::Matrix4x4::mkIdentity();
+  if(isKinematic()) return impl->initialObject;
   auto result=impl->initialObject;
   const auto at=impl->world->physicsSystem().GetBodyInterface().GetPosition(impl->native->GetBodyID(0));
   const auto delta=CollisionWorld::toCentimeters(JPH::Vec3(at)-impl->initialPelvis);
@@ -806,7 +913,7 @@ void Ragdoll::setAllowSleeping(bool allow) {
   }
 
 void Ragdoll::addImpulse(const Tempest::Vec3& impulse) {
-  if(!valid() || !finite(impulse)) return;
+  if(!valid() || isKinematic() || !finite(impulse)) return;
   auto& interface=impl->world->physicsSystem().GetBodyInterface();
   for(size_t i=0;i<partCount();++i) {
     const auto* settings=impl->native->GetRagdollSettings();
@@ -817,7 +924,7 @@ void Ragdoll::addImpulse(const Tempest::Vec3& impulse) {
 
 Ragdoll::State Ragdoll::state() const {
   State result;
-  if(!valid()) return result;
+  if(!valid() || isKinematic()) return result;
   result.skeleton=impl->rig->name;
   result.rootTransform=rootTransform();
   result.ancestors=impl->ancestors;
@@ -845,7 +952,7 @@ Ragdoll::State Ragdoll::state() const {
   }
 
 bool Ragdoll::restore(const State& state) {
-  if(!valid() || (state.version!=1 && state.version!=2 && state.version!=3) || state.skeleton!=impl->rig->name || state.parts.size()!=partCount()) return false;
+  if(!valid() || isKinematic() || (state.version!=1 && state.version!=2 && state.version!=3) || state.skeleton!=impl->rig->name || state.parts.size()!=partCount()) return false;
   ObjectFrame object;
   if(!objectFrame(state.rootTransform,object) || (state.version==1 && !object.uniform)) return false;
   for(JPH::uint i=0;i<3;++i)

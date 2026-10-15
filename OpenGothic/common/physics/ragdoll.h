@@ -14,7 +14,8 @@ class DynamicWorld;
 class HitZones;
 class Skeleton;
 
-// A limp body. Game code uses centimetres, centimetres/second and radians/second;
+// A limp body or an animation-driven kinematic rig. Game code uses centimetres,
+// centimetres/second and radians/second;
 // the implementation alone owns Jolt bodies and constraints.
 class Ragdoll final {
   public:
@@ -54,6 +55,11 @@ class Ragdoll final {
     Ragdoll& operator=(const Ragdoll&) = delete;
 
     bool valid() const;
+    bool isKinematic() const;
+    // Queue an already solved world pose for the next fixed physics step.
+    // Rejects invalid poses or a changed object scale without changing the rig.
+    bool moveKinematic(const Tempest::Matrix4x4* worldPose, size_t numBones,
+                       const Tempest::Matrix4x4& objectMatrix, float deltaSeconds);
     size_t partCount() const;
     size_t boneCount() const;
     float mass() const;
@@ -88,7 +94,10 @@ class Ragdoll final {
     struct Impl;
     Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones& zones,
             const Tempest::Matrix4x4* worldPose, size_t numBones,
-            const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity);
+            const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity,
+            bool kinematic = false);
+    void prepareKinematicStep(float deltaSeconds);
+    void finishKinematicStep();
     void detach();
     std::unique_ptr<Impl> impl;
     friend class CollisionWorld;
