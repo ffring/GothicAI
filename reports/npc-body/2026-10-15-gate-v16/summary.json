@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage8_gate_v16_summary",
+  "host": "Ryzen 9 3950X, bare metal, Ubuntu 26.04",
+  "verdict": {
+    "implementation_ready": true,
+    "checkpoint_ready": true,
+    "stage8_ready": true,
+    "combat_gate_ready": true,
+    "service_gate_ready": false,
+    "service_gate_role": "remote_host_not_measured",
+    "release_ready": false,
+    "issues": [],
+    "checkpoint_issues": [],
+    "limitations": [
+      "Known reaction cases do not replace original v6 neutral-block failures.",
+      "Preparation is included in the native held-start timeout; active duration is separate.",
+      "The later 100-seed release gate remains outstanding."
+    ]
+  },
+  "fresh_screening_20_seeds": {
+    "gru": {
+      "distance": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "attack": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "block": {
+        "episodes": 20,
+        "native_successes": 0,
+        "candidate_successes": 20,
+        "native_success_rate": 0.0,
+        "candidate_success_rate": 1.0,
+        "delta": 1.0,
+        "passed": true
+      },
+      "native_duel": {
+        "episodes": 20,
+        "native_successes": 9,
+        "candidate_successes": 20,
+        "native_success_rate": 0.45,
+        "candidate_success_rate": 1.0,
+        "delta": 0.55,
+        "passed": true
+      }
+    },
+    "mlp": {
+      "distance": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "attack": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "block": {
+        "episodes": 20,
+        "native_successes": 0,
+        "candidate_successes": 20,
+        "native_success_rate": 0.0,
+        "candidate_success_rate": 1.0,
+        "delta": 1.0,
+        "passed": true
+      },
+      "native_duel": {
+        "episodes": 20,
+        "native_successes": 9,
+        "candidate_successes": 20,
+        "native_success_rate": 0.45,
+        "candidate_success_rate": 1.0,
+        "delta": 0.55,
+        "passed": true
+      }
+    }
+  },
+  "realtime_ordinary": {
+    "episodes": 16,
+    "neural_control_min": 1.0,
+    "model_step_p95_ms_max": 1.240337,
+    "collector_to_send_p95_ms_max": 2.013603,
+    "observation_to_arbitration_p95_ms_max": 3.380859
+  },
+  "realtime_reaction": {
+    "episodes": 4,
+    "neural_control_min": 1.0,
+    "model_step_p95_ms_max": 1.304087,
+    "collector_to_send_p95_ms_max": 7.267362,
+    "observation_to_arbitration_p95_ms_max": 8.829424,
+    "block_start_after_windup_game_ms": [
+      66
+    ],
+    "hit_window_game_ms": [
+      166
+    ],
+    "runtime_fallbacks": 0
+  },
+  "four_actor_load": {
+    "episodes": 8,
+    "neural_control_min": 0.9885057471264368,
+    "model_step_p95_ms_max": 1.137884,
+    "collector_to_send_p95_ms_max": 3.723555,
+    "observation_to_arbitration_p95_ms_max": 5.983071
+  },
+  "weights_sha256": {
+    "gru": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9"
+  },
+  "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "fresh_seeds": [
+    251,
+    257,
+    263,
+    269,
+    271,
+    277,
+    281,
+    283,
+    293,
+    307,
+    311,
+    313,
+    317,
+    331,
+    337,
+    347,
+    349,
+    353,
+    359,
+    367
+  ],
+  "proof_runs": [
+    "stage8-motor-v26",
+    "stage8-motor-v27"
+  ],
+  "sources_sha256": {
+    "final_report": "7df5533dc2e4555965b95ee6a1462b07b27f430305e059a24dd58636e923f511",
+    "declaration": "8741ad834532b83cd5fbdda0aae667c96b4be5383d339bb4287425b06924127d",
+    "environment": "753b6dfbef7c949b9849fd7f4e95ad08b96541db769554559e0d287bc0286d73",
+    "known_audit": "4e475481da8db95ffb86dda3d4b3993abfa28ad5fb87f78a5bb2d598c66804c9",
+    "load_audit": "5d2bd1331aa3de65d24f1894b72a9cd6951ba6635063803327159ebc53f5d5e3"
+  }
+}

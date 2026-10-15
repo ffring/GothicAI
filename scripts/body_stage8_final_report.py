@@ -631,7 +631,7 @@ def report(root,snapshot,native_faults,native_reference):
     return {"schema_version":1,"kind":"body_stage8_final_runtime_report","implementation_ready":not issues,"stage8_ready":ready,
             "checkpoint_ready":ready,"combat_gate_ready":ready,"service_gate_ready":service_report["service_gate_ready"],
             "service_gate_role":service_report["service_gate_role"],"service_report":service_report,
-            "stage8_readiness_scope":"combat_runtime" if service_report["service_gate_role"]=="standalone_report" else "combat_runtime_and_candidate_services",
+            "stage8_readiness_scope":"combat_runtime" if service_report["service_gate_role"] in ("standalone_report","remote_host_not_measured") else "combat_runtime_and_candidate_services",
             "combined_runtime_and_service_ready":ready and service_report["service_gate_ready"],
             "release_ready":False,"issues":issues,"checkpoint_issues":checkpoint_issues,"evidence":evidence,
             "resources":resources,"original_neutral_block_failures_replaced":False,"fresh_selection_allowed":False,

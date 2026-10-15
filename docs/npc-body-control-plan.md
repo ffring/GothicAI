@@ -1,6 +1,6 @@
 # План реализации GRU слоя управления телом NPC
 
-Статус: **этапы 1–6 готовы; реализация этапа 7 готова; этап 8 STOPPED_AT_PREFLIGHT, боевой gate не пройден**, 14 октября 2026 года. Единственная дополнительная SafePeer калибровка не прошла физическое покрытие, работа остановлена по ограничению пользователя. [Итог остановки](npc-body-stage8-stop-report.md). Контракт, baseline, настоящий headless runner, частые наблюдения, боевой API, арена и recorder/датасет проверены на `dev-ubuntu`. Результаты — [baseline](../reports/npc-body/2026-10-13-melee-reference/body-baseline.md), [его границы](../reports/npc-body/2026-10-13-melee-reference/run-notes.md), [headless](../reports/npc-body/2026-10-13-headless/headless-report.md), [наблюдения](../reports/npc-body/2026-10-13-observations/body-observe.md), [боевой API](../reports/npc-body/2026-10-13-body-api/validation-notes.md), [арена](../reports/npc-body/2026-10-13-arena/validation-notes.md), [траектории](../reports/npc-body/2026-10-14-trajectories/validation-notes.md) и [BC](../reports/npc-body/2026-10-14-bc/validation-notes.md). Основание — [исследование архитектур](../research_notes/npc_body_control_architectures.md), [текущие контуры NPC](npc-agent.md) и [протокол игры](protocol.md).
+Статус: **этапы 1–7 готовы; этап 8 — боевой gate пройден (gate v16, 15 октября 2026 года, Ryzen 9 3950X)**: известные сценарии, нагрузка из 4 NPC и свежий screening на 20 seed прошли все боевые пороги; сервисный бюджет на этом хосте не измерялся и остаётся отдельным отчётом. [Итог gate v16](../reports/npc-body/2026-10-15-gate-v16/README.md), [продолжение после остановки](../reports/npc-body/2026-10-15-stage8-resume/README.md), [прежняя остановка](npc-body-stage8-stop-report.md). Релизный gate на 100 seed не начат.
 
 Добраны 37 физических демонстраций, включая поворот, отскок, wait300 и стену; GRU/MLP обучены на общем periodic dataset с 11 классами. Первый checkpoint прошёл 12/12 микро-задач, но 0/6 дуэлей из-за native perception loss и возврата к native AI. Последующее обучение на корпусе207 и known-проверки описаны ниже; итоговый допуск также не пройден. Новые запуски не назначены.
 
@@ -32,7 +32,7 @@
 | 5, готов | Headless арена, reset и измерение скорости среды | 2–4 |
 | 6, готов | Проверенный recorder и датасет на сервере | 4–5 |
 | 7, реализация готова | GRU service, MLP baseline и BC; checkpoint quality gate не пройден | 6 и ресурсный бюджет |
-| 8, STOPPED_AT_PREFLIGHT | Исполнение GRU проверено; общий боевой gate не пройден | 7 |
+| 8, боевой gate пройден | Gate v16: known, нагрузка 4 NPC и свежий screening; сервисы — отдельный отчёт | 7 |
 | 9, не начат | Recurrent PPO на сервере и проверка улучшения | 5 и 8; только после возобновления |
 | 10, не начат | Интеграция с намерениями и ограниченное включение в мире | 8 и общий release gate; только после возобновления |
 | 11, не начат | Локальная навигация, препятствия и несколько целей | После готовности первой версии и возобновления |
@@ -253,6 +253,8 @@ Recorder дополнительно отмечает, какие наблюде�
 **Ресурсный gate:** свежий `nvidia-smi`, measured CPU/GPU runtime и достаточный запас под training batch/optimizer/activations. Выбрать CPU или GPU **сервера** по замеру. Сервисы ASR/TTS/Strands продолжают выполнять свои задачи; Docker и продовые контейнеры не изменяются. Если обучение не помещается, уменьшить batch/длину, использовать CPU сервера для малого эксперимента либо отложить GPU training до доступного бюджета; дефицит ресурсов фиксируется до запуска.
 
 ## Этап 8 Управление в headless арене и разбор ошибок
+
+**Итог (15 октября 2026 года): gate v16 — PASS** на Ryzen 9 3950X; свежий screening GRU 20/20 во всех четырёх задачах (native: блок 0/20, дуэль 9/20); нагрузка 4 NPC — neural control ≥ 0,989; p95 модели ≤ 1,3 мс. [Отчёт](../reports/npc-body/2026-10-15-gate-v16/README.md). Ниже — история до этого допуска.
 
 **Статус: STOPPED_AT_PREFLIGHT.** Единственная дополнительная SafePeer калибровка закрыта: шесть эпизодов с сохранением HP и без infrastructure failure; approved action2/5/11 =0/2/0 при требовании2/2/2. Поэтому сбор72, child279, новое обучение и новый боевой gate не запускались. Fresh screening не запускался. [Итог остановки](npc-body-stage8-stop-report.md). В сохранённом child `stage8-defence-bc-v2` подтверждены 72/72 настоящих завершённых блока (9): 36 train и по 12 eval/test/OOD. Объединённый датасет — 207 эпизодов (148 train, 20 eval, 19 test, 20 OOD); train содержит 1104 метки, включая 36 новых блоков, eval — 169 меток и пять классов из 11. CPU verification и tiny overfit GRU/MLP прошли; overfit accuracy — 1,0.
 
