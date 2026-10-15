@@ -348,7 +348,7 @@ class Npc final {
     // to standing with the bow (the hero; an npc's fight plays its own animation)
     void      endManualAim(bool idle);
     // where an arrow passing from-to hits this one, t: how far from 'from'
-    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t, size_t* bone = nullptr) const -> HitZones::Zone;
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string hitZonesDump() const { return visual.hitZonesDump(); }
     void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
@@ -465,6 +465,14 @@ class Npc final {
     const Skeleton* visualSkeleton() const { return visual.visualSkeleton(); }
     const Ragdoll* ragdollBody() const { return ragdoll.get(); }
     const Ragdoll* livingBody() const { return living.get(); }
+    struct ArrowPhysicsProbe {
+      size_t bone = size_t(-1);
+      Tempest::Vec3 point, impulseNs;
+      float strength = 0;
+      uint32_t hits = 0, applied = 0, corpseImpulses = 0;
+      };
+    const ArrowPhysicsProbe& arrowPhysicsProbe() const { return arrowPhysics; }
+    const Tempest::Matrix4x4& animationBone(size_t bone) const { return visual.pose().bone(bone); }
     const RagdollSave::QuestReturn& ragdollQuestReturnState() const { return ragdollQuestReturn; }
     uint32_t ragdollQuestReturnCount() const { return ragdollQuestReturns; }
     const Tempest::Vec3& ragdollQuestReturnFrom() const { return ragdollQuestFrom; }
@@ -706,6 +714,8 @@ class Npc final {
     void               updateRagdollQuestAnchor();
     void               checkRagdollQuestHazard();
     bool               needsRagdollQuestReturn() const;
+    void               queueArrowPhysics(const Bullet& bullet);
+    void               dispatchArrowPhysics(Ragdoll& body);
 
     World&                         owner;
     // Debug trace cache only: neither serialized nor used by native AI/animation decisions.
@@ -735,6 +745,14 @@ class Npc final {
     std::unique_ptr<Ragdoll>       living;
     uint64_t                      livingRetryTick = 0;
     bool                          livingNeedsRebuild = false;
+    ArrowPhysicsProbe             arrowPhysics;
+    struct ArrowImpact {
+      size_t bone;
+      Tempest::Vec3 point, impulseNs;
+      float strength;
+      };
+    std::vector<ArrowImpact>       arrowImpacts;
+    std::vector<Tempest::Matrix4x4> arrowPhysicalPose;
     std::unique_ptr<Ragdoll>       ragdoll;
     std::optional<Ragdoll::State>  ragdollDormant;
     std::vector<Tempest::Matrix4x4> ragdollPose;

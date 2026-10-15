@@ -592,6 +592,12 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
+  Npc* arrowNpc=nullptr;
+  std::string arrowCase,arrowAim;
+  float arrowDraw=1.f;
+  uint64_t arrowSampleTick=0;
+  bool arrowTrace=false,arrowKoOnHit=false;
+  uint32_t arrowSeenHits=0;
   Npc* seatNpc=nullptr;
   Npc* seatCorpse=nullptr;
   Interactive* seatMob=nullptr;
@@ -2220,6 +2226,87 @@ void livingFields(World& world) {
   event("living_frame",livingCountFields(s,world)+",\"phase\":"+jsonStr(bench.livingPhase)+",\"actors\":"+actors+"]");
   }
 
+size_t arrowBone(const Skeleton& skeleton, std::string_view token) {
+  const auto compact=[](std::string_view text) {
+    std::string result;
+    for(const char value:text) {
+      const auto c=static_cast<unsigned char>(value);
+      if(std::isalnum(c)) result+=char(std::toupper(c));
+      }
+    return result;
+    };
+  const auto wanted=compact(token);
+  for(size_t i=0;i<skeleton.nodes.size();++i)
+    if(compact(skeleton.nodes[i].name).find(wanted)!=std::string::npos) return i;
+  return size_t(-1);
+  }
+
+bool arrowAimPoint(Npc& npc, Vec3& point) {
+  const auto* skeleton=npc.visualSkeleton();
+  if(skeleton==nullptr || bench.arrowAim.empty()) return false;
+  const bool leg=bench.arrowAim=="leg";
+  const bool chest=bench.arrowAim=="chest";
+  const auto first=arrowBone(*skeleton,chest ? "SPINE1" : leg ? "L CALF" : "L UPPERARM");
+  auto second=arrowBone(*skeleton,chest ? "SPINE2" : leg ? "L FOOT" : "L FOREARM");
+  if(chest && second==size_t(-1)) second=arrowBone(*skeleton,"NECK");
+  if(first==size_t(-1) || second==size_t(-1)) return false;
+  const auto& a=npc.animationBone(first);const auto& b=npc.animationBone(second);
+  point=Vec3(a.at(3,0)+b.at(3,0),a.at(3,1)+b.at(3,1),a.at(3,2)+b.at(3,2))*.5f;
+  return true;
+  }
+
+void arrowFields(World& world) {
+  auto* npc=bench.arrowNpc;
+  if(!bench.arrowTrace || npc==nullptr || world.tickCount()==bench.arrowSampleTick) return;
+  bench.arrowSampleTick=world.tickCount();
+  const auto& hit=npc->arrowPhysicsProbe();
+  bench.arrowSeenHits=hit.hits;
+  const auto* living=npc->livingBody();const auto* corpse=npc->ragdollBody();
+  const auto* body=living!=nullptr ? living : corpse;
+  const auto* skeleton=npc->visualSkeleton();
+  const auto physics=world.physic()->physicsStats();
+  std::vector<Matrix4x4> native;
+  const bool posed=body!=nullptr && body->getPose(native);
+  std::string bones="[",active="[";
+  if(body!=nullptr) {
+    for(const auto bone:body->reactionBones()) {
+      if(active.size()>1) active+=',';
+      active+=std::to_string(bone);
+      }
+    if(posed && skeleton!=nullptr)
+      for(const auto bone:body->boneIndices()) {
+        if(bone>=native.size() || bone>=skeleton->nodes.size()) continue;
+        if(bones.size()>1) bones+=',';
+        const auto parent=skeleton->nodes[bone].parent;
+        bones+="{\"id\":"+std::to_string(bone)+",\"name\":"+jsonStr(skeleton->nodes[bone].name)+
+          ",\"parent\":"+(parent<skeleton->nodes.size() ? std::to_string(parent) : "null")+
+          ",\"native\":"+ragdollMatrix(native[bone])+",\"animation\":"+ragdollMatrix(npc->animationBone(bone));
+        if(parent<native.size())
+          bones+=",\"native_parent\":"+ragdollMatrix(native[parent])+",\"animation_parent\":"+ragdollMatrix(npc->animationBone(parent));
+        bones+='}';
+        }
+    }
+  const auto& flinch=Flinch::subjectProbe;
+  event("arrow_reaction_frame","\"case\":"+jsonStr(bench.arrowCase)+
+    ",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"feature\":"+(Gothic::settingsGetI("GAME","arrow_physics") ? "true" : "false")+
+    ",\"root_cm\":"+ragdollVector(npc->position())+
+    ",\"dead\":"+(npc->isDead()?"true":"false")+",\"ko\":"+(npc->isUnconscious()?"true":"false")+
+    ",\"living_parts\":"+std::to_string(living ? living->partCount() : 0)+
+    ",\"corpse_parts\":"+std::to_string(corpse ? corpse->partCount() : 0)+
+    ",\"world_bodies\":"+std::to_string(physics.bodies)+",\"physics_ms\":"+ragdollNumber(physics.stepMilliseconds)+
+    ",\"kinematic\":"+(body!=nullptr && body->isKinematic()?"true":"false")+
+    ",\"weight\":"+ragdollNumber(body ? body->reactionWeight() : 0.f)+
+    ",\"reaction_bones\":"+active+"]"+
+    ",\"hits\":"+std::to_string(hit.hits)+",\"applied\":"+std::to_string(hit.applied)+
+    ",\"corpse_impulses\":"+std::to_string(hit.corpseImpulses)+
+    ",\"hit_bone\":"+(hit.bone!=size_t(-1) ? std::to_string(hit.bone) : "null")+
+    ",\"point_cm\":"+ragdollVector(hit.point)+",\"impulse_ns\":"+ragdollVector(hit.impulseNs)+
+    ",\"strength\":"+ragdollNumber(hit.strength)+
+    ",\"flinch_active\":"+(flinch.active?"true":"false")+",\"flinch_hits\":"+std::to_string(flinch.hits)+
+    ",\"bones\":"+bones+"]");
+  }
+
 void livingSeatFields(World& world) {
   auto* npc=bench.seatNpc;
   if(npc==nullptr || bench.seatPhase.empty() || bench.seatSampleTick==world.tickCount()) return;
@@ -2714,6 +2801,52 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     std::snprintf(text,sizeof(text),"physics stats step_ms=%.6f bodies=%zu rays=%llu",
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
+    }
+  else if(c=="arrow" && a.size()==2 && (a[1]=="setup" || a[1]=="replace")) {
+    if(a[1]=="setup") {
+      if(!chooseRagdollArena(w,pl)) {arenaAbort("arrow fixture needs supported empty ground");return;}
+      exec("clear 2500",w,pl,ctrl);
+      pl.setDirection({0,0,1});pl.updateTransform();
+      } else exec("arrow cleanup",w,pl,ctrl);
+    const auto symbol=w.script().findSymbolIndex("BAU_904_BAUER");
+    auto at=bench.ragdollArenaTarget-Vec3(0,80,400);
+    auto* npc=w.addNpc(symbol,at);
+    if(npc==nullptr) {arenaAbort("arrow fixture NPC insertion failed");return;}
+    npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
+    npc->setDirection(pl.position()-at);npc->updateTransform();
+    npc->handle().attribute[ATR_HITPOINTS]=10000;
+    npc->handle().attribute[ATR_HITPOINTSMAX]=10000;
+    bench.arrowNpc=npc;bench.subject=npc;bench.crew.push_back(npc);
+    bench.arrowSeenHits=0;bench.arrowSampleTick=0;
+    exec("watch watched",w,pl,ctrl);
+    event("arrow_reaction_setup","\"actors\":1,\"root_pinned\":false,\"position_cm\":"+ragdollVector(npc->position()));
+    }
+  else if(c=="arrow" && a.size()==3 && a[1]=="case") {
+    bench.arrowCase=a[2];bench.arrowTrace=true;
+    event("arrow_reaction_case","\"case\":"+jsonStr(a[2])+",\"hits_before\":"+
+      std::to_string(bench.arrowNpc ? bench.arrowNpc->arrowPhysicsProbe().hits : 0));
+    }
+  else if(c=="arrow" && a.size()>=3 && a[1]=="aim") {
+    bench.arrowAim=a[2];bench.arrowDraw=std::clamp(num(a,3,1.f),.1f,1.f);
+    bench.aimNpc=nullptr;bench.aimFixed=false;
+    }
+  else if(c=="arrow" && a.size()==3 && a[1]=="feature")
+    Gothic::settingsSetI("GAME","arrow_physics",a[2]=="on");
+  else if(c=="arrow" && a.size()==2 && a[1]=="ko-on-hit")
+    bench.arrowKoOnHit=true;
+  else if(c=="arrow" && a.size()==2 && a[1]=="cleanup") {
+    if(auto* npc=bench.arrowNpc) {
+      bench.arrowTrace=false;bench.arrowAim.clear();bench.arrowNpc=nullptr;bench.arrowKoOnHit=false;
+      const auto before=w.physic()->physicsStats().bodies;
+      const auto parts=(npc->livingBody()?npc->livingBody()->partCount():0)+(npc->ragdollBody()?npc->ragdollBody()->partCount():0);
+      exec("watch player",w,pl,ctrl);bench.crew.clear();w.removeNpc(*npc);
+      const auto after=w.physic()->physicsStats().bodies;
+      event("arrow_reaction_cleanup","\"parts\":"+std::to_string(parts)+",\"before\":"+
+        std::to_string(before)+",\"after\":"+std::to_string(after));
+      }
+    }
+  else if(c=="arrow" && a.size()==2 && a[1]=="stop") {
+    bench.arrowTrace=false;bench.arrowAim.clear();
     }
   else if(c=="living-seat" && a.size()==2 && a[1]=="setup") {
     Interactive* mob=w.availableMob(pl,"BENCH");
@@ -6191,6 +6324,16 @@ void TestBench::note(const char* text) {
   if(scenarioPath!=nullptr && bench.started && !bench.done) {
     say(text);
     event("note","\"text\":"+jsonStr(text));
+    if(bench.arrowKoOnHit && std::string_view(text).starts_with("arrow hit ") && bench.arrowNpc!=nullptr &&
+       bench.arrowNpc->arrowPhysicsProbe().hits>bench.arrowSeenHits && !bench.arrowNpc->isDown()) {
+      // This note runs inside real projectile damage, after queueArrowPhysics
+      // and before the next sequential native prepare. Ordinary arrows kill;
+      // only the benchmark forces KO to exercise the same pending-hit handoff.
+      bench.arrowKoOnHit=false;
+      bench.arrowNpc->setRagdollDown(false);
+      event("arrow_reaction_forced_ko","\"case\":"+jsonStr(bench.arrowCase)+
+        ",\"hits\":"+std::to_string(bench.arrowNpc->arrowPhysicsProbe().hits));
+      }
     }
   }
 
@@ -6351,6 +6494,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   if(dt==0)
     return false;
+  arrowFields(*world);
   if(ragdollPerf) {
     const auto now=std::chrono::steady_clock::now();
     FrameProfile::observer(dt,now);
@@ -6531,6 +6675,15 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       player->setDirection(yaw*180.f/float(M_PI));
       }
     }
+  if(bench.arrowNpc!=nullptr && !bench.arrowAim.empty()) {
+    Vec3 at;
+    if(arrowAimPoint(*bench.arrowNpc,at)) {
+      Vec3 nock,direction;
+      if(!player->arrowRay(nock,direction)) nock=player->position()+Vec3(0,145,0);
+      const auto stats=Archery::stats(*player,player->currentRangedWeapon());
+      ctrl.setAimOverride(true,Archery::launch(nock,at,Archery::speedAt(stats,bench.arrowDraw)));
+      }
+    }
   // the hero speaks to an npc (as the bridge does with his voice), it thinks of an answer
   if(bench.hearNpc!=nullptr) {
     if(bench.time<bench.hearUntil) {
@@ -6677,6 +6830,25 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     cv.text(6,6,"LIVING BODIES: "+bench.livingPhase,2,Text);
     std::snprintf(label,sizeof(label),"LIVE %zu  NATIVE KIN %zu / %zu PARTS  DYNAMIC %zu",counts.alive,counts.kinematic,counts.parts,counts.dynamic);
     cv.text(6,26,label,2,Text);cv.text(6,46,"OVERLAY = GAME HIT ZONES (NOT NATIVE SHAPES)",2,Text);
+    }
+  if(pm.w()>0 && bench.arrowTrace && bench.arrowNpc!=nullptr) {
+    Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
+    const auto& npc=*bench.arrowNpc;
+    const auto* body=npc.livingBody()!=nullptr ? npc.livingBody() : npc.ragdollBody();
+    const auto& hit=npc.arrowPhysicsProbe();
+    const auto* skeleton=npc.visualSkeleton();
+    const auto bone=skeleton!=nullptr && hit.bone<skeleton->nodes.size() ?
+                    std::string_view(skeleton->nodes[hit.bone].name) : std::string_view("-");
+    const char* mode=body==nullptr ? "NONE" : (body->isKinematic() ? "KINEMATIC" :
+                     (body->reactionWeight()>0.f ? "ACTIVE MOTORS" : "LIMP"));
+    char label[200];
+    cv.rect(0,0,std::min(cv.w,790),66,{0,0,0,190});
+    cv.text(6,6,"ARROW PHYSICS: "+bench.arrowCase,2,Text);
+    std::snprintf(label,sizeof(label),"NATIVE %s  WEIGHT %.3f  PARTS %zu",mode,
+                  double(body!=nullptr ? body->reactionWeight() : 0.f),body!=nullptr ? body->partCount() : 0);
+    cv.text(6,26,label,2,Text);
+    std::snprintf(label,sizeof(label),"HIT %.*s  IMPULSE %.2f NS",int(std::min<size_t>(bone.size(),38)),bone.data(),double(hit.impulseNs.length()));
+    cv.text(6,46,label,2,Text);
     }
   if(pm.w()>0 && bench.questTrace && bench.questNpc!=nullptr) {
     Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());

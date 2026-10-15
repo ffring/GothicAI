@@ -95,6 +95,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "ragdoll",             1); // physical death/KO bodies; GAME/ragdoll=0 keeps animation-only behavior
   defaults->set("GAME", "ragdoll_quest_guard", 1);
   defaults->set("GAME", "living_bodies",       1);
+  defaults->set("GAME", "arrow_physics",       1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);

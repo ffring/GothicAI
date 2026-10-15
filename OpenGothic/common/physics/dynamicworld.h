@@ -53,6 +53,7 @@ class DynamicWorld final {
       C_Item      = 6,
       C_Ragdoll   = 7,
       C_LivingBody= 8,
+      C_ActiveBody= 9,
       };
 
     enum PtrType {

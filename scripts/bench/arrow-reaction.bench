@@ -1,0 +1,91 @@
+# Actual manual-aim projectiles; the target's root is never pinned.
+seed 73013
+cheat god
+set time 12 0
+view clean
+overlay off
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+living on
+arrow setup
+wait 600
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 30
+stats str 150 dex 150 bow 100
+tap bow
+wait 1500
+cam follow 290 30 55
+cam look 105
+
+arrow feature off
+arrow aim shoulder 1
+arrow case off
+label ARROW PHYSICS OFF - ORIGINAL FLINCH
+rec off
+volley 1 300
+wait 2600
+stop
+
+arrow feature on
+wait 200
+arrow aim shoulder 0.35
+arrow case weak_shoulder
+label WEAK ARROW - LEFT SHOULDER
+rec weak_shoulder
+volley 1 0 0.35
+wait 2800
+stop
+
+arrow aim shoulder 1
+arrow case strong_shoulder
+label FULL DRAW - LEFT SHOULDER
+rec strong_shoulder
+volley 1 300
+wait 2800
+stop
+
+arrow aim chest 1
+arrow case chest
+label FULL DRAW - CHEST
+rec chest
+volley 1 300
+wait 2800
+stop
+
+cam follow 310 20 55
+cam look 75
+arrow aim leg 1
+arrow case leg
+label FULL DRAW - LEFT LEG
+rec leg
+volley 1 300
+wait 2800
+stop
+
+arrow case repeated
+rec repeated novideo
+volley 2 300
+wait 2800
+stop
+
+# Ordinary arrows kill. This fixture changes the down-state to KO after a real
+# hit has queued its impulse and before the next sequential physics handoff.
+arrow case ko
+arrow aim shoulder 1
+arrow ko-on-hit
+rec ko novideo
+volley 1 300
+wait 1800
+stop
+
+arrow replace
+wait 600
+stats npc watched hp 1 hpmax 160
+arrow aim shoulder 1
+arrow case death
+rec death novideo
+volley 1 300
+wait 1800
+stop
+arrow cleanup
