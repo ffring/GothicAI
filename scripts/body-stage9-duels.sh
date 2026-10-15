@@ -4,7 +4,8 @@
 # Runs on the server next to body_stage9_realtime_duels.py: ./body-stage9-duels.sh [realtime|screening]
 # DUELS_CODE (code root, default the frozen run's), DUELS_CONFIG and DUELS_SUFFIX select a variant;
 # DUELS_RUNNER replaces the frozen runner, DUELS_MODELS ("bc round2") the checkpoints and DUELS_SETENV
-# adds space-separated KEY=VALUE pairs to the unit environment.
+# adds space-separated KEY=VALUE pairs to the unit environment; DUELS_CHECKPOINTS ("name=path ...")
+# names GRU checkpoints beyond bc and round2.
 set -euo pipefail
 phase="${1:-realtime}"
 suffix="${DUELS_SUFFIX-}"
@@ -29,6 +30,7 @@ for name in ${DUELS_MODELS:-bc round2}; do
   [[ ! -e "$work/$name$suffix" ]] || continue
   gru="$bc/gru/best.pt"
   [[ "$name" == bc ]] || gru="$task_root/rl/round2-train/best.pt"
+  for pair in ${DUELS_CHECKPOINTS-}; do [[ "${pair%%=*}" != "$name" ]] || gru="${pair#*=}"; done
   systemd-run --user --wait --pipe --collect --unit="gothic-body-rt-duels-$name$suffix" \
     --property=Nice=10 --property=CPUQuota=200% --property=MemoryMax=6G \
     --property=TasksMax=128 --property=RuntimeMaxSec=4800 --working-directory="$work" \

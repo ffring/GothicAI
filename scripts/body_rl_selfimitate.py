@@ -147,7 +147,13 @@ def train(args):
             features, masks, resets, labels, loss_mask = tensor_batch(batch, "cpu")
             optimizer.zero_grad(set_to_none=True)
             logits, _ = model(features, masks, resets)
-            active = weights[labels[loss_mask]]
+            row_weights = weights[labels]
+            if args.self_weighting == "none":
+                # BC class weights balance a teacher's labels; on the policy's own samples they pull
+                # it toward rare actions, so the self rows count once each.
+                own = torch.tensor([chunk.get("source") == "self" for chunk in batch])[:, None].expand_as(labels)
+                row_weights = torch.where(own, torch.ones_like(row_weights), row_weights)
+            active = row_weights[loss_mask]
             losses = functional.cross_entropy(logits[loss_mask], labels[loss_mask], reduction="none")
             loss = (losses*active).sum()/active.sum()
             loss.backward()
@@ -165,7 +171,8 @@ def train(args):
               "episodes_selected": len(selected), "selection": "wins without fallback, top fraction by score",
               "top_fraction": args.top_fraction, "selected_score_min": selected[-1]["score"],
               "self_chunks": len(self_chunks), "bc_ratio": args.bc_ratio, "epochs": args.epochs,
-              "learning_rate": args.learning_rate, "seed": args.seed, "bc_eval_before": before, "history": history,
+              "learning_rate": args.learning_rate, "seed": args.seed, "self_weighting": args.self_weighting,
+              "bc_eval_before": before, "history": history,
               "selected_episode_ids": [row["name"] for row in selected],
               "selected_sha256": hashlib.sha256("\n".join(sorted(row["npz"] for row in selected)).encode()).hexdigest()}
     checkpoint = save_checkpoint(args.output/"best.pt", model, normalizer=normalizer,
@@ -196,6 +203,8 @@ def main() -> int:
     fit.add_argument("--learning-rate", type=float, default=1e-4)
     fit.add_argument("--threads", type=int, default=8)
     fit.add_argument("--seed", type=int, default=11)
+    fit.add_argument("--self-weighting", choices=("class", "none"), default="class",
+                     help="loss weights of the policy's own rows: BC class weights (9.2) or none")
     args = parser.parse_args()
     (export_bc if args.command == "export-bc" else train)(args)
     return 0
