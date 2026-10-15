@@ -255,6 +255,14 @@ def test_v28_npc_chests():
     assert '"cmd":"chest_take"' in take.to_json() and '"count":29' in take.to_json()
 
 
+def test_v29_the_directors_story_variables():
+    assert PROTOCOL_VERSION >= 29
+    patch = GraphPatchCmd(ops=[{"op": "vars", "vars": {"DIR_Q1": 0}}])
+    assert '"ops":[{"op":"vars","vars":{"DIR_Q1":0}}]' in patch.to_json()
+    take = DebugCmd(req="r1", cmd="player_take", item="ITMI_PAN", distance=300)
+    assert '"cmd":"player_take"' in take.to_json() and '"distance":300' in take.to_json()
+
+
 def test_v30_how_far_the_players_voice_goes():
     assert PROTOCOL_VERSION == 30
     roster = parse_game_message(

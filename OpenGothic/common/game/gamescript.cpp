@@ -579,6 +579,8 @@ void GameScript::loadVar(Serialize &fin) {
       case zenkit::DaedalusDataType::INT:{
         fin.read(name);
         auto* s = findSymbol(name);
+        if(s==nullptr && name.rfind("DIR_",0)==0)
+          s = vm.add_int_symbol(name);  // the AI director's story state, not in the scripts (graph_patch vars)
 
         uint32_t size;
         fin.read(size);

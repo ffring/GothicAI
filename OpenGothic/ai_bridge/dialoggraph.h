@@ -136,6 +136,11 @@ class DialogGraph final {
     std::optional<bool> test(const storygraph::ExprP& e, std::string_view what);
     void        check(const zenkit::IInfo& info, bool visible);
     void        ensureLifter();
+    // the director's story variables (op "vars") in this VM: made with their first value if missing, those a
+    // save brought back keep theirs
+    void        ensureVars();
+    // why `name` can't be a variable of the director's in this VM; empty: it can
+    static std::string whyNotVar(zenkit::DaedalusVm& v, const std::string& name);
     zenkit::DaedalusVm* vm() const;
 
     std::function<void(std::string&&)>                               send;
@@ -151,6 +156,9 @@ class DialogGraph final {
     std::map<std::string,Replaced>                         replaced;    // by node, or node + ":CONDITION"
     std::unordered_map<uint32_t,const storygraph::Program*> replacedFns; // by function symbol, for replacedFor
     zenkit::DaedalusVm*                                    replacedFor = nullptr;
+    std::map<std::string,int32_t>                          vars;        // the director's, with their first values
+    std::set<std::string>                                  varsMade;    // of those, the ones in varsFor
+    zenkit::DaedalusVm*                                    varsFor = nullptr;
 
     // lifting, for conditions of the director and the check
     zenkit::DaedalusVm*                                    liftedFor = nullptr;

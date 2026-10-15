@@ -1150,6 +1150,7 @@ DebugCommand = Literal[
     "player_hp",
     "player_drop",
     "chest_take",
+    "player_take",
 ]
 
 
@@ -1175,7 +1176,8 @@ class DebugCmd(_Command):
     routine may walk it back); set the player's health and its maximum to `hp` (`player_hp`, v21);
     `player_goto` to a point `pos` [x, y, z] on the ground there (v21); the player throws an `item` down, as
     with the game's own key (`player_drop`, v22: he is given it first if he has none); the player takes
-    `count` of an `item` out of a `chest` unseen (`chest_take`, v28, `value`: how many).
+    `count` of an `item` out of a `chest` unseen (`chest_take`, v28, `value`: how many); the player picks up
+    the nearest `item` lying within `distance` cm, default 500 (`player_take`, v29).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -1220,7 +1222,10 @@ class GraphPatchCmd(_Command):
     description, nr, important, permanent, condition, lines, effects, program}); `remove_node`; `told`: the
     hero has chosen that added dialog; `program` (v23): `steps` in place of the scripts' program of a dialog's
     information or condition (`part`) or of a choice (`node`), `steps` null brings the scripts' one back.
-    The director's own dialogs offer choices with `choice` steps (v24).
+    The director's own dialogs offer choices with `choice` steps (v24). `vars` (v29): the director's story
+    variables (`vars` = {name: first value}, names DIR_...), integer globals like the scripts' own that the
+    save keeps: made with that value if missing, kept as they are if a save brought them back; conditions,
+    programs, effects and story_state read and write them by name.
     With `req`, the game answers `result` (`error` lists rejected ops)."""
 
     type: Literal["graph_patch"] = "graph_patch"
