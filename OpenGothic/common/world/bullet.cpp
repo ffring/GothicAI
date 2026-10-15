@@ -153,6 +153,10 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
   impactAt = hit.point;
   impactOwner = hit.bone;
   impactKnown = true;
+  if(isSpell()) {
+    onCollide(hit.material);
+    return;
+    }
   onCollide(hit.material);
   auto matrix = obj->matrix();
   if(auto* npc = wrld->npcForRagdoll(hit.ragdoll)) {
@@ -177,6 +181,7 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
 void Bullet::onCollide(zenkit::MaterialGroup matId) {
   if(isFinished())
     return;
+  applySpellPhysics(nullptr);
   if(precise && zone==HitZones::None && !landed) {
     // where it came down first: it may glance off stone and fly on
     landed = true;
@@ -259,6 +264,7 @@ bool Bullet::onCollide(Npc& npc) {
         npc.takeDamage(*ow,this);
       }
     }
+  applySpellPhysics(&npc);
   vfx.setKey(*wrld,SpellFxKey::Collide);
   vfx.setLooped(false);
   vfx.setPhysicsDisable();
@@ -291,4 +297,15 @@ void Bullet::updateMatrix() {
   mat.rotateOY(90);
   vfx.setObjMatrix(mat);
   // vfx .setTarget(obj->position()+obj->direction());
+  }
+
+void Bullet::applySpellPhysics(Npc* target) {
+  if(!isSpell() || spellPhysicsApplied || Gothic::settingsGetI("GAME","spell_physics")==0)
+    return;
+  const auto kind = wrld->script().physicalSpell(spellId());
+  if(kind!=GameScript::PhysicalSpell::WindFist && kind!=GameScript::PhysicalSpell::Fireball)
+    return;
+  spellPhysicsApplied = true;
+  const auto point = target!=nullptr ? target->collosionCenter() : impactPoint();
+  wrld->applySpellImpact(spellId(),point,origin());
   }

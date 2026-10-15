@@ -721,16 +721,16 @@ bool MdlVisual::isUsingTorch() const {
   return torch.view!=nullptr;
   }
 
-bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force) {
+bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force, bool pausePose) {
   Pose&    pose      = *skInst;
   uint64_t tickCount = world.tickCount();
   auto     pos3      = Vec3{pos.at(3,0), pos.at(3,1), pos.at(3,2)};
 
-  if(npc!=nullptr && world.isInSfxRange(pos3))
+  if(!pausePose && npc!=nullptr && world.isInSfxRange(pos3))
     pose.processSfx(*npc,tickCount);
-  if(mobsi!=nullptr && world.isInSfxRange(pos3))
+  if(!pausePose && mobsi!=nullptr && world.isInSfxRange(pos3))
     pose.processSfx(*mobsi,tickCount);
-  if(world.isInPfxRange(pos3))
+  if(!pausePose && world.isInPfxRange(pos3))
     pose.processPfx(*this,world,tickCount);
 
   for(size_t i=0;i<effects.size();) {
@@ -742,6 +742,10 @@ bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint
       ++i;
       }
     }
+
+  // Effects retain their world-clock lifetime while the actor's solved bones hold still.
+  if(pausePose)
+    return false;
 
   solver.update(tickCount);
   pose.setObjectMatrix(pos,false);

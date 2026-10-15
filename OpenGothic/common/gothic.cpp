@@ -97,6 +97,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "living_bodies",       1);
   defaults->set("GAME", "arrow_physics",       1);
   defaults->set("GAME", "arrow_sticking",      1);
+  defaults->set("GAME", "spell_physics",       1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);

@@ -94,6 +94,7 @@ class Bullet final : public DynamicWorld::BulletCallback {
     size_t                    impactOwner = size_t(-1);
     Tempest::Vec3             impactAt;
     bool                      impactKnown = false;
+    bool                      spellPhysicsApplied = false;
 
     MeshObjects::Mesh         view;
     Effect                    vfx;
@@ -102,5 +103,6 @@ class Bullet final : public DynamicWorld::BulletCallback {
     Flg                       flg=NoFlags;
 
     void updateMatrix();
+    void applySpellPhysics(Npc* target);
   };
 

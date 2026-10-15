@@ -9,6 +9,8 @@
 #include "testbench.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 
 // Read-only measurement around the existing movement step. Collision fields describe only calls
 // through MoveAlgo::tryMove: Npc::tryMove exposes success, not DynamicWorld's internal MoveCode.
@@ -567,6 +569,29 @@ void MoveAlgo::takeRagdollControl() {
   // Its stale InAir gate must not block queued script actions after the body settles.
   clearSpeed();
   flags = Run;
+  }
+
+bool MoveAlgo::addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction) {
+  if(npc.isDown() || npc.spellFrozen() || !std::isfinite(massKg) || massKg<=0.f ||
+     !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     (flags!=Run && flags!=Falling && flags!=InAir))
+    return false;
+  if(!npc.setInteraction(nullptr,true))
+    return false;
+  if(reaction) {
+    npc.setAnimAngGet(Npc::Anim::FallDeepB);
+    npc.setAnimRotate(0);
+    }
+  if(fallCount>0.f)
+    fallSpeed /= fallCount;
+  // N*s / kg gives m/s; the existing movement integrator uses cm/ms.
+  fallSpeed += impulseNs*(0.1f/massKg);
+  const float speed = fallSpeed.length();
+  if(speed>2.f)
+    fallSpeed *= 2.f/speed;
+  fallCount = 0;
+  setState(InAir);
+  return true;
   }
 
 bool MoveAlgo::accessDamFly(float dx, float dz, char hitType) {

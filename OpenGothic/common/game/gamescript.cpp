@@ -874,6 +874,23 @@ const VisualFx* GameScript::spellVfx(int32_t splId) {
   return Gothic::inst().loadVisualFx(name);
   }
 
+GameScript::PhysicalSpell GameScript::physicalSpell(int32_t splId) const {
+  if(spellFxInstanceNames==nullptr || splId<0 || size_t(splId)>=spellFxInstanceNames->count())
+    return PhysicalSpell::None;
+  auto tag = spellFxInstanceNames->get_string(uint16_t(splId));
+  for(auto& c:tag)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  if(tag=="WINDFIST" || tag=="STORMFIST")
+    return PhysicalSpell::WindFist;
+  if(tag=="WHIRLWIND")
+    return PhysicalSpell::Whirlwind;
+  if(tag=="INSTANTFIREBALL" || tag=="CHARGEFIREBALL" || tag=="FIREBALL")
+    return PhysicalSpell::Fireball;
+  if(tag=="ICECUBE" || tag=="ICEBLOCK")
+    return PhysicalSpell::IceCube;
+  return PhysicalSpell::None;
+  }
+
 std::vector<GameScript::DlgChoice> GameScript::dialogChoices(std::shared_ptr<zenkit::INpc> player,
                                                              std::shared_ptr<zenkit::INpc> hnpc,
                                                              const std::vector<uint32_t>& except,

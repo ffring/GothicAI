@@ -601,6 +601,17 @@ struct Bench {
   std::string stickingCase;
   uint64_t stickingSampleTick=0;
   Vec3 stickingWorldPoint;
+  struct SpellActor {Npc* npc=nullptr;std::string role;};
+  std::vector<SpellActor> spellActors;
+  std::vector<Item*> spellItems;
+  std::map<int32_t,size_t> spellRunes;
+  bool spellArenaReady=false,spellTrace=false,spellWasFrozen=false;
+  std::string spellCase;
+  uint64_t spellSampleTick=0,spellReleaseAt=0,spellWaitUntil=0;
+  int32_t spellCastingId=0;
+  int32_t spellEquipPending=0;
+  uint64_t spellEquipUntil=0;
+  int spellWaitFrozen=-1;
   Npc*        downNpc      = nullptr; // waitdown: till it falls
   uint64_t    downFrom = 0, downEnd = 0;
   Npc*        waitRagdollNpc = nullptr;
@@ -2265,6 +2276,7 @@ size_t npcArrowPins(World& world) {
   }
 
 void arenaAbort(std::string_view reason);
+bool chooseRagdollArena(World& world,Npc& player);
 
 void stickingFields(World& world) {
   if(!bench.stickingTrace || world.tickCount()==bench.stickingSampleTick) return;
@@ -2312,6 +2324,130 @@ void stickingFields(World& world) {
     ",\"all_npc_pin_count\":"+std::to_string(npcArrowPins(world))+
     ",\"world_pin_count\":"+std::to_string(world.stuckArrowCount())+
     ",\"npc_pins\":"+pins+"],\"world_pins\":"+worldPins+"]");
+  }
+
+void spellFields(World& world) {
+  if(!bench.spellTrace || bench.spellSampleTick==world.tickCount()) return;
+  bench.spellSampleTick=world.tickCount();
+  std::string actors="[",items="[";
+  for(size_t i=0;i<bench.spellActors.size();++i) {
+    auto& actor=bench.spellActors[i];auto& npc=*actor.npc;
+    const auto* living=npc.livingBody();const auto* corpse=npc.ragdollBody();
+    const auto* body=living?living:corpse;
+    std::vector<Matrix4x4> native;
+    const bool nativePose=body && body->getPose(native);
+    if(i==0 && bench.spellCase.starts_with("ice")) {
+      if(npc.spellFrozen()) {npc.setExternalControl(true);bench.spellWasFrozen=true;}
+      else if(bench.spellWasFrozen) {npc.setExternalControl(false);bench.spellWasFrozen=false;}
+      }
+    if(i) actors+=',';
+    actors+="{\"index\":"+std::to_string(i)+",\"role\":"+jsonStr(actor.role)+",\"mass_kg\":"+ragdollNumber(npc.physicsMass())+
+      ",\"position_cm\":"+ragdollVector(npc.position())+",\"spell_velocity_cm_s\":"+ragdollVector(npc.spellVelocity())+
+      ",\"state\":"+jsonStr(stateName(world,npc))+",\"state_time\":"+std::to_string(npc.stateTime())+
+      ",\"frozen\":"+(npc.spellFrozen()?"true":"false")+",\"whirling\":"+(npc.spellWhirling()?"true":"false")+
+      ",\"in_air\":"+(npc.isInAir()?"true":"false")+
+      ",\"dead\":"+(npc.isDead()?"true":"false")+",\"living_parts\":"+std::to_string(living?living->partCount():0)+
+      ",\"corpse_parts\":"+std::to_string(corpse?corpse->partCount():0)+
+      ",\"kinematic\":"+(body && body->isKinematic()?"true":"false")+
+      ",\"sleeping\":"+(body && body->isSleeping()?"true":"false")+",\"bones\":[";
+    const auto* sk=npc.visualSkeleton();
+    if(sk)
+      for(std::string_view name:{"BIP01 PELVIS","BIP01 SPINE2","BIP01 L UPPERARM","BIP01 L CALF"}) {
+        const auto bone=arrowBone(*sk,name);if(bone==size_t(-1)) continue;
+        if(actors.back()!='[') actors+=',';
+        actors+="{\"id\":"+std::to_string(bone)+",\"render\":"+ragdollMatrix(npc.renderedBone(bone));
+        if(nativePose && bone<native.size()) actors+=",\"native\":"+ragdollMatrix(native[bone]);
+        actors+='}';
+        }
+    actors+="]}";
+    }
+  for(size_t i=0;i<bench.spellItems.size();++i) {
+    const auto& item=*bench.spellItems[i];if(i) items+=',';
+    items+="{\"index\":"+std::to_string(i)+",\"position_cm\":"+ragdollVector(item.position())+
+      ",\"mass_kg\":"+ragdollNumber(item.physicsMass())+",\"velocity_cm_s\":"+ragdollVector(item.physicsVelocity())+
+      ",\"sleeping\":"+(item.physicsSleeping()?"true":"false")+",\"dynamic\":"+(item.isDynamic()?"true":"false")+"}";
+    }
+  const auto stats=world.physic()->physicsStats();
+  event("spell_physics_frame","\"case\":"+jsonStr(bench.spellCase)+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"feature\":"+(Gothic::settingsGetI("GAME","spell_physics")?"true":"false")+
+    ",\"fields\":"+std::to_string(world.spellFieldCount())+",\"world_bodies\":"+std::to_string(stats.bodies)+
+    ",\"physics_ms\":"+ragdollNumber(stats.stepMilliseconds)+",\"actors\":"+actors+"],\"items\":"+items+"]");
+  }
+
+void prepareSpellFixture(World& world,Npc& player,std::string_view fixture) {
+  bench.spellTrace=false;bench.spellReleaseAt=0;bench.spellWaitFrozen=-1;bench.spellWasFrozen=false;bench.spellEquipPending=0;
+  player.setTarget(nullptr);player.closeWeapon(true);
+  const auto before=world.physic()->physicsStats().bodies;
+  size_t expected=0;
+  for(const auto& actor:bench.spellActors) expected+=(actor.npc->livingBody()?actor.npc->livingBody()->partCount():0)+(actor.npc->ragdollBody()?actor.npc->ragdollBody()->partCount():0);
+  for(const auto* item:bench.spellItems) expected+=size_t(item->isDynamic());
+  for(auto& actor:bench.spellActors) world.removeNpc(*actor.npc);
+  for(auto* item:bench.spellItems) world.removeItem(*item);
+  if(expected) event("spell_physics_cleanup","\"before\":"+std::to_string(before)+",\"after\":"+
+    std::to_string(world.physic()->physicsStats().bodies)+",\"expected_parts\":"+std::to_string(expected));
+  bench.spellActors.clear();bench.spellItems.clear();bench.crew.clear();bench.subject=nullptr;
+  if(!bench.spellArenaReady) {
+    if(!chooseRagdollArena(world,player)) {arenaAbort("spell fixture needs supported open arena");return;}
+    bench.spellArenaReady=true;
+    std::vector<Npc*> nearby;
+    for(uint32_t i=0;i<world.npcCount();++i)
+      if(auto* npc=world.npcById(i);npc && npc!=&player && (npc->position()-player.position()).length()<2500) nearby.push_back(npc);
+    for(auto* npc:nearby) world.removeNpc(*npc);
+    }
+  const auto center=bench.ragdollArenaTarget-Vec3(0,80,300);
+  auto hero=center-Vec3(0,0,700);
+  if(const auto floor=world.physic()->landRay(hero+Vec3(0,300,0),1200);floor.hasCol) hero.y=floor.v.y;
+  player.setPosition(hero);player.setDirection({0,0,1});player.updateTransform();
+  const auto add=[&](std::string_view symbol,std::string role,Vec3 point,bool dead=false) {
+    if(const auto floor=world.physic()->landRay(point+Vec3(0,300,0),1200);floor.hasCol) point.y=floor.v.y;
+    auto* npc=world.addNpc(world.script().findSymbolIndex(symbol),point);
+    if(!npc) {arenaAbort("spell actor insertion failed");return;}
+    npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);npc->setDirection(hero-point);npc->updateTransform();
+    npc->handle().attribute[ATR_HITPOINTS]=50000;npc->handle().attribute[ATR_HITPOINTSMAX]=50000;
+    if(dead) {npc->setRagdollDown(true);npc->prepareRagdoll();}
+    bench.spellActors.push_back({npc,std::move(role)});bench.crew.push_back(npc);
+    };
+  add("BAU_904_BAUER","human",center);
+  if(fixture=="wind") {
+    add("TROLL","troll",center+Vec3(220,0,0));
+    add("BAU_904_BAUER","behind",hero-Vec3(0,0,300));
+    add("BAU_904_BAUER","outside_cone",hero+Vec3(550,0,0));
+    }
+  else if(fixture!="ice") {
+    add("BAU_904_BAUER","corpse",center+Vec3(120,0,40),true);
+    for(size_t i=0;i<3;++i) {
+      auto at=center+Vec3(float(i)*110.f-110.f,0,-100);
+      if(const auto floor=world.physic()->landRay(at+Vec3(0,300,0),900);floor.hasCol) at.y=floor.v.y;
+      const auto symbol=world.script().findSymbolIndex(i==0?"ITMI_LUTE":(i==1?"ITMI_PAN":"ITMW_1H_MACE_L_01"));
+      if(symbol==size_t(-1)) {arenaAbort("spell loose prop instance missing");return;}
+      auto* item=world.addItem(symbol,at);
+      if(item) {
+        if(const auto* bounds=item->bBox()) item->setPosition(at.x,at.y-bounds[0].y+1.f,at.z);
+        bench.spellItems.push_back(item);
+        }
+      }
+    }
+  if(fixture=="ice" || fixture=="airborne") bench.spellActors[0].npc->setExternalControl(false);
+  bench.subject=bench.spellActors[0].npc;
+  if(bench.spellRunes.empty()) {
+    for(size_t i=0;i<world.script().symbolsCount();++i) {
+      const auto* symbol=world.script().findSymbol(i);
+      if(!symbol || symbol->type()!=zenkit::DaedalusDataType::INSTANCE) continue;
+      auto name=symbol->name();for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(!name.starts_with("ITRU_") && !name.starts_with("ITSC_")) continue;
+      auto candidate=std::make_unique<Item>(world,i,Item::T_Inventory);
+      const auto id=candidate->spellId();
+      if((id!=23 && id!=26 && id!=30 && id!=33 && id!=71) || bench.spellRunes.contains(id)) continue;
+      bench.spellRunes[id]=i;player.addItem(i,candidate->isRune()?1:5);
+      event("spell_physics_rune","\"id\":"+std::to_string(id)+",\"symbol\":"+jsonStr(name)+
+        ",\"class_id\":"+std::to_string(i)+",\"projectile\":"+(candidate->isSpellShoot()?"true":"false"));
+      }
+    }
+  player.handle().attribute[ATR_MANA]=50000;player.handle().attribute[ATR_MANAMAX]=50000;player.setTalentSkill(TALENT_MAGE,6);
+  const auto target=center+Vec3(0,90,0);
+  bench.cam=C_Hold;lookFrom(target+Vec3(600,280,-300),target);
+  event("spell_physics_setup","\"fixture\":"+jsonStr(fixture)+",\"default_enabled\":"+
+    std::string(Gothic::settingsGetI("GAME","spell_physics")?"true":"false"));
   }
 
 void arrowFields(World& world) {
@@ -2824,6 +2960,48 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     std::snprintf(text,sizeof(text),"physics stats step_ms=%.6f bodies=%zu rays=%llu",
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
+    }
+  else if(c=="spell" && a.size()==3 && a[1]=="fixture") {
+    prepareSpellFixture(w,pl,a[2]);
+    if(!bench.spellActors.empty()) exec("watch watched",w,pl,ctrl);
+    }
+  else if(c=="spell" && a.size()==3 && a[1]=="case") {
+    bench.spellCase=a[2];bench.spellTrace=true;
+    event("spell_physics_case","\"case\":"+jsonStr(a[2]));
+    }
+  else if(c=="spell" && a.size()==3 && a[1]=="feature")
+    Gothic::settingsSetI("GAME","spell_physics",a[2]=="on");
+  else if(c=="spell" && a.size()==3 && a[1]=="equip") {
+    const int32_t id=int32_t(num(a,2,0));
+    const auto rune=bench.spellRunes.find(id);
+    if(rune==bench.spellRunes.end()) {arenaAbort("requested real spell rune not found");return;}
+    pl.useItem(rune->second,Item::NSLOT,true);
+    if(pl.drawSpell(id)) bench.spellCastingId=id;
+    else {bench.spellEquipPending=id;bench.spellEquipUntil=w.tickCount()+3000;}
+    }
+  else if(c=="spell" && a.size()>=2 && a[1]=="cast") {
+    if(bench.spellActors.empty()) {arenaAbort("real spell needs a target");return;}
+    auto* target=bench.spellActors[0].npc;pl.setTarget(target);pl.setDirection(target->position()-pl.position());pl.updateTransform();
+    const auto result=pl.beginCastSpell();
+    event("spell_physics_cast","\"id\":"+std::to_string(bench.spellCastingId)+",\"begin_result\":"+
+      std::to_string(int(result))+",\"active_item\":"+std::to_string(pl.bodyObservationState().weaponSymbol)+
+      ",\"target_in_air\":"+(target->isInAir()?"true":"false"));
+    if(result!=Npc::BC_Invest && result!=Npc::BC_Cast) {arenaAbort("real spell beginCastSpell rejected");return;}
+    bench.spellReleaseAt=result==Npc::BC_Invest?w.tickCount()+uint64_t(num(a,2,500)):0;
+    }
+  else if(c=="spell" && a.size()>=3 && a[1]=="wait-frozen") {
+    bench.spellWaitFrozen=a[2]=="on"?1:0;bench.spellWaitUntil=w.tickCount()+uint64_t(num(a,3,25000));
+    }
+  else if(c=="spell" && a.size()>=2 && (a[1]=="wait-airborne" || a[1]=="wait-field")) {
+    bench.spellWaitFrozen=a[1]=="wait-airborne"?2:3;bench.spellWaitUntil=w.tickCount()+uint64_t(num(a,2,6000));
+    }
+  else if(c=="spell" && a.size()==2 && a[1]=="stop") bench.spellTrace=false;
+  else if(c=="spell" && a.size()==2 && a[1]=="clear") {
+    bench.spellTrace=false;bench.spellReleaseAt=0;bench.spellWaitFrozen=-1;
+    pl.setTarget(nullptr);exec("watch player",w,pl,ctrl);
+    for(auto& actor:bench.spellActors) w.removeNpc(*actor.npc);
+    for(auto* item:bench.spellItems) w.removeItem(*item);
+    bench.spellActors.clear();bench.spellItems.clear();bench.crew.clear();
     }
   else if(c=="sticking" && a.size()==2 && a[1]=="setup") {
     bench.stickingTrace=true;bench.arrowTrace=false;
@@ -5594,6 +5772,20 @@ bool waitingForAi() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+  if(bench.spellEquipPending) {
+    if(pl.drawSpell(bench.spellEquipPending)) {bench.spellCastingId=bench.spellEquipPending;bench.spellEquipPending=0;}
+    else if(w.tickCount()<bench.spellEquipUntil) return;
+    else {bench.spellEquipPending=0;arenaAbort("real spell draw animation did not finish");return;}
+    }
+  if(bench.spellWaitFrozen>=0) {
+    const bool frozen=!bench.spellActors.empty() && bench.spellActors[0].npc->spellFrozen();
+    const bool ready=bench.spellWaitFrozen==2 ? !bench.spellActors.empty() && bench.spellActors[0].npc->isInAir() :
+                     bench.spellWaitFrozen==3 ? w.spellFieldCount()>0 : int(frozen)==bench.spellWaitFrozen;
+    if(!ready && w.tickCount()<bench.spellWaitUntil) return;
+    event("spell_physics_freeze_wait","\"frozen\":"+std::string(frozen?"true":"false")+",\"pass\":"+(ready?"true":"false"));
+    bench.spellWaitFrozen=-1;
+    if(!ready) {arenaAbort("real freeze state did not reach requested transition");return;}
+    }
   if(bench.livingMotion)
     for(auto& walker:bench.livingWalkers) {
       if(walker.npc->isDown()) continue;
@@ -5720,6 +5912,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
+    if(bench.spellWaitFrozen>=0 || bench.spellEquipPending) return;
     if(bench.questWait) return;
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
     if(bench.cadenceWait) return;
@@ -6458,6 +6651,11 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     return false;
   arrowFields(*world);
   stickingFields(*world);
+  spellFields(*world);
+  if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
+    player->endCastSpell(false);bench.spellReleaseAt=0;
+    event("spell_physics_release","\"id\":"+std::to_string(bench.spellCastingId));
+    }
   if(ragdollPerf) {
     const auto now=std::chrono::steady_clock::now();
     FrameProfile::observer(dt,now);
@@ -6806,6 +7004,18 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     std::snprintf(label,sizeof(label),"BONE LOCAL -> RENDER POSE  %s  NATIVE BODIES %zu",npc && npc->isDown()?"LIMP":"LIVING",
       world?world->physic()->physicsStats().bodies:0);
     cv.text(6,46,label,2,Text);
+    }
+  if(pm.w()>0 && bench.spellTrace) {
+    Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
+    auto* world=Gothic::inst().world();char label[200];
+    cv.rect(0,0,std::min(cv.w,790),66,{0,0,0,190});cv.text(6,6,"SPELL PHYSICS: "+bench.spellCase,2,Text);
+    std::snprintf(label,sizeof(label),"REAL CAST %d  FIELDS %zu  NATIVE BODIES %zu",bench.spellCastingId,
+      world?world->spellFieldCount():0,world?world->physic()->physicsStats().bodies:0);cv.text(6,26,label,2,Text);
+    if(!bench.spellActors.empty()) {
+      const auto& npc=*bench.spellActors[0].npc;
+      std::snprintf(label,sizeof(label),"HUMAN %.0f KG  SPEED %.0f CM/S  FROZEN %d  PROPS %zu",double(npc.physicsMass()),
+        double(npc.spellVelocity().length()),int(npc.spellFrozen()),bench.spellItems.size());cv.text(6,46,label,2,Text);
+      }
     }
   if(pm.w()>0 && bench.questTrace && bench.questNpc!=nullptr) {
     Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());

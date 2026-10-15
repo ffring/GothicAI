@@ -98,6 +98,7 @@ namespace {
   struct ObjectFrame {
     JPH::Mat44 rigid;
     JPH::Vec3 scale=JPH::Vec3::sOne();
+    float volumeScale=1.f;
     bool uniform=true;
     };
 
@@ -115,6 +116,9 @@ namespace {
       }
     if(std::abs(axes[0].Dot(axes[1]))>1.e-3f || std::abs(axes[0].Dot(axes[2]))>1.e-3f ||
        std::abs(axes[1].Dot(axes[2]))>1.e-3f || axes[0].Cross(axes[1]).Dot(axes[2])<.999f) return false;
+    frame.volumeScale=float(std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
+                                     double(m[4])*(double(m[1])*m[10]-double(m[9])*m[2])+
+                                     double(m[8])*(double(m[1])*m[6]-double(m[5])*m[2])));
     frame.uniform=std::abs(frame.scale.GetY()-frame.scale.GetX())<=frame.scale.GetX()*1.e-3f &&
                   std::abs(frame.scale.GetZ()-frame.scale.GetX())<=frame.scale.GetX()*1.e-3f;
     const auto q=JPH::Mat44(JPH::Vec4(axes[0],0),JPH::Vec4(axes[1],0),JPH::Vec4(axes[2],0),JPH::Vec3::sZero()).GetQuaternion().Normalized();
@@ -535,6 +539,21 @@ struct Ragdoll::Impl final {
     return frame.GetRotation().Transposed3x3()*basis;
     }
 
+  static JPH::Ref<JPH::RagdollSettings> massSettings(JPH::Ref<JPH::RagdollSettings> source, float volumeScale) {
+    if(volumeScale==1.f) return source;
+    // Cached geometry/anatomy is shared. Mass belongs to the instance's object
+    // scale, including nonuniform scale, and must also reach the motor source.
+    JPH::Ref<JPH::RagdollSettings> result=new JPH::RagdollSettings();
+    result->mSkeleton=source->mSkeleton;
+    result->mParts=source->mParts;
+    result->mAdditionalConstraints=source->mAdditionalConstraints;
+    for(auto& part:result->mParts) part.mMassPropertiesOverride.mMass*=volumeScale;
+    // CalculateInertia uses this mass with the already scaled capsule shape.
+    result->CalculateBodyIndexToConstraintIndex();
+    result->CalculateConstraintIndexToBodyIdxPair();
+    return result;
+    }
+
   static JPH::Ref<JPH::RagdollSettings> kinematicSettings(const JPH::RagdollSettings& source) {
     JPH::Ref<JPH::RagdollSettings> result=new JPH::RagdollSettings();
     result->mSkeleton=source.mSkeleton;
@@ -685,6 +704,7 @@ struct Ragdoll::Impl final {
   Tempest::Matrix4x4 initialObject;
   JPH::Vec3 initialPelvis=JPH::Vec3::sZero();
   ObjectFrame object;
+  float actualMass=0.f;
   std::vector<Tempest::Matrix4x4> references;
   std::vector<JPH::Mat44> corrections;
   std::vector<AncestorState> ancestors;
@@ -853,6 +873,8 @@ Ragdoll::Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones
     settings=impl->object.uniform ? Impl::settings(*impl->rig,impl->object.scale.GetX()) :
                                    Impl::bakedSettings(*impl->rig,impl->object,impl->references,pose);
     }
+  settings=Impl::massSettings(std::move(settings),impl->object.volumeScale);
+  impl->actualMass=impl->rig->totalMass*impl->object.volumeScale;
   impl->kinematic=kinematic;
   impl->hits.reserve(4);
   if(kinematic) {
@@ -1011,7 +1033,7 @@ size_t Ragdoll::boneForBodyId(uint32_t id) const {
   return noBone;
   }
 size_t Ragdoll::boneCount() const { return impl->rig!=nullptr ? impl->rig->numBones : 0; }
-float Ragdoll::mass() const { return impl->rig!=nullptr ? impl->rig->totalMass : 0.f; }
+float Ragdoll::mass() const { return valid() ? impl->actualMass : 0.f; }
 
 const std::vector<size_t>& Ragdoll::boneIndices() const {
   static const std::vector<size_t> empty;
@@ -1185,6 +1207,7 @@ bool Ragdoll::restore(const State& state) {
       settings=object.uniform ? Impl::settings(*impl->rig,object.scale.GetX()) :
                                 Impl::bakedSettings(*impl->rig,object,references,referenceFrames);
       }
+    settings=Impl::massSettings(std::move(settings),object.volumeScale);
     replacement=settings->CreateRagdoll(impl->group,0,&impl->world->physicsSystem());
     if(replacement==nullptr) return false;
     replacement->SetPose(JPH::RVec3::sZero(),pose.data());
@@ -1236,6 +1259,7 @@ bool Ragdoll::restore(const State& state) {
   impl->initialObject=state.rootTransform;
   impl->initialPelvis=JPH::Vec3(interface.GetPosition(impl->native->GetBodyID(0)));
   impl->object=object;
+  impl->actualMass=impl->rig->totalMass*object.volumeScale;
   impl->references=std::move(references);
   impl->corrections=std::move(corrections);
   impl->ancestors=std::move(ancestors);

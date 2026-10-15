@@ -2,6 +2,7 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Log>
+#include <cctype>
 #include <cstdlib>
 
 #include "graphics/mesh/skeleton.h"
@@ -455,11 +456,10 @@ void Npc::loadAiState(Serialize& fin) {
   fin.read(aiState.funcIni,aiState.funcLoop,aiState.funcEnd,aiState.sTime,aiState.eTime,aiState.started,aiState.loopNextTime);
   fin.read(aiPrevState);
 
-#ifndef NDEBUG
+  aiState.hint = "";
   if(auto s = owner.script().findSymbol(aiState.funcIni.ptr)) {
     aiState.hint = s->name().c_str();
     }
-#endif
 
   aiQueue.load(fin);
   aiQueueOverlay.load(fin);
@@ -798,7 +798,34 @@ void Npc::addRagdollImpulse(const Vec3& impulse) {
     ragdoll->addImpulse(impulse);
   }
 
+float Npc::physicsMass() const {
+  if(ragdoll)
+    return ragdoll->mass();
+  if(living)
+    return living->mass();
+  const auto* skeleton = visual.visualSkeleton();
+  const float base = skeleton!=nullptr ? Ragdoll::speciesMass(skeleton->name()) : 75.f;
+  return std::max(0.01f,base*std::abs(sz[0]*sz[1]*sz[2]));
+  }
+
+bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
+  if(Gothic::settingsGetI("GAME","spell_physics")==0 || spellFrozen() ||
+     !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     impulseNs.quadLength()<=0.f)
+    return false;
+  if(ragdoll) {
+    ragdoll->addImpulse(impulseNs);
+    return true;
+    }
+  if(isDown()) {
+    pendingSpellImpulse += impulseNs;
+    return true;
+    }
+  return mvAlgo.addSpellImpulse(impulseNs,physicsMass(),reaction);
+  }
+
 void Npc::suspendRagdoll() {
+  pendingSpellImpulse = {};
   visual.clearStuckArrows();
   living.reset();
   arrowImpacts.clear();
@@ -842,6 +869,9 @@ bool Npc::createRagdoll() {
   ragdollDormant.reset();
   ragdoll = std::move(body);
   dispatchArrowPhysics(*ragdoll);
+  if(Gothic::settingsGetI("GAME","spell_physics")!=0 && pendingSpellImpulse.quadLength()>0.f)
+    ragdoll->addImpulse(pendingSpellImpulse);
+  pendingSpellImpulse = {};
   ragdollStartTick = owner.tickCount();
   physic.setEnable(false);
   mvAlgo.takeRagdollControl();
@@ -966,6 +996,8 @@ void Npc::checkRagdollQuestHazard() {
   }
 
 void Npc::prepareRagdoll() {
+  if(!isDown() || Gothic::settingsGetI("GAME","spell_physics")==0)
+    pendingSpellImpulse = {};
   if(Gothic::settingsGetI("GAME","arrow_sticking")==0)
     visual.clearStuckArrows();
   if(Gothic::settingsGetI("GAME","arrow_physics")==0)
@@ -1060,20 +1092,33 @@ void Npc::prepareRagdoll() {
 
 void Npc::prepareLivingBody() {
   constexpr float radius = 2000.f;
+  const bool frozen = spellFrozen();
+  if(frozen!=livingWasFrozen) {
+    // Enter with a completely kinematic rig, discarding any active hit reaction.
+    // On thaw the ordinary living-body policy decides whether this rig is still needed.
+    living.reset();
+    livingRetryTick = 0;
+    livingNeedsRebuild = false;
+    livingWasFrozen = frozen;
+    arrowImpacts.clear();
+    }
   const auto* hero = owner.player();
-  if(isPlayer() || isDown() || ragdoll || hero==nullptr ||
-     Gothic::settingsGetI("GAME","living_bodies")==0 || qDistTo(*hero)>radius*radius) {
+  if(isDown() || ragdoll || (!frozen && (isPlayer() || hero==nullptr ||
+     Gothic::settingsGetI("GAME","living_bodies")==0 || qDistTo(*hero)>radius*radius))) {
     living.reset();
     livingRetryTick = 0;
     arrowImpacts.clear();
     return;
     }
+  if(frozen)
+    arrowImpacts.clear();
   if(livingNeedsRebuild || (living && !living->isKinematic() && Gothic::settingsGetI("GAME","arrow_physics")==0)) {
     living.reset();
     livingNeedsRebuild = false;
     }
   if(living) {
-    dispatchArrowPhysics(*living);
+    if(!frozen)
+      dispatchArrowPhysics(*living);
     return;
     }
   if(owner.tickCount()<livingRetryTick) {
@@ -1092,7 +1137,7 @@ void Npc::prepareLivingBody() {
                                              visual.pose().boneCount(),visual.transform());
   if(!living)
     livingRetryTick = owner.tickCount()+1000;
-  if(living)
+  if(living && !frozen)
     dispatchArrowPhysics(*living);
   else
     arrowImpacts.clear();
@@ -3007,7 +3052,9 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   // throw enemy
-  if(hitResult.hasHit && (damageType & (1<<zenkit::DamageType::FLY))) {
+  const bool physicalWind = isSpell && Gothic::settingsGetI("GAME","spell_physics")!=0 &&
+                            owner.script().physicalSpell(splId)==GameScript::PhysicalSpell::WindFist;
+  if(hitResult.hasHit && (damageType & (1<<zenkit::DamageType::FLY)) && !physicalWind) {
     mvAlgo.accessDamFly(x-other.x, z-other.z, lastHitType);
     }
 
@@ -3300,6 +3347,27 @@ void Npc::tick(uint64_t dt) {
 
   BodyMovementTrace movementTrace(*this,dt);
   traceCombatSnapshot();
+  // A field can lift an actor before its turn in the NPC list. Admit the queued
+  // magical state before ordinary airborne/animation waits, independent of tick order.
+  if(isInAir() && hasQueuedPhysicalSpellState(aiQueue))
+    nextAiAction(aiQueue,dt);
+  if(spellFrozen()) {
+    // Script time and the real state callbacks keep running even if the queued freeze
+    // animation is waiting in mid-air. B_StopMagicFreeze owns queue cleanup and StandUp.
+    lastEventTime = owner.tickCount();
+    visual.setNpcEffect(owner,*this,hnpc->effect,hnpc->flags);
+    mvAlgo.clearSpeed();
+    tickRoutine();
+    return;
+    }
+  if(spellWhirling()) {
+    // The vortex may keep the actor airborne for the entire state. Its script
+    // loop must still reach B_StopWhirlwind while queued animations wait to land.
+    lastEventTime = owner.tickCount();
+    tickRoutine();
+    mvAlgo.tick(dt);
+    return;
+    }
   tickAnimationTags();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
@@ -3401,8 +3469,18 @@ bool Npc::prepareTurn() {
   return true;
   }
 
+bool Npc::hasQueuedPhysicalSpellState(const AiQueue& queue) const {
+  if(Gothic::settingsGetI("GAME","spell_physics")==0)
+    return false;
+  const auto* action = queue.front();
+  if(action==nullptr || action->act!=AI_StartState)
+    return false;
+  const auto* symbol = owner.script().findSymbol(action->func.ptr);
+  return symbol!=nullptr && (symbol->name()=="ZS_MAGICFREEZE" || symbol->name()=="ZS_WHIRLWIND");
+  }
+
 void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
-  if(isInAir())
+  if(isInAir() && !hasQueuedPhysicalSpellState(queue))
     return;
   if(queue.size()==0)
     return;
@@ -4226,6 +4304,8 @@ void Npc::commitSpell() {
       currentTarget->lastHitSpell = splId;
       currentTarget->perceptionProcess(*this,nullptr,0,PERC_ASSESSMAGIC);
       }
+    if(owner.script().physicalSpell(splId)==GameScript::PhysicalSpell::Whirlwind)
+      owner.startSpellField(splId,currentTarget!=nullptr ? currentTarget->position() : position(),this);
     }
 
   if(active->isSpell()) {
@@ -4366,6 +4446,32 @@ bool Npc::hasStateFlag(BodyState flg) const {
   if(auto i = interactive())
     return flg==(i->stateMask() & (BS_FLAG_MASK|BS_MOD_MASK));
   return false;
+  }
+
+bool Npc::spellWhirling() const {
+  if(Gothic::settingsGetI("GAME","spell_physics")==0 || !aiState.funcIni.isValid() || isDown())
+    return false;
+  constexpr std::string_view whirlwind="ZS_WHIRLWIND";
+  const std::string_view state=aiState.hint;
+  if(state.size()!=whirlwind.size())
+    return false;
+  for(size_t i=0;i<whirlwind.size();++i)
+    if(std::toupper(static_cast<unsigned char>(state[i]))!=whirlwind[i])
+      return false;
+  return true;
+  }
+
+bool Npc::spellFrozen() const {
+  if(Gothic::settingsGetI("GAME","spell_physics")==0 || !aiState.funcIni.isValid() || isDown())
+    return false;
+  constexpr std::string_view frozen="ZS_MAGICFREEZE";
+  const std::string_view state=aiState.hint;
+  if(state.size()!=frozen.size())
+    return false;
+  for(size_t i=0; i<frozen.size(); ++i)
+    if(std::toupper(static_cast<unsigned char>(state[i]))!=frozen[i])
+      return false;
+  return true;
   }
 
 void Npc::setToFightMode(const size_t item) {
@@ -6118,6 +6224,7 @@ void Npc::updateTransform() {
 
 void Npc::updateAnimation(uint64_t dt, bool force) {
   FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
+  const bool frozen = spellFrozen();
   const bool clearedPhysicalPose = visual.clearPhysicalPose();
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
@@ -6145,7 +6252,15 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     durtyTranform = 0;
     }
 
-  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force) || clearedPhysicalPose;
+  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force,frozen) || clearedPhysicalPose;
+  if(frozen) {
+    if(living)
+      livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
+                                                float(std::max<uint64_t>(dt,1))*0.001f);
+    if(syncAtt || force)
+      visual.syncAttaches();
+    return;
+    }
   if(ragdoll) {
     if(syncAtt || force)
       visual.syncAttaches();

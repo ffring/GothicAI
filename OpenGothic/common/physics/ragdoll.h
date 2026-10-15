@@ -73,6 +73,7 @@ class Ragdoll final {
     const std::vector<size_t>& reactionBones() const;
     size_t partCount() const;
     size_t boneCount() const;
+    // Actual native mass in kilograms: speciesMass * absdet(object scale).
     float mass() const;
     const std::vector<size_t>& boneIndices() const;
     // Ancestors have no bodies; their shown frame is carried by a native child.

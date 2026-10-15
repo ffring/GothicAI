@@ -322,13 +322,13 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
     if(response.mContactImpulse.empty())
       return;
     const float impulse = response.mContactImpulse[0];
-    if(impulse/obj->mass<0.9f)
+    if(impulse/obj->bodyMass<0.9f)
       return;
     auto material = zenkit::MaterialGroup::STONE;
     if(terrain!=nullptr && terrain->mesh!=nullptr)
       material = terrain->mesh->materialId(Physics::triangleData(*land->GetShape(),landSubShape));
     std::lock_guard<std::mutex> guard(impactMutex);
-    impacts.push_back({item->GetID(),material,impulse,obj->mass,simulationStep,land->GetID().GetIndexAndSequenceNumber(),landSubShape.GetValue()});
+    impacts.push_back({item->GetID(),material,impulse,obj->bodyMass,simulationStep,land->GetID().GetIndexAndSequenceNumber(),landSubShape.GetValue()});
     }
 
   void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold,
@@ -392,7 +392,7 @@ CollisionWorld::CollisionBody::~CollisionBody() {
   }
 
 CollisionWorld::DynamicBody::DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass)
-  :CollisionBody(owner,std::move(shape),DynamicWorld::C_Item), mass(mass) {
+  :CollisionBody(owner,std::move(shape),DynamicWorld::C_Item), bodyMass(mass) {
   }
 
 void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matrix) {
@@ -467,6 +467,38 @@ void CollisionWorld::CollisionBody::getAabb(JPH::Vec3& min, JPH::Vec3& max) cons
   max = box.mMax;
   }
 
+float CollisionWorld::CollisionBody::mass() const {
+  if(owner==nullptr || id.IsInvalid()) return 0.f;
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return 0.f;
+  return 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
+  }
+
+Tempest::Vec3 CollisionWorld::CollisionBody::velocity() const {
+  if(owner==nullptr || id.IsInvalid()) return {};
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return {};
+  return toCentimeters(lock.GetBody().GetLinearVelocity());
+  }
+
+bool CollisionWorld::CollisionBody::isSleeping() const {
+  if(owner==nullptr || id.IsInvalid()) return true;
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  return !lock.Succeeded() || !lock.GetBody().IsDynamic() || !lock.GetBody().IsActive();
+  }
+
+bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs) {
+  if(owner==nullptr || id.IsInvalid() || !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) ||
+     !std::isfinite(impulseNs.z) || (impulseNs.x==0.f && impulseNs.y==0.f && impulseNs.z==0.f)) return false;
+  {
+    JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+    if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return false;
+    }
+  // BodyInterface adds the impulse in SI units and activates a sleeping body.
+  owner->impl->system.GetBodyInterface().AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
+  return true;
+  }
+
 void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
                              bool movable, bool sensor, float mass) {
   const auto transform = toTransform(matrix);
@@ -510,7 +542,7 @@ std::unique_ptr<CollisionWorld::CollisionBody> CollisionWorld::addCollisionBody(
 
 std::unique_ptr<CollisionWorld::DynamicBody> CollisionWorld::addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix,
                                                                            float friction, float mass) {
-  mass = mass>0.f ? mass : 1.f;
+  mass = std::isfinite(mass) && mass>0.f ? mass : 1.f;
   auto result = std::unique_ptr<DynamicBody>(new DynamicBody(*this,std::move(shape),mass));
   addBody(*result,matrix,friction,false,false,mass);
   rigid.push_back(result.get());

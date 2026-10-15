@@ -47,6 +47,10 @@ class Item : public Vob {
     void    setPhysicsEnable (World& w);
     void    setPhysicsDisable();
     bool    isDynamic() const override;
+    float   physicsMass() const { return physic.mass(); }
+    Tempest::Vec3 physicsVelocity() const { return physic.velocity(); } // cm/s
+    bool    physicsSleeping() const { return physic.isSleeping(); }
+    bool    addSpellImpulse(const Tempest::Vec3& impulseNs);
 
     uint8_t slot() const       { return itSlot;  }
     void    setSlot(uint8_t s) { itSlot = s;     }

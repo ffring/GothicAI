@@ -267,6 +267,7 @@ class Npc final {
     BodyState bodyStateMasked() const;
     bool      hasState(BodyState s) const;
     bool      hasStateFlag(BodyState flg) const;
+    bool      spellFrozen() const;
 
     void      setToFightMode(const size_t item);
     void      setToFistMode();
@@ -482,6 +483,10 @@ class Npc final {
     void      suspendRagdoll();
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
+    float     physicsMass() const;
+    bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true);
+    Tempest::Vec3 spellVelocity() const { return mvAlgo.spellVelocity(); }
+    bool      spellWhirling() const;
 
     void      startDive();
     bool      transformInto(size_t instance); // shape change spell: another creature until transformBack
@@ -716,6 +721,7 @@ class Npc final {
     bool               needsRagdollQuestReturn() const;
     void               queueArrowPhysics(const Bullet& bullet);
     void               dispatchArrowPhysics(Ragdoll& body);
+    bool               hasQueuedPhysicalSpellState(const AiQueue& queue) const;
 
     World&                         owner;
     // Debug trace cache only: neither serialized nor used by native AI/animation decisions.
@@ -745,6 +751,7 @@ class Npc final {
     std::unique_ptr<Ragdoll>       living;
     uint64_t                      livingRetryTick = 0;
     bool                          livingNeedsRebuild = false;
+    bool                          livingWasFrozen = false;
     ArrowPhysicsProbe             arrowPhysics;
     struct ArrowImpact {
       size_t bone;
@@ -752,6 +759,7 @@ class Npc final {
       float strength;
       };
     std::vector<ArrowImpact>       arrowImpacts;
+    Tempest::Vec3                  pendingSpellImpulse = {};
     std::vector<Tempest::Matrix4x4> arrowPhysicalPose;
     std::unique_ptr<Ragdoll>       ragdoll;
     std::optional<Ragdoll::State>  ragdollDormant;
