@@ -171,6 +171,15 @@ def test_service_resource_counters_may_change_without_a_restart():
     assert report.service_identity(before) != report.service_identity(after)
 
 
+def test_unit_absent_from_the_host_is_not_a_stopped_production_service():
+    absent = "LoadState=not-found\nActiveState=inactive\nSubState=dead\nMainPID=0"
+    snapshot = {"services": {name: absent for name in ("gothic-voxtral", "gothic-voxcpm")}}
+    assert report.service_identity(snapshot)["gothic-voxtral"]["LoadState"] == "not-found"
+    stopped = {"services": {name: absent.replace("not-found", "loaded") for name in ("gothic-voxtral", "gothic-voxcpm")}}
+    with pytest.raises(ValueError, match="not active"):
+        report.service_identity(stopped)
+
+
 def test_native_self_test_pass_flag_does_not_replace_computed_gate_results():
     result = pure_gate()
     assert report.validate_pure_gate(result) == []

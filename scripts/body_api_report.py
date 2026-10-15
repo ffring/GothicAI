@@ -103,7 +103,13 @@ def service_identity(snapshot: Any) -> dict[str, dict[str, str]]:
             raise ValueError(f"production service snapshot missing: {name}")
         values = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
         identity = {key: values.get(key, "") for key in ("ActiveState", "SubState", "MainPID")}
-        if identity["ActiveState"] != "active" or identity["SubState"] != "running" or not identity["MainPID"].isdigit() or int(identity["MainPID"]) <= 0:
+        # A host without the unit installed (gate host apart from the service host) has
+        # nothing to protect; an installed but stopped service is still a failure.
+        absent = (values.get("LoadState") == "not-found" and identity["ActiveState"] == "inactive" and
+                  identity["SubState"] == "dead" and identity["MainPID"] == "0")
+        if absent:
+            identity["LoadState"] = "not-found"
+        elif identity["ActiveState"] != "active" or identity["SubState"] != "running" or not identity["MainPID"].isdigit() or int(identity["MainPID"]) <= 0:
             raise ValueError(f"production service not active with an actual PID: {name}")
         result[name] = identity
     return result

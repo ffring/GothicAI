@@ -39,7 +39,7 @@ def service_snapshot() -> dict[str, Any]:
     return {
         "gpu": command_output(["nvidia-smi", "--query-gpu=memory.used,memory.free,utilization.gpu", "--format=csv,noheader"]),
         "services": {name: command_output(["systemctl", "--user", "show", name,
-                                          "--property=ActiveState,SubState,MainPID,MemoryCurrent,CPUUsageNSec"])
+                                          "--property=LoadState,ActiveState,SubState,MainPID,MemoryCurrent,CPUUsageNSec"])
                      for name in ("gothic-voxtral", "gothic-voxcpm")},
         "service_latency_measurement": None,
     }
