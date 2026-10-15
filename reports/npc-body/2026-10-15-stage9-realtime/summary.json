@@ -1,0 +1,473 @@
+{
+ "schema_version": 1,
+ "kind": "body_stage9_realtime_check_summary",
+ "host": "Ryzen 9 3950X, bare metal, Ubuntu 26.04",
+ "stage8_quality_credit": false,
+ "candidate_preregistered": false,
+ "verdict": {
+  "candidate_passes_gate_thresholds": true,
+  "candidate_stronger_than_bc_in_realtime": false,
+  "lockstep_gain_transfers_to_realtime": false,
+  "promoted": false
+ },
+ "runs": {
+  "bc": "stage8-final-gate-v16",
+  "candidate": "stage9-rt-eval-v1"
+ },
+ "bc": {
+  "gru_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+  "mlp_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+  "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "gate_thresholds_passed": true,
+  "issues": [],
+  "ordinary_realtime": {
+   "episodes": 6,
+   "neural_control_min": 1.0,
+   "model_step_ms_p95_max": 1.240337,
+   "collector_to_command_send_ms_p95_max": 1.766167,
+   "observation_to_arbitration_ms_p95_max": 3.041149
+  },
+  "realtime_reaction": {
+   "episodes": 2,
+   "neural_control_min": 1.0,
+   "model_step_ms_p95_max": 1.134939,
+   "collector_to_command_send_ms_p95_max": 6.783119,
+   "observation_to_arbitration_ms_p95_max": 8.463234
+  },
+  "four_actor_load": {
+   "episodes": 4,
+   "neural_control_min": 0.9885057471264368,
+   "model_step_ms_p95_max": 1.137884,
+   "collector_to_command_send_ms_p95_max": 3.723555,
+   "observation_to_arbitration_ms_p95_max": 5.983071
+  },
+  "block_reactions": [
+   {
+    "episode": "block-reaction-223-0-gru",
+    "block_after_windup_game_ms": 66,
+    "window_game_ms": 166,
+    "hp_preserved": true
+   },
+   {
+    "episode": "block-reaction-223-1-gru",
+    "block_after_windup_game_ms": 66,
+    "window_game_ms": 166,
+    "hp_preserved": true
+   }
+  ],
+  "fresh_screening_gru": {
+   "distance": {
+    "episodes": 20,
+    "native_successes": 20,
+    "candidate_successes": 20,
+    "native_success_rate": 1.0,
+    "candidate_success_rate": 1.0,
+    "delta": 0.0,
+    "passed": true
+   },
+   "attack": {
+    "episodes": 20,
+    "native_successes": 20,
+    "candidate_successes": 20,
+    "native_success_rate": 1.0,
+    "candidate_success_rate": 1.0,
+    "delta": 0.0,
+    "passed": true
+   },
+   "block": {
+    "episodes": 20,
+    "native_successes": 0,
+    "candidate_successes": 20,
+    "native_success_rate": 0.0,
+    "candidate_success_rate": 1.0,
+    "delta": 1.0,
+    "passed": true
+   },
+   "native_duel": {
+    "episodes": 20,
+    "native_successes": 9,
+    "candidate_successes": 20,
+    "native_success_rate": 0.45,
+    "candidate_success_rate": 1.0,
+    "delta": 0.55,
+    "passed": true
+   }
+  }
+ },
+ "candidate": {
+  "gru_sha256": "fc6de05e696de167e111e352e7633b4dfb66e3c468d4a310d4357137aa576e0c",
+  "mlp_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+  "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+  "gate_thresholds_passed": true,
+  "issues": [],
+  "ordinary_realtime": {
+   "episodes": 6,
+   "neural_control_min": 1.0,
+   "model_step_ms_p95_max": 1.264642,
+   "collector_to_command_send_ms_p95_max": 1.872667,
+   "observation_to_arbitration_ms_p95_max": 3.171634
+  },
+  "realtime_reaction": {
+   "episodes": 2,
+   "neural_control_min": 1.0,
+   "model_step_ms_p95_max": 1.462004,
+   "collector_to_command_send_ms_p95_max": 7.436798,
+   "observation_to_arbitration_ms_p95_max": 8.985375
+  },
+  "four_actor_load": {
+   "episodes": 4,
+   "neural_control_min": 0.9895287958115183,
+   "model_step_ms_p95_max": 1.166417,
+   "collector_to_command_send_ms_p95_max": 5.610228,
+   "observation_to_arbitration_ms_p95_max": 7.427731
+  },
+  "block_reactions": [
+   {
+    "episode": "block-reaction-223-0-gru",
+    "block_after_windup_game_ms": 66,
+    "window_game_ms": 166,
+    "hp_preserved": true
+   },
+   {
+    "episode": "block-reaction-223-1-gru",
+    "block_after_windup_game_ms": 66,
+    "window_game_ms": 166,
+    "hp_preserved": true
+   }
+  ],
+  "fresh_screening_gru": {
+   "distance": {
+    "episodes": 20,
+    "native_successes": 20,
+    "candidate_successes": 20,
+    "native_success_rate": 1.0,
+    "candidate_success_rate": 1.0,
+    "delta": 0.0,
+    "passed": true
+   },
+   "attack": {
+    "episodes": 20,
+    "native_successes": 20,
+    "candidate_successes": 20,
+    "native_success_rate": 1.0,
+    "candidate_success_rate": 1.0,
+    "delta": 0.0,
+    "passed": true
+   },
+   "block": {
+    "episodes": 20,
+    "native_successes": 0,
+    "candidate_successes": 20,
+    "native_success_rate": 0.0,
+    "candidate_success_rate": 1.0,
+    "delta": 1.0,
+    "passed": true
+   },
+   "native_duel": {
+    "episodes": 20,
+    "native_successes": 9,
+    "candidate_successes": 19,
+    "native_success_rate": 0.45,
+    "candidate_success_rate": 0.95,
+    "delta": 0.49999999999999994,
+    "passed": true
+   }
+  }
+ },
+ "paired_gate_gru": {
+  "realtime": {
+   "distance": {
+    "cases": 2,
+    "bc_successes": 2,
+    "candidate_successes": 2,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 230.0,
+    "candidate_opponent_hp_mean": 300.0,
+    "bc_elapsed_s_mean": 1.433,
+    "candidate_elapsed_s_mean": 3.033
+   },
+   "attack": {
+    "cases": 2,
+    "bc_successes": 2,
+    "candidate_successes": 2,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 230.0,
+    "candidate_opponent_hp_mean": 230.0,
+    "bc_elapsed_s_mean": 0.133,
+    "candidate_elapsed_s_mean": 0.133
+   },
+   "block": {
+    "cases": 2,
+    "bc_successes": 0,
+    "candidate_successes": 0,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 8.0,
+    "candidate_opponent_hp_mean": 125.0,
+    "bc_elapsed_s_mean": 5.0,
+    "candidate_elapsed_s_mean": 5.0
+   },
+   "native_duel": {
+    "cases": 2,
+    "bc_successes": 2,
+    "candidate_successes": 2,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 259.0,
+    "candidate_hp_mean": 154.0,
+    "bc_opponent_hp_mean": 0.0,
+    "candidate_opponent_hp_mean": 0.0,
+    "bc_elapsed_s_mean": 12.583,
+    "candidate_elapsed_s_mean": 17.267
+   }
+  },
+  "realtime-reaction": {
+   "distance": null,
+   "attack": null,
+   "block": {
+    "cases": 2,
+    "bc_successes": 2,
+    "candidate_successes": 2,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 300.0,
+    "candidate_opponent_hp_mean": 300.0,
+    "bc_elapsed_s_mean": 0.233,
+    "candidate_elapsed_s_mean": 0.233
+   },
+   "native_duel": null
+  },
+  "screening": {
+   "distance": {
+    "cases": 20,
+    "bc_successes": 20,
+    "candidate_successes": 20,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 300.0,
+    "candidate_opponent_hp_mean": 300.0,
+    "bc_elapsed_s_mean": 1.433,
+    "candidate_elapsed_s_mean": 1.433
+   },
+   "attack": {
+    "cases": 20,
+    "bc_successes": 20,
+    "candidate_successes": 20,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 265.2,
+    "candidate_opponent_hp_mean": 249.2,
+    "bc_elapsed_s_mean": 0.267,
+    "candidate_elapsed_s_mean": 0.167
+   },
+   "block": {
+    "cases": 20,
+    "bc_successes": 20,
+    "candidate_successes": 20,
+    "only_bc": 0,
+    "only_candidate": 0,
+    "bc_hp_mean": 300.0,
+    "candidate_hp_mean": 300.0,
+    "bc_opponent_hp_mean": 300.0,
+    "candidate_opponent_hp_mean": 300.0,
+    "bc_elapsed_s_mean": 0.233,
+    "candidate_elapsed_s_mean": 0.233
+   },
+   "native_duel": {
+    "cases": 20,
+    "bc_successes": 20,
+    "candidate_successes": 19,
+    "only_bc": 1,
+    "only_candidate": 0,
+    "bc_hp_mean": 231.9,
+    "candidate_hp_mean": 250.6,
+    "bc_opponent_hp_mean": 0.0,
+    "candidate_opponent_hp_mean": 15.0,
+    "bc_elapsed_s_mean": 13.628200000000001,
+    "candidate_elapsed_s_mean": 12.33325
+   }
+  }
+ },
+ "held_out_duels_64": {
+  "seeds": "90000-90063, side index%2, distance (250,300,350,400)[(index//2)%4]",
+  "table": {
+   "bc collector": {
+    "n": 64,
+    "wins": 62,
+    "hp": 213.7,
+    "win_s": 16.85,
+    "dec": 32.0,
+    "front": 23.3,
+    "wait": 12.8,
+    "approach": 27.6
+   },
+   "bc gate-ls": {
+    "n": 64,
+    "wins": 62,
+    "hp": 212.7,
+    "win_s": 16.8,
+    "dec": 31.8,
+    "front": 23.2,
+    "wait": 12.8,
+    "approach": 27.7
+   },
+   "bc realtime": {
+    "n": 64,
+    "wins": 64,
+    "hp": 220.1,
+    "win_s": 14.14,
+    "dec": 25.8,
+    "front": 31.8,
+    "wait": 9.2,
+    "approach": 30.9
+   },
+   "r2 collector": {
+    "n": 64,
+    "wins": 63,
+    "hp": 214.9,
+    "win_s": 14.99,
+    "dec": 27.4,
+    "front": 31.7,
+    "wait": 9.2,
+    "approach": 30.5
+   },
+   "r2 gate-ls": {
+    "n": 64,
+    "wins": 63,
+    "hp": 214.9,
+    "win_s": 14.99,
+    "dec": 27.4,
+    "front": 31.7,
+    "wait": 9.2,
+    "approach": 30.5
+   },
+   "r2 realtime": {
+    "n": 64,
+    "wins": 59,
+    "hp": 192.0,
+    "win_s": 16.07,
+    "dec": 29.4,
+    "front": 27.5,
+    "wait": 17.0,
+    "approach": 26.2
+   }
+  },
+  "realtime_bc_vs_candidate": {
+   "cases": 64,
+   "wins_a": 64,
+   "wins_b": 59,
+   "only_a": 5,
+   "only_b": 0,
+   "mcnemar_p": 0.0625,
+   "hp_a": 220.0625,
+   "hp_b": 192.03125,
+   "hp_delta_mean": -28.03125,
+   "both_win_elapsed_s_a": 13.966000000000001,
+   "both_win_elapsed_s_b": 16.067745762711862
+  },
+  "health": {
+   "bc": {
+    "fallbacks": 0,
+    "no_fallback_credit": 64,
+    "control_min": 1.0,
+    "outcomes": {
+     "death_or_down": 64
+    }
+   },
+   "candidate": {
+    "fallbacks": 0,
+    "no_fallback_credit": 64,
+    "control_min": 1.0,
+    "outcomes": {
+     "death_or_down": 64
+    }
+   }
+  },
+  "lockstep_vs_realtime_bc": {
+   "cases": 64,
+   "wins_a": 62,
+   "wins_b": 64,
+   "only_a": 0,
+   "only_b": 2,
+   "mcnemar_p": 0.5,
+   "hp_a": 213.6875,
+   "hp_b": 220.0625,
+   "hp_delta_mean": 6.375,
+   "both_win_elapsed_s_a": 16.85417741935484,
+   "both_win_elapsed_s_b": 14.161741935483871
+  },
+  "lockstep_vs_realtime_candidate": {
+   "cases": 64,
+   "wins_a": 63,
+   "wins_b": 59,
+   "only_a": 5,
+   "only_b": 1,
+   "mcnemar_p": 0.21875,
+   "hp_a": 214.90625,
+   "hp_b": 192.03125,
+   "hp_delta_mean": -22.875,
+   "both_win_elapsed_s_a": 15.044155172413793,
+   "both_win_elapsed_s_b": 16.06258620689655
+  },
+  "gate_lockstep_bc_vs_candidate": {
+   "cases": 64,
+   "wins_a": 62,
+   "wins_b": 63,
+   "only_a": 1,
+   "only_b": 2,
+   "mcnemar_p": 1.0,
+   "hp_a": 212.6875,
+   "hp_b": 214.90625,
+   "hp_delta_mean": 2.21875,
+   "both_win_elapsed_s_a": 16.666,
+   "both_win_elapsed_s_b": 15.004819672131147
+  },
+  "gate_lockstep_vs_realtime_bc": {
+   "cases": 64,
+   "wins_a": 62,
+   "wins_b": 64,
+   "only_a": 0,
+   "only_b": 2,
+   "mcnemar_p": 0.5,
+   "hp_a": 212.6875,
+   "hp_b": 220.0625,
+   "hp_delta_mean": 7.375,
+   "both_win_elapsed_s_a": 16.803112903225806,
+   "both_win_elapsed_s_b": 14.161741935483871
+  },
+  "gate_lockstep_vs_realtime_candidate": {
+   "cases": 64,
+   "wins_a": 63,
+   "wins_b": 59,
+   "only_a": 5,
+   "only_b": 1,
+   "mcnemar_p": 0.21875,
+   "hp_a": 214.90625,
+   "hp_b": 192.03125,
+   "hp_delta_mean": -22.875,
+   "both_win_elapsed_s_a": 15.044155172413793,
+   "both_win_elapsed_s_b": 16.06258620689655
+  }
+ },
+ "source_sha256": {
+  "gate_compare": "71a40cbe7ac8d7778f91442d8d3ab59763edbb8cf8d5567aa9a31eb630ac8030",
+  "rt_duels_compare": "c1c76a294c70e8ba9314eb6900044ef43a8fce995b099c00f2b3dde57cdc43d2",
+  "body/data/stage9-rt-eval-v1/environment.json": "915e494712210c447e5be3a320dc7c20b02a436aff1ef5862e67087796ec51f5",
+  "body/rl/rt-duels-v1/config.json": "a198433f82630b7de1f47c7c7c302d934bc24c307986c9f3c3e1ad189c874d2e",
+  "body/rl/rt-duels-v1/config-v2.json": "b70df2a649e080407c2e392ecf0947cb3c7a07b1fe00399b7aa8e72d0ef04d9c"
+ }
+}
