@@ -1,0 +1,88 @@
+seed 73013
+cheat god
+set time 12 0
+view full
+overlay off
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+living on
+spell fixture wind
+wait 600
+spell feature off
+spell equip 26
+wait 1200
+spell case wind_off
+rec wind_off novideo
+spell cast 600
+wait 5000
+stop
+
+spell fixture wind
+spell feature on
+wait 600
+spell equip 26
+wait 1200
+spell case wind
+rec wind
+spell cast 600
+wait 5000
+stop
+
+spell fixture field
+wait 3000
+spell equip 71
+wait 1200
+spell case whirlwind
+rec whirlwind
+spell cast 600
+wait 16000
+stop
+
+spell fixture fire
+wait 3000
+spell equip 23
+wait 1200
+spell case instant_fireball
+rec instant_fireball
+spell cast 600
+wait 5000
+stop
+
+spell fixture fire
+wait 3000
+spell equip 30
+wait 1200
+spell case charge_fireball
+rec charge_fireball
+spell cast 1600
+wait 6000
+stop
+
+spell fixture ice
+wait 600
+spell equip 33
+wait 1200
+cam follow 270 30 55
+cam look 105
+spell case ice
+rec ice
+spell cast 600
+spell wait-frozen on 5000
+spell wait-frozen off 25000
+wait 1600
+stop
+
+spell fixture ice
+wait 600
+spell equip 33
+wait 1200
+spell case ice_off
+rec ice_off novideo
+spell cast 600
+spell wait-frozen on 5000
+wait 600
+spell feature off
+wait 1500
+stop
+spell feature on
+spell clear

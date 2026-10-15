@@ -785,7 +785,12 @@ DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, con
 
 DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, zenkit::MaterialGroup mat) {
   auto extent = CollisionWorld::toMeters(b.bbox[1]-b.bbox[0]);
-  const float mass = materialDensity(mat)*extent.GetX()*extent.GetY()*extent.GetZ();
+  const auto* m=pos.data();
+  const double volumeScale=std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
+                                    double(m[4])*(double(m[1])*m[10]-double(m[9])*m[2])+
+                                    double(m[8])*(double(m[1])*m[6]-double(m[5])*m[2]));
+  // Use the visual bounds' volume, before the minimum collision proxy padding.
+  const float mass = float(materialDensity(mat)*double(extent.GetX())*extent.GetY()*extent.GetZ()*volumeScale);
   const auto halfExtent = JPH::Vec3::sMax(extent*0.5f,JPH::Vec3::sReplicate(0.15f));
   JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
   auto obj = std::make_unique<BodyData>();
@@ -835,8 +840,17 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   bool stopBullet = false;
   if(matId != zenkit::MaterialGroup::NONE) {
     if(isSpell){
-      if(b.cb!=nullptr)
-        b.cb->onCollide(matId);
+      if(b.cb!=nullptr) {
+        BulletWorldHit result;
+        result.point=hit.point;
+        result.normal=hit.normal;
+        result.material=matId;
+        result.ragdoll=hit.ragdoll;
+        result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+          result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+        b.cb->onSpellWorldHit(result);
+        }
       stopBullet = true;
       } else {
       if(matId==zenkit::MaterialGroup::METAL ||
@@ -1251,6 +1265,22 @@ void DynamicWorld::Item::setInteractive(Interactive* it) {
 void DynamicWorld::Item::setPayloadPtr(void* ptr) {
   if(obj!=nullptr)
     obj->body->setPayload(ptr,P_Editor);
+  }
+
+float DynamicWorld::Item::mass() const {
+  return obj!=nullptr ? obj->body->mass() : 0.f;
+  }
+
+Tempest::Vec3 DynamicWorld::Item::velocity() const {
+  return obj!=nullptr ? obj->body->velocity() : Tempest::Vec3{};
+  }
+
+bool DynamicWorld::Item::isSleeping() const {
+  return obj==nullptr || obj->body->isSleeping();
+  }
+
+bool DynamicWorld::Item::addImpulse(const Tempest::Vec3& impulseNs) {
+  return obj!=nullptr && obj->body->addImpulse(impulseNs);
   }
 
 DynamicWorld::BulletBody::BulletBody(DynamicWorld* wrld, DynamicWorld::BulletCallback* cb)

@@ -106,7 +106,7 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
 
   handleMovementAction(KeyCodec::ActionMapping{a,mapping}, true);
 
-  if(pl!=nullptr && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
+  if(pl!=nullptr && !pl->spellFrozen() && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
     auto inter = pl->interactive();
     if(inter->needToLockpick(*pl)) {
       processPickLock(*pl,*inter,a);
@@ -520,7 +520,7 @@ bool PlayerControl::canInteract() const {
   if(w==nullptr || w->player()==nullptr)
     return false;
   auto pl = w->player();
-  if(pl->weaponState()!=WeaponState::NoWeapon || pl->isAiBusy())
+  if(pl->spellFrozen() || pl->weaponState()!=WeaponState::NoWeapon || pl->isAiBusy())
     return false;
   return true;
   }
@@ -664,6 +664,15 @@ bool PlayerControl::tickMove(uint64_t dt) {
 
   if(pl==nullptr)
     return true;
+
+  if(pl->spellFrozen()) {
+    // Input must not move an attached actor or change root lean outside Npc::tick.
+    // Explicit Marvin teleports above already leave the scripted state first.
+    clearInput();
+    rotMouse = rotMouseY = 0;
+    runAngleDest = 0;
+    return true;
+    }
 
   // implMove says if the bow is raised by hand
   const bool wasAiming = manualAiming;

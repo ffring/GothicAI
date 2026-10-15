@@ -43,6 +43,11 @@ class CollisionWorld final {
         Tempest::Vec3       position() const;
         Tempest::Matrix4x4  matrix() const;
         void                getAabb(JPH::Vec3& min, JPH::Vec3& max) const;
+        float               mass() const; // kilograms; zero for non-dynamic bodies
+        Tempest::Vec3        velocity() const; // centimetres/second
+        bool                isSleeping() const;
+        // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
+        bool                addImpulse(const Tempest::Vec3& impulseNs);
 
         int                 category() const { return categoryId; }
         int                 ptrType() const { return pointerType; }
@@ -68,7 +73,7 @@ class CollisionWorld final {
     class DynamicBody final : public CollisionBody {
       private:
         DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass);
-        const float mass;
+        const float bodyMass;
       friend class CollisionWorld;
       };
 

@@ -103,7 +103,8 @@ class MdlVisual final {
     const HitZones&                hitZoneShape() const { return hitZones; }
     // the animation of that name plays k times as fast from its next start (1: as it is)
     void                           setAnimSpeed(std::string_view name, float k);
-    bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force);
+    bool                           updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force,
+                                                    bool pausePose=false);
     bool                           updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedToGround);
     bool                           hasQuadrupedIk() const;
     bool                           hasGaze() const;

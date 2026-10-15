@@ -83,6 +83,7 @@ class Marvin {
       C_ToggleLivingBodies,
       C_ToggleArrowPhysics,
       C_ToggleArrowSticking,
+      C_ToggleSpellPhysics,
       };
 
     struct Cmd {

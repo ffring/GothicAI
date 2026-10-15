@@ -1,6 +1,8 @@
 #include "item.h"
 
 #include <Tempest/Log>
+#include <algorithm>
+#include <cmath>
 
 #include "game/serialize.h"
 #include "game/gamescript.h"
@@ -196,6 +198,21 @@ void Item::setPhysicsEnable(const ProtoMesh* mesh) {
   b.assign(mesh->bboxMesh);
   physic = p.addDynamicObj(transform(),b,zenkit::MaterialGroup(hitem->material));
   physic.setItem(this);
+  }
+
+bool Item::addSpellImpulse(const Vec3& impulseNs) {
+  if(!std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     impulseNs.quadLength()<=0.f)
+    return false;
+  if(!isDynamic())
+    setPhysicsEnable(world);
+  const float mass = physic.mass();
+  const float momentum = impulseNs.length();
+  if(mass<=0.f || momentum<=0.f)
+    return false;
+  // Very light props receive the same force, with a bounded launch velocity.
+  const auto impulse = impulseNs*std::min(1.f,12.f*mass/momentum);
+  return physic.addImpulse(impulse);
   }
 
 bool Item::isDynamic() const {

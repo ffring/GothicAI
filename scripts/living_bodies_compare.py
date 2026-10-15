@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check living-body capture, or three matched real-clock OFF/ON measurements."""
+"""Check living-body capture, physics flag toggles, or matched OFF/ON measurements."""
 import argparse
 import csv
 import json
@@ -63,6 +63,28 @@ def functional(run):
                 assert travel(native) > 50, (index, 'kinematic body did not follow movement')
     return {'pass': True, 'checks': checks, 'walker_displacement_cm': motion,
             'note': 'Overlay shows gameplay hit zones; counts are actual native kinematic parts.'}
+
+
+def physics_flags(data):
+    names = ('ragdoll', 'ragdoll_quest_guard', 'living_bodies',
+             'arrow_physics', 'arrow_sticking', 'spell_physics')
+    rows = [e for e in data if e['kind'] == 'physics_flags_check']
+    expected = [(name, phase) for name in names for phase in ('off', 'on', 'restore')]
+    assert [(e['flag'], e['phase']) for e in rows] == expected, 'missing or unordered flag toggles'
+    assert len({e['t'] for e in rows}) == 1, 'flags check advanced the game clock'
+    for row in rows:
+        assert row['pass'] and row['prepared'] and row['same_dispatch'], row
+        assert type(row['cached']) is bool and row['cached'] == (row['configured'] != 0), row
+        if row['phase'] == 'restore':
+            assert row['configured'] == row['original'], row
+        else:
+            assert row['configured'] == int(row['phase'] == 'on'), row
+    return rows
+
+
+def flags(run):
+    living = functional(run)
+    return {'pass': True, 'functional': living, 'flags': physics_flags(events(run))}
 
 
 def radius(run):
@@ -133,12 +155,13 @@ def performance(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('functional', 'performance', 'radius'))
+    parser.add_argument('mode', choices=('functional', 'performance', 'radius', 'flags'))
     parser.add_argument('directory', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        result = {'functional': functional, 'performance': performance, 'radius': radius}[args.mode](args.directory)
+        result = {'functional': functional, 'performance': performance, 'radius': radius,
+                  'flags': flags}[args.mode](args.directory)
     except (AssertionError, KeyError, ValueError, OSError, TypeError) as error:
         result = {'pass': False, 'error': str(error)}
     args.output.write_text(json.dumps(result, indent=2) + '\n')

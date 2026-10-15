@@ -175,6 +175,9 @@ class World final {
     // the velocity an arrow, a bolt leaves with to fall onto the target
     static Tempest::Vec3 bulletVelocity(const Tempest::Vec3& from, const Tempest::Vec3& to);
     Bullet&              shootSpell(const Item &itm, const Npc &npc, const Npc *target);
+    void                 applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target);
+    void                 startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target);
+    size_t               spellFieldCount() const { return spellFields.size(); }
 
     void                 sendPassivePerc  (Npc& self, Npc& other, int32_t perc);
     void                 sendPassivePerc  (Npc& self, Npc& other, Npc& victim, int32_t perc);
@@ -229,12 +232,21 @@ class World final {
     WorldSound                            wsound;
     WorldObjects                          wobj;
     std::vector<MeshObjects::Mesh>        stuckArrows;
+    struct SpellField {
+      Tempest::Vec3 center;
+      Npc* caster = nullptr; // identities only; never dereferenced by a field
+      Npc* target = nullptr;
+      uint64_t until = 0;
+      int32_t spellId = 0;
+      };
+    std::vector<SpellField>               spellFields;
     std::unique_ptr<Npc>                  lvlInspector;
 
     auto         roomAt(const zenkit::BspNode &node) -> std::string_view;
     auto         portalAt(std::string_view tag) -> BspSector*;
 
     void         initScripts(bool firstTime);
+    void         tickSpellFields(uint64_t dt);
 
     Sound        addHitEffect(std::string_view src, std::string_view reciver, std::string_view scheme, const Tempest::Matrix4x4& pos);
   };

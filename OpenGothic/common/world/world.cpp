@@ -3,6 +3,8 @@
 #include <functional>
 #include <future>
 #include <cctype>
+#include <algorithm>
+#include <cmath>
 
 #include <Tempest/Log>
 #include <Tempest/Painter>
@@ -22,6 +24,7 @@
 #include "focus.h"
 #include "resources.h"
 #include "frameprofile.h"
+#include "testbench.h"
 
 const char* materialTag(ItemMaterial src) {
   switch(src) {
@@ -174,6 +177,7 @@ void World::postInit() {
   }
 
 void World::load(Serialize &fin) {
+  spellFields.clear();
   stuckArrows.clear();
   fin.setContext(this);
   fin.setEntry("worlds/",wname,"/world");
@@ -427,11 +431,12 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
-  if(Gothic::settingsGetI("GAME","arrow_sticking")==0)
+  if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;
   if(!doTicks)
     return;
+  tickSpellFields(dt);
   { FrameProfile::Scope timing(FrameProfile::Zone::WorldLogic); wobj.tick(dt,dt); }
   { FrameProfile::Scope timing(FrameProfile::Zone::Prepare); wobj.prepareRagdolls(); }
   { FrameProfile::Scope timing(FrameProfile::Zone::Physics); wdynamic->tick(dt); }
@@ -699,6 +704,145 @@ void World::removeItem(Item& it) {
 
 size_t World::hasItems(std::string_view tag, size_t itemCls) {
   return wobj.hasItems(tag,itemCls);
+  }
+
+void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target) {
+  using namespace Tempest;
+  if(!Gothic::physicsFlags().spellPhysics)
+    return;
+  const auto kind = script().physicalSpell(spellId);
+  const bool wind = kind==GameScript::PhysicalSpell::WindFist;
+  if(!wind && kind!=GameScript::PhysicalSpell::Fireball)
+    return;
+  if(wind && caster==nullptr)
+    return;
+  const Vec3 center = wind ? caster->collosionCenter() : point;
+  const float radius = wind ? 1000.f : 400.f;
+  auto forward = point-center;
+  if(forward.length()<1.e-3f && caster!=nullptr)
+    forward = Vec3(std::cos(caster->rotationRad()),0,std::sin(caster->rotationRad()));
+  if(forward.length()>1.e-3f)
+    forward = Vec3::normalize(forward);
+  auto clearPath = [&](const Vec3& to) {
+    const auto delta = to-center;
+    if(delta.length()<4.f)
+      return true;
+    const auto hit = physic()->ray(center+Vec3::normalize(delta)*2.f,to);
+    return !hit.hasCol || (hit.v-to).length()<8.f;
+    };
+  auto impulseAt = [&](const Vec3& to) {
+    const auto delta = to-center;
+    const float distance = delta.length();
+    if(distance>=radius || !clearPath(to))
+      return Vec3();
+    const auto radial = distance>1.e-3f ? delta/distance : Vec3(0,1,0);
+    if(wind && Vec3::dotProduct(radial,forward)<0.819152f) // 35 degree cone
+      return Vec3();
+    const float falloff = 1.f-distance/radius;
+    auto direction = wind ? forward+Vec3(0,0.35f,0) : radial+Vec3(0,0.35f,0);
+    return Vec3::normalize(direction)*((wind ? 450.f : 300.f)*falloff);
+    };
+  size_t npcHits = 0, itemHits = 0;
+  detectNpc(center,radius,[&](Npc& npc) {
+    if(&npc==caster || (wind && &npc!=target))
+      return;
+    const auto impulse = impulseAt(npc.collosionCenter());
+    // A heavy creature resists this finite wind impulse. The threshold is a
+    // delta velocity, so object scale and species mass use the same rule.
+    if(impulse.quadLength()<=0.f || (wind && impulse.length()/npc.physicsMass()<1.f))
+      return;
+    if(!npc.addSpellImpulse(impulse))
+      return;
+    ++npcHits;
+    if(TestBench::isActive()) {
+      const auto who = TestBench::who(&npc);
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"spell physics %s %.*s mass %.9g impulse %.9g %.9g %.9g",
+                    wind ? "wind" : "fireball",int(who.size()),who.data(),double(npc.physicsMass()),
+                    double(impulse.x),double(impulse.y),double(impulse.z));
+      TestBench::note(buf);
+      }
+    });
+  detectItem(center,radius,[&](Item& item) {
+    const auto impulse = impulseAt(item.midPosition());
+    if(impulse.quadLength()>0.f && item.addSpellImpulse(impulse))
+      ++itemHits;
+    });
+  if(TestBench::isActive()) {
+    char buf[256];
+    std::snprintf(buf,sizeof(buf),"spell physics impact id %d at %.9g %.9g %.9g npc %zu items %zu",
+                  spellId,double(point.x),double(point.y),double(point.z),npcHits,itemHits);
+    TestBench::note(buf);
+    }
+  }
+
+void World::startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target) {
+  if(!Gothic::physicsFlags().spellPhysics ||
+     script().physicalSpell(spellId)!=GameScript::PhysicalSpell::Whirlwind)
+    return;
+  int seconds = 10;
+  if(auto* duration = script().findSymbol("SPL_TIME_WHIRLWIND"))
+    seconds = std::clamp(duration->get_int(),1,60);
+  if(spellFields.size()>=16)
+    spellFields.erase(spellFields.begin());
+  spellFields.push_back({point,caster,target,tickCount()+uint64_t(seconds)*1000,spellId});
+  if(TestBench::isActive()) {
+    char buf[192];
+    std::snprintf(buf,sizeof(buf),"spell physics field start id %d at %.9g %.9g %.9g duration %d",
+                  spellId,double(point.x),double(point.y),double(point.z),seconds);
+    TestBench::note(buf);
+    }
+  }
+
+void World::tickSpellFields(uint64_t dt) {
+  using namespace Tempest;
+  if(!Gothic::physicsFlags().spellPhysics) {
+    spellFields.clear();
+    return;
+    }
+  for(auto i=spellFields.begin();i!=spellFields.end();) {
+    if(tickCount()<i->until) {
+      ++i;
+      continue;
+      }
+    if(TestBench::isActive()) {
+      char buf[192];
+      std::snprintf(buf,sizeof(buf),"spell physics field end id %d at %.9g %.9g %.9g",i->spellId,
+                    double(i->center.x),double(i->center.y),double(i->center.z));
+      TestBench::note(buf);
+      }
+    i = spellFields.erase(i);
+    }
+  const float seconds = float(std::min<uint64_t>(dt,50))*0.001f;
+  if(seconds<=0.f)
+    return;
+  for(const auto& field:spellFields) {
+    auto impulseAt = [&](const Vec3& position) {
+      const auto r = position-field.center;
+      const float distance = Vec3(r.x,0,r.z).length();
+      if(distance>=350.f || r.y>400.f || r.y< -100.f)
+        return Vec3();
+      const auto from = field.center+Vec3(0,75,0);
+      if(physic()->ray(from,position+Vec3(0,30,0)).hasCol)
+        return Vec3();
+      const float falloff = 1.f-distance/350.f;
+      // World-space force in newtons: lift loses strength above the vortex,
+      // while the horizontal component turns inward and around its centre.
+      const Vec3 force(-r.z*4.f-r.x*2.f+80.f,
+                       std::clamp(1800.f-r.y*6.f,-750.f,1800.f),
+                       r.x*4.f-r.z*2.f);
+      return force*(seconds*falloff);
+      };
+    detectNpc(field.center,550.f,[&](Npc& npc) {
+      if(&npc==field.target && &npc!=field.caster)
+        npc.addSpellImpulse(impulseAt(npc.position()),false);
+      });
+    detectItem(field.center,550.f,[&](Item& item) {
+      const auto impulse = impulseAt(item.position());
+      if(impulse.quadLength()>0.f)
+        item.addSpellImpulse(impulse);
+      });
+    }
   }
 
 Bullet& World::shootSpell(const Item &itm, const Npc &npc, const Npc *target) {

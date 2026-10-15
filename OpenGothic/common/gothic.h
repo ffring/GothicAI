@@ -42,6 +42,15 @@ class Gothic final {
       FailedSave = 5
       };
 
+    struct PhysicsFlags {
+      bool ragdoll       = false;
+      bool questGuard    = false;
+      bool livingBodies  = false;
+      bool arrowPhysics  = false;
+      bool arrowSticking = false;
+      bool spellPhysics  = false;
+      };
+
     struct Options {
       GiMethod doGi              = GiMethod::None;
       uint32_t aaPreset          = 0;
@@ -239,6 +248,9 @@ class Gothic final {
     static const MusicDefinitions&        musicDef();
     static const CameraDefinitions&       cameraDef();
 
+    // Shared read-only snapshot for actor/physics hot paths, refreshed on settings changes
+    // and once before each world tick. It is also ready before loading the first actor.
+    static const PhysicsFlags&            physicsFlags() { return instance->physicsFlagsCache; }
     static bool                           settingsHasSection(std::string_view sec);
     static int                            settingsGetI(std::string_view sec, std::string_view name);
     static void                           settingsSetI(std::string_view sec, std::string_view name, int val);
@@ -252,6 +264,7 @@ class Gothic final {
   private:
     VersionInfo                             vinfo;
     Options                                 opts;
+    PhysicsFlags                            physicsFlagsCache;
     std::mt19937                            randGen;
     uint16_t                                pauseSum=0;
     bool                                    isMarvin       = false;
@@ -306,6 +319,7 @@ class Gothic final {
 
     void                                    detectGothicVersion();
     void                                    setupSettings();
+    void                                    refreshPhysicsFlags();
 
     auto                                    getDocument(int id) -> std::unique_ptr<DocumentMenu::Show>&;
 
