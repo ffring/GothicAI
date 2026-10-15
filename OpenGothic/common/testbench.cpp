@@ -2688,6 +2688,28 @@ void prepareMovableCast(World& world,Npc& player) {
     }
   player.closeWeapon(true);
   Vec3 target,caster;bool found=false;
+  const auto npcFreeLane=[&](const Vec3& from,const Vec3& to) {
+    const auto segment=to-from;
+    const float lengthSquared=segment.x*segment.x+segment.z*segment.z;
+    if(lengthSquared<=1.f)return false;
+    // A stopped NPC still intercepts the real projectile. Check every actor,
+    // including the caster endpoint, with a conservative 100 cm lane radius.
+    // Height separates the tavern floor from actors upstairs or downstairs.
+    for(uint32_t id=0;id<world.npcCount();++id) {
+      const auto* other=world.npcById(id);if(!other || other==&player)continue;
+      const auto center=other->collosionCenter();
+      const float t=std::clamp(((center.x-from.x)*segment.x+(center.z-from.z)*segment.z)/lengthSquared,0.f,1.f);
+      const auto closest=from+segment*t+Vec3(0,100,0);
+      const float dx=center.x-closest.x,dz=center.z-closest.z;
+      if(dx*dx+dz*dz<100.f*100.f && std::abs(center.y-closest.y)<160.f)return false;
+      }
+    const auto side=Vec3(-segment.z,0,segment.x)*(60.f/std::sqrt(lengthSquared));
+    for(const auto offset:{Vec3(),side,side*-1.f}) {
+      const auto hit=world.physic()->rayNpc(from+offset+Vec3(0,100,0),to+offset+Vec3(0,100,0),&player);
+      if(hit.npcHit!=nullptr)return false;
+      }
+    return true;
+    };
   for(unsigned i=0;i<16 && !found;++i) {
     const float angle=float(i)*float(M_PI)/8.f;
     const Vec3 direction(std::cos(angle),0,std::sin(angle));
@@ -2702,7 +2724,8 @@ void prepareMovableCast(World& world,Npc& player) {
       for(const auto side:{Vec3(25,0,0),Vec3(-25,0,0),Vec3(0,0,25),Vec3(0,0,-25)})
         if(world.physic()->ray(*point+Vec3(0,85,0),*point+side+Vec3(0,85,0)).hasCol)valid=false;
       }
-    if(valid && !world.physic()->ray(caster+Vec3(0,145,0),target+Vec3(0,145,0)).hasCol)found=true;
+    if(valid && npcFreeLane(caster,target) &&
+       !world.physic()->ray(caster+Vec3(0,145,0),target+Vec3(0,145,0)).hasCol)found=true;
     }
   if(!found) {arenaAbort("tavern fireball needs supported clear caster/target endpoints across furniture");return;}
   player.setPosition(caster);player.setDirection(target-caster);player.updateTransform();
@@ -2721,7 +2744,8 @@ void prepareMovableCast(World& world,Npc& player) {
     }
   player.handle().attribute[ATR_MANA]=player.handle().attribute[ATR_MANAMAX]=50000;player.setTalentSkill(TALENT_MAGE,6);
   Gothic::settingsSetI("GAME","spell_physics",1);
-  event("movable_cast_setup","\"spell_id\":23,\"target_cm\":"+ragdollVector(target)+",\"caster_cm\":"+ragdollVector(player.position()));
+  event("movable_cast_setup","\"spell_id\":23,\"npc_free_lane_radius_cm\":100,\"target_cm\":"+
+    ragdollVector(target)+",\"caster_cm\":"+ragdollVector(player.position()));
   }
 
 void saveMovableSession(World& world,const std::string& label) {
@@ -3366,7 +3390,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("movable_session_reload","\"world\":"+jsonStr(w.name())+",\"world_load_ms\":"+
       ragdollNumber(float(w.loadMilliseconds()))+",\"tables\":"+std::to_string(tables)+",\"utensils\":"+
       std::to_string(utensils)+",\"bodies\":"+std::to_string(w.physic()->physicsStats().bodies));
-    if(!tables || !utensils)arenaAbort("full movable save reload has no registered map furniture or utensils");
+    // The fixture's extra dishes are temporary vobs, outside the map's saved
+    // tree. A complete reload must recreate the authored map furniture.
+    if(!tables)arenaAbort("full movable save reload has no registered map furniture");
     }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
   else if(c=="movable" && a.size()==3 && a[1]=="measure") {

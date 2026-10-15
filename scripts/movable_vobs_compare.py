@@ -166,7 +166,7 @@ def reload(directory, saved_directory):
     saved = one(events(saved_directory), 'movable_session_save')
     checks = [row for row in rows if row['kind'] == 'movable_session_reload']
     require(len(checks) == 2 and checks[1]['t'] - checks[0]['t'] >= 1000, 'fresh save reload needs a complete one-second continuation')
-    require(all(row['world'] == saved['world'] and row['tables'] > 0 and row['utensils'] > 0 for row in checks), 'save reload lost world or map vobs')
+    require(all(row['world'] == saved['world'] and row['tables'] > 0 and row['bodies'] > 0 for row in checks), 'save reload lost world or map furniture')
     source, actual = saved_directory/saved['archive'], directory/'run/save_slot_1.sav'
     require(source.read_bytes() == actual.read_bytes(), 'reload did not load the exact scattered-scene GameSession archive')
     require(loaded['enabled'] is True, 'reload must construct native movable bodies')
