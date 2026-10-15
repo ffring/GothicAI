@@ -189,7 +189,8 @@ class Camera final {
     float                 aimBlend   = 0;   // 0..1: from the usual camera to over the shoulder
     float                 aimZoom    = 0;   // wanted...
     float                 aimZoomS   = 0;   // ...smoothed
-    float                 aimSaved   = 0;   // the elevation before the aim: back to it after
+    float                 aimSaved   = 0;   // the elevation before the aim: back to it after...
+    float                 aimPitchBack = 0; // ...what is left to go back, as the camera blends out
     Tempest::Vec3         aimAnchor  = {};
     float                 aimDrop    = 0;
     float                 aimSide    = 0;

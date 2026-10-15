@@ -93,6 +93,7 @@ void Camera::reset(const Npc* pl) {
 
   state.spin.x  = 0;
   state.spin.y  = pl ? pl->rotation() : 0;
+  aimPitchBack  = 0;
   state.spin   += Vec3(def.best_elevation,
                        def.best_azimuth,
                        def.best_rot_z);
@@ -308,11 +309,16 @@ void Camera::setLookBack(bool lb) {
   }
 
 void Camera::setAim(bool on, float zoom) {
-  if(on && !aimOn)
-    aimSaved = state.spin.x;
+  if(on && !aimOn) {
+    // raised again while still going back: the elevation it was going back to
+    aimSaved     = state.spin.x - aimPitchBack;
+    aimPitchBack = 0;
+    }
   if(!on && aimOn) {
-    // back to how it looked before
-    state.spin.x = aimSaved;
+    // back to how it looked before, as the camera blends out (tickAim): at once the camera over the
+    // shoulder would swing round with it, a jump of a metre. From where the clamp leaves it, all the way
+    state.spin.x = clampRotation(state.spin).x;
+    aimPitchBack = state.spin.x - aimSaved;
     }
   aimOn   = on;
   aimZoom = on ? std::clamp(zoom,0.f,1.f) : 0.f;
@@ -364,8 +370,18 @@ void Camera::tickAim(float dtF) {
   static float zoomRate = 6.f;   // 1/s
   static float fovZoom  = 0.15f; // of the field of view at full draw
   if(dtF>0.f) {
+    const float was = aimBlend;
     aimBlend  = aimOn ? std::min(1.f,aimBlend+dtF/blendIn) : std::max(0.f,aimBlend-dtF/blendOut);
     aimZoomS += (aimZoom*aimBlend - aimZoomS)*std::min(1.f,dtF*zoomRate);
+    if(!aimOn && aimPitchBack!=0.f) {
+      // the elevation goes back with the blend, eased at both ends (the mouse still moves it meanwhile):
+      // what is left of it is smoothstep(aimBlend)
+      auto  ease = [](float b) { return b*b*(3.f-2.f*b); };
+      const float left = was>0.f ? ease(aimBlend)/ease(was) : 0.f;
+      const float give = aimPitchBack*(1.f-left);
+      state.spin.x -= give;
+      aimPitchBack -= give;
+      }
     }
   if(aimBlend<=0.f) {
     // the lean over an edge stays while the camera goes back from the aim (no jump), then is gone
@@ -1069,7 +1085,7 @@ Vec3 Camera::calcCameraColision(const Tempest::Vec3& from, const Tempest::Vec3& 
 Vec3 Camera::clampRotation(Tempest::Vec3 spin) {
   //NOTE: min elevation is zero for nomal camera. assume that it's ignored by vanilla
   float       maxElev = +85;
-  float       minElev = aimOn ? -80 : -60; // a bow aimed by hand: high up too
+  float       minElev = aimOn || aimBlend>0.f ? -80 : -60; // a bow aimed by hand: high up too (and going back)
   float       maxAzim = +180;
   float       minAzim = -180;
 
