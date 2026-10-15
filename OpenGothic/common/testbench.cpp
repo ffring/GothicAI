@@ -568,7 +568,7 @@ struct Bench {
   Npc*        questNpc = nullptr;
   std::string questCase;
   Vec3        questStable = {};
-  bool        questTrace=false,questWaterCase=false,questSawDrop=false,questSawWater=false,questWait=false,questLaunched=false;
+  bool        questTrace=false,questWaterCase=false,questSawDrop=false,questSawWater=false,questWait=false,questLaunched=false,questStandingWait=false;
   uint64_t    questDeadline=0,questWallNs=0;
   uint32_t    questLastReturns=0;
   Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
@@ -3091,45 +3091,67 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
 
   else if(c=="guard" && a.size()==6 && a[1]=="setup") {
-    Npc* npc=bench.subject;
-    const bool water=a[3]=="water", immortal=a[4]=="immortal", enabled=a[5]=="on";
-    if(npc==nullptr || npc==&pl || (a[3]!="water" && a[3]!="cliff") || (a[4]!="immortal" && a[4]!="normal") || (a[5]!="on" && a[5]!="off")) {
-      arenaAbort("guard setup expects watched NPC, label cliff|water immortal|normal on|off");return;
+    Npc* npc=&subjectOf(pl);
+    const bool water=a[3]=="water", enabled=a[5]=="on";
+    if(npc==nullptr || (a[3]!="water" && a[3]!="cliff") || a[4]!="normal" || (a[5]!="on" && a[5]!="off")) {
+      arenaAbort("guard setup expects watched actor, label cliff|water normal on|off");return;
       }
     auto& site=water ? bench.questWater : bench.questCliff;
     if(!chooseQuestSite(w,water,site)) { arenaAbort("no supported dry quest-guard hazard site");return; }
     Gothic::settingsSetI("GAME","ragdoll_quest_guard",enabled);
     auto& flags=npc->handle().flags;
-    flags=zenkit::NpcFlag(immortal ? uint32_t(flags)|uint32_t(zenkit::NpcFlag::IMMORTAL) : uint32_t(flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+    flags=zenkit::NpcFlag(uint32_t(flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+    npc->setAttitude(ATT_NEUTRAL);
+    if(npc!=&pl && npc->isHuman()) {
+      npc->handle().attribute[ATR_HITPOINTSMAX]=100;
+      npc->handle().attribute[ATR_HITPOINTS]=2;
+      for(auto& protection:npc->handle().protection) protection=0;
+      }
+    pl.closeWeapon(true);pl.handle().attribute[ATR_STRENGTH]=1000;
+    pl.handle().damage_type=1<<size_t(zenkit::DamageType::BLUNT);
     npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);npc->setPosition(site.dry);npc->setDirection(site.direction);npc->updateTransform();
     auto hero=site.dry-site.direction*300;
     if(const auto floor=w.physic()->landRay(hero+Vec3(0,300,0),1500);floor.hasCol) hero.y=floor.v.y;
-    pl.setPosition(hero);pl.updateTransform();
+    if(npc!=&pl) {pl.setPosition(hero);pl.updateTransform();}
     // Keep unrelated attacks from changing the dry-anchor setup or the filmed recovery.
     for(uint32_t id=0;id<w.npcCount();++id)
       if(auto* other=w.npcById(id);other!=nullptr && other!=&pl && other!=npc &&
          (other->position()-site.dry).length()<4000)
         exec("freeze id:"+std::to_string(id),w,pl,ctrl);
     bench.questTrace=true;bench.questNpc=npc;bench.questCase=a[2];bench.questWaterCase=water;
-    bench.questSawDrop=bench.questSawWater=bench.questWait=bench.questLaunched=false;bench.questLastReturns=0;bench.questWallNs=0;
+    bench.questSawDrop=bench.questSawWater=bench.questWait=bench.questLaunched=bench.questStandingWait=false;bench.questLastReturns=0;bench.questWallNs=0;
     event("immortal_guard_case","\"case\":"+jsonStr(a[2])+",\"actor_id\":"+std::to_string(w.npcId(npc))+
       ",\"immortal\":"+(npc->isImmortal()?"true":"false")+",\"enabled\":"+(enabled?"true":"false")+
       ",\"site\":"+jsonStr(site.waypoint)+",\"dry_cm\":"+ragdollVector(site.dry)+",\"direction\":"+ragdollVector(site.direction)+
       ",\"water_y_cm\":"+ragdollNumber(site.waterY));
     }
-  else if(c=="guard" && a.size()==2 && a[1]=="launch") {
+  else if(c=="guard" && (a.size()==2 || (a.size()==3 && a[2]=="safe")) && a[1]=="launch") {
     auto* npc=bench.questNpc;if(npc==nullptr || npc->isDown()) {arenaAbort("guard launch needs living actor");return;}
     bench.questStable=npc->position();const auto& q=npc->ragdollQuestReturnState();
-    if(npc->isImmortal() && Gothic::settingsGetI("GAME","ragdoll_quest_guard") && (!q.hasAnchor || (q.anchor-bench.questStable).length()>3)) {
+    if(npc->isHuman() && !npc->isPlayer() && Gothic::settingsGetI("GAME","ragdoll_quest_guard") && (!q.hasAnchor || (q.anchor-bench.questStable).length()>3)) {
       arenaAbort("guard launch lacks a real stable dry anchor");return;
       }
     event("immortal_guard_launch","\"case\":"+jsonStr(bench.questCase)+",\"stable_cm\":"+ragdollVector(bench.questStable)+
       ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"immortal\":"+(npc->isImmortal()?"true":"false"));
     bench.questLaunched=true;
-    npc->setLastHitBy(&pl);npc->setRagdollDown(false);npc->prepareRagdoll();
-    if(!npc->isUnconscious() || !npc->ragdollBody()) {arenaAbort("guard actor did not enter a real native KO");return;}
+    const auto before=npc->attribute(ATR_HITPOINTS);
+    npc->takeDamage(pl,nullptr);npc->prepareRagdoll();
+    event("immortal_guard_damage","\"case\":"+jsonStr(bench.questCase)+",\"hp_before\":"+std::to_string(before)+
+      ",\"hp_after\":"+std::to_string(npc->attribute(ATR_HITPOINTS))+",\"unconscious\":"+(npc->isUnconscious()?"true":"false")+
+      ",\"dead\":"+(npc->isDead()?"true":"false")+",\"melee\":true");
+    if(before!=2 || npc->attribute(ATR_HITPOINTS)!=1 || !npc->isUnconscious() || npc->isDead() || !npc->ragdollBody()) {arenaAbort("real melee damage did not produce HP2 to HP1 native KO");return;}
     const auto direction=(bench.questWaterCase?bench.questWater:bench.questCliff).direction;
-    npc->addRagdollImpulse(direction*1000.f+Vec3(0,50,0));
+    if(a.size()==2) npc->addRagdollImpulse(direction*1000.f+Vec3(0,50,0));
+    }
+  else if(c=="guard" && a.size()==2 && a[1]=="excluded") {
+    const auto* npc=bench.questNpc;
+    if(npc==nullptr || (!npc->isPlayer() && npc->isHuman())) {arenaAbort("guard exclusion needs hero or non-human");return;}
+    const auto& q=npc->ragdollQuestReturnState();
+    event("immortal_guard_excluded","\"case\":"+jsonStr(bench.questCase)+",\"human\":"+(npc->isHuman()?"true":"false")+
+      ",\"hero\":"+(npc->isPlayer()?"true":"false")+",\"monster\":"+(npc->isMonster()?"true":"false")+
+      ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
+      ",\"returns\":"+std::to_string(npc->ragdollQuestReturnCount()));
+    if(q.hasAnchor || q.armed || npc->ragdollQuestReturnCount()!=0) arenaAbort("excluded actor acquired return protection");
     }
   else if(c=="guard" && a.size()==2 && a[1]=="hazard") {
     bench.questWait=true;bench.questDeadline=bench.time+10000;
@@ -3141,6 +3163,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"angle\":"+ragdollNumber(q.angle)+
       ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+",\"hazards\":"+std::to_string(q.hazards));
     bench.questLastReturns=npc->ragdollQuestReturnCount();
+    }
+  else if(c=="guard" && a.size()==3 && a[1]=="wait-standing") {
+    if(bench.questNpc==nullptr) {arenaAbort("guard standing wait lost actor");return;}
+    // Let the actual get-up/draw animation finish while preventing a new combat action.
+    bench.questNpc->setExternalControl(true);
+    bench.questStandingWait=true;bench.questDeadline=bench.time+uint64_t(num(a,2,5000));
     }
   else if(c=="guard" && a.size()==2 && a[1]=="finish") {
     const auto* npc=bench.questNpc;
@@ -3154,10 +3182,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="guard" && a.size()==2 && a[1]=="cleanup") {
     auto* npc=bench.questNpc;
-    if(npc==nullptr || npc==&pl) {arenaAbort("guard cleanup lost actor");return;}
+    if(npc==nullptr) {arenaAbort("guard cleanup lost actor");return;}
     bench.questNpc=nullptr;
     if(bench.subject==npc) exec("watch player",w,pl,ctrl);
-    w.removeNpc(*npc);
+    if(npc!=&pl) w.removeNpc(*npc); else npc->setExternalControl(false);
     }
   else if(c=="waitragdoll") {
     Npc* npc=a.size()>1 ? findNpc(w,pl,a[1]) : nullptr;
@@ -5604,10 +5632,19 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
         }
       }
   if(bench.questNpc!=nullptr && !bench.questCase.empty()) questFields(w,*bench.questNpc,false);
+  if(bench.questStandingWait) {
+    const auto* npc=bench.questNpc;
+    const bool ready=npc && npc->isStanding() && !npc->isDown() && !npc->ragdollBody() &&
+                     !npc->isRagdollBlending() && !npc->ragdollQuestReturnState().armed;
+    if(!ready && bench.time<bench.questDeadline) return;
+    bench.questStandingWait=false;
+    event("immortal_guard_standing","\"case\":"+jsonStr(bench.questCase)+",\"standing\":"+(ready?"true":"false"));
+    if(!ready) {arenaAbort("real get-up did not finish standing");return;}
+    }
   if(bench.questWait) {
     const bool observed=bench.questWaterCase?bench.questSawWater:bench.questSawDrop;
     const uint8_t wanted=bench.questWaterCase ? RagdollSave::QuestReturn::water : RagdollSave::QuestReturn::fell;
-    const bool guarded=bench.questNpc->isImmortal() && Gothic::settingsGetI("GAME","ragdoll_quest_guard");
+    const bool guarded=bench.questNpc->isHuman() && !bench.questNpc->isPlayer() && Gothic::settingsGetI("GAME","ragdoll_quest_guard");
     const bool reached=observed && (!guarded || (bench.questNpc->ragdollQuestReturnState().hazards & wanted));
     if(!reached && bench.time<bench.questDeadline) return;
     bench.questWait=false;
@@ -5720,7 +5757,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
-    if(bench.questWait) return;
+    if(bench.questWait || bench.questStandingWait) return;
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
     if(bench.cadenceWait) return;
 #endif
