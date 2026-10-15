@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from gothic_ai import triggers
 from gothic_ai.protocol import (
     PROTOCOL_VERSION,
     ActionCmd,
@@ -27,6 +28,7 @@ from gothic_ai.protocol import (
     StoryEffectCmd,
     StoryNpcCmd,
     StoryProgramCmd,
+    TriggerFired,
     parse_game_message,
 )
 from tests.fake_game import FakeGame
@@ -308,7 +310,7 @@ def test_v33_an_npc_of_the_directors():
 
 
 def test_v34_a_character_of_the_directors():
-    assert PROTOCOL_VERSION == 34
+    assert PROTOCOL_VERSION >= 34
     spec = NpcSpec(
         npc="DIR_NPC_1",
         like="VLK_4000_BUERGER",
@@ -325,3 +327,15 @@ def test_v34_a_character_of_the_directors():
     json = StoryNpcCmd(req="n1", **spec.model_dump()).to_json()
     assert '"type":"story_npc"' in json and '"name":"Гарет"' in json and '"armor"' not in json
     assert '"routine":[{"start":"06:00","end":"06:00","state":"ZS_STAND_ARMSCROSSED"' in json
+
+
+def test_v35_the_directors_triggers():
+    assert PROTOCOL_VERSION == 35
+    op = triggers.trigger("DIR_Q1_T1", triggers.STATE, [], when=triggers.hero_has("ITMI_SAW"), repeat=True)
+    patch = GraphPatchCmd(ops=[op]).to_json()
+    assert '"op":"trigger"' in patch and '"on":"state"' in patch and '"repeat":true' in patch
+    fired = parse_game_message(
+        '{"type":"trigger_fired","id":"DIR_Q1_T1","count":2,"npc":"PC_HERO","other":"PC_HERO"}'
+    )
+    assert isinstance(fired, TriggerFired) and fired.count == 2 and fired.error is None
+    assert '"cmd":"triggers"' in DebugCmd(req="r1", cmd="triggers").to_json()

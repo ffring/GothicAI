@@ -105,8 +105,7 @@ StoryWorld::StoryWorld(std::function<void(std::string&&)> send, std::function<vo
 
 void StoryWorld::clear() {
   tags.clear();
-  dead.clear();
-  primed = false;
+  deaths.clear();
   }
 
 int StoryWorld::spawn(World& world, const rapidjson::Value& msg, std::string& error) {
@@ -428,11 +427,9 @@ void StoryWorld::tick(World& world) {
     for(auto& [tag,list] : tags)
       for(auto* n : list)
         tagged.insert(n);
-    for(uint32_t i=0; i<world.npcCount(); ++i) {
-      Npc* n = world.npcById(i);
-      if(n==nullptr || !n->isDead() || n->isPlayer() || !dead.insert(n).second || !primed)
-        continue;
-      Npc* by = n->lastHitBy();
+    for(auto& death : deaths.look(world)) {
+      Npc* n  = death.npc;
+      Npc* by = death.killer;
       if(by!=nullptr && (by->isPlayer() || partyMember(world,*by))) {
         // whoever the hero killed, person or creature (v17): an npc's contract may count it. One of his
         // companions killed counts too (v30), as the scripts give him the experience for it (ZS_Dead)
@@ -454,7 +451,6 @@ void StoryWorld::tick(World& world) {
       j.str("killer",by==nullptr ? std::string() : by->isPlayer() ? std::string("PLAYER") : symbolOf(world,*by));
       send(j.finish());
       }
-    primed = true;
     }
   if(!tags.empty() && now>=nextReport) {
     nextReport = now+ReportMs;

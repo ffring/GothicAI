@@ -73,16 +73,19 @@ def effects(steps: list[Step] | None) -> list[dict[str, Any]]:
 
 def _given(e: Expr) -> tuple[str, int | None] | None:
     """What the hero gets from the npc: B_GiveInvItems(self, other, item, n) or CreateInvItems(other, item,
-    n); the count None if it is not a number."""
+    n), `hero` for `other` too (a trigger's program, where other may be someone else); the count None if it
+    is not a number."""
     name = str(e[1]).upper() if len(e) > 1 else ""
+    hero = (["inst", "OTHER"], ["inst", "HERO"])
     if (
         e[0] == "fn"
         and name == "B_GIVEINVITEMS"
         and len(e) == 6
-        and e[2:4] == [["inst", "SELF"], ["inst", "OTHER"]]
+        and e[2] == ["inst", "SELF"]
+        and e[3] in hero
     ):
         item, count = e[4], e[5]
-    elif e[0] == "call" and name == "CREATEINVITEMS" and len(e) == 5 and e[2] == ["inst", "OTHER"]:
+    elif e[0] == "call" and name == "CREATEINVITEMS" and len(e) == 5 and e[2] in hero:
         item, count = e[3], e[4]
     else:
         return None

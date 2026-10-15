@@ -10,6 +10,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "deathscan.h"
+
 class Npc;
 class World;
 
@@ -57,7 +59,6 @@ class StoryWorld final {
     std::function<void(World&,Npc&)>       release;
     std::map<std::string,std::vector<Npc*>> tags;
     std::map<std::string,std::vector<std::string>> watchers;  // owner -> npc symbols
-    std::unordered_set<const Npc*>         dead;      // deaths already known
-    bool                                   primed = false;  // the dead of a loaded world are not news
+    DeathScan                              deaths;
     uint64_t                               nextScan = 0, nextReport = 0;
   };

@@ -67,6 +67,11 @@
 #       scripted with LLM=fake): its model makes him up for the place of Lobart's day, the code builds and checks
 #       him, and he gives the hero the quest of stage 1 (the checks of `authored`, him as the giver). On a
 #       save of Lobart's farm: SAVE=save_slot_1.sav
+#   trigger: the director's triggers in the bridge (docs/director.md, stage 3, layer 1): one for every event —
+#       a thing put near the hero at once, his having it, a place he comes into again and again, a dialog of
+#       the director's, the hour, the death of an npc of the director's he kills; a save and a load in the
+#       middle keep the counts and fire nothing again (protocol v35: graph_patch trigger, trigger_fired). On a
+#       save (a new game opens with Xardas's own dialog): SAVE=save_slot_1.sav
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

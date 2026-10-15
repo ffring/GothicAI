@@ -18,16 +18,13 @@
 #include "expr.h"
 #include "program.h"
 #include "storyeffects.h"
+#include "storyruntime.h"
 
 class Npc;
 class World;
 
 namespace storygraph {
-  class Bytecode;
-  class Externals;
   class Interpreter;
-  class Lifter;
-  class Predicates;
   }
 
 // The story graph in the game (docs/story-graph.md, stage 3): which dialogs npc's offer, through the
@@ -37,22 +34,27 @@ namespace storygraph {
 // With -devmode (or GOTHIC_AI_STORYCHECK=1) every script condition is also computed from its lifted form
 // and differences are logged: the check of stage 2, on the live game.
 // The script functions of dialogs (conditions, information, choices) run as their programs (program.h), by
-// the Interpreter, not by the VM; script functions they call still run in the VM. GOTHIC_AI_STORYEXEC=0 turns
+// the Interpreter of the StoryRuntime, not by the VM; script functions they call still run in the VM. GOTHIC_AI_STORYEXEC=0 turns
 // it off; so do scripts with Ikarus, whose loops jump from engine functions. A patch may put a program of the
 // director in place of a dialog's own (op "program"), and a dialog of the director may have one: those run
 // in any case.
 class DialogGraph final {
   public:
     // send: a message to the server; addLine: registers a runtime line (npc symbol, text in the game
-    // codepage) and returns its id
+    // codepage) and returns its id; rt: what programs and conditions run on, shared with the triggers
     DialogGraph(std::function<void(std::string&&)> send,
-                std::function<std::string(const std::string&,const std::string&)> addLine);
+                std::function<std::string(const std::string&,const std::string&)> addLine,
+                StoryRuntime& rt);
     ~DialogGraph();
 
-    // a graph_patch message: its operations in order; one that can't be applied is skipped and reported
-    std::vector<std::string> apply(const rapidjson::Value& msg);
-    // a load: the server sends the branch's patches again
+    // an operation of a graph_patch message (all but the triggers'); empty, or why it was not applied
+    std::string applyOp(const rapidjson::Value& op);
+    // a load, or patches anew: the server sends the branch's patches again
     void clear();
+    // what the patches change: "2 off, 0 with conditions, 3 new, 0 programs replaced"
+    std::string summary() const;
+    // a dialog or a choice ran (dialog_chosen): the npc and the node, for the triggers
+    std::function<void(Npc& npc, const std::string& node)> chosen;
 
     // the dialogs the npc offers the player now, as the menu would list them (node ids)
     std::vector<std::string> offered(World& world, Npc& npc);
@@ -117,35 +119,20 @@ class DialogGraph final {
     // a dialog's condition, information or choice: run as its program (docs/story-graph.md, «Исполнение без VM»)
     bool        onScript(zenkit::DaedalusSymbol& fn, int32_t& result);
 
-    std::string applyOp(const rapidjson::Value& op);
     std::string readNode(const rapidjson::Value& v, Node& n);
-    // the expression may be evaluated: names exist, script functions it calls can be lifted
-    std::string checkExpr(const storygraph::ExprP& e);
-    // the names an expression uses exist; empty: they do
-    std::string checkNames(zenkit::DaedalusVm& v, const storygraph::ExprP& e) const;
-    // the program may run in place of `fn` (nullptr: a dialog of the director, no parameters): names exist,
-    // functions get as many arguments as they take, stores go into variables
-    std::string checkProgram(zenkit::DaedalusVm& v, const storygraph::Program& p, const zenkit::DaedalusSymbol* fn) const;
     // the script function behind a dialog's condition or information, or a choice's function
     zenkit::DaedalusSymbol* functionOf(zenkit::DaedalusVm& v, const std::string& node, bool condition,
                                        std::string& error) const;
     // the director's program in place of this function, nullptr if there is none
     const storygraph::Program* replacedProgram(zenkit::DaedalusVm& v, uint32_t fn);
-    void        ensureInterp(zenkit::DaedalusVm& v);
-    // nullopt: could not be computed (logged)
-    std::optional<bool> test(const storygraph::ExprP& e, std::string_view what);
+    // the interpreter for this VM; a new VM: the lifted programs are lifted again
+    storygraph::Interpreter& interpreter(zenkit::DaedalusVm& v);
     void        check(const zenkit::IInfo& info, bool visible);
-    void        ensureLifter();
-    // the director's story variables (op "vars") in this VM: made with their first value if missing, those a
-    // save brought back keep theirs
-    void        ensureVars();
-    // why `name` can't be a variable of the director's in this VM; empty: it can
-    static std::string whyNotVar(GameScript& script, const std::string& name);
-    zenkit::DaedalusVm* vm() const;
-    GameScript*         script() const;
+    zenkit::DaedalusVm* vm() const { return rt.vm(); }
 
     std::function<void(std::string&&)>                               send;
     std::function<std::string(const std::string&,const std::string&)> addLine;
+    StoryRuntime&                                                    rt;
 
     std::set<std::string>                                  disabled;    // dialogs and choices
     std::map<std::string,std::vector<storygraph::ExprP>>   conditions;  // added to script dialogs
@@ -157,22 +144,11 @@ class DialogGraph final {
     std::map<std::string,Replaced>                         replaced;    // by node, or node + ":CONDITION"
     std::unordered_map<uint32_t,const storygraph::Program*> replacedFns; // by function symbol, for replacedFor
     zenkit::DaedalusVm*                                    replacedFor = nullptr;
-    std::map<std::string,int32_t>                          vars;        // the director's, with their first values
-    std::set<std::string>                                  varsMade;    // of those, the ones in varsFor
-    zenkit::DaedalusVm*                                    varsFor = nullptr;
-
-    // lifting, for conditions of the director and the check
-    zenkit::DaedalusVm*                                    liftedFor = nullptr;
-    std::unique_ptr<storygraph::Bytecode>                  code;
-    std::unique_ptr<storygraph::Lifter>                    lifter;
-    std::unique_ptr<storygraph::Predicates>                predicates;
 
     // the graph runs dialogs' script functions in place of the VM; GOTHIC_AI_STORYEXEC=0: the VM runs them
     bool                                                   running = true;
-    zenkit::DaedalusVm*                                    runFor = nullptr;
+    zenkit::DaedalusVm*                                    programsFor = nullptr;
     std::unordered_map<uint32_t,storygraph::Program>       programs;   // by function symbol, lifted when it first runs
-    std::unique_ptr<storygraph::Externals>                 engine;
-    std::unique_ptr<storygraph::Interpreter>               interp;
     size_t                                                 ran = 0, notPrograms = 0, runErrors = 0, replacedRuns = 0;
 
     bool                                                   checking = false;

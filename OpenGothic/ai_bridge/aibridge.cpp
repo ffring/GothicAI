@@ -42,6 +42,8 @@
 #include "chatoverlay.h"
 #include "dialoggraph.h"
 #include "storycast.h"
+#include "storyruntime.h"
+#include "storytriggers.h"
 #include "storyworld.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
@@ -60,7 +62,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 34;
+constexpr int         ProtocolVersion = 35;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -216,6 +218,10 @@ struct AiBridge::Impl final {
   void onSay(World& world, const rapidjson::Value& msg);
   // the director's lines (story graph) get the npc's voice from the server (v26)
   void askVoice(const std::string& line, const std::string& npc, const std::string& text);
+  // a line of the director's own (npc symbol, text in the game codepage): a runtime line, voiced; its id
+  std::string storyLine(const std::string& npc, const std::string& text);
+  // a graph_patch message: the operations in order, the triggers' to the triggers; the ones not applied
+  std::vector<std::string> applyPatch(const rapidjson::Value& msg);
   void voiceStoryLine(World& world, const rapidjson::Value& msg, const std::string& line);
   void onSayAudio(World& world, const rapidjson::Value& msg);
   // streamed voices: playback starts with the line, the line is shortened to the real length
@@ -303,13 +309,17 @@ struct AiBridge::Impl final {
   uint64_t                     thinkUntil  = 0;  // no answer by then: it stops thinking
   // dialogs of the story graph: the lines of the director's dialogs are runtime lines too
   uint64_t                     graphLines = 0;
+  // what the director's programs and conditions run on, in dialogs and triggers (docs/director.md, stage 3)
+  StoryRuntime                 runtime{[this](const std::string& npc, const std::string& text) {
+                                         return storyLine(npc,text);
+                                         }};
   DialogGraph                  graph{[this](std::string&& s){ send(std::move(s)); },
                                      [this](const std::string& npc, const std::string& text) {
-                                       auto id = "AIB_G" + std::to_string(++graphLines);
-                                       lines.add(id,npc,text);
-                                       askVoice(id,npc,text);
-                                       return id;
-                                       }};
+                                       return storyLine(npc,text);
+                                       },
+                                     runtime};
+  // the director's triggers: an event, a condition, a program (v35)
+  StoryTriggers                triggers{runtime,[this](std::string&& s){ send(std::move(s)); }};
   // the director's hands in the world: tagged creatures, deaths, effects on npc's (v8)
   StoryWorld                   story{[this](std::string&& s){ send(std::move(s)); },
                                      [this](World& w, Npc& npc) {
@@ -383,6 +393,10 @@ AiBridge::Impl::Impl() {
       return lines.pending();
       };
   lines.onStart   = [this](const LineLibrary::Line& l) { onLineStarted(l); };
+  graph.chosen    = [this](Npc& npc, const std::string& node) {
+    if(auto world = Gothic::inst().world())
+      triggers.onDialog(*world,npc,node);
+    };
   ctrl.onFollowEnded = [this](const std::string& npc, std::string_view) {
     // following on its own ended: back to its routine (the server takes it again if it wants)
     std::string err;
@@ -503,6 +517,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
   if(world!=nullptr) {
     ctrl.tick(*world);
     beasts.tick(*world);  // its reports go nowhere without the server; the console drives it then
+    triggers.tick(*world);  // the director's story goes on without the server too
     if(connected) {
       observer.tick(*world);
       view.tick(*world);
@@ -544,8 +559,12 @@ void AiBridge::Impl::onStartLoading() {
   originalTo.clear();
   lines.clear();
   observer.clear();
-  Log::i("[story] ",graph.status());
-  graph.clear();  // the server sends the patches of the new branch
+  Log::i("[story] ",graph.status(),"; ",triggers.status());
+  // the server sends the patches of the new branch
+  graph.clear();
+  triggers.clear();
+  triggers.clearWorld();
+  runtime.clear();
   story.clear();
   necro.clear();
   if(auto world = Gothic::inst().world()) {
@@ -670,14 +689,14 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
   if(type=="debug") {
     const auto cmd = JsonRead::str(doc,"cmd");
     if(cmd=="dialogs" || cmd=="choices" || cmd=="choose" || cmd=="eval" || cmd=="check" || cmd=="talk" ||
-       cmd=="menu" || cmd=="menu_pick")
+       cmd=="menu" || cmd=="menu_pick" || cmd=="triggers")
       onDialogDebug(world,doc); else
       onDebug(doc);
     return;
     }
   if(type=="graph_patch") {
     // patches don't need a world: names are checked when there is one
-    auto errors = graph.apply(doc);
+    auto errors = applyPatch(doc);
     std::string all;
     for(auto& e : errors)
       all += (all.empty() ? "" : "; ") + e;
@@ -1353,6 +1372,38 @@ void AiBridge::Impl::send(std::string&& text) {
   ws.sendText(text);
   }
 
+std::string AiBridge::Impl::storyLine(const std::string& npc, const std::string& text) {
+  auto id = "AIB_G" + std::to_string(++graphLines);
+  lines.add(id,npc,text);
+  askVoice(id,npc,text);
+  return id;
+  }
+
+std::vector<std::string> AiBridge::Impl::applyPatch(const rapidjson::Value& msg) {
+  std::vector<std::string> errors;
+  if(JsonRead::boolean(msg,"replace",false)) {
+    graph.clear();
+    triggers.clear();
+    runtime.clear();
+    }
+  auto it = msg.FindMember("ops");
+  if(it==msg.MemberEnd() || !it->value.IsArray())
+    return errors;
+  size_t i = 0;
+  for(auto& op : it->value.GetArray()) {
+    std::string err = !op.IsObject()                         ? std::string("not an object")
+                    : JsonRead::str(op,"op")=="trigger" ? triggers.apply(op)
+                                                             : graph.applyOp(op);
+    if(!err.empty()) {
+      errors.push_back("op " + std::to_string(i) + ": " + err);
+      Log::e("[story] patch op ",i,": ",err);
+      }
+    ++i;
+    }
+  Log::i("[story] patch: ",i," operation(s), ",errors.size()," rejected; ",graph.summary(),"; ",triggers.status());
+  return errors;
+  }
+
 void AiBridge::Impl::sendResult(std::string_view req, bool ok, std::string_view err, std::string_view value) {
   JsonWriter j("result");
   j.str("req",req).boolean("ok",ok);
@@ -1376,6 +1427,10 @@ void AiBridge::Impl::onDialogDebug(World* world, const rapidjson::Value& msg) {
     }
   if(cmd=="check") {
     sendResult(req,true,"",graph.checkWorld(*world));
+    return;
+    }
+  if(cmd=="triggers") {
+    sendResult(req,true,"",triggers.list(*world));
     return;
     }
   if(cmd=="menu") {
@@ -1508,6 +1563,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
     reply  = std::string(connected ? "connected to " : "NOT connected to ") + url;
     reply += "; " + ctrl.status(world);
     reply += "; " + graph.status();
+    reply += "; " + triggers.status();
     reply += "; necro " + necro.status();
     reply += "; " + beasts.status();
     return true;

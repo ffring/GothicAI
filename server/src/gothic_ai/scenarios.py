@@ -15,7 +15,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
-from . import characters, programs
+from . import characters, programs, triggers
 from .amends import Amends
 from .authoring import PROPOSE as PROPOSE_QUEST
 from .authoring import Author
@@ -36,6 +36,7 @@ from .deals import GOLD, Deals
 from .dialogue import DialogueManager, SceneLine, line_duration
 from .director import PROPOSE, Director
 from .game import GameError, GameLink
+from .gamedata.storygraph import Expr
 from .gossip import WORDS_CM, GossipDesk, Scene
 from .group import ANSWER_CUE, ROUND_GAP_S
 from .incidents import IncidentDesk
@@ -4224,6 +4225,232 @@ async def own_symbols(link: GameLink, slot: int = 7) -> dict[str, str]:
         (shown(last, HILDA), shown(last, like)) == vanilla,
         f"{vanilla} -> {(shown(last, HILDA), shown(last, like))}",
     )
+    return _logged(results)
+
+
+async def story_triggers(link: GameLink, story: StoryPatches, slot: int = 7) -> dict[str, str]:
+    """Stage 3 of the director as author, layer 1 (docs/director.md): the triggers of the bridge.
+
+    A trigger for every event, put into the branch like the director's other changes, with a save and a load
+    in the middle. Checks:
+    - start: a trigger without a condition fires at once, once: it puts a thing at a point nearby;
+    - item: the hero picks it up, and a trigger on his having it fires, its self the hero;
+    - place: one that repeats fires on every coming into a place, not while he stays or is away;
+    - dialog: one on a dialog of the director's fires when it is chosen, its self the npc;
+    - after_load: after a save and a load every count is what it was, and none fired again: the first one
+      not, though its condition holds, the place's not, though the hero loaded inside it;
+    - place_again: coming into the place again after the load counts on;
+    - hour: one on the time of day fires when the clock gets there;
+    - death: one on the death of an npc of the director's fires when the hero kills it, its self the dead
+      and its other the killer."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    own = "DIR_NPC_T"
+    start, item_t, place_t, hour_t, death_t, dialog_t = (
+        "DIR_E2E_START",
+        "DIR_E2E_ITEM",
+        "DIR_E2E_PLACE",
+        "DIR_E2E_HOUR",
+        "DIR_E2E_DEATH",
+        "DIR_E2E_DIALOG",
+    )
+    counts = [start, item_t, place_t, hour_t, death_t, dialog_t]
+    marks = ["DIR_E2E_STARTS", "DIR_E2E_GOT", "DIR_E2E_TOLD", "DIR_E2E_DEAD", "DIR_E2E_KILLER"]
+
+    def own_id(of: str) -> Expr:
+        return ["call", "HLP_GETINSTANCEID", ["inst", of]]
+
+    def mark(var: str, value: Expr) -> dict[str, Any]:
+        return {"do": "set", "target": ["var", var], "value": value}
+
+    def plus(var: str) -> dict[str, Any]:
+        return mark(var, ["+", ["var", var], ["int", 1]])
+
+    # the points: a waypoint for the thing, another for the place, apart from each other and from the hero
+    snap = await link.snapshot(HILDA, fresh=True)
+    if snap.player is None:
+        return _logged({"start": "failed (no hero in the snapshot)"})
+    hero_at = snap.player.pos
+
+    def far(p: dict[str, Any], q: Sequence[float], cm: float) -> bool:
+        return math.dist((p["x"], p["z"]), (q[0], q[2])) >= cm
+
+    points = sorted(
+        (w for w in await link.waypoints() if not w.get("fp")),
+        key=lambda w: math.dist((w["x"], w["z"]), (hero_at[0], hero_at[2])),
+    )
+    thing_at = next((w for w in points if far(w, hero_at, 700)), None)
+    place_at = (
+        next(
+            (w for w in points if far(w, hero_at, 1500) and far(w, (thing_at["x"], 0, thing_at["z"]), 1500)),
+            None,
+        )
+        if thing_at
+        else None
+    )
+    if thing_at is None or place_at is None:
+        return _logged({"start": "failed (no waypoints around the hero)"})
+    a, b = thing_at["name"], place_at["name"]
+    # a thing the hero has none of
+    thing = None
+    for candidate in ("ITMI_SAW", "ITMI_BROOM", "ITMI_RAKE", "ITMI_SCOOP", "ITMI_BRUSH", "ITMI_PLIERS"):
+        if await link.evaluate(triggers.hero_has(candidate)) == 0:
+            thing = candidate
+            break
+    if thing is None:
+        return _logged({"start": "failed (the hero has every thing of the list)"})
+    hour = int((await link.story_state()).get("hour", 8))
+    at = ((hour + 6) % 24, (hour + 7) % 24)
+
+    try:
+        farmers = sorted(
+            p["npc"] for p in await link.story_people() if re.fullmatch(r"BAU_\d+_BAUER", p["npc"])
+        )
+        await link.own_npc(own, farmers[0], distance=400)
+    except (GameError, IndexError) as err:
+        return _logged({"start": f"failed (no npc of the director's: {err})"})
+
+    talk = "DIR_E2E_TALK"
+    ops: list[dict[str, Any]] = [
+        {"op": "vars", "vars": dict.fromkeys(marks, 0)},
+        {
+            "op": "add_node",
+            "node": {
+                "id": talk,
+                "npc": HILDA,
+                "description": "Как дела на ферме?",
+                "permanent": True,
+                "lines": [{"speaker": "self", "text": "Работы много, как всегда."}],
+            },
+        },
+        triggers.trigger(
+            start,
+            triggers.STATE,
+            [
+                {"do": "call", "call": ["call", "WLD_INSERTITEM", ["sym", thing], ["str", a]]},
+                plus("DIR_E2E_STARTS"),
+            ],
+        ),
+        triggers.trigger(
+            item_t, triggers.STATE, [mark("DIR_E2E_GOT", own_id("SELF"))], when=triggers.hero_has(thing)
+        ),
+        # the count is all these two do
+        triggers.trigger(place_t, triggers.STATE, [], when=triggers.hero_near_point(b, 400), repeat=True),
+        triggers.trigger(
+            dialog_t, triggers.DIALOG, [mark("DIR_E2E_TOLD", own_id("SELF"))], npc=HILDA, node=talk
+        ),
+        triggers.trigger(hour_t, triggers.STATE, [], when=triggers.time_between((at[0], 0), (at[1], 0))),
+        triggers.trigger(
+            death_t,
+            triggers.DEATH,
+            [mark("DIR_E2E_DEAD", own_id("SELF")), mark("DIR_E2E_KILLER", own_id("OTHER"))],
+            npc=own,
+        ),
+    ]
+    try:
+        for op in ops:
+            await story.apply(op)
+    except GameError as err:
+        return _logged({"start": f"failed ({err})"})
+
+    async def values() -> dict[str, int]:
+        state = await link.story_state(vars=[*counts, *marks])
+        return {k: int(v) for k, v in state.get("vars", {}).items()}
+
+    async def goto(point: str) -> None:
+        await link.debug("player_goto", waypoint=point)
+        await asyncio.sleep(1.0)  # four times a second
+
+    hero = await link.evaluate(own_id("HERO"))
+    hilda = await link.evaluate(own_id("SELF"), npc=HILDA)
+    mine = await link.evaluate(own_id("SELF"), npc=own)
+
+    await asyncio.sleep(1.0)
+    v = await values()
+    check("start", v.get(start) == 1 and v.get("DIR_E2E_STARTS") == 1, f"{v.get(start)}×, at {a}")
+
+    await goto(a)
+    try:
+        await link.debug("player_take", item=thing, distance=500)
+    except GameError as err:
+        check("item", False, f"no {thing} at {a}: {err}")
+    else:
+        await asyncio.sleep(1.0)
+        v = await values()
+        check(
+            "item",
+            v.get(item_t) == 1 and v.get("DIR_E2E_GOT") == hero,
+            f"{v.get(item_t)}×, self {v.get('DIR_E2E_GOT')}, hero {hero}",
+        )
+
+    seen = []
+    for point in (b, a, b):
+        await goto(point)
+        seen.append((await values()).get(place_t))
+    check("place", seen == [1, 1, 2], f"{b}: {seen}")
+
+    try:
+        await link.choose_dialog(HILDA, talk)
+        await asyncio.sleep(1.0)
+    except GameError as err:
+        check("dialog", False, err)
+    else:
+        v = await values()
+        check(
+            "dialog",
+            v.get(dialog_t) == 1 and v.get("DIR_E2E_TOLD") == hilda,
+            f"{v.get(dialog_t)}×, self {v.get('DIR_E2E_TOLD')}, Hilda {hilda}",
+        )
+
+    before = await values()
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(3.0)  # the branch's changes come back, the triggers count again
+    after = await values()
+    listed = {t["id"]: t for t in await link.triggers()}
+    broken = [t["id"] for t in listed.values() if t.get("broken")]
+    check(
+        "after_load",
+        after == before and set(counts) <= set(listed) and not broken,
+        f"{before} -> {after}; listed {sorted(listed)}, broken {broken}",
+    )
+
+    seen = []
+    for point in (a, b):
+        await goto(point)
+        seen.append((await values()).get(place_t))
+    check("place_again", seen == [2, 3], seen)
+
+    await link.debug("time", hour=at[0], minute=30)
+    await asyncio.sleep(1.0)
+    v = await values()
+    check("hour", v.get(hour_t) == 1, f"{v.get(hour_t)}× at {at[0]}:30")
+
+    try:
+        await link.debug("kill", instance=own)
+        await asyncio.sleep(1.5)  # deaths are looked for twice a second
+    except GameError as err:
+        check("death", False, err)
+    else:
+        v = await values()
+        check(
+            "death",
+            v.get(death_t) == 1 and v.get("DIR_E2E_DEAD") == mine and v.get("DIR_E2E_KILLER") == hero,
+            f"{v.get(death_t)}×, self {v.get('DIR_E2E_DEAD')} ({mine}), "
+            f"other {v.get('DIR_E2E_KILLER')} ({hero})",
+        )
     return _logged(results)
 
 
