@@ -49,6 +49,7 @@ class Gothic final {
       bool arrowPhysics  = false;
       bool arrowSticking = false;
       bool spellPhysics  = false;
+      bool movableVobs   = false;
       };
 
     struct Options {

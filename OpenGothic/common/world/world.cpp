@@ -5,6 +5,7 @@
 #include <cctype>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 #include <Tempest/Log>
 #include <Tempest/Painter>
@@ -69,6 +70,7 @@ const char* materialTag(zenkit::MaterialGroup src) {
 
 World::World(GameSession& game, std::string_view file, bool startup, std::function<void(int)> loadProgress)
   :wname(std::move(file)), game(game), wsound(game,*this), wobj(*this) {
+  const auto loadStarted = std::chrono::steady_clock::now();
   const auto* entry = Resources::vdfsIndex().find(wname);
 
   if(entry == nullptr) {
@@ -129,6 +131,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     Tempest::Log::e("unable to load landscape mesh");
     throw;
     }
+  worldLoadMs = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-loadStarted).count();
   }
 
 World::~World() {
@@ -431,6 +434,7 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
+  wdynamic->setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
   if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;
@@ -730,10 +734,10 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     const auto hit = physic()->ray(center+Vec3::normalize(delta)*2.f,to);
     return !hit.hasCol || (hit.v-to).length()<8.f;
     };
-  auto impulseAt = [&](const Vec3& to) {
+  auto impulseAt = [&](const Vec3& to, bool testOcclusion=true) {
     const auto delta = to-center;
     const float distance = delta.length();
-    if(distance>=radius || !clearPath(to))
+    if(distance>=radius || (testOcclusion && !clearPath(to)))
       return Vec3();
     const auto radial = distance>1.e-3f ? delta/distance : Vec3(0,1,0);
     if(wind && Vec3::dotProduct(radial,forward)<0.819152f) // 35 degree cone
@@ -768,10 +772,20 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     if(impulse.quadLength()>0.f && item.addSpellImpulse(impulse))
       ++itemHits;
     });
+  const auto vobHits = physic()->applyMovableVobImpulse(center,radius,[&](const Vec3& to, float mass) {
+    auto impulse = impulseAt(to,false);
+    // Small vessels should scatter through the room. The same finite blast
+    // impulse as furniture would launch a light cup at kilometres per second.
+    const float limit = mass*10.f; // at most 10 m/s of added velocity
+    const float length = impulse.length();
+    if(length>limit)
+      impulse *= limit/length;
+    return impulse;
+    });
   if(TestBench::isActive()) {
     char buf[256];
-    std::snprintf(buf,sizeof(buf),"spell physics impact id %d at %.9g %.9g %.9g npc %zu items %zu",
-                  spellId,double(point.x),double(point.y),double(point.z),npcHits,itemHits);
+    std::snprintf(buf,sizeof(buf),"spell physics impact id %d at %.9g %.9g %.9g npc %zu items %zu vobs %zu",
+                  spellId,double(point.x),double(point.y),double(point.z),npcHits,itemHits,vobHits);
     TestBench::note(buf);
     }
   }

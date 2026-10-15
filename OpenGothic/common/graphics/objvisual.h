@@ -19,7 +19,7 @@ class ObjVisual {
     void load(Serialize& fin,  Interactive &mob);
 
     void setVisual(const zenkit::IItem& visual, World& world, bool staticDraw);
-    void setVisual(const zenkit::VirtualObject& visual, World& world, bool staticDraw);
+    void setVisual(const zenkit::VirtualObject& visual, World& world, bool staticDraw, bool enablePhysics = true);
     void setObjMatrix(const Tempest::Matrix4x4& obj);
 
     void setSlotItem(MeshObjects::Mesh&& itm, std::string_view slot);

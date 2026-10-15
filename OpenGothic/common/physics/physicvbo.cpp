@@ -195,6 +195,20 @@ PhysicVbo::PhysicVbo(PackedMesh&& packed)
     }
   }
 
+void PhysicVbo::appendVertices(std::vector<JPH::Vec3>& points, const Tempest::Matrix4x4& transform) const {
+  std::vector<bool> used(vert.size(),false);
+  for(const auto& segment:segments)
+    for(size_t i=segment.off;i<segment.off+3*segment.size;++i) {
+      const auto index = id[i];
+      if(index>=vert.size() || used[index])
+        continue;
+      used[index] = true;
+      auto point = CollisionWorld::toCentimeters(vert[index]);
+      transform.project(point);
+      points.push_back(CollisionWorld::toMeters(point));
+      }
+  }
+
 PhysicVbo::PhysicVbo(const std::vector<Vertex>& v)
   :vStorage(v.size()), vert(vStorage) {
   for(size_t i=0;i<v.size();++i){

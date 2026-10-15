@@ -5,6 +5,7 @@
 #include <zenkit/Material.hh>
 
 #include <functional>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -48,6 +49,8 @@ class CollisionWorld final {
         bool                isSleeping() const;
         // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
         bool                addImpulse(const Tempest::Vec3& impulseNs);
+        Tempest::Vec3       centerOfMass() const;
+        bool                touchedByNpc() const { return npcContact.load(std::memory_order_relaxed); }
 
         int                 category() const { return categoryId; }
         int                 ptrType() const { return pointerType; }
@@ -65,6 +68,7 @@ class CollisionWorld final {
         int                 categoryId = 0;
         int                 pointerType = 0;
         void*               pointer = nullptr;
+        std::atomic<bool>   npcContact{false};
 
       friend class CollisionWorld;
       friend class DynamicBody;
@@ -72,7 +76,7 @@ class CollisionWorld final {
 
     class DynamicBody final : public CollisionBody {
       private:
-        DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass);
+        DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass, int category);
         const float bodyMass;
       friend class CollisionWorld;
       };
@@ -101,7 +105,8 @@ class CollisionWorld final {
 
     std::unique_ptr<CollisionBody> addCollisionBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction,
                                                    int category, bool movable = false, bool sensor = false, const PhysicVbo* mesh = nullptr);
-    std::unique_ptr<DynamicBody> addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction, float mass);
+    std::unique_ptr<DynamicBody> addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction, float mass,
+                                               int category = 6, bool startSleeping = false);
     std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
                                          const Tempest::Matrix4x4* worldPose, size_t numBones,
                                          const Tempest::Matrix4x4& objectMatrix,
@@ -115,14 +120,15 @@ class CollisionWorld final {
 
     // Masks use 1u << DynamicWorld::Category. Normals keep the mesh's winding.
     QueryResult rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
-                        bool backfaces = false, std::vector<QueryResult>* all = nullptr) const;
+                        bool backfaces = false, std::vector<QueryResult>* all = nullptr,
+                        const std::vector<const CollisionBody*>* excluded = nullptr) const;
     QueryResult raySweep(const Tempest::Vec3& from, const Tempest::Vec3& to, float radius, uint32_t mask,
                          bool backfaces = false) const;
 
   private:
     struct Impl;
     void addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
-                 bool movable, bool sensor, float mass);
+                 bool movable, bool sensor, float mass, bool startSleeping = false);
     void removeBody(CollisionBody& body);
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;

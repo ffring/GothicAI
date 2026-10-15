@@ -1,0 +1,4 @@
+#pragma once
+
+// Generated from OpenGothic/data/movable-vobs.csv.
+constexpr const char* movableVobsCsv = R"movable(@MOVABLE_VOBS_CSV@)movable";

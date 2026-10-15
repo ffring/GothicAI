@@ -40,6 +40,7 @@ class World final {
     void                 setPlayer(Npc* npc);
     void                 postInit();
     std::string_view     name() const { return wname; }
+    double               loadMilliseconds() const { return worldLoadMs; }
 
     void                 load(Serialize& fin );
     void                 save(Serialize& fout);
@@ -206,6 +207,7 @@ class World final {
     void                 invalidateVobIndex();
 
   private:
+    double               worldLoadMs = 0;
     const zenkit::IFocus& searchPolicy(const Npc& pl, TargetCollect& collAlgo, TargetType& collType, WorldObjects::SearchFlg& opt) const;
     std::string                           wname;
     GameSession&                          game;

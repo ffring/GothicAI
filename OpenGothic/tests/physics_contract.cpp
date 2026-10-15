@@ -11,6 +11,7 @@
 
 #include <Jolt/Physics/Collision/CastSphereVsTriangles.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -47,6 +48,64 @@ namespace {
     auto matrix = Tempest::Matrix4x4::mkIdentity();
     matrix.translate(x,y,z);
     return matrix;
+    }
+
+  void testMovableVobBodies() {
+    CollisionWorld world;
+    const JPH::Vec3 points[] = {
+      {-.1f,-.1f,-.1f},{-.1f,-.1f,.1f},{-.1f,.1f,-.1f},{-.1f,.1f,.1f},
+      {.1f,-.1f,-.1f},{.1f,-.1f,.1f},{.1f,.1f,-.1f},{.1f,.1f,.1f}
+      };
+    const auto hull = JPH::ConvexHullShapeSettings(points,8,0.f).Create();
+    require(!hull.HasError(),"movable vob convex hull must be constructible");
+    const float mass = hull.Get()->GetVolume()*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD)*.25f;
+    requireNear(mass,.008f*700.f*.25f,.00001f,"mass must use convex hull volume and class multiplier");
+    auto floor = world.addCollisionBody(new JPH::BoxShape({10,.1f,10}),at(0,-10,0),.65f,DynamicWorld::C_Landscape);
+    auto movable = world.addDynamicBody(hull.Get(),at(0,100,0),.5f,mass,DynamicWorld::C_MovableVob,true);
+    const auto initial = movable->position();
+    for(int i=0;i<3600;++i)
+      world.tick(17);
+    require(movable->isSleeping(),"fresh movable vobs must stay asleep for 60 seconds");
+    require((movable->position()-initial).length()<=.001f,"sleeping movable vobs must not drift under gravity");
+    require(world.bodyCount()==2,"sleeping movable vobs must remain registered bodies");
+    Tempest::Vec3 normal;
+    Interactive* vob = nullptr;
+    JPH::SphereShape walker(.05f);
+    require(!world.hasCollision(&walker,{0,100,0},normal,vob),"convex simulation hull must not replace legacy walking queries");
+
+    JPH::TriangleList triangles;
+    triangles.emplace_back(JPH::Float3(-.2f,0,-.2f),JPH::Float3(0,0,.2f),JPH::Float3(.2f,0,-.2f));
+    const auto queryMesh = JPH::MeshShapeSettings(triangles).Create();
+    require(!queryMesh.HasError(),"movable source query mesh must be constructible");
+    auto smallQuery = world.addCollisionBody(queryMesh.Get(),at(0,100,0),.5f,DynamicWorld::C_SmallVobQuery,true,true);
+    require(!world.hasCollision(&walker,{0,101,0},normal,vob),"small utensil mesh must not obstruct walking");
+    auto largeQuery = world.addCollisionBody(queryMesh.Get(),at(50,100,0),.5f,DynamicWorld::C_MovableQuery,true,true);
+    require(world.hasCollision(&walker,{50,101,0},normal,vob),"large furniture must obstruct walking through its source mesh");
+    const uint32_t queryMask = (1u<<DynamicWorld::C_MovableQuery)|(1u<<DynamicWorld::C_SmallVobQuery);
+    require(world.rayCast({0,130,0},{0,90,0},queryMask).hasHit,"small vob source mesh must remain aimable");
+    const std::vector<const CollisionWorld::CollisionBody*> excluded = {smallQuery.get()};
+    require(!world.rayCast({0,130,0},{0,90,0},queryMask,false,nullptr,&excluded).hasHit,
+            "spell visibility must exclude the target's own source mesh");
+    require(movable->addImpulse({mass*2.f,mass*.5f,0}),"spell impulse must wake a movable vob");
+    require(!movable->isSleeping(),"an impulse must activate a sleeping movable vob");
+    for(int i=0;i<900;++i)
+      world.tick(17);
+    require(std::abs(movable->position().x-initial.x)>20.f,"a movable vob impulse must produce physical displacement");
+    require(movable->isSleeping(),"movable vob must settle within 15 seconds after an impulse");
+    require(world.bodyCount()==4,"settled movable vob must retain its registered body");
+
+    // Source vertices keep attachment-local transforms before hull creation.
+    std::vector<JPH::Vec3> source = {{1,2,3},{2,2,3},{1,3,3}};
+    PhysicVbo sourceMesh(&source);
+    sourceMesh.addIndex({0,1,2},0,3,zenkit::MaterialGroup::WOOD);
+    auto local = at(100,200,300);
+    local.scale(2,3,4);
+    std::vector<JPH::Vec3> transformed;
+    sourceMesh.appendVertices(transformed,local);
+    require(transformed.size()==3,"hull input must retain every referenced source vertex");
+    requireNear(transformed[0].GetX(),3.f,.00001f,"hull source input must apply local attachment X transform");
+    requireNear(transformed[0].GetY(),8.f,.00001f,"hull source input must apply local attachment Y transform");
+    requireNear(transformed[0].GetZ(),15.f,.00001f,"hull source input must apply local attachment Z transform");
     }
 
   struct SpherePrecisionCollector final : JPH::CastShapeCollector {
@@ -747,6 +806,7 @@ int main() {
     testFixedStepCarry();
     testFixedStepCadence();
     testContracts();
+    testMovableVobBodies();
     std::puts("Physics contracts passed");
     return EXIT_SUCCESS;
     }
