@@ -1,8 +1,8 @@
 # The manual aim over an edge (docs/manual-aim.md): the hero aims by hand at a wolf below, the trunk bends
 # over the edge and the camera over the shoulder goes ahead and down with the head, so the game's camera
 # shows the wolf under the crosshair, not the roof or the wall in front. Then the aim goes level (the lean
-# eases out), back down, the arrow, the bow lowered: the camera without jumps. On the roof of Lobart's farm
-# and from the gallery in Xardas' tower
+# eases out and in again, the camera with it), back down, the arrow, the bow lowered (the camera keeps the
+# lean until it is back). On the roof of Lobart's farm and from the gallery in Xardas' tower
 cheat god
 set time 12 0
 manual on
