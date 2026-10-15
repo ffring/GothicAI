@@ -16,11 +16,12 @@ give ItRw_Arrow 50
 goto pos 14591 2349 -14597
 wait 600
 face 247.5
-edge 247.5 2000 60
+edge 247.5 2000 60 exact
 wait 300
 clear 2500
 insert Wolf
 wait 300
+immortal WOLF on
 put WOLF 160 0
 wait 300
 cam lift off
@@ -31,23 +32,26 @@ cam look -240
 manual off
 tap bow
 wait 1500
+aim off
+press action
+wait 1500
+# Raising the bow has root motion: place the already raised hero at the measured margin.
 goto pos 14591 2349 -14597
 wait 400
 face 247.5
-edge 247.5 2000 60
+edge 247.5 2000 60 exact
 wait 300
 face 247.5
-aim off
 put WOLF 5000 0
 wait 400
 put WOLF 160 0
 wait 300
 rec stand_classic
-press action
-wait 1500
 sight WOLF
 cansee WOLF
 anims
+pos
+edgedist 247.5
 aim on
 wait 2000
 cansee WOLF
@@ -56,20 +60,45 @@ edgedist 247.5
 stop
 release action
 wait 800
-# manual, standing 60 cm from the edge: drawn at the wolf
+# manual, standing 60 cm from the edge: the real game's camera and crosshair point at the wolf.
+# Capture the upright head first, then the minimum lean and a real arrow past the roof's edge.
 manual on
-aimat WOLF body
-rec stand_manual
+aimat WOLF body mouse
+cam game
+ui on
+aim off
 press action
 wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 60 exact
+wait 300
+rec stand_manual
 sight WOLF
-wait 1500
 cansee WOLF
+anims
 pos
 edgedist 247.5
-stop
+shot stand_manual_upright
+wait 100
+aim on
+wait 2000
+cansee WOLF
+anims
+pos
+edgedist 247.5
+shot stand_manual_drawn
+wait 100
+hp WOLF
 release action
+wait 1500
+hp WOLF
+stop
 aimat off
+ui off
+cam follow 600 300 90
+cam look -240
 wait 800
 # manual, walking: from 2 m back, drawn at the wolf, steps forward for 3 s
 edge 247.5 2000 200
@@ -328,3 +357,39 @@ pos
 edgedist 247.5
 stop
 walkmode run
+
+# A shallow shot hidden by a ship's parapet, found by perches + cansee: 45.8 degrees down.
+# The old angle rule starts at 55 degrees and cannot acquire this target. Raise the bow before
+# placement so its root motion cannot carry the hero towards the parapet during either capture.
+aimat off
+manual off
+disarm
+equip ItRw_Bow_L_01
+aim off
+draw bow
+wait 1500
+press action
+wait 1500
+pin WOLF 5000 0 -422
+wait 300
+goto pos -10355 819 -17689
+face 67.5
+wait 300
+pin WOLF 500 0 -422
+wait 300
+sight WOLF
+cansee WOLF
+anims
+shot parapet_classic_upright
+wait 100
+rec parapet_classic
+aim on
+wait 2500
+cansee WOLF
+anims
+shot parapet_classic_leaned
+wait 100
+stop
+release action
+pin off
+wait 600
