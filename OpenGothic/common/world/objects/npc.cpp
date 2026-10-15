@@ -5802,7 +5802,14 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
 
   bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
   syncAtt |= visual.updateLean(*this,dt);
-  syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
+  // Headless body training can keep foot IK on the watched arena actors only: nobody
+  // looks at the rest of the world there, and their foot IK is ~30% of a serial tick.
+  static const bool footIkWatchedOnly = [] {
+    const char* v = std::getenv("OPENGOTHIC_FOOTIK_WATCHED_ONLY");
+    return v!=nullptr && v[0]=='1';
+    }();
+  if(!footIkWatchedOnly || BodyObservations::watched(*this))
+    syncAtt |= visual.updateFootIk(*this,owner,dt,isAlignedToGround());
   syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   syncAtt |= visual.updateFlinch(*this,dt);

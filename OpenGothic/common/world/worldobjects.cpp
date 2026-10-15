@@ -433,7 +433,15 @@ void WorldObjects::updateAnimation(uint64_t dt) {
     return;
   if(dt==0)
     return;
+  // Headless body training may skip NPCs beyond the far range (>60 m from the hero)
+  // that are not arena actors: nobody sees them, and they are most of the world.
+  static const bool skipFar = [] {
+    const char* v = std::getenv("OPENGOTHIC_ANIM_SKIP_FAR");
+    return v!=nullptr && v[0]=='1';
+    }();
   Workers::parallelTasks(npcArr,[dt](std::unique_ptr<Npc>& i){
+    if(skipFar && i->processPolicy()==NpcProcessPolicy::AiFar2 && !BodyObservations::watched(*i))
+      return;
     i->updateAnimation(dt);
     });
   interactiveObj.parallelFor([dt](Interactive& i){
