@@ -937,6 +937,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario chests: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "hearing":
+                assert state.talk is not None
+                results = await scenarios.hearing_scenario(link, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario hearing: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "group":
                 assert state.dialogue is not None and state.talk is not None
                 results = await scenarios.group_scenario(link, state.dialogue, state.talk)
@@ -1600,6 +1606,7 @@ def main() -> None:
             "wolf",
             "calm",
             "ground",
+            "hearing",
             "chests",
             "chests_lobart",
             "group",

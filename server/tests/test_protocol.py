@@ -16,6 +16,7 @@ from gothic_ai.protocol import (
     NpcActCmd,
     NpcChestsCmd,
     NpcIdle,
+    NpcRoster,
     NpcViews,
     SayCmd,
     Snapshot,
@@ -232,7 +233,7 @@ def test_v27_whom_the_npc_looks_at():
 
 
 def test_v28_npc_chests():
-    assert PROTOCOL_VERSION == 28
+    assert PROTOCOL_VERSION >= 28
     ask = NpcChestsCmd(req="c1", npc="BDT_1014_BANDIT_L")
     assert ask.to_json() == '{"type":"npc_chests","req":"c1","npc":"BDT_1014_BANDIT_L"}'
     chest = Chest.model_validate(
@@ -252,3 +253,17 @@ def test_v28_npc_chests():
     assert chest.why == "key" and chest.items[0].item == "ITRW_BOW_L_01" and chest.start[0].count == 29
     take = DebugCmd(req="r1", cmd="chest_take", chest=chest.id, item="ITMI_GOLD", count=29)
     assert '"cmd":"chest_take"' in take.to_json() and '"count":29' in take.to_json()
+
+
+def test_v30_how_far_the_players_voice_goes():
+    assert PROTOCOL_VERSION == 30
+    roster = parse_game_message(
+        '{"type":"npc_roster","t":1,"npcs":['
+        '{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","distance":140,"heard":140},'
+        '{"id":"BDT_1013_BANDIT_L","name":"Бандит","distance":3500,"heard":20000},'
+        '{"id":"VLK_LOBART","name":"Лобарт","distance":900}]}'
+    )
+    assert isinstance(roster, NpcRoster)
+    cavalorn, bandit, old = roster.npcs
+    assert cavalorn.earshot == 140 and bandit.earshot == 20000  # the rock between: his voice does not reach
+    assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies

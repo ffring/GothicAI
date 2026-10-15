@@ -4,9 +4,14 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <queue>
+#include <unordered_map>
+#include <utility>
 
 #include "game/gamescript.h"
+#include "physics/dynamicworld.h"
 #include "world/aiqueue.h"
+#include "world/waypoint.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 
@@ -22,6 +27,12 @@ constexpr float    RosterRadius   = 6000;  // cm: the engine simplifies AI beyon
 constexpr float    EventRadius    = 3000;  // cm: the engine perceives within this
 constexpr float    ViewRadius     = 3000;
 constexpr float    ViewHalfAngle  = 60;    // degrees around where the player faces
+constexpr float    HeardRadius    = 6000;  // cm: the player's voice is followed round rock and walls to those this near
+constexpr float    AroundMax      = 10000; // cm: and this far round, at most
+constexpr float    NotHeard       = 2*AroundMax; // "heard" of one his voice does not reach
+constexpr float    WalledSide     = 40;    // cm: the lines either side of the one between the heads
+constexpr float    WaySight       = 2000;  // cm: a voice goes round by the waynet in sight this near
+constexpr float    WayEye         = 100;   // cm: above a point of the waynet, where it is looked at
 constexpr float    NearEnter      = 500;   // cm: "player_near" when the player comes this close
 constexpr float    NearLeave      = 700;   // and forgets it once they are this far again
 constexpr uint64_t EventPeriodMs  = 1000;  // per npc, kind and who did it
@@ -67,6 +78,60 @@ bool inView(Npc& player, Npc& npc, float dist) {
   const float rot = player.rotationRad();
   const float cos = (d.x*std::cos(rot)+d.z*std::sin(rot))/len;
   return cos>=std::cos(ViewHalfAngle*float(M_PI)/180.f);
+  }
+
+// rock or a wall between two heads: no straight line from one to the other, nor a hand's breadth to either
+// side of it (a post or a tree trunk in between is no wall)
+bool walled(const DynamicWorld& physic, const Tempest::Vec3& a, const Tempest::Vec3& b) {
+  const float dx = b.x-a.x, dz = b.z-a.z;
+  const float len = std::sqrt(dx*dx+dz*dz);
+  if(len<1)
+    return false;
+  const Tempest::Vec3 side = Tempest::Vec3(-dz/len,0,dx/len)*WalledSide;
+  return physic.ray(a,b).hasCol && physic.ray(a+side,b+side).hasCol && physic.ray(a-side,b-side).hasCol;
+  }
+
+// the nearest point of the waynet in sight of `eye`, not farther than WaySight
+const WayPoint* wayInSight(World& world, const Tempest::Vec3& eye) {
+  const DynamicWorld& physic = *world.physic();
+  return world.findWayPoint(eye,[&](const WayPoint& w) {
+    if(!w.isConnected() || (w.position()-eye).quadLength()>WaySight*WaySight)
+      return false;
+    return !physic.ray(eye,w.position()+Tempest::Vec3(0,WayEye,0)).hasCol;
+    });
+  }
+
+// how far a voice goes from `a` to `b` round rock or a wall between them: to the waynet in sight, along it,
+// and from it (it goes nowhere through the rock); farther than `limit`: NotHeard
+float around(World& world, const WayPoint* from, const Tempest::Vec3& a, const Tempest::Vec3& b, float limit) {
+  const WayPoint* to = wayInSight(world,b);
+  if(from==nullptr || to==nullptr)
+    return NotHeard;
+  const float start = (from->position()-a).length(), end = (to->position()-b).length();
+  using Step = std::pair<float,const WayPoint*>;
+  std::priority_queue<Step,std::vector<Step>,std::greater<Step>> open;
+  std::unordered_map<const WayPoint*,float> best;
+  open.push({start,from});
+  best[from] = start;
+  while(!open.empty()) {
+    auto [len,w] = open.top();
+    open.pop();
+    if(len>best[w])
+      continue;
+    if(len+end>limit)
+      break;
+    if(w==to)
+      return len+end;
+    for(auto& c:w->connections()) {
+      const float next = len+float(c.len);
+      auto it = best.find(c.point);
+      if(it!=best.end() && it->second<=next)
+        continue;
+      best[c.point] = next;
+      open.push({next,c.point});
+      }
+    }
+  return NotHeard;
   }
 
 std::string_view activity(Npc& npc, std::string_view owner) {
@@ -178,6 +243,22 @@ void NpcObserver::emitRoster(World& world) {
    .array("npcs");
   struct Near { std::string symbol; float dist; };
   std::vector<Near> cameClose;  // reported after the roster, so the server already knows these npc's
+  const Tempest::Vec3 head = pl->mapHeadBone();
+  const WayPoint*     way  = nullptr;  // the player's, once someone is behind a wall
+  bool                wayFound = false;
+  // how far the player's voice goes to the npc (v30): straight on, or round what is between them
+  auto heard = [&](Npc& npc, float dist) {
+    if(dist>HeardRadius)
+      return NotHeard;
+    const Tempest::Vec3 at = npc.mapHeadBone();
+    if(!walled(*world.physic(),head,at))
+      return dist;
+    if(!wayFound) {
+      way      = wayInSight(world,head);
+      wayFound = true;
+      }
+    return around(world,way,head,at,AroundMax);
+    };
   world.detectNpc(pl->position(),RosterRadius,[&](Npc& npc) {
     if(npc.isPlayer() || npc.guild()>=GIL_SEPERATOR_HUM)
       return;  // people only: monsters keep their own AI
@@ -193,6 +274,7 @@ void NpcObserver::emitRoster(World& world) {
        .integer("guild",int64_t(npc.guild()))
        .num("distance",double(dist))
        .boolean("in_view",inView(*pl,npc,dist))
+       .num("heard",double(heard(npc,dist)))
        .str("activity",activity(npc,owner(symbol)))
        .str("state",AiNpc::stateName(world,npc.currentState()))
        .boolean("moving",AiNpc::isMoving(npc))

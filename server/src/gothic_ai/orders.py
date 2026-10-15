@@ -25,16 +25,21 @@ A new order replaces the one before (the bridge preempts the running action). "�
 someone who just struck the hero is words to him, not an order.
 
 **A companion fights without an order**, as the original party members do: whoever strikes the hero, it
-or another companion, and a monster that comes close (the game's own combat), then it goes on with the
-hero. It does not wait for the conversational model, which only finds out (incidents.py words it). A
-companion told to wait stands up for the hero only near it; after "Отступай!" it fights no one for a
-while, unless struck itself. The conversational model's own "fight X" for a companion is carried out here
+or another companion (a blow seen within 10 m, heard within 30 m), one that turns on the hero by its own
+model's decision (before its first blow, within DEFEND_CM), and a monster that comes close (the game's own
+combat), then it goes on with the hero. It does not wait for the conversational model, which only finds
+out (incidents.py words it). A companion told to wait stands up for the hero only near it; after
+"Отступай!" it fights no one for a while, unless struck itself.
+
+**The scripts' party**: while an npc goes with the hero it is marked their party member (AIV_PARTYMEMBER,
+the bridge's `party` effect, v30), as a companion's own dialog marks it: the scripts give the hero the
+experience for whom it kills (ZS_Dead), and a contract's kill counts. Only those marked here are unmarked. The conversational model's own "fight X" for a companion is carried out here
 too (dialogue.py hands it over), so that it ends with the companion back at the hero's side.
 
 **Words the conversational model acts on** ("Заходи в пещеру первым"): a companion is shown the places
 around it (places.py) and may `go_to` one: it walks there ahead of the hero, looks around it (walks on
-through its points until it sees someone) and waits for him, and says what it finds. Whoever is there is
-a target for its fight then.
+through its points until it sees someone) and waits for him, and says what it finds; once he comes up, it
+goes on with him. Whoever is there is a target for its fight then.
 """
 
 from __future__ import annotations
@@ -54,7 +59,7 @@ from .game import GameError, GameLink
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .places import Place, PlaceBook
-from .protocol import GameMessage, Loading, NpcView, Perception, Snapshot
+from .protocol import GameMessage, Loading, NpcRoster, NpcView, Perception, Snapshot
 from .talk import calls, named, words
 from .turn import ToolOutcome
 
@@ -64,13 +69,20 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-ORDER_CM = 5000.0  # companions hear an order this far: the hero shouts it (one sent ahead too)
+# companions hear an order this far along the way his voice goes (v30): the hero shouts it, so in the open
+# all around him (the roster's 60 m), and round a bend into a cave (2026-10-14: from the steps below the
+# tower to Brago's fire in the bandits' cave it goes 62 m, 37 m as the crow flies)
+ORDER_CM = 7000.0
 HALT_S = 20.0  # "Стой!" holds this long
 WAIT_S = 600.0  # "Жди здесь!" at most this long
 FIGHT_S = 70.0  # a fight is given up after this (the game's own deadline is 60 s)
 FOE_S = 30.0  # whoever struck the hero or a companion is a foe this long
 ENEMY_CM = 1000.0  # a monster this close to a companion is fought without an order
 GUARD_CM = 1500.0  # a companion told to wait stands up for the hero this near it
+DEFEND_CM = 3000.0  # one who turns on the hero this near a companion is fought: the game's fight sound reach
+MEET_CM = 500.0  # sent ahead, a companion goes on with the hero once he comes this close
+MEET_EVERY_S = 1.0
+PARTY_PROTOCOL = 30  # the bridge's `party` effect
 RETREAT_S = 15.0  # after "Отступай!" a companion fights no one this long, unless struck itself
 MONSTER_GUILD = 16  # GIL_SEPERATOR_HUM: the guilds above it are animals and monsters
 WEAPONS = frozenset({"draw", "sheathe"})
@@ -113,6 +125,10 @@ class Fight:
     """A companion's fight: whom it fights now (the next foe after this one); a newer fight replaces it."""
 
     target: str
+    # out of its sight, it goes after the target where it saw it first (the model's «там бандиты, разберись»);
+    # not one that falls on the hero: it is at him (2026-10-14 Cavalorn walked round the place first for 17 s
+    # while the bandit beat the hero down)
+    seek: bool = True
 
 
 def failed(status: str) -> str | None:
@@ -144,6 +160,8 @@ class Orders:
         self.standing: dict[str, Standing] = {}
         self.foes: dict[str, float] = {}  # who struck the hero or a companion, and when
         self.fights: dict[str, Fight] = {}  # companion -> its fight now
+        # those marked the scripts' party members here (`party`): only these are unmarked here
+        self.party: set[str] = set()
         # what an npc sees now, asked afresh (perception.py): a companion sent somewhere looks around there
         self.view_of: Callable[[str], Awaitable[NpcView | None]] | None = None
         # where the npc last saw someone, lately (sightings.py): the place's id in the book
@@ -153,6 +171,7 @@ class Orders:
         # the conversational model's "fight X" for a companion is carried out here (dialogue.py)
         dialogue.companion_fight = self.fight_intent
         dialogue.fighting = lambda npc: npc.upper() in self.fights
+        dialogue.on_attack.append(self.attacked)
 
     # --- who obeys -----------------------------------------------------------------------------
 
@@ -177,8 +196,8 @@ class Orders:
             return [(to.id, to.name)] if self.companion(to.id) else []
         near = [
             e
-            for e in sorted(self.talk.people.values(), key=lambda e: e.distance)
-            if e.activity != "down" and e.distance <= ORDER_CM and self.companion(e.id)
+            for e in sorted(self.talk.people.values(), key=lambda e: e.earshot)
+            if e.activity != "down" and e.earshot <= ORDER_CM and self.companion(e.id)
         ]
         if heard:
             phrase, by = words(heard), calls(heard)
@@ -320,8 +339,8 @@ class Orders:
         self.talk.free(npc, "order")
         return err
 
-    def _start(self, npc: str, target: str, standing: Standing | None) -> None:
-        fight = self.fights[npc] = Fight(target)  # at once: the next perception finds it fighting
+    def _start(self, npc: str, target: str, standing: Standing | None, *, seek: bool = True) -> None:
+        fight = self.fights[npc] = Fight(target, seek)  # at once: the next perception finds it fighting
         self._spawn(self._fight(npc, fight, standing))
 
     async def _fight(self, npc: str, fight: Fight, standing: Standing | None) -> str | None:
@@ -346,7 +365,7 @@ class Orders:
         see now but saw lately somewhere it goes after there first («там бандиты, разберись»)."""
         if not await self.talk.hold(npc, "order"):
             return "тебя не отпускают"
-        if (place := await self._where_it_saw(npc, fight.target)) is not None:
+        if fight.seek and (place := await self._where_it_saw(npc, fight.target)) is not None:
             log.info("%s goes after %s to %s, where it saw him", npc, fight.target, place.id)
             if not await self._seek(npc, fight, place):
                 return None  # something else took over
@@ -427,14 +446,44 @@ class Orders:
         match msg:
             case Perception():
                 self._perceived(msg)
+            case NpcRoster():
+                self._party()
             case Loading():
                 self.foes.clear()
+                self.party.clear()
+
+    # --- the scripts' party ----------------------------------------------------------------------
+
+    def _party(self) -> None:
+        """A companion is the scripts' party member while it goes with the hero (v30), as a companion's own
+        dialog marks it: whom it kills gives him the experience (ZS_Dead; 2026-10-14 Cavalorn killed three
+        bandits and the hero got nothing), its blows at him are friendly fire."""
+        hello = self.link.hello
+        if hello is None or hello.protocol < PARTY_PROTOCOL:
+            return
+        for npc in list(self.talk.people):
+            npc = npc.upper()
+            want = self.companion(npc)
+            if want != (npc in self.party):
+                (self.party.add if want else self.party.discard)(npc)
+                self._spawn(self._mark(npc, want))
+
+    async def _mark(self, npc: str, on: bool) -> None:
+        try:
+            await self.link.story_effect(npc, [{"do": "party", "value": 1 if on else 0}])
+        except (GameError, TimeoutError) as err:
+            log.info("%s: party %s failed: %s", npc, "on" if on else "off", err or "no answer")
+            (self.party.discard if on else self.party.add)(npc)  # tried again on the next roster
+            return
+        log.info("%s %s the hero's party", npc, "joins" if on else "leaves")
 
     def _perceived(self, p: Perception) -> None:
         npc, other = p.npc.upper(), p.other.upper()
         if other == "PLAYER" or other == npc or self.companion(other):
             return
-        if p.perc in ("ASSESSDAMAGE", "ASSESSOTHERSDAMAGE"):
+        # a blow struck or blocked is heard 30 m off (FIGHTSOUND), one seen only 10 m (OTHERSDAMAGE):
+        # 2026-10-14 Cavalorn waited in the cave's passage while the bandits beat the hero 20 m from him
+        if p.perc in ("ASSESSDAMAGE", "ASSESSOTHERSDAMAGE", "ASSESSFIGHTSOUND"):
             victim = npc if p.perc == "ASSESSDAMAGE" else (p.victim or "").upper()
             if victim != "PLAYER" and not self.companion(victim):
                 return
@@ -454,6 +503,17 @@ class Orders:
             if npc in self.talk.attached and self.companion(npc):
                 self._stand_up(npc, other, "бросается на вас", struck=False)
 
+    def attacked(self, npc: str) -> None:
+        """`npc` turns on the hero by its own decision (dialogue.py: its model's, after its words): before
+        a blow is struck, every companion near enough stands up for him."""
+        npc = npc.upper()
+        if self.companion(npc):
+            return
+        self.foes[npc] = self.clock()
+        for companion in list(self.talk.attached):
+            if companion != npc and self.companion(companion) and self._hero_cm(companion) <= DEFEND_CM:
+                self._stand_up(companion, npc, "напал на героя", struck=False)
+
     def _stand_up(self, npc: str, foe: str, did: str, *, struck: bool) -> None:
         """A companion fights `foe` without an order: it struck the hero, the companion or another one, or it
         is a monster close by. Not when it fights already, retreats, or waits away from the hero."""
@@ -471,7 +531,7 @@ class Orders:
         log.info("%s stands up for the hero: fights %s", npc, foe)
         self.journal.add("defend", npc=npc, name=name, target=foe)
         self.dialogue.remember(npc, name, f"{foe_name} {did} — ты бросился в бой.")
-        self._start(npc, foe, standing)
+        self._start(npc, foe, standing, seek=False)
 
     def fight_intent(self, npc: str, target: str | None) -> bool:
         """The conversational model set a companion on `target`: it fights it here and comes back to the hero
@@ -620,6 +680,7 @@ class Orders:
         if await self._look_around(npc, place, standing) is None:
             return "", True  # an order came meanwhile
         self._later(self.go_wait_s, npc, standing)
+        self._spawn(self._meet(npc, standing))
         self.dialogue.event_turn(
             npc,
             f"[Событие: ты пришёл первым — {place.where_ru} — и ждёшь героя. Скажи ему, что здесь.]",
@@ -649,6 +710,21 @@ class Orders:
             if view is not None and any(o.kind != "body" and not self.companion(o.id) for o in view.sees):
                 return True
         return False
+
+    async def _meet(self, npc: str, standing: Standing) -> None:
+        """Sent ahead, it waits for the hero: once he comes up, it goes on with him (2026-10-14 the hero ran
+        past Cavalorn into the cave, and Cavalorn stayed where he was told to wait)."""
+        far = self._hero_cm(npc) > MEET_CM  # he comes up only once he was away
+        while self._current(npc, standing):
+            await asyncio.sleep(MEET_EVERY_S)
+            if not self._current(npc, standing) or npc in self.fights:
+                continue
+            if self._hero_cm(npc) > MEET_CM:
+                far = True
+            elif far:
+                log.info("%s: the hero came up, it goes on with him", npc)
+                await self._resume(npc, standing)
+                return
 
     def _later(self, seconds: float, npc: str, standing: Standing) -> None:
         async def run() -> None:
