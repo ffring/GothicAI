@@ -66,6 +66,7 @@
 #include "physics/ragdoll.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
+#include "world/objects/interactive.h"
 #include "world/objects/sound.h"
 #include "world/world.h"
 #include "world/waypoint.h"
@@ -591,6 +592,13 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
+  Npc* seatNpc=nullptr;
+  Npc* seatCorpse=nullptr;
+  Interactive* seatMob=nullptr;
+  std::vector<Item*> seatItems;
+  std::vector<Vec3> seatPreviousParts,seatPreviousItems;
+  uint64_t seatSampleTick=0;
+  std::string seatPhase;
   Npc*        downNpc      = nullptr; // waitdown: till it falls
   uint64_t    downFrom = 0, downEnd = 0;
   Npc*        waitRagdollNpc = nullptr;
@@ -2210,6 +2218,41 @@ void livingFields(World& world) {
   event("living_frame",livingCountFields(s,world)+",\"phase\":"+jsonStr(bench.livingPhase)+",\"actors\":"+actors+"]");
   }
 
+void livingSeatFields(World& world) {
+  auto* npc=bench.seatNpc;
+  if(npc==nullptr || bench.seatPhase.empty() || bench.seatSampleTick==world.tickCount()) return;
+  const float seconds=float(world.tickCount()-bench.seatSampleTick)*.001f;
+  bench.seatSampleTick=world.tickCount();
+  std::vector<Matrix4x4> pose;
+  const auto* body=npc->livingBody();
+  float nativeStep=0,corpseSpeed=0,itemSpeed=0;
+  if(body && body->getPose(pose)) {
+    if(bench.seatPreviousParts.size()==pose.size())
+      for(auto bone:body->boneIndices()) nativeStep=std::max(nativeStep,(Vec3(pose[bone].at(3,0),pose[bone].at(3,1),pose[bone].at(3,2))-bench.seatPreviousParts[bone]).length());
+    bench.seatPreviousParts.resize(pose.size());
+    for(auto bone:body->boneIndices()) bench.seatPreviousParts[bone]={pose[bone].at(3,0),pose[bone].at(3,1),pose[bone].at(3,2)};
+    }
+  const auto* corpse=bench.seatCorpse ? bench.seatCorpse->ragdollBody() : nullptr;
+  if(corpse) for(const auto& part:corpse->state().parts) corpseSpeed=std::max(corpseSpeed,part.linearVelocity.length());
+  std::string items="[";
+  for(size_t i=0;i<bench.seatItems.size();++i) {
+    const auto p=bench.seatItems[i]->position();
+    if(bench.seatPreviousItems.size()==bench.seatItems.size() && seconds>0)
+      itemSpeed=std::max(itemSpeed,(p-bench.seatPreviousItems[i]).length()/seconds);
+    if(i) items+=',';
+    items+=ragdollVector(p);
+    }
+  bench.seatPreviousItems.clear();
+  for(const auto* item:bench.seatItems) bench.seatPreviousItems.push_back(item->position());
+  const auto* mob=npc->interactive();
+  event("living_seat_frame","\"phase\":"+jsonStr(bench.seatPhase)+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"attached\":"+(mob==bench.seatMob?"true":"false")+",\"seated\":"+(mob==bench.seatMob && npc->bodyStateMasked()==BS_SIT?"true":"false")+
+    ",\"mob_state\":"+std::to_string(mob?mob->stateId():-99)+",\"animations\":"+jsonStr(npc->animNames())+
+    ",\"living_parts\":"+std::to_string(body?body->partCount():0)+",\"corpse_parts\":"+std::to_string(corpse?corpse->partCount():0)+
+    ",\"native_step_cm\":"+ragdollNumber(nativeStep)+",\"corpse_speed_cm_s\":"+ragdollNumber(corpseSpeed)+
+    ",\"item_speed_cm_s\":"+ragdollNumber(itemSpeed)+",\"items_cm\":"+items+"]");
+  }
+
 void questFields(World& world, Npc& npc, bool csv) {
   const auto& q=npc.ragdollQuestReturnState();
   const auto pos=npc.position();
@@ -2360,6 +2403,7 @@ void writeRow(Npc& pl) {
     questFields(*Gothic::inst().world(),*bench.questNpc,true);
   if(bench.livingFixture)
     livingFields(*Gothic::inst().world());
+  livingSeatFields(*Gothic::inst().world());
   std::fprintf(bench.csv,"\n");
   }
 
@@ -2669,8 +2713,79 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
     }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="setup") {
+    Interactive* mob=w.availableMob(pl,"BENCH");
+    if(!mob) mob=w.availableMob(pl,"CHAIR");
+    if(!mob) {arenaAbort("sitting fixture needs an available real BENCH or CHAIR nearby");return;}
+    bench.seatMob=mob;
+    auto stand=mob->nearestPoint(pl)+Vec3(0,0,-80);
+    const auto ground=w.physic()->landRay(stand+Vec3(0,200,0),500);
+    if(!ground.hasCol) {arenaAbort("sitting fixture has no supported floor");return;}
+    stand.y=ground.v.y;
+    pl.setPosition(stand-Vec3(0,0,350));pl.updateTransform();
+    exec("clear 600",w,pl,ctrl);
+    const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
+    auto* npc=w.addNpc(symbol,stand);
+    auto* corpse=w.addNpc(symbol,stand+Vec3(100,0,60));
+    if(!npc || !corpse) {arenaAbort("sitting fixture actors unavailable");return;}
+    for(auto* actor:{npc,corpse}) {actor->clearAiQueue();actor->clearState(false);actor->setExternalControl(true);}
+    npc->setDirection(mob->position()-stand);npc->updateTransform();
+    corpse->setLastHitBy(&pl);corpse->setRagdollDown(true);corpse->prepareRagdoll();
+    bench.seatNpc=npc;bench.seatCorpse=corpse;bench.subject=npc;
+    for(const float x:{-35.f,35.f}) {
+      auto matrix=Matrix4x4::mkIdentity();matrix.translate(stand+Vec3(x,25,35));
+      auto* item=w.addItemDyn(w.script().findSymbolIndex("ItPo_Health_01"),matrix,size_t(-1));
+      if(!item) {arenaAbort("sitting fixture dropped item unavailable");return;}
+      bench.seatItems.push_back(item);
+      }
+    Gothic::settingsSetI("GAME","living_bodies",1);
+    event("living_seat_setup","\"scheme\":"+jsonStr(mob->schemeName())+",\"mob_cm\":"+ragdollVector(mob->position())+
+      ",\"start_cm\":"+ragdollVector(stand)+",\"items\":2");
+    }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="sit") {
+    if(!bench.seatNpc || !bench.seatNpc->livingBody()) {arenaAbort("sitting fixture requires its existing native living rig");return;}
+    for(auto* item:bench.seatItems) item->setPhysicsEnable(w);
+    bench.seatPhase="sit";bench.seatPreviousItems.clear();bench.seatSampleTick=w.tickCount();
+    for(const auto* item:bench.seatItems) bench.seatPreviousItems.push_back(item->position());
+    std::vector<Matrix4x4> native;
+    if(bench.seatNpc->livingBody()->getPose(native)) {
+      bench.seatPreviousParts.resize(native.size());
+      for(auto bone:bench.seatNpc->livingBody()->boneIndices()) bench.seatPreviousParts[bone]={native[bone].at(3,0),native[bone].at(3,1),native[bone].at(3,2)};
+      }
+    const auto from=bench.seatNpc->position();
+    const bool attached=bench.seatNpc->setInteraction(bench.seatMob);
+    event("living_seat_attach",std::string("\"attached\":")+(attached?"true":"false")+",\"jump_cm\":"+
+      ragdollNumber((bench.seatNpc->position()-from).length()));
+    if(!attached) arenaAbort("real NPC bench attachment failed");
+    }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="shift") {
+    if(!bench.seatNpc) return;
+    bench.seatNpc->setInteraction(nullptr,true);
+    bench.seatNpc->setPosition(bench.seatNpc->position()+Vec3(80,0,0));bench.seatNpc->updateTransform();
+    bench.seatPhase="shift";
+    event("living_seat_shift","\"distance_cm\":80");
+    }
   else if(c=="living" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","living_bodies",a[1]=="on");bench.livingPhase=a[1];
+    }
+  else if(c=="living" && a.size()==2 && a[1]=="radius-check") {
+    auto* npc=bench.subject;
+    if(!npc || npc->isDown()) {arenaAbort("living radius needs a live watched actor");return;}
+    const auto hero=pl.position();
+    const auto offset=pl.centerPosition()-pl.position();
+    const float distances[]{1950,2010,2190,2210,2100,2010,1990,2010};
+    const bool expected[]{true,true,true,false,false,false,true,true};
+    bool pass=true;
+    for(size_t i=0;i<8;++i) {
+      pl.setPosition(npc->centerPosition()+Vec3(distances[i],0,0)-offset);pl.updateTransform();
+      npc->prepareLivingBody();
+      const bool present=npc->livingBody()!=nullptr;
+      pass&=present==expected[i];
+      event("living_radius_check","\"distance_cm\":"+ragdollNumber((pl.centerPosition()-npc->centerPosition()).length())+
+        ",\"expected\":"+(expected[i]?"true":"false")+",\"present\":"+(present?"true":"false"));
+      }
+    pl.setPosition(hero);pl.updateTransform();npc->prepareLivingBody();
+    if(!pass) arenaAbort("living radius hysteresis check failed");
     }
   else if(c=="living" && a.size()==2 && a[1]=="setup") {
     if(!chooseRagdollArena(w,pl)) {arenaAbort("living fixture needs an empty supported arena");return;}

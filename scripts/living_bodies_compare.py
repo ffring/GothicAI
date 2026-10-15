@@ -65,6 +65,18 @@ def functional(run):
             'note': 'Overlay shows gameplay hit zones; counts are actual native kinematic parts.'}
 
 
+def radius(run):
+    data = events(run)
+    rows = [e for e in data if e['kind'] == 'living_radius_check']
+    distances = (1950, 2010, 2190, 2210, 2100, 2010, 1990, 2010)
+    present = (True, True, True, False, False, False, True, True)
+    assert len(rows) == len(distances), 'missing radius checks'
+    for row, distance, expected in zip(rows, distances, present):
+        assert abs(row['distance_cm'] - distance) < 1, row
+        assert row['expected'] == row['present'] == expected, row
+    return {'pass': True, 'checks': rows, 'enter_radius_cm': 2000, 'remove_radius_cm': 2200}
+
+
 def measured(run, mode):
     data = events(run)
     before = [e for e in data if e['kind'] == 'living_measure_before']
@@ -121,12 +133,12 @@ def performance(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('functional', 'performance'))
+    parser.add_argument('mode', choices=('functional', 'performance', 'radius'))
     parser.add_argument('directory', type=Path)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     try:
-        result = (functional if args.mode == 'functional' else performance)(args.directory)
+        result = {'functional': functional, 'performance': performance, 'radius': radius}[args.mode](args.directory)
     except (AssertionError, KeyError, ValueError, OSError, TypeError) as error:
         result = {'pass': False, 'error': str(error)}
     args.output.write_text(json.dumps(result, indent=2) + '\n')
