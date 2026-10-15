@@ -7522,6 +7522,10 @@ bool TestBench::isActive() {
   return scenarioPath!=nullptr;
   }
 
+bool TestBench::isPhysicsNoiseDebug() {
+  return bodyTraceAlive && bench.noiseBridgeDebug;
+  }
+
 bool TestBench::physicsNoiseDebug(World& world,Npc& player,std::string_view command,
                                   std::string& value,std::string& error) {
   const auto fail=[&](std::string_view message) {error=message;return false;};

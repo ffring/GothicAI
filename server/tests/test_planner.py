@@ -245,6 +245,18 @@ async def test_noise_reaches_decider_without_inventing_a_culprit_and_uses_its_lo
     assert len(applier.recent) == 1  # the same noise does not send it on another trip
 
 
+@pytest.mark.parametrize(("confidence", "applied"), [(0.35, True), (0.29, False)])
+async def test_bounded_noise_investigation_needs_less_certainty_than_a_general_reaction(confidence, applied):
+    planner, _, applier, clock = make(FakeDecider("investigate", confidence=confidence))
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    planner.on_event("PATRON", "noise", clock.t, position=(100, 200, 300), source="barrel", loudness=0.7)
+    await step(planner, clock, 0.3)
+    assert bool(applier.recent) is applied
+    assert planner.stats.unsure == (0 if applied else 1)
+    if applied:
+        assert applier.recent[0].args == {"at": [100, 200, 300], "ms": 5000}
+
+
 @pytest.mark.parametrize(
     ("other", "other_name", "seen"), [("PLAYER", None, "the hero"), ("VLK_400", "Горожанин", "Горожанин")]
 )

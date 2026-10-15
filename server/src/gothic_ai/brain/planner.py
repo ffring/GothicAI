@@ -107,11 +107,12 @@ class PlannerConfig:
     )
     react_threshold: float = 0.5  # below it the npc keeps its routine
     plan_threshold: float = 0.5
-    # per-option thresholds: harmless gestures need less certainty than walking up to the player
+    # Reversible gestures and a brief check of a sound need less certainty than approaching the hero.
     option_threshold: dict[str, float] = field(
         default_factory=lambda: {
             "look_at": 0.25,
             "greet": 0.3,
+            "investigate": 0.3,  # bounded walk and scan; the engine returns it to its routine
             "approach_talk": 0.6,
             "fight": 0.6,  # a fight is not taken back: surer than for a gesture
         }

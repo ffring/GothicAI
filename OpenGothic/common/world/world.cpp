@@ -1115,7 +1115,7 @@ void World::emitPhysicsNoise(const PhysicsNoise& noise) {
     }
   sound.setVolume(sound.volume()*noise.volume);
   sound.play();
-  if(TestBench::isActive())
+  if(TestBench::isActive() || TestBench::isPhysicsNoiseDebug())
     TestBench::physicsNoise(noise,name,!sound.isEmpty());
   wobj.emitPhysicsNoise(noise);
   }
