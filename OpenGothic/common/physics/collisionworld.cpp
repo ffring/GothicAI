@@ -45,7 +45,7 @@ namespace {
   struct LayerInterface final : JPH::BroadPhaseLayerInterface {
     JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody)
+      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody)
         return dynamicLayer;
       if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost)
         return sensorLayer;
@@ -60,6 +60,10 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+      if(a==DynamicWorld::C_ActiveBody)
+        return b==DynamicWorld::C_Landscape || b==DynamicWorld::C_Object || b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+      if(b==DynamicWorld::C_ActiveBody)
+        return a==DynamicWorld::C_Landscape || a==DynamicWorld::C_Object || a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
       if(a==DynamicWorld::C_LivingBody)
         return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
       if(b==DynamicWorld::C_LivingBody)
@@ -74,7 +78,8 @@ namespace {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
       if(layer==DynamicWorld::C_LivingBody)
         return broad==dynamicLayer;
-      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
+      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody ||
+             (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
       }
     };
 
@@ -89,7 +94,8 @@ namespace {
   struct QueryBroadPhaseFilter final : JPH::BroadPhaseLayerFilter {
     explicit QueryBroadPhaseFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
-      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|(1u<<DynamicWorld::C_LivingBody);
+      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|
+                                    (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody);
       constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost);
       if(layer==dynamicLayer)
         return (mask & itemMask)!=0;
@@ -812,7 +818,6 @@ void CollisionWorld::tick(uint64_t dt) {
   constexpr float step = 1.f/60.f;
   bool advanced = false;
   if(!rigid.empty() || !ragdolls.empty()) {
-    const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
     accumulatedTime += float(dt)/1000.f;
     int wholeSteps = 0;
     if(accumulatedTime>=step) {
@@ -825,6 +830,7 @@ void CollisionWorld::tick(uint64_t dt) {
     for(int i=0;i<count;++i) {
       ++impl->simulationStep;
       for(auto* body:ragdolls) body->prepareKinematicStep(step);
+      const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
       // A capsule stopped by CCD otherwise compresses its connected limb while
       // the rest of the rig finishes the 1/60 s step. Two native collision steps
       // keep that late-contact displacement small. The public fixed-step clock

@@ -55,11 +55,22 @@ class Ragdoll final {
     Ragdoll& operator=(const Ragdoll&) = delete;
 
     bool valid() const;
+    // True only for a completely kinematic living rig, never an active reaction
+    // or a limp corpse.
     bool isKinematic() const;
     // Queue an already solved world pose for the next fixed physics step.
     // Rejects invalid poses or a changed object scale without changing the rig.
     bool moveKinematic(const Tempest::Matrix4x4* worldPose, size_t numBones,
                        const Tempest::Matrix4x4& objectMatrix, float deltaSeconds);
+    // Queue one point impulse for the next fixed step. pointCm is world-space
+    // centimetres; impulseNs is world-space newton seconds (kg * metres/second),
+    // not a velocity. strength is the visual/motor response in (0, 1].
+    // A living pelvis hit reacts through the nearest spine; a limp hit always
+    // addresses the supplied physical bone. No native world calls happen here.
+    bool queueHit(size_t bone, const Tempest::Vec3& pointCm,
+                  const Tempest::Vec3& impulseNs, float strength);
+    float reactionWeight() const;
+    const std::vector<size_t>& reactionBones() const;
     size_t partCount() const;
     size_t boneCount() const;
     float mass() const;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 #include "ikmath.h"
 #include "skeleton.h"
@@ -305,8 +306,10 @@ Vec3 HitZones::point(const Matrix4x4* tr, const End& e) {
   return p;
   }
 
-HitZones::Zone HitZones::rayTest(const Matrix4x4* tr, size_t numBones, float scale, const Vec3& from, const Vec3& to, float& t) const {
+HitZones::Zone HitZones::rayTest(const Matrix4x4* tr, size_t numBones, float scale, const Vec3& from, const Vec3& to, float& t, size_t* bone) const {
   t = 0;
+  if(bone!=nullptr)
+    *bone = size_t(-1);
   const Vec3  d   = to - from;
   const float len = length(d);
   if(tr==nullptr || len<1e-3f)
@@ -321,10 +324,32 @@ HitZones::Zone HitZones::rayTest(const Matrix4x4* tr, size_t numBones, float sca
     if(h>=0.f && h<best) {
       best = h;
       ret  = c.zone;
+      if(bone!=nullptr)
+        *bone = c.owner;
       }
     }
   t = best;
   return ret;
+  }
+
+size_t HitZones::closestBone(const Matrix4x4* tr, size_t numBones, float scale, const Vec3& at) const {
+  if(tr==nullptr)
+    return size_t(-1);
+  float best = std::numeric_limits<float>::infinity();
+  size_t bone = size_t(-1);
+  for(const auto& c:caps) {
+    if(c.a.bone>=numBones || c.b.bone>=numBones || c.owner>=numBones)
+      continue;
+    const auto a = point(tr,c.a), b = point(tr,c.b), ab = b-a;
+    const float length2 = ab.quadLength();
+    const float t = length2>1.e-6f ? std::clamp(Vec3::dotProduct(at-a,ab)/length2,0.f,1.f) : 0.f;
+    const float distance = std::abs((at-(a+ab*t)).length()-c.r*scale);
+    if(distance<best) {
+      best = distance;
+      bone = c.owner;
+      }
+    }
+  return bone;
   }
 
 bool HitZones::center(const Matrix4x4* tr, size_t numBones, Zone z, Vec3& at) const {

@@ -9,13 +9,93 @@
 #include "objvisual.h"
 #include "gothic.h"
 #include "graphics/mesh/animmath.h"
+#include "graphics/mesh/ikmath.h"
 #include "frameprofile.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 
 using namespace Tempest;
+
+namespace {
+
+bool inverseBasis(const Matrix4x4& m, double inverse[3][3]) {
+  const double a=m.at(0,0), b=m.at(1,0), c=m.at(2,0);
+  const double d=m.at(0,1), e=m.at(1,1), f=m.at(2,1);
+  const double g=m.at(0,2), h=m.at(1,2), i=m.at(2,2);
+  const double det=a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
+  if(!std::isfinite(det) || std::abs(det)<1e-12)
+    return false;
+  inverse[0][0]=(e*i-f*h)/det; inverse[0][1]=(c*h-b*i)/det; inverse[0][2]=(b*f-c*e)/det;
+  inverse[1][0]=(f*g-d*i)/det; inverse[1][1]=(a*i-c*g)/det; inverse[1][2]=(c*d-a*f)/det;
+  inverse[2][0]=(d*h-e*g)/det; inverse[2][1]=(b*g-a*h)/det; inverse[2][2]=(a*e-b*d)/det;
+  return true;
+  }
+
+bool validRenderFrame(const Matrix4x4& m) {
+  for(int c=0; c<4; ++c)
+    for(int r=0; r<4; ++r)
+      if(!std::isfinite(m.at(c,r)))
+        return false;
+  return std::abs(m.at(0,3))<1e-5f && std::abs(m.at(1,3))<1e-5f &&
+         std::abs(m.at(2,3))<1e-5f && std::abs(m.at(3,3)-1.f)<1e-5f;
+  }
+
+bool blendPhysicalBone(const Matrix4x4& animated, const Matrix4x4& physical, float weight, Matrix4x4& out) {
+  if(weight>=1.f) {
+    out=physical;
+    return true;
+    }
+  double inverse[3][3];
+  if(!inverseBasis(animated,inverse))
+    return false;
+  // Native frames retain the animation's affine stretch. Their world-space delta is rigid;
+  // interpolate that rotation, then apply it to the intact animated basis.
+  auto delta=Matrix4x4::mkIdentity();
+  for(int c=0; c<3; ++c)
+    for(int r=0; r<3; ++r) {
+      double value=0;
+      for(int k=0; k<3; ++k)
+        value+=double(physical.at(k,r))*inverse[k][c];
+      delta.set(c,r,float(value));
+      }
+  const auto rotation=IkMath::toMat3(IkMath::slerp({},IkMath::toQuat(IkMath::rotationOf(delta)),weight));
+  out=animated;
+  for(int c=0; c<3; ++c)
+    for(int r=0; r<3; ++r) {
+      float value=0;
+      for(int k=0; k<3; ++k)
+        value+=rotation.m[r][k]*animated.at(c,k);
+      out.set(c,r,value);
+      }
+  for(int r=0; r<3; ++r)
+    out.set(3,r,float(double(animated.at(3,r))+(double(physical.at(3,r))-animated.at(3,r))*weight));
+  return true;
+  }
+
+bool followPhysicalParent(const Matrix4x4& animatedParent, const Matrix4x4& renderedParent,
+                          const Matrix4x4& animated, Matrix4x4& out) {
+  double inverse[3][3];
+  if(!inverseBasis(animatedParent,inverse))
+    return false;
+  auto local=Matrix4x4::mkIdentity();
+  for(int c=0; c<4; ++c)
+    for(int r=0; r<3; ++r) {
+      double value=0;
+      for(int k=0; k<3; ++k) {
+        const double v=c<3 ? double(animated.at(c,k)) : double(animated.at(3,k))-animatedParent.at(3,k);
+        value+=inverse[r][k]*v;
+        }
+      local.set(c,r,float(value));
+      }
+  // Subtract world translations before inversion, keeping small slot/finger offsets precise.
+  out=renderedParent*local;
+  return true;
+  }
+
+}
 
 MdlVisual::MdlVisual()
   :skInst(std::make_unique<Pose>()) {
@@ -40,6 +120,7 @@ void MdlVisual::save(Serialize& fout, const Interactive&) const {
   }
 
 void MdlVisual::load(Serialize& fin, Npc& npc) {
+  clearPhysicalPose();
   std::string s;
 
   fin.read(fgtMode);
@@ -53,6 +134,7 @@ void MdlVisual::load(Serialize& fin, Npc& npc) {
   }
 
 void MdlVisual::load(Serialize& fin, Interactive&) {
+  clearPhysicalPose();
   solver.load(fin);
   skInst->load(fin,solver);
   if(skeleton!=nullptr)
@@ -61,6 +143,7 @@ void MdlVisual::load(Serialize& fin, Interactive&) {
 
 // Mdl_SetVisual
 void MdlVisual::setVisual(const Skeleton *v) {
+  clearPhysicalPose();
   if(v!=nullptr)
     rebindAttaches(*v);
   solver.setSkeleton(v);
@@ -70,6 +153,67 @@ void MdlVisual::setVisual(const Skeleton *v) {
   skeleton = v;
   hitZones.setSkeleton(v);
   setObjMatrix(pos); // invalidate obj matrix
+  }
+
+bool MdlVisual::setPhysicalPose(const std::vector<Matrix4x4>& physical,
+                                const std::vector<size_t>& bones, float weight) {
+  const size_t count=skInst->boneCount();
+  if(skeleton==nullptr || skeleton->nodes.size()!=count || physical.size()!=count || bones.empty() ||
+     !std::isfinite(weight) || weight<=0.f)
+    return clearPhysicalPose();
+  for(const auto i:bones)
+    if(i>=count || !validRenderFrame(physical[i]))
+      return clearPhysicalPose();
+
+  const auto* animated=skInst->transform();
+  renderedPose.assign(animated,animated+count);
+  renderedMask.assign(count,0);
+  constexpr uint8_t Selected=1, Finished=2, Affected=4, Visiting=8;
+  for(const auto i:bones)
+    renderedMask[i]=Selected;
+  weight=std::min(weight,1.f);
+  auto bone=[&](auto&& self, size_t i) -> bool {
+    if(renderedMask[i]&Finished)
+      return true;
+    if(renderedMask[i]&Visiting)
+      return false;
+    renderedMask[i]|=Visiting;
+    const size_t parent=skeleton->nodes[i].parent;
+    if(parent<count && !self(self,parent))
+      return false;
+    if(renderedMask[i]&Selected) {
+      if(!blendPhysicalBone(animated[i],physical[i],weight,renderedPose[i]))
+        return false;
+      renderedMask[i]|=Affected;
+      }
+    else if(parent<count && (renderedMask[parent]&Affected)) {
+      if(!followPhysicalParent(animated[parent],renderedPose[parent],animated[i],renderedPose[i]))
+        return false;
+      renderedMask[i]|=Affected;
+      }
+    renderedMask[i]=uint8_t((renderedMask[i]|Finished)&~Visiting);
+    return true;
+    };
+  for(size_t i=0; i<count; ++i)
+    if(!bone(bone,i))
+      return clearPhysicalPose();
+  view.setPose(pos,renderedPose.data());
+  return true;
+  }
+
+bool MdlVisual::clearPhysicalPose() {
+  if(renderedPose.empty())
+    return false;
+  renderedPose.clear();
+  renderedMask.clear();
+  view.setPose(pos,*skInst);
+  return true;
+  }
+
+const Matrix4x4& MdlVisual::renderedBone(size_t bone) const {
+  if(bone<renderedPose.size())
+    return renderedPose[bone];
+  return skInst->bone(bone);
   }
 
 void MdlVisual::setYTranslationEnable(bool e) {
@@ -127,6 +271,7 @@ void MdlVisual::setArmor(Npc& npc, MeshObjects::Mesh&& armor) {
   }
 
 void MdlVisual::implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, const int32_t version) {
+  clearPhysicalPose();
   attach.clear();
   if(auto p = body.protoMesh()) {
     for(auto& att:p->attach) {
@@ -459,7 +604,7 @@ void MdlVisual::setObjMatrix(const Tempest::Matrix4x4 &m, bool syncAttach) {
   FrameProfile::Scope timing(FrameProfile::Zone::PaletteCpu,FrameProfile::actorContext());
   pos = m;
   skInst->setObjectMatrix(m,syncAttach);
-  view.setPose(m,*skInst);
+  view.setPose(m,renderedPose.empty() ? skInst->transform() : renderedPose.data());
   if(syncAttach)
     syncAttaches();
   }
@@ -515,7 +660,7 @@ void MdlVisual::setTorch(bool t, World& owner) {
   auto& pose = *skInst;
   auto  p    = pos;
   if(torch.boneId<pose.boneCount())
-    p = pose.bone(torch.boneId);
+    p = renderedBone(torch.boneId);
   torch.view->setObjMatrix(p);
   }
 
@@ -931,7 +1076,9 @@ bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
   return true;
   }
 
-HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t) const {
+HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t, size_t* bone) const {
+  if(bone!=nullptr)
+    *bone=size_t(-1);
   if(!hitZones.isValid()) {
     // no bones to tell: its box was hit
     t = 0;
@@ -939,7 +1086,7 @@ HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t)
     }
   const Vec3 sx    = Vec3(pos.at(0,0),pos.at(0,1),pos.at(0,2));
   const float scale = sx.length();
-  return hitZones.rayTest(skInst->transform(),skInst->boneCount(),scale>0.f ? scale : 1.f,from,to,t);
+  return hitZones.rayTest(skInst->transform(),skInst->boneCount(),scale>0.f ? scale : 1.f,from,to,t,bone);
   }
 
 bool MdlVisual::hitZoneCenter(HitZones::Zone z, Vec3& at) const {
@@ -1461,7 +1608,7 @@ void MdlVisual::syncAttaches() {
     auto& pose = *skInst;
     auto  p    = pos;
     if(torch.boneId<pose.boneCount())
-      p = pose.bone(torch.boneId);
+      p = renderedBone(torch.boneId);
     torch.view->setObjMatrix(p);
     }
   }
@@ -1485,7 +1632,7 @@ void MdlVisual::syncAttaches(Attach<View>& att) {
   auto& pose = *skInst;
   auto  p    = pos;
   if(att.boneId<pose.boneCount())
-    p = pose.bone(att.boneId);
+    p = renderedBone(att.boneId);
   att.view.setObjMatrix(p);
   }
 

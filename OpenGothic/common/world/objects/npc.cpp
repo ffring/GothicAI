@@ -527,6 +527,7 @@ bool Npc::setPosition(float ix, float iy, float iz) {
     // Recreate at the destination instead of sweeping a kinematic body through
     // every item between a scripted teleport's endpoints.
     living.reset();
+    arrowImpacts.clear();
     // Large scripted relocations start a new history; normal movement samples
     // must retain the last supported position when the NPC steps off an edge.
     ragdollQuestReturn = {};
@@ -799,6 +800,7 @@ void Npc::addRagdollImpulse(const Vec3& impulse) {
 
 void Npc::suspendRagdoll() {
   living.reset();
+  arrowImpacts.clear();
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
   const bool hadBody = ragdoll!=nullptr;
@@ -838,6 +840,7 @@ bool Npc::createRagdoll() {
     }
   ragdollDormant.reset();
   ragdoll = std::move(body);
+  dispatchArrowPhysics(*ragdoll);
   ragdollStartTick = owner.tickCount();
   physic.setEnable(false);
   mvAlgo.takeRagdollControl();
@@ -962,6 +965,8 @@ void Npc::checkRagdollQuestHazard() {
   }
 
 void Npc::prepareRagdoll() {
+  if(Gothic::settingsGetI("GAME","arrow_physics")==0)
+    arrowImpacts.clear();
   if(!ragdoll && !isDown() && ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) {
     if(!needsRagdollQuestReturn()) {
       ragdollQuestReturn.armed = false;
@@ -980,6 +985,8 @@ void Npc::prepareRagdoll() {
   updateRagdollQuestAnchor();
   const bool enabled = Gothic::settingsGetI("GAME","ragdoll")!=0;
   if(!enabled) {
+    if(isDown())
+      arrowImpacts.clear();
     if(ragdollHasLastPosition) {
       ragdollHasLastPosition = false;
       ragdollLastVelocity = {};
@@ -1034,10 +1041,16 @@ void Npc::prepareRagdoll() {
     ragdollHasLastPosition = true;
     return;
     }
-  if(ragdoll || ragdollLegacyDown || (ragdollRecovering && !ragdollDormant))
+  if(ragdoll || ragdollLegacyDown || (ragdollRecovering && !ragdollDormant)) {
+    if(ragdoll)
+      dispatchArrowPhysics(*ragdoll);
+    else
+      arrowImpacts.clear();
     return;
+    }
   if(!createRagdoll()) {
     ragdollLegacyDown = true;
+    arrowImpacts.clear();
     Log::e("ragdoll: unsupported skeleton or body state for ",displayName());
     }
   }
@@ -1049,19 +1062,26 @@ void Npc::prepareLivingBody() {
      Gothic::settingsGetI("GAME","living_bodies")==0 || qDistTo(*hero)>radius*radius) {
     living.reset();
     livingRetryTick = 0;
+    arrowImpacts.clear();
     return;
     }
-  if(livingNeedsRebuild) {
+  if(livingNeedsRebuild || (living && !living->isKinematic() && Gothic::settingsGetI("GAME","arrow_physics")==0)) {
     living.reset();
     livingNeedsRebuild = false;
     }
-  if(living)
+  if(living) {
+    dispatchArrowPhysics(*living);
     return;
-  if(owner.tickCount()<livingRetryTick)
+    }
+  if(owner.tickCount()<livingRetryTick) {
+    arrowImpacts.clear();
     return;
+    }
   const auto* skeleton = visual.visualSkeleton();
-  if(skeleton==nullptr || !visual.hitZoneShape().isValid())
+  if(skeleton==nullptr || !visual.hitZoneShape().isValid()) {
+    arrowImpacts.clear();
     return;
+    }
   // Only birth needs a forced solve. Subsequent targets come from the normal
   // animation update, including IK/aim/flinch, without solving the pose twice.
   updateAnimation(0,true);
@@ -1069,6 +1089,50 @@ void Npc::prepareLivingBody() {
                                              visual.pose().boneCount(),visual.transform());
   if(!living)
     livingRetryTick = owner.tickCount()+1000;
+  if(living)
+    dispatchArrowPhysics(*living);
+  else
+    arrowImpacts.clear();
+  }
+
+void Npc::queueArrowPhysics(const Bullet& bullet) {
+  if(bullet.isSpell() || Gothic::settingsGetI("GAME","arrow_physics")==0)
+    return;
+  const auto direction = bullet.direction(); // cm/ms, as used by the projectile integrator
+  const float speed = direction.length();
+  const auto point = bullet.impactPoint();
+  if(!std::isfinite(speed) || speed<1.e-3f ||
+     !std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
+    return;
+  size_t bone = bullet.impactBone();
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,point);
+    }
+  if(bone>=visual.pose().boneCount())
+    return;
+  // An 80 g projectile: cm/ms -> m/s gives momentum in N*s. Draw and weapon
+  // strength already determine the actual projectile speed; damage dice do not.
+  const float momentum = std::clamp(0.08f*speed*10.f,0.2f,12.f);
+  const float strength = std::clamp(momentum/8.f,0.1f,1.f);
+  const Vec3 impulse = direction*(momentum/speed);
+  arrowImpacts.push_back({bone,point,impulse,strength});
+  arrowPhysics.bone = bone;
+  arrowPhysics.point = point;
+  arrowPhysics.impulseNs = impulse;
+  arrowPhysics.strength = strength;
+  ++arrowPhysics.hits;
+  }
+
+void Npc::dispatchArrowPhysics(Ragdoll& body) {
+  for(const auto& hit:arrowImpacts)
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength)) {
+      ++arrowPhysics.applied;
+      if(&body==ragdoll.get())
+        ++arrowPhysics.corpseImpulses;
+      }
+  arrowImpacts.clear();
   }
 
 void Npc::syncRagdoll() {
@@ -1350,6 +1414,7 @@ Tempest::Vec3 Npc::animMoveSpeed(uint64_t dt) const {
 void Npc::setVisual(const Skeleton* v) {
   if(visual.visualSkeleton()!=v) {
     living.reset();
+    arrowImpacts.clear();
     releaseRagdoll(false);
     ragdollDormant.reset();
     ragdollRecovering = false;
@@ -1455,6 +1520,7 @@ void Npc::setFatness(float f) {
 void Npc::setScale(float x, float y, float z) {
   if(sz[0]!=x || sz[1]!=y || sz[2]!=z) {
     living.reset();
+    arrowImpacts.clear();
     releaseRagdoll(false);
     ragdollDormant.reset();
     ragdollLegacyDown = false;
@@ -2860,6 +2926,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  if(hitResult.hasHit && !isSpell && b!=nullptr)
+    queueArrowPhysics(*b);
   const auto traceDamage = [&] {
     BodyObservations::noteEvent(*this,&other,hitResult.value>0 ? "damage_received" : "damage_no_loss",owner.tickCount());
     if(TestBench::bodyTracing())
@@ -5197,8 +5265,8 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
   return true;
   }
 
-HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const {
-  return visual.rayHitZone(from,to,t);
+HitZones::Zone Npc::rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t, size_t* bone) const {
+  return visual.rayHitZone(from,to,t,bone);
   }
 
 bool Npc::hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const {
@@ -6028,6 +6096,7 @@ void Npc::updateTransform() {
 
 void Npc::updateAnimation(uint64_t dt, bool force) {
   FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
+  const bool clearedPhysicalPose = visual.clearPhysicalPose();
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
     dt = 0;
@@ -6054,7 +6123,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     durtyTranform = 0;
     }
 
-  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force);
+  bool syncAtt = visual.updateAnimation(this,nullptr,owner,dt,force) || clearedPhysicalPose;
   if(ragdoll) {
     if(syncAtt || force)
       visual.syncAttaches();
@@ -6068,6 +6137,8 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   if(living)
     livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
                                               float(std::max<uint64_t>(dt,1))*0.001f);
+  if(living && living->reactionWeight()>0.f && living->getPose(arrowPhysicalPose))
+    syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)
     visual.syncAttaches();
   }

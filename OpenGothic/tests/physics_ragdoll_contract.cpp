@@ -318,6 +318,99 @@ void testKinematicPoseAndInteraction() {
     }
   }
 
+void testLocalMotorReactions() {
+  Fixture fixture;
+  for(const size_t hitBone:{size_t(6),size_t(13)}) {
+    CollisionWorld world;
+    auto object=at(0,300,0);
+    auto target=fixture.skeleton.tr;
+    for(auto& frame:target) frame=object*frame;
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,target.data(),target.size(),object);
+    require(bool(body),"local motor checks need a valid living rig");
+    const auto count=world.bodyCount(),parts=body->partCount();
+    const auto hitPoint=position(target[hitBone])+Tempest::Vec3(12,0,0);
+    require(!body->queueHit(fixture.skeleton.nodes.size(),hitPoint,{0,0,3},1),"unmapped hit bones must be rejected");
+    require(body->queueHit(hitBone,hitPoint,{0,0,3},1),"a mapped bone must accept one point impulse in newton seconds");
+    require(body->isKinematic(),"queued reactions must not mutate the native world before its fixed step");
+    world.tick(17);
+    require(!body->isKinematic() && !body->reactionBones().empty(),"a hit must activate a real dynamic limb chain");
+    near(body->reactionWeight(),1,.0001f,"hit strength must control the initial physical pose weight");
+    require(body->partCount()==parts && world.bodyCount()==count,"motor promotion must replace native parts without changing their count");
+    const auto contains=[&](size_t bone) {
+      const auto& bones=body->reactionBones(); return std::find(bones.begin(),bones.end(),bone)!=bones.end();
+      };
+    require(contains(hitBone) && !contains(1) && !contains(9) && !contains(16),"physical reaction must exclude pelvis and opposite limbs");
+    require(hitBone==6 ? contains(7) && contains(8) && !contains(13) : contains(12) && contains(14) && !contains(6),
+            "arm and leg hits must select their anatomical chain locally");
+    const auto probeBone=hitBone==6 ? size_t(8) : size_t(14);
+    float peak=0,recovered=0;
+    std::vector<Tempest::Matrix4x4> physical;
+    for(int frame=0;frame<45;++frame) {
+      // Keep the gameplay root moving during the physical limb response.
+      object.set(3,0,float(frame)*.5f);
+      for(size_t i=0;i<target.size();++i) target[i]=object*fixture.skeleton.tr[i];
+      require(body->moveKinematic(target.data(),target.size(),object,.017f),"active rigs must continue consuming the ordinary ready animation target");
+      world.tick(17);
+      require(body->getPose(physical),"active native transforms must remain readable for the render overlay");
+      for(const size_t fixed:{size_t(1),size_t(9),size_t(16)})
+        for(size_t component=0;component<16;++component)
+          near(physical[fixed].data()[component],target[fixed].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+               "root and unaffected limbs must keep their animation transforms during a local reaction");
+      const float displacement=std::abs(position(physical[probeBone]).z-position(target[probeBone]).z);
+      peak=std::max(peak,displacement);
+      if(frame==40) recovered=displacement;
+      require(world.bodyCount()==count,"motor simulation must not append replacement bodies every frame");
+      }
+    require(peak>.3f,"the addressed limb must show a measurable local native displacement after its point impulse");
+    require(body->reactionWeight()>0.f,"motor recovery must be observed before the final kinematic deadline");
+    require(recovered<peak*.65f+.05f,"real motors must return the limb toward animation before the final kinematic reset");
+    const auto point=position(physical[hitBone]);
+    require(world.rayCast(point+Tempest::Vec3(0,0,300),point-Tempest::Vec3(0,0,300),1u<<DynamicWorld::C_ActiveBody).hasHit,
+            "the activated physical chain must be present in its explicit contact layer");
+    require(!world.rayCast(point+Tempest::Vec3(0,0,300),point-Tempest::Vec3(0,0,300),
+                          (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll)).hasHit,
+            "active living parts must remain excluded from the established primary hit layers");
+    require(body->queueHit(hitBone,point,{0,0,-2},.35f) && body->queueHit(hitBone,point,{0,0,1},.35f),
+            "an existing motor rig must accept repeated hits without allocating another rig");
+    for(int frame=0;frame<100;++frame) {
+      world.tick(17);
+      require(world.bodyCount()==count && body->partCount()==parts,"repeated hits and recovery must preserve the native part count");
+      }
+    require(body->isKinematic() && body->reactionWeight()==0.f && body->reactionBones().empty(),"every finite reaction must return to pure kinematic mode within its deadline");
+    require(body->getPose(physical),"the recovered kinematic pose must remain available");
+    for(auto bone:body->poseIndices())
+      for(size_t component=0;component<16;++component)
+        near(physical[bone].data()[component],target[bone].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+             "the recovered rig must exactly follow its latest ordinary animation target");
+    require(body->state().parts.empty(),"a partial active rig must never become corpse save data");
+    std::printf("local motor bone=%zu peak_cm=%.9g recovered_before_reset_cm=%.9g parts=%zu\n",hitBone,double(peak),double(recovered),parts);
+    body.reset(); require(world.bodyCount()==0,"destroying a motor-capable rig must also remove its constraints and every native part");
+    }
+  }
+
+void testLimpBoneImpulseOnce() {
+  Fixture fixture;
+  CollisionWorld hitWorld,controlWorld;
+  auto hit=fixture.create(hitWorld,at(0,700,0));
+  auto control=fixture.create(controlWorld,at(0,700,0));
+  const auto initial=hit->state();
+  const auto found=std::find_if(initial.parts.begin(),initial.parts.end(),[](const auto& part) { return part.bone==7; });
+  require(found!=initial.parts.end(),"limp impulse fixture needs a forearm part");
+  const auto point=position(found->transform)+Tempest::Vec3(12,0,0);
+  require(hit->queueHit(7,point,{0,0,3},1),"a limp body must accept the same deferred point impulse API");
+  same(hit->state(),initial,.001f);
+  hitWorld.tick(17); controlWorld.tick(17);
+  const auto hitState=hit->state(),controlState=control->state();
+  const auto part=size_t(found-initial.parts.begin());
+  require((hitState.parts[part].angularVelocity-controlState.parts[part].angularVelocity).length()>.05f,
+          "a limp bone impulse away from its COM must generate local angular motion instead of a global velocity kick");
+  require(hit->reactionWeight()==0.f && hit->reactionBones().empty() && !hit->isKinematic(),"limp hits must never enable active animation motors");
+  require(hit->restore(initial) && control->restore(initial),"the one-shot impulse check must reset only observable physical state");
+  hitWorld.tick(17); controlWorld.tick(17);
+  same(hit->state(),control->state(),.01f);
+  require(hitWorld.bodyCount()==hit->partCount(),"a limp point impulse must not allocate living or replacement parts");
+  }
+
 void testDropSleepWake() {
   Fixture fixture;
   CollisionWorld world;
@@ -1858,6 +1951,8 @@ int main(int argc, const char** argv) {
     require(argc==1,"usage: gothic-ragdoll-contract [--benchmark20 output.json | --preflight20 output.json | --replay-creation captured.jsonl]");
     testInvalidCreationAndScale();
     testKinematicPoseAndInteraction();
+    testLocalMotorReactions();
+    testLimpBoneImpulseOnce();
     testPoseOverlayAndRecovery();
     testRecoveryMatchesAnimBlendAndSaves();
     testMalformedRecoveryArchive();

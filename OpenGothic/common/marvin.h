@@ -81,6 +81,7 @@ class Marvin {
       C_ToggleRagdoll,
       C_ToggleRagdollQuestGuard,
       C_ToggleLivingBodies,
+      C_ToggleArrowPhysics,
       };
 
     struct Cmd {

@@ -174,10 +174,14 @@ bool Bullet::onCollidePrecise(Npc& npc, const Vec3& from, const Vec3& to) {
     return false;
   // between the arm and the trunk, over the head: past it
   float t = 0;
-  const auto z = npc.rayHitZone(from,to,t);
+  size_t bone = size_t(-1);
+  const auto z = npc.rayHitZone(from,to,t,&bone);
   if(z==HitZones::None)
     return false;
   zone = z;
+  impactOwner = bone;
+  impactAt = from+Vec3::normalize(to-from)*t;
+  impactKnown = true;
   const int32_t hp = npc.attribute(ATR_HITPOINTS);
   const bool    ret = onCollide(npc);
   if(TestBench::isActive()) {

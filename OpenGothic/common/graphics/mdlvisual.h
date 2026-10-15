@@ -85,6 +85,12 @@ class MdlVisual final {
 
     Pose&                          pose() { return *skInst; }
     const Pose&                    pose() const { return *skInst; }
+    // A render-only physical layer: gameplay and aiming continue to read the ordinary Pose.
+    // Both setters return whether attached visuals need synchronization.
+    bool                           setPhysicalPose(const std::vector<Tempest::Matrix4x4>& physical,
+                                                   const std::vector<size_t>& bones, float weight);
+    bool                           clearPhysicalPose();
+    const Tempest::Matrix4x4&       renderedBone(size_t bone) const;
     const HitZones&                hitZoneShape() const { return hitZones; }
     // the animation of that name plays k times as fast from its next start (1: as it is)
     void                           setAnimSpeed(std::string_view name, float k);
@@ -105,7 +111,8 @@ class MdlVisual final {
     // the arrow on the string as posed: its nock, where it points
     bool                           arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
     // where an arrow passing from-to hits the body (its bones), t: how far from 'from'
-    auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    auto                           rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t,
+                                              size_t* bone=nullptr) const -> HitZones::Zone;
     bool                           hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string                    hitZonesDump() const;
     void                           hitZonesPosed(std::vector<HitZones::Posed>& out) const;
@@ -251,6 +258,8 @@ class MdlVisual final {
     WeaponState                    fgtMode=WeaponState::NoWeapon;
     AnimationSolver                solver;
     std::unique_ptr<Pose>          skInst;
+    std::vector<Tempest::Matrix4x4> renderedPose;
+    std::vector<uint8_t>           renderedMask;
     friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
   };
 
