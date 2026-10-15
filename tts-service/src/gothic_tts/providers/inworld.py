@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from .base import ChunkCallback, TtsError, Voice
 log = logging.getLogger(__name__)
 
 DEFAULT_CACHE = Path.home() / ".local/share/gothic-ai/inworld-voices.json"
+KEEP_WARM_S = 60.0
 # Voice Design shapes the voice on a 1-30 s script in the voice's language
 PREVIEW_TEXT = (
     "Ты снова здесь. Значит, Иннос ещё не отвернулся от тебя. Слушай внимательно, у нас мало времени."
@@ -48,6 +50,7 @@ class InworldTTS:
         base_url: str = "https://api.inworld.ai",
         api_key_env: str = "INWORLD_API_KEY",
         timeout: str | float = 10.0,
+        keep_warm: str | float = KEEP_WARM_S,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.model = model
@@ -58,14 +61,19 @@ class InworldTTS:
         self.cache = Path(cache)
         self.base_url = base_url.rstrip("/")
         self.api_key_env = api_key_env
-        # lines come tens of seconds apart; httpx drops an idle connection after 5 s, and a new TLS
-        # connection to Inworld added ~1 s to the next line's first audio
+        # npc's are often silent for minutes, and a new connection adds its TCP+TLS handshake (~0.25 s) to
+        # the next line's first audio. Inworld keeps an idle connection for 610 s and httpx for its
+        # keepalive_expiry, so a free voice list request after `keep_warm` s without requests (0: never)
+        # keeps it open
+        self.keep_warm = float(keep_warm)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(float(timeout), connect=3.0),
             transport=transport,
-            limits=httpx.Limits(keepalive_expiry=120),
+            limits=httpx.Limits(keepalive_expiry=max(120.0, 2 * self.keep_warm)),
         )
         self._designing = asyncio.Lock()
+        self._used = 0.0  # time.monotonic() of the last request's start or end
+        self._keeper: asyncio.Task[None] | None = None
 
     @property
     def steerable(self) -> bool:
@@ -79,10 +87,27 @@ class InworldTTS:
 
     async def warmup(self) -> None:
         """Checks the key (and opens the connection) with a cheap voice list request."""
+        self._start_keeper()
         lang = self.language.split("-")[0].lower()
         await self._call("GET", "/tts/v1/voices", params={"filter": f"language={lang}"})
 
+    def _start_keeper(self) -> None:
+        if self.keep_warm > 0 and self._keeper is None:
+            self._keeper = asyncio.create_task(self._keep_warm())
+
+    async def _keep_warm(self) -> None:
+        while True:
+            idle = time.monotonic() - self._used
+            if idle < self.keep_warm:
+                await asyncio.sleep(self.keep_warm - idle)
+                continue
+            try:
+                await self.warmup()
+            except TtsError as err:  # a line will find out too, and the synthesizer handles that
+                log.debug("inworld: keep-warm request failed: %s", err)
+
     async def synthesize(self, text: str, voice: Voice, on_chunk: ChunkCallback) -> float:
+        self._start_keeper()
         preset = voice.preset or self.voice
         if preset:
             return await self._stream(text, preset, self._instruction(voice, preset=True), on_chunk)
@@ -114,6 +139,7 @@ class InworldTTS:
         if self.delivery and self.steerable:
             body["deliveryMode"] = self.delivery.upper()
         size = 0
+        self._used = time.monotonic()
         try:
             async with self._client.stream(
                 "POST", f"{self.base_url}/tts/v1/voice:stream", headers=self._headers(), json=body
@@ -139,6 +165,8 @@ class InworldTTS:
             raise TtsError(f"inworld: {_describe(err)}") from err
         except ValueError as err:  # a line that is not JSON or not Base64
             raise TtsError(f"inworld: bad stream: {err}") from err
+        finally:
+            self._used = time.monotonic()
         return size / 2 / self.rate
 
     async def _designed(self, voice: Voice) -> str:
@@ -184,12 +212,15 @@ class InworldTTS:
             return voice_id
 
     async def _call(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        self._used = time.monotonic()
         try:
             resp = await self._client.request(
                 method, f"{self.base_url}{path}", headers=self._headers(), **kwargs
             )
         except httpx.HTTPError as err:
             raise TtsError(f"inworld: {_describe(err)}") from err
+        finally:
+            self._used = time.monotonic()
         if resp.status_code != 200:
             _raise(resp.status_code, resp.text)
         return resp.json()
@@ -215,6 +246,10 @@ class InworldTTS:
             self._save(entries)
 
     async def aclose(self) -> None:
+        if self._keeper is not None:
+            self._keeper.cancel()
+            await asyncio.gather(self._keeper, return_exceptions=True)
+            self._keeper = None
         await self._client.aclose()
 
 
