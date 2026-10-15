@@ -19,16 +19,19 @@ from pathlib import Path
 DISTANCES = (250, 300, 350, 400)
 
 
-def duel(index, seed_start):
-    # Same matrix as body_rl_collect.py for --tasks native_duel.
+def duel(index, seed_start, geometry="open"):
+    # Same matrix as body_rl_collect.py for --tasks native_duel; near_wall as in the gate's screening.
     seed, side, distance = seed_start+index, index % 2, DISTANCES[(index//2) % len(DISTANCES)]
-    return {"name": f"rtduel-{seed}-{side}-{distance}", "task": "native_duel", "seed": seed, "side": side,
-            "distance_cm": distance, "timeout_ms": 60000}
+    case = {"name": f"rt{'wall' if geometry == 'near_wall' else 'duel'}-{seed}-{side}-{distance}", "task": "native_duel",
+            "seed": seed, "side": side, "distance_cm": distance, "timeout_ms": 60000}
+    if geometry != "open":
+        case["arena"] = {"geometry": geometry}
+    return case
 
 
 def write_config(args):
     config = json.loads(args.base.read_text())
-    cases = [duel(index, args.seed_start) for index in range(args.duels)]
+    cases = [duel(index, args.seed_start, args.geometry) for index in range(args.duels)]
     config["realtime"] = {**config["realtime"], "cases": cases, "policies": ["gru"], "service_probes": False}
     config["screening"] = {**config["screening"], "cases": cases, "policies": ["gru"]}
     if args.lockstep_start_substeps is not None:
@@ -116,6 +119,7 @@ def main() -> int:
     config.add_argument("--duels", type=int, default=64)
     config.add_argument("--seed-start", type=int, default=90000)
     config.add_argument("--lockstep-start-substeps", type=int, help="1 matches the realtime driver's first poll")
+    config.add_argument("--geometry", choices=("open", "near_wall"), default="open")
     pairs = commands.add_parser("compare")
     pairs.add_argument("--bc-realtime", type=Path, required=True)
     pairs.add_argument("--candidate-realtime", type=Path, required=True)
