@@ -86,8 +86,8 @@ NOTE_EVERY_S = 15.0  # one note per kind of the hero's doings this often
 # states an npc is not busy in: when the behavioral model is unsure, such an npc stops and listens
 IDLE_STATES = ("ZS_STAND", "ZS_SIT", "ZS_SMALLTALK", "ZS_GUARD")
 # body jobs that take the partner away from the hero for the conversation and bring it back (check_claim,
-# ask_witness, a walk to its chest): it has not walked away
-ERRANDS = frozenset({"check", "witness", "chest"})
+# ask_witness, a walk to its chest), or lead him somewhere (guide.py): it has not walked away
+ERRANDS = frozenset({"check", "witness", "chest", "lead"})
 
 # what the hero does mid-conversation, for the partner's memory (npc_event kinds; perceptions of an
 # attached npc map to them below)
@@ -621,6 +621,12 @@ class TalkDesk:
         self.held.setdefault(npc, set()).add(why)
         log.info("%s held for %s", npc, why)
         return True
+
+    def stop_listening(self, npc: str) -> None:
+        """It no longer stands listening, held for other things still (it leads the hero, guide.py): what it
+        answers him is said on the move."""
+        if (reasons := self.held.get(npc.upper())) is not None and reasons - {"listen", "walk"}:
+            reasons -= {"listen", "walk"}
 
     def free(self, npc: str, why: str) -> None:
         """`why` is done; with nothing else to do the npc goes back to its routine."""

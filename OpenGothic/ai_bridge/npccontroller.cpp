@@ -369,6 +369,13 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     a.point    = wp;
     a.radius   = float(integer(args,"radius",300));
     a.deadline = 60000;
+    a.pace     = str(args,"pace");
+    if(a.pace=="run")
+      npc.setWalkMode(WalkBit::WM_Run); else
+    if(a.pace=="walk")
+      npc.setWalkMode(WalkBit::WM_Walk); else
+    if(a.pace=="hero")
+      keepHeroPace(world,npc);
     npc.aiPush(AiQueue::aiGoToPoint(*wp));
     return true;
     }
@@ -618,6 +625,16 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
   finishAction(c,"done",detail);
   }
 
+void NpcController::keepHeroPace(World& world, Npc& npc) {
+  // a guide keeps the hero's pace (v38): runs while he runs, walks while he walks, sneaks while he sneaks
+  const Npc* hero = world.player();
+  if(hero==nullptr)
+    return;
+  const auto pace = hero->walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak);
+  if((npc.walkMode() & (WalkBit::WM_Walk | WalkBit::WM_Sneak))!=pace)
+    npc.setWalkMode(pace);
+  }
+
 void NpcController::regainControl(Controlled& c) {
   if(!c.scripted || c.npc==nullptr)
     return;
@@ -642,6 +659,8 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
 
   if(c.npc->haveOutput())
     a.deadline = now + a.timeout; // queued speech goes first, the clock starts after it
+  if(a.pace=="hero")
+    keepHeroPace(world,*c.npc);
   if(a.type=="go_to_npc" && c.npc->isAiBusy() && !c.npc->haveOutput()) {
     // it stops within the radius: to see someone, it need not walk right up to them
     Npc* target = a.toPlayer ? world.player() : world.findNpcByInstance(a.target);

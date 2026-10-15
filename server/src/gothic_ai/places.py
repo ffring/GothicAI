@@ -545,6 +545,13 @@ class Place:
     def kind_en(self) -> str:
         return KINDS.get(self.kind, KINDS["other"])[1]
 
+    @property
+    def waynet(self) -> tuple[str, ...]:
+        """Its points on the waynet, for a walk there: a freepoint (FP_…) is no waypoint, so the game walks to
+        it in a straight line, into whatever stands between (Malet into the pasture's fence on his way to the
+        mill, 2026-10-15). With none, the bridge takes the waypoint nearest to `pos`."""
+        return tuple(p for p in self.points if not p.upper().startswith("FP_"))
+
 
 # where a spot is from the hero as he faces (the bridge's v18 words for people, perception.py)
 SIDES = {"ahead": "перед героем", "left": "слева от героя", "right": "справа от героя",

@@ -169,6 +169,9 @@
 #   knows: what an npc knows of where people are (docs/npc-tools.md, step M4): Cavalorn by his fire knows the
 #       bandits who robbed him sit in the cave below the steps, though the hero told him nothing: the fact is in
 #       his turn's situation and in `where{пещера}`; LLM=chatgpt: his own answer to «что тут поблизости опасного?»
+#   lead: the npc leads the hero (docs/npc-tools.md, wave 2 step 4): «Малет, отведи меня к мельнице» — a deal
+#       with the way in its window, Y, Malet sets off; the hero put back where it started: it waits and goes on
+#       once he comes up; at the mill it says so, a fact `led` (model scripted with LLM=fake)
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its

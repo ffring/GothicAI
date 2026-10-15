@@ -70,6 +70,7 @@ class NpcController final {
       bool            opened   = false; // the items have moved, it closes the chest now
       bool            relock   = false; // its lock was opened for its owner: locked again after
       std::string     moved;            // what moved: "took=ITEM:N,…;put=ITEM:N,…"
+      std::string     pace;             // go_to_waypoint (v38): run, walk, or hero (his, as a guide ahead)
       };
 
     struct Follow final {
@@ -101,6 +102,7 @@ class NpcController final {
     bool startScriptState(World& world, Controlled& c, Action& a, std::string_view state, const rapidjson::Value& args,
                           std::string& err);
     void regainControl(Controlled& c);
+    void keepHeroPace(World& world, Npc& npc);
     void updateFollow(World& world, Controlled& c, uint64_t now);
     void stopFollow(Controlled& c, std::string_view reason);
     bool giveItem(World& world, Controlled& c, const Action& a, std::string& err);
