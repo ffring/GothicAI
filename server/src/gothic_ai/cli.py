@@ -767,7 +767,14 @@ async def serve(args: argparse.Namespace) -> int:
         if graph is not None and not args.no_director:
             # quests the hero can no longer finish get repaired (story graph, stage 5)
             state.director = Director(
-                link, graph, state.story, state.chronicle, llm, dialogue=state.dialogue, journal=journal
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                llm,
+                dialogue=state.dialogue,
+                journal=journal,
+                book=state.book,
             )
             # the scripts' quests in their givers' conversations, and the hero's lies about them
             state.vanilla = VanillaQuests(
@@ -810,6 +817,7 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue=state.dialogue,
                 journal=journal,
             )
+            state.director.book = state.book
             state.author = Author(
                 link,
                 graph,
@@ -1191,6 +1199,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.book_stages(link, state.book, place_book)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario stages: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "own_repair":
+                assert state.book is not None and state.director is not None and place_book is not None
+                results = await scenarios.own_repair(link, state.book, state.director, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario own_repair: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "trigger":
                 assert state.story is not None
@@ -1865,6 +1879,7 @@ def main() -> None:
             "own",
             "trigger",
             "stages",
+            "own_repair",
             "cast",
             "person",
             "character",

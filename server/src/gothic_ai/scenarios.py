@@ -3828,8 +3828,71 @@ async def authored_quest(
     return _logged(results)
 
 
+class OwnRepairScript:
+    """Hilda's turn-in passes to Lobart: first the dead giver is refused, then he keeps the gold reward.
+    The experience is left out, so the description and the dialog must both keep the smaller reward."""
+
+    name = "own-repair-script"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+        ending = re.search(r"^1\. (\S+)", brief, re.M)
+        args = {
+            "kind": "handover",
+            "ending": ending.group(1) if ending else "",
+            "npc": HILDA if len(self.calls) == 1 else LOBART,
+            "description": "Вот что искала Хильда.",
+            "lines": [
+                {"speaker": "hero", "text": "Хильда просила вернуть это. Она мертва."},
+                {"speaker": "npc", "text": "Знаю. Неси сюда. За её поручение я заплачу."},
+            ],
+            "effects": ["E1"],
+            "answers": [],
+            "status": "obsolete",
+            "journal_now": "Хильда мертва. Её находку теперь примет Лобарт.",
+            "journal_done": "Я отдал находку Лобарту. Он заплатил за поручение Хильды.",
+            "reason": "Лобарт ведёт хозяйство вместе с женой и был рядом",
+        }
+        call = ToolCall(PROPOSE, args, f"o{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
+async def own_repair(
+    link: GameLink,
+    book: questbook.QuestBook,
+    director: Director,
+    places: PlaceBook,
+    slot: int = 7,
+) -> dict[str, str]:
+    """Stage 3, layer 3: the three-stage quest of `stages`, with Hilda dead at stage 2 and Lobart taking
+    her turn-in over, a save and a load before the hero finds the broom and brings it to him."""
+    return await book_stages(link, book, places, slot, director=director)
+
+
 async def book_stages(
-    link: GameLink, book: questbook.QuestBook, places: PlaceBook, slot: int = 7
+    link: GameLink,
+    book: questbook.QuestBook,
+    places: PlaceBook,
+    slot: int = 7,
+    *,
+    director: Director | None = None,
 ) -> dict[str, str]:
     """Stage 3 of the director as author, layer 2 (docs/director.md): a quest as an object, of three stages.
 
@@ -3855,6 +3918,9 @@ async def book_stages(
         await wait_message(link, Session, timeout=10)
     await asyncio.sleep(1)
     hero = ["inst", "HERO"]
+    successor = HILDA
+    if director is not None:
+        director.model.llm = OwnRepairScript()
 
     async def vars(*names: str) -> dict[str, int]:
         return dict((await link.story_state(vars=list(names))).get("vars", {}))
@@ -3863,7 +3929,7 @@ async def book_stages(
         return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
 
     async def come_to_her() -> None:
-        await link.debug("player_goto", to=HILDA, distance=300)
+        await link.debug("player_goto", to=successor, distance=300)
         for _ in range(40):  # her own greeting may start as he comes in
             if not (await link.story_state()).get("dialog"):
                 break
@@ -3880,12 +3946,24 @@ async def book_stages(
         if p.id != home.id
     ]
     spots = [(p, points) for p, points in spots if points]
+    if director is not None:
+        # This repair always starts in the farmyard and ends with the same broom, on the supplied save.
+        yard = places.get("FARM1_OUT")
+        yard_points = sorted(w for w in yard.points if not w.startswith("FP_")) if yard else []
+        if yard is None or not yard_points:
+            return _logged({"made": "failed (no farmyard in the book)"})
+        spots = [(yard, yard_points), *(s for s in spots if s[0].id != yard.id)]
     if len(spots) < 2:
         return _logged({"made": f"failed (places near {home.id}: {len(spots)})"})
     (look, look_at), (lies, lies_at) = spots[0], spots[1]
     to, at = look_at[len(look_at) // 2], lies_at[len(lies_at) // 2]
     thing = None
-    for candidate in ("ITMI_BROOM", "ITMI_RAKE", "ITMI_SAW", "ITMI_SCOOP", "ITMI_BRUSH"):
+    things = (
+        ("ITMI_BROOM",)
+        if director is not None
+        else ("ITMI_BROOM", "ITMI_RAKE", "ITMI_SAW", "ITMI_SCOOP", "ITMI_BRUSH")
+    )
+    for candidate in things:
         if await has(candidate) == 0:
             thing = candidate
             break
@@ -3928,7 +4006,7 @@ async def book_stages(
         asked=f"посмотреть, кто бродит {look.where_ru}.",
         gold=10,
         xp=20,
-        names={HILDA: "Хильда"},
+        names={HILDA: "Хильда", LOBART: "Лобарт"} if director is not None else {HILDA: "Хильда"},
         reason="e2e: три стадии",
     )
     errors = await book.make(q)
@@ -3943,6 +4021,10 @@ async def book_stages(
     )
     if errors:
         return _logged(results)
+    original_reward = q.gold, q.xp
+    original = next(
+        op["node"] for op in book.patches.ops() if op.get("op") == "add_node" and op["node"]["id"] == done
+    )
 
     await come_to_her()
     await link.choose_dialog(HILDA, give)
@@ -3953,6 +4035,58 @@ async def book_stages(
     ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 10)
     await _until(lambda: book.progress(q.id).stage == 2, 5)
     check("reach", ok and book.progress(q.id).stage == 2, f"{to} ({look.id}): {await vars(stage)}")
+
+    if director is not None:
+        facts = director.chronicle.facts
+        await link.debug("npc_goto", npc=LOBART, to=HILDA, distance=300)
+        await link.debug("kill", npc=HILDA)
+        died = await _until(lambda: any(f.get("npc") == HILDA for f in facts("died")), 10)
+        check("died", died)
+        await _until(lambda: any(f.get("quest") == q.id for f in facts("repair") + facts("unrepaired")), 60)
+        dead_ends = [f for f in facts("dead_end") if f.get("quest") == q.id]
+        check("dead_end", bool(dead_ends), dead_ends[-1:])
+        rejected = [f for f in facts("repair_rejected") if f.get("quest") == q.id]
+        check("rejected", any("мёртв" in why for f in rejected for why in f["why"]), rejected[-1:])
+        repaired = next((f for f in facts("repair") if f.get("quest") == q.id), None)
+        accepted = (
+            repaired is not None and repaired.get("kind") == "handover" and repaired.get("npc") == LOBART
+        )
+        check("repaired", accepted, repaired or facts("unrepaired"))
+        if not accepted:
+            return _logged(results)
+        successor = LOBART
+        q = book.all()[q.id]
+        made = next(
+            op["node"]
+            for op in reversed(book.patches.ops())
+            if op.get("op") == "add_node" and op["node"]["id"] == done
+        )
+        mandatory = [
+            e
+            for e in original["effects"]
+            if e["do"] not in ("xp", "journal") and not (e["do"] == "give" and e.get("item") == "ITMI_GOLD")
+        ]
+        check(
+            "same_dialog",
+            made["id"] == original["id"] == done
+            and made["npc"] == successor
+            and made["condition"] == original["condition"]
+            and all(e in made["effects"] for e in mandatory)
+            and q.turn_in() is not None
+            and q.turn_in().npc == successor,
+            made,
+        )
+        gold = sum(e["count"] for e in made["effects"] if e["do"] == "give" and e.get("item") == "ITMI_GOLD")
+        xp = sum(e["amount"] for e in made["effects"] if e["do"] == "xp")
+        check(
+            "reward_cap",
+            (gold, xp) == (q.gold, q.xp) == (original_reward[0], 0)
+            and 0 <= gold <= original_reward[0]
+            and 0 <= xp <= original_reward[1],
+            f"{original_reward} -> {(gold, xp)}",
+        )
+        situation = book.situation(successor) or ""
+        check("successor_knows", "принял" in situation.lower() and "Хильд" in situation, situation)
 
     saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
     await link.debug("save", slot)
@@ -3970,6 +4104,20 @@ async def book_stages(
         and mine == {f"{q.id}_S1G1": 1, f"{q.id}_S1": 1, f"{q.id}_S2G1": 0, f"{q.id}_S2": 0},
         f"{await vars(status, stage)}; {mine}",
     )
+    if director is not None:
+        q = book.all()[q.id]
+        nodes = [
+            op["node"] for op in book.patches.ops() if op.get("op") == "add_node" and op["node"]["id"] == done
+        ]
+        check(
+            "repair_after_load",
+            bool(nodes)
+            and nodes[-1]["npc"] == successor
+            and q.turn_in() is not None
+            and q.turn_in().npc == successor
+            and len([f for f in director.chronicle.facts("repair") if f.get("quest") == q.id]) == 1,
+            nodes[-1] if nodes else "no turn-in",
+        )
 
     await link.debug("player_goto", waypoint=at)
     await asyncio.sleep(1)
@@ -3983,24 +4131,33 @@ async def book_stages(
 
     gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
     await come_to_her()
-    offered = await link.offered_dialogs(HILDA)
+    offered = await link.offered_dialogs(successor)
+    if director is not None:
+        check("successor_offers", done in offered and done not in await link.offered_dialogs(HILDA), offered)
     try:
-        await link.choose_dialog(HILDA, done)
+        await link.choose_dialog(successor, done)
     except GameError as err:
         check("done", False, f"{err}; {' '.join(offered)}")
         return _logged(results)
     ok = await _until_async(lambda: vars(status), lambda v: v.get(status) == 2, 15)
     after = (await has(thing), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
     await asyncio.sleep(1)
-    left = await link.offered_dialogs(HILDA)
+    left = await link.offered_dialogs(successor)
     paid = after[0] == 0 and after[1] >= gold + q.gold and after[2] >= exp + q.xp
+    if director is not None:
+        paid = paid and after[1] - gold <= original_reward[0] and after[2] - exp <= original_reward[1]
     check(
         "done",
         ok and paid and give not in left and done not in left,
         f"thing, gold, exp {(1, gold, exp)} -> {after}; {await vars(status, stage)}",
     )
     await _until(lambda: book.progress(q.id).state == "done", 5)
-    check("knows", "ты заплатил" in (book.situation(HILDA) or ""), book.situation(HILDA) or "")
+    situation = book.situation(successor) or ""
+    check("knows", "ты заплатил" in situation, situation)
+    if director is not None:
+        left = [*left, *await link.offered_dialogs(HILDA)]
+        check("once", not any(n.startswith(f"{q.id}_") for n in left), left)
+        check("book_done", book.progress(q.id).state == "done" and "герой выполнил" in situation, situation)
     return _logged(results)
 
 

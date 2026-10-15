@@ -11,6 +11,7 @@ from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
+from gothic_ai.questbook import Goal, Quest, QuestBook, Stage, Talk
 from gothic_ai.story import StoryPatches
 from gothic_ai.validator import Caps, Patches, Rules, Story, WorldState, validate
 from tests.fake_game import FakeGame, connected
@@ -473,3 +474,254 @@ def test_a_choice_keeps_its_own_condition_but_what_the_dialog_asked():
     assert _rest(["&&", HAS_20, guild], ["&&", RUNNING, HAS_20]) == guild
     assert _rest(HAS_20, ["&&", RUNNING, HAS_20]) is None
     assert _rest(["&&", guild, ["cases", guild, ["int", 1]]], None) is None  # not a program's expression
+
+
+OWN_HELPER = "DIR_NPC_7"
+
+
+class _QuestMemory:
+    def __init__(self) -> None:
+        self.extensions: list[Any] = []
+        self.remembered: list[tuple[str, str, str]] = []
+
+    def remember(self, npc: str, name: str, text: str) -> None:
+        self.remembered.append((npc, name, text))
+
+
+def _own_quest(*, middle_dialog: bool = False) -> Quest:
+    goals = [Goal("have", npc=OWN_HELPER, item="ITPL_BEET", journal="Репа у меня.")]
+    if middle_dialog:
+        goals.insert(
+            0,
+            Goal(
+                "talk",
+                npc=HILDA,
+                talk=Talk("Где искать репу?", [{"speaker": "self", "text": "У работника."}]),
+            ),
+        )
+    return Quest(
+        id="DIR_Q1",
+        giver=HILDA,
+        title="Репа для Хильды",
+        give=Talk("Нужна помощь?", [{"speaker": "self", "text": "Принеси мне репу."}]),
+        stages=[
+            Stage("Хильда просит принести репу. Сначала надо дойти до Вино.", [Goal("reach", npc=VINO)]),
+            Stage("Я дошёл до двора. Репа у работника.", goals),
+            Stage(
+                "Надо отнести репу Хильде.",
+                [
+                    Goal(
+                        "bring",
+                        npc=HILDA,
+                        item="ITPL_BEET",
+                        talk=Talk("Вот репа.", [{"speaker": "self", "text": "Держи плату за репу."}]),
+                    )
+                ],
+            ),
+        ],
+        done_journal="Я отдал репу Хильде.",
+        asked="принести репу.",
+        gold=5,
+        xp=40,
+        names={**NAMES, OWN_HELPER: "Работник"},
+    )
+
+
+def _own_proposal(
+    npc: str = LOBART, *, ending: str = "DIR_Q1_DONE", effects: list[str] | None = None
+) -> ToolCall:
+    return _proposal(
+        npc,
+        ending=ending,
+        description="Хильда погибла. Я принёс репу.",
+        effects=["E1", "E2"] if effects is None else effects,
+        answers=[],
+        journal_now="Хильда погибла. Её поручение принял Лобарт.",
+        journal_done="Я отдал репу Лобарту.",
+        reason="Лобарт ведёт это хозяйство",
+    )
+
+
+async def _own_director(
+    fake: FakeGame, backend: FakeBackend, graph: StoryGraph, *, middle_dialog: bool = False
+):
+    fake.vars = {QUEST: 0, "KAPITEL": 1, "XP_AMBIENT": 50}
+    fake.npc_states = {n: {"state": "alive", "name": name} for n, name in NAMES.items()}
+    fake.npc_states[OWN_HELPER] = {"state": "alive", "name": "Работник"}
+    fake.symbols = {
+        **SYMBOLS,
+        OWN_HELPER: "npc",
+        **dict.fromkeys(("NPC_GETDISTTONPC", "HLP_GETNPC", "LOG_SETTOPICSTATUS", "B_LOGENTRY"), "func"),
+    }
+    fake.people_near = [
+        {"npc": HILDA, "name": "Хильда", "distance": 0},
+        {"npc": XARDAS, "name": "Ксардас", "distance": 100},
+        {"npc": LOBART, "name": "Лобарт", "distance": 1200},
+    ]
+    link_cm = connected(fake)
+    link = await link_cm.__aenter__()
+    store = MemoryStore(":memory:")
+    patches = StoryPatches(link, store)
+    chronicle = Chronicle(link, store)
+    director = Director(link, graph, patches, chronicle, backend, pacing=Pacing(cooldown_s=0), settle_s=0)
+    memory = _QuestMemory()
+    book = QuestBook(link, graph, patches, chronicle, director, dialogue=memory)
+    director.book = book
+    await _until(lambda: patches.branch is not None and chronicle.branch is not None)
+    assert await book.make(_own_quest(middle_dialog=middle_dialog)) == []
+    # The save has reached stage 2; quest events were missed while the server was away.
+    fake.vars.update({"DIR_Q1": 1, "DIR_Q1_STAGE": 2, "DIR_Q1_S1G1": 1, "DIR_Q1_S1": 1})
+    fake.npc_states[HILDA]["state"] = "dead"
+    return link_cm, director, book, chronicle, memory
+
+
+@pytest.mark.parametrize(("reward", "gold", "xp"), [("E1", 5, 0), ("E2", 0, 40)])
+async def test_the_director_hands_over_a_book_quest_and_the_book_finishes_it(graph, reward, gold, xp):
+    fake = FakeGame(branch="A")
+    backend = FakeBackend(
+        script=[FakeStep("", [_own_proposal(HILDA)]), FakeStep("", [_own_proposal(effects=[reward])])],
+        delay=0,
+    )
+    link_cm, director, book, chronicle, memory = await _own_director(fake, backend, graph)
+    try:
+        original = Patches.of(director.patches.ops()).nodes["DIR_Q1_DONE"]
+        await fake.send(type="npc_died", npc=HILDA, name="Хильда", killer="PLAYER")
+        await _until(lambda: bool(chronicle.facts("died")))
+        assert await director.look([HILDA]) == ["DIR_Q1"]
+
+        brief = backend.calls[0][1][0].content
+        assert "Репа для Хильды" in brief and "убил его герой" in brief
+        assert "Хильда просит принести репу" in brief and "Я дошёл до двора" in brief
+        assert "Стадия 2 из 3" in brief and "заполучить ITPL_BEET ×1" in brief
+        assert "принести ITPL_BEET ×1" in brief and "Держи плату за репу." in brief
+        assert "E1: золото герою: 5" in brief and "E2: опыт +40" in brief and "E3:" not in brief
+        candidates = brief.split("Кандидаты в преемники:")[1]
+        assert f"{OWN_HELPER} — Работник" in candidates  # the director's people can inherit too
+        assert f"{LOBART} — Лобарт: был рядом (12 м)" in candidates
+        assert HILDA not in candidates and XARDAS not in candidates
+        assert len(chronicle.facts("repair_rejected")) == 1
+        assert "Отклонено" in backend.calls[1][1][-1].content
+
+        node = Patches.of(director.patches.ops()).nodes["DIR_Q1_DONE"]
+        assert node["id"] == original["id"] and node["npc"] == LOBART
+        assert node["condition"] == original["condition"]
+        assert node["lines"] == [
+            {"speaker": "other", "text": "Я принёс репу."},
+            {"speaker": "self", "text": "Давай. Он бы заплатил."},
+        ]
+        for required in (
+            {"do": "give", "item": "ITPL_BEET", "count": 1, "to": "self"},
+            {"do": "set", "var": "DIR_Q1", "value": 2},
+            {"do": "set", "var": "DIR_Q1_STAGE", "value": 4},
+            {
+                "do": "journal",
+                "topic": "Репа для Хильды",
+                "text": "Я отдал репу Лобарту.",
+                "status": "LOG_SUCCESS",
+            },
+        ):
+            assert required in node["effects"]
+        assert sum(e.get("count", 0) for e in node["effects"] if e.get("item") == "ITMI_GOLD") == gold
+        assert sum(e.get("amount", 0) for e in node["effects"] if e["do"] == "xp") == xp
+        q = book.all()["DIR_Q1"]
+        assert (q.gold, q.xp, q.turn_in().npc) == (gold, xp, LOBART)
+        assert q.turn_in().talk.description == node["description"]
+        assert q.repairs == [
+            {"goal": "DIR_Q1_S3G1", "dead": HILDA, "npc": LOBART, "reason": "Лобарт ведёт это хозяйство"}
+        ]
+        assert len(director.patches.records("quest")) == 2
+        repair = chronicle.facts("repair")[0]
+        assert (repair["quest"], repair["from"], repair["npc"], repair["node"]) == (
+            "DIR_Q1",
+            HILDA,
+            LOBART,
+            "DIR_Q1_DONE",
+        )
+        assert memory.remembered[-1][0] == LOBART and "Ты принял" in memory.remembered[-1][2]
+        assert "Ты принял поручение умершего (Хильда)" in book.situation(LOBART)
+
+        # The same stage triggers and turn-in id keep driving the repaired quest.
+        fake.vars["DIR_Q1_STAGE"] = 3
+        await fake.send(type="trigger_fired", id="DIR_Q1_S2", count=1, npc="PC_HERO", other="PC_HERO")
+        await _until(lambda: book.progress("DIR_Q1").stage == 3)
+        fake.vars.update({"DIR_Q1": 2, "DIR_Q1_STAGE": 4})
+        await fake.send(type="dialog_chosen", npc=LOBART, node="DIR_Q1_DONE", made=True)
+        await _until(lambda: book.progress("DIR_Q1").state == "done")
+        assert (
+            book.situation(LOBART)
+            == f"Поручение «Репа для Хильды» герой выполнил, ты заплатил: {q.reward()}."
+        )
+        assert memory.remembered[-1] == (LOBART, "Лобарт", "Я отдал репу Лобарту.")
+        assert all(
+            not fake.evaluate(n["condition"], n["npc"])
+            for n in Patches.of(director.patches.ops()).nodes.values()
+            if n["id"].startswith("DIR_Q1_")
+        )
+        assert await director.look() == [] and len(backend.calls) == 2
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_the_director_repairs_each_dead_dialog_of_a_book_quest_in_order(graph):
+    fake = FakeGame(branch="A")
+    backend = FakeBackend(
+        script=[
+            FakeStep("", [_own_proposal(ending="DIR_Q1_S2G1_D", effects=[])]),
+            FakeStep("", [_own_proposal()]),
+        ],
+        delay=0,
+    )
+    link_cm, director, book, chronicle, _ = await _own_director(fake, backend, graph, middle_dialog=True)
+    try:
+        original = Patches.of(director.patches.ops()).nodes["DIR_Q1_S2G1_D"]
+        assert await director.look([HILDA]) == ["DIR_Q1"]
+        assert [r.node for r in director.repairs] == ["DIR_Q1_S2G1_D", "DIR_Q1_DONE"]
+        assert [f["endings"] for f in chronicle.facts("dead_end")] == [["DIR_Q1_S2G1_D"], ["DIR_Q1_DONE"]]
+        q = book.all()["DIR_Q1"]
+        assert [r["goal"] for r in q.repairs] == ["DIR_Q1_S2G1", "DIR_Q1_S3G1"]
+        assert q.stages[1].goals[0].npc == LOBART and q.turn_in().npc == LOBART
+        node = Patches.of(director.patches.ops()).nodes["DIR_Q1_S2G1_D"]
+        assert node["condition"] == original["condition"]
+        assert {"do": "set", "var": "DIR_Q1_S2G1", "value": 1} in node["effects"]
+        assert fake.vars["DIR_Q1_S2G1"] == 0 and book.progress("DIR_Q1").stage == 2
+        assert await director.look([HILDA]) == [] and len(backend.calls) == 2
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_loading_repairs_only_recorded_deaths_in_the_book_and_does_not_repeat(graph):
+    fake = FakeGame(branch="A")
+    backend = FakeBackend(script=[FakeStep("", [_own_proposal()])], delay=0)
+    link_cm, director, book, chronicle, _ = await _own_director(fake, backend, graph)
+    try:
+        await director._look_after_load()
+        assert backend.calls == []
+        chronicle.record({"fact": "died", "npc": HILDA, "name": "Хильда", "tag": None, "killer": "PLAYER"})
+        await director._look_after_load()
+        assert len(backend.calls) == 1 and book.all()["DIR_Q1"].turn_in().npc == LOBART
+        # Loading replays both records of the same id in their original order.
+        graph_count = len(fake.graph)
+        await fake.send(type="session", branch="A", reason="load")
+        await _until(lambda: len(fake.graph) > graph_count and fake.graph[-1].get("replace") is True)
+        replayed = Patches.of(fake.graph[-1]["ops"])
+        assert replayed.nodes["DIR_Q1_DONE"]["npc"] == LOBART
+        assert book.all()["DIR_Q1"].turn_in().npc == LOBART
+        await director._look_after_load()
+        assert len(backend.calls) == 1 and len(chronicle.facts("repair")) == 1
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def test_only_a_repair_of_its_own_book_quest_may_replace_an_existing_dialog(graph):
+    done = _repair_node(HILDA, id="DIR_Q1_DONE", condition=None, effects=[])
+    give = _repair_node(HILDA, id="DIR_Q1_GIVE", condition=None, effects=[])
+    story = Story(
+        graph, _state(running=False), Patches.of([{"op": "vars", "vars": {"DIR_Q1": 1}}, done, give])
+    )
+    replacement = _repair_node(VINO, id="DIR_Q1_DONE", condition=None, effects=[])
+    assert validate([replacement], story, Rules.of(graph), repairs="DIR_Q1") == []
+    for repairs in (None, "DIR_Q2"):
+        errors = validate([replacement], story, Rules.of(graph), repairs=repairs)
+        assert "диалог DIR_Q1_DONE уже есть" in errors
+    errors = validate([give], story, Rules.of(graph), repairs="DIR_Q1")
+    assert "диалог DIR_Q1_GIVE уже есть" in errors

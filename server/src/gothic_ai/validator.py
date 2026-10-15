@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import itertools
 import operator
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -492,7 +493,7 @@ def validate(
     for op in ops:
         kind = op.get("op")
         if kind == "add_node":
-            errors += _check_node(op.get("node") or {}, story, after, rules, caps)
+            errors += _check_node(op.get("node") or {}, story, after, rules, caps, repairs)
         elif kind in ("disable", "enable", "condition", "remove_node"):
             errors += _check_change(op, story, after.symbols, rules)
         elif kind == "program":
@@ -515,7 +516,12 @@ def validate(
 
 
 def _check_node(
-    made: dict[str, Any], story: Story, after: Story, rules: Rules, caps: Caps | None
+    made: dict[str, Any],
+    story: Story,
+    after: Story,
+    rules: Rules,
+    caps: Caps | None,
+    repairs: str | None = None,
 ) -> list[str]:
     errors = []
     id = str(made.get("id", "")).upper()
@@ -523,7 +529,14 @@ def _check_node(
     symbols = after.symbols
     if not id.startswith(DIRECTOR_PREFIX):
         errors.append(f"id диалога режиссёра начинается с {DIRECTOR_PREFIX}: {id}")
-    if id in story.graph.nodes or id in symbols or id in story.patches.nodes:
+    own_repair = (
+        repairs is not None
+        and re.fullmatch(r"DIR_Q[0-9]+", repairs) is not None
+        and repairs in story.patches.vars
+        and id in story.patches.nodes
+        and re.fullmatch(re.escape(repairs) + r"_(DONE|S[1-9][0-9]*G[1-9][0-9]*_D)", id) is not None
+    )
+    if id in story.graph.nodes or (not own_repair and (id in symbols or id in story.patches.nodes)):
         errors.append(f"диалог {id} уже есть")
     if symbols.get(npc) != "npc":
         errors.append(f"нет такого NPC: {npc}")

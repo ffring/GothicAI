@@ -76,6 +76,12 @@
 #       stages written in the scenario — come to a place, get a thing put at another, bring it to her; the book
 #       checks and builds it of vars, dialogs and triggers; a save and a load at stage 2 keep it. On a save:
 #       SAVE=save_slot_1.sav
+#   own_repair: the director's own quest repaired (docs/director.md, stage 3, layer 3): Hilda gives the
+#       three-stage quest of `stages`; after the hero reaches the farmyard she dies, the director passes her
+#       turn-in to Lobart (scripted: first the dead Hilda is refused), keeping its id and required effects
+#       and reducing the reward; a save and a load keep it, the hero brings the broom to Lobart, who takes it
+#       and pays; the book follows the quest to success and Lobart knows he paid. On a save:
+#       SAVE=save_slot_1.sav; LLM=fake
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)
