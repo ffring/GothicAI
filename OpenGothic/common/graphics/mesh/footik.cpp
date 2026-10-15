@@ -1,4 +1,5 @@
 #include "footik.h"
+#include "aimwalk.h"
 
 #include <Tempest/Log>
 
@@ -277,7 +278,7 @@ void FootIk::setSkeleton(const Skeleton* sk) {
   }
 
 FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj,
-                              bool alignedToGround, uint64_t dt) const {
+                              bool alignedToGround, uint64_t dt, const AimWalk* walk) const {
   Input in;
   in.dt     = dt;
   in.floorY = obj.at(3,1);
@@ -339,6 +340,25 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
       in.ground[i].toeY   = t.v.y;
       }
     }
+  if(walk!=nullptr && !quadruped) {
+    float ground[2] = {};
+    bool supported = true;
+    for(size_t i=0; i<2; ++i) {
+      Vec3 foot;
+      if(!walk->stanceFoot(i,foot)) {
+        supported = false;
+        break;
+        }
+      auto ray = physic->ray({foot.x,in.floorY+MaxRaise+RayMargin,foot.z},
+                             {foot.x,in.floorY-MaxDrop,foot.z});
+      supported &= ray.hasCol && !isWall(ray.n);
+      ground[i] = ray.v.y;
+      }
+    if(supported && std::abs(ground[0]-ground[1])<MaxStep) {
+      in.hasStanceFloor = true;
+      in.stanceFloor = std::min(ground[0],ground[1]);
+      }
+    }
   in.enable = enabled && !alignedToGround;
   return in;
   }
@@ -366,9 +386,6 @@ bool FootIk::update(const Input& in) {
   const float  dt    = float(in.dt)/1000.f;
   const size_t pairs = numLegs/2;
   bool         on    = in.enable;
-  stopStep = in.aimStop && on && weight>0.f && !quadruped ? std::min(4.f,120.f*dt) : 0.f;
-  for(size_t i=0;i<numLegs;++i)
-    legs[i].stopAnkle = legs[i].finalAnkle;
 
   // of each pair, the lower animated ankle stands on the ground, a raised one swings
   float plant[MaxLegs] = {};
@@ -466,7 +483,9 @@ bool FootIk::update(const Input& in) {
     return (i%2==0) ? s : -s;
     };
   auto bodyTarget = [&](size_t p) {
-    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1)) - crouchOf(p);
+    float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1)) - crouchOf(p);
+    if(p==0 && in.hasStanceFloor && !quadruped)
+      h = in.stanceFloor-in.floorY-crouchOf(p);
     return std::clamp(h, bodyLow(p), bodyTop(p));
     };
   crouch = in.crouch;
@@ -575,7 +594,7 @@ bool FootIk::update(const Input& in) {
   return changed;
   }
 
-void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& bodyOffset) {
+void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& bodyOffset, AimWalk* walk) {
   if(!valid)
     return;
   for(size_t i=0; i<numLegs; ++i) {
@@ -684,12 +703,9 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& body
     if(quadruped)
       body += std::tan(roll)*pairWidth[i/2]*0.5f*(i%2==0 ? 1.f : -1.f);
     target.y += swingOffset(c,floor,low,body)*weight;
-    // A foot crossing the roof boundary changes its support abruptly. Limit the final IK target,
-    // not just the animated gait, using the previous frame even if the pose is rebuilt several times.
-    const Vec3 travel = target-c.stopAnkle;
-    const float distance = length(travel);
-    if(stopStep>0.f && distance>stopStep && distance<100.f)
-      target = c.stopAnkle + travel*(stopStep/distance);
+    const Vec3 normalTarget = target;
+    if(walk!=nullptr && !quadruped)
+      walk->constrainFoot(i,target);
     // the smoothed normal lags behind a turning foot: limit it to the current heading once more
     const Vec3 n = normalize(Up*(1.f-weight) + footTilt(c.normal,c.heading)*weight);
     Vec3      animBend;
@@ -697,6 +713,8 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& body
       animBend = kneeBend(tr,c.thigh,c.calf,c.foot);
     solve(tr,c,target,n,c.outward*weight,c.plant*c.behind*weight);
     c.finalAnkle = position(tr[c.foot]);
+    if(walk!=nullptr && !quadruped)
+      walk->captureFootTarget(i,normalTarget,c.finalAnkle);
     if(dbg) {
       const size_t id[4] = {c.thigh, c.calf, c.foot, c.toe!=size_t(-1) ? c.toe : c.foot};
       for(size_t k=0; k<4; ++k)

@@ -943,6 +943,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   // (the crossbow), slowly
   AimWalk::Input wk;
   wk.dt   = dt;
+  wk.active = manual && in.active;
   const float requestedWalk = manual && in.active ? npc.aimWalk() : 0.f;
   Tempest::Vec3 walkDirection(0,0,requestedWalk);
   if(requestedWalk==0.f && pose.aimWalk().isActive())
@@ -1076,8 +1077,7 @@ bool MdlVisual::updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedTo
     return false;
     }
 
-  auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
-  in.aimStop = pose.aimWalk().isActive() && (pose.aimWalk().isStopping() || npc.isAimWalkStopped());
+  auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt,&pose.aimWalk());
   // crouched stepping with the bow drawn: the steps are low already (sneaking), as low as crouched standing
   in.crouch = std::max(0.f, in.crouch - pose.aimWalk().lowered());
   const bool changed = pose.updateFootIk(in);

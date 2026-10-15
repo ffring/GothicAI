@@ -248,6 +248,11 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-aim
     COMMAND $<TARGET_FILE:gothic-aim-contract>
     DEPENDS gothic-aim-contract USES_TERMINAL)
+  add_executable(gothic-aimwalk-contract EXCLUDE_FROM_ALL tests/aimwalk_contract.cpp)
+  target_link_libraries(gothic-aimwalk-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-aimwalk
+    COMMAND $<TARGET_FILE:gothic-aimwalk-contract>
+    DEPENDS gothic-aimwalk-contract USES_TERMINAL)
   add_executable(gothic-physics-contract EXCLUDE_FROM_ALL tests/physics_contract.cpp)
   target_link_libraries(gothic-physics-contract PRIVATE OpenGothic AiBridge)
   add_custom_target(check-physics
