@@ -233,6 +233,8 @@ if [ -n "${SAVE:-}" ]; then
   cp "$SAVE" "$LOG_DIR/save_slot_1.sav"
   START_ARGS=(-save 1)
 fi
+# Recheck after server startup: another session may have taken the game while it was starting.
+until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 (cd "$LOG_DIR" && GOTHIC_AI_URL="ws://127.0.0.1:$PORT" exec "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 
