@@ -269,6 +269,8 @@ class FakeGame:
                     self.cast[npc] = msg
                     self.npc_states[npc] = {"state": "alive", "name": msg["name"]}
                     self.symbols[npc] = "npc"
+                    if msg.get("routine"):
+                        self.routines[npc] = {"entries": msg["routine"]}
                     state = "made"
                 index = 74650 + list(self.cast).index(npc)
                 await self.send(
