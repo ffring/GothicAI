@@ -52,6 +52,7 @@ class DynamicWorld final {
       C_Ghost     = 5,
       C_Item      = 6,
       C_Ragdoll   = 7,
+      C_LivingBody= 8,
       };
 
     enum PtrType {
@@ -275,6 +276,9 @@ class DynamicWorld final {
                                           const Tempest::Matrix4x4* worldPose, size_t numBones,
                                           const Tempest::Matrix4x4& objectMatrix,
                                           const Tempest::Vec3& initialVelocity = {});
+    std::unique_ptr<Ragdoll> createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                               const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                               const Tempest::Matrix4x4& objectMatrix);
 
     BulletBody*    bulletObj(BulletCallback* cb);
     BBoxBody       bboxObj(BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox);

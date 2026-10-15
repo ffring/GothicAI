@@ -524,6 +524,9 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   y = iy;
   z = iz;
   if(liveTeleport) {
+    // Recreate at the destination instead of sweeping a kinematic body through
+    // every item between a scripted teleport's endpoints.
+    living.reset();
     // Large scripted relocations start a new history; normal movement samples
     // must retain the last supported position when the NPC steps off an edge.
     ragdollQuestReturn = {};
@@ -730,6 +733,7 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
   }
 
 void Npc::onNoHealth(bool death, HitSound sndMask) {
+  living.reset();
   if(!isDown()) {
     updateRagdollQuestAnchor();
     ragdollQuestReturn.armed = !death && !isPlayer() && isImmortal() &&
@@ -794,6 +798,7 @@ void Npc::addRagdollImpulse(const Vec3& impulse) {
   }
 
 void Npc::suspendRagdoll() {
+  living.reset();
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
   const bool hadBody = ragdoll!=nullptr;
@@ -1035,6 +1040,35 @@ void Npc::prepareRagdoll() {
     ragdollLegacyDown = true;
     Log::e("ragdoll: unsupported skeleton or body state for ",displayName());
     }
+  }
+
+void Npc::prepareLivingBody() {
+  constexpr float radius = 2000.f;
+  const auto* hero = owner.player();
+  if(isPlayer() || isDown() || ragdoll || hero==nullptr ||
+     Gothic::settingsGetI("GAME","living_bodies")==0 || qDistTo(*hero)>radius*radius) {
+    living.reset();
+    livingRetryTick = 0;
+    return;
+    }
+  if(livingNeedsRebuild) {
+    living.reset();
+    livingNeedsRebuild = false;
+    }
+  if(living)
+    return;
+  if(owner.tickCount()<livingRetryTick)
+    return;
+  const auto* skeleton = visual.visualSkeleton();
+  if(skeleton==nullptr || !visual.hitZoneShape().isValid())
+    return;
+  // Only birth needs a forced solve. Subsequent targets come from the normal
+  // animation update, including IK/aim/flinch, without solving the pose twice.
+  updateAnimation(0,true);
+  living = owner.physic()->createKinematicBody(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
+                                             visual.pose().boneCount(),visual.transform());
+  if(!living)
+    livingRetryTick = owner.tickCount()+1000;
   }
 
 void Npc::syncRagdoll() {
@@ -1315,6 +1349,7 @@ Tempest::Vec3 Npc::animMoveSpeed(uint64_t dt) const {
 
 void Npc::setVisual(const Skeleton* v) {
   if(visual.visualSkeleton()!=v) {
+    living.reset();
     releaseRagdoll(false);
     ragdollDormant.reset();
     ragdollRecovering = false;
@@ -1344,6 +1379,7 @@ void Npc::setVisualBody(int32_t headTexNr, int32_t teethTexNr, int32_t bodyTexNr
   }
 
 void Npc::updateArmor() {
+  living.reset();
   auto  ar = invent.currentArmor();
   auto& w  = owner;
 
@@ -1418,6 +1454,7 @@ void Npc::setFatness(float f) {
 
 void Npc::setScale(float x, float y, float z) {
   if(sz[0]!=x || sz[1]!=y || sz[2]!=z) {
+    living.reset();
     releaseRagdoll(false);
     ragdollDormant.reset();
     ragdollLegacyDown = false;
@@ -6028,6 +6065,9 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   syncAtt |= visual.updateFlinch(*this,dt);
+  if(living)
+    livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
+                                              float(std::max<uint64_t>(dt,1))*0.001f);
   if(syncAtt)
     visual.syncAttaches();
   }

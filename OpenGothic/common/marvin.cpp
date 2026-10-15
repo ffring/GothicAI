@@ -174,6 +174,7 @@ Marvin::Marvin() {
     {"toggle flinch",              C_ToggleFlinch},
     {"toggle ragdoll",             C_ToggleRagdoll},
     {"toggle ragdoll_quest_guard", C_ToggleRagdollQuestGuard},
+    {"toggle living_bodies",      C_ToggleLivingBodies},
     };
   }
 
@@ -547,6 +548,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleRagdollQuestGuard:
       Gothic::settingsSetI("GAME","ragdoll_quest_guard",Gothic::settingsGetI("GAME","ragdoll_quest_guard")==0 ? 1 : 0);
+      return true;
+    case C_ToggleLivingBodies:
+      Gothic::settingsSetI("GAME","living_bodies",Gothic::settingsGetI("GAME","living_bodies")==0 ? 1 : 0);
       return true;
     }
 

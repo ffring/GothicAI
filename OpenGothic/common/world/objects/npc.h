@@ -458,10 +458,12 @@ class Npc final {
     bool      isRagdollBlending() const { return visual.pose().isRagdollBlending(); }
     const Skeleton* visualSkeleton() const { return visual.visualSkeleton(); }
     const Ragdoll* ragdollBody() const { return ragdoll.get(); }
+    const Ragdoll* livingBody() const { return living.get(); }
     const RagdollSave::QuestReturn& ragdollQuestReturnState() const { return ragdollQuestReturn; }
     uint32_t ragdollQuestReturnCount() const { return ragdollQuestReturns; }
     const Tempest::Vec3& ragdollQuestReturnFrom() const { return ragdollQuestFrom; }
     void      prepareRagdoll();
+    void      prepareLivingBody();
     void      syncRagdoll();
     void      suspendRagdoll();
     bool      setRagdollDown(bool death);
@@ -724,6 +726,9 @@ class Npc final {
     Tempest::Vec3                  lastGroundNormal;
 
     DynamicWorld::NpcItem          physic;
+    std::unique_ptr<Ragdoll>       living;
+    uint64_t                      livingRetryTick = 0;
+    bool                          livingNeedsRebuild = false;
     std::unique_ptr<Ragdoll>       ragdoll;
     std::optional<Ragdoll::State>  ragdollDormant;
     std::vector<Tempest::Matrix4x4> ragdollPose;
