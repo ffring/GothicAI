@@ -3962,8 +3962,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.smValid = false;
     if(m=="game") {
       bench.cam = C_Game;
-      if(auto cam = Gothic::inst().camera())
+      // the game's camera as the player has it: without the near clip `view clean` gives the bench's shots
+      // (130 cm after `cam follow 230`: the hero was clipped away, the aim camera's collision rays hit
+      // the ground under him)
+      if(auto cam = Gothic::inst().camera()) {
         cam->setMarvinMode(Camera::M_Normal);
+        cam->setNearClip(10);
+        }
       }
     else if(m=="follow" || m=="front" || m=="auto") {
       bench.cam       = C_Follow;
