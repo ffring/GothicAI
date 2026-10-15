@@ -31,6 +31,7 @@
 #include "commandline.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/interactive.h"
+#include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 #include "world/worldsound.h"
@@ -891,7 +892,8 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   const auto cmd = JsonRead::str(msg,"cmd");
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
-     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take") {
+     cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
+     cmd=="player_take") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1235,6 +1237,34 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     pl->dropItem(id,1);
     const bool dropped = pl->inventory().itemCount(id)<before;
     sendResult(req,dropped,dropped ? "" : "the hero could not drop it now");
+    return;
+    }
+  if(cmd=="player_take") {
+    // the hero picks up the nearest such thing lying within `distance` cm (v29), as with the game's own key
+    std::string inst(JsonRead::str(msg,"item"));
+    for(auto& c:inst)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    const size_t id = world->script().findSymbolIndex(inst);
+    if(id==size_t(-1)) {
+      sendResult(req,false,"unknown item " + inst);
+      return;
+      }
+    const float range = float(JsonRead::integer(msg,"distance",500));
+    Item*       it    = nullptr;
+    float       best  = range*range;
+    world->detectItem(pl->position(),range,[&](Item& i) {
+      const float d = (i.position()-pl->position()).quadLength();
+      if(i.clsId()==id && d<best) {
+        it   = &i;
+        best = d;
+        }
+      });
+    if(it==nullptr) {
+      sendResult(req,false,"no " + inst + " lying nearby");
+      return;
+      }
+    const bool taken = pl->takeItem(*it)!=nullptr;
+    sendResult(req,taken,taken ? "" : "the hero could not pick it up now");
     return;
     }
   if(cmd=="chest_take") {

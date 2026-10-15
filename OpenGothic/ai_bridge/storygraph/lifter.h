@@ -72,6 +72,13 @@ class Lifter final {
 
     Lifted       lift(uint32_t fnSymbol) const;
 
+    // A script function the lifter puts in place of its call, `depth` calls below the function lifted: it
+    // returns nothing, moves a quest (writes a MIS_* variable) and lifts on its own (B_Addon_Cavalorn_VatrasBrief
+    // ends Cavalorn's quest for two dialogs). Its calls and stores are the caller's, under the caller's guard and
+    // with its state: what the dialog stored before is what the helper reads.
+    bool         inlines(const zenkit::DaedalusSymbol& fn, uint32_t depth) const;
+    static constexpr uint32_t MaxInline = 3;
+
     // a function that returns TRUE/FALSE as one boolean expression
     static ExprP condition(const Lifted& l);
     // the returned value: a boolean expression if every return is boolean, Cases otherwise
@@ -81,6 +88,9 @@ class Lifter final {
     static constexpr uint32_t MaxLocalSize = 256;  // nodes in a variable's value merged from branches
     static constexpr uint32_t MaxCondSize  = 512;  // nodes in a branch condition
     struct State;
+    // runs `fn` from `entry`, its events into out.events. Lifted itself (depth 0), its returns go to
+    // out.returns; put in place of a call, the states at its returns, merged, go to `exit`. False: out.error
+    bool   run(const zenkit::DaedalusSymbol& fn, State entry, Lifted& out, uint32_t depth, State* exit) const;
     ExprP  resolve(const State& s, const ExprP& e) const;
     ExprP  pushVar(const State& s, const zenkit::DaedalusSymbol& sym, int32_t index) const;
     void   merge(State& into, State&& from) const;
@@ -96,6 +106,7 @@ class Lifter final {
     const Bytecode&                              code;
     mutable std::unordered_map<uint32_t, Clobbers> clobberCache;
     mutable std::set<uint32_t>                   clobberBusy;
+    mutable std::unordered_map<uint32_t, bool>   inlineCache;
     // constants naming the indices of array members, by member: AIVAR -> {value -> AIV_*}
     std::unordered_map<std::string, std::unordered_map<int32_t, std::string>> indexNames;
   };

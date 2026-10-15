@@ -850,6 +850,15 @@ namespace zenkit {
 		/// \return The symbol or `nullptr` if no symbol with that name was found.
 		[[nodiscard]] ZKAPI DaedalusSymbol* find_symbol_by_name(std::string_view name);
 
+		/// \brief The most integer variables add_int_symbol can add (room for them is kept when the script loads).
+		static constexpr std::uint32_t MAX_ADDED_SYMBOLS = 1024;
+
+		/// \brief Adds a global integer variable that is not in the compiled scripts (the AI director's story
+		///        state). The room is kept when the script loads, so no symbol moves.
+		/// \param name The name of the variable.
+		/// \return The new variable (its value 0); nullptr if the name is taken or there is no room left.
+		ZKAPI DaedalusSymbol* add_int_symbol(std::string_view name);
+
 		/// \brief Call the given callback function for every instance symbol which is a descendant of the class with
 		///        the given name.
 		/// \param name The name of the parent class.

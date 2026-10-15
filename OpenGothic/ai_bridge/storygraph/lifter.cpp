@@ -388,7 +388,33 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
     out.error = "no code";
     return out;
     }
+  State entry;
+  entry.guard = Dnf::always();
+  // the prologue pops the arguments into the parameter symbols
+  for(uint32_t i=0; i<fn->count(); ++i)
+    entry.stack.push_back(ex::param(int32_t(i)));
+  run(*fn, std::move(entry), out, 0, nullptr);
+  return out;
+  }
 
+bool Lifter::inlines(const zenkit::DaedalusSymbol& fn, uint32_t depth) const {
+  if(depth>MaxInline || fn.is_external() || fn.has_return() || !Bytecode::hasCode(fn))
+    return false;
+  // the model reads these by name: a chapter change, experience, a journal entry, teaching...
+  if(fn.name()=="B_KAPITELWECHSEL" || vocab::StandardHelpers.count(fn.name()) || vocab::PredicateHelpers.count(fn.name()))
+    return false;
+  auto it = inlineCache.find(fn.index());
+  if(it!=inlineCache.end())
+    return it->second;
+  bool quest = false;
+  for(auto& v : clobbers(fn).vars)
+    quest |= v.rfind("MIS_",0)==0;
+  inlineCache[fn.index()] = false;  // while it is lifted
+  return inlineCache[fn.index()] = quest && lift(fn.index()).error.empty();
+  }
+
+bool Lifter::run(const zenkit::DaedalusSymbol& func, State entry, Lifted& out, uint32_t depth, State* exit) const {
+  auto* fn = &func;
   std::vector<zenkit::DaedalusInstruction> ins;
   std::unordered_map<uint32_t, size_t>     at;
   for(uint32_t pc=fn->address(), end=code.codeEnd(pc); pc<end;) {
@@ -400,15 +426,22 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
   std::vector<uint32_t> pcs(ins.size());
   for(auto& [pc,i] : at)
     pcs[i] = pc;
+  // put in place of a call, its parameters are the caller's arguments: not stores of its own
+  std::set<std::string> params;
+  if(depth>0)
+    for(uint32_t k=0; k<fn->count(); ++k)
+      if(auto* par = script.find_symbol_by_index(fn->index()+1+k))
+        params.insert(par->name());
+  std::vector<State> exits;
 
   std::vector<State> in(ins.size());
   std::vector<bool>  has(ins.size(), false);
-  if(ins.empty())
-    return out;
-  in[0].guard = Dnf::always();
-  // the prologue pops the arguments into the parameter symbols
-  for(uint32_t i=0; i<fn->count(); ++i)
-    in[0].stack.push_back(ex::param(int32_t(i)));
+  if(ins.empty()) {
+    if(exit!=nullptr)
+      *exit = std::move(entry);
+    return true;
+    }
+  in[0]  = std::move(entry);
   has[0] = true;
 
   auto send = [&](size_t to, State s) {
@@ -433,6 +466,12 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
       }
     to = it->second;
     return true;
+    };
+  auto leave = [&](State&& s, ExprP ret) {
+    if(depth==0)
+      out.returns.emplace_back(s.guard, std::move(ret));
+    else
+      exits.push_back(std::move(s));
     };
 
   for(size_t i=0; i<ins.size(); ++i) {
@@ -459,7 +498,7 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
         v = ex::op(sop, {resolve(s, target), v});
       if(storable(target))
         s.stored[target->key] = {target, v};
-      {
+      if(!(target->kind==Expr::Local && params.count(target->name))) {
         Event e;
         e.kind   = Event::Store;
         e.pc     = pcs[i];
@@ -529,6 +568,20 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
               a = ex::sym(r->name());
             }
           }
+        if(op.op==DaedalusOpcode::BL && inlines(*callee, depth+1)) {
+          // its events in place of the call, from this state; the caller goes on from where it returns
+          State  inner = s;
+          inner.stack  = args;  // its prologue pops them into its parameters
+          Lifted mine;
+          State  after;
+          if(run(*callee, std::move(inner), mine, depth+1, &after)) {
+            for(auto& ev : mine.events)
+              out.events.push_back(std::move(ev));
+            after.stack = std::move(s.stack);
+            s = std::move(after);
+            break;
+            }
+          }
         Event e;
         e.kind   = Event::Call;
         e.pc     = pcs[i];
@@ -561,7 +614,7 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
           c = ex::unknown("condition too complex");  // one object, so both branches still merge back
         size_t to = 0;
         if(!jumpTarget(i, op.address, to))
-          return out;
+          return false;
         State jump = s;
         jump.guard = s.guard && ex::lnot(c);
         s.guard    = s.guard && c;
@@ -573,7 +626,7 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
       case DaedalusOpcode::B: {
         size_t to = 0;
         if(!jumpTarget(i, op.address, to))
-          return out;
+          return false;
         send(to, std::move(s));
         continue;
         }
@@ -581,7 +634,7 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
         ExprP ret;
         if(fn->has_return())
           ret = s.stack.empty() ? ex::integer(0) : resolve(s, s.stack.back());
-        out.returns.emplace_back(s.guard, ret);
+        leave(std::move(s), ret);
         continue;
         }
       default:
@@ -590,12 +643,22 @@ Lifted Lifter::lift(uint32_t fnSymbol) const {
 
     if(last) {
       // fell off the end without RSR
-      out.returns.emplace_back(s.guard, fn->has_return() ? ex::integer(0) : nullptr);
+      leave(std::move(s), fn->has_return() ? ex::integer(0) : nullptr);
       } else {
       send(i+1, std::move(s));
       }
     }
-  return out;
+    if(exit!=nullptr) {
+    if(exits.empty()) {
+      *exit       = State();
+      exit->guard = Dnf::never();  // it never returns: what follows the call does not run
+      } else {
+      *exit = std::move(exits[0]);
+      for(size_t k=1; k<exits.size(); ++k)
+        merge(*exit, std::move(exits[k]));
+      }
+    }
+  return true;
   }
 
 ExprP Lifter::condition(const Lifted& l) {

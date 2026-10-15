@@ -20,6 +20,7 @@ from gothic_ai.protocol import (
     NpcViews,
     SayCmd,
     Snapshot,
+    StoryEffectCmd,
     StoryProgramCmd,
     parse_game_message,
 )
@@ -255,6 +256,14 @@ def test_v28_npc_chests():
     assert '"cmd":"chest_take"' in take.to_json() and '"count":29' in take.to_json()
 
 
+def test_v29_the_directors_story_variables():
+    assert PROTOCOL_VERSION >= 29
+    patch = GraphPatchCmd(ops=[{"op": "vars", "vars": {"DIR_Q1": 0}}])
+    assert '"ops":[{"op":"vars","vars":{"DIR_Q1":0}}]' in patch.to_json()
+    take = DebugCmd(req="r1", cmd="player_take", item="ITMI_PAN", distance=300)
+    assert '"cmd":"player_take"' in take.to_json() and '"distance":300' in take.to_json()
+
+
 def test_v30_how_far_the_players_voice_goes():
     assert PROTOCOL_VERSION >= 30
     roster = parse_game_message(
@@ -267,6 +276,12 @@ def test_v30_how_far_the_players_voice_goes():
     cavalorn, bandit, old = roster.npcs
     assert cavalorn.earshot == 140 and bandit.earshot == 20000  # the rock between: his voice does not reach
     assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies
+
+
+def test_v31_a_dialog_heard_in_a_conversation():
+    assert PROTOCOL_VERSION >= 31
+    cmd = StoryEffectCmd(req="e1", npc="BAU_4300_ADDON_CAVALORN", effects=[{"do": "knows", "info": "DIA_X"}])
+    assert '"effects":[{"do":"knows","info":"DIA_X"}]' in cmd.to_json()
 
 
 def test_v32_where_the_hero_faces():

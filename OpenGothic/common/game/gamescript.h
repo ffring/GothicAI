@@ -116,6 +116,8 @@ class GameScript final {
 
     zenkit::DaedalusSymbol*     findSymbol(std::string_view s);
     zenkit::DaedalusSymbol*     findSymbol(const size_t s);
+    // the hero has heard this dialog of the npc's, as when it is played (Npc_KnowsInfo)
+    void                        setNpcInfoKnown(const zenkit::INpc& npc, const zenkit::IInfo& info);
     size_t                      findSymbolIndex(std::string_view s);
     size_t                      symbolsCount() const;
 
@@ -455,7 +457,6 @@ class GameScript final {
     void sort(std::vector<DlgChoice>& dlg);
     // a dialog's condition, information or choice: the story graph runs it if it takes it, else the VM
     int32_t dialogFunction(zenkit::DaedalusSymbol* fn, bool returns);
-    void setNpcInfoKnown(const zenkit::INpc& npc, const zenkit::IInfo& info);
     bool doesNpcKnowInfo(const zenkit::INpc& npc, size_t infoInstance) const;
 
     void saveSym(Serialize& fout, zenkit::DaedalusSymbol& s);
