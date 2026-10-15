@@ -76,6 +76,12 @@
 #       stages written in the scenario — come to a place, get a thing put at another, bring it to her; the book
 #       checks and builds it of vars, dialogs and triggers; a save and a load at stage 2 keep it. On a save:
 #       SAVE=save_slot_1.sav
+#   own_repair: the director's own quest repaired (docs/director.md, stage 3, layer 3): Hilda gives the
+#       three-stage quest of `stages`; after the hero reaches the farmyard she dies, the director passes her
+#       turn-in to Lobart (scripted: first the dead Hilda is refused), keeping its id and required effects
+#       and reducing the reward; a save and a load keep it, the hero brings the broom to Lobart, who takes it
+#       and pays; the book follows the quest to success and Lobart knows he paid. On a save:
+#       SAVE=save_slot_1.sav; LLM=fake
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)
@@ -227,6 +233,8 @@ if [ -n "${SAVE:-}" ]; then
   cp "$SAVE" "$LOG_DIR/save_slot_1.sav"
   START_ARGS=(-save 1)
 fi
+# Recheck after server startup: another session may have taken the game while it was starting.
+until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 (cd "$LOG_DIR" && GOTHIC_AI_URL="ws://127.0.0.1:$PORT" exec "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 

@@ -5,13 +5,14 @@ import pytest
 
 from gothic_ai import questbook
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.director import Director, Pacing
+from gothic_ai.director import Brief, Director, Ending, Offer, Pacing, Proposal
 from gothic_ai.game import GameError
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
 from gothic_ai.questbook import Goal, Ground, Quest, QuestBook, Stage, Talk, build, problems
 from gothic_ai.story import QUEST, StoryPatches
+from gothic_ai.validator import LOG_FAILED, LOG_OBSOLETE, Patches, Story, WorldState
 from tests.fake_game import FakeGame, connected
 from tests.test_authoring import BOOK, graph  # noqa: F401 - the graph fixture
 from tests.test_dialogue import _until
@@ -356,5 +357,232 @@ async def test_a_refused_change_is_taken_back(graph):  # noqa: F811
         await _until(lambda: fake.graph[-1].get("replace") is True)
         assert fake.graph[-1]["ops"] == [{"op": "disable", "node": "DIA_X"}]
         assert patches.records(QUEST) == [] and patches.ops() == [{"op": "disable", "node": "DIA_X"}]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def _middle_dialog() -> Quest:
+    return _quest(
+        stages=[
+            Stage("Найти вино.", [Goal("have", item=GOODS, count=2, point="NW_FARM1_OUT_02")]),
+            Stage(
+                "Отдать Хильде.",
+                [Goal("bring", npc=HILDA, item=GOODS, count=2, talk=_talk("Держи вино."))],
+            ),
+            Stage("Рассказать Лобарту.", [Goal("talk", npc=LOBART, talk=_talk("Вино вернул."))]),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("quest", "stage", "completed", "expected"),
+    [
+        (_quest(), 2, {}, [(3, 1, "DIR_Q1_DONE")]),
+        (_middle_dialog(), 2, {}, [(2, 1, "DIR_Q1_S2G1_D")]),
+        (_middle_dialog(), 2, {"DIR_Q1_S2G1": 1}, []),
+        (_middle_dialog(), 3, {}, []),
+        (
+            _quest(stages=[Stage("Убить вора.", [Goal("kill", npcs=[THIEF])]), *_middle_dialog().stages[2:]]),
+            1,
+            {},
+            [],
+        ),
+    ],
+)
+async def test_dead_ends_are_unfinished_dialogs_in_stage_order(graph, quest, stage, completed, expected):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        assert await book.make(quest) == []
+        fake.vars.update({quest.id: 1, "DIR_Q1_STAGE": stage, **completed})
+        fake.npc_states[HILDA]["state"] = "dead"
+        fake.npc_states[THIEF]["state"] = "dead"
+        ends = book.dead_ends(await book.world())
+        assert [(end.stage, end.goal, end.node) for end in ends] == expected
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_the_book_uses_progress_without_save_variables_and_skips_told_dialogs(graph):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _middle_dialog()
+        assert await book.make(q) == []
+        state = WorldState(npcs={HILDA: "dead", LOBART: "alive"})
+        assert book.dead_ends(state) == []  # not given
+        book._fact(q, "story_quest_given")
+        book._fact(q, "story_quest_stage", stage=2)
+        assert book.dead_ends(state) == [questbook.DeadEnd(q.id, 2, 1, "DIR_Q1_S2G1_D", HILDA)]
+        patches._record({"op": "told", "node": "DIR_Q1_S2G1_D"})
+        assert book.dead_ends(state) == []
+        # The save knows better than a missed chronicle message.
+        state.vars[q.id] = LOG_OBSOLETE
+        assert book.dead_ends(state) == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def _repair_context(book: QuestBook, fake: FakeGame, q: Quest) -> tuple[Brief, Story]:
+    fake.vars.update({q.id: 1, "DIR_Q1_STAGE": 2})
+    fake.npc_states[HILDA]["state"] = "dead"
+    state = (await book.director.world()).merge(await book.world())
+    story = Story(book.graph, state, Patches.of(book.patches.ops()))
+    dead = book.dead_ends(state)[0]
+    node = story.patches.nodes[dead.node]
+    offers = []
+    for effect in node["effects"]:
+        if questbook._gold(effect):
+            offers.append(Offer("E1", effect, "золото"))
+        elif effect["do"] == "xp":
+            offers.append(Offer("E2", effect, "опыт"))
+    return (
+        Brief(
+            q.id,
+            q.title,
+            HILDA,
+            "Хильда",
+            "герой",
+            [q.stages[0].journal],
+            [Ending(dead.node, HILDA, node["description"], 2, node["condition"], [], offers)],
+            {LOBART: "Лобарт: был рядом"},
+        ),
+        story,
+    )
+
+
+def _handover(brief: Brief, **change: Any) -> Proposal:
+    return replace(
+        Proposal(
+            "handover",
+            ending=brief.endings[0].node,
+            npc=LOBART,
+            description="Принёс вино Хильды.",
+            lines=[{"speaker": "npc", "text": "Хильды больше нет. Давай вино сюда."}],
+            effects=["E1"],
+            journal_now="Хильда умерла. Вино примет Лобарт.",
+            journal_done="Я отдал Лобарту вино Хильды.",
+            reason="Лобарт ведёт хозяйство.",
+        ),
+        **change,
+    )
+
+
+async def test_handover_replaces_the_same_node_and_keeps_the_required_effects(graph):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        assert await book.make(q) == []
+        brief, story = await _repair_context(book, fake, q)
+        proposal = _handover(brief)
+        done, errors = await book.repair(proposal, brief, story)
+        assert errors == [] and done is not None
+        assert done.node == "DIR_Q1_DONE" and done.npc == LOBART
+        node = Patches.of(patches.ops()).nodes[done.node]
+        assert node["npc"] == LOBART and node["condition"] == story.patches.nodes[done.node]["condition"]
+        assert {"do": "give", "item": GOODS, "count": 2, "to": "self"} in node["effects"]
+        assert {"do": "set", "var": q.id, "value": 2} in node["effects"]
+        assert {"do": "set", "var": "DIR_Q1_STAGE", "value": 4} in node["effects"]
+        assert {"do": "give", "item": "ITMI_GOLD", "count": 20} in node["effects"]
+        assert not any(effect["do"] == "xp" for effect in node["effects"])
+        journal = next(effect for effect in node["effects"] if effect["do"] == "journal")
+        assert journal["text"] == proposal.journal_done and journal["status"] == "LOG_SUCCESS"
+        assert len(patches.records(QUEST)) == 2
+        repaired = book.all()[q.id]
+        assert repaired.turn_in().npc == LOBART and repaired.gold == q.gold and repaired.xp == 0
+        assert repaired.repairs == [
+            {"goal": "DIR_Q1_S3G1", "dead": HILDA, "npc": LOBART, "reason": proposal.reason}
+        ]
+        assert book.dead_ends(await book.world()) == []
+        await book.settle(LOBART)
+        assert "принял поручение умершего (Хильда)" in book.situation(LOBART)
+        # The original stage triggers still bring the quest to its original turn-in id.
+        fake.vars["DIR_Q1_STAGE"] = 3
+        await book.settle(LOBART)
+        assert book.progress(q.id) == questbook.Progress("given", 3)
+        await fake.send(type="dialog_chosen", npc=LOBART, node=done.node, made=True)
+        await _until(lambda: book.progress(q.id).state == "done")
+        assert (
+            book.situation(LOBART) == "Поручение «Украденное вино» герой выполнил, ты заплатил: 20 золотых."
+        )
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_middle_stage_handover_keeps_the_goal_variable_and_the_later_turn_in(graph):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _middle_dialog()
+        assert await book.make(q) == []
+        brief, story = await _repair_context(book, fake, q)
+        done, errors = await book.repair(_handover(brief, effects=[]), brief, story)
+        assert errors == [] and done is not None and done.node == "DIR_Q1_S2G1_D"
+        node = Patches.of(patches.ops()).nodes[done.node]
+        assert {"do": "set", "var": "DIR_Q1_S2G1", "value": 1} in node["effects"]
+        assert {"do": "give", "item": GOODS, "count": 2, "to": "self"} in node["effects"]
+        assert book.all()[q.id].gold == q.gold and book.all()[q.id].xp == q.xp
+        assert Patches.of(patches.ops()).nodes["DIR_Q1_DONE"] == story.patches.nodes["DIR_Q1_DONE"]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(("status", "value"), [("obsolete", LOG_OBSOLETE), ("failed", LOG_FAILED)])
+async def test_closing_a_book_quest_and_settling_it_from_the_save(graph, monkeypatch, status, value):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        assert await book.make(q) == []
+        brief, story = await _repair_context(book, fake, q)
+        original_effect = book.link.story_effect
+
+        async def effect(npc, effects, **kwargs):
+            await original_effect(npc, effects, **kwargs)
+            fake.vars.update({effect["var"]: effect["value"] for effect in effects if effect["do"] == "set"})
+
+        monkeypatch.setattr(book.link, "story_effect", effect)
+        done, errors = await book.repair(
+            Proposal("close", status=status, journal_now="Хильда умерла, поручение закрыто."), brief, story
+        )
+        assert errors == [] and done is not None and done.kind == "close"
+        assert fake.vars[q.id] == value and book.progress(q.id).state == status
+        assert book.dead_ends(await book.world()) == []
+        journal = fake.story[-1]["effects"][-1]
+        assert journal["status"] == ("LOG_OBSOLETE" if status == "obsolete" else "LOG_FAILED")
+        assert chronicle.facts(f"story_quest_{status}")[-1]["id"] == q.id
+        # A second quest without a closure message is settled from the save as well.
+        other = _quest(id="DIR_Q2", title="Другое поручение")
+        fake.npc_states[HILDA]["state"] = "alive"
+        assert await book.make(other) == []
+        fake.vars.update({other.id: value, "DIR_Q2_STAGE": 2})
+        await book.settle()
+        assert book.progress(other.id).state == status
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_refused_handover_rolls_back_the_description_and_the_node(graph, monkeypatch):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        assert await book.make(q) == []
+        brief, story = await _repair_context(book, fake, q)
+        previous = patches.ops()
+        original_patch = book.link.patch_graph
+
+        async def refuse(ops, **kwargs):
+            if not kwargs.get("replace"):
+                raise GameError("dialog refused")
+            await original_patch(ops, **kwargs)
+
+        monkeypatch.setattr(book.link, "patch_graph", refuse)
+        done, errors = await book.repair(_handover(brief), brief, story)
+        assert done is None and errors == ["игра не приняла правку: dialog refused"]
+        assert book.all()[q.id] == q and len(patches.records(QUEST)) == 1
+        assert patches.ops() == previous
+        assert fake.graph[-1]["replace"] is True and fake.graph[-1]["ops"] == previous
     finally:
         await link_cm.__aexit__(None, None, None)

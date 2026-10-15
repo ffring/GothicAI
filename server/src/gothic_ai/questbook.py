@@ -34,6 +34,7 @@ the code owns the truth, the npc's their beliefs.
 
 from __future__ import annotations
 
+import copy
 import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -52,18 +53,22 @@ from .turn import ToolOutcome
 from .validator import (
     DIRECTOR_PREFIX,
     LOG_FAILED,
+    LOG_OBSOLETE,
     LOG_RUNNING,
     LOG_SUCCESS,
     Caps,
     Patches,
     Rules,
+    Story,
+    WorldState,
+    check_effects,
     names_in,
     validate,
 )
 
 if TYPE_CHECKING:
     from .dialogue import Conversation, DialogueManager
-    from .director import Director
+    from .director import Brief, Director, Proposal, Repair
 
 log = logging.getLogger(__name__)
 
@@ -153,6 +158,7 @@ class Quest:
     after: str = ""  # a quest whose success opens this one
     names: dict[str, str] = field(default_factory=dict)  # npc -> its name in the game
     reason: str = ""
+    repairs: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -416,6 +422,14 @@ def _takes(g: Goal) -> list[dict[str, Any]]:
     return [{"do": "give", "item": g.item.upper(), "count": g.count, "to": "self"}] if g.kind == BRING else []
 
 
+def _gold(effect: dict[str, Any]) -> bool:
+    return effect.get("do") == "give" and effect.get("item") == GOLD and effect.get("to") != "self"
+
+
+def _reward(effect: dict[str, Any]) -> bool:
+    return _gold(effect) or effect.get("do") == "xp"
+
+
 # --- checking ----------------------------------------------------------------------------------
 
 
@@ -572,8 +586,19 @@ def names_of(q: Quest) -> set[str]:
 class Progress:
     """Where a quest stands, as the branch's chronicle has it."""
 
-    state: str = "open"  # open -> given -> done | failed
+    state: str = "open"  # open -> given -> done | failed | obsolete
     stage: int = 0  # the stage the hero is at; 0: not given
+
+
+@dataclass
+class DeadEnd:
+    """The first unfinished dialog of a quest that belongs to someone dead."""
+
+    quest: str
+    stage: int
+    goal: int
+    node: str
+    npc: str
 
 
 class QuestBook:
@@ -645,7 +670,184 @@ class QuestBook:
                     p.state = "done"
                 case "story_quest_failed":
                     p.state = "failed"
+                case "story_quest_obsolete":
+                    p.state = "obsolete"
         return p
+
+    async def world(self) -> WorldState:
+        """The save's stages and goals, and the people the descriptions mention."""
+        variables: set[str] = set()
+        people: set[str] = set()
+        for q in self.all().values():
+            variables.update((q.id, stage_var(q)))
+            people.add(q.giver.upper())
+            for k, stage in enumerate(q.stages, 1):
+                for j, goal in enumerate(stage.goals, 1):
+                    variables.add(goal_id(q, k, j))
+                    people.update(n.upper() for n in (goal.npc, *goal.npcs) if n)
+        return WorldState.from_game(await self.link.story_state(vars=sorted(variables), npcs=sorted(people)))
+
+    def dead_ends(self, state: WorldState) -> list[DeadEnd]:
+        """Find blocked dialogs in stage order, one per quest. World goals do not die with their NPCs."""
+        told = Patches.of(self.patches.ops()).told
+        out = []
+        for q in self.all().values():
+            progress = self.progress(q.id)
+            status = state.vars.get(q.id)
+            if status != LOG_RUNNING and (status is not None or progress.state != "given"):
+                continue
+            current = state.vars.get(stage_var(q), progress.stage)
+            if not 1 <= current <= len(q.stages):
+                continue
+            for k, stage in enumerate(q.stages, 1):
+                if k < current:
+                    continue
+                for j, goal in enumerate(stage.goals, 1):
+                    if goal.kind not in TALKS:
+                        continue
+                    gid = goal_id(q, k, j)
+                    node = done_node(q) if k == len(q.stages) else goal_node(gid)
+                    if state.vars.get(gid, 0) or node in told:
+                        continue
+                    if state.dead(goal.npc):
+                        out.append(DeadEnd(q.id, k, j, node, goal.npc.upper()))
+                        break
+                else:
+                    continue
+                break
+        return out
+
+    # --- repairing ----------------------------------------------------------------------------
+
+    async def repair(self, p: Proposal, brief: Brief, story: Story) -> tuple[Repair | None, list[str]]:
+        """Replace just the blocked dialog. Its conditions and required effects belong to the book."""
+        from .director import Repair
+
+        q = self.all().get(brief.quest)
+        if q is None:
+            return None, [f"нет квеста книги {brief.quest}"]
+        if p.kind == "close":
+            status = {"obsolete": LOG_OBSOLETE, "failed": LOG_FAILED}.get(p.status)
+            if status is None:
+                return None, [f"статус закрытия: obsolete или failed, а не {p.status!r}"]
+            if not p.journal_now.strip():
+                return None, ["нужна запись журнала journal_now"]
+            effects = [
+                {"do": "set", "var": q.id, "value": status},
+                {
+                    "do": "journal",
+                    "topic": q.title,
+                    "text": p.journal_now,
+                    "status": "LOG_OBSOLETE" if status == LOG_OBSOLETE else "LOG_FAILED",
+                },
+            ]
+            errors = check_effects(effects, story.symbols, self.rules, None)
+            if errors:
+                return None, errors
+            try:
+                await self.link.story_effect(brief.dead, effects)
+            except (GameError, TimeoutError) as err:
+                return None, [f"игра не приняла закрытие: {err}"]
+            self._fact(q, "story_quest_obsolete" if status == LOG_OBSOLETE else "story_quest_failed")
+            return Repair(q.id, "close"), []
+        if p.kind != "handover":
+            return None, [f"вид ремонта: handover или close, а не {p.kind!r}"]
+        ending = next((e for e in brief.endings if e.node == p.ending), None)
+        if ending is None:
+            return None, [f"нет такой концовки в сводке: {p.ending!r}"]
+        if story.state.dead(p.npc):
+            return None, [f"{story.state.name(p.npc)} ({p.npc}) мёртв"]
+        if p.npc not in brief.successors:
+            return None, [f"{p.npc} нет среди кандидатов в преемники"]
+        unknown = [x for x in p.effects if x not in {o.id for o in ending.offers}]
+        if unknown:
+            return None, [f"эффектов {', '.join(unknown)} нет у концовки {ending.node}"]
+        if not p.journal_now.strip() or not p.journal_done.strip():
+            return None, ["нужны обе записи журнала: journal_now и journal_done"]
+        original = story.patches.nodes.get(ending.node)
+        if original is None:
+            return None, [f"нет диалога книги {ending.node}"]
+        target = next(
+            (
+                (k, j)
+                for k, stage in enumerate(q.stages, 1)
+                for j, goal in enumerate(stage.goals, 1)
+                if goal.kind in TALKS
+                and (done_node(q) if k == len(q.stages) else goal_node(goal_id(q, k, j))) == ending.node
+            ),
+            None,
+        )
+        if target is None or original.get("npc") != brief.dead:
+            return None, [f"{ending.node} не является диалогом умершего в этом квесте"]
+        mandatory = [copy.deepcopy(effect) for effect in original.get("effects", []) if not _reward(effect)]
+        for effect in mandatory:
+            if effect.get("do") == "journal":
+                effect["text"] = p.journal_done
+        if not any(effect.get("do") == "journal" for effect in mandatory):
+            mandatory.append(
+                {"do": "journal", "topic": q.title, "text": p.journal_done, "status": "LOG_RUNNING"}
+            )
+        picked = [copy.deepcopy(brief.offers()[effect].effect) for effect in p.effects]
+        node = copy.deepcopy(original)
+        node.update(
+            npc=p.npc,
+            description=p.description,
+            lines=lines(Talk(p.description, p.lines)),
+            effects=[*mandatory, *picked],
+        )
+        ops = [{"op": "add_node", "node": node}]
+        caps = Caps(
+            xp=sum(
+                int(effect.get("amount", 0))
+                for effect in original.get("effects", [])
+                if effect.get("do") == "xp"
+            ),
+            items={
+                GOLD: sum(
+                    int(effect.get("count", 0)) for effect in original.get("effects", []) if _gold(effect)
+                )
+            },
+        )
+        try:
+            checked = await self.director.with_symbols(story, names_in(ops))
+        except (GameError, TimeoutError) as err:
+            return None, [f"игра не ответила: {err}"]
+        errors = validate(ops, checked, self.rules, repairs=q.id, caps=caps)
+        if errors:
+            return None, errors
+        updated = copy.deepcopy(q)
+        k, j = target
+        goal = updated.stages[k - 1].goals[j - 1]
+        goal.npc = p.npc
+        # what the successor remembers after the talk: its own view, not the hero's journal
+        took = f"Герой пришёл к тебе с поручением «{q.title}» умершего ({brief.dead_name}), которое ты принял"
+        goal.talk = Talk(p.description, node["lines"], f"{took}: «{p.description}»")
+        goal.journal = p.journal_done
+        updated.names[p.npc] = checked.state.name(p.npc)
+        updated.repairs.append(
+            {"goal": goal_id(q, k, j), "dead": brief.dead, "npc": p.npc, "reason": p.reason}
+        )
+        if ending.node == done_node(q):
+            updated.gold = sum(int(effect.get("count", 0)) for effect in picked if _gold(effect))
+            updated.xp = sum(int(effect.get("amount", 0)) for effect in picked if effect.get("do") == "xp")
+            updated.done_journal = p.journal_done
+        try:
+            await self.patches.make({"op": QUEST, "quest": updated.to_dict()}, ops)
+        except (GameError, TimeoutError) as err:
+            return None, [f"игра не приняла правку: {err}"]
+        self.all()
+        try:
+            await self.link.story_effect(p.npc, [{"do": "journal", "topic": q.title, "text": p.journal_now}])
+        except (GameError, TimeoutError) as err:
+            log.warning("questbook: repair journal: %s", err)
+        if self.dialogue is not None:
+            self.dialogue.remember(
+                p.npc,
+                updated.name(p.npc),
+                f"{brief.dead_name} мёртв. Ты принял его поручение герою «{q.title}»: "
+                f"ждёшь, когда герой придёт с ним, в разговоре: «{p.description}».",
+            )
+        return Repair(q.id, "handover", p.npc, ending.node, ops), []
 
     # --- making -------------------------------------------------------------------------------
 
@@ -735,7 +937,11 @@ class QuestBook:
     async def settle(self, npc: str | None = None) -> None:
         """The truth from the save: the quests' variables in the game, and what the chronicle missed of them
         (a message lost while the server was away)."""
-        mine = [q for q in self.all().values() if npc is None or q.giver == npc.upper()]
+        mine = [
+            q
+            for q in self.all().values()
+            if npc is None or q.giver == npc.upper() or any(r["npc"] == npc.upper() for r in q.repairs)
+        ]
         if not mine:
             return
         names = [v for q in mine for v in (q.id, stage_var(q))]
@@ -746,7 +952,7 @@ class QuestBook:
             return
         for q in mine:
             p, status, stage = self.progress(q.id), vars.get(q.id), vars.get(stage_var(q))
-            if status in (LOG_RUNNING, LOG_SUCCESS, LOG_FAILED) and p.state == "open":
+            if status in (LOG_RUNNING, LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE) and p.state == "open":
                 self._fact(q, "story_quest_given")
             if isinstance(stage, int) and 1 < stage <= len(q.stages) and stage > p.stage:
                 self._fact(q, "story_quest_stage", stage=stage)
@@ -754,6 +960,8 @@ class QuestBook:
                 self._fact(q, "story_quest_done")
             elif status == LOG_FAILED and p.state != "failed":
                 self._fact(q, "story_quest_failed")
+            elif status == LOG_OBSOLETE and p.state != "obsolete":
+                self._fact(q, "story_quest_obsolete")
 
     # --- the conversation (TurnExtension) ------------------------------------------------------
 
@@ -764,19 +972,40 @@ class QuestBook:
         npc = npc.upper()
         out = []
         for q in self.all().values():
-            if q.giver != npc:
+            inherited = [r for r in q.repairs if r["npc"] == npc]
+            if q.giver != npc and not inherited:
                 continue
             p = self.progress(q.id)
             if p.state == "given":
-                line = f"Ты дал герою поручение «{q.title}»: {q.asked or q.stages[0].journal}"
-                line += f" Сделает — заплатишь: {q.reward()}."
+                if inherited:
+                    dead = ", ".join(dict.fromkeys(q.name(r["dead"]) for r in inherited))
+                    pending = [
+                        g.talk.description
+                        for k, stage in enumerate(q.stages, 1)
+                        for j, g in enumerate(stage.goals, 1)
+                        if g.talk is not None and any(r["goal"] == goal_id(q, k, j) for r in inherited)
+                    ]
+                    line = (
+                        f"Ты принял поручение умершего ({dead}) «{q.title}»: "
+                        f"{q.asked or q.stages[0].journal} Ждёшь героя: {'; '.join(pending)}."
+                    )
+                else:
+                    line = f"Ты дал герою поручение «{q.title}»: {q.asked or q.stages[0].journal}"
+                if q.turn_in() is not None and q.turn_in().npc == npc:
+                    line += f" Сделает — заплатишь: {q.reward()}."
                 if q.days:
                     line += f" Срок — {q.days} дн."
                 out.append(line)
             elif p.state == "done":
-                out.append(f"Поручение «{q.title}» герой выполнил, ты заплатил: {q.reward()}.")
+                line = f"Поручение «{q.title}» герой выполнил"
+                if q.turn_in() is not None and q.turn_in().npc == npc:
+                    line += f", ты заплатил: {q.reward()}"
+                out.append(line + ".")
             elif p.state == "failed":
-                out.append(f"Поручение «{q.title}» герой не выполнил в срок.")
+                repaired = any(f.get("quest") == q.id for f in self.chronicle.facts("repair"))
+                out.append(f"Поручение «{q.title}» герой не выполнил{'' if repaired else ' в срок'}.")
+            elif p.state == "obsolete":
+                out.append(f"Поручение «{q.title}» потеряло смысл и закрыто.")
         return "\n".join(out) or None
 
     all_tools: tuple[Tool, ...] = ()
