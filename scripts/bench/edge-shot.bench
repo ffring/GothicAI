@@ -1,0 +1,125 @@
+# Shooting down over an edge: the end of a thatched roof's ridge at Lobart's farm, 7.3 m above a path, a wolf on
+# the path 1 m out from the gable wall (8 m, ~80 deg down from the head). The wolf is put from the edge, then the
+# hero steps back: put from 2 m back it would land on the roof.
+#   stand_*: 60 cm from the edge, the bow drawn; the head must not see the wolf, the lean must (`sight`, `cansee`).
+#   walk_*:  from 2 m back, walking (manual: steps with the bow drawn, classic: walk mode) up to the edge.
+# Camera from the side (`cam follow 600 300 90`). bench.log: `pos` (y 2335 on the roof, ~1640 on the ground
+# below: he fell), `cansee`, `anims ... target=`; events.jsonl: `sight` per frame
+cheat god
+set time 12 0
+overlay off
+view full
+stats bow 100 talent 0
+equip ItRw_Bow_L_01
+give ItRw_Arrow 50
+goto pos 14591 2349 -14597
+wait 600
+face 247.5
+edge 247.5 2000 60
+wait 300
+clear 2500
+insert Wolf
+wait 300
+put WOLF 160 0
+wait 300
+cam lift off
+cam follow 600 300 90
+cam look -240
+# classic, standing 60 cm from the edge: drawn upright with the aim off (no target), then the aim on (the lean,
+# the focus takes the wolf)
+manual off
+tap bow
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 60
+wait 300
+face 247.5
+aim off
+put WOLF 5000 0
+wait 400
+put WOLF 160 0
+wait 300
+rec stand_classic
+press action
+wait 1500
+sight WOLF
+cansee WOLF
+anims
+aim on
+wait 2000
+cansee WOLF
+anims
+stop
+release action
+wait 800
+# manual, standing 60 cm from the edge: drawn at the wolf
+manual on
+aimat WOLF body
+rec stand_manual
+press action
+wait 1500
+sight WOLF
+wait 1500
+cansee WOLF
+pos
+stop
+release action
+aimat off
+wait 800
+# manual, walking: from 2 m back, drawn at the wolf, steps forward for 3 s
+edge 247.5 2000 200
+wait 300
+face 247.5
+pos
+aimat WOLF body
+rec walk_manual
+press action
+wait 1200
+press forward
+wait 3000
+release forward
+wait 1500
+pos
+cansee WOLF
+anims
+stop
+release action
+aimat off
+wait 600
+tap bow
+wait 1200
+# classic, walk mode: from 2 m back with the bow raised, walking for 3.5 s, then drawing
+manual off
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 60
+wait 300
+face 247.5
+put WOLF 5000 0
+wait 300
+put WOLF 160 0
+wait 300
+edge 247.5 2000 200
+wait 300
+face 247.5
+walkmode walk
+tap bow
+wait 1500
+rec walk_classic
+press forward
+wait 3500
+release forward
+wait 300
+pos
+press action
+wait 2000
+pos
+cansee WOLF
+anims
+stop
+release action
+wait 600
+walkmode run
