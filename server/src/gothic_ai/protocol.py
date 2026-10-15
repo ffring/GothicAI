@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 33
+PROTOCOL_VERSION = 34
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1255,6 +1255,49 @@ class StorySpawnCmd(_Command):
     near: str | None = None
     distance: int = 600
     waypoint: str | None = None
+
+
+class NpcLook(_Command):
+    """How a character of the director's looks (v34), through the scripts' B_SetNpcVisual: `gender` MALE or
+    FEMALE, `head` mesh (Hum_Head_Pony), `face` texture (FACE_N_NORMAL05), `skin` (BODYTEX_N), `armor` (an
+    item, put on; the template's clothes go)."""
+
+    gender: str
+    head: str
+    face: str
+    skin: str
+    armor: str | None = None
+
+
+class NpcThing(_Command):
+    item: str
+    count: int = 1
+
+
+class NpcSpec(_Command):
+    """A character of the director's (docs/director.md, stage 2): an npc of ours `npc` (DIR_NPC_...) made like
+    the script's npc `like` (its class, body, fight and senses come from its code), at waypoint `at`, named
+    `name`, of `guild` (a GIL_* constant, default the template's), looking `look`, carrying `items` on top of
+    the template's things, living `routine` (in place of the template's day; ZS_* states)."""
+
+    npc: str
+    like: str
+    at: str
+    name: str
+    guild: str | None = None
+    look: NpcLook | None = None
+    items: list[NpcThing] = []
+    routine: list[RoutineEntry] = []
+
+
+class StoryNpcCmd(NpcSpec):
+    """Make a character of the director's (v34), once. The game answers `result` (`value`: {npc, state,
+    index: its symbol}): `made`; or, if it was made before (the save has it), `there`, `dead` or `absent`, and
+    nothing changes: the save remembers what became of it. The server sends its branch's characters every
+    session, before the graph's changes."""
+
+    type: Literal["story_npc"] = "story_npc"
+    req: str
 
 
 class StoryWatchCmd(_Command):

@@ -24,6 +24,7 @@ from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
 from .budget import Budget
+from .cast import Cast
 from .chests import ChestDesk
 from .chronicle import Chronicle
 from .concerns import Concerns
@@ -141,6 +142,7 @@ HELP = """commands (npc defaults to the last attached one):
   day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
   author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
+  cast              the director's own characters on this branch (docs/director.md, stage 2)
   deal              offers open to the hero, and what the game's deal window shows (needs -devmode)
   deal <npc gives> / <hero gives>   the npc offers a deal, e.g. deal ITPO_HEALTH_01:2 / ITMI_GOLD:30
   deal accept       press Y on the deal window as the player does (game needs -devmode)
@@ -182,6 +184,7 @@ class ServerState:
         self.rumors: Rumors | None = None
         self.amends: Amends | None = None
         self.author: Author | None = None
+        self.cast: Cast | None = None
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
@@ -347,6 +350,9 @@ class Console:
                     )
                 for q in self.state.author.quests.values():
                     print(f"{q.id} {q.name}: «{q.title}» {q.stage}; {q.item_name} {q.where}; {q.reward()}")
+            case "cast" if self.state.cast is not None:
+                for c in self.state.cast.characters():
+                    print(f"{c.npc} «{c.name}» like {c.like} at {c.at}")
             case "deal" if self.state.deals is not None:
                 await self.deal(link, npc, rest)
             case "rumors" if self.state.rumors is not None:
@@ -751,6 +757,8 @@ async def serve(args: argparse.Namespace) -> int:
                 dialogue=state.dialogue,
                 journal=journal,
             )
+            # the director's own characters (docs/director.md, stage 2): the branch keeps them
+            state.cast = Cast(link, state.story, state.chronicle)
             # quests of the director's own (docs/director.md, stage 1): for now on the console's word
             state.author = Author(
                 link,
@@ -1103,6 +1111,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.authored_quest(link, state.author, state.story)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario authored: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "cast":
+                assert state.cast is not None
+                results = await scenarios.cast_character(link, state.cast)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario cast: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "own":
                 results = await scenarios.own_symbols(link)
@@ -1756,6 +1770,7 @@ def main() -> None:
             "repair",
             "authored",
             "own",
+            "cast",
             "vlie",
             "vgive",
             "vcheck",

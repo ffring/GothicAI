@@ -51,6 +51,8 @@ class FakeGame:
         # what story_program answers (v23): the scripts' programs of (node, part); missing ones are errors
         self.programs: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self.story: list[dict[str, Any]] = []  # story_spawn / story_watch / story_effect / raise_dead
+        self.cast: dict[str, dict[str, Any]] = {}  # story_npc (v34): the director's npc's made, by id
+        self.cast_asked: list[str] = []  # story_npc, every one asked, in order
         self.people_near: list[dict[str, Any]] = []  # what story_nearby answers
         self.nearby_of: dict[str, list[dict[str, Any]]] = {}  # ...around this npc (else people_near)
         self.nearby_error: set[str] = set()  # npc's story_nearby does not know (ok=false: not in the world)
@@ -257,6 +259,21 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True, value=msg.get("count", 1))
             case "story_watch":
                 self.story.append(msg)
+            case "story_npc":
+                # the director's npc (v34): made once, then left as the save has it
+                self.cast_asked.append(msg["npc"])
+                npc = msg["npc"]
+                if npc in self.cast:
+                    state = "dead" if self.npc_states.get(npc, {}).get("state") == "dead" else "there"
+                else:
+                    self.cast[npc] = msg
+                    self.npc_states[npc] = {"state": "alive", "name": msg["name"]}
+                    self.symbols[npc] = "npc"
+                    state = "made"
+                index = 74650 + list(self.cast).index(npc)
+                await self.send(
+                    type="result", req=msg["req"], ok=True, value={"npc": npc, "state": state, "index": index}
+                )
             case "raise_dead":
                 self.story.append(msg)
                 await self.send(type="result", req=msg["req"], ok=True)

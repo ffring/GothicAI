@@ -42,6 +42,7 @@ from .protocol import (
     NpcActResult,
     NpcActType,
     NpcChestsCmd,
+    NpcSpec,
     NpcView,
     NpcViewCmd,
     PingCmd,
@@ -57,6 +58,7 @@ from .protocol import (
     StoryEffectCmd,
     StoryEvalCmd,
     StoryNearbyCmd,
+    StoryNpcCmd,
     StoryPeopleCmd,
     StoryProgramCmd,
     StorySpawnCmd,
@@ -79,6 +81,7 @@ _Request = (
     | DebugCmd
     | GraphPatchCmd
     | StorySpawnCmd
+    | StoryNpcCmd
     | StoryEffectCmd
     | RaiseDeadCmd
     | StoryNearbyCmd
@@ -354,6 +357,11 @@ class GameLink:
             waypoint=waypoint,
         )
         return int((await self._request(cmd, 5.0)).value or 0)
+
+    async def story_npc(self, spec: NpcSpec, timeout: float = 10.0) -> dict[str, Any]:
+        """A character of the director's, made once (see StoryNpcCmd): {npc, state, index}."""
+        cmd = StoryNpcCmd(req=self._next_id("n"), **spec.model_dump())
+        return dict((await self._request(cmd, timeout)).value or {})
 
     async def story_watch(self, npcs: list[str], owner: str = "") -> None:
         """Npc's whose distance to every tag's living creatures the game reports (story_world); each owner

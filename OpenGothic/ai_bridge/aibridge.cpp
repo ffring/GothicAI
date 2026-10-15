@@ -41,6 +41,7 @@
 #include "beasts.h"
 #include "chatoverlay.h"
 #include "dialoggraph.h"
+#include "storycast.h"
 #include "storyworld.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
@@ -59,7 +60,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 33;
+constexpr int         ProtocolVersion = 34;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -759,6 +760,12 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     std::string err;
     auto json = graph.program(JsonRead::str(doc,"node"),JsonRead::str(doc,"part"),JsonRead::boolean(doc,"own",false),err);
     sendResult(req,!json.empty(),err,json);
+    }
+  else if(type=="story_npc") {
+    // v34: a character of the director's, made once (docs/director.md, stage 2, layer 2)
+    std::string err;
+    auto        value = StoryCast::npc(*world,doc,err);
+    sendResult(req,!value.empty(),err,value);
     }
   else if(type=="story_effect") {
     std::string err;
