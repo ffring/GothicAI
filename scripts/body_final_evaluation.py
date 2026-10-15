@@ -733,8 +733,60 @@ def partial_known_failure_snapshot(prior,candidate):
             "reaction_started":False,"load_started":False,"fresh_screening_started":False,"selected_weights_changed":False,"prior_failures_replaced":False}
 
 
+def realtime_age_failure_snapshot(prior,candidate):
+    """Gate v14: ordinary realtime aborted by the 100 ms age guard in its first GRU duel.
+
+    Shadow 3 and ordinary 10 closed, the partial native_duel GRU case fell back with
+    observation_too_old after runner ticks stretched to 30-75 ms on the shared host;
+    the reaction phase was still collected. No load or fresh screening was started.
+    """
+    repair.frozen_environment(prior)
+    require(not any((prior/phase).exists() for phase in ("load","screening")),"realtime age failure exposed load or fresh screening")
+    declaration=read(prior/"final-evaluation.json");suite=read(prior/"realtime/suite.json");shadow=read(prior/"shadow/suite.json")
+    reaction=read(prior/"realtime-reaction/suite.json")
+    require(declaration.get("kind")==KIND and declaration["candidate"]["checkpoint_sha256"]==candidate["checkpoint_sha256"] and
+            declaration["candidate"]["normalizer_sha256"]==candidate["normalizer_sha256"],"realtime age retry changed selected models")
+    config=read(prior/"code/evals/npc-body/body-stage8-v1.json")
+    expected=[case["name"]+"-"+policy for case in config["realtime"]["cases"] for policy in config["realtime"]["policies"]]
+    name=expected[10];folder=prior/"realtime"/name
+    require(shadow.get("status")=="collected" and len(shadow.get("cases",[]))==3 and not shadow.get("error") and
+            suite.get("status")=="infrastructure_failure" and suite.get("error")=="native arena infrastructure failure: unexpected_control_loss:released" and
+            [record.get("name") for record in suite.get("cases",[])]==expected[:10] and name.endswith("-gru") and
+            reaction.get("status")=="collected" and len(reaction.get("cases",[]))==6 and not reaction.get("error"),
+            "additional prior is not the exact shadow3/ordinary10 realtime age failure")
+    for phase in ("shadow","realtime","realtime-reaction"):
+        for record in read(prior/phase/"suite.json")["cases"]:
+            require(read(prior/phase/record["name"]/"episode.json")==record,"realtime age failure completed episode differs from suite")
+    require(not (folder/"episode.json").exists(),"partial realtime GRU case promoted")
+    entries=[json.loads(line) for line in (folder/"policy-inputs.jsonl").read_text().splitlines() if line]
+    fallbacks=[entry for entry in entries if entry.get("kind")=="model_input" and entry.get("response",{}).get("status")=="fallback"]
+    require(len(fallbacks)==1 and fallbacks[0]["response"].get("reason")=="observation_too_old","partial realtime case is not one age fallback")
+    first=fallbacks[0]["request"];age=first["now_game_ms"]-first["observation"]["t_game_ms"]
+    require(age>100,"partial realtime fallback is not past the 100 ms age guard")
+    terminals=[entry["arena"] for line in (folder/"arena-events.jsonl").read_text().splitlines() if (entry:=json.loads(line)).get("kind")=="terminal"]
+    require(len(terminals)==1 and terminals[0].get("outcome")=="infrastructure" and terminals[0].get("reason")=="unexpected_control_loss:released",
+            "partial realtime infrastructure terminal changed")
+    names=["environment.json","source.tar.gz","reference/gothic-body-runner","final-evaluation.json","dataset/normalization.json"]
+    require(sha(prior/"dataset/normalization.json")==candidate["normalizer_sha256"],"realtime age failure normalizer changed")
+    for architecture in ("gru","mlp"):
+        file=prior/"models"/architecture/"best.pt";require(sha(file)==candidate["checkpoint_sha256"][architecture],"realtime age failure checkpoint changed")
+        names.extend((str(file.relative_to(prior)),str((file.parent/"best.pt.json").relative_to(prior))))
+    for phase in ("shadow","realtime","realtime-reaction"):
+        names.extend(str(file.relative_to(prior)) for file in (prior/phase).rglob("*") if file.is_file())
+        for stem,suffix in (("services","-before.json"),("services","-after.json"),("resources",".txt"),("launcher",".log")):
+            file=prior/(stem+"-"+phase+suffix);require(file.is_file(),"realtime age failure resource/service/log missing")
+            names.append(str(file.relative_to(prior)))
+    names.extend(str(file.relative_to(prior)) for file in (prior/"validation").rglob("*") if file.is_file())
+    return {"kind":"known_realtime_observation_age_infrastructure_failure","run":str(prior),"files":repair.inventory(prior,names),
+            "error":suite["error"],"closed_shadow_cases":3,"closed_ordinary_cases":10,"partial_case":name,
+            "partial_fallback":"observation_too_old","partial_first_row_age_game_ms":age,"partial_native_terminal":terminals[0],
+            "reaction_collected":True,"known_audit_started":False,"load_started":False,"fresh_screening_started":False,
+            "selected_weights_changed":False,"prior_failures_replaced":False}
+
+
 def additional_failure_snapshot(prior,candidate):
     if (prior/"realtime/suite.json").is_file() and read(prior/"realtime/suite.json").get("status")=="infrastructure_failure":
+        if (prior/"realtime-reaction/suite.json").is_file():return realtime_age_failure_snapshot(prior,candidate)
         return partial_known_failure_snapshot(prior,candidate)
     if not (prior/"realtime-reaction/suite.json").is_file():
         return collector_startup_failure_snapshot(prior,candidate)
@@ -916,7 +968,7 @@ def prior_queue_failure_snapshot(prior):
     require(set(inventory)=={"body_arena_env","body_headless_suite","body_observe_suite"},"prior queue helper inventory differs")
     for name,entry in inventory.items():
         file=prior/"code/scripts"/(name+".py")
-        require(Path(entry["path"]).resolve()==file.resolve() and entry.get("sha256")==sha(file)==environment["frozen_files"].get(str(file.relative_to(prior))),
+        require(host_path(entry["path"]).resolve()==file.resolve() and entry.get("sha256")==sha(file)==environment["frozen_files"].get(str(file.relative_to(prior))),
                 "prior queue imported changed helper")
     requests={};responses={}
     for line in (folder/"episode/ipc.jsonl").read_text().splitlines():
@@ -1044,6 +1096,9 @@ def motor_binding(proof,root,candidate,queue_proof=None):
             "motor_transition":transition,"queue_proof":queue_binding,"serial_worker_proof":workers,"historical_owned_trajectory_equivalence":False}
 
 
+host_path=repair.host_path
+
+
 def numerical_report(path,models):
     report=read(path)
     require(report.get("kind")=="body_defence_child_saved_data_audit" and report.get("schema_version")==1 and
@@ -1052,9 +1107,10 @@ def numerical_report(path,models):
     files=report.get("file_inventory")
     require(isinstance(files,dict) and files,"numerical audit lacks source/raw dependency inventory")
     for name,expected in files.items():
-        require(Path(name).is_absolute() and Path(name).is_file() and sha(name)==expected,"independent numerical audit dependency changed")
+        require(Path(name).is_absolute() and host_path(name).is_file() and sha(host_path(name))==expected,"independent numerical audit dependency changed")
+    local={str(host_path(name)):expected for name,expected in files.items()}
     for name in ("environment.json","selection.json","dataset/dataset.json","dataset/normalization.json"):
-        require(files.get(str(models/name))==sha(models/name),"numerical audit did not bind selected child artifact")
+        require(local.get(str(models/name))==sha(models/name),"numerical audit did not bind selected child artifact")
     return {"path":str(path),"sha256":sha(path),"file_inventory":files,"closed_loop_quality_credit":False}
 
 

@@ -575,3 +575,14 @@ def test_mask_failure_guard_cannot_hide_lost_ownership_as_a_healthy_race(tmp_pat
     (folder/"ipc.jsonl").write_text("".join(json.dumps(row)+"\n" for row in rows))
     with pytest.raises(ValueError,match="healthy same-token provenance"):
         final.additional_failure_snapshot(prior,candidate)
+
+
+def test_recorded_home_paths_move_to_this_home_only_when_the_file_is_there(tmp_path, monkeypatch):
+    home = tmp_path/"kaifaty"
+    monkeypatch.setattr(final.Path, "home", classmethod(lambda cls: home))
+    moved = home/"gothic-ai/body/data/run/file.json"
+    moved.parent.mkdir(parents=True)
+    moved.write_text("{}")
+    assert final.host_path("/home/kaifat/gothic-ai/body/data/run/file.json") == moved
+    assert final.host_path("/home/kaifat/gothic-ai/body/data/run/absent.json") == final.Path("/home/kaifat/gothic-ai/body/data/run/absent.json")
+    assert final.host_path("/opt/elsewhere/file.json") == final.Path("/opt/elsewhere/file.json")

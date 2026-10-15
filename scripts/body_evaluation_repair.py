@@ -203,8 +203,19 @@ def validate_declaration(root):
     require(value["updated_runtime"].get("historical_owned_trajectory_equivalence") is False, "historical owned equivalence fabricated")
     if "native_fault_retry_declaration" in value:
         entry = value["native_fault_retry_declaration"]
-        require(Path(entry["path"]) == reference / "faults-retry-v1/declaration.json" and sha(entry["path"]) == entry["sha256"], "fault retry binding changed")
+        require(host_path(entry["path"]) == reference / "faults-retry-v1/declaration.json" and sha(host_path(entry["path"])) == entry["sha256"], "fault retry binding changed")
     return value
+
+
+
+def host_path(name):
+    """A path recorded on another host names /home/<user>/...; here the same tree lives
+    under this user's home. Only the location moves: callers still verify the hash."""
+    path = Path(name)
+    if path.exists() or len(path.parts) < 4 or path.parts[1] != "home":
+        return path
+    moved = Path.home().joinpath(*path.parts[3:])
+    return moved if moved.exists() else path
 
 
 def main():
