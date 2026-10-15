@@ -4,7 +4,8 @@
 #   stand_*: 60 cm from the edge, the bow drawn; the head must not see the wolf, the lean must (`sight`, `cansee`).
 #   walk_*:  from 2 m back, walking (manual: steps with the bow drawn, classic: walk mode) up to the edge.
 # Camera from the side (`cam follow 600 300 90`). bench.log: `pos` (y 2335 on the roof, ~1640 on the ground
-# below: he fell), `cansee`, `anims ... target=`; events.jsonl: `sight` per frame
+# below: he fell), `edgedist` (distance in cm to a drop greater than 100 cm ahead), `cansee`,
+# `anims ... target=`; events.jsonl: `sight` per frame. The guarded walks must leave 20..35 cm to the edge.
 cheat god
 set time 12 0
 overlay off
@@ -51,6 +52,7 @@ aim on
 wait 2000
 cansee WOLF
 anims
+edgedist 247.5
 stop
 release action
 wait 800
@@ -64,6 +66,7 @@ sight WOLF
 wait 1500
 cansee WOLF
 pos
+edgedist 247.5
 stop
 release action
 aimat off
@@ -82,6 +85,7 @@ wait 3000
 release forward
 wait 1500
 pos
+edgedist 247.5
 cansee WOLF
 anims
 stop
@@ -114,10 +118,177 @@ wait 3500
 release forward
 wait 300
 pos
+edgedist 247.5
 press action
 wait 2000
 pos
+edgedist 247.5
 cansee WOLF
+anims
+stop
+release action
+wait 600
+walkmode run
+
+# At exactly 35 cm: the weapon is already in hand, then action raises/draws it to aim without movement.
+# Every extra segment restores a standing hero on the roof and draws explicitly; a previous fall or
+# weapon state must not turn the next setup into a holstering animation.
+immortal WOLF on
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual on
+draw bow
+wait 1500
+face 247.5
+edge 247.5 2000 35 exact
+aimat WOLF body
+rec raise_manual_bow
+anims
+pos
+edgedist 247.5
+press action
+wait 2500
+pos
+edgedist 247.5
+anims
+stop
+release action
+wait 600
+aimat off
+
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual off
+draw bow
+wait 1500
+face 247.5
+edge 247.5 2000 35 exact
+rec raise_classic_bow
+anims
+pos
+edgedist 247.5
+press action
+wait 2500
+pos
+edgedist 247.5
+anims
+stop
+release action
+wait 600
+
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+equip ItRw_Crossbow_L_01
+give ItRw_Bolt 100
+stats cbow 100 talent 0
+manual on
+draw bow
+wait 1500
+face 247.5
+edge 247.5 2000 35 exact
+aimat WOLF body
+rec raise_manual_cbow
+anims
+pos
+edgedist 247.5
+press action
+wait 2500
+pos
+edgedist 247.5
+anims
+stop
+release action
+wait 600
+aimat off
+
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual off
+draw bow
+wait 1500
+face 247.5
+edge 247.5 2000 35 exact
+rec raise_classic_cbow
+anims
+pos
+edgedist 247.5
+press action
+wait 2500
+pos
+edgedist 247.5
+anims
+stop
+release action
+wait 600
+
+# Crossbow counterparts of walk_manual/walk_classic. Classic forward with action shoots, so walk raised,
+# then aim at rest, just as the original bow segment does.
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual on
+draw bow
+wait 1500
+face 247.5
+edge 247.5 2000 200
+wait 300
+face 247.5
+aimat WOLF body
+rec walk_manual_cbow
+anims
+press action
+wait 1200
+press forward
+wait 3000
+release forward
+wait 1500
+pos
+edgedist 247.5
+anims
+stop
+release action
+aimat off
+wait 600
+
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual off
+draw bow
+wait 1500
+face 247.5
+edge 247.5 2000 200
+wait 300
+face 247.5
+walkmode walk
+rec walk_classic_cbow
+anims
+press forward
+wait 3500
+release forward
+wait 300
+pos
+edgedist 247.5
+press action
+wait 2000
+pos
+edgedist 247.5
 anims
 stop
 release action

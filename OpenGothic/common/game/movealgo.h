@@ -130,6 +130,7 @@ class MoveAlgo final {
     float   stepHeight()  const;
     float   slideAngle()  const;
     float   slideAngle2() const;
+    float   edgeMoveFraction(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
 
     void    emitWaterSplash(float y);
 

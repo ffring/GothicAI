@@ -3295,6 +3295,28 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       pl.useItem(id,Item::NSLOT,true); // whatever the hero's strength
     say(c + " " + name);
     }
+  else if(c=="disarm") {
+    // disarm: deterministic bench setup, with no weapon-key toggle or holstering animation.
+    ctrl.clearInput();
+    bench.holds.clear();
+    bench.taps.clear();
+    pl.endManualAim(false);
+    pl.closeWeapon(true);
+    pl.clearState(true);
+    pl.clearAiQueue();
+    pl.clearSpeed();
+    pl.stopAnim("");
+    say("disarm ws=" + std::to_string(int(pl.weaponState())));
+    }
+  else if(c=="draw") {
+    // draw bow: draw the equipped bow/crossbow; calling it again never puts the weapon away.
+    if(a.size()!=2 || a[1]!="bow") {
+      say("draw: expected draw bow");
+      return;
+      }
+    const bool ok = pl.currentRangedWeapon()!=nullptr && pl.drawWeaponBow();
+    say(std::string("draw bow ") + (ok ? "ok" : "failed") + " ws=" + std::to_string(int(pl.weaponState())));
+    }
   else if(c=="put") {
     // put <npc|nearest> <dist> <angle> [dy]: the npc stands there from the hero (angle from the hero's
     // facing, 0 in front), on the ground, frozen, facing the hero
@@ -4656,20 +4678,22 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     }
   else if(c=="edge") {
-    // edge <yaw> [max cm] [margin cm]: the hero is put that way to where the ground falls away, and stands
+    // edge <yaw> [max cm] [margin cm] [exact]: the hero is put that way to where the ground falls away, and stands
     // that far from the edge (35: closer the body slips over it) facing it; prints how deep it goes down
-    // right past the edge
+    // right past the edge. Optional exact refines the usual 25 cm search before applying the margin.
     const float y   = num(a,1,0)*float(M_PI)/180.f;
     const Vec3  dir = Vec3(std::cos(y),0,std::sin(y));
     const float max = num(a,2,2000);
     Vec3        pos = pl.position();
     const float g0  = pos.y;
     bool        found = false;
+    float       boundary = 0;
     for(float d=25; d<=max; d+=25) {
       const Vec3  p = pl.position() + dir*d;
       auto        r = w.physic()->ray({p.x,g0+100,p.z},{p.x,g0-150,p.z});
       if(!r.hasCol || std::abs(r.v.y-g0)>60) {
         found = true;
+        boundary = d;
         break;
         }
       pos = Vec3(p.x,r.v.y,p.z);
@@ -4677,6 +4701,20 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(!found) {
       say("edge: no edge that way");
       return;
+      }
+    if(a.size()>4 && a[4]=="exact") {
+      float lo = boundary-25.f, hi = boundary;
+      for(int i=0; i<8; ++i) {
+        const float mid = (lo+hi)*0.5f;
+        const Vec3  p   = pl.position()+dir*mid;
+        const auto  r   = w.physic()->ray({p.x,g0+100,p.z},{p.x,g0-150,p.z});
+        if(r.hasCol && std::abs(r.v.y-g0)<=60) {
+          lo = mid;
+          pos = Vec3(p.x,r.v.y,p.z);
+          } else {
+          hi = mid;
+          }
+        }
       }
     // a step back from the very edge, the feet on the ground
     pos -= dir*num(a,3,35);
@@ -4688,6 +4726,49 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     char buf[200];
     std::snprintf(buf,sizeof(buf),"edge at %.0f %.0f %.0f, down past it %.0f",pos.x,pos.y,pos.z,r.hasCol ? pos.y-r.v.y : -1.f);
     say(buf);
+    }
+  else if(c=="edgedist") {
+    // edgedist <yaw> [max cm] [min drop cm]: measure the first drop ahead without moving the hero.
+    // Follow the floor in 5 cm steps so a continuous slope does not count as an edge, then refine it.
+    const float yaw     = num(a,1,0);
+    const float y       = yaw*float(M_PI)/180.f;
+    const Vec3  dir     = Vec3(std::cos(y),0,std::sin(y));
+    const Vec3  at      = pl.position();
+    const float max     = num(a,2,2000);
+    const float minDrop = num(a,3,100);
+    auto floor = [&](float d, float height) {
+      const Vec3 p = at+dir*d;
+      return w.physic()->ray({p.x,height+100,p.z},{p.x,height-3000,p.z});
+      };
+    auto r = floor(0,at.y);
+    if(!r.hasCol) {
+      say("edgedist: no floor under the hero");
+      return;
+      }
+    float lo = 0, height = r.v.y;
+    for(float d=5; d<=max; d+=5) {
+      r = floor(d,height);
+      if(!r.hasCol || height-r.v.y>minDrop) {
+        float hi = d;
+        const float top = height;
+        for(int i=0; i<8; ++i) {
+          const float mid = (lo+hi)*0.5f;
+          const auto  q   = floor(mid,top);
+          if(q.hasCol && top-q.v.y<=minDrop)
+            lo = mid; else
+            hi = mid;
+          }
+        r = floor(hi,top);
+        char buf[200];
+        std::snprintf(buf,sizeof(buf),"edgedist yaw=%.1f distance=%.1f cm drop=%.1f cm (min=%.0f)",
+                      double(yaw),double((lo+hi)*0.5f),double(r.hasCol ? top-r.v.y : -1.f),double(minDrop));
+        say(buf);
+        return;
+        }
+      lo     = d;
+      height = r.v.y;
+      }
+    say("edgedist: no edge within " + std::to_string(max) + " cm");
     }
   else if(c=="findwp") {
     for(auto& s:findSpots(w,pl,K_Name,0,90,rest(line),40)) {

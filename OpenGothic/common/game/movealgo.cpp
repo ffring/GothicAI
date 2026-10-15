@@ -289,6 +289,21 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       }
     }
 
+  const auto weapon = npc.weaponState();
+  if(npc.isPlayer() && !npc.isDown() && (state==Run || state==Slide) && bs!=BS_JUMP &&
+     (weapon==WeaponState::Bow || weapon==WeaponState::CBow)) {
+    // Use the displacement accepted by collision detection (which can be partial). This also covers
+    // the step while raising the weapon and sliding, independently of the aim/input mode.
+    const auto  pos = npc.position();
+    const float k   = edgeMoveFraction(pos0,pos);
+    if(k<1.f) {
+      npc.setPosition(pos0+(pos-pos0)*k);
+      if(state==Slide)
+        clearSpeed();
+      // Keep the aim animation: onMoveFailed would switch it to Idle.
+      }
+    }
+
   if(grav) {
     fallSpeed.y -= gravity*float(dt);
     }
@@ -696,6 +711,49 @@ float MoveAlgo::stepHeight() const {
   if(v>0.f)
     return v;
   return 50;
+  }
+
+float MoveAlgo::edgeMoveFraction(const Tempest::Vec3& from, const Tempest::Vec3& to) const {
+  static constexpr float margin  = 30.f;
+  static constexpr float maxDrop = 100.f;
+  static constexpr float step    = 10.f;
+
+  const auto  dp   = to-from;
+  const float dist = std::sqrt(dp.x*dp.x+dp.z*dp.z);
+  if(dist==0.f)
+    return 1.f;
+
+  const float up = stepHeight()+eps;
+  auto floor = [&](float d, float height) {
+    const auto p = from+dp*(d/dist);
+    return npc.world().physic()->landRay({p.x,height+up,p.z});
+    };
+  auto r = floor(0,from.y);
+  if(!r.hasCol)
+    return 1.f;
+
+  // Follow the surface rather than comparing its height with the hero: small steps and continuous
+  // slopes stay traversable. Probe beyond the actual move to leave room before a dangerous drop.
+  float lo = 0, height = r.v.y;
+  const float end = dist+margin;
+  for(float d=std::min(step,end);; d=std::min(d+step,end)) {
+    r = floor(d,height);
+    if(!r.hasCol || height-r.v.y>maxDrop) {
+      float hi = d;
+      for(int i=0; i<8; ++i) {
+        const float mid = (lo+hi)*0.5f;
+        const auto  q   = floor(mid,height);
+        if(q.hasCol && height-q.v.y<=maxDrop)
+          lo = mid; else
+          hi = mid;
+        }
+      return std::clamp((lo-margin)/dist,0.f,1.f);
+      }
+    if(d>=end)
+      return 1.f;
+    lo     = d;
+    height = r.v.y;
+    }
   }
 
 float MoveAlgo::slideAngle() const {
