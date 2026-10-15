@@ -58,6 +58,22 @@ cansee WOLF
 anims
 edgedist 247.5
 stop
+# Check the same drawn animation at both endpoints independently of the visibility solver.
+# lean-frame compares its applied-state prediction with mapHeadBone after all pose passes.
+aimlean 0
+wait 1200
+rec probe_classic_zero
+wait 600
+cansee WOLF
+stop
+aimlean 70
+wait 1200
+rec probe_classic_full
+wait 600
+cansee WOLF
+stop
+aimlean auto
+wait 1200
 release action
 wait 800
 # manual, standing 60 cm from the edge: the real game's camera and crosshair point at the wolf.
@@ -95,6 +111,26 @@ release action
 wait 1500
 hp WOLF
 stop
+# The normal stand_manual capture above includes the actual shot. Draw again for the endpoint
+# head checks, keeping the real game camera and the mouse-driven point on the wolf.
+press action
+wait 1500
+aimlean 0
+wait 1200
+rec probe_manual_zero
+wait 600
+cansee WOLF
+stop
+aimlean 70
+wait 1200
+rec probe_manual_full
+wait 600
+cansee WOLF
+stop
+aimlean auto
+wait 1200
+release action
+wait 800
 aimat off
 ui off
 cam follow 600 300 90

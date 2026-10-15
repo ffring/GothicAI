@@ -916,8 +916,11 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
+      in.leanDirection = npc.aimLeanDirection(aimAt());
       if(npc.isPlayer()) {
         in.lean = npc.aimLean(aimAt(),manual).angle;
+        if(Aim::playerLeanOverride>=0.f)
+          in.lean = Aim::playerLeanOverride;
         } else {
         // NPCs keep the old angle rule; only the hero searches visibility along the bend.
         const Tempest::Vec3 d = in.dir;

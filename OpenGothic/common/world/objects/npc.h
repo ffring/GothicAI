@@ -534,8 +534,12 @@ class Npc final {
     auto      mapWeaponBone() const -> Tempest::Vec3;
     auto      mapHeadBone() const -> Tempest::Vec3;
     auto      aimDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
+    auto      aimLeanDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
     auto      aimHead(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;
-    auto      aimLean(const Tempest::Vec3& target, bool manual=false) const -> Aim::LeanResult;
+    auto      aimCurrentHead() const -> Tempest::Vec3;
+    auto      aimLeanShift() const -> Tempest::Vec3;
+    auto      aimArrow(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;
+    auto      aimLean(const Tempest::Vec3& target, bool manual=false, bool requireShot=true) const -> Aim::LeanResult;
     auto      mapBone(std::string_view bone) const -> Tempest::Vec3;
 
     bool      turnTo  (float dx, float dz, bool noAnim, uint64_t dt);

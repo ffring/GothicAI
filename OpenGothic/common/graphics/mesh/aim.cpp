@@ -73,13 +73,27 @@ Mat3 leanRotation(const Vec3& want, const Vec3& forward, float angle) {
   return axisAngle(normalize(cross(Up,leanDir(want,forward))),angle);
   }
 
+Mat3 turnRotation(const Vec3& turn, float share = 1.f) {
+  const float angle = length(turn);
+  return angle>1e-6f ? axisAngle(turn*(1.f/angle),angle*share) : axisAngle(Up,0.f);
+  }
+
+Vec3 torsoTurn(Vec3 turn, float lean, bool arms) {
+  // A deep hip bend must carry the head forward. The arms take the upward correction
+  // that would otherwise straighten the trunk again while still pointing the arrow down.
+  if(arms && turn.z<0.f)
+    turn.z *= 1.f-std::clamp(lean/(20.f*Deg),0.f,1.f);
+  return turn;
+  }
+
 Vec3 counterweight(const Vec3& want, const Vec3& forward, float angle) {
   return leanDir(want,forward)*(-Aim::PelvisBack*std::clamp(angle/(Aim::LeanMax*Deg),0.f,1.f));
   }
 
 // Axis times angle, in world space. Shared by the pose and its prospective head positions.
-Vec3 bodyTurn(const Vec3& rest, const Vec3& want, const Vec3& forward, float lean, float side) {
-  const Vec3 ar   = mul(sideRotation(forward,side),mul(leanRotation(want,forward,lean),rest));
+Vec3 bodyTurn(const Vec3& rest, const Vec3& want, const Vec3& hipDirection,
+              const Vec3& forward, float lean, float side) {
+  const Vec3 ar   = mul(sideRotation(forward,side),mul(leanRotation(hipDirection,forward,lean),rest));
   const Vec3 axis = cross(ar,want);
   const float s   = length(axis);
   const float an  = std::min(std::atan2(s,dot(ar,want)),MaxTurn);
@@ -115,6 +129,7 @@ void approach(float& v, float target, float k, float maxStep, bool& changed) {
 Aim::Probe Aim::playerProbe;
 Aim::Probe Aim::subjectProbe;
 const void* Aim::probeNpc = nullptr;
+float Aim::playerLeanOverride = -1.f;
 
 float Aim::leanFor(float down) {
   const float k = std::clamp((down/Deg - LeanFrom)/(LeanFull - LeanFrom), 0.f, 1.f);
@@ -126,10 +141,11 @@ float Aim::leanForNpc(float down) {
   }
 
 Vec3 Aim::pelvisOffset() const {
-  return counterweight(fromBody(wantB,forward),forward,leanAmt*weight);
+  return counterweight(leanForward,forward,leanAmt*weight);
   }
 
-Vec3 Aim::headAt(const Vec3& origin, const Vec3& facing, const Vec3& dir, float angle) const {
+Vec3 Aim::pointAt(const Vec3& point, const Vec3& origin, const Vec3& facing, const Vec3& dir,
+                  float angle, bool shot, bool inverse) const {
   Vec3 f = normalize(Vec3(facing.x,0,facing.z));
   if(length(f)<0.5f)
     f = forward;
@@ -141,59 +157,81 @@ Vec3 Aim::headAt(const Vec3& origin, const Vec3& facing, const Vec3& dir, float 
   const Vec3 sp = offset + fromBody(baseSpine,f);
   Vec3 wa = offset + fromBody(baseWaist,f);
   Vec3 ch = offset + fromBody(baseChest,f);
-  Vec3 hd = offset + fromBody(baseHead,f);
-  const Mat3 hip = leanRotation(want,f,angle);
+  const Mat3 hip = mul(sideRotation(f,poseSide),leanRotation(want,f,angle));
   wa = rotatedPoint(wa,hip,sp);
   ch = rotatedPoint(ch,hip,sp);
-  hd = rotatedPoint(hd,hip,sp);
-  const float side = sideAmt*weight;
-  if(side!=0.f) {
-    const Mat3 sd = sideRotation(f,side);
-    wa = rotatedPoint(wa,sd,sp);
-    ch = rotatedPoint(ch,sd,sp);
-    hd = rotatedPoint(hd,sd,sp);
-    }
-  // Zero bend before acquiring a target is the real standing head. Positive candidates
-  // already predict the complete aimed pose: otherwise focus could acquire a hip-only pose
-  // and immediately lose it when the measured waist/chest correction first becomes ready.
-  const bool prospective = !ready && measured && angle>0.f;
-  const Vec3 restDir = (arrow || prospective) ? normalize(fromBody(rest,f)) : f;
-  const Vec3 turn = (ready || prospective) && enabled ? bodyTurn(restDir,want,f,angle,side) : Vec3();
-  const float an = length(turn);
-  if(an>0.f) {
-    const Vec3 axis = normalize(turn);
-    const Mat3 wr = axisAngle(axis,an*WaistShare);
-    ch = rotatedPoint(ch,wr,wa);
-    hd = rotatedPoint(hd,wr,wa);
-    hd = rotatedPoint(hd,axisAngle(axis,an*(1.f-WaistShare)),ch);
-    }
-  Vec3 right = cross(want,Up);
+  const Vec3 turn = fromBody(torsoTurn(poseRotation,angle,!armsTree.empty()),f);
+  const Mat3 wr = turnRotation(turn,WaistShare);
+  const Mat3 cr = turnRotation(turn,1.f-WaistShare);
+  ch = rotatedPoint(ch,wr,wa);
+  const Mat3 arms = mul(turnRotation(fromBody(poseRotation,f)),transpose(turnRotation(turn)));
+  Vec3 right = cross(fromBody(poseShotDirectionB,f),Up);
   right = length(right)>1e-3f ? normalize(right) : normalize(cross(f,Up));
-  if(sway.x!=0.f || sway.y!=0.f)
-    hd = rotatedPoint(hd,mul(axisAngle(Up,sway.x*weight),axisAngle(right,sway.y*weight)),ch);
-  return hd;
+  const Mat3 sw = mul(axisAngle(Up,poseSway.x),axisAngle(right,poseSway.y));
+  const Mat3 tm = mul(axisAngle(Up,poseTremor.x),axisAngle(right,poseTremor.y));
+  const bool armPoint = shot && slotInArms;
+  if(inverse) {
+    Vec3 p = point;
+    if(armPoint)
+      p = rotatedPoint(p,transpose(tm),ch);
+    p = rotatedPoint(p,transpose(sw),ch);
+    if(armPoint)
+      p = rotatedPoint(p,transpose(arms),ch);
+    p = rotatedPoint(p,transpose(cr),ch);
+    p = rotatedPoint(p,transpose(wr),wa);
+    p = rotatedPoint(p,transpose(hip),sp);
+    return toBody(p-offset,f);
+    }
+  Vec3 p = offset + fromBody(point,f);
+  p = rotatedPoint(p,hip,sp);
+  p = rotatedPoint(p,wr,wa);
+  p = rotatedPoint(p,cr,ch);
+  if(armPoint)
+    p = rotatedPoint(p,arms,ch);
+  p = rotatedPoint(p,sw,ch);
+  if(armPoint)
+    p = rotatedPoint(p,tm,ch);
+  return p;
   }
 
-Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, bool manual) const {
+Vec3 Aim::headAt(const Vec3& origin, const Vec3& facing, const Vec3& dir, float angle) const {
+  return pointAt(baseHead,origin,facing,dir,angle,false);
+  }
+
+Vec3 Aim::arrowAt(const Vec3& origin, const Vec3& facing, const Vec3& dir, float angle) const {
+  return pointAt(baseSlot,origin,facing,dir,angle,true);
+  }
+
+Vec3 Aim::appliedDirection() const {
+  return poseLeanDirection;
+  }
+
+Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, bool manual, bool requireShot) const {
   LeanResult out;
   if(!valid || !enabled)
     return out;
   const Vec3 origin = npc.position();
   const float a = npc.rotationRad();
   const Vec3 facing(std::cos(a),0,std::sin(a));
-  const Vec3 dir = npc.aimDirection(target);
+  const Vec3 dir = npc.aimLeanDirection(target);
   const auto* world = npc.world().physic();
   const Vec3 upright = headAt(origin,facing,dir,0.f);
   const auto blocked = world->ray(upright,target);
-  if(!blocked.hasCol) {
+  const Vec3 uprightSlot = arrowAt(origin,facing,dir,0.f);
+  const auto blockedShot = world->ray(uprightSlot,target);
+  out.hitDistance = blocked.hasCol ? length(blocked.v-upright) : -1.f;
+  out.shotClear = !blockedShot.hasCol;
+  if(!blocked.hasCol && (!requireShot || out.shotClear)) {
     out.visible = true;
     return out;
     }
   // Only a nearby obstacle can be the edge we lean over. A hidden distant target does not
   // make the hero bend, nor does a target above or nearly level with his head.
-  const bool edge = down>=LeanStart*Deg && length(blocked.v-upright)<=200.f;
+  out.edge = down>=LeanStart*Deg &&
+             ((blocked.hasCol && out.hitDistance<=200.f) ||
+              (requireShot && blockedShot.hasCol && length(blockedShot.v-uprightSlot)<=200.f));
   const float fallback = manual ? leanFor(down) : 0.f;
-  if(!edge && fallback<=0.f)
+  if(!out.edge && fallback<=0.f)
     return out;
 
   Vec3 previous = upright;
@@ -201,7 +239,7 @@ Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, 
   float lo = 0.f;
   // Walk the entire head path, rather than the chord from upright to the final pose: the
   // arc can meet a wall even with both end points in free space.
-  const float limit = edge ? LeanMax*Deg : fallback;
+  const float limit = out.edge ? LeanMax*Deg : fallback;
   for(float angle=std::min(Deg,limit); angle<=limit+1e-5f; angle=std::min(angle+Deg,limit)) {
     const Vec3 next = headAt(origin,facing,dir,angle);
     if(world->ray(previous,next).hasCol) {
@@ -209,20 +247,34 @@ Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, 
       break;
       }
     safe = angle;
-    if(edge && !world->ray(next,target).hasCol) {
+    const bool headClear = !world->ray(next,target).hasCol;
+    const bool shotClear = !world->ray(arrowAt(origin,facing,dir,angle),target).hasCol;
+    if(out.edge && headClear && (!requireShot || shotClear)) {
       // Refine only this first visible degree. Every accepted point is on a path already
       // checked for room; the short extra segment keeps the final fractional step safe too.
       float hi = angle;
       for(int i=0; i<5; ++i) {
         const float mid = (lo+hi)*0.5f;
         const Vec3 point = headAt(origin,facing,dir,mid);
-        if(!world->ray(point,target).hasCol && !world->ray(previous,point).hasCol)
+        if(!world->ray(point,target).hasCol &&
+           (!requireShot || !world->ray(arrowAt(origin,facing,dir,mid),target).hasCol) &&
+           !world->ray(previous,point).hasCol)
           hi = mid;
         else
           lo = mid;
         }
+      // Keep half a degree beyond the first clear ray, so smoothing and the next animation
+      // sample do not repeatedly close the view at the exact silhouette of the edge.
+      const float margin = std::min(hi+0.5f*Deg,limit);
+      const Vec3 clearHead = headAt(origin,facing,dir,hi);
+      const Vec3 marginHead = headAt(origin,facing,dir,margin);
+      if(!world->ray(clearHead,marginHead).hasCol &&
+         !world->ray(marginHead,target).hasCol &&
+         (!requireShot || !world->ray(arrowAt(origin,facing,dir,margin),target).hasCol))
+        hi = margin;
       out.angle = hi;
       out.visible = true;
+      out.shotClear = !world->ray(arrowAt(origin,facing,dir,hi),target).hasCol;
       return out;
       }
     previous = next;
@@ -234,6 +286,7 @@ Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, 
   // in that case, bounded by the part of the head path that did have room.
   if(manual)
     out.angle = std::min(fallback,safe);
+  out.shotClear = !world->ray(arrowAt(origin,facing,dir,out.angle),target).hasCol;
   return out;
   }
 
@@ -287,6 +340,7 @@ void Aim::setSkeleton(const Skeleton* sk) {
   baseWaist = toBody(position(sk->tr[waist]),modelForward);
   baseChest = toBody(position(sk->tr[chest]),modelForward);
   baseHead  = toBody(position(sk->tr[head]),modelForward);
+  baseSlot  = toBody(position(sk->tr[slot]),modelForward);
   tree(spine,spineTree);
   tree(waist,waistTree);
   tree(chest,chestTree);
@@ -297,6 +351,7 @@ void Aim::setSkeleton(const Skeleton* sk) {
     if(arm!=size_t(-1) && isUnder(arm,chest))
       tree(arm,armsTree);
     }
+  slotInArms = std::find(armsTree.begin(),armsTree.end(),slot)!=armsTree.end();
   valid = true;
   }
 
@@ -313,6 +368,10 @@ bool Aim::update(const Input& in) {
   // The pose is captured even with the bow lowered, so its frame must follow body turns then too.
   if(length(f)>0.5f)
     forward = f;
+  const Vec3 hipDirection = on ? (length(in.leanDirection)>0.5f ? normalize(in.leanDirection) : d) : forward;
+  if(hipDirection!=leanForward)
+    changed = true;
+  leanForward = hipDirection;
 
   if(on) {
     forward = f;
@@ -345,7 +404,7 @@ bool Aim::update(const Input& in) {
     if(steady || ready) {
       // where it aims once leaned over the edge, out sideways
       const Vec3  want = fromBody(wantB,forward);
-      goal = toBody(bodyTurn(fromBody(rest,forward),want,forward,leanAmt,sideAmt),forward);
+      goal = toBody(bodyTurn(fromBody(rest,forward),want,leanForward,forward,leanAmt,sideAmt),forward);
       if(!ready)
         rot = goal;
       ready = true;
@@ -404,6 +463,20 @@ void Aim::apply(Matrix4x4* tr, size_t numBones, const Vec3& origin, const Vec3& 
   baseHead  = toBody(position(tr[head])-baseline,captureForward);
   if(arrowSlot!=size_t(-1) && arrowSlot>=numBones)
     arrowSlot = size_t(-1);
+  const size_t s = arrowSlot!=size_t(-1) ? arrowSlot : slot;
+  baseSlot = toBody(position(tr[s])-baseline,captureForward);
+  slotInArms = std::find(armsTree.begin(),armsTree.end(),s)!=armsTree.end();
+  poseRotation = toBody(fromBody(rot*weight,forward),captureForward);
+  poseLeanDirection = normalize(leanForward);
+  if(length(poseLeanDirection)<0.5f)
+    poseLeanDirection = captureForward;
+  poseShotDirectionB = toBody(normalize(fromBody(wantB,forward)),captureForward);
+  if(length(poseShotDirectionB)<0.5f)
+    poseShotDirectionB = {1,0,0};
+  poseLean = leanAmt*weight;
+  poseSide = sideAmt*weight;
+  poseSway = sway*weight;
+  poseTremor = tremor*weight;
   animArrow = arrowOf(tr);
   measured  = true;
   if(!ready)
@@ -415,22 +488,29 @@ void Aim::apply(Matrix4x4* tr, size_t numBones, const Vec3& origin, const Vec3& 
   const Vec3  want = fromBody(wantB,forward);
   const float l    = leanAmt*weight;
   if(l>0.f)
-    rotateAbout(tr,spineTree,leanRotation(want,forward,l),position(tr[spine]));
+    rotateAbout(tr,spineTree,leanRotation(leanForward,forward,l),position(tr[spine]));
   // round a corner the trunk leans out sideways from the hips
   const float sd   = sideAmt*weight;
   if(sd!=0.f)
     rotateAbout(tr,spineTree,sideRotation(forward,sd),position(tr[spine]));
 
   // the upper body turns from where it aims to the target: the waist a part, the chest the rest
-  const Vec3  r  = fromBody(rot,forward);
-  const float an = length(r)*weight;
+  const Vec3  r  = fromBody(torsoTurn(poseRotation,l,!armsTree.empty()),captureForward);
+  const float an = length(r);
   if(an>0.f) {
     const Vec3 axis = normalize(r);
     rotateAbout(tr,waistTree,axisAngle(axis,an*WaistShare),       position(tr[waist]));
     rotateAbout(tr,chestTree,axisAngle(axis,an*(1.f-WaistShare)), position(tr[chest]));
     }
 
-  const Vec3 now  = arrow ? arrowOf(tr) : (an>0.f ? mul(axisAngle(normalize(r),an),forward) : forward);
+  // Keep the complete shot rotation in the arms after removing its upward part from the trunk.
+  // The product is the original full rotation; at zero lean the residual is the identity.
+  const Mat3 fullTurn = turnRotation(fromBody(poseRotation,captureForward));
+  const Mat3 armTurn = mul(fullTurn,transpose(turnRotation(r)));
+  if(!armsTree.empty())
+    rotateAbout(tr,armsTree,armTurn,position(tr[chest]));
+
+  const Vec3 now  = arrow ? arrowOf(tr) : mul(fullTurn,forward);
   error = std::acos(std::clamp(dot(now,want),-1.f,1.f))/Deg;
 
   // the manual aim sways off that: the chest turns about up and bends (+ up); the arms tremble more, the
@@ -445,6 +525,16 @@ void Aim::apply(Matrix4x4* tr, size_t numBones, const Vec3& origin, const Vec3& 
     const Mat3 rt = mul(axisAngle(Up,tremor.x*weight),axisAngle(side,tremor.y*weight));
     rotateAbout(tr,armsTree.empty() ? chestTree : armsTree,rt,position(tr[chest]));
     }
+  }
+
+void Aim::finish(const Matrix4x4* tr, size_t numBones, const Vec3& origin, const Vec3& facing) {
+  const size_t s = arrowSlot!=size_t(-1) ? arrowSlot : slot;
+  if(!valid || head>=numBones || s>=numBones)
+    return;
+  // BowDraw may slide the nock along the arrow. Bring the final points back through exactly
+  // the shared transform, so every prospective angle starts from that same animated pose.
+  baseHead = pointAt(position(tr[head]),origin,facing,poseLeanDirection,poseLean,false,true);
+  baseSlot = pointAt(position(tr[s]),origin,facing,poseLeanDirection,poseLean,true,true);
   }
 
 void Aim::probe(Probe& p) const {

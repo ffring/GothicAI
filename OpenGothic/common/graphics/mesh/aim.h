@@ -19,6 +19,7 @@ class Aim final {
       bool          arrow   = false;   // a bow, a crossbow: the animation aims where the arrow in the right hand
                                        // lies (an aim up, down is another pose); a spell: straight ahead
       Tempest::Vec3 dir     = {};      // where the shot has to leave, world
+      Tempest::Vec3 leanDirection = {}; // hip bend direction, independent of the arrow's current origin
       Tempest::Vec3 forward = {1,0,0}; // horizontal facing of the body
       float         lean    = 0;       // radians: bend forward from the hips over an edge (leanFor), 0 if
                                        // there is no room in front of the head
@@ -54,12 +55,20 @@ class Aim final {
       float angle   = 0; // radians, the smallest safe hip bend
       bool  visible = false;
       bool  room    = true;
+      bool  shotClear = false;
+      bool  edge = false;
+      float hitDistance = -1; // cm to the first obstruction from the upright head
       };
-    LeanResult     leanNeeded(const Npc& npc, const Tempest::Vec3& target, float down, bool manual) const;
-    // Predicts the head bone from the last unmodified animated joints, using the same hip,
-    // waist and chest rotations as apply. origin is at the feet; angle is in radians.
+    LeanResult     leanNeeded(const Npc& npc, const Tempest::Vec3& target, float down, bool manual,
+                             bool requireShot = true) const;
+    // Predicts the head from the last pose with its actual smoothed torso rotation frozen.
+    // Only the candidate hip bend changes. origin is at the feet; angle is in radians.
     Tempest::Vec3  headAt(const Tempest::Vec3& origin, const Tempest::Vec3& forward,
                          const Tempest::Vec3& dir, float angle) const;
+    Tempest::Vec3  arrowAt(const Tempest::Vec3& origin, const Tempest::Vec3& forward,
+                          const Tempest::Vec3& dir, float angle) const;
+    Tempest::Vec3  appliedDirection() const;
+    float          appliedLean() const { return poseLean; }
     Tempest::Vec3  pelvisOffset() const;
 
     // State for the test bench, degrees
@@ -93,14 +102,21 @@ class Aim final {
     bool           update(const Input& in);
     void           apply(Tempest::Matrix4x4* tr, size_t numBones, const Tempest::Vec3& origin,
                          const Tempest::Vec3& facing);
+    // Capture the final head and arrow slot after BowDraw and the remaining pose passes.
+    void           finish(const Tempest::Matrix4x4* tr, size_t numBones, const Tempest::Vec3& origin,
+                          const Tempest::Vec3& facing);
     void           probe(Probe& p) const;
 
     static Probe       playerProbe;   // filled every frame for the hero
     static Probe       subjectProbe;  // and for the npc the test bench watches
     static const void* probeNpc;
+    static float       playerLeanOverride; // bench only: radians, negative selects the normal solver
 
   private:
     Tempest::Vec3       arrowOf(const Tempest::Matrix4x4* tr) const;
+    Tempest::Vec3       pointAt(const Tempest::Vec3& point, const Tempest::Vec3& origin,
+                               const Tempest::Vec3& facing, const Tempest::Vec3& dir, float angle,
+                               bool shot, bool inverse = false) const;
 
     size_t              spine = size_t(-1), waist = size_t(-1), chest = size_t(-1), slot = size_t(-1), head = size_t(-1);
     size_t              arrowSlot = size_t(-1); // where the arrow lies now: slot, or the input's
@@ -122,10 +138,16 @@ class Aim final {
     Tempest::Vec3       goal    = {}; // turn of the upper body from the arrow to the target: axis*angle,
     Tempest::Vec3       rot     = {}; // in the body's frame (forward, up, side); and the one smoothed
     Tempest::Vec3       forward = {1,0,0};
+    Tempest::Vec3       leanForward = {1,0,0};
 
     // Joint positions before Aim, relative to the feet, in the body's frame. Capturing before
     // the rotations prevents the next frame's visibility test from chasing its own leaned head.
-    Tempest::Vec3       baseSpine = {}, baseWaist = {}, baseChest = {}, baseHead = {};
+    Tempest::Vec3       baseSpine = {}, baseWaist = {}, baseChest = {}, baseHead = {}, baseSlot = {};
+    // The state that actually built the palette, rather than the next smoothed input.
+    Tempest::Vec3       poseRotation = {}, poseLeanDirection = {1,0,0}, poseShotDirectionB = {1,0,0};
+    Tempest::Vec2       poseSway = {}, poseTremor = {};
+    float              poseSide = 0, poseLean = 0;
+    bool               slotInArms = false;
 
     // from the last pose
     bool                measured  = false;

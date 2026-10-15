@@ -6137,13 +6137,43 @@ Vec3 Npc::aimDirection(const Vec3& target) const {
   return target-from;
   }
 
+Vec3 Npc::aimLeanDirection(const Vec3& target) const {
+  // A near crosshair hit can lie behind the already extended nock. Lean toward the view,
+  // rather than following that reversed shot vector over the roof.
+  if(hasManualAim() && aimLook().length()>0.5f)
+    return aimLook();
+  return target-position();
+  }
+
 Vec3 Npc::aimHead(const Vec3& target, float angle) const {
   const float a = rotationRad();
   const Vec3 f = {std::cos(a),0,std::sin(a)};
-  return visual.pose().aimIk().headAt(position(),f,aimDirection(target),angle);
+  return visual.pose().aimIk().headAt(position(),f,aimLeanDirection(target),angle);
   }
 
-Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
+Vec3 Npc::aimCurrentHead() const {
+  const auto& mt = visual.transform();
+  const auto& aim = visual.pose().aimIk();
+  return aim.headAt(Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)),
+                    Vec3(mt.at(2,0),0,mt.at(2,2)),aim.appliedDirection(),aim.appliedLean());
+  }
+
+Vec3 Npc::aimLeanShift() const {
+  const auto& mt = visual.transform();
+  const auto& aim = visual.pose().aimIk();
+  const Vec3 origin(mt.at(3,0),mt.at(3,1),mt.at(3,2));
+  const Vec3 facing(mt.at(2,0),0,mt.at(2,2));
+  return aim.headAt(origin,facing,aim.appliedDirection(),aim.appliedLean())-
+         aim.headAt(origin,facing,aim.appliedDirection(),0.f);
+  }
+
+Vec3 Npc::aimArrow(const Vec3& target, float angle) const {
+  const float a = rotationRad();
+  const Vec3 f(std::cos(a),0,std::sin(a));
+  return visual.pose().aimIk().arrowAt(position(),f,aimLeanDirection(target),angle);
+  }
+
+Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual, bool requireShot) const {
   const Vec3 head = aimHead(target,0.f);
   const Vec3 d = target-head;
   float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
@@ -6151,7 +6181,7 @@ Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
     const Vec3 look = aimLook();
     down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
     }
-  return visual.pose().aimIk().leanNeeded(*this,target,down,manual);
+  return visual.pose().aimIk().leanNeeded(*this,target,down,manual,requireShot);
   }
 
 bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
@@ -6162,7 +6192,7 @@ bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   if(!visual.pose().aimIk().isValid())
     return canSeeNpc(oth,true);
   if(isPlayer()) {
-    const auto lean = aimLean(tg);
+    const auto lean = aimLean(tg,false,false);
     return lean.visible && canRayHitPoint(aimHead(tg,lean.angle),tg,180.f);
     }
   // NPC archers retain their angle rule, without the hero's per-frame visibility search.

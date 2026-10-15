@@ -1,6 +1,7 @@
 #include "graphics/mesh/aim.h"
 #include "graphics/mesh/skeleton.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -14,7 +15,7 @@ using Tempest::Matrix4x4;
 using Tempest::Vec3;
 
 constexpr float Deg = 3.14159265358979323846f/180.f;
-constexpr size_t Spine = 2, Waist = 3, Chest = 4, Head = 5, LeftFoot = 7, RightFoot = 8;
+constexpr size_t Spine = 2, Waist = 3, Chest = 4, Head = 5, Slot = 9, LeftFoot = 10, RightFoot = 11;
 
 void require(bool condition, const char* message) {
   if(condition)
@@ -48,11 +49,12 @@ Vec3 rotated(const Vec3& p, float yaw) {
   return {c*p.x+s*p.z,p.y,-s*p.x+c*p.z};
   }
 
-Matrix4x4 objectAt(const Vec3& origin, float yaw) {
+Matrix4x4 objectAt(const Vec3& origin, float yaw, const Vec3& scale) {
   auto matrix = Matrix4x4::mkIdentity();
   const float c = std::cos(yaw), s = std::sin(yaw);
-  matrix.set(0,0,c); matrix.set(0,2,-s);
-  matrix.set(2,0,s); matrix.set(2,2,c);
+  matrix.set(0,0,c*scale.x); matrix.set(0,2,-s*scale.x);
+  matrix.set(1,1,scale.y);
+  matrix.set(2,0,s*scale.z); matrix.set(2,2,c*scale.z);
   matrix.set(3,0,origin.x); matrix.set(3,1,origin.y); matrix.set(3,2,origin.z);
   return matrix;
   }
@@ -66,8 +68,10 @@ zenkit::ModelHierarchy hierarchy() {
     {"BIP01",-1,{0,0,0}}, {"BIP01 PELVIS",0,{0,95,0}},
     {"BIP01 SPINE",1,{0,5,0}}, {"BIP01 SPINE1",2,{-1,20,0}},
     {"BIP01 SPINE2",3,{-1,25,0}}, {"BIP01 HEAD",4,{-2,33,2}},
-    {"ZS_RIGHTHAND",4,{-35,5,-18}},
-    {"BIP01 L FOOT",1,{0,-95,12}}, {"BIP01 R FOOT",1,{0,-95,-12}}
+    {"BIP01 R CLAVICLE",4,{-3,0,-9}}, {"BIP01 R UPPERARM",6,{-10,0,-2}},
+    {"BIP01 R FOREARM",7,{-12,0,0}}, {"ZS_RIGHTHAND",8,{-10,5,-7}},
+    {"BIP01 L FOOT",1,{0,-95,12}}, {"BIP01 R FOOT",1,{0,-95,-12}},
+    {"BIP01 L CLAVICLE",4,{-3,0,9}}, {"BIP01 L UPPERARM",12,{-10,0,2}}
     };
   for(const auto& bone:bones) {
     zenkit::ModelHierarchyNode node;
@@ -89,11 +93,22 @@ zenkit::ModelHierarchy hierarchy() {
 struct Fixture final {
   Skeleton skeleton{hierarchy(),nullptr,"HUMANS.MDS"};
 
-  std::vector<Matrix4x4> pose(const Vec3& origin, float yaw, const Vec3& pelvis) const {
-    const auto object = objectAt(origin,yaw);
+  std::vector<Matrix4x4> pose(const Vec3& origin, float yaw, const Vec3& pelvis,
+                            const Vec3& scale = Vec3(1,1,1), float armDown = 0.f) const {
+    const auto object = objectAt(origin,yaw,scale);
+    auto armAnimation = Matrix4x4::mkIdentity();
+    const float c = std::cos(armDown), s = std::sin(armDown);
+    const Vec3 pivot = position(skeleton.tr[Chest]);
+    armAnimation.set(0,0,c); armAnimation.set(0,1,s);
+    armAnimation.set(1,0,-s); armAnimation.set(1,1,c);
+    armAnimation.set(3,0,pivot.x-c*pivot.x+s*pivot.y);
+    armAnimation.set(3,1,pivot.y-s*pivot.x-c*pivot.y);
     std::vector<Matrix4x4> result;
     for(size_t i=0; i<skeleton.tr.size(); ++i) {
-      auto matrix = object*skeleton.tr[i];
+      // A downward aiming animation can point the arms down while leaving the trunk upright.
+      const bool arm = (i>=6 && i<=Slot) || i>=12;
+      const auto animated = arm ? armAnimation*skeleton.tr[i] : skeleton.tr[i];
+      auto matrix = object*animated;
       // Supply the post-FootIk state: counterweight translation above the planted feet.
       // This contract exercises Aim, not the separate leg IK solver.
       if(i!=LeftFoot && i!=RightFoot) {
@@ -134,6 +149,7 @@ Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees) {
     aim.update(input);
     palette = fixture.pose(origin,yaw,aim.pelvisOffset());
     aim.apply(palette.data(),palette.size(),origin,facing);
+    aim.finish(palette.data(),palette.size(),origin,facing);
     }
 
   Aim::Probe probe;
@@ -141,8 +157,10 @@ Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees) {
   require(aim.isSteady(),"a fixed animation must settle in 120 frames");
   near(probe.weight,1.f,.0001f,"aim must finish blending before comparing geometry");
   near(probe.lean,leanDegrees,.03f,"the hip bend must reach the requested angle");
-  const Vec3 predicted = aim.headAt(origin,facing,targetDir,input.lean);
-  near(predicted,position(palette[Head]),.06f,"prospective head must match the applied skeleton");
+  const Vec3 predicted = aim.headAt(origin,facing,aim.appliedDirection(),aim.appliedLean());
+  near(predicted,position(palette[Head]),.05f,"prospective head must match the applied skeleton");
+  near(aim.arrowAt(origin,facing,aim.appliedDirection(),aim.appliedLean()),position(palette[Slot]),
+       .05f,"prospective arrow slot must match the applied skeleton");
   near(length(aim.pelvisOffset()),12.f*leanDegrees/70.f,.01f,"counterweight must reach 12 cm at 70 degrees");
   near(aim.pelvisOffset().y,0.f,.0001f,"counterweight must not lift the body");
   require(aim.pelvisOffset().x*facing.x+aim.pelvisOffset().z*facing.z<=.0001f,
@@ -156,11 +174,12 @@ Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees) {
          length(position(neutral[segment[1]])-position(neutral[segment[0]])),.001f,
          "bending must preserve anatomical segment lengths");
 
-  const Vec3 upright = aim.headAt(origin,facing,targetDir,0.f);
-  near(aim.headAt(origin,facing,targetDir,-10.f*Deg),upright,.0001f,"negative hip bend must clamp to standing");
-  near(aim.headAt(origin,facing,targetDir,100.f*Deg),aim.headAt(origin,facing,targetDir,70.f*Deg),
+  const Vec3 direction = aim.appliedDirection();
+  const Vec3 upright = aim.headAt(origin,facing,direction,0.f);
+  near(aim.headAt(origin,facing,direction,-10.f*Deg),upright,.0001f,"negative hip bend must clamp to standing");
+  near(aim.headAt(origin,facing,direction,100.f*Deg),aim.headAt(origin,facing,direction,70.f*Deg),
        .0001f,"the prospective head must stop at 70 degrees");
-  return {predicted-origin,upright-origin,aim.headAt(origin,facing,targetDir,35.f*Deg)-origin,aim.pelvisOffset()};
+  return {predicted-origin,upright-origin,aim.headAt(origin,facing,direction,35.f*Deg)-origin,aim.pelvisOffset()};
   }
 
 void testHeadPathAndPelvis() {
@@ -177,6 +196,54 @@ void testHeadPathAndPelvis() {
               double(-full.head.x),double(length(full.pelvis)));
   }
 
+void testUpwardShotCorrectionKeepsHipBend() {
+  Fixture fixture;
+  const Vec3 origin(0,0,0), facing(-1,0,0);
+  const Vec3 targetDir = facing*std::cos(80.f*Deg)+Vec3(0,-std::sin(80.f*Deg),0);
+  std::array<Vec3,2> heads;
+  std::array<float,2> shotErrors;
+  for(size_t sample=0; sample<heads.size(); ++sample) {
+    Aim aim;
+    aim.setSkeleton(&fixture.skeleton);
+    Aim::Input input;
+    input.active = true;
+    input.arrow = true;
+    input.forward = facing;
+    input.leanDirection = facing;
+    input.dir = targetDir;
+    input.lean = sample==0 ? 0.f : 70.f*Deg;
+    input.dt = 16;
+    std::vector<Matrix4x4> palette;
+    for(int frame=0; frame<120; ++frame) {
+      aim.update(input);
+      palette = fixture.pose(origin,0.f,aim.pelvisOffset(),Vec3(1,1,1),60.f*Deg);
+      aim.apply(palette.data(),palette.size(),origin,facing);
+      aim.finish(palette.data(),palette.size(),origin,facing);
+      }
+    Aim::Probe probe;
+    aim.probe(probe);
+    require(aim.isSteady(),"the downward aiming animation must settle");
+    near(probe.animPitch,-60.f,.01f,"the fixture must already aim its arrow 60 degrees down");
+    near(probe.lean,sample==0 ? 0.f : 70.f,.03f,"the hip bend must settle for the upward-correction test");
+    // At full hip bend the animated arrow points 130 degrees down. Retargeting it to
+    // 80 degrees requires an upward correction of 50 degrees, without straightening the trunk.
+    if(sample==1)
+      require(probe.bend>40.f,"the deep-bend sample must require substantial upward shot correction");
+    const Vec3 arrow(-palette[Slot].at(0,0),-palette[Slot].at(0,1),-palette[Slot].at(0,2));
+    const Vec3 unitArrow = arrow*(1.f/length(arrow));
+    const float dot = unitArrow.x*targetDir.x+unitArrow.y*targetDir.y+unitArrow.z*targetDir.z;
+    shotErrors[sample] = std::acos(std::clamp(dot,-1.f,1.f))/Deg;
+    near(shotErrors[sample],0.f,1.f,"the arms must still aim the arrow at the target after upward correction");
+    heads[sample] = position(palette[Head]);
+    near(aim.headAt(origin,facing,aim.appliedDirection(),aim.appliedLean()),heads[sample],
+         .05f,"the retained hip bend must match the head prediction");
+    }
+  const float forwardGain = heads[0].x-heads[1].x;
+  require(forwardGain>30.f,"upward shot correction must leave more than 30 cm of extra forward head reach at full hip bend");
+  std::printf("aim upward correction: head forward gain=%.2f cm, arrow error standing/full=%.3f/%.3f deg\n",
+              double(forwardGain),double(shotErrors[0]),double(shotErrors[1]));
+  }
+
 void testBodyYaw() {
   Fixture fixture;
   const auto reference = settled(fixture,70.f,0.f);
@@ -188,21 +255,113 @@ void testBodyYaw() {
     }
 
   // Pose capture also runs with the bow down, including after an unsmoothed body turn.
+  // A query retains that actual torso state; a new direction must not create a new torso goal.
   Aim idle;
   idle.setSkeleton(&fixture.skeleton);
   const Vec3 origin(-73,10,29);
+  Vec3 idleReference;
   for(const float yaw:{179.f,-179.f,181.f,-181.f}) {
     const Vec3 facing = rotated(Vec3(-1,0,0),yaw*Deg);
-    const Vec3 targetDir = facing*std::cos(80.f*Deg)+Vec3(0,-std::sin(80.f*Deg),0);
     Aim::Input input;
     input.forward = facing;
     input.dt = 16;
     idle.update(input);
     auto palette = fixture.pose(origin,yaw*Deg,{});
     idle.apply(palette.data(),palette.size(),origin,facing);
-    near(idle.headAt(origin,facing,targetDir,70.f*Deg)-origin,rotated(reference.head,yaw*Deg),
-         .003f,"inactive pose capture must use the current body frame");
+    idle.finish(palette.data(),palette.size(),origin,facing);
+    near(idle.headAt(origin,facing,idle.appliedDirection(),idle.appliedLean()),position(palette[Head]),
+         .003f,"inactive pose capture must match the current body frame");
+    const Vec3 extended = idle.headAt(origin,facing,facing,70.f*Deg)-origin;
+    if(yaw==179.f)
+      idleReference = rotated(extended,-yaw*Deg);
+    near(extended,rotated(idleReference,yaw*Deg),.003f,"inactive head path must rotate across body yaw wraparound");
     }
+  }
+
+struct SnapshotErrors final {
+  float head = 0;
+  float arrow = 0;
+  };
+
+void snapshotMatches(const Aim& aim, const std::vector<Matrix4x4>& palette, const Vec3& origin,
+                     const Vec3& facing, int frame, const char* phase, SnapshotErrors& errors) {
+  const Vec3 dir = aim.appliedDirection();
+  const float lean = aim.appliedLean();
+  const float headError = length(aim.headAt(origin,facing,dir,lean)-position(palette[Head]));
+  const float arrowError = length(aim.arrowAt(origin,facing,dir,lean)-position(palette[Slot]));
+  if(!std::isfinite(headError) || !std::isfinite(arrowError) || headError>.05f || arrowError>.05f) {
+    std::fprintf(stderr,"FAIL: frame %d, %s: head error %.6f cm, arrow slot error %.6f cm\n",
+                 frame,phase,double(headError),double(arrowError));
+    std::exit(EXIT_FAILURE);
+    }
+  errors.head = std::max(errors.head,headError);
+  errors.arrow = std::max(errors.arrow,arrowError);
+  }
+
+void testTransientSnapshot() {
+  Fixture fixture;
+  Aim aim;
+  aim.setSkeleton(&fixture.skeleton);
+  const Vec3 origin(131,27,-211);
+  std::vector<Matrix4x4> palette;
+  Vec3 previousFacing;
+  Vec3 previousDirection;
+  float previousLean = 0;
+  SnapshotErrors errors;
+  int partialWeightFrames = 0, laggingAimFrames = 0, laggingLeanFrames = 0;
+  for(int frame=0; frame<240; ++frame) {
+    // A continuous body turn crosses +pi/-pi while target yaw and pitch change independently.
+    const float yaw = std::remainder(172.f+.7f*float(frame),360.f)*Deg;
+    const Vec3 facing = rotated(Vec3(-1,0,0),yaw);
+    const float targetYaw = 35.f*Deg*std::sin(float(frame)*.31f);
+    const float targetPitch = (-50.f+35.f*std::sin(float(frame)*.19f))*Deg;
+    const Vec3 targetDir = rotated(facing,targetYaw)*std::cos(targetPitch)+Vec3(0,std::sin(targetPitch),0);
+    Aim::Input input;
+    input.active = frame<112 || (frame>=136 && frame<208);
+    input.arrow = true;
+    input.forward = facing;
+    input.leanDirection = facing;
+    input.dir = targetDir;
+    input.lean = frame>=48 && frame<176 ? 70.f*Deg : 0.f;
+    input.side = 8.f*Deg*std::sin(float(frame)*.13f);
+    input.sway = {1.5f*Deg*std::sin(float(frame)*.37f),2.f*Deg*std::cos(float(frame)*.23f)};
+    input.tremor = {2.f*Deg*std::cos(float(frame)*.53f),1.f*Deg*std::sin(float(frame)*.47f)};
+    input.dt = frame%3==0 ? 23 : 16;
+    aim.update(input);
+    if(frame>0) {
+      near(aim.appliedDirection(),previousDirection,.00001f,"new inputs must not change the captured aim direction");
+      near(aim.appliedLean(),previousLean,.00001f,"new inputs must not change the captured hip bend");
+      snapshotMatches(aim,palette,origin,previousFacing,frame,"after next update, before apply",errors);
+      }
+
+    // Vary all three model axes independently. Joint distances, not only the object origin,
+    // must be captured from this actual animated palette.
+    const Vec3 scale(.8f+.17f*std::sin(float(frame)*.11f),
+                     1.2f+.22f*std::cos(float(frame)*.07f),
+                     1.1f+.19f*std::sin(float(frame)*.17f));
+    palette = fixture.pose(origin,yaw,aim.pelvisOffset(),scale);
+    aim.apply(palette.data(),palette.size(),origin,facing);
+    // BowDraw adjusts the release slot after Aim; finish must retain this final position.
+    const Vec3 draw = rotated(Vec3(-3,.5f,1),yaw);
+    palette[Slot].set(3,0,palette[Slot].at(3,0)+draw.x);
+    palette[Slot].set(3,1,palette[Slot].at(3,1)+draw.y);
+    palette[Slot].set(3,2,palette[Slot].at(3,2)+draw.z);
+    aim.finish(palette.data(),palette.size(),origin,facing);
+    snapshotMatches(aim,palette,origin,facing,frame,"after finish",errors);
+    previousFacing = facing;
+    previousDirection = aim.appliedDirection();
+    previousLean = aim.appliedLean();
+    Aim::Probe probe;
+    aim.probe(probe);
+    partialWeightFrames += probe.weight>0.f && probe.weight<1.f;
+    laggingAimFrames += input.active && std::abs(probe.pitch-targetPitch/Deg)>2.f;
+    laggingLeanFrames += input.active && std::abs(previousLean-input.lean)>2.f*Deg;
+    }
+  require(partialWeightFrames>10,"transient test must exercise blending in and out");
+  require(laggingAimFrames>10,"transient test must distinguish smoothed direction from live input");
+  require(laggingLeanFrames>10,"transient test must exercise hip bend lag at 0 and 70 degrees");
+  std::printf("aim transient: 240 frames, head max error=%.6f cm, arrow slot max error=%.6f cm, fade=%d, aim lag=%d, lean lag=%d\n",
+              double(errors.head),double(errors.arrow),partialWeightFrames,laggingAimFrames,laggingLeanFrames);
   }
 
 void testLegacyNpcLimit() {
@@ -218,7 +377,9 @@ void testLegacyNpcLimit() {
 int main() {
   Aim::setEnabled(true);
   testHeadPathAndPelvis();
+  testUpwardShotCorrectionKeepsHipBend();
   testBodyYaw();
+  testTransientSnapshot();
   testLegacyNpcLimit();
   std::puts("aim geometry contract: passed");
   }
