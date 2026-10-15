@@ -120,6 +120,7 @@ void MdlVisual::save(Serialize& fout, const Interactive&) const {
   }
 
 void MdlVisual::load(Serialize& fin, Npc& npc) {
+  clearStuckArrows();
   clearPhysicalPose();
   std::string s;
 
@@ -134,6 +135,7 @@ void MdlVisual::load(Serialize& fin, Npc& npc) {
   }
 
 void MdlVisual::load(Serialize& fin, Interactive&) {
+  clearStuckArrows();
   clearPhysicalPose();
   solver.load(fin);
   skInst->load(fin,solver);
@@ -143,6 +145,8 @@ void MdlVisual::load(Serialize& fin, Interactive&) {
 
 // Mdl_SetVisual
 void MdlVisual::setVisual(const Skeleton *v) {
+  if(v!=skeleton)
+    clearStuckArrows();
   clearPhysicalPose();
   if(v!=nullptr)
     rebindAttaches(*v);
@@ -214,6 +218,55 @@ const Matrix4x4& MdlVisual::renderedBone(size_t bone) const {
   if(bone<renderedPose.size())
     return renderedPose[bone];
   return skInst->bone(bone);
+  }
+
+bool MdlVisual::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix) {
+  if(arrow.isEmpty() || skeleton==nullptr || bone>=skeleton->nodes.size() || bone>=skInst->boneCount() ||
+     !validRenderFrame(worldMatrix))
+    return false;
+  const auto& animated=skInst->bone(bone);
+  double inverse[3][3];
+  if(!validRenderFrame(animated) || !inverseBasis(animated,inverse))
+    return false;
+  ArrowPin pin;
+  pin.bone=bone;
+  pin.local.identity();
+  // Keep the complete arrow basis, including scale. Subtract world translations first so
+  // an impact far from the origin retains its small offset from the animated bone.
+  for(int c=0; c<4; ++c)
+    for(int r=0; r<3; ++r) {
+      double value=0;
+      for(int k=0; k<3; ++k) {
+        const double v=c<3 ? double(worldMatrix.at(c,k)) : double(worldMatrix.at(3,k))-animated.at(3,k);
+        value+=inverse[r][k]*v;
+        }
+      pin.local.set(c,r,float(value));
+      }
+  if(!validRenderFrame(pin.local))
+    return false;
+  arrow.setObjMatrix(renderedBone(bone)*pin.local);
+  pin.view=std::move(arrow);
+  constexpr size_t MaxStuckArrows=64;
+  if(stuckArrows.size()>=MaxStuckArrows)
+    stuckArrows.erase(stuckArrows.begin());
+  stuckArrows.push_back(std::move(pin));
+  return true;
+  }
+
+void MdlVisual::clearStuckArrows() {
+  stuckArrows.clear();
+  }
+
+bool MdlVisual::stuckArrowProbe(size_t index, ArrowPinProbe& out) const {
+  if(index>=stuckArrows.size())
+    return false;
+  const auto& pin=stuckArrows[index];
+  if(pin.view.isEmpty())
+    return false;
+  out.bone=pin.bone;
+  out.local=pin.local;
+  out.world=pin.view.node(0).position();
+  return true;
   }
 
 void MdlVisual::setYTranslationEnable(bool e) {
@@ -1602,6 +1655,8 @@ void MdlVisual::syncAttaches() {
     syncAttaches(i);
   for(auto& i:attach)
     syncAttaches(i);
+  for(auto& pin:stuckArrows)
+    pin.view.setObjMatrix(renderedBone(pin.bone)*pin.local);
   for(auto& i:effects) {
     i.view.setObjMatrix(pos);
     // i.view.setTarget(targetPos);

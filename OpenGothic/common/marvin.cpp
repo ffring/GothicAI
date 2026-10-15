@@ -176,6 +176,7 @@ Marvin::Marvin() {
     {"toggle ragdoll_quest_guard", C_ToggleRagdollQuestGuard},
     {"toggle living_bodies",      C_ToggleLivingBodies},
     {"toggle arrow_physics",      C_ToggleArrowPhysics},
+    {"toggle arrow_sticking",     C_ToggleArrowSticking},
     };
   }
 
@@ -555,6 +556,9 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleArrowPhysics:
       Gothic::settingsSetI("GAME","arrow_physics",Gothic::settingsGetI("GAME","arrow_physics")==0 ? 1 : 0);
+      return true;
+    case C_ToggleArrowSticking:
+      Gothic::settingsSetI("GAME","arrow_sticking",Gothic::settingsGetI("GAME","arrow_sticking")==0 ? 1 : 0);
       return true;
     }
 

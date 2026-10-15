@@ -1017,6 +1017,13 @@ void Ragdoll::finishKinematicStep() {
   }
 
 size_t Ragdoll::partCount() const { return valid() ? impl->native->GetBodyCount() : 0; }
+size_t Ragdoll::boneForBodyId(uint32_t id) const {
+  if(!valid()) return noBone;
+  for(size_t i=0;i<partCount();++i)
+    if(impl->native->GetBodyID(int(i)).GetIndexAndSequenceNumber()==id)
+      return impl->rig->boneIndices[i];
+  return noBone;
+  }
 size_t Ragdoll::boneCount() const { return impl->rig!=nullptr ? impl->rig->numBones : 0; }
 float Ragdoll::mass() const { return impl->rig!=nullptr ? impl->rig->totalMass : 0.f; }
 

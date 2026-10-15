@@ -598,6 +598,10 @@ struct Bench {
   uint64_t arrowSampleTick=0;
   bool arrowTrace=false,arrowKoOnHit=false;
   uint32_t arrowSeenHits=0;
+  bool stickingTrace=false;
+  std::string stickingCase;
+  uint64_t stickingSampleTick=0;
+  Vec3 stickingWorldPoint;
   Npc* seatNpc=nullptr;
   Npc* seatCorpse=nullptr;
   Interactive* seatMob=nullptr;
@@ -2244,6 +2248,16 @@ size_t arrowBone(const Skeleton& skeleton, std::string_view token) {
 bool arrowAimPoint(Npc& npc, Vec3& point) {
   const auto* skeleton=npc.visualSkeleton();
   if(skeleton==nullptr || bench.arrowAim.empty()) return false;
+  if(bench.arrowAim=="world") {point=bench.stickingWorldPoint;return true;}
+  if(bench.arrowAim=="corpse") {
+    if(const auto* body=npc.ragdollBody()) {
+      const auto state=body->state();
+      const auto wanted=arrowBone(*skeleton,"SPINE2");
+      for(const auto& part:state.parts)
+        if(part.bone==wanted) {point=part.centerOfMassMeters*100.f;return true;}
+      }
+    return false;
+    }
   const bool leg=bench.arrowAim=="leg";
   const bool chest=bench.arrowAim=="chest";
   const auto first=arrowBone(*skeleton,chest ? "SPINE1" : leg ? "L CALF" : "L UPPERARM");
@@ -2253,6 +2267,63 @@ bool arrowAimPoint(Npc& npc, Vec3& point) {
   const auto& a=npc.animationBone(first);const auto& b=npc.animationBone(second);
   point=Vec3(a.at(3,0)+b.at(3,0),a.at(3,1)+b.at(3,1),a.at(3,2)+b.at(3,2))*.5f;
   return true;
+  }
+
+size_t npcArrowPins(World& world) {
+  size_t count=0;
+  for(uint32_t i=0;i<world.npcCount();++i)
+    if(const auto* npc=world.npcById(i)) count+=npc->stuckArrowCount();
+  return count;
+  }
+
+void arenaAbort(std::string_view reason);
+
+void stickingFields(World& world) {
+  if(!bench.stickingTrace || world.tickCount()==bench.stickingSampleTick) return;
+  bench.stickingSampleTick=world.tickCount();
+  const auto* npc=bench.arrowNpc;
+  const auto* living=npc ? npc->livingBody() : nullptr;
+  const auto* corpse=npc ? npc->ragdollBody() : nullptr;
+  const auto* body=living ? living : corpse;
+  const auto physics=world.physic()->physicsStats();
+  std::string pins="[",worldPins="[";
+  if(npc) {
+    bench.arrowSeenHits=npc->arrowPhysicsProbe().hits;
+    for(size_t i=0;i<npc->stuckArrowCount();++i) {
+      Npc::ArrowPinProbe pin;
+      if(!npc->stuckArrowProbe(i,pin)) {arenaAbort("stuck NPC pin has no actual draw node");return;}
+      if(i) pins+=',';
+      pins+="{\"index\":"+std::to_string(i)+",\"bone\":"+std::to_string(pin.bone)+
+        ",\"local\":"+ragdollMatrix(pin.local)+",\"world\":"+ragdollMatrix(pin.world)+
+        ",\"expected\":"+ragdollMatrix(npc->renderedBone(pin.bone)*pin.local)+
+        ",\"render_bone\":"+ragdollMatrix(npc->renderedBone(pin.bone))+
+        ",\"animation_bone\":"+ragdollMatrix(npc->animationBone(pin.bone))+"}";
+      }
+    }
+  for(size_t i=0;i<world.stuckArrowCount();++i) {
+    Matrix4x4 actual;
+    if(!world.stuckArrowTransform(i,actual)) {arenaAbort("stuck world pin has no actual draw node");return;}
+    if(i) worldPins+=',';
+    worldPins+="{\"index\":"+std::to_string(i)+",\"world\":"+ragdollMatrix(actual)+"}";
+    }
+  event("arrow_sticking_frame","\"case\":"+jsonStr(bench.stickingCase)+
+    ",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"feature\":"+(Gothic::settingsGetI("GAME","arrow_sticking")?"true":"false")+
+    ",\"npc_present\":"+(npc?"true":"false")+
+    ",\"root_cm\":"+ragdollVector(npc?npc->position():Vec3())+
+    ",\"yaw_deg\":"+ragdollNumber(npc?npc->rotation():0.f)+
+    ",\"ko\":"+(npc && npc->isUnconscious()?"true":"false")+
+    ",\"dead\":"+(npc && npc->isDead()?"true":"false")+
+    ",\"recovering\":"+(npc && npc->isRagdollBlending()?"true":"false")+
+    ",\"collision_overlap\":"+(npc && npc->hasCollision()?"true":"false")+
+    ",\"living_parts\":"+std::to_string(living?living->partCount():0)+
+    ",\"corpse_parts\":"+std::to_string(corpse?corpse->partCount():0)+
+    ",\"weight\":"+ragdollNumber(body?body->reactionWeight():0.f)+
+    ",\"world_bodies\":"+std::to_string(physics.bodies)+",\"physics_ms\":"+ragdollNumber(physics.stepMilliseconds)+
+    ",\"npc_pin_count\":"+std::to_string(npc?npc->stuckArrowCount():0)+
+    ",\"all_npc_pin_count\":"+std::to_string(npcArrowPins(world))+
+    ",\"world_pin_count\":"+std::to_string(world.stuckArrowCount())+
+    ",\"npc_pins\":"+pins+"],\"world_pins\":"+worldPins+"]");
   }
 
 void arrowFields(World& world) {
@@ -2801,6 +2872,62 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     std::snprintf(text,sizeof(text),"physics stats step_ms=%.6f bodies=%zu rays=%llu",
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
+    }
+  else if(c=="sticking" && a.size()==2 && a[1]=="setup") {
+    bench.stickingTrace=true;bench.arrowTrace=false;
+    event("arrow_sticking_setup","\"default_enabled\":"+
+      std::string(Gothic::settingsGetI("GAME","arrow_sticking")?"true":"false"));
+    }
+  else if(c=="sticking" && a.size()==3 && a[1]=="case") {
+    bench.stickingCase=a[2];bench.stickingTrace=true;
+    event("arrow_sticking_case","\"case\":"+jsonStr(a[2])+
+      ",\"npc_pins_before\":"+std::to_string(bench.arrowNpc?bench.arrowNpc->stuckArrowCount():0)+
+      ",\"world_pins_before\":"+std::to_string(w.stuckArrowCount()));
+    }
+  else if(c=="sticking" && a.size()==3 && a[1]=="feature")
+    Gothic::settingsSetI("GAME","arrow_sticking",a[2]=="on");
+  else if(c=="sticking" && a.size()==2 && a[1]=="world") {
+    const auto ahead=facing(pl),side=Vec3(-ahead.z,0,ahead.x);
+    const auto target=pl.position()+ahead*450.f+side*220.f;
+    const auto floor=w.physic()->landRay(target+Vec3(0,300,0),900.f);
+    if(!floor.hasCol) {arenaAbort("arrow sticking ground target has no world surface");return;}
+    bench.stickingWorldPoint=floor.v;bench.arrowAim="world";bench.arrowDraw=1.f;
+    bench.aimNpc=nullptr;bench.aimFixed=false;
+    bench.cam=C_Hold;
+    lookFrom(floor.v-ahead*230.f+side*180.f+Vec3(0,125,0),floor.v+Vec3(0,10,0));
+    event("arrow_sticking_world_target","\"point_cm\":"+ragdollVector(floor.v)+",\"normal\":"+ragdollVector(floor.n));
+    }
+  else if(c=="sticking" && a.size()==2 && a[1]=="motion") {
+    auto* npc=bench.arrowNpc;
+    if(npc==nullptr || npc->isDown()) {arenaAbort("arrow pin motion needs a living target");return;}
+    bench.livingWalkers.clear();bench.livingWalkers.emplace_back();auto& walk=bench.livingWalkers.back();
+    walk.npc=npc;
+    walk.ends[0]=WayPoint(npc->position()+Vec3(250,0,0),"FP_ARROW_PIN_A");
+    walk.ends[1]=WayPoint(npc->position(),"FP_ARROW_PIN_B");
+    for(auto& point:walk.ends) {
+      const auto floor=w.physic()->landRay(point.pos+Vec3(0,200,0),500);
+      if(!floor.hasCol) {arenaAbort("arrow pin walking path has no ground");return;}
+      point.pos.y=floor.v.y;point.groundPos=point.pos;
+      }
+    npc->setWalkMode(WalkBit::WM_Walk);bench.livingMotion=true;
+    }
+  else if(c=="sticking" && a.size()==2 && (a[1]=="still" || a[1]=="turn")) {
+    if(auto* npc=bench.arrowNpc) {
+      bench.livingMotion=false;bench.livingWalkers.clear();npc->clearAiQueue();npc->stopWalking();
+      npc->setExternalControl(true);npc->setAnim(Npc::Anim::Idle);
+      npc->setDirection(a[1]=="turn" ? rotY(facing(*npc),90.f) : pl.position()-npc->position());npc->updateTransform();
+      }
+    }
+  else if(c=="sticking" && a.size()==2 && a[1]=="remove") {
+    const auto pins=npcArrowPins(w),bodies=w.physic()->physicsStats().bodies,worldPins=w.stuckArrowCount();
+    exec("arrow cleanup",w,pl,ctrl);
+    event("arrow_sticking_remove","\"npc_pins_before\":"+std::to_string(pins)+
+      ",\"npc_pins_after\":"+std::to_string(npcArrowPins(w))+
+      ",\"world_pins_before\":"+std::to_string(worldPins)+",\"world_pins_after\":"+std::to_string(w.stuckArrowCount())+
+      ",\"bodies_before\":"+std::to_string(bodies)+",\"bodies_after\":"+std::to_string(w.physic()->physicsStats().bodies));
+    }
+  else if(c=="sticking" && a.size()==2 && a[1]=="stop") {
+    bench.stickingTrace=false;bench.arrowAim.clear();
     }
   else if(c=="arrow" && a.size()==2 && (a[1]=="setup" || a[1]=="replace")) {
     if(a[1]=="setup") {
@@ -6495,6 +6622,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   if(dt==0)
     return false;
   arrowFields(*world);
+  stickingFields(*world);
   if(ragdollPerf) {
     const auto now=std::chrono::steady_clock::now();
     FrameProfile::observer(dt,now);
@@ -6848,6 +6976,26 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
                   double(body!=nullptr ? body->reactionWeight() : 0.f),body!=nullptr ? body->partCount() : 0);
     cv.text(6,26,label,2,Text);
     std::snprintf(label,sizeof(label),"HIT %.*s  IMPULSE %.2f NS",int(std::min<size_t>(bone.size(),38)),bone.data(),double(hit.impulseNs.length()));
+    cv.text(6,46,label,2,Text);
+    }
+  if(pm.w()>0 && bench.stickingTrace) {
+    Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
+    const auto* npc=bench.arrowNpc;auto* world=Gothic::inst().world();
+    float error=0;
+    if(npc)
+      for(size_t i=0;i<npc->stuckArrowCount();++i) {
+        Npc::ArrowPinProbe pin;
+        if(!npc->stuckArrowProbe(i,pin)) continue;
+        const auto expected=npc->renderedBone(pin.bone)*pin.local;
+        error=std::max(error,Vec3(pin.world.at(3,0)-expected.at(3,0),pin.world.at(3,1)-expected.at(3,1),pin.world.at(3,2)-expected.at(3,2)).length());
+        }
+    char label[200];cv.rect(0,0,std::min(cv.w,790),66,{0,0,0,190});
+    cv.text(6,6,"ARROW STICKING: "+bench.stickingCase,2,Text);
+    std::snprintf(label,sizeof(label),"ACTUAL DRAW PINS  NPC %zu  WORLD %zu  ERROR %.4f CM",npc?npc->stuckArrowCount():0,
+      world?world->stuckArrowCount():0,double(error));
+    cv.text(6,26,label,2,Text);
+    std::snprintf(label,sizeof(label),"BONE LOCAL -> RENDER POSE  %s  NATIVE BODIES %zu",npc && npc->isDown()?"LIMP":"LIVING",
+      world?world->physic()->physicsStats().bodies:0);
     cv.text(6,46,label,2,Text);
     }
   if(pm.w()>0 && bench.questTrace && bench.questNpc!=nullptr) {

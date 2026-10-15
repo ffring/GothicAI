@@ -177,12 +177,25 @@ class DynamicWorld final {
       Npc* npcHit = nullptr;
       };
 
+    struct BulletWorldHit {
+      Tempest::Vec3          point = {}; // world centimetres
+      Tempest::Vec3          normal = {}; // unit world normal, unchanged winding
+      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      // Borrowed only for onWorldHit; game code owns the attachment lifetime.
+      Ragdoll*              ragdoll = nullptr;
+      size_t                bone = size_t(-1);
+      Interactive*          vob = nullptr;
+      };
+
     struct BulletCallback {
       virtual ~BulletCallback()=default;
       virtual void onStop(){}
       virtual void onMove(){}
       virtual void onCollide(zenkit::MaterialGroup matId){(void)matId;}
       virtual bool onCollide(Npc& other){(void)other; return true; }
+      // Requests an attachment after a legacy world stop; never changes flight.
+      virtual bool stopsAtWorldHit() const { return false; }
+      virtual void onWorldHit(const BulletWorldHit& hit) { (void)hit; }
       // an arrow aimed by hand: hits an npc where it is (its bones), not its box; from-to: this step
       virtual bool isPrecise() const { return false; }
       virtual bool onCollidePrecise(Npc& other, const Tempest::Vec3& from, const Tempest::Vec3& to){(void)from; (void)to; return onCollide(other); }
@@ -226,6 +239,7 @@ class DynamicWorld final {
         int                 spl=std::numeric_limits<int>::max();
         int                 hitCnt  = 0;
         float               tgRange = 0;
+        bool                worldStopped = false;
 
       friend class DynamicWorld;
       };

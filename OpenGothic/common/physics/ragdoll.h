@@ -109,6 +109,7 @@ class Ragdoll final {
             bool kinematic = false);
     void prepareKinematicStep(float deltaSeconds);
     void finishKinematicStep();
+    size_t boneForBodyId(uint32_t id) const;
     void detach();
     std::unique_ptr<Impl> impl;
     friend class CollisionWorld;

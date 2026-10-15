@@ -473,6 +473,12 @@ class Npc final {
       };
     const ArrowPhysicsProbe& arrowPhysicsProbe() const { return arrowPhysics; }
     const Tempest::Matrix4x4& animationBone(size_t bone) const { return visual.pose().bone(bone); }
+    const Tempest::Matrix4x4& renderedBone(size_t bone) const { return visual.renderedBone(bone); }
+    using ArrowPinProbe = MdlVisual::ArrowPinProbe;
+    size_t stuckArrowCount() const { return visual.stuckArrowCount(); }
+    bool stuckArrowProbe(size_t index, ArrowPinProbe& out) const { return visual.stuckArrowProbe(index,out); }
+    bool stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Tempest::Matrix4x4& worldMatrix);
+    void addCorpseArrowImpulse(const Bullet& bullet);
     const RagdollSave::QuestReturn& ragdollQuestReturnState() const { return ragdollQuestReturn; }
     uint32_t ragdollQuestReturnCount() const { return ragdollQuestReturns; }
     const Tempest::Vec3& ragdollQuestReturnFrom() const { return ragdollQuestFrom; }

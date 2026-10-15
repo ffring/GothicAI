@@ -177,33 +177,46 @@ def functional(run):
             'measurement': 'Post-world native physical matrices versus ordinary animation; local basis removes parent rotation. KO is forced by the bench only after a real arrow queues its pending hit.'}
 
 
-def aim_signature(run):
+def ordered_aim_signature(run):
     data = events(run)
-    counts = collections.Counter()
+    outcomes = []
     for e in data:
         text = e.get('text', '')
         if e['kind'] != 'note' or not text.endswith('by PC_HERO'):
             continue
         match = re.match(r'arrow hit ([^:]+): (head|body|limb),', text)
         if match:
-            counts[(e['seg'], 'manual', match[1], match[2])] += 1
+            outcomes.append((e['seg'], 'manual', match[1], match[2]))
         match = re.match(r'arrow dice ([^:]+): .*?, (hit|miss), by PC_HERO', text)
         if match:
-            counts[(e['seg'], 'dice', match[1], match[2])] += 1
+            outcomes.append((e['seg'], 'dice', match[1], match[2]))
         if text.startswith('arrow missed:'):
-            counts[(e['seg'], 'manual', '-', 'miss')] += 1
+            outcomes.append((e['seg'], 'manual', '-', 'miss'))
+    return outcomes
+
+
+def aim_signature(run):
+    counts = collections.Counter(ordered_aim_signature(run))
     return {'|'.join(key): value for key, value in sorted(counts.items())}
+
+
+def recording_clock(run):
+    return [(e['kind'], e['seg'], e['t'], e.get('frames')) for e in events(run)
+            if e['kind'] in ('rec', 'rec_stop')]
 
 
 def regression(directory):
     result = {}
     for scenario in ('aim', 'manual-aim'):
-        before = aim_signature(directory / f'before-{scenario}')
-        after = aim_signature(directory / f'after-{scenario}')
+        before = ordered_aim_signature(directory / f'before-{scenario}')
+        after = ordered_aim_signature(directory / f'after-{scenario}')
         assert before and after
-        result[scenario] = {'pass': before == after, 'before': before, 'after': after}
+        clock_equal = recording_clock(directory / f'before-{scenario}') == recording_clock(directory / f'after-{scenario}')
+        result[scenario] = {'pass': before == after and clock_equal, 'recording_clock_equal': clock_equal,
+                            'outcomes': len(before), 'before': before, 'after': after}
     return {'pass': all(r['pass'] for r in result.values()), 'scenarios': result,
-            'measurement': 'Actual projectile outcomes and hit zones per segment; continuous animation/timing metrics are informational.'}
+            'outcomes': sum(r['outcomes'] for r in result.values()),
+            'measurement': 'Ordered actual projectile outcomes (segment, kind, target, zone/hit/miss); continuous animation/timing metrics are informational.'}
 
 
 def main():
