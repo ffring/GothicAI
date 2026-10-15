@@ -10,7 +10,7 @@ import pytest
 from gothic_tts.cli import load_env_file
 from gothic_tts.providers import TtsError, Voice
 from gothic_tts.providers.fake import FakeProvider
-from gothic_tts.providers.inworld import CHECK_VOICE, InworldTTS
+from gothic_tts.providers.inworld import CHECK_VOICE, PREVIEW_TEXTS, InworldTTS
 from gothic_tts.synthesizer import Synthesizer
 
 XARDAS = Voice("NONE_100_XARDAS", "An old man with a deep voice")
@@ -24,6 +24,8 @@ class FakeInworld:
         self.requests: list[tuple[str, str, dict]] = []
         self.voices: set[str] = {"Dmitry"}
         self.designed = 0
+        self.cloned = 0
+        self.sample_errors: list[str] = []
         self.fail_line = False
         self.credits = True
         self.odd_check = False  # the check line gets an answer the provider does not know
@@ -40,6 +42,22 @@ class FakeInworld:
                 self.designed += 1
                 preview = f"ws__design-voice-{self.designed}"
                 return httpx.Response(200, json={"previewVoices": [{"voiceId": preview, "previewAudio": ""}]})
+            case "/voices/v1/voices:clone":
+                self.cloned += 1
+                voice_id = f"ws__clone-voice-{self.cloned}"
+                if not self.sample_errors:
+                    self.voices.add(voice_id)
+                checked = {
+                    "warnings": [{"text": "short sample"}],
+                    "errors": [{"text": e} for e in self.sample_errors],
+                }
+                return httpx.Response(
+                    200,
+                    json={
+                        "voice": {"voiceId": voice_id, "languageCode": "ru-RU", "source": "IVC"},
+                        "audioSamplesValidated": [checked],
+                    },
+                )
             case path if path.endswith(":publish"):
                 voice_id = path.removeprefix("/voices/v1/voices/").removesuffix(":publish")
                 self.voices.add(voice_id)
@@ -123,6 +141,50 @@ async def test_voice_designed_once_then_reused(api, tmp_path) -> None:
     await _speak(again, Voice(XARDAS.id, "A young woman"))
     assert api.designed == 2
     await again.aclose()
+
+
+async def test_voice_designed_in_its_language(api, tmp_path) -> None:
+    """An English voice (the shorts' dub) is designed on an English script; the language is part of the
+    voice, so the same id in another language is designed again."""
+    english = _provider(api, tmp_path, language="en-US")
+    await _speak(english)
+    russian = _provider(api, tmp_path)
+    await _speak(russian)
+    for p in (english, russian):
+        await p.aclose()
+    en, ru = [body for _, path, body in api.requests if path == "/voices/v1/voices:design"]
+    assert en["languageCode"] == "en-US" and en["previewText"] == PREVIEW_TEXTS["en"]
+    assert ru["languageCode"] == "ru-RU" and ru["previewText"] == PREVIEW_TEXTS["ru"]
+    first, second = api.streams()
+    assert first["language"] == "en-US" and second["language"] == "ru-RU"
+
+
+async def test_voice_cloned_from_a_recording_speaks_the_providers_language(api, tmp_path) -> None:
+    """The shorts' English dub: a Russian recording cloned once, its lines said in English; another
+    recording is another clone; a refused sample is an error, not a designed voice."""
+    sample = tmp_path / "me.wav"
+    sample.write_bytes(b"RIFF me")
+    me = Voice("USER@bow", "the user", sample=str(sample))
+    p = _provider(api, tmp_path, language="en-US")
+    await _speak(p, me)
+    await _speak(p, me)
+    assert (api.cloned, api.designed) == (1, 0)
+    clone = next(body for _, path, body in api.requests if path == "/voices/v1/voices:clone")
+    assert base64.b64decode(clone["voiceSamples"][0]["audioData"]) == b"RIFF me"
+    assert "languageCode" not in clone  # Inworld hears the recording's language itself
+    first, second = api.streams()
+    assert first["voiceId"] == second["voiceId"] == "ws__clone-voice-1" and first["language"] == "en-US"
+
+    sample.write_bytes(b"RIFF me again")
+    await _speak(p, me)
+    assert api.cloned == 2
+    api.sample_errors = ["no speech"]
+    sample.write_bytes(b"RIFF noise")
+    with pytest.raises(TtsError, match="no speech"):
+        await _speak(p, me)
+    with pytest.raises(TtsError, match="no sample"):
+        await _speak(p, Voice("x", sample=str(tmp_path / "missing.wav")))
+    await p.aclose()
 
 
 async def test_library_voice_steered_by_the_description(api, tmp_path) -> None:

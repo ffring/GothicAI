@@ -1713,6 +1713,19 @@ def lines(args: argparse.Namespace) -> int:
     return 0
 
 
+def voices(args: argparse.Namespace) -> int:
+    """The TTS voices of npc's as the game speaks them: {"<npc>": {"voice_id", "voice"}} on stdout, the voice
+    a description in English (the shorts' dub designs the English voices from it)."""
+    game_dir = Path(args.game_dir) if args.game_dir and Path(args.game_dir).is_dir() else None
+    personas = PersonaProvider(game_dir)
+    out = {}
+    for npc in args.npc:
+        persona = personas.get(npc, npc)
+        out[npc.upper()] = {"voice_id": persona.voice_id, "voice": persona.voice}
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    return 0
+
+
 def _add_voice_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--asr-url", default=os.environ.get("GOTHIC_ASR_URL", DEFAULT_ASR_URL))
     p.add_argument("--mic-device", help="input device name or index (default: system input)")
@@ -1967,6 +1980,10 @@ def main() -> None:
     p.add_argument("npc")
     p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
 
+    p = sub.add_parser("voices", help="the TTS voices of npc's as JSON: their ids and descriptions")
+    p.add_argument("npc", nargs="+")
+    p.add_argument("--game-dir", default=os.environ.get("GOTHIC_DIR", DEFAULT_GAME_DIR))
+
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -1996,6 +2013,8 @@ def main() -> None:
                 code = 0
             case "lines":
                 code = lines(args)
+            case "voices":
+                code = voices(args)
             case "voice-test":
                 code = asyncio.run(voice_test(args))
             case "mics":

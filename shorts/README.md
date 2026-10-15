@@ -13,6 +13,7 @@ uv run gothic-shorts cut xardas-lie             # the newest take -> short-ru.mp
 uv run gothic-shorts cut xardas-lie 2           # take-02
 uv run gothic-shorts subs xardas-lie --lang en  # subs.en.json of the take: fill in the translations, then
 uv run gothic-shorts srt xardas-lie             # -> subs.en.srt: English captions for the Russian short
+uv run gothic-shorts dub xardas-lie             # -> dub.en.wav: its English sound track (+ dub.en.mp4 to check)
 uv run gothic-shorts cut xardas-lie --lang en   # -> short-en.mp4 (English burnt in; no longer uploaded)
 ```
 
@@ -78,7 +79,9 @@ shots:
    (`ffmpeg -ss 12 -i short-ru.mp4 -frames:v 1 f.png`).
 4. If the answers miss: change the hero's lines (the npc answers what it heard), not the cut.
 5. English: `subs`, translate every text in `subs.en.json`, `srt` -> `subs.en.srt`, the caption track the
-   upload adds to the Russian short. A short is one video in every language (see Uploading to YouTube).
+   upload adds to the Russian short; `dub` -> `dub.en.wav`, the English sound track (a line it reports as
+   too long is shortened in `subs.en.json`, then `srt` and `dub` again). Watch `dub.en.mp4` before the
+   upload. A short is one video in every language (see Uploading to YouTube).
 
 Honesty: the npc's answers are not edited, only the pauses while the model thinks are cut down (to ~0.5 s).
 Say so in the description.
@@ -183,6 +186,56 @@ time on the short's timeline, for the plan's captions and for placing the pictur
 follow `script.ru.said.txt` when it exists: what was really said, where it differs from the script. A line whose
 take, text and cleaning have not changed is not aligned again.
 
+## The English sound track
+
+```bash
+scripts/deploy-gpu.sh dub                 # once, from the repository: the jobs on the GPU server
+uv run gothic-shorts dub xardas-lie       # a shot's newest take (or `dub xardas-lie 2`) -> <take>/dub.en.wav
+uv run gothic-shorts dub bow              # an explainer -> <workspace>/render/dub.en.wav
+```
+
+YouTube offers a video's sound in several languages (Studio: Subtitles, the video, the language's Audio
+column; the API has no call for it, and the channel needs YouTube's advanced features). `dub` makes the English one: a WAV (48 kHz stereo,
+24-bit) exactly as long as the Russian short, -14 LUFS like the cut, and `dub.en.mp4`, the Russian short with
+it as the first sound track and the Russian as the second (QuickTime: View, Languages), to hear it as a viewer
+will. It prints every line: where it starts, its length against its slot, the speed-up, the gain.
+
+- **A shot's take.** The game's sound without the npc's Russian voices: Demucs (htdemucs_ft) on the GPU server
+  splits `main.wav` into the voices and the rest (~10 s for a 45 s take, kept in `<take>/dub-en/`), and the
+  rest stands in for the sound from 0.3 s before an npc's line to 0.3 s after, the recording's own sound
+  elsewhere. Every line in English: the take's `subs.en.json` (what the captions say; the hook and captions
+  stay burnt in in Russian), in the voice the game speaks Russian in: the TTS service voices a Russian
+  sample (~17 s) in the npc's voice (its id and description from the AI server, `gothic-ai voices <npc>`;
+  the hero's the shot's `hero_voice`), Inworld clones it (Instant Voice Cloning, `gothic-tts say --clone`),
+  and the clone says the English lines, so the timbre stays the Russian one. When that fails Inworld
+  designs an en-US voice from the description, and then the launcher's fallback takes over, as in the
+  game: VoxCPM2 on the GPU server designs one reading an English sample (as the voxcpm bridge does with
+  its Russian one) and says the lines in it (`--tts voxcpm` picks it). A fallback says why the way before
+  it failed. Each line starts where its Russian one starts and is as loud as it was in the game's sound
+  (the separated voices measured over it; the hero's recording); the cut's pauses go out with the same
+  parts of the recording. The lines are kept by voice and text in `.shorts/voice/en/`, the clones in
+  Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
+- **An explainer.** `script.en.txt` (the caption track's text, without its `|`) in the user's own voice,
+  cloned from their first recorded lines (`voice/clean/`): by Inworld from 20-29 s of them (its best is
+  10-30 s; the clone is `gothic-ai USER@<short>` in the library), or, when Inworld fails, by VoxCPM2 on the
+  GPU server from 8-14 s (its encoder takes up to 15 s); cleaned as the Russian takes were (`words.py`'s
+  chain), each line from where
+  its Russian line's first word is said (`words.ru.json`), as loud as the Russian voice, over the plan's
+  music bed (`plan.json`, `--plan` for another) faded and ducked under the English lines as `Explainer.tsx`
+  ducks it under the Russian ones. The lines and the reference live in `voice/en/` and are made again only
+  when the reference or a text changes. A plan that plays the footage's own sound (`gameVolume` above 0) is
+  refused: the dub mixes the music and the voice only.
+
+A line longer than its slot (until the next line starts, 0.15 s before it) is sped up by up to x1.15 (pitch
+kept); one longer still is reported, and `dub` exits with 1 after writing the track: shorten the line in
+the translation and run it again. Inworld and VoxCPM read English at about 12-14 characters a second.
+Inworld bills the lines and the samples: check its credits first (`gothic-launcher` does).
+
+The jobs (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server): `separate.sh <wav> <out dir>` (Demucs in a
+venv of its own, ~2 GB of GPU memory while it runs) and `clone.sh <reference> <lines.json> <out dir>
+[--design <json>]` (through the engine of the running gothic-voxcpm, no GPU memory of its own; the game's
+lines wait their turn meanwhile). Files go over by scp into a fresh folder there and it is deleted after.
+
 ## Uploading to YouTube
 
 ```bash
@@ -202,8 +255,9 @@ them: a shot's take from its `subs.<lang>.json` on the cut's time (an npc's line
 burnt-in hook and captions in brackets), an explainer from `script.<lang>.txt` over its Russian voice
 (`words.ru.json`, the `|` chunks one after another). Caption tracks need the `youtube.force-ssl` scope: a
 sign-in older than it can still upload, but `--captions` asks to `youtube login` again before it sends
-anything. An English audio track is added in Studio (Subtitles, the video, the language's Audio column); the
-API has no call for it, and Studio shows the column only to channels with YouTube's advanced features.
+anything. An English audio track (`gothic-shorts dub`) is added in Studio (Subtitles, the video, the
+language's Audio column); the API has no call for it, and Studio shows the column only to channels with
+YouTube's advanced features.
 
 The OAuth client is a Desktop app client of a Google Cloud project (YouTube Data API v3); its JSON and the
 token live in `~/.local/share/gothic-ai/` (`youtube-client.json`, `youtube-token.json`), never in the
