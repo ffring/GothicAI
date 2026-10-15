@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import json
+import logging
 import os
 
 import httpx
@@ -54,6 +56,9 @@ class FakeInworld:
 
     def streams(self) -> list[dict]:
         return [body for _, path, body in self.requests if path == "/tts/v1/voice:stream"]
+
+    def voice_lists(self) -> int:
+        return sum(path == "/tts/v1/voices" for _, path, _ in self.requests)
 
 
 @pytest.fixture
@@ -158,6 +163,36 @@ async def test_errors(api, tmp_path, monkeypatch) -> None:
     with pytest.raises(TtsError, match="INWORLD_API_KEY"):
         await _speak(p)
     await p.aclose()
+
+
+async def test_idle_connection_kept_warm(api, tmp_path, monkeypatch, caplog) -> None:
+    p = _provider(api, tmp_path, voice="Dmitry", keep_warm=0.1)
+    await p.warmup()
+    for _ in range(8):  # lines keep the connection open themselves
+        await _speak(p)
+        await asyncio.sleep(0.02)
+    assert api.voice_lists() == 1
+
+    caplog.set_level(logging.DEBUG, logger="gothic_tts")
+    await asyncio.sleep(0.55)  # silence: a free voice list request every 0.1 s
+    assert 3 <= api.voice_lists() - 1 <= 6
+    monkeypatch.setenv("INWORLD_API_KEY", "wrong")
+    before = api.voice_lists()
+    await asyncio.sleep(0.35)  # a failed request neither stops it nor logs above debug
+    assert api.voice_lists() - before >= 2
+    assert caplog.records and all(r.levelno == logging.DEBUG for r in caplog.records)
+
+    await p.aclose()
+    stopped = api.voice_lists()
+    await asyncio.sleep(0.25)
+    assert api.voice_lists() == stopped  # stops with the provider
+
+    monkeypatch.setenv("INWORLD_API_KEY", "test-key")
+    cold = _provider(api, tmp_path, voice="Dmitry", keep_warm=0)
+    await cold.warmup()
+    await asyncio.sleep(0.1)
+    await cold.aclose()
+    assert api.voice_lists() == stopped + 1
 
 
 def test_env_file_from_a_parent_directory(tmp_path, monkeypatch) -> None:
