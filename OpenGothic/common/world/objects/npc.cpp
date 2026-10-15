@@ -736,7 +736,7 @@ void Npc::onNoHealth(bool death, HitSound sndMask) {
   living.reset();
   if(!isDown()) {
     updateRagdollQuestAnchor();
-    ragdollQuestReturn.armed = !death && !isPlayer() && isImmortal() &&
+    ragdollQuestReturn.armed = !death && !isPlayer() && isHuman() &&
         Gothic::settingsGetI("GAME","ragdoll_quest_guard")!=0 && ragdollQuestReturn.hasAnchor;
     ragdollQuestReturn.hazards = 0;
     ragdollDormant.reset();
@@ -916,7 +916,7 @@ bool Npc::recoverRagdoll() {
   }
 
 void Npc::updateRagdollQuestAnchor() {
-  if(isPlayer() || !isImmortal() || isDown() || ragdoll || interactive()!=nullptr ||
+  if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
      (ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) ||
      Gothic::settingsGetI("GAME","ragdoll_quest_guard")==0 ||
      Gothic::settingsGetI("GAME","ragdoll")==0 || mvAlgo.state()!=MoveAlgo::Run)
@@ -939,7 +939,7 @@ void Npc::updateRagdollQuestAnchor() {
 
 bool Npc::needsRagdollQuestReturn() const {
   return ragdollQuestReturn.armed && ragdollQuestReturn.hasAnchor && ragdollQuestReturn.hazards!=0 &&
-         !isPlayer() && isImmortal() && !isDead() && Gothic::settingsGetI("GAME","ragdoll_quest_guard")!=0;
+         !isPlayer() && isHuman() && !isDead() && Gothic::settingsGetI("GAME","ragdoll_quest_guard")!=0;
   }
 
 void Npc::checkRagdollQuestHazard() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the four real NPC KO/return cases recorded by immortal-return.bench."""
+"""Check real melee KO, human return eligibility and exclusion controls."""
 import argparse
 import csv
 import json
@@ -22,8 +22,8 @@ def validate(run):
     assert not [e for e in events if e['kind'] in {'ragdoll_error', 'immortal_guard_error'}], 'game reported an error'
     assert 'done' in (run / 'bench.log').read_text().splitlines(), 'scenario did not finish'
     rows = list(csv.DictReader((run / 'metrics.csv').open()))
-    expected = {'immortal_cliff': (True, True, 1), 'immortal_water': (True, True, 2),
-                'normal_cliff': (False, True, 1), 'guard_off_cliff': (True, False, 1)}
+    expected = {'mortal_cliff': (False, True, 1), 'mortal_water': (False, True, 2),
+                'safe_ko': (False, True, 0), 'guard_off_cliff': (False, False, 1)}
     result = {}
     for label, (immortal, enabled, hazard) in expected.items():
         case = [e for e in events if e.get('case') == label]
@@ -36,22 +36,28 @@ def validate(run):
         setup, launch, end = setup[0], launch[0], end[0]
         assert setup['immortal'] is immortal and setup['enabled'] is enabled, label
         assert launch['immortal'] is immortal, label
+        damage = [e for e in case if e['kind'] == 'immortal_guard_damage']
+        assert len(damage) == 1 and damage[0]['melee'] and damage[0]['hp_before'] == 2 and damage[0]['hp_after'] == 1
+        assert damage[0]['unconscious'] and not damage[0]['dead'], (label, 'real melee did not produce KO')
+        assert any(e['kind'] == 'note' and e['seg'] == label and ', melee, by PC_HERO' in e['text'] for e in events), (label, 'missing production melee damage')
         assert trace and any(e['unconscious'] and e['parts'] == 24 for e in trace), (label, 'no real human native KO')
         assert all(e['immortal'] is immortal and e['enabled'] is enabled for e in trace), label
+        standing = [e for e in case if e['kind'] == 'immortal_guard_standing']
+        assert len(standing) == 1 and standing[0]['standing'] and end['standing'], (label, 'actual standing not reached')
         assert not end['dead'] and not end['unconscious'] and end['parts'] == 0, (label, 'did not get up')
         stable = launch['stable_cm']
         hazard_events = [e for e in case if e['kind'] == 'immortal_guard_hazard']
-        assert len(hazard_events) == 1, (label, 'missing physical hazard checkpoint')
-        witness = hazard_events[0]
+        assert len(hazard_events) == (1 if hazard else 0), (label, 'physical hazard checkpoint count')
+        witness = hazard_events[0] if hazard else next(e for e in trace if e['parts'])
         assert witness['unconscious'] and witness['parts'] == 24, (label, 'hazard was not a native KO')
         actual_drop = max(stable[1] - e['pelvis_cm'][1] for e in trace + [witness] if e['parts'])
         if hazard == 1:
             assert stable[1] - witness['pelvis_cm'][1] > 1000 and end['drop_observed'], (label, 'no 10 m fall')
-        else:
+        elif hazard == 2:
             assert end['water_observed'], (label, 'body did not enter real water')
             assert witness['water_y_cm'] is not None and witness['pelvis_cm'][1] < witness['water_y_cm'] - 5
         checkpoints = [e for e in case if e['kind'] == 'immortal_guard_checkpoint']
-        if immortal and enabled:
+        if hazard and enabled:
             assert end['standing'] and not end['armed'], (label, 'return did not finish standing/disarmed')
             assert distance(end['position_cm'], stable) <= 3, (label, 'completed get-up moved away from anchor', distance(end['position_cm'], stable))
             assert len(returns) == 1 and end['returns'] == 1, (label, 'missing or repeated return')
@@ -67,7 +73,10 @@ def validate(run):
             assert returned['reason'] in ({'drop', 'drop+water'} if hazard == 1 else {'water', 'drop+water'}), label
         else:
             assert not returns and end['returns'] == 0, (label, 'unguarded KO returned')
-            assert distance(end['position_cm'], stable) > 500, (label, 'control returned to initial support')
+            if hazard:
+                assert distance(end['position_cm'], stable) > 500, (label, 'control returned to initial support')
+            else:
+                assert not end['drop_observed'] and not end['water_observed'], (label, 'safe KO became hazardous')
         recorded = [row for row in rows if row['seg'] == label]
         assert recorded and len(recorded) == len(trace), (label, 'CSV/trace coverage differs')
         assert [int(e['frame']) for e in trace] == list(range(len(trace))), label
@@ -76,16 +85,24 @@ def validate(run):
             assert int(row['ig_returns']) == frame['returns'] and int(row['ig_hazards']) == frame['hazards']
             assert row['ig_reason'] == frame['reason']
             assert distance([float(row['ig_' + axis]) for axis in 'xyz'], frame['position_cm']) < .01
-        physics = [float(row['ph_ms']) for row in recorded]
+        physics = [float(row['ph_ms']) for row in recorded if 'ph_ms' in row]
         wall = [float(row['ig_wall_ms']) for row in recorded if float(row['ig_wall_ms']) > 0]
         assert all(math.isfinite(v) and v >= 0 for v in physics + wall)
-        assert (run / (label + '.mp4')).is_file(), (label, 'video missing')
         result[label] = {'frames': len(trace), 'immortal': immortal, 'enabled': enabled,
                          'max_drop_cm': actual_drop, 'stable_cm': stable, 'final_cm': end['position_cm'],
+                         'hp_before': damage[0]['hp_before'], 'hp_after': damage[0]['hp_after'],
                          'returns': len(returns), 'reason': returns[0]['reason'] if returns else 'none',
-                         'ph_ms_mean': statistics.mean(physics), 'ph_ms_p95': percentile(physics, .95),
-                         'ph_ms_max': max(physics), 'bench_observer_wall_fps': 1000 / statistics.mean(wall)}
-    return {'pass': True, 'cases': result, 'timing_note': 'informative fixed-step bench observer throughput, not ordinary-game FPS'}
+                         'ph_ms_mean': statistics.mean(physics) if physics else None,
+                         'ph_ms_p95': percentile(physics, .95) if physics else None,
+                         'ph_ms_max': max(physics) if physics else None}
+    for label, hero in (('hero_control', True), ('monster_control', False)):
+        case = [e for e in events if e.get('case') == label and e['kind'] == 'immortal_guard_excluded']
+        assert len(case) == 1, (label, 'missing exclusion probe')
+        probe = case[0]
+        assert probe['hero'] is hero and (probe['human'] if hero else probe['monster']), label
+        assert not probe['has_anchor'] and not probe['armed'] and probe['returns'] == 0, (label, 'excluded actor protected')
+        result[label] = {'human': probe['human'], 'hero': hero, 'monster': probe['monster'], 'has_anchor': False, 'armed': False, 'returns': 0}
+    return {'pass': True, 'cases': result, 'timing_note': 'native step timing unavailable when OPENGOTHIC_RAGDOLL_TRACE is disabled; timing is informative'}
 
 
 def main():
