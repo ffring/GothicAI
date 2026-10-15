@@ -41,6 +41,12 @@ Mat3 turnY(float a) {
   return axisAngle(Up,-a);
   }
 
+Vec3 vector(const Matrix4x4& m, const Vec3& v) {
+  return {m.at(0,0)*v.x+m.at(1,0)*v.y+m.at(2,0)*v.z,
+          m.at(0,1)*v.x+m.at(1,1)*v.y+m.at(2,1)*v.z,
+          m.at(0,2)*v.x+m.at(1,2)*v.y+m.at(2,2)*v.z};
+  }
+
 }
 
 AimWalk::Probe AimWalk::playerProbe;
@@ -289,6 +295,9 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
   twist = chest = drop = 0;
   if(!valid || base==nullptr || numBones!=skeleton->nodes.size())
     return;
+  model = m;
+  for(size_t i=0; i<feet.size(); ++i)
+    stancePoints[i] = position(tr[feet[i].foot]);
   if(!isActive() && !finishPose) {
     if(standing.size()==numBones) {
       // The landed stance is ordinary local skeletal data: a turn moves the feet with the
@@ -432,18 +441,42 @@ void AimWalk::captureFeet(const Matrix4x4* tr, size_t numBones) {
   }
 
 void AimWalk::constrainFoot(size_t leg, Vec3& target) const {
-  if(!stopping || !contacts || leg>=feet.size())
+  if(leg>=feet.size())
     return;
   const auto& f = feet[leg];
+  if(!stopping && !finishPose) {
+    if(!standing.empty())
+      target += vector(model,f.correction)*(1.f-weight);
+    return;
+    }
+  if(!contacts)
+    return;
   if(leg==support) {
     target = position(f.anchor);
     } else {
     const Vec3 from = position(f.previousFinal);
     const Vec3 delta = target-from;
     const float distance = length(delta);
-    if(distance>4.f && distance<100.f)
-      target = from+delta*(4.f/distance);
+    if(distance>5.5f && distance<100.f)
+      target = from+delta*(5.5f/distance);
     }
+  }
+
+void AimWalk::captureFootTarget(size_t leg, const Vec3& normal, const Vec3& shown) {
+  if(!finishPose || leg>=feet.size())
+    return;
+  // The raw leg may be short of the contact until FootIk moves the hips for the lean/ground.
+  // Hand that final correction over in model coordinates, so it follows subsequent turns.
+  Matrix4x4 inv = model;
+  inv.inverse();
+  feet[leg].correction = vector(inv,shown-normal);
+  }
+
+bool AimWalk::stanceFoot(size_t leg, Vec3& point) const {
+  if(leg>=feet.size() || (!stopping && !finishPose && (standing.empty() || isActive())))
+    return false;
+  point = stancePoints[leg];
+  return true;
   }
 
 void AimWalk::probe(Probe& p) const {

@@ -42,6 +42,8 @@ class FootIk final {
       bool     hardOff = false; // jump, fall, swim: switch off at once instead of fading out
       float    floorY  = 0;     // height that the animation treats as ground (object origin)
       float    crouch  = 0;     // cm the body is lowered on purpose (crouched to aim a bow), the legs bend
+      bool     hasStanceFloor = false;
+      float    stanceFloor = 0; // retain the ordinary aim stance's body height while its feet settle
       Ground   ground[MaxLegs];
       uint64_t dt      = 0;
       };
@@ -98,12 +100,12 @@ class FootIk final {
 
     // Ground under the animated feet of an npc; disabled input if the npc state does not allow IK
     auto           mkInput(const Npc& npc, World& world, const Tempest::Matrix4x4& obj,
-                           bool alignedToGround, uint64_t dt) const -> Input;
+                           bool alignedToGround, uint64_t dt, const class AimWalk* walk = nullptr) const -> Input;
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);
     // Applies IK to world-space bone matrices and records the animated ankle positions
     void           apply(Tempest::Matrix4x4* tr, size_t numBones, float floorY,
-                         const Tempest::Vec3& bodyOffset = {}, const class AimWalk* walk = nullptr);
+                         const Tempest::Vec3& bodyOffset = {}, class AimWalk* walk = nullptr);
 
     void           debugLog(std::string_view name, const Input& in, bool verbose);
     void           probe(Probe& p, const Input& in) const;

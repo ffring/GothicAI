@@ -272,6 +272,8 @@ void testStop(const Fixture& fixture, float direction, bool blocked, int warmFra
     supportTravel = std::max(supportTravel,length(trace[frame][support]-trace[frame-1][support]));
     supportDrift = std::max(supportDrift,length(trace[frame][support]-trace.front()[support]));
     }
+  const float supportHandoff = lastStopping+1<trace.size() ?
+                                 length(trace[lastStopping+1][support]-trace[lastStopping][support]) : 0.f;
 
   const auto start = trace.front()[swing];
   const size_t finishFrame = trace.size()-1;
@@ -291,14 +293,15 @@ void testStop(const Fixture& fixture, float direction, bool blocked, int warmFra
       lift = std::max(lift,contact.y-chordY);
       }
     }
-  std::printf("aimwalk stop %s %s: settle=%llu ms ankle=%.3f cm/frame support=%.3f cm/frame drift=%.3f cm lift=%.3f cm\n",
+  std::printf("aimwalk stop %s %s: settle=%llu ms ankle=%.3f cm/frame support=%.3f cm/frame handoff=%.3f cm drift=%.3f cm lift=%.3f cm\n",
               direction>0.f ? "forward" : "back",blocked ? "blocked" : "released",
-              static_cast<unsigned long long>(settledAt),double(maxTravel),double(supportTravel),double(supportDrift),double(lift));
+              static_cast<unsigned long long>(settledAt),double(maxTravel),double(supportTravel),double(supportHandoff),double(supportDrift),double(lift));
   std::fflush(stdout);
   require(settledAt>=200 && settledAt<=400,"the legs must settle in 0.2 to 0.4 seconds");
   require(maxTravel<=6.f+.001f,"a final ankle must travel at most 6 cm per 30 fps frame, including the completed handoff");
   require(supportTravel<=1.f+.001f,"the support foot must slide at most 1 cm per frame");
   require(supportDrift<=.1f,"the support contact must remain planted throughout the stop");
+  require(supportHandoff<=1.f+.001f,"the support foot must slide at most 1 cm in the first completed handoff frame");
   if(!blockedForward)
     require(lift>=3.f,"the free foot must lift at least 3 cm above a sliding return to the stance");
   if(blocked) {
@@ -389,6 +392,98 @@ void testResumeAndLeaveManualAim(const Fixture& fixture) {
   require(!held.walk.isActive(),"leaving settled manual aim must release the retained stance");
   }
 
+void testIdleWithoutSequence(const Fixture& fixture) {
+  for(bool blocked:{false,true}) {
+    Actor actor(fixture,{},0.f,blocked ? 6.f : 0.f);
+    warm(actor,1.f);
+    for(int frame=0; frame<24; ++frame)
+      actor.tick(blocked ? 1.f : 0.f,blocked);
+    require(!actor.walk.isActive() && !actor.walk.isStopping(),"the idle sequence is released after the stop finishes");
+    const auto settled = actor.palette;
+    AimWalk::Input idle;
+    idle.active = true;
+    idle.dt = FrameMs;
+    // The game drops the gait sequence once neither movement nor a stop owns the legs.
+    idle.legs = nullptr;
+    for(int frame=0; frame<3; ++frame) {
+      require(!actor.walk.update(idle),"idle with no gait sequence must not request a pose rebuild");
+      require(!actor.walk.isActive() && !actor.walk.isStopping(),"idle with no gait sequence must remain inactive");
+      near(actor.walk.move(FrameMs),{},.0001f,"idle with no gait sequence must not request root motion");
+      actor.rebuild();
+      for(size_t bone=0; bone<settled.size(); ++bone)
+        for(int column=0; column<4; ++column)
+          for(int row=0; row<4; ++row)
+            near(actor.palette[bone].at(column,row),settled[bone].at(column,row),.001f,
+                 "dropping the idle gait sequence must preserve the settled local pose");
+      }
+    }
+  }
+
+void testInterruptedStopClock(const Fixture& fixture) {
+  for(float initialDirection:{-1.f,1.f}) {
+    Actor actor(fixture);
+    warm(actor,initialDirection,initialDirection>0.f ? 40 : 48);
+    float expectedWeight = actor.probe().weight;
+    float expectedPhase = actor.probe().phase;
+    const float initialSpeed = initialDirection>0.f ? AimWalk::Forward : AimWalk::Back;
+    for(int frame=0; frame<6; ++frame) {
+      actor.tick(0.f);
+      // The original BlendOut advances the gait's clock on every frame with nonzero weight.
+      expectedWeight = std::max(0.f,expectedWeight-float(FrameMs)/300.f);
+      if(expectedWeight>0.f)
+        expectedPhase = std::fmod(expectedPhase+initialDirection*initialSpeed*float(FrameMs)/100000.f+1.f,1.f);
+      }
+    require(actor.walk.isStopping(),"a six-frame release must still be in the unfinished stop");
+    const float resumedDirection = -initialDirection;
+    const float resumedSpeed = resumedDirection>0.f ? AimWalk::Forward : AimWalk::Back;
+    for(int frame=0; frame<6; ++frame) {
+      actor.tick(resumedDirection);
+      expectedWeight = std::min(1.f,expectedWeight+float(FrameMs)/250.f);
+      expectedPhase = std::fmod(expectedPhase+resumedDirection*resumedSpeed*float(FrameMs)/100000.f+1.f,1.f);
+      const auto probe = actor.probe();
+      near(probe.weight,expectedWeight,.00001f,"an interrupted stop must resume the original linear-fade blend weight");
+      near(probe.phase,expectedPhase,.00001f,"an interrupted stop must resume the original continuously fading gait clock");
+      near(actor.walk.move(FrameMs),Vec3(0,0,resumedDirection*resumedSpeed*float(FrameMs)/1000.f*expectedWeight),.0001f,
+           "an interrupted stop must resume the original root motion when the direction reverses");
+      }
+    }
+  }
+
+void testSettledStanceFloor(const Fixture& fixture) {
+  const bool wasProbing = FootIk::isProbing();
+  FootIk::setProbing(true);
+  FootIk ik;
+  ik.setSkeleton(&fixture.skeleton);
+  auto palette = fixture.pose(Matrix4x4::mkIdentity());
+  ik.apply(palette.data(),palette.size(),0.f);
+  FootIk::Input input;
+  input.enable = true;
+  input.dt = FrameMs;
+  for(size_t leg=0; leg<2; ++leg) {
+    input.ground[leg].hasCol = true;
+    input.ground[leg].toeCol = true;
+    input.ground[leg].y = input.ground[leg].toeY = leg==0 ? -10.f : 5.f;
+    }
+  auto target = [&]() {
+    ik.update(input);
+    ik.update(input);
+    FootIk::Probe probe;
+    ik.probe(probe,input);
+    require(probe.valid,"the explicit ground fixture must expose a valid FootIk probe");
+    return probe.target;
+    };
+  near(target(),-10.f,.001f,"ordinary FootIk must lower the body toward the lower actual foot ground");
+  input.hasStanceFloor = true;
+  input.stanceFloor = -4.f;
+  near(target(),-4.f,.001f,"settled aim must use its ordinary stance floor for the body target");
+  input.ground[0].y = input.ground[0].toeY = -18.f;
+  input.ground[1].y = input.ground[1].toeY = 12.f;
+  near(target(),-4.f,.001f,"changing actual foot grounds must not change a retained stance body target");
+  input.hasStanceFloor = false;
+  near(target(),-18.f,.001f,"releasing the stance floor must restore the ordinary actual-ground body target");
+  FootIk::setProbing(wasProbing);
+  }
+
 }
 
 int main() {
@@ -402,5 +497,8 @@ int main() {
   testRebuildAndWorldSpace(fixture);
   testResumeAndLeaveManualAim(fixture);
   testTurnAfterStop(fixture);
+  testIdleWithoutSequence(fixture);
+  testInterruptedStopClock(fixture);
+  testSettledStanceFloor(fixture);
   std::puts("aimwalk contracts passed");
   }

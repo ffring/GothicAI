@@ -69,6 +69,8 @@ class AimWalk final {
     // Final contacts, after FootIk. Rebuilds within one update share the same previous frame.
     void           captureFeet(const Tempest::Matrix4x4* tr, size_t numBones);
     void           constrainFoot(size_t leg, Tempest::Vec3& target) const;
+    void           captureFootTarget(size_t leg, const Tempest::Vec3& normal, const Tempest::Vec3& shown);
+    bool           stanceFoot(size_t leg, Tempest::Vec3& point) const;
 
     static Probe   playerProbe;   // filled every frame for the hero
 
@@ -104,9 +106,12 @@ class AimWalk final {
       std::vector<size_t> thighTree, calfTree, footTree;
       Tempest::Matrix4x4 raw, final, previousRaw, previousFinal, from, anchor;
       Tempest::Vec3 goal;
+      Tempest::Vec3 correction;
       float speed = 0;
       };
     std::array<Leg,2>           feet;
     std::vector<Tempest::Matrix4x4> stance;           // the pose as the aim holds it (apply)
     std::vector<Tempest::Matrix4x4> standing;         // settled leg locals; follow the model, never world anchors
+    Tempest::Matrix4x4          model;
+    std::array<Tempest::Vec3,2>  stancePoints;
   };
