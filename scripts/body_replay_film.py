@@ -12,7 +12,7 @@ recording before anyone looks at it.
   render   DIR/NAME ... --game Gothic2Notr     on dev-ubuntu: Xvfb + lavapipe, one at a time
   compose  LEFT.mp4 RIGHT.mp4 OUT.mp4          side by side, labels and outcomes
 
-Replay file: {"arena": {scenario, seed, side, distance_cm, timeout_ms}, "provider",
+Replay file: {"arena": {scenario, seed, side, distance_cm, timeout_ms[, geometry, ...]}, "provider",
 "commands": [{step, command_id, action_id, goal_version, target_entity_id, observation_seq,
 ttl_ms}]}, where step counts the native steps after the reset sample (arena_start is step 0).
 """
@@ -29,6 +29,9 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIO = ROOT/"scripts"/"bench"/"body-arena.bench"
 ARENA_KEYS = ("scenario", "seed", "side", "distance_cm", "timeout_ms")
+# A custom arena reset (near_wall, offsets), as the runner reports it under "setup".
+SETUP_KEYS = ("geometry", "wall_clearance_cm", "wall_tangent_sign", "yaw_offset_deg", "opponent_yaw_offset_deg",
+              "separation_yaw_deg", "center_offset_cm")
 COMMAND_KEYS = ("command_id", "action_id", "goal_version", "target_entity_id", "observation_seq", "ttl_ms")
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -49,7 +52,8 @@ def replay_file(episode: Path) -> dict:
     if initial["scenario"] != "native_duel" or not accepted:
         raise SystemExit(f"{episode}: not a policy-driven native duel")
     return {"schema_version": 1, "source": str(episode), "provider": accepted[0]["provider"],
-            "arena": {key: initial[key] for key in ARENA_KEYS},
+            "arena": {**{key: initial[key] for key in ARENA_KEYS}, **{key: value for key, value in (initial.get("setup") or {}).items()
+                                                                  if key in SETUP_KEYS}},
             "outcome": {key: terminal.get(key) for key in ("outcome", "reason", "elapsed_game_ms")} if terminal else None,
             "commands": [{"step": row["sim_step"]-start, **{key: row[key] for key in COMMAND_KEYS}} for row in accepted]}
 

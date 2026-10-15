@@ -202,6 +202,8 @@ def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[lis
                                          native_serial_workers=True,
                                          runner_extra_args=["--fork-reset"]+(["--fork-prefix"] if options.get("fork_prefix") else []))
         runner = LeanRunner(runner_args)
+        if options.get("geometry", "open") != "open":
+            runner.arena_options = {"geometry": options["geometry"]}  # merged into every arena reset
         # Training runtime: the fast packer (float-for-float equal to the gate's) and no provenance digests.
         lean = options.get("lean_runtime", True)
         policy = PolicyRuntime(backend=backend, checkpoint_sha256=checkpoint_sha256, max_actors=4, inference_cpu_threads=1,
@@ -350,6 +352,8 @@ def main() -> int:
     parser.add_argument("--max-substeps", type=int, default=2200)
     parser.add_argument("--keep-journals", action="store_true")
     parser.add_argument("--tasks", default="native_duel")
+    parser.add_argument("--geometry", choices=("open", "near_wall"), default="open",
+                        help="near_wall: the arena against a static wall, as the gate's screening")
     parser.add_argument("--start-substeps", type=int, default=1,
                         help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
     parser.add_argument("--envs-per-worker", type=int, default=1,

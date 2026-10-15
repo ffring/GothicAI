@@ -9,11 +9,13 @@ import sys
 SCRIPT = Path(__file__).resolve().parents[1]/"body_replay_film.py"
 
 
-def write(folder):
+def write(folder, setup=None):
     folder.mkdir(parents=True)
     lines = lambda rows: "".join(json.dumps(row)+"\n" for row in rows)
     initial = {"scenario": "native_duel", "seed": 90014, "side": 0, "distance_cm": 400, "timeout_ms": 60000,
                "primary_entity_id": 1}
+    if setup:
+        initial["setup"] = setup
     final = {**initial, "outcome": "death_or_down", "reason": "opponent_down", "elapsed_game_ms": 16133}
     (folder/"arena-events.jsonl").write_text(lines([{"kind": "reset_ready", "arena": initial}, {"kind": "terminal", "arena": final}]))
     command = {"provider": "stage9-rl", "goal_version": 1, "target_entity_id": 2, "ttl_ms": 100}
@@ -47,3 +49,13 @@ def test_scene_replaces_the_arena_line_and_keeps_the_opening(tmp_path):
     assert lines[:2] == ["set time 12 0", "wait 500"]
     assert lines[3] == f"bodyreplay {(tmp_path/'film/bc/replay.json').resolve()} 2000"
     assert "bodyarena 17" not in lines and lines[-3:] == ["rec duel", "wait 600100", "stop"]
+
+
+def test_a_wall_arena_keeps_its_reset_fields_but_not_the_placement_proof(tmp_path):
+    write(tmp_path/"ep", setup={"schema_version": 1, "geometry": "near_wall", "yaw_offset_deg": 0, "center_offset_cm": [0, 0],
+                                "geometry_proof": {"kind": "existing_static_wall"}})
+    subprocess.run([sys.executable, str(SCRIPT), "prepare", f"wall={tmp_path/'ep'}", "--output", str(tmp_path/"film")],
+                   check=True, capture_output=True)
+    arena = json.loads((tmp_path/"film/wall/replay.json").read_text())["arena"]
+    assert arena["geometry"] == "near_wall" and arena["center_offset_cm"] == [0, 0]
+    assert "geometry_proof" not in arena and "schema_version" not in arena

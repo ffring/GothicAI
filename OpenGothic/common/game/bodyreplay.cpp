@@ -190,6 +190,21 @@ void BodyReplay::load(const std::string& path, const std::string& outDir, uint64
   config.side=unsigned(field(arena,"side"));
   config.distanceCm=float(field(arena,"distance_cm"));
   config.timeoutMs=field(arena,"timeout_ms");
+  // The runner's optional reset fields: an arena against a wall, turned or moved actors.
+  const auto number=[&](const char* key,float fallback) {
+    return arena.HasMember(key) && arena[key].IsNumber() ? arena[key].GetFloat() : fallback;
+    };
+  if(arena.HasMember("geometry") && arena["geometry"].IsString())
+    config.geometry=arena["geometry"].GetString();
+  if(arena.HasMember("wall_clearance_cm"))
+    config.wallClearanceCm=number("wall_clearance_cm",0);
+  if(arena.HasMember("wall_tangent_sign") && arena["wall_tangent_sign"].IsInt())
+    config.wallTangentSign=arena["wall_tangent_sign"].GetInt();
+  config.yawOffsetDeg=number("yaw_offset_deg",0);
+  config.opponentYawOffsetDeg=number("opponent_yaw_offset_deg",0);
+  config.separationYawDeg=number("separation_yaw_deg",0);
+  if(arena.HasMember("center_offset_cm") && arena["center_offset_cm"].IsArray() && arena["center_offset_cm"].Size()==2)
+    config.centerOffsetCm={arena["center_offset_cm"][0].GetFloat(),arena["center_offset_cm"][1].GetFloat()};
 
   r.commands.clear();
   for(const auto& item:doc["commands"].GetArray()) {
