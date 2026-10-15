@@ -900,7 +900,7 @@ async def serve(args: argparse.Namespace) -> int:
                 habits_of=habits_of,
                 view_of=perception.english,
                 # each npc's character, from its card (characters.py)
-                builder=SituationBuilder(traits=Traits(personas.cards)),
+                builder=SituationBuilder(traits=Traits(personas.cards), places=place_book),
                 # the new day menu applied, or still asked in shadow beside the old one
                 config=PlannerConfig(apply_day=args.apply_day),
                 trace=trace,  # its decisions: data for fine-tuning (M5d)

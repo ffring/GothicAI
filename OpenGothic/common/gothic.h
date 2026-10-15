@@ -25,6 +25,7 @@ class MusicDefinitions;
 class FightAi;
 class IniFile;
 class Serialize;
+struct PhysicsNoise;
 
 class Gothic final {
   public:
@@ -205,6 +206,8 @@ class Gothic final {
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onExternalPerception;
     // perceptions of npc's that follow their scripts (seen, not consumed): ai_bridge watches them
     Tempest::Signal<void(Npc&,Npc&,Npc*,PercType)>                      onObservedPerception;
+    // A physical impact actually heard, before the listener turns towards it.
+    Tempest::Signal<void(Npc&,const PhysicsNoise&)>                     onPhysicsNoiseHeard;
     // a perception the scripts would handle may be taken over (true: the scripts do not get it now);
     // the taker decides and hands it back with Npc::passPerception if it does not act on it
     std::function<bool(Npc&,Npc&,Npc*,PercType)>                         interceptPerception;

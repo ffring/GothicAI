@@ -15,6 +15,7 @@
 
 class Npc;
 class World;
+struct PhysicsNoise;
 
 // NPCs that follow their routine, as seen by the AI server's planner (protocol v5):
 // - npc_roster: npc's around the player, twice a second;
@@ -35,6 +36,7 @@ class NpcObserver final {
 
     void tick(World& world);
     void perception(World& world, Npc& self, Npc& other, Npc* victim, PercType perc);
+    void physicsNoise(World& world, Npc& self, const PhysicsNoise& noise);
     void act(World& world, const rapidjson::Value& msg);
     // threats to free npc's (monsters near or attacking, attacks by npc's) are held back from the scripts
     // for the server's behavioral model; it answers with a verdict, or the scripts get them after HoldMs
@@ -64,6 +66,7 @@ class NpcObserver final {
       bool          arrival = false;
       Tempest::Vec3 at;
       float         radius  = 0;
+      bool          investigate = false;
       };
 
     void emitRoster(World& world);

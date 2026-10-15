@@ -18,7 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 35
+PROTOCOL_VERSION = 36
+NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 
 # --- game -> server -----------------------------------------------------------
 
@@ -494,7 +495,10 @@ class NpcEvent(_GameMessage):
     or the victim), an npc attacking it (`npc_attack`), someone attacking the hero (`hero_attacked`).
     The end of it: a monster killed (`monster_killed`; `other` is the killer, the npc itself too, `victim`
     the monster's symbol, `detail` its name).
-    `distance` is from the npc to `other`. The engine's own perceptions still run; this is a copy."""
+    Noise (v36): `at` is the impact point in cm, `place` its nearest waypoint (named by the server's
+    place book), `loudness` the source volume 0..1, `source` what struck. `distance` is to the impact,
+    and `other`/`other_name` are supplied only when the npc saw the culprit before turning to the sound.
+    Other events measure `distance` to `other`. The engine's own perceptions still run."""
 
     type: Literal["npc_event"]
     npc: str
@@ -504,13 +508,25 @@ class NpcEvent(_GameMessage):
     distance: float | None = None
     detail: str | None = None
     victim: str | None = None  # monster_killed: the dead monster's symbol
+    at: tuple[float, float, float] | None = None  # noise: impact point, cm
+    place: str | None = None  # noise: nearest waypoint, resolved through PlaceBook
+    loudness: float | None = None  # noise: source volume, 0..1
+    source: str | None = None  # noise: table, barrel, cup, body, ...
+
+    @model_validator(mode="before")
+    @classmethod
+    def unknown_noise_culprit(cls, value: Any) -> Any:
+        # Older events omit `other` to mean PLAYER. A sound never implies who made it.
+        if isinstance(value, dict) and value.get("kind") == "noise" and "other" not in value:
+            return {**value, "other": ""}
+        return value
 
 
 class NpcIdle(_GameMessage):
     """A soft action (`npc_act`) is over (v5): a good moment to decide what the npc does next.
     `reason`: done (its AI queue ran empty), gone (down, removed, taken over), timeout, arrived (v15: a
     `start_activity` with `arrive` got there) or failed (v15: a `give` that could not be done, `detail`
-    says why)."""
+    says why); interrupted (v36: investigation gave way to combat or dialogue)."""
 
     type: Literal["npc_idle"]
     npc: str
@@ -967,6 +983,7 @@ NpcActType = Literal[
     "start_activity",
     "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
     "give",  # v15: args.npc, args.item, args.count: to another npc; npc_idle done or failed
+    "investigate",  # v36: args.at xyz cm, args.ms scanning time; then back to the routine
 ]
 
 
@@ -1170,6 +1187,7 @@ DebugCommand = Literal[
     "player_take",
     "own_npc",
     "triggers",
+    "physics_noise",  # v36: native tavern fixture, devmode only
 ]
 
 

@@ -3527,6 +3527,9 @@ void Npc::tick(uint64_t dt) {
     physicsNoiseUntil = 0;
     }
 
+  if(tickPhysicsInvestigation(dt))
+    return;
+
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
     if(physicalMovement)
@@ -5790,8 +5793,10 @@ bool Npc::canHearPhysicsNoise() const {
 
 bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
   const uint64_t now = owner.tickCount();
-  if(noise.culprit==this || !canHearPhysicsNoise() || now<physicsNoiseNextTime)
+  if(noise.culprit==this || !canHearPhysicsNoise() || isPhysicsInvestigating() || now<physicsNoiseNextTime)
     return false;
+  // The observer checks sight now, before either the native turn or a script callback.
+  Gothic::inst().onPhysicsNoiseHeard(*this,noise);
   physicsNoiseNextTime = now+2001;
   physicsNoisePosition = noise.position;
   physicsNoiseUntil = now+2000;
@@ -5804,6 +5809,83 @@ bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
     physicsNoiseCallback = false;
     }
   TestBench::physicsNoiseHeard(*this,noise,callbackDispatched);
+  return true;
+  }
+
+bool Npc::startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs) {
+  if(!canHearPhysicsNoise() || !isHuman() || weaponState()!=WeaponState::NoWeapon)
+    return false;
+  clearAiQueue();
+  physicsInvestigationPosition = at;
+  physicsInvestigationUntil = owner.tickCount()+45000;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationScanMs = std::clamp<uint64_t>(scanMs,2000,8000);
+  physicsInvestigationWalking = false;
+  return true;
+  }
+
+void Npc::stopPhysicsInvestigation(bool resume) {
+  if(physicsInvestigationUntil==0)
+    return;
+  physicsInvestigationUntil = 0;
+  physicsInvestigationScanUntil = 0;
+  // A new owner or native state may already have installed its own movement.
+  if(go2.flag==GT_Point && (go2.pos-physicsInvestigationPosition).quadLength()<1.f)
+    clearGoTo();
+  if(resume) {
+    clearAiQueue();
+    resumeAiRoutine();
+    }
+  }
+
+bool Npc::tickPhysicsInvestigation(uint64_t dt) {
+  if(physicsInvestigationUntil==0)
+    return false;
+  if(!canHearPhysicsNoise() || weaponState()!=WeaponState::NoWeapon) {
+    stopPhysicsInvestigation(false);
+    return false;
+    }
+  const uint64_t now = owner.tickCount();
+  if(now>=physicsInvestigationUntil) {
+    stopPhysicsInvestigation(true);
+    return false;
+    }
+  if(physicsInvestigationScanUntil!=0) {
+    if(now>=physicsInvestigationScanUntil) {
+      stopPhysicsInvestigation(true);
+      return false;
+      }
+    // Look to either side of the impact, then back, while standing at the spot.
+    const uint64_t elapsed = physicsInvestigationScanMs-(physicsInvestigationScanUntil-now);
+    const float offset = elapsed<physicsInvestigationScanMs/3 ? -.7f :
+                         elapsed<2*physicsInvestigationScanMs/3 ? .7f : 0.f;
+    const float facing = physicsInvestigationFacing+offset;
+    implTurnTo(std::cos(facing),std::sin(facing),AnimationSolver::TurnType::Std,dt);
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!setInteraction(nullptr)) {
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if((position()-physicsInvestigationPosition).quadLength()<140.f*140.f) {
+    clearGoTo();
+    stopWalking();
+    physicsInvestigationFacing = rotationRad();
+    physicsInvestigationScanUntil = now+physicsInvestigationScanMs;
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!physicsInvestigationWalking) {
+    wayPath.clear();
+    attachToPoint(nullptr);
+    go2.clear();
+    go2.set(physicsInvestigationPosition);
+    physicsInvestigationWalking = true;
+    }
+  // Position targets use the same native movement/collision checks as AI_UseMob.
+  // A blocked approach ends at the deadline; it never teleports the listener.
+  implGoTo(dt,60.f);
   return true;
   }
 
@@ -6092,6 +6174,8 @@ bool Npc::isAiBusy() const {
   }
 
 void Npc::clearAiQueue() {
+  physicsInvestigationUntil = 0;
+  physicsInvestigationScanUntil = 0;
   currentLookAt    = nullptr;
   currentLookAtNpc = nullptr;
   visual.setHeadRotation(0,0);

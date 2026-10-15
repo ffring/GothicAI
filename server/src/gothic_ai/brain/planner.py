@@ -175,6 +175,7 @@ class Flight:
     shadow_menu: dict[str, DayOption] = field(default_factory=dict)  # the do menu in shadow
     # what the applied question did, {question, choice, applied, why}: the shadow row's `code`
     outcome: dict[str, Any] = field(default_factory=dict)
+    react_args: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -311,6 +312,10 @@ class NpcPlanner:
                     detail=msg.detail,
                     other_name=msg.other_name,
                     victim=msg.victim,
+                    position=tuple(msg.at) if msg.at is not None else None,
+                    place=msg.place,
+                    loudness=msg.loudness,
+                    source=msg.source,
                 )
             case NpcIdle():
                 self.on_idle(msg.npc, now)
@@ -360,15 +365,22 @@ class NpcPlanner:
         kind: str,
         now: float,
         *,
-        other: str = "PLAYER",
+        other: str | None = None,
         distance_cm: float | None = None,
         detail: str | None = None,
         other_name: str | None = None,
         victim: str | None = None,
+        position: tuple[float, float, float] | None = None,
+        place: str | None = None,
+        loudness: float | None = None,
+        source: str | None = None,
     ) -> None:
         rec = self.npcs.get(npc.upper())
         if rec is None or (rec.tier is Tier.OFF and rec.activity != "fight"):
             return
+        if kind == "noise" and (rec.activity != "routine" or rec.talking):
+            return  # the bridge only reports sounds heard by free npc's; do not retain a late one
+        other = (other or "") if kind == "noise" else (other or "PLAYER")
         self.stats.events += 1
         kind, detail = normalize(kind, other, other_name, detail)
         context = ""
@@ -380,7 +392,9 @@ class NpcPlanner:
             context = next((THREAT_CONTEXT[k] for k in THREAT_CONTEXT if k in gone), "")
             if other.upper() == rec.id:
                 other_name = "you"
-        stim = Stimulus(kind, now, other, distance_cm, detail, other_name, context)
+        stim = Stimulus(
+            kind, now, other, distance_cm, detail, other_name, context, position, place, loudness, source
+        )
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
             rec.last_interaction = now
@@ -689,6 +703,7 @@ class NpcPlanner:
         shadow: str | None = None
         options: dict[str, DayOption] = {}
         shadow_menu: dict[str, DayOption] = {}
+        react_args: dict[str, dict[str, Any]] = {}
         if pend.purpose == "plan":
             slot = self.routines.get(rec.id)
             if slot is None or slot.info is None or self.game_time is None:
@@ -721,6 +736,9 @@ class NpcPlanner:
             deadline = self.cfg.deadline_ms["far"]
         else:
             sit = self.builder.react(ctx, rec.stimuli, now, clock)
+            noise = max((s for s in rec.stimuli if s.kind == "noise"), key=lambda s: s.at, default=None)
+            if noise is not None and noise.position is not None:
+                react_args["investigate"] = {"at": list(noise.position), "ms": 5000}
             key = "urgent" if pend.urgent else ("near" if rec.tier is Tier.NEAR else "mid")
             deadline = self.cfg.deadline_ms[key]
         lane: Lane = "urgent" if pend.urgent else "background"
@@ -738,6 +756,7 @@ class NpcPlanner:
             shadow=shadow,
             options=options,
             shadow_menu=shadow_menu,
+            react_args=react_args,
         )
         rec.flight = flight
         self.stats.sent[lane] += 1
@@ -899,9 +918,13 @@ class NpcPlanner:
             flight.stimuli,
             latency_ms=(now - flight.sent) * 1000,
             target=flight.target,
-            args=flight.plan_args.get(choice),
+            args=(flight.plan_args if flight.purpose == "plan" else flight.react_args).get(choice),
             own=newest is not None and newest.other.upper() == rec.id,
         )
+        if choice == "investigate" and flight.purpose == "react":
+            # The bridge owns the walk, scan and return. An idle/timer must not send it back to the
+            # same noise after it has finished; a newly heard sound gets a fresh observation.
+            rec.stimuli = [s for s in rec.stimuli if s.kind != "noise"]
         if flight.purpose == "react":
             rec.body = (choice, now) if choice in TAKES_BODY else None
         if choice == "approach_talk" and flight.purpose == "react" and self.on_approach is not None:

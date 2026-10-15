@@ -201,6 +201,158 @@ async def test_events_debounce_into_one_request() -> None:
     assert "pick_up" not in call["questions"]["react"]["criteria"]  # the game never sends it: no option
 
 
+async def test_noise_reaches_decider_without_inventing_a_culprit_and_uses_its_location() -> None:
+    from gothic_ai.brain.apply import actions_for
+
+    planner, decider, applier, clock = make(FakeDecider("investigate"))
+    planner.on_roster([entry("PATRON", 5)], clock.t)
+    planner.on_message(
+        parse_game_message(
+            json.dumps(
+                {
+                    "type": "npc_event",
+                    "npc": "PATRON",
+                    "kind": "noise",
+                    "distance": 500,
+                    "at": [1200, 350, -600],
+                    "place": "in Koragon's tavern",
+                    "loudness": 0.7,
+                    "source": "barrel",
+                }
+            )
+        )
+    )
+    assert planner.npcs["PATRON"].stimuli[0].other == ""
+    assert planner.npcs["PATRON"].last_interaction is None
+    await step(planner, clock, 0.3)
+    (call,) = decider.calls
+    assert call["lane"] == "background"
+    assert "5 m away in Koragon's tavern" in call["state"]
+    assert "a barrel hit something (loudness 0.70)" in call["state"]
+    assert "You did not see who caused it." in call["state"]
+    assert "You saw the hero cause it" not in call["state"]
+    assert set(call["questions"]["react"]["criteria"]) == {
+        "continue",
+        "look_at",
+        "investigate",
+        "call_guards",
+        "comment",
+    }
+    (decision,) = applier.recent
+    assert decision.choice == "investigate" and decision.stimuli == ("noise",)
+    assert actions_for(decision) == [("investigate", {"at": [1200, 350, -600], "ms": 5000})]
+    await step(planner, clock, 9)
+    assert len(applier.recent) == 1  # the same noise does not send it on another trip
+
+
+@pytest.mark.parametrize(
+    ("other", "other_name", "seen"), [("PLAYER", None, "the hero"), ("VLK_400", "Горожанин", "Горожанин")]
+)
+async def test_noise_identifies_only_the_witnessed_culprit(other, other_name, seen) -> None:
+    planner, decider, _, clock = make(FakeDecider("continue"))
+    planner.on_roster([entry("PATRON", 25)], clock.t)  # salient even for MID npc's
+    planner.on_event(
+        "PATRON",
+        "noise",
+        clock.t,
+        other=other,
+        other_name=other_name,
+        distance_cm=600,
+        position=(1, 2, 3),
+        source="table",
+        loudness=0.8,
+    )
+    await step(planner, clock, 0.3)
+    assert f"You saw {seen} cause it." in decider.calls[0]["state"]
+
+
+@pytest.mark.parametrize(
+    ("activity", "talking"), [("dialog", False), ("fight", False), ("attached", False), ("routine", True)]
+)
+async def test_busy_npc_does_not_retain_a_noise(activity, talking) -> None:
+    planner, decider, _, clock = make()
+    planner.on_roster([entry("PATRON", 5, activity=activity)], clock.t)
+    planner.talking("PATRON", talking)
+    planner.on_event("PATRON", "noise", clock.t, position=(1, 2, 3), source="body", loudness=0.9)
+    await step(planner, clock, 1)
+    assert decider.calls == [] and planner.npcs["PATRON"].stimuli == []
+
+
+def test_noise_menu_and_comment_keep_attention_on_the_sound() -> None:
+    from gothic_ai.brain.apply import Decision, actions_for
+    from gothic_ai.brain.situation import NpcContext, SituationBuilder
+    from gothic_ai.brain.stimuli import Stimulus
+
+    stimulus = Stimulus("noise", 10, position=(1, 2, 3), source="cup")
+    react = SituationBuilder().react(NpcContext("PATRON", "Patron"), [stimulus], 10, None)
+    assert "You did not see who caused it." in react.state
+
+    def decision(choice: str, **kwargs) -> Decision:
+        return Decision("PATRON", "react", choice, 0.9, {}, ("noise",), **kwargs)
+
+    assert actions_for(decision("look_at")) == []  # native noise reaction already did the turn
+    assert actions_for(decision("comment")) == [("say_svm", {"svm": "WHATWASTHAT", "overlay": True})]
+    assert actions_for(decision("call_guards")) == [("say_svm", {"svm": "GUARDS", "overlay": True})]
+    assert actions_for(decision("investigate")) == []  # never walk toward an invented destination
+    without_location = SituationBuilder().react(
+        NpcContext("PATRON", "Patron"), [Stimulus("noise", 10)], 10, None
+    )
+    assert "investigate" not in without_location.questions["react"]["criteria"]
+
+
+def test_noise_place_uses_existing_place_book() -> None:
+    from gothic_ai.brain.situation import NpcContext, SituationBuilder
+    from gothic_ai.brain.stimuli import Stimulus
+    from gothic_ai.places import PlaceBook
+
+    book = PlaceBook(
+        {
+            "points": {"TAVERN_01": 0},
+            "places": [
+                {
+                    "id": "TAVERN",
+                    "ru": "Таверна",
+                    "where_ru": "в таверне",
+                    "en": "Koragon's tavern",
+                    "where_en": "in Koragon's tavern",
+                }
+            ],
+        }
+    )
+    stimulus = Stimulus("noise", 10, place="TAVERN_01", source="barrel", distance_cm=500)
+    react = SituationBuilder(places=book).react(NpcContext("PATRON", "Patron"), [stimulus], 10, None)
+    assert "in Koragon's tavern" in react.state and "TAVERN_01" not in react.state
+    assert stimulus.place == "TAVERN_01"  # the input event is still the bridge's observation
+
+
+@pytest.mark.parametrize("protocol_offset", [None, -1, 0])
+async def test_investigation_is_only_sent_to_a_bridge_that_supports_it(protocol_offset) -> None:
+    from types import SimpleNamespace
+
+    from gothic_ai.brain import Decision, GameApplier
+    from gothic_ai.protocol import NOISE_PROTOCOL
+
+    class Link:
+        def __init__(self):
+            self.hello = (
+                None
+                if protocol_offset is None
+                else SimpleNamespace(protocol=NOISE_PROTOCOL + protocol_offset)
+            )
+            self.sent: list[tuple] = []
+
+        async def npc_act(self, npc, action, **args):
+            self.sent.append((npc, action, args))
+
+    link = Link()
+    GameApplier(link).apply(  # type: ignore[arg-type]
+        Decision("PATRON", "react", "investigate", 0.9, {}, ("noise",), args={"at": [1, 2, 3], "ms": 5000})
+    )
+    await settle()
+    expected = [("PATRON", "investigate", {"at": [1, 2, 3], "ms": 5000})] if protocol_offset == 0 else []
+    assert link.sent == expected
+
+
 async def test_scripted_events_are_context_only() -> None:
     planner, decider, _, clock = make()
     planner.on_roster([entry("GUARD", 8)], clock.t)
