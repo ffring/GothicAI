@@ -941,6 +941,87 @@ public:
     observationFile.flush(); timingFile.flush();
     return result;
   }
+  // Lockstep training transport: advance tick by tick until a watched actor's newest row
+  // since the previous check would let a per-tick client decide, then return every row and
+  // control event in the same reply. One round trip per decision instead of three per tick.
+  // After each tick the control watchdogs are pumped exactly as that client's body_events poll
+  // would; the stop predicate mirrors its eligibility check (lease, can_decide, valid mask).
+  Json arenaAdvance(const Json& request) {
+    if(!loaded || !BodyArena::enabled() || !BodyArena::ready() || !BodyArena::started())
+      throw std::runtime_error("reset with arena before arena_advance");
+    if(modeNow!="lockstep" || paused) throw std::runtime_error("arena_advance requires unpaused lockstep");
+    if(!request.HasMember("max_substeps") || !request["max_substeps"].IsUint() ||
+       request["max_substeps"].GetUint()==0 || request["max_substeps"].GetUint()>2000)
+      throw std::runtime_error("arena_advance max_substeps must be 1..2000");
+    if(!request.HasMember("until") || !request["until"].IsArray() || request["until"].Size()>4)
+      throw std::runtime_error("arena_advance until must be an array of at most four watches");
+    struct Watch final { uint64_t entity=0, session=0, world=0, generation=0; bool periodic=false; std::vector<unsigned> actions; };
+    std::vector<Watch> watches;
+    for(const auto& item:request["until"].GetArray()) {
+      if(!item.IsObject()) throw std::runtime_error("arena_advance watch must be an object");
+      Watch watch;
+      const auto field=[&](const char* key) {
+        if(!item.HasMember(key) || !item[key].IsUint64()) throw std::runtime_error(std::string("arena_advance watch ")+key+" must be uint64");
+        return item[key].GetUint64();
+        };
+      watch.entity=field("entity_id"); watch.session=field("session_epoch");
+      watch.world=field("world_epoch"); watch.generation=field("control_generation");
+      if(!item.HasMember("periodic") || !item["periodic"].IsBool()) throw std::runtime_error("arena_advance watch periodic must be boolean");
+      watch.periodic=item["periodic"].GetBool();
+      if(item.HasMember("actions")) {
+        if(!item["actions"].IsArray()) throw std::runtime_error("arena_advance watch actions must be an array");
+        for(const auto& action:item["actions"].GetArray()) {
+          if(!action.IsUint() || action.GetUint()>11) throw std::runtime_error("arena_advance watch action must be 0..11");
+          watch.actions.push_back(action.GetUint());
+          }
+        }
+      watches.push_back(std::move(watch));
+      }
+    // Rows queued since the client's last drain (e.g. by its commands) count for the first check.
+    uint64_t mark=BodyObservations::queuedTotal()-BodyObservations::queuedCount();
+    const auto before=steps;
+    std::string reason="max_substeps";
+    uint64_t decisionEntity=0;
+    for(unsigned i=0;i<request["max_substeps"].GetUint();++i) {
+      if(complete() || BodyArena::reactionArmed()) break;
+      oneStep();
+      if(!BodyArena::complete()) BodyController::pumpWatchdogs();
+      const auto rows=BodyObservations::queuedSince(mark);
+      mark=BodyObservations::queuedTotal();
+      for(const auto& watch:watches) {
+        const BodyObservations::QueuedRow* newest=nullptr;
+        for(const auto& row:rows)
+          if(row.entityId==watch.entity && row.sessionEpoch==watch.session &&
+             row.worldEpoch==watch.world && row.controlGeneration==watch.generation)
+            newest=&row;
+        if(newest==nullptr || (watch.periodic && !newest->periodic) || !newest->canDecide || !newest->actionMaskValid)
+          continue;
+        if(!watch.actions.empty() &&
+           std::none_of(watch.actions.begin(),watch.actions.end(),[&](unsigned action) { return newest->actionMask[action]; }))
+          continue;
+        decisionEntity=watch.entity;
+        break;
+        }
+      if(decisionEntity!=0) { reason="decision"; break; }
+      if(BodyObservations::queuedCount()*4>=BodyObservations::queueCapacity()*3) { reason="queue_bound"; break; }
+      }
+    if(complete()) reason="terminal";
+    auto result=status(); auto& allocator=result.GetAllocator();
+    result.AddMember("advanced_substeps",steps-before,allocator);
+    result.AddMember("stop_reason",rapidjson::Value(reason.c_str(),allocator),allocator);
+    result.AddMember("decision_entity_id",decisionEntity,allocator);
+    Json observations; observations.Parse(BodyObservations::drainJson().c_str());
+    Json events; events.Parse(BodyController::drainJson().c_str());
+    if(observations.HasParseError() || !observations.IsObject() || events.HasParseError() || !events.IsObject())
+      throw std::runtime_error("invalid native advance packet");
+    for(const char* key:{"dropped_total","dropped_since_drain","event_dropped_total"})
+      result.AddMember(rapidjson::Value((std::string("observation_")+key).c_str(),allocator),rapidjson::Value(observations[key],allocator),allocator);
+    result.AddMember("observations",rapidjson::Value(observations["observations"],allocator),allocator);
+    result.AddMember("events",rapidjson::Value(events["events"],allocator),allocator);
+    result.AddMember("events_dropped_total",rapidjson::Value(events["dropped_total"],allocator),allocator);
+    observationFile.flush(); timingFile.flush();
+    return result;
+  }
   bool isPaused() const { return paused; }
   bool isLoaded() const { return loaded; }
   Clock::time_point deadline() const { return due; }
@@ -1394,6 +1475,10 @@ int main(int argc, const char** argv) {
         else if(cmd=="arena_status") runner.arenaSnapshot();
         else if(cmd=="arena_step") {
           auto response=runner.arenaStep(request);
+          echoId(response,request); send(protocol,response); continue;
+        }
+        else if(cmd=="arena_advance") {
+          auto response=runner.arenaAdvance(request);
           echoId(response,request); send(protocol,response); continue;
         }
         else if(cmd=="body_fixture") {

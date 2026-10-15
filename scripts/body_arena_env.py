@@ -186,7 +186,10 @@ class EpisodeEnv:
 
     def pull(self) -> tuple[dict[str, Any], ...]:
         response = self.runner.call({"cmd": "body_observations", "max": 256})
-        rows = response.get("observations", response.get("rows"))
+        return self.accept_rows(response.get("observations", response.get("rows")))
+
+    def accept_rows(self, rows) -> tuple[dict[str, Any], ...]:
+        """Validate drained rows in order and keep each actor's latest one under its lease."""
         if not isinstance(rows, list):
             raise ArenaInfrastructureError("numeric observation packet has no rows")
         for row in rows:

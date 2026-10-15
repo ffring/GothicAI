@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -28,6 +29,7 @@ class BodyObservations final {
     static bool enabled();
     static size_t watchedCount();
     static size_t queuedCount();
+    static size_t queueCapacity();
     static void setSink(std::function<void(std::string_view)> sink);
     static uint64_t lastStepCostUs();
     static size_t lastStepActorCount();
@@ -61,4 +63,15 @@ class BodyObservations final {
     // dropped counters account for bounded-queue losses. Draining never advances game time.
     static std::string drainJson();
     static std::string statsJson();
+
+    // Decision-relevant fields of one queued row, kept beside the serialized queue. The runner's
+    // arena_advance stops on them exactly where a per-tick client would make its next decision.
+    struct QueuedRow final {
+      uint64_t entityId = 0, sessionEpoch = 0, worldEpoch = 0, controlGeneration = 0;
+      bool periodic = false, canDecide = false, actionMaskValid = false;
+      std::array<bool,12> actionMask = {};
+      };
+    // Rows queued in this generation so far, and the still-queued ones queued after `total`.
+    static uint64_t queuedTotal();
+    static std::vector<QueuedRow> queuedSince(uint64_t total);
   };

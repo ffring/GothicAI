@@ -95,6 +95,8 @@ struct State final {
   std::vector<Actor> actors;
   std::unordered_map<const Npc*,uint64_t> ids;
   std::deque<std::string> queue;
+  std::deque<BodyObservations::QueuedRow> queuedRows; // parallel to queue
+  uint64_t queuedTotal = 0;
   std::function<void(std::string_view)> sink;
   uint64_t emitted = 0, dropped = 0, lastDrainDropped = 0, eventDropped = 0;
   uint64_t invalid = 0, missedPeriods = 0, calls = 0, totalCost = 0, stepCost = 0;
@@ -215,6 +217,7 @@ void BodyObservations::configure(const Config& config) {
   s.config = config;
   while(s.queue.size()>config.queueCapacity) {
     s.queue.pop_front();
+    s.queuedRows.pop_front();
     ++s.dropped;
     }
   }
@@ -241,6 +244,7 @@ void BodyObservations::disable() { state().enabled = false; clearActors(); }
 bool BodyObservations::enabled() { return state().enabled; }
 size_t BodyObservations::watchedCount() { return state().actors.size(); }
 size_t BodyObservations::queuedCount() { return state().queue.size(); }
+size_t BodyObservations::queueCapacity() { return state().config.queueCapacity; }
 void BodyObservations::setSink(std::function<void(std::string_view)> sink) { state().sink = std::move(sink); }
 uint64_t BodyObservations::lastStepCostUs() { return state().stepCost; }
 size_t BodyObservations::lastStepActorCount() { return state().stepActors; }
@@ -544,9 +548,17 @@ void BodyObservations::sample(Npc& npc, uint64_t now, bool force) {
     BodyTrajectory::observe(j.s);
     if(s.queue.size()==s.config.queueCapacity) {
       s.queue.pop_front();
+      s.queuedRows.pop_front();
       ++s.dropped;
       }
     s.queue.push_back(std::move(j.s));
+    BodyObservations::QueuedRow queued;
+    queued.entityId=idFor(npc); queued.sessionEpoch=processEpoch(); queued.worldEpoch=s.generation;
+    queued.controlGeneration=control.owned ? control.controlGeneration : 0;
+    queued.periodic=periodic; queued.canDecide=control.canDecide; queued.actionMaskValid=control.owned;
+    if(control.owned) queued.actionMask=control.mask;
+    s.queuedRows.push_back(queued);
+    ++s.queuedTotal;
     s.maxQueue = std::max(s.maxQueue,s.queue.size());
     ++s.emitted; ++s.stepActors;
     npc.traceVisibilityDiagnostic("post_observation");
@@ -584,9 +596,18 @@ std::string BodyObservations::drainJson() {
     }
   j.s += "]}";
   s.queue.clear();
+  s.queuedRows.clear();
   s.lastDrainDropped = s.dropped;
   s.drainCost += micros(start);
   return std::move(j.s);
+  }
+
+uint64_t BodyObservations::queuedTotal() { return state().queuedTotal; }
+
+std::vector<BodyObservations::QueuedRow> BodyObservations::queuedSince(uint64_t total) {
+  const auto& s = state();
+  const auto fresh = size_t(std::min<uint64_t>(s.queuedTotal-std::min(total,s.queuedTotal),s.queuedRows.size()));
+  return std::vector<QueuedRow>(s.queuedRows.end()-std::ptrdiff_t(fresh),s.queuedRows.end());
   }
 
 std::string BodyObservations::statsJson() {

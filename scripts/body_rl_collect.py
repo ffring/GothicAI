@@ -11,7 +11,8 @@ label) a self-imitation round trains on. Measurement and data only: no quality c
 Decisions follow the stage 8 realtime driver: the first one after one tick (--start-substeps 1)
 and native command TTL 100 ms. With them a greedy rollout reproduces the realtime driver's
 episodes (scripts/body_schedule_equivalence.py); the 9.2 rounds used 2 and 1000 and fitted
-a lockstep-only schedule.
+a lockstep-only schedule. Between decisions the runner advances on its own (arena_advance) to
+the tick where the per-tick loop would decide next; --per-tick keeps one round trip per tick.
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ TRAINING_ENV = {"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR
                 "VK_ICD_FILENAMES": "/nonexistent/no-vulkan.json", "OPENGOTHIC_TEXTURES": "",
                 "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 HEARTBEAT_EVERY_S = 0.25
+# Longest arena_advance; keeps the bounded native queues far from overflow between drains.
+ADVANCE_MAX_SUBSTEPS = 30
 # Short arena tasks keep their stage-8 distance and timeout; duels vary the distance.
 TASK_SETUP = {"distance": (600, 10000), "attack": (150, 5000), "block": (150, 5000)}
 
@@ -81,21 +84,36 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
             pass
 
     class LeanEnv(PolicyEpisodeEnv):
-        """Heartbeats on wall time; native events are read once at the end."""
+        """Heartbeats on wall time; per-tick native events are not read."""
         last_heartbeat = 0.0
 
-        def step(self, substeps=1):
+        def heartbeat(self):
             now = time.monotonic()
-            if now-self.last_heartbeat >= HEARTBEAT_EVERY_S:
-                self.last_heartbeat = now
-                for entity, lease in list(self.leases.items()):
-                    response = self.runner.call({"cmd": "body_heartbeat", **lease, "provider": self.owner_provider})
-                    if response.get("accepted") is not True and response.get("reason") != "release_pending":
-                        self.leases.pop(entity)
-                        self.fallbacks.append({"entity_id": entity, "reason": response.get("reason"), "kind": "ownership_loss"})
+            if now-self.last_heartbeat < HEARTBEAT_EVERY_S:
+                return
+            self.last_heartbeat = now
+            for entity, lease in list(self.leases.items()):
+                response = self.runner.call({"cmd": "body_heartbeat", **lease, "provider": self.owner_provider})
+                if response.get("accepted") is not True and response.get("reason") != "release_pending":
+                    self.leases.pop(entity)
+                    self.fallbacks.append({"entity_id": entity, "reason": response.get("reason"), "kind": "ownership_loss"})
+
+        def step(self, substeps=1):
+            self.heartbeat()
             response = self.runner.call({"cmd": "arena_step", "substeps": substeps})
             self._arena(response)
             self.pull()
+            return response.get("advanced_substeps", 0)
+
+        def advance(self, watches, max_substeps):
+            """One round trip to the next tick where a watched actor could decide, or terminal."""
+            self.heartbeat()
+            response = self.runner.call({"cmd": "arena_advance", "max_substeps": max_substeps, "until": watches})
+            self._arena(response)
+            if response.get("observation_dropped_since_drain"):
+                raise ArenaInfrastructureError("arena_advance lost queued observations")
+            self.pulled.extend(self.accept_rows(response.get("observations")))
+            self.events.extend(response.get("events", []))
             return response.get("advanced_substeps", 0)
 
     output = Path(options["output"])/f"worker-{worker:02d}"
@@ -134,8 +152,9 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                     if lease is None or any(row.get(key) != lease[key] for key in LEASE_KEYS):
                         continue
                     stream += 1
+                    # A per-tick client processes each periodic row on its own tick: now == row time.
                     response = policy.process({"stream_seq": stream, "observation": row, "source": "periodic_observer",
-                                               "now_game_ms": env.arena["game_ms"], "checkpoint_sha256": policy.checkpoint_sha256,
+                                               "now_game_ms": row["t_game_ms"], "checkpoint_sha256": policy.checkpoint_sha256,
                                                "command_enabled": command_enabled,
                                                "memory_only": not command_enabled or row.get("can_decide") is not True})
                     if response.get("model_processed"):
@@ -145,6 +164,16 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                     elif response.get("status") == "fallback" and command_enabled:
                         stats["fallbacks"] += 1
                         env.release_to_native(primary, response.get("reason"))
+
+            def watches():
+                # Exactly the per-tick checks below: the primary on a periodic row, and the
+                # block task's held opponent while its single attack is still unsent.
+                out = []
+                if primary in env.leases:
+                    out.append({**{key: env.leases[primary][key] for key in LEASE_KEYS}, "periodic": True})
+                if not adversary_sent and opponent in env.leases:
+                    out.append({**{key: env.leases[opponent][key] for key in LEASE_KEYS}, "periodic": False, "actions": [6, 2]})
+                return out
 
             rollout_started = time.monotonic()
             feed(False)
@@ -163,6 +192,7 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                     elif env.eligible(opponent, 2):
                         env.act(opponent, 2)
                 row = env.latest.get(primary)
+                undecided = False
                 if row is not None and row.get("periodic") is True and env.eligible(primary):
                     response = policy.arbitrate(row, stream_seq=stream)
                     if response.get("status") == "decision" and response.get("action_id") is not None:
@@ -177,7 +207,14 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                     elif response.get("status") == "fallback":
                         stats["fallbacks"] += 1
                         env.release_to_native(primary, response.get("reason"))
-                advanced = env.step(1)
+                    else:
+                        # The runtime declined an eligible row: re-check it tick by tick, as before.
+                        undecided = True
+                if options.get("advance") and not undecided:
+                    advanced = env.advance(watches(), min(ADVANCE_MAX_SUBSTEPS, options["max_substeps"]-ticks))
+                    stats["advance_calls"] += 1
+                else:
+                    advanced = env.step(1)
                 ticks += advanced
                 if advanced == 0 and not (env.arena.get("terminated") or env.arena.get("truncated")):
                     raise ArenaInfrastructureError("rollout made no simulation progress")
@@ -226,6 +263,8 @@ def main() -> int:
     parser.add_argument("--tasks", default="native_duel")
     parser.add_argument("--start-substeps", type=int, default=1,
                         help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
+    parser.add_argument("--per-tick", dest="advance", action="store_false",
+                        help="poll every tick instead of the runner's arena_advance to the next decision")
     parser.add_argument("--command-ttl-ms", type=int, default=100,
                         help="native command TTL; 100 is the stage 8 realtime runtime (9.2 rounds used 1000)")
     args = parser.parse_args()
