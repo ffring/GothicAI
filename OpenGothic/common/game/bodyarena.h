@@ -47,6 +47,10 @@ class BodyArena final {
     static void configure(const Config& config, uint64_t runnerGeneration);
     static void disable();
     static bool enabled();
+    // Training opt-in (OPENGOTHIC_FREEZE_WORLD=1): while an arena is configured, only its actors
+    // and the hero tick; the rest of the world stands still and is not heard.
+    static bool frozenWorld();
+    static bool isActor(const Npc& npc);
     static bool ready();
     static bool started();
     static bool complete();

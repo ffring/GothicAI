@@ -15,6 +15,7 @@
 #include "world/objects/interactive.h"
 #include "world/triggers/abstracttrigger.h"
 #include "world/triggers/cscamera.h"
+#include "game/bodyarena.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
 #include "utils/string_frm.h"
@@ -404,7 +405,7 @@ void World::tick(uint64_t dt) {
     return;
   wobj.tick(dt,dt);
   wdynamic->tick(dt);
-  if(auto pl = player())
+  if(auto pl = player(); pl!=nullptr && !BodyArena::frozenWorld())
     wsound.tick(*pl);
   globFx->tick(dt);
   }

@@ -13,6 +13,8 @@ and native command TTL 100 ms. With them a greedy rollout reproduces the realtim
 episodes (scripts/body_schedule_equivalence.py); the 9.2 rounds used 2 and 1000 and fitted
 a lockstep-only schedule. Between decisions the runner advances on its own (arena_advance) to
 the tick where the per-tick loop would decide next; --per-tick keeps one round trip per tick.
+The world outside the arena is frozen and the actors draw their own script randomness: such a
+rollout equals the realtime driver in the live world with OPENGOTHIC_BODY_SCRIPT_RNG=isolated.
 """
 from __future__ import annotations
 
@@ -31,7 +33,10 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-TRAINING_ENV = {"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1", "DISPLAY": "",
+# Training culls: foot IK only for arena actors, no animation far away, the rest of the world frozen,
+# and the arena actors' script randomness isolated from it (which makes the frozen world exact).
+TRAINING_ENV = {"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1",
+                "OPENGOTHIC_FREEZE_WORLD": "1", "OPENGOTHIC_BODY_SCRIPT_RNG": "isolated", "DISPLAY": "",
                 "WAYLAND_DISPLAY": "", "GOTHIC_AI": "0", "VK_DRIVER_FILES": "/nonexistent/no-vulkan.json",
                 "VK_ICD_FILENAMES": "/nonexistent/no-vulkan.json", "OPENGOTHIC_TEXTURES": "",
                 "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
@@ -278,7 +283,8 @@ def main() -> int:
         tasks.append([task, args.seed_start+index, (index//len(kinds)) % 2, distance])
     options = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     (args.output/"collect.json").write_text(json.dumps({"schema_version": 1, "kind": "body_rl_collect",
-                                                        "quality_credit": False, "options": options}, indent=2)+"\n")
+                                                        "quality_credit": False, "options": options,
+                                                        "training_env": TRAINING_ENV}, indent=2)+"\n")
     started = time.monotonic()
     shards = [tasks[index::args.workers] for index in range(args.workers)]
     with ProcessPoolExecutor(max_workers=args.workers, mp_context=multiprocessing.get_context("spawn")) as pool:

@@ -89,7 +89,7 @@ class FightAlgo final {
 
   private:
     void   fillQueue(Npc &npc, Npc &tg, GameScript& owner);
-    bool   fillQueue(GameScript& owner, const zenkit::IFightAi& src);
+    bool   fillQueue(const Npc& npc, GameScript& owner, const zenkit::IFightAi& src);
 
     static bool   angleTest(const Npc& npc, const Npc& tg, float cosMax);
     static float  weaponRange(GameScript &owner,const Npc &npc);

@@ -14,6 +14,7 @@
 #include "world/objects/npc.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <cmath>
 #include <iomanip>
@@ -48,6 +49,28 @@ struct State final {
   std::function<void(std::string_view)> sink;
   };
 State& state() { static State value; return value; }
+// OPENGOTHIC_BODY_SCRIPT_RNG=isolated gives each arena actor its own script random stream,
+// reseeded from the arena seed wherever the shared stream is: the rest of the world (live,
+// frozen or other arenas) then cannot change the actors' native choices or damage rolls.
+bool isolatedScriptRandom() {
+  static const bool isolated = [] {
+    const char* mode = std::getenv("OPENGOTHIC_BODY_SCRIPT_RNG");
+    if(mode==nullptr || std::string_view(mode)=="shared")
+      return false;
+    if(std::string_view(mode)!="isolated")
+      throw std::runtime_error("unknown OPENGOTHIC_BODY_SCRIPT_RNG mode");
+    return true;
+    }();
+  return isolated;
+  }
+void reseedActors(GameScript& script) {
+  auto& s=state();
+  if(!isolatedScriptRandom())
+    return;
+  for(unsigned i=0;i<s.actorCount;++i)
+    if(s.actors[i]!=nullptr)
+      script.isolateRandom(*s.actors[i],s.config.seed,i);
+  }
 uint64_t gameTime() {
   auto world=Gothic::inst().world();
   return world==nullptr ? 0 : world->tickCount();
@@ -96,6 +119,20 @@ void BodyArena::configure(const Config& config, uint64_t generation) {
   }
 void BodyArena::disable() { state()=State(); }
 bool BodyArena::enabled() { return state().enabled; }
+bool BodyArena::frozenWorld() {
+  static const bool frozen = [] {
+    const char* v = std::getenv("OPENGOTHIC_FREEZE_WORLD");
+    return v!=nullptr && v[0]=='1';
+    }();
+  return frozen && state().enabled;
+  }
+bool BodyArena::isActor(const Npc& npc) {
+  const auto& s=state();
+  for(unsigned i=0;i<s.actorCount;++i)
+    if(s.actors[i]==&npc)
+      return true;
+  return false;
+  }
 bool BodyArena::ready() { return state().ready; }
 bool BodyArena::started() { return state().started; }
 bool BodyArena::complete() { return state().enabled && state().finished; }
@@ -124,6 +161,7 @@ void BodyArena::setup(World& world, Npc& player) {
   if(attackReason<0 || size_t(attackReason)>=zenkit::INpc::aivar_count)
     throw std::runtime_error("arena invalid attack reason");
   world.script().setSeed(s.config.seed);
+  world.script().clearIsolatedRandom();
   const float angle=player.rotation()*float(M_PI)/180.f;
   const Vec3 forward(std::cos(angle),0,std::sin(angle)), side(-forward.z,0,forward.x);
   const auto center=player.position()+forward*(1200.f+s.config.centerOffsetCm[0])+side*s.config.centerOffsetCm[1];
@@ -144,6 +182,8 @@ void BodyArena::setup(World& world, Npc& player) {
     Npc* npc=world.addNpc(ids[role],positions[role^s.config.side]);
     if(npc==nullptr) throw std::runtime_error("arena NPC creation failed");
     s.actors[i]=npc;
+    if(isolatedScriptRandom())
+      world.script().isolateRandom(*npc,s.config.seed,i);
     npc->setExternalControl(true); npc->setInteraction(nullptr,true);
     npc->clearAiQueue(); npc->clearState(true); npc->clearGoTo(); npc->clearSpeed();
     std::vector<size_t> equipped;
@@ -359,6 +399,7 @@ void BodyArena::setup(World& world, Npc& player) {
                         quoted(i%2==0 ? "primary" : "opponent")+",\"physical_side\":"+std::to_string((i%2)^s.config.side));
     }
   world.script().setSeed(s.config.seed);
+  reseedActors(world.script());
   s.setupTime=world.tickCount(); s.ready=true;
   }
 
@@ -530,6 +571,7 @@ void BodyArena::start(std::string_view provider) {
   s.provider=provider; s.started=true; s.startTime=gameTime();
   auto& script=Gothic::inst().world()->script(); const auto attack=script.findSymbolIndex("ZS_ATTACK");
   script.setSeed(s.config.seed);
+  reseedActors(script);
   for(unsigned i=0;i<s.actorCount;++i)
     if(!BodyController::owns(*s.actors[i]))
       s.actors[i]->aiPush(AiQueue::aiStartState(ScriptFn(attack),0,s.actors[i^1],nullptr,""));

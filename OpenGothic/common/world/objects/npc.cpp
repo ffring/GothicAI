@@ -1828,7 +1828,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
           obsticle = false;
         }
       if(obsticle) {
-        auto anim = (owner.script().rand(2)==0 ? Npc::Anim::MoveL : Npc::Anim::MoveR);
+        auto anim = (owner.script().rand(2,this)==0 ? Npc::Anim::MoveL : Npc::Anim::MoveR);
         if(setAnim(anim)){
           visual.setAnimRotate(*this,0);
           implFaiWait(visual.pose().animationTotalTime());
@@ -2675,7 +2675,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         owner.sendPassivePerc(*this,other,*this,PERC_ASSESSMURDER);
         }
       else {
-        if(owner.script().rand(2)==0) {
+        if(owner.script().rand(2,this)==0) {
           emitSoundSVM("SVM_%d_AARGH");
           }
         }
@@ -4911,8 +4911,8 @@ bool Npc::releaseArrow(float draw, const Archery::Stats& st) {
   // the release throws it off, up to the cone
   if(st.cone>0.f) {
     auto&               script = owner.script();
-    const float         r      = st.cone*std::sqrt(float(script.rand(10000))/10000.f);
-    const float         a      = 2.f*float(M_PI)*float(script.rand(10000))/10000.f;
+    const float         r      = st.cone*std::sqrt(float(script.rand(10000,this))/10000.f);
+    const float         a      = 2.f*float(M_PI)*float(script.rand(10000,this))/10000.f;
     Tempest::Vec3       side   = Tempest::Vec3::crossProduct(dir,Tempest::Vec3(0,1,0));
     if(side.length()<1e-3f)
       side = Tempest::Vec3(1,0,0);

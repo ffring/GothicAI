@@ -375,8 +375,7 @@ std::string BodyController::statusJson(const Npc* actor) {
     rapidjson::Value queue(rapidjson::kArrayType);
     for(auto primitive:npc.fghAlgo.queueSnapshot()) queue.PushBack(uint64_t(primitive),pure.GetAllocator());
     pure.AddMember("queue",queue,pure.GetAllocator());
-    std::ostringstream rng; rng << npc.owner.script().randGen;
-    str(pure,"rng_state",rng.str());
+    str(pure,"rng_state",npc.owner.script().randomState(&npc));
     row.AddMember("purity_state",rapidjson::Value(pure,row.GetAllocator()),row.GetAllocator());
     }
     actors.PushBack(rapidjson::Value(row,d.GetAllocator()),d.GetAllocator());

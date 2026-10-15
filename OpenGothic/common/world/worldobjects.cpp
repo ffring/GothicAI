@@ -1,6 +1,7 @@
 #include "worldobjects.h"
 
 #include "game/serialize.h"
+#include "game/bodyarena.h"
 #include "game/bodyobservations.h"
 #include "world/objects/itemtorchburning.h"
 #include "world/objects/item.h"
@@ -173,10 +174,14 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
   auto       camera  = Gothic::inst().camera();
   const bool freeCam = (camera!=nullptr && camera->isFree());
   const auto pl      = owner.player();
+  // Body training with a frozen world: other NPCs (but the hero) and interactive objects stand still.
+  const bool frozen  = BodyArena::frozenWorld();
   for(size_t i=0; i<npcArr.size(); ++i) {
     auto& npc = *npcArr[i];
     uint64_t d = (pl==&npc ? dtPlayer : dt);
     if(freeCam && pl==&npc)
+      continue;
+    if(frozen && pl!=&npc && !BodyArena::isActor(npc))
       continue;
     npc.tick(d);
     }
@@ -196,8 +201,9 @@ void WorldObjects::tick(uint64_t dt, uint64_t dtPlayer) {
   for(CollisionZone* z:collisionZn)
     z->tick(dt);
 
-  for(auto& i:interactiveObj)
-    i->tick(dt);
+  if(!frozen)
+    for(auto& i:interactiveObj)
+      i->tick(dt);
 
   for(auto i:triggersTk)
     i->tick(dt);
@@ -439,14 +445,19 @@ void WorldObjects::updateAnimation(uint64_t dt) {
     const char* v = std::getenv("OPENGOTHIC_ANIM_SKIP_FAR");
     return v!=nullptr && v[0]=='1';
     }();
-  Workers::parallelTasks(npcArr,[dt](std::unique_ptr<Npc>& i){
+  const bool frozen = BodyArena::frozenWorld();
+  const auto pl     = owner.player();
+  Workers::parallelTasks(npcArr,[dt,frozen,pl](std::unique_ptr<Npc>& i){
     if(skipFar && i->processPolicy()==NpcProcessPolicy::AiFar2 && !BodyObservations::watched(*i))
+      return;
+    if(frozen && i.get()!=pl && !BodyArena::isActor(*i))
       return;
     i->updateAnimation(dt);
     });
-  interactiveObj.parallelFor([dt](Interactive& i){
-    i.updateAnimation(dt);
-    });
+  if(!frozen)
+    interactiveObj.parallelFor([dt](Interactive& i){
+      i.updateAnimation(dt);
+      });
   }
 
 bool WorldObjects::isTargeted(Npc& dst) {

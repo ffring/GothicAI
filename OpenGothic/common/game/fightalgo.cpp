@@ -39,7 +39,7 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
 
   if(hitFlg) {
     hitFlg = false;
-    if(fillQueue(owner,ai.my_w_strafe))
+    if(fillQueue(npc,owner,ai.my_w_strafe))
       return;
     }
 
@@ -47,52 +47,52 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
 
   if(tg.isPrehit() && isInWRange(tg,npc,owner) && isInFocusAngle(tg,npc) && focus){
     if(tg.bodyStateMasked()==BS_RUN)
-      if(fillQueue(owner,ai.enemy_stormprehit))
+      if(fillQueue(npc,owner,ai.enemy_stormprehit))
         return;
-    if(fillQueue(owner,ai.enemy_prehit))
+    if(fillQueue(npc,owner,ai.enemy_prehit))
       return;
     }
 
   if(ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) {
     if(isInWRange(npc,tg,owner)) {
       if(focus && npc.bodyStateMasked()==BS_RUN)
-        if(fillQueue(owner,ai.my_w_runto))
+        if(fillQueue(npc,owner,ai.my_w_runto))
           return;
       if(focus && npc.bodyStateMasked()!=BS_RUN)
-        if(fillQueue(owner,ai.my_w_focus))
+        if(fillQueue(npc,owner,ai.my_w_focus))
           return;
-      if(fillQueue(owner,ai.my_w_nofocus))
+      if(fillQueue(npc,owner,ai.my_w_nofocus))
         return;
       }
 
     if(isInGRange(npc,tg,owner)) {
       if(focus && npc.bodyStateMasked()==BS_RUN)
-        if(fillQueue(owner,ai.my_g_runto))
+        if(fillQueue(npc,owner,ai.my_g_runto))
           return;
       if(focus && npc.bodyStateMasked()!=BS_RUN)
-        if(fillQueue(owner,ai.my_g_focus))
+        if(fillQueue(npc,owner,ai.my_g_focus))
           return;
       }
     }
 
   if(ws==WeaponState::Mage) {
     if(isInWRange(npc,tg,owner))
-      if(fillQueue(owner,ai.my_fk_focus_mag))
+      if(fillQueue(npc,owner,ai.my_fk_focus_mag))
         return;
-    if(fillQueue(owner,ai.my_fk_nofocus_mag))
+    if(fillQueue(npc,owner,ai.my_fk_nofocus_mag))
       return;
     }
 
   if(isInWRange(npc,tg,owner) && focus)
-    if(fillQueue(owner,ai.my_fk_focus_far))
+    if(fillQueue(npc,owner,ai.my_fk_focus_far))
       return;
-  if(fillQueue(owner,ai.my_fk_nofocus_far))
+  if(fillQueue(npc,owner,ai.my_fk_nofocus_far))
     return;
 
-  fillQueue(owner,ai.my_w_nofocus);
+  fillQueue(npc,owner,ai.my_w_nofocus);
   }
 
-bool FightAlgo::fillQueue(GameScript& owner, const zenkit::IFightAi& src) {
+bool FightAlgo::fillQueue(const Npc& npc, GameScript& owner, const zenkit::IFightAi& src) {
   uint32_t sz=0;
   for(size_t i=0; i<zenkit::IFightAi::move_count; ++i){
     if(src.move[i]==zenkit::FightAiMove::NOP)
@@ -101,7 +101,7 @@ bool FightAlgo::fillQueue(GameScript& owner, const zenkit::IFightAi& src) {
     }
   if(sz==0)
     return false;
-  queueId = zenkit::FightAiMove(src.move[owner.rand(sz)]);
+  queueId = zenkit::FightAiMove(src.move[owner.rand(sz,&npc)]);
   return queueId!=zenkit::FightAiMove::NOP;
   }
 
@@ -127,7 +127,7 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
         break;
         }
       case FightAiMove::STRAFE:{
-        tr[0] = owner.rand(2) ? MV_STRAFEL : MV_STRAFER;
+        tr[0] = owner.rand(2,&npc) ? MV_STRAFEL : MV_STRAFER;
         tr[1] = FightAlgo::MV_STRAFE_E;
         break;
         }
@@ -141,12 +141,12 @@ FightAlgo::Action FightAlgo::nextFromQueue(Npc& npc, Npc& tg, GameScript& owner)
         break;
         }
       case FightAiMove::ATTACK_FRONT:{
-        tr[0] = owner.rand(2) ? MV_ATTACKL : MV_ATTACKR;
+        tr[0] = owner.rand(2,&npc) ? MV_ATTACKL : MV_ATTACKR;
         tr[1] = MV_ATTACK;
         break;
         }
       case FightAiMove::ATTACK_TRIPLE:{
-        if(owner.rand(2)){
+        if(owner.rand(2,&npc)){
           tr[0] = MV_ATTACK;
           tr[1] = MV_ATTACKR;
           tr[2] = MV_ATTACKL;
