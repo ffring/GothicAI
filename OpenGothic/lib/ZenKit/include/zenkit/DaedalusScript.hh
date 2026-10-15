@@ -850,7 +850,8 @@ namespace zenkit {
 		/// \return The symbol or `nullptr` if no symbol with that name was found.
 		[[nodiscard]] ZKAPI DaedalusSymbol* find_symbol_by_name(std::string_view name);
 
-		/// \brief The most integer variables add_int_symbol can add (room for them is kept when the script loads).
+		/// \brief The most symbols add_int_symbol and add_instance_symbol can add (room for them is kept when the
+		///        script loads).
 		static constexpr std::uint32_t MAX_ADDED_SYMBOLS = 1024;
 
 		/// \brief Adds a global integer variable that is not in the compiled scripts (the AI director's story
@@ -858,6 +859,17 @@ namespace zenkit {
 		/// \param name The name of the variable.
 		/// \return The new variable (its value 0); nullptr if the name is taken or there is no room left.
 		ZKAPI DaedalusSymbol* add_int_symbol(std::string_view name);
+
+		/// \brief Adds an instance that is not in the compiled scripts, made like \p like: of its class, and
+		///        initialized by its code (an npc of the AI director's from a script's npc). The new symbol has
+		///        its own index, so what the scripts tie to \p like stays with it. That code names \p like
+		///        itself (`self` in an instance's body), so whoever runs it for the new instance binds \p like
+		///        to that instance meanwhile.
+		/// \param name The name of the instance.
+		/// \param like The instance to take the class and the code from.
+		/// \return The new instance symbol; nullptr if the name is taken, \p like is not an instance or there is
+		///         no room left.
+		ZKAPI DaedalusSymbol* add_instance_symbol(std::string_view name, DaedalusSymbol const& like);
 
 		/// \brief Call the given callback function for every instance symbol which is a descendant of the class with
 		///        the given name.

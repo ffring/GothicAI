@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 32
+PROTOCOL_VERSION = 33
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1154,6 +1154,7 @@ DebugCommand = Literal[
     "player_drop",
     "chest_take",
     "player_take",
+    "own_npc",
 ]
 
 
@@ -1180,7 +1181,10 @@ class DebugCmd(_Command):
     `player_goto` to a point `pos` [x, y, z] on the ground there (v21); the player throws an `item` down, as
     with the game's own key (`player_drop`, v22: he is given it first if he has none); the player takes
     `count` of an `item` out of a `chest` unseen (`chest_take`, v28, `value`: how many); the player picks up
-    the nearest `item` lying within `distance` cm, default 500 (`player_take`, v29).
+    the nearest `item` lying within `distance` cm, default 500 (`player_take`, v29); an npc of the
+    director's (`own_npc`, v33): a script symbol of ours `npc` (DIR_...) made like the script's npc `like`,
+    put at a `waypoint` or `distance` cm (default 300) in front of the player; the save keeps both (`value`:
+    {npc, index: its symbol, name}).
 
     The story graph (v8): `dialogs` — the dialogs `npc` offers the player now (`value`: their ids, as the
     menu would list them); `choose` — plays dialog `node` of `npc` as if the player chose it in the menu;
@@ -1215,6 +1219,7 @@ class DebugCmd(_Command):
     pos: tuple[float, float, float] | None = None  # player_goto: a point of the world (v21), on the ground
     chest: str | None = None  # chest_take: the chest's id (v28)
     count: int | None = None  # chest_take
+    like: str | None = None  # own_npc: the script's npc it is made like (v33)
 
 
 class GraphPatchCmd(_Command):

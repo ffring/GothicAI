@@ -4,6 +4,7 @@
 #include <Tempest/SoundEffect>
 
 #include <cctype>
+#include <optional>
 
 #include "game/compatibility/directmemory.h"
 #include "game/definitions/spelldefinitions.h"
@@ -514,6 +515,13 @@ void GameScript::initializeInstanceNpc(const std::shared_ptr<zenkit::INpc>& npc,
     return;
     }
 
+  // an npc of ours runs the code of the script's npc it is made like, and that code names its own instance
+  // (self in an instance's body is the instance's symbol): while it runs that instance is ours, as a script's
+  // instance is its own while its code runs. Else the body, clothes and things would go to the script's npc
+  std::optional<ScopeVar<zenkit::INpc>> mine;
+  if(auto* like = own.likeOf(sym->index()))
+    mine.emplace(*like,npc);
+
   vm.init_instance(npc, sym);
 
   if(npc->daily_routine!=0) {
@@ -579,8 +587,11 @@ void GameScript::loadVar(Serialize &fin) {
       case zenkit::DaedalusDataType::INT:{
         fin.read(name);
         auto* s = findSymbol(name);
-        if(s==nullptr && name.rfind("DIR_",0)==0)
-          s = vm.add_int_symbol(name);  // the AI director's story state, not in the scripts (graph_patch vars)
+        if(s==nullptr && name.rfind(OwnSymbols::Prefix,0)==0) {
+          // a save made before its symbols had an entry of their own: the director's story variable is ours now
+          std::string why;
+          s = own.addInt(name,why);
+          }
 
         uint32_t size;
         fin.read(size);

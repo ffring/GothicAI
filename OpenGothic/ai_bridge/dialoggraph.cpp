@@ -95,36 +95,44 @@ zenkit::DaedalusVm* DialogGraph::vm() const {
   return w!=nullptr ? &w->script().getVm() : nullptr;
   }
 
+GameScript* DialogGraph::script() const {
+  World* w = Gothic::inst().world();
+  return w!=nullptr ? &w->script() : nullptr;
+  }
+
 void DialogGraph::ensureVars() {
-  auto* v = vm();
+  auto* sc = script();
+  auto* v  = vm();
   if(v==nullptr || (v==varsFor && varsMade.size()==vars.size()))
     return;
   if(v!=varsFor) {
     varsMade.clear();
     varsFor = v;
     }
+  auto& own = sc->ownSymbols();
   for(auto& [name,value] : vars) {
     if(varsMade.count(name))
       continue;
     varsMade.insert(name);
-    if(auto err = whyNotVar(*v,name); !err.empty()) {
+    if(auto err = whyNotVar(*sc,name); !err.empty()) {
       Log::e("[story] vars: ",err);
       continue;
       }
-    if(v->find_symbol_by_name(name)!=nullptr)
+    if(own.find(name)!=nullptr)
       continue;  // a save brought it back with its value
-    if(auto* s = v->add_int_symbol(name))
+    std::string why;
+    if(auto* s = own.addInt(name,why))
       s->set_int(value); else
-      Log::e("[story] vars: no room for ",name);
+      Log::e("[story] vars: ",why);
     }
   }
 
-std::string DialogGraph::whyNotVar(zenkit::DaedalusVm& v, const std::string& name) {
-  if(name.rfind("DIR_",0)!=0)
+std::string DialogGraph::whyNotVar(GameScript& script, const std::string& name) {
+  if(name.rfind(OwnSymbols::Prefix,0)!=0)
     return name + ": a variable of the director's is named DIR_...";
-  auto* s = v.find_symbol_by_name(name);
-  if(s!=nullptr && !(s->is_generated() && s->type()==DaedalusDataType::INT && s->count()==1))
-    return name + " is a script symbol";
+  auto* own = script.ownSymbols().find(name);
+  if(own!=nullptr ? own->kind!=OwnSymbols::Kind::Int : script.getVm().find_symbol_by_name(name)!=nullptr)
+    return name + " is taken";
   return {};
   }
 
@@ -194,15 +202,15 @@ std::string DialogGraph::applyOp(const rapidjson::Value& op) {
     auto it = op.FindMember("vars");
     if(it==op.MemberEnd() || !it->value.IsObject())
       return "vars: no vars";
-    auto* v = vm();
+    auto* sc = script();
     for(auto& m : it->value.GetObject()) {
       const auto name = upper(std::string(m.name.GetString(),m.name.GetStringLength()));
       if(!m.value.IsInt())
         return "vars: " + name + " is not an integer";
-      if(name.rfind("DIR_",0)!=0)
+      if(name.rfind(OwnSymbols::Prefix,0)!=0)
         return "vars: " + name + ": a variable of the director's is named DIR_...";
-      if(v!=nullptr) {
-        if(auto err = whyNotVar(*v,name); !err.empty())
+      if(sc!=nullptr) {
+        if(auto err = whyNotVar(*sc,name); !err.empty())
           return "vars: " + err;
         }
       }

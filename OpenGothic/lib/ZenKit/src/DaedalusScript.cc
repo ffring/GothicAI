@@ -298,6 +298,34 @@ namespace zenkit {
 		return &_m_symbols.emplace_back(std::move(sym));
 	}
 
+	DaedalusSymbol* DaedalusScript::add_instance_symbol(std::string_view name, DaedalusSymbol const& like) {
+		std::string up {name};
+		std::transform(up.begin(), up.end(), up.begin(), toupper);
+		if (up.empty() || _m_symbols_by_name.find(up) != _m_symbols_by_name.end()) return nullptr;
+		if (like.type() != DaedalusDataType::INSTANCE || like._m_address < 0) return nullptr;
+		if (_m_symbols.size() >= _m_symbols.capacity()) return nullptr; // growing would move every symbol
+
+		DaedalusSymbol sym {};
+		sym._m_name = up;
+		sym._m_generated = true;
+		sym._m_type = DaedalusDataType::INSTANCE;
+		sym._m_flags = like._m_flags;
+		sym._m_count = like._m_count;
+		sym._m_address = like._m_address;
+		sym._m_parent = like._m_parent;
+		sym._m_file_index = like._m_file_index;
+		sym._m_line_start = like._m_line_start;
+		sym._m_line_count = like._m_line_count;
+		sym._m_char_start = like._m_char_start;
+		sym._m_char_count = like._m_char_count;
+		sym._m_value = std::shared_ptr<DaedalusInstance> {};
+		sym._m_index = static_cast<std::uint32_t>(_m_symbols.size());
+		// not by address: that stays the instance it was made like
+		_m_symbols_by_name[up] = sym._m_index;
+
+		return &_m_symbols.emplace_back(std::move(sym));
+	}
+
 	std::uint32_t DaedalusScript::size() const noexcept {
 		auto off = _m_text->tell();
 		_m_text->seek(0, Whence::END);

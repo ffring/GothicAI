@@ -17,6 +17,7 @@
 #include "game/constants.h"
 #include "game/aistate.h"
 #include "game/questlog.h"
+#include "game/ownsymbols.h"
 
 class GameSession;
 class World;
@@ -77,6 +78,8 @@ class GameScript final {
     void         loadPerc(Serialize& fin);
 
     inline auto& getVm() { return vm; }
+    // symbols of ours: the AI director's story variables and npc's
+    inline auto& ownSymbols() { return own; }
     auto         questLog() const -> const QuestLog&;
 
     const World& world() const;
@@ -466,6 +469,7 @@ class GameScript final {
 
     GameSession&                                                owner;
     zenkit::DaedalusVm                                          vm;
+    OwnSymbols                                                  own{vm};
     int32_t                                                     vmLang = -1;
     std::mt19937                                                randGen;
     NpcProcessPolicy                                            aiProcessPolicy = NpcProcessPolicy::AiNormal;

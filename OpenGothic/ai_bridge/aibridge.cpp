@@ -59,7 +59,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 32;
+constexpr int         ProtocolVersion = 33;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -893,7 +893,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
-     cmd=="player_take") {
+     cmd=="player_take" || cmd=="own_npc") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -973,6 +973,48 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     pos.x += dist*dx;
     pos.z += dist*dz;
     sendResult(req,world->addNpc(id,pos)!=nullptr,"could not spawn");
+    return;
+    }
+  if(cmd=="own_npc") {
+    // an npc of the director's (v33): a symbol of ours made like the script's npc `like`, put at a waypoint
+    // or `distance` cm in front of the player. The save keeps both
+    std::string why;
+    auto*       sym = world->script().ownSymbols().addNpc(JsonRead::str(msg,"npc"),JsonRead::str(msg,"like"),why);
+    if(sym==nullptr) {
+      sendResult(req,false,why);
+      return;
+      }
+    const auto wp  = JsonRead::str(msg,"waypoint");
+    Npc*       npc = nullptr;
+    if(!wp.empty()) {
+      npc = world->addNpc(sym->index(),wp);
+      } else {
+      const float dist = float(JsonRead::integer(msg,"distance",300));
+      auto        pos  = pl->position();
+      pos.x += dist*std::cos(pl->rotationRad());
+      pos.z += dist*std::sin(pl->rotationRad());
+      npc = world->addNpc(sym->index(),pos);
+      }
+    if(npc==nullptr) {
+      sendResult(req,false,"could not put " + sym->name() + " in the world");
+      return;
+      }
+    if(npc->visualSkeleton()==nullptr) {
+      // the code it is made like gave it no body: the world cannot have it (perception needs a head)
+      world->removeNpc(*npc);
+      sendResult(req,false,"the code of " + std::string(JsonRead::str(msg,"like")) + " gives " + sym->name() + " no body");
+      return;
+      }
+    // {npc, index: its symbol, name: as the game shows it}
+    rapidjson::StringBuffer                    buf;
+    rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+    const auto                                 shown = TextCodec::toUtf8(npc->displayName());
+    w.StartObject();
+    w.Key("npc");   w.String(sym->name().data(),rapidjson::SizeType(sym->name().size()));
+    w.Key("index"); w.Uint(sym->index());
+    w.Key("name");  w.String(shown.data(),rapidjson::SizeType(shown.size()));
+    w.EndObject();
+    sendResult(req,true,"",std::string_view(buf.GetString(),buf.GetSize()));
     return;
     }
   if(cmd=="teleport") {

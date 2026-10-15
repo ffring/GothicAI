@@ -285,7 +285,7 @@ def test_v31_a_dialog_heard_in_a_conversation():
 
 
 def test_v32_where_the_hero_faces():
-    assert PROTOCOL_VERSION == 32
+    assert PROTOCOL_VERSION >= 32
     snap = '{"type":"snapshot","t":5,"world":{"name":"NEWWORLD.ZEN","day":0,"hour":8,"minute":30},'
     snap += '"npc":{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","pos":[1,2,3],"rot":0,"hp":10,'
     snap += '"hp_max":10,"busy":false},"player":{"name":"Я","pos":[0,0,0],"distance":300'
@@ -294,3 +294,9 @@ def test_v32_where_the_hero_faces():
     assert isinstance(new, Snapshot) and new.player is not None
     assert new.player.ahead == (0, 1) and new.player.right == (-1, 0)
     assert isinstance(old, Snapshot) and old.player is not None and old.player.ahead is None
+
+
+def test_v33_an_npc_of_the_directors():
+    assert PROTOCOL_VERSION == 33
+    own = DebugCmd(req="r1", cmd="own_npc", npc="DIR_NPC_1", like="BAU_955_BAUER", waypoint="NW_FARM1_OUT_01")
+    assert '"cmd":"own_npc"' in own.to_json() and '"like":"BAU_955_BAUER"' in own.to_json()

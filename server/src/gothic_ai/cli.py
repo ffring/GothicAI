@@ -1104,6 +1104,11 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario authored: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "own":
+                results = await scenarios.own_symbols(link)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario own: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "vgive":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
                 assert dialogue is not None and talk is not None and vanilla is not None
@@ -1750,6 +1755,7 @@ def main() -> None:
             "wrath",
             "repair",
             "authored",
+            "own",
             "vlie",
             "vgive",
             "vcheck",

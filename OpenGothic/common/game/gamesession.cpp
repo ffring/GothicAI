@@ -149,6 +149,9 @@ GameSession::GameSession(Serialize &fin) {
   cam.reset(new Camera());
   vm.reset(new GameScript(*this));
   vm->initDialogs();
+  // before the world: its npc's of ours find their symbols by index
+  if(fin.setEntry(OwnSymbols::SaveEntry))
+    vm->ownSymbols().load(fin);
 
   if(true) {
     setWorld(std::unique_ptr<World>(new World(*this,wname,false,[&](int v){
@@ -210,6 +213,9 @@ void GameSession::save(Serialize &fout, std::string_view name, const Pixmap& scr
 
   fout.setEntry("game/session");
   fout.write(ticks,wrldTime,wrldTimePart,wrld->name());
+
+  fout.setEntry(OwnSymbols::SaveEntry);
+  vm->ownSymbols().save(fout);
 
   fout.setEntry("game/camera");
   cam->save(fout);
