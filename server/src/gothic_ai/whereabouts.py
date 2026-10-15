@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from .game import GameLink
 from .knowledge import roots
 from .llm import Tool, ToolCall
+from .lore import Lore, npc_pos
 from .places import KINDS, Place, PlaceBook
 from .protocol import Snapshot
 from .sightings import HERO, Sightings, ago
@@ -63,11 +64,13 @@ class Whereabouts:
         *,
         sightings: Sightings | None = None,
         desk: PerceptionDesk | None = None,
+        lore: Lore | None = None,
     ) -> None:
         self.link = link
         self.book = book
         self.sightings = sightings
         self.desk = desk
+        self.lore = lore  # what it knows of places and people from its dialogs (lore.py)
 
     # --- TurnExtension ----------------------------------------------------------------------------
 
@@ -100,7 +103,7 @@ class Whereabouts:
             return "Ты не знаешь здешних мест."
         if not what:
             return "Скажи, какое место или кого ищешь."
-        here = self._pos(npc)
+        here = npc_pos(npc, self.link, self.book, self.desk)
         if (place := self.book.get(what)) is not None:
             return self.place(npc, place, here)
         if (person := self.person(npc, what, here)) is not None:
@@ -126,6 +129,8 @@ class Whereabouts:
             lines.append("Рядом: " + "; ".join(f"{n.ru} ({n.id})" for n in near[:4]) + ".")
         if seen := self._seen_in(npc, place):
             lines.append("Ты там видел: " + "; ".join(seen) + ".")
+        if self.lore is not None and (known := self.lore.of_place(npc, place.id)):
+            lines.append("Ты знаешь: " + " ".join(f.ru for f in known))
         return "\n".join(lines)
 
     def person(self, npc: str, what: str, here: Sequence[float] | None) -> str | None:
@@ -138,9 +143,7 @@ class Whereabouts:
                 place = self.book.of(o.waypoint) if self.book is not None and o.waypoint else None
                 at = f" — {place.where_ru} ({place.id})" if place is not None else ""
                 return f"{o.name} у тебя на виду, в {round(o.distance / 100)} м{at}."
-        if self.sightings is None:
-            return None
-        for s in reversed(self.sightings.mind(npc).sightings):
+        for s in reversed(self.sightings.mind(npc).sightings if self.sightings is not None else []):
             hit = "геро" in q if s.who == HERO else _names(q, words, s.name)
             if not hit:
                 continue
@@ -150,6 +153,20 @@ class Whereabouts:
             if place is None:
                 return line + (f" — {s.places[-1]}." if s.places else ".")
             return line + f" — {place.where_ru}.\n" + self.place(npc, place, here)
+        return self._known(npc, q, words, here)
+
+    def _known(self, npc: str, q: str, words: set[str], here: Sequence[float] | None) -> str | None:
+        """Whom it has not seen but knows of from its dialogs (lore.py): «где Ватрас?»."""
+        if self.lore is None:
+            return None
+        for f in self.lore.known(npc):
+            for who in f.who:
+                if not _names(q, words, self.lore.names.get(who, "")):
+                    continue
+                facts = self.lore.of_person(npc, who)
+                text = "Сам ты его недавно не видел, но знаешь: " + " ".join(x.ru for x in facts)
+                place = next((self.book.get(x.place) for x in facts if x.place), None) if self.book else None
+                return text + ("\n" + self.place(npc, place, here) if place is not None else "")
         return None
 
     # --- helpers ----------------------------------------------------------------------------------
@@ -186,19 +203,6 @@ class Whereabouts:
             if len(out) >= SEEN_THERE:
                 break
         return out
-
-    def _pos(self, npc: str) -> tuple[float, float, float] | None:
-        """Where the npc is: its snapshot (under control), else the place of the waypoint it is at."""
-        snap = self.link.snapshots.get(npc.upper())
-        if snap is not None:
-            return snap.npc.pos
-        view = self.desk.view(npc) if self.desk is not None else None
-        if view is not None and self.book is not None:
-            place = self.book.of(view.waypoint, view.nearest_waypoint)
-            if place is not None and place.center is not None:
-                return place.center
-        player = self.link.player
-        return player.pos if player is not None else None
 
     def _hero(self) -> tuple[Sequence[float] | None, Sequence[float] | None, Sequence[float] | None]:
         player = self.link.player

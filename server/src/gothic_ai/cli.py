@@ -15,7 +15,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import npc_tools, places, programs, scenarios
+from . import lore, npc_tools, places, programs, scenarios
 from .amends import Amends
 from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
@@ -196,6 +196,7 @@ class ServerState:
         self.perception: PerceptionDesk | None = None
         self.sightings: Sightings | None = None
         self.whereabouts: Whereabouts | None = None
+        self.lore: lore.Lore | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
         self.beasts: BeastDesk | None = None
@@ -653,7 +654,14 @@ async def serve(args: argparse.Namespace) -> int:
         perception.remembered = state.sightings.targets
         state.talk.orders.last_seen = state.sightings.where_seen
         # where a place or someone is, as the npc knows it: `where` (docs/npc-tools.md М3)
-        state.whereabouts = Whereabouts(link, place_book, sightings=state.sightings, desk=perception)
+        # who and what is where, as each npc knows it from its dialogs (docs/npc-tools.md М4)
+        state.lore = lore.Lore.load(place_book, state.knowledge, link=link, desk=perception)
+        if state.lore is not None:
+            state.dialogue.extensions.append(state.lore)
+        log.info("lore: %s", f"{len(state.lore.facts)} npc's know" if state.lore else "no book of facts")
+        state.whereabouts = Whereabouts(
+            link, place_book, sightings=state.sightings, desk=perception, lore=state.lore
+        )
         state.dialogue.extensions.append(state.whereabouts)
         # what each npc knows of the hero's word: its lies found out, rumors, claims that were true
         trust = state.trust = Trust(state.chronicle)
@@ -965,6 +973,15 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario chests: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "knows":
+                assert state.dialogue is not None and state.talk is not None and state.whereabouts is not None
+                assert state.knowledge is not None and state.lore is not None
+                results = await scenarios.knows_scenario(
+                    link, state.dialogue, state.talk, state.knowledge, state.lore, state.whereabouts
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario knows: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cave":
                 assert state.dialogue is not None and state.talk is not None and state.whereabouts is not None
@@ -1413,6 +1430,47 @@ async def places_cmd(args: argparse.Namespace) -> int:
     return 0 if len(book["places"]) == len(groups) else 1
 
 
+async def lore_cmd(args: argparse.Namespace) -> int:
+    """The book of facts (lore.py): who and what is where, as each npc of the world knows it from its
+    dialogs. Picks up where a run stopped; `--who`: only these, afresh."""
+    data = json.loads(await asyncio.to_thread(Path(args.dump).read_text, encoding="utf-8"))
+    book = places.PlaceBook.load()
+    graph = _story_graph(args, Path(args.game_dir) if args.game_dir else None)
+    if book is None or graph is None:
+        print("lore: needs the book of places and the story graph", file=sys.stderr)
+        return 2
+    people = lore.people_of(data.get("people", []), book)
+    out = Path(args.out)
+    done: dict[str, list[dict[str, Any]]] = {}
+    if await asyncio.to_thread(out.exists):
+        kept = json.loads(await asyncio.to_thread(out.read_text, encoding="utf-8"))
+        if kept.get("version") == lore.VERSION:
+            done = dict(kept.get("npcs", {}))
+    wanted = [n.upper() for n in args.who] if args.who else sorted(people)
+    npcs = [n for n in wanted if graph.dialogs_of(n)]
+    for n in npcs if args.who else []:
+        done.pop(n, None)
+    world = str(data.get("world", ""))
+    print(f"{len(npcs)} npc's with dialogs, {len([n for n in npcs if n in done])} done already", flush=True)
+
+    def save(facts: dict[str, list[dict[str, Any]]]) -> None:
+        text = json.dumps(lore.file(world, facts, people), ensure_ascii=False, indent=1)
+        out.write_text(text, encoding="utf-8")
+
+    llm = _backend(args)
+    try:
+        facts = await lore.build(npcs, graph, book, people, llm, done=done, save=save)
+    finally:
+        await llm.aclose()
+    save(facts)
+    print(f"{sum(len(facts.get(n, [])) for n in npcs)} facts of {len(npcs)} npc's -> {out}")
+    if args.who:
+        for n in npcs:
+            for f in facts.get(n, []):
+                print(f"  {n} [{f['dialog']}] {f['place'] or '-'} {f['who']}: {f['ru']}")
+    return 0
+
+
 async def replay(args: argparse.Namespace) -> int:
     """A recorded turn, run again: compare models and prompts on real situations from the game."""
     path = Path(args.file) if args.file else latest(Path(args.trace_dir))
@@ -1680,6 +1738,7 @@ def main() -> None:
             "ground",
             "hearing",
             "cave",
+            "knows",
             "chests",
             "chests_lobart",
             "group",
@@ -1840,6 +1899,13 @@ def main() -> None:
     p.add_argument("--names", help="keep the names of this book (read through already), name only the rest")
     _add_llm_args(p)
 
+    p = sub.add_parser("lore", help="who and what is where, as each npc knows it from its dialogs (lore.py)")
+    p.add_argument("dump", help="world_points.json from SCENARIO=places")
+    p.add_argument("--out", default=str(lore.LORE), help="the book of facts to write")
+    p.add_argument("--who", action="append", help="only these npc's, afresh")
+    p.add_argument("--story-graph", help="storygraph JSON (default: made from the game's scripts and cached)")
+    _add_llm_args(p)
+
     p = sub.add_parser("login", help="sign in to a provider")
     p.add_argument("provider", choices=["chatgpt"])
 
@@ -1890,6 +1956,8 @@ def main() -> None:
                 code = asyncio.run(replay(args))
             case "places":
                 code = asyncio.run(places_cmd(args))
+            case "lore":
+                code = asyncio.run(lore_cmd(args))
             case "login":
                 code = asyncio.run(login_chatgpt())
             case "logout":
