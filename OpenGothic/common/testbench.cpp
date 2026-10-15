@@ -562,6 +562,14 @@ struct Bench {
   float       speed     = 0;
   uint8_t     occl      = 0;    // bit per leg: the ankle is hidden from the camera
   std::string label;            // free text on the overlay
+  struct QuestSite { bool ready=false; Vec3 dry={}, direction={}; float waterY=0; std::string waypoint; };
+  QuestSite   questCliff,questWater;
+  Npc*        questNpc = nullptr;
+  std::string questCase;
+  Vec3        questStable = {};
+  bool        questTrace=false,questWaterCase=false,questSawDrop=false,questSawWater=false,questWait=false,questLaunched=false,questStandingWait=false;
+  uint64_t    questDeadline=0,questWallNs=0;
+  uint32_t    questLastReturns=0;
   Npc*        subject   = nullptr; // the camera watches this npc instead of the player (gaze)
   PlayerControl* ctrl     = nullptr; // the player's input: the crosshair of the manual aim
   // volley: shots by hand in a row - press, draw to volleyDraw, hold volleyHold, let go, wait for the
@@ -1543,6 +1551,8 @@ void writeHeader() {
   std::fprintf(bench.csv,",ai_on,ai_want,ai_sigma,ai_errx,ai_erry,ai_lead,ai_pv,ai_ps");
   if(ragdollTrace)
     std::fprintf(bench.csv,",ph_ms,ph_bodies,ph_rays,rd_mode,rd_weight,rd_sleep");
+  if(bench.questTrace)
+    std::fprintf(bench.csv,",ig_immortal,ig_enabled,ig_anchor,ig_armed,ig_hazards,ig_returns,ig_reason,ig_anchor_x,ig_anchor_y,ig_anchor_z,ig_x,ig_y,ig_z,ig_drop_cm,ig_in_water,ig_ko,ig_wall_ms");
   std::fprintf(bench.csv,"\n");
   }
 
@@ -2098,6 +2108,95 @@ void writeAnim() {
   std::fprintf(bench.csv,",%d,%u,%u,%.1f,%.3f",int(AnimBlend::isEnabled()),a.blend.active,a.blend.started,a.blend.angle,a.blend.time);
   }
 
+
+const char* questReason(uint8_t hazards) {
+  return hazards==3 ? "drop+water" : hazards==2 ? "water" : hazards==1 ? "drop" : "none";
+  }
+
+bool chooseQuestSite(World& world, bool water, Bench::QuestSite& site) {
+  if(site.ready) return true;
+  std::vector<const WayPoint*> points;
+  if(!water)
+    if(const auto* point=world.findPoint("NW_XARDAS_TOWER_VALLEY_02",false)) points.push_back(point);
+  world.forEachWayPoint([&](const WayPoint& point) {
+    const auto& n=point.name;
+    const bool wanted=water ? n.find("HABOUR")!=std::string::npos || n.find("HARBOR")!=std::string::npos ||
+      n.find("HARBOUR")!=std::string::npos || n.find("WATER")!=std::string::npos || n.find("LAKE")!=std::string::npos :
+      n.find("XARDAS_TOWER")!=std::string::npos;
+    if(wanted && !point.underWater) points.push_back(&point);
+    });
+  if(points.size()>1) std::sort(points.begin()+(!water ? 1 : 0),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  if(points.size()>100) points.resize(100);
+  auto* physics=world.physic();
+  for(const auto* point:points) {
+    const auto floor=physics->landRay(point->position()+Vec3(0,150,0),500);
+    if(!floor.hasCol || floor.n.y<.9f) continue;
+    const auto dry=floor.v;
+    const auto wet=physics->waterRay(dry,15);
+    if(wet.hasCol) continue;
+    bool support=true;
+    for(float x:{-25.f,25.f}) for(float z:{-25.f,25.f}) {
+      const auto corner=physics->landRay(dry+Vec3(x,40,z),100);
+      support=support && corner.hasCol && corner.n.y>.85f && std::abs(corner.v.y-dry.y)<15;
+      }
+    if(!support) continue;
+    for(int a=0;a<24;++a) {
+      const float angle=float(a)*float(M_PI)/12.f;
+      const Vec3 direction(std::cos(angle),0,std::sin(angle));
+      for(float distance:{200.f,350.f,500.f,700.f}) {
+        const auto edge=dry+direction*distance;
+        const auto bottom=physics->landRay(edge+Vec3(0,100,0),6000);
+        if(!bottom.hasCol) continue;
+        const auto liquid=physics->waterRay(bottom.v+Vec3(0,5,0),0);
+        if(water ? !liquid.hasCol || liquid.wdepth-bottom.v.y<150 || liquid.wdepth>dry.y+80 : dry.y-bottom.v.y<1200)
+          continue;
+        if(physics->ray(dry+Vec3(0,110,0),edge+Vec3(0,110,0)).hasCol) continue;
+        site={true,dry,direction,water ? liquid.wdepth : 0,point->name};
+        return true;
+        }
+      }
+    }
+  return false;
+  }
+
+void questFields(World& world, Npc& npc, bool csv) {
+  const auto& q=npc.ragdollQuestReturnState();
+  const auto pos=npc.position();
+  auto pelvis=pos;
+  if(const auto* body=npc.ragdollBody()) {
+    const auto matrix=body->pelvisTransform();pelvis={matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)};
+    }
+  const auto water=world.physic()->waterRay(pelvis,0);
+  const bool submerged=water.hasCol && pelvis.y<water.wdepth-5;
+  if(bench.questLaunched) {
+    bench.questSawDrop|=bench.questStable.y-pelvis.y>RagdollSave::QuestReturn::maxFall;
+    bench.questSawWater|=submerged;
+    }
+  const auto count=npc.ragdollQuestReturnCount();
+  if(count>bench.questLastReturns)
+    event("immortal_guard_return","\"case\":"+jsonStr(bench.questCase)+",\"reason\":"+jsonStr(questReason(q.hazards))+
+      ",\"from_cm\":"+ragdollVector(npc.ragdollQuestReturnFrom())+",\"to_cm\":"+ragdollVector(pos)+
+      ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"count\":"+std::to_string(count));
+  bench.questLastReturns=count;
+  if(!csv) return;
+  const auto now=std::chrono::steady_clock::now().time_since_epoch();
+  const auto ns=uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
+  const double wall=bench.questWallNs ? double(ns-bench.questWallNs)/1e6 : 0;bench.questWallNs=ns;
+  std::fprintf(bench.csv,",%d,%d,%d,%d,%u,%u,%s,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%.6f",
+    int(npc.isImmortal()),Gothic::settingsGetI("GAME","ragdoll_quest_guard"),int(q.hasAnchor),int(q.armed),unsigned(q.hazards),count,
+    questReason(q.hazards),double(q.anchor.x),double(q.anchor.y),double(q.anchor.z),double(pos.x),double(pos.y),double(pos.z),
+    double(bench.questStable.y-pos.y),int(submerged),int(npc.isUnconscious()),wall);
+  event("immortal_guard_frame","\"case\":"+jsonStr(bench.questCase)+
+    ",\"actor_id\":"+std::to_string(world.npcId(&npc))+",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"immortal\":"+(npc.isImmortal()?"true":"false")+",\"enabled\":"+(Gothic::settingsGetI("GAME","ragdoll_quest_guard")?"true":"false")+
+    ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
+    ",\"hazards\":"+std::to_string(q.hazards)+",\"returns\":"+std::to_string(count)+",\"reason\":"+jsonStr(questReason(q.hazards))+
+    ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"position_cm\":"+ragdollVector(pos)+",\"pelvis_cm\":"+ragdollVector(pelvis)+
+    ",\"water_y_cm\":"+(water.hasCol?ragdollNumber(water.wdepth):"null")+",\"in_water\":"+(submerged?"true":"false")+
+    ",\"unconscious\":"+(npc.isUnconscious()?"true":"false")+",\"dead\":"+(npc.isDead()?"true":"false")+
+    ",\"parts\":"+std::to_string(npc.ragdollBody()?npc.ragdollBody()->partCount():0));
+  }
+
 void writeRow(Npc& pl) {
   if(bench.csv==nullptr) {
     bench.csv = std::fopen((outDir+"/metrics.csv").c_str(),"w");
@@ -2206,6 +2305,8 @@ void writeRow(Npc& pl) {
                ai.lead,ai.pv,ai.ps);
   if(ragdollTrace)
     writeRagdoll(pl);
+  if(bench.questTrace && bench.questNpc!=nullptr)
+    questFields(*Gothic::inst().world(),*bench.questNpc,true);
   std::fprintf(bench.csv,"\n");
   }
 
@@ -2600,6 +2701,104 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       event("ragdoll_error","\"command\":"+jsonStr(line)+",\"reason\":"+jsonStr(error.what()));
       }
     }
+
+  else if(c=="guard" && a.size()==6 && a[1]=="setup") {
+    Npc* npc=&subjectOf(pl);
+    const bool water=a[3]=="water", enabled=a[5]=="on";
+    if(npc==nullptr || (a[3]!="water" && a[3]!="cliff") || a[4]!="normal" || (a[5]!="on" && a[5]!="off")) {
+      arenaAbort("guard setup expects watched actor, label cliff|water normal on|off");return;
+      }
+    auto& site=water ? bench.questWater : bench.questCliff;
+    if(!chooseQuestSite(w,water,site)) { arenaAbort("no supported dry quest-guard hazard site");return; }
+    Gothic::settingsSetI("GAME","ragdoll_quest_guard",enabled);
+    auto& flags=npc->handle().flags;
+    flags=zenkit::NpcFlag(uint32_t(flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+    npc->setAttitude(ATT_NEUTRAL);
+    if(npc!=&pl && npc->isHuman()) {
+      npc->handle().attribute[ATR_HITPOINTSMAX]=100;
+      npc->handle().attribute[ATR_HITPOINTS]=2;
+      for(auto& protection:npc->handle().protection) protection=0;
+      }
+    pl.closeWeapon(true);pl.handle().attribute[ATR_STRENGTH]=1000;
+    pl.handle().damage_type=1<<size_t(zenkit::DamageType::BLUNT);
+    npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);npc->setPosition(site.dry);npc->setDirection(site.direction);npc->updateTransform();
+    auto hero=site.dry-site.direction*300;
+    if(const auto floor=w.physic()->landRay(hero+Vec3(0,300,0),1500);floor.hasCol) hero.y=floor.v.y;
+    if(npc!=&pl) {pl.setPosition(hero);pl.updateTransform();}
+    // Keep unrelated attacks from changing the dry-anchor setup or the filmed recovery.
+    for(uint32_t id=0;id<w.npcCount();++id)
+      if(auto* other=w.npcById(id);other!=nullptr && other!=&pl && other!=npc &&
+         (other->position()-site.dry).length()<4000)
+        exec("freeze id:"+std::to_string(id),w,pl,ctrl);
+    bench.questTrace=true;bench.questNpc=npc;bench.questCase=a[2];bench.questWaterCase=water;
+    bench.questSawDrop=bench.questSawWater=bench.questWait=bench.questLaunched=bench.questStandingWait=false;bench.questLastReturns=0;bench.questWallNs=0;
+    event("immortal_guard_case","\"case\":"+jsonStr(a[2])+",\"actor_id\":"+std::to_string(w.npcId(npc))+
+      ",\"immortal\":"+(npc->isImmortal()?"true":"false")+",\"enabled\":"+(enabled?"true":"false")+
+      ",\"site\":"+jsonStr(site.waypoint)+",\"dry_cm\":"+ragdollVector(site.dry)+",\"direction\":"+ragdollVector(site.direction)+
+      ",\"water_y_cm\":"+ragdollNumber(site.waterY));
+    }
+  else if(c=="guard" && (a.size()==2 || (a.size()==3 && a[2]=="safe")) && a[1]=="launch") {
+    auto* npc=bench.questNpc;if(npc==nullptr || npc->isDown()) {arenaAbort("guard launch needs living actor");return;}
+    bench.questStable=npc->position();const auto& q=npc->ragdollQuestReturnState();
+    if(npc->isHuman() && !npc->isPlayer() && Gothic::settingsGetI("GAME","ragdoll_quest_guard") && (!q.hasAnchor || (q.anchor-bench.questStable).length()>3)) {
+      arenaAbort("guard launch lacks a real stable dry anchor");return;
+      }
+    event("immortal_guard_launch","\"case\":"+jsonStr(bench.questCase)+",\"stable_cm\":"+ragdollVector(bench.questStable)+
+      ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"immortal\":"+(npc->isImmortal()?"true":"false"));
+    bench.questLaunched=true;
+    const auto before=npc->attribute(ATR_HITPOINTS);
+    npc->takeDamage(pl,nullptr);npc->prepareRagdoll();
+    event("immortal_guard_damage","\"case\":"+jsonStr(bench.questCase)+",\"hp_before\":"+std::to_string(before)+
+      ",\"hp_after\":"+std::to_string(npc->attribute(ATR_HITPOINTS))+",\"unconscious\":"+(npc->isUnconscious()?"true":"false")+
+      ",\"dead\":"+(npc->isDead()?"true":"false")+",\"melee\":true");
+    if(before!=2 || npc->attribute(ATR_HITPOINTS)!=1 || !npc->isUnconscious() || npc->isDead() || !npc->ragdollBody()) {arenaAbort("real melee damage did not produce HP2 to HP1 native KO");return;}
+    const auto direction=(bench.questWaterCase?bench.questWater:bench.questCliff).direction;
+    if(a.size()==2) npc->addRagdollImpulse(direction*1000.f+Vec3(0,50,0));
+    }
+  else if(c=="guard" && a.size()==2 && a[1]=="excluded") {
+    const auto* npc=bench.questNpc;
+    if(npc==nullptr || (!npc->isPlayer() && npc->isHuman())) {arenaAbort("guard exclusion needs hero or non-human");return;}
+    const auto& q=npc->ragdollQuestReturnState();
+    event("immortal_guard_excluded","\"case\":"+jsonStr(bench.questCase)+",\"human\":"+(npc->isHuman()?"true":"false")+
+      ",\"hero\":"+(npc->isPlayer()?"true":"false")+",\"monster\":"+(npc->isMonster()?"true":"false")+
+      ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
+      ",\"returns\":"+std::to_string(npc->ragdollQuestReturnCount()));
+    if(q.hasAnchor || q.armed || npc->ragdollQuestReturnCount()!=0) arenaAbort("excluded actor acquired return protection");
+    }
+  else if(c=="guard" && a.size()==2 && a[1]=="hazard") {
+    bench.questWait=true;bench.questDeadline=bench.time+10000;
+    }
+  else if(c=="guard" && a.size()==3 && a[1]=="checkpoint") {
+    const auto* npc=bench.questNpc;if(npc==nullptr) {arenaAbort("guard checkpoint lost actor");return;}
+    const auto& q=npc->ragdollQuestReturnState();
+    event("immortal_guard_checkpoint","\"case\":"+jsonStr(bench.questCase)+",\"label\":"+jsonStr(a[2])+
+      ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"angle\":"+ragdollNumber(q.angle)+
+      ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+",\"hazards\":"+std::to_string(q.hazards));
+    bench.questLastReturns=npc->ragdollQuestReturnCount();
+    }
+  else if(c=="guard" && a.size()==3 && a[1]=="wait-standing") {
+    if(bench.questNpc==nullptr) {arenaAbort("guard standing wait lost actor");return;}
+    // Let the actual get-up/draw animation finish while preventing a new combat action.
+    bench.questNpc->setExternalControl(true);
+    bench.questStandingWait=true;bench.questDeadline=bench.time+uint64_t(num(a,2,5000));
+    }
+  else if(c=="guard" && a.size()==2 && a[1]=="finish") {
+    const auto* npc=bench.questNpc;
+    if(npc==nullptr) {arenaAbort("guard finish lost actor");return;}
+    event("immortal_guard_end","\"case\":"+jsonStr(bench.questCase)+",\"position_cm\":"+ragdollVector(npc->position())+
+      ",\"stable_cm\":"+ragdollVector(bench.questStable)+",\"returns\":"+std::to_string(npc->ragdollQuestReturnCount())+
+      ",\"drop_observed\":"+(bench.questSawDrop?"true":"false")+",\"water_observed\":"+(bench.questSawWater?"true":"false")+
+      ",\"dead\":"+(npc->isDead()?"true":"false")+",\"unconscious\":"+(npc->isUnconscious()?"true":"false")+
+      ",\"standing\":"+(npc->isStanding()?"true":"false")+",\"armed\":"+(npc->ragdollQuestReturnState().armed?"true":"false")+
+      ",\"parts\":"+std::to_string(npc->ragdollBody()?npc->ragdollBody()->partCount():0));
+    }
+  else if(c=="guard" && a.size()==2 && a[1]=="cleanup") {
+    auto* npc=bench.questNpc;
+    if(npc==nullptr) {arenaAbort("guard cleanup lost actor");return;}
+    bench.questNpc=nullptr;
+    if(bench.subject==npc) exec("watch player",w,pl,ctrl);
+    if(npc!=&pl) w.removeNpc(*npc); else npc->setExternalControl(false);
+    }
   else if(c=="waitragdoll") {
     Npc* npc=a.size()>1 ? findNpc(w,pl,a[1]) : nullptr;
     const std::string state=a.size()>2 ? a[2] : "";
@@ -2665,6 +2864,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
           std::to_string(before)+",\"bodies_after\":"+std::to_string(after)+",\"matched\":"+(removed ? "true" : "false"));
     if(!removed)
       event("ragdoll_error","\"reason\":\"removing NPC retained native ragdoll parts\"");
+    if(bench.questNpc==npc) bench.questNpc=nullptr;
     bench.crew.erase(std::remove(bench.crew.begin(),bench.crew.end(),npc),bench.crew.end());
     if(bench.waitRagdollNpc==npc) bench.waitRagdollNpc=nullptr;
     if(bench.subject==npc) exec("watch player",w,pl,ctrl);
@@ -5043,6 +5243,34 @@ bool waitingForAi() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+  if(bench.questNpc!=nullptr && !bench.questCase.empty()) questFields(w,*bench.questNpc,false);
+  if(bench.questStandingWait) {
+    const auto* npc=bench.questNpc;
+    const bool ready=npc && npc->isStanding() && !npc->isDown() && !npc->ragdollBody() &&
+                     !npc->isRagdollBlending() && !npc->ragdollQuestReturnState().armed;
+    if(!ready && bench.time<bench.questDeadline) return;
+    bench.questStandingWait=false;
+    event("immortal_guard_standing","\"case\":"+jsonStr(bench.questCase)+",\"standing\":"+(ready?"true":"false"));
+    if(!ready) {arenaAbort("real get-up did not finish standing");return;}
+    }
+  if(bench.questWait) {
+    const bool observed=bench.questWaterCase?bench.questSawWater:bench.questSawDrop;
+    const uint8_t wanted=bench.questWaterCase ? RagdollSave::QuestReturn::water : RagdollSave::QuestReturn::fell;
+    const bool guarded=bench.questNpc->isHuman() && !bench.questNpc->isPlayer() && Gothic::settingsGetI("GAME","ragdoll_quest_guard");
+    const bool reached=observed && (!guarded || (bench.questNpc->ragdollQuestReturnState().hazards & wanted));
+    if(!reached && bench.time<bench.questDeadline) return;
+    bench.questWait=false;
+    if(!reached) {arenaAbort("quest guard physical hazard was not reached");return;}
+    const auto* npc=bench.questNpc;
+    const auto* body=npc->ragdollBody();
+    auto pelvis=npc->position();
+    if(body) {const auto tr=body->pelvisTransform();pelvis={tr.at(3,0),tr.at(3,1),tr.at(3,2)};}
+    const auto water=w.physic()->waterRay(pelvis,0);
+    event("immortal_guard_hazard","\"case\":"+jsonStr(bench.questCase)+",\"pelvis_cm\":"+ragdollVector(pelvis)+
+      ",\"water_y_cm\":"+(water.hasCol?ragdollNumber(water.wdepth):"null")+
+      ",\"unconscious\":"+(npc->isUnconscious()?"true":"false")+
+      ",\"parts\":"+std::to_string(body?body->partCount():0)+",\"hazards\":"+std::to_string(npc->ragdollQuestReturnState().hazards));
+    }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
   if(bench.cadenceWait) { if(!AppCadence::done()) return;bench.cadenceWait=false; }
 #endif
@@ -5080,9 +5308,12 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.waitRagdollNpc!=nullptr) {
       const auto* npc=bench.waitRagdollNpc;
       const auto* body=npc->ragdollBody();
+      const auto& quest=npc->ragdollQuestReturnState();
+      const bool guardedReturn=quest.armed && quest.hazards!=0;
       const bool ready=bench.waitRagdollState=="sleep" ? body!=nullptr && body->isSleeping() :
                        bench.waitRagdollState=="recovery" ? npc->isRagdollBlending() :
-                       body==nullptr && !npc->isDown() && !npc->isRagdollBlending();
+                       body==nullptr && !npc->isDown() && !npc->isRagdollBlending() &&
+                       (!guardedReturn || (npc->isStanding() && !quest.armed));
       if(!ready && bench.time<bench.waitRagdollEnd)
         return;
       say("waitragdoll "+bench.waitRagdollState+(ready ? " reached" : " timeout"));
@@ -5138,6 +5369,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
+    if(bench.questWait || bench.questStandingWait) return;
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
     if(bench.cadenceWait) return;
 #endif
@@ -6173,6 +6405,17 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
 
   if(pm.w()>0 && bench.overlay)
     drawOverlay(pm);
+  if(pm.w()>0 && bench.questTrace && bench.questNpc!=nullptr) {
+    Canvas cv;cv.px=reinterpret_cast<uint8_t*>(pm.data());cv.w=int(pm.w());cv.h=int(pm.h());
+    cv.rect(0,0,std::min(cv.w,640),66,{0,0,0,190});
+    cv.text(6,6,bench.questCase,2,Text);
+    const auto& npc=*bench.questNpc;const auto& q=npc.ragdollQuestReturnState();char label[160];
+    std::snprintf(label,sizeof(label),"IMMORTAL %d GUARD %d KO %d RETURN %u",int(npc.isImmortal()),
+      Gothic::settingsGetI("GAME","ragdoll_quest_guard"),int(npc.isUnconscious()),npc.ragdollQuestReturnCount());
+    cv.text(6,26,label,2,Text);
+    std::snprintf(label,sizeof(label),"REASON %s DROP %.0f CM",questReason(q.hazards),double(bench.questStable.y-npc.position().y));
+    cv.text(6,46,label,2,Text);
+    }
   if(!bench.shot.empty()) {
     if(pm.w()>0)
       pm.save((outDir+"/"+bench.shot+".png").c_str());

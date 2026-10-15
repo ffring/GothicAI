@@ -1,0 +1,100 @@
+# Real melee KO of mortal human NPCs; cliff/water return and exclusion controls.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+view nopfx
+overlay off
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup mortal_cliff cliff normal on
+wait 1200
+rec mortal_cliff novideo
+wait 300
+guard launch
+guard hazard
+guard checkpoint before_save
+ragdoll save watched mortal_cliff_ko
+ragdoll restore watched mortal_cliff_ko
+guard checkpoint after_load
+standup watched
+waitragdoll watched getup 10000
+guard wait-standing 5000
+guard finish
+stop
+guard cleanup
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup mortal_water water normal on
+wait 1200
+rec mortal_water novideo
+wait 300
+guard launch
+guard hazard
+guard checkpoint before_save
+ragdoll save watched mortal_water_ko
+ragdoll restore watched mortal_water_ko
+guard checkpoint after_load
+standup watched
+waitragdoll watched getup 10000
+guard wait-standing 5000
+guard finish
+stop
+guard cleanup
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup safe_ko cliff normal on
+wait 1200
+rec safe_ko novideo
+wait 300
+guard launch safe
+waitragdoll watched sleep 20000
+standup watched
+waitragdoll watched getup 10000
+guard wait-standing 5000
+guard finish
+stop
+guard cleanup
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup guard_off_cliff cliff normal off
+wait 1200
+rec guard_off_cliff novideo
+wait 300
+guard launch
+guard hazard
+waitragdoll watched sleep 20000
+standup watched
+waitragdoll watched getup 10000
+guard wait-standing 5000
+guard finish
+stop
+guard cleanup
+
+watch player
+guard setup hero_control cliff normal on
+wait 1200
+rec hero_control novideo
+wait 300
+guard excluded
+stop
+guard cleanup
+
+insert TROLL
+freeze TROLL
+watch TROLL
+guard setup monster_control cliff normal on
+wait 1200
+rec monster_control novideo
+wait 300
+guard excluded
+stop
+guard cleanup

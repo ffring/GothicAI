@@ -93,6 +93,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "manualAim",           1); // the bow aimed by hand (game/archery)
   defaults->set("GAME", "npcManualAim",        1); // npc archers aim by hand too (game/archerai)
   defaults->set("GAME", "ragdoll",             1); // physical death/KO bodies; GAME/ragdoll=0 keeps animation-only behavior
+  defaults->set("GAME", "ragdoll_quest_guard", 1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);

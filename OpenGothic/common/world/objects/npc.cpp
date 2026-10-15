@@ -308,6 +308,8 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   RagdollSave::save(fout,state);
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-recovery");
   visual.pose().saveRagdollRecovery(fout);
+  fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-quest-return");
+  RagdollSave::saveQuestReturn(fout,ragdollQuestReturn);
   }
 
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
@@ -316,6 +318,10 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
   ragdollRecovering = false;
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
+  ragdollQuestReturn = {};
+  ragdollQuestSampleTick = 0;
+  ragdollQuestReturns = 0;
+  ragdollQuestFrom = {};
   fin.setEntry("worlds/",fin.worldName(),directory,id,"/data");
 
   hnpc = std::make_shared<zenkit::INpc>();
@@ -389,6 +395,10 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
     visual.setTorch(true,owner);
   if(isDead())
     physic.setEnable(false);
+
+  if(fin.setEntry("worlds/",fin.worldName(),directory,id,"/ragdoll-quest-return") &&
+     !RagdollSave::loadQuestReturn(fin,ragdollQuestReturn))
+    Log::e("ragdoll: invalid quest NPC return point");
 
   // Absence denotes an old save: existing dead/KO poses stay animated until a new down event.
   ragdollLegacyDown = isDown();
@@ -483,6 +493,7 @@ void Npc::loadTrState(Serialize& fin) {
 bool Npc::setPosition(float ix, float iy, float iz) {
   if(x==ix && y==iy && z==iz)
     return false;
+  const bool liveTeleport = !isDown() && !ragdoll && (position()-Vec3(ix,iy,iz)).length()>300.f;
   const auto* skeleton = visual.visualSkeleton();
   std::optional<Ragdoll::State> movedBody, movedDormant;
   auto relocate = [&](Ragdoll::State& state) {
@@ -512,6 +523,12 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   x = ix;
   y = iy;
   z = iz;
+  if(liveTeleport) {
+    // Large scripted relocations start a new history; normal movement samples
+    // must retain the last supported position when the NPC steps off an edge.
+    ragdollQuestReturn = {};
+    ragdollQuestSampleTick = 0;
+    }
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
   durtyTranform |= TR_Pos;
@@ -713,8 +730,13 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
   }
 
 void Npc::onNoHealth(bool death, HitSound sndMask) {
-  if(!isDown())
+  if(!isDown()) {
+    updateRagdollQuestAnchor();
+    ragdollQuestReturn.armed = !death && !isPlayer() && isHuman() &&
+        Gothic::settingsGetI("GAME","ragdoll_quest_guard")!=0 && ragdollQuestReturn.hasAnchor;
+    ragdollQuestReturn.hazards = 0;
     ragdollDormant.reset();
+    }
   ragdollLegacyDown = false;
   ragdollRecovering = false;
   invent.switchActiveWeapon(*this,Item::NSLOT);
@@ -837,7 +859,9 @@ bool Npc::recoverRagdoll() {
     return true;
   if(isDead())
     return false;
-  if(!ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
+  checkRagdollQuestHazard();
+  const bool returnToAnchor = needsRagdollQuestReturn();
+  if(!returnToAnchor && !ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
     return false;
 
   const bool onBack = ragdoll->onBack();
@@ -847,10 +871,18 @@ bool Npc::recoverRagdoll() {
   if(floor.hasCol && floor.n.y>0.25f)
     at.y = floor.v.y;
 
+  if(returnToAnchor) {
+    ragdollQuestFrom = position();
+    at = ragdollQuestReturn.anchor;
+    ++ragdollQuestReturns;
+    }
+
   // Rebase the animated frame while the physical overlay still holds the shown pose.
   const auto physicalRoot = ragdoll->rootTransform();
   const float fx = physicalRoot.at(2,0), fz = physicalRoot.at(2,2);
-  if(fx*fx+fz*fz>1e-6f)
+  if(returnToAnchor)
+    angle = ragdollQuestReturn.angle;
+  else if(fx*fx+fz*fz>1e-6f)
     angle = 90.f-std::atan2(fx,fz)*180.f/float(M_PI);
   x = at.x; y = at.y; z = at.z;
   physic.setPosition(at);
@@ -865,8 +897,11 @@ bool Npc::recoverRagdoll() {
     // Creatures without wounded poses retain the standard idle fallback.
     visual.startAnimAndGet("S_RUN",owner.tickCount(),true);
     }
-  releaseRagdoll(true);
+  // Do not interpolate a world-space corpse pose across the whole ravine.
+  releaseRagdoll(!returnToAnchor);
   ragdollDormant.reset();
+  if(!returnToAnchor)
+    ragdollQuestReturn.armed = false;
   ragdollRecovering = true;
   ragdollHasLastPosition = false;
   ragdollLastVelocity = {};
@@ -875,7 +910,69 @@ bool Npc::recoverRagdoll() {
   return true;
   }
 
+void Npc::updateRagdollQuestAnchor() {
+  if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
+     (ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) ||
+     Gothic::settingsGetI("GAME","ragdoll_quest_guard")==0 ||
+     Gothic::settingsGetI("GAME","ragdoll")==0 || mvAlgo.state()!=MoveAlgo::Run)
+    return;
+  const auto now = owner.tickCount();
+  if(ragdollQuestReturn.hasAnchor && now>=ragdollQuestSampleTick && now-ragdollQuestSampleTick<250)
+    return;
+  ragdollQuestSampleTick = now;
+  const auto at = position();
+  const auto floor = owner.physic()->landRay(at+Vec3(0,15,0),45.f);
+  if(!floor.hasCol || floor.n.y<0.7f || std::abs(floor.v.y-at.y)>30.f)
+    return;
+  const auto water = owner.physic()->waterRay(at,15.f);
+  if(water.hasCol)
+    return;
+  ragdollQuestReturn.anchor = {at.x,floor.v.y,at.z};
+  ragdollQuestReturn.angle = angle;
+  ragdollQuestReturn.hasAnchor = true;
+  }
+
+bool Npc::needsRagdollQuestReturn() const {
+  return ragdollQuestReturn.armed && ragdollQuestReturn.hasAnchor && ragdollQuestReturn.hazards!=0 &&
+         !isPlayer() && isHuman() && !isDead() && Gothic::settingsGetI("GAME","ragdoll_quest_guard")!=0;
+  }
+
+void Npc::checkRagdollQuestHazard() {
+  if(!ragdoll || !ragdollQuestReturn.armed || Gothic::settingsGetI("GAME","ragdoll_quest_guard")==0)
+    return;
+  const auto pelvis = ragdoll->pelvisTransform();
+  const Vec3 at(pelvis.at(3,0),pelvis.at(3,1),pelvis.at(3,2));
+  if(at.y<ragdollQuestReturn.anchor.y-RagdollSave::QuestReturn::maxFall)
+    ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::fell;
+  if((ragdollQuestReturn.hazards & RagdollSave::QuestReturn::water)==0) {
+    const auto water = owner.physic()->waterRay(at,60.f);
+    if(water.hasCol) {
+      // The padded water ray can start below a dry bank or bridge. A solid
+      // support between the pelvis and that lower surface keeps the body dry.
+      const auto support = water.wdepth<at.y ? owner.physic()->landRay(at,at.y-water.wdepth) : DynamicWorld::RayLandResult();
+      if(!support.hasCol || support.v.y<=water.wdepth)
+        ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::water;
+      }
+    }
+  }
+
 void Npc::prepareRagdoll() {
+  if(!ragdoll && !isDown() && ragdollQuestReturn.armed && ragdollQuestReturn.hazards!=0) {
+    if(!needsRagdollQuestReturn()) {
+      ragdollQuestReturn.armed = false;
+      }
+    else if(visual.pose().isStanding()) {
+      // Finish at the dry point too: get-up root motion must not carry a quest
+      // NPC straight over the same edge again. 'armed' also survives a mid-rise save.
+      const auto at = ragdollQuestReturn.anchor;
+      x = at.x; y = at.y; z = at.z;
+      physic.setPosition(at);
+      mvAlgo.clearSpeed();
+      durtyTranform |= TR_Pos;
+      ragdollQuestReturn.armed = false;
+      }
+    }
+  updateRagdollQuestAnchor();
   const bool enabled = Gothic::settingsGetI("GAME","ragdoll")!=0;
   if(!enabled) {
     if(ragdollHasLastPosition) {
@@ -949,6 +1046,7 @@ void Npc::syncRagdoll() {
   x = ragdollObjectMatrix.at(3,0);
   y = ragdollObjectMatrix.at(3,1);
   z = ragdollObjectMatrix.at(3,2);
+  checkRagdollQuestHazard();
   physic.setPosition(position());
   visual.pose().setRagdollPose(visual.visualSkeleton(),ragdollPose,ragdoll->poseIndices());
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
@@ -1210,6 +1308,8 @@ void Npc::dropTorch(bool burnout) {
   }
 
 Tempest::Vec3 Npc::animMoveSpeed(uint64_t dt) const {
+  if(!ragdoll && needsRagdollQuestReturn() && !visual.pose().isStanding())
+    return {};
   return visual.pose().animMoveSpeed(owner.tickCount(),dt);
   }
 
