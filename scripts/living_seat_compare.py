@@ -18,20 +18,30 @@ def check(run):
     assert len(frames) > 50 and any(e['seated'] for e in frames), 'NPC never entered real seated state'
     assert any(e['seated'] and e['mob_state'] >= 1 and ('S_' + setup[0]['scheme']) in e['animations']
                for e in frames), 'NPC never completed the ordinary seat transition'
-    assert all(e['living_parts'] == e['corpse_parts'] == 24 for e in frames), 'native body missing'
-    assert any(e['phase'] == 'shift' for e in frames), 'short script reposition missing'
+    assert all(e['corpse_parts'] == 24 for e in frames), 'native corpse missing'
+    assert all(e['living_parts'] == 0 for e in frames if e['attached']), 'seat interaction retained its contact rig'
+    exit_frames = [e for e in frames if e['phase'] == 'stand' and not e['attached'] and
+                   ('T_' + setup[0]['scheme'] + '_') in e['animations'] and '_2_STAND' in e['animations']]
+    assert exit_frames, 'ordinary detached seat exit was not exercised'
+    assert all(e['living_parts'] == 0 for e in exit_frames), 'seat exit retained its contact rig'
+    restored = [e for e in frames if e['phase'] == 'stand' and not e['attached'] and e['living_parts'] == 24]
+    assert restored and restored[0]['t_game_ms'] > exit_frames[-1]['t_game_ms'], 'walking contact rig did not return after seat exit'
+    shifts = [e for e in frames if e['phase'] == 'shift']
+    assert shifts and all(e['living_parts'] == 24 for e in shifts), 'short script reposition needs the restored contact rig'
     peak_jump = max(e['native_step_cm'] for e in frames)
-    assert peak_jump > 50, ('native teleport guard was never exercised', peak_jump)
+    shift_jump = max(e['native_step_cm'] for e in shifts)
+    assert shift_jump > 50, ('native teleport guard was never exercised', shift_jump)
     corpse_speed = max(e['corpse_speed_cm_s'] for e in frames)
     item_speed = max(e['item_speed_cm_s'] for e in frames)
     assert all(math.isfinite(v) for v in (peak_jump, corpse_speed, item_speed))
-    assert corpse_speed < 500, ('corpse launched', corpse_speed)
-    assert item_speed < 1000, ('dropped item launched', item_speed)
+    assert corpse_speed < 50, ('corpse launched', corpse_speed)
+    assert item_speed < 50, ('dropped item launched', item_speed)
     item_travel = max(math.dist(frames[0]['items_cm'][i], row['items_cm'][i])
                       for i in range(2) for row in frames)
-    assert item_travel < 100, ('dropped item displaced too far', item_travel)
+    assert item_travel < 5, ('dropped item displaced too far', item_travel)
     return {'pass': True, 'frames': len(frames), 'scheme': setup[0]['scheme'],
             'real_attach_jump_cm': attach[0]['jump_cm'], 'max_native_step_cm': peak_jump,
+            'exit_frames': len(exit_frames), 'restored_frames': len(restored),
             'max_corpse_speed_cm_s': corpse_speed, 'max_item_speed_cm_s': item_speed,
             'max_item_travel_cm': item_travel}
 

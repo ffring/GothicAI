@@ -1141,6 +1141,20 @@ void Npc::prepareRagdoll() {
 
 void Npc::prepareLivingBody() {
   constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
+  if(currentInteract!=nullptr)
+    livingWasInteracting = true;
+  else if(visual.pose().isStanding())
+    livingWasInteracting = false;
+  else if(visual.pose().hasState(BS_MOBINTERACT))
+    livingWasInteracting = true;
+  else if(!visual.pose().hasState(BS_CLIMB))
+    livingWasInteracting = false;
+  // Mob clips align their bones independently of the walking root. Their short
+  // pose changes are real animation, but are not contact velocities. Detach can
+  // clear currentInteract before ToStand finishes; retain the suspension until
+  // that clip ends or ordinary movement interrupts it. Idle successors can keep
+  // the interaction body-state tag, so recognize their standing pose explicitly.
+  const bool interacting = currentInteract!=nullptr || livingWasInteracting;
   const bool frozen = spellFrozen();
   if(frozen!=livingWasFrozen) {
     // Enter with a completely kinematic rig, discarding any active hit reaction.
@@ -1154,10 +1168,11 @@ void Npc::prepareLivingBody() {
   const auto* hero = owner.player();
   const bool outside = hero!=nullptr && (living ? qDistTo(*hero)>leaveRadius*leaveRadius
                                                : qDistTo(*hero)>=enterRadius*enterRadius);
-  if(isDown() || ragdoll || (!frozen && (isPlayer() || hero==nullptr ||
+  if(isDown() || ragdoll || interacting || (!frozen && (isPlayer() || hero==nullptr ||
      !Gothic::physicsFlags().livingBodies || outside))) {
     living.reset();
     livingRetryTick = 0;
+    livingNeedsRebuild = false;
     arrowImpacts.clear();
     return;
     }
@@ -5730,10 +5745,9 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
-    // Mob attachment aligns the root discretely, even over short distances.
-    // Rebuild in the sequential physics handoff instead of sweeping the old
-    // kinematic pose into this alignment with a fictitious contact velocity.
-    livingNeedsRebuild = true;
+    // Remove the contact rig in the sequential physics handoff, including
+    // when an immediate detach leaves only its transition animation behind.
+    livingWasInteracting = true;
     attachToPoint(nullptr); //NOTE: Fajeth campfire
     if(!quick) {
       visual.stopAnim(*this,"");

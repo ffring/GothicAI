@@ -2556,11 +2556,15 @@ void livingSeatFields(World& world) {
     bench.seatPreviousParts.resize(pose.size());
     for(auto bone:body->boneIndices()) bench.seatPreviousParts[bone]={pose[bone].at(3,0),pose[bone].at(3,1),pose[bone].at(3,2)};
     }
+  else {
+    bench.seatPreviousParts.clear();
+    }
   const auto* corpse=bench.seatCorpse ? bench.seatCorpse->ragdollBody() : nullptr;
   if(corpse) for(const auto& part:corpse->state().parts) corpseSpeed=std::max(corpseSpeed,part.linearVelocity.length());
   std::string items="[";
   for(size_t i=0;i<bench.seatItems.size();++i) {
     const auto p=bench.seatItems[i]->position();
+    itemSpeed=std::max(itemSpeed,bench.seatItems[i]->physicsVelocity().length());
     if(bench.seatPreviousItems.size()==bench.seatItems.size() && seconds>0)
       itemSpeed=std::max(itemSpeed,(p-bench.seatPreviousItems[i]).length()/seconds);
     if(i) items+=',';
@@ -3329,6 +3333,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("living_seat_attach",std::string("\"attached\":")+(attached?"true":"false")+",\"jump_cm\":"+
       ragdollNumber((bench.seatNpc->position()-from).length()));
     if(!attached) arenaAbort("real NPC bench attachment failed");
+    }
+  else if(c=="living-seat" && a.size()==2 && a[1]=="stand") {
+    if(!bench.seatNpc) return;
+    bench.seatNpc->setInteraction(nullptr,false);
+    bench.seatPhase="stand";
     }
   else if(c=="living-seat" && a.size()==2 && a[1]=="shift") {
     if(!bench.seatNpc) return;
