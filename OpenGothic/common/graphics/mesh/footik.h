@@ -102,7 +102,8 @@ class FootIk final {
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);
     // Applies IK to world-space bone matrices and records the animated ankle positions
-    void           apply(Tempest::Matrix4x4* tr, size_t numBones, float floorY);
+    void           apply(Tempest::Matrix4x4* tr, size_t numBones, float floorY,
+                         const Tempest::Vec3& bodyOffset = {});
 
     void           debugLog(std::string_view name, const Input& in, bool verbose);
     void           probe(Probe& p, const Input& in) const;

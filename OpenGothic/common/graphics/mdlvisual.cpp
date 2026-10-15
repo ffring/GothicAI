@@ -880,7 +880,6 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       if(sh<skeleton->tr.size())
         shoulder = skeleton->tr[sh].at(3,1);
       }
-    const Tempest::Vec3 from = npc.position() + Tempest::Vec3(0,shoulder,0) + in.forward*35.f;
     // a shot is a frame of BS_HIT, the reload goes on aiming
     if((ws==WeaponState::Bow || ws==WeaponState::CBow) && (bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==(BS_HIT & BS_MAX))) {
       in.active = true;
@@ -888,12 +887,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       if(manual) {
         // by hand: the arrow straight at the crosshair (the archer holds over by himself), from where
         // the arrow is (not too close: the turn moves it)
-        const Tempest::Vec3 at = aimAt();
-        Tempest::Vec3       ap, ad;
-        Tempest::Vec3       o  = from;
-        if(arrowRay(ap,ad) && (at-ap).length()>150.f)
-          o = ap;
-        in.dir    = at - o;
+        in.dir    = npc.aimDirection(aimAt());
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
@@ -902,12 +896,12 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
         in.slot   = ammunition.boneId;
         } else {
-        in.dir  = World::bulletVelocity(from,aimAt());
+        in.dir  = npc.aimDirection(aimAt());
         }
       }
     else if(ws==WeaponState::Mage && bs==BS_CASTING) {
       in.active = true;
-      in.dir    = aimAt() - from;
+      in.dir    = npc.aimDirection(aimAt());
       }
     if(in.active && manual && npc.aimPeek()!=0.f) {
       // round a corner: lean out sideways as far as there is room beside the head
@@ -922,21 +916,19 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
-      // steeply down: lean over the edge, if there is room in front of the head; by hand as steeply as the
-      // hero looks down too (the center of the screen on the edge right in front: leaning looks past it)
-      const Tempest::Vec3 d    = in.dir;
-      const Tempest::Vec3 look = manual ? npc.aimLook() : Tempest::Vec3();
-      float               down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
-      if(look.y<0.f)
-        down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
-      in.lean = Aim::leanFor(down);
-      if(in.lean>0.f) {
-        const float         k    = in.lean/(Aim::LeanMax*float(M_PI)/180.f);
-        const Tempest::Vec3 dir  = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
-        const Tempest::Vec3 head = mapHeadBone();
-        const Tempest::Vec3 to   = head + dir*(Aim::LeanReach*k) - Tempest::Vec3(0,Aim::LeanDrop*k,0);
-        if(npc.world().physic()->ray(head,to).hasCol)
-          in.lean = 0;
+      if(npc.isPlayer()) {
+        in.lean = npc.aimLean(aimAt(),manual).angle;
+        } else {
+        // NPCs keep the old angle rule; only the hero searches visibility along the bend.
+        const Tempest::Vec3 d = in.dir;
+        const float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+        in.lean = Aim::leanForNpc(down);
+        if(in.lean>0.f) {
+          const auto head = npc.aimHead(aimAt(),0.f);
+          const auto to = npc.aimHead(aimAt(),in.lean);
+          if(npc.world().physic()->ray(head,to).hasCol)
+            in.lean = 0;
+          }
         }
       }
     }

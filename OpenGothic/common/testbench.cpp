@@ -237,6 +237,37 @@ Vec3 facing(const Npc& pl) {
   return {std::cos(a),0,std::sin(a)};
   }
 
+// Reuse the hero's skeleton prediction at a candidate perch without teleporting him during a search.
+Vec3 perchHead(const Npc& pl, const Vec3& origin, const Vec3& forward, const Vec3& target, float angle) {
+  const Vec3 f = facing(pl), s(-f.z,0,f.x), side(-forward.z,0,forward.x);
+  const Vec3 d = target-origin;
+  const Vec3 mapped = pl.position() + f*Vec3::dotProduct(d,forward) + s*Vec3::dotProduct(d,side) + Vec3(0,d.y,0);
+  const Vec3 head = pl.aimHead(mapped,angle)-pl.position();
+  return origin + forward*Vec3::dotProduct(head,f) + side*Vec3::dotProduct(head,s) + Vec3(0,head.y,0);
+  }
+
+bool perchLean(World& w, const Npc& pl, const Vec3& origin, const Vec3& forward, const Vec3& target,
+               float minDown, float maxDown, float& down, float& bend) {
+  const Vec3 head = perchHead(pl,origin,forward,target,0.f);
+  const Vec3 d = target-head;
+  down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z))*180.f/float(M_PI);
+  const auto blocked = w.physic()->ray(head,target);
+  if(down<minDown || down>maxDown || !blocked.hasCol || (blocked.v-head).length()>200.f)
+    return false;
+  Vec3 previous = head;
+  for(float angle=1.f; angle<=Aim::LeanMax; angle+=1.f) {
+    const Vec3 next = perchHead(pl,origin,forward,target,angle*float(M_PI)/180.f);
+    if(w.physic()->ray(previous,next).hasCol)
+      return false;
+    if(!w.physic()->ray(next,target).hasCol) {
+      bend = angle;
+      return true;
+      }
+    previous = next;
+    }
+  return false;
+  }
+
 struct Spot {
   std::string name;
   float       angle = 0;
@@ -722,10 +753,8 @@ struct Bench {
   // track: where an npc's head (or trunk) is in each recorded frame, for labels that follow it
   std::string trackNpc;
   bool        trackHead = true;
-  // sight: the hero's line of sight to an npc in each recorded frame and shot (the focus' rays), for the
-  // lines drawn over a cut; the head where it stood when `sight` was given (upright, before a lean)
+  // sight: the hero's line of sight to an npc in each recorded frame and shot (the focus' rays).
   std::string sightNpc;
-  Vec3        sightHead = {};
   float       sightFan  = 700;
   float       camSmooth = 0.12f; // share of the way to the wanted camera per frame; 1: no smoothing
   bool        smValid   = false;
@@ -4114,12 +4143,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="sight") {
     // sight <npc|off> [fan cm]: each recorded frame and shot, the hero's line of sight to it on the picture
-    // (events.jsonl "sight"): from the head as it is now (upright), as the focus looks, and from where the lean
-    // over an edge takes it (Npc::canSeeNpcOverEdge); the fan of the bow's focus down (FOCUS_RANGED elevdo)
+    // (events.jsonl "sight"): the shared standing head, the current head, and the minimum lean that reveals
+    // the target; the fan of the bow's focus down (FOCUS_RANGED elevdo)
     bench.sightNpc = a.size()>1 && a[1]!="off" ? a[1] : "";
     bench.sightFan = num(a,2,700);
-    if(!bench.sightNpc.empty())
-      bench.sightHead = pl.mapHeadBone();
     say("sight " + (bench.sightNpc.empty() ? std::string("off") : bench.sightNpc));
     }
   else if(c=="rec") {
@@ -4166,27 +4193,36 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say("cansee: no npc " + line);
       return;
       }
-    const Vec3  head = pl.mapHeadBone();
     const Vec3  tg   = n->centerPosition();
+    const Vec3  head = pl.aimHead(tg,0.f);
+    const auto  lean = pl.aimLean(tg);
     const Vec3  d    = tg-head;
     const float h    = std::sqrt(d.x*d.x+d.z*d.z);
     auto        r    = w.physic()->ray(head,tg);
     const auto& fr = w.script().focusRange();
-    char buf[300];
+    char buf[420];
     std::snprintf(buf,sizeof(buf),"cansee %s: head %d, over the edge %d; dist %.0f, down %.0f deg; the ray from the head hits at %.0f cm of %.0f; bow focus %.0f..%.0f",
-                  symName(w,n).c_str(),int(pl.canSeeNpc(*n,true)),int(pl.canSeeNpcOverEdge(*n)),double(d.length()),
+                  symName(w,n).c_str(),int(!r.hasCol),int(pl.canSeeNpcOverEdge(*n)),double(d.length()),
                   double(-std::atan2(d.y,h)*180.f/float(M_PI)),r.hasCol ? double((r.v-head).length()) : -1.0,double(d.length()),
                   double(fr.npc_range1),double(fr.npc_range2));
     say(buf);
-    // the lean over the edge, as Npc::canSeeNpcOverEdge does it at full lean
-    const float an   = pl.rotationRad();
-    const Vec3  dir  = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(an),0,std::sin(an))*0.25f);
-    const Vec3  eye  = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
-    auto        r1   = w.physic()->ray(head,eye);
+    const Vec3  dir  = Vec3::normalize(Vec3(d.x,0,d.z));
+    const Vec3  eye  = pl.aimHead(tg,lean.angle);
+    const Vec3  full = pl.aimHead(tg,Aim::LeanMax*float(M_PI)/180.f);
     auto        r2   = w.physic()->ray(eye,tg);
-    std::snprintf(buf,sizeof(buf),"  leaned head: room %d (hit at %.0f of %.0f), to it %d (hit at %.0f of %.0f), head at %.0f above the feet",
-                  int(!r1.hasCol),r1.hasCol ? double((r1.v-head).length()) : -1.0,double((eye-head).length()),
-                  int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(head.y-pl.position().y));
+    const float degrees = lean.angle*180.f/float(M_PI);
+    const float before = std::max(0.f,degrees-0.25f);
+    const Vec3  prior = pl.aimHead(tg,before*float(M_PI)/180.f);
+    const bool  priorSeen = !w.physic()->ray(prior,tg).hasCol;
+    std::snprintf(buf,sizeof(buf),"  leaned head: required_deg %.2f current_deg %.2f visible %d room %d; to it %d (hit at %.0f of %.0f), before %.2f deg seen %d; max_forward_cm %.1f from feet, head at %.0f above the feet",
+                  lean.visible ? double(degrees) : -1.0,double(Aim::playerProbe.lean),int(lean.visible),int(lean.room),
+                  int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(before),int(priorSeen),
+                  double(Vec3::dotProduct(full-pl.position(),dir)),double(eye.y-pl.position().y));
+    say(buf);
+    const Vec3 actual = pl.mapHeadBone();
+    const Vec3 predicted = pl.aimHead(tg,Aim::playerProbe.lean*float(M_PI)/180.f);
+    std::snprintf(buf,sizeof(buf),"  actual head: visible %d prediction_error_cm %.2f",
+                  int(!w.physic()->ray(actual,tg).hasCol),double((actual-predicted).length()));
     say(buf);
     }
   else if(c=="views") {
@@ -5564,7 +5600,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     // the foot of the wall 2.5..10 m below, 1 m out: hidden from the head, seen leaning over (the aim's
     // lean); prints the waypoint and the yaw for `goto`, `edge <yaw>`
     const size_t count = size_t(num(a,1,15));
-    struct Wall { std::string name; float yaw, drop, from; };
+    struct Wall { std::string name; float yaw, drop, from, down, bend; };
     std::vector<Wall> all;
     const Vec3 at = pl.position();
     auto ground = [&](const Vec3& p, float y0, float up, float down) {
@@ -5596,16 +5632,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
         const float tg   = ground(t,st.y,-60,1000);
         if(std::isnan(tg) || st.y-tg<250 || st.y-tg>1000)
           continue;
-        const Vec3 head = st + Vec3(0,148,0); // drawing a bow the head is that low
         const Vec3 aimT = Vec3(t.x,tg+60,t.z);
-        if(!w.physic()->ray(head,aimT).hasCol)
-          continue; // seen from the head anyway
-        const Vec3 eye = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
-        if(w.physic()->ray(head,eye).hasCol || w.physic()->ray(eye,aimT).hasCol)
+        float down = 0, bend = 0;
+        if(!perchLean(w,pl,st,dir,aimT,Aim::LeanStart,90.f,down,bend))
           continue;
         if(w.physic()->ray({t.x,tg+100,t.z},{t.x,tg+1500,t.z}).hasCol)
           continue; // under a roof, an arch
-        all.push_back(Wall{wp.name, float(k)*22.5f, st.y-tg, (wp.pos-at).length()});
+        all.push_back(Wall{wp.name, float(k)*22.5f, st.y-tg, (wp.pos-at).length(),down,bend});
         break;
         }
       return false;
@@ -5614,25 +5647,29 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("walls " + std::to_string(all.size()));
     for(size_t i=0; i<all.size() && i<count; ++i) {
       char buf[256];
-      std::snprintf(buf,sizeof(buf),"wall %s yaw=%.1f drop=%.0f from=%.0f",all[i].name.c_str(),double(all[i].yaw),
-                    double(all[i].drop),double(all[i].from));
+      std::snprintf(buf,sizeof(buf),"wall %s yaw=%.1f drop=%.0f from=%.0f down=%.1f bend=%.0f",all[i].name.c_str(),double(all[i].yaw),
+                    double(all[i].drop),double(all[i].from),double(all[i].down),double(all[i].bend));
       say(buf);
       }
     }
   else if(c=="perches") {
-    // perches [radius 3000] [count 15] [min drop 250] [max drop 1000]: like `walls`, but on any top around the
+    // perches [radius 3000] [count 15] [min drop 250] [max drop 1000] [min down 30] [max down 90]
+    //         [target dist 135] [edge margin 35]: like `walls`, but on any top around the
     // hero, waypoint or not (a roof, a rock, a wall's top): a grid of the highest surfaces, each one you can stand
     // on (slope up to 35 deg, 1.9 m free above) at an edge with the foot 1 m out hidden from the head, seen
-    // leaning over, the sky above it; one a 2 m cell, the nearest first: `goto pos <x y z>`, `face <yaw>`
+    // leaning over, the sky above it; one a 2 m cell, the nearest first: `goto pos <x y z>`, `face <yaw>`.
+    // A farther target and larger margin can find blocked 40..55 degree shots instead of steep wall-foot shots.
     const float  radius = num(a,1,3000);
     const size_t count  = size_t(num(a,2,15));
     const float  minD   = num(a,3,250), maxD = num(a,4,1000);
+    const float  minDown = num(a,5,Aim::LeanStart), maxDown = num(a,6,90);
+    const float  targetDist = num(a,7,135), margin = num(a,8,35);
     const Vec3   at     = pl.position();
     auto ground = [&](const Vec3& p, float y0, float up, float down) {
       auto r = w.physic()->ray({p.x,y0+up,p.z},{p.x,y0-down,p.z});
       return r.hasCol ? r.v.y : NAN;
       };
-    struct Perch { Vec3 st; float yaw, drop, slope, from; };
+    struct Perch { Vec3 st; float yaw, drop, slope, from, down, bend; };
     std::map<std::pair<int,int>,Perch> cells;
     for(float x=-radius; x<=radius; x+=50)
       for(float z=-radius; z<=radius; z+=50) {
@@ -5665,26 +5702,23 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
             }
           if(!edge)
             continue;
-          const Vec3  st = e - dir*35.f;
+          const Vec3  st = e - dir*margin;
           const float sg = ground(st,e.y,60,100);
           if(std::isnan(sg))
             continue;
           const Vec3  stand = Vec3(st.x,sg,st.z);
-          const Vec3  t     = stand + dir*135.f;
+          const Vec3  t     = stand + dir*targetDist;
           const float tg    = ground(t,stand.y,-60,maxD+100);
           if(std::isnan(tg) || stand.y-tg<minD || stand.y-tg>maxD)
             continue;
-          const Vec3 head = stand + Vec3(0,148,0);
           const Vec3 aimT = Vec3(t.x,tg+60,t.z);
-          if(!w.physic()->ray(head,aimT).hasCol)
-            continue; // seen from the head anyway
-          const Vec3 eye = head + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
-          if(w.physic()->ray(head,eye).hasCol || w.physic()->ray(eye,aimT).hasCol)
+          float down = 0, bend = 0;
+          if(!perchLean(w,pl,stand,dir,aimT,minDown,maxDown,down,bend))
             continue;
           if(w.physic()->ray({t.x,tg+100,t.z},{t.x,tg+1500,t.z}).hasCol)
             continue; // under a roof, an arch
           const auto key  = std::make_pair(int(std::floor(stand.x/200.f)),int(std::floor(stand.z/200.f)));
-          const Perch pc  = {stand, float(k)*22.5f, stand.y-tg, slope, (stand-at).length()};
+          const Perch pc  = {stand, float(k)*22.5f, stand.y-tg, slope, (stand-at).length(),down,bend};
           auto        it  = cells.find(key);
           if(it==cells.end() || pc.slope<it->second.slope)
             cells[key] = pc;
@@ -5697,10 +5731,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     std::sort(all.begin(),all.end(),[](const Perch& x, const Perch& y) { return x.from<y.from; });
     say("perches " + std::to_string(all.size()));
     for(size_t i=0; i<all.size() && i<count; ++i) {
-      char buf[256];
-      std::snprintf(buf,sizeof(buf),"perch goto pos %.0f %.0f %.0f, face %.1f: drop=%.0f slope=%.0f above the hero %.0f, from=%.0f",
+      char buf[320];
+      std::snprintf(buf,sizeof(buf),"perch goto pos %.0f %.0f %.0f, face %.1f: drop=%.0f slope=%.0f above the hero %.0f, from=%.0f down=%.1f bend=%.0f; pin WOLF %.0f 0 %.0f",
                     double(all[i].st.x),double(all[i].st.y+5),double(all[i].st.z),double(all[i].yaw),double(all[i].drop),
-                    double(all[i].slope),double(all[i].st.y-at.y),double(all[i].from));
+                    double(all[i].slope),double(all[i].st.y-at.y),double(all[i].from),double(all[i].down),double(all[i].bend),
+                    double(targetDist),double(-all[i].drop));
       say(buf);
       }
     }
@@ -7554,8 +7589,8 @@ void trackFrame(int w, int h) {
   }
 
 // sight: the hero's line of sight to the npc on this frame, into events.jsonl; points are [x, y] in pixels of the
-// frame (null behind the camera): h0 the head when `sight` was given (upright), c0 where its ray to the npc's
-// centre hits (null: nothing; c0d cm of d0), e the leaned head as Npc::canSeeNpcOverEdge puts it from there (room
+// frame (null behind the camera): h0 the shared standing head, c0 where its ray to the npc's
+// centre hits (null: nothing; c0d cm of d0), e the minimum lean as Npc::canSeeNpcOverEdge puts it (room
 // for it), ec where its ray hits; h the head now, c where its ray hits (cd of d, down degrees); t the npc's
 // centre; the bow's focus fan from h0: f level, g at FOCUS_RANGED's elevdo down (elev), fan cm long
 void sightFrame(int w, int h, const std::string& shot) {
@@ -7577,18 +7612,15 @@ void sightFrame(int w, int h, const std::string& shot) {
     };
   auto*       phys = wrld->physic();
   const Vec3  tg   = n->centerPosition();
-  const Vec3  h0   = bench.sightHead;
-  const Vec3  hd   = pl->mapHeadBone();
+  const Vec3  h0   = pl->aimHead(tg,0.f);
+  const Vec3  hd   = pl->aimHead(tg,Aim::playerProbe.lean*float(M_PI)/180.f);
+  const auto  lean = pl->aimLean(tg);
   auto        r0   = phys->ray(h0,tg);
   auto        r1   = phys->ray(hd,tg);
-  // the lean, as Npc::canSeeNpcOverEdge takes it (at full lean)
+  // The same head path and visibility solution as the pose and the classic focus.
   const Vec3  d    = tg-h0;
-  const float hz   = std::sqrt(d.x*d.x+d.z*d.z);
-  const float an   = pl->rotationRad();
-  const Vec3  fwd  = {std::cos(an),0,std::sin(an)};
-  const Vec3  dir  = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(hz,1.f)) + fwd*0.25f);
-  const Vec3  eye  = h0 + dir*Aim::LeanReach - Vec3(0,Aim::LeanDrop,0);
-  auto        re   = phys->ray(h0,eye);
+  const Vec3  eye  = pl->aimHead(tg,lean.angle);
+  const Vec3  full = pl->aimHead(tg,Aim::LeanMax*float(M_PI)/180.f);
   auto        rt   = phys->ray(eye,tg);
   // the focus fan in the vertical plane toward the npc
   const float elev = -float(wrld->script().focusRange().npc_elevdo)*float(M_PI)/180.f;
@@ -7597,17 +7629,18 @@ void sightFrame(int w, int h, const std::string& shot) {
   const Vec3  fg   = h0 + (lvl*std::cos(elev) - Vec3(0,std::sin(elev),0))*bench.sightFan;
   const float down = -std::atan2(tg.y-hd.y,std::sqrt((tg.x-hd.x)*(tg.x-hd.x)+(tg.z-hd.z)*(tg.z-hd.z)))*180.f/float(M_PI);
 
-  char buf[1000];
+  char buf[1200];
   std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"shot\":%s,\"w\":%d,\"h\":%d,"
                 "\"h0\":%s,\"c0\":%s,\"c0d\":%.0f,\"d0\":%.0f,\"e\":%s,\"room\":%d,\"ec\":%s,"
                 "\"h\":%s,\"c\":%s,\"cd\":%.0f,\"d\":%.0f,\"down\":%.1f,\"t\":%s,\"f\":%s,\"g\":%s,\"elev\":%.0f,"
-                "\"seen\":%d,\"over\":%d",
+                "\"seen\":%d,\"over\":%d,\"required_deg\":%.2f,\"current_deg\":%.2f,\"max_forward_cm\":%.1f",
                 jsonStr(bench.sightNpc).c_str(),jsonStr(shot).c_str(),w,h,
                 pt(h0).c_str(),pt(r0.v,r0.hasCol).c_str(),r0.hasCol ? double((r0.v-h0).length()) : -1.0,double((tg-h0).length()),
-                pt(eye).c_str(),int(!re.hasCol),pt(rt.v,rt.hasCol).c_str(),
+                pt(eye).c_str(),int(lean.room),pt(rt.v,rt.hasCol).c_str(),
                 pt(hd).c_str(),pt(r1.v,r1.hasCol).c_str(),r1.hasCol ? double((r1.v-hd).length()) : -1.0,double((tg-hd).length()),
                 double(down),pt(tg).c_str(),pt(fl).c_str(),pt(fg).c_str(),double(elev*180.f/float(M_PI)),
-                int(pl->canSeeNpc(*n,true)),int(pl->canSeeNpcOverEdge(*n)));
+                int(!r0.hasCol),int(pl->canSeeNpcOverEdge(*n)),lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
+                double(Aim::playerProbe.lean),double(Vec3::dotProduct(full-pl->position(),lvl)));
   event("sight",buf);
   }
 

@@ -1284,6 +1284,10 @@ World& Npc::world() {
   return owner;
   }
 
+const World& Npc::world() const {
+  return owner;
+  }
+
 Vec3 Npc::position() const {
   return {x,y,z};
   }
@@ -6112,24 +6116,64 @@ bool Npc::canSeeNpc(const Npc &oth, bool freeLos) const {
   return false;
   }
 
+Vec3 Npc::aimDirection(const Vec3& target) const {
+  const float a = rotationRad();
+  const Vec3 f(std::cos(a),0,std::sin(a));
+  float shoulder = 145.f;
+  if(const auto sk = visual.visualSkeleton()) {
+    const size_t sh = sk->findNode("BIP01 R UPPERARM");
+    if(sh<sk->tr.size())
+      shoulder = sk->tr[sh].at(3,1);
+    }
+  Vec3 from = position()+Vec3(0,shoulder,0)+f*35.f;
+  if(hasManualAim()) {
+    Vec3 point,dir;
+    if(arrowRay(point,dir) && (target-point).length()>150.f)
+      from = point;
+    return target-from;
+    }
+  if(weaponState()==WeaponState::Bow || weaponState()==WeaponState::CBow)
+    return World::bulletVelocity(from,target);
+  return target-from;
+  }
+
+Vec3 Npc::aimHead(const Vec3& target, float angle) const {
+  const float a = rotationRad();
+  const Vec3 f = {std::cos(a),0,std::sin(a)};
+  return visual.pose().aimIk().headAt(position(),f,aimDirection(target),angle);
+  }
+
+Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
+  const Vec3 head = aimHead(target,0.f);
+  const Vec3 d = target-head;
+  float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+  if(manual) {
+    const Vec3 look = aimLook();
+    down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
+    }
+  return visual.pose().aimIk().leanNeeded(*this,target,down,manual);
+  }
+
 bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   const auto ws = weaponState();
   if(!Aim::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow && ws!=WeaponState::Mage))
     return false;
-  const Vec3  head = visual.mapHeadBone();
-  const Vec3  tg   = oth.physic.center();
-  const Vec3  d    = tg - head;
-  const float h    = std::sqrt(d.x*d.x+d.z*d.z);
-  const float lean = Aim::leanFor(-std::atan2(d.y,h));
-  if(lean<=0.f)
+  const Vec3 tg = oth.physic.center();
+  if(!visual.pose().aimIk().isValid())
+    return canSeeNpc(oth,true);
+  if(isPlayer()) {
+    const auto lean = aimLean(tg);
+    return lean.visible && canRayHitPoint(aimHead(tg,lean.angle),tg,180.f);
+    }
+  // NPC archers retain their angle rule, without the hero's per-frame visibility search.
+  const Vec3 d = tg-visual.mapHeadBone();
+  const float angle = Aim::leanForNpc(-std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z)));
+  if(angle<=0.f)
     return false;
-  // toward it, straight down where the body faces (as the aim leans)
-  const float a   = rotationRad();
-  const Vec3  dir = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(a),0,std::sin(a))*0.25f);
-  const float k   = lean/(Aim::LeanMax*float(M_PI)/180.f);
-  const Vec3  eye = head + dir*(Aim::LeanReach*k) - Vec3(0,Aim::LeanDrop*k,0);
+  const Vec3 head = aimHead(tg,0.f);
+  const Vec3 eye = aimHead(tg,angle);
   if(owner.physic()->ray(head,eye).hasCol)
-    return false; // no room to lean
+    return false;
   return canRayHitPoint(eye,tg,180.f) || canRayHitPoint(eye,oth.visual.mapHeadBone(),180.f);
   }
 

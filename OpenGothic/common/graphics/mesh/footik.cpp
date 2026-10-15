@@ -572,7 +572,7 @@ bool FootIk::update(const Input& in) {
   return changed;
   }
 
-void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
+void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& bodyOffset) {
   if(!valid)
     return;
   for(size_t i=0; i<numLegs; ++i) {
@@ -635,16 +635,20 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
         c.dbgAnim[k] = c.dbgFinal[k] = position(tr[id[k]]);
       }
     }
-  if(weight<=0.f) {
+  if(weight<=0.f && length(bodyOffset)<=0.f) {
     for(auto& c:legs)
       c.kneeDev = c.tilt = c.roll = c.yaw = 0;
     return;
     }
 
   const float dy = pelvis*weight;
-  if(dy!=0.f) {
-    for(size_t i=0; i<numBones; ++i)
-      tr[i].set(3,1,tr[i].at(3,1)+dy);
+  if(dy!=0.f || length(bodyOffset)>0.f) {
+    // The hips counterbalance an edge lean; retain the animated ankle targets recorded above.
+    for(size_t i=0; i<numBones; ++i) {
+      tr[i].set(3,0,tr[i].at(3,0)+bodyOffset.x);
+      tr[i].set(3,1,tr[i].at(3,1)+dy+bodyOffset.y);
+      tr[i].set(3,2,tr[i].at(3,2)+bodyOffset.z);
+      }
     }
   if(quadruped) {
     // the body pitches around the hips: the shoulders go down to the front paws' ground

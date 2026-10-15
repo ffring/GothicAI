@@ -241,8 +241,13 @@ if(UNIX AND NOT APPLE AND NOT ANDROID)
   target_link_libraries(gothic-body-runner PRIVATE OpenGothic AiBridge)
 endif()
 
-# Asset-free backend contracts; run explicitly with --target check-physics.
+# Asset-free contracts; run explicitly with their check-* targets.
 if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-aim-contract EXCLUDE_FROM_ALL tests/aim_contract.cpp)
+  target_link_libraries(gothic-aim-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-aim
+    COMMAND $<TARGET_FILE:gothic-aim-contract>
+    DEPENDS gothic-aim-contract USES_TERMINAL)
   add_executable(gothic-physics-contract EXCLUDE_FROM_ALL tests/physics_contract.cpp)
   target_link_libraries(gothic-physics-contract PRIVATE OpenGothic AiBridge)
   add_custom_target(check-physics

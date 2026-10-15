@@ -581,9 +581,10 @@ void Pose::mkSkeleton(const Tempest::Matrix4x4& mt, float ikFloorY) {
     implMkSkeleton(m,size_t(-1));
   walk.apply(tr,numBones,base,m);
   lean.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)));
-  ik.apply(tr,numBones,ikFloorY);
+  ik.apply(tr,numBones,ikFloorY,aim.pelvisOffset());
   bowDraw.hold(tr,numBones,mt);
-  aim.apply(tr,numBones);
+  aim.apply(tr,numBones,Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)),
+            Vec3(mt.at(2,0),0,mt.at(2,2)));
   bowDraw.apply(tr,numBones);
   gaze.apply(tr,numBones);
   flinch.apply(tr,numBones);

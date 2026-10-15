@@ -7,6 +7,7 @@
 #include <vector>
 
 class Skeleton;
+class Npc;
 
 // Aim: an archer (a crossbowman, a mage) turns the upper body so the shot leaves toward the target,
 // above or below too; the animations aim straight ahead. Runs as a post-pass over the world-space
@@ -34,19 +35,32 @@ class Aim final {
       uint64_t      dt      = 0;
       };
 
-    // At an edge one leans over it to shoot who is below: steeper down than LeanFrom the trunk bends
-    // forward from the hips, up to LeanMax at LeanFull; the head goes LeanReach forward and LeanDrop down
-    // then. The focus looks from there too (Npc::canSeeNpcOverEdge)
+    // The angle rule remains the fallback for manual aim and the inexpensive rule for NPCs.
+    // The hero normally uses leanNeeded: the smallest hip bend that clears the nearby edge.
     static constexpr float LeanFrom  = 55.f; // degrees down
     static constexpr float LeanFull  = 80.f;
-    static constexpr float LeanMax   = 55.f;
-    static constexpr float LeanReach = 58.f; // cm: the head 70 cm above the hips, bent 55 degrees
-    static constexpr float LeanDrop  = 28.f;
+    static constexpr float LeanMax   = 70.f;
+    static constexpr float NpcLeanMax= 55.f;
+    static constexpr float LeanStart = 30.f;
+    static constexpr float PelvisBack= 12.f; // cm, with the feet held by FootIk
     // Leaning out round a corner: the trunk tilts sideways from the hips up to SideMax, the head goes
     // SideReach to the side then
     static constexpr float SideMax   = 22.f; // degrees
     static constexpr float SideReach = 30.f; // cm
     static float           leanFor(float down); // the lean for the angle down, radians
+    static float           leanForNpc(float down);
+
+    struct LeanResult final {
+      float angle   = 0; // radians, the smallest safe hip bend
+      bool  visible = false;
+      bool  room    = true;
+      };
+    LeanResult     leanNeeded(const Npc& npc, const Tempest::Vec3& target, float down, bool manual) const;
+    // Predicts the head bone from the last unmodified animated joints, using the same hip,
+    // waist and chest rotations as apply. origin is at the feet; angle is in radians.
+    Tempest::Vec3  headAt(const Tempest::Vec3& origin, const Tempest::Vec3& forward,
+                         const Tempest::Vec3& dir, float angle) const;
+    Tempest::Vec3  pelvisOffset() const;
 
     // State for the test bench, degrees
     struct Probe final {
@@ -77,7 +91,8 @@ class Aim final {
 
     // Moves the smoothed state toward the input; true if the pose has to be rebuilt
     bool           update(const Input& in);
-    void           apply(Tempest::Matrix4x4* tr, size_t numBones);
+    void           apply(Tempest::Matrix4x4* tr, size_t numBones, const Tempest::Vec3& origin,
+                         const Tempest::Vec3& facing);
     void           probe(Probe& p) const;
 
     static Probe       playerProbe;   // filled every frame for the hero
@@ -87,7 +102,7 @@ class Aim final {
   private:
     Tempest::Vec3       arrowOf(const Tempest::Matrix4x4* tr) const;
 
-    size_t              spine = size_t(-1), waist = size_t(-1), chest = size_t(-1), slot = size_t(-1);
+    size_t              spine = size_t(-1), waist = size_t(-1), chest = size_t(-1), slot = size_t(-1), head = size_t(-1);
     size_t              arrowSlot = size_t(-1); // where the arrow lies now: slot, or the input's
     std::vector<size_t> spineTree, waistTree, chestTree;
     std::vector<size_t> armsTree; // both arms from the clavicles: they tremble
@@ -107,6 +122,10 @@ class Aim final {
     Tempest::Vec3       goal    = {}; // turn of the upper body from the arrow to the target: axis*angle,
     Tempest::Vec3       rot     = {}; // in the body's frame (forward, up, side); and the one smoothed
     Tempest::Vec3       forward = {1,0,0};
+
+    // Joint positions before Aim, relative to the feet, in the body's frame. Capturing before
+    // the rotations prevents the next frame's visibility test from chasing its own leaned head.
+    Tempest::Vec3       baseSpine = {}, baseWaist = {}, baseChest = {}, baseHead = {};
 
     // from the last pose
     bool                measured  = false;

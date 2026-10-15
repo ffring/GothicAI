@@ -129,6 +129,7 @@ class Npc final {
     bool       startClimb(JumpStatus jump);
 
     auto       world() -> World&;
+    auto       world() const -> const World&;
 
     auto       centerPosition() const -> Tempest::Vec3;
     auto       collosionCenter() const -> Tempest::Vec3;
@@ -532,6 +533,9 @@ class Npc final {
     Item*     currentShield();
     auto      mapWeaponBone() const -> Tempest::Vec3;
     auto      mapHeadBone() const -> Tempest::Vec3;
+    auto      aimDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
+    auto      aimHead(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;
+    auto      aimLean(const Tempest::Vec3& target, bool manual=false) const -> Aim::LeanResult;
     auto      mapBone(std::string_view bone) const -> Tempest::Vec3;
 
     bool      turnTo  (float dx, float dz, bool noAnim, uint64_t dt);
