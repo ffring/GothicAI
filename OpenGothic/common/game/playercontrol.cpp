@@ -1202,6 +1202,8 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     approach.edge = edge.found;
     approach.distance = edge.distance;
     approach.blocked = pl.isEdgeMoveBlocked({0,0,1});
+    const auto clearance = pl.aimLean(at,true);
+    approach.shotClear = clearance.edge && clearance.shotClear;
     }
   const bool wasStepping = aimStep.isActive();
   if(aimStep.update(approach)) {

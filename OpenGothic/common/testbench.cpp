@@ -7231,6 +7231,22 @@ void TestBench::note(const char* text) {
   if(scenarioPath!=nullptr && bench.started && !bench.done) {
     say(text);
     event("note","\"text\":"+jsonStr(text));
+    // releaseArrow reports this note immediately after releasing the real projectile.
+    // Sample the feet and the applied aim pose here, rather than at the script's
+    // earlier `release action` (which can precede the shot by an animation frame).
+    auto* player = Gothic::inst().player();
+    if(player!=nullptr && player->hasManualAim() &&
+       std::string_view(text).starts_with("arrow shot: ") &&
+       std::string_view(text).ends_with(", by "+std::string(who(player)))) {
+      const float yaw = player->rotationRad();
+      const auto edge = player->aimEdge(Vec3(std::cos(yaw),0,std::sin(yaw)),2000.f);
+      char buf[256];
+      std::snprintf(buf,sizeof(buf),"shot pose %s: edge_facing_cm %.2f edge_found %d facing_yaw_deg %.2f a_lean_deg %.2f",
+                    bench.recName.c_str(),edge.found ? double(edge.distance) : -1.0,int(edge.found),
+                    double(player->rotation()),double(Aim::playerProbe.lean));
+      say(buf);
+      event("note","\"text\":"+jsonStr(buf));
+      }
     if(bench.arrowKoOnHit && std::string_view(text).starts_with("arrow hit ") && bench.arrowNpc!=nullptr &&
        bench.arrowNpc->arrowPhysicsProbe().hits>bench.arrowSeenHits && !bench.arrowNpc->isDown()) {
       // This note runs inside real projectile damage, after queueArrowPhysics

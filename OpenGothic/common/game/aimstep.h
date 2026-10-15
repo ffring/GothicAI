@@ -12,6 +12,7 @@ class AimStep final {
       bool  moving = false;
       bool  edge = false;
       bool  blocked = false;
+      bool  shotClear = false; // leanNeeded found a safe pose whose shot passes the nearby edge
       float down = 0;       // degrees below the horizon
       float yaw = 0;        // degrees, world facing
       float distance = 0;   // cm to a drop greater than 100 cm
@@ -22,20 +23,24 @@ class AimStep final {
         *this = AimStep();
         return false;
         }
-      if(in.moving || (active && std::abs(std::remainder(in.yaw-startYaw,360.f))>30.f)) {
+      if(in.moving || (engaged && std::abs(std::remainder(in.yaw-startYaw,360.f))>30.f)) {
         active = false;
         cancelled = true;
         }
       if(cancelled)
         return false;
-      if(active && (!in.edge || in.distance>SearchRange || in.distance<=35.f || in.blocked)) {
+      if(engaged && (!in.edge || in.distance>SearchRange || in.blocked)) {
         active = false;
         cancelled = true;
         }
-      if(!active && !cancelled && in.edge && in.distance>35.f && in.distance<=SearchRange && !in.blocked) {
-        active = true;
+      if(!engaged && !cancelled && in.edge && in.distance>35.f && in.distance<=SearchRange &&
+         !in.blocked && !in.shotClear) {
+        engaged = true;
         startYaw = in.yaw;
         }
+      // Stay in this approach while the pose settles: if a newly sampled pose closes the shot again,
+      // take the next step even inside 35 cm, until the movement guard holds the body.
+      active = engaged && !cancelled && !in.shotClear;
       return active;
       }
 
@@ -43,6 +48,7 @@ class AimStep final {
 
   private:
     bool  active = false;
+    bool  engaged = false;
     bool  cancelled = false;
     float startYaw = 0;
   };

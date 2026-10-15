@@ -193,9 +193,6 @@ void FootIk::setSkeleton(const Skeleton* sk) {
   pelvis    = 0;
   chest     = 0;
   weight    = 0;
-  stopStep  = 0;
-  stopTail  = 0;
-  ankleFrame = uint64_t(-1);
   for(auto& c:legs)
     c = Chain();
   if(sk==nullptr)
@@ -362,14 +359,6 @@ float FootIk::swingOffset(const Chain& c, float floor, float lowAnkle, float bod
   return lift + (o-lift)*follow;
   }
 
-void FootIk::beginFrame(uint64_t tick) {
-  if(ankleFrame==tick)
-    return;
-  ankleFrame = tick;
-  for(size_t i=0;i<numLegs;++i)
-    legs[i].stopAnkle = legs[i].finalAnkle;
-  }
-
 bool FootIk::update(const Input& in) {
   if(!valid)
     return false;
@@ -377,17 +366,9 @@ bool FootIk::update(const Input& in) {
   const float  dt    = float(in.dt)/1000.f;
   const size_t pairs = numLegs/2;
   bool         on    = in.enable;
-  if(in.dt>0) {
-    if(in.aimStop && on && !quadruped)
-      stopTail = 200;
-    else
-      stopTail -= std::min(stopTail,in.dt);
-    stopStep = stopTail>0 ? std::min(5.5f,165.f*dt) : 0.f;
-    }
-  if(!on || in.hardOff) {
-    stopTail = 0;
-    stopStep = 0;
-    }
+  stopStep = in.aimStop && on && weight>0.f && !quadruped ? std::min(4.f,120.f*dt) : 0.f;
+  for(size_t i=0;i<numLegs;++i)
+    legs[i].stopAnkle = legs[i].finalAnkle;
 
   // of each pair, the lower animated ankle stands on the ground, a raised one swings
   float plant[MaxLegs] = {};
@@ -507,7 +488,7 @@ bool FootIk::update(const Input& in) {
   lastFloor  = in.floorY;
   lastDFloor = std::abs(dFloor)<MaxStep ? dFloor : 0.f;
 
-  bool        changed = stopStep>0.f;
+  bool        changed = false;
   const float prevW   = weight;
   if(in.hardOff)
     weight = 0;
@@ -657,7 +638,7 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& body
         c.dbgAnim[k] = c.dbgFinal[k] = position(tr[id[k]]);
       }
     }
-  if(weight<=0.f && length(bodyOffset)<=0.f && stopStep<=0.f) {
+  if(weight<=0.f && length(bodyOffset)<=0.f) {
     for(auto& c:legs)
       c.kneeDev = c.tilt = c.roll = c.yaw = 0;
     return;

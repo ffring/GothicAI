@@ -724,7 +724,6 @@ bool MdlVisual::isUsingTorch() const {
 bool MdlVisual::updateAnimation(Npc* npc, Interactive* mobsi, World& world, uint64_t dt, bool force, bool pausePose) {
   Pose&    pose      = *skInst;
   uint64_t tickCount = world.tickCount();
-  pose.footIk().beginFrame(tickCount);
   auto     pos3      = Vec3{pos.at(3,0), pos.at(3,1), pos.at(3,2)};
 
   if(!pausePose && npc!=nullptr && world.isInSfxRange(pos3))
@@ -1078,11 +1077,7 @@ bool MdlVisual::updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedTo
     }
 
   auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
-  Tempest::Vec3 walkDirection(0,0,npc.aimWalk());
-  if(pose.aimWalk().isActive() && !pose.aimWalk().isStopping())
-    walkDirection = pose.aimWalk().move(dt);
-  const bool edgeBlocked = npc.hasManualAim() && npc.isEdgeMoveBlocked(walkDirection);
-  in.aimStop = pose.aimWalk().isActive() && (edgeBlocked || pose.aimWalk().isStopping() || npc.isAimWalkStopped());
+  in.aimStop = pose.aimWalk().isActive() && (pose.aimWalk().isStopping() || npc.isAimWalkStopped());
   // crouched stepping with the bow drawn: the steps are low already (sneaking), as low as crouched standing
   in.crouch = std::max(0.f, in.crouch - pose.aimWalk().lowered());
   const bool changed = pose.updateFootIk(in);
