@@ -18,8 +18,14 @@ namespace {
 
 constexpr float BlendIn  = 0.25f; // seconds: the legs take the steps...
 constexpr float BlendOut = 0.3f;  // ...and stand again
-constexpr float StopFootSpeed = 120.f; // cm/s: return to the stance with the body stopped
-constexpr float StopFootFrame = 4.f;   // leave room below the bench's 5 cm/frame ankle limit
+constexpr float StopDuration = 0.36f;
+constexpr float StopLift = 6.f;
+constexpr float StopStride = 32.f;
+
+float smooth(float t) {
+  t = std::clamp(t,0.f,1.f);
+  return t*t*(3.f-2.f*t);
+  }
 
 bool enabled = []() {
   const char* v = std::getenv("OPENGOTHIC_AIMWALK");
@@ -98,6 +104,20 @@ void AimWalk::setSkeleton(const Skeleton* sk) {
      nodes[spine2].parent!=spine1 || nodes[lThigh].parent!=pelvis || nodes[rThigh].parent!=pelvis ||
      !isUnder(lFoot,lThigh) || !isUnder(rFoot,rThigh))
     return;
+  const char* calfNames[] = {"BIP01 L CALF", "BIP01 R CALF"};
+  const char* toeNames [] = {"BIP01 L TOE0", "BIP01 R TOE0"};
+  for(size_t i=0; i<feet.size(); ++i) {
+    auto& f = feet[i];
+    f.thigh = i==0 ? lThigh : rThigh;
+    f.foot  = i==0 ? lFoot  : rFoot;
+    f.calf  = find(calfNames[i]);
+    f.toe   = find(toeNames[i]);
+    if(f.calf>=nodes.size() || !isUnder(f.calf,f.thigh) || !isUnder(f.foot,f.calf))
+      return;
+    tree(f.thigh,f.thighTree);
+    tree(f.calf, f.calfTree);
+    tree(f.foot, f.footTree);
+    }
   tree(lThigh,legsTree);
   tree(rThigh,legsTree);
   std::stable_sort(legsTree.begin(),legsTree.end(),[&](size_t a, size_t b){ return depth(a)<depth(b); });
@@ -166,39 +186,49 @@ bool AimWalk::update(const Input& in) {
 
   const float dt   = float(in.dt)/1000.f;
   const float prev = weight;
+  const bool wasStopping = stopping;
+  // Freeze the last completed pose, not an intermediate rebuild from this update.
+  for(auto& f:feet) {
+    f.speed = length(position(f.final)-position(f.previousFinal));
+    f.previousRaw   = f.raw;
+    f.previousFinal = f.final;
+    }
   walk = std::clamp(in.walk,-1.f,1.f);
-  // Keep the edge stop while its legs settle even if the caller now asks for no movement.
-  const bool wasBlocked = blocked;
-  blocked = in.blocked || (blocked && walk==0.f && weight>0.f);
-  settle = false;
-  const bool on = enabled && seq!=nullptr && walk!=0.f && !blocked && cycle()>0.f;
-  if(on) {
+  blocked = in.blocked;
+  const bool on = enabled && in.active && seq!=nullptr && cycle()>0.f;
+  if(on && walk!=0.f && !blocked) {
+    stopping = contacts = false;
     if(weight<=0.f)
       phase = 0;
     dir    = walk>0.f ? 1.f : -1.f;
     weight = std::min(1.f, weight + dt/BlendIn);
-    } else if(blocked && weight>0.f) {
-    // apply knows the actual stance and can bound the ankles' return, rather than guessing from weight.
-    settle = true;
-    // The contact frame may still contain the body's last clipped step; start returning next frame.
-    settleDt = wasBlocked ? dt : 0.f;
+    } else if(on && (weight>0.f || stopping) && haveFeet) {
+    if(!stopping) {
+      stopping = true;
+      contacts = false;
+      stopTime = 0;
+      stopWeight = weight;
+      } else {
+      stopTime = std::min(StopDuration,stopTime+dt);
+      }
+    weight = stopWeight*(1.f-smooth(stopTime/StopDuration));
     } else {
+    stopping = contacts = false;
     weight = std::max(0.f, weight - dt/BlendOut);
     }
   if(seq==nullptr)
     weight = 0;
-  if(weight>0.f && !blocked) {
-    // the steps go on as they are while they fade out
+  if(weight>0.f && !stopping) {
     const float c = cycle();
     phase = std::fmod(phase + dir*rate()*float(in.dt), c);
     if(phase<0.f)
       phase += c;
     }
-  return weight>0.f || prev>0.f;
+  return isActive() || prev>0.f || wasStopping;
   }
 
 Vec3 AimWalk::move(uint64_t dt) const {
-  if(!isActive() || blocked)
+  if(!isActive() || stopping || blocked)
     return Vec3();
   const auto& d = *seq->data;
   const float c = cycle();
@@ -229,8 +259,13 @@ Vec3 AimWalk::move(uint64_t dt) const {
 
 void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSample* base, const Matrix4x4& m) {
   twist = chest = drop = 0;
-  if(!valid || !isActive() || base==nullptr || numBones!=skeleton->nodes.size())
+  if(!valid || base==nullptr || numBones!=skeleton->nodes.size())
     return;
+  if(!isActive()) {
+    for(auto& f:feet)
+      f.raw = tr[f.foot];
+    return;
+    }
   auto& nodes = skeleton->nodes;
 
   // the stance as the aim holds it
@@ -269,39 +304,56 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
     for(auto i:legsTree)
       set(i);
     };
-  if(settle) {
-    // Pose can rebuild several times in a frame for the other post-passes. Advance the fade only once.
-    settle = false;
-    const float from = weight;
-    const float to   = std::max(0.f,from-settleDt/BlendOut);
-    const float step = std::min(StopFootFrame,StopFootSpeed*settleDt);
-    build();
-    const Vec3 left  = position(tr[lFoot]);
-    const Vec3 right = position(tr[rFoot]);
-    auto travel = [&]() {
-      if(weight<=0.f)
-        return std::max(length(position(stance[lFoot])-left),length(position(stance[rFoot])-right));
-      build();
-      return std::max(length(position(tr[lFoot])-left),length(position(tr[rFoot])-right));
-      };
-    weight = to;
-    if(travel()>step) {
-      float low = to, high = from;
-      for(int i=0; i<8; ++i) {
-        weight = (low+high)*0.5f;
-        if(travel()>step)
-          low = weight;
-        else
-          high = weight;
+  build();
+  if(stopping) {
+    if(!contacts) {
+      // The lower foot bears the weight. At double support prefer the foot already slowing down.
+      const float dy = position(feet[0].previousRaw).y-position(feet[1].previousRaw).y;
+      support = std::abs(dy)>1.f ? (dy<0.f ? 0u : 1u) : (feet[0].speed<feet[1].speed ? 0u : 1u);
+      const Vec3 forward = normalize(Vec3(m.at(2,0),0,m.at(2,2)))*dir;
+      for(size_t i=0; i<feet.size(); ++i) {
+        auto& f = feet[i];
+        f.from = f.previousRaw;
+        f.anchor = f.previousFinal;
+        f.goal = position(stance[f.foot]);
+        if(i==support) {
+          f.goal = position(f.from);
+          continue;
+          }
+        Vec3 delta = f.goal-position(f.from);
+        const float distance = std::sqrt(delta.x*delta.x+delta.z*delta.z);
+        if(distance>StopStride) {
+          f.goal.x = f.from.at(3,0)+delta.x*StopStride/distance;
+          f.goal.z = f.from.at(3,2)+delta.z*StopStride/distance;
+          }
+        // Land behind the stopped body's plane, including the toes: no new placement over the edge.
+        if(blocked) {
+          const Vec3 toe = f.toe<numBones ? position(stance[f.toe])-position(stance[f.foot]) : Vec3();
+          const float ahead = dot(f.goal-position(m),forward)+std::max(0.f,dot(toe,forward));
+          if(ahead>0.f)
+            f.goal -= forward*ahead;
+          }
         }
-      weight = high;
+      contacts = true;
       }
-    if(weight<=0.f) {
-      std::copy(stance.begin(),stance.end(),tr);
-      return;
+    const float t = std::clamp(stopTime/StopDuration,0.f,1.f);
+    const float k = smooth(t);
+    for(size_t i=0; i<feet.size(); ++i) {
+      auto& f = feet[i];
+      Vec3 target = position(f.from)+(f.goal-position(f.from))*k;
+      if(i!=support)
+        target.y += StopLift*std::pow(std::sin(float(M_PI)*t),2.f);
+      const Mat3 orientation = i==support ? rotationOf(f.from) : rotationOf(blend(f.from,stance[f.foot],k));
+      Vec3 bend = position(tr[f.calf])-position(tr[f.thigh]);
+      const Vec3 toe = f.toe<numBones ? position(tr[f.toe])-position(tr[f.foot]) : Vec3();
+      bend += normalize(Vec3(toe.x,0,toe.z))*2.f;
+      TwoBone solved;
+      if(twoBone(tr,f.thigh,f.calf,f.foot,f.thighTree,f.calfTree,target,bend,0.999f,0.f,solved))
+        rotateAbout(tr,f.footTree,mul(orientation,transpose(rotationOf(tr[f.foot]))),position(tr[f.foot]));
       }
     }
-  build();
+  for(auto& f:feet)
+    f.raw = tr[f.foot];
 
   // the upper body goes with the hips, its turn kept: the hips' turn is spread over the spine (the lower
   // spine takes most of it, the chest none)
@@ -319,6 +371,29 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
   twist = d*180.f/float(M_PI);
   chest = wrapAngle(chestYaw(tr)-chestA)*180.f/float(M_PI);
   drop  = -shift.y;
+  }
+
+void AimWalk::captureFeet(const Matrix4x4* tr, size_t numBones) {
+  if(!valid || numBones!=skeleton->nodes.size())
+    return;
+  for(auto& f:feet)
+    f.final = tr[f.foot];
+  haveFeet = true;
+  }
+
+void AimWalk::constrainFoot(size_t leg, Vec3& target) const {
+  if(!stopping || !contacts || leg>=feet.size())
+    return;
+  const auto& f = feet[leg];
+  if(leg==support) {
+    target = position(f.anchor);
+    } else {
+    const Vec3 from = position(f.previousFinal);
+    const Vec3 delta = target-from;
+    const float distance = length(delta);
+    if(distance>4.f && distance<100.f)
+      target = from+delta*(4.f/distance);
+    }
   }
 
 void AimWalk::probe(Probe& p) const {

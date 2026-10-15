@@ -6,6 +6,7 @@
 #include <zenkit/ModelAnimation.hh>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -30,6 +31,7 @@ class AimWalk final {
       const Animation::Sequence* legs = nullptr; // the steps (a loop with root motion)
       float                      walk = 0;       // -1 back..1 forward, 0 standing
       uint64_t                   dt   = 0;
+      bool                       active = false; // manual aiming still owns the legs
       bool                       blocked = false; // the body has stopped at an edge; settle the legs in place
       };
 
@@ -50,8 +52,8 @@ class AimWalk final {
 
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
-    bool           isActive() const { return weight>0.f && seq!=nullptr; }
-    bool           isStopping() const { return blocked && isActive(); }
+    bool           isActive() const { return (weight>0.f || stopping) && seq!=nullptr; }
+    bool           isStopping() const { return stopping; }
     // cm the steps lower the pelvis from the stance (the last pose)
     float          lowered() const { return std::max(drop,0.f); }
 
@@ -64,6 +66,9 @@ class AimWalk final {
     void           apply(Tempest::Matrix4x4* tr, size_t numBones, const zenkit::AnimationSample* base,
                          const Tempest::Matrix4x4& m);
     void           probe(Probe& p) const;
+    // Final contacts, after FootIk. Rebuilds within one update share the same previous frame.
+    void           captureFeet(const Tempest::Matrix4x4* tr, size_t numBones);
+    void           constrainFoot(size_t leg, Tempest::Vec3& target) const;
 
     static Probe   playerProbe;   // filled every frame for the hero
 
@@ -89,7 +94,16 @@ class AimWalk final {
     float                      dir    = 1;  // the way the steps go (kept while they fade out)
     float                      phase  = 0;  // ms into the cycle
     float                      twist  = 0, chest = 0, drop = 0;
-    bool                       blocked = false, settle = false;
-    float                      settleDt = 0;
+    bool                       blocked = false, stopping = false, contacts = false, haveFeet = false;
+    float                      stopTime = 0, stopWeight = 0;
+    size_t                     support = 0;
+    struct Leg final {
+      size_t thigh = size_t(-1), calf = size_t(-1), foot = size_t(-1), toe = size_t(-1);
+      std::vector<size_t> thighTree, calfTree, footTree;
+      Tempest::Matrix4x4 raw, final, previousRaw, previousFinal, from, anchor;
+      Tempest::Vec3 goal;
+      float speed = 0;
+      };
+    std::array<Leg,2>           feet;
     std::vector<Tempest::Matrix4x4> stance;           // the pose as the aim holds it (apply)
   };
