@@ -651,7 +651,8 @@ async def test_the_director_hands_over_a_book_quest_and_the_book_finishes_it(gra
             book.situation(LOBART)
             == f"Поручение «Репа для Хильды» герой выполнил, ты заплатил: {q.reward()}."
         )
-        assert memory.remembered[-1] == (LOBART, "Лобарт", "Я отдал репу Лобарту.")
+        assert memory.remembered[-1][:2] == (LOBART, "Лобарт")
+        assert memory.remembered[-1][2].startswith("Герой пришёл к тебе с поручением «Репа для Хильды»")
         assert all(
             not fake.evaluate(n["condition"], n["npc"])
             for n in Patches.of(director.patches.ops()).nodes.values()

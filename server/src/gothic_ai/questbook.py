@@ -819,7 +819,9 @@ class QuestBook:
         k, j = target
         goal = updated.stages[k - 1].goals[j - 1]
         goal.npc = p.npc
-        goal.talk = Talk(p.description, node["lines"], p.journal_done)
+        # what the successor remembers after the talk: its own view, not the hero's journal
+        took = f"Герой пришёл к тебе с поручением «{q.title}» умершего ({brief.dead_name}), которое ты принял"
+        goal.talk = Talk(p.description, node["lines"], f"{took}: «{p.description}»")
         goal.journal = p.journal_done
         updated.names[p.npc] = checked.state.name(p.npc)
         updated.repairs.append(
