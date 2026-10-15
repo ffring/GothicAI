@@ -47,8 +47,15 @@ def functional(directory):
              row['npc_id'] == near['npc_id'] and 0 <= row['elapsed_ms'] <= 2000 and row['facing_error_deg'] < 30]
     checks['turned_to_noise_within_2000_ms'] = bool(turns) and table_end['near']['heard'] >= 1
     checks['turned_to_noise_other_than_hero'] = any(row['hero_error_deg'] > 30 for row in turns)
+    unknown_heard = [row for row in rows if row['kind'] == 'physics_noise_heard' and row['phase'] == 'table']
+    checks['unknown_culprit_skips_daedalus_callback'] = bool(unknown_heard) and all(
+        row['culprit'] is None and row['callback_dispatched'] is False for row in unknown_heard)
     # Snapshot IDs address BodyData; noise IDs are generation-safe native IDs.
     table_impacts = [row for row in impacts if row['phase'] == 'table' and row['what'] == table['visual']]
+    table_bodies = {row['body'] for row in table_impacts}
+    checks['table_itself_heard_by_near_listener'] = any(
+        row['kind'] == 'physics_noise_heard' and row['phase'] == 'table' and
+        row['npc_id'] == near['npc_id'] and row['body'] in table_bodies for row in rows)
     checks['actual_table_hit_with_unknown_culprit'] = bool(table_impacts) and all(row['culprit'] is None for row in table_impacts)
     wall_samples = [roles(row)['wall'] | {'raw_radius_cm': row['radius_cm']} for row in table_impacts]
     blocked = [row for row in wall_samples if row['effective_radius_cm'] < row['distance_cm'] < row['raw_radius_cm'] and row['occlusion'] > 0]
@@ -57,11 +64,15 @@ def functional(directory):
     checks['beyond_raw_radius_no_hearing'] = bool(far_samples) and all(
         row['distance_cm'] > row['raw_radius_cm'] for row in far_samples) and table_end['far']['heard'] == 0
     pushes = [row for row in rows if row['kind'] == 'physics_noise_push' and row['phase'] == 'table']
-    checks['silent_native_push'] = len(pushes) == 1 and pushes[0]['affected'] > 0 and pushes[0]['spell'] is False
+    checks['silent_native_push'] = len(pushes) == 1 and pushes[0]['affected'] > 0 and pushes[0]['reaction_affected'] > 0 and pushes[0]['spell'] is False
+    checks['native_table_overturned_within_2s'] = checkpoints['table']['table_maximum_tilt_deg'] > 45
 
     cup_impacts = [row for row in impacts if row['phase'] == 'cup' and 'BEER' in row['what'].upper()]
     cup_end = roles(checkpoints['cup'])
-    checks['cup_heard_near_only'] = bool(cup_impacts) and cup_end['near']['heard'] >= 1 and cup_end['far']['heard'] == 0
+    cup_bodies = {row['body'] for row in cup_impacts}
+    cup_heard = any(row['kind'] == 'physics_noise_heard' and row['phase'] == 'cup' and
+                    row['npc_id'] == cup_end['near']['npc_id'] and row['body'] in cup_bodies for row in rows)
+    checks['cup_heard_near_only'] = cup_heard and cup_end['far']['heard'] == 0
     checks['cup_range_is_local'] = bool(cup_impacts) and all(row['radius_cm'] < 600 for row in cup_impacts)
     for phase in cases:
         phase_impacts = [row for row in impacts if row['phase'] == phase]
@@ -81,6 +92,7 @@ def functional(directory):
     dialogue = one(rows, 'physics_noise_dialogue')
     dialogue_end = roles(checkpoints['dialogue'])['dialogue']
     checks['real_dialogue_immunity'] = dialogue['active'] and dialogue_end['dialogue'] and dialogue_end['heard'] == 0
+    checks['actual_coragon_dialogue_host'] = any(name in dialogue_end['npc'].upper() for name in ('CORAGON', 'KORAGON'))
     # A quiet phase with no impact cannot prove immunity.
     checks['dialogue_impact_present'] = any(row['phase'] == 'dialogue' and 'BEER' in row['what'].upper() for row in impacts)
 
@@ -99,6 +111,7 @@ def functional(directory):
             'turn_first_under_30_deg_ms': min((row['elapsed_ms'] for row in turns), default=None),
             'turn_best_deg_within_2s': min((row['facing_error_deg'] for row in rows if row['kind'] == 'physics_noise_turn'), default=None),
             'table_tilt_deg': table_tilt, 'table_listeners': table_end,
+            'table_maximum_tilt_deg_within_2s': checkpoints['table']['table_maximum_tilt_deg'],
             'wall_acoustic_examples': blocked[:2], 'volume_examples': examples,
             'native_impact_events': len(impacts), 'audio_allocated_events': sum(row['played'] for row in impacts),
             'minimum_body_interval_ms': min(intervals, default=None),

@@ -1100,11 +1100,19 @@ Sound World::addLandHitEffect(ItemMaterial src, zenkit::MaterialGroup reciver, c
 void World::emitPhysicsNoise(const PhysicsNoise& noise) {
   // Gothic has no CS_IHL_CL_* instances. Its existing clay contact samples are
   // named for the reverse pair (wood/metal/stone hitting clay).
-  const auto surface = noise.surface==zenkit::MaterialGroup::WOOD ? "WO" :
-                       noise.surface==zenkit::MaterialGroup::METAL ? "ME" : "ST";
-  const auto name = noise.material==MAT_CLAY ? string_frm("CS_IHL_",surface,"_CL.wav") :
-                                            string_frm("CS_IHL_",materialTag(noise.material),'_',materialTag(noise.surface));
+  const auto surface = noise.surface==zenkit::MaterialGroup::UNDEFINED || noise.surface==zenkit::MaterialGroup::NONE ?
+                       "ST" : materialTag(noise.surface);
+  const auto claySurface = noise.surface==zenkit::MaterialGroup::WOOD ? "WO" :
+                           noise.surface==zenkit::MaterialGroup::METAL ? "ME" : "ST";
+  std::string name = noise.material==MAT_CLAY ? std::string("CS_IHL_")+claySurface+"_CL.wav" :
+                                              std::string("CS_IHL_")+materialTag(noise.material)+'_'+surface;
   auto sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
+  // Some Gothic installations reference clay samples without shipping them.
+  // Reuse the existing vessel impact in that case, keeping the event's material.
+  if(sound.isEmpty() && noise.material==MAT_CLAY) {
+    name = std::string("CS_IHL_GL_")+surface;
+    sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
+    }
   sound.setVolume(sound.volume()*noise.volume);
   sound.play();
   if(TestBench::isActive())

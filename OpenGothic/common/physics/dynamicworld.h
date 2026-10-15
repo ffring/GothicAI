@@ -336,7 +336,7 @@ class DynamicWorld final {
     // target's own mesh excluded from the visibility query.
     size_t applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
                                  const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse,
-                                 Npc* culprit = nullptr);
+                                 Npc* culprit = nullptr, const Tempest::Vec3* pointCm = nullptr);
     std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
                                           const Tempest::Matrix4x4* worldPose, size_t numBones,
                                           const Tempest::Matrix4x4& objectMatrix,

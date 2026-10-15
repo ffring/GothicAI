@@ -287,6 +287,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
     float impulse;
     uint64_t step;
     uint64_t logicalBody;
+    bool otherPushing;
     };
   struct Impact {
     JPH::BodyID item;
@@ -340,7 +341,8 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
       const bool first=source(a),second=source(b);
       if(first || second) {
         const auto point=manifold.GetWorldSpaceContactPointOn1(0);
-        const float speed=(a.GetPointVelocity(point)-b.GetPointVelocity(point)).Dot(manifold.mWorldSpaceNormal);
+        const auto firstVelocity=a.GetPointVelocity(point),secondVelocity=b.GetPointVelocity(point);
+        const float speed=(firstVelocity-secondVelocity).Dot(manifold.mWorldSpaceNormal);
         const bool firstNpc=b.GetObjectLayer()==DynamicWorld::C_LivingBody || b.GetObjectLayer()==DynamicWorld::C_ActiveBody ||
                             b.GetObjectLayer()==DynamicWorld::C_Ragdoll;
         const bool secondNpc=a.GetObjectLayer()==DynamicWorld::C_LivingBody || a.GetObjectLayer()==DynamicWorld::C_ActiveBody ||
@@ -372,9 +374,11 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
             };
           std::lock_guard<std::mutex> guard(impactMutex);
           if(first && (impulse>=.08f || firstNpc))
-            noises.push_back({a.GetID(),b.GetID(),toCentimeters(point),surface(b,manifold.mSubShapeID2),impulse,simulationStep,identity(a)});
+            noises.push_back({a.GetID(),b.GetID(),toCentimeters(point),surface(b,manifold.mSubShapeID2),impulse,simulationStep,identity(a),
+                              secondVelocity.Dot(manifold.mWorldSpaceNormal)<-.05f});
           if(second && (impulse>=.08f || secondNpc))
-            noises.push_back({b.GetID(),a.GetID(),toCentimeters(point),surface(a,manifold.mSubShapeID1),impulse,simulationStep,identity(b)});
+            noises.push_back({b.GetID(),a.GetID(),toCentimeters(point),surface(a,manifold.mSubShapeID1),impulse,simulationStep,identity(b),
+                              firstVelocity.Dot(manifold.mWorldSpaceNormal)>.05f});
           }
         }
       }
@@ -591,18 +595,30 @@ bool CollisionWorld::CollisionBody::isSleeping() const {
   return !lock.Succeeded() || !lock.GetBody().IsDynamic() || !lock.GetBody().IsActive();
   }
 
-bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit) {
+bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit,
+                                               const Tempest::Vec3* pointCm) {
   if(owner==nullptr || id.IsInvalid() || !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) ||
      !std::isfinite(impulseNs.z) || (impulseNs.x==0.f && impulseNs.y==0.f && impulseNs.z==0.f)) return false;
+  if(pointCm!=nullptr && (!std::isfinite(pointCm->x) || !std::isfinite(pointCm->y) || !std::isfinite(pointCm->z)))
+    return false;
   {
     JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
     if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return false;
     }
   // BodyInterface adds the impulse in SI units and activates a sleeping body.
-  owner->impl->system.GetBodyInterface().AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
+  auto& interface=owner->impl->system.GetBodyInterface();
+  if(pointCm!=nullptr)
+    interface.AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z),JPH::RVec3(toMeters(*pointCm)));
+  else
+    interface.AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
   noiseCulprit=culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
   noiseCulpritUntilStep=owner->impl->simulationStep+300;
   return true;
+  }
+
+bool CollisionWorld::CollisionBody::addImpulseAtPoint(const Tempest::Vec3& impulseNs,
+                                                      const Tempest::Vec3& pointCm, Npc* culprit) {
+  return addImpulse(impulseNs,culprit,&pointCm);
   }
 
 void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
@@ -1031,6 +1047,7 @@ void CollisionWorld::tick(uint64_t dt) {
   // cleared by NPC destruction even while the script retains the instance.
   for(const auto& impact:noises) {
     Npc* culprit=nullptr;
+    bool knownCulprit=false;
     {
       JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),impact.other);
       if(lock.Succeeded()) {
@@ -1038,7 +1055,10 @@ void CollisionWorld::tick(uint64_t dt) {
         if(layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_Ragdoll)
           if(auto* other=rigFor(impact.other)) {
             culprit=other->noiseCulprit();
-            if(culprit==nullptr) culprit=other->noiseNpc();
+            knownCulprit=culprit!=nullptr;
+            // A stationary NPC struck by an unknown falling body is its
+            // victim. Attribute an owner only when that rig moves into it.
+            if(culprit==nullptr && impact.otherPushing) culprit=other->noiseNpc();
             }
         }
       }
@@ -1046,10 +1066,15 @@ void CollisionWorld::tick(uint64_t dt) {
     JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),impact.body);
     if(!lock.Succeeded()) continue;
     const auto layer=lock.GetBody().GetObjectLayer();
+    // A body thrown by a known actor keeps that cause when it happens to
+    // strike a bystander. A counterpart's known cause can still propagate.
     if(layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_LivingBody) {
-      if(auto* rig=rigFor(impact.body)) rig->setNoiseCulprit(culprit);
+      if(auto* rig=rigFor(impact.body))
+        if(knownCulprit || rig->noiseCulprit()==nullptr) rig->setNoiseCulprit(culprit);
       }
     else if(auto* body=reinterpret_cast<CollisionBody*>(lock.GetBody().GetUserData())) {
+      const auto current=impact.step<=body->noiseCulpritUntilStep ? body->noiseCulprit.lock() : nullptr;
+      if(!knownCulprit && current!=nullptr && current->user_ptr!=nullptr) continue;
       body->noiseCulprit=culprit->handlePtr();
       body->noiseCulpritUntilStep=impact.step+300;
       }

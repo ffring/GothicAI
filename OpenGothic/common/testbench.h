@@ -37,7 +37,7 @@ namespace TestBench {
   void     note(const char* text);
   // Native impact/audio and accepted NPC hearing; inert outside the noise fixture.
   void     physicsNoise(const PhysicsNoise& noise, std::string_view sound, bool played);
-  void     physicsNoiseHeard(const Npc& npc, const PhysicsNoise& noise);
+  void     physicsNoiseHeard(const Npc& npc, const PhysicsNoise& noise, bool callbackDispatched = false);
   // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
   void     arrowAt(const void* arrow, float x, float y, float z);
   // Native melee baseline telemetry. Opt in with OPENGOTHIC_BODY_TRACE=1; no events outside an active bench.

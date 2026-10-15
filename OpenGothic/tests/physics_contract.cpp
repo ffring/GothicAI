@@ -275,6 +275,22 @@ namespace {
     require(!steps.empty(),"a fallen ragdoll must emit impact noise");
     }
 
+  void testOffCenterImpulse() {
+    CollisionWorld world;
+    auto centered=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.5f)),at(0,1000,0),.7f,2.f);
+    auto tipped=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.5f)),at(300,1000,0),.7f,2.f);
+    require(centered->addImpulse({2,0,0}),"centre-of-mass fixture must accept an impulse");
+    require(tipped->addImpulseAtPoint({2,0,0},{300,1050,0}),"off-centre fixture must accept an impulse at a world point");
+    require(!tipped->addImpulseAtPoint({2,0,0},{0,std::numeric_limits<float>::infinity(),0}),
+            "a nonfinite application point must be rejected");
+    world.tick(17);
+    const auto straight=centered->matrix(),rotated=tipped->matrix();
+    requireNear(straight.at(0,1),0.f,.00001f,"centre impulse must preserve the cube's orientation");
+    require(std::abs(rotated.at(0,1))>.01f,"an impulse above the centre of mass must rotate the body");
+    requireNear(rotated.at(3,0)-straight.at(3,0),300.f,.001f,
+                "the application point changes angular response while preserving linear impulse");
+    }
+
   void testMovableVobArrowIdentity() {
     Resources resources;
     ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
@@ -1130,6 +1146,7 @@ int main() {
     testMovableVobArrowIdentity();
     testPhysicsNoise();
     testRagdollNoise();
+    testOffCenterImpulse();
     std::puts("Physics contracts passed");
     return EXIT_SUCCESS;
     }

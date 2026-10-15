@@ -1126,7 +1126,7 @@ std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot()
 
 size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
                                            const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse,
-                                           Npc* culprit) {
+                                           Npc* culprit, const Tempest::Vec3* pointCm) {
   if(!movableVobs->enabled || !std::isfinite(radius) || radius<=0.f || !impulse)
     return 0;
   size_t count = 0;
@@ -1145,7 +1145,7 @@ size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float r
       excluded.push_back(part.get());
     if(world->rayCast(center,target,visualMask,false,nullptr,&excluded).hasHit)
       continue;
-    if(obj->body->addImpulse(force,culprit))
+    if(obj->body->addImpulse(force,culprit,pointCm))
       ++count;
     }
   return count;

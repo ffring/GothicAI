@@ -52,7 +52,10 @@ class CollisionWorld final {
         Tempest::Vec3        velocity() const; // centimetres/second
         bool                isSleeping() const;
         // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
-        bool                addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
+        bool                addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr,
+                                       const Tempest::Vec3* pointCm = nullptr);
+        bool                addImpulseAtPoint(const Tempest::Vec3& impulseNs, const Tempest::Vec3& pointCm,
+                                              Npc* culprit = nullptr);
         void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
         Tempest::Vec3       centerOfMass() const;
         bool                touchedByNpc() const { return npcContact.load(std::memory_order_relaxed); }

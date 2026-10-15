@@ -5783,7 +5783,7 @@ bool Npc::canHearPhysicsNoise() const {
      isLie() || isTalk() || isAttack() || currentTarget!=nullptr || talkPartner()!=nullptr ||
      Gothic::inst().isNpcInDialog(*this))
     return false;
-  const auto* state = owner.script().findSymbol(aiState.funcIni);
+  const auto* state = owner.script().findSymbol(aiState.funcIni.ptr);
   return state==nullptr || (state->name()!="ZS_SLEEP" && state->name()!="ZS_MAGICSLEEP" &&
                             state->name()!="ZS_MM_RTN_SLEEP");
   }
@@ -5795,12 +5795,15 @@ bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
   physicsNoiseNextTime = now+2001;
   physicsNoisePosition = noise.position;
   physicsNoiseUntil = now+2000;
-  if(hasPerc(PERC_ASSESSQUIETSOUND)) {
+  // Vanilla B_AssessQuietSound dereferences OTHER. Unknown physical causes
+  // still turn the listener natively, without inventing a script actor.
+  const bool callbackDispatched = noise.culprit!=nullptr && hasPerc(PERC_ASSESSQUIETSOUND);
+  if(callbackDispatched) {
     physicsNoiseCallback = true;
     owner.script().invokeState(this,noise.culprit,nullptr,perception[PERC_ASSESSQUIETSOUND].func);
     physicsNoiseCallback = false;
     }
-  TestBench::physicsNoiseHeard(*this,noise);
+  TestBench::physicsNoiseHeard(*this,noise,callbackDispatched);
   return true;
   }
 
