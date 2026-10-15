@@ -2257,8 +2257,10 @@ bool arrowAimPoint(Npc& npc, Vec3& point) {
     return false;
     }
   const bool leg=bench.arrowAim=="leg";
-  const auto first=arrowBone(*skeleton,leg ? "L CALF" : "L UPPERARM");
-  const auto second=arrowBone(*skeleton,leg ? "L FOOT" : "L FOREARM");
+  const bool chest=bench.arrowAim=="chest";
+  const auto first=arrowBone(*skeleton,chest ? "SPINE1" : leg ? "L CALF" : "L UPPERARM");
+  auto second=arrowBone(*skeleton,chest ? "SPINE2" : leg ? "L FOOT" : "L FOREARM");
+  if(chest && second==size_t(-1)) second=arrowBone(*skeleton,"NECK");
   if(first==size_t(-1) || second==size_t(-1)) return false;
   const auto& a=npc.animationBone(first);const auto& b=npc.animationBone(second);
   point=Vec3(a.at(3,0)+b.at(3,0),a.at(3,1)+b.at(3,1),a.at(3,2)+b.at(3,2))*.5f;
