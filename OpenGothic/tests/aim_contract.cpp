@@ -1,4 +1,5 @@
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/bowdraw.h"
 #include "graphics/mesh/skeleton.h"
 #include "game/aimstep.h"
 #include "game/aimcamera.h"
@@ -123,6 +124,279 @@ struct Fixture final {
     return result;
     }
   };
+
+// A complete pair of arms lets the pole contract exercise BowDraw's actual hand
+// rotations and string alignment, rather than testing a copy of its roll formula.
+struct BowFixture final {
+  enum : size_t { BowChest = 4, BowHand = 14, BowSlot = 15 };
+
+  static zenkit::ModelHierarchy hierarchy() {
+    zenkit::ModelHierarchy source;
+    struct Bone { const char* name; int16_t parent; Vec3 offset; float roll; };
+    const Bone bones[] = {
+      {"BIP01",-1,{0,0,0},0}, {"BIP01 PELVIS",0,{0,95,0},0},
+      {"BIP01 SPINE",1,{0,5,0},0}, {"BIP01 SPINE1",2,{-1,20,0},0},
+      {"BIP01 SPINE2",3,{-1,25,0},0}, {"BIP01 HEAD",4,{-2,33,2},0},
+      {"BIP01 R CLAVICLE",4,{-3,0,-9},0}, {"BIP01 R UPPERARM",6,{0,0,-2},0},
+      {"BIP01 R FOREARM",7,{-23,3,-7},0}, {"BIP01 R HAND",8,{-9,2,13},0},
+      {"ZS_RIGHTHAND",9,{0,0,0},0},
+      {"BIP01 L CLAVICLE",4,{-3,0,9},0}, {"BIP01 L UPPERARM",11,{0,0,2},0},
+      {"BIP01 L FOREARM",12,{-34,3,0},0}, {"BIP01 L HAND",13,{-35,-3,0},65},
+      {"ZS_LEFTHAND",14,{0,0,0},0}, {"ZS_HELMET",5,{0,20,0},0}
+      };
+    for(size_t i=0; i<std::size(bones); ++i) {
+      const auto& bone = bones[i];
+      zenkit::ModelHierarchyNode node;
+      node.name = bone.name;
+      node.parent_index = bone.parent;
+      // Rotate the model's -X arrow into +Z, the facing supplied by hold(object).
+      auto transform = i==0 ? objectAt({},90.f*Deg,Vec3(1,1,1)) : Matrix4x4::mkIdentity();
+      if(bone.roll!=0.f) {
+        const float c = std::cos(bone.roll*Deg), s = std::sin(bone.roll*Deg);
+        transform.set(1,1,c); transform.set(1,2,s);
+        transform.set(2,1,-s); transform.set(2,2,c);
+        }
+      transform.set(3,0,bone.offset.x);
+      transform.set(3,1,bone.offset.y);
+      transform.set(3,2,bone.offset.z);
+      std::memcpy(&node.transform,&transform,sizeof(transform));
+      source.nodes.push_back(node);
+      }
+    source.bbox.min = {-60,0,-30}; source.bbox.max = {60,190,100};
+    source.collision_bbox = source.bbox;
+    return source;
+    }
+
+  Skeleton skeleton{hierarchy(),nullptr,"HUMANS.MDS"};
+
+  std::vector<Matrix4x4> pose(float down) const {
+    const Vec3 pivot = position(skeleton.tr[BowChest]);
+    const float c = std::cos(down*Deg), s = std::sin(down*Deg);
+    auto pitch = Matrix4x4::mkIdentity();
+    pitch.set(1,1,c); pitch.set(1,2,s);
+    pitch.set(2,1,-s); pitch.set(2,2,c);
+    pitch.set(3,1,pivot.y-c*pivot.y+s*pivot.z);
+    pitch.set(3,2,pivot.z-s*pivot.y-c*pivot.z);
+    auto result = skeleton.tr;
+    for(size_t i=6; i<=BowSlot; ++i)
+      result[i] = pitch*result[i];
+    return result;
+    }
+
+  static BowDraw::Input input() {
+    BowDraw::Input input;
+    input.active = input.ready = input.arrow = input.hasString = true;
+    input.stringRest = Vec3(17,0,0);
+    input.stringPull = input.stringHigh = Vec3(45,0,0);
+    input.bowAxis = Vec3(0,1,0);
+    input.dt = 16;
+    return input;
+    }
+  };
+
+Vec3 bowUp(const std::vector<Matrix4x4>& pose) {
+  const auto& slot = pose[BowFixture::BowSlot];
+  const Vec3 up(slot.at(1,0),slot.at(1,1),slot.at(1,2));
+  const float size = length(up);
+  require(std::isfinite(size) && size>.99f,"the bow's actual limb axis must remain finite and nonzero");
+  return up*(1.f/size);
+  }
+
+float angleStep(float current, float previous) {
+  require(std::isfinite(current) && std::isfinite(previous),"pole angles must remain finite");
+  return std::abs(std::remainder(current-previous,360.f));
+  }
+
+float directionStep(const Vec3& current, const Vec3& previous) {
+  const float dot = current.x*previous.x+current.y*previous.y+current.z*previous.z;
+  return std::acos(std::clamp(dot,-1.f,1.f))/Deg;
+  }
+
+void testManualPoleSweep() {
+  BowFixture fixture;
+  Aim aim;
+  BowDraw bow;
+  aim.setSkeleton(&fixture.skeleton);
+  bow.setSkeleton(&fixture.skeleton);
+  require(aim.isValid() && bow.isValid(),"pole fixture must run the real Aim and BowDraw passes");
+  Aim::Input aimInput;
+  aimInput.active = aimInput.arrow = aimInput.manual = true;
+  aimInput.forward = aimInput.leanDirection = Vec3(0,0,1);
+  aimInput.dt = 16;
+  const auto bowInput = BowFixture::input();
+  const auto object = Matrix4x4::mkIdentity();
+  const Vec3 heading = rotated(aimInput.forward,-16.f*Deg);
+  float previousCant = 0, previousYaw = 0, previousTurn = 0;
+  Vec3 previousUp;
+  float maxCant = 0, maxYaw = 0, maxTurn = 0, maxUp = 0;
+  for(int frame=-120; frame<=232; ++frame) {
+    const float down = frame<0 ? 60.f : 60.f+float(frame<=116 ? frame : 232-frame)*.25f;
+    aimInput.dir = heading*std::cos(down*Deg)+Vec3(0,-std::sin(down*Deg),0);
+    // A small lateral variation becomes a large raw azimuth near the pole.
+    aimInput.dir.x += std::max(0.f,(down-80.f)/9.f)*.0002f*std::sin(float(frame)*.4f);
+    aim.update(aimInput);
+    bow.update(bowInput);
+    auto pose = fixture.pose(60.f);
+    bow.hold(pose.data(),pose.size(),object);
+    aim.apply(pose.data(),pose.size(),{},aimInput.forward);
+    bow.apply(pose.data(),pose.size());
+    aim.finish(pose.data(),pose.size(),{},aimInput.forward);
+    Aim::Probe a;
+    BowDraw::Probe b;
+    aim.probe(a);
+    bow.probe(b);
+    const Vec3 up = bowUp(pose);
+    if(frame>=0) {
+      near(a.weight,1.f,.0001f,"pole sweep must start after Aim has settled");
+      near(b.aligned,1.f,.0001f,"pole sweep must exercise full bow alignment");
+      require(b.span>0.f,"pole sweep must not bypass BowDraw with an invalid string span");
+      const float cant = angleStep(b.cant,previousCant);
+      const float yaw = angleStep(a.yaw,previousYaw);
+      const float turn = angleStep(a.turn,previousTurn);
+      const float limb = directionStep(up,previousUp);
+      if(cant>10.f || yaw>10.f || turn>10.f || limb>10.f) {
+        std::fprintf(stderr,"FAIL: manual pole sweep frame %d, down %.2f: cant/yaw/turn/limb step %.3f/%.3f/%.3f/%.3f deg\n",
+                     frame,double(down),double(cant),double(yaw),double(turn),double(limb));
+        std::exit(EXIT_FAILURE);
+        }
+      maxCant = std::max(maxCant,cant);
+      maxYaw = std::max(maxYaw,yaw);
+      maxTurn = std::max(maxTurn,turn);
+      maxUp = std::max(maxUp,limb);
+      }
+    previousCant = b.cant;
+    previousYaw = a.yaw;
+    previousTurn = a.turn;
+    previousUp = up;
+    }
+  std::printf("aim manual pole: 60->89->60 deg, max cant/yaw/turn/limb step %.3f/%.3f/%.3f/%.3f deg\n",
+              double(maxCant),double(maxYaw),double(maxTurn),double(maxUp));
+
+  // Cross the exact pole with a fixed body frame. The physical upper limb must
+  // keep pointing away from the body even when projected world-up vanishes.
+  BowDraw verticalBow;
+  verticalBow.setSkeleton(&fixture.skeleton);
+  maxCant = maxUp = 0;
+  for(int frame=-120; frame<=80; ++frame) {
+    const float down = frame<0 ? 89.f : 89.f+float(frame<=40 ? frame : 80-frame)*.05f;
+    verticalBow.update(bowInput);
+    auto pose = fixture.pose(down);
+    verticalBow.hold(pose.data(),pose.size(),object);
+    verticalBow.apply(pose.data(),pose.size());
+    BowDraw::Probe b;
+    verticalBow.probe(b);
+    const Vec3 up = bowUp(pose);
+    if(frame>=0) {
+      const float cant = angleStep(b.cant,previousCant);
+      const float limb = directionStep(up,previousUp);
+      require(cant<=10.f && limb<=10.f,"bow roll must remain continuous through and beyond exact vertical");
+      if(down==90.f)
+        require(up.z>.9f,"at exact vertical the upper bow limb must point away from the body");
+      maxCant = std::max(maxCant,cant);
+      maxUp = std::max(maxUp,limb);
+      }
+    previousCant = b.cant;
+    previousUp = up;
+    }
+  std::printf("bow exact pole: 89->91->89 deg, max cant/limb step %.3f/%.3f deg\n",double(maxCant),double(maxUp));
+  }
+
+void testManualPoleReload() {
+  BowFixture fixture;
+  Aim aim;
+  BowDraw bow;
+  aim.setSkeleton(&fixture.skeleton);
+  bow.setSkeleton(&fixture.skeleton);
+  Aim::Input input;
+  input.active = input.arrow = input.manual = true;
+  input.forward = input.leanDirection = Vec3(0,0,1);
+  input.dt = 16;
+  const float horizontal = 500.f*std::cos(85.f*Deg);
+  const Vec3 down(0,-500.f*std::sin(85.f*Deg),0);
+  const Vec3 nocked = rotated(input.forward,-16.f*Deg)*horizontal+down;
+  auto bowInput = BowFixture::input();
+  const auto object = Matrix4x4::mkIdentity();
+  float readyYaw = 0, previousCant = 0;
+  float maxYaw = 0, maxCant = 0, minRawYaw = 0;
+  for(int frame=-120; frame<=80; ++frame) {
+    const bool reload = frame>=0;
+    const float progress = float(std::max(frame,0))/80.f;
+    const float wave = std::cos(2.f*float(M_PI)*progress);
+    const float rawYaw = -16.f-33.f*wave*wave;
+    // The target and body frame stay fixed. Only the arrow's live origin moves
+    // sideways twice as the hand goes to the quiver and returns to the string.
+    input.dir = reload ? rotated(input.forward,rawYaw*Deg)*horizontal+down : nocked;
+    input.referenceDir = nocked;
+    input.holdOrigin = reload;
+    input.reload = frame>=3; // the release precedes T_BOWRELOAD by a few frames
+    bowInput.ready = !reload;
+    bowInput.reload = reload ? progress : -1.f;
+    bowInput.reloadTime = 1.28f;
+    aim.update(input);
+    bow.update(bowInput);
+    auto pose = fixture.pose(60.f);
+    bow.hold(pose.data(),pose.size(),object);
+    aim.apply(pose.data(),pose.size(),{},input.forward);
+    bow.apply(pose.data(),pose.size());
+    aim.finish(pose.data(),pose.size(),{},input.forward);
+    Aim::Probe a;
+    BowDraw::Probe b;
+    aim.probe(a);
+    bow.probe(b);
+    if(reload) {
+      require(b.holding,"reload pole test must hold the actual upper-body pose");
+      const float yaw = angleStep(a.yaw,readyYaw);
+      const float cant = angleStep(b.cant,previousCant);
+      if(yaw>3.f || cant>10.f) {
+        std::fprintf(stderr,"FAIL: manual pole reload frame %d: yaw drift %.3f deg, cant step %.3f deg (raw yaw %.3f deg)\n",
+                     frame,double(yaw),double(cant),double(rawYaw));
+        std::exit(EXIT_FAILURE);
+        }
+      maxYaw = std::max(maxYaw,yaw);
+      maxCant = std::max(maxCant,cant);
+      minRawYaw = std::min(minRawYaw,rawYaw);
+      } else {
+      readyYaw = a.yaw;
+      }
+    previousCant = b.cant;
+    }
+  require(minRawYaw<-48.9f,"reload fixture must exercise the observed 33 degree live-origin yaw excursion");
+  std::printf("aim manual pole reload: raw yaw -16..%.1f deg twice, max yaw drift %.3f deg, cant step %.3f deg\n",
+              double(minRawYaw),double(maxYaw),double(maxCant));
+  }
+
+void testClassicIgnoresPoleReference() {
+  BowFixture fixture;
+  std::array<Aim,2> aims;
+  for(auto& aim:aims)
+    aim.setSkeleton(&fixture.skeleton);
+  Aim::Input input;
+  input.active = input.arrow = true;
+  input.forward = Vec3(0,0,1);
+  input.dt = 16;
+  const Vec3 reference = rotated(input.forward,-16.f*Deg)*std::cos(85.f*Deg)+Vec3(0,-std::sin(85.f*Deg),0);
+  float worst = 0;
+  for(int frame=0; frame<200; ++frame) {
+    input.reload = frame>=120;
+    const float wave = input.reload ? std::sin(float(frame-120)*float(M_PI)/40.f) : 0.f;
+    input.dir = rotated(input.forward,(-16.f-33.f*wave*wave)*Deg)*std::cos(85.f*Deg)+Vec3(0,-std::sin(85.f*Deg),0);
+    std::array<std::vector<Matrix4x4>,2> poses;
+    for(size_t i=0; i<aims.size(); ++i) {
+      input.referenceDir = i==0 ? reference : Vec3();
+      aims[i].update(input);
+      poses[i] = fixture.pose(60.f);
+      aims[i].apply(poses[i].data(),poses[i].size(),{},input.forward);
+      }
+    for(size_t bone=0; bone<poses[0].size(); ++bone)
+      for(size_t column=0; column<4; ++column)
+        for(size_t row=0; row<4; ++row) {
+          const float difference = std::abs(poses[0][bone].at(column,row)-poses[1][bone].at(column,row));
+          near(difference,0.f,0.f,"the manual pole reference must not alter any classic aiming matrix");
+          worst = std::max(worst,difference);
+          }
+    }
+  std::printf("aim classic pole reference: 200 frames, max matrix difference %.9g\n",double(worst));
+  }
 
 struct Result final {
   Vec3 head;
@@ -481,10 +755,14 @@ void testSteepCameraPath() {
 
 int main() {
   Aim::setEnabled(true);
+  BowDraw::setEnabled(true);
   testHeadPathAndPelvis();
   testUpwardShotCorrectionKeepsHipBend();
   testBodyYaw();
   testTransientSnapshot();
+  testManualPoleSweep();
+  testManualPoleReload();
+  testClassicIgnoresPoleReference();
   testLegacyNpcLimit();
   testEdgeApproach();
   testSteepCameraPath();

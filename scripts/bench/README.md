@@ -39,6 +39,8 @@ aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 
 from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
 foot of a gallery's wall in Xardas' tower, 78 degrees down: hidden from the head, so without the aim no
 focus; with it the hero leans over the edge, the focus takes it, the arrow kills it).
+Manual bow pole: `bow-pole` (30 cm from Lobart's roof edge, a wolf ~85 degrees below; two shots
+and reloads from the bow side, one from the drawing side, then a slowed bow-side take).
 Flinch: `flinch` (a frozen bandit: blows only to the flinch from the front, behind, both sides, to the
 head, off the middle, a weak one, three in a row, the same with the flinch off; an arrow in his back;
 the hero's fist from the front, behind and the side as the game deals it, with its stumble; his sword

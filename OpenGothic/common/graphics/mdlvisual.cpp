@@ -889,11 +889,13 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         // by hand: the arrow straight at the crosshair (the archer holds over by himself), from where
         // the arrow is (not too close: the turn moves it)
         in.dir    = npc.aimDirection(aimAt());
+        in.referenceDir = aimAt()-from;
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
         in.follow = (1.f - CrouchSlow*npc.aimCrouch())*(1.f + CantQuick*(ws==WeaponState::Bow ? npc.aimCant() : 0.f));
         in.reload = pose.animProgress(ws==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload,npc.world().tickCount())>=0.f;
+        in.holdOrigin = npc.archer().stage()==Archer::Reloading;
         // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
         in.slot   = ammunition.boneId;
         } else {
