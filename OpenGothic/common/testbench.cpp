@@ -237,6 +237,14 @@ Vec3 facing(const Npc& pl) {
   return {std::cos(a),0,std::sin(a)};
   }
 
+const char* leanLineName(Aim::LeanLine line) {
+  switch(line) {
+    case Aim::LeanLine::Shot: return "shot";
+    case Aim::LeanLine::Head: return "head";
+    default: return "none";
+    }
+  }
+
 // Reuse the hero's skeleton prediction at a candidate perch without teleporting him during a search.
 Vec3 perchHead(const Npc& pl, const Vec3& origin, const Vec3& forward, const Vec3& target, float angle) {
   const Vec3 f = facing(pl), s(-f.z,0,f.x), side(-forward.z,0,forward.x);
@@ -4187,20 +4195,20 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say(buf + s.animNames());
     }
   else if(c=="cansee") {
-    // cansee <npc|nearest>: can the hero see it (from the head, leaning over an edge), and what is between
+    // cansee <npc|nearest> [edge yaw]: visibility and the head/arrow reach toward the edge, in cm from the feet
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
     if(n==nullptr || n==&pl) {
       say("cansee: no npc " + line);
       return;
       }
-    const Vec3  tg   = n->centerPosition();
+    const Vec3  tg   = n->collosionCenter();
     const Vec3  head = pl.aimHead(tg,0.f);
-    const auto  lean = pl.aimLean(tg);
+    const auto  lean = pl.aimLean(pl.hasManualAim() ? pl.manualAimPoint() : tg,pl.hasManualAim());
     const Vec3  d    = tg-head;
     const float h    = std::sqrt(d.x*d.x+d.z*d.z);
     auto        r    = w.physic()->ray(head,tg);
     const auto& fr = w.script().focusRange();
-    char buf[420];
+    char buf[800];
     std::snprintf(buf,sizeof(buf),"cansee %s: head %d, over the edge %d; dist %.0f, down %.0f deg; the ray from the head hits at %.0f cm of %.0f; bow focus %.0f..%.0f",
                   symName(w,n).c_str(),int(!r.hasCol),int(pl.canSeeNpcOverEdge(*n)),double(d.length()),
                   double(-std::atan2(d.y,h)*180.f/float(M_PI)),r.hasCol ? double((r.v-head).length()) : -1.0,double(d.length()),
@@ -4214,8 +4222,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const float before = std::max(0.f,degrees-0.25f);
     const Vec3  prior = pl.aimHead(tg,before*float(M_PI)/180.f);
     const bool  priorSeen = !w.physic()->ray(prior,tg).hasCol;
-    std::snprintf(buf,sizeof(buf),"  leaned head: required_deg %.2f current_deg %.2f visible %d room %d edge %d hit_cm %.2f shot_clear %d; to it %d (hit at %.0f of %.0f), before %.2f deg seen %d; max_forward_cm %.1f from feet, head at %.0f above the feet",
-                  lean.visible ? double(degrees) : -1.0,double(Aim::playerProbe.lean),int(lean.visible),int(lean.room),
+    std::snprintf(buf,sizeof(buf),"  leaned head: required_deg %.2f current_deg %.2f line %s visible %d room %d edge %d hit_cm %.2f shot_clear %d; to it %d (hit at %.0f of %.0f), before %.2f deg seen %d; max_forward_cm %.1f from feet, head at %.0f above the feet",
+                  lean.visible ? double(degrees) : -1.0,double(Aim::playerProbe.lean),leanLineName(lean.line),int(lean.visible),int(lean.room),
                   int(lean.edge),double(lean.hitDistance),int(lean.shotClear),
                   int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(before),int(priorSeen),
                   double(Vec3::dotProduct(full-pl.position(),dir)),double(eye.y-pl.position().y));
@@ -4224,6 +4232,20 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const Vec3 predicted = pl.aimCurrentHead();
     std::snprintf(buf,sizeof(buf),"  actual head: visible %d prediction_error_cm %.2f",
                   int(!w.physic()->ray(actual,tg).hasCol),double((actual-predicted).length()));
+    say(buf);
+    const float yaw = num(a,2,pl.rotation());
+    const float rad = yaw*float(M_PI)/180.f;
+    const Vec3 edgeDir(std::cos(rad),0,std::sin(rad));
+    Vec3 arrow = {}, arrowDir = {};
+    const bool hasArrow = pl.arrowRay(arrow,arrowDir);
+    const Vec3 fullArrow = pl.aimArrow(tg,Aim::LeanMax*float(M_PI)/180.f);
+    std::snprintf(buf,sizeof(buf),"  edge reach yaw %.1f: current head_forward_cm %.2f arrow_forward_cm %.2f arrow_valid %d head (%.2f %.2f %.2f) arrow (%.2f %.2f %.2f); full70 head_forward_cm %.2f arrow_forward_cm %.2f head (%.2f %.2f %.2f) arrow (%.2f %.2f %.2f) feet (%.2f %.2f %.2f)",
+                  double(yaw),double(Vec3::dotProduct(actual-pl.position(),edgeDir)),
+                  hasArrow ? double(Vec3::dotProduct(arrow-pl.position(),edgeDir)) : -1.0,int(hasArrow),
+                  double(actual.x),double(actual.y),double(actual.z),double(arrow.x),double(arrow.y),double(arrow.z),
+                  double(Vec3::dotProduct(full-pl.position(),edgeDir)),double(Vec3::dotProduct(fullArrow-pl.position(),edgeDir)),
+                  double(full.x),double(full.y),double(full.z),double(fullArrow.x),double(fullArrow.y),double(fullArrow.z),
+                  double(pl.position().x),double(pl.position().y),double(pl.position().z));
     say(buf);
     }
   else if(c=="views") {
@@ -7627,7 +7649,7 @@ void sightFrame(int w, int h, const std::string& shot) {
     return b;
     };
   auto*       phys = wrld->physic();
-  const Vec3  tg   = n->centerPosition();
+  const Vec3  tg   = n->collosionCenter();
   const bool  manual = pl->hasManualAim();
   const Vec3  aim  = manual ? pl->manualAimPoint() : tg;
   const Vec3  h0   = pl->aimHead(aim,0.f);
@@ -7654,7 +7676,7 @@ void sightFrame(int w, int h, const std::string& shot) {
                 "\"h0\":%s,\"c0\":%s,\"c0d\":%.0f,\"d0\":%.0f,\"e\":%s,\"room\":%d,\"ec\":%s,"
                 "\"h\":%s,\"c\":%s,\"cd\":%.0f,\"d\":%.0f,\"down\":%.1f,\"t\":%s,\"f\":%s,\"g\":%s,\"elev\":%.0f,"
                 "\"seen\":%d,\"over\":%d,\"required_deg\":%.2f,\"current_deg\":%.2f,\"max_forward_cm\":%.1f,"
-                "\"error_cm\":%.2f,\"actual_seen\":%d,\"edge\":%d,\"hit_cm\":%.2f,\"visible\":%d,\"shot_clear\":%d,\"manual\":%d",
+                "\"error_cm\":%.2f,\"actual_seen\":%d,\"edge\":%d,\"hit_cm\":%.2f,\"visible\":%d,\"line\":%s,\"shot_clear\":%d,\"manual\":%d",
                 jsonStr(bench.sightNpc).c_str(),jsonStr(shot).c_str(),w,h,
                 pt(h0).c_str(),pt(r0.v,r0.hasCol).c_str(),r0.hasCol ? double((r0.v-h0).length()) : -1.0,double((tg-h0).length()),
                 pt(eye).c_str(),int(lean.room),pt(rt.v,rt.hasCol).c_str(),
@@ -7663,7 +7685,7 @@ void sightFrame(int w, int h, const std::string& shot) {
                 int(!r0.hasCol),int(pl->canSeeNpcOverEdge(*n)),lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
                 double(Aim::playerProbe.lean),double(Vec3::dotProduct(full-pl->position(),lvl)),
                 double(predictionError),int(!r1.hasCol),int(lean.edge),double(lean.hitDistance),int(lean.visible),
-                int(lean.shotClear),int(manual));
+                jsonStr(leanLineName(lean.line)).c_str(),int(lean.shotClear),int(manual));
   event("sight",buf);
   // Captured after all pose passes. A shot captured during a recording also calls sightFrame;
   // only its ordinary frame writes the diagnostic, keeping exactly one sample per recorded frame.
@@ -7673,22 +7695,22 @@ void sightFrame(int w, int h, const std::string& shot) {
     const bool hasArrow = pl->arrowRay(arrow,arrowDir);
     const int actualShotClear = hasArrow ? int(!phys->ray(arrow,aim).hasCol) : -1;
     std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"error_cm\":%.2f,\"current_deg\":%.2f,\"required_deg\":%.2f,"
-                  "\"edge\":%d,\"hit_cm\":%.2f,\"room\":%d,\"visible\":%d,\"shot_clear\":%d,\"actual_seen\":%d,"
+                  "\"edge\":%d,\"hit_cm\":%.2f,\"room\":%d,\"visible\":%d,\"line\":%s,\"shot_clear\":%d,\"actual_seen\":%d,"
                   "\"focus\":%s,\"manual\":%d,\"actual_shot_clear\":%d,\"actual\":[%.2f,%.2f,%.2f],\"predicted\":[%.2f,%.2f,%.2f],"
                   "\"aim\":[%.2f,%.2f,%.2f]",
                   jsonStr(bench.sightNpc).c_str(),double(predictionError),double(Aim::playerProbe.lean),
                   lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
-                  int(lean.edge),double(lean.hitDistance),int(lean.room),int(lean.visible),int(lean.shotClear),
+                  int(lean.edge),double(lean.hitDistance),int(lean.room),int(lean.visible),jsonStr(leanLineName(lean.line)).c_str(),int(lean.shotClear),
                   int(!r1.hasCol),jsonStr(focus).c_str(),int(manual),actualShotClear,
                   double(hd.x),double(hd.y),double(hd.z),double(predicted.x),double(predicted.y),double(predicted.z),
                   double(aim.x),double(aim.y),double(aim.z));
     event("lean-frame",buf);
     std::snprintf(buf,sizeof(buf),"lean-frame %s frame %lld: error_cm %.2f current_deg %.2f required_deg %.2f "
-                  "edge %d hit_cm %.2f room %d visible %d shot_clear %d actual_shot_clear %d actual_seen %d focus %s manual %d "
+                  "edge %d hit_cm %.2f room %d visible %d line %s shot_clear %d actual_shot_clear %d actual_seen %d focus %s manual %d "
                   "actual (%.2f %.2f %.2f) predicted (%.2f %.2f %.2f)",
                   bench.recName.c_str(),(long long)bench.recFrame,double(predictionError),double(Aim::playerProbe.lean),
                   lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
-                  int(lean.edge),double(lean.hitDistance),int(lean.room),int(lean.visible),int(lean.shotClear),actualShotClear,
+                  int(lean.edge),double(lean.hitDistance),int(lean.room),int(lean.visible),leanLineName(lean.line),int(lean.shotClear),actualShotClear,
                   int(!r1.hasCol),focus.c_str(),int(manual),
                   double(hd.x),double(hd.y),double(hd.z),double(predicted.x),double(predicted.y),double(predicted.z));
     say(buf);

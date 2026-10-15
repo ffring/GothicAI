@@ -6173,7 +6173,7 @@ Vec3 Npc::aimArrow(const Vec3& target, float angle) const {
   return visual.pose().aimIk().arrowAt(position(),f,aimLeanDirection(target),angle);
   }
 
-Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual, bool requireShot) const {
+Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
   const Vec3 head = aimHead(target,0.f);
   const Vec3 d = target-head;
   float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
@@ -6181,7 +6181,7 @@ Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual, bool requireShot) 
     const Vec3 look = aimLook();
     down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
     }
-  return visual.pose().aimIk().leanNeeded(*this,target,down,manual,requireShot);
+  return visual.pose().aimIk().leanNeeded(*this,target,down,manual);
   }
 
 bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
@@ -6192,7 +6192,7 @@ bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   if(!visual.pose().aimIk().isValid())
     return canSeeNpc(oth,true);
   if(isPlayer()) {
-    const auto lean = aimLean(tg,false,false);
+    const auto lean = aimLean(tg);
     return lean.visible && canRayHitPoint(aimHead(tg,lean.angle),tg,180.f);
     }
   // NPC archers retain their angle rule, without the hero's per-frame visibility search.

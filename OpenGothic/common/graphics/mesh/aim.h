@@ -51,6 +51,7 @@ class Aim final {
     static float           leanFor(float down); // the lean for the angle down, radians
     static float           leanForNpc(float down);
 
+    enum class LeanLine : uint8_t { None, Head, Shot };
     struct LeanResult final {
       float angle   = 0; // radians, the smallest safe hip bend
       bool  visible = false;
@@ -58,9 +59,9 @@ class Aim final {
       bool  shotClear = false;
       bool  edge = false;
       float hitDistance = -1; // cm to the first obstruction from the upright head
+      LeanLine line = LeanLine::None;
       };
-    LeanResult     leanNeeded(const Npc& npc, const Tempest::Vec3& target, float down, bool manual,
-                             bool requireShot = true) const;
+    LeanResult     leanNeeded(const Npc& npc, const Tempest::Vec3& target, float down, bool manual) const;
     // Predicts the head from the last pose with its actual smoothed torso rotation frozen.
     // Only the candidate hip bend changes. origin is at the feet; angle is in radians.
     Tempest::Vec3  headAt(const Tempest::Vec3& origin, const Tempest::Vec3& forward,

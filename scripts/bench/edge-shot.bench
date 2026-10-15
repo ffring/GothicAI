@@ -1,7 +1,10 @@
 # Shooting down over an edge: the end of a thatched roof's ridge at Lobart's farm, 7.3 m above a path, a wolf on
 # the path 1 m out from the gable wall (8 m, ~80 deg down from the head). The wolf is put from the edge, then the
 # hero steps back: put from 2 m back it would land on the roof.
-#   stand_*: 60 cm from the edge, the bow drawn; the head must not see the wolf, the lean must (`sight`, `cansee`).
+#   stand_*: 60 cm from the edge, the bow drawn; the standing head cannot see the wolf, the lean must. The
+#            shared solver prefers a clear shot, then a clear head line when the arrow cannot clear the roof.
+#   close_*: 30 cm from the edge after drawing; both the head and arrow lines must clear below 70 degrees,
+#            and an actual classic/manual shot must hit the wolf.
 #   walk_*:  from 2 m back, walking (manual: steps with the bow drawn, classic: walk mode) up to the edge.
 # Camera from the side (`cam follow 600 300 90`). bench.log: `pos` (y 2335 on the roof, ~1640 on the ground
 # below: he fell), `edgedist` (distance in cm to a drop greater than 100 cm ahead), `cansee`,
@@ -77,7 +80,8 @@ wait 1200
 release action
 wait 800
 # manual, standing 60 cm from the edge: the real game's camera and crosshair point at the wolf.
-# Capture the upright head first, then the minimum lean and a real arrow past the roof's edge.
+# Capture the upright head first, then the minimum lean and an actual shot. At 60 cm a head-only solution
+# is valid: the shot may still hit the roof. close_manual below checks the successful shot from 30 cm.
 manual on
 aimat WOLF body mouse
 cam game
@@ -126,6 +130,115 @@ wait 1200
 rec probe_manual_full
 wait 600
 cansee WOLF
+stop
+aimlean auto
+wait 1200
+release action
+wait 800
+aimat off
+ui off
+cam follow 600 300 90
+cam look -240
+wait 800
+# Close classic: keep the same frozen wolf at the original world position. Draw before the exact
+# placement so the animation's root motion cannot replace the intended 30 cm margin.
+aimat off
+manual off
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+stats bow 100 talent 0
+equip ItRw_Bow_L_01
+aim off
+draw bow
+wait 1500
+press action
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 30 exact
+wait 300
+rec close_classic
+sight WOLF
+aim on
+wait 2500
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+hp WOLF
+# In classic controls action holds the aim; forward while action is held releases a real shot.
+tap forward
+wait 1500
+hp WOLF
+stop
+aimlean 70
+wait 1200
+rec probe_close_classic_full
+wait 600
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+tap forward
+wait 1500
+hp WOLF
+stop
+aimlean auto
+wait 1200
+release action
+wait 800
+# Close manual: the game camera and crosshair follow the wolf as actual mouse input would.
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual on
+aim off
+draw bow
+wait 1500
+aimat WOLF body mouse
+cam game
+ui on
+press action
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 30 exact
+wait 300
+rec close_manual
+sight WOLF
+aim on
+wait 2500
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+hp WOLF
+shot close_manual_drawn
+wait 100
+release action
+wait 1500
+hp WOLF
+stop
+press action
+wait 1500
+aimlean 70
+wait 1200
+rec probe_close_manual_full
+wait 600
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+release action
+wait 1500
+hp WOLF
 stop
 aimlean auto
 wait 1200

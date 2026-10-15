@@ -206,7 +206,7 @@ Vec3 Aim::appliedDirection() const {
   return poseLeanDirection;
   }
 
-Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, bool manual, bool requireShot) const {
+Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, bool manual) const {
   LeanResult out;
   if(!valid || !enabled)
     return out;
@@ -216,30 +216,79 @@ Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, 
   const Vec3 dir = npc.aimLeanDirection(target);
   const auto* world = npc.world().physic();
   const Vec3 upright = headAt(origin,facing,dir,0.f);
-  const auto blocked = world->ray(upright,target);
+  Vec3 sightTarget = target;
+  auto blocked = world->ray(upright,target);
+  if(manual && down>=LeanStart*Deg && blocked.hasCol && length(blocked.v-upright)<=200.f) {
+    // Until the shoulder camera clears the edge, the crosshair can still hit that edge.
+    // Look at the focused target under the view; keep the shot aimed at the crosshair.
+    const Npc* focus = npc.target();
+    const Vec3 look = normalize(npc.aimLook());
+    if(focus!=nullptr && focus!=&npc && length(look)>0.5f &&
+       dot(normalize(focus->collosionCenter()-upright),look)>std::cos(10.f*Deg)) {
+      sightTarget = focus->collosionCenter();
+      blocked = world->ray(upright,sightTarget);
+      }
+    }
   const Vec3 uprightSlot = arrowAt(origin,facing,dir,0.f);
   const auto blockedShot = world->ray(uprightSlot,target);
   out.hitDistance = blocked.hasCol ? length(blocked.v-upright) : -1.f;
   out.shotClear = !blockedShot.hasCol;
-  if(!blocked.hasCol && (!requireShot || out.shotClear)) {
+  if(!blocked.hasCol && out.shotClear) {
     out.visible = true;
+    out.line = LeanLine::Shot;
     return out;
     }
   // Only a nearby obstacle can be the edge we lean over. A hidden distant target does not
   // make the hero bend, nor does a target above or nearly level with his head.
   out.edge = down>=LeanStart*Deg &&
              ((blocked.hasCol && out.hitDistance<=200.f) ||
-              (requireShot && blockedShot.hasCol && length(blockedShot.v-uprightSlot)<=200.f));
+              (blockedShot.hasCol && length(blockedShot.v-uprightSlot)<=200.f));
   const float fallback = manual ? leanFor(down) : 0.f;
+  if(!out.edge && !blocked.hasCol) {
+    out.visible = true;
+    out.line = LeanLine::Head;
+    return out;
+    }
   if(!out.edge && fallback<=0.f)
     return out;
 
   Vec3 previous = upright;
   float safe = 0.f;
   float lo = 0.f;
+  float firstHead = blocked.hasCol ? -1.f : 0.f;
   // Walk the entire head path, rather than the chord from upright to the final pose: the
   // arc can meet a wall even with both end points in free space.
   const float limit = out.edge ? LeanMax*Deg : fallback;
+  auto clear = [&](float angle, bool shot) {
+    return !world->ray(headAt(origin,facing,dir,angle),sightTarget).hasCol &&
+           (!shot || !world->ray(arrowAt(origin,facing,dir,angle),target).hasCol);
+    };
+  auto refine = [&](float low, float high, const Vec3& previous, bool shot) {
+    for(int i=0; i<5; ++i) {
+      const float mid = (low+high)*0.5f;
+      if(clear(mid,shot) && !world->ray(previous,headAt(origin,facing,dir,mid)).hasCol)
+        high = mid;
+      else
+        low = mid;
+      }
+    return high;
+    };
+  auto accept = [&](float angle, bool shot) {
+    // Keep a checked half-degree margin beyond a positive minimum. Upright visibility
+    // stays at zero; only a nearby edge may make the hero bend.
+    if(angle>0.f) {
+      const float margin = std::min(angle+0.5f*Deg,limit);
+      if(clear(margin,shot) &&
+         !world->ray(headAt(origin,facing,dir,angle),headAt(origin,facing,dir,margin)).hasCol)
+        angle = margin;
+      }
+    out.angle = angle;
+    out.visible = true;
+    out.room = true;
+    out.shotClear = !world->ray(arrowAt(origin,facing,dir,angle),target).hasCol;
+    out.line = out.shotClear ? LeanLine::Shot : LeanLine::Head;
+    return out;
+    };
   for(float angle=std::min(Deg,limit); angle<=limit+1e-5f; angle=std::min(angle+Deg,limit)) {
     const Vec3 next = headAt(origin,facing,dir,angle);
     if(world->ray(previous,next).hasCol) {
@@ -247,41 +296,20 @@ Aim::LeanResult Aim::leanNeeded(const Npc& npc, const Vec3& target, float down, 
       break;
       }
     safe = angle;
-    const bool headClear = !world->ray(next,target).hasCol;
-    const bool shotClear = !world->ray(arrowAt(origin,facing,dir,angle),target).hasCol;
-    if(out.edge && headClear && (!requireShot || shotClear)) {
-      // Refine only this first visible degree. Every accepted point is on a path already
-      // checked for room; the short extra segment keeps the final fractional step safe too.
-      float hi = angle;
-      for(int i=0; i<5; ++i) {
-        const float mid = (lo+hi)*0.5f;
-        const Vec3 point = headAt(origin,facing,dir,mid);
-        if(!world->ray(point,target).hasCol &&
-           (!requireShot || !world->ray(arrowAt(origin,facing,dir,mid),target).hasCol) &&
-           !world->ray(previous,point).hasCol)
-          hi = mid;
-        else
-          lo = mid;
-        }
-      // Keep half a degree beyond the first clear ray, so smoothing and the next animation
-      // sample do not repeatedly close the view at the exact silhouette of the edge.
-      const float margin = std::min(hi+0.5f*Deg,limit);
-      const Vec3 clearHead = headAt(origin,facing,dir,hi);
-      const Vec3 marginHead = headAt(origin,facing,dir,margin);
-      if(!world->ray(clearHead,marginHead).hasCol &&
-         !world->ray(marginHead,target).hasCol &&
-         (!requireShot || !world->ray(arrowAt(origin,facing,dir,margin),target).hasCol))
-        hi = margin;
-      out.angle = hi;
-      out.visible = true;
-      out.shotClear = !world->ray(arrowAt(origin,facing,dir,hi),target).hasCol;
-      return out;
+    if(out.edge) {
+      const bool headClear = !world->ray(next,sightTarget).hasCol;
+      if(headClear && firstHead<0.f)
+        firstHead = refine(lo,angle,previous,false);
+      if(headClear && !world->ray(arrowAt(origin,facing,dir,angle),target).hasCol)
+        return accept(refine(lo,angle,previous,true),true);
       }
     previous = next;
     lo = angle;
     if(angle>=limit)
       break;
     }
+  if(firstHead>=0.f)
+    return accept(firstHead,false);
   // In manual aim the crosshair may hit the roof itself. Keep the old angle-based fallback
   // in that case, bounded by the part of the head path that did have room.
   if(manual)
