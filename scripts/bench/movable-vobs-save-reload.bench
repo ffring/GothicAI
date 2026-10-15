@@ -1,0 +1,10 @@
+# New process loads session-traces.sav; the first snapshot precedes simulation.
+movable initial restored
+movable observe
+movable begin reload
+wait 30000
+movable checkpoint
+movable snapshot continued
+movable push-pinned
+wait 2500
+movable snapshot pushed

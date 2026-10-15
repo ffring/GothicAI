@@ -37,6 +37,7 @@ class CollisionWorld final {
         CollisionBody(const CollisionBody&) = delete;
 
         void                setObjMatrix(const Tempest::Matrix4x4& matrix);
+        void                restoreTransform(const Tempest::Matrix4x4& matrix, bool sleeping);
         void                setPosition(const Tempest::Vec3& position);
         void                setScale(const Tempest::Vec3& scale);
         void                setShape(JPH::ShapeRefC shape);

@@ -72,6 +72,7 @@
 #include "graphics/mesh/protomesh.h"
 #include "world/movablevobs.h"
 #include "world/world.h"
+#include "world/bullet.h"
 #include "world/waypoint.h"
 #include "world/aiqueue.h"
 #include "ui/crosshair.h"
@@ -2526,15 +2527,17 @@ Vec3 movablePosition(const Matrix4x4& matrix) {
   return {matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)};
   }
 
-std::string movableRows(World& world) {
+std::string movableRows(World& world,bool allMap=false) {
   std::string result="[";
   for(const auto& body:world.physic()->movableVobSnapshot()) {
-    if(std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)==bench.movableIds.end()) continue;
+    if(allMap ? body.zenId==uint32_t(-1) :
+       std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)==bench.movableIds.end()) continue;
     if(result.size()>1) result+=',';
     result+="{\"id\":"+std::to_string(body.id)+",\"visual\":"+jsonStr(body.visual)+
+      ",\"zen_id\":"+std::to_string(body.zenId)+",\"origin\":"+ragdollMatrix(body.origin)+
       ",\"class\":"+jsonStr(body.className)+",\"blocks_walking\":"+(body.blocksWalking?"true":"false")+
       ",\"legacy_collision\":"+(body.legacyCollision?"true":"false")+
-      ",\"from_map\":"+(bench.movableMapIds.contains(body.id)?"true":"false")+
+      ",\"from_map\":"+((allMap || bench.movableMapIds.contains(body.id))?"true":"false")+
       ",\"mass_kg\":"+ragdollNumber(body.mass)+",\"enabled\":"+(body.enabled?"true":"false")+
       ",\"sleeping\":"+(body.sleeping?"true":"false")+",\"npc_contact\":"+(body.touchedByNpc?"true":"false")+
       ",\"position_cm\":"+ragdollVector(movablePosition(body.transform))+
@@ -2780,6 +2783,90 @@ void prepareMovableCast(World& world,Npc& player) {
     ragdollVector(target)+",\"caster_cm\":"+ragdollVector(player.position()));
   }
 
+void movableSaveSnapshot(World& world,std::string_view label) {
+  std::string npcPins="[",worldPins="[";
+  for(uint32_t id=0;id<world.npcCount();++id) {
+    const auto* npc=world.npcById(id);if(!npc)continue;
+    for(size_t i=0;i<npc->stuckArrowCount();++i) {
+      Npc::ArrowPinProbe pin;
+      if(!npc->stuckArrowProbe(i,pin)) {arenaAbort("saved NPC arrow lacks a rendered node");return;}
+      if(npcPins.size()>1)npcPins+=',';
+      npcPins+="{\"npc_id\":"+std::to_string(world.npcId(npc))+",\"instance\":"+jsonStr(symName(world,npc))+
+        ",\"index\":"+std::to_string(i)+",\"bone\":"+std::to_string(pin.bone)+
+        ",\"local\":"+ragdollMatrix(pin.local)+",\"world\":"+ragdollMatrix(pin.world)+
+        ",\"expected\":"+ragdollMatrix(npc->renderedBone(pin.bone)*pin.local)+"}";
+      }
+    }
+  for(size_t i=0;i<world.stuckArrowCount();++i) {
+    Matrix4x4 matrix,local;uint32_t zenId=uint32_t(-1);
+    if(!world.stuckArrowTransform(i,matrix)) {arenaAbort("saved world arrow lacks a rendered node");return;}
+    const bool attached=world.stuckArrowAttachment(i,zenId,local);
+    if(worldPins.size()>1)worldPins+=',';
+    worldPins+="{\"index\":"+std::to_string(i)+",\"zen_id\":"+(attached?std::to_string(zenId):"null")+
+      ",\"world\":"+ragdollMatrix(matrix)+",\"local\":"+(attached?ragdollMatrix(local):"null")+"}";
+    }
+  event("movable_save_snapshot","\"label\":"+jsonStr(label)+",\"world\":"+jsonStr(world.name())+
+    ",\"t_game_ms\":"+std::to_string(world.tickCount())+
+    ",\"movable_vobs\":"+(Gothic::physicsFlags().movableVobs?"true":"false")+
+    ",\"arrow_sticking\":"+(Gothic::physicsFlags().arrowSticking?"true":"false")+
+    ",\"bodies\":"+movableRows(world,true)+",\"npc_pins\":"+npcPins+"],\"world_pins\":"+worldPins+"]");
+  }
+
+void movablePin(World& world,Npc& player,std::string_view target) {
+  const auto symbol=world.script().findSymbolIndex("ITRW_ARROW");
+  if(symbol==size_t(-1)) {arenaAbort("movable save fixture arrow instance missing");return;}
+  Item arrow(world,symbol,Item::T_Inventory);
+  Vec3 from,to;
+  if(target=="table") {
+    bool found=false;
+    for(const auto& body:world.physic()->movableVobSnapshot()) {
+      if(body.id!=bench.movableTable)continue;
+      const auto* mesh=Resources::loadMesh(body.visual);
+      if(!mesh)break;
+      const auto* bounds=mesh->bbox();to=(bounds[0]+bounds[1])*.5f;
+      body.transform.project(to);from=to+Vec3(0,150,0);found=true;break;
+      }
+    if(!found) {arenaAbort("movable save table is absent");return;}
+    }
+  else if(target=="npc") {
+    if(bench.spellActors.empty()) {arenaAbort("movable save NPC is absent");return;}
+    const auto& npc=*bench.spellActors[0].npc;
+    const auto* skeleton=npc.visualSkeleton();
+    const auto bone=skeleton?arrowBone(*skeleton,"SPINE2"):size_t(-1);
+    if(bone==size_t(-1)) {arenaAbort("movable save NPC has no chest bone");return;}
+    const auto matrix=npc.renderedBone(bone);to=movablePosition(matrix);from=to+Vec3(0,100,0);
+    }
+  else if(target=="world") {
+    const auto point=bench.movableWalkStart;
+    const auto floor=world.physic()->landRay(point+Vec3(0,80,0),180);
+    if(!floor.hasCol) {arenaAbort("movable save static arrow has no floor");return;}
+    to=floor.v;from=to+Vec3(0,60,0);
+    }
+  else {arenaAbort("unknown movable save arrow target");return;}
+  auto& bullet=world.shootArrow(arrow,from,Vec3::normalize(to-from),DynamicWorld::bulletSpeed);
+  bullet.setOrigin(&player);bullet.setPrecise(1.f);
+  event("movable_save_shot","\"target\":"+jsonStr(target)+",\"from_cm\":"+ragdollVector(from)+",\"to_cm\":"+ragdollVector(to));
+  }
+
+void pushMovablePinnedTable(World& world) {
+  uint32_t zenId=uint32_t(-1);Matrix4x4 local;
+  for(size_t i=0;i<world.stuckArrowCount();++i)
+    if(world.stuckArrowAttachment(i,zenId,local))break;
+  if(zenId==uint32_t(-1)) {arenaAbort("movable push needs an arrow attached to map furniture");return;}
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    if(body.zenId!=zenId)continue;
+    const auto* mesh=Resources::loadMesh(body.visual);
+    if(!mesh)break;
+    const auto* bounds=mesh->bbox();auto center=(bounds[0]+bounds[1])*.5f;body.transform.project(center);
+    const auto pushed=world.physic()->applyMovableVobImpulse(center,180.f,
+      [](const Vec3&,float mass) {return Vec3(.9f,.3f,.45f)*mass;});
+    event("movable_save_push","\"zen_id\":"+std::to_string(zenId)+",\"affected\":"+std::to_string(pushed));
+    if(!pushed)arenaAbort("movable saved table impulse was blocked");
+    return;
+    }
+  arenaAbort("movable pinned map furniture is absent");
+  }
+
 void saveMovableSession(World& world,const std::string& label) {
   if(label.empty() || label.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
     throw std::runtime_error("invalid movable save label");
@@ -2789,6 +2876,7 @@ void saveMovableSession(World& world,const std::string& label) {
   std::ofstream file(outDir+"/session-"+label+".sav",std::ios::binary);
   file.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
   if(!file)throw std::runtime_error("cannot write complete movable GameSession archive");
+  movableSaveSnapshot(world,"saved");
   event("movable_session_save","\"archive\":"+jsonStr("session-"+label+".sav")+",\"bytes\":"+
     std::to_string(bytes.size())+",\"world\":"+jsonStr(world.name())+",\"bodies\":"+movableRows(world));
   }
@@ -3384,6 +3472,23 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     w.physic()->setMovableVobsEnabled(a[1]=="on");
     }
   else if(c=="movable" && a.size()==2 && a[1]=="setup") prepareMovableFixture(w,pl);
+  else if(c=="movable" && a.size()==2 && a[1]=="observe") {
+    bench.movableIds.clear();bench.movableMapIds.clear();
+    for(const auto& body:w.physic()->movableVobSnapshot())
+      if(body.zenId!=uint32_t(-1)) {bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);}
+    for(uint32_t id=0;id<w.npcCount();++id)
+      if(auto* npc=w.npcById(id);npc && npc!=&pl && (npc->position()-pl.position()).length()<1800) {
+        npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+        }
+    }
+  else if(c=="movable" && a.size()==3 && a[1]=="snapshot") movableSaveSnapshot(w,a[2]);
+  else if(c=="movable" && a.size()==3 && a[1]=="pin") movablePin(w,pl,a[2]);
+  else if(c=="movable" && a.size()==2 && a[1]=="settle-target") {
+    if(bench.spellActors.empty()) {arenaAbort("movable save NPC is absent");return;}
+    bench.subject=bench.spellActors[0].npc;
+    bench.subject->setRagdollDown(true);bench.subject->prepareRagdoll();
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="push-pinned") pushMovablePinnedTable(w);
   else if(c=="movable" && a.size()==3 && a[1]=="begin") movableBegin(w,a[2]);
   else if(c=="movable" && a.size()==2 && a[1]=="checkpoint") movableCheckpoint(w);
   else if(c=="movable" && a.size()==2 && a[1]=="walk") {
@@ -7392,6 +7497,10 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           say("initial session snapshot failed: "+std::string(error.what()));
           event("ragdoll_error","\"command\":"+jsonStr(line)+",\"reason\":"+jsonStr(error.what()));
           }
+        }
+      else if(args.size()==3 && args[0]=="movable" && args[1]=="initial") {
+        ++bench.pc;
+        movableSaveSnapshot(*world,args[2]);
         }
       }
     renderSound(dt);

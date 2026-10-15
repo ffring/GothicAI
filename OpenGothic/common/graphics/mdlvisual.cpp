@@ -21,6 +21,20 @@ using namespace Tempest;
 
 namespace {
 
+constexpr uint32_t ArrowSaveMagic=0x31525041u; // APR1, independent of the NPC/visual layout.
+constexpr uint16_t ArrowSaveVersion=1;
+constexpr size_t MaxArrowSaveName=512;
+
+bool readArrowName(Serialize& fin, std::string& value) {
+  uint32_t size=0;
+  fin.read(size);
+  if(size==0 || size>MaxArrowSaveName)
+    return false;
+  value.resize(size);
+  fin.readBytes(value.data(),size);
+  return value.find('\0')==std::string::npos;
+  }
+
 bool inverseBasis(const Matrix4x4& m, double inverse[3][3]) {
   const double a=m.at(0,0), b=m.at(1,0), c=m.at(2,0);
   const double d=m.at(0,1), e=m.at(1,1), f=m.at(2,1);
@@ -220,7 +234,8 @@ const Matrix4x4& MdlVisual::renderedBone(size_t bone) const {
   return skInst->bone(bone);
   }
 
-bool MdlVisual::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix) {
+bool MdlVisual::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix,
+                           std::string_view visualName) {
   if(arrow.isEmpty() || skeleton==nullptr || bone>=skeleton->nodes.size() || bone>=skInst->boneCount() ||
      !validRenderFrame(worldMatrix))
     return false;
@@ -229,6 +244,7 @@ bool MdlVisual::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4
   if(!validRenderFrame(animated) || !inverseBasis(animated,inverse))
     return false;
   ArrowPin pin;
+  pin.visual=visualName;
   pin.bone=bone;
   pin.local.identity();
   // Keep the complete arrow basis, including scale. Subtract world translations first so
@@ -246,11 +262,70 @@ bool MdlVisual::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4
     return false;
   arrow.setObjMatrix(renderedBone(bone)*pin.local);
   pin.view=std::move(arrow);
-  constexpr size_t MaxStuckArrows=64;
   if(stuckArrows.size()>=MaxStuckArrows)
     stuckArrows.erase(stuckArrows.begin());
   stuckArrows.push_back(std::move(pin));
   return true;
+  }
+
+void MdlVisual::saveStuckArrows(Serialize& fout) const {
+  fout.write(ArrowSaveMagic,ArrowSaveVersion);
+  fout.write(skeleton!=nullptr ? skeleton->name() : std::string_view());
+  uint32_t count=0;
+  for(const auto& pin:stuckArrows)
+    if(!pin.visual.empty() && skeleton!=nullptr && pin.bone<skeleton->nodes.size())
+      ++count;
+  fout.write(count);
+  for(const auto& pin:stuckArrows) {
+    if(pin.visual.empty() || skeleton==nullptr || pin.bone>=skeleton->nodes.size())
+      continue;
+    fout.write(pin.visual,skeleton->nodes[pin.bone].name,pin.local);
+    }
+  }
+
+bool MdlVisual::loadStuckArrows(Serialize& fin, World& world) {
+  clearStuckArrows();
+  if(!Gothic::physicsFlags().arrowSticking)
+    return true;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t version=0;
+    std::string savedSkeleton;
+    fin.read(magic,version);
+    if(magic!=ArrowSaveMagic || version!=ArrowSaveVersion ||
+       !readArrowName(fin,savedSkeleton) || skeleton==nullptr || savedSkeleton!=skeleton->name())
+      return false;
+    fin.read(count);
+    if(count>MaxStuckArrows)
+      return false;
+    std::vector<ArrowPin> loaded;
+    loaded.reserve(count);
+    for(uint32_t i=0; i<count; ++i) {
+      ArrowPin pin;
+      std::string boneName;
+      if(!readArrowName(fin,pin.visual) || !readArrowName(fin,boneName))
+        return false;
+      fin.read(pin.local);
+      pin.bone=skeleton->findNode(boneName);
+      double inverse[3][3];
+      if(pin.bone>=skeleton->nodes.size() || pin.bone>=skInst->boneCount() ||
+         !validRenderFrame(pin.local) || !inverseBasis(pin.local,inverse))
+        return false;
+      for(int c=0; c<4; ++c)
+        for(int r=0; r<3; ++r)
+          if(std::abs(pin.local.at(c,r))>100000000.f)
+            return false;
+      pin.view=world.addView(pin.visual);
+      if(pin.view.isEmpty())
+        return false;
+      pin.view.setObjMatrix(renderedBone(pin.bone)*pin.local);
+      loaded.push_back(std::move(pin));
+      }
+    stuckArrows=std::move(loaded);
+    return true;
+    } catch(const std::exception&) {
+    return false;
+    }
   }
 
 void MdlVisual::clearStuckArrows() {

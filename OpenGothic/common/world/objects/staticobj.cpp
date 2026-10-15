@@ -23,7 +23,7 @@ StaticObj::StaticObj(Vob* parent, World& world, const zenkit::VirtualObject& vob
     auto& physics = *world.physic();
     physics.setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
     movable = physics.addMovableVob(*visual.protoMesh(),scheme,transform(),rule->massMultiplier,
-                                   rule->blocksWalking,rule->className,vob.cd_dynamic);
+                                   rule->blocksWalking,rule->className,vob.cd_dynamic,vob.id);
     if(!movable.isEmpty()) {
       movable.setTransformCallback([this](const Matrix4x4& matrix) { visual.setObjMatrix(matrix); });
       } else {

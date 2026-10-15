@@ -96,7 +96,9 @@ class MdlVisual final {
       Tempest::Matrix4x4 local, world;
       };
     bool                           stickArrow(MeshObjects::Mesh&& arrow, size_t bone,
-                                              const Tempest::Matrix4x4& worldMatrix);
+                                              const Tempest::Matrix4x4& worldMatrix, std::string_view visualName={});
+    void                           saveStuckArrows(Serialize& fout) const;
+    bool                           loadStuckArrows(Serialize& fin, World& world);
     void                           clearStuckArrows();
     size_t                         stuckArrowCount() const { return stuckArrows.size(); }
     bool                           stuckArrowProbe(size_t index, ArrowPinProbe& out) const;
@@ -223,9 +225,12 @@ class MdlVisual final {
 
     struct ArrowPin {
       MeshObjects::Mesh  view;
+      std::string        visual;
       size_t             bone=size_t(-1);
       Tempest::Matrix4x4 local;
       };
+
+    static constexpr size_t MaxStuckArrows=64;
 
     void implSetBody(Npc* npc, World& world, MeshObjects::Mesh&& body, const int32_t version);
     void setSlotAttachment(MeshObjects::Mesh&& itm, std::string_view bone);

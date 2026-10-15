@@ -433,6 +433,16 @@ void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matri
   owner->impl->system.GetBodyInterface().SetPositionAndRotationWhenChanged(id,transform.position,transform.rotation,JPH::EActivation::DontActivate);
   }
 
+void CollisionWorld::CollisionBody::restoreTransform(const Tempest::Matrix4x4& matrix, bool sleeping) {
+  setObjMatrix(matrix);
+  auto& bodies = owner->impl->system.GetBodyInterface();
+  bodies.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+  if(sleeping)
+    bodies.DeactivateBody(id);
+  else
+    bodies.ActivateBody(id);
+  }
+
 void CollisionWorld::CollisionBody::setPosition(const Tempest::Vec3& position) {
   owner->impl->system.GetBodyInterface().SetPosition(id,toMeters(position),JPH::EActivation::DontActivate);
   }

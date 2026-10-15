@@ -49,9 +49,12 @@ class World final {
     Npc*                 npcById(uint32_t id);
     uint32_t             npcCount() const;
     Npc*                 npcForRagdoll(const Ragdoll* body);
-    bool                 stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix);
+    bool                 stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix,
+                                    std::string_view visual = {},
+                                    std::shared_ptr<const DynamicWorld::MovableVobPose> movable = {});
     size_t               stuckArrowCount() const { return stuckArrows.size(); }
     bool                 stuckArrowTransform(size_t index, Tempest::Matrix4x4& out) const;
+    bool                 stuckArrowAttachment(size_t index, uint32_t& zenId, Tempest::Matrix4x4& local) const;
 
     uint32_t             mobsiId(const Interactive* ptr) const;
     Interactive*         mobsiById(uint32_t id);
@@ -233,7 +236,17 @@ class World final {
     std::unique_ptr<GlobalEffects>        globFx;
     WorldSound                            wsound;
     WorldObjects                          wobj;
-    std::vector<MeshObjects::Mesh>        stuckArrows;
+    struct StuckArrow {
+      MeshObjects::Mesh mesh;
+      std::string visual;
+      Tempest::Matrix4x4 local;
+      std::weak_ptr<const DynamicWorld::MovableVobPose> movable;
+      bool attached = false;
+      };
+    std::vector<StuckArrow>               stuckArrows;
+    void                                 saveStuckArrows(Serialize& fout) const;
+    void                                 loadStuckArrows(Serialize& fin);
+    void                                 updateStuckArrows();
     struct SpellField {
       Tempest::Vec3 center;
       Npc* caster = nullptr; // identities only; never dereferenced by a field

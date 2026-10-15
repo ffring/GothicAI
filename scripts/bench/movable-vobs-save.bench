@@ -1,0 +1,29 @@
+# Real Coragon fireball and native arrow collisions, then a complete GameSession save.
+seed 73013
+cheat god
+set time 12 0
+living on
+movable setup
+movable cast-ready
+spell equip 23
+wait 1200
+overlay off
+view full
+movable blast
+wait 15000
+movable checkpoint
+movable settle-target
+waitragdoll watched sleep 30000
+movable pin table
+wait 600
+movable pin world
+wait 600
+movable pin npc
+wait 15000
+movable snapshot pinned
+movable push-pinned
+wait 2500
+movable snapshot pushed_before_save
+wait 15000
+movable save traces
+physics stats

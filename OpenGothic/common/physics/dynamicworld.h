@@ -22,6 +22,7 @@ class Npc;
 class Item;
 class Interactive;
 class DbgPainter;
+class Serialize;
 
 class CollisionWorld;
 
@@ -65,7 +66,8 @@ class DynamicWorld final {
       P_Null,
       P_Item,
       P_Interactive,
-      P_Editor
+      P_Editor,
+      P_MovableVob
       };
 
     enum MoveCode : uint8_t {
@@ -188,6 +190,12 @@ class DynamicWorld final {
       Npc* npcHit = nullptr;
       };
 
+    struct MovableVobPose {
+      uint32_t zenId = uint32_t(-1);
+      std::string visual;
+      Tempest::Matrix4x4 origin, transform;
+      };
+
     struct BulletWorldHit {
       Tempest::Vec3          point = {}; // world centimetres
       Tempest::Vec3          normal = {}; // unit world normal, unchanged winding
@@ -196,6 +204,7 @@ class DynamicWorld final {
       Ragdoll*              ragdoll = nullptr;
       size_t                bone = size_t(-1);
       Interactive*          vob = nullptr;
+      std::shared_ptr<const MovableVobPose> movable;
       };
 
     struct BulletCallback {
@@ -301,15 +310,19 @@ class DynamicWorld final {
     Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, zenkit::MaterialGroup mat);
     Item           addMovableVob(const ProtoMesh& mesh, std::string_view visual, const Tempest::Matrix4x4& matrix,
                                  float massMultiplier, bool blocksWalking, std::string_view className = {},
-                                 bool legacyCollision = true);
+                                 bool legacyCollision = true, uint32_t zenId = uint32_t(-1));
     void           setMovableVobsEnabled(bool enabled);
     bool           movableVobsEnabled() const;
+    void           saveMovableVobs(Serialize& fout) const;
+    void           loadMovableVobs(Serialize& fin);
+    std::shared_ptr<const MovableVobPose> movableVobPose(uint32_t zenId) const;
     struct MovableVobSnapshot {
       uintptr_t          id = 0;
+      uint32_t           zenId = uint32_t(-1);
       std::string        visual, className;
       bool               blocksWalking = false, legacyCollision = true, enabled = false, sleeping = true, touchedByNpc = false;
       float              mass = 0;
-      Tempest::Matrix4x4 transform;
+      Tempest::Matrix4x4 transform, origin;
       Tempest::Vec3      velocity;
       };
     std::vector<MovableVobSnapshot> movableVobSnapshot() const;

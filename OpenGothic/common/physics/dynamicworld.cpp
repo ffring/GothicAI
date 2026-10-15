@@ -29,6 +29,8 @@
 #include "world/objects/item.h"
 #include "world/bullet.h"
 #include "world/world.h"
+#include "game/serialize.h"
+#include "game/physicssave.h"
 
 #include "utils/dbgpainter.h"
 
@@ -69,7 +71,7 @@ DynamicWorld::RayLandResult toResult(const CollisionWorld::QueryResult& hit, con
   // Object normals stay zero: the movement code relies on this for sliding.
   if(hit.body->ptrType()==DynamicWorld::P_Editor)
     ret.uptr = hit.body->payload();
-  else if(hit.body->category()==DynamicWorld::C_Object)
+  else if(hit.body->category()==DynamicWorld::C_Object && hit.body->ptrType()==DynamicWorld::P_Interactive)
     ret.vob = reinterpret_cast<Interactive*>(hit.body->payload());
   return ret;
   }
@@ -104,6 +106,7 @@ struct DynamicWorld::BodyData {
   std::shared_ptr<MovableVobs::Shape> movableShape;
   std::vector<std::unique_ptr<CollisionWorld::CollisionBody>> query;
   Tempest::Matrix4x4 origin, current;
+  std::shared_ptr<MovableVobPose> pose = std::make_shared<MovableVobPose>();
   std::string visual, className;
   float movableMass = 0.f, massMultiplier = 1.f;
   bool blocksWalking = false, legacyCollision = true;
@@ -855,7 +858,7 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
 DynamicWorld::Item DynamicWorld::addMovableVob(const ProtoMesh& proto, std::string_view visual,
                                               const Tempest::Matrix4x4& matrix, float massMultiplier,
                                               bool blocksWalking, std::string_view className,
-                                              bool legacyCollision) {
+                                              bool legacyCollision, uint32_t zenId) {
   if(!std::isfinite(massMultiplier) || massMultiplier<=0.f)
     return {};
   std::string key(visual);
@@ -908,6 +911,10 @@ DynamicWorld::Item DynamicWorld::addMovableVob(const ProtoMesh& proto, std::stri
   obj->movableShape = cached->second;
   obj->origin = obj->current = matrix;
   obj->visual = std::string(visual);
+  obj->pose->zenId = zenId;
+  obj->pose->visual = obj->visual;
+  obj->pose->origin = matrix;
+  obj->pose->transform = matrix;
   obj->className = std::string(className);
   obj->blocksWalking = blocksWalking;
   obj->legacyCollision = legacyCollision;
@@ -948,6 +955,8 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
   const bool enabled = movableVobs->enabled && shape.hull!=nullptr && std::isfinite(obj.movableMass) && obj.movableMass>0.f;
   if(enabled)
     obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
+  if(obj.body!=nullptr)
+    obj.body->setPayload(&obj,P_MovableVob);
   // cd_dynamic controls the original mesh queries independently of simulation.
   // The hull can move and receive impacts without becoming a new walking/ray obstacle.
   if(obj.legacyCollision) {
@@ -957,8 +966,10 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
       matrix.mul(part.local);
       obj.query.push_back(world->addCollisionBody(part.source->shape,matrix,part.source->friction(),category,
                                                  enabled,enabled,&part.source->mesh));
+      obj.query.back()->setPayload(&obj,P_MovableVob);
       }
     }
+  obj.pose->transform = obj.current;
   if(obj.transformCallback)
     obj.transformCallback(obj.current);
   }
@@ -971,6 +982,7 @@ void DynamicWorld::syncMovableVob(BodyData& obj) {
     return;
   obj.wasSleeping = sleeping;
   obj.current = obj.body->matrix();
+  obj.pose->transform = obj.current;
   for(size_t i=0;i<obj.query.size();++i) {
     auto matrix = obj.current;
     matrix.mul(obj.movableShape->parts[i].local);
@@ -992,12 +1004,75 @@ bool DynamicWorld::movableVobsEnabled() const {
   return movableVobs->enabled;
   }
 
+std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::movableVobPose(uint32_t zenId) const {
+  if(zenId==uint32_t(-1))
+    return {};
+  for(const auto* obj:movableVobs->bodies)
+    if(obj->pose->zenId==zenId)
+      return obj->pose;
+  return {};
+  }
+
+void DynamicWorld::saveMovableVobs(Serialize& fout) const {
+  if(!movableVobs->enabled)
+    return;
+  std::vector<const BodyData*> moved;
+  for(const auto* obj:movableVobs->bodies)
+    if(obj->pose->zenId!=uint32_t(-1) && obj->body!=nullptr &&
+       !PhysicsSave::sameTransform(obj->origin,obj->body->matrix()))
+      moved.push_back(obj);
+  if(moved.empty())
+    return;
+  fout.setEntry("worlds/",fout.worldName(),"/movable-vobs");
+  fout.write(uint32_t(0x31564f4d),uint16_t(1),fout.worldName(),uint32_t(moved.size()));
+  for(const auto* obj:moved)
+    fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->body->matrix(),obj->body->isSleeping());
+  }
+
+void DynamicWorld::loadMovableVobs(Serialize& fin) {
+  if(!movableVobs->enabled || !fin.setEntry("worlds/",fin.worldName(),"/movable-vobs"))
+    return;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,count);
+    if(magic!=0x31564f4d || schema!=1 || worldName!=fin.worldName() || count>100000)
+      return;
+    for(uint32_t i=0;i<count;++i) {
+      uint32_t id=uint32_t(-1);
+      std::string visual;
+      Tempest::Matrix4x4 origin,matrix;
+      bool sleeping=true;
+      fin.read(id,visual,origin,matrix,sleeping);
+      if(!PhysicsSave::validTransform(matrix) || !PhysicsSave::sameScale(matrix,origin))
+        continue;
+      for(auto* obj:movableVobs->bodies) {
+        if(obj->pose->zenId!=id || id==uint32_t(-1) || obj->visual!=visual ||
+           !PhysicsSave::sameTransform(obj->origin,origin) || obj->body==nullptr)
+          continue;
+        obj->body->restoreTransform(matrix,sleeping);
+        // Force query meshes, render callback and attachment pose to synchronize
+        // even when the restored body is asleep and will never take a step.
+        obj->wasSleeping = false;
+        syncMovableVob(*obj);
+        break;
+        }
+      }
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("movable vob load: ",e.what());
+    }
+  }
+
 std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot() const {
   std::vector<MovableVobSnapshot> result;
   result.reserve(movableVobs->bodies.size());
   for(auto* obj:movableVobs->bodies) {
     MovableVobSnapshot entry;
     entry.id = reinterpret_cast<uintptr_t>(obj);
+    entry.zenId = obj->pose->zenId;
+    entry.origin = obj->origin;
     entry.visual = obj->visual;
     entry.className = obj->className;
     entry.blocksWalking = obj->blocksWalking;
@@ -1094,6 +1169,8 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         result.material=matId;
         result.ragdoll=hit.ragdoll;
         result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->ptrType()==P_MovableVob)
+          result.movable=static_cast<BodyData*>(hit.body->payload())->pose;
         if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
           result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
         b.cb->onSpellWorldHit(result);
@@ -1160,6 +1237,8 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         result.material=matId;
         result.ragdoll=hit.ragdoll;
         result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->ptrType()==P_MovableVob)
+          result.movable=static_cast<BodyData*>(hit.body->payload())->pose;
         if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
           result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
         b.worldStopped=true;
