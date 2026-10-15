@@ -81,3 +81,9 @@ Keep these when updating a library from upstream.
   variable that is not in the compiled scripts; `load` keeps room for `MAX_ADDED_SYMBOLS` of them, so no
   symbol moves. The AI director's story state (`DIR_*`, graph_patch `vars`) lives in such variables and is
   saved with the scripts' own (`GameScript::loadVar` makes them again from a save).
+- `ZenKit/` `DaedalusScript::add_instance_symbol` (`DaedalusScript.hh`, `DaedalusScript.cc`): adds an instance
+  that is not in the compiled scripts, of the class and with the init code of a script's instance, in the same
+  room. The AI director's npc's (`DIR_NPC_*`) are such instances; the engine's `OwnSymbols` makes them again
+  in the same order before a save's world loads, so the npc's of the save find their symbols by index. The
+  code names its own instance (`self` in an instance's body), so `GameScript::initializeInstanceNpc` binds
+  that instance to the new npc while the code runs.

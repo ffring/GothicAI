@@ -140,8 +140,9 @@ class DialogGraph final {
     // save brought back keep theirs
     void        ensureVars();
     // why `name` can't be a variable of the director's in this VM; empty: it can
-    static std::string whyNotVar(zenkit::DaedalusVm& v, const std::string& name);
+    static std::string whyNotVar(GameScript& script, const std::string& name);
     zenkit::DaedalusVm* vm() const;
+    GameScript*         script() const;
 
     std::function<void(std::string&&)>                               send;
     std::function<std::string(const std::string&,const std::string&)> addLine;

@@ -431,6 +431,27 @@ class GameLink:
         """Every person of the world and its day (see StoryPeopleCmd)."""
         return list((await self._request(StoryPeopleCmd(req=self._next_id("s")), timeout)).value or [])
 
+    async def own_npc(
+        self,
+        npc: str,
+        like: str,
+        waypoint: str | None = None,
+        distance: int | None = None,
+        timeout: float = 10.0,
+    ) -> dict[str, Any]:
+        """An npc of the director's (game in -devmode, v33): a script symbol of ours made like the script's
+        npc `like`, put at a waypoint or `distance` cm in front of the player; {npc, index: its symbol,
+        name}."""
+        cmd = DebugCmd(
+            req=self._next_id("r"),
+            cmd="own_npc",
+            npc=npc.upper(),
+            like=like.upper(),
+            waypoint=waypoint,
+            distance=distance,
+        )
+        return dict((await self._request(cmd, timeout)).value or {})
+
     async def story_eval(self, npc: str, exprs: list[Any], timeout: float = 5.0) -> list[Any]:
         """Story graph expressions on the live VM, self = `npc` (see StoryEvalCmd)."""
         cmd = StoryEvalCmd(req=self._next_id("s"), npc=npc.upper(), exprs=exprs)

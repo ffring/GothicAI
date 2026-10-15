@@ -3605,6 +3605,128 @@ async def authored_quest(
     return _logged(results)
 
 
+async def own_symbols(link: GameLink, slot: int = 7) -> dict[str, str]:
+    """Stage 2 of the director as author, layer 1 (docs/director.md): script symbols of our own on the game.
+
+    A story variable, an npc of the director's made like a nameless farmer of the scripts, another variable
+    after it; then two saves and loads, a variable changed in between. Checks:
+    - made: the npc stands in front of the hero, by the farmer's name, a symbol of the npc kind;
+    - like: its day and its clothes are the farmer's (the farmer's code made it, on it and not on the farmer),
+      and the farmer is still one of his own;
+    - after_load, again: after each load the npc is there once, where it stood, bound to its own symbol
+      (Hlp_GetInstanceID of it), and the variables have the values they had at the save;
+    - vanilla: Hilda and the farmer are where and who they were."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    own, first, second = "DIR_NPC_E2E", "DIR_E2E_A", "DIR_E2E_B"
+
+    people = {p["npc"]: p for p in await link.story_people()}
+    farmers = sorted(n for n in people if re.fullmatch(r"BAU_\d+_BAUER", n))
+    if not farmers:
+        return _logged({"made": "failed (no nameless farmer in the world)"})
+    like = farmers[0]
+
+    # in the order of the save's entry: a variable, the npc, a variable
+    await link.patch_graph([{"op": "vars", "vars": {first: 7}}])
+    try:
+        made = await link.own_npc(own, like, distance=300)
+    except GameError as err:
+        return _logged({"made": f"failed ({err})"})
+    await link.patch_graph([{"op": "vars", "vars": {second: 9}}])
+    # their values the save keeps, not the first ones a patch would make again
+    values = {first: 17, second: 19}
+    await link.story_effect(HILDA, [{"do": "set", "var": k, "value": v} for k, v in values.items()])
+
+    async def state() -> dict[str, Any]:
+        return await link.story_state(
+            vars=list(values), npcs=[own, like, HILDA], symbols=[own], near="PC_HERO"
+        )
+
+    async def bound() -> Any:
+        return await link.evaluate(["call", "HLP_GETINSTANCEID", ["inst", "SELF"]], npc=own)
+
+    def shown(s: dict[str, Any], npc: str) -> tuple[str, str]:
+        n = s.get("npcs", {}).get(npc, {})
+        return n.get("state", "absent"), n.get("name", "")
+
+    before = await state()
+    me = before.get("npcs", {}).get(own, {})
+    check(
+        "made",
+        shown(before, own) == ("alive", people[like]["name"])
+        and me.get("distance", 1e9) < 600
+        and before.get("symbols", {}).get(own) == "npc",
+        f"{made}; {me}",
+    )
+
+    def day(person: dict[str, Any]) -> list[dict[str, Any]]:
+        keys = ("start", "end", "state", "waypoint")
+        return [{k: e.get(k) for k in keys} for e in person.get("routine", [])]
+
+    now = await link.story_people()
+    mine = [p for p in now if p["npc"] == own]
+    theirs = [p for p in now if p["npc"] == like]
+    same = bool(mine) and day(mine[0]) == day(people[like])
+    # the farmer's code dressed this one, not the farmer again
+    armor = ["call", "NPC_HASEQUIPPEDARMOR", ["inst", "SELF"]]
+    dressed = (await link.evaluate(armor, npc=own), await link.evaluate(armor, npc=like))
+    check(
+        "like",
+        same and len(theirs) == 1 and shown(before, like)[0] == "alive" and dressed[0] == dressed[1],
+        f"{len(theirs)} {like}; armor {dressed}",
+    )
+    vanilla = (shown(before, HILDA), shown(before, like))
+
+    async def save_and_load() -> None:
+        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+        await link.debug("save", slot)
+        await saving
+        loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+        await link.debug("load", slot)
+        await loaded
+        await link.wait_world()
+        await asyncio.sleep(1)
+
+    for name in ("after_load", "again"):
+        if name == "again":
+            # the next save writes what is now, not what came from the last one
+            values[first] += 10
+            await link.story_effect(HILDA, [{"do": "set", "var": first, "value": values[first]}])
+        at = (await state()).get("npcs", {}).get(own, {}).get("distance", 0)
+        await save_and_load()
+        after = await state()
+        me = after.get("npcs", {}).get(own, {})
+        count = sum(1 for p in await link.story_people() if p["npc"] == own)
+        try:
+            index = await bound()
+        except GameError as err:
+            index = str(err)
+        kept = {k: after.get("vars", {}).get(k) for k in values}
+        check(
+            name,
+            me.get("state") == "alive"
+            and count == 1
+            and abs(me.get("distance", 1e9) - at) < 300
+            and index == made.get("index")
+            and kept == values,
+            f"{me}; {count} of it; Hlp_GetInstanceID {index}, made {made.get('index')}; {kept}",
+        )
+    last = await state()
+    check(
+        "vanilla",
+        (shown(last, HILDA), shown(last, like)) == vanilla,
+        f"{vanilla} -> {(shown(last, HILDA), shown(last, like))}",
+    )
+    return _logged(results)
+
+
 async def vanilla_lie(
     link: GameLink,
     dialogue: DialogueManager,
