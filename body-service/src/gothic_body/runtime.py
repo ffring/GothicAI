@@ -110,8 +110,9 @@ class ActorState:
     hidden: Any = None
     response: dict[str, Any] | None = None
     scores: list[float] | None = None
-    arbitration_fingerprint: str = ""
+    arbitration_fingerprint: Any = ""
     arbitration_response: dict[str, Any] | None = None
+    observation: dict[str, Any] | None = None
 
 
 class PolicyRuntime:
@@ -121,11 +122,16 @@ class PolicyRuntime:
     is diagnostic; monotonic timestamps from different machines are not mixed.
     A gap discards memory and the decision. A later contiguous input restarts
     from zero, and the caller can release/reacquire its native lease meanwhile.
+
+    ``lean`` is for training collectors that send each periodic row once: payload
+    fingerprints become (sequence, source, memory flag) tuples, the arbitrated row is
+    compared to the processed one directly, and no JSON digests or request-size
+    encodings are computed. Decisions, memory and fallbacks are the same.
     """
     def __init__(self, checkpoint: Path | str | None = None, *, device: str = "cpu", backend=None,
                  checkpoint_sha256: str | None = None, normalizer: dict[str, Any] | None = None,
                  feature_packer: Callable | None = None, max_actors: int = 16, max_age_game_ms: int = 100,
-                 max_dt_game_ms: int = 100, inference_cpu_threads: int = 2):
+                 max_dt_game_ms: int = 100, inference_cpu_threads: int = 2, lean: bool = False):
         if type(max_actors) is not int or not 1 <= max_actors <= 256:
             raise ValueError("invalid actor bound")
         if type(inference_cpu_threads) is not int or inference_cpu_threads not in (1, 2):
@@ -151,6 +157,9 @@ class PolicyRuntime:
         self.episode_closed = False
         self.counters: Counter = Counter()
         self.lock = threading.RLock()
+        self.lean = lean
+        # Features of the last row the backend consumed (a collector stores them as training input).
+        self.last_features: list[float] | None = None
 
     def begin_episode(self, session_epoch: int, world_epoch: int, *, initial_game_ms: int = 0) -> None:
         if any(type(value) is not int or value < 0 for value in (session_epoch, world_epoch)):
@@ -208,7 +217,7 @@ class PolicyRuntime:
         game_ms, native_sequence = row.get("t_game_ms"), row.get("observation_seq")
         if any(type(value) is not int or value < 0 for value in (sequence, game_ms, native_sequence)) or sequence == 0:
             raise ValueError("invalid observation sequence or game time")
-        if len(json.dumps(request, allow_nan=False)) > MAX_REQUEST_BYTES:
+        if not self.lean and len(json.dumps(request, allow_nan=False)) > MAX_REQUEST_BYTES:
             raise ValueError("request exceeds bounded reader")
         if now_game_ms is None:
             now_game_ms = request.get("now_game_ms", game_ms)
@@ -250,8 +259,11 @@ class PolicyRuntime:
             self.states[identity] = state
             self.active[identity[2]] = identity
             base["hidden_reset"] = True
-        fingerprint = digest({"observation": row, "source": request.get("source", "periodic_observer"),
-                              "memory_only": request.get("memory_only") is True})
+        if self.lean:
+            fingerprint = (native_sequence, request.get("source", "periodic_observer"), request.get("memory_only") is True)
+        else:
+            fingerprint = digest({"observation": row, "source": request.get("source", "periodic_observer"),
+                                  "memory_only": request.get("memory_only") is True})
         if sequence == state.sequence:
             if fingerprint != state.fingerprint:
                 return fallback("duplicate_payload_changed", True)
@@ -303,6 +315,7 @@ class PolicyRuntime:
             features = self.packer(row, self.normalizer, sequence_dt_game_ms=dt)
             if any(not math.isfinite(value) for value in features):
                 return fallback("invalid_features", True)
+            self.last_features = features
             started = time.perf_counter_ns()
             logits, hidden = self.backend.step(features, model_mask, state.hidden)
             infer_ms = (time.perf_counter_ns()-started)/1_000_000
@@ -314,14 +327,15 @@ class PolicyRuntime:
             action = max((index for index, allowed in enumerate(model_mask) if allowed), key=lambda index: logits[index])
             response = {**base, "status": "processed", "reason": "decision" if eligible and action else "locked",
                         "action_id": action if eligible and action else None, "model_processed": True,
-                        "features_sha256": digest(features), "feature_count": len(features),
+                        "features_sha256": None if self.lean else digest(features), "feature_count": len(features),
                         "effective_action_mask": model_mask, "inference_ms": infer_ms,
                         "backend_execution_profile": dict(getattr(self.backend, "execution_profile", {})),
                         "backend_timing": dict(getattr(self.backend, "last_step_timing", {})),
                         "logits": logits, "logits_semantics": "masked_float32_finite_min",
-                        "observation_sha256": digest(row), "raw_action_mask": mask,
+                        "observation_sha256": None if self.lean else digest(row), "raw_action_mask": mask,
                         "memory_only": memory_only, "selected_action_id": action, "new_decision": bool(eligible and action)}
             state.sequence, state.game_ms, state.fingerprint, state.response = sequence, game_ms, fingerprint, response
+            state.observation = row if self.lean else None
             self.actor_clocks[identity[2]] = (*identity[:2], game_ms)
             self.counters["processed"] += 1
             self.counters["decisions" if response["action_id"] else "locked"] += 1
@@ -350,7 +364,8 @@ class PolicyRuntime:
                 return {**base, "reason": "no_current_periodic_state"}
             if state.response.get("memory_only") is True:
                 return {**base, "status": "locked", "reason": "memory_only"}
-            fingerprint = digest({"observation": row, "stream_seq": stream_seq})
+            fingerprint = ((row.get("observation_seq"), row.get("t_game_ms"), stream_seq) if self.lean else
+                           digest({"observation": row, "stream_seq": stream_seq}))
             if fingerprint == state.arbitration_fingerprint:
                 return {**state.arbitration_response, "status": "cached"}
             base.update(periodic_observation_seq=state.response["observation_seq"], periodic_game_ms=state.game_ms,
@@ -358,8 +373,10 @@ class PolicyRuntime:
             now = row.get("t_game_ms")
             if type(now) is not int or not 0 <= now-state.game_ms <= max_anchor_age_game_ms:
                 return {**base, "reason": "periodic_anchor_too_old"}
+            same_row = (row is state.observation or row == state.observation) if self.lean else \
+                digest(row) == state.response["observation_sha256"]
             if row.get("observation_seq") != state.response["observation_seq"] or now != state.game_ms or \
-                    row.get("periodic") is not True or digest(row) != state.response["observation_sha256"]:
+                    row.get("periodic") is not True or not same_row:
                 return {**base, "reason": "periodic_anchor_mismatch"}
             mask = row.get("action_mask")
             if row.get("can_decide") is not True or row.get("action_mask_valid") is not True:

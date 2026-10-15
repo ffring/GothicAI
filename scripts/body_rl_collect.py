@@ -80,6 +80,7 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
     from body_arena_env import LEASE_KEYS, ArenaInfrastructureError
     from body_policy_suite import PolicyArenaRunner, PolicyEpisodeEnv
     from gothic_body.runtime import PolicyRuntime, actor_identity
+    from body_fast_features import pack_features as fast_pack_features
 
     class LeanRunner(PolicyArenaRunner):
         def record(self, direction, value):
@@ -128,7 +129,10 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                                      scenario=Path(options["scenario"]), compact_replies=True,
                                      native_serial_workers=True, runner_extra_args=["--fork-reset"])
     runner = LeanRunner(runner_args)
-    policy = PolicyRuntime(options["checkpoint"], device="cpu", max_actors=4, inference_cpu_threads=1)
+    # Training runtime: the fast packer (float-for-float equal to the gate's) and no provenance digests.
+    lean = options.get("lean_runtime", True)
+    policy = PolicyRuntime(options["checkpoint"], device="cpu", max_actors=4, inference_cpu_threads=1, lean=lean,
+                           feature_packer=fast_pack_features if lean else None)
     rng = random.Random(options["sampling_seed"]*1000+worker)
     summaries = []
     try:
@@ -163,7 +167,7 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                                                "command_enabled": command_enabled,
                                                "memory_only": not command_enabled or row.get("can_decide") is not True})
                     if response.get("model_processed"):
-                        features = policy.packer(row, policy.normalizer, sequence_dt_game_ms=response["sequence_dt_game_ms"])
+                        features = policy.last_features
                         rows.append({"features": features, "mask": response["effective_action_mask"],
                                      "reset": bool(response.get("hidden_reset")), "label": -1, "seq": row["observation_seq"]})
                     elif response.get("status") == "fallback" and command_enabled:
@@ -268,6 +272,8 @@ def main() -> int:
     parser.add_argument("--tasks", default="native_duel")
     parser.add_argument("--start-substeps", type=int, default=1,
                         help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
+    parser.add_argument("--reference-runtime", dest="lean_runtime", action="store_false",
+                        help="gate packer and digest-checked runtime instead of the lean training ones")
     parser.add_argument("--per-tick", dest="advance", action="store_false",
                         help="poll every tick instead of the runner's arena_advance to the next decision")
     parser.add_argument("--command-ttl-ms", type=int, default=100,

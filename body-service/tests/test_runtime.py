@@ -290,3 +290,30 @@ def test_live_locked_empty_mask_updates_memory_until_legal_periodic_decision_ret
     assert response["model_processed"] and policy.backend.calls[-1][2] == 1
     decision = policy.arbitrate(legal["observation"], stream_seq=2)
     assert decision["status"] == "decision" and decision["action_id"] == 11
+
+
+def test_lean_runtime_makes_the_same_decisions_without_digests():
+    def run(lean):
+        policy = runtime(lean=lean)
+        policy.begin_episode(4, 7, initial_game_ms=100)
+        trace = []
+        for sequence in range(1, 6):
+            first = request(sequence, eligible=sequence % 2 == 1)
+            response = policy.process(first)
+            row = deepcopy(first["observation"])
+            decision = policy.arbitrate(row, stream_seq=sequence)
+            trace.append((response["status"], response["action_id"], response["reason"], decision["status"],
+                          decision.get("action_id"), policy.last_features))
+        changed = request(6)
+        policy.process(changed)
+        moved = deepcopy(changed["observation"])
+        moved["can_decide"] = False
+        trace.append(policy.arbitrate(moved, stream_seq=6)["reason"])
+        return policy, trace
+    lean, lean_trace = run(True)
+    full, full_trace = run(False)
+    assert lean_trace == full_trace
+    assert lean_trace[-1] == "periodic_anchor_mismatch"
+    assert [call[2] for call in lean.backend.calls] == [call[2] for call in full.backend.calls]
+    assert lean.states[next(iter(lean.states))].response["observation_sha256"] is None
+    assert full.states[next(iter(full.states))].response["observation_sha256"] is not None
