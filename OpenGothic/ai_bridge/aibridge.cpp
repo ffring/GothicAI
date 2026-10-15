@@ -58,7 +58,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 30;
+constexpr int         ProtocolVersion = 32;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -1169,14 +1169,36 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     return;
     }
   if(cmd=="waypoints") {
-    // every waypoint and freepoint of the world: for the server's book of place names
-    std::string out = "[";
-    char        num[96];
+    // every waypoint and freepoint of the world: for the server's book of places (places.py). v32: the
+    // waynet's links of each, how much of the sky above it is covered (`roof`: of five rays up, straight
+    // and tilted, how many hit rock or a roof within RoofCm) and the room it is in (`room`, indoors)
+    constexpr float RoofCm   = 2000;
+    constexpr float RoofTilt = 0.57f;  // sin of 35°
+    const auto*     phys     = world->physic();
+    std::string     out      = "[";
+    char            num[128];
     world->forEachWayPoint([&](const WayPoint& w) {
       const auto pos = w.position();
-      std::snprintf(num,sizeof(num),"\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"fp\":%s}",
-                    double(pos.x),double(pos.y),double(pos.z),w.isFreePoint() ? "true" : "false");
+      int        roof = 0;
+      const auto eye  = pos+Tempest::Vec3(0,50,0);
+      const Tempest::Vec3 dirs[] = {{0,1,0},
+                                    {RoofTilt,0.82f,0},{-RoofTilt,0.82f,0},{0,0.82f,RoofTilt},{0,0.82f,-RoofTilt}};
+      for(auto& d:dirs)
+        if(phys->ray(eye,eye+d*RoofCm).hasCol)
+          ++roof;
+      std::snprintf(num,sizeof(num),"\",\"x\":%.0f,\"y\":%.0f,\"z\":%.0f,\"fp\":%s,\"roof\":%d",
+                    double(pos.x),double(pos.y),double(pos.z),w.isFreePoint() ? "true" : "false",roof);
       out += (out.size()>1 ? ",{\"name\":\"" : "{\"name\":\"") + w.name + num;
+      const auto land = phys->landRay(eye,500);
+      if(land.hasCol && land.sector!=nullptr && land.sector[0]!='\0')
+        out += std::string(",\"room\":\"") + land.sector + "\"";
+      if(!w.connections().empty()) {
+        out += ",\"conn\":[";
+        for(size_t i=0; i<w.connections().size(); ++i)
+          out += (i ? ",\"" : "\"") + w.connections()[i].point->name + "\"";
+        out += "]";
+        }
+      out += "}";
       });
     sendResult(req,true,"",out + "]");
     return;

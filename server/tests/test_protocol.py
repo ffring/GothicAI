@@ -256,7 +256,7 @@ def test_v28_npc_chests():
 
 
 def test_v30_how_far_the_players_voice_goes():
-    assert PROTOCOL_VERSION == 30
+    assert PROTOCOL_VERSION >= 30
     roster = parse_game_message(
         '{"type":"npc_roster","t":1,"npcs":['
         '{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","distance":140,"heard":140},'
@@ -267,3 +267,15 @@ def test_v30_how_far_the_players_voice_goes():
     cavalorn, bandit, old = roster.npcs
     assert cavalorn.earshot == 140 and bandit.earshot == 20000  # the rock between: his voice does not reach
     assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies
+
+
+def test_v32_where_the_hero_faces():
+    assert PROTOCOL_VERSION == 32
+    snap = '{"type":"snapshot","t":5,"world":{"name":"NEWWORLD.ZEN","day":0,"hour":8,"minute":30},'
+    snap += '"npc":{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","pos":[1,2,3],"rot":0,"hp":10,'
+    snap += '"hp_max":10,"busy":false},"player":{"name":"Я","pos":[0,0,0],"distance":300'
+    new = parse_game_message(f'{snap},"ahead":[0,1],"right":[-1,0]}}}}')
+    old = parse_game_message(f"{snap}}}}}")
+    assert isinstance(new, Snapshot) and new.player is not None
+    assert new.player.ahead == (0, 1) and new.player.right == (-1, 0)
+    assert isinstance(old, Snapshot) and old.player is not None and old.player.ahead is None

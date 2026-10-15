@@ -289,15 +289,17 @@ async def test_guarding_the_hero_keeps_the_companion_with_him():
 
 
 BOOK = {
-    "version": 1,
+    "version": 2,
     "world": "NEWWORLD.ZEN",
     "places": [
         {"id": "TOWER", "ru": "башня", "where_ru": "в башне", "en": "tower", "where_en": "in the tower",
-         "center": [1, 2, 3]},
+         "center": [1, 2, 3], "kind": "house", "inside": True},
         {"id": "CAVE", "ru": "пещера бандитов", "where_ru": "в пещере бандитов", "en": "cave",
-         "where_en": "in the cave", "center": [500, 2, 3]},
+         "where_en": "in the cave", "center": [500, 2, 3], "kind": "cave", "inside": True,
+         "entrances": [{"in": "NW_XARDAS_STAIRS_01", "out": "NW_XARDAS_TOWER_IN1_31", "pos": [450, 2, 3],
+                        "side": "TOWER"}]},
         {"id": "FARM", "ru": "ферма", "where_ru": "на ферме", "en": "farm", "where_en": "at the farm",
-         "center": [90000, 2, 3]},
+         "center": [90000, 2, 3], "kind": "yard"},
     ],
     "points": {"NW_XARDAS_TOWER_IN1_31": 0, "NW_XARDAS_STAIRS_01": 1, "NW_XARDAS_TOWER_04": 1, "NW_FARM": 2},
 }  # fmt: skip
@@ -319,7 +321,8 @@ async def test_a_companion_goes_ahead_to_a_place_near_and_says_what_is_there():
 
     situation = next(m.content for m in llm.calls[0][1] if "Места рядом" in m.content)
     places = next(line for line in situation.splitlines() if line.startswith("Места рядом"))
-    assert places.endswith(": CAVE — пещера бандитов, 5 м.")  # not the tower it is in, not the far farm
+    # not the tower it is in, not the far farm; its kind, which way from the hero, its way in
+    assert places.endswith(": CAVE — пещера бандитов: пещера, 4 м, перед героем; вход — в башне.")
     assert any(t.name == "go_to" for t in llm.calls[0][2])
     walk = next(m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_waypoint")
     assert walk["args"]["pos"] == [500, 2, 3]
@@ -400,7 +403,7 @@ async def test_go_to_any_place_near_though_not_among_the_nearest_shown():
     dialogue.extensions.append(talk.orders)
     try:
         await _follows(fake, dialogue)
-        assert "CAVE" not in [p.id for p, _ in talk.orders.nearby(GORN)]  # not shown
+        assert "CAVE" not in [p.id for p, _ in talk.orders.nearby(GORN)]  # not shown: a spot like the rest
         await fake.send(type="player_text", text="Горн, иди в пещеру первым.")
         await _until(
             lambda: any(m["type"] == "action" and m["action"] == "go_to_waypoint" for m in fake.received)
@@ -409,6 +412,31 @@ async def test_go_to_any_place_near_though_not_among_the_nearest_shown():
         await cm.__aexit__(None, None, None)
     walk = next(m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_waypoint")
     assert walk["args"]["pos"] == [2000, 2, 3]
+
+
+async def test_the_nearest_cave_is_shown_though_six_places_are_nearer():
+    # М3: «зайди в пещеру» without its name; by Cavalorn's fire six places were nearer than the bandits' cave
+    fake = FakeGame()
+    many = {
+        **BOOK,
+        "places": [
+            *[
+                {"id": f"SPOT{i}", "ru": f"место {i}", "where_ru": f"у места {i}", "en": "spot",
+                 "where_en": "at a spot", "center": [100 + 50 * i, 2, 3]}
+                for i in range(7)
+            ],
+            {"id": "CAVE", "ru": "пещера бандитов", "where_ru": "в пещере бандитов", "en": "cave",
+             "where_en": "in the cave", "center": [2000, 2, 3], "kind": "cave"},
+        ],
+        "points": {f"WP{i}": i for i in range(8)},
+    }  # fmt: skip
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0), places=PlaceBook(many))
+    try:
+        await _follows(fake, dialogue)
+        shown = [p.id for p, _ in talk.orders.nearby(GORN)]
+    finally:
+        await cm.__aexit__(None, None, None)
+    assert shown == [f"SPOT{i}" for i in range(6)] + ["CAVE"]
 
 
 async def test_a_companion_sent_ahead_hears_its_name_from_afar():

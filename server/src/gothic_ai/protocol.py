@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 30
+PROTOCOL_VERSION = 32
 
 # --- game -> server -----------------------------------------------------------
 
@@ -136,6 +136,9 @@ class NpcState(_GameMessage):
 class PlayerState(_GameMessage):
     name: str
     pos: tuple[float, float, float]
+    # v32: where he faces on the ground (x, z), ahead of him and to his right as the screen shows it
+    ahead: tuple[float, float] | None = None
+    right: tuple[float, float] | None = None
     distance: float
     guild: int = 0
     hp: int | None = None

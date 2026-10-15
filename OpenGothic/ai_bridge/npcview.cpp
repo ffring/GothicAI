@@ -129,20 +129,9 @@ std::string_view fromHero(const Npc& pl, const Tempest::Vec3& at) {
   const float len = std::sqrt(d.x*d.x+d.z*d.z);
   if(len<1)
     return "ahead";
-  const float a     = pl.rotationRad();
-  const float ahead = (d.x*std::cos(a)+d.z*std::sin(a))/len;
-  float       right = (d.x*std::sin(a)-d.z*std::cos(a))/len;  // left-handed, y up: the world's own
-  if(auto cam = Gothic::inst().camera()) {
-    // a point to that side of the player must come out to the right of him on the screen
-    auto  vp   = cam->viewProj();
-    auto  at   = pl.position()+Tempest::Vec3(0,100,0);
-    auto  side = at+Tempest::Vec3(std::sin(a),0,-std::cos(a))*100.f;
-    float w0 = 1, w1 = 1;
-    vp.project(at.x,at.y,at.z,w0);
-    vp.project(side.x,side.y,side.z,w1);
-    if(w0>0 && w1>0 && side.x/w1<at.x/w0)
-      right = -right;
-    }
+  const auto  ax    = heroAxes(pl);
+  const float ahead = (d.x*ax.aheadX+d.z*ax.aheadZ)/len;
+  const float right = (d.x*ax.rightX+d.z*ax.rightZ)/len;
   if(ahead>=0.7f)
     return "ahead";
   if(ahead<=-0.7f)
@@ -357,4 +346,23 @@ std::string NpcView::views(World& world, const rapidjson::Value& npcs) {
     }
   w.EndArray();
   return std::string(buf.GetString(),buf.GetSize());
+  }
+
+HeroAxes heroAxes(const Npc& pl) {
+  const float a  = pl.rotationRad();
+  HeroAxes    ax = {std::cos(a),std::sin(a),std::sin(a),-std::cos(a)};  // left-handed, y up: the world's own
+  if(auto cam = Gothic::inst().camera()) {
+    // a point to that side of the player must come out to the right of him on the screen
+    auto  vp   = cam->viewProj();
+    auto  at   = pl.position()+Tempest::Vec3(0,100,0);
+    auto  side = at+Tempest::Vec3(ax.rightX,0,ax.rightZ)*100.f;
+    float w0 = 1, w1 = 1;
+    vp.project(at.x,at.y,at.z,w0);
+    vp.project(side.x,side.y,side.z,w1);
+    if(w0>0 && w1>0 && side.x/w1<at.x/w0) {
+      ax.rightX = -ax.rightX;
+      ax.rightZ = -ax.rightZ;
+      }
+    }
+  return ax;
   }
