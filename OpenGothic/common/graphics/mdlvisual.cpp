@@ -1152,13 +1152,14 @@ bool MdlVisual::aimAttachmentBounds(bool ammo, Matrix4x4& matrix, Vec3 (&bounds)
   matrix = mesh.node(0).position();
   bounds[0] = proto->bboxMesh[0];
   bounds[1] = proto->bboxMesh[1];
-  // Morph samples live on the GPU. A vertex cannot move farther than the peak of its morph;
-  // expand the rest mesh by that amount instead of mistaking the bow's rest box for its draw.
-  float padding = 0;
-  for(const auto& morph:proto->morph)
-    padding = std::max(padding,morph.peak);
-  bounds[0] -= Vec3(padding);
-  bounds[1] += Vec3(padding);
+  // Frame interpolation stays within each morph's component bounds. Sum the currently
+  // shown morphs, as the vertex shader does; a string pulled along the arrow must not
+  // expand the bow by its full draw length sideways as well.
+  for(const auto& morph:proto->morph) {
+    const float weight = mesh.morphWeight(morph.name);
+    bounds[0] += morph.moveMin*weight;
+    bounds[1] += morph.moveMax*weight;
+    }
   return true;
   }
 
