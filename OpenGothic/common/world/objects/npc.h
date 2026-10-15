@@ -342,6 +342,9 @@ class Npc final {
     float     aimTrackError() const { return visual.aimTrackError(); }
     // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
     bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    bool      aimAttachmentBounds(bool ammo, Tempest::Matrix4x4& matrix, Tempest::Vec3 (&bounds)[2]) const {
+      return visual.aimAttachmentBounds(ammo,matrix,bounds);
+      }
     // lets the arrow go along the arrow: drawn that far, thrown off by the release
     bool      releaseArrow(float draw, const Archery::Stats& st);
     // one frame of the bow aimed by hand at `at`, the hero's (PlayerControl) or an npc's (ArcherAi): the

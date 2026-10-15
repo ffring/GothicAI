@@ -22,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <new>
 #include <optional>
 #include <string>
@@ -7840,6 +7841,137 @@ void sightFrame(int w, int h, const std::string& shot) {
     }
   }
 
+// Closest points of two closed segments. The first parameter also locates the closest
+// point along the actual camera ray; capsules are the same posed shapes as arrow hits.
+float aimSegmentDistance(const Vec3& p, const Vec3& q, const Vec3& a, const Vec3& b, float& along) {
+  const Vec3 u=q-p, v=b-a, w=p-a;
+  const float uu=Vec3::dotProduct(u,u), vv=Vec3::dotProduct(v,v);
+  const float uv=Vec3::dotProduct(u,v), uw=Vec3::dotProduct(u,w), vw=Vec3::dotProduct(v,w);
+  float s=0, t=0;
+  if(uu<=1e-6f) {
+    t=vv>1e-6f ? std::clamp(vw/vv,0.f,1.f) : 0.f;
+    }
+  else if(vv<=1e-6f) {
+    s=std::clamp(-uw/uu,0.f,1.f);
+    }
+  else {
+    const float den=uu*vv-uv*uv;
+    if(den>1e-6f)
+      s=std::clamp((uv*vw-uw*vv)/den,0.f,1.f);
+    t=(uv*s+vw)/vv;
+    if(t<0) { t=0; s=std::clamp(-uw/uu,0.f,1.f); }
+    if(t>1) { t=1; s=std::clamp((uv-uw)/uu,0.f,1.f); }
+    }
+  along=s;
+  return (p+u*s-a-v*t).length();
+  }
+
+// Exact segment/AABB distance: between crossings of the six box planes the squared
+// distance is one quadratic. The runtime attachment matrix turns this into an OBB test.
+float aimBoxDistance(const Vec3& from, const Vec3& to, const Vec3 (&box)[2]) {
+  const float p[3]={from.x,from.y,from.z}, d[3]={to.x-from.x,to.y-from.y,to.z-from.z};
+  const float low[3]={box[0].x,box[0].y,box[0].z}, high[3]={box[1].x,box[1].y,box[1].z};
+  float cuts[8]={0,1};
+  size_t count=2;
+  for(size_t i=0;i<3;++i)
+    if(std::abs(d[i])>1e-6f)
+      for(float bound:{low[i],high[i]}) {
+        const float t=(bound-p[i])/d[i];
+        if(t>0 && t<1) cuts[count++]=t;
+        }
+  std::sort(cuts,cuts+count);
+  auto distance2=[&](float t) {
+    float value=0;
+    for(size_t i=0;i<3;++i) {
+      const float x=p[i]+d[i]*t;
+      const float gap=x-std::clamp(x,low[i],high[i]);
+      value+=gap*gap;
+      }
+    return value;
+    };
+  float closest=distance2(0);
+  for(size_t k=1;k<count;++k) {
+    const float mid=(cuts[k-1]+cuts[k])*0.5f;
+    float dd=0, pd=0;
+    for(size_t i=0;i<3;++i) {
+      const float x=p[i]+d[i]*mid;
+      if(x>=low[i] && x<=high[i]) continue;
+      dd+=d[i]*d[i];
+      pd+=(p[i]-(x<low[i] ? low[i] : high[i]))*d[i];
+      }
+    const float t=dd>1e-6f ? std::clamp(-pd/dd,cuts[k-1],cuts[k]) : mid;
+    closest=std::min(closest,std::min(distance2(t),distance2(cuts[k])));
+    }
+  return std::sqrt(closest);
+  }
+
+void aimCameraFrame(const std::string& shot) {
+  auto* pl=Gothic::inst().player();
+  auto* camera=Gothic::inst().camera();
+  if(pl==nullptr || camera==nullptr || !pl->hasManualAim())
+    return;
+  const Vec3 origin=camera->originLwc();
+  const Vec3 front=camera->listenerPosition().front;
+  Vec3 crosshair=pl->manualAimPoint();
+  float spread=0;
+  if(bench.ctrl!=nullptr)
+    bench.ctrl->crosshair(crosshair,spread);
+  const bool centered=bench.ctrl!=nullptr && bench.ctrl->isCrosshairCentered();
+  // Input/pose precedes the camera tick. Use the rendered center ray at the target's depth,
+  // retaining both input points so a one-frame tracking error cannot look like clear sight.
+  const Vec3 aim=centered ? origin+front*std::max(0.f,Vec3::dotProduct(crosshair-origin,front)) : crosshair;
+  const float distance=(aim-origin).length();
+  const float pitch=-std::atan2(front.y,std::hypot(front.x,front.z))*180.f/float(M_PI);
+  std::vector<HitZones::Posed> capsules;
+  pl->hitZonesPosed(capsules);
+  float clearance=std::numeric_limits<float>::infinity(), closestAlong=0;
+  size_t closest=0, hits=0;
+  std::string intersections="[";
+  for(size_t i=0;i<capsules.size();++i) {
+    const auto& capsule=capsules[i];
+    float along=0;
+    const float gap=aimSegmentDistance(origin,aim,capsule.a,capsule.b,along)-capsule.r;
+    if(gap<clearance) { clearance=gap; closest=i; closestAlong=along; }
+    if(gap<=0) {
+      if(hits++>0) intersections+=',';
+      intersections+="{\"index\":"+std::to_string(i)+",\"zone\":"+jsonStr(HitZones::name(capsule.zone))+
+                     ",\"clearance_cm\":"+ragdollNumber(gap)+"}";
+      }
+    }
+  intersections+=']';
+  std::string equipment;
+  for(bool ammo:{false,true}) {
+    Matrix4x4 matrix;
+    Vec3 box[2];
+    const bool available=pl->aimAttachmentBounds(ammo,matrix,box);
+    equipment+=std::string(",\"")+(ammo ? "arrow" : "bow")+"\":{\"available\":"+(available ? "true" : "false");
+    if(available) {
+      auto inverse=matrix;
+      inverse.inverse();
+      Vec3 a=origin, b=aim;
+      inverse.project(a); inverse.project(b);
+      // NPC attachment scales are uniform. The smallest basis length is conservative if
+      // a model supplies a nonuniform scale (rotation and scale have no shear here).
+      float scale=std::numeric_limits<float>::infinity();
+      for(int i=0;i<3;++i)
+        scale=std::min(scale,Vec3(matrix.at(i,0),matrix.at(i,1),matrix.at(i,2)).length());
+      const float gap=aimBoxDistance(a,b,box)*scale;
+      equipment+=",\"model\":\"morph-expanded-attachment-obb\",\"conservative\":true,\"clearance_cm\":"+ragdollNumber(gap)+
+                 ",\"intersects\":"+(gap<=1e-4f ? "true" : "false");
+      }
+    equipment+='}';
+    }
+  event("aim-camera","\"shot\":"+jsonStr(shot)+",\"origin\":"+ragdollVector(origin)+",\"front\":"+ragdollVector(front)+
+        ",\"aim_point\":"+ragdollVector(aim)+",\"manual_aim_point\":"+ragdollVector(pl->manualAimPoint())+
+        ",\"crosshair_point\":"+ragdollVector(crosshair)+",\"centered\":"+(centered ? "true" : "false")+
+        ",\"pitch_deg\":"+ragdollNumber(pitch)+",\"draw\":"+ragdollNumber(Archer::playerProbe.draw)+",\"distance_cm\":"+ragdollNumber(distance)+
+        ",\"body_clearance_cm\":"+ragdollNumber(clearance)+",\"body_closest_zone\":"+
+        (capsules.empty() ? "null" : jsonStr(HitZones::name(capsules[closest].zone)))+
+        ",\"body_closest_index\":"+(capsules.empty() ? "null" : std::to_string(closest))+
+        ",\"body_closest_along_cm\":"+ragdollNumber(closestAlong*distance)+",\"body_hit_count\":"+std::to_string(hits)+
+        ",\"body_hits\":"+intersections+equipment);
+  }
+
 void TestBench::capture(Pixmap& frame, float uiScale) {
   bench.uiScale = uiScale;
   Pixmap pm;
@@ -7920,6 +8052,10 @@ void TestBench::capture(Pixmap& frame, float uiScale) {
     std::snprintf(label,sizeof(label),"REASON %s DROP %.0f CM",questReason(q.hazards),double(bench.questStable.y-npc.position().y));
     cv.text(6,46,label,2,Text);
     }
+  // This runs after the final pose and camera, independently of sight/track overlays.
+  // A simultaneous shot and video frame share one sample with the current recording index.
+  if(pm.w()>0 && (bench.rec || !bench.shot.empty()))
+    aimCameraFrame(bench.shot);
   if(!bench.shot.empty()) {
     if(pm.w()>0 && !bench.sightNpc.empty())
       sightFrame(int(pm.w()),int(pm.h()),bench.shot);

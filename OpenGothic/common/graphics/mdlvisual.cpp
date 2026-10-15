@@ -1144,6 +1144,24 @@ bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
   return true;
   }
 
+bool MdlVisual::aimAttachmentBounds(bool ammo, Matrix4x4& matrix, Vec3 (&bounds)[2]) const {
+  const auto& mesh = ammo ? ammunition.view : bow.view;
+  const auto* proto = mesh.protoMesh();
+  if(mesh.isEmpty() || proto==nullptr)
+    return false;
+  matrix = mesh.node(0).position();
+  bounds[0] = proto->bboxMesh[0];
+  bounds[1] = proto->bboxMesh[1];
+  // Morph samples live on the GPU. A vertex cannot move farther than the peak of its morph;
+  // expand the rest mesh by that amount instead of mistaking the bow's rest box for its draw.
+  float padding = 0;
+  for(const auto& morph:proto->morph)
+    padding = std::max(padding,morph.peak);
+  bounds[0] -= Vec3(padding);
+  bounds[1] += Vec3(padding);
+  return true;
+  }
+
 HitZones::Zone MdlVisual::rayHitZone(const Vec3& from, const Vec3& to, float& t, size_t* bone) const {
   if(bone!=nullptr)
     *bone=size_t(-1);
