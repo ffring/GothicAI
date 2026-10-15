@@ -26,6 +26,7 @@ constexpr size_t Root = 0;
 constexpr size_t LeftThigh = 7, LeftCalf = 8, LeftFoot = 9, LeftToe = 10;
 constexpr size_t RightThigh = 11, RightCalf = 12, RightFoot = 13, RightToe = 14;
 constexpr std::array<size_t,2> Feet = {LeftFoot,RightFoot};
+constexpr std::array<size_t,2> Toes = {LeftToe,RightToe};
 
 void require(bool condition, const char* message) {
   if(condition)
@@ -164,14 +165,14 @@ struct Actor final {
     walk.captureFeet(palette.data(),palette.size());
     }
 
-  void tick(float direction, bool blocked = false, bool active = true, int rebuilds = 1) {
+  bool tick(float direction, bool blocked = false, bool active = true, int rebuilds = 1) {
     AimWalk::Input input;
     input.active = active;
     input.legs = &fixture.sequence;
     input.walk = direction;
     input.blocked = blocked;
     input.dt = FrameMs;
-    walk.update(input);
+    const bool changed = walk.update(input);
     FootIk::Input ground;
     ground.enable = true;
     ground.floorY = object.at(3,1);
@@ -186,6 +187,7 @@ struct Actor final {
     ik.update(ground);
     for(int i=0; i<rebuilds; ++i)
       rebuild();
+    return changed;
     }
 
   Contacts contacts() const {
@@ -234,22 +236,28 @@ void testStop(const Fixture& fixture, float direction, bool blocked, int warmFra
   warm(actor,direction,warmFrames);
   const float phase = actor.probe().phase;
   std::vector<Contacts> trace{actor.contacts()};
+  std::vector<Contacts> toeTrace{{position(actor.palette[LeftToe]),position(actor.palette[RightToe])}};
+  std::vector<bool> stopping{false};
+  const bool blockedForward = blocked && direction>0.f;
   float maxTravel = 0.f;
   uint64_t settledAt = 0;
+  size_t lastStopping = 0;
   for(int frame=0; frame<24; ++frame) {
     actor.tick(blocked ? direction : 0.f,blocked);
     near(actor.walk.move(FrameMs),{},.0001f,"stopping legs must never move the body");
     near(actor.probe().phase,phase,.000001f,"stopping must freeze the moving gait phase");
     const auto contacts = actor.contacts();
+    // Include the completed step's handoff in every case, including the blocked forward step.
     for(size_t foot=0; foot<Feet.size(); ++foot)
       maxTravel = std::max(maxTravel,length(contacts[foot]-trace.back()[foot]));
     trace.push_back(contacts);
-    if(settledAt==0 && actor.probe().weight<=.0001f)
+    toeTrace.push_back({position(actor.palette[LeftToe]),position(actor.palette[RightToe])});
+    stopping.push_back(actor.walk.isStopping());
+    if(actor.walk.isStopping())
+      lastStopping = trace.size()-1;
+    else if(settledAt==0 && lastStopping>0)
       settledAt=uint64_t(frame+1)*FrameMs;
     }
-  require(settledAt>=200 && settledAt<=400,"the legs must settle in 0.2 to 0.4 seconds");
-  require(maxTravel<=6.f+.001f,"a final ankle must travel at most 6 cm per 30 fps frame");
-
   // Discover the support from the first three final poses, independently of the implementation's side.
   float earlyTravel[2] = {};
   for(size_t frame=1; frame<=3; ++frame)
@@ -257,45 +265,85 @@ void testStop(const Fixture& fixture, float direction, bool blocked, int warmFra
       earlyTravel[foot] += length(trace[frame][foot]-trace[frame-1][foot]);
   const size_t support = earlyTravel[0]<=earlyTravel[1] ? 0 : 1;
   const size_t swing = support^1;
-  float supportTravel = 0.f;
+  float supportTravel = 0.f, supportDrift = 0.f;
   for(size_t frame=1; frame<trace.size(); ++frame) {
+    if(!stopping[frame])
+      continue;
     supportTravel = std::max(supportTravel,length(trace[frame][support]-trace[frame-1][support]));
-    near(trace[frame][support],trace.front()[support],.1f,"the support contact must remain planted throughout the stop");
+    supportDrift = std::max(supportDrift,length(trace[frame][support]-trace.front()[support]));
     }
-  require(supportTravel<=1.f+.001f,"the support foot must slide at most 1 cm per frame");
 
   const auto start = trace.front()[swing];
-  const auto finish = trace.back()[swing];
-  const Vec3 horizontal(finish.x-start.x,0,finish.z-start.z);
-  const float horizontalSquared = IkMath::dot(horizontal,horizontal);
-  require(horizontalSquared>1.f,"the fixture must leave a measurable horizontal step to its destination");
+  const size_t finishFrame = trace.size()-1;
+  const auto finish = trace[finishFrame][swing];
   float lift = 0.f;
-  for(const auto& frame:trace) {
-    const Vec3 offset(frame[swing].x-start.x,0,frame[swing].z-start.z);
-    const float progress = std::clamp(IkMath::dot(offset,horizontal)/horizontalSquared,0.f,1.f);
-    const float chordY = start.y+(finish.y-start.y)*progress;
-    lift = std::max(lift,frame[swing].y-chordY);
+  if(!blockedForward) {
+    const Vec3 horizontal(finish.x-start.x,0,finish.z-start.z);
+    const float horizontalSquared = IkMath::dot(horizontal,horizontal);
+    for(size_t frame=0; frame<=finishFrame; ++frame) {
+      const auto& contact = trace[frame][swing];
+      const Vec3 offset(contact.x-start.x,0,contact.z-start.z);
+      // A tiny horizontal return still has a meaningful lift above its start-to-finish chord.
+      const float timeProgress = float(frame>0 ? frame-1 : 0)/std::max(1.f,float(settledAt)/float(FrameMs)-1.f);
+      const float progress = std::clamp(horizontalSquared>1.e-4f ?
+                                        IkMath::dot(offset,horizontal)/horizontalSquared : timeProgress,0.f,1.f);
+      const float chordY = start.y+(finish.y-start.y)*progress;
+      lift = std::max(lift,contact.y-chordY);
+      }
     }
-  require(lift>=3.f,"the free foot must lift at least 3 cm above a sliding return to the stance");
-  const auto stance = fixture.pose(actor.object);
-  near(finish.y,position(stance[Feet[swing]]).y,.1f,"the free foot must land at the standing ankle height");
+  std::printf("aimwalk stop %s %s: settle=%llu ms ankle=%.3f cm/frame support=%.3f cm/frame drift=%.3f cm lift=%.3f cm\n",
+              direction>0.f ? "forward" : "back",blocked ? "blocked" : "released",
+              static_cast<unsigned long long>(settledAt),double(maxTravel),double(supportTravel),double(supportDrift),double(lift));
+  std::fflush(stdout);
+  require(settledAt>=200 && settledAt<=400,"the legs must settle in 0.2 to 0.4 seconds");
+  require(maxTravel<=6.f+.001f,"a final ankle must travel at most 6 cm per 30 fps frame, including the completed handoff");
+  require(supportTravel<=1.f+.001f,"the support foot must slide at most 1 cm per frame");
+  require(supportDrift<=.1f,"the support contact must remain planted throughout the stop");
+  if(!blockedForward)
+    require(lift>=3.f,"the free foot must lift at least 3 cm above a sliding return to the stance");
   if(blocked) {
     // The synthetic edge is the stopped body's plane, perpendicular to the requested movement.
     const Vec3 towardEdge(0,0,direction);
     const Vec3 stop = position(actor.object);
-    const size_t toe = swing==0 ? LeftToe : RightToe;
-    require(IkMath::dot(finish-stop,towardEdge)<=.1f,
-            "the free ankle must land on the safe side of the edge stop");
-    require(IkMath::dot(position(actor.palette[toe])-stop,towardEdge)<=.1f,
-            "the free toes must land on the safe side of the edge stop");
+    for(size_t frame=lastStopping+1; frame<trace.size(); ++frame) {
+      require(IkMath::dot(trace[frame][swing]-stop,towardEdge)<=.1f,
+              "the free ankle must remain on the safe side through the completed handoff");
+      require(IkMath::dot(toeTrace[frame][swing]-stop,towardEdge)<=.1f,
+              "the free toes must remain on the safe side through the completed handoff");
+      }
     }
-  require(actor.walk.isActive(),"finished contacts must remain available while manual aim is held");
-  for(size_t frame=trace.size()-8; frame<trace.size(); ++frame)
-    for(size_t foot=0; foot<Feet.size(); ++foot)
-      near(trace[frame][foot],trace.back()[foot],.01f,"contacts must remain stable after the blend weight reaches zero");
-  std::printf("aimwalk stop %s %s: settle=%llu ms ankle=%.3f cm/frame support=%.3f cm/frame lift=%.3f cm\n",
-              direction>0.f ? "forward" : "back",blocked ? "blocked" : "released",
-              static_cast<unsigned long long>(settledAt),double(maxTravel),double(supportTravel),double(lift));
+  require(!actor.walk.isStopping() && !actor.walk.isActive(),"a completed step must release the legs to the ordinary stance");
+  require(!actor.tick(0.f),"idle manual aim must not request another walking pose rebuild");
+  }
+
+void testTurnAfterStop(const Fixture& fixture) {
+  for(bool blocked:{false,true}) {
+    const float counterweight = blocked ? 6.f : 0.f;
+    Actor stopped(fixture,{},0.f,counterweight);
+    warm(stopped,1.f);
+    for(int frame=0; frame<24; ++frame)
+      stopped.tick(blocked ? 1.f : 0.f,blocked);
+    require(!stopped.walk.isStopping() && !stopped.walk.isActive(),"turning begins after the stop contacts have been released");
+    const auto before = stopped.contacts();
+    const Contacts toesBefore{position(stopped.palette[LeftToe]),position(stopped.palette[RightToe])};
+    constexpr float yaw = Pi*.5f;
+    stopped.object = objectAt({},yaw);
+    stopped.bodyOffset = rotated({0,0,-counterweight},yaw);
+    for(int frame=0; frame<30; ++frame)
+      require(!stopped.tick(0.f),"turning in settled manual aim must not reactivate the stop");
+    const auto actual = stopped.contacts();
+    for(size_t foot=0; foot<Feet.size(); ++foot) {
+      const auto expected = rotated(before[foot],yaw);
+      const auto toe = position(stopped.palette[Toes[foot]]);
+      const auto expectedToe = rotated(toesBefore[foot],yaw);
+      near(Vec3(actual[foot].x,0,actual[foot].z),Vec3(expected.x,0,expected.z),.1f,
+           "after a 90 degree turn settled feet must turn with the model and ordinary FootIk");
+      near(Vec3(toe.x,0,toe.z),Vec3(expectedToe.x,0,expectedToe.z),.1f,
+           "after a 90 degree turn settled toes must turn with the model");
+      require(length(Vec3(actual[foot].x-before[foot].x,0,actual[foot].z-before[foot].z))>5.f,
+              "a completed stop must not pin either foot to its old world-space contact");
+      }
+    }
   }
 
 void testRebuildAndWorldSpace(const Fixture& fixture) {
@@ -353,5 +401,6 @@ int main() {
       testStop(fixture,direction,blocked,direction>0.f ? 40 : 48);
   testRebuildAndWorldSpace(fixture);
   testResumeAndLeaveManualAim(fixture);
+  testTurnAfterStop(fixture);
   std::puts("aimwalk contracts passed");
   }

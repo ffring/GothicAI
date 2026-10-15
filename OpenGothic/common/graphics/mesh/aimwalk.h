@@ -95,7 +95,9 @@ class AimWalk final {
     float                      phase  = 0;  // ms into the cycle
     float                      twist  = 0, chest = 0, drop = 0;
     bool                       blocked = false, stopping = false, contacts = false, haveFeet = false;
+    bool                       finishPose = false, resumeFade = false;
     float                      stopTime = 0, stopWeight = 0;
+    float                      resumeWeight = 0, resumePhase = 0;
     size_t                     support = 0;
     struct Leg final {
       size_t thigh = size_t(-1), calf = size_t(-1), foot = size_t(-1), toe = size_t(-1);
@@ -106,4 +108,5 @@ class AimWalk final {
       };
     std::array<Leg,2>           feet;
     std::vector<Tempest::Matrix4x4> stance;           // the pose as the aim holds it (apply)
+    std::vector<Tempest::Matrix4x4> standing;         // settled leg locals; follow the model, never world anchors
   };

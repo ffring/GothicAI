@@ -187,6 +187,8 @@ bool AimWalk::update(const Input& in) {
   const float dt   = float(in.dt)/1000.f;
   const float prev = weight;
   const bool wasStopping = stopping;
+  const bool wasStanding = !standing.empty();
+  finishPose = false;
   // Freeze the last completed pose, not an intermediate rebuild from this update.
   for(auto& f:feet) {
     f.speed = length(position(f.final)-position(f.previousFinal));
@@ -197,6 +199,13 @@ bool AimWalk::update(const Input& in) {
   blocked = in.blocked;
   const bool on = enabled && in.active && seq!=nullptr && cycle()>0.f;
   if(on && walk!=0.f && !blocked) {
+    // A short release can be interrupted by another step. Resume the same gait clock/weight
+    // that the original fade would have reached; settling only changes the stopped pose.
+    if(resumeFade) {
+      weight = resumeWeight;
+      phase  = resumePhase;
+      resumeFade = false;
+      }
     stopping = contacts = false;
     if(weight<=0.f)
       phase = 0;
@@ -208,23 +217,42 @@ bool AimWalk::update(const Input& in) {
       contacts = false;
       stopTime = 0;
       stopWeight = weight;
+      resumeWeight = weight;
+      resumePhase = phase;
+      resumeFade = true;
       } else {
       stopTime = std::min(StopDuration,stopTime+dt);
       }
     weight = stopWeight*(1.f-smooth(stopTime/StopDuration));
+    resumeWeight = std::max(0.f,resumeWeight-dt/BlendOut);
+    if(resumeWeight>0.f && !blocked) {
+      resumePhase = std::fmod(resumePhase+dir*rate()*float(in.dt),cycle());
+      if(resumePhase<0.f)
+        resumePhase += cycle();
+      }
+    if(stopTime>=StopDuration) {
+      stopping = false;
+      finishPose = true;
+      }
     } else {
     stopping = contacts = false;
     weight = std::max(0.f, weight - dt/BlendOut);
     }
+  if(!in.active || !enabled) {
+    standing.clear();
+    resumeFade = false;
+    }
+  if(weight>=1.f && !stopping)
+    standing.clear();
   if(seq==nullptr)
     weight = 0;
-  if(weight>0.f && !stopping) {
+  if(weight>0.f && !stopping && !finishPose) {
     const float c = cycle();
     phase = std::fmod(phase + dir*rate()*float(in.dt), c);
     if(phase<0.f)
       phase += c;
     }
-  return isActive() || prev>0.f || wasStopping;
+  return isActive() || prev>0.f || wasStopping || (wasStanding && standing.empty());
   }
 
 Vec3 AimWalk::move(uint64_t dt) const {
@@ -261,7 +289,15 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
   twist = chest = drop = 0;
   if(!valid || base==nullptr || numBones!=skeleton->nodes.size())
     return;
-  if(!isActive()) {
+  if(!isActive() && !finishPose) {
+    if(standing.size()==numBones) {
+      // The landed stance is ordinary local skeletal data: a turn moves the feet with the
+      // hero, and FootIk is free to adapt it to the ground. No contact constraint survives.
+      for(auto i:legsTree) {
+        const size_t p = skeleton->nodes[i].parent;
+        tr[i] = (p<numBones ? tr[p] : m)*standing[i];
+        }
+      }
     for(auto& f:feet)
       f.raw = tr[f.foot];
     return;
@@ -280,6 +316,8 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
     zenkit::AnimationSample s;
     if(!sample(phase,i,s))
       return Matrix4x4();
+    if(standing.size()==numBones && !stopping && !finishPose && i!=root && i!=pelvis)
+      return blend(standing[i],mkMatrix(s),weight);
     s = mix(base[i],s,weight);
     if(i==root) {
       s.position.x = base[i].position.x;
@@ -295,7 +333,10 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
       // not stepped: as it hangs in the stance
       Matrix4x4 inv = p<numBones ? stance[p] : m;
       inv.inverse();
-      tr[i] = (p<numBones ? tr[p] : m)*(inv*stance[i]);
+      Matrix4x4 local = inv*stance[i];
+      if(standing.size()==numBones && !stopping && !finishPose)
+        local = blend(standing[i],local,weight);
+      tr[i] = (p<numBones ? tr[p] : m)*local;
       }
     };
   auto build = [&]() {
@@ -305,7 +346,7 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
       set(i);
     };
   build();
-  if(stopping) {
+  if(stopping || finishPose) {
     if(!contacts) {
       // The lower foot bears the weight. At double support prefer the foot already slowing down.
       const float dy = position(feet[0].previousRaw).y-position(feet[1].previousRaw).y;
@@ -354,6 +395,15 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
     }
   for(auto& f:feet)
     f.raw = tr[f.foot];
+  if(finishPose) {
+    standing.resize(numBones);
+    for(auto i:legsTree) {
+      const size_t p = nodes[i].parent;
+      Matrix4x4 inv = p<numBones ? tr[p] : m;
+      inv.inverse();
+      standing[i] = inv*tr[i];
+      }
+    }
 
   // the upper body goes with the hips, its turn kept: the hips' turn is spread over the spine (the lower
   // spine takes most of it, the chest none)
