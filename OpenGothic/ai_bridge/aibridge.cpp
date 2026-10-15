@@ -59,7 +59,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 29;
+constexpr int         ProtocolVersion = 30;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 

@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 29
+PROTOCOL_VERSION = 30
 
 # --- game -> server -----------------------------------------------------------
 
@@ -358,9 +358,17 @@ class RosterEntry(_GameMessage):
     guild: int = 0
     distance: float  # to the player, cm
     in_view: bool = False  # on the player's screen
+    # v30: how far the player's voice goes to it, cm: `distance` with nothing between them, else round the
+    # rock or the wall along the waynet (never through it); 20000 when that is longer than 100 m
+    heard: float | None = None
     activity: NpcActivity = "routine"
     state: str = ""  # v7: the script state it is in, e.g. ZS_SIT_BENCH
     moving: bool = False  # v7: walking or running
+
+    @property
+    def earshot(self) -> float:
+        """How far the player's words go to it: `heard`, or `distance` from a bridge before v30."""
+        return self.distance if self.heard is None else self.heard
 
 
 class NpcRoster(_GameMessage):

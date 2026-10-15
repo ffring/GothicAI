@@ -28,7 +28,7 @@ struct StoryEffect final {
   std::string reason;   // attack: AR_* constant (default AR_NONE: until the hero is down, not to death)
   std::string attitude; // calm: ATT_* constant, how it treats the hero from now on (default ATT_NEUTRAL; v20)
   int32_t     count  = 1;  // give, create: count; xp: amount; set: value; refuse_talk: seconds;
-                           // teach: points (attribute), percent (fight), circle (circle)
+                           // teach: points (attribute), percent (fight), circle (circle); party: 1 on, 0 off
   bool        toHero = true;  // give: the npc gives to the hero, else the hero to the npc
 
   // `{"do": "give", "item": ..., ...}`; an error if it is malformed or, with a VM, names something

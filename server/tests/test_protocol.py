@@ -16,6 +16,7 @@ from gothic_ai.protocol import (
     NpcActCmd,
     NpcChestsCmd,
     NpcIdle,
+    NpcRoster,
     NpcViews,
     SayCmd,
     Snapshot,
@@ -255,8 +256,22 @@ def test_v28_npc_chests():
 
 
 def test_v29_the_directors_story_variables():
-    assert PROTOCOL_VERSION == 29
+    assert PROTOCOL_VERSION >= 29
     patch = GraphPatchCmd(ops=[{"op": "vars", "vars": {"DIR_Q1": 0}}])
     assert '"ops":[{"op":"vars","vars":{"DIR_Q1":0}}]' in patch.to_json()
     take = DebugCmd(req="r1", cmd="player_take", item="ITMI_PAN", distance=300)
     assert '"cmd":"player_take"' in take.to_json() and '"distance":300' in take.to_json()
+
+
+def test_v30_how_far_the_players_voice_goes():
+    assert PROTOCOL_VERSION == 30
+    roster = parse_game_message(
+        '{"type":"npc_roster","t":1,"npcs":['
+        '{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","distance":140,"heard":140},'
+        '{"id":"BDT_1013_BANDIT_L","name":"Бандит","distance":3500,"heard":20000},'
+        '{"id":"VLK_LOBART","name":"Лобарт","distance":900}]}'
+    )
+    assert isinstance(roster, NpcRoster)
+    cavalorn, bandit, old = roster.npcs
+    assert cavalorn.earshot == 140 and bandit.earshot == 20000  # the rock between: his voice does not reach
+    assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies
