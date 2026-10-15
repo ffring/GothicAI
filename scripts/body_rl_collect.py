@@ -21,7 +21,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import hashlib
 import json
 import math
 import multiprocessing
@@ -29,6 +30,7 @@ import os
 from pathlib import Path
 import random
 import shutil
+import threading
 import sys
 import time
 
@@ -75,12 +77,73 @@ def sample_action(scores: list[float], mask: list[bool], temperature: float, rng
     return rng.choices(allowed, weights=weights)[0]
 
 
-def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
+class SharedBackend:
+    """One loaded model for several env threads of a process.
+
+    exact: each row steps alone under a lock, bit for bit as the realtime runtime.
+    batched: the rows of all envs waiting at that moment step together. GRU outputs then differ
+    from one-row steps in the last float bits (measured: under 1e-5 in logits, no changed action).
+    """
+    def __init__(self, base, *, batched: bool):
+        self.base, self.batched = base, batched
+        self.model, self.torch = base.model, base.torch
+        self.normalizer, self.metadata = base.normalizer, base.metadata
+        self.execution_profile, self.last_step_timing = base.execution_profile, {}
+        self.condition = threading.Condition()
+        self.queue: list[dict] = []
+        self.running = False
+        self.batches: Counter = Counter()
+
+    def step(self, features, mask, state):
+        if not self.batched:
+            with self.condition:
+                self.batches[1] += 1
+                return self.base.step(features, mask, state)
+        slot = {"features": features, "mask": mask, "state": state, "result": None}
+        with self.condition:
+            self.queue.append(slot)
+            while slot["result"] is None:
+                if self.running:
+                    self.condition.wait()
+                    continue
+                self.running, batch, self.queue = True, self.queue, []
+                self.condition.release()
+                try:
+                    self._compute(batch)
+                finally:
+                    self.condition.acquire()
+                    self.running = False
+                    self.condition.notify_all()
+        if isinstance(slot["result"], Exception):
+            raise slot["result"]
+        return slot["result"]
+
+    def _compute(self, batch):
+        torch = self.torch
+        self.batches[len(batch)] += 1
+        try:
+            with torch.inference_mode():
+                values = torch.tensor([slot["features"] for slot in batch], dtype=torch.float32)
+                masks = torch.tensor([slot["mask"] for slot in batch], dtype=torch.bool)
+                state = None
+                if any(slot["state"] is not None for slot in batch):
+                    state = torch.cat([slot["state"] if slot["state"] is not None else self.model.initial_state(values[index:index+1])
+                                       for index, slot in enumerate(batch)])
+                logits, state = self.model.step(values, masks, state=state)
+                rows = logits.detach().cpu().tolist()
+            for index, slot in enumerate(batch):
+                slot["result"] = (rows[index], state[index:index+1])
+        except Exception as error:  # every waiting env fails the same way
+            for slot in batch:
+                slot["result"] = error
+
+
+def run_worker(process: int, options: dict, env_shards: list[tuple[int, list[list]]]) -> dict:
     os.environ.update(TRAINING_ENV)
     import numpy
     from body_arena_env import LEASE_KEYS, ArenaInfrastructureError
     from body_policy_suite import PolicyArenaRunner, PolicyEpisodeEnv
-    from gothic_body.runtime import PolicyRuntime, actor_identity
+    from gothic_body.runtime import PolicyRuntime, TorchBackend, actor_identity
     from body_fast_features import pack_features as fast_pack_features
 
     class LeanRunner(PolicyArenaRunner):
@@ -123,140 +186,155 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
             self.events.extend(response.get("events", []))
             return response.get("advanced_substeps", 0)
 
-    output = Path(options["output"])/f"worker-{worker:02d}"
-    output.mkdir(parents=True)
-    runner_args = argparse.Namespace(output=output, runner=Path(options["runner"]), assets=Path(options["assets"]),
-                                     save=Path(options["save"]), reference=Path(options["reference"]),
-                                     scenario=Path(options["scenario"]), compact_replies=True,
-                                     native_serial_workers=True,
-                                     runner_extra_args=["--fork-reset"]+(["--fork-prefix"] if options.get("fork_prefix") else []))
-    runner = LeanRunner(runner_args)
-    # Training runtime: the fast packer (float-for-float equal to the gate's) and no provenance digests.
-    lean = options.get("lean_runtime", True)
-    policy = PolicyRuntime(options["checkpoint"], device="cpu", max_actors=4, inference_cpu_threads=1, lean=lean,
-                           feature_packer=fast_pack_features if lean else None)
-    rng = random.Random(options["sampling_seed"]*1000+worker)
-    summaries = []
-    try:
-        for task, seed, side, distance in tasks:
-            name = f"ep-{task}-{seed}-{side}-{distance}"
-            episode_dir = output/name
-            env = LeanEnv(runner, Path(options["scenario"]), owner_provider="stage9-rl")
-            env.command_ttl_ms = options.get("command_ttl_ms", 1000)
-            started = time.monotonic()
-            timeout_ms = TASK_SETUP[task][1] if task in TASK_SETUP else options["timeout_ms"]
-            initial = env.reset(output=episode_dir, task=task, seed=seed, side=side, distance_cm=distance,
-                                timeout_ms=timeout_ms, provider="scripted")
-            adversary_sent = task != "block"
-            reset_s = time.monotonic()-started
-            primary, opponent = initial["primary_entity_id"], initial["opponent_entity_id"]
-            policy.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
-            stream, rows, stats = 0, [], Counter()
+    # One model per process, shared by its env threads: row by row (as the realtime runtime) or
+    # batched across the envs that wait for inference at the same moment.
+    base = TorchBackend(options["checkpoint"], device="cpu", inference_cpu_threads=1)
+    backend = SharedBackend(base, batched=options.get("inference", "exact") == "batched")
+    checkpoint_sha256 = hashlib.sha256(Path(options["checkpoint"]).read_bytes()).hexdigest()
 
-            def feed(command_enabled):
-                nonlocal stream
-                pulled, env.pulled = env.pulled, []
-                for row in pulled:
-                    if row.get("entity_id") != primary or row.get("periodic") is not True:
-                        continue
-                    lease = env.leases.get(primary)
-                    if lease is None or any(row.get(key) != lease[key] for key in LEASE_KEYS):
-                        continue
-                    stream += 1
-                    # A per-tick client processes each periodic row on its own tick: now == row time.
-                    response = policy.process({"stream_seq": stream, "observation": row, "source": "periodic_observer",
-                                               "now_game_ms": row["t_game_ms"], "checkpoint_sha256": policy.checkpoint_sha256,
-                                               "command_enabled": command_enabled,
-                                               "memory_only": not command_enabled or row.get("can_decide") is not True})
-                    if response.get("model_processed"):
-                        features = policy.last_features
-                        rows.append({"features": features, "mask": response["effective_action_mask"],
-                                     "reset": bool(response.get("hidden_reset")), "label": -1, "seq": row["observation_seq"]})
-                    elif response.get("status") == "fallback" and command_enabled:
-                        stats["fallbacks"] += 1
-                        env.release_to_native(primary, response.get("reason"))
+    def run_env(worker: int, tasks: list[list]) -> dict:
+        base.torch.set_num_threads(1)  # per thread: keep the one-thread kernels of the realtime runtime
+        output = Path(options["output"])/f"worker-{worker:02d}"
+        output.mkdir(parents=True)
+        runner_args = argparse.Namespace(output=output, runner=Path(options["runner"]), assets=Path(options["assets"]),
+                                         save=Path(options["save"]), reference=Path(options["reference"]),
+                                         scenario=Path(options["scenario"]), compact_replies=True,
+                                         native_serial_workers=True,
+                                         runner_extra_args=["--fork-reset"]+(["--fork-prefix"] if options.get("fork_prefix") else []))
+        runner = LeanRunner(runner_args)
+        # Training runtime: the fast packer (float-for-float equal to the gate's) and no provenance digests.
+        lean = options.get("lean_runtime", True)
+        policy = PolicyRuntime(backend=backend, checkpoint_sha256=checkpoint_sha256, max_actors=4, inference_cpu_threads=1,
+                               lean=lean, feature_packer=fast_pack_features if lean else None)
+        rng = random.Random(options["sampling_seed"]*1000+worker)
+        summaries = []
+        try:
+            for task, seed, side, distance in tasks:
+                name = f"ep-{task}-{seed}-{side}-{distance}"
+                episode_dir = output/name
+                env = LeanEnv(runner, Path(options["scenario"]), owner_provider="stage9-rl")
+                env.command_ttl_ms = options.get("command_ttl_ms", 1000)
+                started = time.monotonic()
+                timeout_ms = TASK_SETUP[task][1] if task in TASK_SETUP else options["timeout_ms"]
+                initial = env.reset(output=episode_dir, task=task, seed=seed, side=side, distance_cm=distance,
+                                    timeout_ms=timeout_ms, provider="scripted")
+                adversary_sent = task != "block"
+                reset_s = time.monotonic()-started
+                primary, opponent = initial["primary_entity_id"], initial["opponent_entity_id"]
+                policy.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
+                stream, rows, stats = 0, [], Counter()
 
-            def watches():
-                # Exactly the per-tick checks below: the primary on a periodic row, and the
-                # block task's held opponent while its single attack is still unsent.
-                out = []
-                if primary in env.leases:
-                    out.append({**{key: env.leases[primary][key] for key in LEASE_KEYS}, "periodic": True})
-                if not adversary_sent and opponent in env.leases:
-                    out.append({**{key: env.leases[opponent][key] for key in LEASE_KEYS}, "periodic": False, "actions": [6, 2]})
-                return out
+                def feed(command_enabled):
+                    nonlocal stream
+                    pulled, env.pulled = env.pulled, []
+                    for row in pulled:
+                        if row.get("entity_id") != primary or row.get("periodic") is not True:
+                            continue
+                        lease = env.leases.get(primary)
+                        if lease is None or any(row.get(key) != lease[key] for key in LEASE_KEYS):
+                            continue
+                        stream += 1
+                        # A per-tick client processes each periodic row on its own tick: now == row time.
+                        response = policy.process({"stream_seq": stream, "observation": row, "source": "periodic_observer",
+                                                   "now_game_ms": row["t_game_ms"], "checkpoint_sha256": policy.checkpoint_sha256,
+                                                   "command_enabled": command_enabled,
+                                                   "memory_only": not command_enabled or row.get("can_decide") is not True})
+                        if response.get("model_processed"):
+                            features = policy.last_features
+                            rows.append({"features": features, "mask": response["effective_action_mask"],
+                                         "reset": bool(response.get("hidden_reset")), "label": -1, "seq": row["observation_seq"]})
+                        elif response.get("status") == "fallback" and command_enabled:
+                            stats["fallbacks"] += 1
+                            env.release_to_native(primary, response.get("reason"))
 
-            rollout_started = time.monotonic()
-            feed(False)
-            env.start(options.get("start_substeps", 2))
-            ticks = 0
-            while ticks < options["max_substeps"]:
-                terminal = bool(env.arena.get("terminated") or env.arena.get("truncated"))
-                feed(not terminal)
-                if terminal:
-                    break
-                if not adversary_sent:
-                    # The stage-7 block task: the held opponent throws one real front attack.
-                    if env.eligible(opponent, 6):
-                        env.act(opponent, 6)
-                        adversary_sent = True
-                    elif env.eligible(opponent, 2):
-                        env.act(opponent, 2)
-                row = env.latest.get(primary)
-                undecided = False
-                if row is not None and row.get("periodic") is True and env.eligible(primary):
-                    response = policy.arbitrate(row, stream_seq=stream)
-                    if response.get("status") == "decision" and response.get("action_id") is not None:
-                        scores = policy.states[actor_identity(row)].scores
-                        allowed = [bool(a and b) for a, b in zip(response["effective_action_mask"], row["action_mask"])]
-                        action = sample_action(scores, allowed, options["temperature"], rng)
-                        env.act(primary, action)
-                        stats["decisions"] += 1
-                        stats[f"action_{action}"] += 1
-                        if rows and rows[-1]["seq"] == row["observation_seq"]:
-                            rows[-1]["label"] = action
-                    elif response.get("status") == "fallback":
-                        stats["fallbacks"] += 1
-                        env.release_to_native(primary, response.get("reason"))
+                def watches():
+                    # Exactly the per-tick checks below: the primary on a periodic row, and the
+                    # block task's held opponent while its single attack is still unsent.
+                    out = []
+                    if primary in env.leases:
+                        out.append({**{key: env.leases[primary][key] for key in LEASE_KEYS}, "periodic": True})
+                    if not adversary_sent and opponent in env.leases:
+                        out.append({**{key: env.leases[opponent][key] for key in LEASE_KEYS}, "periodic": False, "actions": [6, 2]})
+                    return out
+
+                rollout_started = time.monotonic()
+                feed(False)
+                env.start(options.get("start_substeps", 2))
+                ticks = 0
+                while ticks < options["max_substeps"]:
+                    terminal = bool(env.arena.get("terminated") or env.arena.get("truncated"))
+                    feed(not terminal)
+                    if terminal:
+                        break
+                    if not adversary_sent:
+                        # The stage-7 block task: the held opponent throws one real front attack.
+                        if env.eligible(opponent, 6):
+                            env.act(opponent, 6)
+                            adversary_sent = True
+                        elif env.eligible(opponent, 2):
+                            env.act(opponent, 2)
+                    row = env.latest.get(primary)
+                    undecided = False
+                    if row is not None and row.get("periodic") is True and env.eligible(primary):
+                        response = policy.arbitrate(row, stream_seq=stream)
+                        if response.get("status") == "decision" and response.get("action_id") is not None:
+                            scores = policy.states[actor_identity(row)].scores
+                            allowed = [bool(a and b) for a, b in zip(response["effective_action_mask"], row["action_mask"])]
+                            action = sample_action(scores, allowed, options["temperature"], rng)
+                            env.act(primary, action)
+                            stats["decisions"] += 1
+                            stats[f"action_{action}"] += 1
+                            if rows and rows[-1]["seq"] == row["observation_seq"]:
+                                rows[-1]["label"] = action
+                        elif response.get("status") == "fallback":
+                            stats["fallbacks"] += 1
+                            env.release_to_native(primary, response.get("reason"))
+                        else:
+                            # The runtime declined an eligible row: re-check it tick by tick, as before.
+                            undecided = True
+                    if options.get("advance") and not undecided:
+                        advanced = env.advance(watches(), min(ADVANCE_MAX_SUBSTEPS, options["max_substeps"]-ticks))
+                        stats["advance_calls"] += 1
                     else:
-                        # The runtime declined an eligible row: re-check it tick by tick, as before.
-                        undecided = True
-                if options.get("advance") and not undecided:
-                    advanced = env.advance(watches(), min(ADVANCE_MAX_SUBSTEPS, options["max_substeps"]-ticks))
-                    stats["advance_calls"] += 1
-                else:
-                    advanced = env.step(1)
-                ticks += advanced
-                if advanced == 0 and not (env.arena.get("terminated") or env.arena.get("truncated")):
-                    raise ArenaInfrastructureError("rollout made no simulation progress")
-            final = env.status()
-            policy.end_episode(initial["session_epoch"], initial["world_epoch"])
-            actors = {actor["entity_id"]: actor for actor in final["actors"]}
-            start = {actor["entity_id"]: actor for actor in initial["actors"]}
-            summary = {"worker": worker, "name": name, "task": task, "seed": seed, "side": side, "distance_cm": distance,
-                       "reason": final.get("reason"), "outcome": final.get("outcome"),
-                       "elapsed_game_ms": final.get("elapsed_game_ms", 0),
-                       "primary_hp": actors[primary]["hp"], "primary_hp_max": start[primary].get("hp_max", start[primary]["hp"]),
-                       "opponent_hp": actors[opponent]["hp"], "opponent_hp_max": start[opponent].get("hp_max", start[opponent]["hp"]),
-                       "rows": len(rows), "ticks": ticks, "reset_s": reset_s, "rollout_s": time.monotonic()-rollout_started,
-                       "temperature": options["temperature"], "checkpoint_sha256": policy.checkpoint_sha256, **stats}
-            summary["success"] = success(summary)
-            summary["score"] = score(summary, timeout_ms)
-            if rows:
-                numpy.savez_compressed(output/f"{name}.npz",
-                                       features=numpy.asarray([row["features"] for row in rows], dtype=numpy.float32),
-                                       masks=numpy.asarray([row["mask"] for row in rows], dtype=bool),
-                                       resets=numpy.asarray([row["reset"] for row in rows], dtype=bool),
-                                       labels=numpy.asarray([row["label"] for row in rows], dtype=numpy.int16))
-            summaries.append(summary)
-            with (output/"episodes.jsonl").open("a") as stream_file:
-                stream_file.write(json.dumps(summary)+"\n")
-            if not options["keep_journals"]:
-                shutil.rmtree(episode_dir, ignore_errors=True)
-        runner.call({"cmd": "close"})
-    finally:
-        runner.terminate()
-    return {"worker": worker, "episodes": len(summaries)}
+                        advanced = env.step(1)
+                    ticks += advanced
+                    if advanced == 0 and not (env.arena.get("terminated") or env.arena.get("truncated")):
+                        raise ArenaInfrastructureError("rollout made no simulation progress")
+                final = env.status()
+                policy.end_episode(initial["session_epoch"], initial["world_epoch"])
+                actors = {actor["entity_id"]: actor for actor in final["actors"]}
+                start = {actor["entity_id"]: actor for actor in initial["actors"]}
+                summary = {"worker": worker, "name": name, "task": task, "seed": seed, "side": side, "distance_cm": distance,
+                           "reason": final.get("reason"), "outcome": final.get("outcome"),
+                           "elapsed_game_ms": final.get("elapsed_game_ms", 0),
+                           "primary_hp": actors[primary]["hp"], "primary_hp_max": start[primary].get("hp_max", start[primary]["hp"]),
+                           "opponent_hp": actors[opponent]["hp"], "opponent_hp_max": start[opponent].get("hp_max", start[opponent]["hp"]),
+                           "rows": len(rows), "ticks": ticks, "reset_s": reset_s, "rollout_s": time.monotonic()-rollout_started,
+                           "temperature": options["temperature"], "checkpoint_sha256": policy.checkpoint_sha256, **stats}
+                summary["success"] = success(summary)
+                summary["score"] = score(summary, timeout_ms)
+                if rows:
+                    numpy.savez_compressed(output/f"{name}.npz",
+                                           features=numpy.asarray([row["features"] for row in rows], dtype=numpy.float32),
+                                           masks=numpy.asarray([row["mask"] for row in rows], dtype=bool),
+                                           resets=numpy.asarray([row["reset"] for row in rows], dtype=bool),
+                                           labels=numpy.asarray([row["label"] for row in rows], dtype=numpy.int16))
+                summaries.append(summary)
+                with (output/"episodes.jsonl").open("a") as stream_file:
+                    stream_file.write(json.dumps(summary)+"\n")
+                if not options["keep_journals"]:
+                    shutil.rmtree(episode_dir, ignore_errors=True)
+            runner.call({"cmd": "close"})
+        finally:
+            runner.terminate()
+        return {"worker": worker, "episodes": len(summaries)}
+
+    if len(env_shards) == 1:
+        results = [run_env(*env_shards[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=len(env_shards)) as pool:
+            results = [future.result() for future in [pool.submit(run_env, index, tasks) for index, tasks in env_shards]]
+    return {"process": process, "envs": results, "batch_sizes": dict(backend.batches)}
 
 
 def main() -> int:
@@ -274,6 +352,10 @@ def main() -> int:
     parser.add_argument("--tasks", default="native_duel")
     parser.add_argument("--start-substeps", type=int, default=1,
                         help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
+    parser.add_argument("--envs-per-worker", type=int, default=1,
+                        help="env threads per process, sharing one model; envs = workers x this")
+    parser.add_argument("--inference", choices=("exact", "batched"), default="exact",
+                        help="exact: row by row as the realtime runtime; batched: one step for all waiting envs")
     parser.add_argument("--no-fork-prefix", dest="fork_prefix", action="store_false",
                         help="replay the bench opening in every fork instead of once in the template")
     parser.add_argument("--reference-runtime", dest="lean_runtime", action="store_false",
@@ -299,11 +381,15 @@ def main() -> int:
                                                         "quality_credit": False, "options": options,
                                                         "training_env": TRAINING_ENV}, indent=2)+"\n")
     started = time.monotonic()
-    shards = [tasks[index::args.workers] for index in range(args.workers)]
-    with ProcessPoolExecutor(max_workers=args.workers, mp_context=multiprocessing.get_context("spawn")) as pool:
-        futures = [pool.submit(run_worker, index, options, shard) for index, shard in enumerate(shards) if shard]
+    # Env i always plays tasks[i::envs] with sampling seed i, however envs are grouped into processes.
+    envs = args.workers*args.envs_per_worker
+    shards = [(index, tasks[index::envs]) for index in range(envs) if tasks[index::envs]]
+    groups = [shards[index:index+args.envs_per_worker] for index in range(0, len(shards), args.envs_per_worker)]
+    batch_sizes: Counter = Counter()
+    with ProcessPoolExecutor(max_workers=len(groups), mp_context=multiprocessing.get_context("spawn")) as pool:
+        futures = [pool.submit(run_worker, index, options, group) for index, group in enumerate(groups)]
         for future in futures:
-            future.result()
+            batch_sizes.update({int(size): count for size, count in future.result()["batch_sizes"].items()})
     wall = time.monotonic()-started
     summaries = [json.loads(line) for path in sorted(args.output.glob("worker-*/episodes.jsonl")) for line in path.read_text().splitlines()]
     wins = sum(row["reason"] == "opponent_down" for row in summaries)
@@ -320,7 +406,9 @@ def main() -> int:
               "mean_primary_hp": sum(row["primary_hp"] for row in summaries)/max(1, len(summaries)),
               "mean_elapsed_s": sum(row["elapsed_game_ms"] for row in summaries)/1000/max(1, len(summaries)),
               "decisions": decisions, "decisions_per_s": decisions/wall, "episodes_per_min": len(summaries)/wall*60,
-              "fallbacks": sum(row.get("fallbacks", 0) for row in summaries)}
+              "fallbacks": sum(row.get("fallbacks", 0) for row in summaries),
+              "envs": envs, "processes": len(groups), "inference": args.inference,
+              "inference_batch_sizes": dict(sorted(batch_sizes.items()))}
     (args.output/"summary.json").write_text(json.dumps(report, indent=2)+"\n")
     print(json.dumps(report), flush=True)
     return 0
