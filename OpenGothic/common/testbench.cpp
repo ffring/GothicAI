@@ -613,6 +613,8 @@ struct Bench {
   int32_t spellEquipPending=0;
   uint64_t spellEquipUntil=0;
   int spellWaitFrozen=-1;
+  bool spellGuardTrace=false;
+  uint32_t spellGuardObservedReturns=0;
   Npc* seatNpc=nullptr;
   Npc* seatCorpse=nullptr;
   Interactive* seatMob=nullptr;
@@ -2377,6 +2379,30 @@ void spellFields(World& world) {
       ",\"mass_kg\":"+ragdollNumber(item.physicsMass())+",\"velocity_cm_s\":"+ragdollVector(item.physicsVelocity())+
       ",\"sleeping\":"+(item.physicsSleeping()?"true":"false")+",\"dynamic\":"+(item.isDynamic()?"true":"false")+"}";
     }
+  if(bench.spellGuardTrace && !bench.spellActors.empty()) {
+    const auto& npc=*bench.spellActors[0].npc;
+    const auto& q=npc.ragdollQuestReturnState();
+    const auto returns=npc.ragdollQuestReturnCount();
+    event("spell_guard_frame","\"position_cm\":"+ragdollVector(npc.position())+
+      ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"return_from_cm\":"+ragdollVector(npc.ragdollQuestReturnFrom())+
+      ",\"hp\":"+std::to_string(npc.attribute(ATR_HITPOINTS))+
+      ",\"human\":"+(npc.isHuman()?"true":"false")+",\"hero\":"+(npc.isPlayer()?"true":"false")+
+      ",\"immortal\":"+(npc.isImmortal()?"true":"false")+
+      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"standing\":"+(npc.isStanding()?"true":"false")+
+      ",\"unconscious\":"+(npc.isUnconscious()?"true":"false")+",\"dead\":"+(npc.isDead()?"true":"false")+
+      ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
+      ",\"hazards\":"+std::to_string(q.hazards)+",\"returns\":"+std::to_string(returns));
+    if(returns>bench.spellGuardObservedReturns) {
+      const auto from=npc.ragdollQuestReturnFrom();
+      const auto floor=world.physic()->landRay(from+Vec3(0,200,0),6000);
+      event("spell_guard_landing","\"from_cm\":"+ragdollVector(from)+",\"to_cm\":"+ragdollVector(npc.position())+
+        ",\"anchor_cm\":"+ragdollVector(q.anchor)+",\"returns\":"+std::to_string(returns)+
+        ",\"has_floor\":"+(floor.hasCol?"true":"false")+
+        ",\"floor_cm\":"+(floor.hasCol?ragdollVector(floor.v):"null")+
+        ",\"floor_normal\":"+(floor.hasCol?ragdollVector(floor.n):"null"));
+      bench.spellGuardObservedReturns=returns;
+      }
+    }
   const auto stats=world.physic()->physicsStats();
   event("spell_physics_frame","\"case\":"+jsonStr(bench.spellCase)+",\"t_game_ms\":"+std::to_string(world.tickCount())+
     ",\"feature\":"+(Gothic::settingsGetI("GAME","spell_physics")?"true":"false")+
@@ -2418,8 +2444,10 @@ void prepareSpellFixture(World& world,Npc& player,std::string_view fixture) {
     bench.spellActors.push_back({npc,std::move(role)});bench.crew.push_back(npc);
     };
   add("BAU_904_BAUER","human",center);
+  if(fixture=="wind" || fixture=="field")
+    add("BDT_1013_BANDIT_L","companion",center+Vec3(-180,0,0));
   if(fixture=="wind") {
-    add("TROLL","troll",center+Vec3(220,0,0));
+    add("TROLL","troll",center+Vec3(450,0,0));
     add("BAU_904_BAUER","behind",hero-Vec3(0,0,300));
     add("BAU_904_BAUER","outside_cone",hero+Vec3(550,0,0));
     }
@@ -3000,6 +3028,40 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="physics" && a.size()>1 && a[1]=="dump") {
     physicsDump(w,pl,size_t(std::clamp(num(a,2,100000),1.f,1000000.f)),uint32_t(num(a,3,73013)),a.size()>4 ? a[4] : "");
     }
+  else if(c=="physics" && a.size()==2 && a[1]=="flags-check") {
+    struct Flag {const char* key;bool Gothic::PhysicsFlags::*member;};
+    const Flag flags[]{
+      {"ragdoll",&Gothic::PhysicsFlags::ragdoll},
+      {"ragdoll_quest_guard",&Gothic::PhysicsFlags::questGuard},
+      {"living_bodies",&Gothic::PhysicsFlags::livingBodies},
+      {"arrow_physics",&Gothic::PhysicsFlags::arrowPhysics},
+      {"arrow_sticking",&Gothic::PhysicsFlags::arrowSticking},
+      {"spell_physics",&Gothic::PhysicsFlags::spellPhysics}
+      };
+    auto& npc=subjectOf(pl);
+    const auto tick=w.tickCount();
+    bool pass=true;
+    for(const auto& flag:flags) {
+      const int original=Gothic::settingsGetI("GAME",flag.key);
+      pass&=(Gothic::physicsFlags().*flag.member)==(original!=0);
+      for(const std::string_view phase:{"off","on","restore"}) {
+        const int value=phase=="restore" ? original : int(phase=="on");
+        Gothic::settingsSetI("GAME",flag.key,value);
+        const bool immediate=Gothic::physicsFlags().*flag.member;
+        npc.prepareRagdoll();npc.prepareLivingBody();
+        const int configured=Gothic::settingsGetI("GAME",flag.key);
+        const bool cached=Gothic::physicsFlags().*flag.member;
+        const bool same=w.tickCount()==tick;
+        const bool ok=immediate==(value!=0) && cached==(configured!=0) && configured==value && same;
+        pass&=ok;
+        event("physics_flags_check","\"flag\":"+jsonStr(flag.key)+",\"phase\":"+jsonStr(phase)+
+          ",\"original\":"+std::to_string(original)+",\"configured\":"+std::to_string(configured)+
+          ",\"cached\":"+(cached?"true":"false")+",\"prepared\":true,\"same_dispatch\":"+(same?"true":"false")+
+          ",\"pass\":"+(ok?"true":"false"));
+        }
+      }
+    if(!pass) arenaAbort("physics flag snapshot differs in same dispatch");
+    }
   else if(c=="physics" && a.size()==2 && a[1]=="stats") {
     const auto stats=w.physic()->physicsStats();
     char text[200];
@@ -3010,6 +3072,73 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="spell" && a.size()==3 && a[1]=="fixture") {
     prepareSpellFixture(w,pl,a[2]);
     if(!bench.spellActors.empty()) exec("watch watched",w,pl,ctrl);
+    }
+  else if(c=="spell" && a.size()==2 && a[1]=="guard-fixture") {
+    prepareSpellFixture(w,pl,"wind");
+    if(bench.spellActors.empty()) return;
+    if(!chooseQuestSite(w,false,bench.questCliff)) {arenaAbort("wind guard needs a real cliff");return;}
+    auto& site=bench.questCliff;
+    // Retain at least 50 cm of dry, flat support in front of the starting body.
+    const auto original=site.dry;
+    bool foundSupport=false;
+    for(float advance=-150;advance<=700;advance+=10) {
+      const auto at=original+site.direction*advance;
+      const auto side=Vec3(-site.direction.z,0,site.direction.x);
+      const auto center=w.physic()->landRay(at+Vec3(0,40,0),100);
+      bool supported=center.hasCol && center.n.y>.85f;
+      for(const auto delta:{Vec3(),site.direction*50.f,side*35.f,side*-35.f,site.direction*-35.f}) {
+        const auto floor=w.physic()->landRay(at+delta+Vec3(0,40,0),100);
+        supported=supported && floor.hasCol && floor.n.y>.85f && std::abs(floor.v.y-center.v.y)<15.f &&
+                  !w.physic()->waterRay(at+delta,15.f).hasCol;
+        }
+      if(!supported) {
+        if(foundSupport) break;
+        continue;
+        }
+      site.dry=center.v;foundSupport=true;
+      }
+    if(!foundSupport) {arenaAbort("wind guard lacks 50 cm supported cliff margin");return;}
+    bool visibleDrop=false;
+    Vec3 cliffFloor;
+    for(float distance:{100.f,150.f,200.f,350.f,500.f,700.f}) {
+      const auto edge=site.dry+site.direction*distance;
+      const auto floor=w.physic()->landRay(edge+Vec3(0,100,0),6000);
+      if(floor.hasCol && site.dry.y-floor.v.y>1200.f &&
+         !w.physic()->ray(site.dry+Vec3(0,110,0),edge+Vec3(0,110,0)).hasCol) {
+        visibleDrop=true;cliffFloor=floor.v;break;
+        }
+      }
+    if(!visibleDrop) {arenaAbort("wind guard cliff lacks a visible 12 m drop");return;}
+    auto* npc=bench.spellActors[0].npc;
+    for(size_t i=1;i<bench.spellActors.size();++i) w.removeNpc(*bench.spellActors[i].npc);
+    bench.spellActors.resize(1);bench.crew.clear();bench.crew.push_back(npc);
+    npc->handle().flags=zenkit::NpcFlag(uint32_t(npc->handle().flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+    npc->handle().attribute[ATR_HITPOINTS]=npc->handle().attribute[ATR_HITPOINTSMAX]=50000;
+    npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
+    npc->setPosition(site.dry);npc->setDirection(site.direction);npc->updateTransform();
+    auto hero=site.dry-site.direction*300.f;
+    const auto floor=w.physic()->landRay(hero+Vec3(0,300,0),1500);
+    if(!floor.hasCol) {arenaAbort("wind caster lacks real ground support");return;}
+    hero.y=floor.v.y;pl.setPosition(hero);pl.setDirection(site.direction);pl.updateTransform();
+    Gothic::settingsSetI("GAME","spell_physics",1);Gothic::settingsSetI("GAME","ragdoll_quest_guard",1);
+    bench.spellGuardTrace=true;bench.spellGuardObservedReturns=0;
+    bench.subject=npc;exec("watch watched",w,pl,ctrl);
+    event("spell_guard_setup","\"actor_id\":"+std::to_string(w.npcId(npc))+
+      ",\"site\":"+jsonStr(site.waypoint)+",\"stable_cm\":"+ragdollVector(site.dry)+
+      ",\"hero_cm\":"+ragdollVector(hero)+",\"direction\":"+ragdollVector(site.direction)+
+      ",\"cliff_floor_cm\":"+ragdollVector(cliffFloor)+",\"support_margin_cm\":50");
+    }
+  else if(c=="spell" && a.size()==3 && a[1]=="target") {
+    auto actor=std::find_if(bench.spellActors.begin(),bench.spellActors.end(),[&](const auto& value) {return value.role==a[2];});
+    if(actor==bench.spellActors.end()) {arenaAbort("spell target role missing");return;}
+    if(a[2]=="troll") {
+      actor->npc->setPosition(bench.spellActors[0].npc->position()+Vec3(220,0,0));
+      actor->npc->updateTransform();
+      }
+    std::iter_swap(bench.spellActors.begin(),actor);
+    bench.subject=bench.spellActors[0].npc;
+    exec("watch watched",w,pl,ctrl);
+    event("spell_selected_target","\"role\":"+jsonStr(a[2])+",\"actor_id\":"+std::to_string(w.npcId(bench.subject)));
     }
   else if(c=="spell" && a.size()==3 && a[1]=="case") {
     bench.spellCase=a[2];bench.spellTrace=true;
@@ -3035,6 +3164,9 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(result!=Npc::BC_Invest && result!=Npc::BC_Cast) {arenaAbort("real spell beginCastSpell rejected");return;}
     bench.spellReleaseAt=result==Npc::BC_Invest?w.tickCount()+uint64_t(num(a,2,500)):0;
     }
+  else if(c=="spell" && a.size()==3 && a[1]=="wait-return") {
+    bench.spellWaitFrozen=4;bench.spellWaitUntil=w.tickCount()+uint64_t(num(a,2,20000));
+    }
   else if(c=="spell" && a.size()>=3 && a[1]=="wait-frozen") {
     bench.spellWaitFrozen=a[2]=="on"?1:0;bench.spellWaitUntil=w.tickCount()+uint64_t(num(a,3,25000));
     }
@@ -3043,7 +3175,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="spell" && a.size()==2 && a[1]=="stop") bench.spellTrace=false;
   else if(c=="spell" && a.size()==2 && a[1]=="clear") {
-    bench.spellTrace=false;bench.spellReleaseAt=0;bench.spellWaitFrozen=-1;
+    bench.spellTrace=false;bench.spellReleaseAt=0;bench.spellWaitFrozen=-1;bench.spellGuardTrace=false;
     pl.setTarget(nullptr);exec("watch player",w,pl,ctrl);
     for(auto& actor:bench.spellActors) w.removeNpc(*actor.npc);
     for(auto* item:bench.spellItems) w.removeItem(*item);
@@ -5925,11 +6057,16 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
   if(bench.spellWaitFrozen>=0) {
     const bool frozen=!bench.spellActors.empty() && bench.spellActors[0].npc->spellFrozen();
     const bool ready=bench.spellWaitFrozen==2 ? !bench.spellActors.empty() && bench.spellActors[0].npc->isInAir() :
-                     bench.spellWaitFrozen==3 ? w.spellFieldCount()>0 : int(frozen)==bench.spellWaitFrozen;
+                     bench.spellWaitFrozen==3 ? w.spellFieldCount()>0 :
+                     bench.spellWaitFrozen==4 ? !bench.spellActors.empty() &&
+                       bench.spellActors[0].npc->ragdollQuestReturnCount()==1 &&
+                       bench.spellActors[0].npc->isStanding() && !bench.spellActors[0].npc->isInAir() &&
+                       !bench.spellActors[0].npc->isDown() && !bench.spellActors[0].npc->ragdollQuestReturnState().armed :
+                       int(frozen)==bench.spellWaitFrozen;
     if(!ready && w.tickCount()<bench.spellWaitUntil) return;
     event("spell_physics_freeze_wait","\"frozen\":"+std::string(frozen?"true":"false")+",\"pass\":"+(ready?"true":"false"));
     bench.spellWaitFrozen=-1;
-    if(!ready) {arenaAbort("real freeze state did not reach requested transition");return;}
+    if(!ready) {arenaAbort(bench.spellGuardTrace?"real wind throw did not return standing":"real freeze state did not reach requested transition");return;}
     }
   if(bench.livingMotion)
     for(auto& walker:bench.livingWalkers) {

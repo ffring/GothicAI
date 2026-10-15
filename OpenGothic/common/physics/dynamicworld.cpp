@@ -849,7 +849,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         result.bone=hit.bone;
         if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
           result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
-        b.cb->onWorldHit(result);
+        b.cb->onSpellWorldHit(result);
         }
       stopBullet = true;
       } else {

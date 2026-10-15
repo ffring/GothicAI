@@ -146,7 +146,14 @@ void Bullet::onMove() {
   }
 
 bool Bullet::stopsAtWorldHit() const {
-  return !isSpell() && Gothic::settingsGetI("GAME","arrow_sticking")!=0;
+  return !isSpell() && Gothic::physicsFlags().arrowSticking;
+  }
+
+void Bullet::onSpellWorldHit(const DynamicWorld::BulletWorldHit& hit) {
+  impactAt = hit.point;
+  impactOwner = hit.bone;
+  impactKnown = true;
+  onCollide(hit.material);
   }
 
 void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
@@ -295,12 +302,12 @@ void Bullet::updateMatrix() {
   }
 
 void Bullet::applySpellPhysics(Npc* target) {
-  if(!isSpell() || spellPhysicsApplied || Gothic::settingsGetI("GAME","spell_physics")==0)
+  if(!isSpell() || spellPhysicsApplied || !Gothic::physicsFlags().spellPhysics)
     return;
   const auto kind = wrld->script().physicalSpell(spellId());
   if(kind!=GameScript::PhysicalSpell::WindFist && kind!=GameScript::PhysicalSpell::Fireball)
     return;
   spellPhysicsApplied = true;
   const auto point = target!=nullptr ? target->collosionCenter() : impactPoint();
-  wrld->applySpellImpact(spellId(),point,origin());
+  wrld->applySpellImpact(spellId(),point,origin(),target);
   }

@@ -765,9 +765,9 @@ void testSpellWorldImpactMetadata() {
     int worlds=0,materials=0,stops=0,moves=0;
     std::string order;
     bool stopsAtWorldHit() const override { return true; }
-    void onWorldHit(const DynamicWorld::BulletWorldHit& value) override {
+    void onSpellWorldHit(const DynamicWorld::BulletWorldHit& value) override {
       ++worlds; order+='W'; hit=value;
-      DynamicWorld::BulletCallback::onWorldHit(value);
+      DynamicWorld::BulletCallback::onSpellWorldHit(value);
       }
     void onCollide(zenkit::MaterialGroup material) override {
       require(material==zenkit::MaterialGroup::STONE,"default spell world-hit callback must preserve the old selected material callback");

@@ -431,7 +431,7 @@ void World::scaleTime(uint64_t& dt) {
   }
 
 void World::tick(uint64_t dt) {
-  if(Gothic::settingsGetI("GAME","arrow_sticking")==0)
+  if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;
   if(!doTicks)
@@ -706,9 +706,9 @@ size_t World::hasItems(std::string_view tag, size_t itemCls) {
   return wobj.hasItems(tag,itemCls);
   }
 
-void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster) {
+void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target) {
   using namespace Tempest;
-  if(Gothic::settingsGetI("GAME","spell_physics")==0)
+  if(!Gothic::physicsFlags().spellPhysics)
     return;
   const auto kind = script().physicalSpell(spellId);
   const bool wind = kind==GameScript::PhysicalSpell::WindFist;
@@ -744,7 +744,7 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     };
   size_t npcHits = 0, itemHits = 0;
   detectNpc(center,radius,[&](Npc& npc) {
-    if(&npc==caster)
+    if(&npc==caster || (wind && &npc!=target))
       return;
     const auto impulse = impulseAt(npc.collosionCenter());
     // A heavy creature resists this finite wind impulse. The threshold is a
@@ -776,8 +776,8 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     }
   }
 
-void World::startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster) {
-  if(Gothic::settingsGetI("GAME","spell_physics")==0 ||
+void World::startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target) {
+  if(!Gothic::physicsFlags().spellPhysics ||
      script().physicalSpell(spellId)!=GameScript::PhysicalSpell::Whirlwind)
     return;
   int seconds = 10;
@@ -785,7 +785,7 @@ void World::startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* ca
     seconds = std::clamp(duration->get_int(),1,60);
   if(spellFields.size()>=16)
     spellFields.erase(spellFields.begin());
-  spellFields.push_back({point,caster,tickCount()+uint64_t(seconds)*1000,spellId});
+  spellFields.push_back({point,caster,target,tickCount()+uint64_t(seconds)*1000,spellId});
   if(TestBench::isActive()) {
     char buf[192];
     std::snprintf(buf,sizeof(buf),"spell physics field start id %d at %.9g %.9g %.9g duration %d",
@@ -796,7 +796,7 @@ void World::startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* ca
 
 void World::tickSpellFields(uint64_t dt) {
   using namespace Tempest;
-  if(Gothic::settingsGetI("GAME","spell_physics")==0) {
+  if(!Gothic::physicsFlags().spellPhysics) {
     spellFields.clear();
     return;
     }
@@ -834,7 +834,7 @@ void World::tickSpellFields(uint64_t dt) {
       return force*(seconds*falloff);
       };
     detectNpc(field.center,550.f,[&](Npc& npc) {
-      if(&npc!=field.caster)
+      if(&npc==field.target && &npc!=field.caster)
         npc.addSpellImpulse(impulseAt(npc.position()),false);
       });
     detectItem(field.center,550.f,[&](Item& item) {

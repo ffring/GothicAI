@@ -6,6 +6,7 @@ goto NW_XARDAS_TOWER_VALLEY_091
 wait 500
 living off
 living setup
+physics flags-check
 wait 600
 overlay off
 view nopfx

@@ -201,6 +201,7 @@ class DynamicWorld final {
       // Requests an attachment after a legacy world stop; never changes flight.
       virtual bool stopsAtWorldHit() const { return false; }
       virtual void onWorldHit(const BulletWorldHit& hit) { (void)hit; }
+      virtual void onSpellWorldHit(const BulletWorldHit& hit) { onCollide(hit.material); }
       // an arrow aimed by hand: hits an npc where it is (its bones), not its box; from-to: this step
       virtual bool isPrecise() const { return false; }
       virtual bool onCollidePrecise(Npc& other, const Tempest::Vec3& from, const Tempest::Vec3& to){(void)from; (void)to; return onCollide(other); }

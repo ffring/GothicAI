@@ -358,6 +358,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     return true;
     }
 
+  npc.checkRagdollQuestHazard();
+
   // water interaction
   if(!canFlyOverWater() && !dead && ground<water) {
     if(swim) {
@@ -372,6 +374,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       // setState(Dive);
       }
     else if(gpos + chest <= water+0.01f && npc.hasSwimAnimations()) {
+      if(npc.recoverSpellThrow())
+        return true;
       if(state!=Swim && state!=Dive) {
         const bool splash = grav || fallSpeed.quadLength() >= 1.f;
         setState(Swim);
@@ -414,6 +418,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       }
     return true;
     }
+
+  // A bottomless fall cannot reach the normal landing callback.
+  if(!gValid && npc.needsRagdollQuestReturn() && npc.recoverSpellThrow())
+    return true;
 
   // above ground/void
   if(!gValid || (pos.y>ground && dY >= stickThreshold && state!=InWater)) {
@@ -484,6 +492,9 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
 
   // no longer in air - ground code
   if(state==InAir || state==Falling) {
+    // Resolve the protected throw before landing damage can lose the NPC.
+    if(npc.recoverSpellThrow())
+      return true;
     // attach to ground
     npc.takeFallDamage(fallSpeed);
     setState(Run);

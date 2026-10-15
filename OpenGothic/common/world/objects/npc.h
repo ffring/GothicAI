@@ -719,6 +719,7 @@ class Npc final {
     void               updateRagdollQuestAnchor();
     void               checkRagdollQuestHazard();
     bool               needsRagdollQuestReturn() const;
+    bool               recoverSpellThrow();
     void               queueArrowPhysics(const Bullet& bullet);
     void               dispatchArrowPhysics(Ragdoll& body);
     bool               hasQueuedPhysicalSpellState(const AiQueue& queue) const;
@@ -773,6 +774,7 @@ class Npc final {
     bool                          ragdollLegacyDown = false;
     bool                          ragdollRecovering = false;
     RagdollSave::QuestReturn       ragdollQuestReturn;
+    bool                          ragdollQuestSpellThrow = false;
     uint64_t                      ragdollQuestSampleTick = 0;
     uint32_t                      ragdollQuestReturns = 0;
     Tempest::Vec3                 ragdollQuestFrom;

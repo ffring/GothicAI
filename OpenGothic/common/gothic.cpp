@@ -595,6 +595,7 @@ void Gothic::tick(uint64_t dt) {
 
   // before world tick: queued external AI commands apply in the same frame
   onTick(dt);
+  refreshPhysicsFlags();
   if(game)
     game->tick(dt);
   }
@@ -897,7 +898,21 @@ void Gothic::detectGothicVersion() {
     }
   }
 
+void Gothic::refreshPhysicsFlags() {
+  physicsFlagsCache = {
+    settingsGetI("GAME","ragdoll")!=0,
+    settingsGetI("GAME","ragdoll_quest_guard")!=0,
+    settingsGetI("GAME","living_bodies")!=0,
+    settingsGetI("GAME","arrow_physics")!=0,
+    settingsGetI("GAME","arrow_sticking")!=0,
+    settingsGetI("GAME","spell_physics")!=0
+    };
+  }
+
 void Gothic::setupSettings() {
+  // settingsSetI/S/F emit onSettingsChanged synchronously. Publish before any
+  // same-dispatch actor creation, prepare or input query can consume the change.
+  refreshPhysicsFlags();
   if(game!=nullptr)
     game->setupSettings();
 

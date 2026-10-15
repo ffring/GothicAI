@@ -175,8 +175,8 @@ class World final {
     // the velocity an arrow, a bolt leaves with to fall onto the target
     static Tempest::Vec3 bulletVelocity(const Tempest::Vec3& from, const Tempest::Vec3& to);
     Bullet&              shootSpell(const Item &itm, const Npc &npc, const Npc *target);
-    void                 applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster);
-    void                 startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster);
+    void                 applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target);
+    void                 startSpellField(int32_t spellId, const Tempest::Vec3& point, Npc* caster, Npc* target);
     size_t               spellFieldCount() const { return spellFields.size(); }
 
     void                 sendPassivePerc  (Npc& self, Npc& other, int32_t perc);
@@ -234,7 +234,8 @@ class World final {
     std::vector<MeshObjects::Mesh>        stuckArrows;
     struct SpellField {
       Tempest::Vec3 center;
-      Npc* caster = nullptr; // identity only; never dereferenced by a field
+      Npc* caster = nullptr; // identities only; never dereferenced by a field
+      Npc* target = nullptr;
       uint64_t until = 0;
       int32_t spellId = 0;
       };
