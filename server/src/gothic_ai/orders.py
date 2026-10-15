@@ -33,8 +33,12 @@ out (incidents.py words it). A companion told to wait stands up for the hero onl
 
 **The scripts' party**: while an npc goes with the hero it is marked their party member (AIV_PARTYMEMBER,
 the bridge's `party` effect, v30), as a companion's own dialog marks it: the scripts give the hero the
-experience for whom it kills (ZS_Dead), and a contract's kill counts. Only those marked here are unmarked. The conversational model's own "fight X" for a companion is carried out here
-too (dialogue.py hands it over), so that it ends with the companion back at the hero's side.
+experience for whom it kills (ZS_Dead), and a contract's kill counts. Only its own mark is taken off here:
+one a companion's dialog set (vanilla.py plays Cavalorn's) stays until the scripts take it off, or the
+companion would leave the party in the middle of its quest.
+
+The conversational model's own "fight X" for a companion is carried out here too (dialogue.py hands it
+over), so that it ends with the companion back at the hero's side.
 
 **Words the conversational model acts on** ("Заходи в пещеру первым"): a companion is shown the places
 around it (places.py) and may `go_to` one: it walks there ahead of the hero, looks around it (walks on
@@ -160,8 +164,10 @@ class Orders:
         self.standing: dict[str, Standing] = {}
         self.foes: dict[str, float] = {}  # who struck the hero or a companion, and when
         self.fights: dict[str, Fight] = {}  # companion -> its fight now
-        # those marked the scripts' party members here (`party`): only these are unmarked here
-        self.party: set[str] = set()
+        # those marked the scripts' party members here (`party`), with the mark's number (GameLink.party):
+        # only these are unmarked here, and only if nobody marked them since
+        self.party: dict[str, int] = {}
+        self._marking: set[str] = set()
         # what an npc sees now, asked afresh (perception.py): a companion sent somewhere looks around there
         self.view_of: Callable[[str], Awaitable[NpcView | None]] | None = None
         # where the npc last saw someone, lately (sightings.py): the place's id in the book
@@ -464,17 +470,29 @@ class Orders:
         for npc in list(self.talk.people):
             npc = npc.upper()
             want = self.companion(npc)
-            if want != (npc in self.party):
-                (self.party.add if want else self.party.discard)(npc)
-                self._spawn(self._mark(npc, want))
+            if want == (npc in self.party) or npc in self._marking:
+                continue
+            last, value = self.link.party.get(npc, (0, 0))
+            if want and value:
+                continue  # a companion dialog marked it (Cavalorn's HELFEN): the scripts' to take off
+            if not want and last != self.party[npc]:
+                del self.party[npc]  # marked since by a dialog: the scripts' now
+                continue
+            self._marking.add(npc)
+            self._spawn(self._mark(npc, want))
 
     async def _mark(self, npc: str, on: bool) -> None:
         try:
             await self.link.story_effect(npc, [{"do": "party", "value": 1 if on else 0}])
         except (GameError, TimeoutError) as err:
             log.info("%s: party %s failed: %s", npc, "on" if on else "off", err or "no answer")
-            (self.party.discard if on else self.party.add)(npc)  # tried again on the next roster
-            return
+            return  # tried again on the next roster
+        finally:
+            self._marking.discard(npc)
+        if on:
+            self.party[npc] = self.link.party[npc][0]
+        else:
+            self.party.pop(npc, None)
         log.info("%s %s the hero's party", npc, "joins" if on else "leaves")
 
     def _perceived(self, p: Perception) -> None:

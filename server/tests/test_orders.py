@@ -540,6 +540,34 @@ async def test_a_companion_is_the_scripts_party_member_while_it_goes_with_the_he
     assert party(fake) == [(GORN, 1), (GORN, 0)]  # nobody else is touched
 
 
+async def test_a_companion_dialogs_party_mark_is_the_scripts_to_take_off():
+    # Cavalorn's HELFEN marks him (vanilla.py), the end of his quest unmarks him: let go in between, he stays
+    assert await _let_go(dialog_first=True) == [(GORN, 1)]
+    assert await _let_go(dialog_first=False) == [(GORN, 1), (GORN, 1)]
+
+
+async def _let_go(*, dialog_first: bool) -> list[tuple[str, int]]:
+    """The `party` effects sent when a companion dialog marks Gorn before or after he goes with the hero,
+    and the hero then lets him go."""
+    fake = FakeGame()
+    cm, dialogue, talk = await _desk(fake, FakeBackend("-", delay=0))
+    try:
+        if dialog_first:
+            await talk.link.story_effect(GORN, [{"do": "party", "value": 1}])
+        await _follows(fake, dialogue)
+        await fake.roster(person(GORN, "Горн", 4))
+        if not dialog_first:
+            await _until(lambda: party(fake) == [(GORN, 1)])
+            await talk.link.story_effect(GORN, [{"do": "party", "value": 1}])
+        await fake.send(type="player_text", text="Свободен.")
+        await _until(lambda: GORN not in fake.attached)
+        await fake.roster(person(GORN, "Горн", 4))
+        await asyncio.sleep(0.1)
+    finally:
+        await cm.__aexit__(None, None, None)
+    return party(fake)
+
+
 def party(fake: FakeGame) -> list[tuple[str, int]]:
     return [
         (m["npc"], e["value"])
