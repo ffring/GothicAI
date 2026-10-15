@@ -307,7 +307,7 @@ class DynamicWorld final {
     struct MovableVobSnapshot {
       uintptr_t          id = 0;
       std::string        visual, className;
-      bool               blocksWalking = false, enabled = false, sleeping = true, touchedByNpc = false;
+      bool               blocksWalking = false, legacyCollision = true, enabled = false, sleeping = true, touchedByNpc = false;
       float              mass = 0;
       Tempest::Matrix4x4 transform;
       Tempest::Vec3      velocity;

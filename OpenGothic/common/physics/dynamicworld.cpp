@@ -948,7 +948,9 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
   const bool enabled = movableVobs->enabled && shape.hull!=nullptr && std::isfinite(obj.movableMass) && obj.movableMass>0.f;
   if(enabled)
     obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
-  if(enabled || obj.legacyCollision) {
+  // cd_dynamic controls the original mesh queries independently of simulation.
+  // The hull can move and receive impacts without becoming a new walking/ray obstacle.
+  if(obj.legacyCollision) {
     const int category = !enabled ? C_Object : obj.blocksWalking ? C_MovableQuery : C_SmallVobQuery;
     for(const auto& part:shape.parts) {
       auto matrix = obj.origin;
@@ -999,6 +1001,7 @@ std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot()
     entry.visual = obj->visual;
     entry.className = obj->className;
     entry.blocksWalking = obj->blocksWalking;
+    entry.legacyCollision = obj->legacyCollision;
     entry.enabled = obj->body!=nullptr;
     entry.mass = obj->movableMass;
     entry.transform = obj->body!=nullptr ? obj->body->matrix() : obj->current;
