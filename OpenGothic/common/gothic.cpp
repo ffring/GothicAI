@@ -99,6 +99,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "arrow_sticking",      1);
   defaults->set("GAME", "spell_physics",       1);
   defaults->set("GAME", "movable_vobs",        1);
+  defaults->set("GAME", "physics_noise",       1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -907,7 +908,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","arrow_physics")!=0,
     settingsGetI("GAME","arrow_sticking")!=0,
     settingsGetI("GAME","spell_physics")!=0,
-    settingsGetI("GAME","movable_vobs")!=0
+    settingsGetI("GAME","movable_vobs")!=0,
+    settingsGetI("GAME","physics_noise")!=0
     };
   }
 
@@ -917,8 +919,10 @@ void Gothic::setupSettings() {
   refreshPhysicsFlags();
   if(game!=nullptr)
     game->setupSettings();
-  if(auto* activeWorld = world())
+  if(auto* activeWorld = world()) {
     activeWorld->physic()->setMovableVobsEnabled(physicsFlagsCache.movableVobs);
+    activeWorld->physic()->setPhysicsNoiseEnabled(physicsFlagsCache.physicsNoise);
+    }
 
   const float soundVolume = settingsSoundVolume();
   if(sndDev)

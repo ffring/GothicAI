@@ -22,6 +22,7 @@ class TriggerEvent;
 class AbstractTrigger;
 class CsCamera;
 class CollisionZone;
+struct PhysicsNoise;
 
 class WorldObjects final {
   public:
@@ -136,6 +137,8 @@ class WorldObjects final {
 
     void           sendPassivePerc  (Npc& self, Npc& other, Npc* victim, Item* itm, int32_t perc);
     void           sendImmediatePerc(Npc& self, Npc& other, Npc& victim, Item* itm, int32_t perc);
+
+    void           emitPhysicsNoise(const PhysicsNoise& noise);
 
     void           resetPositionToTA();
 

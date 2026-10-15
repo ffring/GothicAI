@@ -64,6 +64,7 @@
 #include "graphics/mesh/skeleton.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
+#include "physics/physicsnoise.h"
 #include "world/objects/npc.h"
 #include "world/objects/item.h"
 #include "world/objects/interactive.h"
@@ -613,6 +614,19 @@ struct Bench {
   std::string movablePhase;
   uint64_t movablePhaseStart=0,movableSampleTick=0;
   std::vector<LivingPhysics> movablePhysics;
+  struct NoiseListener { Npc* npc=nullptr; std::string role; Vec3 initial; unsigned heard=0; };
+  std::vector<NoiseListener> noiseListeners;
+  bool noiseTrace=false,noiseHasPushed=false;
+  std::string noisePhase;
+  uint64_t noiseStart=0;
+  Vec3 noiseSource;
+  Matrix4x4 noiseTableInitial;
+  float noiseTableMaximumTilt=0;
+  std::unordered_map<uint32_t,unsigned> noisePerceptions;
+  std::unordered_map<const Npc*,uint32_t> noiseNpcIds;
+  uint32_t noiseNextNpcId=0;
+  Npc* noiseHost=nullptr;
+  uint64_t noiseMeasuredImpacts=0,noiseMeasuredHeard=0,noiseMeasuredRays=0;
   Npc* arrowNpc=nullptr;
   std::string arrowCase,arrowAim;
   float arrowDraw=1.f;
@@ -2592,6 +2606,7 @@ void prepareMovableFixture(World& world,Npc& player) {
     if(name.find("CORAGON")!=std::string::npos || name.find("KORAGON")!=std::string::npos) {host=npc;break;}
     }
   if(!host) {arenaAbort("movable fixture requires Coragon in the loaded Khorinis world");return;}
+  bench.noiseHost=host;
   const auto all=world.physic()->movableVobSnapshot();
   std::map<std::string,size_t> noncollidingClasses,mapClasses;
   for(const auto& body:all)
@@ -2711,6 +2726,251 @@ void prepareMovableFixture(World& world,Npc& player) {
     ",\"enabled\":"+(world.physic()->movableVobsEnabled()?"true":"false")+
     ",\"walk_start_cm\":"+ragdollVector(laneStart)+",\"walk_end_cm\":"+ragdollVector(laneEnd)+
     ",\"mass_examples\":"+massExamples+"],\"bodies\":"+movableRows(world));
+  }
+
+float noiseFacingError(const Npc& npc,const Vec3& point) {
+  const auto direction=point-npc.position();
+  const float desired=std::atan2(direction.z,direction.x)*180.f/float(M_PI);
+  return std::abs(std::remainder(desired-npc.rotation(),360.f));
+  }
+
+uint32_t noiseNpcId(const Npc* npc) {
+  if(npc==nullptr)return 0;
+  const auto found=bench.noiseNpcIds.find(npc);
+  if(found!=bench.noiseNpcIds.end())return found->second;
+  const auto id=++bench.noiseNextNpcId;
+  bench.noiseNpcIds.emplace(npc,id);
+  return id;
+  }
+
+std::string noiseListenerRows(World& world) {
+  std::string rows="[";
+  for(const auto& listener:bench.noiseListeners) {
+    if(rows.size()>1)rows+=',';
+    const auto& npc=*listener.npc;
+    rows+="{\"role\":"+jsonStr(listener.role)+",\"npc_id\":"+std::to_string(noiseNpcId(&npc))+
+      ",\"npc\":"+jsonStr(symName(world,&npc))+
+      ",\"position_cm\":"+ragdollVector(npc.position())+",\"head_cm\":"+ragdollVector(npc.mapHeadBone())+
+      ",\"yaw_deg\":"+ragdollNumber(npc.rotation())+
+      ",\"distance_cm\":"+ragdollNumber((npc.position()-bench.noiseSource).length())+
+      ",\"occlusion\":"+ragdollNumber(world.physic()->soundOclusion(bench.noiseSource,npc.mapHeadBone()))+
+      ",\"facing_error_deg\":"+ragdollNumber(noiseFacingError(npc,bench.noiseSource))+
+      ",\"hero_error_deg\":"+ragdollNumber(noiseFacingError(npc,world.player()->position()))+
+      ",\"heard\":"+std::to_string(listener.heard)+",\"external\":"+(npc.isExternalControl()?"true":"false")+
+      ",\"eligible\":"+(npc.canHearPhysicsNoise()?"true":"false")+
+      ",\"process_policy\":"+std::to_string(int(npc.processPolicy()))+
+      ",\"dialogue\":"+(Gothic::inst().isNpcInDialog(npc)?"true":"false")+"}";
+    }
+  return rows+"]";
+  }
+
+void noiseBegin(World& world,std::string_view phase,const Vec3& source) {
+  bench.noiseTrace=true;bench.noisePhase=phase;bench.noiseStart=world.tickCount();bench.noiseSource=source;
+  bench.noiseHasPushed=false;
+  bench.noisePerceptions.clear();
+  for(auto& listener:bench.noiseListeners)listener.heard=0;
+  }
+
+// Select actual supported tavern/world floor, using the same acoustic query as
+// hearing. No synthetic wall, injected noise, spell sound or direct NPC turn.
+bool noiseFloor(World& world,const Vec3& source,float distance,bool wall,Vec3& result,bool distant=false) {
+  float best=-1;
+  for(unsigned step=0;step<96;++step) {
+    const float angle=float(step)*float(M_PI)/48.f;
+    auto point=source+Vec3(std::cos(angle)*distance,0,std::sin(angle)*distance);
+    const auto floor=world.physic()->landRay(point+Vec3(0,180,0),400);
+    if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-bench.movableWalkStart.y)>70)continue;
+    point.y=floor.v.y;
+    bool free=true;
+    for(const auto offset:{Vec3(35,0,0),Vec3(-35,0,0),Vec3(0,0,35),Vec3(0,0,-35)})
+      if(world.physic()->ray(point+Vec3(0,85,0),point+offset+Vec3(0,85,0)).hasCol)free=false;
+    if(!free)continue;
+    const float occlusion=world.physic()->soundOclusion(source,point+Vec3(0,160,0));
+    if(wall) {
+      // 1200 cm is the engine's maximum physical-impact radius. This
+      // endpoint is inside that radius but inaudible even at maximum volume.
+      if(distance<=1200.f*(1.f-occlusion)+100.f || occlusion<.12f)continue;
+      } else if(!distant && occlusion>.05f)continue;
+    const float score=wall?occlusion:float(step==0 ? 2 : 1);
+    if(score>best) {best=score;result=point;}
+    }
+  return best>=0;
+  }
+
+Npc* noiseAddListener(World& world,std::string role,const Vec3& point,Npc* npc=nullptr) {
+  if(npc==nullptr)npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),point);
+  if(!npc) {arenaAbort("physics noise listener insertion failed");return nullptr;}
+  npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setInteraction(nullptr,true);
+  npc->closeWeapon(true);npc->setPosition(point);npc->setExternalControl(false);
+  npc->setProcessPolicy(NpcProcessPolicy::AiNormal);
+  npc->setDirection(point-bench.noiseSource);npc->updateTransform();
+  // A native wait keeps the normal actor in this fixture without teleporting
+  // or rotating it during observation. Hearing executes before this wait gate.
+  npc->aiPush(AiQueue::aiWait(60000));
+  const auto callback=world.script().findSymbolIndex("B_ASSESSQUIETSOUND");
+  if(callback!=size_t(-1))npc->setPerceptionEnable(PERC_ASSESSQUIETSOUND,callback);
+  bench.noiseListeners.push_back({npc,std::move(role),point,0});
+  return npc;
+  }
+
+void noiseRetireListeners() {
+  for(const auto& listener:bench.noiseListeners) {
+    listener.npc->clearAiQueue();listener.npc->setExternalControl(true);
+    }
+  bench.noiseListeners.clear();
+  }
+
+void prepareNoiseFixture(World& world,Npc& player) {
+  if(!bench.movableReady)prepareMovableFixture(world,player);
+  if(!bench.movableReady)return;
+  for(uint32_t i=0;i<world.npcCount();++i)
+    if(auto* npc=world.npcById(i);npc && npc!=&player && (npc->position()-bench.movableCenter).length()<1400.f) {
+      npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+      }
+  bench.noiseTrace=true;
+  event("physics_noise_setup","\"world\":"+jsonStr(world.name())+",\"table_id\":"+
+    std::to_string(bench.movableTable)+",\"enabled\":"+(world.physic()->physicsNoiseEnabled()?"true":"false"));
+  }
+
+void noisePushTable(World& world) {
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    if(body.id!=bench.movableTable)continue;
+    const auto* mesh=Resources::loadMesh(body.visual);if(!mesh)break;
+    const auto* bounds=mesh->bbox();auto center=(bounds[0]+bounds[1])*.5f;body.transform.project(center);
+    auto point=(bounds[0]+bounds[1])*.5f;
+    point.y=bounds[1].y;
+    // Push across the narrower tabletop edge so the native hull rotates,
+    // rather than receiving another centre-of-mass translation.
+    const bool narrowX=bounds[1].x-bounds[0].x<bounds[1].z-bounds[0].z;
+    if(narrowX)point.x=bounds[1].x;
+    else point.z=bounds[1].z;
+    body.transform.project(point);
+    auto direction=point-center;direction.y=0;
+    direction=Vec3::normalize(direction);
+    // A real native impulse couple tips the table in place: the equal COM
+    // reaction cancels linear momentum, preserving the 5 m hearing geometry.
+    const Vec3 force=direction*(6.f*body.mass),reaction=force*-1.f;
+    const auto pushed=world.physic()->applyMovableVobImpulse(center,140.f,
+      [force,mass=body.mass](const Vec3&,float targetMass) {
+        return std::abs(targetMass-mass)<.001f ? force : Vec3();
+        },nullptr,&point);
+    const auto reacted=world.physic()->applyMovableVobImpulse(center,140.f,
+      [reaction,mass=body.mass](const Vec3&,float targetMass) {
+        return std::abs(targetMass-mass)<.001f ? reaction : Vec3();
+        },nullptr,&center);
+    bench.noiseTableInitial=body.transform;bench.noiseTableMaximumTilt=0;bench.noiseHasPushed=true;
+    event("physics_noise_push","\"phase\":"+jsonStr(bench.noisePhase)+",\"table_id\":"+
+      std::to_string(body.id)+",\"affected\":"+std::to_string(pushed)+",\"mass_kg\":"+ragdollNumber(body.mass)+
+      ",\"impulse_ns\":"+ragdollVector(force)+",\"application_point_cm\":"+ragdollVector(point)+
+      ",\"reaction_impulse_ns\":"+ragdollVector(reaction)+",\"reaction_point_cm\":"+ragdollVector(center)+
+      ",\"reaction_affected\":"+std::to_string(reacted)+
+      ",\"transform\":"+ragdollMatrix(body.transform)+
+      ",\"spell\":false,\"culprit\":null");
+    if(!pushed || !reacted)arenaAbort("physics noise silent table impulse couple was blocked");
+    return;
+    }
+  arenaAbort("physics noise table absent");
+  }
+
+void noiseTableCase(World& world,Npc& player,bool push=true) {
+  noiseRetireListeners();
+  noiseBegin(world,"table",bench.movableCenter);
+  Vec3 near,wall,far;bool hasWall=false;
+  if(!noiseFloor(world,bench.noiseSource,500,false,near)) {arenaAbort("noise fixture lacks a clear 5m listener position");return;}
+  for(float distance:{500.f,600.f,700.f,800.f,900.f,1000.f,1100.f})
+    if(noiseFloor(world,bench.noiseSource,distance,true,wall)) {hasWall=true;break;}
+  if(!hasWall) {arenaAbort("noise fixture lacks an acoustically occluded floor behind a real wall");return;}
+  bool hasFar=false;
+  for(float distance:{1800.f,2000.f,2400.f,2800.f})
+    if(noiseFloor(world,bench.noiseSource,distance,false,far,true)) {hasFar=true;break;}
+  if(!hasFar) {arenaAbort("noise fixture lacks a supported distant listener position");return;}
+  if(!noiseAddListener(world,"near",near) || !noiseAddListener(world,"wall",wall) || !noiseAddListener(world,"far",far))return;
+  // The hero's bearing is visibly different from the table at the near NPC.
+  const auto side=Vec3::normalize(near-bench.noiseSource);
+  auto hero=near+Vec3(-side.z,0,side.x)*220.f;
+  const auto floor=world.physic()->landRay(hero+Vec3(0,180,0),400);
+  if(floor.hasCol)hero.y=floor.v.y;
+  player.setPosition(hero);player.setDirection(bench.noiseSource-hero);player.updateTransform();
+  bench.cam=C_Hold;lookFrom(near+Vec3(0,250,0),bench.noiseSource);
+  event("physics_noise_case","\"phase\":\"table\",\"source_cm\":"+ragdollVector(bench.noiseSource)+
+    ",\"listeners\":"+noiseListenerRows(world));
+  if(push)noisePushTable(world);
+  }
+
+void noiseDropItems(World& world,unsigned count) {
+  const auto instance=world.script().findSymbolIndex("ITFO_BEER");
+  if(instance==size_t(-1)) {arenaAbort("noise fixture beer Item instance unavailable");return;}
+  for(unsigned i=0;i<count;++i) {
+    auto matrix=Matrix4x4::mkIdentity();
+    // Native Item proxies have a 30 cm minimum diameter, even for this small
+    // mesh. Keep them separate until their ordinary simultaneous floor hits.
+    const float x=count==1 ? 0.f : (float(i%3)-1.f)*36.f;
+    const float z=count==1 ? 0.f : (float(i/3)-1.5f)*36.f;
+    matrix.translate(bench.noiseSource+Vec3(x,100.f,z));
+    auto* item=world.addItemDyn(instance,matrix,size_t(-1));
+    if(!item || item->physicsMass()<=0) {arenaAbort("noise fixture real dynamic cup Item has no native mass");return;}
+    event("physics_noise_drop","\"phase\":"+jsonStr(bench.noisePhase)+",\"ordinal\":"+
+      std::to_string(i)+",\"item\":\"ITFO_BEER\",\"mass_kg\":"+ragdollNumber(item->physicsMass())+
+      ",\"position_cm\":"+ragdollVector(item->position())+",\"drop_height_cm\":100");
+    }
+  }
+
+void noiseItemCase(World& world,Npc& player,std::string_view phase) {
+  noiseRetireListeners();
+  auto source=(bench.movableWalkStart+bench.movableWalkEnd)*.5f;
+  noiseBegin(world,phase,source);
+  Vec3 near,far;
+  if(!noiseFloor(world,source,110,false,near) || !noiseFloor(world,source,600,false,far,true)) {
+    arenaAbort("noise cup fixture lacks supported near/far floor");return;
+    }
+  if(phase=="dialogue" && bench.noiseHost==nullptr) {arenaAbort("physics noise dialogue needs the actual Coragon host");return;}
+  auto* listener=noiseAddListener(world,phase=="dialogue"?"dialogue":"near",near,
+    phase=="dialogue"?bench.noiseHost:nullptr);
+  if(!listener)return;
+  if(!noiseAddListener(world,"far",far))return;
+  player.setPosition(near+Vec3(0,0,80));player.setDirection(near-player.position());player.updateTransform();
+  event("physics_noise_case","\"phase\":"+jsonStr(phase)+",\"source_cm\":"+ragdollVector(source)+
+    ",\"listeners\":"+noiseListenerRows(world));
+  if(phase=="dialogue") {
+    listener->clearAiQueue();listener->aiPush(AiQueue::aiProcessInfo(player));
+    // Opening the actual output pipe takes a native tick; a separate command
+    // verifies the real dialog state before releasing the cup.
+    return;
+    }
+  noiseDropItems(world,phase=="burst"?10:1);
+  }
+
+void noiseCheckpoint(World& world) {
+  std::string perceptions="[";
+  for(const auto& [npc,count]:bench.noisePerceptions) {
+    if(perceptions.size()>1)perceptions+=',';
+    perceptions+="{\"npc_id\":"+std::to_string(npc)+",\"count\":"+std::to_string(count)+"}";
+    }
+  std::string table="null";
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(body.id==bench.movableTable) {table=ragdollMatrix(body.transform);break;}
+  event("physics_noise_checkpoint","\"phase\":"+jsonStr(bench.noisePhase)+",\"elapsed_ms\":"+
+    std::to_string(world.tickCount()-bench.noiseStart)+",\"listeners\":"+noiseListenerRows(world)+
+    ",\"perceptions\":"+perceptions+"],\"table_transform\":"+table+
+    ",\"table_maximum_tilt_deg\":"+ragdollNumber(bench.noiseTableMaximumTilt));
+  }
+
+void noiseFields(World& world) {
+  if(!bench.noiseTrace || bench.movableMeasuring || !bench.noiseHasPushed || bench.noisePhase!="table" || world.tickCount()-bench.noiseStart>2000)return;
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(body.id==bench.movableTable) {
+      const auto* before=bench.noiseTableInitial.data();const auto* after=body.transform.data();
+      const Vec3 a(before[4],before[5],before[6]),b(after[4],after[5],after[6]);
+      const float cosine=(a.x*b.x+a.y*b.y+a.z*b.z)/(a.length()*b.length());
+      const float tilt=std::acos(std::clamp(cosine,-1.f,1.f))*180.f/float(M_PI);
+      bench.noiseTableMaximumTilt=std::max(bench.noiseTableMaximumTilt,tilt);
+      }
+  for(const auto& listener:bench.noiseListeners)
+    if(listener.role=="near")
+      event("physics_noise_turn","\"elapsed_ms\":"+std::to_string(world.tickCount()-bench.noiseStart)+
+        ",\"npc_id\":"+std::to_string(noiseNpcId(listener.npc))+",\"facing_error_deg\":"+
+        ragdollNumber(noiseFacingError(*listener.npc,bench.noiseSource))+
+        ",\"hero_error_deg\":"+ragdollNumber(noiseFacingError(*listener.npc,world.player()->position())));
   }
 
 void prepareMovableCast(World& world,Npc& player) {
@@ -3498,6 +3758,25 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
     }
+  else if(c=="noise" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","physics_noise",a[1]=="on");
+    w.physic()->setPhysicsNoiseEnabled(a[1]=="on");
+    }
+  else if(c=="noise" && a.size()==2 && a[1]=="setup") prepareNoiseFixture(w,pl);
+  else if(c=="noise" && a.size()==2 && a[1]=="table") noiseTableCase(w,pl);
+  else if(c=="noise" && a.size()==2 && a[1]=="listeners") noiseTableCase(w,pl,false);
+  else if(c=="noise" && a.size()==2 && a[1]=="push") noisePushTable(w);
+  else if(c=="noise" && a.size()==2 && (a[1]=="cup" || a[1]=="burst" || a[1]=="dialogue")) noiseItemCase(w,pl,a[1]);
+  else if(c=="noise" && a.size()==2 && a[1]=="dialogue-drop") {
+    const auto* listener=bench.noiseListeners.empty()?nullptr:bench.noiseListeners.front().npc;
+    const bool active=listener && Gothic::inst().isNpcInDialog(*listener);
+    event("physics_noise_dialogue","\"active\":"+std::string(active?"true":"false")+
+      ",\"npc_id\":"+std::to_string(noiseNpcId(listener)));
+    if(!active) {arenaAbort("physics noise dialogue fixture did not open an actual native dialogue");return;}
+    bench.noiseStart=w.tickCount();
+    noiseDropItems(w,1);
+    }
+  else if(c=="noise" && a.size()==2 && a[1]=="checkpoint") noiseCheckpoint(w);
   else if(c=="movable" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","movable_vobs",a[1]=="on");
     w.physic()->setMovableVobsEnabled(a[1]=="on");
@@ -3572,6 +3851,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       arenaAbort("movable normal-game cadence measurement cannot start");return;
       }
     bench.movableMeasuring=true;bench.movablePhysics.clear();bench.movablePhysics.reserve(20000);bench.movableOverflow=false;
+    bench.noiseMeasuredImpacts=0;bench.noiseMeasuredHeard=0;bench.noiseMeasuredRays=0;
+    for(auto& listener:bench.noiseListeners)listener.heard=0;
     AppCadence::counts(true,uint32_t(bench.movableIds.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
     event("movable_measure_before","\"enabled\":"+std::string(w.physic()->movableVobsEnabled()?"true":"false")+
       ",\"bodies\":"+movableRows(w));
@@ -3581,6 +3862,11 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     AppCadence::counts(false,uint32_t(bench.movableIds.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
     event("movable_measure_after","\"overflow\":"+std::string(bench.movableOverflow?"true":"false")+
       ",\"bodies\":"+movableRows(w));
+    if(bench.noiseTrace)
+      event("physics_noise_measure_after","\"enabled\":"+std::string(w.physic()->physicsNoiseEnabled()?"true":"false")+
+        ",\"impacts\":"+std::to_string(bench.noiseMeasuredImpacts)+",\"perceptions\":"+
+        std::to_string(bench.noiseMeasuredHeard)+",\"native_rays\":"+std::to_string(bench.noiseMeasuredRays)+
+        ",\"listeners\":"+noiseListenerRows(w));
     if(auto* file=std::fopen((outDir+"/movable-physics.csv").c_str(),"w")) {
       std::fprintf(file,"sample,t_game_ms,dt_ms,step_ms,native_bodies\n");
       for(size_t i=0;i<bench.movablePhysics.size();++i) {const auto& row=bench.movablePhysics[i];
@@ -7233,6 +7519,63 @@ bool TestBench::isActive() {
   return scenarioPath!=nullptr;
   }
 
+void TestBench::physicsNoise(const PhysicsNoise& noise,std::string_view sound,bool played) {
+  if(scenarioPath==nullptr || !bench.noiseTrace)return;
+  if(bench.movableMeasuring) {++bench.noiseMeasuredImpacts;return;}
+  const char* material="unknown";
+  switch(noise.material) {
+    case MAT_WOOD:material="wood";break;
+    case MAT_METAL:material="metal";break;
+    case MAT_STONE:material="stone";break;
+    case MAT_CLAY:material="clay";break;
+    case MAT_GLAS:material="glass";break;
+    case MAT_LEATHER:material="leather";break;
+    default:break;
+    }
+  auto* world=Gothic::inst().world();
+  std::string listeners="[";
+  if(world)for(const auto& listener:bench.noiseListeners) {
+    if(listeners.size()>1)listeners+=',';
+    const auto head=listener.npc->mapHeadBone();
+    const auto occlusion=world->physic()->soundOclusion(head,noise.position);
+    listeners+="{\"role\":"+jsonStr(listener.role)+",\"npc_id\":"+std::to_string(noiseNpcId(listener.npc))+
+      ",\"distance_cm\":"+ragdollNumber((head-noise.position).length())+
+      ",\"occlusion\":"+ragdollNumber(occlusion)+",\"effective_radius_cm\":"+
+      ragdollNumber(noise.radius*(1.f-occlusion))+"}";
+    }
+  event("physics_noise","\"phase\":"+jsonStr(bench.noisePhase)+",\"t_game_ms\":"+
+    std::to_string(world?world->tickCount():0)+",\"body\":"+std::to_string(noise.body)+
+    ",\"position_cm\":"+ragdollVector(noise.position)+",\"volume\":"+ragdollNumber(noise.volume)+
+    ",\"radius_cm\":"+ragdollNumber(noise.radius)+",\"impulse_ns\":"+ragdollNumber(noise.impulse)+
+    ",\"material\":"+jsonStr(material)+",\"surface_material\":"+std::to_string(int(noise.surface))+
+    ",\"what\":"+jsonStr(noise.what)+",\"culprit\":"+
+    (world && noise.culprit?std::to_string(noiseNpcId(noise.culprit)):"null")+
+    ",\"sound\":"+jsonStr(sound)+",\"played\":"+(played?"true":"false")+
+    ",\"listeners\":"+listeners+"]");
+  }
+
+void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool callbackDispatched) {
+  if(scenarioPath==nullptr || !bench.noiseTrace)return;
+  if(bench.movableMeasuring) {
+    ++bench.noiseMeasuredHeard;
+    for(auto& listener:bench.noiseListeners)
+      if(listener.npc==&npc)++listener.heard;
+    return;
+    }
+  auto* world=Gothic::inst().world();if(!world)return;
+  const auto id=noiseNpcId(&npc);
+  ++bench.noisePerceptions[id];
+  std::string_view role;
+  for(auto& listener:bench.noiseListeners)
+    if(listener.npc==&npc) {++listener.heard;role=listener.role;}
+  event("physics_noise_heard","\"phase\":"+jsonStr(bench.noisePhase)+",\"t_game_ms\":"+
+    std::to_string(world->tickCount())+",\"npc_id\":"+std::to_string(id)+",\"role\":"+jsonStr(role)+
+    ",\"body\":"+std::to_string(noise.body)+",\"position_cm\":"+ragdollVector(noise.position)+
+    ",\"perception\":"+std::to_string(int(PERC_ASSESSQUIETSOUND))+
+    ",\"callback_dispatched\":"+(callbackDispatched?"true":"false")+
+    ",\"culprit\":"+(noise.culprit?std::to_string(noiseNpcId(noise.culprit)):"null"));
+  }
+
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
   stopRecording();
   if(bench.csv!=nullptr)
@@ -7306,6 +7649,7 @@ void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view 
   }
 
 void TestBench::bodyForget(const Npc* npc) {
+  if(bodyTraceAlive && bench.noiseTrace)bench.noiseNpcIds.erase(npc);
   if(bodyTracing() || (ragdollTrace && bodyTraceAlive && bench.started && !bench.done)) {
     bench.bodyIds.erase(npc);
     for(auto it=bench.savedRagdollNpcs.begin();it!=bench.savedRagdollNpcs.end();) {
@@ -7551,6 +7895,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   stickingFields(*world);
   spellFields(*world);
   movableFields(*world);
+  noiseFields(*world);
   if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
     player->endCastSpell(false);bench.spellReleaseAt=0;
     event("spell_physics_release","\"id\":"+std::to_string(bench.spellCastingId));
@@ -7639,6 +7984,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
   if(bench.movableMeasuring && !AppCadence::done()) {
     const auto stats=world->physic()->physicsStats();
+    bench.noiseMeasuredRays+=stats.rays;
     if(bench.movablePhysics.size()<20000)
       bench.movablePhysics.push_back({world->tickCount(),dt,stats.stepMilliseconds,stats.bodies});
     else bench.movableOverflow=true;

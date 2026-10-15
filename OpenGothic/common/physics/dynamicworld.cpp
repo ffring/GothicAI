@@ -42,6 +42,15 @@ constexpr uint32_t landscapeMask = (1u << DynamicWorld::C_Landscape) | (1u << Dy
 constexpr uint32_t visualMask    = landscapeMask | (1u << DynamicWorld::C_SmallVobQuery);
 constexpr uint32_t waterMask     = 1u << DynamicWorld::C_Water;
 
+ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
+  switch(material) {
+    case zenkit::MaterialGroup::METAL: return MAT_METAL;
+    case zenkit::MaterialGroup::STONE: return MAT_STONE;
+    case zenkit::MaterialGroup::WOOD:  return MAT_WOOD;
+    default:                          return MAT_CLAY;
+    }
+  }
+
 double volumeScale(const Tempest::Matrix4x4& matrix) {
   const auto* m = matrix.data();
   return std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
@@ -829,6 +838,7 @@ DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, cons
     return Item();
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,false,false,&shape->mesh);
+  obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
   return Item(this,obj.release());
   }
 
@@ -837,6 +847,7 @@ DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, con
     return Item();
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,true,false,&shape->mesh);
+  obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
   return Item(this,obj.release());
   }
 
@@ -852,6 +863,7 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   JPH::ShapeRefC shape = new JPH::BoxShape(halfExtent);
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addDynamicBody(shape,pos,materialFriction(mat),mass);
+  obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");
   return Item(this,obj.release());
   }
 
@@ -955,8 +967,10 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
   const bool enabled = movableVobs->enabled && shape.hull!=nullptr && std::isfinite(obj.movableMass) && obj.movableMass>0.f;
   if(enabled)
     obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
-  if(obj.body!=nullptr)
+  if(obj.body!=nullptr) {
     obj.body->setPayload(&obj,P_MovableVob);
+    obj.body->setNoiseProfile(impactMaterial(shape.material),shape.material,obj.visual);
+    }
   // cd_dynamic controls the original mesh queries independently of simulation.
   // The hull can move and receive impacts without becoming a new walking/ray obstacle.
   if(obj.legacyCollision) {
@@ -1002,6 +1016,18 @@ void DynamicWorld::setMovableVobsEnabled(bool enabled) {
 
 bool DynamicWorld::movableVobsEnabled() const {
   return movableVobs->enabled;
+  }
+
+void DynamicWorld::setPhysicsNoiseEnabled(bool enabled) {
+  world->setPhysicsNoiseEnabled(enabled);
+  }
+
+bool DynamicWorld::physicsNoiseEnabled() const {
+  return world->physicsNoiseEnabled();
+  }
+
+void DynamicWorld::setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback) {
+  world->setPhysicsNoiseCallback(std::move(callback));
   }
 
 std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::movableVobPose(uint32_t zenId) const {
@@ -1099,7 +1125,8 @@ std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot()
   }
 
 size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
-                                           const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse) {
+                                           const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse,
+                                           Npc* culprit, const Tempest::Vec3* pointCm) {
   if(!movableVobs->enabled || !std::isfinite(radius) || radius<=0.f || !impulse)
     return 0;
   size_t count = 0;
@@ -1118,7 +1145,7 @@ size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float r
       excluded.push_back(part.get());
     if(world->rayCast(center,target,visualMask,false,nullptr,&excluded).hasHit)
       continue;
-    if(obj->body->addImpulse(force))
+    if(obj->body->addImpulse(force,culprit,pointCm))
       ++count;
     }
   return count;
@@ -1602,6 +1629,12 @@ void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4& m) {
 void DynamicWorld::Item::setItem(::Item* it) {
   assert(obj->body->category()==DynamicWorld::C_Item);
   obj->body->setPayload(it,P_Item);
+  if(it!=nullptr) {
+    const auto material=ItemMaterial(it->handle().material);
+    const auto surface=material==MAT_WOOD ? zenkit::MaterialGroup::WOOD :
+                       material==MAT_METAL ? zenkit::MaterialGroup::METAL : zenkit::MaterialGroup::STONE;
+    obj->body->setNoiseProfile(material,surface,it->handle().visual);
+    }
   }
 
 void DynamicWorld::Item::setInteractive(Interactive* it) {
@@ -1629,8 +1662,8 @@ bool DynamicWorld::Item::isSleeping() const {
   return obj==nullptr || obj->body==nullptr || obj->body->isSleeping();
   }
 
-bool DynamicWorld::Item::addImpulse(const Tempest::Vec3& impulseNs) {
-  return obj!=nullptr && obj->body!=nullptr && obj->body->addImpulse(impulseNs);
+bool DynamicWorld::Item::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit) {
+  return obj!=nullptr && obj->body!=nullptr && obj->body->addImpulse(impulseNs,culprit);
   }
 
 void DynamicWorld::Item::setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback) {

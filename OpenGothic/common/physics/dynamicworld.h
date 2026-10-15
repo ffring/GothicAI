@@ -1,6 +1,7 @@
 #pragma once
 
 #include <zenkit/Mesh.hh>
+#include "physics/physicsnoise.h"
 
 #include <Tempest/Matrix4x4>
 #include <functional>
@@ -157,7 +158,7 @@ class DynamicWorld final {
         Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
         bool isSleeping() const;
         // World-space newton seconds (kg * metres/second), with native wake.
-        bool addImpulse(const Tempest::Vec3& impulseNs);
+        bool addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
         void setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback);
 
       private:
@@ -313,6 +314,9 @@ class DynamicWorld final {
                                  bool legacyCollision = true, uint32_t zenId = uint32_t(-1));
     void           setMovableVobsEnabled(bool enabled);
     bool           movableVobsEnabled() const;
+    void           setPhysicsNoiseEnabled(bool enabled);
+    bool           physicsNoiseEnabled() const;
+    void           setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
     void           saveMovableVobs(Serialize& fout) const;
     void           loadMovableVobs(Serialize& fin);
     std::shared_ptr<const MovableVobPose> movableVobPose(uint32_t zenId) const;
@@ -331,7 +335,8 @@ class DynamicWorld final {
     // centre of mass in world centimetres. Geometry occludes the blast, with the
     // target's own mesh excluded from the visibility query.
     size_t applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
-                                 const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse);
+                                 const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse,
+                                 Npc* culprit = nullptr, const Tempest::Vec3* pointCm = nullptr);
     std::unique_ptr<Ragdoll> createRagdoll(const Skeleton& skeleton, const HitZones& zones,
                                           const Tempest::Matrix4x4* worldPose, size_t numBones,
                                           const Tempest::Matrix4x4& objectMatrix,

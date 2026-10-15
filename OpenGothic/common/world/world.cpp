@@ -27,6 +27,7 @@
 #include "resources.h"
 #include "frameprofile.h"
 #include "testbench.h"
+#include "physics/physicsnoise.h"
 
 const char* materialTag(ItemMaterial src) {
   switch(src) {
@@ -117,6 +118,8 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     loadProgress(60);
 
     wdynamic = wdynamicFut.get();
+    wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
+    wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     world.world_mesh = zenkit::Mesh();
     loadProgress(70);
 
@@ -541,6 +544,7 @@ void World::scaleTime(uint64_t& dt) {
 
 void World::tick(uint64_t dt) {
   wdynamic->setMovableVobsEnabled(Gothic::physicsFlags().movableVobs);
+  wdynamic->setPhysicsNoiseEnabled(Gothic::physicsFlags().physicsNoise);
   if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;
@@ -862,7 +866,7 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     // delta velocity, so object scale and species mass use the same rule.
     if(impulse.quadLength()<=0.f || (wind && impulse.length()/npc.physicsMass()<1.f))
       return;
-    if(!npc.addSpellImpulse(impulse))
+    if(!npc.addSpellImpulse(impulse,true,caster))
       return;
     ++npcHits;
     if(TestBench::isActive()) {
@@ -876,7 +880,7 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     });
   detectItem(center,radius,[&](Item& item) {
     const auto impulse = impulseAt(item.midPosition());
-    if(impulse.quadLength()>0.f && item.addSpellImpulse(impulse))
+    if(impulse.quadLength()>0.f && item.addSpellImpulse(impulse,caster))
       ++itemHits;
     });
   const auto vobHits = physic()->applyMovableVobImpulse(center,radius,[&](const Vec3& to, float mass) {
@@ -888,7 +892,7 @@ void World::applySpellImpact(int32_t spellId, const Tempest::Vec3& point, Npc* c
     if(length>limit)
       impulse *= limit/length;
     return impulse;
-    });
+    },caster);
   if(TestBench::isActive()) {
     char buf[256];
     std::snprintf(buf,sizeof(buf),"spell physics impact id %d at %.9g %.9g %.9g npc %zu items %zu vobs %zu",
@@ -938,6 +942,7 @@ void World::tickSpellFields(uint64_t dt) {
   if(seconds<=0.f)
     return;
   for(const auto& field:spellFields) {
+    auto* caster = wobj.validateNpc(field.caster);
     auto impulseAt = [&](const Vec3& position) {
       const auto r = position-field.center;
       const float distance = Vec3(r.x,0,r.z).length();
@@ -956,12 +961,12 @@ void World::tickSpellFields(uint64_t dt) {
       };
     detectNpc(field.center,550.f,[&](Npc& npc) {
       if(&npc==field.target && &npc!=field.caster)
-        npc.addSpellImpulse(impulseAt(npc.position()),false);
+        npc.addSpellImpulse(impulseAt(npc.position()),false,caster);
       });
     detectItem(field.center,550.f,[&](Item& item) {
       const auto impulse = impulseAt(item.position());
       if(impulse.quadLength()>0.f)
-        item.addSpellImpulse(impulse);
+        item.addSpellImpulse(impulse,caster);
       });
     }
   }
@@ -1090,6 +1095,29 @@ Sound World::addLandHitEffect(ItemMaterial src, zenkit::MaterialGroup reciver, c
   // IHI - item hits item
   // IHL - Item hits Level
   return addHitEffect(materialTag(src),materialTag(reciver),"IHL",pos);
+  }
+
+void World::emitPhysicsNoise(const PhysicsNoise& noise) {
+  // Gothic has no CS_IHL_CL_* instances. Its existing clay contact samples are
+  // named for the reverse pair (wood/metal/stone hitting clay).
+  const auto surface = noise.surface==zenkit::MaterialGroup::UNDEFINED || noise.surface==zenkit::MaterialGroup::NONE ?
+                       "ST" : materialTag(noise.surface);
+  const auto claySurface = noise.surface==zenkit::MaterialGroup::WOOD ? "WO" :
+                           noise.surface==zenkit::MaterialGroup::METAL ? "ME" : "ST";
+  std::string name = noise.material==MAT_CLAY ? std::string("CS_IHL_")+claySurface+"_CL.wav" :
+                                              std::string("CS_IHL_")+materialTag(noise.material)+'_'+surface;
+  auto sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
+  // Some Gothic installations reference clay samples without shipping them.
+  // Reuse the existing vessel impact in that case, keeping the event's material.
+  if(sound.isEmpty() && noise.material==MAT_CLAY) {
+    name = std::string("CS_IHL_GL_")+surface;
+    sound = Sound(*this,Sound::T_Regular,name,noise.position,noise.radius,false);
+    }
+  sound.setVolume(sound.volume()*noise.volume);
+  sound.play();
+  if(TestBench::isActive())
+    TestBench::physicsNoise(noise,name,!sound.isEmpty());
+  wobj.emitPhysicsNoise(noise);
   }
 
 Sound World::addWeaponBlkEffect(ItemMaterial src, ItemMaterial reciver, const Tempest::Matrix4x4& pos) {

@@ -4,6 +4,7 @@
 #include "dynamicworld.h"
 #include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/skeleton.h"
+#include "world/objects/npc.h"
 
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -716,6 +717,9 @@ struct Ragdoll::Impl final {
   std::vector<size_t> poseBones;
   bool legacyAncestors=false;
   uint32_t group=0;
+  std::weak_ptr<zenkit::INpc> npc,culprit;
+  uint64_t culpritUntilStep=0;
+  uint64_t nextNoiseStep=0;
   bool kinematic=false;
   struct Hit { size_t part; Tempest::Vec3 pointCm,impulseNs; float strength; };
   std::vector<Hit> hits;
@@ -925,14 +929,45 @@ bool Ragdoll::valid() const { return impl->world!=nullptr && impl->native!=nullp
 bool Ragdoll::isKinematic() const { return impl->kinematic && impl->reactionBones.empty(); }
 
 bool Ragdoll::queueHit(size_t bone, const Tempest::Vec3& pointCm,
-                       const Tempest::Vec3& impulseNs, float strength) {
+                       const Tempest::Vec3& impulseNs, float strength, Npc* culprit) {
   if(!valid() || !finite(pointCm) || !finite(impulseNs) || !std::isfinite(strength) || strength<=0.f || strength>1.f ||
      std::abs(pointCm.x)>1.e8f || std::abs(pointCm.y)>1.e8f || std::abs(pointCm.z)>1.e8f ||
      impulseNs.quadLength()<=0.f || impulseNs.quadLength()>1.e8f) return false;
   const auto found=std::find(impl->rig->boneIndices.begin(),impl->rig->boneIndices.end(),bone);
   if(found==impl->rig->boneIndices.end()) return false;
   impl->hits.push_back({size_t(found-impl->rig->boneIndices.begin()),pointCm,impulseNs,strength});
+  setNoiseCulprit(culprit);
   return true;
+  }
+
+void Ragdoll::setNpc(Npc* npc) {
+  impl->npc=npc!=nullptr ? npc->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  }
+
+void Ragdoll::setNoiseCulprit(Npc* culprit) {
+  impl->culprit=culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  impl->culpritUntilStep=impl->world!=nullptr ? impl->world->simulationStep()+300 : 0;
+  }
+
+Npc* Ragdoll::noiseNpc() const {
+  const auto npc=impl->npc.lock();
+  return npc!=nullptr ? static_cast<Npc*>(npc->user_ptr) : nullptr;
+  }
+
+Npc* Ragdoll::noiseCulprit() const {
+  if(impl->world==nullptr || impl->world->simulationStep()>impl->culpritUntilStep) return nullptr;
+  const auto npc=impl->culprit.lock();
+  return npc!=nullptr ? static_cast<Npc*>(npc->user_ptr) : nullptr;
+  }
+
+bool Ragdoll::acceptNoise(uint64_t step) {
+  if(step<impl->nextNoiseStep) return false;
+  impl->nextNoiseStep=step+30;
+  return true;
+  }
+
+uint64_t Ragdoll::noiseId() const {
+  return (uint64_t(1)<<63)|impl->group;
   }
 
 float Ragdoll::reactionWeight() const { return impl->reactionWeight; }
@@ -1122,8 +1157,9 @@ void Ragdoll::setAllowSleeping(bool allow) {
   if(!allow) impl->native->Activate();
   }
 
-void Ragdoll::addImpulse(const Tempest::Vec3& impulse) {
+void Ragdoll::addImpulse(const Tempest::Vec3& impulse, Npc* culprit) {
   if(!valid() || impl->kinematic || !finite(impulse)) return;
+  setNoiseCulprit(culprit);
   auto& interface=impl->world->physicsSystem().GetBodyInterface();
   for(size_t i=0;i<partCount();++i) {
     const auto* settings=impl->native->GetRagdollSettings();
