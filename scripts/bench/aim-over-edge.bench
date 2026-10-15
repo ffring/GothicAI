@@ -1,0 +1,66 @@
+# The manual aim over an edge (docs/manual-aim.md): the hero aims by hand at a wolf below, the trunk bends
+# over the edge and the camera over the shoulder goes ahead and down with the head, so the game's camera
+# shows the wolf under the crosshair, not the roof or the wall in front. Then the aim goes level (the lean
+# eases out and in again, the camera with it), back down, the arrow, the bow lowered (the camera keeps the
+# lean until it is back). On the roof of Lobart's farm and from the gallery in Xardas' tower
+cheat god
+set time 12 0
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 100
+stats str 60 dex 60 bow 60
+
+goto pos 14591 2349 -14597        # the roof of Lobart's barn, the yard below
+wait 500
+face 247.5
+edge 247.5 2000 60
+insert Wolf
+wait 300
+immortal WOLF on                  # the farmers fight it: it would die (`WOLF` another one) or run off
+pin WOLF 160 0 -730
+tap bow
+wait 1500
+aimat WOLF body mouse
+cam game
+ui on
+wait 300
+rec roof
+press action
+wait 2000
+shot roof_drawn
+aimat ahead 2000 150 mouse
+wait 1500
+shot roof_level
+aimat WOLF body mouse
+wait 1500
+shot roof_again
+release action
+wait 1500
+press parade
+wait 300
+release parade
+wait 1000
+stop
+
+goto NW_XARDAS_TOWER_IN1_20       # the gallery in Xardas' tower: the wolf 5.6 m below, 1 m out from the
+wait 500                          # wall's foot (78 degrees down), hidden from the head
+edge 67.5
+wait 300
+face 67.5
+insert Wolf
+wait 300
+immortal WOLF on
+pin WOLF 135 0 -558
+aimat WOLF body mouse
+wait 300
+rec gallery
+press action
+wait 2000
+shot gallery_drawn
+release action
+wait 1500
+press parade
+wait 300
+release parade
+wait 1000
+stop

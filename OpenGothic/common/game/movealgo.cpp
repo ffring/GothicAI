@@ -9,6 +9,8 @@
 #include "testbench.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 
 // Read-only measurement around the existing movement step. Collision fields describe only calls
 // through MoveAlgo::tryMove: Npc::tryMove exposes success, not DynamicWorld's internal MoveCode.
@@ -371,6 +373,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     return true;
     }
 
+  npc.checkRagdollQuestHazard();
+
   // water interaction
   if(!canFlyOverWater() && !dead && ground<water) {
     if(swim) {
@@ -385,6 +389,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       // setState(Dive);
       }
     else if(gpos + chest <= water+0.01f && npc.hasSwimAnimations()) {
+      if(npc.recoverSpellThrow())
+        return true;
       if(state!=Swim && state!=Dive) {
         const bool splash = grav || fallSpeed.quadLength() >= 1.f;
         setState(Swim);
@@ -427,6 +433,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       }
     return true;
     }
+
+  // A bottomless fall cannot reach the normal landing callback.
+  if(!gValid && npc.needsRagdollQuestReturn() && npc.recoverSpellThrow())
+    return true;
 
   // above ground/void
   if(!gValid || (pos.y>ground && dY >= stickThreshold && state!=InWater)) {
@@ -497,6 +507,9 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
 
   // no longer in air - ground code
   if(state==InAir || state==Falling) {
+    // Resolve the protected throw before landing damage can lose the NPC.
+    if(npc.recoverSpellThrow())
+      return true;
     // attach to ground
     npc.takeFallDamage(fallSpeed);
     setState(Run);
@@ -582,6 +595,29 @@ void MoveAlgo::takeRagdollControl() {
   // Its stale InAir gate must not block queued script actions after the body settles.
   clearSpeed();
   flags = Run;
+  }
+
+bool MoveAlgo::addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction) {
+  if(npc.isDown() || npc.spellFrozen() || !std::isfinite(massKg) || massKg<=0.f ||
+     !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
+     (flags!=Run && flags!=Falling && flags!=InAir))
+    return false;
+  if(!npc.setInteraction(nullptr,true))
+    return false;
+  if(reaction) {
+    npc.setAnimAngGet(Npc::Anim::FallDeepB);
+    npc.setAnimRotate(0);
+    }
+  if(fallCount>0.f)
+    fallSpeed /= fallCount;
+  // N*s / kg gives m/s; the existing movement integrator uses cm/ms.
+  fallSpeed += impulseNs*(0.1f/massKg);
+  const float speed = fallSpeed.length();
+  if(speed>2.f)
+    fallSpeed *= 2.f/speed;
+  fallCount = 0;
+  setState(InAir);
+  return true;
   }
 
 bool MoveAlgo::accessDamFly(float dx, float dz, char hitType) {

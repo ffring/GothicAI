@@ -173,6 +173,11 @@ Marvin::Marvin() {
     {"toggle npcmanualaim",        C_ToggleNpcManualAim},
     {"toggle flinch",              C_ToggleFlinch},
     {"toggle ragdoll",             C_ToggleRagdoll},
+    {"toggle ragdoll_quest_guard", C_ToggleRagdollQuestGuard},
+    {"toggle living_bodies",      C_ToggleLivingBodies},
+    {"toggle arrow_physics",      C_ToggleArrowPhysics},
+    {"toggle arrow_sticking",     C_ToggleArrowSticking},
+    {"toggle spell_physics",      C_ToggleSpellPhysics},
     };
   }
 
@@ -543,6 +548,21 @@ bool Marvin::exec(std::string_view v) {
       return true;
     case C_ToggleRagdoll:
       Gothic::settingsSetI("GAME","ragdoll",Gothic::settingsGetI("GAME","ragdoll")==0 ? 1 : 0);
+      return true;
+    case C_ToggleRagdollQuestGuard:
+      Gothic::settingsSetI("GAME","ragdoll_quest_guard",Gothic::settingsGetI("GAME","ragdoll_quest_guard")==0 ? 1 : 0);
+      return true;
+    case C_ToggleLivingBodies:
+      Gothic::settingsSetI("GAME","living_bodies",Gothic::settingsGetI("GAME","living_bodies")==0 ? 1 : 0);
+      return true;
+    case C_ToggleArrowPhysics:
+      Gothic::settingsSetI("GAME","arrow_physics",Gothic::settingsGetI("GAME","arrow_physics")==0 ? 1 : 0);
+      return true;
+    case C_ToggleArrowSticking:
+      Gothic::settingsSetI("GAME","arrow_sticking",Gothic::settingsGetI("GAME","arrow_sticking")==0 ? 1 : 0);
+      return true;
+    case C_ToggleSpellPhysics:
+      Gothic::settingsSetI("GAME","spell_physics",Gothic::settingsGetI("GAME","spell_physics")==0 ? 1 : 0);
       return true;
     }
 

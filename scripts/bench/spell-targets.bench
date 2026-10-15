@@ -1,0 +1,39 @@
+# Actual single-target wind and vortex; adjacent companion stays on the ground.
+seed 73013
+cheat god
+set time 12 0
+view full
+overlay off
+living on
+spell feature on
+spell fixture wind
+spell target human
+wait 600
+spell equip 26
+wait 1200
+spell case wind_target
+rec wind_target novideo
+spell cast 600
+wait 5000
+stop
+spell fixture wind
+spell target troll
+wait 600
+spell equip 26
+wait 1200
+spell case wind_troll
+rec wind_troll novideo
+spell cast 600
+wait 5000
+stop
+spell fixture field
+spell target human
+wait 3000
+spell equip 71
+wait 1200
+spell case whirl_target
+rec whirl_target novideo
+spell cast 600
+wait 16000
+stop
+spell clear

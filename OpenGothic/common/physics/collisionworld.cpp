@@ -45,7 +45,7 @@ namespace {
   struct LayerInterface final : JPH::BroadPhaseLayerInterface {
     JPH::uint GetNumBroadPhaseLayers() const override { return 3; }
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll)
+      if(layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody)
         return dynamicLayer;
       if(layer==DynamicWorld::C_Water || layer==DynamicWorld::C_Ghost)
         return sensorLayer;
@@ -60,6 +60,14 @@ namespace {
 
   struct LayerPairFilter final : JPH::ObjectLayerPairFilter {
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+      if(a==DynamicWorld::C_ActiveBody)
+        return b==DynamicWorld::C_Landscape || b==DynamicWorld::C_Object || b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+      if(b==DynamicWorld::C_ActiveBody)
+        return a==DynamicWorld::C_Landscape || a==DynamicWorld::C_Object || a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
+      if(a==DynamicWorld::C_LivingBody)
+        return b==DynamicWorld::C_Item || b==DynamicWorld::C_Ragdoll;
+      if(b==DynamicWorld::C_LivingBody)
+        return a==DynamicWorld::C_Item || a==DynamicWorld::C_Ragdoll;
       return (a==DynamicWorld::C_Item || b==DynamicWorld::C_Item ||
               a==DynamicWorld::C_Ragdoll || b==DynamicWorld::C_Ragdoll) &&
              a!=DynamicWorld::C_Null && b!=DynamicWorld::C_Null;
@@ -68,7 +76,10 @@ namespace {
 
   struct BroadPhaseFilter final : JPH::ObjectVsBroadPhaseLayerFilter {
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer broad) const override {
-      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
+      if(layer==DynamicWorld::C_LivingBody)
+        return broad==dynamicLayer;
+      return layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_ActiveBody ||
+             (layer!=DynamicWorld::C_Null && broad==dynamicLayer);
       }
     };
 
@@ -83,7 +94,8 @@ namespace {
   struct QueryBroadPhaseFilter final : JPH::BroadPhaseLayerFilter {
     explicit QueryBroadPhaseFilter(uint32_t mask):mask(mask) {}
     bool ShouldCollide(JPH::BroadPhaseLayer layer) const override {
-      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll);
+      constexpr uint32_t itemMask = (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_Ragdoll)|
+                                    (1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody);
       constexpr uint32_t sensorMask = (1u<<DynamicWorld::C_Water)|(1u<<DynamicWorld::C_Ghost);
       if(layer==dynamicLayer)
         return (mask & itemMask)!=0;
@@ -310,13 +322,13 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
     if(response.mContactImpulse.empty())
       return;
     const float impulse = response.mContactImpulse[0];
-    if(impulse/obj->mass<0.9f)
+    if(impulse/obj->bodyMass<0.9f)
       return;
     auto material = zenkit::MaterialGroup::STONE;
     if(terrain!=nullptr && terrain->mesh!=nullptr)
       material = terrain->mesh->materialId(Physics::triangleData(*land->GetShape(),landSubShape));
     std::lock_guard<std::mutex> guard(impactMutex);
-    impacts.push_back({item->GetID(),material,impulse,obj->mass,simulationStep,land->GetID().GetIndexAndSequenceNumber(),landSubShape.GetValue()});
+    impacts.push_back({item->GetID(),material,impulse,obj->bodyMass,simulationStep,land->GetID().GetIndexAndSequenceNumber(),landSubShape.GetValue()});
     }
 
   void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold& manifold,
@@ -380,7 +392,7 @@ CollisionWorld::CollisionBody::~CollisionBody() {
   }
 
 CollisionWorld::DynamicBody::DynamicBody(CollisionWorld& owner, JPH::ShapeRefC shape, float mass)
-  :CollisionBody(owner,std::move(shape),DynamicWorld::C_Item), mass(mass) {
+  :CollisionBody(owner,std::move(shape),DynamicWorld::C_Item), bodyMass(mass) {
   }
 
 void CollisionWorld::CollisionBody::setObjMatrix(const Tempest::Matrix4x4& matrix) {
@@ -455,6 +467,38 @@ void CollisionWorld::CollisionBody::getAabb(JPH::Vec3& min, JPH::Vec3& max) cons
   max = box.mMax;
   }
 
+float CollisionWorld::CollisionBody::mass() const {
+  if(owner==nullptr || id.IsInvalid()) return 0.f;
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return 0.f;
+  return 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
+  }
+
+Tempest::Vec3 CollisionWorld::CollisionBody::velocity() const {
+  if(owner==nullptr || id.IsInvalid()) return {};
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return {};
+  return toCentimeters(lock.GetBody().GetLinearVelocity());
+  }
+
+bool CollisionWorld::CollisionBody::isSleeping() const {
+  if(owner==nullptr || id.IsInvalid()) return true;
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  return !lock.Succeeded() || !lock.GetBody().IsDynamic() || !lock.GetBody().IsActive();
+  }
+
+bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs) {
+  if(owner==nullptr || id.IsInvalid() || !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) ||
+     !std::isfinite(impulseNs.z) || (impulseNs.x==0.f && impulseNs.y==0.f && impulseNs.z==0.f)) return false;
+  {
+    JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+    if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return false;
+    }
+  // BodyInterface adds the impulse in SI units and activates a sleeping body.
+  owner->impl->system.GetBodyInterface().AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
+  return true;
+  }
+
 void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
                              bool movable, bool sensor, float mass) {
   const auto transform = toTransform(matrix);
@@ -498,7 +542,7 @@ std::unique_ptr<CollisionWorld::CollisionBody> CollisionWorld::addCollisionBody(
 
 std::unique_ptr<CollisionWorld::DynamicBody> CollisionWorld::addDynamicBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix,
                                                                            float friction, float mass) {
-  mass = mass>0.f ? mass : 1.f;
+  mass = std::isfinite(mass) && mass>0.f ? mass : 1.f;
   auto result = std::unique_ptr<DynamicBody>(new DynamicBody(*this,std::move(shape),mass));
   addBody(*result,matrix,friction,false,false,mass);
   rigid.push_back(result.get());
@@ -522,6 +566,18 @@ void CollisionWorld::fillMaterial(QueryResult& result, const JPH::Shape& shape, 
   const auto segment = Physics::triangleData(shape,subShape);
   result.material = result.body->mesh->materialId(segment);
   result.sector = result.body->mesh->sectorName(segment);
+  }
+
+void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const {
+  // Metadata for this selected native hit only: never cast another ray or keep
+  // a stale BodyID table across corpse restores and native rig replacements.
+  for(auto* body:ragdolls) {
+    const size_t bone=body->boneForBodyId(native.GetIndexAndSequenceNumber());
+    if(bone==size_t(-1)) continue;
+    result.ragdoll=body;
+    result.bone=bone;
+    return;
+    }
   }
 
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
@@ -603,6 +659,8 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
       value.material = mesh->materialId(triangle);
       value.sector = mesh->sectorName(triangle);
       }
+    if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll)
+      fillRagdoll(value,hit.mBodyID);
     return value;
     };
   if(all!=nullptr) {
@@ -706,6 +764,8 @@ CollisionWorld::QueryResult CollisionWorld::raySweep(const Tempest::Vec3& from, 
   result.normal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
   result.body = reinterpret_cast<CollisionBody*>(body.GetUserData());
   fillMaterial(result,*body.GetShape(),hit.mSubShapeID2);
+  if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll)
+    fillRagdoll(result,hit.mBodyID2);
   // A failed center ray kept the old sphere hit, while resetting only its fraction.
   if(fallback) {
     lock.ReleaseLock();
@@ -817,12 +877,15 @@ void CollisionWorld::tick(uint64_t dt) {
     const int count = std::min(wholeSteps,2);
     for(int i=0;i<count;++i) {
       ++impl->simulationStep;
+      for(auto* body:ragdolls) body->prepareKinematicStep(step);
+      const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
       // A capsule stopped by CCD otherwise compresses its connected limb while
       // the rest of the rig finishes the 1/60 s step. Two native collision steps
       // keep that late-contact displacement small. The public fixed-step clock
       // and two-update frame budget stay unchanged; worlds without corpses keep
       // their original single collision step.
-      impl->system.Update(float(step),ragdolls.empty() ? 1 : 2,&impl->allocator,&impl->jobs);
+      impl->system.Update(float(step),dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
+      for(auto* body:ragdolls) body->finishKinematicStep();
       advanced = true;
       }
     }
@@ -908,6 +971,19 @@ std::unique_ptr<Ragdoll> CollisionWorld::createRagdoll(const Skeleton& skeleton,
   std::unique_ptr<Ragdoll> result;
   try {
     result.reset(new Ragdoll(*this,skeleton,zones,worldPose,numBones,objectMatrix,initialVelocity));
+    }
+  catch(const std::runtime_error&) {
+    return nullptr;
+    }
+  return result->valid() ? std::move(result) : nullptr;
+  }
+
+std::unique_ptr<Ragdoll> CollisionWorld::createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                                            const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                                            const Tempest::Matrix4x4& objectMatrix) {
+  std::unique_ptr<Ragdoll> result;
+  try {
+    result.reset(new Ragdoll(*this,skeleton,zones,worldPose,numBones,objectMatrix,{},true));
     }
   catch(const std::runtime_error&) {
     return nullptr;

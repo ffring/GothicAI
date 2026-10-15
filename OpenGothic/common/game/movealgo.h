@@ -61,6 +61,8 @@ class MoveAlgo final {
     void    clearSpeed();
     void    takeRagdollControl();
     bool    accessDamFly(float dx, float dz, char hitType);
+    bool    addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction);
+    Tempest::Vec3 spellVelocity() const { return fallSpeed*1000.f; } // cm/s
 
     bool    testSlide(const Tempest::Vec3& p, DynamicWorld::CollisionTest& out) const;
     bool    testSlide(const Tempest::Vec3& pos, const Tempest::Vec3& norm, DynamicWorld::CollisionTest& out) const;

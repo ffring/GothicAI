@@ -14,7 +14,8 @@ class DynamicWorld;
 class HitZones;
 class Skeleton;
 
-// A limp body. Game code uses centimetres, centimetres/second and radians/second;
+// A limp body or an animation-driven kinematic rig. Game code uses centimetres,
+// centimetres/second and radians/second;
 // the implementation alone owns Jolt bodies and constraints.
 class Ragdoll final {
   public:
@@ -54,8 +55,25 @@ class Ragdoll final {
     Ragdoll& operator=(const Ragdoll&) = delete;
 
     bool valid() const;
+    // True only for a completely kinematic living rig, never an active reaction
+    // or a limp corpse.
+    bool isKinematic() const;
+    // Queue an already solved world pose for the next fixed physics step.
+    // Rejects invalid poses or a changed object scale without changing the rig.
+    bool moveKinematic(const Tempest::Matrix4x4* worldPose, size_t numBones,
+                       const Tempest::Matrix4x4& objectMatrix, float deltaSeconds);
+    // Queue one point impulse for the next fixed step. pointCm is world-space
+    // centimetres; impulseNs is world-space newton seconds (kg * metres/second),
+    // not a velocity. strength is the visual/motor response in (0, 1].
+    // A living pelvis hit reacts through the nearest spine; a limp hit always
+    // addresses the supplied physical bone. No native world calls happen here.
+    bool queueHit(size_t bone, const Tempest::Vec3& pointCm,
+                  const Tempest::Vec3& impulseNs, float strength);
+    float reactionWeight() const;
+    const std::vector<size_t>& reactionBones() const;
     size_t partCount() const;
     size_t boneCount() const;
+    // Actual native mass in kilograms: speciesMass * absdet(object scale).
     float mass() const;
     const std::vector<size_t>& boneIndices() const;
     // Ancestors have no bodies; their shown frame is carried by a native child.
@@ -88,7 +106,11 @@ class Ragdoll final {
     struct Impl;
     Ragdoll(CollisionWorld& world, const Skeleton& skeleton, const HitZones& zones,
             const Tempest::Matrix4x4* worldPose, size_t numBones,
-            const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity);
+            const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity,
+            bool kinematic = false);
+    void prepareKinematicStep(float deltaSeconds);
+    void finishKinematicStep();
+    size_t boneForBodyId(uint32_t id) const;
     void detach();
     std::unique_ptr<Impl> impl;
     friend class CollisionWorld;

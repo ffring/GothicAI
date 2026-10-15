@@ -1,17 +1,21 @@
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
+#include "physics/physicmeshshape.h"
+#include "graphics/bounds.h"
 #include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animmath.h"
 #include "graphics/mesh/ikmath.h"
+#include "graphics/mesh/submesh/packedmesh.h"
 #include "game/serialize.h"
 
 #include <Tempest/MemReader>
 #include <Tempest/MemWriter>
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 
 #include <algorithm>
 #include <cmath>
@@ -97,6 +101,14 @@ Tempest::Vec3 position(const Tempest::Matrix4x4& matrix) {
   return result;
   }
 
+float scaleVolume(const Tempest::Matrix4x4& matrix) {
+  // Accepted object frames have orthogonal axes; their lengths give an
+  // independent volume oracle without using the production determinant helper.
+  const auto* m=matrix.data();
+  return Tempest::Vec3(m[0],m[1],m[2]).length()*Tempest::Vec3(m[4],m[5],m[6]).length()*
+         Tempest::Vec3(m[8],m[9],m[10]).length();
+  }
+
 zenkit::ModelHierarchy hierarchy() {
   zenkit::ModelHierarchy source;
   struct Bone { const char* name; int16_t parent; Tempest::Vec3 offset; };
@@ -144,7 +156,7 @@ struct Fixture final {
     require(body!=nullptr && body->valid(),"valid capsule hierarchy must create a ragdoll");
     require(body->partCount()>10 && body->partCount()<skeleton.nodes.size(),"physical parts must cover limbs and exclude slots/root");
     require(body->boneCount()==skeleton.nodes.size(),"pose output must retain skeleton indexing");
-    near(body->mass(),75,.001f,"human parts must sum to the human mass in kilograms");
+    near(body->mass(),75*scaleVolume(object),.001f,"human native mass must include the object's volume scale");
     return body;
     }
   };
@@ -243,6 +255,548 @@ void joints(const Fixture& fixture, const Ragdoll& body, int frame=-1) {
 auto floor(CollisionWorld& world, float friction=.75f) {
   return world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),
                                 friction,DynamicWorld::C_Landscape);
+  }
+
+void testKinematicPoseAndInteraction() {
+  Fixture fixture;
+  {
+    CollisionWorld world;
+    const auto emptyCount=world.bodyCount();
+    auto thinSource=hierarchy(); thinSource.nodes.resize(1);
+    Skeleton thin(thinSource,nullptr,"NO_PHYSICAL_BONES.MDS");
+    HitZones thinZones; thinZones.setSkeleton(&thin);
+    require(!world.createKinematicBody(thin,thinZones,thin.tr.data(),thin.tr.size(),at(0,0,0)),
+            "a skeleton without compatible physical owners must safely decline a live rig");
+    require(world.bodyCount()==emptyCount,"an incompatible living skeleton must leave no native parts");
+    auto object=at(23000,500,-18000); object.rotateOY(31); object.scale(.9f,1.f,1.f);
+    auto pose=fixture.skeleton.tr;
+    for(auto& bone:pose) bone=object*bone;
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(body && body->isKinematic(),"an animation-driven rig must create independent kinematic parts");
+    require(world.bodyCount()==emptyCount+body->partCount(),"every live capsule owner must belong to the shared physics world");
+    const auto compare=[&] {
+      std::vector<Tempest::Matrix4x4> actual;
+      require(body->getPose(actual),"kinematic native pose must be readable");
+      for(auto bone:body->poseIndices())
+        for(size_t component=0;component<16;++component)
+          near(actual[bone].data()[component],pose[bone].data()[component],
+               component>=12 && component<=14 ? .02f : .00002f,
+               "kinematic parts and ancestor frames must reproduce the requested animation pose");
+      };
+    compare();
+    for(int frame=0;frame<6;++frame) {
+      // Independent changes to head, forearm and calf detect rigs that update
+      // only their root or accidentally retain the initial capsule orientation.
+      for(size_t bone:{size_t(5),size_t(7),size_t(13)}) {
+        pose[bone].rotateOZ(7.f);
+        pose[bone].set(3,0,pose[bone].at(3,0)+float(bone));
+        }
+      require(body->moveKinematic(pose.data(),pose.size(),object,.007f),"a ready animation pose must queue without another solve");
+      world.tick(17);
+      compare();
+      }
+    for(int frame=0;frame<120;++frame) world.tick(17);
+    compare();
+    auto invalid=pose;
+    invalid[7].set(3,0,std::numeric_limits<float>::quiet_NaN());
+    require(!body->moveKinematic(invalid.data(),invalid.size(),object,.017f),"invalid live poses must be rejected atomically");
+    world.tick(17); compare();
+    const auto pelvis=position(body->pelvisTransform());
+    require(world.rayCast(pelvis+Tempest::Vec3(0,0,300),pelvis-Tempest::Vec3(0,0,300),1u<<DynamicWorld::C_LivingBody).hasHit,
+            "live geometry must be queryable only when its layer is explicitly requested");
+    require(!world.rayCast(pelvis+Tempest::Vec3(0,0,300),pelvis-Tempest::Vec3(0,0,300),
+                          (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll)).hasHit,
+            "the established world and corpse hit layers must exclude living rigs");
+    require(body->state().parts.empty(),"transient animation rigs must not export corpse save data");
+    body.reset();
+    require(world.bodyCount()==emptyCount,"destroying a live rig must remove every kinematic part");
+    }
+  {
+    CollisionWorld world;
+    auto ground=floor(world,.1f);
+    auto item=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto object=at(-100,-75,0);
+    auto pose=fixture.skeleton.tr;
+    const auto update=[&] { for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i]; };
+    update();
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(bool(body),"a live rig must be created for native contact checks");
+    for(int frame=0;frame<50;++frame) {
+      object.set(3,0,-100.f+2.f*float(frame+1)); update();
+      require(body->moveKinematic(pose.data(),pose.size(),object,.017f),"a translated live rig must accept the next animation pose");
+      world.tick(17);
+      }
+    require(item->position().x>15.f,"moving live capsules must transfer motion to a dynamic item through native contacts");
+    }
+  {
+    CollisionWorld world,control;
+    auto ground=floor(world,.1f),controlGround=floor(control,.1f);
+    auto item=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto reference=control.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.15f)),at(0,15,0),.1f,1.f);
+    auto object=at(-25,-75,0);
+    auto pose=fixture.skeleton.tr;
+    for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i];
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+    require(bool(body),"teleport contact check needs a live rig touching a dynamic item");
+    const auto parts=world.bodyCount();
+    // Each queued change is below the guard. Only the accumulated distance
+    // from the real native frame reveals the 80 cm script/interaction jump.
+    for(int step=0;step<2;++step) {
+      object.set(3,0,object.at(3,0)+40.f);
+      for(size_t i=0;i<pose.size();++i) pose[i]=object*fixture.skeleton.tr[i];
+      require(body->moveKinematic(pose.data(),pose.size(),object,.017f),"script jumps must queue ordinary solved poses");
+      }
+    float maxItemError=0;
+    for(int frame=0;frame<12;++frame) {
+      world.tick(17);control.tick(17);
+      maxItemError=std::max(maxItemError,(item->position()-reference->position()).length());
+      require(world.bodyCount()==parts,"teleporting must preserve native part count");
+      }
+    std::vector<Tempest::Matrix4x4> actual;
+    require(body->getPose(actual),"teleported native pose must remain available");
+    for(auto bone:body->poseIndices())
+      for(size_t component=0;component<16;++component)
+        near(actual[bone].data()[component],pose[bone].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+             "a teleport must reach the full requested pose and retain zero residual motion");
+    near(maxItemError,0,.01f,"an 80 cm kinematic jump must not launch a touching item along its old swept path");
+    std::printf("kinematic teleport distance_cm=80 queued_steps=2 item_delta_cm=%.9g parts=%zu\n",double(maxItemError),body->partCount());
+    }
+  }
+
+void testLocalMotorReactions() {
+  Fixture fixture;
+  for(const size_t hitBone:{size_t(6),size_t(13),size_t(3)}) {
+    const bool chest=hitBone==3;
+    CollisionWorld world;
+    auto object=at(0,300,0);
+    auto target=fixture.skeleton.tr;
+    for(auto& frame:target) frame=object*frame;
+    auto body=world.createKinematicBody(fixture.skeleton,fixture.zones,target.data(),target.size(),object);
+    require(bool(body),"local motor checks need a valid living rig");
+    const auto count=world.bodyCount(),parts=body->partCount();
+    const auto hitPoint=position(target[hitBone])+Tempest::Vec3(12,0,0);
+    require(!body->queueHit(fixture.skeleton.nodes.size(),hitPoint,{0,0,3},1),"unmapped hit bones must be rejected");
+    require(body->queueHit(hitBone,hitPoint,{0,0,3},1),"a mapped bone must accept one point impulse in newton seconds");
+    require(body->isKinematic(),"queued reactions must not mutate the native world before its fixed step");
+    world.tick(17);
+    require(!body->isKinematic() && !body->reactionBones().empty(),"a hit must activate a real dynamic limb chain");
+    near(body->reactionWeight(),1,.0001f,"hit strength must control the initial physical pose weight");
+    require(body->partCount()==parts && world.bodyCount()==count,"motor promotion must replace native parts without changing their count");
+    const auto contains=[&](size_t bone) {
+      const auto& bones=body->reactionBones(); return std::find(bones.begin(),bones.end(),bone)!=bones.end();
+      };
+    require(contains(hitBone) && !contains(1) && !contains(16) && (chest || !contains(9)),"physical reaction must exclude pelvis and unaffected limbs");
+    require(chest ? !contains(2) && !contains(12) : hitBone==6 ? contains(7) && contains(8) && !contains(13) : contains(12) && contains(14) && !contains(6),
+            "limb hits must select their anatomical chain while a chest hit leaves the lower spine and legs fixed");
+    if(chest) require(body->reactionBones()==std::vector<size_t>{3},"a torso hit must activate only its spine branch, leaving head and arms kinematic");
+    const auto probeBone=hitBone==6 ? size_t(8) : size_t(14);
+    float peak=0,recovered=0;
+    float chestAnglePeak=0,chestAngleRecovered=0;
+    std::vector<Tempest::Matrix4x4> physical;
+    for(int frame=0;frame<45;++frame) {
+      // Keep the gameplay root moving during the physical limb response.
+      object.set(3,0,float(frame)*.5f);
+      for(size_t i=0;i<target.size();++i) target[i]=object*fixture.skeleton.tr[i];
+      require(body->moveKinematic(target.data(),target.size(),object,.017f),"active rigs must continue consuming the ordinary ready animation target");
+      world.tick(17);
+      require(body->getPose(physical),"active native transforms must remain readable for the render overlay");
+      for(const size_t fixed:{size_t(1),chest ? size_t(12) : size_t(9),size_t(16)})
+        for(size_t component=0;component<16;++component)
+          near(physical[fixed].data()[component],target[fixed].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+               "root and unaffected limbs must keep their animation transforms during a local reaction");
+      const float displacement=std::abs(position(physical[probeBone]).z-position(target[probeBone]).z);
+      peak=std::max(peak,displacement);
+      if(frame==40) recovered=displacement;
+      if(chest) {
+        float trace=0;
+        for(size_t axis=0;axis<3;++axis) {
+          const auto* a=physical[hitBone].data()+axis*4;
+          const auto* b=target[hitBone].data()+axis*4;
+          trace+=Tempest::Vec3::dotProduct(Tempest::Vec3::normalize({a[0],a[1],a[2]}),Tempest::Vec3::normalize({b[0],b[1],b[2]}));
+          }
+        const float angle=std::acos(std::clamp((trace-1.f)*.5f,-1.f,1.f))*180.f/3.14159265358979323846f;
+        chestAnglePeak=std::max(chestAnglePeak,angle);
+        if(frame==40) chestAngleRecovered=angle;
+        for(const size_t bone:body->boneIndices())
+          if(bone!=hitBone)
+            for(size_t component=0;component<16;++component)
+              near(physical[bone].data()[component],target[bone].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+                   "head, both arms, pelvis and legs must retain their exact world animation pose during a chest reaction");
+        }
+      require(world.bodyCount()==count,"motor simulation must not append replacement bodies every frame");
+      }
+    // A spine's bone origin is its constrained pivot: rotation is the physical
+    // response, while head/arms remain at their independent animation targets.
+    const float responsePeak=chest ? chestAnglePeak : peak;
+    const float responseRecovered=chest ? chestAngleRecovered : recovered;
+    std::printf("local motor measured bone=%zu peak=%.9g recovered=%.9g unit=%s\n",hitBone,double(responsePeak),double(responseRecovered),chest?"degrees":"cm");
+    require(responsePeak>(chest ? .1f : .3f),"the addressed limb/chest must show a measurable local native response after its point impulse");
+    require(body->reactionWeight()>0.f,"motor recovery must be observed before the final kinematic deadline");
+    require(responseRecovered<responsePeak*.65f+.05f,"real motors must return the limb/chest toward animation before the final kinematic reset");
+    const auto point=position(physical[hitBone]);
+    require(world.rayCast(point+Tempest::Vec3(0,0,300),point-Tempest::Vec3(0,0,300),1u<<DynamicWorld::C_ActiveBody).hasHit,
+            "the activated physical chain must be present in its explicit contact layer");
+    require(!world.rayCast(point+Tempest::Vec3(0,0,300),point-Tempest::Vec3(0,0,300),
+                          (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|(1u<<DynamicWorld::C_Ragdoll)).hasHit,
+            "active living parts must remain excluded from the established primary hit layers");
+    require(body->queueHit(hitBone,point,{0,0,-2},.35f) && body->queueHit(hitBone,point,{0,0,1},.35f),
+            "an existing motor rig must accept repeated hits without allocating another rig");
+    for(int frame=0;frame<100;++frame) {
+      world.tick(17);
+      require(world.bodyCount()==count && body->partCount()==parts,"repeated hits and recovery must preserve the native part count");
+      }
+    require(body->isKinematic() && body->reactionWeight()==0.f && body->reactionBones().empty(),"every finite reaction must return to pure kinematic mode within its deadline");
+    require(body->getPose(physical),"the recovered kinematic pose must remain available");
+    for(auto bone:body->poseIndices())
+      for(size_t component=0;component<16;++component)
+        near(physical[bone].data()[component],target[bone].data()[component],component>=12 && component<=14 ? .02f : .00002f,
+             "the recovered rig must exactly follow its latest ordinary animation target");
+    require(body->state().parts.empty(),"a partial active rig must never become corpse save data");
+    std::printf("local motor bone=%zu peak=%.9g recovered_before_reset=%.9g unit=%s parts=%zu\n",hitBone,double(responsePeak),double(responseRecovered),chest?"degrees":"cm",parts);
+    body.reset(); require(world.bodyCount()==0,"destroying a motor-capable rig must also remove its constraints and every native part");
+    }
+  }
+
+void testLimpBoneImpulseOnce() {
+  Fixture fixture;
+  CollisionWorld hitWorld,controlWorld;
+  auto hit=fixture.create(hitWorld,at(0,700,0));
+  auto control=fixture.create(controlWorld,at(0,700,0));
+  const auto initial=hit->state();
+  const auto found=std::find_if(initial.parts.begin(),initial.parts.end(),[](const auto& part) { return part.bone==7; });
+  require(found!=initial.parts.end(),"limp impulse fixture needs a forearm part");
+  const auto point=position(found->transform)+Tempest::Vec3(12,0,0);
+  require(hit->queueHit(7,point,{0,0,3},1),"a limp body must accept the same deferred point impulse API");
+  same(hit->state(),initial,.001f);
+  hitWorld.tick(17); controlWorld.tick(17);
+  const auto hitState=hit->state(),controlState=control->state();
+  const auto part=size_t(found-initial.parts.begin());
+  require((hitState.parts[part].angularVelocity-controlState.parts[part].angularVelocity).length()>.05f,
+          "a limp bone impulse away from its COM must generate local angular motion instead of a global velocity kick");
+  require(hit->reactionWeight()==0.f && hit->reactionBones().empty() && !hit->isKinematic(),"limp hits must never enable active animation motors");
+  require(hit->restore(initial) && control->restore(initial),"the one-shot impulse check must reset only observable physical state");
+  hitWorld.tick(17); controlWorld.tick(17);
+  same(hit->state(),control->state(),.01f);
+  require(hitWorld.bodyCount()==hit->partCount(),"a limp point impulse must not allocate living or replacement parts");
+  }
+
+void testScaledMassAndInertia() {
+  Fixture fixture;
+  struct Response { Tempest::Vec3 linear,angular; };
+  const auto response=[&](float scale,bool restore) {
+    CollisionWorld hitWorld,controlWorld;
+    auto object=at(0,1000,0); object.scale(scale);
+    auto hit=fixture.create(hitWorld,object),control=fixture.create(controlWorld,object);
+    const auto initial=hit->state();
+    if(restore) {
+      // Recreate with fresh BodyIDs, then restore the saved scaled body before
+      // applying the same external impulse. Metadata alone cannot satisfy this.
+      hit.reset(); control.reset();
+      hit=fixture.create(hitWorld,object); control=fixture.create(controlWorld,object);
+      require(hit->restore(initial) && control->restore(initial),"scaled corpse state must restore into a fresh native rig");
+    }
+    const auto part=std::find_if(initial.parts.begin(),initial.parts.end(),[](const auto& p) { return p.bone==7; });
+    require(part!=initial.parts.end(),"mass/inertia oracle needs a physical forearm");
+    const auto point=part->centerOfMassMeters*100.f+Tempest::Vec3(12*scale,0,0);
+    require(hit->queueHit(7,point,{0,0,.15f},1),"scaled native forearm must accept a point impulse in Ns");
+    hitWorld.tick(17); controlWorld.tick(17);
+    const auto got=hit->state(),baseline=control->state();
+    const size_t index=size_t(part-initial.parts.begin());
+    return Response{got.parts[index].linearVelocity-baseline.parts[index].linearVelocity,
+                    got.parts[index].angularVelocity-baseline.parts[index].angularVelocity};
+    };
+  const auto unit=response(1,false),large=response(2,false),restored=response(2,true);
+  require(unit.linear.length()>.01f && unit.angular.length()>.01f,"native mass test must observe real linear and angular response");
+  near(unit.linear.length()/large.linear.length(),8,1.6f,"double-size corpse must have eight times the native mass for the same Ns impulse");
+  near(unit.angular.length()/large.angular.length(),16,3.2f,"mass and scaled inertia must reduce angular response by sixteen at a doubled lever arm");
+  near((large.linear-restored.linear).length(),0,.001f,"restoring a scaled body must preserve native inverse mass");
+  near((large.angular-restored.angular).length(),0,.0001f,"restoring a scaled body must preserve native inertia");
+  CollisionWorld world;
+  auto anisotropic=at(0,700,0); anisotropic.rotateOY(37); anisotropic.scale(.5f,2.f,3.f);
+  auto body=fixture.create(world,anisotropic);
+  near(body->mass(),225,.001f,"nonuniform object scale must use the volume determinant rather than a single axis");
+  const auto saved=body->state();
+  require(body->restore(saved),"nonuniform mass must survive native restore");
+  near(body->mass(),225,.001f,"restored nonuniform mass must remain the actual native total");
+  }
+
+void testItemMassImpulseAndWake() {
+  DynamicWorld::Item empty;
+  require(empty.mass()==0 && empty.isSleeping() && empty.velocity().quadLength()==0 && !empty.addImpulse({1,0,0}),
+          "an empty item handle must safely reject impulse and report no dynamic state");
+  zenkit::Mesh ground;
+  ground.vertices={{-1000,0,-1000},{1000,0,-1000},{1000,0,1000},{-1000,0,1000}};
+  ground.materials.resize(1); ground.materials[0].group=zenkit::MaterialGroup::STONE;
+  ground.polygons.material_indices={0,0}; ground.polygons.vertex_indices={0,1,2,0,2,3};
+  DynamicWorld world(nullptr,ground);
+  std::unique_ptr<PhysicMeshShape> shape(PhysicMeshShape::load(PackedMesh(ground,PackedMesh::PK_Physic)));
+  require(shape!=nullptr,"static item safety oracle needs a native terrain shape");
+  auto fixed=world.addStaticObj(shape.get(),at(0,-100,0));
+  auto moving=world.addMovableObj(shape.get(),at(0,-200,0));
+  for(auto* body:{&fixed,&moving})
+    require(body->mass()==0 && body->isSleeping() && body->velocity().quadLength()==0 && !body->addImpulse({1,0,0}),
+            "static and animation-driven handles must never accept dynamic impulses");
+  Bounds bounds; bounds.bbox[0]={-10,-20,-30}; bounds.bbox[1]={10,20,30};
+  auto matrix=at(0,300,0); matrix.rotateOY(31); matrix.scale(.5f,2.f,3.f);
+  auto body=world.addDynamicObj(matrix,bounds,zenkit::MaterialGroup::WOOD);
+  const float expected=.2f*.4f*.6f*700.f*3.f;
+  near(body.mass(),expected,.001f,"native item mass must include material density, source volume and nonuniform object scale");
+  require(!body.addImpulse({std::numeric_limits<float>::quiet_NaN(),0,0}) &&
+          !body.addImpulse({0,std::numeric_limits<float>::infinity(),0}) && !body.addImpulse({0,0,0}),
+          "nonfinite or zero item impulses must be harmless no-ops");
+  require(body.addImpulse({expected,0,0}),"a dynamic item must accept world-space Ns");
+  near(body.velocity().x,100,.001f,"native item velocity must follow J/m in metres/second at the API boundary");
+  require(body.addImpulse({-expected,0,0}),"opposite impulse must cancel horizontal item momentum");
+  for(int frame=0;frame<600 && !body.isSleeping();++frame) world.tick(17);
+  require(body.isSleeping(),"a dropped item must settle and retain a queryable sleeping native body");
+  require(body.addImpulse({expected,0,0}) && !body.isSleeping(),"a spell-sized impulse must awaken the sleeping native item immediately");
+  near(body.velocity().x,100,.001f,"the woken item's mass must still govern its actual native velocity");
+  Bounds tiny; tiny.bbox[0]={-1,-1,-1}; tiny.bbox[1]={1,1,1};
+  auto small=world.addDynamicObj(at(500,300,0),tiny,zenkit::MaterialGroup::WOOD);
+  near(small.mass(),.02f*.02f*.02f*700.f,.000001f,"minimum collision padding must not inflate a small item's material mass");
+  }
+
+void testCorpseRayMetadata() {
+  Fixture fixture;
+  CollisionWorld world,reference;
+  auto nearBody=fixture.create(world,at(0,300,0));
+  auto farBody=fixture.create(world,at(0,300,-100));
+  const auto a=position(fixture.skeleton.tr[7]),b=position(fixture.skeleton.tr[8]);
+  std::vector<HitZones::Posed> capsules;
+  fixture.zones.posed(fixture.skeleton.tr.data(),fixture.skeleton.tr.size(),1.f,capsules);
+  const auto cap=std::find_if(capsules.begin(),capsules.end(),[&](const auto& c) { return (c.a-a).quadLength()<.0001f && (c.b-b).quadLength()<.0001f; });
+  require(cap!=capsules.end(),"corpse query oracle needs the public posed forearm capsule");
+  const auto center=(a+b)*.5f+Tempest::Vec3(0,300,0);
+  auto frame=at(center.x,center.y,center.z); frame.rotateOZ(-90);
+  auto plain=reference.addCollisionBody(new JPH::CapsuleShape((b-a).length()*.005f,cap->r*.01f),frame,.5f,DynamicWorld::C_Ragdoll);
+  const Tempest::Vec3 from{center.x,center.y,300},to{center.x,center.y,-300};
+  const uint32_t mask=1u<<DynamicWorld::C_Ragdoll;
+  const auto expected=reference.rayCast(from,to,mask);
+  require(expected.hasHit && expected.ragdoll==nullptr,"plain native primitive must give an independent geometry oracle without owner metadata");
+  const auto compare=[&] {
+    const auto hit=world.rayCast(from,to,mask);
+    require(hit.hasHit && hit.ragdoll==nearBody.get() && hit.bone==7,"the selected corpse hit must identify its current owner and exact forearm bone");
+    near(hit.fraction,expected.fraction,.000001f,"adding corpse ownership must preserve the selected native fraction");
+    near((hit.point-expected.point).length(),0,.001f,"corpse metadata must preserve the selected world point");
+    near((hit.normal-expected.normal).length(),0,.000001f,"corpse metadata must preserve the selected native normal");
+    require(hit.material==expected.material,"corpse ownership must preserve the selected material");
+    };
+  compare();
+  const auto saved=nearBody->state();
+  require(nearBody->restore(saved),"corpse metadata oracle must survive native BodyID replacement on restore");
+  compare();
+  std::vector<CollisionWorld::QueryResult> all;
+  world.rayCast(from,to,mask,false,&all);
+  require(std::any_of(all.begin(),all.end(),[&](const auto& hit) { return hit.ragdoll==farBody.get() && hit.bone==7; }),
+          "all-hit metadata must identify the far corpse independently of the closest one");
+  nearBody.reset();
+  require(world.rayCast(from,to,mask).ragdoll==farBody.get(),"destroyed corpse parts must never leave stale owner metadata");
+  require(!world.rayCast(from,to,(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)).hasHit,
+          "ordinary ray masks must remain unchanged by corpse metadata");
+  }
+
+void testProjectileWorldStopOptIn() {
+  struct Callback final : DynamicWorld::BulletCallback {
+    bool enabled=false,precise=false;
+    DynamicWorld::BulletBody* body=nullptr;
+    DynamicWorld::BulletWorldHit hit;
+    std::string order;
+    int worlds=0,materials=0,stops=0,moves=0;
+    bool stopsAtWorldHit() const override { return enabled; }
+    bool isPrecise() const override { return precise; }
+    void onMove() override { ++moves; order+='M'; }
+    void onCollide(zenkit::MaterialGroup) override { ++materials; order+='C'; }
+    void onWorldHit(const DynamicWorld::BulletWorldHit& value) override {
+      ++worlds; order+='W'; hit=value;
+      near((body->position()-value.point).length(),0,0,"attachment must observe the unchanged stopped projectile position");
+      require(body->pathLength()>0,"attachment must observe updated travelled distance");
+      DynamicWorld::BulletCallback::onWorldHit(value);
+      }
+    void onStop() override { ++stops; order+='S'; }
+    };
+  const auto wallAt=[](float x, zenkit::MaterialGroup material, bool fromRight=false) {
+    zenkit::Mesh wall;
+    wall.vertices={{x,-2000,-2000},{x,2000,-2000},{x,0,2000}};
+    wall.materials.resize(1); wall.materials[0].group=material;
+    wall.polygons.material_indices={0};
+    wall.polygons.vertex_indices=fromRight ? std::vector<uint32_t>{0,2,1} : std::vector<uint32_t>{0,1,2};
+    return wall;
+    };
+  const Tempest::Vec3 from{0,500,0},direction{3,0,0};
+  const auto to=from+direction*100.f-Tempest::Vec3(0,.5f*DynamicWorld::gravity*100.f*100.f,0);
+  for(const auto material:{zenkit::MaterialGroup::STONE,zenkit::MaterialGroup::METAL})
+    for(const bool enabled:{false,true})
+      for(const int previousHits:{0,3}) {
+        DynamicWorld world(nullptr,wallAt(100,material));
+        Callback callback; callback.enabled=enabled;
+        auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+        const auto expected=world.ray(from,to);
+        require(expected.hasCol && expected.mat==material,"reflection contract must hit the selected hard wall");
+        arrow->setPosition(from); arrow->setDirection(direction);
+        for(int i=0;i<previousHits;++i) arrow->addHit();
+        world.tick(100);
+        near((arrow->position()-(from+(to-from)*expected.hitFraction)).length(),0,0,"ON/OFF must preserve the original hit interpolation");
+        near((arrow->direction()-Tempest::Vec3(-1.5f,0,0)).length(),0,.000001f,"hard material must reflect at half speed even when attachment is ON");
+        near(arrow->speed(),1.5f,.000001f,"reflection must preserve the original speed loss");
+        near(arrow->pathLength(),(to-from).length()*expected.hitFraction,.0001f,"reflection must preserve travelled distance");
+        require(arrow->hitCount()==previousHits+1 && callback.materials==1 && callback.moves==1,"hard impact must keep one hit/material/move callback");
+        if(previousHits==0) {
+          require(callback.worlds==0 && callback.stops==0 && callback.order=="CM","the first reflection must not stop or pin an arrow");
+          }
+        else {
+          require(callback.stops==1 && callback.worlds==int(enabled) && callback.order==(enabled ? "CWSM" : "CSM"),
+                  "fourth impact must preserve reflection before the original terminal decision and callbacks");
+          if(enabled) {
+            near((callback.hit.normal-expected.n).length(),0,0,"terminal attachment must preserve the selected normal");
+            require(callback.hit.ragdoll==nullptr,"a hard world stop must not become a corpse hit");
+            for(int frame=0;frame<4;++frame) world.tick(17);
+            require(callback.worlds==1 && callback.stops==1 && callback.materials==1 && callback.moves==1,
+                    "a terminal pin must not repeat callbacks while deletion is deferred");
+            }
+          }
+        world.deleteObj(arrow);
+        }
+
+  for(const bool enabled:{false,true}) {
+    DynamicWorld world(nullptr,wallAt(100,zenkit::MaterialGroup::WOOD));
+    Callback callback; callback.enabled=enabled;
+    auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+    const auto expected=world.ray(from,to);
+    require(expected.hasCol && expected.mat==zenkit::MaterialGroup::WOOD,"terminal contract must hit a soft wall");
+    arrow->setPosition(from); arrow->setDirection(direction);
+    world.tick(100);
+    require(callback.worlds==int(enabled) && callback.materials==1 && callback.stops==1 && callback.moves==1 &&
+            callback.order==(enabled ? "CWSM" : "CSM"),"soft contact must preserve gameplay callbacks and add only an attachment notification");
+    near((arrow->position()-(from+(to-from)*expected.hitFraction)).length(),0,0,"soft terminal position must retain original interpolation");
+    near((arrow->direction()-direction).length(),0,0,"soft stop must retain original direction");
+    near(arrow->pathLength(),(to-from).length()*expected.hitFraction,.0001f,"soft stop must retain travelled distance");
+    require(arrow->hitCount()==1,"soft stop must record exactly one world hit");
+    if(enabled) {
+      near((callback.hit.normal-expected.n).length(),0,0,"soft attachment must retain the world normal");
+      for(int frame=0;frame<4;++frame) world.tick(17);
+      require(callback.worlds==1 && callback.stops==1 && callback.moves==1,"a soft pin must not repeat terminal callbacks");
+      }
+    world.deleteObj(arrow);
+    }
+
+  // The old speed*fraction gate moves to the wall but does not count, reflect,
+  // collide or stop for this near-contact sample. Attachment must not widen it.
+  for(const bool enabled:{false,true}) {
+    DynamicWorld world(nullptr,wallAt(100,zenkit::MaterialGroup::STONE));
+    Callback callback; callback.enabled=enabled;
+    auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+    arrow->setPosition({95,500,0}); arrow->setDirection(direction);
+    world.tick(100);
+    require(callback.worlds==0 && callback.materials==0 && callback.stops==0 && callback.moves==1 && callback.order=="M",
+            "near hard contact must retain the original no-callback speed/fraction gate");
+    require(arrow->hitCount()==0 && arrow->pathLength()==0,"near-contact gate must preserve hit and distance counters");
+    near((arrow->direction()-direction).length(),0,0,"near-contact gate must preserve incoming direction");
+    near(arrow->position().x,100,.0001f,"near-contact gate must still reach the original wall point");
+    world.deleteObj(arrow);
+    }
+
+  Fixture fixture;
+  for(const bool enabled:{false,true})
+    for(const bool precise:{false,true})
+      for(const bool wallBehind:{false,true}) {
+        DynamicWorld world(nullptr,wallBehind ? wallAt(-160,zenkit::MaterialGroup::WOOD,true) : zenkit::Mesh{});
+        auto pose=fixture.skeleton.tr;
+        const auto object=at(0,300,0);
+        for(auto& frame:pose) frame=object*frame;
+        auto corpse=world.createRagdoll(fixture.skeleton,fixture.zones,pose.data(),pose.size(),object);
+        require(corpse && corpse->valid() && corpse->partCount()>0,"transparency contract needs an actual native corpse");
+        const Tempest::Vec3 start{200,439,0},velocity{-4,0,0};
+        const auto end=start+velocity*100.f-Tempest::Vec3(0,.5f*DynamicWorld::gravity*100.f*100.f,0);
+        float crossing=0;
+        require(fixture.zones.rayTest(pose.data(),pose.size(),1.f,start,end,crossing)!=HitZones::None,
+                "the arrow segment must cross the corpse's source capsule geometry");
+        Callback callback; callback.enabled=enabled; callback.precise=precise;
+        auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+        arrow->setPosition(start); arrow->setDirection(velocity);
+        const auto expected=world.ray(start,end);
+        require(expected.hasCol==wallBehind,"only the unchanged wall mask may obstruct this flight");
+        world.tick(100);
+        if(wallBehind) {
+          require(callback.materials==1 && callback.stops==1 && callback.worlds==int(enabled) && callback.order==(enabled ? "CWSM" : "CSM"),
+                  "an arrow crossing a corpse must still reach the same terminal wall");
+          near((arrow->position()-(start+(end-start)*expected.hitFraction)).length(),0,0,"a corpse must not shorten the wall-bound segment");
+          require(arrow->hitCount()==1 && callback.hit.ragdoll==nullptr,"the accepted hit must belong to the wall, never the corpse");
+          }
+        else {
+          require(callback.worlds==0 && callback.materials==0 && callback.stops==0 && callback.moves==1 && callback.order=="M",
+                  "ON/OFF and precise/legacy arrows must pass through corpses without impact callbacks");
+          near((arrow->position()-end).length(),0,0,"corpse transparency must preserve the complete flight segment");
+          near(arrow->pathLength(),400,.0001f,"corpse transparency must preserve travelled distance");
+          require(arrow->hitCount()==0,"passing a corpse must not count as an impact");
+          }
+        world.deleteObj(arrow);
+        }
+
+  for(const bool enabled:{false,true}) {
+    DynamicWorld world(nullptr,wallAt(100,zenkit::MaterialGroup::STONE));
+    Callback callback; callback.enabled=enabled;
+    auto* spell=world.bulletObj(&callback); callback.body=spell;
+    spell->setSpellId(1); spell->setPosition(from); spell->setDirection(direction);
+    world.tick(100);
+    require(callback.worlds==0 && callback.materials==1 && callback.stops==1 && callback.moves==1 && callback.order=="CSM",
+            "arrow attachment must not change spell impact callbacks");
+    near((spell->position()-from).length(),0,0,"spell stop must preserve the original projectile position");
+    require(spell->hitCount()==0 && spell->pathLength()==0,"spell stop must preserve the original counters");
+    world.deleteObj(spell);
+    }
+
+  for(const bool enabled:{false,true}) {
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    Callback callback; callback.enabled=enabled;
+    auto* arrow=world.bulletObj(&callback); callback.body=arrow;
+    arrow->setPosition(from); arrow->setDirection(direction); arrow->addPathLen(10001);
+    world.tick(100);
+    require(callback.worlds==0 && callback.materials==0 && callback.stops==1 && callback.moves==1 && callback.order=="SM",
+            "the original distance limit must stop without inventing a world attachment");
+    near((arrow->position()-to).length(),0,0,"distance limit must preserve the original final movement");
+    require(arrow->hitCount()==0,"distance limit must not invent a world hit");
+    world.deleteObj(arrow);
+    }
+  }
+
+void testSpellWorldImpactMetadata() {
+  struct Callback final : DynamicWorld::BulletCallback {
+    DynamicWorld::BulletWorldHit hit;
+    int worlds=0,materials=0,stops=0,moves=0;
+    std::string order;
+    bool stopsAtWorldHit() const override { return true; }
+    void onSpellWorldHit(const DynamicWorld::BulletWorldHit& value) override {
+      ++worlds; order+='W'; hit=value;
+      DynamicWorld::BulletCallback::onSpellWorldHit(value);
+      }
+    void onCollide(zenkit::MaterialGroup material) override {
+      require(material==zenkit::MaterialGroup::STONE,"default spell world-hit callback must preserve the old selected material callback");
+      ++materials; order+='C';
+      }
+    void onStop() override { ++stops; order+='S'; }
+    void onMove() override { ++moves; order+='M'; }
+    };
+  zenkit::Mesh wall;
+  wall.vertices={{100,-2000,-2000},{100,2000,-2000},{100,0,2000}};
+  wall.materials.resize(1); wall.materials[0].group=zenkit::MaterialGroup::STONE;
+  wall.polygons.material_indices={0}; wall.polygons.vertex_indices={0,1,2};
+  DynamicWorld world(nullptr,wall);
+  Callback callback;
+  auto* spell=world.bulletObj(&callback);
+  const Tempest::Vec3 from{0,500,0},direction{3,0,0};
+  const auto expected=world.ray(from,from+direction*100.f);
+  require(expected.hasCol,"spell impact oracle needs the selected wall hit");
+  spell->setSpellId(1); spell->setPosition(from); spell->setDirection(direction);
+  world.tick(100);
+  require(callback.worlds==1 && callback.materials==1 && callback.stops==1 && callback.moves==1 && callback.order=="WCSM",
+          "spell world-hit metadata must preserve one default material, stop and move callback in legacy order");
+  near((callback.hit.point-expected.v).length(),0,0,"spell explosion metadata must use the exact selected impact point");
+  near((callback.hit.normal-expected.n).length(),0,0,"spell metadata must retain the selected normal");
+  require(callback.hit.material==expected.mat && callback.hit.ragdoll==nullptr,"spell metadata must preserve its old world query selection");
+  near((spell->position()-from).length(),0,0,"metadata must not change legacy spell position at world impact");
+  near(spell->pathLength(),0,0,"metadata must not change legacy spell travelled distance");
+  require(spell->hitCount()==0 && spell->direction().x==3,"spell metadata must not enter arrow stop/pin/bounce accounting");
+  world.deleteObj(spell);
   }
 
 void testDropSleepWake() {
@@ -563,7 +1117,7 @@ void replayCreation(const char* input) {
     auto body=world.createRagdoll(skeleton,zones,worldPose.data(),worldPose.size(),object,vector(capture["velocity"]));
     require(body!=nullptr && body->valid(),"exact captured real-model input must create a native body");
     require(body->partCount()==capture["physical_owners"].Size(),"actual captured physical owner coverage must match");
-    near(body->mass(),Ragdoll::speciesMass(skeleton.name()),.001f,"actual native body must use its species mass");
+    near(body->mass(),Ragdoll::speciesMass(skeleton.name())*scaleVolume(object),.01f,"actual native body must use its species mass and captured object volume scale");
     std::vector<Tempest::Matrix4x4> initial;
     require(body->getPose(initial),"actual native initial visual frames must be available");
     float positionError=0,basisError=0;
@@ -1784,6 +2338,14 @@ int main(int argc, const char** argv) {
       }
     require(argc==1,"usage: gothic-ragdoll-contract [--benchmark20 output.json | --preflight20 output.json | --replay-creation captured.jsonl]");
     testInvalidCreationAndScale();
+    testKinematicPoseAndInteraction();
+    testLocalMotorReactions();
+    testLimpBoneImpulseOnce();
+    testScaledMassAndInertia();
+    testItemMassImpulseAndWake();
+    testCorpseRayMetadata();
+    testProjectileWorldStopOptIn();
+    testSpellWorldImpactMetadata();
     testPoseOverlayAndRecovery();
     testRecoveryMatchesAnimBlendAndSaves();
     testMalformedRecoveryArchive();

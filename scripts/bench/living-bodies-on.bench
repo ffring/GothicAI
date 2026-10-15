@@ -1,0 +1,16 @@
+seed 73013
+cheat god
+set time 12 0
+goto NW_XARDAS_TOWER_VALLEY_091
+wait 500
+living on
+living setup
+wait 600
+overlay off
+view nopfx
+cadence normal
+wait 34
+living motion
+living measure on
+cadence wait
+living report

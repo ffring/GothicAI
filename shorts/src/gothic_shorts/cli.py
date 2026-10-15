@@ -128,7 +128,7 @@ def cmd_dub(args: argparse.Namespace) -> int:
         config = _config()
         done = dub_take(config, shot, _take(config, shot, args.take), args.lang, args.tts)
     else:
-        done = dub_explainer(_config(), workspace(args.short), args.lang, args.plan, args.tts)
+        done = dub_explainer(_config(), workspace(args.short), args.lang, args.plan, args.tts, args.reclone)
     print("  start who            length/slot  tempo  gain  text")
     for row in done.rows:
         print(f"  {row}")
@@ -338,6 +338,8 @@ def main() -> None:
     s.add_argument("--lang", default="en", help="the track's language: en")
     s.add_argument("--tts", help="inworld or voxcpm (default: the launcher's provider, then its fallback)")
     s.add_argument("--plan", default="plan.json", help="the explainer's plan, the one of its Russian render")
+    s.add_argument("--reclone", action="store_true",
+                   help="an explainer: the user's voice made anew from its recordings (cloned again)")
     s.set_defaults(fn=cmd_dub)
 
     s = sub.add_parser("align", help="word timings of a known text in a recording (on the GPU server)")

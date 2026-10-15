@@ -52,6 +52,8 @@ class DynamicWorld final {
       C_Ghost     = 5,
       C_Item      = 6,
       C_Ragdoll   = 7,
+      C_LivingBody= 8,
+      C_ActiveBody= 9,
       };
 
     enum PtrType {
@@ -144,6 +146,11 @@ class DynamicWorld final {
         void setInteractive(Interactive* it);
         void setPayloadPtr(void* ptr);
         bool isEmpty() const { return obj==nullptr; }
+        float mass() const; // kilograms; zero for empty/static/kinematic handles
+        Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
+        bool isSleeping() const;
+        // World-space newton seconds (kg * metres/second), with native wake.
+        bool addImpulse(const Tempest::Vec3& impulseNs);
 
       private:
         DynamicWorld*       owner  = nullptr;
@@ -175,12 +182,26 @@ class DynamicWorld final {
       Npc* npcHit = nullptr;
       };
 
+    struct BulletWorldHit {
+      Tempest::Vec3          point = {}; // world centimetres
+      Tempest::Vec3          normal = {}; // unit world normal, unchanged winding
+      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      // Borrowed only for onWorldHit; game code owns the attachment lifetime.
+      Ragdoll*              ragdoll = nullptr;
+      size_t                bone = size_t(-1);
+      Interactive*          vob = nullptr;
+      };
+
     struct BulletCallback {
       virtual ~BulletCallback()=default;
       virtual void onStop(){}
       virtual void onMove(){}
       virtual void onCollide(zenkit::MaterialGroup matId){(void)matId;}
       virtual bool onCollide(Npc& other){(void)other; return true; }
+      // Requests an attachment after a legacy world stop; never changes flight.
+      virtual bool stopsAtWorldHit() const { return false; }
+      virtual void onWorldHit(const BulletWorldHit& hit) { (void)hit; }
+      virtual void onSpellWorldHit(const BulletWorldHit& hit) { onCollide(hit.material); }
       // an arrow aimed by hand: hits an npc where it is (its bones), not its box; from-to: this step
       virtual bool isPrecise() const { return false; }
       virtual bool onCollidePrecise(Npc& other, const Tempest::Vec3& from, const Tempest::Vec3& to){(void)from; (void)to; return onCollide(other); }
@@ -224,6 +245,7 @@ class DynamicWorld final {
         int                 spl=std::numeric_limits<int>::max();
         int                 hitCnt  = 0;
         float               tgRange = 0;
+        bool                worldStopped = false;
 
       friend class DynamicWorld;
       };
@@ -275,6 +297,9 @@ class DynamicWorld final {
                                           const Tempest::Matrix4x4* worldPose, size_t numBones,
                                           const Tempest::Matrix4x4& objectMatrix,
                                           const Tempest::Vec3& initialVelocity = {});
+    std::unique_ptr<Ragdoll> createKinematicBody(const Skeleton& skeleton, const HitZones& zones,
+                                               const Tempest::Matrix4x4* worldPose, size_t numBones,
+                                               const Tempest::Matrix4x4& objectMatrix);
 
     BulletBody*    bulletObj(BulletCallback* cb);
     BBoxBody       bboxObj(BBoxCallback* cb, const zenkit::AxisAlignedBoundingBox& bbox);

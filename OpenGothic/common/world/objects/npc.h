@@ -12,6 +12,7 @@
 #include "game/fightalgo.h"
 #include "game/archerai.h"
 #include "game/gamescript.h"
+#include "game/ragdollsave.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
 #include "world/aiqueue.h"
@@ -266,6 +267,7 @@ class Npc final {
     BodyState bodyStateMasked() const;
     bool      hasState(BodyState s) const;
     bool      hasStateFlag(BodyState flg) const;
+    bool      spellFrozen() const;
 
     void      setToFightMode(const size_t item);
     void      setToFistMode();
@@ -319,6 +321,10 @@ class Npc final {
     float     aimPeek()   const { return stancePeek; }
     float     aimCant()   const { return stanceCant; }
     float     aimWalk()   const { return stanceWalk; }
+    // where the hero looks aiming by hand (the center of the screen), zero if not known (an npc): leaning
+    // over an edge goes by it too
+    void      setAimLook(const Tempest::Vec3& dir) { stanceLook = dir; }
+    auto      aimLook()   const -> Tempest::Vec3 { return stanceLook; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
     void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
     // how far the animation of that name has played, 0..1; -1: it does not play
@@ -343,7 +349,7 @@ class Npc final {
     // to standing with the bow (the hero; an npc's fight plays its own animation)
     void      endManualAim(bool idle);
     // where an arrow passing from-to hits this one, t: how far from 'from'
-    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t) const -> HitZones::Zone;
+    auto      rayHitZone(const Tempest::Vec3& from, const Tempest::Vec3& to, float& t, size_t* bone = nullptr) const -> HitZones::Zone;
     bool      hitZoneCenter(HitZones::Zone z, Tempest::Vec3& at) const;
     std::string hitZonesDump() const { return visual.hitZonesDump(); }
     void        hitZonesPosed(std::vector<HitZones::Posed>& out) const { visual.hitZonesPosed(out); }
@@ -459,11 +465,34 @@ class Npc final {
     bool      isRagdollBlending() const { return visual.pose().isRagdollBlending(); }
     const Skeleton* visualSkeleton() const { return visual.visualSkeleton(); }
     const Ragdoll* ragdollBody() const { return ragdoll.get(); }
+    const Ragdoll* livingBody() const { return living.get(); }
+    struct ArrowPhysicsProbe {
+      size_t bone = size_t(-1);
+      Tempest::Vec3 point, impulseNs;
+      float strength = 0;
+      uint32_t hits = 0, applied = 0, corpseImpulses = 0;
+      };
+    const ArrowPhysicsProbe& arrowPhysicsProbe() const { return arrowPhysics; }
+    const Tempest::Matrix4x4& animationBone(size_t bone) const { return visual.pose().bone(bone); }
+    const Tempest::Matrix4x4& renderedBone(size_t bone) const { return visual.renderedBone(bone); }
+    using ArrowPinProbe = MdlVisual::ArrowPinProbe;
+    size_t stuckArrowCount() const { return visual.stuckArrowCount(); }
+    bool stuckArrowProbe(size_t index, ArrowPinProbe& out) const { return visual.stuckArrowProbe(index,out); }
+    bool stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Tempest::Matrix4x4& worldMatrix);
+    void addCorpseArrowImpulse(const Bullet& bullet);
+    const RagdollSave::QuestReturn& ragdollQuestReturnState() const { return ragdollQuestReturn; }
+    uint32_t ragdollQuestReturnCount() const { return ragdollQuestReturns; }
+    const Tempest::Vec3& ragdollQuestReturnFrom() const { return ragdollQuestFrom; }
     void      prepareRagdoll();
+    void      prepareLivingBody();
     void      syncRagdoll();
     void      suspendRagdoll();
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
+    float     physicsMass() const;
+    bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true);
+    Tempest::Vec3 spellVelocity() const { return mvAlgo.spellVelocity(); }
+    bool      spellWhirling() const;
 
     void      startDive();
     bool      transformInto(size_t instance); // shape change spell: another creature until transformBack
@@ -693,6 +722,13 @@ class Npc final {
     void               releaseRagdoll(bool blend);
     bool               recoverRagdoll();
     bool               createRagdoll();
+    void               updateRagdollQuestAnchor();
+    void               checkRagdollQuestHazard();
+    bool               needsRagdollQuestReturn() const;
+    bool               recoverSpellThrow();
+    void               queueArrowPhysics(const Bullet& bullet);
+    void               dispatchArrowPhysics(Ragdoll& body);
+    bool               hasQueuedPhysicalSpellState(const AiQueue& queue) const;
 
     World&                         owner;
     // Debug trace cache only: neither serialized nor used by native AI/animation decisions.
@@ -719,6 +755,19 @@ class Npc final {
     Tempest::Vec3                  lastGroundNormal;
 
     DynamicWorld::NpcItem          physic;
+    std::unique_ptr<Ragdoll>       living;
+    uint64_t                      livingRetryTick = 0;
+    bool                          livingNeedsRebuild = false;
+    bool                          livingWasFrozen = false;
+    ArrowPhysicsProbe             arrowPhysics;
+    struct ArrowImpact {
+      size_t bone;
+      Tempest::Vec3 point, impulseNs;
+      float strength;
+      };
+    std::vector<ArrowImpact>       arrowImpacts;
+    Tempest::Vec3                  pendingSpellImpulse = {};
+    std::vector<Tempest::Matrix4x4> arrowPhysicalPose;
     std::unique_ptr<Ragdoll>       ragdoll;
     std::optional<Ragdoll::State>  ragdollDormant;
     std::vector<Tempest::Matrix4x4> ragdollPose;
@@ -730,6 +779,11 @@ class Npc final {
     uint64_t                      ragdollStartTick = 0;
     bool                          ragdollLegacyDown = false;
     bool                          ragdollRecovering = false;
+    RagdollSave::QuestReturn       ragdollQuestReturn;
+    bool                          ragdollQuestSpellThrow = false;
+    uint64_t                      ragdollQuestSampleTick = 0;
+    uint32_t                      ragdollQuestReturns = 0;
+    Tempest::Vec3                 ragdollQuestFrom;
 
     WalkBit                        wlkMode                 =WalkBit::WM_Run;
     int32_t                        trGuild                 =GIL_NONE;
@@ -804,6 +858,7 @@ class Npc final {
     float                          stancePeek   = 0;
     float                          stanceCant   = 0;
     float                          stanceWalk   = 0;
+    Tempest::Vec3                  stanceLook   = {};
     bool                           benchStill   = false;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;
