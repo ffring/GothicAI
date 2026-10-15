@@ -7,6 +7,11 @@ evaluation; at each decision the action is sampled from the runtime's own logits
 the effective mask (temperature 0 is the evaluation argmax). Per episode the collector
 keeps a compact score summary and the model-view rows (features, mask, reset, sampled
 label) a self-imitation round trains on. Measurement and data only: no quality credit.
+
+Decisions follow the stage 8 realtime driver: the first one after one tick (--start-substeps 1)
+and native command TTL 100 ms. With them a greedy rollout reproduces the realtime driver's
+episodes (scripts/body_schedule_equivalence.py); the 9.2 rounds used 2 and 1000 and fitted
+a lockstep-only schedule.
 """
 from __future__ import annotations
 
@@ -108,6 +113,7 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
             name = f"ep-{task}-{seed}-{side}-{distance}"
             episode_dir = output/name
             env = LeanEnv(runner, Path(options["scenario"]), owner_provider="stage9-rl")
+            env.command_ttl_ms = options.get("command_ttl_ms", 1000)
             started = time.monotonic()
             timeout_ms = TASK_SETUP[task][1] if task in TASK_SETUP else options["timeout_ms"]
             initial = env.reset(output=episode_dir, task=task, seed=seed, side=side, distance_cm=distance,
@@ -142,7 +148,7 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
 
             rollout_started = time.monotonic()
             feed(False)
-            env.start()
+            env.start(options.get("start_substeps", 2))
             ticks = 0
             while ticks < options["max_substeps"]:
                 terminal = bool(env.arena.get("terminated") or env.arena.get("truncated"))
@@ -218,6 +224,10 @@ def main() -> int:
     parser.add_argument("--max-substeps", type=int, default=2200)
     parser.add_argument("--keep-journals", action="store_true")
     parser.add_argument("--tasks", default="native_duel")
+    parser.add_argument("--start-substeps", type=int, default=1,
+                        help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
+    parser.add_argument("--command-ttl-ms", type=int, default=100,
+                        help="native command TTL; 100 is the stage 8 realtime runtime (9.2 rounds used 1000)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     distances = (250, 300, 350, 400)

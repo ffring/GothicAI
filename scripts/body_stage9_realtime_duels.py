@@ -31,6 +31,8 @@ def write_config(args):
     cases = [duel(index, args.seed_start) for index in range(args.duels)]
     config["realtime"] = {**config["realtime"], "cases": cases, "policies": ["gru"], "service_probes": False}
     config["screening"] = {**config["screening"], "cases": cases, "policies": ["gru"]}
+    if args.lockstep_start_substeps is not None:
+        config["runtime"]["lockstep_start_substeps"] = args.lockstep_start_substeps
     args.output.write_text(json.dumps(config, indent=2)+"\n")
 
 
@@ -113,6 +115,7 @@ def main() -> int:
     config.add_argument("--output", type=Path, required=True)
     config.add_argument("--duels", type=int, default=64)
     config.add_argument("--seed-start", type=int, default=90000)
+    config.add_argument("--lockstep-start-substeps", type=int, help="1 matches the realtime driver's first poll")
     pairs = commands.add_parser("compare")
     pairs.add_argument("--bc-realtime", type=Path, required=True)
     pairs.add_argument("--candidate-realtime", type=Path, required=True)

@@ -165,8 +165,10 @@ class DiagnosticRunner(PolicyArenaRunner):
 
 class DiagnosticEpisodeEnv(PolicyEpisodeEnv):
     def __init__(self, runner, scenario, *, owner_provider, poll_ms=5, command_ttl_ms=1000,
-                 heartbeat_interval_ms=0, max_stale_refresh_attempts=0, native_deadline_polling=False):
+                 heartbeat_interval_ms=0, max_stale_refresh_attempts=0, native_deadline_polling=False,
+                 lockstep_start_substeps=2):
         super().__init__(runner, scenario, owner_provider=owner_provider)
+        self.lockstep_start_substeps = lockstep_start_substeps
         self.poll_ms = poll_ms
         self.last_poll_ns = 0
         self.native_sim_step = 0
@@ -440,6 +442,10 @@ class DiagnosticEpisodeEnv(PolicyEpisodeEnv):
         self._deadline_polling_counts["deadline_wait_batches"] += 1
         self._deadline_polling_counts["sleep_calls"] += record["sleep_calls"]
         return True
+
+    def start(self, substeps=None):
+        # Realtime polls once whatever is asked; lockstep advances the declared barrier.
+        return super().start(self.lockstep_start_substeps if substeps is None else substeps)
 
     def finalize(self):
         result = super().finalize()
@@ -899,7 +905,8 @@ def run_suite(args, config):
                                            command_ttl_ms=1000 if args.phase == "probe" else runtime_config.get("command_ttl_ms", 100),
                                            heartbeat_interval_ms=runtime_config.get("heartbeat_interval_ms", 0),
                                            max_stale_refresh_attempts=runtime_config.get("max_stale_refresh_attempts", 0),
-                                           native_deadline_polling=runtime_config.get("native_deadline_polling", False))
+                                           native_deadline_polling=runtime_config.get("native_deadline_polling", False),
+                                           lockstep_start_substeps=runtime_config.get("lockstep_start_substeps", 2))
                 native = provider == "native" or shadow
                 initial = env.reset(output=args.output / name, task=case["task"], seed=case["seed"], side=case["side"],
                                     distance_cm=case["distance_cm"], timeout_ms=case["timeout_ms"],
@@ -916,6 +923,8 @@ def run_suite(args, config):
                           "profile": PROFILE, "visibility_watch": watch,
                           "checkpoint_sha256": policy.checkpoint_sha256 if policy is not None else None,
                           "normalizer_sha256": policy.normalizer_sha256 if policy is not None else None}
+                if "lockstep_start_substeps" in runtime_config:
+                    record["lockstep_start_substeps"] = env.lockstep_start_substeps
                 with (env.output / "policy-inputs.jsonl").open("x") as journal, (env.output / "latency.jsonl").open("x") as latency:
                     record.update(rollout(env, policy, case, phase_config, journal, latency,
                                           shadow=shadow, scripted_strafe=provider == "scripted_strafe"))

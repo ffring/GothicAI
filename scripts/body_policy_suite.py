@@ -74,6 +74,9 @@ class PolicyArenaRunner(ArenaRunner):
 
 class PolicyEpisodeEnv(EpisodeEnv):
     """Local policy adapter; older stage 5 provider semantics remain unchanged."""
+    # Native command TTL. The stage 8 realtime runtime sends 100 ms; a lockstep collector
+    # that must expire commands like realtime sets the same value.
+    command_ttl_ms = 1000
     def __init__(self, runner, scenario, *, owner_provider, watchdog_ms=5000):
         super().__init__(runner, scenario, watchdog_ms=watchdog_ms)
         self.owner_provider = owner_provider
@@ -154,7 +157,7 @@ class PolicyEpisodeEnv(EpisodeEnv):
         request = {"cmd": "body_action", **self.leases[entity], "provider": self.owner_provider,
                    "goal_version": row["goal"]["version"], "target_entity_id": row["target"]["entity_id"],
                    "command_id": command_id, "action_id": action, "observation_seq": row["observation_seq"],
-                   "issued_game_ms": row["t_game_ms"], "ttl_ms": 1000}
+                   "issued_game_ms": row["t_game_ms"], "ttl_ms": self.command_ttl_ms}
         response = self.runner.call(request)
         self.command_responses.append({"request": request, "response": response})
         if response.get("accepted") is not True:

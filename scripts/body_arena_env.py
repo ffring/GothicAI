@@ -176,11 +176,13 @@ class EpisodeEnv:
         # journal, but they cannot create a decision under the new generation.
         self.latest.pop(entity, None)
 
-    def start(self) -> EpisodeStep:
+    def start(self, substeps: int = 2) -> EpisodeStep:
         self._arena(self.runner.call({"cmd": "arena_start", "provider": self.provider}))
         self.rollout_started = time.monotonic()
-        # The post-acquire freshness barrier advances the actual simulation.
-        return self.step(2)
+        # The post-acquire freshness barrier advances the actual simulation. The realtime
+        # driver's first poll sees exactly one tick after arena_start; a lockstep run that
+        # must make the same decisions starts with one substep instead of two.
+        return self.step(substeps)
 
     def pull(self) -> tuple[dict[str, Any], ...]:
         response = self.runner.call({"cmd": "body_observations", "max": 256})

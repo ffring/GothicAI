@@ -127,6 +127,16 @@ def test_failed_reset_clears_memory_before_transport_failure(tmp_path):
     assert not env.decisions and not env.events
 
 
+def test_start_barrier_defaults_to_two_substeps_and_accepts_realtime_one(tmp_path):
+    for name, substeps in (("default", None), ("realtime", 1)):
+        transport = FakeTransport()
+        env = EpisodeEnv(transport, Path("body-arena.bench"))
+        reset(env, tmp_path / name)
+        env.start() if substeps is None else env.start(substeps)
+        assert [request["substeps"] for request in transport.requests if request["cmd"] == "arena_step"] == [substeps or 2]
+        assert env.eligible(1)
+
+
 def test_post_acquire_freshness_and_single_sample_decision(tmp_path):
     transport = FakeTransport()
     env = EpisodeEnv(transport, Path("body-arena.bench"))
