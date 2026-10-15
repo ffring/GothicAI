@@ -79,6 +79,7 @@ class Marvin {
       C_ToggleNpcManualAim,
       C_ToggleFlinch,
       C_ToggleRagdoll,
+      C_ToggleRagdollQuestGuard,
       };
 
     struct Cmd {

@@ -1,0 +1,95 @@
+# Stage 3.1: real IMMORTAL KO, native cliff/water motion, dry-anchor get-up.
+# OPENGOTHIC_RAGDOLL_TRACE=1 supplies the existing native CPU/pose trace as well.
+seed 73013
+cheat god
+set time 12 0
+ragdoll on
+view nopfx
+overlay off
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup immortal_cliff cliff immortal on
+cam auto 420 350
+view clean 180
+cam look 80
+wait 1200
+rec immortal_cliff
+wait 300
+guard launch
+guard hazard
+guard checkpoint before_save
+ragdoll save watched immortal_cliff_ko
+ragdoll restore watched immortal_cliff_ko
+guard checkpoint after_load
+standup watched
+waitragdoll watched getup 10000
+guard finish
+wait 1000
+stop
+guard cleanup
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup immortal_water water immortal on
+cam auto 420 180
+view clean 180
+cam look 80
+wait 1200
+rec immortal_water
+wait 300
+guard launch
+guard hazard
+guard checkpoint before_save
+ragdoll save watched immortal_water_ko
+ragdoll restore watched immortal_water_ko
+guard checkpoint after_load
+standup watched
+waitragdoll watched getup 10000
+guard finish
+wait 1000
+stop
+guard cleanup
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup normal_cliff cliff normal on
+view nopfx
+cam follow 700 180 90
+cam look 80
+wait 1200
+rec normal_cliff
+wait 300
+guard launch
+guard hazard
+waitragdoll watched sleep 20000
+standup watched
+waitragdoll watched getup 10000
+wait 300
+guard finish
+stop
+guard cleanup
+
+insert BDT_1013_BANDIT_L
+freeze BDT_1013_BANDIT_L
+watch BDT_1013_BANDIT_L
+guard setup guard_off_cliff cliff immortal off
+cam follow 700 180 90
+cam look 80
+wait 1200
+rec guard_off_cliff
+wait 300
+guard launch
+guard hazard
+waitragdoll watched sleep 20000
+standup watched
+waitragdoll watched getup 10000
+wait 300
+guard finish
+stop
+guard cleanup
+
+toggle ragdoll_quest_guard

@@ -12,6 +12,7 @@
 #include "game/fightalgo.h"
 #include "game/archerai.h"
 #include "game/gamescript.h"
+#include "game/ragdollsave.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
 #include "world/aiqueue.h"
@@ -457,6 +458,9 @@ class Npc final {
     bool      isRagdollBlending() const { return visual.pose().isRagdollBlending(); }
     const Skeleton* visualSkeleton() const { return visual.visualSkeleton(); }
     const Ragdoll* ragdollBody() const { return ragdoll.get(); }
+    const RagdollSave::QuestReturn& ragdollQuestReturnState() const { return ragdollQuestReturn; }
+    uint32_t ragdollQuestReturnCount() const { return ragdollQuestReturns; }
+    const Tempest::Vec3& ragdollQuestReturnFrom() const { return ragdollQuestFrom; }
     void      prepareRagdoll();
     void      syncRagdoll();
     void      suspendRagdoll();
@@ -691,6 +695,9 @@ class Npc final {
     void               releaseRagdoll(bool blend);
     bool               recoverRagdoll();
     bool               createRagdoll();
+    void               updateRagdollQuestAnchor();
+    void               checkRagdollQuestHazard();
+    bool               needsRagdollQuestReturn() const;
 
     World&                         owner;
     // Debug trace cache only: neither serialized nor used by native AI/animation decisions.
@@ -728,6 +735,10 @@ class Npc final {
     uint64_t                      ragdollStartTick = 0;
     bool                          ragdollLegacyDown = false;
     bool                          ragdollRecovering = false;
+    RagdollSave::QuestReturn       ragdollQuestReturn;
+    uint64_t                      ragdollQuestSampleTick = 0;
+    uint32_t                      ragdollQuestReturns = 0;
+    Tempest::Vec3                 ragdollQuestFrom;
 
     WalkBit                        wlkMode                 =WalkBit::WM_Run;
     int32_t                        trGuild                 =GIL_NONE;

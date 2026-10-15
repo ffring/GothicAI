@@ -324,6 +324,34 @@ bool RagdollSave::valid(const Snapshot& snapshot) {
   return !snapshot.body || validState(*snapshot.body);
   }
 
+namespace {
+  bool validQuestReturn(const RagdollSave::QuestReturn& state) {
+    return finiteVector(state.anchor,maxCoordinate) && std::isfinite(state.angle) &&
+           (!state.armed || state.hasAnchor) && (state.hazards & ~uint8_t(3))==0;
+    }
+  }
+
+void RagdollSave::saveQuestReturn(Serialize& fout, const QuestReturn& state) {
+  if(!validQuestReturn(state))
+    throw std::invalid_argument("invalid quest NPC return point");
+  fout.write(uint32_t(1),state.anchor,state.angle,state.hasAnchor,state.armed,state.hazards);
+  }
+
+bool RagdollSave::loadQuestReturn(Serialize& fin, QuestReturn& state) {
+  try {
+    uint32_t version = 0;
+    QuestReturn result;
+    fin.read(version,result.anchor,result.angle,result.hasAnchor,result.armed,result.hazards);
+    if(version!=1 || !validQuestReturn(result) || !entryExhausted(fin))
+      return false;
+    state = result;
+    return true;
+    }
+  catch(const std::exception&) {
+    return false;
+    }
+  }
+
 void RagdollSave::save(Serialize& fout, const Snapshot& snapshot) {
   if(!valid(snapshot))
     throw std::invalid_argument("invalid ragdoll save snapshot");

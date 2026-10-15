@@ -378,6 +378,15 @@ missing coverage and command errors fail the comparison. `--toggle before_label:
 the full sleeping state before a 600 ms feature-off interval with the automatic on restoration,
 before the fixture manually restores any NPC archive.
 
+`immortal-return.bench` covers quest NPC protection: real native KO falls from a cliff and into
+water, NPC save/load while the return is pending, and normal AI get-up at the last dry support.
+The mortal and feature-off controls get up at their fallen positions. The feature defaults on;
+disable it with `[GAME] ragdoll_quest_guard=0` or Marvin `toggle ragdoll_quest_guard`.
+Run with `OPENGOTHIC_RAGDOLL_TRACE=1`, then check the output with
+`python3 scripts/immortal_return_compare.py <output-directory> --output <result.json>`.
+The `ig_*` columns record eligibility, anchor, latched hazards and actual returns. `ph_ms` records
+the native physics step; observer wall throughput is informative and is not ordinary-game FPS.
+
 | Command | |
 |---|---|
 | `ragdoll on\|off` | Set the same `GAME/ragdoll` switch as the Marvin toggle. Enabled by default; set `[GAME] ragdoll=0` or use Marvin `toggle ragdoll` to disable it. |
