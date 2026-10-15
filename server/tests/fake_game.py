@@ -351,6 +351,10 @@ class FakeGame:
                         # the director's story variables (v29): kept if the save has them
                         self.vars.setdefault(name, value)
                         self.symbols.setdefault(name, "var")
+                    if op.get("op") == "trigger" and op.get("steps") is not None:
+                        # a trigger's count (v35): a variable of the director's by its id
+                        self.vars.setdefault(op["id"], 0)
+                        self.symbols.setdefault(op["id"], "var")
                 if msg.get("req"):
                     bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
                     errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}

@@ -54,8 +54,9 @@ bool usesRandom(const ExprP& e) {
 }
 
 DialogGraph::DialogGraph(std::function<void(std::string&&)> send,
-                         std::function<std::string(const std::string&,const std::string&)> addLine)
-  :send(std::move(send)), addLine(std::move(addLine)) {
+                         std::function<std::string(const std::string&,const std::string&)> addLine,
+                         StoryRuntime& rt)
+  :send(std::move(send)), addLine(std::move(addLine)), rt(rt) {
   const char* env = std::getenv("GOTHIC_AI_STORYCHECK");
   checking = env!=nullptr ? std::string_view(env)=="1" : CommandLine::inst().isDevMode();
   const char* exec = std::getenv("GOTHIC_AI_STORYEXEC");
@@ -73,6 +74,21 @@ DialogGraph::DialogGraph(std::function<void(std::string&&)> send,
     };
   g.onDialogChosen.bind(this,&DialogGraph::onChosen);
   g.dialogScriptFn       = [this](zenkit::DaedalusSymbol& fn, int32_t& result) { return onScript(fn,result); };
+  // a choice step of a program: the dialog of the director that runs offers it
+  rt.choices = [this](const storygraph::Step& s) {
+    if(runningOwn.empty())
+      return false;
+    auto& list = offering[runningOwn];
+    if(s.kind==storygraph::Step::ClearChoices) {
+      list.clear();
+      return true;
+      }
+    // offered again: once in the menu
+    list.erase(std::remove_if(list.begin(),list.end(),[&s](const Choice& c) { return c.id==s.id; }),list.end());
+    list.push_back(Choice{s.id,runningOwn,s.text,s.then});
+    choiceOf[s.id] = runningOwn;
+    return true;
+    };
   if(running)
     Log::i("[story] dialogs run as their programs");
   if(checking)
@@ -88,65 +104,7 @@ DialogGraph::~DialogGraph() {
   g.dialogExtraChoicesFn = nullptr;
   g.dialogScriptFn       = nullptr;
   g.onDialogChosen.ubind(this,&DialogGraph::onChosen);
-  }
-
-zenkit::DaedalusVm* DialogGraph::vm() const {
-  World* w = Gothic::inst().world();
-  return w!=nullptr ? &w->script().getVm() : nullptr;
-  }
-
-GameScript* DialogGraph::script() const {
-  World* w = Gothic::inst().world();
-  return w!=nullptr ? &w->script() : nullptr;
-  }
-
-void DialogGraph::ensureVars() {
-  auto* sc = script();
-  auto* v  = vm();
-  if(v==nullptr || (v==varsFor && varsMade.size()==vars.size()))
-    return;
-  if(v!=varsFor) {
-    varsMade.clear();
-    varsFor = v;
-    }
-  auto& own = sc->ownSymbols();
-  for(auto& [name,value] : vars) {
-    if(varsMade.count(name))
-      continue;
-    varsMade.insert(name);
-    if(auto err = whyNotVar(*sc,name); !err.empty()) {
-      Log::e("[story] vars: ",err);
-      continue;
-      }
-    if(own.find(name)!=nullptr)
-      continue;  // a save brought it back with its value
-    std::string why;
-    if(auto* s = own.addInt(name,why))
-      s->set_int(value); else
-      Log::e("[story] vars: ",why);
-    }
-  }
-
-std::string DialogGraph::whyNotVar(GameScript& script, const std::string& name) {
-  if(name.rfind(OwnSymbols::Prefix,0)!=0)
-    return name + ": a variable of the director's is named DIR_...";
-  auto* own = script.ownSymbols().find(name);
-  if(own!=nullptr ? own->kind!=OwnSymbols::Kind::Int : script.getVm().find_symbol_by_name(name)!=nullptr)
-    return name + " is taken";
-  return {};
-  }
-
-void DialogGraph::ensureLifter() {
-  ensureVars();
-  auto* v = vm();
-  if(v==nullptr || v==liftedFor)
-    return;
-  predicates.reset();
-  lifter.reset();
-  code       = std::make_unique<storygraph::Bytecode>(*v);
-  lifter     = std::make_unique<storygraph::Lifter>(*v,*code);
-  predicates = std::make_unique<storygraph::Predicates>(*v,*lifter);
-  liftedFor  = v;
+  rt.choices = nullptr;
   }
 
 void DialogGraph::clear() {
@@ -159,40 +117,15 @@ void DialogGraph::clear() {
   replaced.clear();
   replacedFns.clear();
   replacedFor = nullptr;
-  vars.clear();
-  varsMade.clear();
-  varsFor = nullptr;
   reported.clear();
   // the next game session has its own VM
-  predicates.reset();
-  lifter.reset();
-  code.reset();
-  liftedFor = nullptr;
-  interp.reset();
-  engine.reset();
   programs.clear();
-  runFor = nullptr;
+  programsFor = nullptr;
   }
 
-std::vector<std::string> DialogGraph::apply(const rapidjson::Value& msg) {
-  std::vector<std::string> errors;
-  if(JsonRead::boolean(msg,"replace",false))
-    clear();
-  auto it = msg.FindMember("ops");
-  if(it==msg.MemberEnd() || !it->value.IsArray())
-    return errors;
-  size_t i = 0;
-  for(auto& op : it->value.GetArray()) {
-    auto err = op.IsObject() ? applyOp(op) : std::string("not an object");
-    if(!err.empty()) {
-      errors.push_back("op " + std::to_string(i) + ": " + err);
-      Log::e("[story] patch op ",i,": ",err);
-      }
-    ++i;
-    }
-  Log::i("[story] patch: ",i," operation(s), ",errors.size()," rejected; ",disabled.size()," off, ",
-         conditions.size()," with conditions, ",nodes.size()," new, ",replaced.size()," programs replaced");
-  return errors;
+std::string DialogGraph::summary() const {
+  return std::to_string(disabled.size()) + " off, " + std::to_string(conditions.size()) + " with conditions, " +
+         std::to_string(nodes.size()) + " new, " + std::to_string(replaced.size()) + " programs replaced";
   }
 
 std::string DialogGraph::applyOp(const rapidjson::Value& op) {
@@ -202,7 +135,7 @@ std::string DialogGraph::applyOp(const rapidjson::Value& op) {
     auto it = op.FindMember("vars");
     if(it==op.MemberEnd() || !it->value.IsObject())
       return "vars: no vars";
-    auto* sc = script();
+    auto* sc = rt.script();
     for(auto& m : it->value.GetObject()) {
       const auto name = upper(std::string(m.name.GetString(),m.name.GetStringLength()));
       if(!m.value.IsInt())
@@ -210,13 +143,13 @@ std::string DialogGraph::applyOp(const rapidjson::Value& op) {
       if(name.rfind(OwnSymbols::Prefix,0)!=0)
         return "vars: " + name + ": a variable of the director's is named DIR_...";
       if(sc!=nullptr) {
-        if(auto err = whyNotVar(*sc,name); !err.empty())
+        if(auto err = StoryRuntime::whyNotVar(*sc,name); !err.empty())
           return "vars: " + err;
         }
       }
     for(auto& m : it->value.GetObject())
-      vars.emplace(upper(std::string(m.name.GetString(),m.name.GetStringLength())),m.value.GetInt());
-    ensureVars();
+      if(auto err = rt.addVar(upper(std::string(m.name.GetString(),m.name.GetStringLength())),m.value.GetInt()); !err.empty())
+        return "vars: " + err;
     return {};
     }
   if(kind=="add_node") {
@@ -276,7 +209,7 @@ std::string DialogGraph::applyOp(const rapidjson::Value& op) {
       auto* fn = functionOf(*v,node,r.condition,err);
       if(fn==nullptr)
         return "program: " + err;
-      err = checkProgram(*v,r.program,fn);
+      err = rt.checkProgram(*v,r.program,fn);
       if(!err.empty())
         return "program: " + err;
       }
@@ -293,7 +226,7 @@ std::string DialogGraph::applyOp(const rapidjson::Value& op) {
     auto e = storygraph::readExpr(it->value,err);
     if(e==nullptr)
       return "condition: " + err;
-    err = checkExpr(e);
+    err = rt.checkExpr(e);
     if(!err.empty())
       return "condition: " + err;
     conditions[node].push_back(e);
@@ -327,7 +260,7 @@ std::string DialogGraph::readNode(const rapidjson::Value& v, Node& n) {
     n.condition = storygraph::readExpr(it->value,err);
     if(n.condition==nullptr)
       return "add_node condition: " + err;
-    err = checkExpr(n.condition);
+    err = rt.checkExpr(n.condition);
     if(!err.empty())
       return "add_node condition: " + err;
     }
@@ -372,135 +305,12 @@ std::string DialogGraph::readNode(const rapidjson::Value& v, Node& n) {
       };
     name(n.program.steps);
     if(dat!=nullptr) {
-      auto err = checkProgram(*dat,n.program,nullptr);
+      auto err = rt.checkProgram(*dat,n.program,nullptr);
       if(!err.empty())
         return "add_node program: " + err;
       }
     }
   return {};
-  }
-
-std::string DialogGraph::checkExpr(const ExprP& e) {
-  auto* v = vm();
-  if(v==nullptr)
-    return {};  // no world yet: names are checked when the condition is computed
-  auto err = checkNames(*v,e);
-  if(!err.empty())
-    return err;
-  ensureLifter();
-  return predicates->whyNotLifted(e);
-  }
-
-std::string DialogGraph::checkNames(zenkit::DaedalusVm& vm, const ExprP& e) const {
-  auto* v = &vm;
-  std::string err;
-  storygraph::ex::walk(e, [&](const Expr& x) {
-    if(!err.empty())
-      return;
-    auto* s = (x.kind==Expr::Var || x.kind==Expr::Inst || x.kind==Expr::Sym || x.kind==Expr::Call ||
-               x.kind==Expr::Fn) ? v->find_symbol_by_name(x.name) : nullptr;
-    switch(x.kind) {
-      case Expr::Var:
-        if(s==nullptr || s->is_member())
-          err = "no variable " + x.name;
-        break;
-      case Expr::Inst:
-        if(s==nullptr || s->type()!=DaedalusDataType::INSTANCE)
-          err = "no instance " + x.name;
-        break;
-      case Expr::Sym:
-        if(s==nullptr)
-          err = "no symbol " + x.name;
-        break;
-      case Expr::Call:
-        if(s==nullptr || !s->is_external())
-          err = "no engine function " + x.name;
-        else if(v->find_parameters_for_function(s).size()!=x.args.size())
-          err = x.name + " takes " + std::to_string(v->find_parameters_for_function(s).size()) + " arguments";
-        break;
-      case Expr::Fn:
-        if(s==nullptr || s->type()!=DaedalusDataType::FUNCTION || s->is_external())
-          err = "no script function " + x.name;
-        break;
-      default:
-        break;
-      }
-    });
-  return err;
-  }
-
-std::string DialogGraph::checkProgram(zenkit::DaedalusVm& v, const storygraph::Program& p,
-                                      const zenkit::DaedalusSymbol* fn) const {
-  const size_t params = fn!=nullptr ? v.find_parameters_for_function(fn).size() : 0;
-  auto member = [&v](const std::string& name) {
-    for(auto* cls : {"C_NPC.", "C_ITEM.", "C_INFO.", "C_FOCUS.", "C_MENU_ITEM."})
-      if(auto* m = v.find_symbol_by_name(cls + name); m!=nullptr && m->is_member())
-        return true;
-    return false;
-    };
-  auto expr = [&](const ExprP& e) {
-    auto err = checkNames(v,e);
-    storygraph::ex::walk(e, [&](const Expr& x) {
-      if(!err.empty())
-        return;
-      if(x.kind==Expr::Fn) {
-        // the VM runs it: it takes what it takes
-        auto* s = v.find_symbol_by_name(x.name);
-        if(s!=nullptr && v.find_parameters_for_function(s).size()!=x.args.size())
-          err = x.name + " takes " + std::to_string(v.find_parameters_for_function(s).size()) + " arguments";
-        }
-      else if(x.kind==Expr::Param && (x.index<0 || size_t(x.index)>=params))
-        err = "no argument " + std::to_string(x.index) + (fn!=nullptr ? " of " + fn->name() : std::string());
-      else if(x.kind==Expr::Field && !member(x.name))
-        err = "no member " + x.name;
-      });
-    return err;
-    };
-  std::function<std::string(const std::vector<storygraph::Step>&)> steps = [&](const std::vector<storygraph::Step>& ss) {
-    for(auto& st : ss) {
-      std::string err;
-      switch(st.kind) {
-        case storygraph::Step::Call:
-          err = expr(st.call);
-          break;
-        case storygraph::Step::Store: {
-          err = expr(st.target);
-          if(err.empty())
-            err = expr(st.value);
-          auto* t = st.target->kind!=Expr::Field ? v.find_symbol_by_name(st.target->name) : nullptr;
-          if(err.empty() && t!=nullptr && t->is_const())
-            err = "store to the constant " + st.target->name;
-          break;
-          }
-        case storygraph::Step::If:
-          err = expr(st.cond);
-          if(err.empty())
-            err = steps(st.then);
-          if(err.empty())
-            err = steps(st.otherwise);
-          break;
-        case storygraph::Step::Return:
-          if(st.value!=nullptr)
-            err = expr(st.value);
-          break;
-        case storygraph::Step::Say:
-          if(!st.line.empty() && Gothic::inst().messageByName(st.line).empty())
-            err = "no original line " + st.line;
-          break;
-        case storygraph::Step::Choice:
-        case storygraph::Step::ClearChoices:
-          if(fn!=nullptr)
-            err = "a dialog of the scripts offers its choices through INFO_ADDCHOICE";
-          else
-            err = steps(st.then);
-          break;
-        }
-      if(!err.empty())
-        return err;
-      }
-    return std::string();
-    };
-  return steps(p.steps);
   }
 
 zenkit::DaedalusSymbol* DialogGraph::functionOf(zenkit::DaedalusVm& v, const std::string& node, bool condition,
@@ -529,7 +339,7 @@ const storygraph::Program* DialogGraph::replacedProgram(zenkit::DaedalusVm& v, u
       std::string err;
       auto* f = functionOf(v,r.node,r.condition,err);
       if(f!=nullptr)
-        err = checkProgram(v,r.program,f);
+        err = rt.checkProgram(v,r.program,f);
       if(!err.empty()) {
         // the scripts' own program runs
         if(reported.insert("program:" + key).second)
@@ -544,23 +354,6 @@ const storygraph::Program* DialogGraph::replacedProgram(zenkit::DaedalusVm& v, u
   return it!=replacedFns.end() ? it->second : nullptr;
   }
 
-std::optional<bool> DialogGraph::test(const ExprP& e, std::string_view what) {
-  auto* v = vm();
-  if(v==nullptr)
-    return std::nullopt;
-  ensureLifter();
-  predicates->whyNotLifted(e);  // lifts the script functions it calls
-  storygraph::VmExternals engine(*v);
-  storygraph::Evaluator   ev(*v,predicates->helpers(),engine);
-  auto r = ev.eval(e);
-  if(!r || r->type!=storygraph::Value::Int) {
-    if(reported.insert(std::string("eval:") + std::string(what)).second)
-      Log::e("[story] condition of ",what," not computed: ",r ? "not an int" : ev.why());
-    return std::nullopt;
-    }
-  return r->i!=0;
-  }
-
 void DialogGraph::check(const zenkit::IInfo& info, bool visible) {
   auto* v = vm();
   if(v==nullptr || info.condition==0)
@@ -568,12 +361,13 @@ void DialogGraph::check(const zenkit::IInfo& info, bool visible) {
   if(!replaced.empty() && replacedProgram(*v,uint32_t(info.condition))!=nullptr)
     return;  // the director's condition: the lifted one is the scripts'
 
-  ensureLifter();
-  auto& e = predicates->condition(uint32_t(info.condition));
-  if(!predicates->whyNotLifted(e).empty() || usesRandom(e))
+  rt.ensureLifter();
+  auto& predicates = rt.predicates();
+  auto& e = predicates.condition(uint32_t(info.condition));
+  if(!predicates.whyNotLifted(e).empty() || usesRandom(e))
     return;  // not lifted, or a dice roll of its own
   storygraph::VmExternals engine(*v);
-  storygraph::Evaluator   ev(*v,predicates->helpers(),engine);
+  storygraph::Evaluator   ev(*v,predicates.helpers(),engine);
   auto r = ev.eval(e);
   checked++;
   auto* sym  = v->find_symbol_by_index(info.symbol_index());
@@ -608,7 +402,7 @@ void DialogGraph::onFilter(const zenkit::IInfo& info, bool& visible) {
     return;
   for(auto& c : it->second) {
     // a condition that can't be computed leaves the dialog as the scripts have it
-    auto r = test(c,sym->name());
+    auto r = rt.test(c,sym->name());
     if(r && !*r) {
       visible = false;
       return;
@@ -637,7 +431,7 @@ void DialogGraph::onExtra(const zenkit::INpc& npc, bool important, std::vector<G
     if(told.count(id) && !n.permanent)
       continue;
     if(n.condition!=nullptr) {
-      auto r = test(n.condition,id);
+      auto r = rt.test(n.condition,id);
       if(!r || !*r)
         continue;
       }
@@ -692,12 +486,12 @@ void DialogGraph::runOwn(const std::string& node, const std::vector<storygraph::
   if(v==nullptr)
     return;
   // self and other are the npc and the hero (GameScript::exec)
-  ensureInterp(*v);
+  auto& interp = interpreter(*v);
   storygraph::Program p;
   p.steps = steps;
   const auto outer = runningOwn;
   runningOwn = node;
-  auto r = interp->run(p);
+  auto r = interp.run(p);
   runningOwn = outer;
   replacedRuns++;
   if(!r.ok) {
@@ -725,46 +519,30 @@ void DialogGraph::onChoices(const GameScript::DlgChoice& dlg, std::vector<GameSc
     }
   }
 
-void DialogGraph::ensureInterp(zenkit::DaedalusVm& v) {
-  if(runFor==&v)
-    return;
-  interp.reset();
+storygraph::Interpreter& DialogGraph::interpreter(zenkit::DaedalusVm& v) {
+  auto& interp = rt.interpreter(v);
+  if(programsFor==&v)
+    return interp;
   programs.clear();
-  engine = std::make_unique<storygraph::VmExternals>(v);  // the engine's own functions, as the VM calls them
-  interp = std::make_unique<storygraph::Interpreter>(v,*engine);
-  interp->ownLine = [this](const std::string& npc, const std::string& text) { return addLine(npc,text); };
-  interp->choices = [this](const storygraph::Step& s) {
-    if(runningOwn.empty())
-      return false;
-    auto& list = offering[runningOwn];
-    if(s.kind==storygraph::Step::ClearChoices) {
-      list.clear();
-      return true;
-      }
-    // offered again: once in the menu
-    list.erase(std::remove_if(list.begin(),list.end(),[&s](const Choice& c) { return c.id==s.id; }),list.end());
-    list.push_back(Choice{s.id,runningOwn,s.text,s.then});
-    choiceOf[s.id] = runningOwn;
-    return true;
-    };
-  runFor = &v;
+  programsFor = &v;
   // Ikarus loops move the VM's program counter from engine functions (DirectMemory): a program has none. The
   // director's programs still run: what they call runs in the VM
   if(running && DirectMemory::isRequired(v)) {
     Log::i("[story] Ikarus scripts: dialogs run in the VM");
     running = false;
     }
+  return interp;
   }
 
 bool DialogGraph::onScript(zenkit::DaedalusSymbol& fn, int32_t& result) {
   auto* v = vm();
   if(v==nullptr || (!running && replaced.empty()))
     return false;
-  ensureLifter();
-  ensureInterp(*v);
+  rt.ensureLifter();
+  auto& interp = interpreter(*v);
   if(auto* mine = replaced.empty() ? nullptr : replacedProgram(*v,fn.index())) {
     // the director's program in place of the scripts'
-    auto r = interp->run(*mine);
+    auto r = interp.run(*mine);
     replacedRuns++;
     if(!r.ok) {
       runErrors++;
@@ -777,7 +555,7 @@ bool DialogGraph::onScript(zenkit::DaedalusSymbol& fn, int32_t& result) {
     return false;
   auto it = programs.find(fn.index());
   if(it==programs.end()) {
-    it = programs.emplace(fn.index(), storygraph::liftProgram(*v,*code,fn.index())).first;
+    it = programs.emplace(fn.index(), storygraph::liftProgram(*v,rt.bytecode(),fn.index())).first;
     if(!it->second.error.empty()) {
       notPrograms++;
       Log::e("[story] ", fn.name(), " is not a program (", it->second.error, "): the VM runs it");
@@ -785,7 +563,7 @@ bool DialogGraph::onScript(zenkit::DaedalusSymbol& fn, int32_t& result) {
     }
   if(!it->second.error.empty())
     return false;
-  auto r = interp->run(it->second);
+  auto r = interp.run(it->second);
   ran++;
   if(!r.ok) {
     // what ran before the error is done: the VM can't run it again
@@ -816,6 +594,8 @@ void DialogGraph::onChosen(const GameScript::DlgChoice& dlg, Npc& player, Npc& n
          .str("node",node)
          .boolean("made",!dlg.external.empty())
          .finish());
+  if(chosen)
+    chosen(npc,node);
   }
 
 std::vector<std::string> DialogGraph::offered(World& world, Npc& npc) {
@@ -897,7 +677,7 @@ bool DialogGraph::evaluate(World& world, Npc* npc, const rapidjson::Value& expr,
   auto e = storygraph::readExpr(expr,error);
   if(e==nullptr)
     return false;
-  error = checkExpr(e);
+  error = rt.checkExpr(e);
   if(!error.empty())
     return false;
   auto* self  = v->global_self();
@@ -909,7 +689,7 @@ bool DialogGraph::evaluate(World& world, Npc* npc, const rapidjson::Value& expr,
   if(world.player()!=nullptr)
     other->set_instance(world.player()->handlePtr());
   storygraph::VmExternals engine(*v);
-  storygraph::Evaluator   ev(*v,predicates->helpers(),engine);
+  storygraph::Evaluator   ev(*v,rt.predicates().helpers(),engine);
   auto r = ev.eval(e);
   self->set_instance(prevSelf);
   other->set_instance(prevOther);
@@ -987,7 +767,7 @@ std::string DialogGraph::status() const {
          std::to_string(differ) + " differ; programs " + (running ? "on" : "off") + ": " + std::to_string(ran) +
          " runs, " + std::to_string(runErrors) + " failed, " + std::to_string(notPrograms) + " not programs; " +
          std::to_string(replaced.size()) + " replaced, " + std::to_string(replacedRuns) + " director's runs; " +
-         std::to_string(vars.size()) + " vars";
+         std::to_string(rt.varCount()) + " vars";
   }
 
 std::string DialogGraph::program(std::string_view node, std::string_view part, bool own, std::string& error) {
@@ -1000,7 +780,7 @@ std::string DialogGraph::program(std::string_view node, std::string_view part, b
     error = "part is information or condition, not " + std::string(part);
     return {};
     }
-  ensureLifter();
+  rt.ensureLifter();
   const auto id = upper(node);
   auto* fn = functionOf(*v,id,part=="condition",error);
   if(fn==nullptr)
@@ -1009,7 +789,7 @@ std::string DialogGraph::program(std::string_view node, std::string_view part, b
   const storygraph::Program* p = replaced.empty() ? nullptr : replacedProgram(*v,fn->index());
   const bool patched = p!=nullptr;
   if(p==nullptr || own) {
-    scripts = storygraph::liftProgram(*v,*code,fn->index());
+    scripts = storygraph::liftProgram(*v,rt.bytecode(),fn->index());
     p       = &scripts;
     }
   if(!p->error.empty()) {
