@@ -24,13 +24,14 @@ VISUAL_EXTRAS = ("OPENGOTHIC_FOOTIK", "OPENGOTHIC_LEAN", "OPENGOTHIC_AIM", "OPEN
                  "OPENGOTHIC_GESTURES")
 
 
-def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool, off=(), env=None) -> dict:
+def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool, off=(), env=None, extra=()) -> dict:
     output = args.output/name
     output.mkdir(parents=True)
     variant = argparse.Namespace(**vars(args))
     variant.output = output
     variant.native_serial_workers = serial
     variant.compact_replies = True
+    variant.runner_extra_args = list(extra)
     os.environ.pop("OPENGOTHIC_BODY_TRACE", None)
     if trace:
         os.environ["OPENGOTHIC_BODY_TRACE"] = "1"
@@ -59,6 +60,8 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             else:
                 runner.request({"cmd": "body_visibility_watch", "enabled": True}, allow_error=True)
             reset_s = time.monotonic()-begin
+            native_reset_ms = reset.get("reset_wall_ms")
+            warmup_ms = reset.get("simulated_ms")
             start = runner.request({"cmd": "arena_start", "provider": "native"})
             game0 = (start.get("arena") or reset.get("arena") or {}).get("game_ms", 0)
             steps, begin = 0, time.monotonic()
@@ -71,10 +74,10 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
                     break
             wall = time.monotonic()-begin
             game = arena.get("game_ms", game0)-game0
-            episodes.append({"reset_s": reset_s, "steps": steps, "wall_s": wall, "game_ms": game,
+            episodes.append({"reset_s": reset_s, "native_reset_ms": native_reset_ms, "warmup_game_ms": warmup_ms, "steps": steps, "wall_s": wall, "game_ms": game,
                              "ms_per_tick": wall*1000/max(1, steps), "speed": game/1000/max(wall, 1e-9),
                              "outcome": arena.get("outcome")})
-            print(f"{name} ep{index}: reset {reset_s:.2f}s steps {steps} {wall*1000/max(1,steps):.2f} ms/tick "
+            print(f"{name} ep{index}: reset {reset_s:.2f}s (runner {native_reset_ms} ms, warmup {warmup_ms} game ms) steps {steps} {wall*1000/max(1,steps):.2f} ms/tick "
                   f"speed {game/1000/max(wall,1e-9):.2f}x {arena.get('outcome')}", flush=True)
         sample = runner.sample()
         runner.request({"cmd": "close"})
@@ -111,7 +114,9 @@ def main() -> int:
              "lean-footik-watched": dict(serial=True, trace=False, watch=False, env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1"}),
              "gate-footik-watched": dict(serial=True, trace=True, watch=True, env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1"}),
              "lean-cull": dict(serial=True, trace=False, watch=False,
-                               env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"})}
+                               env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"}),
+             "lean-cull-fork": dict(serial=True, trace=False, watch=False, extra=("--fork-reset",),
+                                    env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"})}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,
                                                       "results": results}, indent=2)+"\n")

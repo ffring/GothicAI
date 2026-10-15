@@ -48,7 +48,8 @@ class ObserverRunner:
             [str(args.runner), "-g", str(args.assets), "-g2", "-devmode", "--save", str(args.save),
              "--scenario", str(args.scenario), "--output", str(args.output / "initial"),
              "--mode", "lockstep", "--stdio"] +
-            (["--compact-replies"] if getattr(args, "compact_replies", False) else [])+native_worker_arguments(args), cwd=workdir,
+            (["--compact-replies"] if getattr(args, "compact_replies", False) else [])+native_worker_arguments(args)+
+            list(getattr(args, "runner_extra_args", [])), cwd=workdir,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
             env=rng_environment("isolated"))
 

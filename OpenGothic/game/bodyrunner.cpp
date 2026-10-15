@@ -38,6 +38,8 @@
 #include <iostream>
 #include <optional>
 #include <poll.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <stdexcept>
 #include <thread>
 #include <unistd.h>
@@ -49,7 +51,7 @@ using Allocator = rapidjson::Document::AllocatorType;
 
 struct Options {
   std::string save, scenario, output = ".body-runner", mode = "lockstep";
-  bool stdio = false, compactReplies = false, schedulingDiagnostics = false, serialWorkers = false;
+  bool stdio = false, compactReplies = false, schedulingDiagnostics = false, serialWorkers = false, forkReset = false;
 };
 
 Options options(int argc, const char** argv) {
@@ -69,11 +71,14 @@ Options options(int argc, const char** argv) {
     else if(arg=="--compact-replies") result.compactReplies = true;
     else if(arg=="--scheduling-diagnostics") result.schedulingDiagnostics = true;
     else if(arg=="--serial-workers") result.serialWorkers = true;
+    else if(arg=="--fork-reset") result.forkReset = true;
   }
   if(result.save.empty() || result.scenario.empty())
     throw std::runtime_error("--save and --scenario are required");
   if(result.mode!="lockstep" && result.mode!="realtime")
     throw std::runtime_error("mode must be lockstep or realtime");
+  if(result.forkReset && (!result.serialWorkers || !result.stdio))
+    throw std::runtime_error("--fork-reset requires --serial-workers and --stdio");
   result.save = std::filesystem::absolute(result.save).string();
   result.scenario = std::filesystem::absolute(result.scenario).string();
   result.output = std::filesystem::absolute(result.output).string();
@@ -113,7 +118,13 @@ class Runner final {
 public:
   Runner(Gothic& gothic, Options options) : gothic(gothic), opts(std::move(options)) {}
 
-  void reset(const Json& command) {
+  struct ResetPlan final {
+    std::string scenario, mode, output;
+    int64_t seed = -1;
+    std::optional<BodyArena::Config> arena;
+  };
+
+  ResetPlan plan(const Json& command) const {
     const auto scenario = optionalString(command,"scenario",opts.scenario);
     const auto mode = optionalString(command,"mode",opts.mode);
     const auto output = optionalString(command,"output_dir",opts.output);
@@ -202,7 +213,48 @@ public:
           arenaConfig->scenario!="native_duel" && arenaConfig->scenario!="reset_stress"))
         throw std::runtime_error("invalid bounded arena configuration");
     }
-    std::filesystem::create_directories(output);
+    return {scenario,mode,output,seed,arenaConfig};
+  }
+
+  void reset(const Json& command) {
+    const auto p = plan(command);
+    teardown();
+    configureEpisode(p);
+    // A process begins with C rand seed 1. Reconstruct that state for each independent episode,
+    // separately from the script RNG reseeded by bodyduel. No wall-clock-derived randomness.
+    std::srand(1);
+    const auto from = Clock::now();
+    loadWorld();
+    beginEpisode(p,from);
+  }
+
+  // --fork-reset: the save is loaded once into a template process that never simulates; each
+  // episode runs in a fork of it. Loading consults neither the bench nor the arena config, so
+  // configuring them after the load reaches the same state as a full reset (checked by tests).
+  void loadTemplate() {
+    teardown();
+    std::srand(1);
+    loadWorld();
+    templateReady = true;
+  }
+  bool hasTemplate() const { return templateReady; }
+  // In the template after each fork: the next episode gets new identities, as a full reset would.
+  void noteForked() { ++generation; ++observationGeneration; }
+  void resetFromTemplate(const Json& command) {
+    const auto p = plan(command);
+    const auto from = Clock::now();
+    BodyObservations::reset(++observationGeneration);
+    configureEpisode(p);
+    beginEpisode(p,from);
+  }
+  // A fork ending its episode: flush its own journals without tearing down the shared world.
+  void flushForExit() {
+    saveSummary();
+    observationFile.close(); timingFile.close(); controlFile.close(); arenaFile.close();
+  }
+
+private:
+  void teardown() {
     BodyArena::interrupt("reset_requested");
     BodyArena::disable();
     BodyTrajectory::reset("reset");
@@ -215,12 +267,15 @@ public:
     player.reset();
     gothic.clearGame().reset();
     loaded = false;
-    if(arenaConfig) BodyArena::configure(*arenaConfig,generation+1);
-    TestBench::configure(scenario,output,seed);
-    // A process begins with C rand seed 1. Reconstruct that state for each independent episode,
-    // separately from the script RNG reseeded by bodyduel. No wall-clock-derived randomness.
-    std::srand(1);
-    const auto from = Clock::now();
+  }
+
+  void configureEpisode(const ResetPlan& p) {
+    std::filesystem::create_directories(p.output);
+    if(p.arena) BodyArena::configure(*p.arena,generation+1);
+    TestBench::configure(p.scenario,p.output,p.seed);
+  }
+
+  void loadWorld() {
     Tempest::RFile file(opts.save);
     Serialize save(file);
     gothic.setGame(std::make_unique<GameSession>(save));
@@ -231,6 +286,11 @@ public:
     gothic.gameSession()->setTimeMultiplyer(1.f);
     gothic.camera()->setViewport(640,480);
     player->clearFocus();
+  }
+
+  void beginEpisode(const ResetPlan& p,Clock::time_point from) {
+    const auto& mode=p.mode; const auto& output=p.output; const auto& arenaConfig=p.arena;
+    (void)output;
     // Match the rendered load-finalize frame: animation/camera/bench initialize at dt=0.
     SimulationStep::finishStep(0,*player);
     modeNow = mode;
@@ -292,6 +352,7 @@ public:
     }
   }
 
+public:
   void oneStep() {
     if(!loaded || paused || complete())
       return;
@@ -963,6 +1024,7 @@ private:
   uint64_t schedulingRows = 0, schedulingDropped = 0, schedulingTick = 0;
   Clock::time_point started{}, due{};
   bool loaded = false;
+  bool templateReady = false;
   bool paused = false;
   bool watchRequested = false;
   bool arenaSetupWatch = false;
@@ -1113,6 +1175,77 @@ void advanceReply(std::FILE* output, const Advance& pending, const Runner& runne
 }
 }
 
+size_t threadCount() {
+  size_t count = 0;
+  for(const auto& entry:std::filesystem::directory_iterator("/proc/self/task")) { (void)entry; ++count; }
+  return count;
+}
+
+// Template side of --fork-reset. Returns an exit code once the template is done. In a fork it
+// returns -1, with `line` holding the reset that fork must perform and answer.
+int serveForks(Runner& runner, std::FILE* protocol, std::string& line, int& forkPipe) {
+  for(;;) {
+    Json request;
+    request.Parse(line.data(),line.size());
+    const auto cmd = request.HasParseError() || !request.IsObject() ? std::string() : optionalString(request,"cmd","");
+    if(cmd=="close") {
+      auto response = runner.status();
+      echoId(response,request);
+      send(protocol,response);
+      return 0;
+    }
+    if(cmd!="reset")
+      throw std::runtime_error("fork-reset template accepts only reset or close");
+    if(!runner.hasTemplate())
+      runner.loadTemplate();
+    if(threadCount()!=1)
+      throw std::runtime_error("fork-reset requires a single-threaded template");
+    std::fflush(protocol); std::fflush(stdout); std::fflush(stderr);
+    int fds[2];
+    if(pipe(fds)!=0)
+      throw std::runtime_error("fork-reset pipe failed");
+    const pid_t pid = fork();
+    if(pid<0)
+      throw std::runtime_error("fork-reset fork failed");
+    if(pid==0) {
+      close(fds[0]);
+      forkPipe = fds[1];
+      return -1;
+    }
+    close(fds[1]);
+    runner.noteForked();
+    // The fork forwards the next reset/close line and exits; an empty pipe means it ended.
+    std::string next;
+    char chunk[65536];
+    for(;;) {
+      const auto count = read(fds[0],chunk,sizeof(chunk));
+      if(count>0) { next.append(chunk,size_t(count)); continue; }
+      if(count<0 && errno==EINTR) continue;
+      break;
+    }
+    close(fds[0]);
+    int status = 0;
+    while(waitpid(pid,&status,0)<0 && errno==EINTR) {}
+    if(next.empty())
+      return WIFEXITED(status) && WEXITSTATUS(status)==0 ? 0 : 3;
+    line = std::move(next);
+  }
+}
+
+[[noreturn]] void forwardAndExit(int forkPipe, const std::string& line) {
+  size_t offset = 0;
+  while(offset<line.size()) {
+    const auto count = write(forkPipe,line.data()+offset,line.size()-offset);
+    if(count<0) {
+      if(errno==EINTR) continue;
+      _exit(4);
+    }
+    offset += size_t(count);
+  }
+  close(forkPipe);
+  _exit(0);
+}
+
 int main(int argc, const char** argv) {
   // Reserve protocol stdout before redirecting all engine/library logging (including C stdio).
   std::FILE* protocol = fdopen(dup(STDOUT_FILENO),"w");
@@ -1144,6 +1277,7 @@ int main(int argc, const char** argv) {
       return 0;
     }
     CommandInput input;
+    int forkPipe = -1;
     std::optional<Advance> pending;
     std::optional<Clock::time_point> admittedForDue;
     for(;;) {
@@ -1236,7 +1370,22 @@ int main(int argc, const char** argv) {
           }
           continue;
         }
-        if(cmd=="reset") runner.reset(request);
+        if(cmd=="reset") {
+          if(!opts.forkReset) {
+            runner.reset(request);
+          } else if(forkPipe>=0) {
+            // This fork's episode is over: the template forks the next one from the pristine world.
+            runner.flushForExit();
+            forwardAndExit(forkPipe,frame.line);
+          } else {
+            std::string line = frame.line;
+            const int code = serveForks(runner,protocol,line,forkPipe);
+            if(code>=0)
+              return code;
+            request.Parse(line.data(),line.size());
+            runner.resetFromTemplate(request);
+          }
+        }
         else if(cmd=="body_watch") runner.bodyWatch(request);
         else if(cmd=="body_trajectory_watch") runner.trajectoryWatch(request);
         else if(cmd=="pause" || cmd=="resume") runner.setPaused(cmd=="pause");
@@ -1279,6 +1428,7 @@ int main(int argc, const char** argv) {
         runner.compactReply(response,cmd);
         send(protocol,response);
         if(cmd=="close") {
+          if(forkPipe>=0) { runner.flushForExit(); _exit(0); }
           runner.close();
           return 0;
         }
@@ -1292,6 +1442,7 @@ int main(int argc, const char** argv) {
         send(protocol,response);
       }
     }
+    if(forkPipe>=0) { runner.flushForExit(); _exit(0); }
     runner.close();
     return 0;
   } catch(const std::exception& e) {
