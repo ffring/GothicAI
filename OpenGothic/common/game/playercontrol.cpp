@@ -1198,7 +1198,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   approach.yaw = rot;
   if(approach.drawn && approach.down>40.f) {
     const float a = pl.rotationRad();
-    const auto edge = pl.aimEdge({std::cos(a),0,std::sin(a)});
+    const auto edge = pl.aimEdge({std::cos(a),0,std::sin(a)},AimStep::SearchRange);
     approach.edge = edge.found;
     approach.distance = edge.distance;
     approach.blocked = pl.isEdgeMoveBlocked({0,0,1});

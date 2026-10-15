@@ -96,6 +96,8 @@ class FootIk final {
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
     bool           isQuadruped() const { return valid && quadruped; }
+    // Freeze the preceding rendered ankles before any of this tick's pose rebuilds.
+    void           beginFrame(uint64_t tick);
 
     // Ground under the animated feet of an npc; disabled input if the npc state does not allow IK
     auto           mkInput(const Npc& npc, World& world, const Tempest::Matrix4x4& obj,
@@ -165,6 +167,8 @@ class FootIk final {
     float    dbgLimit   = 0;
     float    weight     = 0;
     float    stopStep   = 0;
+    uint64_t stopTail   = 0;
+    uint64_t ankleFrame = uint64_t(-1);
     bool     valid      = false;
     uint64_t logTimer   = 0;
     uint64_t logTime    = 0;

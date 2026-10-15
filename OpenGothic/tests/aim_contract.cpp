@@ -1,4 +1,5 @@
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/footik.h"
 #include "graphics/mesh/skeleton.h"
 #include "game/aimstep.h"
 
@@ -122,6 +123,123 @@ struct Fixture final {
     return result;
     }
   };
+
+zenkit::ModelHierarchy footHierarchy() {
+  zenkit::ModelHierarchy source;
+  struct Bone { const char* name; int16_t parent; Vec3 offset; };
+  const Bone bones[] = {
+    {"BIP01",-1,{0,0,0}}, {"BIP01 PELVIS",0,{0,87,0}},
+    {"BIP01 L THIGH",1,{0,0,10}}, {"BIP01 L CALF",2,{5,-42,0}},
+    {"BIP01 L FOOT",3,{-5,-45,0}}, {"BIP01 L TOE0",4,{15,0,0}},
+    {"BIP01 R THIGH",1,{0,0,-10}}, {"BIP01 R CALF",6,{5,-42,0}},
+    {"BIP01 R FOOT",7,{-5,-45,0}}, {"BIP01 R TOE0",8,{15,0,0}}
+    };
+  for(const auto& bone:bones) {
+    zenkit::ModelHierarchyNode node;
+    node.name = bone.name;
+    node.parent_index = bone.parent;
+    auto transform = Matrix4x4::mkIdentity();
+    transform.set(3,0,bone.offset.x);
+    transform.set(3,1,bone.offset.y);
+    transform.set(3,2,bone.offset.z);
+    std::memcpy(&node.transform,&transform,sizeof(transform));
+    source.nodes.push_back(node);
+    }
+  source.bbox.min = {-60,0,-30}; source.bbox.max = {60,190,30};
+  source.collision_bbox = source.bbox;
+  return source;
+  }
+
+void testEdgeStopAnkles() {
+  Skeleton skeleton(footHierarchy(),nullptr,"HUMANS.MDS");
+  FootIk feet;
+  feet.setSkeleton(&skeleton);
+  require(feet.isValid() && !feet.isQuadruped(),"synthetic leg chains must support humanoid FootIk");
+  const std::array<size_t,2> ankles = {4,8};
+  auto pose = [&](float stride) {
+    auto palette = skeleton.tr;
+    for(size_t leg=0; leg<ankles.size(); ++leg) {
+      const size_t foot = ankles[leg];
+      const float x = leg==0 ? stride : -stride;
+      palette[foot-1].set(3,0,palette[foot-1].at(3,0)+x*.5f);
+      for(size_t bone=foot; bone<=foot+1; ++bone)
+        palette[bone].set(3,0,palette[bone].at(3,0)+x);
+      }
+    return palette;
+    };
+  auto anklePositions = [&](const std::vector<Matrix4x4>& palette) {
+    return std::array<Vec3,2>{position(palette[ankles[0]]),position(palette[ankles[1]])};
+    };
+  float maximum = 0;
+  auto bounded = [&](const std::vector<Matrix4x4>& palette, const std::array<Vec3,2>& previous, const char* message) {
+    for(size_t leg=0; leg<ankles.size(); ++leg) {
+      const float travel = length(position(palette[ankles[leg]])-previous[leg]);
+      require(std::isfinite(travel) && travel<=6.f,message);
+      maximum = std::max(maximum,travel);
+      }
+    };
+  FootIk::Input input;
+  input.enable = true;
+  input.crouch = 20.f;
+  input.dt = 33;
+  for(auto& ground:input.ground)
+    ground.hasCol = true;
+  std::vector<Matrix4x4> palette;
+  for(uint64_t tick=0; tick<20; ++tick) {
+    feet.beginFrame(tick);
+    feet.update(input);
+    palette = pose(0.f);
+    feet.apply(palette.data(),palette.size(),0.f);
+    }
+  auto previous = anklePositions(palette);
+
+  // A pose rebuild may happen before update enables the stop, and several more may follow.
+  // All of them must retain the preceding rendered frame as the ankle travel baseline.
+  feet.beginFrame(20);
+  palette = pose(24.f);
+  feet.apply(palette.data(),palette.size(),0.f);
+  require(length(position(palette[ankles[0]])-previous[0])>12.f,
+          "the pre-update rebuild must move far enough to expose a late ankle baseline capture");
+  input.aimStop = true;
+  input.ground[0].y = -12.f;
+  feet.update(input);
+  palette = pose(30.f);
+  feet.apply(palette.data(),palette.size(),0.f,Vec3(-12,0,0));
+  bounded(palette,previous,"the first edge stop must limit final ankles after animation/support changes");
+  for(int rebuild=0; rebuild<3; ++rebuild) {
+    feet.beginFrame(20);
+    input.dt = 0;
+    feet.update(input);
+    palette = pose(36.f+float(rebuild));
+    feet.apply(palette.data(),palette.size(),0.f,Vec3(-12,0,0));
+    bounded(palette,previous,"same-tick rebuilds and zero-dt updates must not reset or accumulate the ankle cap");
+    }
+  previous = anklePositions(palette);
+
+  // Releasing the stop retains the cap for the rest of the 200 ms stance transition.
+  input.aimStop = false;
+  input.dt = 33;
+  for(uint64_t frame=0; frame<6; ++frame) {
+    feet.beginFrame(21+frame);
+    input.ground[0].y = frame%2==0 ? 0.f : -12.f;
+    input.ground[1].y = frame%2==0 ? -12.f : 0.f;
+    feet.update(input);
+    palette = pose(frame%2==0 ? 36.f : -36.f);
+    feet.apply(palette.data(),palette.size(),0.f,Vec3(-12,0,0));
+    bounded(palette,previous,"the ankle cap must survive 198 ms after the edge stop clears");
+    previous = anklePositions(palette);
+    }
+  feet.beginFrame(27);
+  input.dt = 2;
+  feet.update(input);
+  palette = pose(36.f);
+  feet.apply(palette.data(),palette.size(),0.f,Vec3(-12,0,0));
+  const float released = length(position(palette[ankles[0]])-previous[0]);
+  require(maximum>1.f,"bounded ankles must still advance toward the final stance");
+  require(std::isfinite(released) && released>6.f,"the temporary ankle cap must expire after 200 ms");
+  std::printf("aim edge stop: ankle max=%.3f cm at 30 fps, repeated rebuilds/zero dt bounded, tail=200 ms, released=%.3f cm\n",
+              double(maximum),double(released));
+  }
 
 struct Result final {
   Vec3 head;
@@ -387,8 +505,14 @@ void testEdgeApproach() {
   in.down = 60.f;
   in.distance = 200.f;
   require(!step.update(in),"an edge two metres away must not start an approach");
+  in.distance = AimStep::SearchRange+.01f;
+  require(!step.update(in),"an edge just outside 120 cm must not start an approach");
+  in.distance = AimStep::SearchRange;
+  require(step.update(in),"an edge at the 120 cm search limit must start an approach");
   in.distance = 100.f;
-  require(step.update(in),"an edge one metre away must start an approach");
+  AimStep metreStep;
+  require(metreStep.update(in),"an edge one metre away must start an approach");
+  require(step.update(in),"an edge one metre away must keep the approach active");
   in.distance = 36.f;
   require(step.update(in),"the approach must continue until inside 35 cm");
   in.distance = 34.f;
@@ -441,5 +565,6 @@ int main() {
   testTransientSnapshot();
   testLegacyNpcLimit();
   testEdgeApproach();
+  testEdgeStopAnkles();
   std::puts("aim geometry contract: passed");
   }

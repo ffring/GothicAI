@@ -5,6 +5,8 @@
 // One approach per drawn, downward look. Player input keeps control until the look or draw is reset.
 class AimStep final {
   public:
+    static constexpr float SearchRange = 120.f;
+
     struct Input final {
       bool  drawn = false;
       bool  moving = false;
@@ -26,11 +28,11 @@ class AimStep final {
         }
       if(cancelled)
         return false;
-      if(active && (!in.edge || in.distance>100.f || in.distance<=35.f || in.blocked)) {
+      if(active && (!in.edge || in.distance>SearchRange || in.distance<=35.f || in.blocked)) {
         active = false;
         cancelled = true;
         }
-      if(!active && !cancelled && in.edge && in.distance>35.f && in.distance<=100.f && !in.blocked) {
+      if(!active && !cancelled && in.edge && in.distance>35.f && in.distance<=SearchRange && !in.blocked) {
         active = true;
         startYaw = in.yaw;
         }

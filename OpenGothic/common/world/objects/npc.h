@@ -541,7 +541,7 @@ class Npc final {
     auto      aimCurrentHead() const -> Tempest::Vec3;
     auto      aimLeanShift() const -> Tempest::Vec3;
     auto      aimArrow(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;
-    auto      aimEdge(const Tempest::Vec3& direction) const -> Aim::LeanEdge;
+    auto      aimEdge(const Tempest::Vec3& direction, float range=100.f) const -> Aim::LeanEdge;
     auto      aimLean(const Tempest::Vec3& target, bool manual=false) const -> Aim::LeanResult;
     auto      mapBone(std::string_view bone) const -> Tempest::Vec3;
 

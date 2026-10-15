@@ -18,8 +18,9 @@ namespace {
 
 constexpr float BlendIn  = 0.25f; // seconds: the legs take the steps...
 constexpr float BlendOut = 0.3f;  // ...and stand again
-constexpr float StopFootSpeed = 120.f; // cm/s: return to the stance with the body stopped
-constexpr float StopFootFrame = 4.f;   // leave room below the bench's 5 cm/frame ankle limit
+constexpr float StopBlendOut = 0.2f; // seconds: the body is already stopped at an edge
+constexpr float StopFootSpeed = 150.f; // cm/s: return to the stance with the body stopped
+constexpr float StopFootFrame = 5.f;   // leave room below the final 6 cm/frame ankle limit
 
 bool enabled = []() {
   const char* v = std::getenv("OPENGOTHIC_AIMWALK");
@@ -273,7 +274,7 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
     // Pose can rebuild several times in a frame for the other post-passes. Advance the fade only once.
     settle = false;
     const float from = weight;
-    const float to   = std::max(0.f,from-settleDt/BlendOut);
+    const float to   = std::max(0.f,from-settleDt/StopBlendOut);
     const float step = std::min(StopFootFrame,StopFootSpeed*settleDt);
     build();
     const Vec3 left  = position(tr[lFoot]);
