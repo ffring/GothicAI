@@ -153,11 +153,6 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
   impactAt = hit.point;
   impactOwner = hit.bone;
   impactKnown = true;
-  if(isSpell()) {
-    onCollide(hit.material);
-    return;
-    }
-  onCollide(hit.material);
   auto matrix = obj->matrix();
   if(auto* npc = wrld->npcForRagdoll(hit.ragdoll)) {
     npc->addCorpseArrowImpulse(*this);
@@ -237,24 +232,6 @@ bool Bullet::onCollide(Npc& npc) {
   if(&npc==origin() || isFinished())
     return false;
 
-  if(stopsAtWorldHit() && !impactKnown) {
-    // The legacy capsule query has already accepted this NPC. Resolve only the
-    // attachment frame; this secondary bone lookup cannot change that outcome.
-    const auto from = position();
-    const auto dir = direction();
-    float distance = 0;
-    size_t bone = size_t(-1);
-    if(dir.length()>1.e-3f &&
-       npc.rayHitZone(from,from+Vec3::normalize(dir)*500.f,distance,&bone)!=HitZones::None) {
-      impactOwner = bone;
-      impactAt = from+Vec3::normalize(dir)*distance;
-      }
-    else {
-      impactAt = npc.collosionCenter();
-      }
-    impactKnown = true;
-    }
-
   if(ow!=nullptr) {
     // no damage between ally npc's, only emit pfx effect
     const bool friendlyFire = wrld->script().isFriendlyFire(*ow, npc);
@@ -269,6 +246,24 @@ bool Bullet::onCollide(Npc& npc) {
   vfx.setLooped(false);
   vfx.setPhysicsDisable();
   wrld->runEffect(std::move(vfx));
+
+  if(stopsAtWorldHit() && !impactKnown) {
+    // Damage and the existing physical reaction consumed the legacy impact
+    // metadata above. Resolve this additional frame only for the visual pin.
+    const auto from = position();
+    const auto dir = direction();
+    float distance = 0;
+    size_t bone = size_t(-1);
+    if(dir.length()>1.e-3f &&
+       npc.rayHitZone(from,from+Vec3::normalize(dir)*500.f,distance,&bone)!=HitZones::None) {
+      impactOwner = bone;
+      impactAt = from+Vec3::normalize(dir)*distance;
+      }
+    else {
+      impactAt = npc.collosionCenter();
+      }
+    impactKnown = true;
+    }
 
   if(stopsAtWorldHit()) {
     auto matrix = obj->matrix();

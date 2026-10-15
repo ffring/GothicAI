@@ -521,8 +521,8 @@ struct DynamicWorld::BulletsList final {
   void tick(uint64_t dt) {
     for(auto& i:body) {
       if(i.worldStopped) continue;
-      const bool moveNotified=wrld.moveBullet(i,i.dir,dt);
-      if(!moveNotified && i.cb!=nullptr)
+      wrld.moveBullet(i,i.dir,dt);
+      if(i.cb!=nullptr)
         i.cb->onMove();
       }
     }
@@ -810,7 +810,7 @@ DynamicWorld::BBoxBody DynamicWorld::bboxObj(BBoxCallback* cb, const Tempest::Ve
   return BBoxBody(this,cb,pos,R);
   }
 
-bool DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t dt) {
+void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t dt) {
   const float dtF     = float(dt);
   const bool  isSpell = b.isSpell();
 
@@ -821,9 +821,8 @@ bool DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(ptr->cb!=nullptr)
       ptr->cb->onCollide(b);
     }
-  const bool stopAtWorld=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
-  const uint32_t mask=landscapeMask | (stopAtWorld ? 1u<<C_Ragdoll : 0u);
-  const auto hit = world->rayCast(pos,to,mask,false);
+  const bool attachAtWorldStop=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
+  const auto hit = world->rayCast(pos,to,landscapeMask,false);
   const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
 
   // an arrow aimed by hand: the npcs on the way to the wall first (one stands right before it), hit
@@ -834,29 +833,8 @@ bool DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     const auto  end = pos + (to-pos)*a;
     if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) { return b.cb->onCollidePrecise(npc,pos,end); })) {
       b.cb->onStop();
-      return false;
+      return;
       }
-    }
-
-  if(stopAtWorld && matId!=zenkit::MaterialGroup::NONE) {
-    BulletWorldHit result;
-    result.point=hit.point;
-    result.normal=hit.normal;
-    result.material=matId;
-    result.ragdoll=hit.ragdoll;
-    result.bone=hit.bone;
-    if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
-      result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
-    b.move(hit.point);
-    b.addPathLen((to-pos).length()*hit.fraction);
-    b.addHit();
-    b.worldStopped=true;
-    // Attachment code sees the exact selected hit pose and incoming direction.
-    // The terminal branch never reflects the arrow or queues a physics impulse.
-    b.cb->onMove();
-    b.cb->onWorldHit(result);
-    b.cb->onStop();
-    return true;
     }
 
   bool stopBullet = false;
@@ -922,10 +900,24 @@ bool DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   if(stopBullet || b.hitCount()>3 || b.pathLength()>10000) {
-    if(b.cb!=nullptr)
+    if(b.cb!=nullptr) {
+      // Pin only after the unchanged flight code has decided to stop at a solid
+      // world contact. In particular, stone/metal still reflect before this test.
+      if(attachAtWorldStop && matId!=zenkit::MaterialGroup::NONE) {
+        BulletWorldHit result;
+        result.point=b.position();
+        result.normal=hit.normal;
+        result.material=matId;
+        result.ragdoll=hit.ragdoll;
+        result.bone=hit.bone;
+        if(hit.body!=nullptr && hit.body->category()==C_Object && hit.body->ptrType()==P_Interactive)
+          result.vob=reinterpret_cast<Interactive*>(hit.body->payload());
+        b.worldStopped=true;
+        b.cb->onWorldHit(result);
+        }
       b.cb->onStop();
+      }
     }
-  return false;
   }
 
 void DynamicWorld::tick(uint64_t dt) {

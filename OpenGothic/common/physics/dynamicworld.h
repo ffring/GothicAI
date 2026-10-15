@@ -198,8 +198,9 @@ class DynamicWorld final {
       virtual void onMove(){}
       virtual void onCollide(zenkit::MaterialGroup matId){(void)matId;}
       virtual bool onCollide(Npc& other){(void)other; return true; }
+      // Requests an attachment after a legacy world stop; never changes flight.
       virtual bool stopsAtWorldHit() const { return false; }
-      virtual void onWorldHit(const BulletWorldHit& hit) { onCollide(hit.material); }
+      virtual void onWorldHit(const BulletWorldHit& hit) { (void)hit; }
       // an arrow aimed by hand: hits an npc where it is (its bones), not its box; from-to: this step
       virtual bool isPrecise() const { return false; }
       virtual bool onCollidePrecise(Npc& other, const Tempest::Vec3& from, const Tempest::Vec3& to){(void)from; (void)to; return onCollide(other); }
@@ -327,8 +328,7 @@ class DynamicWorld final {
     std::string_view validateSectorName(std::string_view name) const;
 
   private:
-    // True when the terminal world-hit branch already delivered onMove.
-    bool           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
+    void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const;
     bool           hasCollision(const NpcItem &it, CollisionTest& out);
 
