@@ -3509,7 +3509,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       if(body.zenId!=uint32_t(-1)) {bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);}
     for(uint32_t id=0;id<w.npcCount();++id)
       if(auto* npc=w.npcById(id);npc && npc!=&pl && (npc->position()-pl.position()).length()<1800) {
-        npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+        if(!npc->isDown()) {
+          npc->clearAiQueue();npc->clearState(false);npc->stopWalking();
+          }
+        npc->setExternalControl(true);
         }
     }
   else if(c=="movable" && a.size()==3 && a[1]=="snapshot") movableSaveSnapshot(w,a[2]);
@@ -7533,6 +7536,10 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       else if(args.size()==3 && args[0]=="movable" && args[1]=="initial") {
         ++bench.pc;
         movableSaveSnapshot(*world,args[2]);
+        // External control is a transient fixture setting. Restore it before
+        // the first native step, after observing the unmodified loaded state.
+        if(args[2]=="restored")
+          exec("movable observe",*world,*player,ctrl);
         }
       }
     renderSound(dt);

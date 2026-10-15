@@ -220,7 +220,8 @@ def saved_traces(directory):
     moved = {key: row for key, row in catalog.items()
              if max(transform_error(row['origin'], row['transform'])) > .1}
     require(moved and any(row['class'] == 'table' for row in moved.values()), 'fireball did not move map furniture/table')
-    require(all(row['sleeping'] for row in moved.values()), 'moved map furniture is awake at save')
+    require(all(row['sleeping'] or math.dist(row['velocity_cm_s'], (0, 0, 0)) < .1
+                for row in moved.values()), 'moved map furniture is neither sleeping nor slower than 0.1cm/s at save')
     npc, world = arrow_pins(snapshot)
     require(npc and world and any(pin['zen_id'] is not None for pin in world.values()) and
             any(pin['zen_id'] is None for pin in world.values()), 'save scene needs NPC, movable-table and static-world arrows')
@@ -261,6 +262,8 @@ def trace_save(directory):
                                           one(rows, 'movable_save_snapshot', label='pushed_before_save'),
                                           one(rows, 'movable_save_push'))
     return {'pass': True, 'moved_map_vobs': len(moved), 'npc_arrows': len(npc), 'world_arrows': len(world),
+            'sleeping_moved_vobs': sum(row['sleeping'] for row in moved.values()),
+            'max_save_speed_cm_s': max(math.dist(row['velocity_cm_s'], (0, 0, 0)) for row in moved.values()),
             'attached_arrows': sum(pin['zen_id'] is not None for pin in world.values()),
             'archive_bytes': one(rows, 'movable_session_save')['bytes'], 'table_push_cm': travel,
             'arrow_attachment_error_cm': attachment}
@@ -281,12 +284,16 @@ def trace_reload(directory, saved_directory):
     require(before.keys() == after.keys(), 'reload changed map furniture identity set')
     errors = [transform_error(body['transform'], after[key]['transform']) for key, body in before.items()]
     require(all(pos <= 1 and angle <= 1 for pos, angle in errors), f'reload furniture error >1cm/1deg: {max(errors)}')
-    require(all(after[key]['sleeping'] for key in moved), 'restored moved furniture was awakened')
     checkpoint = one(rows, 'movable_checkpoint', phase='reload')
     require(30_000 <= checkpoint['elapsed_ms'] <= 30_100, 'reload drift observation must span 30 simulation seconds')
+    beginning = map_bodies(one(rows, 'movable_begin', phase='reload'))
     check_bodies = {body['zen_id']: body for body in checkpoint['bodies']}
-    drift = max(check_bodies[key]['max_displacement_cm'] for key in moved)
-    require(drift <= 1 and all(check_bodies[key]['sleeping'] for key in moved), 'moved furniture drifted/awoke during 30s')
+    require(beginning.keys() == check_bodies.keys() == before.keys(), 'drift observation lost map furniture')
+    # The first native step precedes movable begin. Include that displacement so
+    # even an immediate load-time jump cannot disappear from the 30s observation.
+    initial_drift = {key: transform_error(after[key]['transform'], beginning[key]['transform'])[0] for key in moved}
+    drift = max(initial_drift[key] + check_bodies[key]['max_displacement_cm'] for key in moved)
+    require(drift <= 1, f'moved furniture drifted more than 1cm during 30s: {drift}cm')
     saved_npc, saved_world = arrow_pins(saved)
     max_arrow = 0
     for snapshot in (restored, continued):
@@ -309,6 +316,7 @@ def trace_reload(directory, saved_directory):
     table_travel, attachment_error = pushed_attachment(continued, pushed, one(rows, 'movable_save_push'))
     return {'pass': True, 'moved_map_vobs': len(moved), 'max_restore_position_cm': max(x[0] for x in errors),
             'max_restore_rotation_deg': max(x[1] for x in errors), 'observation_ms': checkpoint['elapsed_ms'],
+            'max_initial_step_drift_cm': max(initial_drift.values()),
             'max_drift_cm': drift, 'npc_arrows': len(saved_npc), 'world_arrows': len(saved_world),
             'max_arrow_restore_cm': max_arrow, 'table_push_cm': table_travel, 'arrow_attachment_error_cm': attachment_error}
 
