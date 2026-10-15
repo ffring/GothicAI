@@ -31,6 +31,10 @@ Op = dict[str, Any]
 # a character of the director's in the branch's log, {"op": "npc", "spec": NpcSpec} (docs/director.md,
 # stage 2): not a change of the graph, the game makes it once (story_npc)
 NPC = "npc"
+# a quest of the director's, {"op": "quest", "quest": questbook.Quest} (docs/director.md, stage 3): its
+# description, next to the changes of the graph built of it; the game gets the changes only
+QUEST = "quest"
+RECORDS = (NPC, QUEST)  # in the log, not changes of the graph
 
 # the bandits below the steps to Xardas's tower (user, 2026-10-13): the lure's "Where are you going?" that
 # ends in his attack or leads the hero into the cave, the cave's ambush, Brago's and his mate's attack, and
@@ -63,7 +67,11 @@ class StoryPatches:
 
     def ops(self) -> list[Op]:
         """The changes of the graph on the current branch, oldest first."""
-        return [op for op in self._log() if op.get("op") != NPC]
+        return [op for op in self._log() if op.get("op") not in RECORDS]
+
+    def records(self, kind: str) -> list[Op]:
+        """The records of one kind on the current branch (NPC, QUEST), oldest first."""
+        return [op for op in self._log() if op.get("op") == kind]
 
     def characters(self) -> list[NpcSpec]:
         """The director's characters on the current branch, in the order they came."""
@@ -71,7 +79,7 @@ class StoryPatches:
 
     def cast(self) -> list[Op]:
         """The records of the director's characters on the current branch: {"op", "spec", "person"?}."""
-        return [op for op in self._log() if op.get("op") == NPC]
+        return self.records(NPC)
 
     async def introduce(self, spec: NpcSpec, person: dict[str, Any] | None = None) -> dict[str, Any]:
         """A character of the director's: the game makes it (or GameError says why not), then the branch
@@ -95,6 +103,21 @@ class StoryPatches:
             raise GameError("the game has not reported a session yet")
         await self.link.patch_graph([op])
         self._record(op)
+
+    async def make(self, record: Op, ops: list[Op]) -> None:
+        """Something of the director's built of changes (a quest): the game takes all of them, then the branch
+        remembers the record and the changes. If the game refuses one (GameError), the others are taken back:
+        it gets the branch's changes anew, as they were."""
+        if self.branch is None:
+            raise GameError("the game has not reported a session yet")
+        try:
+            await self.link.patch_graph(ops)
+        except GameError:
+            await self._replay(self.characters(), self.ops())
+            raise
+        self._record(record)
+        for op in ops:
+            self._record(op)
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:

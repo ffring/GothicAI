@@ -1,0 +1,790 @@
+"""Quests as objects (docs/director.md, stage 3, layer 2): one model of a quest of the director's, from which
+the code builds the primitives of the story graph. Nothing here runs a quest: the bridge and the graph run
+what is built.
+
+A quest has a giver, a journal topic, the dialog that gives it, stages, a reward, maybe a deadline and the
+quest it opens after. A stage has the journal entry it begins with and goals; all done, the next stage
+begins, the last one ends the quest. The goals are what the code checks:
+- `bring` — a thing to an npc, the giver or another: his dialog is offered while the hero has it;
+- `talk` — a talk with an npc: his dialog in this stage;
+- `reach` — come to a point (of the book of places) or to an npc: a state trigger on the distance;
+- `have` — get a thing anyhow (kill, take, buy, find): a state trigger on Npc_HasItems;
+- `kill` — npc's of the director's dead: a state trigger on Npc_IsDead. Its own: their symbols outlive a load,
+  while the bridge forgets creatures under a tag (story_spawn) after one;
+- `wait` — so many days gone: a trigger on Wld_GetDay and the day the stage began.
+The last stage ends in a talk: its one goal that is a dialog (bring or talk) is the turn-in, which pays and
+closes the quest.
+
+What the code builds (`build`):
+- the variables: DIR_Q<n> — the status, as the scripts' quests have it (0, LOG_RUNNING, LOG_SUCCESS,
+  LOG_FAILED); _STAGE — the stage; _DAY — the day the stage began; _DUE — the last day;
+- the dialogs: the one that gives it, the goals' and the turn-in;
+- the triggers (triggers.py): the goals', the stages' and the deadline's;
+- the journal's entries.
+A goal done is its trigger's count, or the variable its dialog sets; a stage's own trigger begins the next.
+
+The description lies in the branch's log as a `quest` record next to the changes built of it (as a character
+lies as an `npc` one); only the changes go to the game, and what was built is never built anew. Before it
+is made the code checks it (`problems`): its people and things are there, every stage can be done in order
+and the last one ends it, the reward is within the chapter's; then the validator checks the changes.
+
+The giver knows what it asked and what it saw itself, the turn-in; how far the hero got only from his words:
+the code owns the truth, the npc's their beliefs.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from . import triggers
+from .chronicle import Chronicle, Fact
+from .game import GameError, GameLink
+from .gamedata.storygraph import Expr, StoryGraph
+from .journal import Journal
+from .llm import Tool, ToolCall
+from .places import PlaceBook
+from .protocol import DialogChosen, GameMessage, Session, Snapshot, TriggerFired
+from .story import QUEST, StoryPatches
+from .turn import ToolOutcome
+from .validator import (
+    DIRECTOR_PREFIX,
+    LOG_FAILED,
+    LOG_RUNNING,
+    LOG_SUCCESS,
+    Caps,
+    Patches,
+    Rules,
+    names_in,
+    validate,
+)
+
+if TYPE_CHECKING:
+    from .dialogue import Conversation, DialogueManager
+    from .director import Director
+
+log = logging.getLogger(__name__)
+
+Op = dict[str, Any]
+Step = dict[str, Any]
+
+BRING, TALK, REACH, HAVE, KILL, WAIT = "bring", "talk", "reach", "have", "kill", "wait"
+KINDS = (BRING, TALK, REACH, HAVE, KILL, WAIT)
+TALKS = (BRING, TALK)  # the goals that are dialogs
+GOLD = "ITMI_GOLD"
+OWN_NPC = f"{DIRECTOR_PREFIX}NPC_"  # the director's characters (cast.py): the only ones a quest kills
+MAX_STAGES = 5
+MAX_GOALS = 4
+MAX_KILL = 8
+MAX_COUNT = 20
+MAX_WAIT = 7  # days
+MAX_DAYS = 30  # a deadline
+REACH_CM = 500
+MIN_REACH_CM, MAX_REACH_CM = 200, 3000
+MAX_TITLE = 40
+MAX_DESCRIPTION = 80
+MAX_LINES = 10
+XP_FALLBACK = 50  # when the game does not say XP_AMBIENT
+
+
+# --- the description ---------------------------------------------------------------------------
+
+
+@dataclass
+class Talk:
+    """A dialog of the quest: the hero's line in the menu, the talk, what the npc remembers of it after."""
+
+    description: str
+    lines: list[dict[str, str]]  # {"speaker": "self" | "other", "text"}
+    remember: str = ""
+
+    @classmethod
+    def of(cls, d: dict[str, Any] | None) -> Talk | None:
+        if not d:
+            return None
+        return cls(str(d.get("description", "")), list(d.get("lines") or []), str(d.get("remember", "")))
+
+
+@dataclass
+class Goal:
+    kind: str
+    npc: str = ""  # bring, talk: whose dialog it is; reach: whom to come to; have: who holds the thing
+    item: str = ""  # bring, have
+    count: int = 1
+    point: str = ""  # reach: where to come; bring, have: where the thing lies, put there as the stage begins
+    radius: int = REACH_CM  # reach
+    npcs: list[str] = field(default_factory=list)  # kill
+    days: int = 0  # wait
+    talk: Talk | None = None  # bring, talk
+    journal: str = ""  # an entry when it is done
+
+    @classmethod
+    def of(cls, d: dict[str, Any]) -> Goal:
+        known = {k: d[k] for k in cls.__dataclass_fields__ if k in d and k != "talk"}
+        return cls(**known, talk=Talk.of(d.get("talk")))
+
+
+@dataclass
+class Stage:
+    journal: str  # the entry it begins with
+    goals: list[Goal]
+
+    @classmethod
+    def of(cls, d: dict[str, Any]) -> Stage:
+        return cls(str(d.get("journal", "")), [Goal.of(g) for g in d.get("goals") or []])
+
+
+@dataclass
+class Quest:
+    id: str  # DIR_Q<n>, its status variable too
+    giver: str
+    title: str  # the journal's topic
+    give: Talk
+    stages: list[Stage]
+    done_journal: str
+    knows: str = ""  # what the giver knows from the moment the quest is made (its trouble), for its model
+    asked: str = ""  # what the giver asked of the hero, as the giver knows it
+    gold: int = 0
+    xp: int = 0
+    days: int = 0  # the deadline in days from when it is given; 0: none
+    late_journal: str = ""
+    after: str = ""  # a quest whose success opens this one
+    names: dict[str, str] = field(default_factory=dict)  # npc -> its name in the game
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def of(cls, d: dict[str, Any]) -> Quest:
+        known = {k: d[k] for k in cls.__dataclass_fields__ if k in d and k not in ("give", "stages")}
+        return cls(
+            **known,
+            give=Talk.of(d.get("give")) or Talk("", []),
+            stages=[Stage.of(s) for s in d.get("stages") or []],
+        )
+
+    def name(self, npc: str) -> str:
+        return self.names.get(npc, npc)
+
+    def reward(self) -> str:
+        parts = [f"{self.gold} золотых"] if self.gold else []
+        parts += [f"опыт +{self.xp}"] if self.xp else []
+        return ", ".join(parts) or "ничего"
+
+    def turn_in(self) -> Goal | None:
+        """The last stage's dialog: it ends the quest."""
+        last = self.stages[-1].goals if self.stages else []
+        return next((g for g in last if g.kind in TALKS), None)
+
+    def dialogs(self) -> dict[str, tuple[str, Talk | None]]:
+        """Every dialog of the quest by its id: whose it is and its talk."""
+        out: dict[str, tuple[str, Talk | None]] = {give_node(self): (self.giver, self.give)}
+        for k, s in enumerate(self.stages, 1):
+            for j, g in enumerate(s.goals, 1):
+                if g.kind in TALKS:
+                    node = done_node(self) if k == len(self.stages) else goal_node(goal_id(self, k, j))
+                    out[node] = (g.npc, g.talk)
+        return out
+
+
+# --- the names of what is built ------------------------------------------------------------------
+
+
+def stage_var(q: Quest) -> str:
+    return f"{q.id}_STAGE"
+
+
+def day_var(q: Quest) -> str:
+    return f"{q.id}_DAY"
+
+
+def due_var(q: Quest) -> str:
+    return f"{q.id}_DUE"
+
+
+def give_node(q: Quest) -> str:
+    return f"{q.id}_GIVE"
+
+
+def done_node(q: Quest) -> str:
+    return f"{q.id}_DONE"
+
+
+def goal_id(q: Quest, stage: int, goal: int) -> str:
+    """A goal's variable: its trigger's count, or what its dialog sets."""
+    return f"{q.id}_S{stage}G{goal}"
+
+
+def goal_node(goal: str) -> str:
+    return f"{goal}_D"
+
+
+def stage_trigger(q: Quest, stage: int) -> str:
+    """The trigger that ends the stage and begins the next."""
+    return f"{q.id}_S{stage}"
+
+
+def late_trigger(q: Quest) -> str:
+    return f"{q.id}_LATE"
+
+
+# --- building ----------------------------------------------------------------------------------
+
+
+def _int(n: int, name: str = "") -> Expr:
+    return ["int", n, name] if name else ["int", n]
+
+
+def _set(var: str, value: Expr) -> Step:
+    return {"do": "set", "target": ["var", var], "value": value}
+
+
+def _entry(q: Quest, text: str) -> list[Step]:
+    """A journal entry from a program, under the quest's topic."""
+    return [{"do": "call", "call": ["fn", "B_LOGENTRY", ["str", q.title], ["str", text]]}] if text else []
+
+
+def _begin(q: Quest, k: int) -> list[Step]:
+    """What happens as stage k begins: the things it needs lie where they are said to, its day is noted."""
+    steps: list[Step] = []
+    stage = q.stages[k - 1]
+    for g in stage.goals:
+        if g.kind in (BRING, HAVE) and g.point:
+            put = ["call", "WLD_INSERTITEM", ["sym", g.item.upper()], ["str", g.point.upper()]]
+            steps += [{"do": "call", "call": put} for _ in range(max(1, g.count))]
+    if any(g.kind == WAIT for g in stage.goals):
+        steps.append(_set(day_var(q), ["call", "WLD_GETDAY"]))
+    return steps
+
+
+def _world(q: Quest, g: Goal) -> Expr:
+    """The condition of a goal the world decides."""
+    match g.kind:
+        case "reach" if g.point:
+            return triggers.hero_near_point(g.point, g.radius)
+        case "reach":
+            return triggers.hero_near(g.npc, g.radius)
+        case "have":
+            return triggers.hero_has(g.item, g.count)
+        case "kill":
+            return triggers.all_of(*(triggers.dead(n) for n in g.npcs))
+        case _:
+            return [">=", ["call", "WLD_GETDAY"], ["+", ["var", day_var(q)], _int(g.days)]]
+
+
+def lines(talk: Talk) -> list[dict[str, str]]:
+    """The talk as the bridge plays it; the hero opens it with what he picked in the menu, as in the scripts,
+    unless he opens it with words of his own."""
+    out = [
+        {
+            "speaker": "other" if x.get("speaker") in ("hero", "other") else "self",
+            "text": str(x.get("text", "")),
+        }
+        for x in talk.lines
+    ]
+    if not out or out[0]["speaker"] != "other":
+        out.insert(0, {"speaker": "other", "text": talk.description})
+    return out
+
+
+def build(q: Quest) -> list[Op]:
+    """The changes of the graph that make the quest."""
+    n = len(q.stages)
+    status, stage = ["var", q.id], ["var", stage_var(q)]
+    running = ["==", status, _int(LOG_RUNNING, "LOG_RUNNING")]
+
+    def at(k: int) -> Expr:
+        return triggers.all_of(running, ["==", stage, _int(k)])
+
+    variables = {q.id: 0, stage_var(q): 0}
+    if any(g.kind == WAIT for s in q.stages for g in s.goals):
+        variables[day_var(q)] = 0
+    if q.days:
+        variables[due_var(q)] = 0
+    for k, s in enumerate(q.stages[:-1], 1):
+        for j, g in enumerate(s.goals, 1):
+            if g.kind in TALKS:
+                variables[goal_id(q, k, j)] = 0
+    ops: list[Op] = [{"op": "vars", "vars": variables}]
+
+    opens: Expr = ["==", status, _int(0)]
+    if q.after:
+        opens = ["&&", opens, ["==", ["var", q.after.upper()], _int(LOG_SUCCESS, "LOG_SUCCESS")]]
+    begin = _begin(q, 1)
+    if q.days:
+        begin.append(_set(due_var(q), ["+", ["call", "WLD_GETDAY"], _int(q.days)]))
+    give: dict[str, Any] = {
+        "id": give_node(q),
+        "npc": q.giver,
+        "description": q.give.description,
+        "condition": opens,
+        "lines": lines(q.give),
+        "effects": [
+            {"do": "set", "var": q.id, "value": LOG_RUNNING},
+            {"do": "set", "var": stage_var(q), "value": 1},
+            {"do": "journal", "topic": q.title, "text": q.stages[0].journal, "status": "LOG_RUNNING"},
+        ],
+    }
+    if begin:
+        give["program"] = begin
+    ops.append({"op": "add_node", "node": give})
+
+    for k, s in enumerate(q.stages, 1):
+        last = k == n
+        done: list[str] = []  # the goals' variables, but the turn-in's
+        for j, g in enumerate(s.goals, 1):
+            gid = goal_id(q, k, j)
+            if g.kind in TALKS and last:
+                continue
+            done.append(gid)
+            if g.kind not in TALKS:
+                ops.append(
+                    triggers.trigger(
+                        gid, triggers.STATE, _entry(q, g.journal), when=triggers.all_of(at(k), _world(q, g))
+                    )
+                )
+                continue
+            assert g.talk is not None
+            effects: list[dict[str, Any]] = _takes(g)
+            effects.append({"do": "set", "var": gid, "value": 1})
+            if g.journal:
+                effects.append(
+                    {"do": "journal", "topic": q.title, "text": g.journal, "status": "LOG_RUNNING"}
+                )
+            node = {
+                "id": goal_node(gid),
+                "npc": g.npc.upper(),
+                "description": g.talk.description,
+                "condition": triggers.all_of(at(k), ["==", ["var", gid], _int(0)], *_has(g)),
+                "lines": lines(g.talk),
+                "effects": effects,
+            }
+            ops.append({"op": "add_node", "node": node})
+        before = [triggers.fired(gid) for gid in done]
+        if not last:
+            steps = [_set(stage_var(q), _int(k + 1)), *_entry(q, q.stages[k].journal), *_begin(q, k + 1)]
+            ops.append(
+                triggers.trigger(
+                    stage_trigger(q, k), triggers.STATE, steps, when=triggers.all_of(at(k), *before)
+                )
+            )
+            continue
+        t = q.turn_in()
+        assert t is not None and t.talk is not None
+        reward: list[dict[str, Any]] = [{"do": "give", "item": GOLD, "count": q.gold}] if q.gold else []
+        reward += [{"do": "xp", "amount": q.xp}] if q.xp else []
+        turn_in = {
+            "id": done_node(q),
+            "npc": t.npc.upper(),
+            "description": t.talk.description,
+            "condition": triggers.all_of(at(k), *before, *_has(t)),
+            "lines": lines(t.talk),
+            "effects": [
+                *_takes(t),
+                *reward,
+                {"do": "set", "var": q.id, "value": LOG_SUCCESS},
+                {"do": "set", "var": stage_var(q), "value": n + 1},
+                {"do": "journal", "topic": q.title, "text": q.done_journal, "status": "LOG_SUCCESS"},
+            ],
+        }
+        ops.append({"op": "add_node", "node": turn_in})
+
+    if q.days:
+        steps = [
+            _set(q.id, _int(LOG_FAILED, "LOG_FAILED")),
+            {
+                "do": "call",
+                "call": ["call", "LOG_SETTOPICSTATUS", ["str", q.title], _int(LOG_FAILED, "LOG_FAILED")],
+            },
+            *_entry(q, q.late_journal),
+        ]
+        late = [">", ["call", "WLD_GETDAY"], ["var", due_var(q)]]
+        ops.append(
+            triggers.trigger(late_trigger(q), triggers.STATE, steps, when=triggers.all_of(running, late))
+        )
+    return ops
+
+
+def _has(g: Goal) -> list[Expr]:
+    return [triggers.hero_has(g.item, g.count)] if g.kind == BRING else []
+
+
+def _takes(g: Goal) -> list[dict[str, Any]]:
+    return [{"do": "give", "item": g.item.upper(), "count": g.count, "to": "self"}] if g.kind == BRING else []
+
+
+# --- checking ----------------------------------------------------------------------------------
+
+
+@dataclass
+class Ground:
+    """What a quest is checked against."""
+
+    symbols: dict[str, str]  # what the game's names are: npc, item...
+    states: dict[str, str]  # npc -> alive, dead, absent
+    plot: Callable[[str], bool]  # an npc of the plot: the director leaves it alone
+    point: Callable[[str], bool]  # a point the book of places knows
+    gold: int  # the most of the reward
+    xp: int
+    quests: dict[str, Quest] = field(default_factory=dict)  # the branch's others
+
+
+def problems(q: Quest, ground: Ground) -> list[str]:
+    """Why the quest can't be made, in the words a model reads; empty: it can. The code also goes through it
+    the way the hero would: every stage can be done in order, and the last one ends it."""
+    errors: list[str] = []
+    if not q.id.startswith(f"{DIRECTOR_PREFIX}Q"):
+        errors.append(f"id квеста — {DIRECTOR_PREFIX}Q<n>, а не {q.id}")
+    if not q.title.strip() or len(q.title) > MAX_TITLE:
+        errors.append(f"тема журнала пустая или длиннее {MAX_TITLE} знаков")
+    if any(o.title == q.title for o in ground.quests.values() if o.id != q.id):
+        errors.append(f"поручение «{q.title}» уже было")
+    if not 1 <= len(q.stages) <= MAX_STAGES:
+        errors.append(f"стадий должно быть от 1 до {MAX_STAGES}")
+    errors += _person(q.giver, "заказчик", ground)
+    errors += _talk(q.give, "выдачи")
+    if not q.done_journal.strip():
+        errors.append("нет записи журнала о том, что квест выполнен")
+    if not 0 <= q.gold <= ground.gold:
+        errors.append(f"золота {q.gold}, а можно от 0 до {ground.gold}")
+    if not 0 <= q.xp <= ground.xp:
+        errors.append(f"опыта {q.xp}, а можно от 0 до {ground.xp}")
+    if q.days and not 1 <= q.days <= MAX_DAYS:
+        errors.append(f"срок — от 1 до {MAX_DAYS} дней, а не {q.days}")
+    if q.days and not q.late_journal.strip():
+        errors.append("у квеста со сроком нужна запись журнала о провале")
+    if q.after and q.after.upper() not in ground.quests:
+        errors.append(f"квест {q.after} не найден: этот открывается после него")
+    if errors:
+        return errors
+
+    # as the hero goes: who is dead by then, which things he has
+    killed: set[str] = set()
+    held: set[str] = set()
+    for k, s in enumerate(q.stages, 1):
+        last = k == len(q.stages)
+        here = f"стадия {k}"
+        got = held | {g.item.upper() for g in s.goals if g.kind == HAVE}  # what the stage itself gets
+        if not s.journal.strip():
+            errors.append(f"{here}: нет записи журнала")
+        if not 1 <= len(s.goals) <= MAX_GOALS:
+            errors.append(f"{here}: целей должно быть от 1 до {MAX_GOALS}")
+        talks = [g for g in s.goals if g.kind in TALKS]
+        if last and len(talks) != 1:
+            errors.append(
+                f"{here}, последняя: в ней одна сдача — цель «принести» или «поговорить», а не {len(talks)}"
+            )
+        for j, g in enumerate(s.goals, 1):
+            errors += [f"{here}, цель {j}: {e}" for e in _goal(g, ground, killed, got)]
+        for g in s.goals:
+            if g.kind == KILL:
+                killed |= {n.upper() for n in g.npcs}
+            if g.kind == HAVE:
+                held.add(g.item.upper())
+            if g.kind == BRING:
+                held.discard(g.item.upper())  # given away
+    return errors
+
+
+def _person(npc: str, who: str, ground: Ground) -> list[str]:
+    npc = npc.upper()
+    if ground.symbols.get(npc) != "npc":
+        return [f"{who}: нет такого NPC {npc}"]
+    if ground.plot(npc):
+        return [f"{who}: {npc} — сюжетный NPC, его не трогаем"]
+    if ground.states.get(npc) != "alive":
+        return [f"{who}: {npc} {'мёртв' if ground.states.get(npc) == 'dead' else 'не в мире'}"]
+    return []
+
+
+def _talk(talk: Talk | None, what: str) -> list[str]:
+    if talk is None:
+        return [f"у диалога {what} нет разговора"]
+    errors = []
+    if not talk.description.strip() or len(talk.description) > MAX_DESCRIPTION:
+        errors.append(f"строка героя в меню диалога {what} пустая или длиннее {MAX_DESCRIPTION} знаков")
+    if not 1 <= len(talk.lines) <= MAX_LINES or any(not str(x.get("text", "")).strip() for x in talk.lines):
+        errors.append(f"в диалоге {what} должно быть от 1 до {MAX_LINES} непустых реплик")
+    return errors
+
+
+def _goal(g: Goal, ground: Ground, killed: set[str], held: set[str]) -> list[str]:
+    if g.kind not in KINDS:
+        return [f"вид цели — {', '.join(KINDS)}, а не {g.kind!r}"]
+    errors = []
+    if g.kind in (BRING, TALK):
+        errors += _person(g.npc, "с кем разговор", ground)
+        if g.npc.upper() in killed:
+            errors.append(f"{g.npc} к этому времени убит целью «убить»")
+        errors += _talk(g.talk, "цели")
+    if g.kind in (BRING, HAVE):
+        if ground.symbols.get(g.item.upper()) != "item":
+            errors.append(f"нет такой вещи {g.item}")
+        if not 1 <= g.count <= MAX_COUNT:
+            errors.append(f"сколько вещей: от 1 до {MAX_COUNT}, а не {g.count}")
+        if g.point and not ground.point(g.point):
+            errors.append(f"точки {g.point} нет в книге мест")
+    if g.kind == BRING and not g.point and g.item.upper() not in held:
+        errors.append(f"{g.item} неоткуда взять: ни точки, где она лежит, ни цели «заполучить» раньше")
+    if g.kind == HAVE and not g.point:
+        if not g.npc:
+            errors.append(f"{g.item}: у кого она — нужна точка, где она лежит, или NPC, у которого она")
+        elif ground.symbols.get(g.npc.upper()) != "npc":
+            errors.append(f"нет такого NPC {g.npc}, у которого вещь")
+    if g.kind == REACH:
+        if bool(g.point) == bool(g.npc):
+            errors.append("дойти: или до точки, или до NPC")
+        elif g.point and not ground.point(g.point):
+            errors.append(f"точки {g.point} нет в книге мест")
+        elif g.npc and ground.symbols.get(g.npc.upper()) != "npc":
+            errors.append(f"нет такого NPC {g.npc}")
+        if not MIN_REACH_CM <= g.radius <= MAX_REACH_CM:
+            errors.append(f"радиус — от {MIN_REACH_CM} до {MAX_REACH_CM} см, а не {g.radius}")
+    if g.kind == KILL:
+        if not 1 <= len(g.npcs) <= MAX_KILL:
+            errors.append(f"убить: от 1 до {MAX_KILL} NPC")
+        for n in g.npcs:
+            if not n.upper().startswith(OWN_NPC):
+                errors.append(f"убить можно только своих персонажей режиссёра ({OWN_NPC}…), а не {n}")
+            elif ground.symbols.get(n.upper()) != "npc":
+                errors.append(f"нет такого NPC {n}")
+    if g.kind == WAIT and not 1 <= g.days <= MAX_WAIT:
+        errors.append(f"ждать: от 1 до {MAX_WAIT} дней, а не {g.days}")
+    return errors
+
+
+def names_of(q: Quest) -> set[str]:
+    """The game's names the description uses: for story_state."""
+    out = {q.giver.upper(), GOLD}
+    for s in q.stages:
+        for g in s.goals:
+            out |= {x.upper() for x in (g.npc, g.item, *g.npcs) if x}
+    return out
+
+
+# --- the book ----------------------------------------------------------------------------------
+
+
+@dataclass
+class Progress:
+    """Where a quest stands, as the branch's chronicle has it."""
+
+    state: str = "open"  # open -> given -> done | failed
+    stage: int = 0  # the stage the hero is at; 0: not given
+
+
+class QuestBook:
+    """The director's quests on the branch: made from their descriptions, followed through the dialogs and the
+    triggers. Also a TurnExtension: the giver knows what it asked of the hero."""
+
+    def __init__(
+        self,
+        link: GameLink,
+        graph: StoryGraph,
+        patches: StoryPatches,
+        chronicle: Chronicle,
+        director: Director,
+        *,
+        places: PlaceBook | None = None,
+        dialogue: DialogueManager | None = None,
+        journal: Journal | None = None,
+    ) -> None:
+        self.link = link
+        self.graph = graph
+        self.patches = patches
+        self.chronicle = chronicle
+        self.director = director
+        self.places = places
+        self.dialogue = dialogue
+        self.journal = journal or Journal()
+        self.rules = Rules.of(graph)
+        self.quests: dict[str, Quest] = {}  # by id, in the order they were made
+        self._version = -1
+        link.listeners.append(self._on_message)
+        if dialogue is not None:
+            dialogue.extensions.append(self)
+
+    # --- the branch -----------------------------------------------------------------------------
+
+    def all(self) -> dict[str, Quest]:
+        """The quests of the current branch, from the records of its log."""
+        if self._version != self.patches.version:
+            self._version = self.patches.version
+            self.quests = {}
+            for record in self.patches.records(QUEST):
+                q = Quest.of(record["quest"])
+                self.quests[q.id] = q
+        return self.quests
+
+    def next_id(self, taken: set[str] = frozenset()) -> str:
+        """DIR_Q<n> nobody has: no quest, no variable of the branch."""
+        vars = Patches.of(self.patches.ops()).vars
+        prefix = f"{DIRECTOR_PREFIX}Q"
+        used = [
+            int(k[len(prefix) :])
+            for k in [*vars, *self.all(), *taken]
+            if k.startswith(prefix) and k[len(prefix) :].isdigit()
+        ]
+        return f"{prefix}{1 + max([0, *used])}"
+
+    def progress(self, id: str) -> Progress:
+        id = id.upper()
+        p = Progress()
+        for f in self.chronicle.facts():
+            if f.get("id") != id:
+                continue
+            match f.get("fact"):
+                case "story_quest_given":
+                    p = Progress("given", 1)
+                case "story_quest_stage":
+                    p.stage = int(f.get("stage", p.stage))
+                case "story_quest_done":
+                    p.state = "done"
+                case "story_quest_failed":
+                    p.state = "failed"
+        return p
+
+    # --- making -------------------------------------------------------------------------------
+
+    async def ground(self, q: Quest) -> Ground:
+        names = names_of(q)
+        state = await self.link.story_state(vars=["XP_AMBIENT"], npcs=sorted(names), symbols=sorted(names))
+        xp = int((state.get("vars") or {}).get("XP_AMBIENT") or XP_FALLBACK)
+        places = self.places
+        return Ground(
+            symbols=state.get("symbols") or {},
+            states={n: str(s.get("state")) for n, s in (state.get("npcs") or {}).items()},
+            plot=self.rules.plot_npc,
+            point=lambda p: places is not None and places.of(p) is not None,
+            gold=xp,
+            xp=xp,
+            quests=self.all(),
+        )
+
+    async def make(self, q: Quest, *, gold: int | None = None, xp: int | None = None) -> list[str]:
+        """Check the quest, build it, make it: why not, in the words a model reads; empty: it is made.
+        `gold`, `xp`: the most of the reward, the chapter's (XP_AMBIENT) if not given."""
+        try:
+            ground = await self.ground(q)
+        except (GameError, TimeoutError) as err:
+            return [f"игра не ответила: {err}"]
+        if gold is not None:
+            ground.gold = gold
+        if xp is not None:
+            ground.xp = xp
+        errors = problems(q, ground)
+        if errors:
+            return errors
+        ops = build(q)
+        story = await self.director.with_symbols(await self.director.story(), names_in(ops))
+        errors = validate(ops, story, self.rules, caps=Caps(xp=ground.xp, items={GOLD: ground.gold}))
+        if errors:
+            return errors
+        try:
+            await self.patches.make({"op": QUEST, "quest": q.to_dict()}, ops)
+        except GameError as err:
+            return [f"игра не приняла правку: {err}"]
+        self.all()[q.id] = q
+        if q.knows and self.dialogue is not None:
+            self.dialogue.remember(q.giver, q.name(q.giver), q.knows)
+        self.chronicle.record(
+            {"fact": "story_quest", "id": q.id, "giver": q.giver, "title": q.title, "reason": q.reason}
+        )
+        self.journal.add("story_quest", npc=q.giver, name=q.name(q.giver), quest=q.id, title=q.title)
+        log.info("questbook: %s gives %s «%s», %d stage(s)", q.giver, q.id, q.title, len(q.stages))
+        return []
+
+    # --- following -----------------------------------------------------------------------------
+
+    def _on_message(self, msg: GameMessage) -> None:
+        match msg:
+            case Session():
+                self._version = -1
+            case DialogChosen(made=True):
+                for q in self.all().values():
+                    if (dialog := q.dialogs().get(msg.node)) is not None:
+                        self._chosen(q, msg.node, *dialog)
+            case TriggerFired():
+                for q in self.all().values():
+                    self._fired(q, msg.id)
+
+    def _chosen(self, q: Quest, node: str, npc: str, talk: Talk | None) -> None:
+        if node == give_node(q) and self.progress(q.id).state == "open":
+            self._fact(q, "story_quest_given")
+        elif node == done_node(q) and self.progress(q.id).state == "given":
+            self._fact(q, "story_quest_done")
+        if talk is not None and talk.remember and self.dialogue is not None:
+            self.dialogue.remember(npc.upper(), q.name(npc.upper()), talk.remember)
+
+    def _fired(self, q: Quest, id: str) -> None:
+        for k in range(1, len(q.stages)):
+            if id == stage_trigger(q, k):
+                self._fact(q, "story_quest_stage", stage=k + 1)
+        if id == late_trigger(q) and self.progress(q.id).state == "given":
+            self._fact(q, "story_quest_failed")
+
+    def _fact(self, q: Quest, kind: str, **data: Any) -> None:
+        fact: Fact = {"fact": kind, "id": q.id, **data}
+        self.chronicle.record(fact)
+        self.journal.add(kind, npc=q.giver, name=q.name(q.giver), quest=q.id, title=q.title, **data)
+        log.info("questbook: %s «%s»: %s %s", q.id, q.title, kind, data or "")
+
+    async def settle(self, npc: str | None = None) -> None:
+        """The truth from the save: the quests' variables in the game, and what the chronicle missed of them
+        (a message lost while the server was away)."""
+        mine = [q for q in self.all().values() if npc is None or q.giver == npc.upper()]
+        if not mine:
+            return
+        names = [v for q in mine for v in (q.id, stage_var(q))]
+        try:
+            vars = (await self.link.story_state(vars=names)).get("vars") or {}
+        except (GameError, TimeoutError) as err:
+            log.warning("questbook: the quests' state: %s", err)
+            return
+        for q in mine:
+            p, status, stage = self.progress(q.id), vars.get(q.id), vars.get(stage_var(q))
+            if status in (LOG_RUNNING, LOG_SUCCESS, LOG_FAILED) and p.state == "open":
+                self._fact(q, "story_quest_given")
+            if isinstance(stage, int) and 1 < stage <= len(q.stages) and stage > p.stage:
+                self._fact(q, "story_quest_stage", stage=stage)
+            if status == LOG_SUCCESS and p.state != "done":
+                self._fact(q, "story_quest_done")
+            elif status == LOG_FAILED and p.state != "failed":
+                self._fact(q, "story_quest_failed")
+
+    # --- the conversation (TurnExtension) ------------------------------------------------------
+
+    async def prepare(self, npc: str) -> None:
+        await self.settle(npc)
+
+    def situation(self, npc: str) -> str | None:
+        npc = npc.upper()
+        out = []
+        for q in self.all().values():
+            if q.giver != npc:
+                continue
+            p = self.progress(q.id)
+            if p.state == "given":
+                line = f"Ты дал герою поручение «{q.title}»: {q.asked or q.stages[0].journal}"
+                line += f" Сделает — заплатишь: {q.reward()}."
+                if q.days:
+                    line += f" Срок — {q.days} дн."
+                out.append(line)
+            elif p.state == "done":
+                out.append(f"Поручение «{q.title}» герой выполнил, ты заплатил: {q.reward()}.")
+            elif p.state == "failed":
+                out.append(f"Поручение «{q.title}» герой не выполнил в срок.")
+        return "\n".join(out) or None
+
+    all_tools: tuple[Tool, ...] = ()
+
+    def tools(self, npc: str) -> list[Tool]:
+        return []
+
+    async def handle(
+        self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None
+    ) -> ToolOutcome | None:
+        return None
