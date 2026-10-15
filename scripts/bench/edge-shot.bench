@@ -1,8 +1,9 @@
 # Manual shooting down over Lobart's roof: the same frozen wolf below the gable wall.
-# stand_manual: exactly 60 cm after drawing; clear head and shot-direction rays are required.
-# If no angle through 70 degrees clears both, the limited full pose and its actual impact are logged.
+# stand_manual: exactly 60 cm after drawing; automatic steps bring the hero to the edge, then lean clears the shot.
 # close_manual: exactly 30 cm after drawing, a clear shot below 70 degrees must hit the wolf.
-# aimat ... mouse drives the actual game camera and crosshair; all stand/close PNGs include its UI.
+# auto_step_60/100: start exactly 60/100 cm back, step without movement input, then hit the same wolf.
+# no_step_200: exactly 2 m back, hold the same downward aim without stepping.
+# aimat ... mouse drives the actual game camera and crosshair; all shooting PNGs include its UI.
 # probe_manual_zero/full: applied-head prediction checks at 60 cm, including the full 70-degree pose.
 # Guard checks inherited from #77: drawn forward steps stop 20..35 cm before the edge, raising at
 # 35 cm stays on the roof, and the hero can retreat or leave the stop sideways. Both bow and crossbow.
@@ -23,6 +24,8 @@ insert Wolf
 wait 300
 immortal WOLF on
 put WOLF 160 0
+# Keep the ground position fixed through hit reactions, so every segment shoots the same steep target.
+pin WOLF 160 0 -733
 wait 300
 cam lift off
 manual on
@@ -63,12 +66,22 @@ hp WOLF
 stop
 # Diagnose the same drawn animation and game camera at both endpoints. The forced 70-degree shot
 # records its actual impact before restoring automatic lean, including any geometric limit at 60 cm.
+# Fixed aimlean overrides suppress automatic approach, so restore the original 60 cm geometry first.
+aim off
+aimlean 0
 press action
 wait 1500
-aimlean 0
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 60 exact
+wait 300
+aim on
 wait 1200
 rec probe_manual_zero
 wait 600
+pos
+edgedist 247.5
 cansee WOLF 247.5
 shot stand_manual_zero
 wait 100
@@ -87,6 +100,7 @@ release action
 wait 1500
 hp WOLF
 stop
+aim off
 aimlean auto
 wait 1200
 wait 800
@@ -130,6 +144,125 @@ release action
 wait 1500
 hp WOLF
 stop
+aimat off
+# Explicit approach checks: draw with procedural aim disabled, then place at the exact starting margin.
+# The wolf stays at its original world position and the real camera tracks it as the hero steps forward.
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual on
+aim off
+draw bow
+wait 1500
+aimat WOLF body mouse
+cam game
+ui on
+press action
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 60 exact
+wait 300
+rec auto_step_60
+sight WOLF
+pos
+edgedist 247.5
+cansee WOLF 247.5
+shot auto_step_60_start
+wait 100
+aim on
+wait 4000
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+hp WOLF
+shot auto_step_60_drawn
+wait 100
+release action
+wait 1500
+hp WOLF
+stop
+aimat off
+aim off
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual on
+draw bow
+wait 1500
+aimat WOLF body mouse
+cam game
+ui on
+press action
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 100 exact
+wait 300
+rec auto_step_100
+sight WOLF
+pos
+edgedist 247.5
+cansee WOLF 247.5
+shot auto_step_100_start
+wait 100
+aim on
+wait 4000
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+hp WOLF
+shot auto_step_100_drawn
+wait 100
+release action
+wait 1500
+hp WOLF
+stop
+aimat off
+aim off
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 400
+manual on
+draw bow
+wait 1500
+aimat WOLF body mouse
+cam game
+ui on
+press action
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 200 exact
+wait 300
+rec no_step_200
+sight WOLF
+pos
+edgedist 247.5
+cansee WOLF 247.5
+shot no_step_200_start
+wait 100
+aim on
+wait 4000
+pos
+edgedist 247.5
+cansee WOLF 247.5
+anims
+shot no_step_200_drawn
+wait 100
+stop
+release action
 aimat off
 ui off
 cam follow 600 300 90

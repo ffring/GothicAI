@@ -18,6 +18,8 @@ namespace {
 
 constexpr float BlendIn  = 0.25f; // seconds: the legs take the steps...
 constexpr float BlendOut = 0.3f;  // ...and stand again
+constexpr float StopFootSpeed = 120.f; // cm/s: return to the stance with the body stopped
+constexpr float StopFootFrame = 4.f;   // leave room below the bench's 5 cm/frame ankle limit
 
 bool enabled = []() {
   const char* v = std::getenv("OPENGOTHIC_AIMWALK");
@@ -87,11 +89,14 @@ void AimWalk::setSkeleton(const Skeleton* sk) {
   rThigh = find("BIP01 R THIGH");
   lArm   = find("BIP01 L UPPERARM");
   rArm   = find("BIP01 R UPPERARM");
-  for(auto i:{root,pelvis,spine,spine1,spine2,lThigh,rThigh,lArm,rArm})
+  lFoot  = find("BIP01 L FOOT");
+  rFoot  = find("BIP01 R FOOT");
+  for(auto i:{root,pelvis,spine,spine1,spine2,lThigh,rThigh,lArm,rArm,lFoot,rFoot})
     if(i>=nodes.size())
       return;
   if(nodes[pelvis].parent!=root || nodes[spine].parent!=pelvis || nodes[spine1].parent!=spine ||
-     nodes[spine2].parent!=spine1 || nodes[lThigh].parent!=pelvis || nodes[rThigh].parent!=pelvis)
+     nodes[spine2].parent!=spine1 || nodes[lThigh].parent!=pelvis || nodes[rThigh].parent!=pelvis ||
+     !isUnder(lFoot,lThigh) || !isUnder(rFoot,rThigh))
     return;
   tree(lThigh,legsTree);
   tree(rThigh,legsTree);
@@ -162,18 +167,27 @@ bool AimWalk::update(const Input& in) {
   const float dt   = float(in.dt)/1000.f;
   const float prev = weight;
   walk = std::clamp(in.walk,-1.f,1.f);
-  const bool on = enabled && seq!=nullptr && walk!=0.f && cycle()>0.f;
+  // Keep the edge stop while its legs settle even if the caller now asks for no movement.
+  const bool wasBlocked = blocked;
+  blocked = in.blocked || (blocked && walk==0.f && weight>0.f);
+  settle = false;
+  const bool on = enabled && seq!=nullptr && walk!=0.f && !blocked && cycle()>0.f;
   if(on) {
     if(weight<=0.f)
       phase = 0;
     dir    = walk>0.f ? 1.f : -1.f;
     weight = std::min(1.f, weight + dt/BlendIn);
+    } else if(blocked && weight>0.f) {
+    // apply knows the actual stance and can bound the ankles' return, rather than guessing from weight.
+    settle = true;
+    // The contact frame may still contain the body's last clipped step; start returning next frame.
+    settleDt = wasBlocked ? dt : 0.f;
     } else {
     weight = std::max(0.f, weight - dt/BlendOut);
     }
   if(seq==nullptr)
     weight = 0;
-  if(weight>0.f) {
+  if(weight>0.f && !blocked) {
     // the steps go on as they are while they fade out
     const float c = cycle();
     phase = std::fmod(phase + dir*rate()*float(in.dt), c);
@@ -184,7 +198,7 @@ bool AimWalk::update(const Input& in) {
   }
 
 Vec3 AimWalk::move(uint64_t dt) const {
-  if(!isActive())
+  if(!isActive() || blocked)
     return Vec3();
   const auto& d = *seq->data;
   const float c = cycle();
@@ -249,10 +263,45 @@ void AimWalk::apply(Matrix4x4* tr, size_t numBones, const zenkit::AnimationSampl
       tr[i] = (p<numBones ? tr[p] : m)*(inv*stance[i]);
       }
     };
-  set(root);
-  set(pelvis);
-  for(auto i:legsTree)
-    set(i);
+  auto build = [&]() {
+    set(root);
+    set(pelvis);
+    for(auto i:legsTree)
+      set(i);
+    };
+  if(settle) {
+    // Pose can rebuild several times in a frame for the other post-passes. Advance the fade only once.
+    settle = false;
+    const float from = weight;
+    const float to   = std::max(0.f,from-settleDt/BlendOut);
+    const float step = std::min(StopFootFrame,StopFootSpeed*settleDt);
+    build();
+    const Vec3 left  = position(tr[lFoot]);
+    const Vec3 right = position(tr[rFoot]);
+    auto travel = [&]() {
+      if(weight<=0.f)
+        return std::max(length(position(stance[lFoot])-left),length(position(stance[rFoot])-right));
+      build();
+      return std::max(length(position(tr[lFoot])-left),length(position(tr[rFoot])-right));
+      };
+    weight = to;
+    if(travel()>step) {
+      float low = to, high = from;
+      for(int i=0; i<8; ++i) {
+        weight = (low+high)*0.5f;
+        if(travel()>step)
+          low = weight;
+        else
+          high = weight;
+        }
+      weight = high;
+      }
+    if(weight<=0.f) {
+      std::copy(stance.begin(),stance.end(),tr);
+      return;
+      }
+    }
+  build();
 
   // the upper body goes with the hips, its turn kept: the hips' turn is spread over the spine (the lower
   // spine takes most of it, the chest none)

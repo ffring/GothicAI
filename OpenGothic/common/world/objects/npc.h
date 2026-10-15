@@ -315,13 +315,15 @@ class Npc final {
     // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), the bow canted
     // for a quick shot 0..1, as smooth as whoever drives it makes it (PlayerControl); stepping -1 (back)..1
     // (forward)
-    void      setAimStance(float crouch, float peek, float cant = 0, float walk = 0) {
+    void      setAimStance(float crouch, float peek, float cant = 0, float walk = 0, bool stopWalk = false) {
       stanceCrouch = crouch; stancePeek = peek; stanceCant = cant; stanceWalk = walk;
+      stanceWalkStopped = stopWalk;
       }
     float     aimCrouch() const { return stanceCrouch; }
     float     aimPeek()   const { return stancePeek; }
     float     aimCant()   const { return stanceCant; }
     float     aimWalk()   const { return stanceWalk; }
+    bool      isAimWalkStopped() const { return stanceWalkStopped; }
     bool      isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const {
       return mvAlgo.isEdgeMoveBlocked(modelDirection);
       }
@@ -871,6 +873,7 @@ class Npc final {
     float                          stancePeek   = 0;
     float                          stanceCant   = 0;
     float                          stanceWalk   = 0;
+    bool                           stanceWalkStopped = false;
     Tempest::Vec3                  stanceLook   = {};
     bool                           benchStill   = false;
     Npc*                           currentTarget  =nullptr;

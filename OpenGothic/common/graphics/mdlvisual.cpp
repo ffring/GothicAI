@@ -948,10 +948,10 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   if(requestedWalk==0.f && pose.aimWalk().isActive())
     walkDirection = pose.aimWalk().move(dt);
   const bool edgeBlocked = manual && in.active && npc.isEdgeMoveBlocked(walkDirection);
+  wk.blocked = edgeBlocked || npc.isAimWalkStopped();
   wk.walk = edgeBlocked ? 0.f : requestedWalk;
-  // At an edge the legs must stop with the body, including their normal release fade.
-  // No leg sequence resets their weight immediately instead of walking in place while fading out.
-  if(!edgeBlocked && (wk.walk!=0.f || pose.aimWalk().isActive())) {
+  // Keep the gait while the stopped legs ease back into the stance, without further root motion.
+  if(wk.walk!=0.f || pose.aimWalk().isActive()) {
     const bool cbow = ws==WeaponState::CBow;
     wk.legs = solver.solveFrm(cbow ? "S_CBOWSNEAKL" : "S_BOWSNEAKL");
     if(wk.legs==nullptr)
@@ -1077,6 +1077,7 @@ bool MdlVisual::updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedTo
     }
 
   auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
+  in.aimStop = pose.aimWalk().isActive() && (pose.aimWalk().isStopping() || npc.isAimWalkStopped());
   // crouched stepping with the bow drawn: the steps are low already (sneaking), as low as crouched standing
   in.crouch = std::max(0.f, in.crouch - pose.aimWalk().lowered());
   const bool changed = pose.updateFootIk(in);

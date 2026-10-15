@@ -42,6 +42,7 @@ class FootIk final {
       bool     hardOff = false; // jump, fall, swim: switch off at once instead of fading out
       float    floorY  = 0;     // height that the animation treats as ground (object origin)
       float    crouch  = 0;     // cm the body is lowered on purpose (crouched to aim a bow), the legs bend
+      bool     aimStop = false; // the drawn gait is settling at an edge; bound final ankle travel too
       Ground   ground[MaxLegs];
       uint64_t dt      = 0;
       };
@@ -122,6 +123,7 @@ class FootIk final {
       Tempest::Vec3       animHip    = {};
       Tempest::Vec3       animToe    = {};
       Tempest::Vec3       finalAnkle = {};
+      Tempest::Vec3       stopAnkle = {};
       float               groundY    = 0;  // world height of the ground under the foot, smoothed
       float               plant      = 1;  // 1: the foot stands on the ground, 0: it swings
       float               slack      = 0;  // how much lower the animated leg could still reach
@@ -162,6 +164,7 @@ class FootIk final {
     uint32_t dbgBad     = 0;
     float    dbgLimit   = 0;
     float    weight     = 0;
+    float    stopStep   = 0;
     bool     valid      = false;
     uint64_t logTimer   = 0;
     uint64_t logTime    = 0;

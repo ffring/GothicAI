@@ -12,6 +12,7 @@
 #include "physics/dynamicworld.h"
 #include "camera.h"
 #include "graphics/mesh/aim.h"
+#include "graphics/mesh/aimwalk.h"
 #include "graphics/mesh/footik.h"
 #include "gothic.h"
 
@@ -1148,7 +1149,7 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   const float dtS  = float(dt)/1000.f;
   const float peek = (wantsToStrafeRight() ? 1.f : 0.f) - (wantsToStrafeLeft() ? 1.f : 0.f);
   const float cant = aimCant && ws==WeaponState::Bow ? 1.f : 0.f;
-  const float step = (wantsToMoveForward() ? 1.f : 0.f) - (wantsToMoveBackward() ? 1.f : 0.f);
+  float       step = (wantsToMoveForward() ? 1.f : 0.f) - (wantsToMoveBackward() ? 1.f : 0.f);
   const float ease = 1.f - std::exp(-StanceRate*dtS);
   crouchK += ((aimCrouch ? 1.f : 0.f) - crouchK)*ease;
   peekK   += (peek - peekK)*ease;
@@ -1159,10 +1160,6 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     peekK = peek;
   if(std::abs(cantK-cant)<1e-3f)
     cantK = cant;
-  // the steps ease in and out by themselves (AimWalk); the aim shakes as they do
-  walkK += (std::abs(step) - walkK)*ease;
-  if(std::abs(walkK-std::abs(step))<1e-3f)
-    walkK = std::abs(step);
   pl.setAimStance(crouchK,peekK,cantK,step);
   manualAiming = true;
 
@@ -1192,6 +1189,36 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   if(camera!=nullptr && !aimOverride)
     camera->aimRay(lookFrom,look);
   pl.setAimLook(look);
+
+  AimStep::Input approach;
+  approach.drawn = lmb && ar.stage()==Archer::Held && Aim::isEnabled() && AimWalk::isEnabled() &&
+                   Aim::playerLeanOverride<0.f;
+  approach.moving = movement.forwardBackward.any() || movement.strafeRightLeft.any();
+  approach.down = -std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z))*180.f/float(M_PI);
+  approach.yaw = rot;
+  if(approach.drawn && approach.down>40.f) {
+    const float a = pl.rotationRad();
+    const auto edge = pl.aimEdge({std::cos(a),0,std::sin(a)});
+    approach.edge = edge.found;
+    approach.distance = edge.distance;
+    approach.blocked = pl.isEdgeMoveBlocked({0,0,1});
+    }
+  const bool wasStepping = aimStep.isActive();
+  if(aimStep.update(approach)) {
+    step = 1.f;
+    aimStepStopped = false;
+    }
+  else if(wasStepping) {
+    // Cancel the automatic root motion immediately; the planted pose still fades into the stance.
+    aimStepStopped = true;
+    }
+  if(step!=0.f && !aimStep.isActive())
+    aimStepStopped = false;
+  // The same gait and speed as forward input; its disturbance also shakes the drawn aim.
+  walkK += (std::abs(step) - walkK)*ease;
+  if(std::abs(walkK-std::abs(step))<1e-3f)
+    walkK = std::abs(step);
+  pl.setAimStance(crouchK,peekK,cantK,step,aimStepStopped);
 
   // canted: a quick shot (drawn fast, settles fast, looser)
   const auto    st = Archery::canted(Archery::stats(pl,pl.currentRangedWeapon()),cantK);
@@ -1230,12 +1257,17 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
   }
 
 void PlayerControl::endManualAim(Npc& pl) {
+  const bool stopStep = aimStep.isActive() || aimStepStopped;
   pl.endManualAim(true);
+  if(stopStep)
+    pl.setAimStance(0,0,0,0,true);
   aimCrouch = false;
   crouchK   = 0;
   peekK     = 0;
   cantK     = 0;
   walkK     = 0;
+  aimStep   = AimStep();
+  aimStepStopped = false;
   Archer::playerProbe = Archer::Probe();
   ctrl[Action::Walk] = false;
   if(auto camera = Gothic::inst().camera()) {

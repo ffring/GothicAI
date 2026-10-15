@@ -30,6 +30,7 @@ class AimWalk final {
       const Animation::Sequence* legs = nullptr; // the steps (a loop with root motion)
       float                      walk = 0;       // -1 back..1 forward, 0 standing
       uint64_t                   dt   = 0;
+      bool                       blocked = false; // the body has stopped at an edge; settle the legs in place
       };
 
     // State for the test bench
@@ -50,6 +51,7 @@ class AimWalk final {
     void           setSkeleton(const Skeleton* sk);
     bool           isValid() const { return valid; }
     bool           isActive() const { return weight>0.f && seq!=nullptr; }
+    bool           isStopping() const { return blocked && isActive(); }
     // cm the steps lower the pelvis from the stance (the last pose)
     float          lowered() const { return std::max(drop,0.f); }
 
@@ -76,6 +78,7 @@ class AimWalk final {
     bool                       valid    = false;
     size_t                     root = size_t(-1), pelvis = size_t(-1), spine = size_t(-1), spine1 = size_t(-1), spine2 = size_t(-1);
     size_t                     lThigh = size_t(-1), rThigh = size_t(-1), lArm = size_t(-1), rArm = size_t(-1);
+    size_t                     lFoot = size_t(-1), rFoot = size_t(-1);
     std::vector<size_t>        legsTree;              // the thighs and down, parents first
     std::vector<size_t>        spineTree, spine1Tree, spine2Tree;
     std::vector<int>           seqNode;               // node -> its index in the steps' animation, -1
@@ -86,5 +89,7 @@ class AimWalk final {
     float                      dir    = 1;  // the way the steps go (kept while they fade out)
     float                      phase  = 0;  // ms into the cycle
     float                      twist  = 0, chest = 0, drop = 0;
+    bool                       blocked = false, settle = false;
+    float                      settleDt = 0;
     std::vector<Tempest::Matrix4x4> stance;           // the pose as the aim holds it (apply)
   };
