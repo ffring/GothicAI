@@ -16,7 +16,8 @@
    "kind": "house",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_HABOUR_KASERN_BARRACK02_IN"
   },
   {
    "id": "BIGFARMFORESTCAVE",
@@ -45,7 +46,8 @@
    ],
    "neighbours": [
     "BIGFARM_FOREST"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_FOREST_08"
   },
   {
    "id": "BIGFARM_ALLEE",
@@ -69,7 +71,8 @@
     "BIGFARM_LAKE",
     "BIGFARM_FARM4",
     "BIGMILL"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_ALLEE_08_N_1"
   },
   {
    "id": "BIGFARM_ALLEE#2",
@@ -91,7 +94,8 @@
     "BIGFARM_FARM4",
     "BIGFARM_PATH",
     "BIGMILL_PATH"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_FELDREUBER"
   },
   {
    "id": "BIGFARM_CHAPEL",
@@ -110,7 +114,8 @@
    "neighbours": [
     "BIGFARM_PATH",
     "BIGFARM_KITCHEN"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_CHAPEL"
   },
   {
    "id": "BIGFARM_FARM4",
@@ -135,7 +140,8 @@
     "FARM4_WOOD_NEARPEASANT2",
     "BIGFARM_ALLEE",
     "BIGFARM_ALLEE#2"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_FARM4_PATH_04"
   },
   {
    "id": "BIGFARM_FIELD",
@@ -155,7 +161,8 @@
     "FARM4_FIELD",
     "FARM4_WOOD_NEARPEASANT2",
     "BIGFARM_FIELD#2"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_FIELD_MONSTER_01"
   },
   {
    "id": "BIGFARM_FIELD#2",
@@ -174,7 +181,8 @@
    "neighbours": [
     "BIGFARM_ALLEE#2",
     "BIGFARM_FIELD"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_FIELD_01"
   },
   {
    "id": "BIGFARM_FOREST",
@@ -193,7 +201,8 @@
    "neighbours": [
     "BIGFARM_SHEEP2",
     "BIGFARMFORESTCAVE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_FOREST_03_NAVIGATION2"
   },
   {
    "id": "BIGFARM_HOUSE",
@@ -226,7 +235,8 @@
     "BIGFARM_HOUSE_LEE",
     "BIGFARM_HOUSE_UP2",
     "BIGFARM_HOUSE_UP1"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_01"
   },
   {
    "id": "BIGFARM_HOUSE_LEE",
@@ -244,7 +254,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_HOUSE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_LEE_GUARDING"
   },
   {
    "id": "BIGFARM_HOUSE_OUT",
@@ -265,7 +276,8 @@
     "BIGFARM_SHEEP2",
     "BIGFARM_HOUSE_OUT#2",
     "BIGFARM_PATH"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_OUT_04"
   },
   {
    "id": "BIGFARM_HOUSE_OUT#2",
@@ -283,7 +295,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_HOUSE_OUT"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_OUT_07"
   },
   {
    "id": "BIGFARM_HOUSE_SLD",
@@ -301,7 +314,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_HOUSE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_SLD_SLEEP"
   },
   {
    "id": "BIGFARM_HOUSE_UP1",
@@ -319,7 +333,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_HOUSE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_UP1_02"
   },
   {
    "id": "BIGFARM_HOUSE_UP2",
@@ -337,7 +352,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_HOUSE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HOUSE_UP2_07"
   },
   {
    "id": "BIGFARM_HUT",
@@ -356,7 +372,8 @@
    "neighbours": [
     "BIGFARM_LAKE_MONSTER#2",
     "BIGFARM_ALLEE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_HUT_02"
   },
   {
    "id": "BIGFARM_KITCHEN",
@@ -377,7 +394,8 @@
     "BIGFARM_SMITH",
     "BIGFARM_SHEEP1",
     "BIGFARM_CHAPEL"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_KITCHEN_07"
   },
   {
    "id": "BIGFARM_LAKE",
@@ -402,7 +420,8 @@
     "BIGFARM_LAKE_MONSTER#3",
     "TAVERNE_BIGFARM",
     "FARM4"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_LAKE_03_MOVEMENT2"
   },
   {
    "id": "BIGFARM_LAKE_CAVE",
@@ -431,7 +450,8 @@
    ],
    "neighbours": [
     "BIGFARM_LAKE_MONSTER#3"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_LAKE_CAVE_04"
   },
   {
    "id": "BIGFARM_LAKE_MONSTER",
@@ -450,7 +470,8 @@
    "neighbours": [
     "LAKE_",
     "BIGFARM_LAKE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_LAKE_MONSTER_BLOODFLY"
   },
   {
    "id": "BIGFARM_LAKE_MONSTER#2",
@@ -471,7 +492,8 @@
     "BIGFARM_LAKE",
     "BIGFARM_ALLEE",
     "LAKE_"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_LAKE_MONSTER_05_01"
   },
   {
    "id": "BIGFARM_LAKE_MONSTER#3",
@@ -490,7 +512,8 @@
    "neighbours": [
     "BIGFARM_LAKE",
     "BIGFARM_LAKE_CAVE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_LAKE_MONSTER_01_01"
   },
   {
    "id": "BIGFARM_LAKE_MONSTER#4",
@@ -508,7 +531,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_LAKE"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_LAKE_MONSTER_03_01"
   },
   {
    "id": "BIGFARM_PATH",
@@ -531,7 +555,8 @@
     "BIGFARM_ALLEE#2",
     "BIGFARM_CHAPEL",
     "BIGFARM_SMITH"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_PATH_HODGES"
   },
   {
    "id": "BIGFARM_PEPES",
@@ -547,7 +572,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_BIGFARM_FOREST_03_NAVIGATION2"
   },
   {
    "id": "BIGFARM_SHEEP1",
@@ -566,7 +592,8 @@
    "neighbours": [
     "CRYPT",
     "BIGFARM_KITCHEN"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_SHEEP1_01"
   },
   {
    "id": "BIGFARM_SHEEP2",
@@ -586,7 +613,8 @@
     "CASTLEMINE_PATH",
     "BIGFARM_FOREST",
     "BIGFARM_HOUSE_OUT"
-   ]
+   ],
+   "anchor": "BIGFARM"
   },
   {
    "id": "BIGFARM_SMITH",
@@ -606,7 +634,8 @@
     "BIGFARM_KITCHEN",
     "BIGFARM_STABLE",
     "BIGFARM_PATH"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_SMITH_COOL"
   },
   {
    "id": "BIGFARM_STABLE",
@@ -636,7 +665,8 @@
    "neighbours": [
     "BIGFARM_PATH",
     "BIGFARM_SMITH"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_STABLE_04"
   },
   {
    "id": "BIGFARM_VORPOSTEN1",
@@ -654,7 +684,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_ALLEE#2"
-   ]
+   ],
+   "anchor": "NW_BIGFARM_VORPOSTEN1_01_RIGHTFIELD_01"
   },
   {
    "id": "BIGMILL",
@@ -674,7 +705,8 @@
     "BIGMILL_FARM3",
     "BIGMILL_FIELD",
     "BIGFARM_ALLEE"
-   ]
+   ],
+   "anchor": "NW_BIGMILL_05"
   },
   {
    "id": "BIGMILL_FARM3",
@@ -696,7 +728,8 @@
     "RUMBOLD_FLUCHT2",
     "FARM3_OUT",
     "FARM3_BIGWOOD#2"
-   ]
+   ],
+   "anchor": "NW_BIGMILL_FARM3_04"
   },
   {
    "id": "BIGMILL_FIELD",
@@ -717,7 +750,8 @@
     "BIGMILL_PATH",
     "BIGMILL_MALAKSVERSTECK",
     "BIGMILL"
-   ]
+   ],
+   "anchor": "NW_BIGMILL_FIELD_MONSTER_01"
   },
   {
    "id": "BIGMILL_MALAKSVERSTECK",
@@ -736,7 +770,8 @@
    "neighbours": [
     "BIGMILL_FIELD",
     "CASTLEMINE_TROLL"
-   ]
+   ],
+   "anchor": "NW_BIGMILL_MALAKSVERSTECK_MALAK"
   },
   {
    "id": "BIGMILL_PATH",
@@ -756,7 +791,8 @@
     "BIGFARM_FARM4",
     "BIGMILL_FIELD",
     "BIGFARM_ALLEE#2"
-   ]
+   ],
+   "anchor": "NW_BIGMILL_PATH_06"
   },
   {
    "id": "CASTLEMILL_TROLL",
@@ -772,7 +808,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CASTLEMINE_TROLL_07"
   },
   {
    "id": "CASTLEMINE",
@@ -802,7 +839,8 @@
    "neighbours": [
     "CASTLEMINE_PATH",
     "CASTLEMINE_HUT"
-   ]
+   ],
+   "anchor": "NW_CASTLEMINE_09"
   },
   {
    "id": "CASTLEMINE2",
@@ -818,7 +856,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_BIGMILL_FARM3_RANGERBANDITS_04"
   },
   {
    "id": "CASTLEMINE_HUT",
@@ -837,7 +876,8 @@
    "neighbours": [
     "CASTLEMINE_TOWER",
     "CASTLEMINE"
-   ]
+   ],
+   "anchor": "NW_CASTLEMINE_HUT_BENCH_CAVE"
   },
   {
    "id": "CASTLEMINE_PATH",
@@ -858,7 +898,8 @@
     "BIGFARM_SHEEP2",
     "CASTLEMINE",
     "CASTLEMINE_TROLL"
-   ]
+   ],
+   "anchor": "NW_CASTLEMINE_PATH_04"
   },
   {
    "id": "CASTLEMINE_TOWER",
@@ -877,7 +918,8 @@
    "neighbours": [
     "CASTLEMINE_PATH",
     "CASTLEMINE_HUT"
-   ]
+   ],
+   "anchor": "NW_CASTLEMINE_TOWER_02"
   },
   {
    "id": "CASTLEMINE_TROLL",
@@ -897,7 +939,8 @@
     "CASTLEMINE_TROLL#2",
     "BIGMILL_MALAKSVERSTECK",
     "CASTLEMINE_PATH"
-   ]
+   ],
+   "anchor": "NW_CASTLEMINE_TROLL_03"
   },
   {
    "id": "CASTLEMINE_TROLL#2",
@@ -915,7 +958,8 @@
    "entrances": [],
    "neighbours": [
     "CASTLEMINE_TROLL"
-   ]
+   ],
+   "anchor": "NW_CASTLEMINE_TROLL_06"
   },
   {
    "id": "CITY",
@@ -936,7 +980,8 @@
     "CITY_HABOUR",
     "CITY_MERCHANT_PATH",
     "CITY_MERCHANT_TAVERN01"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_STOMPER_01"
   },
   {
    "id": "CITY#2",
@@ -952,7 +997,8 @@
    "kind": "street",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_UPTOWN_PATH_13"
   },
   {
    "id": "CITY#3",
@@ -971,7 +1017,8 @@
    "neighbours": [
     "CITY_UPTOWNPARADE",
     "CITY_UPTOWN_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_SMALLTALK_02"
   },
   {
    "id": "CITYFOREST",
@@ -992,7 +1039,8 @@
     "CITY_TO_FOREST",
     "CITYFOREST_KAP3#2",
     "CITYFOREST_CAVE"
-   ]
+   ],
+   "anchor": "NW_CITYFOREST_07"
   },
   {
    "id": "CITYFOREST2",
@@ -1010,7 +1058,8 @@
    "entrances": [],
    "neighbours": [
     "CITYFOREST"
-   ]
+   ],
+   "anchor": "NW_CITYFOREST2_02"
   },
   {
    "id": "CITYFOREST_CAVE",
@@ -1039,7 +1088,8 @@
    ],
    "neighbours": [
     "CITYFOREST"
-   ]
+   ],
+   "anchor": "NW_CITYFOREST_CAVE_03"
   },
   {
    "id": "CITYFOREST_KAP3",
@@ -1055,7 +1105,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITYFOREST_11"
   },
   {
    "id": "CITYFOREST_KAP3#2",
@@ -1073,7 +1124,8 @@
    "entrances": [],
    "neighbours": [
     "CITYFOREST"
-   ]
+   ],
+   "anchor": "NW_CITYFOREST_05_SPEC"
   },
   {
    "id": "CITYHALL_OFFICE",
@@ -1092,7 +1144,8 @@
    "neighbours": [
     "CITY_CITYHALL",
     "CITYHALL_UPSTAIRS"
-   ]
+   ],
+   "anchor": "NW_CITYHALL_OFFICE_03"
   },
   {
    "id": "CITYHALL_PRIVATE",
@@ -1111,7 +1164,8 @@
    "neighbours": [
     "CITYHALL_UPSTAIRS",
     "CITY_CITYHALL"
-   ]
+   ],
+   "anchor": "NW_CITYHALL_PRIVATE_01"
   },
   {
    "id": "CITYHALL_UPSTAIRS",
@@ -1152,7 +1206,8 @@
     "CITY_CITYHALL",
     "CITYHALL_PRIVATE",
     "CITYHALL_OFFICE"
-   ]
+   ],
+   "anchor": "NW_CITYHALL_UPSTAIRS_02"
   },
   {
    "id": "CITYKNEIPE",
@@ -1168,7 +1223,8 @@
    "kind": "street",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_MERCHANT_TAVERN01_02"
   },
   {
    "id": "CITY_ANDRE",
@@ -1197,7 +1253,8 @@
    ],
    "neighbours": [
     "CITY_HABOUR_KASERN"
-   ]
+   ],
+   "anchor": "NW_CITY_ANDRE_SMALLTALK"
   },
   {
    "id": "CITY_BARRACK01",
@@ -1227,7 +1284,8 @@
    "neighbours": [
     "CITY_HABOUR_KASERN",
     "CITY_BARRACK02"
-   ]
+   ],
+   "anchor": "NW_CITY_BARRACK01_01"
   },
   {
    "id": "CITY_BARRACK02",
@@ -1246,7 +1304,8 @@
    "neighbours": [
     "CITY_BARRACK01",
     "CITY_HABOUR_KASERN"
-   ]
+   ],
+   "anchor": "NW_CITY_BARRACK02_BED_BOLTAN"
   },
   {
    "id": "CITY_BED",
@@ -1298,7 +1357,8 @@
     "CITY_SHOP02",
     "CITY_SMITH",
     "CITY_MERCHANT_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_BED_BOSPER_B"
   },
   {
    "id": "CITY_BED#2",
@@ -1317,7 +1377,8 @@
    "neighbours": [
     "CITY_MERCHANT_HUT",
     "CITY_ZURIS"
-   ]
+   ],
+   "anchor": "NW_CITY_BED_ZURIS"
   },
   {
    "id": "CITY_BEER",
@@ -1337,7 +1398,8 @@
     "CITY_MERCHANT_PATH",
     "CITY_HABOUR_KASERN",
     "CITY_MERCHANT_SHOP03"
-   ]
+   ],
+   "anchor": "NW_CITY_BEER_06"
   },
   {
    "id": "CITY_CITYHALL",
@@ -1358,7 +1420,8 @@
     "CITYHALL_UPSTAIRS",
     "CITY_UPTOWN_PATH",
     "CITYHALL_PRIVATE"
-   ]
+   ],
+   "anchor": "NW_CITY_CITYHALL_IN_01"
   },
   {
    "id": "CITY_DITCH",
@@ -1377,7 +1440,8 @@
    "neighbours": [
     "CITY_TO_FOREST",
     "CITY_TO_LIGHTHOUSE"
-   ]
+   ],
+   "anchor": "NW_CITY_DITCH_05"
   },
   {
    "id": "CITY_ENTRANCE",
@@ -1396,7 +1460,8 @@
    "neighbours": [
     "CITY_MAINSTREET",
     "FARM1_PATH_CITY"
-   ]
+   ],
+   "anchor": "NW_CITY_ENTRANCE_01"
   },
   {
    "id": "CITY_ENTRANCE#2",
@@ -1415,7 +1480,8 @@
    "neighbours": [
     "CITY_MERCHANT_PATH",
     "CITY_TO_FOREST"
-   ]
+   ],
+   "anchor": "NW_CITY_ENTRANCE_BACK"
   },
   {
    "id": "CITY_HABOUR",
@@ -1439,7 +1505,8 @@
     "CITY_HABOUR_KASERN",
     "CITY",
     "CITY_PIRATESCAMP"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_06_B"
   },
   {
    "id": "CITY_HABOUR_HUT",
@@ -1492,7 +1559,8 @@
     "CITY_SHEEP",
     "CITY_HABOUR",
     "CITY_HABOUR_KASERN"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_HUT_05_IN_B"
   },
   {
    "id": "CITY_HABOUR_KASERN",
@@ -1519,7 +1587,8 @@
     "CITY_HABOUR",
     "CITY_KASERN",
     "CITY_ANDRE"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_KASERN_MAIN_IN_C"
   },
   {
    "id": "CITY_HABOUR_POOR",
@@ -1544,7 +1613,8 @@
     "CITY_HABOUR_PUFF",
     "CITY_MERCHANT_PATH",
     "CITY_MAINSTREET"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_POOR_AREA_HUT_03"
   },
   {
    "id": "CITY_HABOUR_PUFF",
@@ -1597,7 +1667,8 @@
     "PUFF",
     "CITY_PATH",
     "CITY_HABOUR_POOR"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_PUFF_07"
   },
   {
    "id": "CITY_HABOUR_TAVERN01",
@@ -1626,7 +1697,8 @@
    ],
    "neighbours": [
     "CITY_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_TAVERN01_01"
   },
   {
    "id": "CITY_HOTEL",
@@ -1644,7 +1716,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_MERCHANT_SHOP03"
-   ]
+   ],
+   "anchor": "NW_CITY_HOTEL_BED_03"
   },
   {
    "id": "CITY_JAEGER",
@@ -1662,7 +1735,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_TO_LIGHTHOUSE"
-   ]
+   ],
+   "anchor": "NW_CITY_JAEGER_06"
   },
   {
    "id": "CITY_KANAL",
@@ -1692,7 +1766,8 @@
    "neighbours": [
     "CITY_KANAL_ROOM",
     "CITY_KANAL_ROOM#2"
-   ]
+   ],
+   "anchor": "NW_CITY_KANAL_11"
   },
   {
    "id": "CITY_KANAL_ROOM",
@@ -1711,7 +1786,8 @@
    "neighbours": [
     "CITY_KANAL",
     "CITY_TO_KANAL"
-   ]
+   ],
+   "anchor": "NW_CITY_KANAL_ROOM_05_01"
   },
   {
    "id": "CITY_KANAL_ROOM#2",
@@ -1729,7 +1805,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_KANAL"
-   ]
+   ],
+   "anchor": "NW_CITY_KANAL_ROOM_01_01"
   },
   {
    "id": "CITY_KASERN",
@@ -1758,7 +1835,8 @@
    ],
    "neighbours": [
     "CITY_HABOUR_KASERN"
-   ]
+   ],
+   "anchor": "NW_CITY_KASERN_ARMORY_ANVIL"
   },
   {
    "id": "CITY_KASERN#2",
@@ -1776,7 +1854,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_HABOUR_KASERN"
-   ]
+   ],
+   "anchor": "NW_CITY_KASERN_BARRACK02_02"
   },
   {
    "id": "CITY_LEOMAR",
@@ -1805,7 +1884,8 @@
    ],
    "neighbours": [
     "CITY_UPTOWN_HUT"
-   ]
+   ],
+   "anchor": "NW_CITY_LEOMAR_BED_06"
   },
   {
    "id": "CITY_LUTERO",
@@ -1835,7 +1915,8 @@
    "neighbours": [
     "CITY_UPTOWN_HUT#2",
     "CITY_UPTOWN_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_LUTERO_READ"
   },
   {
    "id": "CITY_MAINSTREET",
@@ -1861,7 +1942,8 @@
     "CITY_HABOUR_POOR",
     "CITY_PATH",
     "CITY_SMITH"
-   ]
+   ],
+   "anchor": "NW_CITY_MAINSTREET_03"
   },
   {
    "id": "CITY_MERCHANT",
@@ -1880,7 +1962,8 @@
    "neighbours": [
     "CITY_MERCHANT_PATH",
     "WEAPON"
-   ]
+   ],
+   "anchor": "MARKT_02"
   },
   {
    "id": "CITY_MERCHANT_HUT",
@@ -1921,7 +2004,8 @@
     "CITY_BED#2",
     "CITY_ZURIS",
     "CITY_MERCHANT_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_HUT_02_ENTRY_B"
   },
   {
    "id": "CITY_MERCHANT_PATCH",
@@ -1939,7 +2023,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_MERCHANT_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_PATCH_45_B"
   },
   {
    "id": "CITY_MERCHANT_PATH",
@@ -1974,7 +2059,8 @@
     "CITY_MERCHANT_TRADE",
     "CITY_HABOUR_POOR",
     "CITY_SMITH"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_PATH_20"
   },
   {
    "id": "CITY_MERCHANT_SHOP01",
@@ -1995,7 +2081,8 @@
     "CITY_BED",
     "CITY_MERCHANT_PATH",
     "CITY_MERCHANT_TRADE"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_SHOP01_FRONT_02"
   },
   {
    "id": "CITY_MERCHANT_SHOP02",
@@ -2025,7 +2112,8 @@
    "neighbours": [
     "CITY_SHOP02",
     "CITY_MAINSTREET"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_SHOP02_FRONT_01_B"
   },
   {
    "id": "CITY_MERCHANT_SHOP03",
@@ -2069,7 +2157,8 @@
     "CITY_RAUCH",
     "CITY_BEER",
     "CITY_ZURIS"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_SHOP03_IN_01"
   },
   {
    "id": "CITY_MERCHANT_TAVERN01",
@@ -2100,7 +2189,8 @@
     "CITY_TAVERN",
     "CITY_MERCHANT_PATH",
     "CITY"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_TAVERN01_IN"
   },
   {
    "id": "CITY_MERCHANT_TEMPLE",
@@ -2118,7 +2208,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_MERCHANT_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_TEMPLE_IN"
   },
   {
    "id": "CITY_MERCHANT_TRADE",
@@ -2138,7 +2229,8 @@
     "CITY_MAINSTREET",
     "CITY_MERCHANT_SHOP01",
     "CITY_MERCHANT_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_MERCHANT_TRADE_01"
   },
   {
    "id": "CITY_OV",
@@ -2154,7 +2246,8 @@
    "kind": "house",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_UPTOWN_HUT_01_IN"
   },
   {
    "id": "CITY_PALCAMP",
@@ -2172,7 +2265,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_WAY#2"
-   ]
+   ],
+   "anchor": "NW_CITY_PALCAMP_06"
   },
   {
    "id": "CITY_PATH",
@@ -2197,7 +2291,8 @@
     "CITY_MAINSTREET",
     "CITY_HABOUR_KASERN",
     "CITY_HABOUR_PUFF"
-   ]
+   ],
+   "anchor": "NW_CITY_HABOUR_STOMPER_02"
   },
   {
    "id": "CITY_PIRATESCAMP",
@@ -2215,7 +2310,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_HABOUR"
-   ]
+   ],
+   "anchor": "NW_CITY_PIRATESCAMP_03"
   },
   {
    "id": "CITY_POOR",
@@ -2233,7 +2329,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_HABOUR_POOR"
-   ]
+   ],
+   "anchor": "NW_CITY_POOR_SMITH_01"
   },
   {
    "id": "CITY_PUFF",
@@ -2263,7 +2360,8 @@
    "neighbours": [
     "CITY_HABOUR_PUFF",
     "PUFF"
-   ]
+   ],
+   "anchor": "NW_CITY_PUFF_OFFICE_01"
   },
   {
    "id": "CITY_RATS",
@@ -2281,7 +2379,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_HABOUR_POOR"
-   ]
+   ],
+   "anchor": "NW_CITY_RATS_01"
   },
   {
    "id": "CITY_RAUCH",
@@ -2300,7 +2399,8 @@
    "neighbours": [
     "CITY_MERCHANT_PATH",
     "CITY_MERCHANT_SHOP03"
-   ]
+   ],
+   "anchor": "NW_CITY_RAUCH_02"
   },
   {
    "id": "CITY_REICH02",
@@ -2329,7 +2429,8 @@
    ],
    "neighbours": [
     "CITY_UPTOWN_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_REICH02_07"
   },
   {
    "id": "CITY_REICH03",
@@ -2358,7 +2459,8 @@
    ],
    "neighbours": [
     "CITY_UPTOWN_HUT"
-   ]
+   ],
+   "anchor": "NW_CITY_REICH03_05"
   },
   {
    "id": "CITY_RICHTER",
@@ -2387,7 +2489,8 @@
    ],
    "neighbours": [
     "CITY_UPTOWN_JUDGE"
-   ]
+   ],
+   "anchor": "NW_CITY_RICHTER_01"
   },
   {
    "id": "CITY_SHEEP",
@@ -2405,7 +2508,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_HABOUR_HUT"
-   ]
+   ],
+   "anchor": "NW_CITY_SHEEP_SPAWN_01"
   },
   {
    "id": "CITY_SHOP",
@@ -2434,7 +2538,8 @@
    ],
    "neighbours": [
     "CITY_UPTOWN_HUT#2"
-   ]
+   ],
+   "anchor": "NW_CITY_SHOP_SALANDRIL_02_B"
   },
   {
    "id": "CITY_SHOP02",
@@ -2464,7 +2569,8 @@
    "neighbours": [
     "CITY_BED",
     "CITY_MERCHANT_SHOP02"
-   ]
+   ],
+   "anchor": "NW_CITY_SHOP02_CENTER"
   },
   {
    "id": "CITY_SMFOREST",
@@ -2494,7 +2600,8 @@
    "neighbours": [
     "CITY_TO_LIGHTHOUSE",
     "CITY_SMFOREST_M"
-   ]
+   ],
+   "anchor": "NW_CITY_SMFOREST_06"
   },
   {
    "id": "CITY_SMFOREST_M",
@@ -2512,7 +2619,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_SMFOREST"
-   ]
+   ],
+   "anchor": "NW_CITY_SMFOREST_03_M"
   },
   {
    "id": "CITY_SMITH",
@@ -2532,7 +2640,8 @@
     "CITY_BED",
     "CITY_MAINSTREET",
     "CITY_MERCHANT_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_SMITH_COOL"
   },
   {
    "id": "CITY_TAVERN",
@@ -2561,7 +2670,8 @@
    ],
    "neighbours": [
     "CITY_MERCHANT_TAVERN01"
-   ]
+   ],
+   "anchor": "NW_CITY_TAVERN_IN_04"
   },
   {
    "id": "CITY_TO_FARM2",
@@ -2582,7 +2692,8 @@
     "FARM2_PATH",
     "FARM2_TO_TAVERN",
     "CITY_TO_FOREST"
-   ]
+   ],
+   "anchor": "NW_CITY_TO_FARM2_05"
   },
   {
    "id": "CITY_TO_FOREST",
@@ -2605,7 +2716,8 @@
     "CITYFOREST",
     "CITY_TO_LIGHTHOUSE",
     "CITY_ENTRANCE#2"
-   ]
+   ],
+   "anchor": "NW_CITY_TO_FOREST_04_04"
   },
   {
    "id": "CITY_TO_FOREST#2",
@@ -2621,7 +2733,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM2_TO_TAVERN_05"
   },
   {
    "id": "CITY_TO_FOREST#3",
@@ -2637,7 +2750,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_SMFOREST_01_01"
   },
   {
    "id": "CITY_TO_FOREST#4",
@@ -2653,7 +2767,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITYFOREST2_01"
   },
   {
    "id": "CITY_TO_KANAL",
@@ -2683,7 +2798,8 @@
    "neighbours": [
     "CITY_MERCHANT_SHOP03",
     "CITY_KANAL_ROOM"
-   ]
+   ],
+   "anchor": "NW_CITY_SHOP03_01_B"
   },
   {
    "id": "CITY_TO_LIGHTHOUSE",
@@ -2707,7 +2823,8 @@
     "CITY_SMFOREST",
     "LIGHTHOUSE_IN",
     "LIGHTHOUSE"
-   ]
+   ],
+   "anchor": "NW_CITY_TO_LIGHTHOUSE_13_MONSTER4"
   },
   {
    "id": "CITY_UPTOWNPARADE",
@@ -2726,7 +2843,8 @@
    "neighbours": [
     "CITY_UPTOWN_PATH",
     "CITY#3"
-   ]
+   ],
+   "anchor": "NW_CITY_UPTOWNPARADE_04"
   },
   {
    "id": "CITY_UPTOWN_GUARD",
@@ -2744,7 +2862,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_UPTOWN_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_UPTOWN_GUARD_MIDDLE"
   },
   {
    "id": "CITY_UPTOWN_HUT",
@@ -2785,7 +2904,8 @@
     "CITY_UPTOWN_PATH",
     "CITY_REICH03",
     "CITY_LEOMAR"
-   ]
+   ],
+   "anchor": "NW_CITY_UPTOWN_HUT_02_IN_B"
   },
   {
    "id": "CITY_UPTOWN_HUT#2",
@@ -2836,7 +2956,8 @@
     "CITY_UPTOWN_PATH",
     "CITY_LUTERO",
     "CITY_SHOP"
-   ]
+   ],
+   "anchor": "NW_CITY_UPTOWN_HUT_04_01"
   },
   {
    "id": "CITY_UPTOWN_JUDGE",
@@ -2866,7 +2987,8 @@
    "neighbours": [
     "CITY_RICHTER",
     "CITY_UPTOWN_PATH"
-   ]
+   ],
+   "anchor": "NW_CITY_UPTOWN_JUDGE_06"
   },
   {
    "id": "CITY_UPTOWN_PATH",
@@ -2893,7 +3015,8 @@
     "CITY_MAINSTREET",
     "CITY_LUTERO",
     "CITY_REICH02"
-   ]
+   ],
+   "anchor": "NW_CITY_UPTOWN_PATH_06_B"
   },
   {
    "id": "CITY_WAY",
@@ -2914,7 +3037,8 @@
     "WAITFORSHIP",
     "CITY_WAY#2",
     "SHIP_DECK"
-   ]
+   ],
+   "anchor": "NW_CITY_WAY_TO_SHIP_25"
   },
   {
    "id": "CITY_WAY#2",
@@ -2934,7 +3058,8 @@
     "CITY_PALCAMP",
     "CITY_HABOUR_POOR",
     "CITY_WAY"
-   ]
+   ],
+   "anchor": "NW_CITY_WAY_TO_SHIP_02"
   },
   {
    "id": "CITY_ZURIS",
@@ -2954,7 +3079,8 @@
     "CITY_MERCHANT_HUT",
     "CITY_BED#2",
     "CITY_MERCHANT_SHOP03"
-   ]
+   ],
+   "anchor": "NW_CITY_ZURIS_REGAL"
   },
   {
    "id": "CRYPT",
@@ -2976,7 +3102,8 @@
     "CRYPT_MONSTER04",
     "FARM4_WOOD_NEARPEASANT2",
     "CRYPT_MONSTER08"
-   ]
+   ],
+   "anchor": "CRYPT"
   },
   {
    "id": "CRYPT_IN",
@@ -3005,7 +3132,8 @@
    ],
    "neighbours": [
     "CRYPT"
-   ]
+   ],
+   "anchor": "NW_CRYPT_IN_07"
   },
   {
    "id": "CRYPT_MONSTER04",
@@ -3024,7 +3152,8 @@
    "neighbours": [
     "CRYPT_MONSTER06",
     "CRYPT"
-   ]
+   ],
+   "anchor": "NW_CRYPT_MONSTER04"
   },
   {
    "id": "CRYPT_MONSTER06",
@@ -3043,7 +3172,8 @@
    "neighbours": [
     "CRYPT_MONSTER04",
     "CRYPT_MONSTER08"
-   ]
+   ],
+   "anchor": "NW_CRYPT_MONSTER06"
   },
   {
    "id": "CRYPT_MONSTER08",
@@ -3062,7 +3192,8 @@
    "neighbours": [
     "CRYPT_MONSTER06",
     "CRYPT"
-   ]
+   ],
+   "anchor": "NW_CRYPT_MONSTER08"
   },
   {
    "id": "DEMENTOR_KDF",
@@ -3078,7 +3209,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_CITYWALL_FOREST_07"
   },
   {
    "id": "DEMENTOR_KDF#2",
@@ -3094,7 +3226,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_LAKE_GREG_TREASURE_01"
   },
   {
    "id": "EVT_CRYPT",
@@ -3110,7 +3243,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CRYPT_IN_07"
   },
   {
    "id": "FARM1_BANDITS",
@@ -3139,7 +3273,8 @@
    ],
    "neighbours": [
     "FARM1_PATH_BANDITS"
-   ]
+   ],
+   "anchor": "NW_FARM1_BANDITS_CAVE_07"
   },
   {
    "id": "FARM1_BLOODFLY",
@@ -3155,7 +3290,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_CITY_10_B"
   },
   {
    "id": "FARM1_BLOODFLY#2",
@@ -3171,7 +3307,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_CITYWALL_02_B"
   },
   {
    "id": "FARM1_CITYWALL",
@@ -3190,7 +3327,8 @@
    "neighbours": [
     "FARM1_PATH_BANDITS",
     "FARM1_CITYWALL#3"
-   ]
+   ],
+   "anchor": "NW_FARM1_CITYWALL_FOREST_06"
   },
   {
    "id": "FARM1_CITYWALL#2",
@@ -3208,7 +3346,8 @@
    "entrances": [],
    "neighbours": [
     "FARM1_PATH_CITY"
-   ]
+   ],
+   "anchor": "NW_FARM1_CITYWALL_RIGHT_03"
   },
   {
    "id": "FARM1_CITYWALL#3",
@@ -3227,7 +3366,8 @@
    "neighbours": [
     "FARM1_CITYWALL",
     "FARM1_PATH_CITY"
-   ]
+   ],
+   "anchor": "NW_FARM1_CITYWALL_02_B"
   },
   {
    "id": "FARM1_ENTRANCE",
@@ -3247,7 +3387,8 @@
     "FARM1_OUT",
     "FARM1_INHOUSE",
     "FARM1_INSTABLE"
-   ]
+   ],
+   "anchor": "NW_FARM1_ENTRANCE_01"
   },
   {
    "id": "FARM1_FIELD",
@@ -3267,7 +3408,8 @@
     "FARM1_OUT",
     "FARM1_PATH_CITY",
     "FARM1_PATH_SPAWN#2"
-   ]
+   ],
+   "anchor": "NW_FARM1_FIELD_01"
   },
   {
    "id": "FARM1_FIELD#2",
@@ -3285,7 +3427,8 @@
    "entrances": [],
    "neighbours": [
     "FARM1_PATH"
-   ]
+   ],
+   "anchor": "NW_FARM1_FIELD_09"
   },
   {
    "id": "FARM1_FORREST",
@@ -3301,7 +3444,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_CITYWALL_FOREST_04"
   },
   {
    "id": "FARM1_FORREST#2",
@@ -3317,7 +3461,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_CITYWALL_05"
   },
   {
    "id": "FARM1_GOBBO",
@@ -3333,7 +3478,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_CITYWALL_FOREST_14"
   },
   {
    "id": "FARM1_INHOUSE",
@@ -3362,7 +3508,8 @@
    ],
    "neighbours": [
     "FARM1_ENTRANCE"
-   ]
+   ],
+   "anchor": "NW_FARM1_INHOUSE_BED_02"
   },
   {
    "id": "FARM1_INSTABLE",
@@ -3391,7 +3538,8 @@
    ],
    "neighbours": [
     "FARM1_ENTRANCE"
-   ]
+   ],
+   "anchor": "NW_FARM1_INSTABLE"
   },
   {
    "id": "FARM1_MILL",
@@ -3409,7 +3557,8 @@
    "entrances": [],
    "neighbours": [
     "FARM1_OUT"
-   ]
+   ],
+   "anchor": "NW_FARM1_MILL_01"
   },
   {
    "id": "FARM1_OUT",
@@ -3433,7 +3582,8 @@
     "FARM1_MILL",
     "FARM1_PATH",
     "LITTLESTONEHENDGE"
-   ]
+   ],
+   "anchor": "NW_FARM1_OUT_06"
   },
   {
    "id": "FARM1_PATH",
@@ -3454,7 +3604,8 @@
     "FARM1_FIELD#2",
     "FARM1_OUT",
     "FARM1_SHEEP"
-   ]
+   ],
+   "anchor": "NW_FARM1_PATH_04"
   },
   {
    "id": "FARM1_PATH_BANDITS",
@@ -3473,7 +3624,8 @@
    "neighbours": [
     "FARM1_BANDITS",
     "FARM1_CITYWALL"
-   ]
+   ],
+   "anchor": "NW_FARM1_PATH_BANDITS_07"
   },
   {
    "id": "FARM1_PATH_CITY",
@@ -3501,7 +3653,8 @@
     "CITY_ENTRANCE",
     "XARDAS_MONSTER#2",
     "XARDAS_PATH"
-   ]
+   ],
+   "anchor": "NW_FARM1_PATH_CITY_SHEEP_01"
   },
   {
    "id": "FARM1_PATH_SHEEP",
@@ -3517,7 +3670,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_CITY_SHEEP_09"
   },
   {
    "id": "FARM1_PATH_SHEEP#2",
@@ -3533,7 +3687,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_CITY_SHEEP_01"
   },
   {
    "id": "FARM1_PATH_SPAWN",
@@ -3551,7 +3706,8 @@
    "entrances": [],
    "neighbours": [
     "FARM1_PATH_CITY"
-   ]
+   ],
+   "anchor": "NW_FARM1_PATH_SPAWN_01"
   },
   {
    "id": "FARM1_PATH_SPAWN#2",
@@ -3570,7 +3726,8 @@
    "neighbours": [
     "FARM1_FIELD",
     "FARM1_PATH_CITY"
-   ]
+   ],
+   "anchor": "NW_FARM1_PATH_SPAWN_05"
   },
   {
    "id": "FARM1_PATH_SPAWN#3",
@@ -3586,7 +3743,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_CITY_SHEEP_04"
   },
   {
    "id": "FARM1_SHEEP",
@@ -3606,7 +3764,8 @@
     "FARM1_OUT",
     "FARM1_PATH_CITY",
     "FARM1_PATH"
-   ]
+   ],
+   "anchor": "NW_FARM1_LOBART"
   },
   {
    "id": "FARM1_SHEEP#2",
@@ -3622,7 +3781,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_CITY_SHEEP_07"
   },
   {
    "id": "FARM1_WOLF",
@@ -3638,7 +3798,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_CITY_05_B"
   },
   {
    "id": "FARM2_FIELD",
@@ -3656,7 +3817,8 @@
    "entrances": [],
    "neighbours": [
     "FARM2_OUT"
-   ]
+   ],
+   "anchor": "NW_FARM2_FIELD_TANOK"
   },
   {
    "id": "FARM2_FIELD#2",
@@ -3674,7 +3836,8 @@
    "entrances": [],
    "neighbours": [
     "FARM2_PATH"
-   ]
+   ],
+   "anchor": "NW_FARM2_FIELD_04_C"
   },
   {
    "id": "FARM2_HOUSE",
@@ -3714,7 +3877,8 @@
    "neighbours": [
     "FARM2_PATH",
     "FARM2_OUT"
-   ]
+   ],
+   "anchor": "NW_FARM2_HOUSE_IN_02_B"
   },
   {
    "id": "FARM2_OUT",
@@ -3735,7 +3899,8 @@
     "FARM2_PATH",
     "FARM2_REST",
     "FARM2_HOUSE"
-   ]
+   ],
+   "anchor": "NW_FARM2_OUT_03"
   },
   {
    "id": "FARM2_PATH",
@@ -3756,7 +3921,8 @@
     "FARM2_FIELD#2",
     "CITY_TO_FARM2",
     "FARM2_HOUSE"
-   ]
+   ],
+   "anchor": "NW_FARM2_PATH_01"
   },
   {
    "id": "FARM2_REST",
@@ -3774,7 +3940,8 @@
    "entrances": [],
    "neighbours": [
     "FARM2_OUT"
-   ]
+   ],
+   "anchor": "NW_FARM2_BBQ"
   },
   {
    "id": "FARM2_SHEEP",
@@ -3790,7 +3957,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM2_OUT_02"
   },
   {
    "id": "FARM2_SLD",
@@ -3806,7 +3974,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM2_PATH_02"
   },
   {
    "id": "FARM2_TAVERNCAVE1",
@@ -3835,7 +4004,8 @@
    ],
    "neighbours": [
     "FARM2_TO_TAVERNCAVE1"
-   ]
+   ],
+   "anchor": "NW_FARM2_TAVERNCAVE1_03"
   },
   {
    "id": "FARM2_TO_TAVERN",
@@ -3855,7 +4025,8 @@
     "FARM2_TO_TAVERNCAVE1",
     "TAVERNE_GRPEASANT",
     "CITY_TO_FARM2"
-   ]
+   ],
+   "anchor": "NW_FARM2_TO_TAVERN_10"
   },
   {
    "id": "FARM2_TO_TAVERNCAVE1",
@@ -3874,7 +4045,8 @@
    "neighbours": [
     "FARM2_TO_TAVERN",
     "FARM2_TAVERNCAVE1"
-   ]
+   ],
+   "anchor": "NW_FARM2_TO_TAVERNCAVE1_03"
   },
   {
    "id": "FARM3_BIGWOOD",
@@ -3893,7 +4065,8 @@
    "neighbours": [
     "FARM3_BIGWOOD#3",
     "FARM3_BIGWOOD#2"
-   ]
+   ],
+   "anchor": "NW_FARM3_BIGWOOD_03_A"
   },
   {
    "id": "FARM3_BIGWOOD#2",
@@ -3914,7 +4087,8 @@
     "FARM3_BIGWOOD",
     "FARM3_PATH",
     "FARM3_MOUNTAINLAKE"
-   ]
+   ],
+   "anchor": "NW_FARM3_BIGWOOD_02"
   },
   {
    "id": "FARM3_BIGWOOD#3",
@@ -3932,7 +4106,8 @@
    "entrances": [],
    "neighbours": [
     "FARM3_BIGWOOD"
-   ]
+   ],
+   "anchor": "NW_FARM3_BIGWOOD_04"
   },
   {
    "id": "FARM3_FIELD",
@@ -3951,7 +4126,8 @@
    "neighbours": [
     "FARM3_OUT",
     "BIGMILL_FARM3"
-   ]
+   ],
+   "anchor": "NW_FARM3_FIELD_01"
   },
   {
    "id": "FARM3_HOUSE",
@@ -3971,7 +4147,8 @@
     "FARM3_PATH",
     "FARM3_STABLE",
     "FARM3_OUT"
-   ]
+   ],
+   "anchor": "NW_FARM3_HOUSE_IN"
   },
   {
    "id": "FARM3_MOUNTAINLAKE",
@@ -3990,7 +4167,8 @@
    "neighbours": [
     "FARM3_BIGWOOD#2",
     "FARM3_PATH_SMALLRIVER"
-   ]
+   ],
+   "anchor": "NW_FARM3_MOUNTAINLAKE_03"
   },
   {
    "id": "FARM3_OUT",
@@ -4011,7 +4189,8 @@
     "FARM3_PATH",
     "FARM3_HOUSE",
     "BIGMILL_FARM3"
-   ]
+   ],
+   "anchor": "NW_FARM3_OUT_06"
   },
   {
    "id": "FARM3_PATH",
@@ -4034,7 +4213,8 @@
     "FARM3_PATH#2",
     "FARM3_STABLE",
     "FARM3_BIGWOOD#2"
-   ]
+   ],
+   "anchor": "NW_FARM3_PATH_06"
   },
   {
    "id": "FARM3_PATH#2",
@@ -4054,7 +4234,8 @@
     "GREATPEASANT_FERNANDOSWEAPONS",
     "FARM3_PATH_MONSTER",
     "FARM3_PATH"
-   ]
+   ],
+   "anchor": "NW_FARM3_PATH_13"
   },
   {
    "id": "FARM3_PATH_MONSTER",
@@ -4072,7 +4253,8 @@
    "entrances": [],
    "neighbours": [
     "FARM3_PATH#2"
-   ]
+   ],
+   "anchor": "NW_FARM3_PATH_12_MONSTER_02"
   },
   {
    "id": "FARM3_PATH_SMALLRIVER",
@@ -4093,7 +4275,8 @@
     "FARM3_PATH_SMALLRIVERMID",
     "FARM3_MOUNTAINLAKE",
     "TO_PASS"
-   ]
+   ],
+   "anchor": "NW_FARM3_PATH_11_SMALLRIVER_19"
   },
   {
    "id": "FARM3_PATH_SMALLRIVERMID",
@@ -4111,7 +4294,8 @@
    "entrances": [],
    "neighbours": [
     "FARM3_PATH_SMALLRIVER"
-   ]
+   ],
+   "anchor": "NW_FARM3_PATH_11_SMALLRIVERMID_01"
   },
   {
    "id": "FARM3_REST",
@@ -4129,7 +4313,8 @@
    "entrances": [],
    "neighbours": [
     "FARM3_STABLE"
-   ]
+   ],
+   "anchor": "NW_FARM3_GREGTREASURE_01"
   },
   {
    "id": "FARM3_STABLE",
@@ -4149,7 +4334,8 @@
     "FARM3_HOUSE",
     "FARM3_REST",
     "FARM3_PATH"
-   ]
+   ],
+   "anchor": "NW_FARM3_STABLE_OUT_02"
   },
   {
    "id": "FARM4",
@@ -4172,7 +4358,8 @@
     "BIGFARM_LAKE",
     "FARM4_SHEEP",
     "FARM4_WOOD_MONSTER"
-   ]
+   ],
+   "anchor": "NW_FARM4_04"
   },
   {
    "id": "FARM4_FIELD",
@@ -4191,7 +4378,8 @@
    "neighbours": [
     "BIGFARM_FARM4",
     "BIGFARM_FIELD"
-   ]
+   ],
+   "anchor": "NW_FARM4_FIELD_02"
   },
   {
    "id": "FARM4_FLEEDMT",
@@ -4209,7 +4397,8 @@
    "entrances": [],
    "neighbours": [
     "BIGFARM_FARM4"
-   ]
+   ],
+   "anchor": "NW_FLEEDMT_KAP3"
   },
   {
    "id": "FARM4_IN",
@@ -4238,7 +4427,8 @@
    ],
    "neighbours": [
     "FARM4"
-   ]
+   ],
+   "anchor": "NW_FARM4_IN_03"
   },
   {
    "id": "FARM4_SHEEP",
@@ -4256,7 +4446,8 @@
    "entrances": [],
    "neighbours": [
     "FARM4"
-   ]
+   ],
+   "anchor": "NW_FARM4_BALTHASAR"
   },
   {
    "id": "FARM4_WOOD_MONSTER",
@@ -4280,7 +4471,8 @@
     "BIGFARM_FARM4",
     "SAGITTA_CAVE",
     "FARM4"
-   ]
+   ],
+   "anchor": "NW_FARM4_WOOD_MONSTER_03"
   },
   {
    "id": "FARM4_WOOD_MONSTER#2",
@@ -4300,7 +4492,8 @@
     "FARM4_WOOD_RANGERBANDITS",
     "FARM4_WOOD_MONSTER",
     "TAVERNE_TROLLAREA_BANDIT03"
-   ]
+   ],
+   "anchor": "NW_FARM4_WOOD_MONSTER_N_1_MONSTER"
   },
   {
    "id": "FARM4_WOOD_NEARPEASANT2",
@@ -4321,7 +4514,8 @@
     "BIGFARM_FIELD",
     "CRYPT",
     "BIGFARM_FARM4"
-   ]
+   ],
+   "anchor": "NW_FARM4_WOOD_NEARPEASANT2_10"
   },
   {
    "id": "FARM4_WOOD_NEARPEASANT7",
@@ -4340,7 +4534,8 @@
    "neighbours": [
     "FARM4",
     "FARM4_WOOD_MONSTER"
-   ]
+   ],
+   "anchor": "NW_FARM4_WOOD_NEARPEASANT7"
   },
   {
    "id": "FARM4_WOOD_RANGERBANDITS",
@@ -4359,7 +4554,8 @@
    "neighbours": [
     "FARM4_WOOD_MONSTER#2",
     "TAVERNE_TROLLAREA_BANDIT03"
-   ]
+   ],
+   "anchor": "NW_FARM4_WOOD_RANGERBANDITS_02"
   },
   {
    "id": "FISHERCOAST",
@@ -4375,7 +4571,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_PIRATESCAMP_03"
   },
   {
    "id": "FOREST_CAVE1",
@@ -4404,7 +4601,8 @@
    ],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_CAVE1_IN_01"
   },
   {
    "id": "FOREST_CONNECT",
@@ -4425,7 +4623,8 @@
     "TAVERNE",
     "SHRINE_MONSTER",
     "TAVERN_TO"
-   ]
+   ],
+   "anchor": "NW_FOREST_CROSS_MONASTERY"
   },
   {
    "id": "FOREST_PATH",
@@ -4464,7 +4663,8 @@
     "FOREST_PATH_MONSTER#9",
     "FOREST_PATH_MOVEMENTF",
     "FOREST_PATH_MOVEMENT6"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_73"
   },
   {
    "id": "FOREST_PATH#2",
@@ -4483,7 +4683,8 @@
    "neighbours": [
     "FOREST_PATH",
     "FOREST_PATH_M#3"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_82"
   },
   {
    "id": "FOREST_PATH_M",
@@ -4501,7 +4702,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_62_M"
   },
   {
    "id": "FOREST_PATH_M#2",
@@ -4519,7 +4721,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_66_M"
   },
   {
    "id": "FOREST_PATH_M#3",
@@ -4537,7 +4740,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH#2"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_82_M"
   },
   {
    "id": "FOREST_PATH_M#4",
@@ -4555,7 +4759,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_25_01_M"
   },
   {
    "id": "FOREST_PATH_M#5",
@@ -4574,7 +4779,8 @@
    "neighbours": [
     "FOREST_PATH_MONSTER2",
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_04_16_M_N_03"
   },
   {
    "id": "FOREST_PATH_MONSTER",
@@ -4593,7 +4799,8 @@
    "neighbours": [
     "FOREST_PATH",
     "FOREST_PATH_MONSTER23"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_21_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#10",
@@ -4611,7 +4818,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_35_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#2",
@@ -4629,7 +4837,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_04_16_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#3",
@@ -4647,7 +4856,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_04_14_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#4",
@@ -4666,7 +4876,8 @@
    "neighbours": [
     "FOREST_PATH_NAVIGATION",
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_31_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#5",
@@ -4685,7 +4896,8 @@
    "neighbours": [
     "FOREST_PATH_MOVEMENT8",
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_35_01_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#6",
@@ -4703,7 +4915,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_38_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#7",
@@ -4721,7 +4934,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_56_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#8",
@@ -4739,7 +4953,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_66_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER#9",
@@ -4757,7 +4972,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_75_2_MONSTER"
   },
   {
    "id": "FOREST_PATH_MONSTER2",
@@ -4776,7 +4992,8 @@
    "neighbours": [
     "FOREST_PATH",
     "FOREST_PATH_M#5"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_04_16_MONSTER2"
   },
   {
    "id": "FOREST_PATH_MONSTER23",
@@ -4794,7 +5011,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH_MONSTER"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_72_MONSTER23"
   },
   {
    "id": "FOREST_PATH_MOVEMENT15",
@@ -4812,7 +5030,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH_MOVEMENT8"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_80_1_MOVEMENT15"
   },
   {
    "id": "FOREST_PATH_MOVEMENT6",
@@ -4831,7 +5050,8 @@
    "neighbours": [
     "FOREST_PATH",
     "FOREST_PATH_MOVEMENT8"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_80_1_MOVEMENT6"
   },
   {
    "id": "FOREST_PATH_MOVEMENT8",
@@ -4851,7 +5071,8 @@
     "FOREST_PATH_MONSTER#5",
     "FOREST_PATH_MOVEMENT6",
     "FOREST_PATH_MOVEMENT15"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_80_1_MOVEMENT8_M3"
   },
   {
    "id": "FOREST_PATH_MOVEMENTF",
@@ -4869,7 +5090,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_80_1_MOVEMENTF"
   },
   {
    "id": "FOREST_PATH_NAVIGATION",
@@ -4888,7 +5110,8 @@
    "neighbours": [
     "FOREST_PATH_NAVIGATION3",
     "FOREST_PATH_MONSTER#4"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_31_NAVIGATION_M"
   },
   {
    "id": "FOREST_PATH_NAVIGATION10",
@@ -4907,7 +5130,8 @@
    "neighbours": [
     "FOREST_PATH_NAVIGATION16",
     "FOREST_PATH_NAVIGATION3"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_31_NAVIGATION11"
   },
   {
    "id": "FOREST_PATH_NAVIGATION16",
@@ -4926,7 +5150,8 @@
    "neighbours": [
     "FOREST_PATH_NAVIGATION10",
     "FOREST_PATH_NAVIGATION19"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_31_NAVIGATION16"
   },
   {
    "id": "FOREST_PATH_NAVIGATION19",
@@ -4944,7 +5169,8 @@
    "entrances": [],
    "neighbours": [
     "FOREST_PATH_NAVIGATION16"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_31_NAVIGATION19"
   },
   {
    "id": "FOREST_PATH_NAVIGATION3",
@@ -4963,7 +5189,8 @@
    "neighbours": [
     "FOREST_PATH_NAVIGATION",
     "FOREST_PATH_NAVIGATION10"
-   ]
+   ],
+   "anchor": "NW_FOREST_PATH_31_NAVIGATION4"
   },
   {
    "id": "FOREST_VINOSKELLEREI",
@@ -4992,7 +5219,8 @@
    ],
    "neighbours": [
     "FOREST_PATH"
-   ]
+   ],
+   "anchor": "NW_FOREST_VINOSKELLEREI_02"
   },
   {
    "id": "GAERTNER",
@@ -5008,7 +5236,8 @@
    "kind": "yard",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_CITYHALL_07"
   },
   {
    "id": "GREATPEASANT_FERNANDOSWEAPONS",
@@ -5032,7 +5261,8 @@
     "TROLLAREA_PATH",
     "TROLLAREA#2",
     "TAVERNE_TROLLAREA"
-   ]
+   ],
+   "anchor": "NW_GREATPEASANT_CONNECT_FOREST_01"
   },
   {
    "id": "HAFEN",
@@ -5050,7 +5280,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_HABOUR"
-   ]
+   ],
+   "anchor": "HAFEN"
   },
   {
    "id": "HERB",
@@ -5066,7 +5297,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_DITCH_09"
   },
   {
    "id": "HERB#2",
@@ -5085,7 +5317,8 @@
    "neighbours": [
     "MONASTERY_HERB",
     "MONASTERY_PLACE"
-   ]
+   ],
+   "anchor": "NW_MONSTERY_HERB_01"
   },
   {
    "id": "INSEL",
@@ -5101,7 +5334,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_WAY_TO_SHIP_FISCHER_06"
   },
   {
    "id": "INSEL#2",
@@ -5117,7 +5351,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_WAY_TO_SHIP_FISCHER_06"
   },
   {
    "id": "KANAL_RATTEN",
@@ -5133,7 +5368,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_KANAL_ROOM_01_01"
   },
   {
    "id": "KASERN",
@@ -5149,7 +5385,8 @@
    "kind": "camp",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_HABOUR_KASERN_BARRACKS02_ENTRY"
   },
   {
    "id": "KDF_LIBRARY",
@@ -5167,7 +5404,8 @@
    "entrances": [],
    "neighbours": [
     "MONASTERY_SEALROOM"
-   ]
+   ],
+   "anchor": "NW_KDF_LIBRARY_12"
   },
   {
    "id": "LAKE_",
@@ -5188,7 +5426,8 @@
     "BIGFARM_LAKE_MONSTER#2",
     "BIGFARM_LAKE_MONSTER",
     "BIGFARM_LAKE"
-   ]
+   ],
+   "anchor": "NW_LAKE__WATER_05"
   },
   {
    "id": "LIGHTHOUSE",
@@ -5206,7 +5445,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_TO_LIGHTHOUSE"
-   ]
+   ],
+   "anchor": "LIGHTHOUSE"
   },
   {
    "id": "LIGHTHOUSE_IN",
@@ -5224,7 +5464,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_TO_LIGHTHOUSE"
-   ]
+   ],
+   "anchor": "NW_LIGHTHOUSE_IN_07"
   },
   {
    "id": "LITTLESTONEHENDGE",
@@ -5242,7 +5483,8 @@
    "entrances": [],
    "neighbours": [
     "FARM1_OUT"
-   ]
+   ],
+   "anchor": "NW_LITTLESTONEHENDGE_01"
   },
   {
    "id": "LL_ADD",
@@ -5260,7 +5502,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_LL_ADD_03"
   },
   {
    "id": "MAGECAVE",
@@ -5289,7 +5532,8 @@
    ],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_MAGECAVE_GUARD_01"
   },
   {
    "id": "MALAKSVERSTECK",
@@ -5305,7 +5549,8 @@
    "kind": "camp",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_BIGMILL_MALAKSVERSTECK_05"
   },
   {
    "id": "MEDIUMFOREST_KAP2",
@@ -5321,7 +5566,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_04_8"
   },
   {
    "id": "MEDIUMFOREST_KAP2#2",
@@ -5337,7 +5583,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_03"
   },
   {
    "id": "MEDIUMFOREST_KAP2#3",
@@ -5353,7 +5600,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_07"
   },
   {
    "id": "MEDIUMFOREST_KAP2#4",
@@ -5369,7 +5617,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_CAVE1_IN_06"
   },
   {
    "id": "MEDIUMFOREST_KAP3",
@@ -5385,7 +5634,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_04_16_M_N_03"
   },
   {
    "id": "MEDIUMFOREST_KAP3#2",
@@ -5401,7 +5651,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_JAEGER_06"
   },
   {
    "id": "MEDIUMFOREST_KAP3#3",
@@ -5417,7 +5668,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_27_04"
   },
   {
    "id": "MEDIUMFOREST_KAP3#4",
@@ -5433,7 +5685,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_62_05"
   },
   {
    "id": "MEDIUMFOREST_KAP3#5",
@@ -5449,7 +5702,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_30"
   },
   {
    "id": "MONASTERY",
@@ -5470,7 +5724,8 @@
     "MONASTERY_BRIDGE",
     "MONASTERY_CELLAR",
     "MONASTERY_GRASS"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_TRAIN_02"
   },
   {
    "id": "MONASTERY_BRIDGE",
@@ -5489,7 +5744,8 @@
    "neighbours": [
     "PATH_TO_MONASTERY",
     "MONASTERY"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_BRIDGE_03"
   },
   {
    "id": "MONASTERY_CELLAR",
@@ -5510,7 +5766,8 @@
     "MONASTERY",
     "MONASTERY_SEALROOM",
     "MONASTERY_RUNEMAKER"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_CELLAR_04"
   },
   {
    "id": "MONASTERY_CHAPELL",
@@ -5539,7 +5796,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_CHAPELL_03"
   },
   {
    "id": "MONASTERY_CHURCH",
@@ -5579,7 +5837,8 @@
    "neighbours": [
     "MONASTERY_THRONE",
     "MONASTERY_PLACE"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_CHURCH_03"
   },
   {
    "id": "MONASTERY_CORRIDOR",
@@ -5602,7 +5861,8 @@
     "MONASTERY_NOVICE02",
     "MONASTERY_NOVICE01",
     "MONASTERY_RUNEMAKER"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_CORRIDOR_04"
   },
   {
    "id": "MONASTERY_CORRIDOR#2",
@@ -5625,7 +5885,8 @@
     "MONASTERY_MAGE02",
     "MONASTERY_NOVICE03",
     "MONASTERY_WINEMAKER"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_CORRIDOR_10"
   },
   {
    "id": "MONASTERY_GRASS",
@@ -5644,7 +5905,8 @@
    "neighbours": [
     "MONASTERY_PLACE",
     "MONASTERY"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_GRASS_01"
   },
   {
    "id": "MONASTERY_HERB",
@@ -5662,7 +5924,8 @@
    "entrances": [],
    "neighbours": [
     "HERB#2"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_HERB_05"
   },
   {
    "id": "MONASTERY_MAGE01",
@@ -5691,7 +5954,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_MAGE01_012"
   },
   {
    "id": "MONASTERY_MAGE02",
@@ -5720,7 +5984,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR#2"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_MAGE02_BED_01"
   },
   {
    "id": "MONASTERY_NOVICE01",
@@ -5749,7 +6014,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_NOVICE01_02"
   },
   {
    "id": "MONASTERY_NOVICE02",
@@ -5778,7 +6044,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_NOVICE02_02"
   },
   {
    "id": "MONASTERY_NOVICE03",
@@ -5807,7 +6074,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR#2"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_NOVICE03_02"
   },
   {
    "id": "MONASTERY_NOVICE04",
@@ -5836,7 +6104,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR#2"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_NOVICE04_02"
   },
   {
    "id": "MONASTERY_PLACE",
@@ -5860,7 +6129,8 @@
     "HERB#2",
     "MONASTERY_SHEEP",
     "MONASTERY"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_PLACE_02"
   },
   {
    "id": "MONASTERY_RUNEMAKER",
@@ -5890,7 +6160,8 @@
    "neighbours": [
     "MONASTERY_CORRIDOR",
     "MONASTERY_CELLAR"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_RUNEMAKER_09"
   },
   {
    "id": "MONASTERY_SEALROOM",
@@ -5909,7 +6180,8 @@
    "neighbours": [
     "KDF_LIBRARY",
     "MONASTERY_CELLAR"
-   ]
+   ],
+   "anchor": "LAMP"
   },
   {
    "id": "MONASTERY_SHEEP",
@@ -5927,7 +6199,8 @@
    "entrances": [],
    "neighbours": [
     "MONASTERY_PLACE"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_SHEEP_05"
   },
   {
    "id": "MONASTERY_SHRINE",
@@ -5945,7 +6218,8 @@
    "entrances": [],
    "neighbours": [
     "PATH_TO_MONASTERY"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_SHRINE_05"
   },
   {
    "id": "MONASTERY_STAIRS",
@@ -5975,7 +6249,8 @@
    "neighbours": [
     "MONASTERY_CELLAR",
     "MONASTERY_CORRIDOR#2"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_STAIRS_02"
   },
   {
    "id": "MONASTERY_THRONE",
@@ -5993,7 +6268,8 @@
    "entrances": [],
    "neighbours": [
     "MONASTERY_CHURCH"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_THRONE_01"
   },
   {
    "id": "MONASTERY_WINEMAKER",
@@ -6022,7 +6298,8 @@
    ],
    "neighbours": [
     "MONASTERY_CORRIDOR#2"
-   ]
+   ],
+   "anchor": "NW_MONASTERY_WINEMAKER_01"
   },
   {
    "id": "MONSTERMILL",
@@ -6038,7 +6315,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM4_WOOD_NEARPEASANT2_6_MONSTERMILL"
   },
   {
    "id": "MONSTERMILL#2",
@@ -6054,7 +6332,8 @@
    "kind": "field",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM4_WOOD_NEARPEASANT2_6_MONSTERMILL2"
   },
   {
    "id": "OV",
@@ -6070,7 +6349,8 @@
    "kind": "street",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_UPTOWN_PATH_12"
   },
   {
    "id": "OV#2",
@@ -6086,7 +6366,8 @@
    "kind": "street",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_SMALLTALK_05"
   },
   {
    "id": "PALADIN",
@@ -6102,7 +6383,8 @@
    "kind": "house",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_UPTOWN_HUT_03_01"
   },
   {
    "id": "PASS",
@@ -6122,7 +6404,8 @@
     "PASS_ORKS",
     "PASS_SECRET",
     "TO_PASS"
-   ]
+   ],
+   "anchor": "NW_PASS_08"
   },
   {
    "id": "PASS_GOBBO",
@@ -6138,7 +6421,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_PASS_GRAT_05"
   },
   {
    "id": "PASS_GRAT",
@@ -6156,7 +6440,8 @@
    "entrances": [],
    "neighbours": [
     "PASS_SECRET"
-   ]
+   ],
+   "anchor": "NW_PASS_GRAT_03"
   },
   {
    "id": "PASS_ORK",
@@ -6172,7 +6457,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_PASS_ORKS_02"
   },
   {
    "id": "PASS_ORKS",
@@ -6190,7 +6476,8 @@
    "entrances": [],
    "neighbours": [
     "PASS"
-   ]
+   ],
+   "anchor": "NW_PASS_ORKS_02_B"
   },
   {
    "id": "PASS_SECRET",
@@ -6209,7 +6496,8 @@
    "neighbours": [
     "PASS_GRAT",
     "PASS"
-   ]
+   ],
+   "anchor": "NW_PASS_SECRET_01"
   },
   {
    "id": "PASS_WOLF",
@@ -6225,7 +6513,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_PASS_06"
   },
   {
    "id": "PASS_WOLF#2",
@@ -6241,7 +6530,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_PASS_11"
   },
   {
    "id": "PATH_TO_MONASTER",
@@ -6259,7 +6549,8 @@
    "entrances": [],
    "neighbours": [
     "PATH_TO_MONASTERY"
-   ]
+   ],
+   "anchor": "NW_PATH_TO_MONASTER_AREA_05"
   },
   {
    "id": "PATH_TO_MONASTERY",
@@ -6280,7 +6571,8 @@
     "SHRINE_MONSTER",
     "MONASTERY_SHRINE",
     "MONASTERY_BRIDGE"
-   ]
+   ],
+   "anchor": "NW_PATH_TO_MONASTERY_06"
   },
   {
    "id": "PUFF",
@@ -6299,7 +6591,8 @@
    "neighbours": [
     "CITY_PUFF",
     "CITY_HABOUR_PUFF"
-   ]
+   ],
+   "anchor": "NW_PUFF_DANCE"
   },
   {
    "id": "RICHTER",
@@ -6315,7 +6608,8 @@
    "kind": "yard",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_CITYHALL_10"
   },
   {
    "id": "RITUALFOREST_CAVE",
@@ -6344,7 +6638,8 @@
    ],
    "neighbours": [
     "TROLLAREA_RITUALFOREST"
-   ]
+   ],
+   "anchor": "NW_RITUALFOREST_CAVE_05"
   },
   {
    "id": "RUMBOLD_FLUCHT2",
@@ -6362,7 +6657,8 @@
    "entrances": [],
    "neighbours": [
     "BIGMILL_FARM3"
-   ]
+   ],
+   "anchor": "NW_RUMBOLD_FLUCHT2"
   },
   {
    "id": "RUMBOLD_FLUCHT3",
@@ -6382,7 +6678,8 @@
     "TAVERNE",
     "TAVERNE_GRPEASANT",
     "TAVERNE_BIGFARM"
-   ]
+   ],
+   "anchor": "NW_RUMBOLD_FLUCHT3"
   },
   {
    "id": "SAGITTA_CAVE",
@@ -6401,7 +6698,8 @@
    "neighbours": [
     "SAGITTA_MOREMONSTER",
     "FARM4_WOOD_MONSTER"
-   ]
+   ],
+   "anchor": "NW_SAGITTA_CAVE_05"
   },
   {
    "id": "SAGITTA_MOREMONSTER",
@@ -6420,7 +6718,8 @@
    "neighbours": [
     "FARM4_WOOD_MONSTER",
     "SAGITTA_CAVE"
-   ]
+   ],
+   "anchor": "NW_SAGITTA_MOREMONSTER_02"
   },
   {
    "id": "SHAMAN",
@@ -6436,7 +6735,8 @@
    "kind": "camp",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_PASS_ORKS_02"
   },
   {
    "id": "SHELLSPAWN_CITY",
@@ -6452,7 +6752,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_PIRATESCAMP_01"
   },
   {
    "id": "SHELLSPAWN_CITY#2",
@@ -6468,7 +6769,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_35_09"
   },
   {
    "id": "SHELLSPAWN_CITY#3",
@@ -6484,7 +6786,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_WAY_TO_SHIP_08"
   },
   {
    "id": "SHELLSPAWN_CITY#4",
@@ -6500,7 +6803,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM1_PATH_BANDITS_05"
   },
   {
    "id": "SHIP",
@@ -6518,7 +6822,8 @@
    "entrances": [],
    "neighbours": [
     "SHIP_DECK"
-   ]
+   ],
+   "anchor": "SHIP"
   },
   {
    "id": "SHIPWRECK",
@@ -6534,7 +6839,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FOREST_PATH_35_08"
   },
   {
    "id": "SHIP_CREW",
@@ -6552,7 +6858,8 @@
    "entrances": [],
    "neighbours": [
     "SHIP_DECK"
-   ]
+   ],
+   "anchor": "SHIP_CREW_04"
   },
   {
    "id": "SHIP_DECK",
@@ -6574,7 +6881,8 @@
     "SHIP_SMITH",
     "SHIP",
     "CITY_WAY"
-   ]
+   ],
+   "anchor": "SHIP_DECK_13"
   },
   {
    "id": "SHIP_IN",
@@ -6603,7 +6911,8 @@
    ],
    "neighbours": [
     "SHIP_DECK"
-   ]
+   ],
+   "anchor": "SHIP_IN_01"
   },
   {
    "id": "SHIP_SMITH",
@@ -6621,7 +6930,8 @@
    "entrances": [],
    "neighbours": [
     "SHIP_DECK"
-   ]
+   ],
+   "anchor": "SHIP_SMITH_FIRE"
   },
   {
    "id": "SHRINE_MONSTER",
@@ -6640,7 +6950,8 @@
    "neighbours": [
     "FOREST_CONNECT",
     "PATH_TO_MONASTERY"
-   ]
+   ],
+   "anchor": "NW_SHRINE_MONSTER"
   },
   {
    "id": "SPIELPLATZ",
@@ -6656,7 +6967,8 @@
    "kind": "camp",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CASTLEMINE_TOWER__MOBSI"
   },
   {
    "id": "TAVERN01",
@@ -6672,7 +6984,8 @@
    "kind": "house",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_HABOUR_TAVERN01_01"
   },
   {
    "id": "TAVERNE",
@@ -6695,7 +7008,8 @@
     "TAVERNE_BIGFARM",
     "GREATPEASANT_FERNANDOSWEAPONS",
     "TAVERNE_GRPEASANT"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_RUKHAR"
   },
   {
    "id": "TAVERNE_BIGFARM",
@@ -6718,7 +7032,8 @@
     "RUMBOLD_FLUCHT3",
     "TAVERNE",
     "TAVERNE_GRPEASANT"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_BIGFARM_MONSTER_01"
   },
   {
    "id": "TAVERNE_GRPEASANT",
@@ -6740,7 +7055,8 @@
     "GREATPEASANT_FERNANDOSWEAPONS",
     "FARM2_TO_TAVERN",
     "TAVERNE"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_CROSS"
   },
   {
    "id": "TAVERNE_IN",
@@ -6769,7 +7085,8 @@
    ],
    "neighbours": [
     "TAVERNE"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_IN_06"
   },
   {
    "id": "TAVERNE_TROLLAREA",
@@ -6792,7 +7109,8 @@
     "TAVERNE_BIGFARM",
     "TAVERNE_TROLLAREA_MONSTER",
     "TAVERNE_TROLLAREA_BANDIT03"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_TROLLAREA_MONSTER_03_01"
   },
   {
    "id": "TAVERNE_TROLLAREA_BANDIT03",
@@ -6812,7 +7130,8 @@
     "FARM4_WOOD_RANGERBANDITS",
     "FARM4_WOOD_MONSTER#2",
     "TAVERNE_TROLLAREA"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_TROLLAREA_BANDIT03_02"
   },
   {
    "id": "TAVERNE_TROLLAREA_MONSTER",
@@ -6830,7 +7149,8 @@
    "entrances": [],
    "neighbours": [
     "TAVERNE_TROLLAREA"
-   ]
+   ],
+   "anchor": "NW_TAVERNE_TROLLAREA_MONSTER_05_01M1"
   },
   {
    "id": "TAVERN_TO",
@@ -6849,7 +7169,8 @@
    "neighbours": [
     "CITY_TO_FOREST",
     "FOREST_CONNECT"
-   ]
+   ],
+   "anchor": "NW_TAVERN_TO_FOREST_04"
   },
   {
    "id": "TO_PASS",
@@ -6868,7 +7189,8 @@
    "neighbours": [
     "PASS",
     "FARM3_PATH_SMALLRIVER"
-   ]
+   ],
+   "anchor": "NW_TO_PASS_01"
   },
   {
    "id": "TROLLAREA",
@@ -6886,7 +7208,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_GOBBO_01"
   },
   {
    "id": "TROLLAREA#2",
@@ -6907,7 +7230,8 @@
     "TROLLAREA_PATH",
     "GREATPEASANT_FERNANDOSWEAPONS",
     "TROLLAREA_PLANE"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PLANE_10"
   },
   {
    "id": "TROLLAREA#3",
@@ -6925,7 +7249,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RATS_01"
   },
   {
    "id": "TROLLAREA_BRIGDE",
@@ -6943,7 +7268,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_BRIGDE_CENTRE"
   },
   {
    "id": "TROLLAREA_NOVCHASE",
@@ -6961,7 +7287,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_NOVCHASE_01"
   },
   {
    "id": "TROLLAREA_PATH",
@@ -6999,7 +7326,8 @@
     "TROLLAREA_PATH_MONSTER#5",
     "TROLLAREA_RIVERSIDE",
     "TROLLAREA"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PATH_15"
   },
   {
    "id": "TROLLAREA_PATH_MONSTER",
@@ -7018,7 +7346,8 @@
    "neighbours": [
     "TROLLAREA_PATH",
     "TROLLAREA_TROLLLAKECAVE"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PATH_71_MONSTER2"
   },
   {
    "id": "TROLLAREA_PATH_MONSTER#2",
@@ -7036,7 +7365,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PATH_15_MONSTER"
   },
   {
    "id": "TROLLAREA_PATH_MONSTER#3",
@@ -7054,7 +7384,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PATH_22_MONSTER"
   },
   {
    "id": "TROLLAREA_PATH_MONSTER#4",
@@ -7072,7 +7403,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PATH_38_MONSTER"
   },
   {
    "id": "TROLLAREA_PATH_MONSTER#5",
@@ -7090,7 +7422,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PATH_66_MONSTER"
   },
   {
    "id": "TROLLAREA_PLANE",
@@ -7110,7 +7443,8 @@
     "TROLLAREA_PATH",
     "TROLLAREA_RIVERSIDE#2",
     "TROLLAREA#2"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PLANE_07"
   },
   {
    "id": "TROLLAREA_PLANE#2",
@@ -7128,7 +7462,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PLANE_05"
   },
   {
    "id": "TROLLAREA_PLANE#3",
@@ -7146,7 +7481,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PLANE_01"
   },
   {
    "id": "TROLLAREA_PLANE#4",
@@ -7164,7 +7500,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PLANE_04"
   },
   {
    "id": "TROLLAREA_PORTAL",
@@ -7182,7 +7519,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PORTALTEMPEL"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PORTAL_07"
   },
   {
    "id": "TROLLAREA_PORTALTEMPEL",
@@ -7224,7 +7562,8 @@
     "TROLLAREA_PORTALTEMPEL_A",
     "TROLLAREA_PORTAL",
     "TROLLAREA_RUINS"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PORTALTEMPEL_19"
   },
   {
    "id": "TROLLAREA_PORTALTEMPEL_A",
@@ -7242,7 +7581,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PORTALTEMPEL"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PORTALTEMPEL_17_A"
   },
   {
    "id": "TROLLAREA_PORTALTEMPEL_RITUAL",
@@ -7260,7 +7600,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_PORTALTEMPEL"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_PORTALTEMPEL_RITUAL_07"
   },
   {
    "id": "TROLLAREA_RITUAL",
@@ -7278,7 +7619,8 @@
    "entrances": [],
    "neighbours": [
     "TROLLAREA_RITUALPATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RITUAL_10"
   },
   {
    "id": "TROLLAREA_RITUALFOREST",
@@ -7299,7 +7641,8 @@
     "TROLLAREA_TROLLROCKCAVE",
     "TROLLAREA_RITUALPATH",
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RITUALFOREST_03"
   },
   {
    "id": "TROLLAREA_RITUALPATH",
@@ -7318,7 +7661,8 @@
    "neighbours": [
     "TROLLAREA_RITUAL",
     "TROLLAREA_RITUALFOREST"
-   ]
+   ],
+   "anchor": "RITUAL"
   },
   {
    "id": "TROLLAREA_RIVERSIDE",
@@ -7337,7 +7681,8 @@
    "neighbours": [
     "TROLLAREA_PATH",
     "TROLLAREA_RIVERSIDECAVE"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RIVERSIDE_03"
   },
   {
    "id": "TROLLAREA_RIVERSIDE#2",
@@ -7356,7 +7701,8 @@
    "neighbours": [
     "TROLLAREA#2",
     "TROLLAREA_PLANE"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RIVERSIDE_08"
   },
   {
    "id": "TROLLAREA_RIVERSIDECAVE",
@@ -7385,7 +7731,8 @@
    ],
    "neighbours": [
     "TROLLAREA_RIVERSIDE"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RIVERSIDECAVE_03"
   },
   {
    "id": "TROLLAREA_RUINS",
@@ -7405,7 +7752,8 @@
     "TROLLAREA_PATH",
     "TROLLAREA_PORTALTEMPEL",
     "TROLLAREA_RUINS_CAVE"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RUINS_35"
   },
   {
    "id": "TROLLAREA_RUINS_CAVE",
@@ -7434,7 +7782,8 @@
    ],
    "neighbours": [
     "TROLLAREA_RUINS"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_RUINS_CAVE_10"
   },
   {
    "id": "TROLLAREA_SEA",
@@ -7450,7 +7799,8 @@
    "kind": "shore",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_TROLLAREA_PATH_12"
   },
   {
    "id": "TROLLAREA_TROLLLAKECAVE",
@@ -7479,7 +7829,8 @@
    ],
    "neighbours": [
     "TROLLAREA_PATH_MONSTER"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_TROLLLAKECAVE_04"
   },
   {
    "id": "TROLLAREA_TROLLLAKECAVE#2",
@@ -7495,7 +7846,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_TROLLAREA_TROLLROCKCAVE_10"
   },
   {
    "id": "TROLLAREA_TROLLROCKCAVE",
@@ -7524,7 +7876,8 @@
    ],
    "neighbours": [
     "TROLLAREA_RITUALFOREST"
-   ]
+   ],
+   "anchor": "NW_TROLLAREA_TROLLROCKCAVE_04"
   },
   {
    "id": "TT_ADD",
@@ -7542,7 +7895,8 @@
    "entrances": [],
    "neighbours": [
     "TAVERNE_TROLLAREA"
-   ]
+   ],
+   "anchor": "NW_TT_ADD_03"
   },
   {
    "id": "VATRAS",
@@ -7558,7 +7912,8 @@
    "kind": "street",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_MERCHANT_TEMPLE_FRONT"
   },
   {
    "id": "WAITFORSHIP",
@@ -7576,7 +7931,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_WAY"
-   ]
+   ],
+   "anchor": "WAITFORSHIP"
   },
   {
    "id": "WAITFOR_SHIP",
@@ -7594,7 +7950,8 @@
    "entrances": [],
    "neighbours": [
     "CITY_WAY"
-   ]
+   ],
+   "anchor": "NW_WAITFOR_SHIP_CAPTAIN"
   },
   {
    "id": "WATCH",
@@ -7610,7 +7967,8 @@
    "kind": "street",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_CITY_WATCH_FIGHT_02"
   },
   {
    "id": "WEAPON",
@@ -7629,7 +7987,8 @@
    "neighbours": [
     "CITY_MERCHANT_PATH",
     "CITY_MERCHANT"
-   ]
+   ],
+   "anchor": "MARKT"
   },
   {
    "id": "WOLF_PASS",
@@ -7645,7 +8004,8 @@
    "kind": "road",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_PASS_SECRET_16"
   },
   {
    "id": "WOOD_MONSTER",
@@ -7661,7 +8021,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM4_WOOD_MONSTER_01"
   },
   {
    "id": "WOOD_MONSTER#2",
@@ -7677,7 +8038,8 @@
    "kind": "forest",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_FARM4_WOOD_MONSTER_10"
   },
   {
    "id": "WP_BIGFARM",
@@ -7706,7 +8068,8 @@
    ],
    "neighbours": [
     "TROLLAREA_PATH"
-   ]
+   ],
+   "anchor": "WP_BIGFARM_TAVERNCAVE2_04"
   },
   {
    "id": "XARDAS",
@@ -7722,7 +8085,8 @@
    "kind": "house",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_TOWER_IN1_21"
   },
   {
    "id": "XARDASCAVE_DJG",
@@ -7738,7 +8102,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_TOWER_SECRET_CAVE_04"
   },
   {
    "id": "XARDASTOWER_DEMON",
@@ -7754,7 +8119,8 @@
    "kind": "house",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_TOWER_IN1_25"
   },
   {
    "id": "XARDAS_BANDITS",
@@ -7783,7 +8149,8 @@
    ],
    "neighbours": [
     "XARDAS_STAIRS"
-   ]
+   ],
+   "anchor": "WP_XXX_ADD_02"
   },
   {
    "id": "XARDAS_CAVE",
@@ -7799,7 +8166,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_TOWER_WATERFALL_CAVE_ENTRANCE_04"
   },
   {
    "id": "XARDAS_CAVE#2",
@@ -7815,7 +8183,8 @@
    "kind": "cave",
    "inside": true,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_TOWER_SECRET_CAVE_01"
   },
   {
    "id": "XARDAS_GOBBO",
@@ -7834,7 +8203,8 @@
    "neighbours": [
     "XARDAS_PATH",
     "XARDAS_TOWER"
-   ]
+   ],
+   "anchor": "NW_XARDAS_GOBBO_02"
   },
   {
    "id": "XARDAS_MONSTER",
@@ -7852,7 +8222,8 @@
    "entrances": [],
    "neighbours": [
     "XARDAS_PATH"
-   ]
+   ],
+   "anchor": "NW_XARDAS_MONSTER_INSERT_01"
   },
   {
    "id": "XARDAS_MONSTER#2",
@@ -7870,7 +8241,8 @@
    "entrances": [],
    "neighbours": [
     "FARM1_PATH_CITY"
-   ]
+   ],
+   "anchor": "NW_XARDAS_MONSTER_INSERT_02"
   },
   {
    "id": "XARDAS_PATH",
@@ -7891,7 +8263,8 @@
     "XARDAS_STAIRS",
     "FARM1_PATH_CITY",
     "XARDAS_MONSTER"
-   ]
+   ],
+   "anchor": "NW_XARDAS_PATH_FARM1_06"
   },
   {
    "id": "XARDAS_SECRET",
@@ -7907,7 +8280,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_TOWER_VALLEY_09"
   },
   {
    "id": "XARDAS_SECRET#2",
@@ -7923,7 +8297,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_VALLEY_03"
   },
   {
    "id": "XARDAS_STAIRS",
@@ -7942,7 +8317,8 @@
    "neighbours": [
     "XARDAS_PATH",
     "XARDAS_BANDITS"
-   ]
+   ],
+   "anchor": "NW_XARDAS_STAIRS_03"
   },
   {
    "id": "XARDAS_TOWER",
@@ -7962,7 +8338,8 @@
     "XARDAS_TOWER_WATERFALL",
     "XARDAS_TOWER_IN1",
     "XARDAS_GOBBO"
-   ]
+   ],
+   "anchor": "NW_XARDAS_TOWER_05"
   },
   {
    "id": "XARDAS_TOWER#2",
@@ -7978,7 +8355,8 @@
    "kind": "other",
    "inside": false,
    "entrances": [],
-   "neighbours": []
+   "neighbours": [],
+   "anchor": "NW_XARDAS_PATH_FARM1_08_01"
   },
   {
    "id": "XARDAS_TOWER_IN1",
@@ -8007,7 +8385,8 @@
    ],
    "neighbours": [
     "XARDAS_TOWER"
-   ]
+   ],
+   "anchor": "NW_XARDAS_TOWER_IN1_31"
   },
   {
    "id": "XARDAS_TOWER_SECRET",
@@ -8036,7 +8415,8 @@
    ],
    "neighbours": [
     "XARDAS_TOWER_VALLEY#2"
-   ]
+   ],
+   "anchor": "NW_XARDAS_TOWER_SECRET_CAVE_03"
   },
   {
    "id": "XARDAS_TOWER_VALLEY",
@@ -8056,7 +8436,8 @@
     "XARDAS_TOWER_WATERFALL",
     "XARDAS_TOWER_VALLEY#2",
     "XARDAS_VALLEY"
-   ]
+   ],
+   "anchor": "NW_XARDAS_TOWER_VALLEY_04_B"
   },
   {
    "id": "XARDAS_TOWER_VALLEY#2",
@@ -8076,7 +8457,8 @@
     "XARDAS_VALLEY",
     "XARDAS_TOWER_SECRET",
     "XARDAS_TOWER_VALLEY"
-   ]
+   ],
+   "anchor": "NW_XARDAS_TOWER_VALLEY_WOLF"
   },
   {
    "id": "XARDAS_TOWER_WATERFALL",
@@ -8106,7 +8488,8 @@
    "neighbours": [
     "XARDAS_TOWER_VALLEY",
     "XARDAS_TOWER"
-   ]
+   ],
+   "anchor": "NW_XARDAS_TOWER_WATERFALL_CAVE_ENTRANCE_02"
   },
   {
    "id": "XARDAS_VALLEY",
@@ -8125,7 +8508,8 @@
    "neighbours": [
     "XARDAS_TOWER_VALLEY#2",
     "XARDAS_TOWER_VALLEY"
-   ]
+   ],
+   "anchor": "NW_XARDAS_VALLEY_02"
   }
  ],
  "points": {

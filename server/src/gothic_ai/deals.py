@@ -27,7 +27,9 @@ The terms are what the code can carry out and check (step 2: deals in the story)
   learning points (`npc_teach`), the things the npc keeps elsewhere (its stash, in `npc_gives` like the rest);
 - a task (`task`: whom to kill, what to bring, by a day or with none) and its reward (`reward`): the code
   pays it when the task is done, the next time the hero talks to the npc;
-- the npc leads the hero to a place (`lead`, guide.py): once he says yes, it sets off and he goes after it.
+- the npc leads the hero to a place (`lead`, guide.py): once he says yes, it sets off and he goes after it;
+- a meeting (`meet`, meetings.py): where, on which game day and hour, how long the npc waits; the hero gives
+  his word to come, and not coming breaks it.
 """
 
 from __future__ import annotations
@@ -76,6 +78,7 @@ from .turn import ToolOutcome
 if TYPE_CHECKING:
     from .dialogue import Conversation, DialogueManager
     from .guide import Guide, Way
+    from .meetings import Meetings, MeetTerm
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +158,8 @@ PROPOSE_TOOL = Tool(
     "сам выдаст награду, как только он с тобой заговорит, — так что обещай только то, что готов отдать. "
     "Отвести героя к месту (lead) — тоже сделка, хоть и даром: он согласится, и ты пойдёшь, а он за тобой. "
     "Место — id из ответа where или название; ведёшь в общие места и в свои, в чужой дом — до входа. "
+    "Встреча (meet) — тоже сделка: где, день и час (день — как в «Время: день N»), сколько часов ты ждёшь; "
+    "герой даёт слово прийти, и ты придёшь туда сам к этому часу. "
     "Сначала договоритесь о сути словами, потом предлагай и скажи, что предлагаешь. Ненужные списки — "
     "пустые, ненужные числа — 0, ненужные строки — пустые.",
     {
@@ -214,6 +219,22 @@ PROPOSE_TOOL = Tool(
                 "type": "string",
                 "description": "куда ты отведёшь героя: id места или его название; пусто — никуда",
             },
+            "meet": {
+                "type": "object",
+                "properties": {
+                    "where": {
+                        "type": "string",
+                        "description": "id места или его название; пусто — без встречи",
+                    },
+                    "day": {"type": "integer", "description": "день игры, как в «Время: день N»"},
+                    "hour": {"type": "integer", "description": "час, 0–23"},
+                    "minute": {"type": "integer", "description": "минута, 0–59"},
+                    "hours": {"type": "integer", "description": "сколько часов ты ждёшь там, 1–4"},
+                },
+                "required": ["where", "day", "hour", "minute", "hours"],
+                "additionalProperties": False,
+                "description": "встреча с героем; без встречи — where пустое, числа 0",
+            },
         },
         "required": [
             "npc_gives",
@@ -227,6 +248,7 @@ PROPOSE_TOOL = Tool(
             "task",
             "reward",
             "lead",
+            "meet",
         ],
         "additionalProperties": False,
     },
@@ -313,6 +335,7 @@ class Deal:
     task: Task | None = None  # the hero takes on a task...
     reward: Reward = field(default_factory=Reward)  # ...the npc pays this when it is done (contracts.py)
     lead: Way | None = None  # it leads him there (guide.py)
+    meet: MeetTerm | None = None  # they meet there and then; his word to come (meetings.py)
     state: DealState = "open"
 
     def same(self, other: Deal) -> bool:
@@ -337,6 +360,8 @@ class Deal:
         his += [f"отдаст позже {x.give.text()} до конца дня {x.due + 1}" for x in self.later]
         if self.task:
             his.append(f"берётся за поручение — {self.task.text()}")
+        if self.meet:
+            his.append(f"обещает прийти на встречу — {self.meet.text()}")
         return f"ты {_side('отдаёшь', self.npc_gives, mine)}; герой {_side('отдаёт', self.hero_gives, his)}"
 
     def show(self) -> DealShowCmd:
@@ -356,6 +381,8 @@ class Deal:
         if self.task:
             his += [DealTerm(item="", count=0, text=f"Поручение: {x}") for x in self.task.parts()]
             his.append(DealTerm(item="", count=0, text=f"Срок: {self.task.when()}"))
+        if self.meet:
+            his.append(DealTerm(item="", count=0, text=f"Встреча: {self.meet.text()}"))
         # the game's codepage (cp1251) has no "×": the window would show "?"
         mine = [t.model_copy(update={"text": t.text.replace("×", "x")}) for t in mine]
         his = [t.model_copy(update={"text": t.text.replace("×", "x")}) for t in his]
@@ -399,6 +426,7 @@ class Deals:
         # the tasks of the deals and their rewards: a TurnExtension of its own (cli.py)
         self.contracts = Contracts(link, dialogue, chronicle, self.stash, journal=self.journal)
         self.guide: Guide | None = None  # where it may lead the hero, and the way (guide.py)
+        self.meetings: Meetings | None = None  # where and when it may meet him, and the meetings
         self.open: dict[str, Deal] = {}  # npc -> its offer, while the conversation lasts
         self.debts: dict[str, Debt] = {}  # by id, of the save branch
         self.day: int | None = None  # the game day, as last read
@@ -540,7 +568,10 @@ class Deals:
         lead, why = await self._lead(npc, args.get("lead"), snap)
         if why:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
-        given = (npc_gives, hero_gives, forgive, silence, later, repay, xp, teach, task, lead)
+        meet, why = await self._meet(npc, args.get("meet"), snap)
+        if why:
+            return ToolOutcome(f"Отклонено: встреча — {why}", "rejected")
+        given = (npc_gives, hero_gives, forgive, silence, later, repay, xp, teach, task, lead, meet)
         if not any(given):
             return ToolOutcome("Отклонено: в сделке ничего нет.", "rejected")
         current = self.open.get(npc)  # he may have accepted the shown terms meanwhile
@@ -563,6 +594,7 @@ class Deals:
             task,
             reward,
             lead,
+            meet,
         )
         if current is not None and current.same(deal):
             return ToolOutcome(f"Эти условия герой уже видит: {current.terms()}.", "accepted")
@@ -686,6 +718,15 @@ class Deals:
         way, why = await self.guide.way(npc, what, snap)
         return way, "" if way is not None else why
 
+    async def _meet(self, npc: str, raw: Any, snap: Snapshot | None) -> tuple[MeetTerm | None, str]:
+        """Where and when they meet (`meet`), None for no meeting; or why not ("" when it is fine)."""
+        where = str(raw.get("where") or "").strip() if isinstance(raw, dict) else ""
+        if not where:
+            return None, ""
+        if self.meetings is None:
+            return None, "назначать встречи ты не можешь"
+        return await self.meetings.term(npc, raw, snap)
+
     def _repay(self, npc: str, raw: Any) -> tuple[tuple[Debt, ...] | None, str]:
         ids = [str(k).strip() for k in (raw or [])]
         mine = {d.id: d for d in self.debts.values() if d.npc == npc and not d.paid}
@@ -779,11 +820,14 @@ class Deals:
                 **({"xp": deal.xp} if deal.xp else {}),
                 **({"teach": [t.fact() for t in deal.teach]} if deal.teach else {}),
                 **({"lead": deal.lead.place.id} if deal.lead else {}),
+                **({"meet": deal.meet.text()} if deal.meet else {}),
                 **day,
             }
         )
         if deal.task:
             self.contracts.add(deal.id, deal.npc, deal.name, deal.task, deal.reward, day.get("day"))
+        if deal.meet is not None and self.meetings is not None:
+            self.meetings.add(deal.npc, deal.name, deal.meet, deal.id)
         for d in debts:
             self.debts[d.id] = d
             self.chronicle.record(
