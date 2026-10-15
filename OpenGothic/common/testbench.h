@@ -41,6 +41,7 @@ namespace TestBench {
   void     physicsNoiseHeard(const Npc& npc, const PhysicsNoise& noise, bool callbackDispatched = false);
   // Devmode-only live bridge stand, reusing the actual Coragon tavern fixture.
   bool     isPhysicsNoiseDebug();
+  void     physicsNoiseBridgeEvent(const Npc& listener, uint64_t tick);
   bool     physicsNoiseDebug(World& world, Npc& player, std::string_view command,
                              std::string& value, std::string& error);
   // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)

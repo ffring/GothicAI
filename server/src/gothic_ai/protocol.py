@@ -543,6 +543,7 @@ class NpcActResult(_GameMessage):
     npc: str
     status: Literal["queued", "rejected"]
     detail: str | None = None
+    action: str | None = None  # v36: identifies the command whose lifecycle this receipt starts
 
 
 class PerceptionHeld(_GameMessage):

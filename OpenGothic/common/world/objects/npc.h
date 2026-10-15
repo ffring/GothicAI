@@ -424,7 +424,8 @@ class Npc final {
     // A free NPC's brief investigation; normal perceptions and dialogue retain priority.
     bool      startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs);
     bool      isPhysicsInvestigating() const { return physicsInvestigationUntil!=0; }
-    void      stopPhysicsInvestigation(bool resume);
+    std::string_view physicsInvestigationResult() const { return physicsInvestigationReason; }
+    void      stopPhysicsInvestigation(bool resume, std::string_view reason="interrupted");
     bool      canHearPhysicsNoise() const;
     bool      hasPerc(PercType perc) const;
     uint64_t  percNextTime() const;
@@ -823,6 +824,7 @@ class Npc final {
     uint64_t                       physicsInvestigationScanMs = 0;
     float                          physicsInvestigationFacing = 0;
     bool                           physicsInvestigationWalking = false;
+    std::string_view               physicsInvestigationReason;
 
     // inventory
     Inventory                      invent;

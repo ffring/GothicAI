@@ -34,7 +34,7 @@ from gothic_ai.brain.planner import NpcPlanner
 from gothic_ai.brain.situation import SituationBuilder
 from gothic_ai.game import GameLink, GameServer
 from gothic_ai.places import PlaceBook
-from gothic_ai.protocol import DebugCmd, NpcEvent, NpcIdle
+from gothic_ai.protocol import DebugCmd, NpcActCmd, NpcActResult, NpcEvent, NpcIdle
 from gothic_ai.trace import TraceWriter
 
 
@@ -49,6 +49,7 @@ class RecordingDecider:
         outcome = await self.client.decide(rid, lane, priority, deadline_ms, state, questions)
         row = {"id": rid, "lane": lane, "deadline_ms": deadline_ms, "state": state,
                "questions": questions, "outcome": asdict(outcome),
+               "started_wall_s": started, "answered_wall_s": time.monotonic(),
                "elapsed_ms": (time.monotonic() - started) * 1000}
         self.answers.append(row)
         append_json(self.trace, row)
@@ -91,6 +92,19 @@ async def exercise(link: GameLink, case: str, directory: Path, decider_url: str)
     ready = await debug(link, f"{mode}-ready")
     npc = ready["npc"]
     messages: list[tuple[float, Any]] = []
+    commands: list[dict[str, Any]] = []
+    send = link.send
+
+    async def record_send(command):
+        if isinstance(command, NpcActCmd) and command.npc == npc:
+            row = {"wall_s": time.monotonic(), **command.model_dump()}
+            commands.append(row)
+            append_json(directory / "actions.jsonl", row)
+        await send(command)
+
+    # Observe the production applier's exact wire commands, including their IDs.
+    # No replacement decisions or action arguments are introduced by the stand.
+    link.send = record_send
 
     def observe(message):
         if getattr(message, "npc", None) == npc and message.type in (
@@ -130,6 +144,12 @@ async def exercise(link: GameLink, case: str, directory: Path, decider_url: str)
     reached_s = None
     decision = None
     first_event = None
+    investigator = None
+    investigator_idle = None
+    active_seen = False
+    proximity_during_walk = False
+    post_idle_decisions: list[dict[str, Any]] = []
+    idle_player_distance = None
     try:
         until = started + (60 if mode == "loud" else 14 if mode == "throttle" else 3)
         extra_pushes = 0
@@ -144,18 +164,42 @@ async def exercise(link: GameLink, case: str, directory: Path, decider_url: str)
             if noises and first_event is None:
                 first_event = noises[0][1]
             answers = [row for row in recorder.answers[initial_index:]
-                       if row["id"].startswith(npc + "#") and "react" in row["questions"]]
+                       if row["id"].startswith(npc + "#") and
+                       "investigate" in row["questions"].get("react", {}).get("criteria", {})]
             if answers and decision is None:
-                decision = (answers[0]["outcome"].get("answers") or {}).get("react")
-            if first_event is not None and first_event.at is not None:
+                decision = next(((row["outcome"].get("answers") or {}).get("react") for row in answers
+                                 if (row["outcome"].get("answers") or {}).get("react")), None)
+            if sample["investigating"]:
+                active_seen = True
+            if first_event is not None and first_event.at is not None and sample["investigating"]:
                 minimum = min(minimum, math.dist(sample["position_cm"], first_event.at))
                 if minimum < 150 and reached_s is None:
                     reached_s = now - started
             if mode == "loud":
-                applied = [d for d in applier.recent if d.npc == npc and d.choice == "investigate"]
-                done = any(isinstance(m, NpcIdle) and m.reason == "done" for _, m in messages)
-                if applied and done and reached_s is not None and sample["routine_state"]:
+                if investigator is None:
+                    investigator = next((cmd for cmd in commands if cmd["wall_s"] >= started and
+                                         cmd["action"] == "investigate" and any(
+                                             isinstance(msg, NpcActResult) and msg.id == cmd["id"] and msg.status == "queued"
+                                             for _, msg in messages)), None)
+                if investigator is not None:
+                    investigator_idle = next(((when, msg) for when, msg in messages
+                                              if isinstance(msg, NpcIdle) and msg.act == investigator["id"]), None)
+                    if investigator_idle is not None and idle_player_distance is None:
+                        idle_player_distance = sample["player_distance_cm"]
+                    proximity_during_walk = any(
+                        isinstance(msg, NpcEvent) and msg.kind == "player_near" and
+                        investigator["wall_s"] < when < (investigator_idle[0] if investigator_idle else now)
+                        for when, msg in messages)
+                done = investigator_idle is not None and investigator_idle[1].reason == "done"
+                if returned_s is None and active_seen and done and reached_s is not None and not sample["investigating"] and sample["routine_state"]:
                     returned_s = now - started
+                if investigator_idle is not None:
+                    post_idle_decisions = [row for row in recorder.answers[initial_index:]
+                                           if row["id"].startswith(npc + "#") and
+                                           row["started_wall_s"] >= investigator_idle[0] and "react" in row["questions"]]
+                # Leave the production planner running after native completion so a deferred
+                # player_near is observed as a new request rather than a replayed answer.
+                if returned_s is not None and now - started >= returned_s + 3:
                     break
                 # A model choosing another option is an observed independent trial too.
                 # Give its first response time to be applied before ending the observation.
@@ -177,32 +221,53 @@ async def exercise(link: GameLink, case: str, directory: Path, decider_url: str)
     result: dict[str, Any] = {"case": case, "ready": ready, "before_impact": hit,
                               "noise_events": len(noises), "final": final}
     if mode == "loud":
-        missing_culprit = bool(noises) and not hit["can_see_hero"] and final["native_culprit_impacts"] > 0 and all(
-            not event.other and not event.other_name for _, event in noises)
+        missing_culprit = bool(first_event) and final["native_unseen_culprit_loud_impacts"] > 0 and not (
+            first_event.other or first_event.other_name)
+        observed_investigation = active_seen and investigator is not None
+        interrupted = investigator_idle is not None and investigator_idle[1].reason != "done"
+        post_idle_required = proximity_during_walk and idle_player_distance is not None and idle_player_distance <= 600
+        redecided = bool(post_idle_decisions)
         result.update({"decider_choice": (decision or {}).get("choice"), "decider_answer": decision,
                        "minimum_distance_cm": minimum if math.isfinite(minimum) else None,
                        "reached_s": reached_s, "routine_returned_s": returned_s,
                        "unseen_culprit_absent": missing_culprit,
-                       "investigated": reached_s is not None and returned_s is not None and returned_s <= 60,
+                       "investigated": observed_investigation and reached_s is not None and returned_s is not None and returned_s <= 60,
+                       "investigation_action": investigator,
+                       "investigation_idle": investigator_idle[1].model_dump(exclude_none=True) if investigator_idle else None,
+                       "investigation_active_observed": active_seen,
+                       "player_near_during_investigation": proximity_during_walk,
+                       "post_idle_redecision_required": post_idle_required,
+                       "player_distance_at_idle_cm": idle_player_distance,
+                       "post_idle_redecided": redecided,
+                       "post_idle_answers": [(row["outcome"].get("answers") or {}).get("react") for row in post_idle_decisions],
+                       "noise_answers": [(row["outcome"].get("answers") or {}).get("react") for row in answers],
                        "event": first_event.model_dump(exclude_none=True) if first_event else None,
                        "applied": [asdict(d) for d in applier.recent]})
         result["pass"] = (400 <= ready["distance_cm"] <= 600 and ready["facing_error_deg"] >= 150 and
-                          ready["eligible"] and not ready["external"] and missing_culprit and decision is not None)
+                          ready["eligible"] and not ready["external"] and missing_culprit and decision is not None and
+                          not interrupted and (not post_idle_required or redecided))
     elif mode == "throttle":
         # Native hearing at 3 s exercises the bridge guard; a hit after 11 s
         # verifies that a new event is allowed once the guard has elapsed.
         heard = final["native_heard_ms"]
+        event_ticks = final["bridge_event_ms"]
         result["native_hearing_count"] = len(heard)
-        result["event_intervals_s"] = [b[0] - a[0] for a, b in zip(noises, noises[1:])]
-        intervals = result["event_intervals_s"]
-        early = sum(when - started < 10 for when, _ in noises)
-        result["events_before_10_s"] = early
-        result["pass"] = len(heard) >= 3 and len(noises) >= 2 and early == 1 and all(
-            delta >= 9.8 for delta in intervals) and final["native_loud_impacts"] >= 3
+        intervals = [right - left for left, right in zip(event_ticks, event_ticks[1:])]
+        early = sum(tick - event_ticks[0] < 10000 for tick in event_ticks) if event_ticks else 0
+        withheld = [tick for tick in heard if event_ticks and 0 < tick - event_ticks[0] < 10000]
+        result["event_intervals_game_ms"] = intervals
+        result["events_before_10000_game_ms"] = early
+        result["native_hearing_withheld_ms"] = withheld
+        result["pass"] = (len(heard) >= 3 and len(event_ticks) == len(noises) >= 2 and early == 1 and
+                          bool(withheld) and all(delta >= 10000 for delta in intervals) and
+                          final["native_loud_impacts"] >= 3)
     else:
-        busy = (hit["dialogue"] if mode == "dialogue" else hit["combat"] if mode == "combat" else True)
-        impacts = final["native_impacts"] > 0 if mode == "quiet" else final["native_loud_impacts"] > 0
-        result["pass"] = not noises and impacts and busy
+        if mode == "quiet":
+            impacts = final["native_cup_impacts"] > 0 and 0 < final["native_cup_max_radius_cm"] < 600
+            eligible = hit["eligible"] and not hit["external"] and 599 <= hit["distance_cm"] <= 601
+            result["pass"] = not noises and impacts and eligible
+        else:
+            result["pass"] = not noises and final[f"audible_{mode}_loud_impacts"] > 0
     return result
 
 

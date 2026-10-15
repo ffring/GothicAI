@@ -3015,6 +3015,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
   if(isDown())
     return;
 
+  stopPhysicsInvestigation(false);
+
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
   const bool  isJumpb = pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
@@ -3081,6 +3083,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
+    stopPhysicsInvestigation(false);
     perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
@@ -4259,6 +4262,8 @@ void Npc::tickRoutine() {
   }
 
 void Npc::setTarget(Npc *t) {
+  if(t!=nullptr)
+    stopPhysicsInvestigation(false);
   if(currentTarget==t)
     return;
 
@@ -5652,6 +5657,7 @@ void Npc::setPerceptionDisable(PercType t) {
 void Npc::startDialog(Npc& pl) {
   if(pl.isDown() || pl.isInAir() || isPlayer())
     return;
+  stopPhysicsInvestigation(false);
   if(perceptionProcess(pl,nullptr,0,PERC_ASSESSTALK))
     setOther(&pl);
   }
@@ -5759,6 +5765,31 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
+  if(isPhysicsInvestigating()) {
+    switch(perc) {
+      case PERC_ASSESSENEMY:
+      case PERC_ASSESSFIGHTER:
+      case PERC_ASSESSDAMAGE:
+      case PERC_ASSESSOTHERSDAMAGE:
+      case PERC_ASSESSTHREAT:
+      case PERC_ASSESSFIGHTSOUND:
+      case PERC_ASSESSWARN:
+      case PERC_ASSESSCALL:
+      case PERC_ASSESSTALK:
+      case PERC_DRAWWEAPON:
+      case PERC_ASSESSMURDER:
+      case PERC_ASSESSMAGIC:
+      case PERC_ASSESSCASTER:
+        stopPhysicsInvestigation(false);
+        break;
+      default:
+        // The planner has observed it above. Routine chatter and ordinary hero
+        // activity must not replace the ongoing check through a script callback.
+        trace("investigating",false,false);
+        return false;
+      }
+    }
+
   if(hasPerc(perc)) {
     auto& intercept = Gothic::inst().interceptPerception;
     if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
@@ -5821,14 +5852,17 @@ bool Npc::startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs) {
   physicsInvestigationScanUntil = 0;
   physicsInvestigationScanMs = std::clamp<uint64_t>(scanMs,2000,8000);
   physicsInvestigationWalking = false;
+  physicsInvestigationReason = {};
   return true;
   }
 
-void Npc::stopPhysicsInvestigation(bool resume) {
+void Npc::stopPhysicsInvestigation(bool resume, std::string_view reason) {
   if(physicsInvestigationUntil==0)
     return;
   physicsInvestigationUntil = 0;
   physicsInvestigationScanUntil = 0;
+  physicsInvestigationReason = reason;
+  physicsNoiseUntil = 0;
   // A new owner or native state may already have installed its own movement.
   if(go2.flag==GT_Point && (go2.pos-physicsInvestigationPosition).quadLength()<1.f)
     clearGoTo();
@@ -5847,12 +5881,12 @@ bool Npc::tickPhysicsInvestigation(uint64_t dt) {
     }
   const uint64_t now = owner.tickCount();
   if(now>=physicsInvestigationUntil) {
-    stopPhysicsInvestigation(true);
+    stopPhysicsInvestigation(true,"timeout");
     return false;
     }
   if(physicsInvestigationScanUntil!=0) {
     if(now>=physicsInvestigationScanUntil) {
-      stopPhysicsInvestigation(true);
+      stopPhysicsInvestigation(true,"done");
       return false;
       }
     // Look to either side of the impact, then back, while standing at the spot.
@@ -6162,7 +6196,7 @@ std::vector<GameScript::DlgChoice> Npc::dialogChoices(Npc& player,const std::vec
   }
 
 bool Npc::isAiQueueEmpty() const {
-  return aiQueue.size()==0 &&
+  return !isPhysicsInvestigating() && aiQueue.size()==0 &&
          go2.empty() &&
          waitTime<owner.tickCount();
   }
@@ -6174,8 +6208,7 @@ bool Npc::isAiBusy() const {
   }
 
 void Npc::clearAiQueue() {
-  physicsInvestigationUntil = 0;
-  physicsInvestigationScanUntil = 0;
+  stopPhysicsInvestigation(false);
   currentLookAt    = nullptr;
   currentLookAtNpc = nullptr;
   visual.setHeadRotation(0,0);

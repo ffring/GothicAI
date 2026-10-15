@@ -16,6 +16,7 @@ from gothic_ai.protocol import (
     HushCmd,
     LineVoice,
     NpcActCmd,
+    NpcActResult,
     NpcChestsCmd,
     NpcEvent,
     NpcIdle,
@@ -362,3 +363,12 @@ def test_v36_physics_noise_and_investigation():
     cmd = NpcActCmd(id="n1", npc="X", action="investigate", args={"at": [100, 20, 300], "ms": 5000})
     assert '"action":"investigate"' in cmd.to_json() and '"at":[100,20,300]' in cmd.to_json()
     assert '"cmd":"physics_noise"' in DebugCmd(req="r1", cmd="physics_noise", text="status").to_json()
+
+
+def test_v36_investigation_receipt_identifies_action_without_breaking_old_bridge():
+    receipt = parse_game_message(
+        '{"type":"npc_act_result","id":"n1","npc":"X","status":"queued","action":"investigate"}'
+    )
+    assert isinstance(receipt, NpcActResult) and receipt.action == "investigate" and receipt.id == "n1"
+    legacy = parse_game_message('{"type":"npc_act_result","id":"n2","npc":"X","status":"queued"}')
+    assert isinstance(legacy, NpcActResult) and legacy.action is None

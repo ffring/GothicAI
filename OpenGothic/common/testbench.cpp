@@ -629,7 +629,11 @@ struct Bench {
   uint64_t noiseMeasuredImpacts=0,noiseMeasuredHeard=0,noiseMeasuredRays=0;
   bool noiseBridgeDebug=false;
   uint64_t noiseBridgeImpacts=0,noiseBridgeLoudImpacts=0,noiseBridgeCulpritImpacts=0;
+  uint64_t noiseBridgeUnseenCulpritImpacts=0,noiseBridgeCupImpacts=0;
+  uint64_t noiseBridgeDialogueImpacts=0,noiseBridgeCombatImpacts=0;
+  float noiseBridgeCupMaxRadius=0;
   std::vector<uint64_t> noiseBridgeHeard;
+  std::vector<uint64_t> noiseBridgeEvents;
   Npc* arrowNpc=nullptr;
   std::string arrowCase,arrowAim;
   float arrowDraw=1.f;
@@ -7526,12 +7530,19 @@ bool TestBench::isPhysicsNoiseDebug() {
   return bodyTraceAlive && bench.noiseBridgeDebug;
   }
 
+void TestBench::physicsNoiseBridgeEvent(const Npc& listener,uint64_t tick) {
+  if(isPhysicsNoiseDebug() && &listener==bench.noiseHost)bench.noiseBridgeEvents.push_back(tick);
+  }
+
 bool TestBench::physicsNoiseDebug(World& world,Npc& player,std::string_view command,
                                   std::string& value,std::string& error) {
   const auto fail=[&](std::string_view message) {error=message;return false;};
   const auto resetCounts=[] {
     bench.noiseBridgeImpacts=0;bench.noiseBridgeLoudImpacts=0;bench.noiseBridgeCulpritImpacts=0;
+    bench.noiseBridgeUnseenCulpritImpacts=0;bench.noiseBridgeCupImpacts=0;bench.noiseBridgeCupMaxRadius=0;
+    bench.noiseBridgeDialogueImpacts=0;bench.noiseBridgeCombatImpacts=0;
     bench.noiseBridgeHeard.clear();
+    bench.noiseBridgeEvents.clear();
     };
   if(command=="setup") {
     world.physic()->setMovableVobsEnabled(true);world.physic()->setPhysicsNoiseEnabled(true);
@@ -7580,16 +7591,19 @@ bool TestBench::physicsNoiseDebug(World& world,Npc& player,std::string_view comm
     }
   else if(command=="cup-hit") {resetCounts();noiseDropItems(world,1);}
   else if(command!="setup" && command!="sample")return fail("unknown physics_noise command");
-  bool routine=false;
-  npc.forEachRoutine([&](const Npc::RoutineInfo& entry) {routine=routine || npc.currentState()==entry.state;});
+  const bool routine=npc.currentState().isValid() && npc.isInRoutine(npc.currentState());
   std::string heard="[";
   for(auto tick:bench.noiseBridgeHeard) {if(heard.size()>1)heard+=',';heard+=std::to_string(tick);}
+  std::string bridgeEvents="[";
+  for(auto tick:bench.noiseBridgeEvents) {if(bridgeEvents.size()>1)bridgeEvents+=',';bridgeEvents+=std::to_string(tick);}
   value="{\"npc\":"+jsonStr(symName(world,&npc))+",\"position_cm\":"+ragdollVector(npc.position())+
     ",\"source_cm\":"+ragdollVector(bench.noiseSource)+",\"distance_cm\":"+
     ragdollNumber((npc.position()-bench.noiseSource).length())+",\"facing_error_deg\":"+
     ragdollNumber(noiseFacingError(npc,bench.noiseSource))+",\"can_see_hero\":"+(npc.canSeeNpc(player,false)?"true":"false")+
     ",\"eligible\":"+(npc.canHearPhysicsNoise()?"true":"false")+
     ",\"external\":"+(npc.isExternalControl()?"true":"false")+
+    ",\"investigating\":"+(npc.isPhysicsInvestigating()?"true":"false")+
+    ",\"player_distance_cm\":"+ragdollNumber((npc.position()-player.position()).length())+
     ",\"dialogue\":"+(Gothic::inst().isNpcInDialog(npc)?"true":"false")+
     ",\"combat\":"+(npc.weaponState()!=WeaponState::NoWeapon?"true":"false")+
     ",\"ai_queue_empty\":"+(npc.isAiQueueEmpty()?"true":"false")+
@@ -7598,7 +7612,12 @@ bool TestBench::physicsNoiseDebug(World& world,Npc& player,std::string_view comm
     ",\"native_impacts\":"+std::to_string(bench.noiseBridgeImpacts)+
     ",\"native_loud_impacts\":"+std::to_string(bench.noiseBridgeLoudImpacts)+
     ",\"native_culprit_impacts\":"+std::to_string(bench.noiseBridgeCulpritImpacts)+
-    ",\"native_heard_ms\":"+heard+"]}";
+    ",\"native_unseen_culprit_loud_impacts\":"+std::to_string(bench.noiseBridgeUnseenCulpritImpacts)+
+    ",\"native_cup_impacts\":"+std::to_string(bench.noiseBridgeCupImpacts)+
+    ",\"native_cup_max_radius_cm\":"+ragdollNumber(bench.noiseBridgeCupMaxRadius)+
+    ",\"audible_dialogue_loud_impacts\":"+std::to_string(bench.noiseBridgeDialogueImpacts)+
+    ",\"audible_combat_loud_impacts\":"+std::to_string(bench.noiseBridgeCombatImpacts)+
+    ",\"native_heard_ms\":"+heard+"],\"bridge_event_ms\":"+bridgeEvents+"]}";
   return true;
   }
 
@@ -7607,6 +7626,19 @@ void TestBench::physicsNoise(const PhysicsNoise& noise,std::string_view sound,bo
     ++bench.noiseBridgeImpacts;
     if(noise.volume>=.35f)++bench.noiseBridgeLoudImpacts;
     if(noise.culprit)++bench.noiseBridgeCulpritImpacts;
+    if(noise.what.find("BEER")!=std::string::npos) {
+      ++bench.noiseBridgeCupImpacts;
+      bench.noiseBridgeCupMaxRadius=std::max(bench.noiseBridgeCupMaxRadius,noise.radius);
+      }
+    if(auto* world=Gothic::inst().world();world && bench.noiseHost && noise.volume>=.35f) {
+      auto& npc=*bench.noiseHost;
+      const float radius=noise.radius*std::max(0.f,1.f-world->physic()->soundOclusion(npc.mapHeadBone(),noise.position));
+      if(npc.qDistTo(noise.position)<=radius*radius) {
+        if(noise.culprit && !npc.canSeeNpc(*noise.culprit,false))++bench.noiseBridgeUnseenCulpritImpacts;
+        if(Gothic::inst().isNpcInDialog(npc))++bench.noiseBridgeDialogueImpacts;
+        if(npc.weaponState()!=WeaponState::NoWeapon && stateName(*world,npc)=="ZS_ATTACK")++bench.noiseBridgeCombatImpacts;
+        }
+      }
     }
   if(scenarioPath==nullptr || !bench.noiseTrace)return;
   if(bench.movableMeasuring) {++bench.noiseMeasuredImpacts;return;}

@@ -77,7 +77,8 @@ class NpcObserver final {
                    double distance, std::string_view detail, std::string_view otherName,
                    std::string_view victim = {});
     bool throttled(std::string_view npc, std::string_view kind, uint64_t now, uint64_t periodMs);
-    void reply(std::string_view id, std::string_view npc, std::string_view status, std::string_view detail);
+    void reply(std::string_view id, std::string_view npc, std::string_view status, std::string_view detail,
+               std::string_view action = {});
 
     Emit                                  emit;
     Owner                                 owner;
