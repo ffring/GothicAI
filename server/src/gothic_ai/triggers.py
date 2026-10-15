@@ -110,10 +110,11 @@ def time_between(start: tuple[int, int], end: tuple[int, int]) -> Expr:
 
 
 def all_of(*exprs: Expr) -> Expr:
-    """All the conditions hold."""
-    if len(exprs) == 1:
-        return exprs[0]
-    return ["&&", *exprs]
+    """All the conditions hold; one that is itself an "and" of others gives those."""
+    flat: list[Expr] = []
+    for e in exprs:
+        flat += e[1:] if e[:1] == ["&&"] else [e]
+    return flat[0] if len(flat) == 1 else ["&&", *flat]
 
 
 class Triggers:

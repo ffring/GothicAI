@@ -125,7 +125,7 @@ async def test_the_director_brings_in_a_character_who_gives_a_quest(graph):  # n
             link, graph, patches, chronicle, director, quests, places=places, cards=Cards({}, cast.cards)
         )
         q = await author.quest("DIR_NPC_1")
-        assert q is not None and q.npc == "DIR_NPC_1" and q.name == "Гарет"
+        assert q is not None and q.giver == "DIR_NPC_1" and q.name(q.giver) == "Гарет"
         assert "Его характер (написан ему самому): Ты — Гарет" in quests.calls[0][1][0].content
         give = next(op["node"] for m in fake.graph for op in m["ops"] if op.get("op") == "add_node")
         assert give["npc"] == "DIR_NPC_1" and give["id"] == "DIR_Q1_GIVE"

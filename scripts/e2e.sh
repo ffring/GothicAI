@@ -72,6 +72,10 @@
 #       the director's, the hour, the death of an npc of the director's he kills; a save and a load in the
 #       middle keep the counts and fire nothing again (protocol v35: graph_patch trigger, trigger_fired). On a
 #       save (a new game opens with Xardas's own dialog): SAVE=save_slot_1.sav
+#   stages: a quest of the director's as an object (docs/director.md, stage 3, layer 2): Hilda's quest of three
+#       stages written in the scenario — come to a place, get a thing put at another, bring it to her; the book
+#       checks and builds it of vars, dialogs and triggers; a save and a load at stage 2 keep it. On a save:
+#       SAVE=save_slot_1.sav
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

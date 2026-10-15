@@ -79,6 +79,7 @@ from .protocol import (
     Session,
     ThreatControlCmd,
 )
+from .questbook import QuestBook
 from .quests import QuestBoard
 from .replay import replay as replay_turn
 from .sightings import Sightings
@@ -192,6 +193,7 @@ class ServerState:
         self.cast: Cast | None = None
         self.casting: Casting | None = None
         self.triggers: Triggers | None = None
+        self.book: QuestBook | None = None
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
@@ -352,11 +354,16 @@ class Console:
             case "author" if self.state.author is not None:
                 if rest:
                     q = await self.state.author.quest(rest[0])
+                    print("(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.asked}")
+                for old in self.state.author.old.values():
+                    print(f"{old.id} {old.name}: «{old.title}» {old.stage}; {old.item_name} {old.where}")
+                book = self.state.author.book
+                for q in book.all().values():
+                    p = book.progress(q.id)
                     print(
-                        "(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.item} {q.where}"
+                        f"{q.id} {q.name(q.giver)}: «{q.title}» {p.state}, stage {p.stage}/{len(q.stages)}; "
+                        f"{q.reward()}"
                     )
-                for q in self.state.author.quests.values():
-                    print(f"{q.id} {q.name}: «{q.title}» {q.stage}; {q.item_name} {q.where}; {q.reward()}")
             case "triggers":
                 for t in await link.triggers():
                     holds = {True: "holds", False: "does not hold", None: "-"}[t.get("holds")]
@@ -376,9 +383,7 @@ class Console:
                 )
                 if spec is not None and self.state.author is not None:
                     q = await self.state.author.quest(spec.npc)
-                    print(
-                        "(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.item} {q.where}"
-                    )
+                    print("(no quest: see the log)" if q is None else f"{q.id} «{q.title}»: {q.asked}")
             case "deal" if self.state.deals is not None:
                 await self.deal(link, npc, rest)
             case "rumors" if self.state.rumors is not None:
@@ -793,7 +798,18 @@ async def serve(args: argparse.Namespace) -> int:
             # the director's model makes characters up for a place (layer 4): for now on the console's word
             if place_book is not None:
                 state.casting = Casting(link, state.cast, llm, place_book, state.chronicle, journal=journal)
-            # quests of the director's own (docs/director.md, stage 1): for now on the console's word
+            # quests of the director's own as objects (docs/director.md, stage 3): the book makes and follows
+            # them, the author makes them up (stage 1), for now on the console's word
+            state.book = QuestBook(
+                link,
+                graph,
+                state.story,
+                state.chronicle,
+                state.director,
+                places=place_book,
+                dialogue=state.dialogue,
+                journal=journal,
+            )
             state.author = Author(
                 link,
                 graph,
@@ -805,6 +821,7 @@ async def serve(args: argparse.Namespace) -> int:
                 cards=personas.cards,
                 dialogue=state.dialogue,
                 journal=journal,
+                book=state.book,
             )
             # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
             state.consequences = LieConsequences(
@@ -1168,6 +1185,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.cast_character(link, state.cast)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario cast: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "stages":
+                assert state.book is not None and place_book is not None
+                results = await scenarios.book_stages(link, state.book, place_book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario stages: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "trigger":
                 assert state.story is not None
@@ -1841,6 +1864,7 @@ def main() -> None:
             "authored",
             "own",
             "trigger",
+            "stages",
             "cast",
             "person",
             "character",

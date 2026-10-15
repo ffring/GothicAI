@@ -113,13 +113,11 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
     link_cm, author, chronicle = await _author(fake, llm, graph, MemoryStore(":memory:"))
     try:
         q = await author.quest(HILDA)
-        assert q is not None and (q.id, q.item, q.place, q.gold, q.xp) == (
-            "DIR_Q1",
-            "ITMI_SAW",
-            "FARM1_FIELD",
-            20,
-            50,
-        )
+        assert q is not None and (q.id, q.giver, q.gold, q.xp) == ("DIR_Q1", HILDA, 20, 50)
+        # one stage: bring the saw back, it lies at a point of the field
+        [stage] = q.stages
+        [saw] = stage.goals
+        assert (saw.kind, saw.npc, saw.item, saw.point) == ("bring", HILDA, "ITMI_SAW", "NW_FARM1_FIELD_02")
 
         brief = llm.calls[0][1][0].content
         assert f"Кто просит: Хильда ({HILDA})." in brief and "Где живёт и работает: в доме Лобарта." in brief
@@ -131,8 +129,9 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
         rejected = llm.calls[1][1][-1].content
         assert "места 'CITY' нет в сводке" in rejected and "золота 500, а можно от 0 до 50" in rejected
 
+        # the book built it: its status and its stage, the dialog that gives it and the one that ends it
         ops = _ops(fake)
-        assert ops[0] == {"op": "vars", "vars": {"DIR_Q1": 0}} and fake.vars["DIR_Q1"] == 0
+        assert ops[0] == {"op": "vars", "vars": {"DIR_Q1": 0, "DIR_Q1_STAGE": 0}} and fake.vars["DIR_Q1"] == 0
         give, done = ops[1]["node"], ops[2]["node"]
         assert give["id"] == "DIR_Q1_GIVE" and give["condition"] == ["==", ["var", "DIR_Q1"], ["int", 0]]
         assert give["program"] == [
@@ -141,9 +140,13 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
                 "call": ["call", "WLD_INSERTITEM", ["sym", "ITMI_SAW"], ["str", "NW_FARM1_FIELD_02"]],
             }
         ]
-        assert give["effects"][0] == {"do": "set", "var": "DIR_Q1", "value": 1}
+        assert give["effects"][:2] == [
+            {"do": "set", "var": "DIR_Q1", "value": 1},
+            {"do": "set", "var": "DIR_Q1_STAGE", "value": 1},
+        ]
         assert give["lines"][0] == {"speaker": "other", "text": "Тебе нужна помощь?"}
         assert done["id"] == "DIR_Q1_DONE" and "ITMI_SAW" in str(done["condition"])
+        assert ["==", ["var", "DIR_Q1_STAGE"], ["int", 1]] in done["condition"][1:]
         # he opens the talk with what he picked in the menu, unless the model has him say his own words
         assert done["lines"] == [
             {"speaker": "other", "text": "Вот твоя пила."},
@@ -156,6 +159,7 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
         ]
         assert done["effects"][3:] == [
             {"do": "set", "var": "DIR_Q1", "value": 2},
+            {"do": "set", "var": "DIR_Q1_STAGE", "value": 2},
             {
                 "do": "journal",
                 "topic": "Пила Хильды",
@@ -163,24 +167,26 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
                 "status": "LOG_SUCCESS",
             },
         ]
-        assert [f["fact"] for f in chronicle.facts() if f["fact"].startswith("authored")] == [
-            "authored_rejected",
-            "authored",
-        ]
+        assert len(ops) == 3  # one stage, its one goal the turn-in: no triggers
+        facts = [f["fact"] for f in chronicle.facts()]
+        assert facts == ["authored_rejected", "story_quest"]
 
         # the hero takes it, then brings the saw: the giver knows where it stands
-        assert author.situation(HILDA) is None
+        book = author.book
+        assert book.situation(HILDA) is None and author.situation(HILDA) is None
         await fake.send(type="dialog_chosen", npc=HILDA, node="DIR_Q1_GIVE", made=True)
-        await _until(lambda: author.quests["DIR_Q1"].stage == "given")
-        assert "найти твою пропавшую вещь — Пила («Пила Хильды»): она лежит на полях" in (
-            author.situation(HILDA) or ""
+        await _until(lambda: book.progress("DIR_Q1").state == "given")
+        assert "найти твою пропавшую вещь — Пила: она лежит на полях фермы Лобарта." in (
+            book.situation(HILDA) or ""
         )
         await fake.send(type="dialog_chosen", npc=HILDA, node="DIR_Q1_DONE", made=True)
-        await _until(lambda: author.quests["DIR_Q1"].stage == "done")
+        await _until(lambda: book.progress("DIR_Q1").state == "done")
+        assert "ты заплатил: 20 золотых, опыт +50" in (book.situation(HILDA) or "")
 
-        # a load of the branch brings it back as it stands
-        author._load()
-        assert author.quests["DIR_Q1"].stage == "done"
+        # a load of the branch brings it back as it stands: the description from the log, the rest from facts
+        book.quests.clear()
+        book._version = -1
+        assert book.all()["DIR_Q1"] == q and book.progress("DIR_Q1").state == "done"
 
         # another: the next variable, and the model knows what she asked before
         llm.script.append(FakeStep("", [_quest(title="Грабли", item="ITMI_RAKE")]))

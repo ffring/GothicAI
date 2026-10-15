@@ -15,7 +15,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
-from . import characters, programs, triggers
+from . import characters, programs, questbook, triggers
 from .amends import Amends
 from .authoring import PROPOSE as PROPOSE_QUEST
 from .authoring import Author
@@ -3771,29 +3771,32 @@ async def authored_quest(
     check("made", q is not None, q or rejected[-1:])
     if q is None:
         return _logged(results)
-    point = next(f["point"] for f in reversed(author.chronicle.facts("authored")) if f.get("id") == q.id)
+    book = author.book
+    thing = q.stages[0].goals[0]
+    give, done = questbook.give_node(q), questbook.done_node(q)
+    point, item = thing.point, thing.item
     check("var", await var(q.id) == 0, f"{q.id} = {await var(q.id)}")
     offered = await link.offered_dialogs(giver)
-    check("offered", q.give in offered and q.done not in offered, " ".join(offered))
+    check("offered", give in offered and done not in offered, " ".join(offered))
 
     # the hero asks her what is wrong
     await come_to_her()
-    await link.choose_dialog(giver, q.give)
+    await link.choose_dialog(giver, give)
     ok = await _until_async(lambda: var(q.id), lambda v: v == 1, 15)
-    await _until(lambda: author.quests[q.id].stage == "given", 5)
-    check("given", ok and author.quests[q.id].stage == "given", f"{q.id} = {await var(q.id)}")
+    await _until(lambda: book.progress(q.id).state == "given", 5)
+    check("given", ok and book.progress(q.id).state == "given", f"{q.id} = {await var(q.id)}")
 
     # the thing lies where she said
-    before = await has(q.item)
+    before = await has(item)
     await link.debug("player_goto", waypoint=point)
     await asyncio.sleep(1)
     error = ""
     try:
-        await link.debug("player_take", item=q.item, distance=800)
+        await link.debug("player_take", item=item, distance=800)
     except GameError as err:
         error = str(err)
-    ok = await _until_async(lambda: has(q.item), lambda n: n > before, 10)
-    check("found", ok, f"{q.item} at {point}" + (f": {error}" if error else ""))
+    ok = await _until_async(lambda: has(item), lambda n: n > before, 10)
+    check("found", ok, f"{item} at {point}" + (f": {error}" if error else ""))
 
     # a save and a load in between
     await asyncio.sleep(0.5)  # the game has the memory head of the quest
@@ -3807,23 +3810,197 @@ async def authored_quest(
     await asyncio.sleep(1)
     now = await link.offered_dialogs(giver)
     kept = await var(q.id)
-    check(
-        "after_load", kept == 1 and q.done in now and q.give not in now, f"{q.id} = {kept}; {' '.join(now)}"
-    )
+    check("after_load", kept == 1 and done in now and give not in now, f"{q.id} = {kept}; {' '.join(now)}")
 
     # he brings it
     gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
     await come_to_her()
-    await link.choose_dialog(giver, q.done)
+    await link.choose_dialog(giver, done)
     ok = await _until_async(lambda: var(q.id), lambda v: v == 2, 15)
-    after = (await has(q.item), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
+    after = (await has(item), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
     paid = after[0] == before and after[1] >= gold + q.gold and after[2] >= exp + q.xp
     check("done", ok and paid, f"thing, gold, exp {(before + 1, gold, exp)} -> {after}")
     await asyncio.sleep(1)
     left = await link.offered_dialogs(giver)
-    check("once", q.give not in left and q.done not in left, " ".join(left))
-    await _until(lambda: author.quests[q.id].stage == "done", 5)
-    check("knows", "ты заплатил" in (author.situation(giver) or ""), author.situation(giver) or "")
+    check("once", give not in left and done not in left, " ".join(left))
+    await _until(lambda: book.progress(q.id).state == "done", 5)
+    check("knows", "ты заплатил" in (book.situation(giver) or ""), book.situation(giver) or "")
+    return _logged(results)
+
+
+async def book_stages(
+    link: GameLink, book: questbook.QuestBook, places: PlaceBook, slot: int = 7
+) -> dict[str, str]:
+    """Stage 3 of the director as author, layer 2 (docs/director.md): a quest as an object, of three stages.
+
+    The quest is written here, not by a model: Hilda asks the hero to look who walks about a place near the
+    farm (reach), then to get a thing that lies at another one (have, put there as the stage begins), then
+    to bring it to her (bring, the turn-in). The book checks it, builds it of the graph's primitives and
+    makes it.
+    Checks:
+    - made: the book takes it; its status is in the game, 0, and her menu offers the dialog that gives it;
+    - given: the hero asks her, the quest runs at stage 1;
+    - reach: he comes to the place, its trigger and the stage's fire: stage 2;
+    - after_load: a save and a load keep the stage, and the triggers are back with their counts;
+    - have: he picks the thing up where it was put: stage 3;
+    - done: he brings it, she takes it and pays; the quest is done, no dialog of it is offered any more;
+    - knows: her conversational model knows he did it and she paid."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    hero = ["inst", "HERO"]
+
+    async def vars(*names: str) -> dict[str, int]:
+        return dict((await link.story_state(vars=list(names))).get("vars", {}))
+
+    async def has(item: str) -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", item]]) or 0)
+
+    async def come_to_her() -> None:
+        await link.debug("player_goto", to=HILDA, distance=300)
+        for _ in range(40):  # her own greeting may start as he comes in
+            if not (await link.story_state()).get("dialog"):
+                break
+            await asyncio.sleep(0.5)
+
+    # two places near her own: one to come to, one where the thing lies
+    routine = await link.routine(HILDA)
+    home = places.of(*(e.waypoint for e in routine.entries))
+    if home is None or home.center is None:
+        return _logged({"made": "failed (no place of Hilda's in the book)"})
+    spots = [
+        (p, sorted(w for w in p.points if not w.startswith("FP_")))
+        for p, _ in places.near(home.center, 4000, 8)
+        if p.id != home.id
+    ]
+    spots = [(p, points) for p, points in spots if points]
+    if len(spots) < 2:
+        return _logged({"made": f"failed (places near {home.id}: {len(spots)})"})
+    (look, look_at), (lies, lies_at) = spots[0], spots[1]
+    to, at = look_at[len(look_at) // 2], lies_at[len(lies_at) // 2]
+    thing = None
+    for candidate in ("ITMI_BROOM", "ITMI_RAKE", "ITMI_SAW", "ITMI_SCOOP", "ITMI_BRUSH"):
+        if await has(candidate) == 0:
+            thing = candidate
+            break
+    if thing is None:
+        return _logged({"made": "failed (the hero has every thing of the list)"})
+
+    def talk(said: str, answer: str, remember: str = "") -> questbook.Talk:
+        return questbook.Talk(said, [{"speaker": "self", "text": answer}], remember)
+
+    q = questbook.Quest(
+        id=book.next_id(),
+        giver=HILDA,
+        title="Чужак у фермы",
+        give=talk("Что-то случилось?", f"Кто-то бродит {look.where_ru}. Глянь, а? Заплачу."),
+        stages=[
+            questbook.Stage(
+                f"Хильда видела чужака {look.where_ru}. Надо посмотреть.", [questbook.Goal("reach", point=to)]
+            ),
+            questbook.Stage(
+                f"Чужака нет, но он что-то бросил {lies.where_ru}.",
+                [questbook.Goal("have", item=thing, point=at, journal="Я подобрал то, что он бросил.")],
+            ),
+            questbook.Stage(
+                "Надо отнести находку Хильде.",
+                [
+                    questbook.Goal(
+                        "bring",
+                        npc=HILDA,
+                        item=thing,
+                        talk=talk(
+                            "Вот что он бросил.",
+                            "Так это наша! Держи за труды.",
+                            "Герой принёс то, что бросил чужак.",
+                        ),
+                    )
+                ],
+            ),
+        ],
+        done_journal="Я отдал Хильде находку.",
+        asked=f"посмотреть, кто бродит {look.where_ru}.",
+        gold=10,
+        xp=20,
+        names={HILDA: "Хильда"},
+        reason="e2e: три стадии",
+    )
+    errors = await book.make(q)
+    status, stage = q.id, questbook.stage_var(q)
+    offered = await link.offered_dialogs(HILDA) if not errors else []
+    give, done = questbook.give_node(q), questbook.done_node(q)
+    now = await vars(status, stage)
+    check(
+        "made",
+        not errors and now.get(status) == 0 and give in offered and done not in offered,
+        errors or f"{now}; {' '.join(offered)}",
+    )
+    if errors:
+        return _logged(results)
+
+    await come_to_her()
+    await link.choose_dialog(HILDA, give)
+    ok = await _until_async(lambda: vars(status, stage), lambda v: v == {status: 1, stage: 1}, 15)
+    check("given", ok and book.progress(q.id).state == "given", await vars(status, stage))
+
+    await link.debug("player_goto", waypoint=to)
+    ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 10)
+    await _until(lambda: book.progress(q.id).stage == 2, 5)
+    check("reach", ok and book.progress(q.id).stage == 2, f"{to} ({look.id}): {await vars(stage)}")
+
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(2)
+    counts = {t["id"]: t["count"] for t in await link.triggers()}
+    mine = {k: v for k, v in counts.items() if k.startswith(f"{q.id}_")}
+    check(
+        "after_load",
+        await vars(status, stage) == {status: 1, stage: 2}
+        and mine == {f"{q.id}_S1G1": 1, f"{q.id}_S1": 1, f"{q.id}_S2G1": 0, f"{q.id}_S2": 0},
+        f"{await vars(status, stage)}; {mine}",
+    )
+
+    await link.debug("player_goto", waypoint=at)
+    await asyncio.sleep(1)
+    error = ""
+    try:
+        await link.debug("player_take", item=thing, distance=800)
+    except GameError as err:
+        error = str(err)
+    ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 3, 10)
+    check("have", ok, f"{thing} at {at} ({lies.id}): {await vars(stage)}" + (f"; {error}" if error else ""))
+
+    gold, exp = await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"])
+    await come_to_her()
+    offered = await link.offered_dialogs(HILDA)
+    try:
+        await link.choose_dialog(HILDA, done)
+    except GameError as err:
+        check("done", False, f"{err}; {' '.join(offered)}")
+        return _logged(results)
+    ok = await _until_async(lambda: vars(status), lambda v: v.get(status) == 2, 15)
+    after = (await has(thing), await has("ITMI_GOLD"), await link.evaluate(["field", hero, "EXP"]))
+    await asyncio.sleep(1)
+    left = await link.offered_dialogs(HILDA)
+    paid = after[0] == 0 and after[1] >= gold + q.gold and after[2] >= exp + q.xp
+    check(
+        "done",
+        ok and paid and give not in left and done not in left,
+        f"thing, gold, exp {(1, gold, exp)} -> {after}; {await vars(status, stage)}",
+    )
+    await _until(lambda: book.progress(q.id).state == "done", 5)
+    check("knows", "ты заплатил" in (book.situation(HILDA) or ""), book.situation(HILDA) or "")
     return _logged(results)
 
 
