@@ -2395,7 +2395,8 @@ void spellFields(World& world) {
       ",\"hp\":"+std::to_string(npc.attribute(ATR_HITPOINTS))+
       ",\"human\":"+(npc.isHuman()?"true":"false")+",\"hero\":"+(npc.isPlayer()?"true":"false")+
       ",\"immortal\":"+(npc.isImmortal()?"true":"false")+
-      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"standing\":"+(npc.isStanding()?"true":"false")+
+      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"falling\":"+(npc.isFalling()?"true":"false")+
+      ",\"standing\":"+(npc.isStanding()?"true":"false")+
       ",\"unconscious\":"+(npc.isUnconscious()?"true":"false")+",\"dead\":"+(npc.isDead()?"true":"false")+
       ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
       ",\"hazards\":"+std::to_string(q.hazards)+",\"returns\":"+std::to_string(returns));
@@ -3176,6 +3177,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     auto* npc=bench.spellActors[0].npc;
     for(size_t i=1;i<bench.spellActors.size();++i) w.removeNpc(*bench.spellActors[i].npc);
     bench.spellActors.resize(1);bench.crew.clear();bench.crew.push_back(npc);
+    // The hazard site is separate from the spell arena cleared above. Keep
+    // nearby monsters from interrupting the real cast with a hurt animation.
+    constexpr float clearRadius=3500.f;
+    std::vector<Npc*> monsters;
+    for(uint32_t i=0;i<w.npcCount();++i)
+      if(auto* other=w.npcById(i);other && other->isMonster() &&
+         ((other->position()-hero).length()<clearRadius || (other->position()-site.dry).length()<clearRadius))
+        monsters.push_back(other);
+    for(auto* monster:monsters) w.removeNpc(*monster);
     npc->handle().flags=zenkit::NpcFlag(uint32_t(npc->handle().flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
     npc->handle().attribute[ATR_HITPOINTS]=npc->handle().attribute[ATR_HITPOINTSMAX]=50000;
     npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
@@ -3188,6 +3198,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       ",\"case\":"+jsonStr(bench.spellGuardCase)+",\"water_y_cm\":"+ragdollNumber(site.waterY)+
       ",\"site\":"+jsonStr(site.waypoint)+",\"stable_cm\":"+ragdollVector(site.dry)+
       ",\"hero_cm\":"+ragdollVector(hero)+",\"direction\":"+ragdollVector(site.direction)+
+      ",\"cleared_monsters\":"+std::to_string(monsters.size())+",\"clear_radius_cm\":"+ragdollNumber(clearRadius)+
       ",\"cliff_floor_cm\":"+ragdollVector(cliffFloor)+",\"support_margin_cm\":50");
     }
   else if(c=="spell" && a.size()==3 && a[1]=="target") {

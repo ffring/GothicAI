@@ -492,6 +492,11 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
 
   // no longer in air - ground code
   if(state==InAir || state==Falling) {
+    // A protected return records the landing source before leaving this tick.
+    // Attach its root to the detected floor first, as the normal path does below;
+    // the fall step can otherwise leave that source below ground for one tick.
+    if(npc.needsRagdollQuestReturn())
+      npc.tryMove(Tempest::Vec3(0,-dY,0));
     // Resolve the protected throw before landing damage can lose the NPC.
     if(npc.recoverSpellThrow())
       return true;
