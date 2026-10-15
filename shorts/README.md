@@ -192,6 +192,7 @@ take, text and cleaning have not changed is not aligned again.
 scripts/deploy-gpu.sh dub                 # once, from the repository: the jobs on the GPU server
 uv run gothic-shorts dub xardas-lie       # a shot's newest take (or `dub xardas-lie 2`) -> <take>/dub.en.wav
 uv run gothic-shorts dub bow              # an explainer -> <workspace>/render/dub.en.wav
+uv run gothic-shorts dub bow --reclone    # the user's kept voice made anew from bow's recordings
 ```
 
 YouTube offers a video's sound in several languages (Studio: Subtitles, the video, the language's Audio
@@ -213,18 +214,27 @@ will. It prints every line: where it starts, its length against its slot, the sp
   its Russian one) and says the lines in it (`--tts voxcpm` picks it). A fallback says why the way before
   it failed. Each line starts where its Russian one starts and is as loud as it was in the game's sound
   (the separated voices measured over it; the hero's recording); the cut's pauses go out with the same
-  parts of the recording. The lines are kept by voice and text in `.shorts/voice/en/`, the clones in
-  Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
-- **An explainer.** `script.en.txt` (the caption track's text, without its `|`) in the user's own voice,
-  cloned from their first recorded lines (`voice/clean/`): by Inworld from 20-29 s of them (its best is
-  10-30 s; the clone is `gothic-ai USER@<short>` in the library), or, when Inworld fails, by VoxCPM2 on the
-  GPU server from 8-14 s (its encoder takes up to 15 s); cleaned as the Russian takes were (`words.py`'s
-  chain), each line from where
+  parts of the recording. The lines are kept by voice and text in `.shorts/voice/en/`, the voices in the
+  kept voices (below) and Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
+- **An explainer.** `script.en.txt` (the caption track's text, without its `|`) in the user's own voice: by
+  Inworld, the clone `USER` of the kept recording `user.inworld.wav` (20-29 s of the user's lines; its best
+  is 10-30 s), or, when Inworld fails, by VoxCPM2 on the GPU server from `user.voxcpm.wav` (8-14 s: its
+  encoder takes up to 15 s); cleaned as the Russian takes were (`words.py`'s chain), each line from where
   its Russian line's first word is said (`words.ru.json`), as loud as the Russian voice, over the plan's
   music bed (`plan.json`, `--plan` for another) faded and ducked under the English lines as `Explainer.tsx`
-  ducks it under the Russian ones. The lines and the reference live in `voice/en/` and are made again only
-  when the reference or a text changes. A plan that plays the footage's own sound (`gameVolume` above 0) is
-  refused: the dub mixes the music and the voice only.
+  ducks it under the Russian ones. The lines live in `voice/en/` and are made again only when the voice or
+  a text changes. A plan that plays the footage's own sound (`gameVolume` above 0) is refused: the dub
+  mixes the music and the voice only.
+
+The voices are kept for every short and every checkout in `~/.local/share/gothic-ai/voices/`, so each is
+cloned or designed once: `user.inworld.wav` and `user.voxcpm.wav` (the user's recorded voice, made from
+the first explainer dubbed without them: its first lines in `voice/clean/`), `<npc>-<key>.ru.wav` (the
+Russian sample Inworld clones an npc's English voice from), `<npc>-<key>.ref.wav` (a voice VoxCPM
+designed). The clone is replaced only on demand: `dub <explainer> --reclone` makes both recordings anew
+from that explainer's lines (Inworld clones it again, every explainer's English lines are voiced again on
+their next dub), as deleting a file does for that one. Inworld keeps its clones in the workspace's library
+and the TTS service's `~/.local/share/gothic-ai/inworld-voices.json` maps the id (`USER`) to the clone of
+the recording it was made of.
 
 A line longer than its slot (until the next line starts, 0.15 s before it) is sped up by up to x1.15 (pitch
 kept); one longer still is reported, and `dub` exits with 1 after writing the track: shorten the line in

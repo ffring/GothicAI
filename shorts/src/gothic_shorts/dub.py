@@ -63,6 +63,10 @@ MAX_GAIN_DB = 20.0
 REFERENCE_S = (8.0, 14.0)
 REFERENCE_INWORLD_S = (20.0, 29.0)
 REFERENCE_GAP_S = 0.3  # between two lines of it
+# the voices the dubs speak in, kept for every short and every checkout: the user's recorded one
+# (user.<provider>.wav), an npc's Russian sample Inworld clones (*.ru.wav), one VoxCPM designed (*.ref.wav)
+VOICES = Path.home() / ".local/share/gothic-ai/voices"
+USER_VOICE = "USER"  # the Inworld clone of user.inworld.wav, in Inworld's library and the TTS's voice cache
 # what VoxCPM designs a voice reading (the voxcpm bridge's VOICE_SAMPLE, in the dub's language)
 SAMPLES = {"en": "You're back. Good. We don't have much time, so listen carefully: I won't say it twice."}
 # what an npc's Russian voice reads for Inworld to clone it (10-30 s is best)
@@ -416,7 +420,9 @@ def english_voices(
     `tts`. Inworld clones the voice the game speaks Russian in (a sample of it voiced by the TTS service), so
     the English keeps its timbre, and designs an en-US one from the description when that fails; VoxCPM on
     the GPU server designs one reading an English sample (as the voxcpm bridge does with its Russian one).
-    Kept by provider, voice and text."""
+    The lines are kept in `cache` by provider, voice and text; the voices themselves (the Russian samples
+    Inworld clones, the ones VoxCPM designs) in VOICES, so a voice is cloned or designed once, whichever the
+    checkout."""
     out: dict[tuple[str, str], Path] = {}
     for who, (voice_id, description) in voices.items():
         texts = list(dict.fromkeys(lines.get(who, [])))
@@ -451,7 +457,7 @@ def _ways(config: Config, voice_id: str, description: str, texts: list[str], cac
         return {t: p for t, p in wanted.items() if not p.is_file()}
 
     def inworld_clone(spec: str) -> dict[str, Path]:
-        russian = cache / f"{voice_id}-{_key(spec, description, RUSSIAN_SAMPLE)}.ru.wav"
+        russian = VOICES / f"{voice_id}-{_key(spec, description, RUSSIAN_SAMPLE)}.ru.wav"
         if not russian.is_file():  # the game's own voice: the same id and description, so the same voice
             say(config, voice_id, description, {RUSSIAN_SAMPLE: russian}, provider=spec, fallback="none")
         en = english_provider(spec, LOCALES[lang])
@@ -468,7 +474,7 @@ def _ways(config: Config, voice_id: str, description: str, texts: list[str], cac
         return wanted
 
     def voxcpm_design() -> dict[str, Path]:
-        ref = cache / f"{voice_id}-{_key(description, SAMPLES[lang])}.ref.wav"
+        ref = VOICES / f"{voice_id}-{_key(description, SAMPLES[lang])}.ref.wav"
         wanted = {t: cache / f"{_key('voxcpm', ref.name, t)}.wav" for t in texts}
         design = {"description": description, "sample": SAMPLES[lang], "seed": _seed(description)}
         voxcpm(ref, missing(wanted), cache, design)
@@ -594,31 +600,33 @@ def _report(dub: Dub, slot: Slot, f: Fit, gain: float, who: str) -> None:
 # --- an explainer -------------------------------------------------------------------------------------------
 
 
-def clone(config: Config, ws: Path, texts_en: list[str], lang: str, tts: str | None = None) -> list[Path]:
-    """The lines in the user's own voice, cloned from their first recorded lines: by Inworld through the TTS
-    service (REFERENCE_INWORLD_S of them), else by VoxCPM2 on the GPU server (REFERENCE_S: its encoder takes
-    no more), in the launcher's order or by `tts`. A line is voiced again only when its text, the
-    recordings or the provider change."""
-    clean = sorted((ws / "voice/clean").glob("[0-9][0-9].wav"))
-    if not clean:
-        raise DubError(f"no recorded lines in {ws / 'voice/clean'}: gothic-shorts words {ws.name}")
+def clone(
+    config: Config, ws: Path, texts_en: list[str], lang: str, tts: str | None = None, reclone: bool = False
+) -> list[Path]:
+    """The lines in the user's own voice: by Inworld through the TTS service (the clone USER of the recording
+    user.inworld.wav), else by VoxCPM2 on the GPU server (user.voxcpm.wav), in the launcher's order or by
+    `tts`. The recordings are kept in VOICES for every short (user_voice); `reclone` makes them anew from this
+    explainer's. A line is voiced again only when its text, the recording or the provider change."""
     work = ws / "voice" / lang
     raw = work / "raw"
     raw.mkdir(parents=True, exist_ok=True)
+    if reclone:
+        for provider, want in (("inworld", REFERENCE_INWORLD_S), ("voxcpm", REFERENCE_S)):
+            user_voice(ws, provider, want, anew=True)
     out = [raw / f"{i:02d}.wav" for i in range(1, len(texts_en) + 1)]
     errors = []
     for spec in _providers(config, tts):
         name = _name(spec)
         try:
             if name == "inworld":
-                ref, ref_key = _reference(clean, work / "reference.inworld.wav", REFERENCE_INWORLD_S)
-                keys = [_key(name, ref_key, text) for text in texts_en]
+                ref = user_voice(ws, name, REFERENCE_INWORLD_S)
+                keys = [_key(name, _digest(ref), text) for text in texts_en]
                 todo = [i for i, (wav, key) in enumerate(zip(out, keys, strict=True)) if not _fresh(wav, key)]
-                say(config, f"USER@{ws.name}", "the author's own voice", {texts_en[i]: out[i] for i in todo},
+                say(config, USER_VOICE, "the author's own voice", {texts_en[i]: out[i] for i in todo},
                     provider=english_provider(spec, LOCALES[lang]), fallback="none", clone=ref)  # fmt: skip
             elif name == "voxcpm":
-                ref, ref_key = _reference(clean, work / "reference.wav", REFERENCE_S)
-                keys = [_key(name, ref_key, text) for text in texts_en]
+                ref = user_voice(ws, name, REFERENCE_S)
+                keys = [_key(name, _digest(ref), text) for text in texts_en]
                 todo = [i for i, (wav, key) in enumerate(zip(out, keys, strict=True)) if not _fresh(wav, key)]
                 voxcpm(ref, {texts_en[i]: out[i] for i in todo}, work)
             else:
@@ -634,23 +642,41 @@ def clone(config: Config, ws: Path, texts_en: list[str], lang: str, tts: str | N
     raise DubError("no clone of the user's voice:\n  " + "\n  ".join(errors))
 
 
-def _reference(clean: list[Path], ref: Path, want: tuple[float, float]) -> tuple[Path, str]:
-    """The first recorded lines one after another, `want` seconds of them (kept while they stay the same)."""
+def user_voice(ws: Path, provider: str, want: tuple[float, float], anew: bool = False) -> Path:
+    """The user's recorded voice as `provider` clones it, VOICES/user.<provider>.wav, kept for every short so
+    that it is cloned once: made from this explainer's first recorded lines (voice/clean/, `want` seconds of
+    them) only when it is not there, or `anew` (gothic-shorts dub --reclone)."""
+    ref = VOICES / f"user.{provider}.wav"
+    if ref.is_file() and not anew:
+        return ref
+    clean = sorted((ws / "voice/clean").glob("[0-9][0-9].wav"))
+    if not clean:
+        raise DubError(f"no recorded lines in {ws / 'voice/clean'} for {ref}: gothic-shorts words {ws.name}")
     takes = clean[: reference_count([_seconds(c) for c in clean], want)]
-    key = _key(*(f"{c.name} {c.stat().st_mtime_ns}" for c in takes), want)
-    stamp = ref.with_suffix(".key")
-    if not (ref.is_file() and stamp.is_file() and stamp.read_text() == key):
-        pads = "".join(f"[{i}:a]apad=pad_dur={REFERENCE_GAP_S}[p{i}];" for i in range(len(takes)))
-        joined = pads + "".join(f"[p{i}]" for i in range(len(takes)))
-        joined += f"concat=n={len(takes)}:v=0:a=1,atrim=end={want[1]}"
-        _ffmpeg([*_inputs(takes), "-filter_complex", joined, "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le",
-                 str(ref)], "the voice's reference")  # fmt: skip
-        stamp.write_text(key)
-    return ref, key
+    pads = "".join(f"[{i}:a]apad=pad_dur={REFERENCE_GAP_S}[p{i}];" for i in range(len(takes)))
+    joined = pads + "".join(f"[p{i}]" for i in range(len(takes)))
+    joined += f"concat=n={len(takes)}:v=0:a=1,atrim=end={want[1]}"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    part = ref.with_name(ref.stem + ".part.wav")
+    _ffmpeg([*_inputs(takes), "-filter_complex", joined, "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le",
+             str(part)], "the voice's reference")  # fmt: skip
+    part.replace(ref)
+    print(f"the user's voice for {provider}: {ref}, {_seconds(ref):.1f} s of {ws.name}'s lines "
+          f"{takes[0].stem}-{takes[-1].stem}")  # fmt: skip
+    return ref
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha1(path.read_bytes()).hexdigest()[:16]
 
 
 def dub_explainer(
-    config: Config, ws: Path, lang: str = "en", plan_file: str = "plan.json", tts: str | None = None
+    config: Config,
+    ws: Path,
+    lang: str = "en",
+    plan_file: str = "plan.json",
+    tts: str | None = None,
+    reclone: bool = False,
 ) -> Dub:
     words_path, plan_path = ws / "words.ru.json", ws / plan_file
     for p in (words_path, plan_path):
@@ -675,7 +701,7 @@ def dub_explainer(
         dub.ru_lufs = loudness(ru)
     dub.duration = dub.ru_duration or end
 
-    voiced = clone(config, ws, texts_en, lang, tts)
+    voiced = clone(config, ws, texts_en, lang, tts, reclone)
     rows = [
         ("voice", " ".join(w["text"] for w in r["words"]), en, r["words"][0]["start"], r["words"][-1]["end"])
         for r, en in zip(said, texts_en, strict=True)
