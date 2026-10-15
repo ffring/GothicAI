@@ -319,6 +319,10 @@ class Npc final {
     float     aimPeek()   const { return stancePeek; }
     float     aimCant()   const { return stanceCant; }
     float     aimWalk()   const { return stanceWalk; }
+    // where the hero looks aiming by hand (the center of the screen), zero if not known (an npc): leaning
+    // over an edge goes by it too
+    void      setAimLook(const Tempest::Vec3& dir) { stanceLook = dir; }
+    auto      aimLook()   const -> Tempest::Vec3 { return stanceLook; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
     void      setAnimSpeed(std::string_view name, float k) { visual.setAnimSpeed(name,k); }
     // how far the animation of that name has played, 0..1; -1: it does not play
@@ -804,6 +808,7 @@ class Npc final {
     float                          stancePeek   = 0;
     float                          stanceCant   = 0;
     float                          stanceWalk   = 0;
+    Tempest::Vec3                  stanceLook   = {};
     bool                           benchStill   = false;
     Npc*                           currentTarget  =nullptr;
     Npc*                           nearestEnemy   =nullptr;

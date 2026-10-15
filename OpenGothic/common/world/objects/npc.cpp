@@ -5011,6 +5011,7 @@ void Npc::endManualAim(bool idle) {
     }
   setManualAim(false);
   setAimStance(0,0,0,0);
+  setAimLook({});
   }
 
 bool Npc::releaseArrow(float draw, const Archery::Stats& st) {

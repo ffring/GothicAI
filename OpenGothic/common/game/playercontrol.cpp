@@ -1177,6 +1177,12 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
 
   Tempest::Vec3 at;
   aimRayHit(pl,at);
+  // where the hero looks: the lean over an edge goes by it too (the center of the screen may fall on the
+  // edge right in front, leaning over is what looks past it); the test bench aiming: by where it aims
+  Tempest::Vec3 lookFrom, look;
+  if(camera!=nullptr && !aimOverride)
+    camera->aimRay(lookFrom,look);
+  pl.setAimLook(look);
 
   // canted: a quick shot (drawn fast, settles fast, looser)
   const auto    st = Archery::canted(Archery::stats(pl,pl.currentRangedWeapon()),cantK);
@@ -1206,6 +1212,9 @@ bool PlayerControl::implManualAim(Npc& pl, uint64_t dt) {
     // the left one leaning out to the left
     const float side = std::sin(Aim::playerProbe.side*float(M_PI)/180.f)*HeadOverHips;
     camera->setAimStance(crouchK*FootIk::aimCrouchDepth(),side,1.f-2.f*std::max(0.f,-peekK));
+    // over an edge ahead and down as the head goes (as far as the trunk bends: eased, no room no lean)
+    const float lean = Aim::playerProbe.lean/Aim::LeanMax;
+    camera->setAimLean(lean*Aim::LeanReach,lean*Aim::LeanDrop);
     }
   return true;
   }
