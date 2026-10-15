@@ -116,6 +116,10 @@ class GameLink:
         self.world: str | None = None
         self.session: Session | None = None
         self.snapshots: dict[str, Snapshot] = {}
+        # the last `party` effect sent to each npc, by anyone: its number and value (orders.py unmarks only
+        # its own mark, not a companion dialog's)
+        self.party: dict[str, tuple[int, int]] = {}
+        self._party_writes = itertools.count(1)
         self.body_latest: dict[int, BodyObservation] = {}
         self._body_packets: deque[BodyObservationPacket] = deque(maxlen=4)
         self.body_generation: int | None = None
@@ -162,6 +166,7 @@ class GameLink:
                 self.world = None
                 self._world_ready.clear()
                 self.snapshots.clear()
+                self.party.clear()
             case Result():
                 _resolve(self._requests.pop(msg.req, None), msg)
             case ActionResult():
@@ -357,6 +362,9 @@ class GameLink:
         only if each giver has what it gives."""
         cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
         await self._request(cmd, timeout)
+        for e in effects:
+            if e.get("do") == "party":
+                self.party[npc.upper()] = (next(self._party_writes), 1 if e.get("value") else 0)
 
     async def beast(
         self, npc: str, do: BeastDo, *, ms: int | None = None, sit: bool | None = None, timeout: float = 5.0
