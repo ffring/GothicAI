@@ -36,8 +36,6 @@ Gothic.ini
 log.txt
 *.sav
 
-# Local agent rules (not shared)
-/AGENTS.md
 /tts-samples/
 
 # Test bench output (scripts/bench.sh)
