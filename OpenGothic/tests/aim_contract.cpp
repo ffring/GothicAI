@@ -129,7 +129,7 @@ struct Result final {
   Vec3 pelvis;
   };
 
-Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees) {
+Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees, bool manual = true) {
   const Vec3 origin(250,35,-180);
   const float yaw = yawDegrees*Deg;
   const Vec3 facing = rotated(Vec3(-1,0,0),yaw);
@@ -140,6 +140,7 @@ Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees) {
   Aim::Input input;
   input.active = true;
   input.arrow = true;
+  input.manual = manual;
   input.forward = facing;
   input.dir = targetDir;
   input.lean = leanDegrees*Deg;
@@ -161,7 +162,8 @@ Result settled(const Fixture& fixture, float leanDegrees, float yawDegrees) {
   near(predicted,position(palette[Head]),.05f,"prospective head must match the applied skeleton");
   near(aim.arrowAt(origin,facing,aim.appliedDirection(),aim.appliedLean()),position(palette[Slot]),
        .05f,"prospective arrow slot must match the applied skeleton");
-  near(length(aim.pelvisOffset()),12.f*leanDegrees/70.f,.01f,"counterweight must reach 12 cm at 70 degrees");
+  near(length(aim.pelvisOffset()),manual ? 12.f*leanDegrees/70.f : 0.f,.01f,
+       "only manual aiming must move the pelvis back, reaching 12 cm at 70 degrees");
   near(aim.pelvisOffset().y,0.f,.0001f,"counterweight must not lift the body");
   require(aim.pelvisOffset().x*facing.x+aim.pelvisOffset().z*facing.z<=.0001f,
           "counterweight must move backward from the feet");
@@ -208,6 +210,7 @@ void testUpwardShotCorrectionKeepsHipBend() {
     Aim::Input input;
     input.active = true;
     input.arrow = true;
+    input.manual = true;
     input.forward = facing;
     input.leanDirection = facing;
     input.dir = targetDir;
@@ -319,6 +322,7 @@ void testTransientSnapshot() {
     Aim::Input input;
     input.active = frame<112 || (frame>=136 && frame<208);
     input.arrow = true;
+    input.manual = true;
     input.forward = facing;
     input.leanDirection = facing;
     input.dir = targetDir;
@@ -369,7 +373,10 @@ void testLegacyNpcLimit() {
   near(Aim::leanForNpc(67.5f*Deg)/Deg,27.5f,.001f,"NPCs must keep the old angular ramp");
   near(Aim::leanForNpc(80.f*Deg)/Deg,55.f,.001f,"NPC hip bend must retain its 55 degree maximum");
   near(Aim::leanForNpc(90.f*Deg)/Deg,55.f,.001f,"NPC hip bend must stay capped below the hero maximum");
-  near(Aim::leanFor(80.f*Deg)/Deg,70.f,.001f,"manual fallback must allow the hero's deeper bend");
+  near(Aim::leanFor(80.f*Deg)/Deg,70.f,.001f,"the deep hip bend helper must allow the hero's 70 degree limit");
+  Fixture fixture;
+  const auto classic = settled(fixture,55.f,0.f,false);
+  near(classic.pelvis,Vec3(),.0001f,"classic aiming must preserve the legacy pelvis position");
   }
 
 }

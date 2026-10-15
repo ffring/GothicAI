@@ -238,7 +238,6 @@ bool Bullet::onCollidePrecise(Npc& npc, const Vec3& from, const Vec3& to) {
 bool Bullet::onCollide(Npc& npc) {
   if(&npc==origin() || isFinished())
     return false;
-  const int32_t hpBefore = npc.attribute(ATR_HITPOINTS);
 
   if(ow!=nullptr) {
     // no damage between ally npc's, only emit pfx effect
@@ -287,17 +286,6 @@ bool Bullet::onCollide(Npc& npc) {
       std::snprintf(buf,sizeof(buf),"arrow stuck npc %.*s bone %zu",int(who.size()),who.data(),pin.bone);
       TestBench::note(buf);
       }
-    }
-  if(TestBench::isActive() && !precise && stopsAtWorldHit()) {
-    // Classic arrows use the dice damage path, but the physical impact is the same proof of arrival.
-    const auto who = TestBench::who(&npc);
-    const auto by = TestBench::who(origin());
-    const auto point = impactPoint();
-    char buf[256];
-    std::snprintf(buf,sizeof(buf),"arrow hit %.*s: classic, hp %d -> %d, flew %.0f cm, at %.0f %.0f %.0f, by %.*s",
-                  int(who.size()),who.data(),int(hpBefore),int(npc.attribute(ATR_HITPOINTS)),double(pathLength()),
-                  point.x,point.y,point.z,int(by.size()),by.data());
-    TestBench::note(buf);
     }
   return true;
   }

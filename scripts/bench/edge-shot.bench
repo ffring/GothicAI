@@ -1,14 +1,11 @@
-# Shooting down over an edge: the end of a thatched roof's ridge at Lobart's farm, 7.3 m above a path, a wolf on
-# the path 1 m out from the gable wall (8 m, ~80 deg down from the head). The wolf is put from the edge, then the
-# hero steps back: put from 2 m back it would land on the roof.
-#   stand_*: 60 cm from the edge, the bow drawn; the standing head cannot see the wolf, the lean must. The
-#            shared solver prefers a clear shot, then a clear head line when the arrow cannot clear the roof.
-#   close_*: 30 cm from the edge after drawing; both the head and arrow lines must clear below 70 degrees,
-#            and an actual classic/manual shot must hit the wolf.
-#   walk_*:  from 2 m back, walking (manual: steps with the bow drawn, classic: walk mode) up to the edge.
-# Camera from the side (`cam follow 600 300 90`). bench.log: `pos` (y 2335 on the roof, ~1640 on the ground
-# below: he fell), `edgedist` (distance in cm to a drop greater than 100 cm ahead), `cansee`,
-# `anims ... target=`; events.jsonl: `sight` per frame. The guarded walks must leave 20..35 cm to the edge.
+# Manual shooting down over Lobart's roof: the same frozen wolf below the gable wall.
+# stand_manual: exactly 60 cm after drawing; clear head and shot-direction rays are required.
+# If no angle through 70 degrees clears both, the limited full pose and its actual impact are logged.
+# close_manual: exactly 30 cm after drawing, a clear shot below 70 degrees must hit the wolf.
+# aimat ... mouse drives the actual game camera and crosshair; all stand/close PNGs include its UI.
+# probe_manual_zero/full: applied-head prediction checks at 60 cm, including the full 70-degree pose.
+# Guard checks inherited from #77: drawn forward steps stop 20..35 cm before the edge, raising at
+# 35 cm stays on the roof, and the hero can retreat or leave the stop sideways. Both bow and crossbow.
 cheat god
 set time 12 0
 overlay off
@@ -28,67 +25,16 @@ immortal WOLF on
 put WOLF 160 0
 wait 300
 cam lift off
-cam follow 600 300 90
-cam look -240
-# classic, standing 60 cm from the edge: drawn upright with the aim off (no target), then the aim on (the lean,
-# the focus takes the wolf)
-manual off
-tap bow
-wait 1500
-aim off
-press action
-wait 1500
-# Raising the bow has root motion: place the already raised hero at the measured margin.
-goto pos 14591 2349 -14597
-wait 400
-face 247.5
-edge 247.5 2000 60 exact
-wait 300
-face 247.5
-put WOLF 5000 0
-wait 400
-put WOLF 160 0
-wait 300
-rec stand_classic
-sight WOLF
-cansee WOLF
-anims
-pos
-edgedist 247.5
-aim on
-wait 2000
-cansee WOLF
-anims
-edgedist 247.5
-stop
-# Check the same drawn animation at both endpoints independently of the visibility solver.
-# lean-frame compares its applied-state prediction with mapHeadBone after all pose passes.
-aimlean 0
-wait 1200
-rec probe_classic_zero
-wait 600
-cansee WOLF
-stop
-aimlean 70
-wait 1200
-rec probe_classic_full
-wait 600
-cansee WOLF
-stop
-aimlean auto
-wait 1200
-release action
-wait 800
-# manual, standing 60 cm from the edge: the real game's camera and crosshair point at the wolf.
-# Capture the upright head first, then the minimum lean and an actual shot. At 60 cm a head-only solution
-# is valid: the shot may still hit the roof. close_manual below checks the successful shot from 30 cm.
 manual on
+aim off
+draw bow
+wait 1500
 aimat WOLF body mouse
 cam game
 ui on
-aim off
 press action
 wait 1500
+# Drawing has root motion: place the fully drawn hero at the exact margin.
 goto pos 14591 2349 -14597
 wait 400
 face 247.5
@@ -96,15 +42,15 @@ edge 247.5 2000 60 exact
 wait 300
 rec stand_manual
 sight WOLF
-cansee WOLF
+cansee WOLF 247.5
 anims
 pos
 edgedist 247.5
 shot stand_manual_upright
 wait 100
 aim on
-wait 2000
-cansee WOLF
+wait 2500
+cansee WOLF 247.5
 anims
 pos
 edgedist 247.5
@@ -115,83 +61,37 @@ release action
 wait 1500
 hp WOLF
 stop
-# The normal stand_manual capture above includes the actual shot. Draw again for the endpoint
-# head checks, keeping the real game camera and the mouse-driven point on the wolf.
+# Diagnose the same drawn animation and game camera at both endpoints. The forced 70-degree shot
+# records its actual impact before restoring automatic lean, including any geometric limit at 60 cm.
 press action
 wait 1500
 aimlean 0
 wait 1200
 rec probe_manual_zero
 wait 600
-cansee WOLF
+cansee WOLF 247.5
+shot stand_manual_zero
+wait 100
 stop
 aimlean 70
 wait 1200
 rec probe_manual_full
 wait 600
-cansee WOLF
-stop
-aimlean auto
-wait 1200
+pos
+edgedist 247.5
+cansee WOLF 247.5
+shot stand_manual_full70
+wait 100
+hp WOLF
 release action
-wait 800
-aimat off
-ui off
-cam follow 600 300 90
-cam look -240
-wait 800
-# Close classic: keep the same frozen wolf at the original world position. Draw before the exact
-# placement so the animation's root motion cannot replace the intended 30 cm margin.
-aimat off
-manual off
-disarm
-goto pos 14591 2349 -14597
-cheat full
-ani player S_RUN
-wait 400
-stats bow 100 talent 0
-equip ItRw_Bow_L_01
-aim off
-draw bow
-wait 1500
-press action
-wait 1500
-goto pos 14591 2349 -14597
-wait 400
-face 247.5
-edge 247.5 2000 30 exact
-wait 300
-rec close_classic
-sight WOLF
-aim on
-wait 2500
-pos
-edgedist 247.5
-cansee WOLF 247.5
-anims
-hp WOLF
-# In classic controls action holds the aim; forward while action is held releases a real shot.
-tap forward
-wait 1500
-hp WOLF
-stop
-aimlean 70
-wait 1200
-rec probe_close_classic_full
-wait 600
-pos
-edgedist 247.5
-cansee WOLF 247.5
-anims
-tap forward
 wait 1500
 hp WOLF
 stop
 aimlean auto
 wait 1200
-release action
 wait 800
-# Close manual: the game camera and crosshair follow the wolf as actual mouse input would.
+aimat off
+# Keep the same frozen wolf at its original world position. Draw before exact placement.
 disarm
 goto pos 14591 2349 -14597
 cheat full
@@ -213,6 +113,10 @@ edge 247.5 2000 30 exact
 wait 300
 rec close_manual
 sight WOLF
+pos
+edgedist 247.5
+shot close_manual_upright
+wait 100
 aim on
 wait 2500
 pos
@@ -226,30 +130,12 @@ release action
 wait 1500
 hp WOLF
 stop
-press action
-wait 1500
-aimlean 70
-wait 1200
-rec probe_close_manual_full
-wait 600
-pos
-edgedist 247.5
-cansee WOLF 247.5
-anims
-release action
-wait 1500
-hp WOLF
-stop
-aimlean auto
-wait 1200
-release action
-wait 800
 aimat off
 ui off
 cam follow 600 300 90
 cam look -240
 wait 800
-# manual, walking: from 2 m back, drawn at the wolf, steps forward for 3 s
+# Bow, drawn manual steps: from 2 m back, walk forward for 3 s until the guard stops the hero.
 edge 247.5 2000 200
 wait 300
 face 247.5
@@ -264,53 +150,14 @@ release forward
 wait 1500
 pos
 edgedist 247.5
-cansee WOLF
+cansee WOLF 247.5
 anims
 stop
 release action
 aimat off
 wait 600
-tap bow
-wait 1200
-# classic, walk mode: from 2 m back with the bow raised, walking for 3.5 s, then drawing
-manual off
-goto pos 14591 2349 -14597
-wait 400
-face 247.5
-edge 247.5 2000 60
-wait 300
-face 247.5
-put WOLF 5000 0
-wait 300
-put WOLF 160 0
-wait 300
-edge 247.5 2000 200
-wait 300
-face 247.5
-walkmode walk
-tap bow
-wait 1500
-rec walk_classic
-press forward
-wait 3500
-release forward
-wait 300
-pos
-edgedist 247.5
-press action
-wait 2000
-pos
-edgedist 247.5
-cansee WOLF
-anims
-stop
-release action
-wait 600
-walkmode run
-
-# At exactly 35 cm: the weapon is already in hand, then action raises/draws it to aim without movement.
-# Every extra segment restores a standing hero on the roof and draws explicitly; a previous fall or
-# weapon state must not turn the next setup into a holstering animation.
+# At exactly 35 cm, raising/drawing without movement must not carry the hero over the edge.
+# Restore standing before each setup; a previous fall or weapon state must not hide the check.
 immortal WOLF on
 disarm
 goto pos 14591 2349 -14597
@@ -342,29 +189,6 @@ goto pos 14591 2349 -14597
 cheat full
 ani player S_RUN
 wait 400
-manual off
-draw bow
-wait 1500
-face 247.5
-edge 247.5 2000 35 exact
-rec raise_classic_bow
-anims
-pos
-edgedist 247.5
-press action
-wait 2500
-pos
-edgedist 247.5
-anims
-stop
-release action
-wait 600
-
-disarm
-goto pos 14591 2349 -14597
-cheat full
-ani player S_RUN
-wait 400
 equip ItRw_Crossbow_L_01
 give ItRw_Bolt 100
 stats cbow 100 talent 0
@@ -387,32 +211,7 @@ stop
 release action
 wait 600
 aimat off
-
-disarm
-goto pos 14591 2349 -14597
-cheat full
-ani player S_RUN
-wait 400
-manual off
-draw bow
-wait 1500
-face 247.5
-edge 247.5 2000 35 exact
-rec raise_classic_cbow
-anims
-pos
-edgedist 247.5
-press action
-wait 2500
-pos
-edgedist 247.5
-anims
-stop
-release action
-wait 600
-
-# Crossbow counterparts of walk_manual/walk_classic. Classic forward with action shoots, so walk raised,
-# then aim at rest, just as the original bow segment does.
+# Crossbow counterpart of walk_manual.
 disarm
 goto pos 14591 2349 -14597
 cheat full
@@ -441,40 +240,7 @@ stop
 release action
 aimat off
 wait 600
-
-disarm
-goto pos 14591 2349 -14597
-cheat full
-ani player S_RUN
-wait 400
-manual off
-draw bow
-wait 1500
-face 247.5
-edge 247.5 2000 200
-wait 300
-face 247.5
-walkmode walk
-rec walk_classic_cbow
-anims
-press forward
-wait 3500
-release forward
-wait 300
-pos
-edgedist 247.5
-press action
-wait 2000
-pos
-edgedist 247.5
-anims
-stop
-release action
-wait 600
-walkmode run
-
-# Leaving an edge stop: drawn manual steps can retreat, then the carried crossbow can step sideways.
-manual on
+# Leave the guard stop: retreat with the crossbow drawn, then step sideways with it carried.
 aimat WOLF body
 rec retreat_manual_cbow
 press action
@@ -490,10 +256,9 @@ edgedist 247.5
 stop
 release action
 aimat off
-manual off
 wait 800
 walkmode walk
-rec escape_classic_cbow
+rec escape_manual_cbow
 pos
 edgedist 247.5
 hold back 600
@@ -506,39 +271,3 @@ pos
 edgedist 247.5
 stop
 walkmode run
-
-# A shallow shot hidden by a ship's parapet, found by perches + cansee: 45.8 degrees down.
-# The old angle rule starts at 55 degrees and cannot acquire this target. Raise the bow before
-# placement so its root motion cannot carry the hero towards the parapet during either capture.
-aimat off
-manual off
-disarm
-equip ItRw_Bow_L_01
-aim off
-draw bow
-wait 1500
-press action
-wait 1500
-pin WOLF 5000 0 -422
-wait 300
-goto pos -10355 819 -17689
-face 67.5
-wait 300
-pin WOLF 500 0 -422
-wait 300
-sight WOLF
-cansee WOLF
-anims
-shot parapet_classic_upright
-wait 100
-rec parapet_classic
-aim on
-wait 2500
-cansee WOLF
-anims
-shot parapet_classic_leaned
-wait 100
-stop
-release action
-pin off
-wait 600

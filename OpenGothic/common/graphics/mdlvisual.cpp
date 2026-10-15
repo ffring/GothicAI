@@ -880,6 +880,7 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       if(sh<skeleton->tr.size())
         shoulder = skeleton->tr[sh].at(3,1);
       }
+    const Tempest::Vec3 from = npc.position() + Tempest::Vec3(0,shoulder,0) + in.forward*35.f;
     // a shot is a frame of BS_HIT, the reload goes on aiming
     if((ws==WeaponState::Bow || ws==WeaponState::CBow) && (bs==BS_AIMNEAR || bs==BS_AIMFAR || bs==(BS_HIT & BS_MAX))) {
       in.active = true;
@@ -896,12 +897,12 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
         // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
         in.slot   = ammunition.boneId;
         } else {
-        in.dir  = npc.aimDirection(aimAt());
+        in.dir  = World::bulletVelocity(from,aimAt());
         }
       }
     else if(ws==WeaponState::Mage && bs==BS_CASTING) {
       in.active = true;
-      in.dir    = npc.aimDirection(aimAt());
+      in.dir    = aimAt() - from;
       }
     if(in.active && manual && npc.aimPeek()!=0.f) {
       // round a corner: lean out sideways as far as there is room beside the head
@@ -916,19 +917,22 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
-      in.leanDirection = npc.aimLeanDirection(aimAt());
-      if(npc.isPlayer()) {
-        in.lean = npc.aimLean(aimAt(),manual).angle;
+      if(npc.isPlayer() && manual) {
+        in.leanDirection = npc.aimLeanDirection(aimAt());
+        in.lean = npc.aimLean(aimAt(),true).angle;
         if(Aim::playerLeanOverride>=0.f)
           in.lean = Aim::playerLeanOverride;
         } else {
-        // NPCs keep the old angle rule; only the hero searches visibility along the bend.
+        // Classic aiming and NPCs keep their original angular rule and room check.
+        static constexpr float reach = 58.f, drop = 28.f;
         const Tempest::Vec3 d = in.dir;
         const float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
         in.lean = Aim::leanForNpc(down);
         if(in.lean>0.f) {
-          const auto head = npc.aimHead(aimAt(),0.f);
-          const auto to = npc.aimHead(aimAt(),in.lean);
+          const float k = in.lean/(Aim::NpcLeanMax*float(M_PI)/180.f);
+          const auto dir = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
+          const auto head = mapHeadBone();
+          const auto to = head + dir*(reach*k) - Tempest::Vec3(0,drop*k,0);
           if(npc.world().physic()->ray(head,to).hasCol)
             in.lean = 0;
           }

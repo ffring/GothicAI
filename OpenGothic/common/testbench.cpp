@@ -4223,7 +4223,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const Vec3  prior = pl.aimHead(tg,before*float(M_PI)/180.f);
     const bool  priorSeen = !w.physic()->ray(prior,tg).hasCol;
     std::snprintf(buf,sizeof(buf),"  leaned head: required_deg %.2f current_deg %.2f line %s visible %d room %d edge %d hit_cm %.2f shot_clear %d; to it %d (hit at %.0f of %.0f), before %.2f deg seen %d; max_forward_cm %.1f from feet, head at %.0f above the feet",
-                  lean.visible ? double(degrees) : -1.0,double(Aim::playerProbe.lean),leanLineName(lean.line),int(lean.visible),int(lean.room),
+                  double(degrees),double(Aim::playerProbe.lean),leanLineName(lean.line),int(lean.visible),int(lean.room),
                   int(lean.edge),double(lean.hitDistance),int(lean.shotClear),
                   int(!r2.hasCol),r2.hasCol ? double((r2.v-eye).length()) : -1.0,double((tg-eye).length()),double(before),int(priorSeen),
                   double(Vec3::dotProduct(full-pl.position(),dir)),double(eye.y-pl.position().y));
@@ -4247,6 +4247,25 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
                   double(full.x),double(full.y),double(full.z),double(fullArrow.x),double(fullArrow.y),double(fullArrow.z),
                   double(pl.position().x),double(pl.position().y),double(pl.position().z));
     say(buf);
+    std::snprintf(buf,sizeof(buf),"  directional lean: edge_cm %.2f drop_cm %.2f support_y %.2f head_clear %d shot_clear %d head_hit_cm %.2f shot_hit_cm %.2f limited %d room_limited %d",
+                  double(lean.edgeDistance),double(std::isfinite(lean.edgeDrop) ? lean.edgeDrop : -1.f),double(lean.edgeHeight),int(lean.headClear),int(lean.shotClear),
+                  double(lean.headHitDistance),double(lean.shotHitDistance),int(lean.limited),int(lean.roomLimited));
+    say(buf);
+    if(hasArrow && pl.hasManualAim()) {
+      const Vec3 look = Vec3::normalize(pl.aimLook());
+      const Vec3 lookFlat = Vec3::normalize(Vec3(look.x,0,look.z));
+      const float edgeProjection = lean.edgeDistance*Vec3::dotProduct(lookFlat,edgeDir);
+      const auto headRay = w.physic()->ray(actual,actual+look*200.f);
+      const auto shotRay = w.physic()->ray(arrow,arrow+Vec3::normalize(arrowDir)*200.f);
+      std::snprintf(buf,sizeof(buf),"  actual edge rays: head_over_edge_cm %.2f arrow_over_edge_cm %.2f head_hit_cm %.2f at (%.2f %.2f %.2f) arrow_hit_cm %.2f at (%.2f %.2f %.2f)",
+                    double(Vec3::dotProduct(actual-pl.position(),edgeDir)-edgeProjection),
+                    double(Vec3::dotProduct(arrow-pl.position(),edgeDir)-edgeProjection),
+                    headRay.hasCol ? double((headRay.v-actual).length()) : -1.0,
+                    double(headRay.v.x),double(headRay.v.y),double(headRay.v.z),
+                    shotRay.hasCol ? double((shotRay.v-arrow).length()) : -1.0,
+                    double(shotRay.v.x),double(shotRay.v.y),double(shotRay.v.z));
+      say(buf);
+      }
     }
   else if(c=="views") {
     // views <npc> [count] [max dist] [from <min dist>] [shoot <prefix>]: where a camera sees the hero (the top of
@@ -7659,7 +7678,7 @@ void sightFrame(int w, int h, const std::string& shot) {
   const auto  lean = pl->aimLean(aim,manual);
   auto        r0   = phys->ray(h0,tg);
   auto        r1   = phys->ray(hd,tg);
-  // The same head path and visibility solution as the pose and the classic focus.
+  // The manual pose's directional solver is independent of this observed NPC.
   const Vec3  d    = tg-h0;
   const Vec3  eye  = pl->aimHead(aim,lean.angle);
   const Vec3  full = pl->aimHead(aim,Aim::LeanMax*float(M_PI)/180.f);
@@ -7671,7 +7690,7 @@ void sightFrame(int w, int h, const std::string& shot) {
   const Vec3  fg   = h0 + (lvl*std::cos(elev) - Vec3(0,std::sin(elev),0))*bench.sightFan;
   const float down = -std::atan2(tg.y-hd.y,std::sqrt((tg.x-hd.x)*(tg.x-hd.x)+(tg.z-hd.z)*(tg.z-hd.z)))*180.f/float(M_PI);
 
-  char buf[1600];
+  char buf[2300];
   std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"shot\":%s,\"w\":%d,\"h\":%d,"
                 "\"h0\":%s,\"c0\":%s,\"c0d\":%.0f,\"d0\":%.0f,\"e\":%s,\"room\":%d,\"ec\":%s,"
                 "\"h\":%s,\"c\":%s,\"cd\":%.0f,\"d\":%.0f,\"down\":%.1f,\"t\":%s,\"f\":%s,\"g\":%s,\"elev\":%.0f,"
@@ -7682,7 +7701,7 @@ void sightFrame(int w, int h, const std::string& shot) {
                 pt(eye).c_str(),int(lean.room),pt(rt.v,rt.hasCol).c_str(),
                 pt(hd).c_str(),pt(r1.v,r1.hasCol).c_str(),r1.hasCol ? double((r1.v-hd).length()) : -1.0,double((tg-hd).length()),
                 double(down),pt(tg).c_str(),pt(fl).c_str(),pt(fg).c_str(),double(elev*180.f/float(M_PI)),
-                int(!r0.hasCol),int(pl->canSeeNpcOverEdge(*n)),lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
+                int(!r0.hasCol),int(pl->canSeeNpcOverEdge(*n)),double(lean.angle*180.f/float(M_PI)),
                 double(Aim::playerProbe.lean),double(Vec3::dotProduct(full-pl->position(),lvl)),
                 double(predictionError),int(!r1.hasCol),int(lean.edge),double(lean.hitDistance),int(lean.visible),
                 jsonStr(leanLineName(lean.line)).c_str(),int(lean.shotClear),int(manual));
@@ -7693,23 +7712,30 @@ void sightFrame(int w, int h, const std::string& shot) {
     const std::string focus = symName(*wrld,pl->target());
     Vec3 arrow, arrowDir;
     const bool hasArrow = pl->arrowRay(arrow,arrowDir);
-    const int actualShotClear = hasArrow ? int(!phys->ray(arrow,aim).hasCol) : -1;
+    int actualShotClear = -1;
+    if(hasArrow) {
+      const auto shotRay = phys->ray(arrow,arrow+Vec3::normalize(arrowDir)*200.f);
+      actualShotClear = int(!shotRay.hasCol || (lean.edge && shotRay.v.y<lean.edgeHeight-100.f));
+      }
     std::snprintf(buf,sizeof(buf),"\"npc\":%s,\"error_cm\":%.2f,\"current_deg\":%.2f,\"required_deg\":%.2f,"
                   "\"edge\":%d,\"hit_cm\":%.2f,\"room\":%d,\"visible\":%d,\"line\":%s,\"shot_clear\":%d,\"actual_seen\":%d,"
                   "\"focus\":%s,\"manual\":%d,\"actual_shot_clear\":%d,\"actual\":[%.2f,%.2f,%.2f],\"predicted\":[%.2f,%.2f,%.2f],"
-                  "\"aim\":[%.2f,%.2f,%.2f]",
+                  "\"aim\":[%.2f,%.2f,%.2f],\"head_clear\":%d,\"edge_cm\":%.2f,\"drop_cm\":%.2f,\"support_y\":%.2f,"
+                  "\"head_hit_cm\":%.2f,\"shot_hit_cm\":%.2f,\"limited\":%d,\"room_limited\":%d",
                   jsonStr(bench.sightNpc).c_str(),double(predictionError),double(Aim::playerProbe.lean),
-                  lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
+                  double(lean.angle*180.f/float(M_PI)),
                   int(lean.edge),double(lean.hitDistance),int(lean.room),int(lean.visible),jsonStr(leanLineName(lean.line)).c_str(),int(lean.shotClear),
                   int(!r1.hasCol),jsonStr(focus).c_str(),int(manual),actualShotClear,
                   double(hd.x),double(hd.y),double(hd.z),double(predicted.x),double(predicted.y),double(predicted.z),
-                  double(aim.x),double(aim.y),double(aim.z));
+                  double(aim.x),double(aim.y),double(aim.z),int(lean.headClear),double(lean.edgeDistance),
+                  double(std::isfinite(lean.edgeDrop) ? lean.edgeDrop : -1.f),double(lean.edgeHeight),double(lean.headHitDistance),double(lean.shotHitDistance),
+                  int(lean.limited),int(lean.roomLimited));
     event("lean-frame",buf);
     std::snprintf(buf,sizeof(buf),"lean-frame %s frame %lld: error_cm %.2f current_deg %.2f required_deg %.2f "
                   "edge %d hit_cm %.2f room %d visible %d line %s shot_clear %d actual_shot_clear %d actual_seen %d focus %s manual %d "
                   "actual (%.2f %.2f %.2f) predicted (%.2f %.2f %.2f)",
                   bench.recName.c_str(),(long long)bench.recFrame,double(predictionError),double(Aim::playerProbe.lean),
-                  lean.visible ? double(lean.angle*180.f/float(M_PI)) : -1.0,
+                  double(lean.angle*180.f/float(M_PI)),
                   int(lean.edge),double(lean.hitDistance),int(lean.room),int(lean.visible),leanLineName(lean.line),int(lean.shotClear),actualShotClear,
                   int(!r1.hasCol),focus.c_str(),int(manual),
                   double(hd.x),double(hd.y),double(hd.z),double(predicted.x),double(predicted.y),double(predicted.z));

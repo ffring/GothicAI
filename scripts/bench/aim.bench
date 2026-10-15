@@ -245,3 +245,80 @@ hp SHEEP
 release action
 wait 800
 stop
+
+# MANUAL_VISIBLE_BEGIN
+# Self-contained manual checks, also runnable alone by extracting from this marker to EOF.
+# All three targets are in open sight: the lean must stay zero, while aim error and bend retain
+# their previous behavior. The actual game camera/crosshair follows mouse input, as on the roof.
+cheat god
+set time 12 0
+view full
+overlay off
+pin off
+aimat off
+disarm
+goto NW_XARDAS_TOWER_VALLEY_091
+cheat full
+ani player S_RUN
+face -106
+wait 500
+clear 2500
+equip ItRw_Bow_L_01
+give ItRw_Arrow 50
+stats str 120 dex 120 bow 100 talent 0
+insert Sheep
+wait 300
+immortal SHEEP on
+manual on
+aim on
+draw bow
+wait 1500
+cam game
+ui on
+sight SHEEP
+# A visible target at ground level, slightly below the standing head.
+pin SHEEP 1200 0 0
+wait 300
+aimat SHEEP body mouse
+rec manual_visible
+press action
+wait 2500
+cansee SHEEP
+anims
+shot manual_visible_drawn
+wait 100
+release action
+wait 1500
+stop
+# Upward aim: the target remains in open sight.
+pin SHEEP 1000 0 550
+wait 300
+aimat SHEEP body mouse
+rec manual_up
+press action
+wait 2500
+cansee SHEEP
+anims
+shot manual_up_drawn
+wait 100
+release action
+wait 1500
+stop
+# Horizontal look near standing-head height; keep the same target visible in the frame.
+pin SHEEP 1200 0 115
+wait 300
+aimat ahead 1200 160 mouse
+rec manual_straight
+press action
+wait 2500
+cansee SHEEP
+anims
+shot manual_straight_drawn
+wait 100
+release action
+wait 1500
+stop
+aimat off
+pin off
+sight off
+ui off

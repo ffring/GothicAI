@@ -788,11 +788,7 @@ Npc* WorldObjects::findNpcNear(const Npc& pl, Npc* def, const SearchOpt& opt) {
   def = validateNpc(def);
   if(def) {
     auto xopt  = opt;
-    const auto ws = pl.weaponState();
-    const bool edgeAim = pl.isPlayer() && Aim::isEnabled() &&
-                         (ws==WeaponState::Bow || ws==WeaponState::CBow || ws==WeaponState::Mage);
-    // Keep the angle grace of an acquired focus, but do not retain an unreachable target below an edge.
-    xopt.flags = SearchFlg(xopt.flags | SearchFlg::NoAngle | (edgeAim ? SearchFlg(0) : SearchFlg::NoRay));
+    xopt.flags = SearchFlg(xopt.flags | SearchFlg::NoAngle | SearchFlg::NoRay);
     if(def && testObj(*def,pl,xopt))
       return def;
     }
@@ -1082,9 +1078,6 @@ template<class T>
 static bool canSee(const Npc&,const T&){ return true; }
 
 static bool canSee(const Npc& pl, const Npc& n){
-  const auto ws = pl.weaponState();
-  if(pl.isPlayer() && Aim::isEnabled() && (ws==WeaponState::Bow || ws==WeaponState::CBow || ws==WeaponState::Mage))
-    return pl.canSeeNpcOverEdge(n);
   return pl.canSeeNpc(n,true) || pl.canSeeNpcOverEdge(n);
   }
 

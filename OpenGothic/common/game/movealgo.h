@@ -99,6 +99,14 @@ class MoveAlgo final {
     bool    checkLastBounce() const;
     // A short virtual step keeps an edge stop active even when the legs no longer produce root motion.
     bool    isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const;
+    struct EdgeProbe final {
+      bool  found = false;
+      float distance = 0;
+      float drop = 0;
+      float supportY = 0;
+      };
+    // Read-only support query along a world-space direction, without the movement guard's margin.
+    EdgeProbe edgeAhead(const Tempest::Vec3& direction, float range) const;
 
   private:
     // Opt-in native movement observation, scoped to one tick; absent outside a body trace.

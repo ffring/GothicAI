@@ -6173,37 +6173,42 @@ Vec3 Npc::aimArrow(const Vec3& target, float angle) const {
   return visual.pose().aimIk().arrowAt(position(),f,aimLeanDirection(target),angle);
   }
 
+Aim::LeanEdge Npc::aimEdge(const Vec3& direction) const {
+  const auto edge = mvAlgo.edgeAhead(direction,100.f);
+  return {edge.found,edge.distance,edge.drop,edge.supportY};
+  }
+
 Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
-  const Vec3 head = aimHead(target,0.f);
-  const Vec3 d = target-head;
-  float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
-  if(manual) {
-    const Vec3 look = aimLook();
-    down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
+  if(!manual) {
+    const auto d = aimDirection(target);
+    Aim::LeanResult result;
+    result.angle = Aim::leanForNpc(-std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z)));
+    return result;
     }
-  return visual.pose().aimIk().leanNeeded(*this,target,down,manual);
+  const auto look = aimLook();
+  const float down = -std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z));
+  return visual.pose().aimIk().leanNeeded(*this,look,look,down,aimEdge(look));
   }
 
 bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   const auto ws = weaponState();
   if(!Aim::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow && ws!=WeaponState::Mage))
     return false;
-  const Vec3 tg = oth.physic.center();
-  if(!visual.pose().aimIk().isValid())
-    return canSeeNpc(oth,true);
-  if(isPlayer()) {
-    const auto lean = aimLean(tg);
-    return lean.visible && canRayHitPoint(aimHead(tg,lean.angle),tg,180.f);
-    }
-  // NPC archers retain their angle rule, without the hero's per-frame visibility search.
-  const Vec3 d = tg-visual.mapHeadBone();
-  const float angle = Aim::leanForNpc(-std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z)));
-  if(angle<=0.f)
+  const Vec3  head = visual.mapHeadBone();
+  const Vec3  tg   = oth.physic.center();
+  const Vec3  d    = tg - head;
+  const float h    = std::sqrt(d.x*d.x+d.z*d.z);
+  const float lean = Aim::leanForNpc(-std::atan2(d.y,h));
+  if(lean<=0.f)
     return false;
-  const Vec3 head = aimHead(tg,0.f);
-  const Vec3 eye = aimHead(tg,angle);
+  // Classic focus keeps its original angular rule and head estimate.
+  static constexpr float reach = 58.f, drop = 28.f;
+  const float a   = rotationRad();
+  const Vec3  dir = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(a),0,std::sin(a))*0.25f);
+  const float k   = lean/(Aim::NpcLeanMax*float(M_PI)/180.f);
+  const Vec3  eye = head + dir*(reach*k) - Vec3(0,drop*k,0);
   if(owner.physic()->ray(head,eye).hasCol)
-    return false;
+    return false; // no room to lean
   return canRayHitPoint(eye,tg,180.f) || canRayHitPoint(eye,oth.visual.mapHeadBone(),180.f);
   }
 
