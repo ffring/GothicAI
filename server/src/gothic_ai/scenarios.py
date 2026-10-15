@@ -3695,6 +3695,106 @@ class ClaimScript:
             yield event
 
 
+async def vanilla_given(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    vanilla: VanillaQuests,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+    bandits: tuple[str, ...] = ("BDT_1013_BANDIT_L", "BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
+) -> dict[str, str]:
+    """A quest of the scripts given and ended in a conversation (the player's game, 2026-10-14: Cavalorn's
+    bandits, agreed on in his own words, killed together, counted for nothing). A new game; Cavalorn's model
+    scripted unless LLM=chatgpt (on «помогу» give_quest, on «мертвы» accept_quest). Checks:
+    - can_give: his situation has the quest he gives in his dialog HELFEN, «Могу я помочь тебе с бандитами?»;
+    - given: the hero offers his help in his own words: the quest runs and HELFEN counts as heard (no longer
+      in his menu), the journal has it;
+    - letter: with the bandits dead, his situation has what he says at the ending, of the letter to Vatras
+      (the converter has the ending from B_Addon_Cavalorn_VatrasBrief now);
+    - ended: the hero says they are dead: the scripts' ending plays — the quest done, the letter to Vatras its
+      next step, +100 experience, 50 gold (the hero has no armour); no lie, they are dead;
+    - once: the ending counts as heard, neither dialog is offered."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    quest, letter = "MIS_ADDON_CAVALORN_KILLBRAGO", "MIS_ADDON_CAVALORN_LETTER2VATRAS"
+    helfen, ended = "DIA_ADDON_CAVALORN_HELFEN", "DIA_ADDON_CAVALORN_BRAGOKILLED"
+    facts = vanilla.chronicle.facts
+    hero = ["inst", "HERO"]
+
+    async def var(name: str) -> int | None:
+        return (await link.story_state(vars=[name])).get("vars", {}).get(name)
+
+    if isinstance(dialogue.llm, FakeBackend):
+        give = ToolCall("give_quest", {"quest": quest}, "g1")
+        accept = ToolCall("accept_quest", {"quest": quest}, "a1")
+        words = [
+            ("помогу", FakeStep("Поможешь? Ну, пошли, вдвоём управимся.", [give])),
+            ("мертвы", FakeStep("Все трое? Ну, раз так. Слушай, у меня к тебе ещё дело.", [accept])),
+        ]
+        dialogue.llm = _ByNpc({"Кавалорн": _OnWords(words, FakeStep("Хм."))}, FakeBackend("Хм.", delay=0))
+    await link.debug("skip_important", near=npc)  # his own greeting would stop the hero
+    for _ in range(2):  # the goblins by his fire would beat the hero down
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("vgive: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=300)
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    if not await _until(lambda: npc in talk.people, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+    exp = await link.evaluate(["field", hero, "EXP"])
+    gold = await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]])
+
+    # he can give the quest his dialog gives
+    await vanilla.prepare(npc)
+    situation = vanilla.situation(npc) or ""
+    check("can_give", "Ты можешь сам дать герою поручение «Бандиты Кавалорна»" in situation, situation[:300])
+
+    # the hero offers his help in his own words
+    talk.hear("Кавалорн, давай я помогу тебе с бандитами.", None, {"via": "scenario"})
+    ok = await _until(lambda: any(f.get("quest") == quest for f in facts("quest_given")), 60)
+    await asyncio.sleep(1)
+    menu = await link.offered_dialogs(npc)
+    check(
+        "given", ok and await var(quest) == 1 and helfen not in menu, f"{quest} = {await var(quest)}; {menu}"
+    )
+
+    # the bandits die
+    for b in bandits:
+        try:
+            await link.debug("kill", npc=b)
+        except GameError as err:
+            log.info("vgive: %s: %s", b, err)
+    await asyncio.sleep(2)
+    await vanilla.prepare(npc)
+    situation = vanilla.situation(npc) or ""
+    check("letter", "Ватрас" in situation and "Засчитывая" in situation, situation[:400])
+
+    # the hero says so
+    talk.hear("Кавалорн, Браго и его парни мертвы.", None, {"via": "scenario"})
+    ok = await _until(lambda: any(f.get("quest") == quest for f in facts("claim")), 60)
+    await asyncio.sleep(2)
+    claim = next((f for f in facts("claim") if f.get("quest") == quest), {})
+    after = (
+        await var(quest),
+        await var(letter),
+        await link.evaluate(["field", hero, "EXP"]),
+        await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]),
+    )
+    played = ok and after[:2] == (2, 1) and after[2] >= exp + 100 and after[3] >= gold + 50
+    check("ended", played and claim.get("truth") is True and not facts("lie"), f"{(exp, gold)} -> {after}")
+    menu = await link.offered_dialogs(npc)
+    check("once", ended not in menu and helfen not in menu, " ".join(menu))
+    return _logged(results)
+
+
 async def vanilla_check(
     link: GameLink, dialogue: DialogueManager, talk: TalkDesk, vanilla: VanillaQuests, giver: str = LOBART
 ) -> dict[str, str]:

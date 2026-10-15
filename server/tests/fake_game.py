@@ -65,6 +65,7 @@ class FakeGame:
         self.hour, self.minute = 8, 0
         self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
         self.item_names: dict[str, str] = {}
+        self.fns: dict[str, int] = {}  # story_eval: what helper predicates of the scripts come to (C_X())
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
         # story_effect with `check`: the npc's things (the hero's are hero_items), moved by the gives
@@ -259,6 +260,8 @@ class FakeGame:
                 await self.send(type="result", req=msg["req"], ok=True)
             case "story_effect":
                 self.story.append(msg)
+                # a dialog counts as heard (v31)
+                self.known |= {e["info"] for e in msg["effects"] if e.get("do") == "knows"}
                 error = self.give(msg) if msg.get("check") else None
                 await self.send(
                     type="result", req=msg["req"], ok=error is None, **({"error": error} if error else {})
@@ -469,6 +472,10 @@ class FakeGame:
                 return int(self.npc_states.get(dead, {}).get("state") == "dead")
             case ["call", "NPC_CHECKINFO", ["inst", "SELF"], ["int", 1, *_]]:
                 return int(npc in self.important)
+            case ["call", "NPC_KNOWSINFO", ["inst", "OTHER" | "HERO"], ["sym", info]]:
+                return int(info in self.known)
+            case ["fn", name] if name in self.fns:
+                return self.fns[name]
         return None
 
     async def handle_action(self, msg: dict[str, Any]) -> None:

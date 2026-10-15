@@ -425,3 +425,173 @@ async def test_once_lied_to_it_takes_his_word_no_more(graph):
         assert chronicle.facts("claim")[0]["truth"] is True
     finally:
         await link_cm.__aexit__(None, None, None)
+
+
+CAVALORN, BRAGO = "BAU_4300_ADDON_CAVALORN", "BDT_1013_BANDIT_L"
+KILLBRAGO = "MIS_ADDON_CAVALORN_KILLBRAGO"
+BANDITEN, HELFEN, KILLED = (
+    "DIA_ADDON_CAVALORN_BANDITEN",
+    "DIA_ADDON_CAVALORN_HELFEN",
+    "DIA_ADDON_CAVALORN_PCKILLEDBRAGO",
+)
+PARTY = {"do": "set_field", "field": "AIVAR", "of": ["inst", "SELF"], "index": ["int", 15, "AIV_PARTYMEMBER"]}
+VATRAS = "Отнеси его к Ватрасу, магу воды, в город."
+
+
+def _line(text: str, speaker: str = "SELF") -> dict:
+    other = "OTHER" if speaker == "SELF" else "SELF"
+    return {"do": "line", "id": "X", "text": text, "speaker": ["inst", speaker], "listener": ["inst", other]}
+
+
+@pytest.fixture
+def cavalorn(tmp_path: Path) -> StoryGraph:
+    """Cavalorn's bandits, cut down: he tells of them (BANDITEN), the hero offers his help (HELFEN: the quest
+    runs, Cavalorn goes with him) or kills them unasked and says so (PCKILLEDBRAGO, the ending that the
+    converter has from B_Addon_Cavalorn_VatrasBrief: the letter to Vatras)."""
+    g = copy.deepcopy(GRAPH)
+    knows = ["call", "NPC_KNOWSINFO", ["inst", "OTHER"], ["sym", BANDITEN]]
+    bandits_dead = ["==", ["fn", "C_BRAGOBANDITSDEAD"], ["int", 1, "TRUE"]]
+    g["nodes"] += [
+        _node(BANDITEN, CAVALORN, [_line("Бандиты украли у меня кое-что ценное.")], description="Бандиты?"),
+        _node(
+            HELFEN,
+            CAVALORN,
+            [
+                _line("Могу я помочь тебе с бандитами?", "OTHER"),
+                _line("Почему бы и нет. Пошли."),
+                {"do": "set", "var": KILLBRAGO, "value": ["int", 1, "LOG_RUNNING"]},
+                {
+                    "do": "journal_status",
+                    "topic": "TOPIC_ADDON_KILLBRAGO",
+                    "status": ["int", 1, "LOG_RUNNING"],
+                },
+                {
+                    "do": "journal_entry",
+                    "topic": "TOPIC_ADDON_KILLBRAGO",
+                    "text": "Бандиты украли у Кавалорна.",
+                },
+                {**PARTY, "value": ["int", 1, "TRUE"]},
+            ],
+            condition=["&&", knows, ["==", ["var", KILLBRAGO], ["int", 0]]],
+            description="Могу я помочь тебе с бандитами?",
+        ),
+        _node(
+            KILLED,
+            CAVALORN,
+            [
+                _line("С бандитами покончено.", "OTHER"),
+                _line(VATRAS),
+                {"do": "set", "var": KILLBRAGO, "value": ["int", 2, "LOG_SUCCESS"]},
+                {"do": "xp", "amount": ["int", 100, "XP_ADDON_CAVALORN_KILLBRAGO"]},
+                {**PARTY, "value": ["int", 0, "FALSE"]},
+            ],
+            condition=["&&", knows, ["==", ["var", KILLBRAGO], ["int", 0]], bandits_dead],
+            description="С бандитами покончено.",
+        ),
+    ]
+    g["functions"]["C_BRAGOBANDITSDEAD"] = {
+        "params": 0,
+        "body": ["call", "NPC_ISDEAD", ["inst", "AMBUSHER_1013"]],
+        "lifted": True,
+    }
+    g["instances"]["AMBUSHER_1013"] = BRAGO
+    g["quests"].append(
+        {
+            "var": KILLBRAGO,
+            "topics": [{"topic": "TOPIC_ADDON_KILLBRAGO", "title": "Бандиты Кавалорна"}],
+            "running": [HELFEN],
+            "success": [KILLED],
+            "failed": [],
+            "obsolete": [],
+            "other": [],
+        }
+    )
+    path = tmp_path / "story.json"
+    path.write_text(json.dumps(g, ensure_ascii=False), encoding="utf-8")
+    return load(path)
+
+
+async def _cavalorn(fake: FakeGame, llm: FakeBackend, graph: StoryGraph):
+    fake.vars = {KILLBRAGO: 0, "KAPITEL": 1}
+    fake.npc_states = {
+        CAVALORN: {"state": "alive", "name": "Кавалорн"},
+        BRAGO: {"state": "alive", "name": "Браго"},
+    }
+    fake.instances = {"AMBUSHER_1013": BRAGO}
+    link_cm = connected(fake)
+    link = await link_cm.__aenter__()
+    store = MemoryStore(":memory:")
+    dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store)
+    chronicle = Chronicle(link, store)
+    vanilla = VanillaQuests(link, dialogue, chronicle, graph, hero_distance=lambda npc: 300.0)
+    await _until(lambda: chronicle.branch is not None)
+    return link_cm, dialogue, chronicle, vanilla
+
+
+async def test_a_quest_of_the_scripts_given_in_a_conversation(cavalorn):
+    # the hero offers Cavalorn his help in his own words; Cavalorn gives the quest as HELFEN does: it runs,
+    # the journal has it, the dialog counts as heard, he is in the hero's party
+    fake = FakeGame(branch="A")
+    give = FakeStep("Ладно, пошли.", [ToolCall("give_quest", {"quest": KILLBRAGO}, "g1")])
+    llm = FakeBackend(script=[give, FakeStep("Ну?")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _cavalorn(fake, llm, cavalorn)
+    try:
+        dialogue.open(CAVALORN, "Кавалорн")
+        await vanilla.prepare(CAVALORN)
+        situation = vanilla.situation(CAVALORN) or ""
+        # what he told of the bandits in the conversation counts: BANDITEN, a dialog of his own
+        assert f"Ты можешь сам дать герою поручение «Бандиты Кавалорна» (id {KILLBRAGO})" in situation
+        assert "«Могу я помочь тебе с бандитами?»" in situation and "«Почему бы и нет. Пошли.»" in situation
+        assert "give_quest" in [t.name for t in vanilla.tools(CAVALORN)]
+        # he may also say he killed them unasked: Brago lives, far from Cavalorn's eyes
+        assert "Герой может сказать, что сам сделал «Бандиты Кавалорна»" in situation
+
+        await dialogue.say_as_player(CAVALORN, "Давай я помогу тебе с бандитами.")
+        await _until(lambda: chronicle.facts("quest_given") != [])
+        effects = _effects(fake, CAVALORN)[0]
+        assert {"do": "set", "var": KILLBRAGO, "value": 1} in effects
+        assert {
+            "do": "journal",
+            "topic": "Бандиты Кавалорна",
+            "text": "Бандиты украли у Кавалорна.",
+        } in effects
+        assert {"do": "knows", "info": HELFEN} in effects and HELFEN in fake.known
+        assert {"do": "party", "value": 1} in effects  # he goes with the hero, as the scripts mark it
+        # given: not offered again; and the ending for the unasked is not one any more
+        fake.vars[KILLBRAGO] = 1
+        await vanilla.prepare(CAVALORN)
+        assert vanilla.starts[CAVALORN] == {} and vanilla.offers[CAVALORN] == {}
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_an_ending_that_wants_its_quest_not_begun(cavalorn):
+    # the hero killed Brago unasked: PCKILLEDBRAGO wants the quest not begun, and Brago dead (the scripts'
+    # C_BragoBanditsDead, taken apart: who must be dead); Cavalorn knows what to say, the letter to Vatras
+    fake = FakeGame(branch="A")
+    accept = FakeStep("Ну, раз так.", [ToolCall("accept_quest", {"quest": KILLBRAGO}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Ну?")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _cavalorn(fake, llm, cavalorn)
+    try:
+        fake.npc_states[BRAGO]["state"] = "dead"
+        fake.fns["C_BRAGOBANDITSDEAD"] = 1
+        dialogue.open(CAVALORN, "Кавалорн")
+        await vanilla.prepare(CAVALORN)
+        offer = vanilla.offers[CAVALORN][KILLBRAGO]
+        assert offer.ending == KILLED and offer.claim.dead == [BRAGO] and offer.claim.own == [BANDITEN]
+        situation = vanilla.situation(CAVALORN) or ""
+        assert "будут мертвы: Браго" in situation and "Засчитывая, в игре ты говоришь" in situation
+        assert f"«{VATRAS}»" in situation
+
+        await dialogue.say_as_player(CAVALORN, "Браго мёртв, я сам с ними разобрался.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        effects = _effects(fake, CAVALORN)[0]
+        assert {"do": "set", "var": KILLBRAGO, "value": 2} in effects and {
+            "do": "xp",
+            "amount": 100,
+        } in effects
+        assert {"do": "knows", "info": KILLED} in effects and {"do": "party", "value": 0} in effects
+        # what he told of the bandits only in the conversation is no lie of the hero's
+        assert chronicle.facts("claim")[-1]["truth"] is True and chronicle.facts("lie") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)

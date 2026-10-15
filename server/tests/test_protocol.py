@@ -20,6 +20,7 @@ from gothic_ai.protocol import (
     NpcViews,
     SayCmd,
     Snapshot,
+    StoryEffectCmd,
     StoryProgramCmd,
     parse_game_message,
 )
@@ -264,7 +265,7 @@ def test_v29_the_directors_story_variables():
 
 
 def test_v30_how_far_the_players_voice_goes():
-    assert PROTOCOL_VERSION == 30
+    assert PROTOCOL_VERSION >= 30
     roster = parse_game_message(
         '{"type":"npc_roster","t":1,"npcs":['
         '{"id":"BAU_4300_ADDON_CAVALORN","name":"Кавалорн","distance":140,"heard":140},'
@@ -275,3 +276,9 @@ def test_v30_how_far_the_players_voice_goes():
     cavalorn, bandit, old = roster.npcs
     assert cavalorn.earshot == 140 and bandit.earshot == 20000  # the rock between: his voice does not reach
     assert old.heard is None and old.earshot == 900  # a bridge before v30: as the crow flies
+
+
+def test_v31_a_dialog_heard_in_a_conversation():
+    assert PROTOCOL_VERSION == 31
+    cmd = StoryEffectCmd(req="e1", npc="BAU_4300_ADDON_CAVALORN", effects=[{"do": "knows", "info": "DIA_X"}])
+    assert '"effects":[{"do":"knows","info":"DIA_X"}]' in cmd.to_json()

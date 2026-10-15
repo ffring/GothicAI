@@ -112,6 +112,17 @@ Externals& EffectCheck::engine() {
   }
 
 void EffectCheck::enter(zenkit::DaedalusVm& v, zenkit::DaedalusSymbol& fn) {
+  struct Depth final {
+    uint32_t& level;
+    explicit Depth(uint32_t& l) : level(l) { ++level; }
+    ~Depth() { --level; }
+    };
+  if(recording && level==0 && lifter->inlines(fn, inlined+1)) {
+    // the model has its calls and stores in place of the call (Lifter::inlines): they are the dialog's own
+    Depth in(inlined);
+    v.unsafe_call(&fn);
+    return;
+    }
   if(recording && level==0) {
     // the arguments are on the stack: read them, then put them back for the function
     auto params = v.find_parameters_for_function(&fn);
@@ -133,11 +144,7 @@ void EffectCheck::enter(zenkit::DaedalusVm& v, zenkit::DaedalusSymbol& fn) {
         }
     observed.push_back({fn.name(), std::move(args)});
     }
-  struct Depth final {
-    uint32_t& level;
-    explicit Depth(uint32_t& l) : level(l) { ++level; }
-    ~Depth() { --level; }
-    } depth(level);
+  Depth depth(level);
   v.unsafe_call(&fn);
   }
 

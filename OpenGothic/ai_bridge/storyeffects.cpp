@@ -7,7 +7,10 @@
 
 #include <zenkit/DaedalusVm.hh>
 
+#include "game/gamescript.h"
 #include "world/objects/npc.h"
+#include "world/world.h"
+#include "gothic.h"
 #include "world/aiqueue.h"
 
 #include "eval.h"
@@ -72,6 +75,7 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.var    = upper(JsonRead::str(x,"var"));
   e.reason = upper(JsonRead::str(x,"reason"));
   e.attitude = upper(JsonRead::str(x,"attitude"));
+  e.info   = upper(JsonRead::str(x,"info"));
   e.topic  = TextCodec::fromUtf8(JsonRead::str(x,"topic"));
   e.text   = TextCodec::fromUtf8(JsonRead::str(x,"text"));
   e.status = upper(JsonRead::str(x,"status"));
@@ -140,6 +144,12 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
     if(vm && !e.target.empty() && (t==nullptr || t->type()!=DaedalusDataType::INSTANCE))
       return "routine: no npc " + e.target;
     return e.routine.empty() ? "routine: needs a routine" : "";
+    }
+  if(e.kind=="knows") {
+    auto* i = vm ? vm->find_symbol_by_name(e.info) : nullptr;
+    if(vm && (i==nullptr || i->type()!=DaedalusDataType::INSTANCE || !i->is_instance_of<zenkit::IInfo>()))
+      return "knows: no dialog " + e.info;
+    return e.info.empty() ? "knows: needs a dialog" : "";
     }
   if(e.kind=="party") {
     if(vm && vm->find_symbol_by_name("AIV_PARTYMEMBER")==nullptr)
@@ -235,6 +245,15 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
       npc.aiPush(AiQueue::aiRemoveWeapon());
       npc.resumeAiRoutine();
       }
+    }
+  else if(kind=="knows") {
+    // the dialog counts as heard, as when it is played: the menu no longer offers it, conditions see it
+    auto* s    = vm.find_symbol_by_name(info);
+    auto  dlg  = s!=nullptr ? std::dynamic_pointer_cast<zenkit::IInfo>(s->get_instance()) : nullptr;
+    auto* w    = Gothic::inst().world();
+    if(dlg!=nullptr && w!=nullptr)
+      w->script().setNpcInfoKnown(player.handle(),*dlg); else
+      Log::e("[story] ",who,": knows ",info,": no such dialog in the world");
     }
   else if(kind=="party") {
     // the npc goes with the hero (v30), as a companion's dialog marks it: whom it kills gives him the
