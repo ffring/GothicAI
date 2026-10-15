@@ -3684,7 +3684,7 @@ async def director_casts(
     """Stage 2 of the director as author, layer 4 (docs/director.md): the director brings in a character of
     its own, and he gives the hero a quest of the author's. Its models are scripted unless the server runs a
     real one (LLM=chatgpt). The place: where Lobart spends most of his day. Checks:
-    - cast: the character comes, in the world by his name, a person (his card in front of his model);
+    - cast: the character comes, in the world by his name, and is a person (the cast has his card);
     - then the quest of stage 1 with him as the giver (authored_quest): made, offered, given, found,
       after_load (he too comes back from the save), done, once, knows."""
     results: dict[str, str] = {}
