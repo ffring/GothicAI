@@ -30,10 +30,22 @@ TRAINING_ENV = {"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR
                 "VK_ICD_FILENAMES": "/nonexistent/no-vulkan.json", "OPENGOTHIC_TEXTURES": "",
                 "CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 HEARTBEAT_EVERY_S = 0.25
+# Short arena tasks keep their stage-8 distance and timeout; duels vary the distance.
+TASK_SETUP = {"distance": (600, 10000), "attack": (150, 5000), "block": (150, 5000)}
+
+
+def success(summary: dict) -> bool:
+    """A duel is won by downing the opponent; a short task only by its own success
+    (killing the opponent in the block task is not a blocked hit)."""
+    if summary.get("task", "native_duel") == "native_duel":
+        return summary["reason"] == "opponent_down"
+    return summary["outcome"] == "task_success"
 
 
 def score(summary: dict, timeout_ms: int) -> float:
     """Win/loss, then health margin, then a faster win. Timeouts score on margin only."""
+    if summary.get("task", "native_duel") != "native_duel":
+        return 1.0 if success(summary) else 0.0
     outcome = {"opponent_down": 1.0, "primary_down": -1.0}.get(summary["reason"], 0.0)
     margin = summary["primary_hp"]/summary["primary_hp_max"]-summary["opponent_hp"]/summary["opponent_hp_max"]
     speed = -0.2*summary["elapsed_game_ms"]/timeout_ms if outcome > 0 else 0.0
@@ -92,13 +104,15 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
     rng = random.Random(options["sampling_seed"]*1000+worker)
     summaries = []
     try:
-        for seed, side, distance in tasks:
-            name = f"ep-{seed}-{side}-{distance}"
+        for task, seed, side, distance in tasks:
+            name = f"ep-{task}-{seed}-{side}-{distance}"
             episode_dir = output/name
             env = LeanEnv(runner, Path(options["scenario"]), owner_provider="stage9-rl")
             started = time.monotonic()
-            initial = env.reset(output=episode_dir, task="native_duel", seed=seed, side=side, distance_cm=distance,
-                                timeout_ms=options["timeout_ms"], provider="scripted")
+            timeout_ms = TASK_SETUP[task][1] if task in TASK_SETUP else options["timeout_ms"]
+            initial = env.reset(output=episode_dir, task=task, seed=seed, side=side, distance_cm=distance,
+                                timeout_ms=timeout_ms, provider="scripted")
+            adversary_sent = task != "block"
             reset_s = time.monotonic()-started
             primary, opponent = initial["primary_entity_id"], initial["opponent_entity_id"]
             policy.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
@@ -135,6 +149,13 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
                 feed(not terminal)
                 if terminal:
                     break
+                if not adversary_sent:
+                    # The stage-7 block task: the held opponent throws one real front attack.
+                    if env.eligible(opponent, 6):
+                        env.act(opponent, 6)
+                        adversary_sent = True
+                    elif env.eligible(opponent, 2):
+                        env.act(opponent, 2)
                 row = env.latest.get(primary)
                 if row is not None and row.get("periodic") is True and env.eligible(primary):
                     response = policy.arbitrate(row, stream_seq=stream)
@@ -158,14 +179,15 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
             policy.end_episode(initial["session_epoch"], initial["world_epoch"])
             actors = {actor["entity_id"]: actor for actor in final["actors"]}
             start = {actor["entity_id"]: actor for actor in initial["actors"]}
-            summary = {"worker": worker, "name": name, "seed": seed, "side": side, "distance_cm": distance,
+            summary = {"worker": worker, "name": name, "task": task, "seed": seed, "side": side, "distance_cm": distance,
                        "reason": final.get("reason"), "outcome": final.get("outcome"),
                        "elapsed_game_ms": final.get("elapsed_game_ms", 0),
                        "primary_hp": actors[primary]["hp"], "primary_hp_max": start[primary].get("hp_max", start[primary]["hp"]),
                        "opponent_hp": actors[opponent]["hp"], "opponent_hp_max": start[opponent].get("hp_max", start[opponent]["hp"]),
                        "rows": len(rows), "ticks": ticks, "reset_s": reset_s, "rollout_s": time.monotonic()-rollout_started,
                        "temperature": options["temperature"], "checkpoint_sha256": policy.checkpoint_sha256, **stats}
-            summary["score"] = score(summary, options["timeout_ms"])
+            summary["success"] = success(summary)
+            summary["score"] = score(summary, timeout_ms)
             if rows:
                 numpy.savez_compressed(output/f"{name}.npz",
                                        features=numpy.asarray([row["features"] for row in rows], dtype=numpy.float32),
@@ -195,10 +217,16 @@ def main() -> int:
     parser.add_argument("--timeout-ms", type=int, default=60000)
     parser.add_argument("--max-substeps", type=int, default=2200)
     parser.add_argument("--keep-journals", action="store_true")
+    parser.add_argument("--tasks", default="native_duel")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     distances = (250, 300, 350, 400)
-    tasks = [[args.seed_start+index, index % 2, distances[(index//2) % len(distances)]] for index in range(args.episodes)]
+    kinds = args.tasks.split(",")
+    tasks = []
+    for index in range(args.episodes):
+        task = kinds[index % len(kinds)]
+        distance = TASK_SETUP[task][0] if task in TASK_SETUP else distances[(index//2) % len(distances)]
+        tasks.append([task, args.seed_start+index, (index//len(kinds)) % 2, distance])
     options = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}
     (args.output/"collect.json").write_text(json.dumps({"schema_version": 1, "kind": "body_rl_collect",
                                                         "quality_credit": False, "options": options}, indent=2)+"\n")
@@ -212,7 +240,13 @@ def main() -> int:
     summaries = [json.loads(line) for path in sorted(args.output.glob("worker-*/episodes.jsonl")) for line in path.read_text().splitlines()]
     wins = sum(row["reason"] == "opponent_down" for row in summaries)
     decisions = sum(row.get("decisions", 0) for row in summaries)
-    report = {"episodes": len(summaries), "wall_s": wall, "wins": wins, "losses": sum(row["reason"] == "primary_down" for row in summaries),
+    by_task = {}
+    for row in summaries:
+        entry = by_task.setdefault(row.get("task", "native_duel"), [0, 0])
+        entry[0] += int(row.get("success", row["reason"] == "opponent_down"))
+        entry[1] += 1
+    report = {"episodes": len(summaries), "wall_s": wall, "wins": wins,
+              "success_by_task": {task: f"{done}/{total}" for task, (done, total) in sorted(by_task.items())}, "losses": sum(row["reason"] == "primary_down" for row in summaries),
               "timeouts": sum(row["reason"] not in ("opponent_down", "primary_down") for row in summaries),
               "mean_score": sum(row["score"] for row in summaries)/max(1, len(summaries)),
               "mean_primary_hp": sum(row["primary_hp"] for row in summaries)/max(1, len(summaries)),
