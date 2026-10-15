@@ -63,6 +63,10 @@
 #   person: the peddler of `cast` as a person (docs/director.md, stage 2, layer 3): his card, past, knowledge
 #       and acquaintances in front of his model when the hero speaks to him, a voice of his own; Hilda knows
 #       him by name; the same after a save and a load. On a save of Lobart's farm: SAVE=save_slot_1.sav
+#   character: the director brings in a character of its own (docs/director.md, stage 2, layer 4; models
+#       scripted with LLM=fake): its model makes him up for the place of Lobart's day, the code builds and checks
+#       him, and he gives the hero the quest of stage 1 (the checks of `authored`, him as the giver). On a
+#       save of Lobart's farm: SAVE=save_slot_1.sav
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

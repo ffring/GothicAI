@@ -25,6 +25,8 @@ from .brain import Decider, NpcPlanner, Outcome
 from .brain.reflex import Reflexes
 from .budget import Budget
 from .cast import TEMPLATES, Cast, Person, PersonTie
+from .casting import PROPOSE as PROPOSE_CHARACTER
+from .casting import Casting
 from .chests import BACK, CHEST, OWNED, ChestDesk
 from .chronicle import Fact
 from .concerns import Concerns
@@ -47,7 +49,7 @@ from .lore import Lore
 from .npc_tools import GESTURES as NPC_GESTURES
 from .perception import PerceptionDesk, Sight
 from .persona import PersonaProvider, habits_of
-from .places import SIDES
+from .places import SIDES, PlaceBook
 from .protocol import (
     ActionResult,
     Detached,
@@ -3567,6 +3569,8 @@ class AuthoredScript:
         caps = re.search(r"опыт до (\d+), золото до (\d+)", brief)
         xp, gold = (int(caps.group(1)), int(caps.group(2))) if caps else (0, 0)
         name, where = (item.group(2) if item else "вещь"), (spot.group(2) if spot else "")
+        asker = re.search(r"^Кто просит: (.+) \(", brief, re.M)
+        who = asker.group(1) if asker else "Хильда"
         args = {
             "title": f"Пропажа: {name}"[:40],
             "item": item.group(1) if item else "",
@@ -3584,13 +3588,141 @@ class AuthoredScript:
             ],
             "gold": min(gold, 10),
             "xp": xp,
-            "journal_given": f"У Хильды пропала одна вещь — {name}. Она думает, что та лежит {where}.",
-            "journal_done": "Я нашёл пропажу и отдал её Хильде.",
+            "journal_given": f"{who}: пропала одна вещь — {name}. Лежит, наверное, {where}.",
+            "journal_done": f"Я нашёл пропажу и вернул её. {who} заплатил(а).",
             "reason": "мелкая пропажа по хозяйству",
         }
         call = ToolCall(PROPOSE_QUEST, args, f"a{len(self.calls)}")
         yield call
         yield Done("", (call,))
+
+
+class CastingScript:
+    """The director's model for its own characters, scripted: the first kind, head, face, clothes, points,
+    states and thing the brief offers, a peddler's card, the first person of the place as an acquaintance."""
+
+    name = "casting-script"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        brief = next(m.content for m in messages if isinstance(m, Message))
+        self.calls.append(brief)
+
+        def section(header: str) -> list[str]:
+            lines = brief.split("\n")
+            at = next((i for i, line in enumerate(lines) if line.startswith(header)), None)
+            out = []
+            for line in lines[at + 1 :] if at is not None else []:
+                if not line.startswith("- "):
+                    break
+                out.append(line[2:])
+            return out
+
+        def listed(header: str) -> list[str]:
+            line = next((x for x in brief.split("\n") if x.startswith(header)), "")
+            return [x.strip(" .") for x in line[len(header) :].split(",") if x.strip(" .")]
+
+        points = section("Точки этого места")
+        kinds = {k.split(" — ")[0]: k.split("; ")[1].split(", ") for k in section("Кем он может быть")}
+        kind = "townsman" if "townsman" in kinds else next(iter(kinds), "")
+        woman = kind == "townswoman"
+        states = [x.split(" — ")[0] for x in section("Чем он занят")]
+        things = [x.split(" — ")[0] for x in section("Вещи при нём")]
+        people = [x.split(" — ") for x in section("Люди этого места")]
+        args = {
+            "kind": kind,
+            "name": "Гарет" if not woman else "Мира",
+            "head": (listed("Головы женщин:") if woman else listed("Головы мужчин:"))[0],
+            "face": (listed("Лица женщин:") if woman else listed("Лица мужчин:"))[0],
+            "armor": kinds.get(kind, [""])[0],
+            "day_point": points[0] if points else "",
+            "day_state": states[0] if states else "",
+            "night_point": points[-1] if points else "",
+            "night_state": states[-1] if states else "",
+            "items": [{"item": things[0], "count": 2}] if things else [],
+            "gold": 20,
+            "ru": "Ты — бродячий торговец, скупой на слова, но честный в цене.",
+            "en": "A taciturn peddler who keeps his prices fair.",
+            "greed": 3,
+            "honesty": 4,
+            "courage": 2,
+            "talk": 2,
+            "pushy": 2,
+            "strangers": 4,
+            "voice": "A weathered peddler in her forties with a dry woman's voice"
+            if woman
+            else "A weathered peddler in his forties with a low, dry male voice",
+            "past": "Ты пришёл с последним кораблём и торгуешь по фермам.",
+            "knows": ["На дорогах к городу неспокойно."],
+            "ties": [{"npc": people[0][0], "how": f"{people[0][1]}: покупаешь у неё молоко"}]
+            if people
+            else [],
+            "reason": "торговец на дороге",
+        }
+        call = ToolCall(PROPOSE_CHARACTER, args, f"c{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
+async def director_casts(
+    link: GameLink, casting: Casting, author: Author, story: StoryPatches, places: PlaceBook
+) -> dict[str, str]:
+    """Stage 2 of the director as author, layer 4 (docs/director.md): the director brings in a character of
+    its own, and he gives the hero a quest of the author's. Its models are scripted unless the server runs a
+    real one (LLM=chatgpt). The place: where Lobart spends most of his day. Checks:
+    - cast: the character comes, in the world by his name, a person (his card in front of his model);
+    - then the quest of stage 1 with him as the giver (authored_quest): made, offered, given, found,
+      after_load (he too comes back from the save), done, once, knows."""
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    if isinstance(casting.model.llm, FakeBackend):
+        casting.model.llm = CastingScript()
+    try:
+        day = await link.routine(LOBART)
+    except (GameError, TimeoutError) as err:
+        return _logged({"cast": f"failed (Lobart's day: {err})"})
+    homes = Counter(p.id for e in day.entries if (p := places.of(e.waypoint)) is not None)
+    if not homes:
+        return _logged({"cast": "failed (Lobart's day is in no place of the book)"})
+    place = homes.most_common(1)[0][0]
+    spec = await casting.character(place)
+    person = casting.cast.person(spec.npc) if spec is not None else None
+    state = (await link.story_state(npcs=[spec.npc])).get("npcs", {}).get(spec.npc, {}) if spec else {}
+    check(
+        "cast",
+        spec is not None
+        and person is not None
+        and state.get("state") == "alive"
+        and state.get("name") == spec.name,
+        f"{spec.npc} «{spec.name}» at {spec.at} in {place}: {person.ru if person else ''}"
+        if spec is not None
+        else casting.chronicle.facts("cast_rejected")[-1:],
+    )
+    _logged(results)
+    if spec is None:
+        return results
+    return {**results, **await authored_quest(link, author, story, giver=spec.npc)}
 
 
 async def authored_quest(

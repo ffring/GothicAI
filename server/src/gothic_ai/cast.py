@@ -62,7 +62,7 @@ FEMALE_FACES = frozenset(
 )
 SKINS = frozenset({"BODYTEX_N", "BODYTEX_L", "BODYTEX_B", "BODYTEX_P"})
 ARMORS = {
-    "MALE": frozenset(f"ITAR_{a}" for a in ("BAU_L", "BAU_M", "VLK_L", "VLK_M", "VLK_H")),
+    "MALE": frozenset(f"ITAR_{a}" for a in ("BAU_L", "BAU_M", "VLK_L", "VLK_M", "VLK_H", "SLD_L")),
     "FEMALE": frozenset(
         f"ITAR_{a}BABE_{s}" for a, s in (("BAU", "L"), ("BAU", "M"), ("VLK", "L"), ("VLK", "M"), ("VLK", "H"))
     ),

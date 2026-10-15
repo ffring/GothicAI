@@ -710,8 +710,9 @@ class Director:
             log.warning("director: effects on %s: %s", npc, err)
 
     async def with_symbols(self, story: Story, names: set[str]) -> Story:
-        """The story with what the game says of the names a change uses."""
-        known = await self.world(symbols=names)
+        """The story with what the game says of the names a change uses, and how the npc's among them are:
+        a character of the director's own is in no dialog of the graph (cast.py)."""
+        known = await self.world(npcs=names, symbols=names)
         state = story.state.merge(known)
         state.symbols = known.symbols
         return Story(self.graph, state, story.patches)
