@@ -6187,8 +6187,8 @@ Vec3 Npc::aimArrow(const Vec3& target, float angle) const {
   return visual.pose().aimIk().arrowAt(position(),f,aimLeanDirection(target),angle);
   }
 
-Aim::LeanEdge Npc::aimEdge(const Vec3& direction) const {
-  const auto edge = mvAlgo.edgeAhead(direction,100.f);
+Aim::LeanEdge Npc::aimEdge(const Vec3& direction, float range) const {
+  const auto edge = mvAlgo.edgeAhead(direction,range);
   return {edge.found,edge.distance,edge.drop,edge.supportY};
   }
 

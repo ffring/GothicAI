@@ -1,5 +1,6 @@
 #include "graphics/mesh/aim.h"
 #include "graphics/mesh/skeleton.h"
+#include "game/aimstep.h"
 
 #include <algorithm>
 #include <array>
@@ -379,6 +380,70 @@ void testLegacyNpcLimit() {
   near(classic.pelvis,Vec3(),.0001f,"classic aiming must preserve the legacy pelvis position");
   }
 
+void testEdgeApproach() {
+  AimStep step;
+  AimStep::Input in;
+  in.drawn = in.edge = true;
+  in.down = 60.f;
+  in.distance = 200.f;
+  require(!step.update(in),"an edge two metres away must not start an approach");
+  in.distance = AimStep::SearchRange+.01f;
+  require(!step.update(in),"an edge just outside 120 cm must not start an approach");
+  in.distance = AimStep::SearchRange;
+  require(step.update(in),"an edge at the 120 cm search limit must start an approach");
+  in.distance = 100.f;
+  AimStep metreStep;
+  require(metreStep.update(in),"an edge one metre away must start an approach");
+  require(step.update(in),"an edge one metre away must keep the approach active");
+  in.distance = 36.f;
+  require(step.update(in),"a blocked shot must keep the approach moving");
+  in.distance = 34.f;
+  require(step.update(in),"35 cm is not a stopping goal while the shot remains blocked");
+  in.shotClear = true;
+  require(!step.update(in),"a safe lean with a clear shot must pause the approach");
+  in.shotClear = false;
+  require(step.update(in),"a shot closed by the settling pose must resume inside 35 cm");
+  in.distance = 30.f;
+  in.blocked = true;
+  require(!step.update(in),"the existing edge guard must stop the approach");
+  in.blocked = false;
+  in.distance = 60.f;
+  require(!step.update(in),"a completed approach must not restart during the same downward look");
+  in.down = 40.f;
+  require(!step.update(in),"40 degrees must not start an approach");
+  in.down = 40.1f;
+  require(step.update(in),"looking down again must rearm the approach");
+  in.moving = true;
+  require(!step.update(in),"player movement must cancel the approach");
+  in.moving = false;
+  require(!step.update(in),"releasing movement must not immediately undo the player's cancellation");
+  in.drawn = false;
+  require(!step.update(in),"letting the string down must stop the approach");
+  in.drawn = true;
+  in.yaw = 350.f;
+  require(step.update(in),"a fresh draw must rearm the approach");
+  in.yaw = 15.f;
+  require(step.update(in),"yaw cancellation must wrap around 360 degrees");
+  in.yaw = 21.f;
+  require(!step.update(in),"a cumulative turn greater than 30 degrees must cancel the approach");
+  in.drawn = false;
+  step.update(in);
+  in.drawn = true;
+  in.distance = 35.f;
+  require(!step.update(in),"standing within 35 cm must not start an approach");
+  in.distance = 60.f;
+  in.shotClear = true;
+  require(!step.update(in),"a shot already clear with a safe lean must not start an approach");
+  in.shotClear = false;
+  in.edge = false;
+  require(!step.update(in),"flat ground or a small drop must not start an approach");
+  in.edge = true;
+  require(step.update(in),"60 cm must start an approach");
+  in.edge = false;
+  require(!step.update(in),"losing the nearby edge must cancel the approach");
+  std::puts("aim approach: distance, pitch, movement, yaw, draw and edge cancellation passed");
+  }
+
 }
 
 int main() {
@@ -388,5 +453,6 @@ int main() {
   testBodyYaw();
   testTransientSnapshot();
   testLegacyNpcLimit();
+  testEdgeApproach();
   std::puts("aim geometry contract: passed");
   }

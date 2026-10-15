@@ -366,6 +366,9 @@ bool FootIk::update(const Input& in) {
   const float  dt    = float(in.dt)/1000.f;
   const size_t pairs = numLegs/2;
   bool         on    = in.enable;
+  stopStep = in.aimStop && on && weight>0.f && !quadruped ? std::min(4.f,120.f*dt) : 0.f;
+  for(size_t i=0;i<numLegs;++i)
+    legs[i].stopAnkle = legs[i].finalAnkle;
 
   // of each pair, the lower animated ankle stands on the ground, a raised one swings
   float plant[MaxLegs] = {};
@@ -681,6 +684,12 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& body
     if(quadruped)
       body += std::tan(roll)*pairWidth[i/2]*0.5f*(i%2==0 ? 1.f : -1.f);
     target.y += swingOffset(c,floor,low,body)*weight;
+    // A foot crossing the roof boundary changes its support abruptly. Limit the final IK target,
+    // not just the animated gait, using the previous frame even if the pose is rebuilt several times.
+    const Vec3 travel = target-c.stopAnkle;
+    const float distance = length(travel);
+    if(stopStep>0.f && distance>stopStep && distance<100.f)
+      target = c.stopAnkle + travel*(stopStep/distance);
     // the smoothed normal lags behind a turning foot: limit it to the current heading once more
     const Vec3 n = normalize(Up*(1.f-weight) + footTilt(c.normal,c.heading)*weight);
     Vec3      animBend;

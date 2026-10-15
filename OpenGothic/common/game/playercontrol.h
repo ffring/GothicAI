@@ -3,6 +3,7 @@
 #include "world/focus.h"
 #include "utils/keycodec.h"
 #include "constants.h"
+#include "aimstep.h"
 
 #include <array>
 
@@ -181,6 +182,8 @@ class PlayerControl final {
     bool           aimCant        = false;   //!< the bow canted for quick shots (the wheel; kept till changed)
     float          cantK          = 0;       //!< canted 0..1, smoothed
     float          walkK          = 0;       //!< stepping with the bow drawn 0..1, smoothed
+    AimStep        aimStep;
+    bool           aimStepStopped = false;
 
     DialogMenu*    dlg = nullptr;
     InventoryMenu* inv = nullptr;
