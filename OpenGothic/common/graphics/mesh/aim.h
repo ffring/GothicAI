@@ -19,6 +19,7 @@ class Aim final {
       bool          arrow   = false;   // a bow, a crossbow: the animation aims where the arrow in the right hand
                                        // lies (an aim up, down is another pose); a spell: straight ahead
       Tempest::Vec3 dir     = {};      // where the shot has to leave, world
+      Tempest::Vec3 referenceDir = {}; // same target from a fixed body origin, unnormalized; manual reload
       Tempest::Vec3 leanDirection = {}; // hip bend direction, independent of the arrow's current origin
       Tempest::Vec3 forward = {1,0,0}; // horizontal facing of the body
       float         lean    = 0;       // radians: bend forward from the hips over an edge (leanFor), 0 if
@@ -31,6 +32,7 @@ class Aim final {
       bool          manual  = false;   // aimed by hand: the upper body follows the mouse faster
       bool          reload  = false;   // the reload plays: the arrow is not on the string, not measured (the
                                        // hand holds still at the quiver for a while)
+      bool          holdOrigin = false; // manual release/reload, including before the reload animation starts
       size_t        slot    = size_t(-1); // the bone the arrow lies along, if not the right hand's slot (a bolt
                                           // in the crossbow: the left hand's); under the chest
       uint64_t      dt      = 0;
@@ -148,6 +150,8 @@ class Aim final {
     Tempest::Vec2       sway    = {};
     Tempest::Vec2       tremor  = {};
     Tempest::Vec3       wantB   = {}; // where the shot has to go, body's frame, smoothed
+    Tempest::Vec3       nockedOffsetB = {}; // release origin relative to referenceDir's origin, body's frame
+    bool               nockedOrigin = false;
     uint8_t             steadyFrames = 0;
     Tempest::Vec3       rest    = {}; // where the animation aims while the bow holds still, body's frame
     Tempest::Vec3       goal    = {}; // turn of the upper body from the arrow to the target: axis*angle,

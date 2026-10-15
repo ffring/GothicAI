@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ikmath.h"
+#include "aimframe.h"
 #include "skeleton.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -385,7 +386,23 @@ bool Aim::update(const Input& in) {
   const float dt      = float(in.dt)/1000.f;
   bool        changed = false;
   const Vec3  f       = normalize(Vec3(in.forward.x,0,in.forward.z));
-  const Vec3  d       = normalize(in.dir);
+  Vec3        direction = in.dir;
+  if(in.manual && in.active && length(in.referenceDir)>0.5f) {
+    if(!in.reload && !in.holdOrigin) {
+      nockedOffsetB = toBody(in.referenceDir-in.dir,f);
+      nockedOrigin = true;
+      } else if(nockedOrigin) {
+      // The arrow travels round the head to the quiver during reload. Its moving origin
+      // must not steer the torso at a pole; retain the last nocked origin in the body frame.
+      // Both vectors still follow the target and the hero's translation/turn.
+      const Vec3 held = in.referenceDir-fromBody(nockedOffsetB,f);
+      const float k = AimFrame::poleWeight(normalize(held));
+      direction += (held-direction)*k;
+      }
+    } else {
+    nockedOrigin = false;
+    }
+  const Vec3  d       = normalize(direction);
   const bool  on      = in.active && enabled && length(f)>0.5f && length(d)>0.5f;
   const float fast    = (in.manual ? HandRate : 1.f)*in.follow;
   if(manualMode!=in.manual)
