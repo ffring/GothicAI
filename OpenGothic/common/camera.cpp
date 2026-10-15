@@ -332,6 +332,11 @@ void Camera::setAimStance(float drop, float side, float shoulder) {
   aimShoulderK = std::clamp(shoulder,-1.f,1.f);
   }
 
+void Camera::setAimLean(float reach, float drop) {
+  aimReach    = std::max(reach,0.f);
+  aimLeanDrop = std::max(drop,0.f);
+  }
+
 static constexpr float ShoulderSide   = 40.f;  // cm right of the hero
 static constexpr float ShoulderHeight = 165.f; // above the feet
 
@@ -361,6 +366,12 @@ void Camera::tickAim(float dtF) {
   if(dtF>0.f) {
     aimBlend  = aimOn ? std::min(1.f,aimBlend+dtF/blendIn) : std::max(0.f,aimBlend-dtF/blendOut);
     aimZoomS += (aimZoom*aimBlend - aimZoomS)*std::min(1.f,dtF*zoomRate);
+    }
+  if(aimBlend<=0.f) {
+    // the lean over an edge stays while the camera goes back from the aim (no jump), then is gone
+    aimReach    = 0;
+    aimLeanDrop = 0;
+    aimLeanRoom = 1;
     }
   const float k = 1.f - fovZoom*aimZoomS;
   if(std::abs(k-fovK)>1e-4f) {
@@ -937,7 +948,30 @@ void Camera::tickThirdPerson(float dtF) {
     // leaning out to the left
     Vec3 right = Vec3::crossProduct(Vec3(0,1,0),Vec3(-back.x,0,-back.z));
     right = right.length()>1e-3f ? Vec3::normalize(right) : Vec3();
-    const Vec3 at = aimAnchor + Vec3(0,ShoulderHeight-aimDrop,0) + right*(ShoulderSide*aimShoulderK + aimSide);
+    Vec3 at = aimAnchor + Vec3(0,ShoulderHeight-aimDrop,0) + right*(ShoulderSide*aimShoulderK + aimSide);
+    // leaning over an edge the head goes ahead and down, the shoulder with it: past the edge, the target
+    // below in view. Not into a roof or a wall: as far as there is room (closer at once, back eased)
+    static float leanClear = 20.f; // cm
+    static float roomRate  = 4.f;  // 1/s
+    Vec3 ahead = Vec3(-back.x,0,-back.z);
+    ahead = ahead.length()>1e-3f ? Vec3::normalize(ahead) : Vec3();
+    const Vec3  lean    = ahead*aimReach - Vec3(0,aimLeanDrop,0);
+    const float leanLen = lean.length();
+    if(leanLen>1e-3f) {
+      float room = 1;
+      if(auto world = Gothic::inst().world()) {
+        auto rc = world->physic()->ray(at, at + lean*((leanLen+leanClear)/leanLen));
+        if(rc.hasCol)
+          room = std::clamp(((rc.v-at).length()-leanClear)/leanLen, 0.f, 1.f);
+        }
+      if(room<aimLeanRoom)
+        aimLeanRoom = room;
+      else
+        aimLeanRoom += (room-aimLeanRoom)*std::min(1.f,dtF*roomRate);
+      at += lean*aimLeanRoom;
+      } else {
+      aimLeanRoom = 1;
+      }
     float      r  = aimRange - aimZoomIn*aimZoomS;
     if(def.collision!=0)
       r = calcCameraColision(at, back, calcLookAtAngles(at+back*r, at, Vec3(), state.spin), r);

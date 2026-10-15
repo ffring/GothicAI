@@ -720,9 +720,13 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
-      // steeply down: lean over the edge, if there is room in front of the head
+      // steeply down: lean over the edge, if there is room in front of the head; by hand as steeply as the
+      // hero looks down too (the center of the screen on the edge right in front: leaning looks past it)
       const Tempest::Vec3 d    = in.dir;
-      const float         down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+      const Tempest::Vec3 look = manual ? npc.aimLook() : Tempest::Vec3();
+      float               down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+      if(look.y<0.f)
+        down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
       in.lean = Aim::leanFor(down);
       if(in.lean>0.f) {
         const float         k    = in.lean/(Aim::LeanMax*float(M_PI)/180.f);

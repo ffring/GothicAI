@@ -640,6 +640,8 @@ struct Bench {
   bool        aimLeg    = false;  // aimat ... leg: the middle of the legs' capsules (limb takes the arms too)
   bool           aimFixed = false;
   bool           aimRaw   = false; // no holding over for the drop of the arrow
+  bool           aimMouse = false; // the game's camera turns onto it, as the mouse would: the shot from the
+                                   // center of the screen
   bool           crossValid = false;
   Vec3           crossPrev  = {}; // on the screen, -1..1
   float          aspect     = 4.f/3.f; // of the captured frame
@@ -2835,7 +2837,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.label = rest(line);
     }
   else if(c=="goto") {
-    const bool ok = marvin().exec("goto waypoint " + rest(line));
+    // goto <waypoint> | goto pos <x> <y> <z> (a roof, a rock: where no waypoint is)
+    const bool ok = marvin().exec(a.size()>1 && a[1]=="pos" ? line : "goto waypoint " + rest(line));
     bench.hasPrev = false;
     say(std::string(ok ? "goto " : "goto failed: ") + rest(line));
     }
@@ -4103,9 +4106,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="aimat") {
     // aimat <npc|nearest> [head|body|limb|leg] | aimat <x> <y> <z> | aimat ahead [dist] [height] | aimat off: the
     // manual aim aims there
-    // instead of the mouse - the middle of a zone of the npc, every frame
+    // instead of the mouse - the middle of a zone of the npc, every frame. A last word `mouse`: the game's camera
+    // turns onto it as the mouse would, the hero with it, the shot goes from the center of the screen
+    auto a = split(line);
     bench.aimNpc   = nullptr;
     bench.aimFixed = false;
+    bench.aimMouse = a.size()>2 && a.back()=="mouse";
+    if(bench.aimMouse) {
+      a.pop_back();
+      ctrl.setAimOverride(false);
+      }
     if(a.size()>1 && a[1]=="off") {
       ctrl.setAimOverride(false);
       say("aimat off");
@@ -4116,15 +4126,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       const Vec3 f   = facing(pl);
       bench.aimFixed = true;
       bench.aimAt    = pl.position() + f*num(a,2,2000) + Vec3(0,num(a,3,140),0);
-      ctrl.setAimOverride(true,bench.aimAt);
-      say("aimat ahead");
+      ctrl.setAimOverride(!bench.aimMouse,bench.aimAt);
+      say(std::string("aimat ahead") + (bench.aimMouse ? " mouse" : ""));
       return;
       }
     if(a.size()>3 && (std::isdigit(uint8_t(a[1][0])) || a[1][0]=='-')) {
       bench.aimFixed = true;
       bench.aimAt    = Vec3(num(a,1,0),num(a,2,0),num(a,3,0));
-      ctrl.setAimOverride(true,bench.aimAt);
-      say("aimat " + a[1] + " " + a[2] + " " + a[3]);
+      ctrl.setAimOverride(!bench.aimMouse,bench.aimAt);
+      say("aimat " + a[1] + " " + a[2] + " " + a[3] + (bench.aimMouse ? " mouse" : ""));
       return;
       }
     Npc* n = findNpc(w,pl,a.size()>1 ? a[1] : "nearest");
@@ -4137,7 +4147,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.aimZone = z=="head" ? HitZones::Head : (z=="limb" || z=="leg" ? HitZones::Limb : HitZones::Body);
     bench.aimLeg  = z=="leg";
     bench.aimRaw  = a.size()>3 && a[3]=="raw";
-    say("aimat " + symName(w,n) + " " + std::string(HitZones::name(bench.aimZone)) + (bench.aimRaw ? " raw" : ""));
+    say("aimat " + symName(w,n) + " " + std::string(HitZones::name(bench.aimZone)) + (bench.aimRaw ? " raw" : "") +
+        (bench.aimMouse ? " mouse" : ""));
     }
   else if(c=="immortal") {
     // immortal <npc|nearest> on|off: arrows hit it, it does not die (counting hits)
@@ -5984,11 +5995,12 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     bench.pinned->setDirection(Vec3(d.x,0,d.z));
     bench.pinned->updateTransform();
     }
-  if(bench.aimNpc!=nullptr) {
-    Vec3 at;
-    if(!aimPoint(*bench.aimNpc,bench.aimZone,bench.aimLeg,at) && !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
+  if(bench.aimNpc!=nullptr || (bench.aimMouse && bench.aimFixed)) {
+    Vec3 at = bench.aimAt;
+    if(bench.aimNpc!=nullptr && !aimPoint(*bench.aimNpc,bench.aimZone,bench.aimLeg,at) &&
+       !bench.aimNpc->hitZoneCenter(HitZones::Body,at))
       at = bench.aimNpc->collosionCenter();
-    if(!bench.aimRaw) {
+    if(bench.aimNpc!=nullptr && !bench.aimRaw) {
       // as an archer does: over it by how much the arrow drops on the way (at full draw), from the nock
       const auto st = Archery::stats(*player,player->currentRangedWeapon());
       Vec3       nock, dir;
@@ -5996,7 +6008,32 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         nock = player->position() + Vec3(0,145,0);
       at = Archery::launch(nock,at,Archery::speedAt(st,1.f));
       }
-    ctrl.setAimOverride(true,at);
+    auto cam = Gothic::inst().camera();
+    if(!bench.aimMouse) {
+      ctrl.setAimOverride(true,at);
+      }
+    else if(cam!=nullptr && cam->isAim()) {
+      // as the mouse: the center of the screen onto it, the hero turned with the camera. The camera looks
+      // through a point over the shoulder that turns about the hero with it: the turn that puts the target in
+      // the camera's plane through it (steeply down a turn toward the target from there would swing round)
+      Vec3 from, dir;
+      cam->aimRay(from,dir);
+      Vec3 fw = Vec3(dir.x,0,dir.z);
+      if(fw.length()<1e-3f)
+        fw = facing(*player);
+      fw = Vec3::normalize(fw);
+      const Vec3  o    = from - player->position();
+      const float ahd  = Vec3::dotProduct(o,fw);
+      const float side = Vec3::dotProduct(o,Vec3(fw.z,0,-fw.x));
+      const Vec3  t    = at - player->position();
+      const float lt   = std::sqrt(t.x*t.x+t.z*t.z);
+      const float yaw  = std::atan2(t.z,t.x) + (lt>1.f ? std::asin(std::clamp(side/lt,-1.f,1.f)) : 0.f);
+      const Vec3  f    = Vec3(std::cos(yaw),0,std::sin(yaw));
+      const Vec3  d    = t - (f*ahd + Vec3(f.z,0,-f.x)*side + Vec3(0,o.y,0));
+      const float pit  = std::atan2(d.y,std::max(Vec3::dotProduct(d,f),1.f))*180.f/float(M_PI);
+      cam->setSpin(PointF(-pit,yaw*180.f/float(M_PI)));
+      player->setDirection(yaw*180.f/float(M_PI));
+      }
     }
   // the hero speaks to an npc (as the bridge does with his voice), it thinks of an answer
   if(bench.hearNpc!=nullptr) {
