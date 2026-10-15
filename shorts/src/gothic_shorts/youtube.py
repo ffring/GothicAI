@@ -5,6 +5,10 @@ the token stays next to the client's file, outside the repository), a resumable 
 private (the videos.insert reference says so; the first shorts of this project were made public in Studio
 without a lock), and the upload reads the video's status back to be sure. The client's file is the OAuth
 client of the Google Cloud project (a Desktop app), downloaded from the console.
+
+A short is one video in every language: its sound is Russian (the game is), the other languages of its
+youtube.json go in as translations of the title and the description, and subtitle files as caption tracks.
+An audio track in another language is added in Studio: the API has no call for it.
 """
 
 from __future__ import annotations
@@ -30,13 +34,19 @@ TOKEN = HOME / "youtube-token.json"
 SCOPES = (
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",  # whose channel it is, before uploading
+    "https://www.googleapis.com/auth/youtube.force-ssl",  # caption tracks
 )
+CAPTIONS_SCOPE = SCOPES[2]
 API = "https://www.googleapis.com/youtube/v3"
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
+UPLOAD_CAPTIONS = "https://www.googleapis.com/upload/youtube/v3/captions"
 CHUNK = 8 * 1024 * 1024
 # the project's channel (GothicAI), by its id: nothing is uploaded anywhere else
 CHANNEL = os.environ.get("GOTHIC_YOUTUBE_CHANNEL", "UCbeAoPh3V7yFVpiuWNI-wkw")
 GAMING = "20"
+# the language of every short's sound: the game, its npc's and the hero speak Russian; an English audio
+# track is added in Studio, it does not change this
+AUDIO_LANGUAGE = "ru"
 
 
 class YouTubeError(Exception):
@@ -51,18 +61,22 @@ class Meta:
     language: str = "ru"
     synthetic: bool = False  # altered or synthetic content (AI voices that sound real)
     privacy: str = "private"
+    # the title and the description in other languages: {"en": {"title", "description"}}
+    localizations: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def body(self) -> dict:
-        if len(self.title) > 100:
-            raise YouTubeError(f"the title is {len(self.title)} characters, YouTube takes 100")
-        return {
+        titles = {**{k: v["title"] for k, v in self.localizations.items()}, self.language: self.title}
+        for lang, title in titles.items():
+            if len(title) > 100:
+                raise YouTubeError(f"the {lang} title is {len(title)} characters, YouTube takes 100")
+        body: dict = {
             "snippet": {
                 "title": self.title,
                 "description": self.description,
                 "tags": self.tags,
                 "categoryId": GAMING,
                 "defaultLanguage": self.language,
-                "defaultAudioLanguage": self.language,
+                "defaultAudioLanguage": AUDIO_LANGUAGE,
             },
             "status": {
                 "privacyStatus": self.privacy,
@@ -70,18 +84,25 @@ class Meta:
                 "containsSyntheticMedia": self.synthetic,
             },
         }
+        if self.localizations:
+            body["localizations"] = self.localizations
+        return body
 
 
 def load_meta(path: Path, lang: str) -> Meta:
     """The `<lang>` section of a short's metadata, kept next to the short (.shorts/<name>/youtube.json),
-    outside the repository; a JSON with a `youtube` section works too"""
+    outside the repository; a JSON with a `youtube` section works too. Every other language's section is a
+    translation of the title and the description."""
     data = json.loads(path.read_text())
+    sections = data.get("youtube", data)
     try:
-        yt = data.get("youtube", data)[lang]
+        yt = sections[lang]
     except KeyError as err:
         raise YouTubeError(f"{path} has no {lang}") from err
+    other = {k: {"title": v["title"], "description": v["description"]}
+             for k, v in sections.items() if k != lang and isinstance(v, dict) and "title" in v}  # fmt: skip
     return Meta(title=yt["title"], description=yt["description"], tags=yt.get("tags", []), language=lang,
-                synthetic=bool(yt.get("synthetic", False)))
+                synthetic=bool(yt.get("synthetic", False)), localizations=other)
 
 
 def _client() -> dict:
@@ -170,6 +191,12 @@ def sign_in() -> dict:
     return _sign_in(_client())
 
 
+def granted() -> set[str]:
+    """The scopes of the saved sign-in (empty without one)"""
+    token = json.loads(TOKEN.read_text()) if TOKEN.is_file() else {}
+    return set(token.get("scope", "").split())
+
+
 def access_token(*, sign_in: bool = True) -> str:
     client = _client()
     token = json.loads(TOKEN.read_text()) if TOKEN.is_file() else None
@@ -209,22 +236,55 @@ def check_channel(cid: str, title: str, expected: str = CHANNEL) -> None:
                            f"gothic-shorts youtube login, then pick the project's channel in Google's window")
 
 
-def privacy(token: str, vid: str) -> str:
-    """What YouTube made of the video: private, unlisted or public"""
-    r = httpx.get(f"{API}/videos", params={"part": "status", "id": vid},
+def _video(token: str, vid: str, part: str) -> dict:
+    r = httpx.get(f"{API}/videos", params={"part": part, "id": vid},
                   headers={"Authorization": f"Bearer {token}"}, timeout=30)
     if r.status_code != 200:
         raise YouTubeError(f"videos.list: {r.status_code} {r.text[:300]}")
     items = r.json().get("items", [])
     if not items:
         raise YouTubeError(f"YouTube does not show the video {vid}")
-    return items[0]["status"]["privacyStatus"]
+    return items[0]
+
+
+def privacy(token: str, vid: str) -> str:
+    """What YouTube made of the video: private, unlisted or public"""
+    return _video(token, vid, "status")["status"]["privacyStatus"]
+
+
+def translated(token: str, vid: str) -> set[str]:
+    """The languages the video's title and description are translated into"""
+    return set(_video(token, vid, "localizations").get("localizations", {}))
+
+
+def check_captions_scope(scopes: set[str]) -> None:
+    if CAPTIONS_SCOPE not in scopes:
+        raise YouTubeError("the sign-in can not add caption tracks (it has no youtube.force-ssl): "
+                           "gothic-shorts youtube login, then upload again")
+
+
+def add_captions(token: str, vid: str, lang: str, subs: Path) -> str:
+    """A caption track (a SubRip or WebVTT file) in `lang` on the video; the track's id"""
+    meta = {"snippet": {"videoId": vid, "language": lang, "name": "", "isDraft": False}}
+    boundary = secrets.token_hex(16)
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(meta)}\r\n"
+        f"--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n"
+    ).encode() + subs.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    r = httpx.post(UPLOAD_CAPTIONS, params={"part": "snippet", "uploadType": "multipart"},
+                   headers={"Authorization": f"Bearer {token}",
+                            "Content-Type": f"multipart/related; boundary={boundary}"},
+                   content=body, timeout=120)  # fmt: skip
+    if r.status_code != 200:
+        raise YouTubeError(f"captions.insert ({lang}): {r.status_code} {r.text[:300]}")
+    return r.json()["id"]
 
 
 def upload(video: Path, meta: Meta, token: str) -> str:
     """A resumable upload in chunks; the id of the new video"""
     size = video.stat().st_size
-    r = httpx.post(UPLOAD, params={"uploadType": "resumable", "part": "snippet,status"},
+    part = "snippet,status" + (",localizations" if meta.localizations else "")
+    r = httpx.post(UPLOAD, params={"uploadType": "resumable", "part": part},
                    headers={"Authorization": f"Bearer {token}",
                             "Content-Type": "application/json; charset=UTF-8",
                             "X-Upload-Content-Type": "video/mp4", "X-Upload-Content-Length": str(size)},
