@@ -7,6 +7,11 @@ import re
 from pathlib import Path
 
 
+def airborne(row):
+    # Deep falls switch MoveAlgo from InAir to Falling before the 10 m hazard.
+    return row['in_air'] or row['falling']
+
+
 def validate_case(events, case):
     setup = [e for e in events if e['kind'] == 'spell_guard_setup' and e['case'] == case]
     assert len(setup) == 1, f'missing or repeated {case} setup'
@@ -35,7 +40,7 @@ def validate_case(events, case):
     rows = [e for e in segment if e['kind'] == 'spell_guard_frame' and e['case'] == case]
     assert rows and all(e['human'] and not e['hero'] and not e['immortal'] and not e['dead'] and not e['unconscious'] and e['hp'] > 1 for e in rows), 'actor was not always a living mortal human'
     assert rows[0]['has_anchor'] and not rows[0]['armed'] and math.dist(rows[0]['anchor_cm'], stable) <= 3, 'no pre-hit stable anchor'
-    assert any(e['in_air'] and e['armed'] for e in rows), 'spell did not arm a real airborne throw'
+    assert any(airborne(e) and e['armed'] for e in rows), 'spell did not arm a real airborne throw'
     before = [e for e in rows if e['returns'] == 0]
     drop = max(stable[1]-e['position_cm'][1] for e in before)
     landings = [e for e in segment if e['kind'] == 'spell_guard_landing' and e['case'] == case]
@@ -44,7 +49,7 @@ def validate_case(events, case):
     landing_drop = stable[1]-landing['from_cm'][1]
     if case == 'cliff':
         assert drop > 1000 and landing_drop > 1000 and landing['hazards'] & 1, ('no real 10 m fall', drop, landing_drop)
-        assert any(e['in_air'] and e['hazards'] & 1 for e in before), 'fall never latched the cliff hazard'
+        assert any(airborne(e) and e['hazards'] & 1 for e in before), 'fall never latched the cliff hazard'
         assert landing['has_floor'] and landing['floor_normal'][1] > .5, 'return source has no landing surface'
         floor_error = abs(landing['from_cm'][1]-landing['floor_cm'][1])
         assert floor_error <= 30, ('returned before reaching ground', floor_error)
@@ -55,7 +60,7 @@ def validate_case(events, case):
         contact = {'landing_water_depth_cm': landing['water_depth_cm']}
     assert math.dist(landing['to_cm'], stable) <= 3, 'return destination missed the stable anchor'
     last = rows[-1]
-    assert max(e['returns'] for e in rows) == last['returns'] == 1 and last['standing'] and not last['in_air'] and not last['armed'], 'return did not finish standing once'
+    assert max(e['returns'] for e in rows) == last['returns'] == 1 and last['standing'] and not airborne(last) and not last['armed'], 'return did not finish standing once'
     error = math.dist(last['position_cm'], stable)
     assert error <= 3, ('return moved away from stable anchor', error)
     return {'pass': True, 'samples': len(rows), 'spell_id': 26, 'mass_kg': mass, 'impulse_ns': impulse,

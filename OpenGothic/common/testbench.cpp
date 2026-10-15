@@ -2395,7 +2395,8 @@ void spellFields(World& world) {
       ",\"hp\":"+std::to_string(npc.attribute(ATR_HITPOINTS))+
       ",\"human\":"+(npc.isHuman()?"true":"false")+",\"hero\":"+(npc.isPlayer()?"true":"false")+
       ",\"immortal\":"+(npc.isImmortal()?"true":"false")+
-      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"standing\":"+(npc.isStanding()?"true":"false")+
+      ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"falling\":"+(npc.isFalling()?"true":"false")+
+      ",\"standing\":"+(npc.isStanding()?"true":"false")+
       ",\"unconscious\":"+(npc.isUnconscious()?"true":"false")+",\"dead\":"+(npc.isDead()?"true":"false")+
       ",\"has_anchor\":"+(q.hasAnchor?"true":"false")+",\"armed\":"+(q.armed?"true":"false")+
       ",\"hazards\":"+std::to_string(q.hazards)+",\"returns\":"+std::to_string(returns));
