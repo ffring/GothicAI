@@ -52,6 +52,7 @@ using Allocator = rapidjson::Document::AllocatorType;
 struct Options {
   std::string save, scenario, output = ".body-runner", mode = "lockstep";
   bool stdio = false, compactReplies = false, schedulingDiagnostics = false, serialWorkers = false, forkReset = false;
+  bool forkPrefix = false;
 };
 
 Options options(int argc, const char** argv) {
@@ -72,6 +73,7 @@ Options options(int argc, const char** argv) {
     else if(arg=="--scheduling-diagnostics") result.schedulingDiagnostics = true;
     else if(arg=="--serial-workers") result.serialWorkers = true;
     else if(arg=="--fork-reset") result.forkReset = true;
+    else if(arg=="--fork-prefix") result.forkPrefix = true;
   }
   if(result.save.empty() || result.scenario.empty())
     throw std::runtime_error("--save and --scenario are required");
@@ -79,6 +81,8 @@ Options options(int argc, const char** argv) {
     throw std::runtime_error("mode must be lockstep or realtime");
   if(result.forkReset && (!result.serialWorkers || !result.stdio))
     throw std::runtime_error("--fork-reset requires --serial-workers and --stdio");
+  if(result.forkPrefix && !result.forkReset)
+    throw std::runtime_error("--fork-prefix requires --fork-reset");
   result.save = std::filesystem::absolute(result.save).string();
   result.scenario = std::filesystem::absolute(result.scenario).string();
   result.output = std::filesystem::absolute(result.output).string();
@@ -238,11 +242,54 @@ public:
     templateReady = true;
   }
   bool hasTemplate() const { return templateReady; }
+  // --fork-prefix: the scenario's opening (time of day, hero placement, waits, clearing) is the same
+  // for every arena episode, and setting the time of day re-plans every routine in the world. The
+  // template plays it once, stops right before `bodyarena` and forks there; see resetFromTemplate.
+  bool wantsPrefix() const { return opts.forkPrefix && !prefixReady; }
+  void preparePrefix(const Json& command) {
+    const auto p = plan(command);
+    if(!p.arena) throw std::runtime_error("--fork-prefix serves arena episodes only");
+    const auto from = Clock::now();
+    BodyObservations::reset(++observationGeneration);
+    const auto output = std::filesystem::path(opts.output)/"fork-prefix";
+    std::filesystem::create_directories(output);
+    TestBench::configure(p.scenario,output.string(),p.seed);
+    TestBench::holdBefore("bodyarena");
+    SimulationStep::finishStep(0,*player);
+    modeNow = "lockstep";
+    outputNow = output.string();
+    steps = 0;
+    elapsedSimMs = 0;
+    started = Clock::now();
+    due = started;
+    loaded = true;
+    paused = false;
+    for(unsigned step=0;step<300 && !TestBench::held() && !TestBench::done();++step)
+      oneStep();
+    if(!TestBench::held()) throw std::runtime_error("fork prefix did not reach bodyarena within 300 substeps");
+    TestBench::flushOutput();
+    prefixScenario = p.scenario;
+    prefixReady = true;
+    prefixWallMs = elapsed(from);
+  }
   // In the template after each fork: the next episode gets new identities, as a full reset would.
   void noteForked() { ++generation; ++observationGeneration; }
   void resetFromTemplate(const Json& command) {
     const auto p = plan(command);
     const auto from = Clock::now();
+    if(prefixReady) {
+      // The template's opening already ran: this episode starts at its held `bodyarena` step, with
+      // the step counters it would have had, a fresh observation generation and its own outputs.
+      if(p.scenario!=prefixScenario || !p.arena) throw std::runtime_error("fork prefix serves only its scenario's arena episodes");
+      const auto step = BodyObservations::currentStep();
+      BodyObservations::reset(++observationGeneration);
+      BodyObservations::beginStep(step);
+      std::filesystem::create_directories(p.output);
+      BodyArena::configure(*p.arena,generation+1);
+      TestBench::retarget(p.output);
+      beginEpisode(p,from,true);
+      return;
+    }
     BodyObservations::reset(++observationGeneration);
     configureEpisode(p);
     beginEpisode(p,from);
@@ -288,16 +335,20 @@ private:
     player->clearFocus();
   }
 
-  void beginEpisode(const ResetPlan& p,Clock::time_point from) {
+  void beginEpisode(const ResetPlan& p,Clock::time_point from,bool fromPrefix=false) {
     const auto& mode=p.mode; const auto& output=p.output; const auto& arenaConfig=p.arena;
     (void)output;
     // Match the rendered load-finalize frame: animation/camera/bench initialize at dt=0.
-    SimulationStep::finishStep(0,*player);
+    // A prefix fork already ran it, and its opening steps, in the template.
+    if(!fromPrefix)
+      SimulationStep::finishStep(0,*player);
     modeNow = mode;
     outputNow = output;
     generation++;
-    steps = 0;
-    elapsedSimMs = 0;
+    if(!fromPrefix) {
+      steps = 0;
+      elapsedSimMs = 0;
+    }
     resetWallMs = elapsed(from);
     started = Clock::now();
     due = started;
@@ -334,6 +385,9 @@ private:
         arenaFile.write(row.data(),std::streamsize(row.size())); arenaFile.put('\n'); arenaFile.flush();
         if(!arenaFile) throw std::runtime_error("arena journal write failed");
       });
+      // The held `bodyarena` line runs where the template stopped: in the same step's bench pass.
+      if(fromPrefix)
+        TestBench::resumeHeld();
       for(unsigned warmup=0;warmup<300 && !BodyArena::ready() && !TestBench::done();++warmup)
         oneStep();
       if(!BodyArena::ready()) throw std::runtime_error("arena setup did not reach readiness within 300 substeps");
@@ -1106,6 +1160,9 @@ private:
   Clock::time_point started{}, due{};
   bool loaded = false;
   bool templateReady = false;
+  bool prefixReady = false;
+  std::string prefixScenario;
+  uint64_t prefixWallMs = 0;
   bool paused = false;
   bool watchRequested = false;
   bool arenaSetupWatch = false;
@@ -1279,6 +1336,8 @@ int serveForks(Runner& runner, std::FILE* protocol, std::string& line, int& fork
       throw std::runtime_error("fork-reset template accepts only reset or close");
     if(!runner.hasTemplate())
       runner.loadTemplate();
+    if(runner.wantsPrefix())
+      runner.preparePrefix(request);
     if(threadCount()!=1)
       throw std::runtime_error("fork-reset requires a single-threaded template");
     std::fflush(protocol); std::fflush(stdout); std::fflush(stderr);

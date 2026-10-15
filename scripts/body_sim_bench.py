@@ -19,6 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from body_observe_suite import ObserverRunner  # noqa: E402
 
 
+# Training mode of the RL collector: culls, frozen world, isolated arena randomness.
+FROZEN_ENV = {"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1",
+              "OPENGOTHIC_FREEZE_WORLD": "1", "OPENGOTHIC_BODY_SCRIPT_RNG": "isolated"}
 VISUAL_EXTRAS = ("OPENGOTHIC_FOOTIK", "OPENGOTHIC_LEAN", "OPENGOTHIC_AIM", "OPENGOTHIC_AIMWALK", "OPENGOTHIC_ANIBLEND",
                  "OPENGOTHIC_BOWDRAW", "OPENGOTHIC_BLINK", "OPENGOTHIC_FLINCH", "OPENGOTHIC_GAZE", "OPENGOTHIC_LIPSYNC",
                  "OPENGOTHIC_GESTURES")
@@ -39,8 +42,8 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         os.environ.pop(key, None)
     for key in off:
         os.environ[key] = "0"
-    os.environ.pop("OPENGOTHIC_FOOTIK_WATCHED_ONLY", None)
-    os.environ.pop("OPENGOTHIC_ANIM_SKIP_FAR", None)
+    for key in FROZEN_ENV:
+        os.environ.pop(key, None)
     os.environ.update(env or {})
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     runner = ObserverRunner(variant)
@@ -116,7 +119,10 @@ def main() -> int:
              "lean-cull": dict(serial=True, trace=False, watch=False,
                                env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"}),
              "lean-cull-fork": dict(serial=True, trace=False, watch=False, extra=("--fork-reset",),
-                                    env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"})}
+                                    env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"}),
+             "frozen-fork": dict(serial=True, trace=False, watch=False, extra=("--fork-reset",), env=FROZEN_ENV),
+             "frozen-prefix": dict(serial=True, trace=False, watch=False, extra=("--fork-reset", "--fork-prefix"),
+                                   env=FROZEN_ENV)}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,
                                                       "results": results}, indent=2)+"\n")

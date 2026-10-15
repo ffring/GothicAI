@@ -501,6 +501,8 @@ struct Bench {
   bool        loaded    = false;
   bool        started   = false;
   bool        done      = false;
+  std::string holdCommand;      // --fork-prefix: stop before this command
+  bool        heldNow   = false;
   uint64_t    time      = 0;    // game time since the start, ms
   uint64_t    step      = 0;    // fixed steps made
 
@@ -3863,6 +3865,10 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
         say("waitarrive: timeout");
       bench.waitArrive = false;
       }
+    if(!bench.holdCommand.empty() && bench.prog[bench.pc].rfind(bench.holdCommand,0)==0) {
+      bench.heldNow = true;
+      return;
+      }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
     }
@@ -4271,6 +4277,39 @@ void TestBench::configure(std::string scenario, std::string output, int64_t seed
       line = "bodyduel " + std::to_string(seedOverride) + " " + (args.size()>2 ? args[2] : "60000");
       }
     }
+  }
+
+void TestBench::holdBefore(std::string command) {
+  bench.holdCommand = std::move(command);
+  bench.heldNow = false;
+  }
+
+bool TestBench::held() { return bench.heldNow; }
+
+void TestBench::flushOutput() {
+  for(std::FILE* file:{bench.events,bench.csv,logFile})
+    if(file!=nullptr)
+      std::fflush(file);
+  }
+
+void TestBench::retarget(std::string output) {
+  // The template flushed these before forking: closing the fork's copies writes nothing twice.
+  for(std::FILE** file:{&bench.events,&bench.csv,&logFile})
+    if(*file!=nullptr) {
+      std::fclose(*file);
+      *file = nullptr;
+      }
+  outDir = std::move(output);
+  }
+
+void TestBench::resumeHeld() {
+  auto world  = Gothic::inst().world();
+  auto player = Gothic::inst().player();
+  if(!bench.heldNow || world==nullptr || player==nullptr || bench.ctrl==nullptr)
+    throw std::runtime_error("no held scenario step to resume");
+  bench.holdCommand.clear();
+  bench.heldNow = false;
+  run(*world,*player,*bench.ctrl);
   }
 
 bool TestBench::done() { return bench.done; }

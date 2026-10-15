@@ -11,7 +11,8 @@ label) a self-imitation round trains on. Measurement and data only: no quality c
 Decisions follow the stage 8 realtime driver: the first one after one tick (--start-substeps 1)
 and native command TTL 100 ms. With them a greedy rollout reproduces the realtime driver's
 episodes (scripts/body_schedule_equivalence.py); the 9.2 rounds used 2 and 1000 and fitted
-a lockstep-only schedule. Between decisions the runner advances on its own (arena_advance) to
+a lockstep-only schedule. The fork template plays the bench opening once (--fork-prefix) and every
+episode forks right before `bodyarena`. Between decisions the runner advances on its own (arena_advance) to
 the tick where the per-tick loop would decide next; --per-tick keeps one round trip per tick.
 The world outside the arena is frozen and the actors draw their own script randomness: such a
 rollout equals the realtime driver in the live world with OPENGOTHIC_BODY_SCRIPT_RNG=isolated.
@@ -127,7 +128,8 @@ def run_worker(worker: int, options: dict, tasks: list[list]) -> dict:
     runner_args = argparse.Namespace(output=output, runner=Path(options["runner"]), assets=Path(options["assets"]),
                                      save=Path(options["save"]), reference=Path(options["reference"]),
                                      scenario=Path(options["scenario"]), compact_replies=True,
-                                     native_serial_workers=True, runner_extra_args=["--fork-reset"])
+                                     native_serial_workers=True,
+                                     runner_extra_args=["--fork-reset"]+(["--fork-prefix"] if options.get("fork_prefix") else []))
     runner = LeanRunner(runner_args)
     # Training runtime: the fast packer (float-for-float equal to the gate's) and no provenance digests.
     lean = options.get("lean_runtime", True)
@@ -272,6 +274,8 @@ def main() -> int:
     parser.add_argument("--tasks", default="native_duel")
     parser.add_argument("--start-substeps", type=int, default=1,
                         help="ticks before the first decision; 1 matches the realtime driver (9.2 rounds used 2)")
+    parser.add_argument("--no-fork-prefix", dest="fork_prefix", action="store_false",
+                        help="replay the bench opening in every fork instead of once in the template")
     parser.add_argument("--reference-runtime", dest="lean_runtime", action="store_false",
                         help="gate packer and digest-checked runtime instead of the lean training ones")
     parser.add_argument("--per-tick", dest="advance", action="store_false",
@@ -279,6 +283,9 @@ def main() -> int:
     parser.add_argument("--command-ttl-ms", type=int, default=100,
                         help="native command TTL; 100 is the stage 8 realtime runtime (9.2 rounds used 1000)")
     args = parser.parse_args()
+    # Runners work in their own directory: a relative output would put their journals elsewhere,
+    # beyond the cleanup of --keep-journals-less runs.
+    args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     distances = (250, 300, 350, 400)
     kinds = args.tasks.split(",")

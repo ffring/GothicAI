@@ -19,6 +19,14 @@ namespace TestBench {
   bool     isActive();
   // Reinitialize the harness for a fresh runner generation. The caller owns world teardown/load.
   void     configure(std::string scenario, std::string output, int64_t seedOverride = -1);
+  // Body runner --fork-prefix: the template stops its scenario before the first line starting with
+  // `command` (held), flushes its output and forks. The fork writes to its own output and resumes
+  // that very line within the same step, as if the scenario had never stopped.
+  void     holdBefore(std::string command);
+  bool     held();
+  void     flushOutput();
+  void     retarget(std::string output);
+  void     resumeHeld();
   bool     done();
   uint64_t stepCount();
   uint64_t nativeChoices();

@@ -51,7 +51,7 @@ def processes(root):
     return {pid: tree[pid] for pid in keep if pid in tree}
 
 
-workers, episodes, out, extra = int(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3]), sys.argv[4:]
+workers, episodes, out, extra = int(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3]).resolve(), sys.argv[4:]
 source = HOME/"gothic-ai/body/source"
 command = [str(HOME/"gothic-ai/body/.venv/bin/python"), str(source/"scripts/body_rl_collect.py"),
            "--runner", str(HOME/"gothic-ai/body-api/build/opengothic/gothic-body-runner"),
