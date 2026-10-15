@@ -85,6 +85,7 @@ class EffectCheck final {
 
     bool                                              recording = false;
     uint32_t                                          level     = 0;  // script calls deep below the dialog function
+    uint32_t                                          inlined   = 0;  // ... of those the lifter puts in its place
     std::vector<Call>                                 observed;
   };
 

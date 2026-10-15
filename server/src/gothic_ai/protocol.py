@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 28
+PROTOCOL_VERSION = 31
 
 # --- game -> server -----------------------------------------------------------
 
@@ -1252,7 +1252,10 @@ class StoryEffectCmd(_Command):
     the server is let go for these two; `routine` (`npc`: an instance symbol, default this npc; `routine`:
     START...) through B_StartOtherRoutine, as the dialogs change routines; `calm` (v20; `attitude`: an
     ATT_* constant, ATT_NEUTRAL by default): the npc calls off its fight with the hero and keeps to it, its
-    attitude to him set through B_SetAttitude, a held npc let go too. The game answers `result`.
+    attitude to him set through B_SetAttitude, a held npc let go too; `knows` (v31; `info`: a dialog's
+    C_INFO symbol): the hero has heard that dialog of the npc's, as when it is played — the menu no longer
+    offers it, Npc_KnowsInfo sees it (a quest of the scripts given or ended in a conversation). The game
+    answers `result`.
 
     `check` (v10): the gives are checked first, and nothing happens unless each giver has all it gives
     (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)")."""

@@ -48,6 +48,9 @@
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
+#   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
+#       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
+#       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)
 #   vlie: a lie about a quest of the scripts: the hero tells Lobart the turnips are in the barn, Lobart's
 #       model (scripted with LLM=fake) believes him and his own ending plays; the next morning he misses the
 #       turnips, turns against the hero, and the people around hear it (story graph, stage 5)
