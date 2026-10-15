@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import json
+import logging
 import os
 
 import httpx
@@ -7,9 +9,12 @@ import pytest
 
 from gothic_tts.cli import load_env_file
 from gothic_tts.providers import TtsError, Voice
-from gothic_tts.providers.inworld import InworldTTS
+from gothic_tts.providers.fake import FakeProvider
+from gothic_tts.providers.inworld import CHECK_VOICE, InworldTTS
+from gothic_tts.synthesizer import Synthesizer
 
 XARDAS = Voice("NONE_100_XARDAS", "An old man with a deep voice")
+NO_CREDITS = "You have no credits remaining. Please add credits to continue using the service."
 
 
 class FakeInworld:
@@ -20,6 +25,8 @@ class FakeInworld:
         self.voices: set[str] = {"Dmitry"}
         self.designed = 0
         self.fail_line = False
+        self.credits = True
+        self.odd_check = False  # the check line gets an answer the provider does not know
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         body = json.loads(req.content) if req.content else {}
@@ -38,6 +45,12 @@ class FakeInworld:
                 self.voices.add(voice_id)
                 return httpx.Response(200, json={"voiceId": voice_id, "tags": body["tags"]})
             case "/tts/v1/voice:stream":
+                if not self.credits:  # asked before the voice is looked up, as the real one does
+                    return httpx.Response(
+                        402, json={"error": {"code": 7, "message": NO_CREDITS, "details": []}}
+                    )
+                if self.odd_check and body["voiceId"] == CHECK_VOICE:
+                    return httpx.Response(400, json={"code": 3, "message": "Invalid voice id"})
                 if body["voiceId"] not in self.voices:
                     return httpx.Response(
                         404, json={"code": 5, "message": f"Unknown voice: {body['voiceId']}"}
@@ -53,7 +66,17 @@ class FakeInworld:
         return httpx.Response(404, json={"message": "no such path"})
 
     def streams(self) -> list[dict]:
+        """Lines, without warmup's checks."""
+        return [body for body in self._streams() if body["voiceId"] != CHECK_VOICE]
+
+    def checks(self) -> int:
+        return sum(body["voiceId"] == CHECK_VOICE for body in self._streams())
+
+    def _streams(self) -> list[dict]:
         return [body for _, path, body in self.requests if path == "/tts/v1/voice:stream"]
+
+    def voice_lists(self) -> int:
+        return sum(path == "/tts/v1/voices" for _, path, _ in self.requests)
 
 
 @pytest.fixture
@@ -157,6 +180,99 @@ async def test_errors(api, tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("INWORLD_API_KEY")
     with pytest.raises(TtsError, match="INWORLD_API_KEY"):
         await _speak(p)
+    await p.aclose()
+
+
+async def test_idle_connection_kept_warm(api, tmp_path, monkeypatch, caplog) -> None:
+    p = _provider(api, tmp_path, voice="Dmitry", keep_warm=0.1)
+    await p.warmup()
+    for _ in range(8):  # lines keep the connection open themselves
+        await _speak(p)
+        await asyncio.sleep(0.02)
+    assert api.checks() == 1
+
+    caplog.set_level(logging.DEBUG, logger="gothic_tts")
+    await asyncio.sleep(0.55)  # silence: a free check every 0.1 s
+    assert 3 <= api.checks() - 1 <= 6
+    monkeypatch.setenv("INWORLD_API_KEY", "wrong")
+    before = api.checks()
+    await asyncio.sleep(0.35)  # a failed request neither stops it nor logs above debug
+    assert api.checks() - before >= 2
+    assert caplog.records and all(r.levelno == logging.DEBUG for r in caplog.records)
+
+    await p.aclose()
+    stopped = api.checks()
+    await asyncio.sleep(0.25)
+    assert api.checks() == stopped  # stops with the provider
+
+    monkeypatch.setenv("INWORLD_API_KEY", "test-key")
+    cold = _provider(api, tmp_path, voice="Dmitry", keep_warm=0)
+    await cold.warmup()
+    await asyncio.sleep(0.1)
+    await cold.aclose()
+    assert api.checks() == stopped + 1
+
+
+async def test_out_of_credits_stays_out_until_topped_up(api, tmp_path, caplog) -> None:
+    """An account without credits still gets the free voice list, but every line is refused with 402.
+    Lines must go straight to the fallback, not into a 402 after each check, and quietly."""
+    caplog.set_level(logging.DEBUG, logger="gothic_tts")
+    inworld, fallback = _provider(api, tmp_path, voice="Dmitry", keep_warm=0), FakeProvider()
+    synth = Synthesizer(inworld, fallback, retry_s=0.02, retry_max_s=0.05)
+
+    async def line() -> str:
+        async def chunk(pcm: bytes, p) -> None:
+            pass
+
+        return (await synth.speak("Да.", XARDAS, chunk)).provider
+
+    def warnings() -> int:
+        return sum(r.levelno >= logging.WARNING for r in caplog.records)
+
+    async def checked(n: int) -> None:  # the background check asked Inworld n more times
+        target = api.checks() + n
+        for _ in range(100):
+            if api.checks() >= target:
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("no check")
+
+    api.credits = False  # empty from the start: the fallback speaks the first line
+    await synth.warmup()
+    assert synth.available() == [fallback] and warnings() == 2  # inworld failed, left out
+    for _ in range(3):
+        assert await line() == "fake"
+        await checked(2)
+    assert api.streams() == [] and api.voice_lists() == 0  # no line and no voice list asked Inworld
+    assert warnings() == 2  # checks that keep failing say nothing
+
+    api.credits = True  # topped up: the next check finds out, for free
+    for _ in range(100):
+        if inworld in synth.available():
+            break
+        await asyncio.sleep(0.01)
+    assert await line() == "inworld"
+    assert len(api.streams()) == 1
+
+    api.credits = False  # spent mid-game: one line pays the 402 round trip, then they skip it
+    assert await line() == "fake"
+    assert warnings() == 4  # inworld failed, left out: once
+    for _ in range(3):
+        await checked(2)
+        assert await line() == "fake"
+    assert len(api.streams()) == 2 and warnings() == 4
+    await synth.aclose()
+
+
+async def test_an_unknown_answer_to_the_check_leaves_it_to_the_voice_list(api, tmp_path) -> None:
+    p = _provider(api, tmp_path, voice="Dmitry", keep_warm=0)
+    api.odd_check = True  # Inworld changed: the check line is refused for something else
+    await p.warmup()  # the voice list still decides, so Inworld is not left out for good
+    assert api.checks() == 1 and api.voice_lists() == 1
+    api.credits = False
+    with pytest.raises(TtsError, match="no credits remaining"):
+        await p.warmup()
+    assert api.voice_lists() == 1
     await p.aclose()
 
 
