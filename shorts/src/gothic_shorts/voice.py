@@ -46,10 +46,12 @@ def say(
     *,
     provider: str | None = None,
     fallback: str | None = None,
+    clone: Path | None = None,
     keep: Callable[[Path, Path], object] = shutil.copyfile,
 ) -> None:
     """Voices each text into its file, in one `gothic-tts say`: the voice `voice_id` designed from
-    `description`, by the launcher's providers unless `provider`/`fallback` name others."""
+    `description` (or cloned from the recording `clone`), by the launcher's providers unless
+    `provider`/`fallback` name others."""
     texts = list(dict.fromkeys(lines))
     if not texts:
         return
@@ -67,7 +69,8 @@ def say(
         argv = [
             str(uv), "run", "--project", str(repo / "tts-service"), "gothic-tts", "say",
             "--provider", provider or s.tts.provider, "--fallback", fallback or s.tts.fallback,
-            "--voice-id", voice_id, "--voice", description, "--out", str(target), *texts,
+            "--voice-id", voice_id, "--voice", description, "--out", str(target),
+            *(["--clone", str(clone.resolve())] if clone else []), *texts,
         ]  # fmt: skip
         done = subprocess.run(argv, cwd=tmp, env=child_env(env), capture_output=True, text=True)
         print(done.stdout.strip())

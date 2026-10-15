@@ -37,6 +37,8 @@ class VoxCPM:
             await self._connection()
 
     async def synthesize(self, text: str, voice: Voice, on_chunk: ChunkCallback) -> float:
+        if voice.sample:
+            raise TtsError("voxcpm: the bridge designs voices, it clones none from a recording")
         async with self._lock:
             try:
                 ws = await self._connection()

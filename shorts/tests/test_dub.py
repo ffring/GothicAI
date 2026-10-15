@@ -108,6 +108,31 @@ def test_the_english_script_without_its_caption_breaks(tmp_path):
     assert dub.english_script(tmp_path, "en") == ["In Gothic you don't aim", "Yes"]
 
 
+def test_inworld_clones_the_voice_the_game_speaks_russian_in(tmp_path, monkeypatch):
+    calls = []
+
+    def say(config, voice_id, description, lines, *, provider=None, fallback=None, clone=None, keep=None):
+        if not lines:
+            return  # as voice.say: nothing to voice, no gothic-tts
+        calls.append((voice_id, provider, clone, list(lines)))
+        for path in lines.values():
+            path.write_bytes(b"wav " + voice_id.encode())
+
+    monkeypatch.setattr(dub, "say", say)
+    config = SimpleNamespace(settings=SimpleNamespace(tts=SimpleNamespace(provider="inworld:delivery=stable",
+                                                                          fallback="voxcpm")))  # fmt: skip
+    got = dub.english_voices(config, HERO, {"hero": ["Hi."]}, tmp_path, "en")
+    (game, ru_spec, _, sample), (english, en_spec, clone, texts) = calls
+    # a Russian sample in the game's own voice (its id and description: the voice the game designed) ...
+    assert (game, ru_spec, sample) == ("SHORTS_HERO", "inworld:delivery=stable", [dub.RUSSIAN_SAMPLE])
+    # ... cloned, the lines said in English
+    assert (english, texts) == ("SHORTS_HERO@en~ru", ["Hi."])
+    assert en_spec == "inworld:delivery=stable,language=en-US"
+    assert clone.read_bytes() == b"wav SHORTS_HERO" and got[("hero", "Hi.")].is_file()
+    dub.english_voices(config, HERO, {"hero": ["Hi."]}, tmp_path, "en")
+    assert len(calls) == 2  # kept: nothing voiced again
+
+
 def test_a_speaker_falls_back_to_the_next_provider(tmp_path, monkeypatch):
     def no_credits(*args, **kwargs):
         raise VoiceError("gothic-tts say failed:\nerror: no voice: inworld unavailable")
@@ -193,23 +218,38 @@ def test_an_explainer_dub_over_its_music_bed(tmp_path, monkeypatch):
     (ws / "script.en.txt").write_text("One | two\nThree\n")
     asked = []
 
-    def voxcpm(ref, lines, work, design=None):
-        assert ref.is_file() and design is None  # the user's own voice: never designed
+    def say(config, voice_id, description, lines, *, provider=None, fallback=None, clone=None, keep=None):
+        assert clone.name == "reference.inworld.wav" and provider == "inworld:language=en-US"
         asked.extend(lines)
         for path in lines.values():
             _sound(path, 1.0)
 
-    monkeypatch.setattr(dub, "voxcpm", voxcpm)
-    done = dub.dub_explainer(ws)
+    monkeypatch.setattr(dub, "say", say)
+    done = dub.dub_explainer(CONFIG, ws)
     assert asked == ["One two", "Three"]
     assert _samples(done.wav) == 6 * 48000  # the plan's length
     assert done.lufs == pytest.approx(dub.TARGET_LUFS, abs=0.5)
     assert not done.too_long
 
-    dub.dub_explainer(ws)  # unchanged lines are not voiced again
+    dub.dub_explainer(CONFIG, ws)  # unchanged lines are not voiced again
     assert asked == ["One two", "Three"]
+
+    # without Inworld, VoxCPM clones from a reference its encoder takes
+    def no_credits(*args, **kwargs):
+        raise VoiceError("error: no voice: inworld unavailable")
+
+    def voxcpm(ref, lines, work, design=None):
+        assert ref.name == "reference.wav" and design is None  # the user's own voice: never designed
+        asked.extend(lines)
+        for path in lines.values():
+            _sound(path, 1.0)
+
+    monkeypatch.setattr(dub, "say", no_credits)
+    monkeypatch.setattr(dub, "voxcpm", voxcpm)
+    dub.dub_explainer(CONFIG, ws, tts="voxcpm")
+    assert asked == ["One two", "Three", "One two", "Three"]  # another provider: voiced again
 
     plan["gameVolume"] = 1
     (ws / "plan.json").write_text(json.dumps(plan))
     with pytest.raises(dub.DubError, match="footage's own sound"):
-        dub.dub_explainer(ws)
+        dub.dub_explainer(CONFIG, ws)

@@ -204,17 +204,22 @@ will. It prints every line: where it starts, its length against its slot, the sp
   splits `main.wav` into the voices and the rest (~10 s for a 45 s take, kept in `<take>/dub-en/`), and the
   rest stands in for the sound from 0.3 s before an npc's line to 0.3 s after, the recording's own sound
   elsewhere. Every line in English: the take's `subs.en.json` (what the captions say; the hook and captions
-  stay burnt in in Russian), in a voice designed from the same description as the Russian one: the npc's
-  from the AI server (`gothic-ai voices <npc>`), the hero's the shot's `hero_voice`. The launcher's TTS
-  provider designs it and its fallback takes over when it fails, as in the game: Inworld designs an en-US
-  voice through the TTS service, VoxCPM2 on the GPU server designs one reading an English sample (as the
-  voxcpm bridge does with its Russian one) and says the lines in it (`--tts voxcpm` picks one). Each line
-  starts where its Russian one starts and is as loud as it was in the game's sound (the separated voices
-  measured over it; the hero's recording); the cut's pauses go out with the same parts of the recording.
-  The lines are kept by voice and text in `.shorts/voice/en/`. The lip sync stays the Russian one.
+  stay burnt in in Russian), in the voice the game speaks Russian in: the TTS service voices a Russian
+  sample (~17 s) in the npc's voice (its id and description from the AI server, `gothic-ai voices <npc>`;
+  the hero's the shot's `hero_voice`), Inworld clones it (Instant Voice Cloning, `gothic-tts say --clone`),
+  and the clone says the English lines, so the timbre stays the Russian one. When that fails Inworld
+  designs an en-US voice from the description, and then the launcher's fallback takes over, as in the
+  game: VoxCPM2 on the GPU server designs one reading an English sample (as the voxcpm bridge does with
+  its Russian one) and says the lines in it (`--tts voxcpm` picks it). A fallback says why the way before
+  it failed. Each line starts where its Russian one starts and is as loud as it was in the game's sound
+  (the separated voices measured over it; the hero's recording); the cut's pauses go out with the same
+  parts of the recording. The lines are kept by voice and text in `.shorts/voice/en/`, the clones in
+  Inworld's library (`gothic-ai <id>@en~ru`). The lip sync stays the Russian one.
 - **An explainer.** `script.en.txt` (the caption track's text, without its `|`) in the user's own voice,
-  cloned by VoxCPM2 on the GPU server from their first recorded lines (`voice/clean/`, 8-14 s of them;
-  VoxCPM2's encoder takes up to 15 s) and cleaned as those were (`words.py`'s chain), each line from where
+  cloned from their first recorded lines (`voice/clean/`): by Inworld from 20-29 s of them (its best is
+  10-30 s; the clone is `gothic-ai USER@<short>` in the library), or, when Inworld fails, by VoxCPM2 on the
+  GPU server from 8-14 s (its encoder takes up to 15 s); cleaned as the Russian takes were (`words.py`'s
+  chain), each line from where
   its Russian line's first word is said (`words.ru.json`), as loud as the Russian voice, over the plan's
   music bed (`plan.json`, `--plan` for another) faded and ducked under the English lines as `Explainer.tsx`
   ducks it under the Russian ones. The lines and the reference live in `voice/en/` and are made again only
@@ -223,7 +228,8 @@ will. It prints every line: where it starts, its length against its slot, the sp
 
 A line longer than its slot (until the next line starts, 0.15 s before it) is sped up by up to x1.15 (pitch
 kept); one longer still is reported, and `dub` exits with 1 after writing the track: shorten the line in
-the translation and run it again. VoxCPM reads English at about 12 characters a second.
+the translation and run it again. Inworld and VoxCPM read English at about 12-14 characters a second.
+Inworld bills the lines and the samples: check its credits first (`gothic-launcher` does).
 
 The jobs (`shorts/deploy/dub`, in `~/gothic-ai/dub` on the server): `separate.sh <wav> <out dir>` (Demucs in a
 venv of its own, ~2 GB of GPU memory while it runs) and `clone.sh <reference> <lines.json> <out dir>
