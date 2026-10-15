@@ -77,3 +77,7 @@ Keep these when updating a library from upstream.
 - `ZenKit/` `DaedalusVm::unsafe_call_bl` (`DaedalusVm.hh`, `DaedalusVm.cc`): calls a script function the way
   the `BL` instruction does, so an override (`override_function`) runs instead of its code. The story
   graph's Interpreter calls script functions from a dialog's program through it.
+- `ZenKit/` `DaedalusScript::add_int_symbol` (`DaedalusScript.hh`, `DaedalusScript.cc`): adds a global integer
+  variable that is not in the compiled scripts; `load` keeps room for `MAX_ADDED_SYMBOLS` of them, so no
+  symbol moves. The AI director's story state (`DIR_*`, graph_patch `vars`) lives in such variables and is
+  saved with the scripts' own (`GameScript::loadVar` makes them again from a save).

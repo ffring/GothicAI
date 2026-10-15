@@ -95,7 +95,41 @@ zenkit::DaedalusVm* DialogGraph::vm() const {
   return w!=nullptr ? &w->script().getVm() : nullptr;
   }
 
+void DialogGraph::ensureVars() {
+  auto* v = vm();
+  if(v==nullptr || (v==varsFor && varsMade.size()==vars.size()))
+    return;
+  if(v!=varsFor) {
+    varsMade.clear();
+    varsFor = v;
+    }
+  for(auto& [name,value] : vars) {
+    if(varsMade.count(name))
+      continue;
+    varsMade.insert(name);
+    if(auto err = whyNotVar(*v,name); !err.empty()) {
+      Log::e("[story] vars: ",err);
+      continue;
+      }
+    if(v->find_symbol_by_name(name)!=nullptr)
+      continue;  // a save brought it back with its value
+    if(auto* s = v->add_int_symbol(name))
+      s->set_int(value); else
+      Log::e("[story] vars: no room for ",name);
+    }
+  }
+
+std::string DialogGraph::whyNotVar(zenkit::DaedalusVm& v, const std::string& name) {
+  if(name.rfind("DIR_",0)!=0)
+    return name + ": a variable of the director's is named DIR_...";
+  auto* s = v.find_symbol_by_name(name);
+  if(s!=nullptr && !(s->is_generated() && s->type()==DaedalusDataType::INT && s->count()==1))
+    return name + " is a script symbol";
+  return {};
+  }
+
 void DialogGraph::ensureLifter() {
+  ensureVars();
   auto* v = vm();
   if(v==nullptr || v==liftedFor)
     return;
@@ -117,6 +151,9 @@ void DialogGraph::clear() {
   replaced.clear();
   replacedFns.clear();
   replacedFor = nullptr;
+  vars.clear();
+  varsMade.clear();
+  varsFor = nullptr;
   reported.clear();
   // the next game session has its own VM
   predicates.reset();
@@ -152,6 +189,28 @@ std::vector<std::string> DialogGraph::apply(const rapidjson::Value& msg) {
 
 std::string DialogGraph::applyOp(const rapidjson::Value& op) {
   const auto kind = str(op,"op");
+  if(kind=="vars") {
+    // the director's story variables (v29): globals of the scripts' kind that the save keeps
+    auto it = op.FindMember("vars");
+    if(it==op.MemberEnd() || !it->value.IsObject())
+      return "vars: no vars";
+    auto* v = vm();
+    for(auto& m : it->value.GetObject()) {
+      const auto name = upper(std::string(m.name.GetString(),m.name.GetStringLength()));
+      if(!m.value.IsInt())
+        return "vars: " + name + " is not an integer";
+      if(name.rfind("DIR_",0)!=0)
+        return "vars: " + name + ": a variable of the director's is named DIR_...";
+      if(v!=nullptr) {
+        if(auto err = whyNotVar(*v,name); !err.empty())
+          return "vars: " + err;
+        }
+      }
+    for(auto& m : it->value.GetObject())
+      vars.emplace(upper(std::string(m.name.GetString(),m.name.GetStringLength())),m.value.GetInt());
+    ensureVars();
+    return {};
+    }
   if(kind=="add_node") {
     auto it = op.FindMember("node");
     if(it==op.MemberEnd() || !it->value.IsObject())
@@ -919,7 +978,8 @@ std::string DialogGraph::status() const {
          " told); check " + (checking ? "on" : "off") + ": " + std::to_string(checked) + " computed, " +
          std::to_string(differ) + " differ; programs " + (running ? "on" : "off") + ": " + std::to_string(ran) +
          " runs, " + std::to_string(runErrors) + " failed, " + std::to_string(notPrograms) + " not programs; " +
-         std::to_string(replaced.size()) + " replaced, " + std::to_string(replacedRuns) + " director's runs";
+         std::to_string(replaced.size()) + " replaced, " + std::to_string(replacedRuns) + " director's runs; " +
+         std::to_string(vars.size()) + " vars";
   }
 
 std::string DialogGraph::program(std::string_view node, std::string_view part, bool own, std::string& error) {

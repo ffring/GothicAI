@@ -325,6 +325,11 @@ class FakeGame:
                     )
             case "graph_patch":
                 self.graph.append(msg)
+                for op in msg["ops"]:
+                    for name, value in (op.get("vars") or {}).items() if op.get("op") == "vars" else []:
+                        # the director's story variables (v29): kept if the save has them
+                        self.vars.setdefault(name, value)
+                        self.symbols.setdefault(name, "var")
                 if msg.get("req"):
                     bad = [i for i, op in enumerate(msg["ops"]) if op.get("node") == "BAD"]
                     errors = {"error": "; ".join(f"op {i}: no dialog BAD" for i in bad)} if bad else {}
