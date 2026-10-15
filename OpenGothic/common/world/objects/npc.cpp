@@ -311,6 +311,10 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   visual.pose().saveRagdollRecovery(fout);
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-quest-return");
   RagdollSave::saveQuestReturn(fout,ragdollQuestReturn);
+  if(visual.stuckArrowCount()>0) {
+    fout.setEntry("worlds/",fout.worldName(),directory,id,"/stuck-arrows");
+    visual.saveStuckArrows(fout);
+    }
   }
 
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
@@ -433,6 +437,10 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
       !ragdollLegacyDown && !ragdollRecovering &&
       (movement==MoveAlgo::InAir || movement==MoveAlgo::Falling ||
        movement==MoveAlgo::Swim || movement==MoveAlgo::Dive);
+  if(Gothic::physicsFlags().arrowSticking &&
+     fin.setEntry("worlds/",fin.worldName(),directory,id,"/stuck-arrows") &&
+     !visual.loadStuckArrows(fin,owner))
+    Log::e("arrows: invalid saved NPC attachments, keeping the body without arrows");
   }
 
 void Npc::postValidate() {
@@ -846,7 +854,6 @@ bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
 
 void Npc::suspendRagdoll() {
   pendingSpellImpulse = {};
-  visual.clearStuckArrows();
   living.reset();
   arrowImpacts.clear();
   ragdollHasLastPosition = false;
@@ -1209,7 +1216,8 @@ void Npc::prepareLivingBody() {
     arrowImpacts.clear();
   }
 
-bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix) {
+bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& worldMatrix,
+                     std::string_view visualName) {
   // A corpse hit is selected after the native step, before the usual pose export.
   // Bind against that same current pose so the first sync cannot move the pin twice.
   if(ragdoll)
@@ -1220,7 +1228,7 @@ bool Npc::stickArrow(MeshObjects::Mesh&& arrow, size_t bone, const Matrix4x4& wo
     const Vec3 at(worldMatrix.at(3,0),worldMatrix.at(3,1),worldMatrix.at(3,2));
     bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
     }
-  return visual.stickArrow(std::move(arrow),bone,worldMatrix);
+  return visual.stickArrow(std::move(arrow),bone,worldMatrix,visualName);
   }
 
 void Npc::addCorpseArrowImpulse(const Bullet& bullet) {

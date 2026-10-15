@@ -4,6 +4,10 @@
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/submesh/packedmesh.h"
+#include "game/serialize.h"
+
+#include <Tempest/MemReader>
+#include <Tempest/MemWriter>
 
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -23,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -67,6 +72,132 @@ namespace {
                       {{0,4,7}},{{0,7,3}},{{1,2,6}},{{1,6,5}},
                       {{0,1,5}},{{0,5,4}},{{3,7,6}},{{3,6,2}}};
     return mesh;
+    }
+
+  std::vector<uint8_t> saveArchive(const std::function<void(Serialize&)>& write) {
+    std::vector<uint8_t> bytes;
+    Tempest::MemWriter writer(bytes);
+    {
+      Serialize output(writer);
+      write(output);
+    }
+    return bytes;
+    }
+
+  void requireMatrix(const Tempest::Matrix4x4& actual, const Tempest::Matrix4x4& expected,
+                     const char* message) {
+    for(int c=0;c<4;++c)
+      for(int r=0;r<4;++r)
+        requireNear(actual.at(c,r),expected.at(c,r),c==3 ? .001f : .00001f,message);
+    }
+
+  void loadMovables(DynamicWorld& world, const std::vector<uint8_t>& bytes) {
+    Tempest::MemReader reader(bytes);
+    Serialize input(reader);
+    world.loadMovableVobs(input);
+    }
+
+  void testMovableVobSave() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    constexpr uint32_t zenId=42;
+    auto origin=at(120,100,-200);
+    origin.rotateOY(17.f);
+    auto moved=at(170.125f,118.5f,-219.25f);
+    moved.rotateOX(13.f);
+    moved.rotateOY(39.f);
+    // The independent optional entry can describe a settled pose without having to
+    // wait for a game asset or a particular native solver trajectory in this fixture.
+    auto savedRecord=[&](std::string_view worldName, uint32_t id, std::string_view visual,
+                         const Tempest::Matrix4x4& birth) {
+      return saveArchive([&](Serialize& output) {
+        output.setEntry("worlds/_/movable-vobs");
+        output.write(uint32_t(0x31564f4d),uint16_t(1),worldName,uint32_t(1));
+        output.write(id,visual,birth,moved,true);
+        });
+      };
+    const auto saved=savedRecord("_",zenId,"CONTRACT_CUBE.MRM",origin);
+    DynamicWorld first(nullptr,zenkit::Mesh{});
+    auto firstObject=first.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    require(!firstObject.isEmpty(),"movable save fixture must have a physical body");
+    loadMovables(first,saved);
+    auto firstState=first.movableVobSnapshot();
+    require(firstState.size()==1 && firstState[0].zenId==zenId && firstState[0].sleeping,
+            "saved movable identity and sleep must restore in a fresh world");
+    requireMatrix(firstState[0].origin,origin,"restore must retain the original ZEN frame");
+    requireMatrix(firstState[0].transform,moved,"restore must retain moved translation and rotation");
+    const auto roundtrip=saveArchive([&](Serialize& output) { first.saveMovableVobs(output); });
+
+    DynamicWorld second(nullptr,zenkit::Mesh{});
+    auto secondObject=second.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    loadMovables(second,roundtrip);
+    require(secondObject.isSleeping(),"a sleeping saved vob must remain asleep after a save roundtrip");
+    auto pose=second.movableVobPose(zenId);
+    require(pose!=nullptr && pose->zenId==zenId && pose->visual=="CONTRACT_CUBE.MRM",
+            "attachments must find a loaded vob by its stable ZEN identity");
+    requireMatrix(pose->transform,moved,"attachment pose must synchronize during restore before any tick");
+    for(int i=0;i<1800;++i)
+      second.tick(17);
+    require(secondObject.isSleeping(),"restored furniture must remain asleep for thirty seconds");
+    requireMatrix(second.movableVobSnapshot()[0].transform,moved,"sleeping restored furniture must not drift");
+    const auto pinLocal=at(2,3,4);
+    const auto pinBefore=pose->transform*pinLocal;
+    require(secondObject.addImpulse({secondObject.mass(),0,0}),"restored furniture must still accept impulses");
+    second.tick(17);
+    const auto after=second.movableVobSnapshot()[0].transform;
+    requireMatrix(pose->transform,after,"attachment pose must follow later furniture motion");
+    require(std::abs((pose->transform*pinLocal).at(3,0)-pinBefore.at(3,0))>.01f,
+            "a local arrow attachment must travel with a restored vob after another push");
+
+    const std::vector<std::vector<uint8_t>> rejected = {
+      savedRecord("OTHERWORLD.ZEN",zenId,"CONTRACT_CUBE.MRM",origin),
+      savedRecord("_",zenId+1,"CONTRACT_CUBE.MRM",origin),
+      savedRecord("_",zenId,"OTHER_CUBE.MRM",origin),
+      savedRecord("_",zenId,"CONTRACT_CUBE.MRM",at(121,100,-200)),
+      saveArchive([](Serialize& output) { output.setEntry("old-save"); output.write(uint8_t(1)); })
+      };
+    for(const auto& bytes:rejected) {
+      DynamicWorld other(nullptr,zenkit::Mesh{});
+      auto object=other.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+      loadMovables(other,bytes);
+      requireMatrix(other.movableVobSnapshot()[0].transform,origin,
+                    "old saves and mismatched world, ZEN id, visual or origin must retain the ZEN pose");
+      require(object.isSleeping(),"ignoring an optional record must not wake furniture");
+      }
+    DynamicWorld disabled(nullptr,zenkit::Mesh{});
+    disabled.setMovableVobsEnabled(false);
+    auto disabledObject=disabled.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    loadMovables(disabled,saved);
+    requireMatrix(disabled.movableVobSnapshot()[0].transform,origin,
+                  "movable_vobs=0 must ignore saved motion and keep the ZEN frame");
+    }
+
+  void testMovableVobArrowIdentity() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    auto object=world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,true,"table",true,42);
+    struct ArrowContact final : DynamicWorld::BulletCallback {
+      bool stopsAtWorldHit() const override { return true; }
+      void onWorldHit(const DynamicWorld::BulletWorldHit& hit) override {
+        ++hits;
+        movable=hit.movable;
+        }
+      int hits=0;
+      std::weak_ptr<const DynamicWorld::MovableVobPose> movable;
+      } contact;
+    auto* arrow=world.bulletObj(&contact);
+    arrow->setPosition({-40,100,0});
+    arrow->setDirection({3,0,0});
+    world.tick(17);
+    require(contact.hits==1 && !contact.movable.expired(),
+            "a world arrow contact must identify the movable body it hit");
+    require(contact.movable.lock()==world.movableVobPose(42),
+            "arrow contact identity must share the live ZEN vob attachment pose");
+    world.deleteObj(arrow);
+    object=DynamicWorld::Item();
+    require(contact.movable.expired() && world.movableVobPose(42)==nullptr,
+            "removing a vob must expire weak arrow attachments without leaving a dangling body");
     }
 
   void testMovableVobLegacyCollision() {
@@ -892,6 +1023,8 @@ int main() {
     testContracts();
     testMovableVobBodies();
     testMovableVobLegacyCollision();
+    testMovableVobSave();
+    testMovableVobArrowIdentity();
     std::puts("Physics contracts passed");
     return EXIT_SUCCESS;
     }

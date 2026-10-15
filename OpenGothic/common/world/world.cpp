@@ -20,6 +20,7 @@
 #include "world/triggers/cscamera.h"
 #include "game/globaleffects.h"
 #include "game/serialize.h"
+#include "game/physicssave.h"
 #include "utils/string_frm.h"
 #include "gothic.h"
 #include "focus.h"
@@ -197,6 +198,8 @@ void World::load(Serialize &fin) {
 
   wobj.load(fin);
   npcPlayer = wobj.findHero();
+  wdynamic->loadMovableVobs(fin);
+  loadStuckArrows(fin);
   }
 
 void World::save(Serialize &fout) {
@@ -209,6 +212,8 @@ void World::save(Serialize &fout) {
     }
 
   wobj.save(fout);
+  wdynamic->saveMovableVobs(fout);
+  saveStuckArrows(fout);
   }
 
 uint32_t World::npcId(const Npc *ptr) const {
@@ -234,21 +239,122 @@ Npc* World::npcForRagdoll(const Ragdoll* body) {
   return nullptr;
   }
 
-bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix) {
-  if(arrow.isEmpty())
+bool World::stickArrow(MeshObjects::Mesh&& arrow, const Tempest::Matrix4x4& worldMatrix,
+                      std::string_view visual, std::shared_ptr<const DynamicWorld::MovableVobPose> movable) {
+  if(arrow.isEmpty() || !Gothic::physicsFlags().arrowSticking)
     return false;
   if(stuckArrows.size()>=512)
     stuckArrows.erase(stuckArrows.begin());
   arrow.setObjMatrix(worldMatrix);
-  stuckArrows.push_back(std::move(arrow));
+  StuckArrow pin;
+  pin.mesh = std::move(arrow);
+  pin.visual = std::string(visual);
+  pin.local = worldMatrix;
+  if(movable!=nullptr) {
+    pin.local = movable->transform;
+    pin.local.inverse();
+    pin.local.mul(worldMatrix);
+    pin.movable = movable;
+    pin.attached = true;
+    }
+  stuckArrows.push_back(std::move(pin));
   return true;
   }
 
 bool World::stuckArrowTransform(size_t index, Tempest::Matrix4x4& out) const {
-  if(index>=stuckArrows.size() || stuckArrows[index].isEmpty())
+  if(index>=stuckArrows.size() || stuckArrows[index].mesh.isEmpty())
     return false;
-  out = stuckArrows[index].node(0).position();
+  out = stuckArrows[index].mesh.node(0).position();
   return true;
+  }
+
+bool World::stuckArrowAttachment(size_t index, uint32_t& zenId, Tempest::Matrix4x4& local) const {
+  if(index>=stuckArrows.size())
+    return false;
+  const auto& pin = stuckArrows[index];
+  auto pose = pin.movable.lock();
+  if(!pin.attached || pose==nullptr)
+    return false;
+  zenId = pose->zenId;
+  local = pin.local;
+  return true;
+  }
+
+void World::updateStuckArrows() {
+  for(auto i=stuckArrows.begin();i!=stuckArrows.end();) {
+    if(!i->attached) {
+      ++i;
+      continue;
+      }
+    auto pose = i->movable.lock();
+    if(pose==nullptr) {
+      i = stuckArrows.erase(i);
+      continue;
+      }
+    auto matrix = pose->transform;
+    matrix.mul(i->local);
+    i->mesh.setObjMatrix(matrix);
+    ++i;
+    }
+  }
+
+void World::saveStuckArrows(Serialize& fout) const {
+  if(!Gothic::physicsFlags().arrowSticking || stuckArrows.empty())
+    return;
+  std::vector<const StuckArrow*> pins;
+  for(const auto& pin:stuckArrows) {
+    auto pose = pin.movable.lock();
+    if(pin.visual.empty() || (pin.attached && (pose==nullptr || pose->zenId==uint32_t(-1))))
+      continue;
+    pins.push_back(&pin);
+    }
+  fout.setEntry("worlds/",wname,"/stuck-arrows");
+  fout.write(uint32_t(0x31524157),uint16_t(1),wname,uint32_t(pins.size()));
+  for(const auto* pin:pins) {
+    fout.write(pin->visual,pin->local,pin->attached);
+    if(auto pose = pin->movable.lock(); pin->attached && pose!=nullptr)
+      fout.write(pose->zenId,pose->visual,pose->origin);
+    }
+  }
+
+void World::loadStuckArrows(Serialize& fin) {
+  if(!Gothic::physicsFlags().arrowSticking || !fin.setEntry("worlds/",wname,"/stuck-arrows"))
+    return;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,count);
+    if(magic!=0x31524157 || schema!=1 || worldName!=wname || count>512)
+      return;
+    std::vector<StuckArrow> pins;
+    for(uint32_t i=0;i<count;++i) {
+      StuckArrow pin;
+      fin.read(pin.visual,pin.local,pin.attached);
+      bool matches=true;
+      if(pin.attached) {
+        uint32_t id=uint32_t(-1);
+        std::string visual;
+        Tempest::Matrix4x4 origin;
+        fin.read(id,visual,origin);
+        auto pose = wdynamic->movableVobPose(id);
+        matches = pose!=nullptr && pose->visual==visual && PhysicsSave::sameTransform(pose->origin,origin);
+        pin.movable = pose;
+        }
+      if(!matches || pin.visual.empty() || pin.visual.size()>512 || !PhysicsSave::validTransform(pin.local))
+        continue;
+      pin.mesh = addView(pin.visual);
+      if(pin.mesh.isEmpty())
+        continue;
+      pin.mesh.setObjMatrix(pin.local);
+      pins.push_back(std::move(pin));
+      }
+    stuckArrows = std::move(pins);
+    updateStuckArrows();
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("world arrows load: ",e.what());
+    }
   }
 
 uint32_t World::mobsiId(const Interactive* ptr) const {
@@ -444,6 +550,7 @@ void World::tick(uint64_t dt) {
   { FrameProfile::Scope timing(FrameProfile::Zone::WorldLogic); wobj.tick(dt,dt); }
   { FrameProfile::Scope timing(FrameProfile::Zone::Prepare); wobj.prepareRagdolls(); }
   { FrameProfile::Scope timing(FrameProfile::Zone::Physics); wdynamic->tick(dt); }
+  updateStuckArrows();
   { FrameProfile::Scope timing(FrameProfile::Zone::Sync); wobj.syncRagdolls(); }
   FrameProfile::Scope timing(FrameProfile::Zone::WorldMisc);
   if(auto pl = player())

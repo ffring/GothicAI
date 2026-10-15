@@ -98,6 +98,7 @@ class Bullet final : public DynamicWorld::BulletCallback {
     bool                      spellPhysicsApplied = false;
 
     MeshObjects::Mesh         view;
+    std::string               visualName;
     Effect                    vfx;
 
     uint8_t                   material=0;

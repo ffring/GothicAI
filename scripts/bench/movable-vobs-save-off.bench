@@ -1,0 +1,4 @@
+# Both feature flags must be zero in INI before constructing the saved world.
+movable initial disabled
+wait 1000
+movable snapshot continued_disabled
