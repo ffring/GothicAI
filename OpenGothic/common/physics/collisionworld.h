@@ -8,8 +8,10 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <string_view>
 
 #include "physics/physics.h"
+#include "physics/physicsnoise.h"
 #include <Jolt/Physics/Body/BodyID.h>
 
 class Item;
@@ -18,6 +20,7 @@ class PhysicVbo;
 class Skeleton;
 class HitZones;
 class Ragdoll;
+namespace zenkit { struct INpc; }
 namespace JPH { class PhysicsSystem; }
 
 class CollisionWorld final {
@@ -49,7 +52,8 @@ class CollisionWorld final {
         Tempest::Vec3        velocity() const; // centimetres/second
         bool                isSleeping() const;
         // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
-        bool                addImpulse(const Tempest::Vec3& impulseNs);
+        bool                addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
+        void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
         Tempest::Vec3       centerOfMass() const;
         bool                touchedByNpc() const { return npcContact.load(std::memory_order_relaxed); }
 
@@ -70,6 +74,12 @@ class CollisionWorld final {
         int                 pointerType = 0;
         void*               pointer = nullptr;
         std::atomic<bool>   npcContact{false};
+        ItemMaterial       noiseMaterial = MAT_WOOD;
+        zenkit::MaterialGroup noiseSurface = zenkit::MaterialGroup::STONE;
+        std::string         noiseWhat = "item";
+        std::weak_ptr<zenkit::INpc> noiseCulprit;
+        uint64_t            noiseCulpritUntilStep = 0;
+        uint64_t            nextNoiseStep = 0;
 
       friend class CollisionWorld;
       friend class DynamicBody;
@@ -97,6 +107,9 @@ class CollisionWorld final {
     void tick(uint64_t dt);
     void setBBox(JPH::Vec3Arg min, JPH::Vec3Arg max);
     void setItemHitCallback(std::function<void(Item&, zenkit::MaterialGroup, float impulse, float mass)> f);
+    void setPhysicsNoiseEnabled(bool enabled);
+    bool physicsNoiseEnabled() const;
+    void setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
 
     // BodyInterface updates the broad phase immediately when a body moves.
     void updateAabbs() const {}
@@ -118,6 +131,7 @@ class CollisionWorld final {
     size_t bodyCount() const;
     float stepMilliseconds() const;
     uint64_t rayCount() const;
+    uint64_t simulationStep() const;
 
     // Masks use 1u << DynamicWorld::Category. Normals keep the mesh's winding.
     QueryResult rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
@@ -142,6 +156,7 @@ class CollisionWorld final {
     std::vector<Ragdoll*> ragdolls;
     uint32_t nextRagdollGroup = 1;
     std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
+    std::function<void(const PhysicsNoise&)> physicsNoise;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;

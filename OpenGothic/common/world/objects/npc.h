@@ -29,6 +29,7 @@
 
 class Interactive;
 class WayPoint;
+struct PhysicsNoise;
 
 class Npc final {
   public:
@@ -418,6 +419,9 @@ class Npc final {
     bool      perceptionProcess(Npc& pl, Npc *victim, float quadDist, PercType perc);
     // a perception held back by Gothic::interceptPerception, given to the scripts after all
     bool      passPerception(Npc& other, Npc* victim, PercType perc);
+    // A physical impact has a location, independent of a known actor.
+    bool      hearPhysicsNoise(const PhysicsNoise& noise);
+    bool      canHearPhysicsNoise() const;
     bool      hasPerc(PercType perc) const;
     uint64_t  percNextTime() const;
 
@@ -491,7 +495,7 @@ class Npc final {
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
     float     physicsMass() const;
-    bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true);
+    bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true, Npc* culprit=nullptr);
     Tempest::Vec3 spellVelocity() const { return mvAlgo.spellVelocity(); }
     bool      spellWhirling() const;
 
@@ -766,9 +770,11 @@ class Npc final {
       size_t bone;
       Tempest::Vec3 point, impulseNs;
       float strength;
+      std::weak_ptr<zenkit::INpc> culprit;
       };
     std::vector<ArrowImpact>       arrowImpacts;
     Tempest::Vec3                  pendingSpellImpulse = {};
+    std::weak_ptr<zenkit::INpc>     spellImpulseCulprit;
     std::vector<Tempest::Matrix4x4> arrowPhysicalPose;
     std::unique_ptr<Ragdoll>       ragdoll;
     std::optional<Ragdoll::State>  ragdollDormant;
@@ -801,6 +807,11 @@ class Npc final {
     uint64_t                       perceptionTime    =0;
     uint64_t                       perceptionNextTime=0;
     Perc                           perception[PERC_Count];
+    // Transient: hearing neither changes save format nor needs to survive a load.
+    Tempest::Vec3                   physicsNoisePosition;
+    uint64_t                       physicsNoiseUntil = 0;
+    uint64_t                       physicsNoiseNextTime = 0;
+    bool                           physicsNoiseCallback = false;
 
     // inventory
     Inventory                      invent;

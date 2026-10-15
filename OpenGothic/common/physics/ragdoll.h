@@ -13,6 +13,7 @@ class CollisionWorld;
 class DynamicWorld;
 class HitZones;
 class Skeleton;
+class Npc;
 
 // A limp body or an animation-driven kinematic rig. Game code uses centimetres,
 // centimetres/second and radians/second;
@@ -68,7 +69,9 @@ class Ragdoll final {
     // A living pelvis hit reacts through the nearest spine; a limp hit always
     // addresses the supplied physical bone. No native world calls happen here.
     bool queueHit(size_t bone, const Tempest::Vec3& pointCm,
-                  const Tempest::Vec3& impulseNs, float strength);
+                  const Tempest::Vec3& impulseNs, float strength, Npc* culprit = nullptr);
+    void setNpc(Npc* npc);
+    void setNoiseCulprit(Npc* culprit);
     float reactionWeight() const;
     const std::vector<size_t>& reactionBones() const;
     size_t partCount() const;
@@ -91,7 +94,7 @@ class Ragdoll final {
     // Disabling it also awakens every part. The policy is not part of saved state.
     void setAllowSleeping(bool allow);
     // Total impulse, distributed by mass over the parts (newton seconds).
-    void addImpulse(const Tempest::Vec3& impulse);
+    void addImpulse(const Tempest::Vec3& impulse, Npc* culprit = nullptr);
     State state() const;
     // Rejects incompatible, nonfinite or malformed states without changing bodies.
     bool restore(const State& state);
@@ -111,6 +114,10 @@ class Ragdoll final {
     void prepareKinematicStep(float deltaSeconds);
     void finishKinematicStep();
     size_t boneForBodyId(uint32_t id) const;
+    Npc* noiseNpc() const;
+    Npc* noiseCulprit() const;
+    bool acceptNoise(uint64_t step);
+    uint64_t noiseId() const;
     void detach();
     std::unique_ptr<Impl> impl;
     friend class CollisionWorld;

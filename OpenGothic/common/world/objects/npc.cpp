@@ -10,6 +10,7 @@
 #include "game/damagecalculator.h"
 #include "game/bodyobservations.h"
 #include "game/serialize.h"
+#include "physics/physicsnoise.h"
 #include "game/ragdollsave.h"
 #include "game/gamescript.h"
 #include "utils/string_frm.h"
@@ -254,6 +255,8 @@ Npc::~Npc(){
   TestBench::bodyForget(this);
   if(currentInteract)
     currentInteract->detach(*this,true);
+  if(hnpc && hnpc->user_ptr==this)
+    hnpc->user_ptr=nullptr;
   }
 
 void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
@@ -826,22 +829,26 @@ float Npc::physicsMass() const {
   return std::max(0.01f,base*std::abs(sz[0]*sz[1]*sz[2]));
   }
 
-bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
+bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction, Npc* culprit) {
   if(!Gothic::physicsFlags().spellPhysics || spellFrozen() ||
      !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
      impulseNs.quadLength()<=0.f)
     return false;
   if(ragdoll) {
-    ragdoll->addImpulse(impulseNs);
+    ragdoll->addImpulse(impulseNs,culprit);
     return true;
     }
   if(isDown()) {
     pendingSpellImpulse += impulseNs;
+    spellImpulseCulprit = culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
     return true;
     }
   updateRagdollQuestAnchor();
   if(!mvAlgo.addSpellImpulse(impulseNs,physicsMass(),reaction))
     return false;
+  spellImpulseCulprit = culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
+  if(living)
+    living->setNoiseCulprit(culprit);
   if(!isPlayer() && isHuman() && ragdollQuestReturn.hasAnchor &&
      Gothic::physicsFlags().questGuard) {
     if(!ragdollQuestReturn.armed)
@@ -854,6 +861,7 @@ bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction) {
 
 void Npc::suspendRagdoll() {
   pendingSpellImpulse = {};
+  spellImpulseCulprit.reset();
   living.reset();
   arrowImpacts.clear();
   ragdollHasLastPosition = false;
@@ -895,10 +903,16 @@ bool Npc::createRagdoll() {
     }
   ragdollDormant.reset();
   ragdoll = std::move(body);
+  ragdoll->setNpc(this);
+  if(const auto culprit = spellImpulseCulprit.lock())
+    ragdoll->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
   dispatchArrowPhysics(*ragdoll);
-  if(Gothic::physicsFlags().spellPhysics && pendingSpellImpulse.quadLength()>0.f)
-    ragdoll->addImpulse(pendingSpellImpulse);
+  if(Gothic::physicsFlags().spellPhysics && pendingSpellImpulse.quadLength()>0.f) {
+    const auto culprit = spellImpulseCulprit.lock();
+    ragdoll->addImpulse(pendingSpellImpulse,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr);
+    }
   pendingSpellImpulse = {};
+  spellImpulseCulprit.reset();
   ragdollStartTick = owner.tickCount();
   physic.setEnable(false);
   mvAlgo.takeRagdollControl();
@@ -1053,6 +1067,8 @@ bool Npc::recoverSpellThrow() {
 void Npc::prepareRagdoll() {
   if(!isDown() || !Gothic::physicsFlags().spellPhysics)
     pendingSpellImpulse = {};
+  if(!Gothic::physicsFlags().spellPhysics || (!isDown() && !isInAir()))
+    spellImpulseCulprit.reset();
   if(!Gothic::physicsFlags().arrowSticking)
     visual.clearStuckArrows();
   if(!Gothic::physicsFlags().arrowPhysics)
@@ -1208,7 +1224,12 @@ void Npc::prepareLivingBody() {
   updateAnimation(0,true);
   living = owner.physic()->createKinematicBody(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
                                              visual.pose().boneCount(),visual.transform());
-  if(!living)
+  if(living) {
+    living->setNpc(this);
+    if(const auto culprit = spellImpulseCulprit.lock())
+      living->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
+    }
+  else
     livingRetryTick = owner.tickCount()+1000;
   if(living && !frozen)
     dispatchArrowPhysics(*living);
@@ -1258,7 +1279,8 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
   const float momentum = std::clamp(0.08f*speed*10.f,0.2f,12.f);
   const float strength = std::clamp(momentum/8.f,0.1f,1.f);
   const Vec3 impulse = direction*(momentum/speed);
-  arrowImpacts.push_back({bone,point,impulse,strength});
+  arrowImpacts.push_back({bone,point,impulse,strength,
+                           bullet.origin()!=nullptr ? bullet.origin()->handlePtr() : std::weak_ptr<zenkit::INpc>()});
   arrowPhysics.bone = bone;
   arrowPhysics.point = point;
   arrowPhysics.impulseNs = impulse;
@@ -1267,12 +1289,14 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
   }
 
 void Npc::dispatchArrowPhysics(Ragdoll& body) {
-  for(const auto& hit:arrowImpacts)
-    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength)) {
+  for(const auto& hit:arrowImpacts) {
+    const auto culprit = hit.culprit.lock();
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr)) {
       ++arrowPhysics.applied;
       if(&body==ragdoll.get())
         ++arrowPhysics.corpseImpulses;
       }
+    }
   arrowImpacts.clear();
   }
 
@@ -3489,6 +3513,20 @@ void Npc::tick(uint64_t dt) {
   const bool physicalMovement = ragdoll ||
       (Gothic::physicsFlags().ragdoll && isDown() && !ragdollLegacyDown && !ragdollRecovering);
 
+  // A nearby impact briefly interrupts idle work, including an AI_Wait. Combat,
+  // conversation and sleep immediately regain control if they begin meanwhile.
+  if(physicsNoiseUntil>owner.tickCount()) {
+    if(Gothic::physicsFlags().physicsNoise && canHearPhysicsNoise()) {
+      if(prepareTurn()) {
+        const auto direction = physicsNoisePosition-position();
+        implTurnTo(direction.x,direction.z,AnimationSolver::TurnType::Std,dt);
+        }
+      mvAlgo.tick(dt,MoveAlgo::WaitMove);
+      return;
+      }
+    physicsNoiseUntil = 0;
+    }
+
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
     if(physicalMovement)
@@ -4585,6 +4623,10 @@ void Npc::setToFistMode() {
   }
 
 void Npc::aiPush(AiQueue::AiAction&& a) {
+  // Vanilla quiet-sound scripts aim at OTHER. A physical sound is located at the
+  // collision, and OTHER may be null or a distant culprit, so native turning owns it.
+  if(physicsNoiseCallback && (a.act==AI_TurnToNpc || a.act==AI_LookAtNpc))
+    return;
   if(a.act==AI_OutputSvmOverlay)
     aiQueueOverlay.pushBack(std::move(a)); else
     aiQueue.pushBack(std::move(a));
@@ -5537,6 +5579,10 @@ Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
     at = other->mapHeadBone() + eyes;
     return Gaze::Source::Talk;
     }
+  if(physicsNoiseUntil>owner.tickCount() && Gothic::physicsFlags().physicsNoise && canHearPhysicsNoise()) {
+    at = physicsNoisePosition;
+    return Gaze::Source::Script;
+    }
   if(currentLookAtNpc!=nullptr && currentLookAtNpc!=this) {
     at = currentLookAtNpc->mapHeadBone() + eyes;
     return Gaze::Source::Script;
@@ -5730,6 +5776,32 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   trace("no_callback",false,false);
   return false;
+  }
+
+bool Npc::canHearPhysicsNoise() const {
+  if(isPlayer() || processPolicy()!=NpcProcessPolicy::AiNormal || externalCtrl || isDown() ||
+     isLie() || isTalk() || isAttack() || currentTarget!=nullptr || talkPartner()!=nullptr ||
+     Gothic::inst().isNpcInDialog(*this))
+    return false;
+  const auto* state = owner.script().findSymbol(aiState.funcIni);
+  return state==nullptr || (state->name()!="ZS_SLEEP" && state->name()!="ZS_MAGICSLEEP" &&
+                            state->name()!="ZS_MM_RTN_SLEEP");
+  }
+
+bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
+  const uint64_t now = owner.tickCount();
+  if(noise.culprit==this || !canHearPhysicsNoise() || now<physicsNoiseNextTime)
+    return false;
+  physicsNoiseNextTime = now+2001;
+  physicsNoisePosition = noise.position;
+  physicsNoiseUntil = now+2000;
+  if(hasPerc(PERC_ASSESSQUIETSOUND)) {
+    physicsNoiseCallback = true;
+    owner.script().invokeState(this,noise.culprit,nullptr,perception[PERC_ASSESSQUIETSOUND].func);
+    physicsNoiseCallback = false;
+    }
+  TestBench::physicsNoiseHeard(*this,noise);
+  return true;
   }
 
 bool Npc::hasPerc(PercType perc) const {

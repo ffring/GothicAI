@@ -1,0 +1,29 @@
+# Requires the same old Khorinis save as movable-vobs.bench.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+noise setup
+overlay off
+view full
+wait 1000
+noise table
+wait 2000
+noise checkpoint
+wait 6000
+noise cup
+wait 2000
+noise checkpoint
+wait 4000
+noise burst
+wait 2000
+noise checkpoint
+wait 4000
+noise dialogue
+wait 100
+noise dialogue-drop
+wait 2000
+noise checkpoint
+physics stats

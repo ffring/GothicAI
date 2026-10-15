@@ -200,7 +200,7 @@ void Item::setPhysicsEnable(const ProtoMesh* mesh) {
   physic.setItem(this);
   }
 
-bool Item::addSpellImpulse(const Vec3& impulseNs) {
+bool Item::addSpellImpulse(const Vec3& impulseNs, Npc* culprit) {
   if(!std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) || !std::isfinite(impulseNs.z) ||
      impulseNs.quadLength()<=0.f)
     return false;
@@ -212,7 +212,7 @@ bool Item::addSpellImpulse(const Vec3& impulseNs) {
     return false;
   // Very light props receive the same force, with a bounded launch velocity.
   const auto impulse = impulseNs*std::min(1.f,12.f*mass/momentum);
-  return physic.addImpulse(impulse);
+  return physic.addImpulse(impulse,culprit);
   }
 
 bool Item::isDynamic() const {

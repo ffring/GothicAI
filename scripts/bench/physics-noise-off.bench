@@ -1,0 +1,17 @@
+# Identical native bodies, meshes, silent impulse and scene, physics_noise=0.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise off
+noise setup
+overlay off
+view full
+wait 1000
+cadence normal
+wait 34
+movable measure off
+noise push
+cadence wait
+movable report

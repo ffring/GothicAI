@@ -1,8 +1,10 @@
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicvbo.h"
+#include "physics/ragdoll.h"
 #include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/skeleton.h"
+#include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "game/serialize.h"
 
@@ -22,6 +24,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <cmath>
 #include <cstdio>
@@ -170,6 +173,106 @@ namespace {
     loadMovables(disabled,saved);
     requireMatrix(disabled.movableVobSnapshot()[0].transform,origin,
                   "movable_vobs=0 must ignore saved motion and keep the ZEN frame");
+    }
+
+  void testPhysicsNoise() {
+    CollisionWorld world;
+    std::vector<PhysicsNoise> noises;
+    std::vector<uint64_t> steps;
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) {
+      noises.push_back(noise);
+      steps.push_back(world.simulationStep());
+      });
+    require(world.physicsNoiseEnabled(),"physics noise must be enabled by default");
+    auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                      DynamicWorld::C_Landscape);
+    auto cup=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(0,100,0),.7f,.15f);
+    cup->setNoiseProfile(MAT_CLAY,zenkit::MaterialGroup::STONE,"cup");
+    auto table=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.35f)),at(300,100,0),.7f,50.f,
+                                    DynamicWorld::C_MovableVob);
+    table->setNoiseProfile(MAT_WOOD,zenkit::MaterialGroup::WOOD,"table");
+    auto soft=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(-300,5.1f,0),.7f,.15f);
+    soft->setNoiseProfile(MAT_CLAY,zenkit::MaterialGroup::STONE,"soft");
+    auto wood=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.3f,.1f,.3f)),at(600,40,0),.7f,DynamicWorld::C_Object);
+    wood->setNoiseProfile(MAT_WOOD,zenkit::MaterialGroup::WOOD,"wood");
+    auto metal=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(600,100,0),.7f,1.f);
+    metal->setNoiseProfile(MAT_METAL,zenkit::MaterialGroup::METAL,"metal");
+    for(int i=0;i<120;++i) world.tick(17);
+    const auto find=[&](std::string_view what) -> const PhysicsNoise* {
+      for(const auto& noise:noises) if(noise.what==what) return &noise;
+      return nullptr;
+      };
+    const auto* cupNoise=find("cup");
+    const auto* tableNoise=find("table");
+    const auto* metalNoise=find("metal");
+    require(cupNoise!=nullptr && tableNoise!=nullptr && metalNoise!=nullptr,
+            "items, movable furniture and contact with another object must emit noise");
+    require(find("soft")==nullptr,"resting/subthreshold contact must remain silent");
+    require(cupNoise->material==MAT_CLAY && cupNoise->radius<300.f && cupNoise->culprit==nullptr,
+            "a small fallen cup must retain clay material, local radius and unknown culprit");
+    require(tableNoise->material==MAT_WOOD && tableNoise->radius>=600.f && tableNoise->volume>cupNoise->volume,
+            "a heavy table must be louder and audible at six metres");
+    require(metalNoise->surface==zenkit::MaterialGroup::WOOD && metalNoise->material==MAT_METAL,
+            "noise must retain both source and struck surface materials");
+    requireNear(cupNoise->position.y,0.f,2.f,"noise position must be the contact in world centimetres");
+    for(size_t i=0;i<noises.size();++i)
+      for(size_t j=i+1;j<noises.size();++j)
+        if(noises[i].body==noises[j].body)
+          require(steps[j]>=steps[i]+29,"a logical body must not emit more often than every half second");
+    const auto before=noises.size();
+    world.setPhysicsNoiseEnabled(false);
+    cup->restoreTransform(at(0,100,0),false);
+    for(int i=0;i<60;++i) world.tick(17);
+    require(noises.size()==before && !world.physicsNoiseEnabled(),"disabled physics noise must not emit events");
+    world.setPhysicsNoiseEnabled(true);
+    cup->restoreTransform(at(0,100,0),false);
+    for(int i=0;i<60 && noises.size()==before;++i) world.tick(17);
+    require(noises.size()>before,"runtime re-enable must restore impact noise");
+    // Repeated hard contacts before the same half-second expires must share
+    // the body's cooldown, including multiple collision manifolds/substeps.
+    const auto firstCount=noises.size();
+    cup->restoreTransform(at(0,5,0),false);
+    require(cup->addImpulse({0,-2.f,0}),"cooldown fixture must accept a second hard impact");
+    world.tick(17);
+    require(noises.size()==firstCount,"a second immediate impact must be throttled per body");
+    }
+
+  void testRagdollNoise() {
+    zenkit::ModelHierarchy hierarchy;
+    const char* names[]={"BIP01","BIP01 PELVIS","BIP01 SPINE","BIP01 HEAD"};
+    const float offsets[]={0,95,40,40};
+    for(int i=0;i<4;++i) {
+      zenkit::ModelHierarchyNode node;
+      node.name=names[i];
+      node.parent_index=int16_t(i-1);
+      const auto matrix=at(0,offsets[i],0);
+      std::memcpy(&node.transform,&matrix,sizeof(matrix));
+      hierarchy.nodes.push_back(node);
+      }
+    Skeleton skeleton(hierarchy,nullptr,"NOISE_HUMAN.MDS");
+    HitZones zones;
+    zones.setSkeleton(&skeleton);
+    require(zones.isValid(),"noise ragdoll fixture must contain canonical capsules");
+    CollisionWorld world;
+    auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                      DynamicWorld::C_Landscape);
+    auto object=at(0,100,0);
+    object.rotateOZ(90.f);
+    std::vector<Tempest::Matrix4x4> pose;
+    for(const auto& bone:skeleton.tr) pose.push_back(object*bone);
+    auto body=world.createRagdoll(skeleton,zones,pose.data(),pose.size(),object,{0,-600,0});
+    require(body!=nullptr && body->partCount()>1,"noise fixture must create several physical limbs");
+    std::vector<uint64_t> steps;
+    uint64_t identity=0;
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) {
+      require(noise.material==MAT_LEATHER && noise.what=="ragdoll","body noise must retain its material and source");
+      if(identity!=0) require(noise.body==identity,"limbs must share one logical noise identity");
+      identity=noise.body;
+      if(!steps.empty()) require(world.simulationStep()>=steps.back()+29,"ragdoll limbs must share a half-second cooldown");
+      steps.push_back(world.simulationStep());
+      });
+    for(int i=0;i<120;++i) world.tick(17);
+    require(!steps.empty(),"a fallen ragdoll must emit impact noise");
     }
 
   void testMovableVobArrowIdentity() {
@@ -1025,6 +1128,8 @@ int main() {
     testMovableVobLegacyCollision();
     testMovableVobSave();
     testMovableVobArrowIdentity();
+    testPhysicsNoise();
+    testRagdollNoise();
     std::puts("Physics contracts passed");
     return EXIT_SUCCESS;
     }
