@@ -20,6 +20,9 @@
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 using Tempest::Vec3;
@@ -40,9 +43,16 @@ std::string vector(const Vec3& value) {
 }
 
 uint64_t cpuNs() {
+#ifdef _WIN32
+  FILETIME created{},exited{},kernel{},user{};
+  if(!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user)) return 0;
+  const auto ticks=[](const FILETIME& time) { return (uint64_t(time.dwHighDateTime)<<32)|uint64_t(time.dwLowDateTime); };
+  return (ticks(kernel)+ticks(user))*100;
+#else
   timespec now{};
   clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&now);
   return uint64_t(now.tv_sec)*1000000000ULL+uint64_t(now.tv_nsec);
+#endif
 }
 
 struct Cost {
@@ -97,18 +107,22 @@ void makeEyes() {
 
 std::string setup(World& world,Npc& player,const std::string& scene,size_t count) {
   if(state.active) throw std::runtime_error("eye end before changing fixture");
-  if(scene!="market" && scene!="lobart") throw std::runtime_error("eye scene must be market or lobart");
+  const bool fence=scene=="lobart-fence";
+  if(scene!="market" && scene!="lobart" && !fence) throw std::runtime_error("eye scene must be market, lobart or lobart-fence");
   if(count!=1 && count!=10 && count!=20 && count!=50)
     throw std::runtime_error("eye actors must be 1, 10, 20 or 50");
   Gothic::settingsSetI("GAME","living_bodies",1);
   for(auto* actor:state.actors) world.removeNpc(*actor);
   state.actors.clear();state.eyes.clear();
-  state.scene=scene;
-  state.anchor=scene=="market" ? "NW_CITY_MERCHANT_PATH_01" : "NW_FARM1_PATH_01";
+  state.scene=fence?"lobart":scene;
+  state.anchor=scene=="market" ? "NW_CITY_MERCHANT_PATH_01" : fence?"NW_FARM1_ENTRANCE_03":"NW_FARM1_PATH_01";
   const auto* point=world.findWayPoint(state.anchor);
   if(!point) throw std::runtime_error("eye fixture stock waypoint unavailable: "+state.anchor);
   Vec3 origin;
-  if(!floorAt(world,point->pos,origin)) throw std::runtime_error("eye anchor has no supported standing floor");
+  // Outside the fence where Maleth stopped at (14136,1790,-15993), 2.5 m back
+  // toward the barn. PATH_01 itself is already inside the pasture.
+  const Vec3 standing=fence?Vec3(14385,1790,-15968):point->pos;
+  if(!floorAt(world,standing,origin)) throw std::runtime_error("eye anchor has no supported standing floor");
   Vec3 forward=point->dir;
   forward.y=0;
   if(forward.quadLength()<.01f) forward=Vec3(1,0,0);
@@ -123,7 +137,7 @@ std::string setup(World& world,Npc& player,const std::string& scene,size_t count
       pasture+=npc->position();++sheep;
     }
   const auto* pasturePoint=world.findPoint("FP_ROAM_FARM1_SHEEP_09",false);
-  if(scene=="lobart" && (pasturePoint || sheep)) {
+  if((scene=="lobart" || fence) && (pasturePoint || sheep)) {
     forward=(pasturePoint?pasturePoint->pos:pasture*(1.f/float(sheep)))-origin;forward.y=0;
     if(forward.quadLength()>.01f) forward*=1.f/forward.length();
   }
@@ -403,7 +417,7 @@ std::string NavigationEyeBench::command(const std::vector<std::string>& args,Wor
   if((args.size()==3 || args.size()==4) && args[1]=="snapshot")
     return snapshot(world,args[2],args.size()==4?std::stoul(args[3]):0);
   if(args.size()==2 && args[1]=="wall") return wall(world);
-  throw std::runtime_error("eye: setup <market|lobart> <count> | begin <250|500|1000> <20|50|100> <on|off> <tag> | end | snapshot <tag> [actor] | wall");
+  throw std::runtime_error("eye: setup <market|lobart|lobart-fence> <count> | begin <250|500|1000> <20|50|100> <on|off> <tag> | end | snapshot <tag> [actor] | wall");
 }
 
 void NavigationEyeBench::tick(uint64_t gameMs) {

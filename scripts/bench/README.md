@@ -609,7 +609,7 @@ For timing, set `OPENGOTHIC_BODY_TRACE=0` to suppress the runner's default comba
 `run.sh` below sets this explicitly. Eye timing and snapshots use their own journals.
 
 ```text
-eye setup market 20                 # market|lobart; 1, 10, 20 or 50 distinct frozen human NPCs
+eye setup market 20                 # market|lobart|lobart-fence; 1, 10, 20 or 50 frozen human NPCs
 wait 2000
 eye begin 500 100 off baseline       # layout 250|500|1000, center range 20|50|100 m, on|off, tag
 wait 12000                          # first 2000 ms excluded; remaining ~10 s measured
@@ -621,7 +621,7 @@ eye snapshot market-20 0             # fresh full eye of actor 0, outside measur
 eye wall                            # bounded real finite-wall fixture: back 0 hits, front >0
 ```
 
-`setup` uses supported roots near the market or Lobart's pasture fence, freezes nearby residents,
+`setup` uses supported roots near the market or Lobart's field, freezes nearby residents,
 and enables the existing native living rigs. `begin` rejects overlapping spans. Only `tick` samples
 the eye, after world movement and animation. Near segments (up to 10 m) update at 10 Hz; unobstructed
 continuations at 2 Hz. Cached continuations retain their original head pose and timestamp.
@@ -632,3 +632,5 @@ hit kind, signed normal Y and timestamps), `eye-events.jsonl` (fixture geometry 
 Timing rows are buffered and written after the measured span; snapshots are explicit. No eye data
 enters the AI bridge. Repeat the full matrix with
 [`reports/navigation/2026-10-16-eye/run.sh`](../../reports/navigation/2026-10-16-eye/run.sh).
+`lobart-fence` places the calibration actor outside the pasture, near Maleth's previously confirmed
+collision with the fence; the performance pool `lobart` stays inside the field at `NW_FARM1_PATH_01`.
