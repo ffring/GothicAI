@@ -12,6 +12,7 @@
 
 #include "physics/physics.h"
 #include "physics/physicsnoise.h"
+#include "physics/charactervirtualdiagnostics.h"
 #include <Jolt/Physics/Body/BodyID.h>
 
 class Item;
@@ -130,6 +131,8 @@ class CollisionWorld final {
         CharacterMoveResult move(const Tempest::Vec3& displacement, uint64_t dt,
                                  float stepHeight, float maxSlope, float mass, Npc* culprit);
         void setPosition(const Tempest::Vec3& feet);
+        void setDiagnosticsEnabled(bool enabled);
+        bool diagnostics(CharacterVirtualDiagnostics& out) const;
 
       private:
         struct Impl;

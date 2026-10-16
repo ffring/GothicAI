@@ -1,0 +1,19 @@
+# Real app cadence, no capture. Exactly twenty live human NPCs walk supported
+# stock market lanes via their own AI queues. appcadence.csv.json measures FPS.
+seed 73013
+cheat god
+set time 12 0
+movable on
+off: npccharacter off
+on: npccharacter on
+npccharacter market
+view full
+overlay off
+wait 1500
+cam hold
+cadence normal
+wait 34
+off: npccharacter measure off
+on: npccharacter measure on
+cadence wait
+npccharacter report

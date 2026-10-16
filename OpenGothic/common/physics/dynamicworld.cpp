@@ -46,6 +46,11 @@ constexpr uint32_t landscapeMask = (1u << DynamicWorld::C_Landscape) | (1u << Dy
 constexpr uint32_t visualMask    = landscapeMask | (1u << DynamicWorld::C_SmallVobQuery);
 constexpr uint32_t waterMask     = 1u << DynamicWorld::C_Water;
 
+bool isNpcMoveSkipped(const Tempest::Vec3& displacement) {
+  constexpr float eps = 2.f; // Legacy component-wise two centimetre skip.
+  return std::abs(displacement.x)<eps && std::abs(displacement.y)<eps && std::abs(displacement.z)<eps;
+  }
+
 ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
   switch(material) {
     case zenkit::MaterialGroup::METAL: return MAT_METAL;
@@ -178,6 +183,8 @@ struct DynamicWorld::NpcBody {
 
   JPH::ShapeRefC shape;
   std::unique_ptr<CollisionWorld::VirtualCharacter> virtualCharacter;
+  bool virtualDiagnosticsEnabled = false;
+  std::unique_ptr<CharacterVirtualDiagnostics::NpcMove> virtualDiagnosticMove;
   void*         userPointer = nullptr;
   float         radius      = 0.f;
   float         cylinderHeight = 0.f;
@@ -1012,6 +1019,7 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
     obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
   if(obj.body!=nullptr) {
     obj.body->setPayload(&obj,P_MovableVob);
+    obj.body->setLabel(obj.visual);
     obj.body->setNoiseProfile(impactMaterial(shape.material),shape.material,obj.visual);
     }
   // cd_dynamic controls the original mesh queries independently of simulation.
@@ -1024,6 +1032,7 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
       obj.query.push_back(world->addCollisionBody(part.source->shape,matrix,part.source->friction(),category,
                                                  enabled,enabled,&part.source->mesh));
       obj.query.back()->setPayload(&obj,P_MovableVob);
+      obj.query.back()->setLabel(obj.visual);
       }
     }
   obj.pose->transform = obj.current;
@@ -1822,16 +1831,13 @@ bool DynamicWorld::NpcItem::testMove(const Tempest::Vec3& to, const Tempest::Vec
   }
 
 DynamicWorld::MoveCode DynamicWorld::NpcItem::tryMove(const Tempest::Vec3& to, CollisionTest& out) {
-  // 2-santimeters
-  static const float eps = 2;
-
   if(!obj)
     return MoveCode::MC_Fail;
 
   resetVirtual();
 
   auto dp = to - obj->pos;
-  if(std::abs(dp.x)<eps && std::abs(dp.y)<eps && std::abs(dp.z)<eps) {
+  if(isNpcMoveSkipped(dp)) {
     // skip-move
     return MoveCode::MC_Skip;
     }
@@ -1857,6 +1863,26 @@ void DynamicWorld::NpcItem::resetVirtual() {
     obj->virtualCharacter.reset();
   }
 
+void DynamicWorld::NpcItem::setVirtualDiagnosticsEnabled(bool enabled) {
+  if(obj==nullptr)
+    return;
+  obj->virtualDiagnosticsEnabled = enabled;
+  if(enabled && obj->virtualDiagnosticMove==nullptr)
+    obj->virtualDiagnosticMove = std::make_unique<CharacterVirtualDiagnostics::NpcMove>();
+  if(!enabled)
+    obj->virtualDiagnosticMove.reset();
+  if(obj->virtualCharacter!=nullptr)
+    obj->virtualCharacter->setDiagnosticsEnabled(enabled);
+  }
+
+bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out) const {
+  if(obj==nullptr || obj->virtualCharacter==nullptr || !obj->virtualCharacter->diagnostics(out))
+    return false;
+  if(obj->virtualDiagnosticMove!=nullptr)
+    out.npcMove = *obj->virtualDiagnosticMove;
+  return true;
+  }
+
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
   VirtualMoveResult result;
@@ -1865,43 +1891,107 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   result.position = obj->pos;
   if(!obj->enable)
     return result;
-  if(obj->virtualCharacter==nullptr)
+  if(obj->virtualCharacter==nullptr) {
     obj->virtualCharacter = owner->world->createVirtualCharacter(obj->radius,obj->h,obj->pos);
+    obj->virtualCharacter->setDiagnosticsEnabled(obj->virtualDiagnosticsEnabled);
+    }
 
   const auto initial = obj->pos;
-  auto npcDepth = [&]() {
-    float depth = 0;
-    Tempest::Vec3 normal;
+  auto* npcDiagnostic = obj->virtualDiagnosticMove.get();
+  if(npcDiagnostic!=nullptr) {
+    *npcDiagnostic = {};
+    npcDiagnostic->initial = initial;
+    npcDiagnostic->requested = displacement;
+    }
+  // Every character retains its legacy ellipsoid. Movement is sequential, so
+  // each sweep sees the latest position of the other characters, including the
+  // hero, without applying impulses or moving a neighbour through world walls.
+  auto clipNpc = [&](const Tempest::Vec3& target, bool& clipped,
+                     CharacterVirtualDiagnostics::NpcCollision* diagnosticCollision) {
+    struct Obstacle {
+      NpcBody* body = nullptr;
+      float depth = 0;
+      };
+    std::vector<Obstacle> obstacles;
     for(const auto* records:{&owner->npcList->body,&owner->npcList->frozen}) {
+      // A script teleport can change a frozen body's X before the next physics
+      // tick re-sorts that list, so use current poses for this broad phase.
       for(const auto& record:*records) {
-        if(record.body==nullptr || !record.body->enable)
+        auto* other = record.body;
+        if(other==nullptr || other==obj || !other->enable)
           continue;
-        owner->npcList->hasCollision(*obj,*record.body,normal,depth);
+        const float reachXZ = obj->maxRXZ+other->maxRXZ;
+        const float reachY = obj->maxRY+other->maxRY;
+        if(other->pos.x<std::min(initial.x,target.x)-reachXZ || other->pos.x>std::max(initial.x,target.x)+reachXZ ||
+           other->pos.z<std::min(initial.z,target.z)-reachXZ || other->pos.z>std::max(initial.z,target.z)+reachXZ ||
+           other->pos.y<std::min(initial.y,target.y)-reachY || other->pos.y>std::max(initial.y,target.y)+reachY)
+          continue;
+        Tempest::Vec3 normal;
+        float depth = 0;
+        owner->npcList->hasCollision(*obj,*other,normal,depth);
+        obstacles.push_back({other,depth});
         }
       }
-    return depth;
-    };
-  const float initialDepth = npcDepth();
-  // NPCs retain their old ellipsoids and are never handed to Jolt's impulse
-  // solver. Sweep this hero only against those existing stationary obstacles.
-  auto clipNpc = [&](const Tempest::Vec3& target) {
     const auto delta = target-initial;
     const int count = std::max(1,int(std::ceil(delta.length()/std::max(obj->stepSz*0.5f,1.f))));
     auto accepted = initial;
     for(int i=1;i<=count;++i) {
       obj->setPosition(initial+delta*(float(i)/float(count)));
-      if(npcDepth()>initialDepth+0.01f)
+      for(auto& obstacle:obstacles) {
+        Tempest::Vec3 normal;
+        float depth = 0;
+        owner->npcList->hasCollision(*obj,*obstacle.body,normal,depth);
+        if(depth>obstacle.depth+0.01f) {
+          result.collision.npc = obstacle.body->toNpc();
+          result.collision.npcCol = depth;
+          result.collision.normal = Tempest::Vec3::normalize(normal);
+          if(diagnosticCollision!=nullptr) {
+            diagnosticCollision->npc = obstacle.body->toNpc();
+            diagnosticCollision->position = obstacle.body->pos;
+            diagnosticCollision->normal = result.collision.normal;
+            diagnosticCollision->testedPosition = obj->pos;
+            diagnosticCollision->allowedDepth = obstacle.depth;
+            diagnosticCollision->rejectedDepth = depth;
+            }
+          clipped = true;
+          break;
+          }
+        // An overlap after a teleport may separate, but it cannot transfer to
+        // another neighbour or grow again after the characters have separated.
+        obstacle.depth = std::min(obstacle.depth,depth);
+        }
+      if(clipped)
         break;
       accepted = obj->pos;
       }
     obj->setPosition(initial);
     return accepted;
     };
-  const auto requested = clipNpc(initial+displacement)-initial;
-  const auto moved = obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
-  const auto accepted = clipNpc(moved.position);
-  if((accepted-moved.position).quadLength()>0.0001f)
+  bool requestClipped = false;
+  const auto requested = clipNpc(initial+displacement,requestClipped,
+                                 npcDiagnostic!=nullptr ? &npcDiagnostic->requestCollision : nullptr)-initial;
+  auto moved = obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
+  bool resolvedClipped = false;
+  clipNpc(moved.position,resolvedClipped,npcDiagnostic!=nullptr ? &npcDiagnostic->resolvedCollision : nullptr);
+  // Jolt may have slid around a wall or stepped up: an interpolated point on
+  // the chord to that endpoint is not necessarily clear of world geometry.
+  // If that resolved motion hits an NPC, retain the known-safe starting feet.
+  const auto accepted = resolvedClipped ? initial : moved.position;
+  if(npcDiagnostic!=nullptr) {
+    npcDiagnostic->clippedRequest = requested;
+    npcDiagnostic->nativePosition = moved.position;
+    npcDiagnostic->accepted = accepted;
+    npcDiagnostic->requestClipped = requestClipped;
+    npcDiagnostic->resolvedClipped = resolvedClipped;
+    }
+  if(resolvedClipped) {
     obj->virtualCharacter->setPosition(accepted);
+    const auto support = obj->virtualCharacter->move({},0,stepHeight,maxSlope,mass,culprit);
+    moved.groundNormal = support.groundNormal;
+    moved.groundVelocity = support.groundVelocity;
+    moved.grounded = support.grounded;
+    moved.steep = support.steep;
+    }
   obj->setPosition(accepted);
   owner->npcList->onMove(*obj);
   owner->bulletList->onMoveNpc(*obj,*owner->npcList);
@@ -1918,6 +2008,18 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   result.groundVelocity = moved.groundVelocity;
   result.grounded = moved.grounded;
   result.steep = moved.steep;
+  const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
+  const float desiredLength = horizontal.length();
+  if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {
+    const float advancement = Tempest::Vec3::dotProduct(accepted-initial,horizontal)/desiredLength;
+    result.blocked = advancement<=std::max(0.1f,desiredLength*0.1f);
+    if(result.blocked && !requestClipped && !resolvedClipped) {
+      result.collision.landCol = true;
+      result.collision.normal = Tempest::Vec3::normalize(accepted-initial-horizontal);
+      }
+    }
+  if(npcDiagnostic!=nullptr)
+    npcDiagnostic->blocked = result.blocked;
   return result;
   }
 
@@ -2016,6 +2118,7 @@ void DynamicWorld::Item::setItem(::Item* it) {
     const auto surface=material==MAT_WOOD ? zenkit::MaterialGroup::WOOD :
                        material==MAT_METAL ? zenkit::MaterialGroup::METAL : zenkit::MaterialGroup::STONE;
     obj->body->setNoiseProfile(material,surface,it->handle().visual);
+    obj->body->setLabel(it->handle().visual);
     }
   }
 

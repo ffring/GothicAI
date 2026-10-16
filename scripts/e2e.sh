@@ -273,9 +273,16 @@ if ! kill -0 "$SRV" 2>/dev/null; then
 fi
 
 # An isolated initial setting also exercises first-load character synchronization.
-if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
-  [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
-  printf '[GAME]\ncharacter_virtual=%s\n' "$CHARACTER_VIRTUAL" >"$LOG_DIR/Gothic.ini"
+if [[ -n "${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+  printf '[GAME]\n' >"$LOG_DIR/Gothic.ini"
+  if [[ -n "${CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$CHARACTER_VIRTUAL" == 0 || "$CHARACTER_VIRTUAL" == 1 ]] || { echo "CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'character_virtual=%s\n' "$CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
+  fi
+  if [[ -n "${NPC_CHARACTER_VIRTUAL:-}" ]]; then
+    [[ "$NPC_CHARACTER_VIRTUAL" == 0 || "$NPC_CHARACTER_VIRTUAL" == 1 ]] || { echo "NPC_CHARACTER_VIRTUAL must be 0 or 1" >&2; exit 2; }
+    printf 'npc_character_virtual=%s\n' "$NPC_CHARACTER_VIRTUAL" >>"$LOG_DIR/Gothic.ini"
+  fi
 fi
 START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
@@ -286,7 +293,7 @@ if [ "${GOTHIC_INTRO:-0}" != "1" ]; then
   START_ARGS+=(-nointro)
 fi
 # Recheck after server startup: another session may have taken the game while it was starting.
-until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
+until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
 if [ "$SCENARIO" = "trace" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/trace-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
