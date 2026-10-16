@@ -25,11 +25,12 @@ std::unique_ptr<NavMesh> mesh;
 std::string meshWorld;
 float capsuleHeight=0, capsuleCenter=0;
 // Bench teacher only. Distances are centimetres; clocks are simulation milliseconds.
-constexpr float cornerRadius=45.f, cornerHeight=100.f, progressStep=20.f;
+constexpr float cornerRadius=20.f, cornerHeight=100.f, progressStep=20.f;
 constexpr float linkTakeoffRadius=20.f, linkLandingRadius=60.f;
-constexpr uint64_t progressTimeout=3000, fallbackTimeout=25000;
+constexpr uint64_t progressTimeout=3000, fallbackTimeout=65000;
 constexpr uint64_t linkLandingTime=300, linkTimeout=6000;
 constexpr unsigned maxReplans=2, maxFallbacks=1;
+constexpr float walkingSpeed=85.f, meshTimeBudget=.85f, nativeShortcutRatio=.8f;
 struct Trial {
   Npc* npc=nullptr;
   Vec3 goal;
@@ -41,12 +42,15 @@ struct Trial {
   unsigned replans=0,fallbacks=0;
   uint64_t progressAt=0,fallbackAt=0,sampleAt=0,linkAt=0,landedAt=0;
   float bestRemaining=std::numeric_limits<float>::max();
+  float initialLength=0,nativeEstimate=0,fallbackBest=0;
+  Vec3 fallbackGoal;
+  bool haveFallbackGoal=false;
   const WayPoint* fallback=nullptr;
   bool onFallback=false,linkStarted=false;
   bool sawAir=false,sawJump=false,sawClimb=false;
   int linkHp=0;
   Vec3 linkOrigin,linkEnd;
-  std::string failure;
+  std::string failure,fallbackReason;
   std::ofstream trace;
   bool active=false,success=false,finished=false;
 } trial;
@@ -88,6 +92,10 @@ bool closeCorner(const Vec3& at,const Vec3& to) {
 }
 Vec3 destination() {
   if(trial.linkStarted) return trial.linkEnd;
+  if(trial.onFallback) {
+    if(const auto* point=trial.npc->currentWayPoint()) return point->groundPos;
+    if(trial.fallback) return trial.fallback->groundPos;
+  }
   return trial.corner<trial.path.corners.size()?centimeters(trial.path.corners[trial.corner]):trial.goal;
 }
 float remaining(const Vec3& at) {
@@ -103,13 +111,29 @@ void replan(World& w) {
   trial.linkStarted=false;
   trial.corner=0;trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
 }
-void fallback(World& w) {
+void fallback(World& w,const char* reason) {
   auto& n=*trial.npc;
   n.clearAiQueue();n.clearGoTo();n.setWalkMode(WalkBit::WM_Walk);
   trial.fallback=w.findWayPoint(trial.goal,[](const WayPoint& p){return p.isConnected();});
   ++trial.fallbacks;trial.fallbackAt=trial.progressAt=w.tickCount();trial.onFallback=true;
+  trial.haveFallbackGoal=false;trial.fallbackReason=reason;
   if(trial.fallback) n.aiPush(AiQueue::aiGoToPoint(*trial.fallback));
   else {trial.onFallback=false;trial.failure="no_waypoint";}
+}
+void checkRouteBudget(World& w) {
+  if(!trial.path.complete || trial.initialLength<=walkingSpeed*float(trial.limit)*.001f*meshTimeBudget) return;
+  auto& n=*trial.npc;
+  const auto* point=w.findWayPoint(trial.goal,[](const WayPoint& p){return p.isConnected();});
+  if(!point) return;
+  const auto tail=mesh->findPath(meters(point->groundPos),meters(trial.goal));
+  if(!tail.complete) return;
+  auto route=w.wayTo(n,*point);
+  if(!route.first() && (n.position()-point->groundPos).length()>150.f) return;
+  auto previous=n.position();
+  float length=0;
+  while(const auto* next=route.pop()) {length+=(next->groundPos-previous).length();previous=next->groundPos;}
+  trial.nativeEstimate=length+tail.length*100;
+  if(trial.nativeEstimate<trial.initialLength*nativeShortcutRatio) fallback(w,"mesh_time_budget");
 }
 void finish(World& w) {
   if(trial.npc==nullptr) throw std::runtime_error("navmesh finish without trial");
@@ -125,9 +149,11 @@ void finish(World& w) {
      <<",\"corners_visited\":"<<trial.corner<<",\"final_position\":";
   vec(out,n.position());out<<",\"target_position\":";vec(out,trial.goal);
   out<<",\"replans\":"<<trial.replans<<",\"fallbacks\":"<<trial.fallbacks
+     <<",\"fallback_reason\":"<<std::quoted(trial.fallbackReason)
      <<",\"failure\":"<<std::quoted(trial.failure)<<",\"next_position\":";vec(out,destination());
   out<<",\"goal_direct_move_clear\":"<<n.testMove(trial.goal)
      <<",\"path_length_cm\":"<<trial.path.length*100
+     <<",\"initial_path_length_cm\":"<<trial.initialLength<<",\"native_estimate_cm\":"<<trial.nativeEstimate
      <<",\"start_snap_m\":"<<trial.path.startSnapDistance<<",\"end_snap_m\":"<<trial.path.endSnapDistance
      <<",\"frames\":"<<trial.frames<<",\"cv_frames\":"<<trial.cvFrames<<",\"normal_ai_frames\":"<<trial.normalFrames;
   const auto hit=w.physic()->navigationRay(n.centerPosition(),destination()+Vec3(0,100,0),&n);
@@ -135,6 +161,21 @@ void finish(World& w) {
   // Sweep a sphere along the standing capsule's axis at the requested goal,
   // independently of the route from the actor. This is diagnostic only.
   const auto capsule=n.navigationCapsule();
+  auto forward=destination()-n.position();forward.y=0;
+  const float forwardLength=forward.length();
+  if(forwardLength>0) forward*=std::min(75.f,forwardLength)/forwardLength;
+  DynamicWorld::NavigationRayResult nearHit;
+  float nearest=std::numeric_limits<float>::max();
+  const float bodyCenter=n.navigationClearance()-capsule.y*.5f;
+  const float span=std::max(0.f,capsule.y*.5f-capsule.x);
+  for(float y:{bodyCenter-span,bodyCenter,bodyCenter+span}) {
+    const auto from=n.position()+Vec3(0,y,0);
+    const auto probe=w.physic()->navigationRay(from,from+forward,&n);
+    const float distance=(probe.point-from).length();
+    if(probe.hasCol && distance<nearest) {nearHit=probe;nearest=distance;}
+  }
+  out<<",\"near_blocker_category\":"<<int(nearHit.kind)<<",\"near_blocker_position\":";
+  if(nearHit.hasCol) vec(out,nearHit.point); else out<<"null";
   const auto center=trial.goal+Vec3(0,n.navigationClearance()-capsule.y*.5f,0);
   const auto half=Vec3(0,std::max(0.f,capsule.y*.5f-capsule.x),0);
   const auto volume=w.physic()->sweep(center+half,center-half,capsule.x);
@@ -202,8 +243,10 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
       for(const auto& c:wp.connections()) {
         if(wp.name>=c.point->name) continue;
         auto path=mesh->findPath(meters(wp.groundPos),meters(c.point->groundPos));
+        const auto reverse=mesh->findPath(meters(c.point->groundPos),meters(wp.groundPos));
         edges<<"{\"from\":"<<std::quoted(wp.name)<<",\"to\":"<<std::quoted(c.point->name)
              <<",\"complete\":"<<path.complete<<",\"reason\":"<<std::quoted(path.reason)
+             <<",\"reverse_complete\":"<<reverse.complete
              <<",\"edge_length_cm\":"<<c.len
              <<",\"path_length_cm\":"<<path.length*100<<",\"start_snap_m\":"<<path.startSnapDistance
              <<",\"end_snap_m\":"<<path.endSnapDistance<<"}\n";
@@ -269,9 +312,11 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
     trial.start=place?a[4]:"intentional";trial.target=goal->name;trial.output=output;
     trial.limit=std::stoull(a[place?6:5]);trial.began=w.tickCount();trial.active=true;
     trial.path=mesh->findPath(meters(n.position()),meters(trial.goal));
+    trial.initialLength=trial.path.length*100;
     if(trial.mode=="teacher") trial.corner=0;
     trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
     if(trial.mode=="teacher") trial.trace=file(output,"teacher-trace.jsonl");
+    if(trial.mode=="teacher") checkRouteBudget(w);
     if(trial.mode=="direct") n.aiPush(AiQueue::aiGoToPoint(*goal));
     return;
   }
@@ -294,15 +339,26 @@ void NavBench::tick(World& w) {
       vec(trial.trace,n.position());trial.trace<<",\"next\":";vec(trial.trace,destination());trial.trace<<"}\n";
     }
     if(trial.onFallback) {
+      const auto* point=n.currentWayPoint();
+      if(point && n.moveHint()==Npc::GT_Way) {
+        const float left=(n.position()-point->groundPos).length();
+        if(!trial.haveFallbackGoal || (point->groundPos-trial.fallbackGoal).length()>1.f) {
+          trial.fallbackGoal=point->groundPos;trial.haveFallbackGoal=true;
+          trial.fallbackBest=left;trial.progressAt=w.tickCount();
+        } else if(left+progressStep<trial.fallbackBest) {
+          trial.fallbackBest=left;trial.progressAt=w.tickCount();
+        }
+      }
       const bool reached=trial.fallback && (n.position()-trial.fallback->groundPos).length()<150.f;
-      if(reached || (n.isAiQueueEmpty() && n.moveHint()==Npc::GT_No) || w.tickCount()-trial.fallbackAt>=fallbackTimeout) {
+      if(reached || (n.isAiQueueEmpty() && n.moveHint()==Npc::GT_No) ||
+         w.tickCount()-trial.fallbackAt>=fallbackTimeout || w.tickCount()-trial.progressAt>=progressTimeout) {
         trial.onFallback=false;replan(w);
       }
       return;
     }
     if(!trial.path.complete) {
       trial.failure="no_path:"+trial.path.reason;
-      if(trial.fallbacks<maxFallbacks) fallback(w);
+      if(trial.fallbacks<maxFallbacks) fallback(w,"no_mesh_path");
       return;
     }
     // Advance only after the body actually reaches the corner. Preserve link takeoffs.
@@ -361,7 +417,7 @@ void NavBench::tick(World& w) {
     if(w.tickCount()-trial.progressAt>=progressTimeout) {
       trial.failure="body_blocked";
       if(trial.replans<maxReplans) {++trial.replans;replan(w);}
-      else if(trial.fallbacks<maxFallbacks) fallback(w);
+      else if(trial.fallbacks<maxFallbacks) fallback(w,"no_progress");
       else trial.progressAt=w.tickCount();
       return;
     }
