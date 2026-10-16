@@ -343,6 +343,7 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
     sym->set_instance(hnpc);
 
   fin.read(x,y,z,angle,sz);
+  resetCharacterVisualHeight();
   fin.read(wlkMode,trGuild,talentsSk,talentsVl,refuseTalkMilis);
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
   if(fin.version()<55)
@@ -541,6 +542,7 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   x = ix;
   y = iy;
   z = iz;
+  resetCharacterVisualHeight();
   if(liveTeleport) {
     // Recreate at the destination instead of sweeping a kinematic body through
     // every item between a scripted teleport's endpoints.
@@ -1340,7 +1342,17 @@ Vec3 Npc::position() const {
   }
 
 Matrix4x4 Npc::transform() const {
-  return visual.transform();
+  auto matrix = visual.transform();
+  // Gameplay users of this matrix retain the exact origin. The presentation
+  // correction belongs to the model, its attachments and the foot IK frame only.
+  if(characterVisualYOffset!=0)
+    matrix.set(3,1,matrix.at(3,1)-characterVisualYOffset);
+  return matrix;
+  }
+
+Vec3 Npc::characterVisualPosition() const {
+  const auto& matrix = visual.transform();
+  return {matrix.at(3,0),matrix.at(3,1),matrix.at(3,2)};
   }
 
 Vec3 Npc::cameraBone(bool isFirstPerson) const {
@@ -6674,6 +6686,89 @@ void Npc::updateTransform() {
   updateAnimation(0, true);
   }
 
+void Npc::resetCharacterVisualHeight() {
+  if(characterVisualYOffset!=0)
+    durtyTranform |= TR_Pos;
+  characterVisualSteps.clear();
+  characterVisualYOffset = 0;
+  characterVisualHasSample = false;
+  characterVisualGroundSample = false;
+  }
+
+void Npc::updateCharacterVisualHeight() {
+  if(!isPlayer()) {
+    if(characterVisualHasSample)
+      resetCharacterVisualHeight();
+    return;
+    }
+  constexpr uint64_t blendMilliseconds = 100;
+  constexpr float heightNoise = 0.1f; // cm
+  constexpr float maxVisualLag = 10.f; // cm
+  const auto now = owner.tickCount();
+  const auto at = position();
+  const auto normal = mvAlgo.groundNormal();
+  const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
+                           mvAlgo.state()==MoveAlgo::Run &&
+                           !(bodyStateMasked()==BS_JUMP && isFlyAnim());
+  const bool enabled = Gothic::physicsFlags().characterVirtual &&
+                        mvAlgo.characterVirtualActive() && groundState;
+  const float previousOffset = characterVisualYOffset;
+
+  if(!enabled || (characterVisualHasSample && now<characterVisualSampleTick)) {
+    characterVisualSteps.clear();
+    characterVisualYOffset = 0;
+    }
+  else {
+    auto alive = std::find_if(characterVisualSteps.begin(),characterVisualSteps.end(),[now](const CharacterVisualStep& step) {
+      return now-step.tick<blendMilliseconds;
+      });
+    characterVisualSteps.erase(characterVisualSteps.begin(),alive);
+    if(characterVisualHasSample && characterVisualGroundSample) {
+      const auto delta = at-characterVisualSamplePosition;
+      const auto support = mvAlgo.characterVirtualGroundVelocity()*(float(now-characterVisualSampleTick)*0.001f);
+      const auto relative = delta-support;
+      float predictedMin = 0, predictedMax = 0;
+      bool hasPrediction = false;
+      // Relative travel along the support plane explains an ordinary slope.
+      // Either endpoint normal may explain a transition between two surfaces.
+      for(const auto& n:{characterVisualSampleNormal,normal}) {
+        if(n.y<=1.e-3f)
+          continue;
+        const float predicted = support.y-(n.x*relative.x+n.z*relative.z)/n.y;
+        if(!std::isfinite(predicted))
+          continue;
+        if(!hasPrediction)
+          predictedMin = predictedMax = predicted;
+        predictedMin = std::min(predictedMin,predicted);
+        predictedMax = std::max(predictedMax,predicted);
+        hasPrediction = true;
+        }
+      const float explained = hasPrediction ? std::clamp(delta.y,predictedMin,predictedMax) : support.y;
+      const float residual = delta.y-explained;
+      const float correction = std::copysign(std::max(0.f,std::abs(residual)-heightNoise),residual);
+      if(correction!=0)
+        characterVisualSteps.push_back({now,-correction});
+      }
+    characterVisualYOffset = 0;
+    for(const auto& step:characterVisualSteps)
+      characterVisualYOffset += step.offset*(1.f-float(now-step.tick)/float(blendMilliseconds));
+    if(std::abs(characterVisualYOffset)>maxVisualLag) {
+      characterVisualSteps.clear();
+      characterVisualYOffset = 0;
+      }
+    }
+
+  // Keep a baseline even while the freshly loaded controller is inactive. Its first
+  // floor correction can then blend from the saved height, while airborne handoffs snap.
+  characterVisualHasSample = true;
+  characterVisualGroundSample = groundState;
+  characterVisualSamplePosition = at;
+  characterVisualSampleNormal = normal;
+  characterVisualSampleTick = now;
+  if(characterVisualYOffset!=previousOffset)
+    durtyTranform |= TR_Pos;
+  }
+
 void Npc::updateAnimation(uint64_t dt, bool force) {
   FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
   const bool frozen = spellFrozen();
@@ -6681,6 +6776,8 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   const auto camera = Gothic::inst().camera();
   if(isPlayer() && camera!=nullptr && camera->isFree())
     dt = 0;
+
+  updateCharacterVisualHeight();
 
   if(durtyTranform) {
     const auto ground = groundNormal();
@@ -6694,10 +6791,11 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     if(durtyTranform==TR_Pos) {
       pos = visual.transform();
       pos.set(3,0,x);
-      pos.set(3,1,y);
+      pos.set(3,1,y+characterVisualYOffset);
       pos.set(3,2,z);
       } else {
       pos = mkPositionMatrix();
+      pos.set(3,1,pos.at(3,1)+characterVisualYOffset);
       }
 
     visual.setObjMatrix(pos,false);

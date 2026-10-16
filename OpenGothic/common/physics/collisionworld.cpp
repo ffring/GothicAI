@@ -15,12 +15,14 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -32,6 +34,7 @@
 #include <cmath>
 #include <mutex>
 #include <limits>
+#include <iterator>
 #include <stdexcept>
 #include <thread>
 #include <tuple>
@@ -115,6 +118,12 @@ namespace {
       }
     const uint32_t mask;
     };
+
+  // Use simulated hulls, including small props. The movable query meshes are
+  // duplicate sensor geometry used by the legacy controller and aiming only.
+  constexpr uint32_t characterMask = (1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|
+                                     (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_MovableVob)|
+                                     (1u<<DynamicWorld::C_Ragdoll);
 
   float angularMotionDisc(const JPH::Shape& shape) {
     const auto bounds = shape.GetLocalBounds();
@@ -448,7 +457,338 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
   std::atomic<uint64_t> rayCount {0};
   uint64_t lastRayCount = 0;
   float stepMilliseconds = 0;
+  float characterMilliseconds = 0;
+  std::vector<VirtualCharacter*> virtualCharacters;
   };
+
+struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListener {
+  explicit Impl(CollisionWorld& world):world(world) {}
+
+  static bool isPushable(const JPH::Body& body) {
+    const auto layer = body.GetObjectLayer();
+    return body.IsDynamic() && (layer==DynamicWorld::C_Item || layer==DynamicWorld::C_MovableVob);
+    }
+
+  bool OnContactValidate(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact) override {
+    bool rejectSupport = false;
+    {
+      JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
+      if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()) || contact.mIsSensorB)
+        return true;
+      const auto up = character->GetUp();
+      const float mass = 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
+      const bool light = mass<10.f;
+      // Loose utensils never become a floor. A heavy body's top may support a
+      // character placed on it, but walking into it must not acquire that top
+      // as a new step. Keep the side contacts, which still stop and push it.
+      const float contactHeight = JPH::Vec3(contact.mPosition-character->GetPosition()).Dot(up);
+      rejectSupport = light ? contact.mSurfaceNormal.Dot(up)>1.e-3f :
+                              contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
+      }
+    if(!rejectSupport)
+      return true;
+
+    // Rejecting a support in Jolt also removes its solver impulse. Retain the
+    // real contact point and horizontal push, within the same per-move budget.
+    // The capsule's rounded toe must slide through a mug rather than climb it.
+    // Sweeps also validate distant future contacts, so only push a point that
+    // is already touching the current capsule (including its padding).
+    auto local = JPH::Vec3(contact.mPosition-character->GetPosition());
+    auto closest = character->GetUp()*std::clamp(local.Dot(character->GetUp()),radius,height-radius);
+    if((local-closest).Length()<=radius+character->GetCharacterPadding()+.001f) {
+      auto horizontal = contact.mContactNormal-contact.mContactNormal.Dot(character->GetUp())*character->GetUp();
+      if(horizontal.IsNearZero()) {
+        const auto velocity = character->GetLinearVelocity();
+        horizontal = -(velocity-velocity.Dot(character->GetUp())*character->GetUp());
+        }
+      if(!horizontal.IsNearZero()) {
+        auto pushContact = contact;
+        pushContact.mContactNormal = horizontal.Normalized();
+        pushContact.mDistance = std::max(contact.mDistance,0.f);
+        pushContact.mHadCollision = true;
+        JPH::CharacterContactSettings settings;
+        onContact(pushContact,settings);
+        }
+      }
+    return false;
+    }
+
+  void OnContactSolve(const JPH::CharacterVirtual*, const JPH::BodyID& bodyID, const JPH::SubShapeID&,
+                      JPH::RVec3Arg point, JPH::Vec3Arg, JPH::Vec3Arg, const JPH::PhysicsMaterial*,
+                      JPH::Vec3Arg velocity, JPH::Vec3& newVelocity) override {
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),bodyID);
+    if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()))
+      return;
+    const auto up = character->GetUp();
+    if(JPH::Vec3(point-character->GetPosition()).Dot(up)<=.02f)
+      return; // Existing top support, including a moving body.
+    // The rounded capsule can turn even a vertical furniture side into an
+    // upward velocity. Side contacts still block us, but cannot lift the feet.
+    const float gained = (newVelocity-velocity).Dot(up);
+    if(gained>0.f)
+      newVelocity -= gained*up;
+    }
+
+  void onContact(const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) {
+    // Jolt's native limit applies afresh to each contact / stair probe. Dose
+    // the impulse here instead, sharing one force budget across the whole move.
+    settings.mCanReceiveImpulses = false;
+    JPH::BodyLockWrite lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
+    if(!lock.SucceededAndIsInBroadPhase())
+      return;
+    const auto& nativeBody = lock.GetBody();
+    const auto layer = nativeBody.GetObjectLayer();
+    if((layer!=DynamicWorld::C_Item && layer!=DynamicWorld::C_MovableVob) || !nativeBody.IsDynamic() || contact.mIsSensorB)
+      return;
+    auto* body = reinterpret_cast<CollisionBody*>(contact.mUserData);
+    if(body==nullptr)
+      return;
+    // Attribute an approaching contact, including the character's weight on a
+    // simulated support, rather than a separating or predictive-only contact.
+    const auto relative = character->GetLinearVelocity()-contact.mLinearVelocity;
+    const float projectedVelocity = relative.Dot(contact.mContactNormal);
+    if(projectedVelocity<-0.01f) {
+      body->npcContact.store(true,std::memory_order_relaxed);
+      body->setTraceCulprit(culprit);
+      }
+    if(!contact.mHadCollision || pushSeconds<=0.f || pushRemaining<=0.f)
+      return;
+
+    // Use the native effective contact mass, including the torque caused by an
+    // off-centre push. Penetration recovery has the same damping as Jolt.
+    const float deltaVelocity = -projectedVelocity*0.9f-std::min(contact.mDistance,0.f)*0.4f/pushSeconds;
+    if(deltaVelocity<=0.f)
+      return;
+    const float inverseMass = nativeBody.GetMotionProperties()->GetInverseMass();
+    if(inverseMass<=0.f)
+      return;
+    const auto jacobian = JPH::Vec3(contact.mPosition-nativeBody.GetCenterOfMassPosition()).Cross(contact.mContactNormal);
+    const float inverseEffectiveMass = nativeBody.GetInverseInertia().Multiply3x3(jacobian).Dot(jacobian)+inverseMass;
+    auto impulse = -(deltaVelocity/inverseEffectiveMass)*contact.mContactNormal;
+    // Downward weight is applied independently by CharacterVirtual::Update;
+    // do not spend the walking push budget on that supporting contact.
+    const float down = impulse.Dot(character->GetUp());
+    if(down<0.f)
+      impulse -= down*character->GetUp();
+    const float magnitude = impulse.Length();
+    if(magnitude<=0.f)
+      return;
+
+    auto used = std::find_if(pushBodies.begin(),pushBodies.end(),[&](const auto& entry) {return entry.first==contact.mBodyB;});
+    if(used==pushBodies.end()) {
+      pushBodies.emplace_back(contact.mBodyB,0.f);
+      used = std::prev(pushBodies.end());
+      }
+    // Ordinary walking has less effective effort against a heavier load than
+    // a braced push. Keep this continuous in both masses; no furniture classes.
+    const float bodyMass = 1.f/inverseMass;
+    const float force = character->GetMaxStrength()*character->GetMass()/(character->GetMass()+bodyMass);
+    const float available = std::min(pushRemaining,std::max(0.f,force*pushSeconds-used->second));
+    const float amount = std::min(magnitude,available);
+    if(amount<=0.f)
+      return;
+    pushRemaining -= amount;
+    used->second += amount;
+    // The write lock is already held. AddImpulse activates a sleeping body and
+    // applies the torque at the real contact point, in native SI units.
+    world.impl->system.GetBodyInterfaceNoLock().AddImpulse(contact.mBodyB,impulse*(amount/magnitude),contact.mPosition);
+    }
+
+  void OnContactAdded(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
+                      JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
+  void OnContactPersisted(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
+                          JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
+
+  CollisionWorld& world;
+  std::unique_ptr<JPH::CharacterVirtual> character;
+  Npc* culprit = nullptr;
+  float pushSeconds = 0.f;
+  float pushRemaining = 0.f;
+  std::vector<std::pair<JPH::BodyID,float>> pushBodies;
+  bool contactsDirty = true;
+  float radius = 0.f;
+  float height = 0.f;
+  JPH::BodyID ground;
+  JPH::RMat44 groundTransform = JPH::RMat44::sIdentity();
+  };
+
+CollisionWorld::VirtualCharacter::VirtualCharacter(CollisionWorld& owner, float radius, float height,
+                                                  const Tempest::Vec3& feet)
+  :impl(std::make_unique<Impl>(owner)) {
+  const float r = std::max(toMeters(radius),0.01f);
+  const float h = std::max(toMeters(height),2.f*r);
+  impl->radius = r;
+  impl->height = h;
+  JPH::CharacterVirtualSettings settings;
+  settings.mShape = new JPH::CapsuleShape(std::max(h*0.5f-r,0.001f),r);
+  settings.mShapeOffset = JPH::Vec3(0,h*0.5f,0);
+  settings.mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(),-r);
+  settings.mCharacterPadding = 0.01f;
+  settings.mPredictiveContactDistance = 0.05f;
+  settings.mCollisionTolerance = 0.001f;
+  settings.mEnhancedInternalEdgeRemoval = true;
+  impl->character = std::make_unique<JPH::CharacterVirtual>(&settings,JPH::RVec3(toMeters(feet)),
+                                                          JPH::Quat::sIdentity(),&owner.impl->system);
+  impl->character->SetListener(impl.get());
+  owner.impl->virtualCharacters.push_back(this);
+  }
+
+CollisionWorld::VirtualCharacter::~VirtualCharacter() {
+  auto& characters = impl->world.impl->virtualCharacters;
+  characters.erase(std::remove(characters.begin(),characters.end(),this),characters.end());
+  }
+
+std::unique_ptr<CollisionWorld::VirtualCharacter> CollisionWorld::createVirtualCharacter(
+    float radius, float height, const Tempest::Vec3& feet) {
+  return std::unique_ptr<VirtualCharacter>(new VirtualCharacter(*this,radius,height,feet));
+  }
+
+void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
+  impl->character->SetPosition(JPH::RVec3(toMeters(feet)));
+  impl->contactsDirty = true;
+  impl->ground = JPH::BodyID();
+  }
+
+CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+  const auto started = std::chrono::steady_clock::now();
+  auto& state = *impl;
+  auto& character = *state.character;
+  auto& world = *state.world.impl;
+  const QueryBroadPhaseFilter broadFilter(characterMask);
+  const QueryLayerFilter layerFilter(characterMask);
+  const JPH::BodyFilter bodyFilter;
+  const JPH::ShapeFilter shapeFilter;
+  state.culprit = culprit;
+  character.SetMass(std::max(mass,1.f));
+  // Jolt uses metres, kilograms and seconds: this is a 450 N human push,
+  // capped independently of the character's weight on a supporting body.
+  character.SetMaxStrength(std::min(character.GetMass()*DynamicWorld::gravityMS,450.f));
+  const float seconds = float(dt)*0.001f;
+  state.pushSeconds = seconds;
+  state.pushRemaining = character.GetMaxStrength()*seconds;
+  state.pushBodies.clear();
+  character.SetMaxSlopeAngle(maxSlope);
+  if(state.contactsDirty) {
+    character.RefreshContacts(broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    state.contactsDirty = false;
+    }
+  auto inheritedGroundVelocity = character.GetGroundVelocity();
+  bool inferredKinematicVelocity = false;
+  if(seconds>0.f) {
+    auto kinematicVelocity = JPH::Vec3::sZero();
+    if(character.IsSupported() && state.ground==character.GetGroundBodyID() && !state.ground.IsInvalid()) {
+      JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
+      if(lock.Succeeded() && lock.GetBody().IsKinematic()) {
+        // Movers update their transform directly. Infer their motion at the
+        // support point, including rotation, without changing legacy physics.
+        const auto transform = lock.GetBody().GetWorldTransform();
+        const auto position = character.GetPosition();
+        kinematicVelocity = JPH::Vec3(transform*(state.groundTransform.InversedRotationTranslation()*position)-position)/seconds;
+        inheritedGroundVelocity = kinematicVelocity;
+        inferredKinematicVelocity = true;
+        }
+      }
+    character.UpdateGroundVelocity();
+    auto groundVelocity = character.GetGroundVelocity();
+    if(inferredKinematicVelocity) {
+      groundVelocity = kinematicVelocity;
+      // A direct-matrix lift has already advanced vertically. Resolve that new
+      // floor through penetration recovery / floor sticking; adding its upward
+      // speed again would detach the feet from a contact with zero native speed.
+      groundVelocity.SetY(0.f);
+      }
+    auto velocity = toMeters(displacement)/seconds;
+    if(character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround)
+      velocity += groundVelocity;
+    velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
+    JPH::CharacterVirtual::ExtendedUpdateSettings settings;
+    const float step = std::max(toMeters(stepHeight),0.f);
+    // Run Jolt's ordinary update and floor sticking first. Its automatic stair
+    // recipe is applied below only for world geometry, after contact solving
+    // has identified an Item / movable body that should be pushed instead.
+    settings.mWalkStairsStepUp = JPH::Vec3::sZero();
+    settings.mStickToFloorStepDown = JPH::Vec3(0,-step,0);
+    const auto oldPosition = character.GetPosition();
+    const auto desiredVelocity = character.GetLinearVelocity();
+    character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
+                             broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    bool pushingBody = false;
+    for(const auto& contact:character.GetActiveContacts()) {
+      if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB ||
+         contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f)
+        continue;
+      JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
+      if(lock.SucceededAndIsInBroadPhase() && Impl::isPushable(lock.GetBody())) {
+        pushingBody = true;
+        break;
+        }
+      }
+    // The remainder is the WalkStairs part of Jolt's ExtendedUpdate recipe,
+    // including its direction and minimum-distance tests for oblique steps.
+    const auto up = character.GetUp();
+    const auto desiredStep = (desiredVelocity-desiredVelocity.Dot(up)*up)*seconds;
+    const float desiredLength = desiredStep.Length();
+    if(step>0.f && !pushingBody && desiredLength>0.f && character.CanWalkStairs(desiredVelocity)) {
+      const auto forward = desiredStep/desiredLength;
+      const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
+      const float achievedLength = std::max(0.f,achieved.Dot(forward));
+      if(achievedLength+1.e-4f<desiredLength) {
+        auto direction = forward;
+        float best = settings.mWalkStairsCosAngleForwardContact;
+        for(const auto& contact:character.GetActiveContacts()) {
+          if(!contact.mHadCollision || contact.mWasDiscarded ||
+             contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f ||
+             !character.IsSlopeTooSteep(contact.mSurfaceNormal))
+            continue;
+          const auto candidate = contact.mSurfaceNormal.Dot(up)*up-contact.mSurfaceNormal;
+          const float length = candidate.Length();
+          if(length>1.e-6f && candidate.Dot(forward)/length>best) {
+            direction = candidate/length;
+            best = direction.Dot(forward);
+            }
+          }
+        const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
+        character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
+                             settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+        }
+      }
+    }
+  const auto previousGround = state.ground;
+  state.ground = character.GetGroundBodyID();
+  if(!state.ground.IsInvalid()) {
+    JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
+    if(lock.Succeeded())
+      state.groundTransform = lock.GetBody().GetWorldTransform();
+    else
+      state.ground = JPH::BodyID();
+    }
+  CharacterMoveResult result;
+  result.position = toCentimeters(JPH::Vec3(character.GetPosition()));
+  // Jolt keeps its requested velocity after moving. Resolve the carried
+  // velocity against actual contacts so downhill acceleration survives, while
+  // stair snaps and penetration recovery never turn into airborne momentum.
+  auto solvedVelocity = character.GetLinearVelocity();
+  for(int iteration=0;iteration<2;++iteration) {
+    for(const auto& contact:character.GetActiveContacts()) {
+      if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB)
+        continue;
+      const float into = (solvedVelocity-contact.mLinearVelocity).Dot(contact.mContactNormal);
+      if(into<0.f)
+        solvedVelocity -= contact.mContactNormal*into;
+      }
+    }
+  result.velocity = toCentimeters(solvedVelocity);
+  result.groundVelocity = toCentimeters(inferredKinematicVelocity && previousGround==state.ground ?
+                                        inheritedGroundVelocity : character.GetGroundVelocity());
+  const auto normal = character.GetGroundNormal();
+  result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+  result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
+  result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
+  world.characterMilliseconds += std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  return result;
+  }
 
 CollisionWorld::CollisionWorld() {
   Physics::initialize();
@@ -1246,13 +1586,27 @@ void CollisionWorld::tick(uint64_t dt) {
       m[13] *= 100.f;
       m[14] *= 100.f;
       matrix.setData(m);
-      disable = !native.IsActive() || native.GetPosition().GetY()<bboxMin.GetY()-100.f;
+      bool keepSleeping = false;
+      if(!native.IsActive()) {
+        const float range = toMeters(DynamicWorld::characterItemRange);
+        for(const auto* character:impl->virtualCharacters) {
+          if((native.GetPosition()-character->impl->character->GetPosition()).LengthSq()<=range*range) {
+            keepSleeping = true;
+            break;
+            }
+          }
+        }
+      // Legacy items lose their body at rest. A nearby virtual character needs
+      // that sleeping body to remain queryable so a native contact can wake it.
+      // Removing the opt-in controller restores the original cleanup policy.
+      disable = (!native.IsActive() && !keepSleeping) || native.GetPosition().GetY()<bboxMin.GetY()-100.f;
       }
     item->setObjMatrix(matrix);
     if(disable)
       item->setPhysicsDisable();
     }
-  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count()+impl->characterMilliseconds;
+  impl->characterMilliseconds = 0;
   impl->lastRayCount=impl->rayCount.exchange(0,std::memory_order_relaxed);
   }
 

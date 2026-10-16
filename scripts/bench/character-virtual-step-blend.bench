@@ -1,0 +1,31 @@
+# Final ON retake: continuous steep slope and stairs down after step-only blending.
+seed 73013
+cheat god
+set time 12 0
+movable on
+character on
+view full
+cam auto 240 70
+overlay on
+
+release all
+character route steep_slope
+walkmode run
+wait 500
+rec steep_slope
+character begin
+hold forward 3000
+wait 3000
+character end
+stop
+
+release all
+character route stairs_down
+walkmode walk
+wait 500
+rec stairs_down
+character begin
+hold forward 2500
+wait 2500
+character end
+stop

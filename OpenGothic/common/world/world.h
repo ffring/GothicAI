@@ -147,6 +147,7 @@ class World final {
 
     void                 triggerOnStart(bool firstTime);
     void                 triggerEvent(const TriggerEvent& e);
+    void                 detectMover(const std::function<void(MoveTrigger&)>& f);
     void                 triggerChangeWorld(std::string_view world, std::string_view wayPoint);
     void                 execTriggerEvent(const TriggerEvent& e);
     void                 enableDefTrigger(AbstractTrigger& t);

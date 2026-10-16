@@ -43,6 +43,7 @@ class DynamicWorld final {
     static constexpr float gravity     = gravityMS*100.f/(1000.f*1000.f); // centimeters per milliseconds^2
     static constexpr float bulletSpeed = 3; // centimeters per milliseconds
     static constexpr float spellSpeed  = 1; // centimeters per milliseconds
+    static constexpr float characterItemRange = 300.f; // centimetres around the opt-in hero
 
     DynamicWorld(World *world, const zenkit::Mesh& mesh);
     DynamicWorld(const DynamicWorld&)=delete;
@@ -112,6 +113,7 @@ class DynamicWorld final {
         void  debugDraw(DbgPainter& p) const;
 
         void  setEnable(bool e);
+        bool  isEnabled() const;
         void  setUserPointer(void* p);
 
         auto  center()  const -> Tempest::Vec3;
@@ -123,6 +125,16 @@ class DynamicWorld final {
         bool  testMove(const Tempest::Vec3& to, CollisionTest& out);
         bool  testMove(const Tempest::Vec3& to, const Tempest::Vec3& from, CollisionTest& out);
         auto  tryMove (const Tempest::Vec3& to, CollisionTest& out) -> DynamicWorld::MoveCode;
+
+        struct VirtualMoveResult {
+          Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+          bool grounded = false;
+          bool steep = false;
+          };
+        // Walking only: displacement in cm, dt in ms, slope in radians, mass in kg.
+        VirtualMoveResult moveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
+                                      float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr);
+        void resetVirtual();
 
         bool  hasCollision() const;
 
@@ -159,6 +171,7 @@ class DynamicWorld final {
         Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
         Tempest::Vec3 angularVelocity() const; // world radians/second; zero without dynamics
         bool isSleeping() const;
+        bool touchedByNpc() const;
         // World-space newton seconds (kg * metres/second), with native wake.
         bool addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
         void setTransformCallback(std::function<void(const Tempest::Matrix4x4&)> callback);

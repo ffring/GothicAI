@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Body/BodyID.h>
 
 class Item;
+class Npc;
 class Interactive;
 class PhysicVbo;
 class Skeleton;
@@ -115,6 +116,29 @@ class CollisionWorld final {
       Ragdoll*             ragdoll = nullptr;
       size_t               bone = size_t(-1);
       };
+
+    struct CharacterMoveResult {
+      Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+      bool grounded = false;
+      bool steep = false;
+      };
+
+    // Transient, feet-based walking controller. Nothing in this object is saved.
+    class VirtualCharacter final {
+      public:
+        ~VirtualCharacter();
+        CharacterMoveResult move(const Tempest::Vec3& displacement, uint64_t dt,
+                                 float stepHeight, float maxSlope, float mass, Npc* culprit);
+        void setPosition(const Tempest::Vec3& feet);
+
+      private:
+        struct Impl;
+        VirtualCharacter(CollisionWorld& owner, float radius, float height, const Tempest::Vec3& feet);
+        std::unique_ptr<Impl> impl;
+        friend class CollisionWorld;
+      };
+
+    std::unique_ptr<VirtualCharacter> createVirtualCharacter(float radius, float height, const Tempest::Vec3& feet);
 
     void tick(uint64_t dt);
     void setBBox(JPH::Vec3Arg min, JPH::Vec3Arg max);

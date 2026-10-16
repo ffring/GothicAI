@@ -1442,6 +1442,222 @@ namespace {
     requireNear(body->position().y,700.f-6.f*acceleration,.005f,"next sixteen millisecond frame must advance the retained step");
     }
 
+  void testCharacterVirtual() {
+    constexpr float slope = .785398163f;
+    const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
+      std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",
+                   stage,frames,double(state.position.x),double(state.position.y),double(state.position.z),
+                   double(state.velocity.x),double(state.velocity.y),double(state.velocity.z),state.grounded,state.steep,
+                   double(state.groundNormal.x),double(state.groundNormal.y),double(state.groundNormal.z));
+      };
+    {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      std::vector<std::unique_ptr<CollisionWorld::CollisionBody>> steps;
+      for(int i=1;i<=3;++i)
+        steps.push_back(world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.5f,.1f*float(i),2)),
+                                               at(100.f*float(i)+50.f,10.f*float(i),0),.7f,DynamicWorld::C_Object));
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      auto state=hero->move({},0,50,slope,80,nullptr);
+      printState("stairs-start",0,state);
+      int frames=0;
+      // Finish inside the last tread (300..400), with room for collision loss
+      // at each riser. Unobstructed 80*5 cm is not a traversal-time contract.
+      for(;frames<120 && state.position.x<350.f;++frames) {
+        state=hero->move({5,0,0},17,50,slope,80,nullptr);
+        if((frames+1)%20==0)
+          printState("stairs-up",frames+1,state);
+        }
+      printState("stairs-up-end",frames,state);
+      require(state.grounded && state.position.x>=350.f,"virtual walking must reach the interior of the last twenty centimetre step");
+      requireNear(state.position.y,60,2,"virtual capsule feet must remain on the final stair");
+      frames=0;
+      for(;frames<120 && state.position.x>20.f;++frames)
+        state=hero->move({-5,0,0},17,50,slope,80,nullptr);
+      printState("stairs-down-end",frames,state);
+      require(state.grounded && state.position.x<=20.f,"virtual walking must descend the same steps");
+      requireNear(state.position.y,0,2,"floor sticking must return the feet to the floor");
+      auto wall=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.1f,3,10)),at(600,300,0),.7f,
+                                       DynamicWorld::C_Object);
+      for(int i=0;i<150;++i)
+        state=hero->move({5,0,5},17,50,slope,80,nullptr);
+      printState("wall-slide-end",150,state);
+      require(state.position.x<567 && state.position.z>650,
+              "virtual walking must stop at the wall while retaining motion along it");
+      hero->setPosition({-300,0,0});
+      state=hero->move({},17,50,slope,80,nullptr);
+      printState("teleport",1,state);
+      requireNear(state.position.x,-300,.01f,"a virtual teleport must not retain old ground displacement");
+      require(state.grounded,"a teleported virtual character must refresh its support");
+    }
+    auto push=[&](float mass, int category) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto prop=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.2f,.4f,.4f)),at(80,40,0),.7f,mass,category,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      CollisionWorld::CharacterMoveResult state;
+      for(int i=0;i<60;++i) {
+        state=hero->move({5,0,0},17,10,slope,80,nullptr);
+        world.tick(17);
+        }
+      printState("push-end",60,state);
+      std::fprintf(stderr,"CharacterVirtual pushed body: mass=%.3f kg x=%.3f cm\n",double(mass),double(prop->position().x));
+      require(state.position.x<prop->position().x-30,
+              "virtual contacts must not allow the hero through a dynamic hull");
+      return prop->position().x-80.f;
+      };
+    const float light=push(1,DynamicWorld::C_Item);
+    const float heavy=push(122,DynamicWorld::C_MovableVob);
+    require(light>20 && heavy<light*.5f,"the same character strength must push a light item faster than heavy furniture");
+    std::printf("CharacterVirtual push: 1 kg %.2f cm, 122 kg %.2f cm\n",double(light),double(heavy));
+    for(const int category:{DynamicWorld::C_Item,DynamicWorld::C_MovableVob}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto mug=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.07f,.08f,.07f)),at(80,8,0),.7f,5.8f,category,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      float highest=0.f;
+      CollisionWorld::CharacterMoveResult state;
+      for(int i=0;i<60;++i) {
+        state=hero->move({5,0,0},17,50,slope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        world.tick(17);
+        }
+      std::printf("CharacterVirtual loose utensil: category %d moved %.3f cm, max feet %.3f cm\n",
+                  category,double(mug->position().x-80.f),double(highest));
+      require(highest<1.f,"walking into a loose item or small movable utensil must not lift the feet");
+      require(mug->position().x>100.f && mug->touchedByNpc(),
+              "a loose utensil excluded as a support must still receive native contact impulses");
+      require(state.position.x>250.f,"a loose utensil must be pushed aside while the hero keeps walking");
+    }
+    {
+      CollisionWorld world;
+      auto mug=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.2f,.08f,.2f)),at(0,8,0),.7f,5.8f,
+                                     DynamicWorld::C_Item,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,16,0});
+      CollisionWorld::CharacterMoveResult state;
+      // Leave the rigid body suspended without ticking it: the feet can only
+      // remain at 16 cm if this light body is erroneously accepted as a floor.
+      for(int i=0;i<10;++i)
+        state=hero->move({},17,50,slope,80,nullptr);
+      require(!state.grounded && state.position.y<14.f,
+              "even feet initially placed on a light item must fall rather than acquire it as support");
+      requireNear(mug->velocity().y,0,.001f,"an excluded light support must not receive character support weight");
+    }
+    {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      // A low table is deliberately within the 50 cm stair limit, including
+      // the capsule's rounded toe. It must remain furniture rather than a step.
+      auto table=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.2f,.1f,.6f)),at(100,10,0),1.f,122.f,
+                                       DynamicWorld::C_MovableVob,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      CollisionWorld::CharacterMoveResult state;
+      float highest=0.f;
+      for(int i=0;i<90;++i) {
+        state=hero->move({5,0,0},17,50,slope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        world.tick(17);
+        }
+      std::printf("CharacterVirtual low table: hero %.3f cm, table %.3f cm, max feet %.3f cm\n",
+                  double(state.position.x),double(table->position().x),double(highest));
+      require(highest<1.f,"ordinary walking must neither auto-step nor roll the capsule up a movable table");
+      require(state.position.x<table->position().x-35.f,
+              "a table excluded from automatic stepping must still block the capsule");
+    }
+    {
+      CollisionWorld world;
+      // No floor or simulation tick: measured linear momentum comes only from
+      // character contact impulses, without gravity, support weight or friction.
+      // Two narrow bodies block the same capsule. Each can demand a full force
+      // allowance; repeated contacts / stair probes must share the move budget.
+      constexpr float mass=20.f,seconds=.1f;
+      auto a=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.1f,.9f,.1f)),at(50,190,-20),.4f,mass,
+                                  DynamicWorld::C_MovableVob,true);
+      auto b=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.1f,.9f,.1f)),at(50,190,20),.4f,mass,
+                                  DynamicWorld::C_MovableVob,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,100,0});
+      hero->move({100,0,0},100,50,slope,80,nullptr);
+      const float impulseA=a->velocity().length()*.01f*mass;
+      const float impulseB=b->velocity().length()*.01f*mass;
+      constexpr float totalLimit=450.f*seconds;
+      constexpr float bodyLimit=450.f*80.f/(80.f+mass)*seconds;
+      std::printf("CharacterVirtual shared push: %.3f + %.3f Ns, total limit %.3f Ns, per-body %.3f Ns\n",
+                  double(impulseA),double(impulseB),double(totalLimit),double(bodyLimit));
+      require(impulseA>1.f && impulseB>1.f,"the shared push fixture must exercise two native contact bodies");
+      require(impulseA<=bodyLimit+.01f && impulseB<=bodyLimit+.01f,
+              "all contacts of one body must share its mass-dependent walking effort");
+      require(impulseA+impulseB<=totalLimit+.01f,
+              "all bodies and repeated contacts must share one 450 newton walking budget per move");
+    }
+    {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto platform=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,90,0),.7f,
+                                           DynamicWorld::C_Object,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,100,0});
+      auto state=hero->move({},17,50,slope,80,nullptr);
+      require(state.grounded,"virtual feet must find the initial kinematic support");
+      for(int i=1;i<=60;++i) {
+        platform->setObjMatrix(at(float(i),90.f+.3f*float(i),0));
+        state=hero->move({},17,50,slope,80,nullptr);
+        }
+      printState("kinematic-support-end",60,state);
+      requireNear(state.position.x,60,2,"a direct-matrix mover must carry standing virtual feet horizontally");
+      requireNear(state.position.y,118,2,"a direct-matrix mover must carry standing virtual feet vertically");
+      require(state.grounded && state.groundVelocity.x>50,
+              "kinematic support must expose inherited velocity for a later jump");
+      platform.reset();
+      state=hero->move({},17,50,slope,80,nullptr);
+      require(!state.grounded && state.position.y<118,
+              "virtual feet must lose support and fall after the moving platform disappears");
+    }
+    {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.01f,
+                                        DynamicWorld::C_Landscape);
+      auto platform=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,10,0),.01f,10000,
+                                         DynamicWorld::C_MovableVob,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,20,0});
+      auto state=hero->move({},17,50,slope,80,nullptr);
+      require(state.grounded,"virtual feet must find a simulated support body");
+      require(platform->addImpulse({10000,0,0}),"support fixture must accept its native impulse");
+      for(int i=0;i<60;++i) {
+        state=hero->move({},17,50,slope,80,nullptr);
+        world.tick(17);
+        }
+      printState("dynamic-support-end",60,state);
+      require(state.grounded && state.position.x>60,"a moving simulated body must carry a standing virtual character");
+      requireNear(state.position.x,platform->position().x,5,"virtual feet must keep their location relative to a moving body");
+    }
+    {
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_CONTRACT");
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto hero=world.addGhostObj(&shape);
+      auto npc=world.addGhostObj(&shape);
+      hero.setPosition({0,0,0});
+      npc.setPosition({100,0,0});
+      world.tick(0);
+      world.tick(0); // leave the other NPC in the frozen broad-phase list
+      for(int i=0;i<30;++i)
+        hero.moveVirtual({5,0,0},17,50,slope,80);
+      require(hero.position().x<55,"virtual hero walking must retain existing NPC ellipsoid obstacles");
+      requireNear(npc.position().x,100,0,"virtual hero contacts must never move another NPC");
+      hero.setPosition({-200,50,30});
+      hero.resetVirtual();
+      const auto after=hero.moveVirtual({},0,50,slope,80);
+      requireNear(after.position.x,-200,.001f,"controller recreation must retain the saved or teleported feet x");
+      requireNear(after.position.y,50,.001f,"controller recreation must retain the saved or teleported feet y");
+      requireNear(after.position.z,30,.001f,"controller recreation must retain the saved or teleported feet z");
+    }
+    }
+
   void testContracts() {
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),
@@ -1566,6 +1782,7 @@ int main() {
     testFixedStepCarry();
     testFixedStepCadence();
     testContracts();
+    testCharacterVirtual();
     testMovableVobBodies();
     testMovableVobLegacyCollision();
     testMovableVobGeometrySupport();

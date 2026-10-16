@@ -82,6 +82,8 @@ class MoveAlgo final {
     auto    state() const { return flags; }
     // Telemetry counter only: records real MoveAlgo invocations, never advances simulation.
     uint64_t traceTickSerial() const { return movementTraceSerial; }
+    bool    characterVirtualActive() const { return virtualMovementActive; }
+    auto    characterVirtualGroundVelocity() const -> Tempest::Vec3 { return virtualGroundVelocity; }
 
     zenkit::MaterialGroup groundMaterial() const;
     auto    groundNormal() const -> Tempest::Vec3;
@@ -116,6 +118,7 @@ class MoveAlgo final {
     void    tickClimb (uint64_t dt);
     void    tickJumpup(uint64_t dt);
     bool    implTick  (uint64_t dt, MvFlags fai);
+    bool    tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement);
 
     bool    tryMove   (float x, float y, float z);
     bool    tryMove   (float x, float y, float z, DynamicWorld::CollisionTest& out);
@@ -171,6 +174,11 @@ class MoveAlgo final {
     float               mulSpeed  =1.f;
     Tempest::Vec3       fallSpeed ={};
     float               fallCount=0.f;
+
+    // Controller contacts are transient: the saved origin and movement state stay unchanged.
+    bool                virtualMovementActive = false;
+    Tempest::Vec3       virtualGroundVelocity = {}; // cm/s
+    Tempest::Vec3       virtualJumpVelocity = {};   // cm/ms, inherited during jump root motion
 
     uint64_t            climbStart=0;
     Tempest::Vec3       climbPos0={};

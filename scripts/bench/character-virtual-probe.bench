@@ -1,0 +1,9 @@
+# Geometry preparation only. Missing routes are all reported before probe completion.
+seed 73013
+cheat god
+set time 12 0
+movable on
+character probe
+character ride mover
+character ride-checkpoint
+character cleanup

@@ -1284,6 +1284,10 @@ void World::addDlgSound(std::string_view s, const Tempest::Vec3& pos, float rang
   sfx.play();
   }
 
+void World::detectMover(const std::function<void(MoveTrigger&)>& f) {
+  wobj.detectMover(f);
+  }
+
 void World::addTrigger(AbstractTrigger* trigger) {
   wobj.addTrigger(trigger);
   }
