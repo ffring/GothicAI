@@ -311,6 +311,13 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-navigation-memory
     COMMAND $<TARGET_FILE:gothic-navigation-memory-contract>
     DEPENDS gothic-navigation-memory-contract USES_TERMINAL)
+  add_executable(gothic-navigation-roads-contract EXCLUDE_FROM_ALL
+    tests/navigation_roads_contract.cpp common/game/knownroads.cpp)
+  target_include_directories(gothic-navigation-roads-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine)
+  add_custom_target(check-navigation-roads
+    COMMAND $<TARGET_FILE:gothic-navigation-roads-contract>
+    DEPENDS gothic-navigation-roads-contract USES_TERMINAL)
 endif()
 
 target_sources(Spacer PRIVATE ${SPACER_SOURCES} spacer/main.cpp)
