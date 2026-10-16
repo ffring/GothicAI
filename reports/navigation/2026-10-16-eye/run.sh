@@ -43,7 +43,7 @@ fi
 if [[ "$ACTION" == mac ]]; then
   [[ "$(uname -s)" == Darwin ]]
   mkdir -p "$OUT"
-  if pgrep -fl Gothic2Notr >"$OUT/mac-process-check.txt"; then
+  if LC_ALL=C pgrep -fl Gothic2Notr >"$OUT/mac-process-check.txt"; then
     echo 'Mac benchmark skipped: pgrep -fl Gothic2Notr is nonempty.' | tee "$OUT/mac-skipped.txt"
     exit
   fi
