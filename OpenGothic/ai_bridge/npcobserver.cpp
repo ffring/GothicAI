@@ -604,7 +604,8 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     npc->startState(state,wp->name,until,false);
     // `arrive` (v15): npc_idle "arrived" once it is there doing it, not only when it leaves it
     run.arrival = JsonRead::boolean(args,"arrive",false);
-    run.at      = wp->position();
+    // Native waypoint walks end at groundPos; authored points can float above the floor.
+    run.at      = wp->groundPos;
     run.radius  = float(std::clamp<int64_t>(JsonRead::integer(args,"radius",500),50,5000));
     }
   else if(action=="set_routine") {
@@ -726,8 +727,8 @@ void NpcObserver::checkRunning(World& world, uint64_t now) {
       r.entered = r.entered || in;
       done      = (r.entered && !in) || (!r.entered && now>r.start+StateStartMs);
       // there and doing it (v15): the state has begun (its start pushes the walk to the spot) and the walk
-      // is over (queue, go-to and waits empty). From the feet: the waypoint is on the ground, and qDistTo's
-      // center is about a metre above it, so a small radius could never be met
+      // is over (queue, go-to and waits empty). Measure from the feet to the grounded waypoint,
+      // just as MoveAlgo does; qDistTo measures from the body's centre instead.
       if(r.arrival && in && now>r.start+ActGraceMs && npc->isAiQueueEmpty() &&
          (npc->position()-r.at).quadLength()<=r.radius*r.radius) {
         done   = true;
