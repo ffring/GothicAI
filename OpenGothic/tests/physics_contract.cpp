@@ -14,6 +14,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -1754,11 +1755,220 @@ namespace {
       }
     }
 
+  void testCharacterVirtualSlopeRest() {
+    constexpr float radians=.01745329252f, maxSlope=45.f*radians;
+    constexpr float radius=25.f, padding=1.f;
+    for(unsigned planeKind:{0u,1u,2u}) for(float angle:{14.f,25.f,40.f,55.f}) {
+      const float sine=std::sin(angle*radians), cosine=std::cos(angle*radians);
+      CollisionWorld world;
+      std::unique_ptr<CollisionWorld::CollisionBody> support;
+      if(planeKind>0) {
+        const JPH::Vec3 along(cosine,sine,0), across(0,0,1);
+        const auto a=-20.f*along-20.f*across, b=-20.f*along+20.f*across;
+        const auto c=20.f*along+20.f*across, d=20.f*along-20.f*across;
+        JPH::TriangleList triangles;
+        triangles.emplace_back(a,b,c);
+        triangles.emplace_back(a,c,d);
+        const auto shape=JPH::MeshShapeSettings(triangles).Create();
+        require(!shape.HasError(),"slope rest fixture must construct a planar mesh");
+        JPH::ShapeRefC floorShape=shape.Get();
+        if(planeKind==2) {
+          // The real landscape is chunked into compound mesh children. Keep
+          // both hierarchy bits and the triangle ID in the support subshape.
+          JPH::StaticCompoundShapeSettings inner;
+          inner.AddShape(JPH::Vec3::sZero(),JPH::Quat::sIdentity(),floorShape.GetPtr());
+          inner.AddShape(JPH::Vec3(100,0,0),JPH::Quat::sIdentity(),new JPH::BoxShape(JPH::Vec3(1,1,1)));
+          const auto child=inner.Create();
+          require(!child.HasError(),"slope fixture must construct a mesh chunk");
+          JPH::StaticCompoundShapeSettings outer;
+          outer.AddShape(JPH::Vec3::sZero(),JPH::Quat::sIdentity(),child.Get());
+          outer.AddShape(JPH::Vec3(200,0,0),JPH::Quat::sIdentity(),new JPH::BoxShape(JPH::Vec3(1,1,1)));
+          const auto compound=outer.Create();
+          require(!compound.HasError(),"slope fixture must construct a chunked landscape");
+          floorShape=compound.Get();
+          }
+        support=world.addCollisionBody(floorShape,at(0,0,0),.7f,DynamicWorld::C_Landscape);
+        } else {
+        // Put the rotated box's upper face through the origin.
+        auto matrix=at(50.f*sine,-50.f*cosine,0);
+        matrix.rotateOZ(angle);
+        support=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),matrix,.7f,
+                                       DynamicWorld::C_Landscape);
+        }
+      // The lower capsule sphere, including native character padding, touches
+      // the plane at t=0. No settling frames may hide first-second movement.
+      const Tempest::Vec3 initial(0,(radius+padding)/cosine-radius-padding,0);
+      auto walker=world.createVirtualCharacter(radius,180,initial);
+      auto state=walker->move({},0,50,maxSlope,80,nullptr);
+      requireNear((state.position-initial).length(),0.f,.001f,"zero-dt slope refresh must preserve the analytical initial pose");
+      requireNear(state.groundNormal.y,cosine,.001f,"initial slope contact must use the actual plane normal");
+      require(angle>45.f ? state.steep : state.grounded,"slope fixture must acquire its initial support without a warmup");
+      Tempest::Vec3 atOneSecond;
+      float firstSecond=0.f, later=0.f;
+      for(int frame=1;frame<=1000;++frame) {
+        state=walker->move({},10,50,maxSlope,80,nullptr);
+        if(frame<=100)
+          firstSecond=std::max(firstSecond,(state.position-initial).length());
+        if(frame==100)
+          atOneSecond=state.position;
+        if(frame>100)
+          later=std::max(later,(state.position-atOneSecond).length());
+        }
+      std::printf("CharacterVirtual %s slope %.0f deg: 0-1 s %.6f cm, 1-10 s %.6f cm, final (%.6f,%.6f,%.6f) cm\n",
+                  planeKind==2?"compound mesh":planeKind==1?"mesh":"box",double(angle),double(firstSecond),double(later),
+                  double(state.position.x),double(state.position.y),double(state.position.z));
+      if(angle<=45.f) {
+        require(firstSecond<=.5f,"an idle virtual human must move at most half a centimetre during the first second on a walkable slope");
+        require(later<=.5f,"an idle virtual human must move at most half a centimetre from one to ten seconds on a walkable slope");
+        require(state.grounded,"rest correction must preserve walkable slope support");
+        } else {
+        require(state.steep && state.position.x<initial.x-5.f && state.position.y<initial.y-5.f,
+                "a non-walkable slope must retain downhill sliding instead of acquiring idle friction");
+        }
+      }
+    }
+
+  void testCharacterVirtualIdleStairIntent() {
+    constexpr float radians=.01745329252f, angle=14.f*radians, maxSlope=50.f*radians;
+    constexpr float radius=25.f, padding=1.f;
+    const float sine=std::sin(angle), cosine=std::cos(angle);
+    CollisionWorld world;
+    auto matrix=at(50.f*sine,-50.f*cosine,0);
+    matrix.rotateOZ(14.f);
+    auto incline=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),matrix,.7f,
+                                        DynamicWorld::C_Landscape);
+    // Touch an architectural riser above the supporting volume. The incline
+    // remains the real ground, while the riser could trigger automatic stairs
+    // if the uphill component of inward gravity were mistaken for user input.
+    auto riser=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.5f,.2f,2)),
+                                      at(radius+padding+50.f,20.f,0),.7f,DynamicWorld::C_Object);
+    riser->setLabel("idle-slope-riser");
+    const Tempest::Vec3 initial(0,(radius+padding)/cosine-radius-padding,0);
+    auto walker=world.createVirtualCharacter(radius,180,initial);
+    walker->setDiagnosticsEnabled(true);
+    auto state=walker->move({},0,50,maxSlope,80,nullptr);
+    require(state.grounded,"idle stair intent fixture must start supported on its incline");
+    requireNear(state.groundNormal.y,cosine,.001f,"the incline, rather than the touching riser, must remain the initial ground");
+    CharacterVirtualDiagnostics diagnostic;
+    require(walker->diagnostics(diagnostic),"idle stair intent fixture must retain its initial contacts");
+    const bool touchesRiser=std::any_of(diagnostic.afterStairs.contacts.begin(),diagnostic.afterStairs.contacts.end(),
+                                       [](const auto& contact) {
+      return contact.body.label=="idle-slope-riser" && contact.hadCollision && !contact.discarded &&
+             !contact.withinSupportingVolume && !contact.walkableSlope;
+      });
+    require(touchesRiser,"the idle incline fixture must touch a steep riser outside its supporting volume");
+    float maximumDrift=0.f, maximumHorizontalDrift=0.f;
+    for(int frame=0;frame<1000;++frame) {
+      state=walker->move({},10,50,maxSlope,80,nullptr);
+      require(walker->diagnostics(diagnostic),"idle stair intent must retain movement diagnostics");
+      require(!diagnostic.stairAttempted,"inward gravity must never request an automatic stair walk without horizontal movement input");
+      const auto displacement=state.position-initial;
+      maximumDrift=std::max(maximumDrift,displacement.length());
+      maximumHorizontalDrift=std::max(maximumHorizontalDrift,std::hypot(displacement.x,displacement.z));
+      }
+    std::printf("CharacterVirtual idle 14 deg incline at riser: maximum drift %.6f cm, horizontal %.6f cm\n",
+                double(maximumDrift),double(maximumHorizontalDrift));
+    require(state.grounded && maximumDrift<=.5f && maximumHorizontalDrift<=.5f,
+            "an idle character touching a riser on an incline must stay supported within half a centimetre for ten seconds");
+    }
+
+  void testCharacterVirtualSlopedRiser() {
+    constexpr float radians=.01745329252f, maxSlope=50.f*radians;
+    constexpr float radius=8.17f, height=125.f, stepHeight=60.f;
+    const float run=40.f/std::tan(54.5f*radians);
+    for(bool narrowTread:{false,true}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      JPH::TriangleList triangles;
+      const auto surface=[&](float x0,float y0,float x1,float y1) {
+        const JPH::Vec3 a(x0*.01f,y0*.01f,-2), b(x0*.01f,y0*.01f,2);
+        const JPH::Vec3 c(x1*.01f,y1*.01f,2), d(x1*.01f,y1*.01f,-2);
+        triangles.emplace_back(a,b,c);
+        triangles.emplace_back(a,c,d);
+        };
+      surface(0,0,run,40);
+      if(narrowTread) {
+        // Both the old 15 cm endpoint and the maximum lookahead can hit a
+        // steep face. The short tread between them must still be discoverable.
+        surface(run,40,run+18,40);
+        surface(run+18,40,2.f*run+18,80);
+        surface(2.f*run+18,80,220,80);
+        } else {
+        surface(run,40,220,40);
+        }
+      const auto mesh=JPH::MeshShapeSettings(triangles).Create();
+      require(!mesh.HasError(),"sloped riser fixture must construct its architectural mesh");
+      auto stairs=world.addCollisionBody(mesh.Get(),at(0,0,0),.7f,DynamicWorld::C_Object);
+      auto walker=world.createVirtualCharacter(radius,height,{-40,0,0});
+      walker->setDiagnosticsEnabled(true);
+      auto state=walker->move({},0,stepHeight,maxSlope,80,nullptr);
+      require(state.grounded,"sloped riser traversal must start supported on the flat approach");
+      const float target=narrowTread?120.f:100.f, landing=narrowTread?80.f:40.f;
+      bool sawLongProbe=false;
+      float progress=state.position.x;
+      uint64_t stalled=0;
+      int frames=0;
+      for(;frames<180 && state.position.x<target;++frames) {
+        state=walker->move({4,0,0},17,stepHeight,maxSlope,80,nullptr);
+        CharacterVirtualDiagnostics diagnostic;
+        require(walker->diagnostics(diagnostic),"sloped riser traversal must retain native stair diagnostics");
+        if(diagnostic.stairSucceeded && (diagnostic.stairProbe.testPosition-diagnostic.stairProbe.upPosition).length()>15.5f)
+          sawLongProbe=true;
+        if(state.position.x-progress>=1.f) {
+          progress=state.position.x;
+          stalled=0;
+          } else {
+          stalled+=17;
+          }
+        require(stalled<=1000,"a traversable finite sloped riser must not stall for more than one second");
+        }
+      std::printf("CharacterVirtual 54.5 deg riser %s tread: frames %d, extended probe %d, feet (%.5f,%.5f,%.5f) cm\n",
+                  narrowTread?"narrow":"wide",frames,sawLongProbe,double(state.position.x),double(state.position.y),double(state.position.z));
+      require(state.grounded && state.position.x>=target,"a finite steep riser must reach its horizontal architectural landing");
+      requireNear(state.position.y,landing,2.f,"finite sloped riser traversal must finish on the expected tread");
+      require(sawLongProbe,"the finite riser contract must exercise a landing beyond the fixed fifteen-centimetre stair probe");
+      }
+    {
+      CollisionWorld world;
+      const float angle=55.f*radians, sine=std::sin(angle), cosine=std::cos(angle);
+      const JPH::Vec3 along(cosine,sine,0), across(0,0,1);
+      const auto a=-20.f*along-20.f*across, b=-20.f*along+20.f*across;
+      const auto c=20.f*along+20.f*across, d=20.f*along-20.f*across;
+      JPH::TriangleList triangles;
+      triangles.emplace_back(a,b,c);
+      triangles.emplace_back(a,c,d);
+      const auto mesh=JPH::MeshShapeSettings(triangles).Create();
+      require(!mesh.HasError(),"continuous steep slope control must construct its planar mesh");
+      auto plane=world.addCollisionBody(mesh.Get(),at(0,0,0),.7f,DynamicWorld::C_Landscape);
+      const Tempest::Vec3 initial(0,(radius+1.f)/cosine-radius-1.f,0);
+      auto walker=world.createVirtualCharacter(radius,height,initial);
+      walker->setDiagnosticsEnabled(true);
+      auto state=walker->move({},0,stepHeight,maxSlope,80,nullptr);
+      float highest=initial.y, furthest=initial.x;
+      for(int frame=0;frame<120;++frame) {
+        state=walker->move({4,0,0},17,stepHeight,maxSlope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        furthest=std::max(furthest,state.position.x);
+        CharacterVirtualDiagnostics diagnostic;
+        require(walker->diagnostics(diagnostic) && !diagnostic.stairSucceeded,
+                "a continuous non-walkable slope without a tread must never become an automatic stair");
+        }
+      std::printf("CharacterVirtual continuous 55 deg slope: uphill progress %.6f cm, height gain %.6f cm\n",
+                  double(furthest-initial.x),double(highest-initial.y));
+      require(furthest<=initial.x+.5f && highest<=initial.y+.5f,
+              "extending stair probes must not allow requested movement to climb a continuous steep slope");
+      }
+    }
+
   void testCharacterVirtual() {
     testCharacterVirtualSkippedMove();
     testCharacterVirtualInteractiveStep();
     testCharacterVirtualMovingUtensil();
     testCharacterVirtualSupports();
+    testCharacterVirtualSlopeRest();
+    testCharacterVirtualIdleStairIntent();
+    testCharacterVirtualSlopedRiser();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
       std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",
@@ -1772,28 +1982,69 @@ namespace {
                                         DynamicWorld::C_Landscape);
       std::vector<std::unique_ptr<CollisionWorld::CollisionBody>> steps;
       for(int i=1;i<=3;++i)
-        steps.push_back(world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.5f,.1f*float(i),2)),
+        steps.push_back(world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.5f,.1f*float(i),2),0.f),
                                                at(100.f*float(i)+50.f,10.f*float(i),0),.7f,DynamicWorld::C_Object));
-      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
-      auto state=hero->move({},0,50,slope,80,nullptr);
-      printState("stairs-start",0,state);
-      int frames=0;
-      // Finish inside the last tread (300..400), with room for collision loss
-      // at each riser. Unobstructed 80*5 cm is not a traversal-time contract.
-      for(;frames<120 && state.position.x<350.f;++frames) {
-        state=hero->move({5,0,0},17,50,slope,80,nullptr);
-        if((frames+1)%20==0)
-          printState("stairs-up",frames+1,state);
+      struct Approach { const char* name; float side, heading, edgeAngle; };
+      const Approach approaches[]={
+        {"center",0,0,0},{"left",-10,0,0},{"right",10,0,0},
+        {"heading-left",0,-15,0},{"heading-right",0,15,0},
+        {"edge-walkable",0,15,44},{"edge-steep",0,-15,46}};
+      for(const auto& approach:approaches) {
+        constexpr float radians=.01745329252f;
+        const float edgeAngle=approach.edgeAngle*radians;
+        // With r=25 cm and 1 cm padding, this puts the lower sphere exactly
+        // against the first tread's upper front edge. These two starts straddle
+        // the 45-degree slope gate without relying on a lucky approach frame.
+        const Tempest::Vec3 initial=approach.edgeAngle>0.f ?
+          Tempest::Vec3(100.f-26.f*std::sin(edgeAngle),20.f+26.f*std::cos(edgeAngle)-25.f-1.f,approach.side) :
+          Tempest::Vec3(0,0,approach.side);
+        auto walker=world.createVirtualCharacter(25,180,initial);
+        walker->setDiagnosticsEnabled(approach.edgeAngle>0.f);
+        auto state=walker->move({},0,50,slope,80,nullptr);
+        if(approach.edgeAngle>0.f) {
+          CharacterVirtualDiagnostics diagnostic;
+          require(walker->diagnostics(diagnostic),"edge approach must retain its initial native contacts");
+          const bool nearThreshold=std::any_of(diagnostic.afterStairs.contacts.begin(),diagnostic.afterStairs.contacts.end(),
+                                              [&](const auto& contact) {
+            return contact.hadCollision && !contact.discarded &&
+                   std::abs(contact.position.x-100.f)<.1f && std::abs(contact.position.y-20.f)<.1f &&
+                   std::abs(contact.contactNormal.y-std::cos(edgeAngle))<.01f;
+            });
+          require(nearThreshold,"edge fixture must exercise a capsule contact normal next to the walkable slope threshold");
+          }
+        const Tempest::Vec3 request(5.f*std::cos(approach.heading*radians),0,5.f*std::sin(approach.heading*radians));
+        const auto traverse=[&](bool ascending) {
+          float progress=state.position.x;
+          uint64_t stalled=0, maximumStall=0;
+          int frames=0;
+          for(;frames<180 && (ascending ? state.position.x<350.f : state.position.x>20.f);++frames) {
+            state=walker->move(ascending?request:request*-1.f,17,50,slope,80,nullptr);
+            if((ascending ? state.position.x-progress : progress-state.position.x)>=1.f) {
+              progress=state.position.x;
+              stalled=0;
+              } else {
+              stalled+=17;
+              maximumStall=std::max(maximumStall,stalled);
+              }
+            if(stalled>1000) {
+              std::fprintf(stderr,"CharacterVirtual stairs %s %s stalled: feet (%.4f,%.4f,%.4f), normal (%.4f,%.4f,%.4f)\n",
+                           approach.name,ascending?"up":"down",double(state.position.x),double(state.position.y),double(state.position.z),
+                           double(state.groundNormal.x),double(state.groundNormal.y),double(state.groundNormal.z));
+              require(false,"twenty-centimetre stairs must never block a requested approach for more than one second");
+              }
+            }
+          std::printf("CharacterVirtual stairs %s %s: frames %d, max stall %llu ms, feet (%.4f,%.4f,%.4f) cm\n",
+                      approach.name,ascending?"up":"down",frames,static_cast<unsigned long long>(maximumStall),
+                      double(state.position.x),double(state.position.y),double(state.position.z));
+          require(state.grounded && (ascending ? state.position.x>=350.f : state.position.x<=20.f),
+                  "virtual walking must finish twenty-centimetre stairs from every side, heading and threshold-edge approach");
+          requireNear(state.position.y,ascending?60.f:0.f,2.f,"virtual capsule feet must finish on the expected stair landing");
+          };
+        traverse(true);
+        traverse(false);
         }
-      printState("stairs-up-end",frames,state);
-      require(state.grounded && state.position.x>=350.f,"virtual walking must reach the interior of the last twenty centimetre step");
-      requireNear(state.position.y,60,2,"virtual capsule feet must remain on the final stair");
-      frames=0;
-      for(;frames<120 && state.position.x>20.f;++frames)
-        state=hero->move({-5,0,0},17,50,slope,80,nullptr);
-      printState("stairs-down-end",frames,state);
-      require(state.grounded && state.position.x<=20.f,"virtual walking must descend the same steps");
-      requireNear(state.position.y,0,2,"floor sticking must return the feet to the floor");
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      CollisionWorld::CharacterMoveResult state;
       auto wall=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.1f,3,10)),at(600,300,0),.7f,
                                        DynamicWorld::C_Object);
       for(int i=0;i<150;++i)

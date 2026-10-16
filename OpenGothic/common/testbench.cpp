@@ -4815,7 +4815,7 @@ void characterIdleSlopePrepare(World& world,Npc& player,float requestedAngle,boo
           planeError=std::max(planeError,error);normalAngle=std::max(normalAngle,normalError);
           }
         if(!planar)continue;
-        const auto feet=center.v+Vec3(0,(radius+padding)/n.y-radius,0);
+        const auto feet=center.v+Vec3(0,(radius+padding)/n.y-radius-padding,0);
         if(physics->ray(feet+Vec3(0,radius+padding,0),feet+Vec3(0,height+padding,0)).hasCol)continue;
         for(unsigned direction=0;direction<8 && planar;++direction) {
           const float yaw=float(direction)*float(M_PI)/4.f;
@@ -4831,7 +4831,8 @@ void characterIdleSlopePrepare(World& world,Npc& player,float requestedAngle,boo
     }
   if(waypoint.empty()) {arenaAbort("no static planar landscape footprint for idle slope "+std::to_string(requestedAngle));return;}
   auto downhill=Vec3(normal.x,0,normal.z);downhill=Vec3::normalize(downhill);
-  const float verticalOffset=(radius+padding)/normal.y-radius;
+  // Jolt also translates the shape upward by its padding.
+  const float verticalOffset=(radius+padding)/normal.y-radius-padding;
   const auto start=floor+Vec3(0,verticalOffset,0);
   characterFreezeNear(world,player,floor,floor);
   actor->setInteraction(nullptr,true);actor->clearAiQueue();actor->stopWalking();actor->clearSpeed();

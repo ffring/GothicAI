@@ -493,6 +493,37 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
                       contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
     }
 
+  JPH::Vec3 idleGravity(JPH::Vec3Arg gravity) const {
+    const auto id = character->GetGroundBodyID();
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),id);
+    if(!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsStatic())
+      return gravity;
+    const auto& body = lock.GetBody();
+    const auto subShape = character->GetGroundSubShapeID();
+    JPH::SubShapeID remainder;
+    const auto* leaf = body.GetShape()->GetLeafShape(subShape,remainder);
+    if(leaf==nullptr)
+      return gravity;
+    const auto type = leaf->GetSubType();
+    if(type!=JPH::EShapeSubType::Mesh && type!=JPH::EShapeSubType::Box)
+      return gravity;
+    const auto face = body.GetWorldSpaceSurfaceNormal(subShape,character->GetGroundPosition());
+    constexpr float cosTwoDegrees = .999390827f;
+    if(character->IsSlopeTooSteep(face) || face.Dot(character->GetGroundNormal())<cosTwoDegrees)
+      return gravity;
+    for(const auto& contact:character->GetActiveContacts()) {
+      if(contact.mBodyB!=id || contact.mSubShapeIDB!=subShape || !contact.mHadCollision ||
+         contact.mWasDiscarded || contact.mIsSensorB)
+        continue;
+      // A rounded toe on a tread edge is not a plane. Use the real full
+      // subshape normal, rather than balancing gravity along that artificial
+      // slope (which would also disturb ordinary walking at the harbour edge).
+      if(face.Dot(contact.mContactNormal)>=cosTwoDegrees && face.Dot(contact.mSurfaceNormal)>=cosTwoDegrees)
+        return face*gravity.Dot(face);
+      }
+    return gravity;
+    }
+
   CharacterVirtualDiagnostics::Body diagnosticBody(JPH::BodyID id, JPH::RVec3Arg point) const {
     CharacterVirtualDiagnostics::Body result;
     result.id = id.GetIndexAndSequenceNumber();
@@ -855,12 +886,27 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     auto velocity = toMeters(displacement)/seconds;
     if(onGround)
       velocity += groundVelocity;
-    velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    auto gravity = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    // At rest, static friction balances only the tangential gravity on a
+    // verified walkable plane. Retain inward pressure, native body weight,
+    // all requested movement, and gravity on steep or moving supports.
+    if(onGround && displacement.x==0.f && displacement.z==0.f)
+      gravity = state.idleGravity(gravity);
+    velocity += gravity;
     if(diagnostic!=nullptr)
       diagnostic->requestedVelocity = toCentimeters(velocity);
-    character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
+    // ExtendedUpdate cancels steep-slope motion internally, while preserving
+    // this original request for the separate world-stair recipe below.
+    character.SetLinearVelocity(velocity);
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);
+    // A steep, slanted riser can be longer than Jolt's fixed 15 cm probe.
+    // Search its possible horizontal run, bounded by the permitted step's
+    // height and slope, plus the toe. This changes only the support test;
+    // accepted forward travel still uses the original per-frame request.
+    const float riserRun = maxSlope>0.f ? std::min(step,step/std::tan(maxSlope)) : step;
+    settings.mWalkStairsStepForwardTest = std::max(settings.mWalkStairsStepForwardTest,
+                                                  riserRun+state.radius+character.GetCharacterPadding());
     // Run Jolt's ordinary update and floor sticking first. Its automatic stair
     // recipe is applied below only for world geometry, after contact solving
     // has identified pushable objects or interactive walking obstacles.
@@ -890,7 +936,10 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     // The remainder is the WalkStairs part of Jolt's ExtendedUpdate recipe,
     // including its direction and minimum-distance tests for oblique steps.
     const auto up = character.GetUp();
-    const auto desiredStep = (desiredVelocity-desiredVelocity.Dot(up)*up)*seconds;
+    // Static friction has a horizontal component on a slope; it is a contact
+    // force, not a walking request. Keep support motion in the stair intent.
+    const auto stairVelocity = desiredVelocity-gravity;
+    const auto desiredStep = (stairVelocity-stairVelocity.Dot(up)*up)*seconds;
     const float desiredLength = desiredStep.Length();
     if(diagnostic!=nullptr) {
       const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);

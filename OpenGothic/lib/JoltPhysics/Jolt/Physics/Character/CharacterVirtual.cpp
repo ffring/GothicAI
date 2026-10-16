@@ -1736,51 +1736,73 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 		if (inStepForwardTest.IsNearZero())
 			return finish(EWalkStairsResult::NoForwardTest);
 
-		// Delta time may be very small, so it may be that we hit the edge of a step and the normal is too horizontal.
-		// In order to judge if the floor is flat further along the sweep, we test again for a floor at inStepForwardTest
-		// and check if the normal is valid there.
-		RVec3 test_position = up_position;
-		MoveShape(test_position, inStepForwardTest / inDeltaTime, inDeltaTime, nullptr, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter, inAllocator);
-		if (outDiagnostics != nullptr)
-			outDiagnostics->mTestPosition = test_position;
-		float test_horizontal_movement_sq = Vec3(test_position - up_position).LengthSq();
-		if (test_horizontal_movement_sq <= horizontal_movement_sq + 1.0e-8f)
-			return finish(EWalkStairsResult::TestNoProgress); // We didn't move any further than in the previous test
+		// A single lookahead endpoint can land on the next riser and miss a
+		// supporting tread in between. Search the same interval at the character's
+		// contact resolution, retaining the original full-distance probe last.
+		const auto test_floor = [&](Vec3Arg inTestStep)
+		{
+			RVec3 test_position = up_position;
+			MoveShape(test_position, inTestStep / inDeltaTime, inDeltaTime, nullptr, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter, inAllocator);
+			if (outDiagnostics != nullptr)
+			{
+				outDiagnostics->mTestPosition = test_position;
+				outDiagnostics->mTestFinalPosition = RVec3::sZero();
+				outDiagnostics->mTestLandingFraction = -1.0f;
+				outDiagnostics->mTestLandingNormal = Vec3::sZero();
+			}
+			float test_horizontal_movement_sq = Vec3(test_position - up_position).LengthSq();
+			if (test_horizontal_movement_sq <= horizontal_movement_sq + 1.0e-8f)
+				return EWalkStairsResult::TestNoProgress;
 
 	#ifdef JPH_DEBUG_RENDERER
-		// Draw 2nd sweep horizontal
-		if (sDrawWalkStairs)
-			DebugRenderer::sInstance->DrawArrow(up_position, test_position, Color::sCyan, 0.01f);
+			// Draw test sweep horizontal
+			if (sDrawWalkStairs)
+				DebugRenderer::sInstance->DrawArrow(up_position, test_position, Color::sCyan, 0.01f);
 	#endif // JPH_DEBUG_RENDERER
 
-		// Then sweep down
-		CharacterContact test_contact;
-		if (!GetFirstContactForSweep(test_position, down, test_contact, dummy_ignored_contacts, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter))
-			return finish(EWalkStairsResult::TestNoFloor);
-		if (outDiagnostics != nullptr)
-		{
-			outDiagnostics->mTestFinalPosition = test_position + test_contact.mFraction * down;
-			outDiagnostics->mTestLandingFraction = test_contact.mFraction;
-			outDiagnostics->mTestLandingNormal = test_contact.mSurfaceNormal;
-		}
+			// Test only the first blocking down hit: looking through a steep face
+			// for a later floor would allow placing the capsule inside an obstacle.
+			CharacterContact test_contact;
+			if (!GetFirstContactForSweep(test_position, down, test_contact, dummy_ignored_contacts, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter))
+				return EWalkStairsResult::TestNoFloor;
+			if (outDiagnostics != nullptr)
+			{
+				outDiagnostics->mTestFinalPosition = test_position + test_contact.mFraction * down;
+				outDiagnostics->mTestLandingFraction = test_contact.mFraction;
+				outDiagnostics->mTestLandingNormal = test_contact.mSurfaceNormal;
+			}
 
-		surface_normal = test_contact.mSurfaceNormal;
-		too_steep = IsSlopeTooSteep(surface_normal);
+			surface_normal = test_contact.mSurfaceNormal;
+			too_steep = IsSlopeTooSteep(surface_normal);
 
 	#ifdef JPH_DEBUG_RENDERER
-		// Draw 2nd sweep down
-		if (sDrawWalkStairs)
-		{
-			RVec3 debug_pos = test_position + test_contact.mFraction * down;
-			Color color = too_steep? Color::sRed : Color::sCyan;
-			DebugRenderer::sInstance->DrawArrow(test_position, debug_pos, color, 0.01f);
-			DebugRenderer::sInstance->DrawArrow(test_contact.mPosition, test_contact.mPosition + test_contact.mSurfaceNormal, color, 0.01f);
-			mShape->Draw(DebugRenderer::sInstance, GetCenterOfMassTransform(debug_pos, mRotation, mShape), Vec3::sOne(), color, false, true);
-		}
+			// Draw test sweep down
+			if (sDrawWalkStairs)
+			{
+				RVec3 debug_pos = test_position + test_contact.mFraction * down;
+				Color color = too_steep? Color::sRed : Color::sCyan;
+				DebugRenderer::sInstance->DrawArrow(test_position, debug_pos, color, 0.01f);
+				DebugRenderer::sInstance->DrawArrow(test_contact.mPosition, test_contact.mPosition + test_contact.mSurfaceNormal, color, 0.01f);
+				mShape->Draw(DebugRenderer::sInstance, GetCenterOfMassTransform(debug_pos, mRotation, mShape), Vec3::sOne(), color, false, true);
+			}
 	#endif // JPH_DEBUG_RENDERER
 
-		if (too_steep)
-			return finish(EWalkStairsResult::TestSteep);
+			return too_steep ? EWalkStairsResult::TestSteep : EWalkStairsResult::Success;
+		};
+		const float test_length = inStepForwardTest.Length();
+		const float spacing = max(mCharacterPadding, mCollisionTolerance);
+		float probe_length = spacing > 0.0f? min(test_length, Sqrt(horizontal_movement_sq) + spacing) : test_length;
+		for (;;)
+		{
+			const bool full_distance = probe_length >= test_length;
+			const Vec3 test_step = full_distance? inStepForwardTest : inStepForwardTest * (probe_length / test_length);
+			const EWalkStairsResult result = test_floor(test_step);
+			if (result == EWalkStairsResult::Success)
+				break;
+			if (full_distance)
+				return finish(result);
+			probe_length = min(test_length, probe_length + spacing);
+		}
 	}
 
 	// If we don't gain any height compared to our contact then the stair walk is pointless
