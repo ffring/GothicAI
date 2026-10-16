@@ -1442,6 +1442,40 @@ namespace {
     requireNear(body->position().y,700.f-6.f*acceleration,.005f,"next sixteen millisecond frame must advance the retained step");
     }
 
+  void testCharacterVirtualSkippedMove() {
+    Resources resources;
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,600}),PackedMesh::PK_Visual),"VIRTUAL_SKIP_WALL.MRM");
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+    Skeleton shape(hierarchy,nullptr,"VIRTUAL_SKIP_CONTRACT");
+    for(bool obstructed:{false,true}) {
+      DynamicWorld world(nullptr,movableFloor());
+      auto structure=obstructed ? world.addStaticObj(wall.attach[0].shape.get(),at(50,200,0),"VIRTUAL_SKIP_WALL.MRM") :
+                                 DynamicWorld::Item();
+      auto walker=world.addGhostObj(&shape);
+      const Tempest::Vec3 initial(14,0,0);
+      for(const Tempest::Vec3 request:{Tempest::Vec3(.11f,0,0),Tempest::Vec3(1.9f,0,1.9f)}) {
+        walker.setPosition(initial);
+        DynamicWorld::CollisionTest collision;
+        require(walker.tryMove(initial+request,collision)==DynamicWorld::MC_Skip,
+                "legacy skip must remain component-wise even when the diagonal length exceeds two centimetres");
+        const auto moved=walker.moveVirtual(request,17,50,.785398163f,80);
+        require(!moved.blocked,"a legacy-skipped animation sway must not report virtual movement failure, with or without a wall");
+        }
+      walker.setPosition(initial);
+      DynamicWorld::CollisionTest collision;
+      require(walker.tryMove(initial+Tempest::Vec3(2,0,0),collision)!=DynamicWorld::MC_Skip,
+              "a component exactly two centimetres must retain the legacy non-skip boundary");
+      walker.setPosition(initial);
+      const auto step=walker.moveVirtual({5,0,0},17,50,.785398163f,80);
+      require(step.blocked==obstructed,"a real walking step must report a blocking wall while remaining free on an unobstructed floor");
+      if(obstructed)
+        require(!structure.isEmpty() && step.collision.landCol,"a blocked virtual walking step must retain its world collision notification");
+      else
+        require(step.position.x>initial.x+4.f,"suppressing animation-sway failures must preserve native walking displacement");
+      }
+    }
+
   void testCharacterVirtualInteractiveStep() {
     constexpr float slope=.785398163f;
     for(bool movable:{false,true}) for(bool interactive:{false,true}) {
@@ -1519,6 +1553,7 @@ namespace {
     }
 
   void testCharacterVirtual() {
+    testCharacterVirtualSkippedMove();
     testCharacterVirtualInteractiveStep();
     testCharacterVirtualMovingUtensil();
     constexpr float slope = .785398163f;
@@ -1760,6 +1795,9 @@ namespace {
       require(blocked.blocked && blocked.collision.npcCol>0.f,
               "unsuccessful virtual NPC advancement must expose its blocking character contact to MoveAlgo");
       requireNear(right.position().x,stoppedRight.x,0.f,"a virtual NPC contact must never push its neighbour");
+      const auto sway=left.moveVirtual({1.9f,0,0},17,50,slope,80);
+      require(!sway.blocked,"a legacy-skipped sway into another NPC must not notify AI of movement failure");
+      requireNear(right.position().x,stoppedRight.x,0.f,"a skipped sway must preserve the neighbouring NPC obstacle");
       right.setEnable(false);
       for(int i=0;i<20;++i)
         left.moveVirtual({5,0,0},17,50,slope,80);

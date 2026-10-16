@@ -45,6 +45,11 @@ constexpr uint32_t landscapeMask = (1u << DynamicWorld::C_Landscape) | (1u << Dy
 constexpr uint32_t visualMask    = landscapeMask | (1u << DynamicWorld::C_SmallVobQuery);
 constexpr uint32_t waterMask     = 1u << DynamicWorld::C_Water;
 
+bool isNpcMoveSkipped(const Tempest::Vec3& displacement) {
+  constexpr float eps = 2.f; // Legacy component-wise two centimetre skip.
+  return std::abs(displacement.x)<eps && std::abs(displacement.y)<eps && std::abs(displacement.z)<eps;
+  }
+
 ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
   switch(material) {
     case zenkit::MaterialGroup::METAL: return MAT_METAL;
@@ -1796,16 +1801,13 @@ bool DynamicWorld::NpcItem::testMove(const Tempest::Vec3& to, const Tempest::Vec
   }
 
 DynamicWorld::MoveCode DynamicWorld::NpcItem::tryMove(const Tempest::Vec3& to, CollisionTest& out) {
-  // 2-santimeters
-  static const float eps = 2;
-
   if(!obj)
     return MoveCode::MC_Fail;
 
   resetVirtual();
 
   auto dp = to - obj->pos;
-  if(std::abs(dp.x)<eps && std::abs(dp.y)<eps && std::abs(dp.z)<eps) {
+  if(isNpcMoveSkipped(dp)) {
     // skip-move
     return MoveCode::MC_Skip;
     }
@@ -1947,7 +1949,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   result.steep = moved.steep;
   const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
   const float desiredLength = horizontal.length();
-  if(desiredLength>0.1f) {
+  if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {
     const float advancement = Tempest::Vec3::dotProduct(accepted-initial,horizontal)/desiredLength;
     result.blocked = advancement<=std::max(0.1f,desiredLength*0.1f);
     if(result.blocked && !requestClipped && !resolvedClipped) {
