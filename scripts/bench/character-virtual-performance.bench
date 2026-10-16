@@ -10,7 +10,10 @@ character route tavern
 walkmode walk
 view nopfx
 overlay off
+# Set one world-facing shot, then freeze it before measurement.
+cam world 350 180 0
 wait 1500
+cam hold
 cadence normal
 wait 34
 off: character measure off
