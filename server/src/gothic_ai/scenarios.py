@@ -2774,6 +2774,9 @@ async def meet_scenario(
             {"via": "scenario"},
         )
         shown = await _until(lambda: npc in deals.open and deals.open[npc].meet is not None, 90)
+    if not shown and live:  # it agrees in words and asks the hour first («В шесть часов подойдёт?»)
+        talk.hear("Да, в шесть подойдёт. Договорились.", npc, {"via": "scenario"})
+        shown = await _until(lambda: npc in deals.open and deals.open[npc].meet is not None, 90)
     deal = deals.open.get(npc)
     check("offered", shown, deal.terms() if deal is not None else "no deal")
     if not shown or deal is None or deal.meet is None:
@@ -9463,7 +9466,9 @@ async def errand_scenario(
     - fork (SCENARIO=errand_fork): Andre is taken away before Lobart comes, another of the militia stands
       there: he hears it instead (`goal_done.instead_of`);
     - far (SCENARIO=errand_far): the hero is at the tower; at 7:00 nothing walks, and when Lobart would be
-      there the fact comes (`far`), his body still at his routine, no model called."""
+      there the fact comes (`far`), his body still at his routine, no model called.
+    With LLM=chatgpt Lobart answers the question himself: whoever he sets out to tell and whenever, the rest
+    follows his goal."""
     await link.wait_world()
     if link.session is None:
         await wait_message(link, Session, timeout=10)
@@ -9474,6 +9479,8 @@ async def errand_scenario(
 
     facts = errands.chronicle.facts
     live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+    if live is not None and variant != "near":
+        return _logged({"live": f"failed (SCENARIO=errand_{variant} is scripted only)"})
     if not await _until(lambda: rumors.social is not None, 30):
         return _logged({"social": "failed (no people)"})
     rumors.gate = lambda r, a, b: False  # the schedule passes nothing meanwhile: only the errand does
@@ -9490,7 +9497,8 @@ async def errand_scenario(
             ("расскажешь", FakeStep("Ещё как. Завтра с утра схожу к Андре, пусть ополчение знает.",
                                     [ToolCall("plan", plan)]))
         )  # fmt: skip
-        model = _Recorded(GossipScript(claim, claim, live, lines=ERRAND_LINES, quiet=False))
+        # live, Lobart's answer is his own model's
+        model = _Recorded(GossipScript(live or claim, claim, live, lines=ERRAND_LINES, quiet=False))
         dialogue.llm = model
         name = talk.people[npc].name if npc in talk.people else "Лобарт"
         await link.debug("type", text=f"{name}, ты кому-нибудь расскажешь?")
@@ -9500,15 +9508,19 @@ async def errand_scenario(
 
         planned = await _until(lambda: goal() is not None, 60)
         g = goal()
-        check("planned", planned and g is not None and g.to == to, g.what() if g is not None else "no goal")
+        meant = g is not None and (live is not None or g.to == to)
+        told = f"{g.when(errands.now)}: {g.what()}" if g is not None else "no goal"
+        check("planned", planned and meant, told)
         if g is None:
             return _logged(results)
+        to = g.to
         talk.end()
 
         # the night goes by (a leap, as a sleep: everyone at their routine's spots); the hero goes where
         # Andre will be, or far off
         before = g.start - 2
-        await link.debug("time", hour=before % GAME_DAY // 60, minute=before % 60)
+        if errands.now is None or before > errands.now:  # live, it may set off at once
+            await link.debug("time", hour=before % GAME_DAY // 60, minute=before % 60)
         await asyncio.sleep(2)
         here = await link.snapshot(npc, fresh=True)
         walk = math.ceil(math.dist(here.npc.pos, errands._spot(to, g.start).pos) / 100 * 1.5 / 3.0)  # type: ignore[union-attr]

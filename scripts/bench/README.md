@@ -14,6 +14,33 @@ does not take the focus and plays no sound, so it can run while someone works on
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the
 random idle animations the game picks).
 
+Recast navigation experiments run through `gothic-body-runner` on Linux. The normal game
+does not build or load a navmesh. Set `[GAME] movable_vobs=0` before loading the world so
+the authored prop collision meshes are static in both takes; the repeat script sets it
+in its own working directory. Bench commands (coordinates/distances are in engine cm,
+Recast internals are metres):
+
+- `navmesh build <absolute cache directory>` exports the current static Jolt triangles,
+  builds or loads a tiled mesh keyed by world geometry and agent parameters, and writes
+  `navmesh-stats.json` and `navmesh-polygons.jsonl`. It also times a second cache read.
+- `navmesh coverage` writes all undirected waypoint edges and complete-path results to
+  `coverage.jsonl`, plus `points.jsonl`. Partial Detour paths count as unreachable.
+- `navmesh pairs <seed> <count per region>` writes deterministic 10–40 m waypoint → `FP_*`
+  pairs for market, harbour, Onar, Lobart, port alleys and upper-town streets.
+- `navmesh start <direct|mesh> <NPC> <waypoint> <FP> <limit ms>` places the actor and begins
+  a measured walk. `direct` uses the same `AiQueue::aiGoToPoint` as `npcgo`; `mesh` sends
+  direct point targets along Detour's string-pulled corners. Both use native walking.
+- `navmesh follow <direct|mesh> <NPC> <FP> <limit ms>` starts the same measurement from
+  the current position, preserving the original intentional-stuck fixture setup.
+- `navmesh finish` writes `trial.json`. Scenario execution waits while the measured walk
+  is active, ending at <100 cm from the target or at the time limit. No teleport occurs
+  during the walk. The immutable mesh can be reused after a fresh runner reset.
+
+Use `reports/navigation/2026-10-16-navmesh/run.sh` on Ryzen under the shared simulation
+lock. It runs `scripts/navmesh_measure.py`, which resets the saved world for every take,
+uses `OPENGOTHIC_STUCK_LOG`, and can resume a measured series. `summarize` writes the
+coverage/walk tables and two top-down PNGs using only the Python standard library.
+
 A line `off: <command>` or `on: <command>` runs in that take only: `OPENGOTHIC_BENCH_TAKE=off|on`, set by
 `shorts/compare/film.sh` (without it the take is `on`). `OPENGOTHIC_MANUALAIM=0|1` and `OPENGOTHIC_NPCAIM=0|1`
 set the hero's and the npc archers' manual aim over Gothic.ini.
