@@ -107,9 +107,19 @@ def melee(directory):
             require(final['attempts'] >= final['hits'], f'{case}: hit count exceeds animation attempts')
             require(8 <= len(final['fragments']) <= 20, f'{case}: fractured mesh missing')
             require((directory / f'destruction2-{material}-{weapon}.mp4').is_file(), f'{case}: video missing')
-            result.append({'class': material, 'weapon': weapon, 'strength': setup['strength'],
-                           'weapon_damage': setup['weapon_damage'], 'hits_to_break': final['hits'],
-                           'attempts': final['attempts'], 'health_damage_per_hit': damages})
+            measured = {'class': material, 'weapon': weapon, 'strength': setup['strength'],
+                        'weapon_damage': setup['weapon_damage'], 'hits_to_break': final['hits'],
+                        'attempts': final['attempts'], 'health_damage_per_hit': damages}
+            if material == 'fence':
+                probes = [row for row in rows if row['kind'] == 'destruction2_melee_probe'
+                          and row['case'] == case and row['stage'] == 'before-animation']
+                require(len(probes) >= final['attempts'] and all(row['contact_rays'] > 0 and
+                        row['closest_contact_cm'] <= row['reach_cm'] for row in probes),
+                        f'{case}: attack stance was not proved against actual source wood inside native reach')
+                measured['prepared_contact_rays_min'] = min(row['contact_rays'] for row in probes)
+                measured['closest_contact_cm_max'] = max(row['closest_contact_cm'] for row in probes)
+                measured['native_reach_cm'] = probes[0]['reach_cm']
+            result.append(measured)
     npc = one(rows, 'destruction2_melee_complete', case='crate-1h-npc')
     require(npc['hits'] > 0 and npc['bodies'][0]['broken'], 'NPC animation did not break the crate')
     return {'cases': result, 'npc_sword_hits': npc['hits']}
@@ -203,7 +213,9 @@ def main():
         result['time_cleanup']['not_removed_at_age29'] = len(age29['fragments'])
     if args.distance:
         rows = events(args.distance)
-        require(one(rows, 'destruction2_far')['distance_cm'] > 3000, 'hero did not leave the 30m radius')
+        far = one(rows, 'destruction2_far')
+        require(far['distance_cm'] > 3000 and far['minimum_debris_distance_cm'] >= 3500 and far['waypoint'],
+                'hero did not reach a supported authored waypoint beyond the 30m debris radius')
         result['distance_cleanup'] = cleanup(rows, 'distant')
     for flag, source, label in (('time_reload', args.time, 'step2-time-cleaned'),
                                 ('distance_reload', args.distance, 'step2-distance-cleaned')):

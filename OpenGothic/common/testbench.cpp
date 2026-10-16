@@ -686,8 +686,8 @@ struct Bench {
   bool destructionSleepSampled=false;
   Npc* destructionMeleeActor=nullptr;
   Npc* destructionMeleeNpc=nullptr;
-  std::string destructionMeleeWeapon;
-  Vec3 destructionMeleeStand,destructionMeleeFacing;
+  Vec3 destructionMeleeFacing,destructionMeleeStand;
+  bool destructionMeleeRestance=false;
   uint64_t destructionMeleeNext=0,destructionMeleeDeadline=0;
   unsigned destructionMeleeAttempts=0,destructionMeleeHits=0;
   bool destructionMeleeRunning=false,destructionMeleeArena=false;
@@ -697,8 +697,6 @@ struct Bench {
   uint32_t destructionFarmZen=uint32_t(-1);
   float destructionFarmNpcTravel=0;
   float destructionFarmNpcBest=std::numeric_limits<float>::infinity();
-  bool destructionFarmWalk=false;
-  std::string destructionFarmPhase;
   struct CharacterRoute {
     std::string name,waypoint;
     Vec3 start,goal,direction;
@@ -3861,18 +3859,53 @@ void destructionCheckpoint(World& world) {
   bench.destructionShooting=false;
   }
 
-void destructionMeleeEquip(World& world,Npc& actor,std::string_view weapon) {
+bool destructionMeleeEquip(World& world,Npc& actor,std::string_view weapon) {
   actor.clearAiQueue();actor.clearState(false);actor.clearGoTo();actor.stopWalking();actor.closeWeapon(true);
   actor.setTarget(nullptr);actor.setExternalControl(true);
   actor.handle().attribute[ATR_STRENGTH]=100;
   actor.setTalentSkill(TALENT_1H,2);actor.setTalentSkill(TALENT_2H,2);
   if(weapon=="fist")actor.setToFistMode();
   else {
-    const auto symbol=world.script().findSymbolIndex(weapon=="1h"?"ITMW_1H_BAU_SWORD":"ITMW_2H_BAU_AXE");
-    if(symbol==size_t(-1)) {arenaAbort("destruction melee stock weapon symbol absent");return;}
+    const auto symbol=world.script().findSymbolIndex(weapon=="1h"?"ITMW_1H_COMMON_01":"ITMW_2H_BAU_AXE");
+    if(symbol==size_t(-1)) {arenaAbort("destruction melee stock weapon symbol absent");return false;}
     actor.setToFightMode(symbol);
+    const auto* equipped=actor.currentMeleeWeapon();
+    if(!equipped || equipped->clsId()!=symbol || equipped->is2H()!=(weapon=="2h")) {
+      arenaAbort("destruction melee stock weapon did not equip");return false;
+      }
     }
-  bench.destructionMeleeWeapon=weapon;
+  return true;
+  }
+
+bool destructionMeleeProbe(World& world,Npc& actor,const DynamicWorld::MovableVobSnapshot& body,std::string_view stage) {
+  const auto& guild=world.script().guildVal();const auto gl=actor.guild();
+  const bool fist=actor.weaponState()==WeaponState::Fist;
+  const auto* weapon=fist?nullptr:actor.currentMeleeWeapon();
+  const float reach=float(guild.fight_range_base[gl]+(fist?guild.fight_range_fist[gl]:
+    weapon && weapon->is2H()?guild.fight_range_2ha[gl]:guild.fight_range_1ha[gl]))+float(weapon?weapon->swordLength():0);
+  const auto origin=actor.collosionCenter();
+  unsigned contacts=0;float closest=std::numeric_limits<float>::infinity();Vec3 point;
+  for(int yaw=-(fist?20:60);yaw<=(fist?20:60);yaw+=10)
+    for(int pitch=-40;pitch<=20;pitch+=20) {
+      const float a=actor.rotationRad()+float(yaw)*float(M_PI)/180.f,p=float(pitch)*float(M_PI)/180.f;
+      const Vec3 direction(std::cos(a)*std::cos(p),std::sin(p),std::sin(a)*std::cos(p));
+      const auto end=origin+direction*reach;
+      const auto target=world.physic()->rayMovableVob(origin,end);
+      if(!target || target->visual!=body.visual || target->zenId!=body.zenId ||
+         (movablePosition(target->transform)-movablePosition(body.transform)).length()>1.f)continue;
+      const auto hit=world.physic()->ray(origin,end);
+      if(!hit.hasCol)continue;
+      ++contacts;const float distance=(hit.v-origin).length();
+      if(distance<closest) {closest=distance;point=hit.v;}
+      }
+  auto local=point;auto inverse=body.transform;inverse.inverse();inverse.project(local);
+  event("destruction2_melee_probe","\"case\":"+jsonStr(bench.destructionCase)+",\"stage\":"+jsonStr(stage)+
+    ",\"actor_cm\":"+ragdollVector(actor.position())+",\"origin_cm\":"+ragdollVector(origin)+
+    ",\"reach_cm\":"+ragdollNumber(reach)+",\"contact_rays\":"+std::to_string(contacts)+
+    ",\"closest_contact_cm\":"+(contacts?ragdollNumber(closest):"null")+
+    ",\"contact_point_cm\":"+(contacts?ragdollVector(point):"null")+
+    ",\"contact_local_cm\":"+(contacts?ragdollVector(local):"null"));
+  return contacts>0;
   }
 
 void destructionMeleeSetup(World& world,Npc& player,std::string_view kind,std::string_view weapon,bool npc) {
@@ -3908,6 +3941,9 @@ void destructionMeleeSetup(World& world,Npc& player,std::string_view kind,std::s
   auto center=(found->localBounds[0]+found->localBounds[1])*.5f;found->transform.project(center);
   const float extent=(found->localBounds[1].z-found->localBounds[0].z)*.5f;
   auto stand=center-Vec3(0,0,extent+75.f);
+  // This upright authored post spans the full strike height. The middle of
+  // NW_NATURE_FENCE_01 is a gap between two narrow horizontal rails.
+  if(kind=="fence")stand.x+=100.f;
   const auto floor=world.physic()->landRay(Vec3(stand.x,source.y+80,stand.z),180);
   if(!floor.hasCol) {arenaAbort("destruction melee actor has no native floor");return;}
   stand.y=floor.v.y;
@@ -3922,13 +3958,17 @@ void destructionMeleeSetup(World& world,Npc& player,std::string_view kind,std::s
     if(!actor) {arenaAbort("destruction melee NPC actor insertion failed");return;}
     bench.destructionMeleeNpc=actor;
     }
-  destructionMeleeEquip(world,*actor,weapon);
+  if(!destructionMeleeEquip(world,*actor,weapon))return;
   actor->setPosition(stand);actor->setDirection(Vec3(0,0,1));actor->updateTransform();
   if(npc) {player.closeWeapon(true);player.setPosition(stand+Vec3(200,0,-100));player.updateTransform();}
-  bench.destructionMeleeActor=actor;bench.destructionMeleeStand=stand;bench.destructionMeleeFacing=Vec3(0,0,1);
+  bench.destructionMeleeActor=actor;bench.destructionMeleeFacing=Vec3(0,0,1);
+  bench.destructionMeleeStand=stand;bench.destructionMeleeRestance=kind=="fence";
   bench.destructionMeleeAttempts=bench.destructionMeleeHits=0;
   bench.destructionCase=std::string(kind)+"-"+std::string(weapon)+(npc?"-npc":"");
   bench.destructionStart=world.tickCount();bench.destructionTrace=true;
+  if(!destructionMeleeProbe(world,*actor,*found,"setup")) {
+    arenaAbort("destruction melee stance has no real wood contact inside native attack reach");return;
+    }
   bench.cam=C_Hold;lookFrom(center+Vec3(250,230,-310),center+Vec3(0,35,0));
   const auto* item=weapon=="fist"?nullptr:actor->currentMeleeWeapon();
   event("destruction2_melee_setup","\"case\":"+jsonStr(bench.destructionCase)+",\"class\":"+jsonStr(kind)+
@@ -3953,6 +3993,16 @@ void destructionMeleeTick(World& world) {
     }
   if(world.tickCount()<bench.destructionMeleeNext)return;
   auto& actor=*bench.destructionMeleeActor;
+  // Each fence sample starts outside its post. Forward fist root motion would
+  // otherwise carry repeated attacks into the open rail gap after two swings.
+  // The animation and its impact run freely between these setup boundaries.
+  if(bench.destructionMeleeRestance) {
+    actor.stopWalking();actor.clearSpeed();actor.setPosition(bench.destructionMeleeStand);
+    actor.setDirection(bench.destructionMeleeFacing);actor.updateTransform();
+    if(!destructionMeleeProbe(world,actor,*found,"before-animation")) {
+      bench.destructionMeleeRunning=false;arenaAbort("destruction melee reset stance lost native wood contact");return;
+      }
+    }
   const bool accepted=actor.doAttack(Npc::Anim::Attack,BS_HIT);
   if(accepted)++bench.destructionMeleeAttempts;
   bench.destructionMeleeNext=world.tickCount()+(accepted?2200:100);
@@ -3972,7 +4022,7 @@ std::string destructionRoutineRows(const Npc& npc) {
   }
 
 void destructionFarmSetup(World& world,Npc& player,uint32_t zenId) {
-  bench.destructionMeleeRunning=false;bench.destructionTrace=false;bench.destructionFarmWalk=false;
+  bench.destructionMeleeRunning=false;bench.destructionTrace=false;
   bench.destructionFixtures.clear();bench.destructionIds.clear();
   const auto bodies=world.physic()->movableVobSnapshot();
   const auto found=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body){return body.zenId==zenId;});
@@ -3993,9 +4043,11 @@ void destructionFarmSetup(World& world,Npc& player,uint32_t zenId) {
     start.y=first.v.y;end.y=last.v.y;normal*=sign;supported=true;break;
     }
   if(!supported) {arenaAbort("destruction farm fence lacks native walkable ground on both sides");return;}
-  destructionMeleeEquip(world,player,"1h");player.setPosition(start);player.setDirection(normal);player.updateTransform();
+  if(!destructionMeleeEquip(world,player,"1h"))return;
+  player.setPosition(start);player.setDirection(normal);player.updateTransform();
   bench.destructionIds.push_back(found->id);bench.destructionMeleeActor=&player;
-  bench.destructionMeleeStand=start;bench.destructionMeleeFacing=normal;
+  bench.destructionMeleeRestance=false;
+  bench.destructionMeleeFacing=normal;
   bench.destructionMeleeAttempts=bench.destructionMeleeHits=0;
   bench.destructionFarmZen=zenId;bench.destructionFarmStart=start;bench.destructionFarmEnd=end;
   bench.destructionCase="farm-fence-1h";bench.destructionTrace=true;bench.destructionStart=world.tickCount();
@@ -4027,7 +4079,6 @@ void destructionFarmNpcWalk(World& world,std::string_view phase) {
   npc->setPosition(start->pos);npc->setDirection(goal->pos-start->pos);npc->updateTransform();
   bench.destructionFarmNpcStart=npc->position();bench.destructionFarmNpcTravel=0;bench.destructionFarmNpcGoal=goal;
   bench.destructionFarmNpcBest=(npc->position()-goal->pos).length();
-  bench.destructionFarmPhase=phase;
   npc->aiPush(AiQueue::aiGoToPoint(*goal));
   event("destruction2_farm_npc_begin","\"phase\":"+jsonStr(phase)+",\"npc\":"+jsonStr(symName(world,npc))+",\"start_waypoint\":"+jsonStr(start->name)+
     ",\"goal_waypoint\":"+jsonStr(goal->name)+",\"start_cm\":"+ragdollVector(npc->position())+
@@ -4068,14 +4119,15 @@ void destructionSessionSnapshot(World& world,std::string_view label) {
     (world.physic()->destructionEnabled()?"true":"false")+",\"bodies\":"+bodies+"],\"fragments\":"+fragments+"]");
   }
 
-void destructionAge(World& world,int64_t minutes) {
+void destructionAge(World& world,int64_t minutes,bool youngest) {
   int64_t asleep=-1;
   for(const auto& part:world.physic()->fragmentSnapshot())
-    if(part.zenId!=uint32_t(-1) && part.sleeping && part.asleepSince>=0)
-      asleep=asleep<0?part.asleepSince:std::min(asleep,part.asleepSince);
+    if(part.zenId!=uint32_t(-1) && !part.permanent && part.sleeping && part.asleepSince>=0)
+      asleep=asleep<0?part.asleepSince:youngest?std::max(asleep,part.asleepSince):std::min(asleep,part.asleepSince);
   if(asleep<0 || minutes<0) {arenaAbort("destruction age requires sleeping map debris and nonnegative minutes");return;}
   Gothic::inst().gameSession()->setTime(gtime(int64_t(0),int64_t(0),asleep+minutes));
-  event("destruction2_age","\"asleep_since_min\":"+std::to_string(asleep)+",\"age_min\":"+std::to_string(minutes)+
+  event("destruction2_age","\"anchor\":"+jsonStr(youngest?"youngest":"oldest")+
+    ",\"asleep_since_min\":"+std::to_string(asleep)+",\"age_min\":"+std::to_string(minutes)+
     ",\"game_minutes\":"+std::to_string(world.time().toInt()/60000));
   }
 
@@ -6587,13 +6639,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     exec("hold forward 2800",w,pl,ctrl);bench.waitUntil=bench.time+2834;
     }
   else if(c=="destruction2" && a.size()==2 && a[1]=="farm-ready") {
-    destructionMeleeEquip(w,pl,"1h");pl.setPosition(bench.destructionFarmStart);
+    if(!destructionMeleeEquip(w,pl,"1h"))return;
+    pl.setPosition(bench.destructionFarmStart);
     pl.setDirection(bench.destructionMeleeFacing);pl.updateTransform();
     }
   else if(c=="destruction2" && a.size()==3 && a[1]=="farm-npc-walk") destructionFarmNpcWalk(w,a[2]);
   else if(c=="destruction2" && a.size()==3 && a[1]=="farm-checkpoint") destructionFarmCheckpoint(w,pl,a[2]);
   else if(c=="destruction2" && a.size()==3 && a[1]=="snapshot") destructionSessionSnapshot(w,a[2]);
-  else if(c=="destruction2" && a.size()==3 && a[1]=="age") destructionAge(w,int64_t(num(a,2,0)));
+  else if(c=="destruction2" && a.size()==4 && a[1]=="age" && (a[3]=="oldest" || a[3]=="youngest"))
+    destructionAge(w,int64_t(num(a,2,0)),a[3]=="youngest");
   else if(c=="destruction2" && a.size()==3 && a[1]=="save") {
     try {destructionSessionSnapshot(w,"saved-"+a[2]);saveMovableSession(w,a[2]);}
     catch(const std::exception& error) {arenaAbort(error.what());}
@@ -6602,11 +6656,29 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const auto parts=w.physic()->fragmentSnapshot();
     if(parts.empty()) {arenaAbort("destruction far requires map debris");return;}
     const auto origin=movablePosition(parts.front().transform);
-    auto destination=origin+Vec3(4200,0,0);
-    const auto floor=w.physic()->landRay(destination+Vec3(0,1500,0),4000);
-    if(!floor.hasCol) {arenaAbort("destruction far needs supported distant hero position");return;}
-    destination.y=floor.v.y;pl.closeWeapon(true);pl.clearAiQueue();pl.stopWalking();pl.setPosition(destination);pl.updateTransform();
+    std::vector<const WayPoint*> candidates;
+    w.findWayPoint(origin,[&](const WayPoint& point) {
+      const auto distance=(point.pos-origin).length();
+      if(!point.underWater && distance>=3600.f && distance<=10000.f)candidates.push_back(&point);
+      return false;
+      });
+    std::sort(candidates.begin(),candidates.end(),[&](const auto* first,const auto* second) {
+      const auto a=(first->pos-origin).quadLength(),b=(second->pos-origin).quadLength();
+      return a==b?first->name<second->name:a<b;
+      });
+    Vec3 destination;std::string waypoint;float minimum=0;
+    for(const auto* point:candidates) {
+      const auto floor=w.physic()->landRay(point->pos+Vec3(0,200,0),800);
+      if(!floor.hasCol || (floor.n.length()>0 && floor.n.y<.6f))continue;
+      float distance=std::numeric_limits<float>::infinity();
+      for(const auto& part:parts)distance=std::min(distance,(floor.v-movablePosition(part.transform)).length());
+      if(distance<3500.f)continue;
+      destination=floor.v;waypoint=point->name;minimum=distance;break;
+      }
+    if(waypoint.empty()) {arenaAbort("destruction far needs a supported distant authored waypoint");return;}
+    pl.closeWeapon(true);pl.clearAiQueue();pl.stopWalking();pl.setPosition(destination);pl.updateTransform();
     event("destruction2_far","\"debris_cm\":"+ragdollVector(origin)+",\"hero_cm\":"+ragdollVector(destination)+
+      ",\"waypoint\":"+jsonStr(waypoint)+",\"minimum_debris_distance_cm\":"+ragdollNumber(minimum)+
       ",\"distance_cm\":"+ragdollNumber((destination-origin).length()));
     }
   else if(c=="noise" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
