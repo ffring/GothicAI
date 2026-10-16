@@ -47,6 +47,7 @@ stop
 
 release all
 character route port_edge
+cam auto 350 260
 walkmode walk
 wait 500
 rec port_edge
@@ -80,6 +81,7 @@ stop
 
 release all
 character route jump_ledge
+cam auto 500 220
 walkmode run
 wait 500
 rec jump_ledge
@@ -92,6 +94,8 @@ stop
 
 release all
 character route water_entry
+cam auto 500 320
+cam look 130
 walkmode run
 wait 500
 rec water_entry

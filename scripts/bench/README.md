@@ -525,7 +525,7 @@ cannot consume held movement; this fixture does not change production NPC behavi
 prints every selected waypoint, start XYZ, goal XYZ and yaw as `character_route_setup` in
 `events.jsonl`. Missing geometry produces `character_error`; the probe visits all eight
 preparations before ending, while the actual scenario stops on a missing fixture. Routes are
-Khorinis stairs up/down, a smooth slope above the hero guild’s legacy slide threshold (up to 65°), a harbour lane within 95 cm of a drop, a narrow
+Khorinis stairs up/down, downhill movement from a measured slope above the hero guild’s legacy slide threshold (up to 65°), a harbour lane within 95 cm of a drop, a narrow
 opening, Coragon's furnished tavern, a 55–110 cm ledge and a waterfront with a swimming destination (the quay may enter via falling).
 Stairs additionally require at least three distinct 6–32 cm risers and level treads, excluding bed waypoints.
 The port lane stays within 30 cm of its starting height. These coordinates are also the teleport points for a manual trial. Only the initial placement
@@ -547,10 +547,13 @@ Run `character-virtual-props` with the same OFF/ON environment in separate outpu
 four equal-duration native contacts: a real potion Item, a beer mug Item, a stock barrel mesh and
 a stock table mesh. Only the current test prop occupies the lane; temporary props from the general
 tavern fixture are removed. Checkpoints include native contact attribution, mass, horizontal
-position, velocity and displacement. Table passage is checked against the current transformed
+position, velocity and displacement. Reported push speed uses the actual held-input duration,
+excluding the 700 ms settling interval. Table passage is checked against the current transformed
 far face after straight forward input. The same scenario records dynamic table, kinematic mesh
 and any exposed standable world mover. A missing standable mover is explicitly reported;
-insufficient support motion or falling needs review of its video.
+insufficient support motion or falling needs review of its video. The real world mover is the
+accepted support case for this step; artificial tavern supports remain diagnostic, including
+the known kinematic drift left outside this PR's scope.
 
 `character-virtual-save` writes `session-standing.sav` at an identical freshly placed stair point.
 Load each result through `SAVE=<path>/session-standing.sav` and `character-virtual-reload`, with

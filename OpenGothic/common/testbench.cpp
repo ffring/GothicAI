@@ -3878,8 +3878,10 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
           if(!surface.hasCol || !(std::sin(legacySlideEnd*k)<surface.n.y && surface.n.y<std::cos(legacySlideAngle*k)))continue;
           }
         route.waypoint=point->name;
-        route.start=name=="stairs_down" ? high : low;
-        route.goal=name=="stairs_down" ? low : high;
+        // Enter the steep route on its measured surface and face downhill.
+        // Starting at its low foot instead only tests walking into a cliff.
+        route.start=stairs ? (name=="stairs_down" ? high : low) : center;
+        route.goal=stairs ? (name=="stairs_down" ? low : high) : low;
         route.tolerance=55;found=true;
         event("character_route_surface","\"route\":"+jsonStr(name)+",\"angle_deg\":"+ragdollNumber(angle)+
           ",\"roughness_cm\":"+ragdollNumber(rough)+",\"riser_count\":"+std::to_string(risers)+
@@ -3892,19 +3894,31 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
   else if(name=="port_edge") {
     for(const auto* point:points) {
       if(!harbour(*point)) continue;
-      Vec3 center;if(!characterFloor(world,point->position(),center)) continue;
-      for(unsigned i=0;i<24 && !found;++i) {
-        const float angle=float(i)*float(M_PI)/12.f;
-        const Vec3 along(std::cos(angle),0,std::sin(angle)),side(-along.z,0,along.x);
-        Vec3 end;
-        if(!characterFloor(world,center+along*300.f,end) || !characterLane(world,center,end,20) || std::abs(end.y-center.y)>30) continue;
-        bool nearEdge=true;
-        for(float distance:{0.f,150.f,300.f}) {
-          const auto edge=physics->landRay(center+along*distance+side*95.f+Vec3(0,80,0),700);
-          nearEdge&=!edge.hasCol || center.y-edge.v.y>120.f;
+      for(float x:{0.f,-80.f,80.f,-160.f,160.f})for(float z:{0.f,-80.f,80.f,-160.f,160.f}) {
+        if(found)continue;
+        Vec3 center;if(!characterFloor(world,point->position()+Vec3(x,0,z),center)) continue;
+        for(unsigned i=0;i<24 && !found;++i) {
+          const float angle=float(i)*float(M_PI)/12.f;
+          const Vec3 along(std::cos(angle),0,std::sin(angle)),side(-along.z,0,along.x);
+          Vec3 end;
+          if(!characterFloor(world,center+along*300.f,end) || !characterLane(world,center,end,20) || std::abs(end.y-center.y)>30) continue;
+          bool nearEdge=true;
+          for(float distance:{0.f,150.f,300.f}) {
+            Vec3 floor;
+            if(!characterFloor(world,center+along*distance,floor)) {nearEdge=false;break;}
+            // A missing floor beyond a wall is not an exposed harbour edge.
+            const auto from=floor+Vec3(0,80,0),to=from+side*95.f;
+            const auto edge=physics->landRay(to,3000);
+            if(physics->ray(from,to).hasCol || !edge.hasCol || floor.y-edge.v.y<=120.f) {nearEdge=false;break;}
+            for(float width:{-25.f,25.f}) {
+              Vec3 support;
+              if(!characterFloor(world,floor+side*width,support) || std::abs(support.y-floor.y)>20.f)nearEdge=false;
+              }
+            if(!nearEdge)break;
+            }
+          if(!nearEdge) continue;
+          route.waypoint=point->name;route.start=center;route.goal=end;route.tolerance=70;found=true;
           }
-        if(!nearEdge) continue;
-        route.waypoint=point->name;route.start=center;route.goal=end;route.tolerance=70;found=true;
         }
       if(found)break;
       }
