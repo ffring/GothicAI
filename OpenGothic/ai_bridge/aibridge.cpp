@@ -1031,7 +1031,11 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
         if(px*px+pz*pz<400.f*400.f)
           return false;
         const auto floor = physics->landRay({point.x,hero.y+100.f,point.z},200.f);
-        if(!floor.hasCol || std::abs(floor.v.y-hero.y)>100.f || floor.n.y<.8f)
+        if(!floor.hasCol || std::abs(floor.v.y-hero.y)>100.f)
+          return false;
+        // landRay deliberately leaves object normals zero. The footprint below
+        // checks their support; a zero normal does not describe a steep slope.
+        if(floor.n!=Vec3() && floor.n.y<.8f)
           return false;
         ++level;
         point = floor.v;
