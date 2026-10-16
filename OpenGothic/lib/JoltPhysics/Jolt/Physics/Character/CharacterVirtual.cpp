@@ -1737,8 +1737,8 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 			return finish(EWalkStairsResult::NoForwardTest);
 
 		// A single lookahead endpoint can land on the next riser and miss a
-		// supporting tread in between. Search the same interval at the character's
-		// contact resolution, retaining the original full-distance probe last.
+		// supporting tread in between. Try the full endpoint first, then use a
+		// bounded set of intermediate probes if it is not a walkable landing.
 		const auto test_floor = [&](Vec3Arg inTestStep)
 		{
 			RVec3 test_position = up_position;
@@ -1789,19 +1789,27 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 
 			return too_steep ? EWalkStairsResult::TestSteep : EWalkStairsResult::Success;
 		};
-		const float test_length = inStepForwardTest.Length();
-		const float spacing = max(mCharacterPadding, mCollisionTolerance);
-		float probe_length = spacing > 0.0f? min(test_length, Sqrt(horizontal_movement_sq) + spacing) : test_length;
-		for (;;)
+		EWalkStairsResult result = test_floor(inStepForwardTest);
+		if (result != EWalkStairsResult::Success)
 		{
-			const bool full_distance = probe_length >= test_length;
-			const Vec3 test_step = full_distance? inStepForwardTest : inStepForwardTest * (probe_length / test_length);
-			const EWalkStairsResult result = test_floor(test_step);
-			if (result == EWalkStairsResult::Success)
-				break;
-			if (full_distance)
+			const float test_length = inStepForwardTest.Length();
+			const float first_length = Sqrt(horizontal_movement_sq);
+			const float interval = test_length - first_length;
+			const float spacing = max(max(mCharacterPadding, mCollisionTolerance), 0.5f * mShape->GetInnerRadius());
+			// Bound work even with tiny padding or an extended architectural
+			// lookahead. Five includes the endpoint already tested above.
+			constexpr uint max_probes = 5;
+			const uint probes = interval > 0.0f && spacing > 0.0f?
+				uint(min(float(max_probes), max(1.0f, std::ceil(interval / spacing)))) : 1;
+			for (uint probe = 1; probe < probes; ++probe)
+			{
+				const float length = first_length + interval * (float(probe) / float(probes));
+				result = test_floor(inStepForwardTest * (length / test_length));
+				if (result == EWalkStairsResult::Success)
+					break;
+			}
+			if (result != EWalkStairsResult::Success)
 				return finish(result);
-			probe_length = min(test_length, probe_length + spacing);
 		}
 	}
 

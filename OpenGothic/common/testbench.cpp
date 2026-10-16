@@ -4948,6 +4948,116 @@ void npcCharacterEnd(World& world) {
     ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false")+mug);
   }
 
+void characterStairPerformance(World& world,Npc& player) {
+  if(!Gothic::physicsFlags().characterVirtual || !Gothic::settingsGetI("GAME","npc_character_virtual")) {
+    arenaAbort("stair performance requires both human CharacterVirtual flags on");return;
+    }
+  std::vector<const Npc*> sources{&player};
+  for(uint32_t id=0;id<world.npcCount() && sources.size()<11;++id) {
+    const auto* npc=world.npcById(id);
+    if(npc && npc!=&player && npc->isHuman() && !npc->isDown() && npc->visualSkeleton() &&
+       npc->navigationCapsule().x>0.f && npc->navigationCapsule().y>0.f)
+      sources.push_back(npc);
+    }
+  if(sources.size()!=11 || !player.visualSkeleton()) {
+    arenaAbort("stair performance needs one loaded hero and ten loaded live human skeletons");return;
+    }
+  constexpr float radians=float(M_PI)/180.f, angle=55.f*radians, padding=1.f;
+  const float cosine=std::cos(angle), tangent=std::tan(angle);
+  zenkit::Mesh plane;
+  plane.vertices={{-2000,-2000*tangent,-2000},{-2000,-2000*tangent,2000},
+                  {2000,2000*tangent,2000},{2000,2000*tangent,-2000}};
+  plane.materials.resize(1);plane.materials[0].group=zenkit::MaterialGroup::STONE;
+  // PhysicVbo reverses Gothic source winding into upward-facing native triangles.
+  plane.polygons.vertex_indices={0,2,1,0,3,2};plane.polygons.material_indices={0,0};
+  DynamicWorld isolated(nullptr,plane);
+  struct Actor {
+    DynamicWorld::NpcItem body;
+    const Npc* source=nullptr;
+    float step=0,slope=0,mass=0;
+    };
+  std::vector<Actor> actors;actors.reserve(11);
+  const auto& guild=world.script().guildVal();
+  for(size_t index=0;index<sources.size();++index) {
+    const auto* source=sources[index];
+    auto body=isolated.addGhostObj(source->visualSkeleton());
+    const auto capsule=source->navigationCapsule();
+    if(std::abs(body.capsuleRadius()-capsule.x)>.01f || std::abs(body.capsuleHeight()-capsule.y)>.01f) {
+      arenaAbort("stair performance human skeleton must retain its actual landscape capsule dimensions");return;
+      }
+    const float step=std::max(float(guild.step_height[source->guild()]),0.f);
+    const float slope=float(guild.slide_angle[source->guild()])*radians;
+    if(!(slope>0.f && slope<angle && std::isfinite(slope))) {
+      arenaAbort("stair performance requires every human to treat 55 degrees as non-walkable");return;
+      }
+    const Vec3 initial(0,(capsule.x+padding)/cosine-capsule.x-padding,(float(index)-5.f)*150.f);
+    body.setPosition(initial);
+    const float mass=source->physicsMass(), stepHeight=step>0.f?step:50.f;
+    const auto state=body.moveVirtual({},0,stepHeight,slope,mass);
+    if(!state.steep || (state.position-initial).length()>.001f) {
+      arenaAbort("stair performance must acquire all eleven analytic steep supports without settling");return;
+      }
+    actors.push_back({std::move(body),source,stepHeight,slope,mass});
+    }
+  // Flush only zero-dt contact preparation from the production timer. No
+  // positive-dt warmup or measured steps are discarded.
+  isolated.tick(0);
+  struct Sample { uint64_t frame=0,time=0,dt=0;float physics=0,wall=0;unsigned steep=0,grounded=0; };
+  std::vector<Sample> samples;samples.reserve(600);
+  uint64_t elapsed=0;
+  unsigned minimumSteep=11;
+  for(uint64_t frame=0;frame<600;++frame) {
+    const uint64_t dt=frame%3==0?16:17;
+    const Vec3 request(4.f*float(dt)/17.f,0,0);
+    unsigned steep=0,grounded=0;
+    const auto began=std::chrono::steady_clock::now();
+    // All eleven controllers coexist. Direct wrapper requests keep stressing
+    // the uphill stair sweeps even though normal MoveAlgo would enter Slide.
+    for(auto& actor:actors) {
+      const auto state=actor.body.moveVirtual(request,dt,actor.step,actor.slope,actor.mass);
+      steep+=state.steep;grounded+=state.grounded;
+      }
+    isolated.tick(dt);
+    const float wall=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-began).count();
+    elapsed+=dt;
+    samples.push_back({frame,elapsed,dt,isolated.physicsStats().stepMilliseconds,wall,steep,grounded});
+    minimumSteep=std::min(minimumSteep,steep);
+    }
+  auto* file=std::fopen((outDir+"/character-stair-performance.csv").c_str(),"w");
+  if(!file) {arenaAbort("cannot write stair performance samples");return;}
+  std::fprintf(file,"frame,t_sim_ms,dt_ms,actors,uphill_requests,steep_actors,grounded_actors,step_ms,batch_wall_ms\n");
+  std::vector<float> physics,wall;physics.reserve(samples.size());wall.reserve(samples.size());
+  for(const auto& sample:samples) {
+    std::fprintf(file,"%llu,%llu,%llu,11,11,%u,%u,%.9g,%.9g\n",(unsigned long long)sample.frame,
+                 (unsigned long long)sample.time,(unsigned long long)sample.dt,sample.steep,sample.grounded,
+                 double(sample.physics),double(sample.wall));
+    physics.push_back(sample.physics);wall.push_back(sample.wall);
+    }
+  std::fclose(file);std::sort(physics.begin(),physics.end());std::sort(wall.begin(),wall.end());
+  const auto p95=size_t(std::ceil(.95*double(samples.size())))-1;
+  event("character_stair_performance","\"actors\":11,\"hero\":1,\"npcs\":10,\"samples\":"+std::to_string(samples.size())+
+    ",\"simulated_ms\":"+std::to_string(elapsed)+",\"angle_deg\":55,\"minimum_steep_actors\":"+std::to_string(minimumSteep)+
+    ",\"p95_step_ms\":"+ragdollNumber(physics[p95])+",\"p95_batch_wall_ms\":"+ragdollNumber(wall[p95])+
+    ",\"timing_diagnostics\":false,\"source\":\"eleven independent human NpcItem controllers in isolated DynamicWorld\"");
+  // Enable tracing only after formal timing. One extra uphill step per actor
+  // proves the measured configuration without charging diagnostics to p95.
+  for(size_t index=0;index<actors.size();++index) {
+    auto& actor=actors[index];actor.body.setVirtualDiagnosticsEnabled(true);
+    const auto state=actor.body.moveVirtual({4,0,0},17,actor.step,actor.slope,actor.mass);
+    CharacterVirtualDiagnostics diagnostic;
+    if(!actor.body.virtualDiagnostics(diagnostic)) {arenaAbort("stair performance coverage diagnostics are unavailable");return;}
+    event("character_stair_performance_actor","\"actor\":"+std::to_string(index)+",\"role\":"+jsonStr(index?"npc":"hero")+
+      ",\"source_npc_id\":"+std::to_string(world.npcId(actor.source))+",\"source_npc\":"+jsonStr(symName(world,actor.source))+
+      ",\"radius_cm\":"+ragdollNumber(actor.body.capsuleRadius())+",\"height_cm\":"+ragdollNumber(actor.body.capsuleHeight())+
+      ",\"mass_kg\":"+ragdollNumber(actor.mass)+",\"step_height_cm\":"+ragdollNumber(actor.step)+
+      ",\"max_slope_rad\":"+ragdollNumber(actor.slope)+",\"root_cm\":"+ragdollVector(state.position)+
+      ",\"ground_normal\":"+ragdollVector(state.groundNormal)+",\"ground_state\":"+std::to_string(diagnostic.afterStairs.groundState)+
+      ",\"steep\":"+(state.steep?"true":"false")+",\"stair_attempted\":"+(diagnostic.stairAttempted?"true":"false")+
+      ",\"stair_succeeded\":"+(diagnostic.stairSucceeded?"true":"false")+",\"reason\":"+jsonStr(diagnostic.stairProbe.reason));
+    }
+  if(minimumSteep!=11 || elapsed!=10000)arenaAbort("stair performance lost its eleven continuous steep-slope actors or ten-second window");
+  }
+
 void npcCharacterMarket(World& world,Npc& player) {
   const WayPoint* center=world.findPoint("NW_CITY_MERCHANT_PATH_20");
   if(!center) {arenaAbort("NPC character market fixture has no stock market waypoint");return;}
@@ -5479,6 +5589,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("character_probe_complete","\"prepared\":"+std::to_string(prepared)+",\"expected\":8");
     }
   else if(c=="character" && a.size()==3 && a[1]=="route") prepareCharacterRoute(w,pl,a[2]);
+  else if(c=="character" && a.size()==2 && a[1]=="stair-performance") characterStairPerformance(w,pl);
   else if(c=="character" && a.size()==4 && a[1]=="idle-slope") {
     if(a[3]!="hero" && a[3]!="npc") {arenaAbort("character idle-slope expects hero or npc");return;}
     characterIdleSlopePrepare(w,pl,num(a,2,0),a[3]=="npc");

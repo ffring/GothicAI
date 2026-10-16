@@ -35,8 +35,9 @@ Keep these when updating a library from upstream.
 
 - `JoltPhysics/Jolt/Physics/Character/CharacterVirtual.{h,cpp}`: optional transient
   `WalkStairsDiagnostics` records the rejection stage and sweep results. The stair support test
-  searches between the requested forward step and its lookahead endpoint at the native contact
-  resolution, checking the first downward hit at every position. OpenGothic bounds that lookahead
+  tests the full lookahead endpoint first, then at most four intermediate positions, checking the
+  first downward hit at every position. Spacing uses contact tolerance and half the shape's inner
+  radius, with a hard budget of five lookahead probes per attempt. OpenGothic bounds that lookahead
   by the permitted riser height, slope and capsule toe; actual forward travel is unchanged.
   This lets finite slanted risers and narrow treads work without accepting continuous steep
   slopes. Contracts live in `tests/physics_contract.cpp`.
