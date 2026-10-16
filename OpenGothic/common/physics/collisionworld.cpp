@@ -718,6 +718,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   float pushRemaining = 0.f;
   std::vector<std::pair<JPH::BodyID,float>> pushBodies;
   bool contactsDirty = true;
+  bool needsInitialUpdate = true;
   bool carrying = false;
   float radius = 0.f;
   float height = 0.f;
@@ -759,6 +760,7 @@ std::unique_ptr<CollisionWorld::VirtualCharacter> CollisionWorld::createVirtualC
 void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
   impl->character->SetPosition(JPH::RVec3(toMeters(feet)));
   impl->contactsDirty = true;
+  impl->needsInitialUpdate = true;
   impl->ground = JPH::BodyID();
   }
 
@@ -845,7 +847,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     if(onGround)
       velocity += groundVelocity;
     auto gravityStep = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
-    if(displacement==Tempest::Vec3() && onGround) {
+    if(displacement==Tempest::Vec3() && onGround && !state.needsInitialUpdate) {
       // A supported idle character has static friction. Feeding vertical
       // gravity to Jolt's frictionless contact solver adds a downhill tangent
       // every frame, even on a walkable slope. Keep only pressure into the
@@ -868,6 +870,11 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const auto desiredVelocity = character.GetLinearVelocity();
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    // RefreshContacts only classifies the initial overlap. Let the first
+    // physical solve after creation/teleport recover it with native gravity;
+    // changing that solve changes the contact pose used to enter stairs.
+    // A zero-dt refresh does not complete this acquisition.
+    state.needsInitialUpdate = false;
     if(diagnostic!=nullptr)
       diagnostic->afterExtendedUpdate = state.diagnosticPose();
     bool stairObstacle = false;

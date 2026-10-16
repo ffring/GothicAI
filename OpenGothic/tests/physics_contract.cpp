@@ -1573,6 +1573,22 @@ namespace {
       require(!mesh.HasError(),"idle-slope fixture must construct its landscape plane");
       auto floor=world.addCollisionBody(mesh.Get(),at(0,0,0),.7f,DynamicWorld::C_Landscape);
       auto walker=world.createVirtualCharacter(radius,180,{0,radius*(1.f/normal.GetY()-1.f),0});
+      auto reference=world.createVirtualCharacter(radius,180,{0,radius*(1.f/normal.GetY()-1.f),0});
+      const Tempest::Vec3 initialFeet(0,radius*(1.f/normal.GetY()-1.f),0);
+      for(bool teleport:{false,true}) {
+        if(teleport) {
+          walker->setPosition(initialFeet);
+          reference->setPosition(initialFeet);
+          walker->move({},0,50,maxSlope,80,nullptr);
+          }
+        const auto idleContact=walker->move({},33,50,maxSlope,80,nullptr);
+        // An infinitesimal vertical request uses the native gravity solve.
+        // Acquiring an idle contact must be continuous with that solve,
+        // including after a teleport followed by a zero-dt contact refresh.
+        const auto nativeContact=reference->move({0,.0001f,0},33,50,maxSlope,80,nullptr);
+        requireNear((idleContact.position-nativeContact.position).length(),0,.001f,
+                    "initial idle contact recovery must preserve the native contact pose used for stairs");
+        }
       CollisionWorld::CharacterMoveResult state;
       for(int frame=0;frame<30;++frame)
         state=walker->move({},17,50,maxSlope,80,nullptr);
