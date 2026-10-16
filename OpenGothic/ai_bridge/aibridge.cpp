@@ -954,7 +954,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
-     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces") {
+     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise" || cmd=="physics_traces" || cmd=="destruction_traces") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -1016,6 +1016,12 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
   if(cmd=="physics_traces") {
     std::string value, error;
     const bool ok = TestBench::physicsTracesDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
+    return;
+    }
+  if(cmd=="destruction_traces") {
+    std::string value, error;
+    const bool ok = TestBench::destructionTracesDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
     sendResult(req,ok,error,value);
     return;
     }
