@@ -313,11 +313,14 @@ def book(
     """The file: places, of what kind, their ways in and neighbours, and which place each point belongs to."""
     places = []
     points: dict[str, int] = {}
+    waynet = [p for g in groups for p in g.points if on_waynet(p)]
     for g in sorted(groups, key=lambda g: g.id):
         if g.id not in names:
             continue
         cx, cy, cz = g.center
         entry: dict[str, Any] = {"id": g.id, **names[g.id], "center": [round(cx), round(cy), round(cz)]}
+        if (wp := anchor(g.points, g.center, waynet)) is not None:
+            entry["anchor"] = wp
         if surveys is not None and (s := surveys.get(g.id)) is not None:
             entry["kind"] = (kind or {}).get(g.id, s.guess)
             entry["inside"] = s.inside >= INSIDE_SHARE
@@ -327,6 +330,21 @@ def book(
         for p in g.points:
             points[p["name"].upper()] = len(places) - 1
     return {"version": VERSION, "world": (world or "").upper(), "places": places, "points": points}
+
+
+def on_waynet(p: dict[str, Any]) -> bool:
+    """A point of the dump that is a waypoint the waynet joins (not a freepoint, not a lone one)."""
+    return not p.get("fp") and bool(p.get("conn"))
+
+
+def anchor(
+    own: Sequence[dict[str, Any]], center: Sequence[float], waynet: Sequence[dict[str, Any]]
+) -> str | None:
+    """A place's anchor: of its own waypoints the one nearest its middle; with none, the nearest of the
+    world's (`waynet`): where one stands to wait there, or walks to by the waynet (meetings.py)."""
+    pool = [p for p in own if on_waynet(p)] or list(waynet)
+    best = min(pool, key=lambda p: math.dist((p["x"], p["y"], p["z"]), center), default=None)
+    return str(best["name"]).upper() if best is not None else None
 
 
 # --- the lie of the land (version 2) ----------------------------------------------------------------
@@ -536,6 +554,7 @@ class Place:
     inside: bool = False  # under a roof: a cave, a house
     entrances: tuple[Entrance, ...] = ()
     neighbours: tuple[str, ...] = ()  # the places the waynet joins it with (ids)
+    anchor: str | None = None  # the waypoint nearest its middle, its own or else the nearest of the world's
 
     @property
     def kind_ru(self) -> str:
@@ -549,8 +568,10 @@ class Place:
     def waynet(self) -> tuple[str, ...]:
         """Its points on the waynet, for a walk there: a freepoint (FP_…) is no waypoint, so the game walks to
         it in a straight line, into whatever stands between (Malet into the pasture's fence on his way to the
-        mill, 2026-10-15). With none, the bridge takes the waypoint nearest to `pos`."""
-        return tuple(p for p in self.points if not p.upper().startswith("FP_"))
+        mill, 2026-10-15). With none of its own, its anchor: a waypoint by it (74 places have freepoints
+        only)."""
+        own = tuple(p for p in self.points if not p.upper().startswith("FP_"))
+        return own or ((self.anchor,) if self.anchor else ())
 
 
 # where a spot is from the hero as he faces (the bridge's v18 words for people, perception.py)
@@ -599,6 +620,7 @@ class PlaceBook:
                     for e in p.get("entrances", ())
                 ),
                 neighbours=tuple(p.get("neighbours", ())),
+                anchor=p.get("anchor"),
             )
             for i, p in enumerate(data.get("places", []))
         ]

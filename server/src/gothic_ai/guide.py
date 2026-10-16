@@ -113,6 +113,7 @@ class Guide:
         self.companion = companion
         self.journal = journal or dialogue.journal
         self.leads: dict[str, Lead] = {}  # npc -> its way under way
+        self.meet_too = False  # meetings.py is on: the npc is told it may set the hero a meeting too
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._routines: dict[str, tuple[float, list[RoutineEntry]]] = {}
         self._may: dict[str, str | None] = {}  # npc -> why it may not lead (None: it may), as of its turn
@@ -139,6 +140,11 @@ class Guide:
         if lead is None:
             if self.book is None or npc not in self._may or self._may[npc] is not None:
                 return None
+            if self.meet_too:
+                return (
+                    "Можешь, если захочешь, отвести героя к месту (lead) или назначить ему встречу (meet): "
+                    "это условия сделки, даром или за плату. Где место и как туда пройти — where."
+                )
             return (
                 "Можешь отвести героя к месту, если захочешь: условие lead в сделке, даром или за плату. "
                 "Где место и как туда пройти — where."
@@ -157,13 +163,16 @@ class Guide:
 
     # --- where to ----------------------------------------------------------------------------------
 
-    async def way(self, npc: str, what: str, snap: Snapshot | None) -> tuple[Way | None, str]:
-        """Where the npc would lead the hero for a deal's `lead` (`what`: a place's id or name); or why not
-        (Russian, for the model)."""
+    async def way(
+        self, npc: str, what: str, snap: Snapshot | None, *, meet: bool = False
+    ) -> tuple[Way | None, str]:
+        """Where the npc would lead the hero for a deal's `lead` (`what`: a place's id or name), or wait for
+        him for its `meet` (meetings.py: there it may be already, and it needs a waypoint to stand at); or why
+        not (Russian, for the model)."""
         npc, what = npc.upper(), what.strip()
         if self.book is None:
             return None, "ты не знаешь здешних мест"
-        if npc in self.leads:
+        if npc in self.leads and not meet:
             return None, "ты уже ведёшь героя"
         why, entries = await self._free(npc)
         if why is not None:
@@ -182,12 +191,15 @@ class Guide:
             way = Way(place, (door.outside,), door.pos, door=True)
         else:
             way = Way(place, place.waynet, place.center)
+        if meet and not way.points:
+            return None, f"{place.ru}: там негде встать и ждать. Выбери место у дороги или у дома"
         if here is not None:
             far = math.dist(here, way.pos)
             if far > LEAD_CM:
-                return None, f"{place.ru} — слишком далеко отсюда ({round(far / 100)} м), туда ты не поведёшь"
+                go = "пойдёшь" if meet else "поведёшь"
+                return None, f"{place.ru} — слишком далеко отсюда ({round(far / 100)} м), туда ты не {go}"
             at = self.book.of(snap.npc.nearest_waypoint) if snap is not None else None
-            if far <= ARRIVE_CM or (not way.door and at is not None and at.id == place.id):
+            if not meet and (far <= ARRIVE_CM or (not way.door and at is not None and at.id == place.id)):
                 return None, f"вы и так здесь: {place.where_ru}"
         return way, ""
 

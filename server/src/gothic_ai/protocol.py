@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 PROTOCOL_VERSION = 38
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
-PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace
+PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
 
 # --- game -> server -----------------------------------------------------------
 
@@ -997,7 +997,8 @@ NpcActType = Literal[
     "draw_weapon",  # v6
     "remove_weapon",  # v6
     # v6: args.state (ZS_*), args.waypoint, args.minutes of game time; then the routine. v15: with
-    # args.arrive npc_idle "arrived" once it is within args.radius (cm, 500) of the waypoint in that state
+    # args.arrive npc_idle "arrived" once it is within args.radius (cm, 500) of the waypoint in that state.
+    # v38: args.place puts it there at once (the clock leapt: the hero slept, meetings.py)
     "start_activity",
     "set_routine",  # v6: args.name, e.g. START (Rtn_START_<id>), effective at once
     "give",  # v15: args.npc, args.item, args.count: to another npc; npc_idle done or failed

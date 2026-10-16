@@ -124,6 +124,10 @@ def test_the_book_knows_the_bandits_cave_is_a_cave_entered_from_the_steps():
     fire = book.get("XARDAS_GOBBO")
     assert fire is not None and fire.kind == "camp" and not fire.inside  # trees over it, but no room
     assert "XARDAS_STAIRS" in cave.neighbours
+    # a place of freepoints only is walked to, and waited at, by its anchor: a waypoint by it
+    field = book.get("FARM1_WOLF")
+    assert field is not None and all(p.startswith("FP_") for p in field.points)
+    assert field.waynet == ("NW_FARM1_PATH_CITY_05_B",)
 
 
 def test_the_waynet_and_rooms_tell_a_caves_way_in_and_neighbours():
@@ -145,6 +149,7 @@ def test_the_waynet_and_rooms_tell_a_caves_way_in_and_neighbours():
     places = PlaceBook(book(groups, names, "newworld.zen", surveys, {"XARDAS_STAIRS": "road"}))
     there = places.get("XARDAS_BANDITS")
     assert there is not None and there.kind == "cave" and there.kind_ru == "пещера" and there.inside
+    assert there.anchor == "NW_XARDAS_BANDITS_04"  # its own waypoint nearest its middle (the way through too)
     assert places.ways_in_ru(there) == "вход — на ступенях"
     assert there.entrances[0].outside == "NW_XARDAS_STAIRS_04" and there.entrances[0].pos == (0, 0, 0)
     assert places.distance(there, (-500.0, 0.0, 0.0)) == 500  # to its way in, not its middle

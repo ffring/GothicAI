@@ -591,6 +591,14 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
       }
     auto until = world.time();
     until.addMilis(uint64_t(std::clamp<int64_t>(JsonRead::integer(args,"minutes",60),1,24*60))*60*1000);
+    // `place` (v38): it is there at once, the way the engine puts everyone at their routine's spot when the
+    // clock leaps (World::setDayTime: the hero slept), as Npc::resetPositionToTA does: the walk went by meanwhile
+    if(JsonRead::boolean(args,"place",false)) {
+      npc->clearAiQueue();
+      npc->setPosition (wp->position());
+      npc->setDirection(wp->direction());
+      world.script().fixNpcPosition(*npc,0,100);
+      }
     npc->startState(state,wp->name,until,false);
     // `arrive` (v15): npc_idle "arrived" once it is there doing it, not only when it leaves it
     run.arrival = JsonRead::boolean(args,"arrive",false);

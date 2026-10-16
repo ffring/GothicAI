@@ -283,6 +283,11 @@ class Rumor:
 
     def told(self, teller: str) -> str:
         """The remark for the one it is told to (names stay as they are: nothing to decline)."""
+        if self.kind == "broken" and self.quest.startswith("meet-"):  # meetings.py
+            return (
+                f"Слух (со слов: {teller}): герой обещал человеку по имени {self.about_name} прийти на "
+                f"встречу и не пришёл — {self.title}"
+            )
         if self.kind == "broken":
             return (
                 f"Слух (со слов: {teller}): герой задолжал человеку по имени {self.about_name} и не вернул "
@@ -529,9 +534,8 @@ class Rumors:
                         if not r.about_name or r.about_name == about:
                             r.about_name = f.get("about_name") or f.get("name") or about
             case "broken":
-                r = Rumor(
-                    f.get("debt", ""), "broken", f.get("npc", ""), f.get("name") or "", f.get("what", "")
-                )
+                key = f.get("debt") or f.get("meet") or ""  # a debt, or a meeting he did not come to
+                r = Rumor(key, "broken", f.get("npc", ""), f.get("name") or "", f.get("what", ""))
                 r.known[r.about] = 0
                 if "day" in f:
                     r.since[r.about] = int(f["day"])
