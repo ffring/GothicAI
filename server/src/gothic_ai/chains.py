@@ -158,6 +158,7 @@ class Brief:
     roles: dict[str, list[NpcSpec]] = field(default_factory=dict)
     fixed: dict[str, Role] = field(default_factory=dict)
     new_people: bool = False  # the chain must bring in someone new: a person or a camp
+    max_people: int | None = None  # the whole chain, including already introduced roles on a retry
 
     def bandit_ok(self, place: str) -> bool:
         p = self.places.get(place)
@@ -175,6 +176,11 @@ class Brief:
         out.append("Виды новых людей: " + ", ".join(KINDS))
         if self.new_people:
             out.append(NEW_PEOPLE)
+        if self.max_people is not None:
+            out.append(
+                f"Новых персонажей в этой цепочке — не больше {self.max_people}; каждый бандит считается "
+                "отдельно. Готовые роли повтора входят в этот предел один раз."
+            )
         if self.roles:
             out.append("Готовые роли, уже в мире (сохрани описание роли, не ставь их снова):")
             for role, specs in self.roles.items():
@@ -224,8 +230,8 @@ class ChainAuthor:
         self.link = author.link
         self.model = ChainModel(author.model.llm)
 
-    async def brief(self, npc: str) -> Brief | None:
-        base = await self.author.brief(npc.upper())
+    async def brief(self, npc: str, *, premise: str = "") -> Brief | None:
+        base = await self.author.brief(npc.upper(), premise)
         places = self.author.places
         if base is None or places is None:
             return None
@@ -261,13 +267,21 @@ class ChainAuthor:
                 people[person["npc"]] = str(person.get("name") or person["npc"])
         return Brief(base, nearby, people, occupied)
 
-    async def chain(self, npc: str, *, new_people: bool = False) -> list[questbook.Quest] | None:
+    async def chain(
+        self,
+        npc: str,
+        *,
+        new_people: bool = False,
+        premise: str = "",
+        max_people: int | None = None,
+    ) -> list[questbook.Quest] | None:
         """`new_people`: the chain must bring in someone new (cast not empty), not only the people around."""
         open_ahead(self.model.llm, CACHE_KEY, keep=True)
-        brief = await self.brief(npc)
+        brief = await self.brief(npc, premise=premise)
         if brief is None:
             return None
         brief.new_people = new_people
+        brief.max_people = max_people
         previous = None
         errors: list[str] = []
         for attempt in range(1, ATTEMPTS + 1):
@@ -325,7 +339,11 @@ class ChainAuthor:
                 continue
             if role.count == 1:
                 spec = await self.casting.character(
-                    role.place, kind=role.kind, about=role.about, carries=role.carries
+                    role.place,
+                    kind=role.kind,
+                    about=role.about,
+                    carries=role.carries,
+                    premise=brief.base.premise,
                 )
                 if spec is None:
                     return None, [f"кастинг не сделал роль {role.role}"]
@@ -354,6 +372,9 @@ class ChainAuthor:
             errors.append("в цепочке должно быть 2–3 квеста")
         if brief.new_people and not p.cast:
             errors.append("cast пуст, а цепочке нужен новый человек или лагерь бандитов")
+        people = sum(r.count for r in p.cast)
+        if brief.max_people is not None and people > brief.max_people:
+            errors.append(f"новых персонажей {people}, а бюджет цепочки — не больше {brief.max_people}")
         seen = set()
         for r in p.cast:
             if not ROLE.fullmatch(r.role) or r.role == "giver" or r.role in seen:

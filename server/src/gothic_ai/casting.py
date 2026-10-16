@@ -189,9 +189,12 @@ class Brief:
     kind: str = ""  # the author's fixed role, if this is a character of a chain
     about: str = ""
     carries: list[str] = field(default_factory=list)  # put in its inventory by code, besides its own things
+    premise: str = ""
 
     def text(self) -> str:
         out = [f"Место: {self.where} ({self.place}).", f"Глава {self.chapter}."]
+        if self.premise:
+            out.append(f"Замысел режиссёра: {self.premise}")
         if self.kind or self.about:
             out.append(f"Роль автора задана: kind — {self.kind}; about — {self.about}.")
             out.append("Место, вид и дело заданы; придумай ему имя и личность, сохранив эту роль.")
@@ -395,11 +398,17 @@ class Casting:
         self.journal = journal or Journal()
 
     async def character(
-        self, place: str, *, kind: str = "", about: str = "", carries: list[str] | None = None
+        self,
+        place: str,
+        *,
+        kind: str = "",
+        about: str = "",
+        carries: list[str] | None = None,
+        premise: str = "",
     ) -> NpcSpec | None:
         """A new character for the place, in the world; None if the model has none that passes."""
         self.model.warm()
-        brief = await self.brief(place)
+        brief = await self.brief(place, premise=premise)
         if brief is None:
             return None
         kind = kind.strip().lower()
@@ -481,7 +490,7 @@ class Casting:
             made.append(spec)
         return made, []
 
-    async def brief(self, place_id: str) -> Brief | None:
+    async def brief(self, place_id: str, *, premise: str = "") -> Brief | None:
         place = self.places.get(place_id)
         if place is None or not place.points:
             log.info("casting: no place %s", place_id)
@@ -520,4 +529,5 @@ class Casting:
             things=things,
             people=dict(sorted(here.items())[:MAX_PEOPLE]),
             cast=[c.name for c in self.cast.characters()],
+            premise=premise,
         )

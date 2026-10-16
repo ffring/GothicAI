@@ -317,7 +317,21 @@ class Cast:
         branch keeps it. The game's answer ({npc, state, index}), or None and what is wrong."""
         known = [t.npc for t in person.ties] if person is not None else []
         state = await self.link.story_state(symbols=_names(spec), npcs=known)
-        issues = problems(spec, state.get("symbols", {}), {c.npc for c in self.characters()})
+        characters = self.characters()
+        issues = problems(spec, state.get("symbols", {}), {c.npc for c in characters})
+        name = spec.name.strip().casefold()
+        nameless_bandit = (
+            person is None
+            and re.fullmatch(r"BDT_\d+_BANDIT_[LMH]", spec.like) is not None
+            and name in {"бандит", "bandit"}
+        )
+        if name and not nameless_bandit:
+            people = await self.link.story_people()
+            other_names = {
+                str(p.get("name") or "").strip().casefold() for p in people if p.get("npc") != spec.npc
+            } | {c.name.strip().casefold() for c in characters if c.npc != spec.npc}
+            if name in other_names:
+                issues.append(f"имя «{spec.name.strip()}» уже есть у человека мира")
         if person is not None:
             alive = {n for n, s in state.get("npcs", {}).items() if s.get("state") == "alive"}
             issues += person_problems(person, spec, alive)

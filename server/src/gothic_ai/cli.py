@@ -15,7 +15,7 @@ from array import array
 from pathlib import Path
 from typing import Any
 
-from . import lore, npc_tools, places, programs, scenario_occasions, scenarios
+from . import lore, npc_tools, places, programs, scenario_occasions, scenario_showrunner, scenarios
 from .amends import Amends
 from .authoring import Author
 from .beasts import TONE_MAX_TOKENS, BeastDesk
@@ -86,6 +86,7 @@ from .protocol import (
 from .questbook import QuestBook
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .showrunner import Showrunner
 from .sightings import Sightings
 from .social import Rumors
 from .story import StoryPatches, freed
@@ -138,6 +139,8 @@ HELP = """commands (npc defaults to the last attached one):
   director          quests left without an ending and the director's repairs of them
   director look     look for such quests now and repair them
   occasions         the hero's place, queued and recent occasions for the director
+  lines             the director's plot lines, their state and remaining budget
+  pitch             an occasion here and now, subject to the director's budget
   claims            quests of the scripts the hero said were done: believed, lies, found out
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
@@ -192,6 +195,7 @@ class ServerState:
         self.quests: QuestBoard | None = None
         self.director: Director | None = None
         self.occasions: Occasions | None = None
+        self.showrunner: Showrunner | None = None
         self.vanilla: VanillaQuests | None = None
         self.trust: Trust | None = None
         self.rumors: Rumors | None = None
@@ -314,6 +318,25 @@ class Console:
                         print(f"{label}: {len(facts)}")
                         for fact in facts:
                             print("  " + json.dumps(fact, ensure_ascii=False))
+            case "lines":
+                if (showrunner := self.state.showrunner) is None:
+                    print("lines: off")
+                else:
+                    for line in showrunner.lines:
+                        status = "open" if showrunner.is_open(line) else "closed"
+                        print(
+                            f"{line['kind']} {line.get('giver', '-')}: {line.get('premise', '')}; "
+                            f"{', '.join(line.get('quests', []))}; {status}"
+                        )
+                    at = await link.story_state(vars=["KAPITEL"])
+                    chapter = int(at.get("vars", {}).get("KAPITEL") or 1)
+                    print(showrunner.budget(chapter, at).text())
+            case "pitch":
+                if (showrunner := self.state.showrunner) is None:
+                    print("pitch: off")
+                else:
+                    fact = await showrunner.pitch()
+                    print(json.dumps(fact, ensure_ascii=False) if fact else "(no occasion now)")
             case "graph" if self.state.story is not None:
                 await self.graph(rest)
             case "quest" if len(rest) >= 5 and self.state.quests is not None:
@@ -897,6 +920,12 @@ async def serve(args: argparse.Namespace) -> int:
             )
             if state.casting is not None:
                 state.chains = ChainAuthor(state.author, state.casting)
+                if state.occasions is not None:
+                    state.showrunner = Showrunner(
+                        state.occasions, state.author, state.chains, state.casting, llm
+                    )
+                    if args.showrunner:
+                        directing.append(asyncio.create_task(state.showrunner.run()))
             # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
             state.consequences = LieConsequences(
                 link,
@@ -1283,6 +1312,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenario_occasions.occasions(link, state.occasions)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario occasions: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "showrunner":
+                assert state.showrunner is not None
+                results = await scenario_showrunner.showrunner(link, state.showrunner)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario showrunner: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "character":
                 casting, author, story = state.casting, state.author, state.story
@@ -1996,6 +2031,7 @@ def main() -> None:
             "repair",
             "authored",
             "occasions",
+            "showrunner",
             "own",
             "trigger",
             "stages",
@@ -2060,6 +2096,9 @@ def main() -> None:
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
     p.add_argument(
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
+    )
+    p.add_argument(
+        "--showrunner", action="store_true", help="let the director turn occasions into new plot lines"
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"

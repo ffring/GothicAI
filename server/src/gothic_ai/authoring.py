@@ -161,6 +161,7 @@ class Brief:
     xp: int  # the most experience
     gold: int  # the most gold
     given: list[str] = field(default_factory=list)  # titles of its quests the author made before
+    premise: str = ""
 
     def text(self) -> str:
         out = [f"Кто просит: {self.name} ({self.npc})."]
@@ -169,6 +170,8 @@ class Brief:
         if self.home:
             out.append(f"Где живёт и работает: {self.home}.")
         out.append(f"Глава {self.chapter}.")
+        if self.premise:
+            out.append(f"Замысел режиссёра: {self.premise}")
         out.append("Вещи, одна из которых у него пропала (id — название):")
         out += [f"- {i} — {n}" for i, n in self.items.items()]
         out.append("Места рядом, где она может лежать (id — где, как далеко от его места):")
@@ -309,11 +312,11 @@ class Author:
 
     # --- a quest ------------------------------------------------------------------------------
 
-    async def quest(self, npc: str) -> questbook.Quest | None:
+    async def quest(self, npc: str, premise: str = "") -> questbook.Quest | None:
         """A quest of the author's that `npc` gives the hero; None if the model has none that passes."""
         npc = npc.upper()
         self.model.warm()
-        brief = await self.brief(npc)
+        brief = await self.brief(npc, premise)
         if brief is None:
             return None
         proposal: Proposal | None = None
@@ -337,7 +340,7 @@ class Author:
         old = [q.title for q in self.old.values() if q.npc == npc]
         return old + [q.title for q in self.book.all().values() if q.giver == npc]
 
-    async def brief(self, npc: str) -> Brief | None:
+    async def brief(self, npc: str, premise: str = "") -> Brief | None:
         state = await self.link.story_state(
             vars=["KAPITEL", "XP_AMBIENT"], npcs=[npc], symbols=[npc, *ITEMS], items=list(ITEMS)
         )
@@ -369,6 +372,7 @@ class Author:
             xp=xp,
             gold=xp,
             given=self.given(npc),
+            premise=premise,
         )
 
     async def _spots(self, npc: str) -> tuple[str, list[Spot]]:

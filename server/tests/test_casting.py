@@ -90,13 +90,16 @@ async def test_the_director_brings_in_a_character_who_gives_a_quest(graph):  # n
         casting = Casting(link, cast, llm, places, chronicle)
         await _until(lambda: patches.branch is not None and chronicle.branch is not None)
 
-        spec = await casting.character("FARM1_ENTRANCE")
+        premise = "На ферму пришёл торговец после ограбления. Теперь ему нужна помощь с товаром."
+        spec = await casting.character("FARM1_ENTRANCE", premise=premise)
         assert spec is not None and spec.npc == "DIR_NPC_1" and spec.like == TOWNSMAN
         brief = llm.calls[0][1][0].content
         assert "Место: во дворе перед домом Лобарта (FARM1_ENTRANCE)." in brief
         assert "- NW_FARM1_OUT_01" in brief and "- NW_FARM1_FIELD_01" not in brief
         assert "- townsman — горожанин" in brief and "farmer" not in brief  # the world has no farmer to copy
         assert f"- {HILDA} — Хильда" in brief and "- ITFO_CHEESE — Сыр" in brief
+        assert f"Замысел режиссёра: {premise}" in brief
+        assert f"Замысел режиссёра: {premise}" in llm.calls[1][1][0].content
         rejected = llm.calls[1][1][-1].content
         assert (
             "вида 'knight' нет в сводке" in rejected and "точки 'NW_CITY_01' (днём) нет в сводке" in rejected
@@ -185,6 +188,7 @@ async def test_a_named_bandit_keeps_the_authors_role_and_carried_goods():
         assert {t.item: t.count for t in spec.items}["ITMI_SAW"] == 1
         assert "kind — bandit; about — Вор, укравший товар торговца." in llm.calls[0][1][0].content
         assert "ITMI_SAW" in llm.calls[0][1][0].content
+        assert "Замысел режиссёра:" not in llm.calls[0][1][0].content
         assert "вид задан автором: bandit" in llm.calls[1][1][-1].content
 
 

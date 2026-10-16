@@ -107,6 +107,7 @@ class StubCasting:
         self.author = author
         self.calls: list[tuple[Any, ...]] = []
         self.specs: list[NpcSpec] = []
+        self.premises: list[str] = []
         self.partial_group = partial_group
 
     async def _make(self, place: str, point: str, name: str, carries: list[str]) -> NpcSpec:
@@ -126,8 +127,11 @@ class StubCasting:
         self.specs.append(spec)
         return spec
 
-    async def character(self, place: str, *, kind: str, about: str, carries: list[str]) -> NpcSpec:
+    async def character(
+        self, place: str, *, kind: str, about: str, carries: list[str], premise: str = ""
+    ) -> NpcSpec:
         self.calls.append(("character", place, kind, about, tuple(carries)))
+        self.premises.append(premise)
         return await self._make(place, self.author.places.get(place).points[0], "Рутгер", carries)
 
     async def bandits(
@@ -304,6 +308,18 @@ async def test_a_bandit_cannot_live_in_any_residential_kind(graph, kind):  # noq
         assert casting.calls == []
 
 
+@pytest.mark.parametrize("max_people", [0, 1, 2])
+async def test_the_chain_people_budget_counts_each_bandit_before_casting(graph, max_people):  # noqa: F811
+    async with _setup(graph) as (fake, chains, casting, _):
+        brief = await chains.brief(HILDA)
+        assert brief is not None
+        brief.max_people = max_people
+        made, errors = await chains._try(_proposal(), brief)
+        assert made is None and f"новых персонажей 3, а бюджет цепочки — не больше {max_people}" in errors
+        assert casting.calls == [] and fake.cast == {} and brief.roles == {}
+        assert chains.book.all() == {}
+
+
 async def test_a_bad_structure_never_reaches_casting_or_the_book(graph):  # noqa: F811
     async with _setup(graph) as (fake, chains, casting, _):
         brief = await chains.brief(HILDA)
@@ -397,10 +413,13 @@ async def test_rejected_description_is_explained_and_the_second_model_proposal_p
     invalid = _proposal()
     invalid["cast"][1]["place"] = YARD
     async with _setup(graph, [invalid, _proposal()]) as (fake, chains, casting, llm):
-        made = await chains.chain(HILDA)
+        premise = "Ночью на ферме пропал товар. Следы ведут к скупщикам у поля."
+        made = await chains.chain(HILDA, premise=premise)
         assert made is not None and len(made) == 2
         assert len(llm.calls) == 2 and llm.cache_keys == [CACHE_KEY, CACHE_KEY]
         assert all([tool.name for tool in tools] == [PROPOSE] for tools in llm.sent_tools)
+        assert all(f"Замысел режиссёра: {premise}" in call[1][0].content for call in llm.calls)
+        assert casting.premises == [premise]
         assert "жилое" in llm.calls[1][1][-1].content and "Отклонено" in llm.calls[1][1][-1].content
         assert len(casting.calls) == 2 and len(fake.cast) == 3
         [rejected] = chains.chronicle.facts("chain_rejected")
@@ -425,12 +444,13 @@ async def test_retry_after_game_refusal_keeps_the_cast_and_shows_its_roles(graph
             return await original_patch(ops, **kwargs)
 
         monkeypatch.setattr(chains.link, "patch_graph", refuse_first)
-        made = await chains.chain(HILDA)
+        made = await chains.chain(HILDA, max_people=3)
         assert made is not None and proposed == 2 and len(llm.calls) == 2
         assert len(casting.calls) == 2 and len(casting.specs) == 3 and len(fake.cast) == 3
         repeated = llm.calls[1][1][0].content
         assert "Готовые роли" in repeated and "thief:" in repeated and "camp:" in repeated
         assert all(spec.npc in repeated for spec in casting.specs)
+        assert "Новых персонажей в этой цепочке — не больше 3" in repeated
         assert "лагерь временно не принят" in llm.calls[1][1][-1].content
         assert len(chains.author.patches.records(QUEST)) == 2
         assert [q.id for q in made] == ["DIR_Q1", "DIR_Q2"]
@@ -438,7 +458,7 @@ async def test_retry_after_game_refusal_keeps_the_cast_and_shows_its_roles(graph
 
 async def test_a_partial_group_is_completed_on_retry_without_replacing_the_existing_bandit(graph):  # noqa: F811
     async with _setup(graph, [_proposal(), _proposal()], partial_group=True) as (fake, chains, casting, llm):
-        made = await chains.chain(HILDA)
+        made = await chains.chain(HILDA, max_people=3)
         assert made is not None and len(llm.calls) == 2
         assert [c[0] for c in casting.calls] == ["character", "bandits", "bandits"]
         first_bandit = casting.specs[1]
@@ -500,9 +520,11 @@ async def test_a_chain_can_use_people_from_the_brief_without_new_roles(graph):  
                 "goals": [{"kind": "talk", "npc": "giver", "talk": _talk("Дело сделано.")}],
             }
         ]
-    async with _setup(graph, [raw]) as (_, chains, casting, _):
-        made = await chains.chain(HILDA)
+    async with _setup(graph, [raw]) as (_, chains, casting, llm):
+        made = await chains.chain(HILDA, max_people=0)
         assert made is not None and len(made) == 2 and not casting.calls
+        assert "Замысел режиссёра:" not in llm.calls[0][1][0].content
+        assert "Новых персонажей в этой цепочке — не больше 0" in llm.calls[0][1][0].content
         assert chains.chronicle.facts("chain")[-1]["roles"] == {}
         assert made[1].after == made[0].id
 
