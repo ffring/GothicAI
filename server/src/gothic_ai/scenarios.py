@@ -1074,6 +1074,11 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         f"{'done' if res.status in ('done', 'timeout') and not detached else 'failed'} "
         f"({res.status} {res.detail or ''}, still attached: {not detached})"
     )
+    # The flee wolf can still be alive: finish this encounter before restoring the routine.
+    around = (await link.snapshot(npc, fresh=True)).nearby_npcs
+    for other in around:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
     await link.act(npc, "return_to_routine")
 
     # 5. a free npc speaks: queued like its own lines, or on the move (overlay) without stopping

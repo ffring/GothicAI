@@ -468,6 +468,8 @@ class Npc final {
       };
     void      forEachRoutine(const std::function<void(const RoutineInfo&)>& f) const;
     ScriptFn  currentState() const { return aiState.funcIni; }
+    // The initializer has run; installing funcIni alone does not start the state.
+    bool      isStateStarted() const { return aiState.started; }
     Npc*      stateOther() const { return currentOther; }  // ai_bridge: whom the script state is about
     void      multSpeed(float s);
 
