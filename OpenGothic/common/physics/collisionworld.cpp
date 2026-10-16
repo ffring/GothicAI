@@ -2041,11 +2041,18 @@ void CollisionWorld::tick(uint64_t dt) {
       // terrain triangles. The audible impulse and its ordering stay unchanged.
       if(impact.body==previous && impact.step==previousStep) continue;
       CollisionBody* body=nullptr;
+      std::string otherCulprit;
       {
         JPH::BodyLockRead other(impl->system.GetBodyLockInterface(),impact.other);
         if(!other.Succeeded()) continue;
         const auto category=other.GetBody().GetObjectLayer();
         if(category==DynamicWorld::C_LivingBody || category==DynamicWorld::C_ActiveBody) continue;
+        // The impactor's recorded push/throw takes precedence over an older
+        // cause on the struck prop. This is trace truth only: audible noise
+        // keeps its existing short attribution window and visibility rules.
+        if(category==DynamicWorld::C_Item || category==DynamicWorld::C_MovableVob)
+          if(const auto* source=reinterpret_cast<const CollisionBody*>(other.GetBody().GetUserData()))
+            otherCulprit=source->traceCulprit();
         }
       {
         JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),impact.body);
@@ -2054,7 +2061,7 @@ void CollisionWorld::tick(uint64_t dt) {
         }
       previous=impact.body;
       previousStep=impact.step;
-      if(body!=nullptr) bodyImpact(*body,impact.structuralImpulse,impact.point);
+      if(body!=nullptr) bodyImpact(*body,impact.structuralImpulse,impact.point,otherCulprit);
       }
     }
   if(impl->noiseEnabled && physicsNoise) {
@@ -2240,7 +2247,7 @@ void CollisionWorld::setPhysicsNoiseCallback(std::function<void(const PhysicsNoi
   impl->emitNoise=impl->noiseEnabled && bool(physicsNoise);
   }
 
-void CollisionWorld::setBodyImpactCallback(std::function<void(CollisionBody&,float,const Tempest::Vec3&)> callback) {
+void CollisionWorld::setBodyImpactCallback(std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> callback) {
   bodyImpact=std::move(callback);
   }
 

@@ -11,7 +11,7 @@ from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.npc_tools import render_situation
 from gothic_ai.perception import RECENT_S, PerceptionDesk
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.protocol import TRACE_PROTOCOL, NpcView
+from gothic_ai.protocol import BROKEN_TRACE_PROTOCOL, TRACE_PROTOCOL, NpcView
 from gothic_ai.protocol import Snapshot as NpcSnapshot
 from tests.fake_game import FakeGame, connected
 from tests.fakes import Clock
@@ -353,6 +353,38 @@ def test_trace_perception_requires_the_bridge_protocol(protocol):
     assert bool(sight.traces) == (protocol >= TRACE_PROTOCOL)
     perception._store(NpcView.model_validate(lobarts_view()))
     assert perception.sight(LOBART).traces is None
+
+
+@pytest.mark.parametrize("age", [0, 17, None])
+def test_broken_trace_world_picture_names_the_remains_without_a_culprit(age):
+    perception = desk([{**lobarts_view(), "traces": [
+        physical_trace("broken:7", "broken", "обломки ящика", age=age),
+    ]}])
+    sight = perception.sight(LOBART)
+    assert sight is not None
+    age_words = f"{age} мин" if age is not None else "неизвестна"
+    assert sight.traces == (
+        "Следы: обломки ящика (5 м, у точки NW_FARM1_OUT_02, слева от героя, "
+        f"давность {age_words})."
+    )
+    assert sight.traces in render_situation(None, None, sight)
+    english_age = f"age {age} game minutes" if age is not None else "age unknown"
+    assert f"You see debris: обломки ящика, 5 m away ({english_age})." in perception.english(LOBART)
+    assert sight.things == {}
+    assert "PLAYER" not in sight.traces
+
+
+@pytest.mark.parametrize("protocol", [TRACE_PROTOCOL - 1, TRACE_PROTOCOL, BROKEN_TRACE_PROTOCOL])
+def test_old_bridge_keeps_its_traces_without_broken(protocol):
+    perception = desk([])
+    perception.link.hello = SimpleNamespace(protocol=protocol)
+    perception._store(NpcView.model_validate({**lobarts_view(), "traces": [
+        physical_trace(), physical_trace("broken:7", "broken", "сломанный забор"),
+    ]}))
+    sight = perception.sight(LOBART)
+    assert sight is not None
+    assert ("Стол" in (sight.traces or "")) == (protocol >= TRACE_PROTOCOL)
+    assert ("сломанный забор" in (sight.traces or "")) == (protocol >= BROKEN_TRACE_PROTOCOL)
 
 
 async def test_it_picks_up_what_the_hero_threw_down_and_follows_him_again():

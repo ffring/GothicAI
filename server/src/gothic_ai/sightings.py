@@ -47,6 +47,7 @@ from .llm import Tool, ToolCall
 from .memory import MemoryStore
 from .perception import WEAPON, _doing, armor_look, trace_name
 from .protocol import (
+    BROKEN_TRACE_PROTOCOL,
     NOISE_PROTOCOL,
     TRACE_PROTOCOL,
     GameMessage,
@@ -102,7 +103,8 @@ CATCH_TOOL = Tool(
     "а ты сам видел его в другом месте или другим (строка из «Что ты видел сам», например В2) — или его "
     "видел тот, кого ты расспросил (строка С1 из «Что тебе рассказали о герое другие»). "
     "Уликой может быть и след из «Следы, которые ты видел», если слова героя прямо ему противоречат "
-    "(например, он говорит, что стрела старая, а ты видел, что она свежая). Только если его "
+    "(например, он говорит, что стрела старая, а ты видел, что она свежая). "
+    "Или говорит, что забор сломан с весны, а ты видел свежие обломки. Только если его "
     "слова прямо противоречат увиденному. Ты это запомнишь, люди вокруг услышат.",
     {
         "type": "object",
@@ -139,6 +141,7 @@ class Sighting:
     doing: str = ""  # what it was doing when last seen: «сидит у костра»
     saved: int = -1  # the end last written down; -1: never
     trace_kind: str = ""  # physical evidence, first seen at start; not a person or proof of a culprit
+    trace_age: int | None = None  # broken: its age when first seen, not time elapsed since seeing it
 
     @property
     def key(self) -> str:
@@ -158,6 +161,7 @@ class Sighting:
             **({} if self.known else {"known": False}),
             **({"doing": self.doing} if self.doing else {}),
             **({"trace_kind": self.trace_kind} if self.trace_kind else {}),
+            **({"trace_age": self.trace_age} if self.trace_kind == "broken" else {}),
         }
 
     @classmethod
@@ -175,6 +179,7 @@ class Sighting:
             known=bool(record.get("known", True)),
             doing=str(record.get("doing", "")),
             trace_kind=str(record.get("trace_kind", "")),
+            trace_age=record.get("trace_age"),
         )
         s.saved = s.end
         return s
@@ -321,6 +326,8 @@ class Sightings:
         hello = getattr(self.link, "hello", None)
         if hello is None or hello.protocol >= TRACE_PROTOCOL:
             for trace in view.traces:
+                if trace.kind == "broken" and hello is not None and hello.protocol < BROKEN_TRACE_PROTOCOL:
+                    continue
                 who = f"TRACE:{trace.id}:{trace.kind}"
                 s = mind.traces.get(who)
                 if s is None:
@@ -328,6 +335,7 @@ class Sightings:
                     s = Sighting(
                         who, trace.name, now, now, [where], place_ids=[place] if place else [],
                         trace_kind=trace.kind,
+                        trace_age=trace.age if trace.kind == "broken" else None,
                     )
                     mind.traces[who] = s
                     self._write(viewer, s)
@@ -445,7 +453,12 @@ class Sightings:
         now = max(self.now if now is None else now, s.end)
         parts = [", потом ".join(s.places) or "где-то"]
         if s.trace_kind:
-            return f"{_observed_when(s.start, now)} — {trace_name(s.trace_kind, s.name)}; {parts[0]}"
+            age = ""
+            if s.trace_kind == "broken":
+                age = "; давность при наблюдении " + (
+                    f"{s.trace_age} мин" if s.trace_age is not None else "неизвестна"
+                )
+            return f"{_observed_when(s.start, now)} — {trace_name(s.trace_kind, s.name)}; {parts[0]}{age}"
         if s.who == HERO:
             parts.append(_wore(s))
         parts += [NOTABLE[n] for n in s.notable if n in NOTABLE]

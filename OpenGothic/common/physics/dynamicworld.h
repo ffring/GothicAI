@@ -254,6 +254,7 @@ class DynamicWorld final {
 
     struct BulletCallback {
       virtual ~BulletCallback()=default;
+      virtual Npc* origin() const { return nullptr; }
       virtual void onStop(){}
       virtual void onMove(){}
       virtual void onCollide(zenkit::MaterialGroup matId){(void)matId;}
@@ -394,6 +395,7 @@ class DynamicWorld final {
       Tempest::Vec3      velocity;
       Tempest::Vec3      localBounds[2];
       bool               trace = false, tilted = false;
+      // Moved-prop appearance or, for broken props, the moment of destruction.
       int64_t            traceTime = -1;
       // Engine/save truth only; never serialize this field into npc_view.
       std::string        traceCulprit;
@@ -509,7 +511,8 @@ class DynamicWorld final {
     void           rebuildMovableVob(BodyData& body);
     void           validateMovableVobs();
     void           syncMovableVob(BodyData& body);
-    void           damageMovableVob(BodyData& body, float impulse, const Tempest::Vec3& point, bool arrow = false);
+    void           damageMovableVob(BodyData& body, float impulse, const Tempest::Vec3& point, bool arrow = false,
+                                    std::string_view impactCulprit = {});
     void           breakMovableVob(BodyData& body);
     void           syncFragments(BodyData& body);
     void           cleanupFragments(BodyData& body);

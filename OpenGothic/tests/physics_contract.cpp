@@ -886,6 +886,7 @@ namespace {
       }
     {
       DynamicWorld world(nullptr,zenkit::Mesh{});
+      world.setTraceTime(1500);
       auto object=make(world,at(0,1000,0));
       require(world.destructionEnabled() && object.fractureMesh()!=nullptr && object.fractureMesh()->pieces.size()==8,
               "destruction must preload all native piece hulls and be enabled by default");
@@ -908,6 +909,8 @@ namespace {
       const auto state=world.movableVobSnapshot()[0];
       require(state.broken && state.destructible && state.health==0 && !state.enabled,
               "a broken original must retain diagnostic identity without an intact collision body");
+      require(state.traceTime==1500 && state.traceCulprit.empty(),
+              "breaking must record the game minute and leave an unknown actor unknown");
       const auto pieces=world.fragmentSnapshot();
       require(pieces.size()==8 && world.physicsStats().bodies==8,
               "replacement must remove both intact and query collisions and install only fragments");
@@ -928,11 +931,15 @@ namespace {
               "fragments must never become walking or floor query obstacles");
       const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
       DynamicWorld restored(nullptr,zenkit::Mesh{});
+      restored.setTraceTime(9000);
       auto restoredObject=make(restored,at(0,1000,0));
       loadMovables(restored,saved);
       const auto restoredPieces=restored.fragmentSnapshot();
       require(restoredObject.isBroken() && restoredPieces.size()==pieces.size(),
               "a fresh world must restore the broken original and every surviving fragment");
+      require(restored.movableVobSnapshot()[0].traceTime==1500 &&
+              restored.movableVobSnapshot()[0].traceCulprit.empty(),
+              "loading debris must preserve its destruction minute rather than use load time");
       for(size_t i=0;i<pieces.size();++i) {
         require(restoredPieces[i].piece==pieces[i].piece && restoredPieces[i].sleeping==pieces[i].sleeping,
                 "fragment cache index and sleep state must survive save/load");
@@ -941,6 +948,34 @@ namespace {
                     "awake fragment linear velocity must survive save/load");
         requireNear((restoredPieces[i].angularVelocity-pieces[i].angularVelocity).length(),0,.001f,
                     "awake fragment angular velocity must survive save/load");
+        }
+      for(const uint16_t schema:{uint16_t(1),uint16_t(2)}) {
+        const auto versioned=saveArchive([&](Serialize& output) {
+          output.setEntry("worlds/",output.worldName(),"/destruction-vobs");
+          output.write(uint32_t(0x31534544),schema,output.worldName(),uint32_t(1));
+          output.write(zenId,state.visual,state.origin,state.transform,0.f,true,uint32_t(pieces.size()));
+          if(schema>=2)
+            output.write(uint64_t(1501),std::string("NPC_DESTRUCTION_TEST"));
+          for(const auto& piece:pieces)
+            output.write(true,piece.permanent,uint64_t(piece.asleepSince)+1,
+                         piece.transform,piece.velocity,piece.angularVelocity,piece.sleeping);
+          });
+        DynamicWorld loaded(nullptr,zenkit::Mesh{});
+        loaded.setTraceTime(9000);
+        auto loadedObject=make(loaded,at(0,1000,0));
+        loadMovables(loaded,versioned);
+        const auto metadata=loaded.movableVobSnapshot()[0];
+        require(loadedObject.isBroken() && metadata.traceTime==(schema==1 ? -1 : 1500) &&
+                metadata.traceCulprit==(schema==1 ? "" : "NPC_DESTRUCTION_TEST"),
+                "legacy debris must have unknown age and actor; v2 must retain engine truth");
+        const auto savedAgain=saveArchive([&](Serialize& output) { loaded.saveMovableVobs(output); });
+        DynamicWorld reloaded(nullptr,zenkit::Mesh{});
+        auto reloadedObject=make(reloaded,at(0,1000,0));
+        loadMovables(reloaded,savedAgain);
+        const auto repeated=reloaded.movableVobSnapshot()[0];
+        require(reloadedObject.isBroken() && repeated.traceTime==metadata.traceTime &&
+                repeated.traceCulprit==metadata.traceCulprit,
+                "saving loaded debris again must preserve both unknown and recorded break metadata");
         }
       DynamicWorld movementOff(nullptr,zenkit::Mesh{});
       movementOff.setMovableVobsEnabled(false);
@@ -1048,6 +1083,8 @@ namespace {
       restored.tick(17);
       const auto retained=restored.fragmentSnapshot();
       require(retained.size()==3,"thirty game minutes must remove only nonpermanent sleeping debris");
+      require(restored.movableVobSnapshot()[0].traceTime==1500,
+              "debris cleanup must retain the original destruction minute");
       for(const auto& piece:retained) {
         require(piece.permanent,"cleanup must retain the three permanent piece indices");
         requireMatrix(piece.transform,settled[piece.piece].transform,"cleanup must not move the permanent pieces");
@@ -1063,6 +1100,8 @@ namespace {
       loadMovables(cleaned,cleanedSave);
       require(cleanedObject.isBroken() && cleaned.fragmentSnapshot().size()==3 && rendered.size()==8,
               "cleaned saves must not resurrect removed bodies or lose the render index mapping");
+      require(cleaned.movableVobSnapshot()[0].traceTime==1500,
+              "loading the permanent debris must preserve its original break time");
       size_t hidden=0;
       for(const auto& matrix:rendered) hidden+=matrix.at(3,1)<-1000000.f;
       require(hidden==5,"loading cleaned debris must hide removed render batches immediately");

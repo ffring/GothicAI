@@ -13,7 +13,15 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.perception import PerceptionDesk
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.places import PlaceBook
-from gothic_ai.protocol import NOISE_PROTOCOL, TRACE_PROTOCOL, Loading, NpcEvent, NpcView, NpcViews
+from gothic_ai.protocol import (
+    BROKEN_TRACE_PROTOCOL,
+    NOISE_PROTOCOL,
+    TRACE_PROTOCOL,
+    Loading,
+    NpcEvent,
+    NpcView,
+    NpcViews,
+)
 from gothic_ai.sightings import Sightings, when
 from gothic_ai.trust import Trust
 from tests.fake_game import FakeGame, connected
@@ -268,6 +276,55 @@ async def test_trace_memory_obeys_hello_even_when_given_a_view_directly(protocol
     assert bool(seen.tools(LOBART)) == (protocol >= TRACE_PROTOCOL)
 
 
+@pytest.mark.parametrize("protocol", [TRACE_PROTOCOL - 1, TRACE_PROTOCOL, BROKEN_TRACE_PROTOCOL])
+async def test_broken_memory_obeys_hello_without_disabling_old_traces(protocol):
+    store = MemoryStore(":memory:")
+    store.ensure_branch("A")
+    link = Link()
+    link.hello = SimpleNamespace(protocol=protocol)
+    seen = sightings(store, link)
+    seen.saw(trace_view(AT_8, traces=[
+        physical_trace(), physical_trace("broken:7", "broken", "сломанный забор"),
+    ]))
+    situation = seen.situation(LOBART) or ""
+    assert ("Стол" in situation) == (protocol >= TRACE_PROTOCOL)
+    assert ("сломанный забор" in situation) == (protocol >= BROKEN_TRACE_PROTOCOL)
+    await asyncio.gather(*seen._background)
+
+
+@pytest.mark.parametrize("age", [2, None])
+async def test_broken_memory_keeps_observed_age_after_a_load(tmp_path, age):
+    path = str(tmp_path / "memory.sqlite3")
+    store = MemoryStore(path)
+    store.ensure_branch("A")
+    seen = sightings(store)
+    first = trace_view(AT_8, traces=[physical_trace("broken:7", "broken", "обломки ящика", age=age)])
+    seen.saw(first)
+    seen.saw(first.model_copy(update={"time": AT_8 + 20}))
+    await asyncio.gather(*seen._background)
+    head = store.head("A")
+    assert head == 1
+    record = json.loads(store.seen("A", LOBART)[0])
+    assert record["trace_age"] == age
+    assert record["trace_kind"] == "broken"
+    assert "culprit" not in record and "other" not in record
+    store.close()
+
+    store = MemoryStore(path)
+    store.ensure_branch("loaded", "A", head)
+    link = Link()
+    link.session.branch = "loaded"
+    again = sightings(store, link)
+    again._sweep(AT_8 + 60)
+    age_words = f"{age} мин" if age is not None else "неизвестна"
+    assert (
+        "В1: сегодня 08:10, около часа назад — обломки ящика; во дворе фермы Лобарта; "
+        f"давность при наблюдении {age_words}."
+    ) in (again.situation(LOBART) or "")
+    assert again.targets(LOBART) == {}
+    store.close()
+
+
 @pytest.mark.parametrize("protocol", [NOISE_PROTOCOL - 1, NOISE_PROTOCOL, TRACE_PROTOCOL])
 async def test_noise_is_heard_memory_with_time_and_place_never_visual_evidence(protocol):
     store = MemoryStore(":memory:")
@@ -304,12 +361,17 @@ async def test_noise_is_heard_memory_with_time_and_place_never_visual_evidence(p
     assert len(again.mind(LOBART).heard) == 1
 
 
-async def test_a_seen_trace_is_a_catch_lie_evidence_line_in_the_model_prompt():
+@pytest.mark.parametrize("kind,name,lie,description", [
+    ("moved", "Стол", "я не трогал стол", "сдвинутый предмет: Стол"),
+    ("broken", "сломанный забор", "этот забор давно сломан, ещё с весны", "сломанный забор"),
+])
+async def test_a_seen_trace_is_a_catch_lie_evidence_line_in_the_model_prompt(kind, name, lie, description):
+    observed = trace_view(AT_8, traces=[physical_trace(kind=kind, name=name, age=2)])
     fake = FakeGame(branch="A")
-    fake.views = {LOBART: trace_view(AT_8 + 20).model_dump()}
+    fake.views = {LOBART: observed.model_copy(update={"time": AT_8 + 20}).model_dump()}
     llm = FakeBackend(script=[
         FakeStep(
-            "Стол-то сдвинут.", [ToolCall("catch_lie", {"said": "я не трогал стол", "seen": "В1"}, "c1")]
+            "Я видел свежий след.", [ToolCall("catch_lie", {"said": lie, "seen": "В1"}, "c1")]
         ),
         FakeStep("Я запомню твои слова."),
     ], delay=0)
@@ -321,20 +383,22 @@ async def test_a_seen_trace_is_a_catch_lie_evidence_line_in_the_model_prompt():
         seen = Sightings(link, store, desk, chronicle)
         dialogue.extensions += [desk, seen]
         dialogue.sight = desk.sight
-        seen.saw(trace_view(AT_8))
+        seen.saw(observed)
         dialogue.open(LOBART, "Лобарт")
-        await dialogue.say_as_player(LOBART, "Я не трогал стол.")
+        await dialogue.say_as_player(LOBART, lie)
         await _until(lambda: chronicle.facts("caught") != [], 5)
     prompt = str(llm.calls[0][1][-2].content)
     assert "Что ты видел сам, своими глазами" in prompt
-    assert "В1: сегодня 08:10, 20 минут назад — сдвинутый предмет: Стол; во дворе фермы Лобарта" in prompt
-    assert "Следы: сдвинутый предмет: Стол" in prompt
+    assert f"В1: сегодня 08:10, 20 минут назад — {description}; во дворе фермы Лобарта" in prompt
+    assert f"Следы: {description}" in prompt
+    if kind == "broken":
+        assert "давность при наблюдении 2 мин" in prompt
     catch = next(tool for tool in llm.calls[0][2] if tool.name == "catch_lie")
     assert "Следы, которые ты видел" in catch.description
     caught = chronicle.facts("caught")
     assert len(caught) == 1
-    assert caught[0]["title"] == "я не трогал стол"
-    assert "сдвинутый предмет: Стол; во дворе фермы Лобарта" in caught[0]["how"]
+    assert caught[0]["title"] == lie
+    assert f"{description}; во дворе фермы Лобарта" in caught[0]["how"]
     assert caught[0]["how"].startswith("сам видел: ")  # the trace, without claiming to have seen its maker
 
 

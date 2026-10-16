@@ -158,7 +158,7 @@ class CollisionWorld final {
     void setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
     // Whole collision-pair normal momentum (Ns), deferred until native workers
     // finish. Excludes walking/living rig contact; noise retains solver impulse.
-    void setBodyImpactCallback(std::function<void(CollisionBody&,float,const Tempest::Vec3&)> callback);
+    void setBodyImpactCallback(std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> callback);
     void emitPhysicsNoise(const PhysicsNoise& noise);
 
     // BodyInterface updates the broad phase immediately when a body moves.
@@ -247,7 +247,7 @@ class CollisionWorld final {
     uint32_t nextRagdollGroup = 1;
     std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
     std::function<void(const PhysicsNoise&)> physicsNoise;
-    std::function<void(CollisionBody&,float,const Tempest::Vec3&)> bodyImpact;
+    std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> bodyImpact;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;
