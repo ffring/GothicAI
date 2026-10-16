@@ -46,6 +46,7 @@
 #include "storyruntime.h"
 #include "storytriggers.h"
 #include "storyworld.h"
+#include "stucklogger.h"
 #include "jsonread.h"
 #include "jsonwriter.h"
 #include "world/waypoint.h"
@@ -1758,6 +1759,7 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
   }
 
 AiBridge::AiBridge() {
+  stuck = StuckLogger::fromEnvironment();
   const char* env = std::getenv("GOTHIC_AI");
   if(env!=nullptr && std::string_view(env)=="0") {
     Log::i("[ai] bridge disabled (GOTHIC_AI=0)");

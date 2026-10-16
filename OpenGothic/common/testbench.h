@@ -86,4 +86,7 @@ namespace TestBench {
   extern std::function<bool()> aiBusy;
   // set by the bridge: whether a thing of it has got that far (`waitai necro risen`: the necromancer's answer)
   extern std::function<bool(std::string_view key, std::string_view stage)> aiReached;
+  // Installed only by the opt-in bridge stuck logger; the core engine has no bridge dependency.
+  extern std::function<bool(World&,std::string_view,float)> stuckBegin;
+  extern std::function<bool(World&)> stuckEnd;
   }

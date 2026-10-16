@@ -6241,6 +6241,58 @@ bool Npc::isAiQueueEmpty() const {
          waitTime<owner.tickCount();
   }
 
+auto Npc::navigationGoal() const -> NavigationGoal {
+  NavigationGoal ret;
+  if(!go2.empty()) {
+    ret.active = true;
+    ret.npc = go2.npc;
+    ret.point = go2.wp;
+    // Preserve the final goal as intermediate waypoints change along the same walk.
+    if(go2.flag==GT_Way && go2.npc==nullptr && wayPath.last()!=nullptr)
+      ret.point = wayPath.last();
+    ret.position = ret.point!=nullptr ? ret.point->position() : go2.target();
+    ret.kind = ret.npc!=nullptr ? "npc" : (ret.point!=nullptr ? (ret.point->isFreePoint() ? "freepoint" : "waypoint") : "point");
+    if(ret.point!=nullptr)
+      ret.name = ret.point->name;
+    else if(go2.flag==GT_Item)
+      ret.kind = "item";
+    return ret;
+    }
+
+  // A future walk behind AI_Wait/occupation is not a moving NPC. Only the ready head counts.
+  const auto now = owner.tickCount();
+  if(waitTime>=now || aniWaitTime>=now || outWaitTime>now)
+    return ret;
+  const auto* action = aiQueue.front();
+  if(action==nullptr)
+    return ret;
+  if(action->act==AI_GoToPoint && action->point!=nullptr) {
+    ret.active = true;
+    ret.point = action->point;
+    ret.position = action->point->position();
+    ret.kind = ret.point->isFreePoint() ? "freepoint" : "waypoint";
+    ret.name = ret.point->name;
+    }
+  else if(action->act==AI_GoToNpc && action->target!=nullptr) {
+    ret.active = true;
+    ret.npc = action->target;
+    ret.position = action->target->position();
+    ret.kind = "npc";
+    }
+  else if(action->act==AI_GoToNextFp) {
+    // Resolving the freepoint would acquire runtime state. Keep the queued name until scripts do it.
+    ret.active = true;
+    ret.kind = "freepoint_query";
+    ret.name = action->s0;
+    }
+  else if(action->act==AI_GotoItem && action->item!=nullptr) {
+    ret.active = true;
+    ret.kind = "item";
+    ret.position = action->item->position();
+    }
+  return ret;
+  }
+
 bool Npc::isAiBusy() const {
   return !isAiQueueEmpty() ||
          aniWaitTime>=owner.tickCount() ||
