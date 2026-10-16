@@ -6741,23 +6741,21 @@ void Npc::updateCharacterVisualHeight() {
       const auto delta = at-characterVisualSamplePosition;
       const auto support = mvAlgo.characterVirtualGroundVelocity()*(float(now-characterVisualSampleTick)*0.001f);
       const auto relative = delta-support;
-      float predictedMin = 0, predictedMax = 0;
-      bool hasPrediction = false;
+      float predictedMin = support.y, predictedMax = support.y;
       // Relative travel along the support plane explains an ordinary slope.
       // Either endpoint normal may explain a transition between two surfaces.
+      // Include support-only travel: a blended normal must not turn continued
+      // ascent relative to that support into a fictitious downward step.
       for(const auto& n:{characterVisualSampleNormal,normal}) {
         if(n.y<=1.e-3f)
           continue;
         const float predicted = support.y-(n.x*relative.x+n.z*relative.z)/n.y;
         if(!std::isfinite(predicted))
           continue;
-        if(!hasPrediction)
-          predictedMin = predictedMax = predicted;
         predictedMin = std::min(predictedMin,predicted);
         predictedMax = std::max(predictedMax,predicted);
-        hasPrediction = true;
         }
-      const float explained = hasPrediction ? std::clamp(delta.y,predictedMin,predictedMax) : support.y;
+      const float explained = std::clamp(delta.y,predictedMin,predictedMax);
       const float residual = delta.y-explained;
       const float correction = std::copysign(std::max(0.f,std::abs(residual)-heightNoise),residual);
       if(correction!=0)
@@ -6767,8 +6765,14 @@ void Npc::updateCharacterVisualHeight() {
     for(const auto& step:characterVisualSteps)
       characterVisualYOffset += step.offset*(1.f-float(now-step.tick)/float(blendMilliseconds));
     if(std::abs(characterVisualYOffset)>maxVisualLag) {
-      characterVisualSteps.clear();
-      characterVisualYOffset = 0;
+      const float limited = std::clamp(characterVisualYOffset,-maxVisualLag,maxVisualLag);
+      const float scale = limited/characterVisualYOffset;
+      // Keep each correction's remaining lifetime while discarding excess lag.
+      // Clamping only the shown offset would retain a hidden backlog; clearing
+      // the history would instead snap the model to its physical feet.
+      for(auto& step:characterVisualSteps)
+        step.offset *= scale;
+      characterVisualYOffset = limited;
       }
     }
 
