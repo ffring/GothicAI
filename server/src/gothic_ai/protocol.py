@@ -18,8 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 36
+PROTOCOL_VERSION = 37
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
+TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 
 # --- game -> server -----------------------------------------------------------
 
@@ -454,6 +455,19 @@ class GroundItem(_GameMessage):
     from_hero: Side | None = None
 
 
+class Trace(_GameMessage):
+    """A visible physical trace (v37). Its originator remains private to the engine and save."""
+
+    id: str  # stable across saves; identifies the trace, not its originator
+    kind: Literal["arrow", "moved", "tilted"]
+    name: str  # arrow, table, barrel, ...
+    waypoint: str | None = None  # nearest waypoint to the trace
+    distance: float = 0  # cm from the npc
+    hero_cm: float | None = None
+    from_hero: Side | None = None
+    age: int | None = Field(default=None, ge=0)  # game minutes since appearance; unknown in legacy saves
+
+
 class NpcView(_GameMessage):
     """What an npc perceives (v11): where it is, what it does, the hero, whom it sees (the nearest first).
     Sight is the engine's own (the head's field of view and a ray), within the npc's senses range."""
@@ -475,6 +489,7 @@ class NpcView(_GameMessage):
     hero: HeroLook | None = None
     sees: list[Look] = Field(default_factory=list)
     items: list[GroundItem] = Field(default_factory=list)  # v22: things lying about, the nearest first
+    traces: list[Trace] = Field(default_factory=list)  # v37: visible physical traces, up to six within 15 m
 
 
 class NpcViews(_GameMessage):
@@ -512,6 +527,7 @@ class NpcEvent(_GameMessage):
     place: str | None = None  # noise: nearest waypoint, resolved through PlaceBook
     loudness: float | None = None  # noise: source volume, 0..1
     source: str | None = None  # noise: table, barrel, cup, body, ...
+    time: int | None = None  # v37 noise: game minutes since the first day began
 
     @model_validator(mode="before")
     @classmethod
@@ -1189,6 +1205,7 @@ DebugCommand = Literal[
     "own_npc",
     "triggers",
     "physics_noise",  # v36: native tavern fixture, devmode only
+    "physics_traces",  # v37: physical traces fixture, devmode only
 ]
 
 

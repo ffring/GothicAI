@@ -175,6 +175,88 @@ namespace {
                   "movable_vobs=0 must ignore saved motion and keep the ZEN frame");
     }
 
+  void testMovableTraceThresholds() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
+    constexpr uint32_t zenId=43;
+    const auto origin=at(0,100,0);
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    auto object=world.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    require(!object.isEmpty(),"trace fixture must have a movable body");
+    world.setTraceTime(1500);
+    for(const float distance:{10.f,50.f}) {
+      require(world.setMovableVobTransform(zenId,at(distance,100,0)),"trace fixture must accept controlled translation");
+      const auto state=world.movableVobSnapshot()[0];
+      require(!state.trace && !state.tilted && state.traceTime==-1,
+              "ten or exactly fifty centimetres of displacement must not create a trace");
+      }
+    require(world.setMovableVobTransform(zenId,at(50.1f,100,0)),"trace fixture must accept above-threshold displacement");
+    auto state=world.movableVobSnapshot()[0];
+    require(state.trace && !state.tilted && state.traceTime==1500 && state.traceCulprit.empty(),
+            "displacement beyond fifty centimetres must create an unknown-culprit trace at game time");
+    world.setTraceTime(1530);
+    require(world.setMovableVobTransform(zenId,at(75,100,0)),"an existing trace must accept further movement");
+    require(world.movableVobSnapshot()[0].traceTime==1500,
+            "later furniture movement must retain the first trace appearance time");
+
+    const auto roundtrip=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
+    DynamicWorld restored(nullptr,zenkit::Mesh{});
+    auto restoredObject=restored.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+    restored.setTraceTime(2000);
+    loadMovables(restored,roundtrip);
+    state=restored.movableVobSnapshot()[0];
+    require(state.trace && state.traceTime==1500 && state.traceCulprit.empty(),
+            "a v2 save roundtrip must retain trace appearance rather than load time");
+
+    for(const float degrees:{30.f,31.f}) {
+      auto rotated=origin;
+      rotated.rotateOX(degrees);
+      require(world.setMovableVobTransform(zenId,rotated),"trace fixture must accept a tilted pose");
+      state=world.movableVobSnapshot()[0];
+      require(state.trace==(degrees>30.f) && state.tilted==(degrees>30.f),
+              "exactly thirty degrees must not be a trace, but thirty-one degrees must be tilted");
+      }
+    auto yaw=origin;
+    yaw.rotateOY(140.f);
+    require(world.setMovableVobTransform(zenId,yaw),"trace fixture must accept an upright yaw rotation");
+    state=world.movableVobSnapshot()[0];
+    require(!state.trace && !state.tilted && state.traceTime==-1,
+            "yaw-only rotation must not create a fallen-furniture trace");
+
+    const auto moved=at(75,100,0);
+    for(const uint16_t schema:{uint16_t(1),uint16_t(2)}) {
+      const auto saved=saveArchive([&](Serialize& output) {
+        output.setEntry("worlds/_/movable-vobs");
+        output.write(uint32_t(0x31564f4d),schema,std::string_view("_"),uint32_t(1));
+        output.write(zenId,std::string_view("CONTRACT_CUBE.MRM"),origin,moved,true);
+        if(schema>=2)
+          output.write(true,uint64_t(1501),std::string_view("PLAYER"));
+        });
+      DynamicWorld loaded(nullptr,zenkit::Mesh{});
+      auto loadedObject=loaded.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+      loaded.setTraceTime(2200);
+      loadMovables(loaded,saved);
+      state=loaded.movableVobSnapshot()[0];
+      require(state.trace && !state.tilted && state.zenId==zenId,
+              "both optional save schemas must recover the same moved trace identity");
+      require(state.traceTime==(schema==1 ? -1 : 1500) && state.traceCulprit==(schema==1 ? "" : "PLAYER"),
+              "legacy trace time and culprit must remain unknown; v2 must retain engine truth");
+      require(loadedObject.addImpulse({loadedObject.mass(),0,0}),"a loaded trace must accept another impulse");
+      loaded.tick(17);
+      const auto afterImpulse=loaded.movableVobSnapshot()[0];
+      require(afterImpulse.trace && afterImpulse.traceTime==state.traceTime && afterImpulse.traceCulprit==state.traceCulprit,
+              "a later unattributed impulse must not rewrite an existing trace's first time or culprit");
+      const auto savedAgain=saveArchive([&](Serialize& output) { loaded.saveMovableVobs(output); });
+      DynamicWorld reloaded(nullptr,zenkit::Mesh{});
+      auto reloadedObject=reloaded.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
+      reloaded.setTraceTime(2300);
+      loadMovables(reloaded,savedAgain);
+      const auto reloadedState=reloaded.movableVobSnapshot()[0];
+      require(reloadedState.trace && reloadedState.traceTime==state.traceTime && reloadedState.traceCulprit==state.traceCulprit,
+              "saving either legacy unknown metadata or v2 known metadata must preserve it in the next process");
+      }
+    }
+
   void testPhysicsNoise() {
     CollisionWorld world;
     std::vector<PhysicsNoise> noises;
@@ -1143,6 +1225,7 @@ int main() {
     testMovableVobBodies();
     testMovableVobLegacyCollision();
     testMovableVobSave();
+    testMovableTraceThresholds();
     testMovableVobArrowIdentity();
     testPhysicsNoise();
     testRagdollNoise();

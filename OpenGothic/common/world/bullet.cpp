@@ -1,10 +1,12 @@
 #include "bullet.h"
 
 #include <Tempest/Log>
+#include <cmath>
 
 #include "graphics/visualfx.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
+#include "world/objects/interactive.h"
 #include "world.h"
 #include "testbench.h"
 #include "gothic.h"
@@ -172,7 +174,13 @@ void Bullet::onWorldHit(const DynamicWorld::BulletWorldHit& hit) {
       return;
       }
     }
-  if(wrld->stickArrow(std::move(view),matrix,visualName,hit.movable)) {
+  auto sightNormal = hit.normal;
+  if(Tempest::Vec3::dotProduct(sightNormal,hit.incoming)>0.f)
+    sightNormal = -sightNormal;
+  const auto sightPoint = hit.point+sightNormal*3.f;
+  const auto surface = hit.vob!=nullptr && hit.vob->isDoor() ? "door" :
+                       (std::abs(hit.normal.y)<.7f ? "wall" : "ground");
+  if(wrld->stickArrow(std::move(view),matrix,visualName,hit.movable,origin(),&sightPoint,surface)) {
     char buf[256];
     std::snprintf(buf,sizeof(buf),"arrow stuck world: at %.9g %.9g %.9g normal %.9g %.9g %.9g material %u",
                   double(hit.point.x),double(hit.point.y),double(hit.point.z),

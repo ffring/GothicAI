@@ -634,6 +634,11 @@ struct Bench {
   float noiseBridgeCupMaxRadius=0;
   std::vector<uint64_t> noiseBridgeHeard;
   std::vector<uint64_t> noiseBridgeEvents;
+  Npc* traceHost=nullptr;
+  uint32_t traceTable=uint32_t(-1);
+  Matrix4x4 traceOrigin;
+  Vec3 traceCenter,traceVisible,traceBlocked,traceFar,traceWall,traceShotDirection;
+  bool traceReady=false;
   Npc* arrowNpc=nullptr;
   std::string arrowCase,arrowAim;
   float arrowDraw=1.f;
@@ -3764,6 +3769,12 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     std::snprintf(text,sizeof(text),"physics stats step_ms=%.6f bodies=%zu rays=%llu",
                   double(stats.stepMilliseconds),stats.bodies,(unsigned long long)stats.rays);
     say(text);
+    }
+  else if(c=="traces" && a.size()>=2) {
+    std::string command=a[1],value,error;
+    for(size_t i=2;i<a.size();++i)command+=' '+a[i];
+    if(!TestBench::physicsTracesDebug(w,pl,command,value,error)) {arenaAbort(error);return;}
+    event("physics_traces_debug","\"command\":"+jsonStr(command)+",\"sample\":"+value);
     }
   else if(c=="noise" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","physics_noise",a[1]=="on");
@@ -7618,6 +7629,161 @@ bool TestBench::physicsNoiseDebug(World& world,Npc& player,std::string_view comm
     ",\"audible_dialogue_loud_impacts\":"+std::to_string(bench.noiseBridgeDialogueImpacts)+
     ",\"audible_combat_loud_impacts\":"+std::to_string(bench.noiseBridgeCombatImpacts)+
     ",\"native_heard_ms\":"+heard+"],\"bridge_event_ms\":"+bridgeEvents+"]}";
+  return true;
+  }
+
+bool TestBench::physicsTracesDebug(World& world,Npc& player,std::string_view command,
+                                  std::string& value,std::string& error) {
+  const auto fail=[&](std::string_view message) {error=message;return false;};
+  const auto park=[&](Npc& npc,const Vec3& point) {
+    npc.clearAiQueue();npc.clearState(false);npc.stopWalking();npc.setInteraction(nullptr,true);
+    npc.closeWeapon(true);npc.setPosition(point);npc.setExternalControl(false);
+    npc.setDirection(bench.traceCenter-point);npc.updateTransform();
+    npc.aiPush(AiQueue::aiWait(120000));
+    };
+  const auto floorAt=[&](Vec3& point) {
+    const auto floor=world.physic()->landRay(point+Vec3(0,180,0),400);
+    if(!floor.hasCol || floor.n.y<.8f || std::abs(floor.v.y-bench.traceCenter.y)>180)return false;
+    point.y=floor.v.y;
+    for(const auto offset:{Vec3(40,0,0),Vec3(-40,0,0),Vec3(0,0,40),Vec3(0,0,-40)})
+      if(world.physic()->ray(point+Vec3(0,85,0),point+offset+Vec3(0,85,0)).hasCol)return false;
+    return true;
+    };
+  if(command=="setup" || command.starts_with("reload ")) {
+    world.physic()->setMovableVobsEnabled(true);
+    Gothic::settingsSetI("GAME","arrow_sticking",1);
+    bench.traceHost=nullptr;
+    for(uint32_t i=0;i<world.npcCount();++i) {
+      auto* npc=world.npcById(i);if(!npc)continue;
+      auto name=symName(world,npc);
+      for(auto& c:name)c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(name.find("CORAGON")!=std::string::npos || name.find("KORAGON")!=std::string::npos) {bench.traceHost=npc;break;}
+      }
+    if(!bench.traceHost)return fail("trace fixture requires Coragon in Khorinis");
+    const auto all=world.physic()->movableVobSnapshot();
+    const DynamicWorld::MovableVobSnapshot* table=nullptr;
+    if(command.starts_with("reload ")) {
+      const auto zenId=uint32_t(std::stoul(std::string(command.substr(7))));
+      for(const auto& body:all)if(body.zenId==zenId) {table=&body;break;}
+      }
+    else {
+      float nearest=1400.f*1400.f;
+      for(const auto& body:all) {
+        if(body.className!="table" || body.zenId==uint32_t(-1))continue;
+        const auto distance=(movablePosition(body.transform)-bench.traceHost->position()).quadLength();
+        if(distance<nearest) {nearest=distance;table=&body;}
+        }
+      }
+    if(!table)return fail("Coragon trace fixture lacks a native map table");
+    bench.traceTable=table->zenId;bench.traceOrigin=table->origin;
+    bench.traceCenter=(table->localBounds[0]+table->localBounds[1])*.5f;
+    table->origin.project(bench.traceCenter);
+    if(command=="setup" && !world.physic()->setMovableVobTransform(bench.traceTable,bench.traceOrigin))
+      return fail("trace table baseline restoration failed");
+    world.script().skipImportantInfos(*bench.traceHost,player);
+    player.handle().attribute[ATR_HITPOINTS]=100000;player.handle().attribute[ATR_HITPOINTSMAX]=100000;
+    bool wallFound=false;
+    const auto from=bench.traceCenter+Vec3(0,120,0);
+    for(unsigned i=0;i<96;++i) {
+      const float angle=float(i)*float(M_PI)/48.f;
+      const Vec3 direction(std::cos(angle),0,std::sin(angle));
+      const auto hit=world.physic()->ray(from,from+direction*1000.f);
+      if(!hit.hasCol || std::abs(hit.n.y)>.25f || (hit.v-from).length()<180)continue;
+      bench.traceWall=hit.v;bench.traceShotDirection=direction;wallFound=true;break;
+      }
+    if(!wallFound)return fail("trace fixture lacks a real vertical tavern wall");
+    bool supported=false;
+    for(unsigned i=0;i<48;++i) {
+      const float angle=float(i)*float(M_PI)/24.f;
+      auto point=bench.traceCenter+Vec3(std::cos(angle)*400,0,std::sin(angle)*400);
+      if(!floorAt(point))continue;
+      park(*bench.traceHost,point);bench.traceVisible=point;supported=true;break;
+      }
+    if(!supported)return fail("trace fixture lacks supported observer floor");
+    auto hero=bench.traceVisible+Vec3(100,0,0);
+    if(floorAt(hero)) {player.setPosition(hero);player.updateTransform();}
+    bench.traceReady=true;
+    }
+  if(!bench.traceReady || !bench.traceHost)return fail("physics_traces setup required");
+  auto& npc=*bench.traceHost;
+  if(command=="small" || command=="moved" || command=="tilted") {
+    auto matrix=bench.traceOrigin;
+    if(command=="tilted")matrix.rotate(35,0,0,1);
+    else matrix.set(3,0,matrix.at(3,0)+(command=="small"?10.f:80.f));
+    if(!world.physic()->setMovableVobTransform(bench.traceTable,matrix,&player))
+      return fail("native trace table transform failed");
+    }
+  else if(command=="arrow" || command=="arrows") {
+    const auto symbol=world.script().findSymbolIndex("ITRW_ARROW");
+    if(symbol==size_t(-1))return fail("native trace arrow instance missing");
+    Item arrow(world,symbol,Item::T_Inventory);
+    const unsigned count=command=="arrow"?1:7;
+    for(unsigned i=0;i<count;++i) {
+      const auto to=bench.traceWall+Vec3(0,float(i)*8,0);
+      const auto from=to-bench.traceShotDirection*80.f;
+      auto& bullet=world.shootArrow(arrow,from,bench.traceShotDirection,DynamicWorld::bulletSpeed);
+      bullet.setOrigin(&player);bullet.setPrecise(1.f);
+      }
+    }
+  else if(command=="visible" || command=="blocked" || command=="far") {
+    const auto traces=world.physicsTraces();
+    std::vector<const World::PhysicsTrace*> scene;
+    for(const auto& trace:traces)
+      if((trace.position-bench.traceCenter).length()<1300.f)scene.push_back(&trace);
+    if(scene.size()<2)return fail("trace observer placement requires table and wall arrow");
+    bool found=false;
+    for(float distance:command=="far"?std::initializer_list<float>{1700,1900,2100,2400}:
+                                       std::initializer_list<float>{300,450,600,800,1000}) {
+      const unsigned steps=command=="far"?360:96;
+      for(unsigned i=0;i<steps;++i) {
+        const float angle=float(i)*float(M_PI)*2.f/float(steps);
+        auto point=bench.traceCenter+Vec3(std::cos(angle)*distance,0,std::sin(angle)*distance);
+        if(!floorAt(point))continue;
+        park(npc,point);
+        bool all=true,anyVisible=false;
+        for(const auto* trace:scene) {
+          bool visible=false;
+          for(const auto& sight:trace->sightPoints)
+            visible|=command=="visible"?npc.canRayHitPoint(sight,false):npc.canRayHitPoint(sight,true,2000.f);
+          const float cm=(trace->position-npc.position()).length();
+          anyVisible|=visible;
+          if(command=="blocked")all&=!visible && cm<1500;
+          else if(command=="far")all&=cm>1500;
+          else all&=visible && cm<1500;
+          }
+        if(command=="far")all&=anyVisible;
+        if(all) {found=true;break;}
+        }
+      if(found)break;
+      }
+    if(!found)return fail(command=="blocked"?"no supported observer behind a real wall":
+                         command=="far"?"no supported visible observer beyond 15m":
+                                        "no supported observer seeing both native traces");
+    if(command=="visible")bench.traceVisible=npc.position();
+    if(command=="blocked")bench.traceBlocked=npc.position();
+    if(command=="far")bench.traceFar=npc.position();
+    }
+  else if(command!="setup" && !command.starts_with("reload ") && command!="sample")
+    return fail("unknown physics_traces command");
+  std::string rows="[";
+  for(const auto& trace:world.physicsTraces()) {
+    if((trace.position-bench.traceCenter).length()>2500)continue;
+    bool visible=false;
+    for(const auto& point:trace.sightPoints)visible|=npc.canRayHitPoint(point,true,2000.f);
+    if(rows.size()>1)rows+=',';
+    const auto* wp=world.findWayPoint(trace.position);
+    rows+="{\"id\":"+jsonStr(trace.id)+",\"kind\":"+jsonStr(trace.kind)+",\"name\":"+jsonStr(trace.name)+
+      ",\"waypoint\":"+jsonStr(wp?wp->name:"")+",\"position_cm\":"+ragdollVector(trace.position)+
+      ",\"distance_cm\":"+ragdollNumber((trace.position-npc.position()).length())+
+      ",\"appeared_at\":"+std::to_string(trace.appearedAt)+",\"actor_truth\":"+jsonStr(trace.culprit)+
+      ",\"can_ray_hit_point\":"+(visible?"true":"false")+"}";
+    }
+  value="{\"npc\":"+jsonStr(symName(world,&npc))+",\"hero\":"+jsonStr(symName(world,&player))+
+    ",\"table_zen_id\":"+std::to_string(bench.traceTable)+
+    ",\"table_trace_id\":"+jsonStr(std::string(world.name())+":vob:"+std::to_string(bench.traceTable))+
+    ",\"npc_position_cm\":"+ragdollVector(npc.position())+",\"table_center_cm\":"+ragdollVector(bench.traceCenter)+
+    ",\"wall_cm\":"+ragdollVector(bench.traceWall)+",\"game_minutes\":"+std::to_string(world.time().toInt()/60000)+
+    ",\"truth\":"+rows+"]}";
   return true;
   }
 

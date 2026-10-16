@@ -60,7 +60,7 @@
 - **Заклинания с отбрасыванием** в данных G2: кулак ветра (`MFX_WINDFIST_CAST`, `pfxbucket.cpp:350`), смерч (`ZS_WHIRLWIND`, `npc.cpp:3144`). Сейчас это эффекты и состояния ИИ, без физики.
 
 **ИИ:**
-- `npc_view` / `npc_views` — кого NPC видит, через `canSeeNpc` ([npc-tools.md](npc-tools.md), шаг 4). Предметов на земле там пока нет.
+- `npc_view` / `npc_views` — кого NPC видит, через `canSeeNpc` ([npc-tools.md](npc-tools.md), шаг 4). Предметы на земле передаются с v22 (`items`), видимые физические следы — с v37 (`traces`).
 - Память увиденного (v12): встречи с героем и знакомыми, `catch_lie{said, seen}`, `check_claim` на настоящей видимости.
 - Звуковое восприятие Gothic: `PERC_ASSESSQUIETSOUND` (`constants.h:414`).
 

@@ -5,6 +5,7 @@ from gothic_ai import triggers
 from gothic_ai.protocol import (
     NOISE_PROTOCOL,
     PROTOCOL_VERSION,
+    TRACE_PROTOCOL,
     ActionCmd,
     ActionResult,
     BeastCmd,
@@ -345,7 +346,7 @@ def test_v35_the_directors_triggers():
 
 
 def test_v36_physics_noise_and_investigation():
-    assert PROTOCOL_VERSION == NOISE_PROTOCOL == 36
+    assert PROTOCOL_VERSION >= NOISE_PROTOCOL == 36
     noise = parse_game_message(
         '{"type":"npc_event","npc":"X","kind":"noise","at":[100,20,300],'
         '"place":"NW_CITY_TAVERN_01","loudness":0.54,"source":"table","distance":502}'
@@ -372,3 +373,28 @@ def test_v36_investigation_receipt_identifies_action_without_breaking_old_bridge
     assert isinstance(receipt, NpcActResult) and receipt.action == "investigate" and receipt.id == "n1"
     legacy = parse_game_message('{"type":"npc_act_result","id":"n2","npc":"X","status":"queued"}')
     assert isinstance(legacy, NpcActResult) and legacy.action is None
+
+
+def test_v37_physical_traces_and_noise_clock():
+    assert PROTOCOL_VERSION == TRACE_PROTOCOL == 37
+    msg = parse_game_message(_json({
+        "type": "npc_views", "t": 1000, "views": [{
+            "npc": "X", "name": "Корагон", "time": 725,
+            "traces": [{"id": "NEWWORLD.ZEN:vob:42", "kind": "tilted", "name": "стол",
+                        "waypoint": "NW_CITY_TAVERN_01", "distance": 210, "hero_cm": 300,
+                        "from_hero": "left", "age": 5}],
+        }],
+    }))
+    assert isinstance(msg, NpcViews)
+    trace = msg.views[0].traces[0]
+    assert (trace.kind, trace.name, trace.waypoint, trace.age) == (
+        "tilted", "стол", "NW_CITY_TAVERN_01", 5,
+    )
+    assert trace.hero_cm == 300 and trace.from_hero == "left"
+    assert set(trace.model_dump()) == {
+        "id", "kind", "name", "waypoint", "distance", "hero_cm", "from_hero", "age",
+    }
+    legacy = parse_game_message('{"type":"npc_views","t":1,"views":[{"npc":"X","name":"x"}]}')
+    assert isinstance(legacy, NpcViews) and legacy.views[0].traces == []
+    noise = parse_game_message('{"type":"npc_event","npc":"X","kind":"noise","time":725}')
+    assert isinstance(noise, NpcEvent) and noise.time == 725 and noise.other == ""

@@ -4,6 +4,7 @@
 #include "ragdoll.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
+#include "world/world.h"
 
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -332,8 +333,12 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
         second->npcContact.store(true,std::memory_order_relaxed);
         }
       }
-    if(emitNoise && !manifold.mRelativeContactPointsOn1.empty() && !a.IsSensor() && !b.IsSensor()) {
-      auto source=[](const JPH::Body& body) {
+    // Movable traces need the same push attribution even when audible noise
+    // is disabled. Resolve identities after the native workers have finished.
+    if((emitNoise || a.GetObjectLayer()==DynamicWorld::C_MovableVob || b.GetObjectLayer()==DynamicWorld::C_MovableVob) &&
+       !manifold.mRelativeContactPointsOn1.empty() && !a.IsSensor() && !b.IsSensor()) {
+      auto source=[this](const JPH::Body& body) {
+        if(!emitNoise && body.GetObjectLayer()!=DynamicWorld::C_MovableVob) return false;
         return body.IsDynamic() && (body.GetObjectLayer()==DynamicWorld::C_Item ||
                body.GetObjectLayer()==DynamicWorld::C_MovableVob || body.GetObjectLayer()==DynamicWorld::C_Ragdoll ||
                body.GetObjectLayer()==DynamicWorld::C_ActiveBody);
@@ -597,6 +602,16 @@ bool CollisionWorld::CollisionBody::isSleeping() const {
   return !lock.Succeeded() || !lock.GetBody().IsDynamic() || !lock.GetBody().IsActive();
   }
 
+void CollisionWorld::CollisionBody::setTraceCulprit(Npc* culprit) {
+  traceCause.clear();
+  if(culprit==nullptr)
+    return;
+  if(culprit->isPlayer())
+    traceCause = "PLAYER";
+  else if(auto symbol = culprit->world().script().findSymbol(size_t(culprit->instanceSymbol())))
+    traceCause = symbol->name();
+  }
+
 bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit,
                                                const Tempest::Vec3* pointCm) {
   if(owner==nullptr || id.IsInvalid() || !std::isfinite(impulseNs.x) || !std::isfinite(impulseNs.y) ||
@@ -615,6 +630,7 @@ bool CollisionWorld::CollisionBody::addImpulse(const Tempest::Vec3& impulseNs, N
     interface.AddImpulse(id,JPH::Vec3(impulseNs.x,impulseNs.y,impulseNs.z));
   noiseCulprit=culprit!=nullptr ? culprit->handlePtr() : std::weak_ptr<zenkit::INpc>();
   noiseCulpritUntilStep=owner->impl->simulationStep+300;
+  setTraceCulprit(culprit);
   return true;
   }
 
@@ -1079,6 +1095,7 @@ void CollisionWorld::tick(uint64_t dt) {
       if(!knownCulprit && current!=nullptr && current->user_ptr!=nullptr) continue;
       body->noiseCulprit=culprit->handlePtr();
       body->noiseCulpritUntilStep=impact.step+300;
+      body->setTraceCulprit(culprit);
       }
     }
   std::sort(noises.begin(),noises.end(),[](const auto& a,const auto& b) {

@@ -356,7 +356,9 @@ void NpcObserver::physicsNoise(World& world, Npc& self, const PhysicsNoise& nois
   if(symbol.empty() || !owner(symbol).empty() || throttled(symbol,"noise",world.tickCount(),NoisePeriodMs))
     return;
   JsonWriter j("npc_event");
+  const auto now = world.time();
   j.str("npc",symbol).str("kind","noise")
+   .integer("time",now.day()*24*60+now.hour()*60+now.minute())
    .array("at").item(double(noise.position.x)).item(double(noise.position.y)).item(double(noise.position.z)).endArray()
    .num("distance",double((self.position()-noise.position).length()))
    .num("loudness",double(noise.volume)).str("source",noiseSource(noise));
