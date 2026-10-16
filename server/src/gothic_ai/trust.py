@@ -9,7 +9,8 @@ situation of its quests (vanilla.py), and what it knows of the hero's honesty is
 - kept: claims of his to it that were true (`claim` with `truth`);
 - amended: lies he made amends for, to it or as it asked (amends.py), or it forgave in a deal (deals.py): a
   lie amended does not break his word;
-- broke: debts to it he did not pay back by their day (deals.py): a broken word, like a lie.
+- broke: debts to it he did not pay back by their day (deals.py), a meeting he did not come to
+  (meetings.py): a broken word, like a lie.
 
 The last two the conversational model weighs in character.
 """
@@ -26,6 +27,12 @@ from .turn import ToolOutcome
 
 if TYPE_CHECKING:
     from .dialogue import Conversation, DialogueManager
+
+
+def is_meeting(key: str) -> bool:
+    """A broken word's key is a meeting's id (meetings.py), not a debt's."""
+    return str(key).startswith("meet-")
+
 
 WORD_BROKEN = "На слово ты ему больше не веришь: засчитаешь только то, что увидишь сам."
 
@@ -82,13 +89,16 @@ class Trust:
                     for key in f["forgive"]:
                         what = titles.get(_lie(key)[0]) or _lie(key)[0]
                         r.amended.append(f"«{what}»{f' — заплатил {gold} золотых' if gold else ''}")
+                case "broken" if f.get("npc") == npc and f.get("promise") == "meet":
+                    r.broke.append(f"обещал прийти на встречу ({f.get('what', '')}), а не пришёл")
                 case "broken" if f.get("npc") == npc:
                     r.broke.append(f"обещал вернуть {f.get('what', '')}, а не вернул")
                 case "rumor" if f.get("to") == npc and f.get("kind") == "broken":
                     about = f.get("about_name") or f.get("about", "")
                     teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None
                     told = f", со слов: {teller}" if teller else ""
-                    r.heard.append(f"{about} (не вернул долг: {f.get('title', '')}{told})")
+                    what = "не пришёл на встречу" if is_meeting(f.get("quest", "")) else "не вернул долг"
+                    r.heard.append(f"{about} ({what}: {f.get('title', '')}{told})")
                 case "rumor" if f.get("to") == npc:
                     about = f.get("about_name") or f.get("name") or f.get("from", "")
                     teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None

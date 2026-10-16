@@ -1275,6 +1275,52 @@ CollisionWorld::QueryResult CollisionWorld::raySweep(const Tempest::Vec3& from, 
   return result;
   }
 
+std::vector<CollisionWorld::Overlap> CollisionWorld::overlaps(const CollisionBody& body, float marginCm, uint32_t mask) const {
+  std::vector<Overlap> ret;
+  JPH::RMat44 com;
+  JPH::ShapeRefC shape;
+  {
+    JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),body.id);
+    if(!lock.Succeeded())
+      return ret;
+    com   = lock.GetBody().GetCenterOfMassTransform();
+    shape = lock.GetBody().GetShape();
+  }
+  // The simulation's own narrow phase settings: back faces and inactive edges never push.
+  JPH::CollideShapeSettings settings;
+  settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideOnlyWithActive;
+  settings.mMaxSeparationDistance = toMeters(marginCm);
+  JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
+  QueryLayerFilter filter(mask);
+  QueryBroadPhaseFilter broadFilter(mask);
+  JPH::IgnoreSingleBodyFilter self(body.id);
+  const auto base = com.GetTranslation();
+  impl->system.GetNarrowPhaseQuery().CollideShape(shape,JPH::Vec3::sOne(),com,settings,base,collector,
+                                               broadFilter,filter,self);
+  for(const auto& hit:collector.mHits) {
+    JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),hit.mBodyID2);
+    if(!lock.Succeeded())
+      continue;
+    const auto& native = lock.GetBody();
+    Overlap o;
+    o.body     = reinterpret_cast<CollisionBody*>(native.GetUserData());
+    o.category = int(native.GetObjectLayer());
+    o.depth    = hit.mPenetrationDepth*100.f;
+    o.axis     = toCentimeters(hit.mPenetrationAxis.NormalizedOr(JPH::Vec3::sZero())*0.01f);
+    o.point1   = toCentimeters(base+hit.mContactPointOn1);
+    o.point2   = toCentimeters(base+hit.mContactPointOn2);
+    if(o.body!=nullptr && o.body->mesh!=nullptr) {
+      QueryResult info;
+      info.body = o.body;
+      fillMaterial(info,*native.GetShape(),hit.mSubShapeID2);
+      o.material = info.material;
+      o.sector   = info.sector;
+      }
+    ret.push_back(o);
+    }
+  return ret;
+  }
+
 bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& center,
                                   Tempest::Vec3& normal, Interactive*& vob) const {
   if(shape==nullptr)

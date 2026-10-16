@@ -591,6 +591,10 @@ struct Bench {
   uint64_t    volleyHoldNow = 0;
   uint32_t    lcg          = 1;  // the bench's own random numbers (seed)
   std::vector<Npc*> crew;        // arc: the npcs set out, `all` of fight
+  // wander: the crew walks the waynet from waypoint to waypoint near the hero (docs/navigation.md, stage 0)
+  std::vector<Npc*>            wanderers;
+  std::vector<const WayPoint*> wanderPoints;
+  size_t                       wanderLegs = 0;
   struct LivingWalker { Npc* npc=nullptr; WayPoint ends[2]; bool next=false,queued=false; };
   std::deque<LivingWalker> livingWalkers;
   bool livingFixture=false,livingDebug=false,livingMotion=false,livingMeasuring=false,livingMode=false;
@@ -651,6 +655,25 @@ struct Bench {
   MoveTrigger* characterMover=nullptr;
   Vec3 characterRideStart,characterRideHeroStart;
   bool characterRiding=false,characterRideMoving=false;
+  uint64_t movableWakeStart=0;
+  bool movableWakeTrace=false;
+  std::unordered_map<uintptr_t,float> movableWakeTravel;
+  struct CandleAttachment {
+    uint32_t zenId=uint32_t(-1);
+    std::string visual;
+    bool light=false;
+    Vec3 local,initial;
+    float maximumError=0,maximumTravel=0;
+  };
+  std::vector<CandleAttachment> candleAttachments;
+  uintptr_t candleBody=0;
+  uint32_t candleZenId=uint32_t(-1),candleTableZenId=uint32_t(-1);
+  Matrix4x4 candleTableInitial;
+  Vec3 candleInitial,candleSupport;
+  Vec3 candleTableBounds[2];
+  float candleMaximumTilt=0,candleMaximumTravel=0;
+  bool candleTrace=false,candleLeftTable=false,candleSnapshotMissing=false,candleCaptured=false;
+  uint64_t candleStart=0,candleSamples=0;
   struct NoiseListener { Npc* npc=nullptr; std::string role; Vec3 initial; unsigned heard=0; };
   std::vector<NoiseListener> noiseListeners;
   bool noiseTrace=false,noiseHasPushed=false,noiseTipNegative=false;
@@ -2637,6 +2660,11 @@ void movableBegin(World& world,std::string phase) {
   }
 
 void movableFields(World& world) {
+  if(bench.movableWakeTrace)
+    for(const auto& body:world.physic()->movableVobSnapshot())
+      if(body.enabled)
+        bench.movableWakeTravel[body.id]=std::max(bench.movableWakeTravel[body.id],
+          (movablePosition(body.transform)-movablePosition(body.origin)).length());
   if(!bench.movableTrace || bench.movableMeasuring || bench.movableSampleTick==world.tickCount()) return;
   bench.movableSampleTick=world.tickCount();
   for(const auto& body:world.physic()->movableVobSnapshot()) {
@@ -2671,6 +2699,11 @@ void prepareMovableFixture(World& world,Npc& player) {
   if(!host) {arenaAbort("movable fixture requires Coragon in the loaded Khorinis world");return;}
   bench.noiseHost=host;
   const auto all=world.physic()->movableVobSnapshot();
+  // Use the same authored geometry subset in ON and OFF fixtures. Rejected
+  // map props remain in the real world, outside the dynamic test catalog.
+  std::unordered_set<uint32_t> allowedMapVobs;
+  for(const auto& body:world.physic()->movableVobContacts(1.f))
+    if(body.disposition=="ok" || body.disposition=="item")allowedMapVobs.insert(body.zenId);
   std::map<std::string,size_t> noncollidingClasses,mapClasses;
   for(const auto& body:all)
     if(!body.legacyCollision)++noncollidingClasses[body.className];
@@ -2687,6 +2720,7 @@ void prepareMovableFixture(World& world,Npc& player) {
   if(!Resources::loadMesh(barrelVisual))barrelVisual.clear();
   Matrix4x4 tableTransform;float nearest=1400.f*1400.f;
   for(const auto& body:all) {
+    if(!allowedMapVobs.contains(body.zenId))continue;
     if(body.className=="utensil" && utensilVisual.empty()) utensilVisual=body.visual;
     if(body.className=="barrel" && barrelVisual.empty()) barrelVisual=body.visual;
     if(body.className!="table")continue;
@@ -2706,6 +2740,7 @@ void prepareMovableFixture(World& world,Npc& player) {
     }
   bench.movableTable=tableId;bench.movableCenter=tableCenter;
   for(const auto& body:all) {
+    if(!allowedMapVobs.contains(body.zenId))continue;
     const auto delta=movablePosition(body.transform)-tableCenter;
     if(delta.x*delta.x+delta.z*delta.z<900.f*900.f && std::abs(delta.y)<350) {
       bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);++mapClasses[body.className];
@@ -2763,7 +2798,8 @@ void prepareMovableFixture(World& world,Npc& player) {
   bench.movableDish=add(utensilVisual,(laneStart+laneEnd)*.5f);
   if(!bench.movableDish) {arenaAbort("movable floor utensil insertion failed");return;}
   bool hasBarrel=false;
-  for(const auto& body:all)if(body.className=="barrel" && std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)!=bench.movableIds.end())hasBarrel=true;
+  for(const auto& body:all)
+    if(body.className=="barrel" && allowedMapVobs.contains(body.zenId) && bench.movableMapIds.contains(body.id))hasBarrel=true;
   if(!hasBarrel && !barrelVisual.empty()) {
     const auto side=Vec3::normalize(laneEnd-laneStart);
     const auto point=(laneStart+laneEnd)*.5f+side*110.f;
@@ -2951,6 +2987,160 @@ void noisePushTable(World& world,Npc* culprit=nullptr) {
     return;
     }
   arenaAbort("physics noise table absent");
+  }
+
+void movableCandleSetup(World& world,Npc& player) {
+  const auto bodies=world.physic()->movableVobSnapshot();
+  const DynamicWorld::MovableVobSnapshot* table=nullptr;
+  const DynamicWorld::MovableVobSnapshot* candle=nullptr;
+  float bestClearance=-1;
+  bool negative=false;
+  for(const auto& candidate:bodies) {
+    if(!candidate.enabled || (candidate.zenId!=21133 && candidate.zenId!=21134))continue;
+    const auto* mesh=Resources::loadMesh(candidate.visual);if(!mesh)continue;
+    const auto* bounds=mesh->bbox();
+    auto inverse=candidate.transform;inverse.inverse();
+    const DynamicWorld::MovableVobSnapshot* supported=nullptr;
+    for(const auto& item:bodies) {
+      if(!item.enabled || item.visual.find("NW_CITY_CANDLE_01")==std::string::npos)continue;
+      const auto* candleMesh=Resources::loadMesh(item.visual);if(!candleMesh)continue;
+      const auto* cb=candleMesh->bbox();
+      auto bottom=Vec3((cb[0].x+cb[1].x)*.5f,cb[0].y,(cb[0].z+cb[1].z)*.5f);
+      item.transform.project(bottom);inverse.project(bottom);
+      if(bottom.x>=bounds[0].x && bottom.x<=bounds[1].x && bottom.z>=bounds[0].z && bottom.z<=bounds[1].z &&
+         std::abs(bottom.y-bounds[1].y)<5.f) {supported=&item;break;}
+      }
+    if(supported==nullptr)continue;
+    const bool narrowX=bounds[1].x-bounds[0].x<bounds[1].z-bounds[0].z;
+    auto center=(bounds[0]+bounds[1])*.5f;candidate.transform.project(center);
+    for(const bool side:{false,true}) {
+      auto edge=(bounds[0]+bounds[1])*.5f;
+      if(narrowX)edge.x=bounds[side?0:1].x;
+      else edge.z=bounds[side?0:1].z;
+      candidate.transform.project(edge);
+      auto direction=edge-center;direction.y=0;direction=Vec3::normalize(direction);
+      float clearance=250.f;
+      for(float height:{-20.f,0.f,30.f}) {
+        const auto from=edge+direction*15.f+Vec3(0,height,0),to=from+direction*250.f;
+        const auto hit=world.physic()->ray(from,to);
+        if(hit.hasCol)clearance=std::min(clearance,(hit.v-from).length());
+        }
+      if(clearance>bestClearance) {bestClearance=clearance;table=&candidate;candle=supported;negative=side;}
+      }
+    }
+  if(table==nullptr || candle==nullptr) {arenaAbort("candle fixture requires a movable candle on map table 21133 or 21134");return;}
+  if(bestClearance<80.f) {arenaAbort("candle table has no clear narrow tipping edge");return;}
+  const auto* tableMesh=Resources::loadMesh(table->visual);
+  const auto* candleMesh=Resources::loadMesh(candle->visual);
+  const auto* tb=tableMesh->bbox();const auto* cb=candleMesh->bbox();
+  bench.candleTableBounds[0]=tb[0];bench.candleTableBounds[1]=tb[1];
+  bench.candleSupport=Vec3((cb[0].x+cb[1].x)*.5f,cb[0].y,(cb[0].z+cb[1].z)*.5f);
+  bench.candleTableInitial=table->transform;bench.candleInitial=movablePosition(candle->transform);
+  bench.candleBody=candle->id;bench.candleZenId=candle->zenId;bench.candleTableZenId=table->zenId;
+  bench.candleAttachments.clear();
+  auto inverse=candle->transform;inverse.inverse();
+  std::string attachments="[";unsigned flames=0,lights=0;
+  for(const auto& child:world.vobAttachmentSnapshot(candle->zenId)) {
+    const bool flame=child.visual.find("FIRE_COMPLETE_A0.TGA")!=std::string::npos;
+    if(!flame && !child.isLight)continue;
+    if(!child.hasRenderedPosition) {arenaAbort("candle child lacks a real rendered position");return;}
+    Bench::CandleAttachment sample;
+    sample.zenId=child.zenId;sample.visual=child.visual;sample.light=child.isLight;
+    sample.initial=child.renderedPosition;sample.local=child.renderedPosition;inverse.project(sample.local);
+    bench.candleAttachments.emplace_back(sample);
+    flames+=flame;lights+=child.isLight;
+    if(attachments.size()>1)attachments+=',';
+    attachments+="{\"zen_id\":"+std::to_string(child.zenId)+",\"parent_zen_id\":"+std::to_string(child.parentZenId)+
+      ",\"visual\":"+jsonStr(child.visual)+",\"light\":"+(child.isLight?"true":"false")+
+      ",\"position_cm\":"+ragdollVector(child.renderedPosition)+",\"candle_local_cm\":"+ragdollVector(sample.local)+"}";
+    }
+  if(flames!=1 || lights<1 || lights>2) {arenaAbort("candle fixture requires its real fire sprite and one or two real lights");return;}
+  bench.movableTable=table->id;bench.noiseTipNegative=negative;
+  bench.movableCenter=(tb[0]+tb[1])*.5f;table->transform.project(bench.movableCenter);
+  for(uint32_t i=0;i<world.npcCount();++i)
+    if(auto* npc=world.npcById(i);npc && npc!=&player && (npc->position()-bench.movableCenter).length()<1400.f) {
+      npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+      }
+  auto edge=(tb[0]+tb[1])*.5f;
+  if(tb[1].x-tb[0].x<tb[1].z-tb[0].z)edge.x=tb[negative?0:1].x;
+  else edge.z=tb[negative?0:1].z;
+  table->transform.project(edge);
+  auto outward=edge-bench.movableCenter;outward.y=0;outward=Vec3::normalize(outward);
+  const auto camera=bench.movableCenter+outward*240.f+Vec3(-outward.z,0,outward.x)*100.f+Vec3(0,150,0);
+  auto hero=bench.movableCenter-outward*300.f;
+  if(const auto floor=world.physic()->landRay(hero+Vec3(0,180,0),400);floor.hasCol)hero.y=floor.v.y;
+  player.setPosition(hero);player.setDirection(bench.movableCenter-hero);player.updateTransform();
+  bench.cam=C_Hold;lookFrom(camera,bench.movableCenter+Vec3(0,15,0));
+  bench.candleMaximumTilt=0;bench.candleMaximumTravel=0;bench.candleSamples=0;
+  bench.candleLeftTable=false;bench.candleSnapshotMissing=false;bench.candleCaptured=false;
+  event("movable_candle_setup","\"world\":"+jsonStr(world.name())+",\"table_zen_id\":"+
+    std::to_string(table->zenId)+",\"candle_zen_id\":"+std::to_string(candle->zenId)+
+    ",\"table_mass_kg\":"+ragdollNumber(table->mass)+",\"candle_mass_kg\":"+ragdollNumber(candle->mass)+
+    ",\"clearance_cm\":"+ragdollNumber(bestClearance)+",\"negative_edge\":"+(negative?"true":"false")+
+    ",\"table_transform\":"+ragdollMatrix(table->transform)+",\"candle_transform\":"+ragdollMatrix(candle->transform)+
+    ",\"attachments\":"+attachments+"]");
+  }
+
+void movableCandleFields(World& world) {
+  if(!bench.candleTrace)return;
+  ++bench.candleSamples;
+  const auto bodies=world.physic()->movableVobSnapshot();
+  const DynamicWorld::MovableVobSnapshot* table=nullptr;
+  const DynamicWorld::MovableVobSnapshot* candle=nullptr;
+  for(const auto& body:bodies) {
+    if(body.zenId==bench.candleTableZenId)table=&body;
+    if(body.id==bench.candleBody)candle=&body;
+    }
+  if(table==nullptr || candle==nullptr || !table->enabled || !candle->enabled) {bench.candleSnapshotMissing=true;return;}
+  const auto* before=bench.candleTableInitial.data();const auto* after=table->transform.data();
+  const Vec3 a(before[4],before[5],before[6]),b(after[4],after[5],after[6]);
+  const float tilt=std::acos(std::clamp((a.x*b.x+a.y*b.y+a.z*b.z)/(a.length()*b.length()),-1.f,1.f))*180.f/float(M_PI);
+  bench.candleMaximumTilt=std::max(bench.candleMaximumTilt,tilt);
+  bench.candleMaximumTravel=std::max(bench.candleMaximumTravel,(movablePosition(candle->transform)-bench.candleInitial).length());
+  auto bottom=bench.candleSupport;candle->transform.project(bottom);
+  auto inverse=table->transform;inverse.inverse();inverse.project(bottom);
+  const auto* bounds=bench.candleTableBounds;
+  bench.candleLeftTable|=bottom.x<bounds[0].x-3.f || bottom.x>bounds[1].x+3.f ||
+    bottom.z<bounds[0].z-3.f || bottom.z>bounds[1].z+3.f || std::abs(bottom.y-bounds[1].y)>5.f;
+  const auto children=world.vobAttachmentSnapshot(bench.candleZenId);
+  for(auto& sample:bench.candleAttachments) {
+    const auto child=std::find_if(children.begin(),children.end(),[&](const auto& item) {return item.zenId==sample.zenId;});
+    if(child==children.end() || !child->hasRenderedPosition) {bench.candleSnapshotMissing=true;continue;}
+    auto expected=sample.local;candle->transform.project(expected);
+    sample.maximumError=std::max(sample.maximumError,(child->renderedPosition-expected).length());
+    sample.maximumTravel=std::max(sample.maximumTravel,(child->renderedPosition-sample.initial).length());
+    }
+  if(tilt>45.f && bench.candleLeftTable && !bench.candleCaptured) {
+    bench.shot="movable-candle-tip";bench.candleCaptured=true;
+    }
+  }
+
+void movableCandlePush(World& world) {
+  if(bench.candleAttachments.empty()) {arenaAbort("candle setup is required before push");return;}
+  noiseBegin(world,"candle",bench.movableCenter);
+  bench.candleStart=world.tickCount();bench.candleTrace=true;
+  noisePushTable(world);
+  movableCandleFields(world);
+  }
+
+void movableCandleCheckpoint(World& world) {
+  movableCandleFields(world);
+  std::string attachments="[";float maximumError=0;
+  for(const auto& sample:bench.candleAttachments) {
+    if(attachments.size()>1)attachments+=',';
+    attachments+="{\"zen_id\":"+std::to_string(sample.zenId)+",\"visual\":"+jsonStr(sample.visual)+
+      ",\"light\":"+(sample.light?"true":"false")+",\"max_local_offset_error_cm\":"+ragdollNumber(sample.maximumError)+
+      ",\"max_displacement_cm\":"+ragdollNumber(sample.maximumTravel)+"}";
+    maximumError=std::max(maximumError,sample.maximumError);
+    }
+  event("movable_candle_checkpoint","\"elapsed_ms\":"+std::to_string(world.tickCount()-bench.candleStart)+
+    ",\"samples\":"+std::to_string(bench.candleSamples)+",\"table_maximum_tilt_deg\":"+ragdollNumber(bench.candleMaximumTilt)+
+    ",\"candle_maximum_displacement_cm\":"+ragdollNumber(bench.candleMaximumTravel)+
+    ",\"candle_left_tabletop\":"+(bench.candleLeftTable?"true":"false")+
+    ",\"missing_render_snapshot\":"+(bench.candleSnapshotMissing?"true":"false")+
+    ",\"max_local_offset_error_cm\":"+ragdollNumber(maximumError)+",\"tip_frame_captured\":"+(bench.candleCaptured?"true":"false")+
+    ",\"attachments\":"+attachments+"]");
+  bench.candleTrace=false;
   }
 
 void noiseTableCase(World& world,Npc& player,bool push=true) {
@@ -4411,6 +4601,69 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     w.physic()->setMovableVobsEnabled(a[1]=="on");
     }
   else if(c=="movable" && a.size()==2 && a[1]=="setup") prepareMovableFixture(w,pl);
+  else if(c=="movable" && a.size()==2 && a[1]=="candle-setup") movableCandleSetup(w,pl);
+  else if(c=="movable" && a.size()==2 && a[1]=="candle-push") movableCandlePush(w);
+  else if(c=="movable" && a.size()==2 && a[1]=="candle-checkpoint") movableCandleCheckpoint(w);
+  else if(c=="movable" && a.size()==2 && a[1]=="wake") {
+    bench.movableWakeStart=w.tickCount();bench.movableWakeTrace=true;bench.movableWakeTravel.clear();
+    say("movable wake: "+std::to_string(w.physic()->wakeMovableVobs()));
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="drift") {
+    std::FILE* f = std::fopen((outDir+"/movable-drift.jsonl").c_str(),"a");
+    size_t moved = 0, total = 0;
+    for(const auto& body:w.physic()->movableVobSnapshot()) {
+      if(!body.enabled) continue;
+      ++total;
+      const auto shift = (movablePosition(body.transform)-movablePosition(body.origin)).length();
+      const auto* before=body.origin.data();const auto* after=body.transform.data();
+      const Vec3 ua(before[4],before[5],before[6]),ub(after[4],after[5],after[6]);
+      const float tilt=std::acos(std::clamp((ua.x*ub.x+ua.y*ub.y+ua.z*ub.z)/(ua.length()*ub.length()),-1.f,1.f))*180.f/float(M_PI);
+      if(shift>1.f || tilt>1.f) ++moved;
+      if(f!=nullptr)
+        std::fprintf(f,"%s\n",("{\"world\":"+jsonStr(w.name())+",\"zen_id\":"+std::to_string(body.zenId)+
+          ",\"visual\":"+jsonStr(body.visual)+",\"shift_cm\":"+ragdollNumber(shift)+",\"tilt_deg\":"+ragdollNumber(tilt)+
+          ",\"max_shift_cm\":"+ragdollNumber(std::max(shift,bench.movableWakeTravel[body.id]))+
+          ",\"elapsed_ms\":"+std::to_string(w.tickCount()-bench.movableWakeStart)+
+          ",\"sleeping\":"+(body.sleeping?"true":"false")+"}").c_str());
+      }
+    if(f!=nullptr) std::fclose(f);
+    say("movable drift: "+std::to_string(moved)+" of "+std::to_string(total)+" moved more than 1 cm or 1 deg");
+    }
+  else if(c=="movable" && (a.size()==2 || a.size()==3) && a[1]=="clamps") {
+    const float margin = a.size()==3 ? std::stof(a[2]) : 1.f;
+    const auto all = w.physic()->movableVobContacts(margin);
+    std::FILE* f = std::fopen((outDir+"/movable-clamps.jsonl").c_str(),"a");
+    size_t touched = 0;
+    for(const auto& body:all) {
+      std::string row = "{\"world\":"+jsonStr(w.name())+",\"zen_id\":"+std::to_string(body.zenId)+
+        ",\"visual\":"+jsonStr(body.visual)+",\"class\":"+jsonStr(body.className)+
+        ",\"mass_kg\":"+ragdollNumber(body.mass)+",\"position_cm\":"+ragdollVector(body.position)+
+        ",\"enabled\":"+(body.enabled?"true":"false")+",\"disposition\":"+jsonStr(body.disposition)+
+        ",\"classification_ms\":"+ragdollNumber(float(w.physic()->movableVobValidationMilliseconds()))+
+        ",\"hull_min_cm\":"+ragdollVector(body.hullMin)+",\"hull_max_cm\":"+ragdollVector(body.hullMax)+
+        ",\"contacts\":[";
+      for(size_t i=0;i<body.contacts.size();++i) {
+        const auto& t = body.contacts[i];
+        if(i>0) row += ",";
+        row += "{\"other\":"+jsonStr(t.other)+",\"category\":"+std::to_string(t.category)+
+          ",\"other_zen_id\":"+std::to_string(t.otherZenId)+
+          ",\"interactive\":"+(t.interactive?"true":"false")+",\"below\":"+(t.below?"true":"false")+",\"side\":"+std::to_string(t.side)+
+          ",\"other_min_cm\":"+ragdollVector(t.otherMin)+",\"other_max_cm\":"+ragdollVector(t.otherMax)+
+          ",\"depth_cm\":"+ragdollNumber(t.depth)+",\"count\":"+std::to_string(t.count)+
+          ",\"axis\":"+ragdollVector(t.axis)+",\"point_cm\":"+ragdollVector(t.point)+
+          ",\"point_y_min_cm\":"+ragdollNumber(t.pointYMin)+",\"point_y_max_cm\":"+ragdollNumber(t.pointYMax)+
+          ",\"material\":"+jsonStr(t.material)+",\"sector\":"+jsonStr(t.sector)+"}";
+        }
+      row += "]}";
+      if(!body.contacts.empty()) ++touched;
+      if(f!=nullptr) std::fprintf(f,"%s\n",row.c_str());
+      }
+    if(f!=nullptr) std::fclose(f);
+    say("movable clamps: "+std::to_string(all.size())+" bodies, "+std::to_string(touched)+" with contacts");
+    event("movable_clamps","\"world\":"+jsonStr(w.name())+",\"bodies\":"+std::to_string(all.size())+
+      ",\"with_contacts\":"+std::to_string(touched)+",\"margin_cm\":"+ragdollNumber(margin)+
+      ",\"classification_ms\":"+ragdollNumber(float(w.physic()->movableVobValidationMilliseconds())));
+    }
   else if(c=="movable" && a.size()==2 && a[1]=="observe") {
     bench.movableIds.clear();bench.movableMapIds.clear();
     for(const auto& body:w.physic()->movableVobSnapshot())
@@ -6455,6 +6708,38 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     say(out);
     }
+  else if(c=="wander" && a.size()>1 && a[1]=="stats") {
+    size_t walking = 0;
+    for(auto* n:bench.wanderers)
+      if(!n->isDown() && n->isAiBusy())
+        ++walking;
+    say("wander stats: " + std::to_string(bench.wanderers.size()) + " npcs, " + std::to_string(walking) +
+        " walking, " + std::to_string(bench.wanderLegs) + " legs");
+    }
+  else if(c=="wander") {
+    // wander [radius cm 3000] [walk|run]: each npc set out by `arc` is held as the AI server holds a body and
+    // walks by the waynet to a waypoint within the radius of the hero, then to another: a crowd for the speed
+    // probe (docs/navigation.md, stage 0)
+    const float r = num(a,1,3000);
+    bench.wanderPoints.clear();
+    w.findWayPoint(pl.position(),[&](const WayPoint& p) {
+      if((p.pos-pl.position()).quadLength()<r*r)
+        bench.wanderPoints.push_back(&p);
+      return false;
+      });
+    const bool run = a.size()>2 && a[2]=="run";
+    bench.wanderers.clear();
+    bench.wanderLegs = 0;
+    for(auto* n:bench.crew) {
+      n->clearAiQueue();
+      n->clearState(false);
+      n->setExternalControl(true);
+      n->setWalkMode(run ? WalkBit::WM_Run : WalkBit::WM_Walk);
+      bench.wanderers.push_back(n);
+      }
+    say("wander " + std::to_string(bench.wanderers.size()) + " npcs, " + std::to_string(bench.wanderPoints.size()) +
+        " waypoints within " + std::to_string(int(r)) + " cm");
+    }
   else if(c=="fight") {
     // fight <npc|all> <target|player>: it attacks as the game's fight starts (ZS_ATTACK, to kill: an
     // archer readies its bow from 9 m); all: the npcs of arc
@@ -7578,6 +7863,14 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     bench.spellWaitFrozen=-1;
     if(!ready) {arenaAbort(bench.spellGuardTrace?"real wind throw did not return standing":"real freeze state did not reach requested transition");return;}
     }
+  if(!bench.wanderPoints.empty())
+    for(auto* n:bench.wanderers) {
+      if(n->isDown() || n->isAiBusy())
+        continue;
+      bench.lcg = bench.lcg*1664525u + 1013904223u;
+      n->aiPush(AiQueue::aiGoToPoint(*bench.wanderPoints[(bench.lcg>>8) % bench.wanderPoints.size()]));
+      ++bench.wanderLegs;
+      }
   if(bench.livingMotion)
     for(auto& walker:bench.livingWalkers) {
       if(walker.npc->isDown()) continue;
@@ -8797,6 +9090,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   stickingFields(*world);
   spellFields(*world);
   movableFields(*world);
+  movableCandleFields(*world);
   noiseFields(*world);
   if(bench.spellReleaseAt && world->tickCount()>=bench.spellReleaseAt) {
     player->endCastSpell(false);bench.spellReleaseAt=0;

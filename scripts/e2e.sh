@@ -169,14 +169,26 @@
 #   knows: what an npc knows of where people are (docs/npc-tools.md, step M4): Cavalorn by his fire knows the
 #       bandits who robbed him sit in the cave below the steps, though the hero told him nothing: the fact is in
 #       his turn's situation and in `where{пещера}`; LLM=chatgpt: his own answer to «что тут поблизости опасного?»
+#   lead: the npc leads the hero (docs/npc-tools.md, wave 2 step 4): «Малет, отведи меня к мельнице» — a deal
+#       with the way in its window, Y, Malet sets off; the hero put back where it started: it waits and goes on
+#       once he comes up; at the mill it says so, a fact `led` (model scripted with LLM=fake); TIMEOUT=540
+#   meet: a meeting (docs/npc-tools.md, wave 2 step 4): at 19:00 the hero and Malet agree to meet at dawn by
+#       the field in front of the city gates (a deal, Y); the clock leaps past when Malet sets off, as a sleep:
+#       he is there at once and waits; the hero comes, `meet_kept`, Malet speaks first (model scripted with
+#       LLM=fake); TIMEOUT=600
+#   meet_missed: the clock to a little before he sets off, Malet walks there himself and waits; the hero does
+#       not come: the clock past the end, his word broken (`broken`, promise meet), Malet back to his routine,
+#       and when the hero comes up the missed meeting is before him; TIMEOUT=700
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its
 #       choices (v24) through the debug commands and through the dialog window as the player has it, and a
 #       program kept across save/load; the director's own lines in the npc's voice (v26). Starts the TTS
 #       service (TTS=fake)
-# A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
-# instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
+# A new game starts without the intro (`-nointro`): no videos, and the important dialogs of those around
+# the hero count as told, so Xardas does not stop him for his first talk and its addon intro video (over a
+# minute). GOTHIC_INTRO=1 brings both back. SAVE=<file.sav> loads that save instead (copied into LOG_DIR as
+# slot 1). The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
 #   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
@@ -185,7 +197,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
-LOG_DIR="${LOG_DIR:-$(mktemp -d -t gothic-e2e)}"
+LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
 TIMEOUT="${TIMEOUT:-240}"
 SCENARIO="${SCENARIO:-m0}"
 LLM="${LLM:-fake}"
@@ -244,6 +256,9 @@ START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
   cp "$SAVE" "$LOG_DIR/save_slot_1.sav"
   START_ARGS=(-save 1)
+fi
+if [ "${GOTHIC_INTRO:-0}" != "1" ]; then
+  START_ARGS+=(-nointro)
 fi
 # Recheck after server startup: another session may have taken the game while it was starting.
 until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done

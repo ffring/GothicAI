@@ -43,6 +43,7 @@ from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .gossip import GossipDesk
 from .group import GroupTalk
+from .guide import Guide
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
 from .interject import Interjections
@@ -64,6 +65,7 @@ from .llm import (
     quick_url,
 )
 from .llm.siwc import AuthError, TokenStore, login
+from .meetings import Meetings
 from .memory import DEFAULT_PATH as DEFAULT_MEMORY_DB
 from .memory import MemoryStore
 from .orders import Orders
@@ -147,7 +149,7 @@ HELP = """commands (npc defaults to the last attached one):
   day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
   author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
-  chain <npc>       the director makes a linear chain of quests and the characters it needs
+  chain <npc> [new] the director makes a linear chain of quests and the characters it needs; new: someone new
   cast              the director's own characters on this branch (docs/director.md, stage 2)
   triggers          the director's triggers in the game: counts and conditions (stage 3, -devmode)
   character <place> the director makes up a character for the place (places.py id), and a quest he gives
@@ -212,6 +214,8 @@ class ServerState:
         self.sightings: Sightings | None = None
         self.whereabouts: Whereabouts | None = None
         self.lore: lore.Lore | None = None
+        self.guide: Guide | None = None
+        self.meetings: Meetings | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
         self.beasts: BeastDesk | None = None
@@ -368,7 +372,7 @@ class Console:
                         f"{q.reward()}"
                     )
             case "chain" if self.state.chains is not None and rest:
-                quests = await self.state.chains.chain(rest[0])
+                quests = await self.state.chains.chain(rest[0], new_people="new" in rest[1:])
                 if quests is None:
                     print("(no chain: see the log)")
                 else:
@@ -742,6 +746,38 @@ async def serve(args: argparse.Namespace) -> int:
         state.bodies = Bodies(link)
         state.concerns = Concerns(link, state.chronicle, state.deals)
         state.guard = StoryGuard(graph)
+        if args.lead:
+            # it leads the hero to a place, a term of a deal (docs/npc-tools.md, wave 2 step 4)
+            state.guide = Guide(
+                link,
+                state.dialogue,
+                talk,
+                place_book,
+                state.guard,
+                state.chronicle,
+                whereabouts=state.whereabouts,
+                companion=state.talk.orders.companion,
+                journal=journal,
+            )
+            state.deals.guide = state.guide
+            state.dialogue.extensions.append(state.guide)
+        meets: asyncio.Task[None] | None = None
+        if args.meet and state.guide is not None:
+            # a meeting with the hero, a term of a deal: it is there by the hour (docs/npc-tools.md, step 4)
+            state.meetings = Meetings(
+                link,
+                state.dialogue,
+                talk,
+                state.guide,
+                state.chronicle,
+                state.bodies,
+                budget=budget,
+                journal=journal,
+            )
+            state.deals.meetings = state.meetings
+            state.dialogue.extensions.append(state.meetings)
+            state.concerns.extra.append(state.meetings.concerns)  # a meeting he did not come to
+            meets = asyncio.create_task(state.meetings.run())  # the game's clock, while one is pending
         # the npc checks the hero's words by asking a witness it knows (wave 2 step 3)
         witnesses = state.witnesses = Witnesses(
             link,
@@ -946,6 +982,8 @@ async def serve(args: argparse.Namespace) -> int:
             state.gossip.follow(planner, state.initiative)
             # the day's menus and trips: its veto before the two talking's
             state.day.follow(planner, state.gossip, state.initiative)
+            if state.meetings is not None:  # an npc on its way to a meeting or waiting there: first veto
+                state.meetings.attach_planner(planner)
             brain = asyncio.create_task(planner.run())
         try:
             await _run_scenario(link)
@@ -954,6 +992,8 @@ async def serve(args: argparse.Namespace) -> int:
             lies.cancel()
             debts.cancel()
             asks.cancel()
+            if meets is not None:
+                meets.cancel()
             for task in directing:
                 task.cancel()
             if brain is not None:
@@ -1065,6 +1105,29 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario knows: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "lead":
+                assert state.dialogue is not None and state.talk is not None and state.deals is not None
+                assert state.guide is not None
+                results = await scenarios.lead_scenario(
+                    link, state.dialogue, state.talk, state.deals, state.guide
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario lead: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in ("meet", "meet_missed"):
+                assert state.dialogue is not None and state.talk is not None and state.deals is not None
+                assert state.meetings is not None
+                results = await scenarios.meet_scenario(
+                    link,
+                    state.dialogue,
+                    state.talk,
+                    state.deals,
+                    state.meetings,
+                    missed=args.scenario == "meet_missed",
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cave":
                 assert state.dialogue is not None and state.talk is not None and state.whereabouts is not None
@@ -1888,6 +1951,9 @@ def main() -> None:
             "hearing",
             "cave",
             "knows",
+            "lead",
+            "meet",
+            "meet_missed",
             "chests",
             "chests_lobart",
             "group",
@@ -2000,6 +2066,19 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="npc's know what lies in their chests and go to take it out (docs/npc-tools.md «Сундуки»)",
+    )
+    p.add_argument(
+        "--lead",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's lead the hero to a place, a term of a deal (docs/npc-tools.md, wave 2 step 4)",
+    )
+    p.add_argument(
+        "--meet",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's set the hero meetings, a term of a deal, and come there by the hour (docs/npc-tools.md, "
+        "wave 2 step 4; needs --lead)",
     )
     p.add_argument(
         "--interject",

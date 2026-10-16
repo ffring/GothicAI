@@ -272,6 +272,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `seed <n>` | the random numbers start over: the scripts' (the dice, the release cone), the bench's (`volley` jitter), the hero's sway |
 | `npcequip <npc> <item> [count]` | into the npc's inventory, the first put on |
 | `arc <npc> <count> <dist> <step deg>` | that many of the npc stand that far in front of the hero, a step apart round it, facing it: the crew of `fight all` (a new arc replaces it, `clear` takes the gone out) |
+| `wander [radius cm 3000] [walk\|run]`, `wander stats` | the npcs of `arc` are held (as the AI server holds a body) and walk by the waynet to a random waypoint within the radius of the hero, then to another: a crowd for the speed probe of docs/navigation.md; `stats`: how many walk, how many ways they went |
 | `fight <npc\|all> <target\|player>` | it attacks as the game starts a fight (`ZS_ATTACK`, attack reason to kill: archers keep the bow beyond 9 m) |
 | `waitdown <npc\|player> [ms]` | the scenario waits till it is down: `fight over: <npc> down after <ms>`, else `waitdown: timeout` |
 | `npcaim on [second\|arrow] \| off \| sigma <deg\|off> \| lead on\|off` | npc archers aim by hand (game/archerai, `[GAME] npcManualAim`, on by default: `npcaim off` for the dice): as many hits a second as G2's dice (`second`) or as sure an arrow (`arrow`); an error forced, degrees per axis (0: the bow's own spread only); the lead on a runner. Each release logs `arrow aim: at, true <the point meant>, err <right up> deg, sigma, pv <dice %> p <target %> rho, lead, hold, disturb, settled\|waited, by <npc>` |
@@ -473,6 +474,19 @@ python3 scripts/movable_vobs_compare.py reload .bench/movable-reload --saved .be
 MOVABLE_VOBS=0 NO_BUILD=1 SAVE="$PWD/.bench/movable-input.sav" scripts/bench.sh movable-vobs-off .bench/movable-performance/off
 MOVABLE_VOBS=1 NO_BUILD=1 SAVE="$PWD/.bench/movable-input.sav" scripts/bench.sh movable-vobs-on .bench/movable-performance/on
 python3 scripts/movable_vobs_compare.py performance .bench/movable-performance --output .bench/movable-performance/result.json
+```
+
+`movable-census.bench` checks every movable vob of a map against the level, on a fresh world
+(`WORLD` starts a new game in that world instead of loading a save). `movable clamps [margin cm]`
+writes `movable-clamps.jsonl`: for each movable hull at its ZEN pose, every static or movable body
+it touches or penetrates, with the simulation's own contact settings, grouped by body and side
+(0 below, 1 above, 2..5 = +x, -x, +z, -z towards the other body). `movable wake` wakes every
+movable body without an impulse; `movable drift` writes how far each moved (`movable-drift.jsonl`).
+
+```sh
+for w in NEWWORLD OLDWORLD ADDONWORLD DRAGONISLAND; do
+  WORLD=$w.ZEN MOVABLE_VOBS=1 NO_BUILD=1 scripts/bench.sh movable-census .bench/movable-census-$w
+done
 ```
 
 `MOVABLE_VOBS` writes the initial `[GAME] movable_vobs` setting before constructing the world;

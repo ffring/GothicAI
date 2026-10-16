@@ -25,6 +25,10 @@ PROPOSE = "propose_chain"
 CACHE_KEY = "chain"
 NEAR_CM = 20_000  # a chain can lead beyond the farmyard of a one-stage errand
 ROLE = re.compile(r"[a-z][a-z0-9_]{0,31}")
+NEW_PEOPLE = (
+    "Этой цепочке нужен новый человек или лагерь бандитов: хотя бы одна роль в cast, и квесты на неё "
+    "опираются (у кого вещь, с кем говорить, кого убить)."
+)
 
 INSTRUCTIONS = """\
 Ты — сценарист Gothic II. Придумай для заказчика из сводки одну связанную цепочку из 2–3 квестов.
@@ -153,6 +157,7 @@ class Brief:
     occupied: set[str]
     roles: dict[str, list[NpcSpec]] = field(default_factory=dict)
     fixed: dict[str, Role] = field(default_factory=dict)
+    new_people: bool = False  # the chain must bring in someone new: a person or a camp
 
     def bandit_ok(self, place: str) -> bool:
         p = self.places.get(place)
@@ -168,6 +173,8 @@ class Brief:
         out.append("Люди этих мест (npc — имя; заказчик также giver):")
         out += [f"- {n} — {name}" for n, name in self.people.items()]
         out.append("Виды новых людей: " + ", ".join(KINDS))
+        if self.new_people:
+            out.append(NEW_PEOPLE)
         if self.roles:
             out.append("Готовые роли, уже в мире (сохрани описание роли, не ставь их снова):")
             for role, specs in self.roles.items():
@@ -254,11 +261,13 @@ class ChainAuthor:
                 people[person["npc"]] = str(person.get("name") or person["npc"])
         return Brief(base, nearby, people, occupied)
 
-    async def chain(self, npc: str) -> list[questbook.Quest] | None:
+    async def chain(self, npc: str, *, new_people: bool = False) -> list[questbook.Quest] | None:
+        """`new_people`: the chain must bring in someone new (cast not empty), not only the people around."""
         open_ahead(self.model.llm, CACHE_KEY, keep=True)
         brief = await self.brief(npc)
         if brief is None:
             return None
+        brief.new_people = new_people
         previous = None
         errors: list[str] = []
         for attempt in range(1, ATTEMPTS + 1):
@@ -343,6 +352,8 @@ class ChainAuthor:
         errors = []
         if not 2 <= len(p.quests) <= 3:
             errors.append("в цепочке должно быть 2–3 квеста")
+        if brief.new_people and not p.cast:
+            errors.append("cast пуст, а цепочке нужен новый человек или лагерь бандитов")
         seen = set()
         for r in p.cast:
             if not ROLE.fullmatch(r.role) or r.role == "giver" or r.role in seen:

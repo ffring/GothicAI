@@ -9,6 +9,9 @@ class StaticObj : public Vob {
 
   private:
     void  moveEvent() override;
+    void  physicsMoveEvent() override;
+    bool  hasDynamicBody() const override;
+    void  fillAttachmentSnapshot(AttachmentSnapshot& out) const override;
     bool  setMobState(std::string_view scheme,int32_t st) override;
 
     ObjVisual   visual;

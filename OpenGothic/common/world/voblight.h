@@ -9,6 +9,7 @@ class VobLight : public Vob {
 
   private:
     void  moveEvent() override;
+    void  fillAttachmentSnapshot(AttachmentSnapshot& out) const override;
 
     LightGroup::Light light;
   };

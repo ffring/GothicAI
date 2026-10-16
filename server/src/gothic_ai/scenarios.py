@@ -41,6 +41,7 @@ from .game import GameError, GameLink
 from .gamedata.storygraph import Expr
 from .gossip import WORDS_CM, GossipDesk, Scene
 from .group import ANSWER_CUE, ROUND_GAP_S
+from .guide import Guide
 from .incidents import IncidentDesk
 from .initiative import ARRIVE_CM, CHECKINFO, InitiativeDesk
 from .interject import Interjections
@@ -49,6 +50,8 @@ from .knowledge import Knowledge, Topic, roots
 from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from .llm.fake import FakeBackend, FakeStep
 from .lore import Lore
+from .meetings import DAY as GAME_DAY
+from .meetings import Meetings, clock
 from .npc_tools import GESTURES as NPC_GESTURES
 from .perception import BEASTS, PerceptionDesk, Sight, trace_name
 from .persona import PersonaProvider, habits_of
@@ -2556,6 +2559,292 @@ async def knows_scenario(
     return _logged(results)
 
 
+async def lead_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    guide: Guide,
+    npc: str = "BAU_954_MALETH",
+    to: str = "FARM1_MILL",
+) -> dict[str, str]:
+    """The npc leads the hero (docs/npc-tools.md, wave 2 step 4: `lead`): «Малет, отведи меня к мельнице».
+    Checks:
+    - offered: a deal with the way there in its window («Проводит: мельница фермы Лобарта»);
+    - sets_off: the hero says yes (Y), Malet sets off for the mill;
+    - waits: the hero is put back where Malet started: it stops and waits for him; he comes up, it goes on;
+    - there: the hero after it, it gets to the mill and says so; a fact `led` (arrived).
+    How fast it walks is logged (`pace`). The model is scripted with LLM=fake; LLM=chatgpt answers itself."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    dialogue.journal.sink = keep
+    if dialogue.llm.name == "fake":
+        offer = {"npc_gives": [], "hero_gives": [], "lead": to}
+        dialogue.llm = _OnWords(
+            [
+                ("отведи меня", FakeStep("Пойдём, покажу.", [ToolCall("propose_deal", offer, "lead1")])),
+                ("ты ведёшь его", FakeStep("Иди за мной.")),
+                ("Герой отстал", FakeStep("Эй, не отставай!")),
+                ("Вы пришли", FakeStep("Вот и мельница.")),
+            ],
+            FakeStep("Да."),
+        )
+    book = guide.book
+    mill = book.get(to) if book is not None else None
+    if mill is None or mill.center is None:
+        return _logged({"book": f"failed (no {to} in the book of places)"})
+    await link.debug("time", hour=10, minute=0)
+    await link.debug("skip_important", near=npc)  # Malet's own dialog would stop the hero at once
+    await link.debug("teleport", near=npc, distance=300)
+    if not await _until(lambda: npc in talk.people and talk.people[npc].distance <= 600, 20):
+        him = await link.snapshot(npc, fresh=True)
+        around = sorted((round(e.distance / 100), e.id) for e in talk.people.values())[:5]
+        return _logged({"roster": f"failed ({npc} at {him.npc.pos}, the hero at "
+                        f"{him.player.pos if him.player else '?'}; around him {around})"})  # fmt: skip
+
+    talk.hear("Малет, отведи меня к мельнице.", npc, {"via": "scenario"})
+    shown = await _until(lambda: npc in deals.open, 60)
+    deal = deals.open.get(npc)
+    check("offered", shown and deal is not None and deal.lead is not None and deal.lead.place.id == to,
+          deal.terms() if deal is not None else "no deal")  # fmt: skip
+    if deal is None:
+        return _logged(results)
+    await asyncio.sleep(1.2)  # Y waits until the terms have stood a moment
+    pressed = await link.press_deal()
+    started = await _until(lambda: npc in guide.leads and guide.leads[npc].state == "going", 30)
+    start = await link.snapshot(npc, fresh=True)
+    away = await _until_async(
+        lambda: link.snapshot(npc, fresh=True), lambda snap: math.dist(snap.npc.pos, start.npc.pos) > 800, 30
+    )
+    check("sets_off", pressed == "sent" and started and away, f"Y: {pressed}")
+
+    # where it is on the way, for the log, and how fast it goes while it goes (not while it waits)
+    speeds: list[float] = []
+
+    async def trace() -> None:
+        last: tuple[float, tuple[float, float, float]] | None = None
+        while True:
+            snap = link.snapshots.get(npc)
+            lead = guide.leads.get(npc)
+            now = time.monotonic()
+            if snap is not None and lead is not None and lead.state == "going":
+                if last is not None and (v := math.dist(snap.npc.pos, last[1]) / 100 / (now - last[0])) > 0.3:
+                    speeds.append(v)
+                last = (now, snap.npc.pos)
+            else:
+                last = None
+            if snap is not None and snap.player is not None:
+                log.info("lead: %s at %s (%s), %.0f m from %s, the hero %.0f m off, %s", npc,
+                         [round(x) for x in snap.npc.pos], snap.npc.nearest_waypoint,
+                         math.dist(snap.npc.pos, mill.center) / 100, to, snap.player.distance / 100,
+                         lead.state if lead else "over")  # fmt: skip
+            await asyncio.sleep(2)
+
+    tracing = asyncio.create_task(trace())
+    # the hero is back where it set off: it stops and waits for him; he comes up, it goes on
+    await _until_async(
+        lambda: link.snapshot(npc, fresh=True), lambda snap: math.dist(snap.npc.pos, start.npc.pos) > 1500, 60
+    )
+    await link.debug("player_goto", waypoint=start.npc.nearest_waypoint or start.npc.waypoint or "")
+    waited = await _until(lambda: npc in guide.leads and guide.leads[npc].state == "waiting", 20)
+    called = any(e.get("kind") == "npc" and e.get("npc") == npc for e in entries[-20:])
+    await link.debug("teleport", near=npc, distance=300)
+    on = await _until(lambda: npc in guide.leads and guide.leads[npc].state == "going", 20)
+    check("waits", waited and on, f"waited {waited}, called {called}, went on {on}")
+
+    # he goes after it: put behind it now and then, as a player who follows
+    async def after() -> None:
+        while npc in guide.leads:
+            if guide.leads[npc].state == "waiting":
+                await link.debug("teleport", near=npc, distance=300)
+            await asyncio.sleep(1)
+
+    follow = asyncio.create_task(after())
+    try:
+        await _until(lambda: npc not in guide.leads, 180)
+    finally:
+        follow.cancel()
+        tracing.cancel()
+    led = [f for f in guide.chronicle.facts("led") if f.get("npc") == npc]
+    snap = await link.snapshot(npc, fresh=True)
+    there = book.of(snap.npc.nearest_waypoint) if book is not None else None
+    pace = sorted(speeds)[len(speeds) // 2] if speeds else 0.0
+    results["pace"] = f"done ({pace:.1f} m/s on the move, the hero runs)"
+    await asyncio.sleep(4)
+    said = [e.get("text", "") for e in entries if e.get("kind") == "npc" and e.get("npc") == npc]
+    check(
+        "there",
+        bool(led) and led[-1].get("how") == "arrived" and math.dist(snap.npc.pos, mill.center) < 2000,
+        f"{led[-1].get('how') if led else 'no fact'}, at {snap.npc.nearest_waypoint} "
+        f"({there.id if there else '?'}), {math.dist(snap.npc.pos, mill.center) / 100:.0f} m from {to}",
+    )
+    log.info("lead: %s said %s", npc, said)
+    return _logged(results)
+
+
+async def meet_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    deals: Deals,
+    meetings: Meetings,
+    *,
+    missed: bool = False,
+    npc: str = "BAU_954_MALETH",
+    to: str = "FARM1_WOLF",
+) -> dict[str, str]:
+    """A meeting with the hero (docs/npc-tools.md, wave 2 step 4: `meet`): at 19:00 the hero agrees with
+    Malet to meet at dawn by the field in front of the city gates. Checks:
+    - offered: a deal with the meeting in its window;
+    - agreed: Y; the meeting is the desk's;
+    - there: the clock leaps past when Malet sets off, as when the hero sleeps: the engine puts everyone at
+      their routine's spot, and Malet is put at the meeting at once (`start_activity.place`);
+    - kept: the hero comes, a fact `meet_kept`, and Malet speaks first (`first`).
+    With `missed` (SCENARIO=meet_missed) the clock goes to a little before he sets off: he walks there himself
+    and stands there by the hour. Then the hero does not come: the clock past its end, his word is broken
+    (`broken`, promise meet), Malet goes back to his routine (`routine`), and when the hero comes up to him
+    the missed meeting is in front of him (`reproach`; live: in his words).
+    The model is scripted with LLM=fake; LLM=chatgpt answers itself."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    entries: list[dict[str, Any]] = []
+    sink = dialogue.journal.sink
+
+    def keep(entry: dict[str, Any]) -> None:
+        entries.append(entry)
+        if sink is not None:
+            sink(entry)
+
+    def said(since: int) -> list[str]:
+        return [e.get("text", "") for e in entries[since:] if e.get("kind") == "npc" and e.get("npc") == npc]
+
+    dialogue.journal.sink = keep
+    live = dialogue.llm.name != "fake"
+    await link.debug("time", hour=19, minute=0)
+    await link.debug("skip_important", near=npc)  # Malet's own dialog would stop the hero at once
+    await link.debug("teleport", near=npc, distance=300)
+    if not await _until(lambda: npc in talk.people and talk.people[npc].distance <= 600, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+    snap = await link.snapshot(npc, fresh=True)
+    tomorrow = snap.world.day + 2  # as the npc sees days: from 1
+    if not live:
+        dawn = {"where": to, "day": tomorrow, "hour": 5, "minute": 0, "hours": 2}
+        offer = ToolCall("propose_deal", {"meet": dawn}, "meet1")
+        dialogue.llm = _OnWords(
+            [
+                ("встретимся", FakeStep("Ладно, на рассвете у поля перед воротами.", [offer])),
+                ("сделка состоялась", FakeStep("Договорились. Не опаздывай.")),
+                ("пришёл на встречу", FakeStep("Пришёл всё-таки. Хорошо.")),
+                ("привет", FakeStep("Ты где был на рассвете? Я тебя ждал.")),
+            ],
+            FakeStep("Да."),
+        )
+    model = _Recorded(dialogue.llm)
+    dialogue.llm = model
+
+    talk.hear(
+        "Малет, давай встретимся завтра на рассвете у поля перед городскими воротами. Мне нужно с тобой "
+        "поговорить без лишних ушей.",
+        npc,
+        {"via": "scenario"},
+    )
+    shown = await _until(lambda: npc in deals.open and deals.open[npc].meet is not None, 60)
+    if not shown:  # a live Malet asks what it is about first
+        talk.hear(
+            "Про бандитов на дороге к городу: я знаю, где они прячутся. Здесь говорить не буду — на рассвете "
+            "у поля перед воротами.",
+            npc,
+            {"via": "scenario"},
+        )
+        shown = await _until(lambda: npc in deals.open and deals.open[npc].meet is not None, 90)
+    deal = deals.open.get(npc)
+    check("offered", shown, deal.terms() if deal is not None else "no deal")
+    if not shown or deal is None or deal.meet is None:
+        return _logged(results)
+    await asyncio.sleep(1.2)  # Y waits until the terms have stood a moment
+    pressed = await link.press_deal()
+
+    def meeting() -> Any:
+        return next((m for m in meetings.meetings.values() if m.npc == npc and m.deal == deal.id), None)
+
+    agreed = await _until(lambda: meeting() is not None, 20)
+    m = meeting()
+    check("agreed", pressed == "sent" and agreed, f"Y: {pressed}, {m.term.text() if m else 'no meeting'}")
+    if m is None:
+        return _logged(results)
+
+    # the clock past when it sets off, near enough the hour for him to come (it is put there), or a little
+    # before it sets off (it walks there by the hour)
+    before = m.term.start - m.lead_min - 3 if missed else max(m.term.start - m.lead_min, m.term.start - 25)
+    await link.debug("time", hour=before % GAME_DAY // 60, minute=before % 60)
+    there = await _until(lambda: m.state in ("there", "kept"), 300)
+    snap = await link.snapshot(npc, fresh=True)
+    now = _game_minute(snap)
+    far = math.dist(snap.npc.pos, m.term.way.pos) / 100
+    detail = f"{m.state} at {clock(now)}, {far:.0f} m from it"
+    check("there", there and far < 10 and now <= m.term.start, detail)
+    if not there:
+        return _logged(results)
+
+    if not missed:
+        t0 = len(entries)
+        await link.debug("teleport", near=npc, distance=600)
+        kept = await _until(lambda: m.state == "kept", 30)
+        facts = [f for f in meetings.chronicle.facts("meet_kept") if f.get("meet") == m.id]
+        check("kept", kept and bool(facts), m.state)
+        spoke = await _until(lambda: bool(said(t0)), 60)
+        check("first", spoke and talk.partner is not None and talk.partner.npc == npc, said(t0) or "silent")
+        return _logged(results)
+
+    # he does not come: the clock past its end
+    after = m.term.end + 10
+    await link.debug("time", hour=after % GAME_DAY // 60, minute=after % 60)
+    broken = await _until(lambda: m.state == "missed", 30)
+    facts = [f for f in meetings.chronicle.facts("broken") if f.get("meet") == m.id]
+    check("broken", broken and bool(facts) and facts[0].get("promise") == "meet", m.state)
+    left = await _until_async(
+        lambda: link.snapshot(npc, fresh=True), lambda s: math.dist(s.npc.pos, m.term.way.pos) > 800, 180
+    )
+    snap = await link.snapshot(npc, fresh=True)
+    check("routine", left, f"{math.dist(snap.npc.pos, m.term.way.pos) / 100:.0f} m from the meeting")
+    await link.debug("skip_important", near=npc)
+    await link.debug("teleport", near=npc, distance=300)
+    await _until(lambda: npc in talk.people and talk.people[npc].distance <= 600, 20)
+    t0, asked = len(entries), len(model.asked)
+    talk.hear("Малет, привет.", npc, {"via": "scenario"})
+    await _until(lambda: bool(said(t0)), 60)
+    words = " ".join(said(t0))
+    shown_to_it = any("не пришёл на встречу" in a for a in model.asked[asked:])
+    low = words.lower()
+    spoke_of = any(w in low for w in ("встреч", "ждал", "прожд", "рассвет", "договар", "не пришёл"))
+    check(
+        "reproach",
+        shown_to_it and (not live or spoke_of),
+        f"in its situation: {shown_to_it}; {words or 'silent'}",
+    )
+    return _logged(results)
+
+
+def _game_minute(snap: Snapshot) -> int:
+    return snap.world.day * GAME_DAY + snap.world.hour * 60 + snap.world.minute
+
+
 async def hearing_scenario(
     link: GameLink,
     talk: TalkDesk,
@@ -4382,7 +4671,7 @@ async def author_chain(
         )
         chains.casting.model.llm = characters_script = ChainCharacterScript()
 
-    quests = await chains.chain(giver)
+    quests = await chains.chain(giver, new_people=True)  # a chain of the director's own people
     facts = chains.chronicle.facts
     rejected = facts("chain_rejected")
     if script is not None:
@@ -4413,8 +4702,8 @@ async def author_chain(
     roles = chain_fact.get("roles", {})
     npcs = [npc for group in roles.values() for npc in group]
     world = (await link.story_state(npcs=npcs)).get("npcs", {})
-    # A chain may use only people already in the brief, so an empty cast/role map is valid.
-    check("roles", all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
+    # asked for someone new: the cast is not empty, and all of it is in the world
+    check("roles", bool(npcs) and all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
     held = []
     for q in quests:
         for stage in q.stages:

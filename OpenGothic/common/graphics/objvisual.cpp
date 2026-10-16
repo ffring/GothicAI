@@ -231,6 +231,17 @@ void ObjVisual::setObjMatrix(const Tempest::Matrix4x4& obj) {
     }
   }
 
+bool ObjVisual::renderPosition(Tempest::Vec3& out) const {
+  if(type==M_Pfx)
+    return pfx.renderPosition(out);
+  if(type==M_Mesh && !mesh.view.isEmpty()) {
+    const auto m = mesh.view.node(0).position();
+    out = Tempest::Vec3(m.at(3,0),m.at(3,1),m.at(3,2));
+    return true;
+    }
+  return false;
+  }
+
 void ObjVisual::setSlotItem(MeshObjects::Mesh&& itm, std::string_view slot) {
   if(type==M_Mdl)
     mdl.view.setSlotItem(std::move(itm), slot);

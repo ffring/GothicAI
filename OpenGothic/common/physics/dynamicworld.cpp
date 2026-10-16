@@ -22,8 +22,11 @@
 #include <cassert>
 #include <cstddef>
 #include <list>
+#include <map>
 #include <unordered_map>
 #include <cctype>
+#include <chrono>
+#include <unordered_set>
 
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "world/objects/item.h"
@@ -121,6 +124,9 @@ struct DynamicWorld::MovableVobs {
     };
   std::unordered_map<std::string,std::shared_ptr<Shape>> shapes;
   std::vector<BodyData*> bodies;
+  std::vector<MovableVobContacts> census;
+  double validationMs = 0;
+  bool finalized = false;
   bool enabled = true;
   };
 
@@ -138,6 +144,7 @@ struct DynamicWorld::BodyData {
   Tempest::Matrix4x4 origin, current;
   std::shared_ptr<MovableVobPose> pose = std::make_shared<MovableVobPose>();
   std::string visual, className;
+  std::string disposition;
   float movableMass = 0.f, massMultiplier = 1.f;
   bool blocksWalking = false, legacyCollision = true;
   bool wasSleeping = true;
@@ -708,6 +715,7 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   if(!landMesh->isEmpty() && landMesh->shape()!=nullptr) {
     bodies->landscape = world->addCollisionBody(landMesh->shape(),mt,materialFriction(zenkit::MaterialGroup::NONE),
                                                C_Landscape,false,false,landMesh.get());
+    bodies->landscape->setLabel("landscape");
     JPH::Vec3 min, max;
     bodies->landscape->getAabb(min,max);
     bbox[0] = JPH::Vec3::sMin(bbox[0],min);
@@ -859,20 +867,22 @@ DynamicWorld::NpcItem DynamicWorld::addGhostObj(const Skeleton* src) {
   return NpcItem(this,obj);
   }
 
-DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
+DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m, std::string_view label) {
   if(shape==nullptr || shape->shape==nullptr)
     return Item();
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,false,false,&shape->mesh);
+  obj->body->setLabel(label);
   obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
   return Item(this,obj.release());
   }
 
-DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
+DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m, std::string_view label) {
   if(shape==nullptr || shape->shape==nullptr)
     return Item();
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,true,false,&shape->mesh);
+  obj->body->setLabel(label);
   obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
   return Item(this,obj.release());
   }
@@ -995,7 +1005,8 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
     }
   if(shape.hull!=nullptr)
     obj.movableMass = float(shape.hull->GetVolume()*volumeScale(obj.origin)*materialDensity(shape.material)*obj.massMultiplier);
-  const bool enabled = movableVobs->enabled && shape.hull!=nullptr && std::isfinite(obj.movableMass) && obj.movableMass>0.f;
+  const bool allowed = obj.disposition.empty() || obj.disposition=="ok" || obj.disposition=="item";
+  const bool enabled = movableVobs->enabled && allowed && shape.hull!=nullptr && std::isfinite(obj.movableMass) && obj.movableMass>0.f;
   if(enabled)
     obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
   if(obj.body!=nullptr) {
@@ -1053,6 +1064,86 @@ void DynamicWorld::setMovableVobsEnabled(bool enabled) {
   movableVobs->enabled = enabled;
   for(auto* obj:movableVobs->bodies)
     rebuildMovableVob(*obj);
+  if(enabled && movableVobs->finalized && movableVobs->census.empty())
+    validateMovableVobs();
+  }
+
+void DynamicWorld::finalizeMovableVobs() {
+  movableVobs->finalized = true;
+  // Capture the authored geometry even when starting with physics disabled:
+  // a later enable must not classify against a moved door or a loaded save.
+  const bool enabled = movableVobs->enabled;
+  if(!enabled) {
+    movableVobs->enabled = true;
+    for(auto* obj:movableVobs->bodies)
+      rebuildMovableVob(*obj);
+    }
+  validateMovableVobs();
+  if(!enabled) {
+    movableVobs->enabled = false;
+    for(auto* obj:movableVobs->bodies)
+      rebuildMovableVob(*obj);
+    }
+  }
+
+double DynamicWorld::movableVobValidationMilliseconds() const {
+  return movableVobs->validationMs;
+  }
+
+void DynamicWorld::validateMovableVobs() {
+  const auto start = std::chrono::steady_clock::now();
+  // All candidates still have their hulls at ZEN poses here. Decide the entire
+  // set before replacing any hull with its original mesh: order cannot affect it.
+  auto census = movableVobContacts(1.f);
+  std::unordered_set<uint32_t> deepPairs;
+  for(const auto& entry:census)
+    for(const auto& c:entry.contacts)
+      if(c.category==C_MovableVob && c.depth>4.f) {
+        deepPairs.insert(entry.zenId);
+        if(c.otherZenId!=uint32_t(-1))
+          deepPairs.insert(c.otherZenId);
+        }
+  size_t rejected = 0;
+  for(auto& entry:census) {
+    const auto onTop = [&](const MovableVobContact& c) {
+      return c.category==C_Object && c.side!=0 &&
+             (c.otherMin.y-entry.hullMin.y)/std::max(entry.hullMax.y-entry.hullMin.y,1e-3f)>=.9f;
+      };
+    const auto size = [](const MovableVobContact& c) {
+      const auto s = c.otherMax-c.otherMin;
+      return std::max({s.x,s.y,s.z});
+      };
+    const MovableVobContact* deepest = nullptr;
+    bool supported = false, carries = false, item = false;
+    for(const auto& c:entry.contacts) {
+      supported |= c.side==0;
+      const bool top = onTop(c);
+      const bool small = size(c)<=80.f;
+      if(c.depth>4.f && !(top && small) && (deepest==nullptr || c.depth>deepest->depth))
+        deepest = &c;
+      carries |= top && !small;
+      item |= top;
+      }
+    entry.disposition = !supported ? "hangs" : deepest!=nullptr ?
+        (deepest->category==C_MovableVob ? "neighbour" : deepest->side==0 ? "floor" :
+         deepest->category==C_Landscape ? "wall" : "structure") :
+        carries ? "carries" : deepPairs.count(entry.zenId)!=0 ? "neighbour" : item ? "item" : "ok";
+    entry.enabled = entry.disposition=="ok" || entry.disposition=="item";
+    rejected += !entry.enabled;
+    }
+  // Preserve the exact origin geometry for the census, including rejected hulls.
+  movableVobs->census = std::move(census);
+  for(auto* obj:movableVobs->bodies)
+    for(const auto& entry:movableVobs->census)
+      if(obj->pose->zenId==entry.zenId) {
+        obj->disposition = entry.disposition;
+        if(!entry.enabled)
+          rebuildMovableVob(*obj);
+        break;
+        }
+  movableVobs->validationMs = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+  Tempest::Log::i("movable vob geometry: ",movableVobs->census.size()," candidates, ",rejected,
+                 " static, ",movableVobs->validationMs," ms");
   }
 
 bool DynamicWorld::movableVobsEnabled() const {
@@ -1130,8 +1221,13 @@ void DynamicWorld::loadMovableVobs(Serialize& fin) {
         continue;
       for(auto* obj:movableVobs->bodies) {
         if(obj->pose->zenId!=id || id==uint32_t(-1) || obj->visual!=visual ||
-           !PhysicsSave::sameTransform(obj->origin,origin) || obj->body==nullptr)
+           !PhysicsSave::sameTransform(obj->origin,origin))
           continue;
+        if(obj->body==nullptr) {
+          if(!PhysicsSave::sameTransform(origin,matrix))
+            Tempest::Log::i("movable vob save pose ignored: ",id," ",visual," static (",obj->disposition,")");
+          break;
+          }
         obj->body->restoreTransform(matrix,sleeping);
         // Legacy poses have no recorded appearance time. Mark an existing
         // trace before synchronizing so loading cannot invent a new timestamp.
@@ -1169,6 +1265,94 @@ bool DynamicWorld::setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4
     return true;
     }
   return false;
+  }
+
+std::vector<DynamicWorld::MovableVobContacts> DynamicWorld::movableVobContacts(float marginCm) const {
+  if(marginCm==1.f && !movableVobs->census.empty()) {
+    auto result = movableVobs->census;
+    for(auto& entry:result)
+      for(const auto* obj:movableVobs->bodies)
+        if(obj->pose->zenId==entry.zenId) {
+          entry.enabled = obj->body!=nullptr;
+          break;
+          }
+    return result;
+    }
+  static const char* materials[] = {"undef","metal","stone","wood","earth","water","snow","none"};
+  constexpr uint32_t mask = (1u<<C_Landscape)|(1u<<C_Object)|(1u<<C_MovableVob);
+  std::vector<MovableVobContacts> result;
+  for(const auto* obj:movableVobs->bodies) {
+    if(obj->body==nullptr)
+      continue;
+    MovableVobContacts entry;
+    entry.zenId = obj->pose->zenId;
+    entry.visual = obj->visual;
+    entry.className = obj->className;
+    entry.enabled = true;
+    entry.mass = obj->movableMass;
+    entry.position = obj->body->position();
+    JPH::Vec3 min, max;
+    obj->body->getAabb(min,max);
+    entry.hullMin = CollisionWorld::toCentimeters(min);
+    entry.hullMax = CollisionWorld::toCentimeters(max);
+    // One entry per body and side: the world mesh is a single body holding both floor and walls.
+    using Key = std::pair<const CollisionWorld::CollisionBody*,int>;
+    std::vector<Key> order;
+    std::map<Key,MovableVobContact> byBody;
+    const float height = std::max(entry.hullMax.y-entry.hullMin.y,1.f);
+    for(const auto& hit:world->overlaps(*obj->body,marginCm,mask)) {
+      const bool below = hit.axis.y<=-0.6f && hit.point1.y<=entry.hullMin.y+0.3f*height;
+      // side: 0 below, 1 above, 2..5 = +x,-x,+z,-z by the dominant horizontal component
+      int side = below ? 0 : hit.axis.y>=0.6f ? 1 :
+                 std::abs(hit.axis.x)>=std::abs(hit.axis.z) ? (hit.axis.x>=0 ? 2 : 3) : (hit.axis.z>=0 ? 4 : 5);
+      const Key key{hit.body,side};
+      auto [it,inserted] = byBody.try_emplace(key);
+      auto& c = it->second;
+      if(inserted) {
+        order.push_back(key);
+        c.below = below;
+        c.side = side;
+        c.category = hit.category;
+        c.depth = hit.depth;
+        c.pointYMin = c.pointYMax = hit.point1.y;
+        if(hit.body!=nullptr) {
+          c.interactive = hit.body->ptrType()==P_Interactive;
+          c.other = hit.body->label();
+          if(hit.body->ptrType()==P_MovableVob) {
+            c.other = static_cast<const BodyData*>(hit.body->payload())->visual;
+            c.otherZenId = static_cast<const BodyData*>(hit.body->payload())->pose->zenId;
+            }
+          hit.body->getAabb(min,max);
+          c.otherMin = CollisionWorld::toCentimeters(min);
+          c.otherMax = CollisionWorld::toCentimeters(max);
+          }
+        }
+      c.count++;
+      c.pointYMin = std::min(c.pointYMin,hit.point1.y);
+      c.pointYMax = std::max(c.pointYMax,hit.point1.y);
+      if(inserted || hit.depth>c.depth) {
+        c.depth = hit.depth;
+        c.axis = hit.axis;
+        c.point = hit.point1;
+        c.material = materials[std::min<size_t>(size_t(hit.material),7)];
+        c.sector = hit.sector==nullptr ? "" : hit.sector;
+        }
+      }
+    for(const auto& key:order)
+      entry.contacts.push_back(byBody[key]);
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
+
+size_t DynamicWorld::wakeMovableVobs() {
+  size_t count = 0;
+  for(auto* obj:movableVobs->bodies)
+    if(obj->body!=nullptr) {
+      obj->body->restoreTransform(obj->body->matrix(),false);
+      ++count;
+      }
+  return count;
   }
 
 std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot() const {
@@ -1781,6 +1965,18 @@ void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4& m) {
     }
   else if(obj->body!=nullptr)
     obj->body->setObjMatrix(m);
+  }
+
+void DynamicWorld::Item::setAttachmentMatrix(const Tempest::Matrix4x4& m) {
+  if(obj==nullptr || obj->movableShape==nullptr || obj->body!=nullptr)
+    return;
+  obj->current = m;
+  obj->pose->transform = m;
+  for(size_t i=0;i<obj->query.size();++i) {
+    auto matrix = m;
+    matrix.mul(obj->movableShape->parts[i].local);
+    obj->query[i]->setObjMatrix(matrix);
+    }
   }
 
 void DynamicWorld::Item::setItem(::Item* it) {
