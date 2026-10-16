@@ -171,12 +171,14 @@
 #       his turn's situation and in `where{пещера}`; LLM=chatgpt: his own answer to «что тут поблизости опасного?»
 #   lead: the npc leads the hero (docs/npc-tools.md, wave 2 step 4): «Малет, отведи меня к мельнице» — a deal
 #       with the way in its window, Y, Malet sets off; the hero put back where it started: it waits and goes on
-#       once he comes up; at the mill it says so, a fact `led` (model scripted with LLM=fake)
+#       once he comes up; at the mill it says so, a fact `led` (model scripted with LLM=fake); TIMEOUT=540
 #   meet: a meeting (docs/npc-tools.md, wave 2 step 4): at 19:00 the hero and Malet agree to meet at dawn by
-#       the field in front of the city gates (a deal, Y); the clock before the hour, Malet walks there and
-#       waits; the hero comes, `meet_kept`, Malet speaks first (model scripted with LLM=fake)
-#   meet_missed: the same, but the hero does not come: the clock past the end, his word broken (`broken`,
-#       promise meet), Malet back to his routine, and when the hero comes up the missed meeting is before him
+#       the field in front of the city gates (a deal, Y); the clock leaps past when Malet sets off, as a sleep:
+#       he is there at once and waits; the hero comes, `meet_kept`, Malet speaks first (model scripted with
+#       LLM=fake); TIMEOUT=600
+#   meet_missed: the clock to a little before he sets off, Malet walks there himself and waits; the hero does
+#       not come: the clock past the end, his word broken (`broken`, promise meet), Malet back to his routine,
+#       and when the hero comes up the missed meeting is before him; TIMEOUT=700
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its

@@ -184,6 +184,40 @@ async def test_it_does_not_get_there_itself_no_word_of_his_is_broken():
     assert chronicle.facts("meet_failed")[0]["meet"] == m.id
 
 
+async def test_he_sleeps_till_the_hour_it_is_there_at_once():
+    meetings, link, _, _, bodies, _, _ = _desk()
+    term, _ = await meetings.term(MALETH, DAWN, link.snapshots[MALETH])
+    assert term is not None
+    m = meetings.add(MALETH, "Малет", term, "D1")  # the clock from the snapshot: 19:05
+    t0 = asyncio.get_running_loop().time()
+    meetings.read(NOW + 2, t0 + 10)  # the clock as it goes: no leap
+    assert m.state == "agreed" and not m.place
+    meetings.read(term.start - 20, t0 + 15)  # he slept till 04:40: the engine put it at its routine's spot
+    await _until(lambda: bodies.walk is not None)
+    assert bodies.acts[0][1]["place"] is True and not m.place  # there at once
+    assert bodies.walk is not None
+    bodies.walk.set_result("rejected")  # still held for the talk: it did not go at all
+    await _until(lambda: m.state == "agreed")
+    meetings.read(term.start - 14, t0 + 40)  # five minutes on: again, still there at once
+    await _until(lambda: len(bodies.acts) == 2)
+    assert bodies.acts[1][1]["place"] is True
+    bodies.walk.set_result("arrived")
+    await _until(lambda: m.state == "there")
+    meetings.read(term.start + 60, t0 + 45)  # he slept again: off its spot again, put back
+    await _until(lambda: len(bodies.acts) == 3)
+    assert bodies.acts[2][1]["place"] is True and bodies.acts[2][1]["minutes"] == 60
+
+
+async def test_he_sleeps_through_it_his_word_is_broken():
+    meetings, link, _, _, bodies, chronicle, _ = _desk()
+    term, _ = await meetings.term(MALETH, DAWN, link.snapshots[MALETH])
+    assert term is not None
+    m = meetings.add(MALETH, "Малет", term, "D1")
+    # he slept through it: it never set off before his eyes, but the world went on and it waited there
+    meetings.read(term.end + 60, asyncio.get_running_loop().time())
+    assert m.state == "missed" and chronicle.facts("broken")[0]["meet"] == m.id and bodies.acts == []
+
+
 async def test_a_load_brings_the_meetings_back():
     meetings, link, *_ = _desk()
     term, _ = await meetings.term(MALETH, DAWN, link.snapshots[MALETH])

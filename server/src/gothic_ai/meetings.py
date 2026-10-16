@@ -8,6 +8,9 @@ The server keeps it, not the save (`routine_add`, `set_routine` would stay in th
 hour as the walk there takes, the npc's routine gives way to an activity at the place's waypoint
 (`start_activity` with `arrive`: it stands there with its arms crossed till the meeting is over), and the
 planner gives its body nothing else meanwhile. Cut off (a fight, a dialog, a load), it is given again.
+When the clock leaps (the hero sleeps: Wld_SetTime), the engine puts everyone at their routine's spot; the
+world went on meanwhile, so an npc due at its meeting by then is put there at once (`start_activity.place`),
+and one whose meeting is over by then waited there in vain: he slept through it.
 - The hero comes (within MEET_CM of it while it waits): the meeting is kept, a fact `meet_kept`, and the npc
   speaks first, as on its own initiative (initiative.py).
 - He does not come by the end: his word is broken (`broken` with `promise: meet`), as with a debt not paid
@@ -57,6 +60,8 @@ WAY_LONGER = 1.5  # the way by the waynet is about this much longer than the str
 SPARE_MIN = 15  # it sets off so much earlier than the walk takes
 LEAD_MIN = (20, 150)  # ...and at least, at most so far ahead of the hour
 TICK_S = 5.0  # how often the game's clock is read while a meeting is pending
+GAME_MIN_S = 4.0  # a game minute takes a little more real seconds than this
+LEAP_MIN = 45  # the clock read so many game minutes further than real time took it: it leapt (a sleep)
 RETRY_MIN = 5  # a walk cut off is given again so many game minutes later...
 TRIES = 3  # ...so many times at most
 WAIT_STATE = "ZS_STAND_ARMSCROSSED"  # how it waits there (TA_Stand_ArmsCrossed)
@@ -99,6 +104,7 @@ class Meeting:
     retry: int = 0  # a walk cut off: not again before this game minute
     tries: int = 0
     raised: bool = False  # missed: it has told him so
+    place: bool = False  # the clock leapt past its setting off: there at once, no walk
 
     def fact(self) -> Fact:
         way = self.term.way
@@ -133,6 +139,7 @@ class Meetings:
         self.journal = journal or dialogue.journal
         self.meetings: dict[str, Meeting] = {}
         self.now: int | None = None  # the game minute, as last read
+        self._read_at: float | None = None  # ...at this real time (the loop's clock)
         self._world = 0
         self._tasks: set[asyncio.Task[Any]] = set()
         self._next_allow: Callable[[NpcRecord, str], str | None] | None = None
@@ -155,7 +162,7 @@ class Meetings:
         match msg:
             case Loading():
                 self._world += 1  # its walk and its activity went with the world: given again
-                self.now = None
+                self.now = self._read_at = None
                 for m in self.meetings.values():
                     if m.state in ("going", "there"):
                         m.state, m.retry = "agreed", 0
@@ -235,6 +242,8 @@ class Meetings:
         far_m = math.dist(here.npc.pos, term.way.pos) / 100 if here is not None else 0.0
         walk = math.ceil(far_m * WAY_LONGER / WALK_M_PER_MIN)
         lead = min(LEAD_MIN[1], max(LEAD_MIN[0], walk + SPARE_MIN))
+        if self.now is None and here is not None:  # the clock from here on: a sleep right away is a leap too
+            self.now, self._read_at = _now(here), asyncio.get_running_loop().time()
         m = Meeting(f"meet-{uuid.uuid4().hex[:6]}", npc, name, term, deal, lead)
         self.meetings[m.id] = m
         self.chronicle.record(m.fact())
@@ -311,7 +320,34 @@ class Meetings:
                 log.info("meetings: %s", str(err) or type(err).__name__)
                 continue
             if all(k in state for k in ("day", "hour", "minute")):
-                self.tick(int(state["day"]) * DAY + int(state["hour"]) * 60 + int(state["minute"]))
+                now = int(state["day"]) * DAY + int(state["hour"]) * 60 + int(state["minute"])
+                self.read(now, asyncio.get_running_loop().time())
+
+    def read(self, now: int, at: float) -> None:
+        """The game's clock read at real time `at`: further on than the real time since the last read takes
+        it, it has leapt."""
+        if self.now is not None and self._read_at is not None:
+            if now - self.now > (at - self._read_at) / GAME_MIN_S + LEAP_MIN:
+                self._leapt(self.now, now)
+        self._read_at = at
+        self.tick(now)
+
+    def _leapt(self, before: int, now: int) -> None:
+        """The clock leapt forward (the hero slept: Wld_SetTime). The engine has put everyone at their
+        routine's spot (World::setDayTime), the meeting's npc too, its walk and its activity gone. The world
+        went on meanwhile: due at its meeting by now, it is there at once; its meeting over by now, it waited
+        there in vain."""
+        self._world += 1  # the walk given before the leap: whatever comes of it is no news
+        for m in self.meetings.values():
+            if m.state not in OPEN or m.tries >= TRIES:
+                continue  # over, or it has given up getting there
+            if now >= m.term.end:
+                m.state = "there"  # he slept through it: tick finds him not come
+            elif now >= m.term.start - m.lead_min:
+                m.state, m.retry, m.place = "agreed", 0, True
+            else:
+                continue
+            log.info("meeting %s: the clock leapt %s → %s, %s", m.id, clock(before), clock(now), m.state)
 
     def tick(self, now: int) -> None:
         """What comes of each meeting at `now` (a game minute)."""
@@ -328,6 +364,7 @@ class Meetings:
     async def _walk(self, m: Meeting, world: int) -> None:
         """There, and it waits till the end."""
         now = self.now if self.now is not None else m.term.start
+        place, m.place = m.place, False
         out = await self.bodies.act(
             m.npc,
             "start_activity",
@@ -337,6 +374,7 @@ class Meetings:
             arrive=True,
             radius=RADIUS_CM,
             timeout=WALK_S,
+            **({"place": True} if place else {}),
         )
         if world != self._world or m.state != "going":
             return  # a load, or the meeting is over meanwhile
@@ -350,6 +388,8 @@ class Meetings:
             if self.now is not None and self._came(m, self.now):
                 self._kept(m)
             return
+        if out.status == "rejected":
+            m.place = place  # it did not go at all: still there at once when it does
         if not (out.status == "rejected" and "busy" in out.detail):  # held for a talk: not a try, only later
             m.tries += 1
         log.info("meeting %s: %s's walk there %s (%s), try %d", m.id, m.npc, out.status, out.detail, m.tries)

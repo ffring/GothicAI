@@ -2709,9 +2709,11 @@ async def meet_scenario(
     Malet to meet at dawn by the field in front of the city gates. Checks:
     - offered: a deal with the meeting in its window;
     - agreed: Y; the meeting is the desk's;
-    - there: the clock to when Malet sets off; he walks there and stands there by the hour;
+    - there: the clock leaps past when Malet sets off, as when the hero sleeps: the engine puts everyone at
+      their routine's spot, and Malet is put at the meeting at once (`start_activity.place`);
     - kept: the hero comes, a fact `meet_kept`, and Malet speaks first (`first`).
-    With `missed` (SCENARIO=meet_missed) the hero does not come: the clock past its end, his word is broken
+    With `missed` (SCENARIO=meet_missed) the clock goes to a little before he sets off: he walks there himself
+    and stands there by the hour. Then the hero does not come: the clock past its end, his word is broken
     (`broken`, promise meet), Malet goes back to his routine (`routine`), and when the hero comes up to him
     the missed meeting is in front of him (`reproach`; live: in his words).
     The model is scripted with LLM=fake; LLM=chatgpt answers itself."""
@@ -2787,8 +2789,9 @@ async def meet_scenario(
     if m is None:
         return _logged(results)
 
-    # the clock to when it sets off: it walks there and is there by the hour
-    before = m.term.start - m.lead_min
+    # the clock past when it sets off, near enough the hour for him to come (it is put there), or a little
+    # before it sets off (it walks there by the hour)
+    before = m.term.start - m.lead_min - 3 if missed else max(m.term.start - m.lead_min, m.term.start - 25)
     await link.debug("time", hour=before % GAME_DAY // 60, minute=before % 60)
     there = await _until(lambda: m.state in ("there", "kept"), 300)
     snap = await link.snapshot(npc, fresh=True)
