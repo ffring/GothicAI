@@ -12,7 +12,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
 from gothic_ai.questbook import Goal, Ground, Quest, QuestBook, Stage, Talk, build, problems
 from gothic_ai.story import QUEST, StoryPatches
-from gothic_ai.validator import LOG_FAILED, LOG_OBSOLETE, Patches, Story, WorldState
+from gothic_ai.validator import LOG_FAILED, LOG_OBSOLETE, LOG_RUNNING, LOG_SUCCESS, Patches, Story, WorldState
 from tests.fake_game import FakeGame, connected
 from tests.test_authoring import BOOK, graph  # noqa: F401 - the graph fixture
 from tests.test_dialogue import _until
@@ -323,6 +323,109 @@ async def test_the_book_makes_a_quest_and_follows_it(graph):  # noqa: F811
         assert await book.make(_quest(id="DIR_Q2")) == ["поручение «Украденное вино» уже было"]
     finally:
         await link_cm.__aexit__(None, None, None)
+
+
+def _chain() -> list[Quest]:
+    return [
+        _quest(),
+        _quest(
+            id="DIR_Q2",
+            title="Лагерь",
+            after="DIR_Q1",
+            stages=[
+                Stage("Рассказать Хильде о лагере.", [Goal("talk", npc=HILDA, talk=_talk("Лагерь пуст."))])
+            ],
+            done_journal="Я рассказал Хильде о лагере.",
+        ),
+    ]
+
+
+async def test_a_chain_is_checked_with_its_predecessors_and_sent_in_one_patch(graph, monkeypatch):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        await _until(lambda: bool(fake.graph))
+        before = len(fake.graph)
+        checked = []
+        original_problems = questbook.problems
+
+        def check(q, ground):
+            checked.append((q.id, set(ground.quests)))
+            return original_problems(q, ground)
+
+        monkeypatch.setattr(questbook, "problems", check)
+        quests = _chain()
+        assert await book.make_chain(quests) == (quests, [])
+        assert checked == [("DIR_Q1", set()), ("DIR_Q2", {"DIR_Q1"})]
+        assert len(fake.graph) == before + 1
+        assert fake.graph[-1]["ops"] == [op for q in quests for op in build(q)]
+        assert book.all() == {q.id: q for q in quests}
+        assert [record["quest"]["id"] for record in patches.records(QUEST)] == ["DIR_Q1", "DIR_Q2"]
+        assert [fact["id"] for fact in chronicle.facts("story_quest")] == ["DIR_Q1", "DIR_Q2"]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"gold": 51}, "золота 51"),
+        ({"after": "DIR_Q9"}, "квест DIR_Q9 не найден"),
+        ({"title": "Украденное вино"}, "поручение «Украденное вино» уже было"),
+        ({"id": "DIR_Q1"}, "квест DIR_Q1 уже есть"),
+    ],
+)
+async def test_a_bad_later_quest_prevents_the_entire_chain(graph, change, error):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        await _until(lambda: bool(fake.graph))
+        before = len(fake.graph)
+        quests = _chain()
+        quests[1] = replace(quests[1], **change)
+        made, errors = await book.make_chain(quests)
+        assert made is None and any(error in e for e in errors)
+        assert len(fake.graph) == before
+        assert book.all() == {} and patches.records(QUEST) == [] and patches.ops() == []
+        assert chronicle.facts("story_quest") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_refused_chain_keeps_only_the_previous_quests(graph, monkeypatch):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        old = _quest(id="DIR_Q0", title="Прежнее поручение")
+        assert await book.make(old) == []
+        before = patches.ops()
+        original_patch = book.link.patch_graph
+
+        async def refuse_late(ops, **kwargs):
+            # The bridge has applied earlier operations when it rejects a later one.
+            if not kwargs.get("replace"):
+                ops = [*ops, {"op": "disable", "node": "BAD"}]
+            await original_patch(ops, **kwargs)
+
+        monkeypatch.setattr(book.link, "patch_graph", refuse_late)
+        made, errors = await book.make_chain(_chain())
+        assert made is None and any("no dialog BAD" in error for error in errors)
+        assert book.all() == {old.id: old}
+        assert [record["quest"]["id"] for record in patches.records(QUEST)] == [old.id]
+        assert patches.ops() == before
+        assert fake.graph[-1]["replace"] is True and fake.graph[-1]["ops"] == before
+        assert [fact["id"] for fact in chronicle.facts("story_quest")] == [old.id]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("previous", [0, LOG_RUNNING, LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE])
+def test_the_next_quest_opens_only_when_the_previous_one_succeeded(graph, previous):  # noqa: F811
+    first, second = _chain()
+    give = next(op["node"] for op in build(second) if op["op"] == "add_node")
+    # Evaluate the condition at the current state, without future dialog writers.
+    state = WorldState(vars={first.id: previous, second.id: 0})
+    assert Story(graph, state).possible(give["condition"]) is (previous == LOG_SUCCESS)
 
 
 async def test_the_save_has_the_truth_the_book_catches_up(graph):  # noqa: F811

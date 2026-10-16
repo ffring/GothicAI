@@ -1,6 +1,8 @@
+import pytest
+
 from gothic_ai.game import GameError
 from gothic_ai.memory import MemoryStore
-from gothic_ai.story import FREED, StoryPatches, freed
+from gothic_ai.story import FREED, QUEST, StoryPatches, freed
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
 
@@ -40,6 +42,33 @@ async def test_rejected_changes_are_not_kept():
         except GameError as err:
             assert "no dialog BAD" in str(err)
         assert story.ops() == []
+
+
+async def test_multiple_records_are_kept_only_after_one_complete_patch():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        story = StoryPatches(link, MemoryStore(":memory:"))
+        await _until(lambda: len(fake.graph) == 1)
+        records = [{"op": QUEST, "quest": {"id": f"DIR_Q{k}"}} for k in (1, 2)]
+        await story.make(records, [HIDE, HIDE_HILDA])
+        assert len(fake.graph) == 2 and fake.graph[-1]["ops"] == [HIDE, HIDE_HILDA]
+        assert story.records(QUEST) == records
+        assert story.ops() == [HIDE, HIDE_HILDA]
+        # Each description and each operation belongs to the save's log.
+        await _until(lambda: fake.heads[-1:] == [("A", 4)])
+
+
+async def test_refusing_a_multiple_record_patch_restores_the_previous_graph():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        story = StoryPatches(link, MemoryStore(":memory:"))
+        await _until(lambda: len(fake.graph) == 1)
+        await story.apply(HIDE)
+        records = [{"op": QUEST, "quest": {"id": f"DIR_Q{k}"}} for k in (1, 2)]
+        with pytest.raises(GameError, match="no dialog BAD"):
+            await story.make(records, [HIDE_HILDA, {"op": "disable", "node": "BAD"}])
+        assert story.records(QUEST) == [] and story.ops() == [HIDE]
+        assert fake.graph[-1]["replace"] is True and fake.graph[-1]["ops"] == [HIDE]
 
 
 async def test_a_chosen_added_dialog_stays_told():

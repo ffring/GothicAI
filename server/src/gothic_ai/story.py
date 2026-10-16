@@ -104,10 +104,10 @@ class StoryPatches:
         await self.link.patch_graph([op])
         self._record(op)
 
-    async def make(self, record: Op, ops: list[Op]) -> None:
-        """Something of the director's built of changes (a quest): the game takes all of them, then the branch
-        remembers the record and the changes. If the game refuses one (GameError), the others are taken back:
-        it gets the branch's changes anew, as they were."""
+    async def make(self, record: Op | list[Op], ops: list[Op]) -> None:
+        """Something of the director's built of changes (one quest or a chain): the game takes all of them,
+        then the branch remembers the records and the changes. If the game refuses one (GameError), the
+        others are taken back: it gets the branch's changes anew, as they were."""
         if self.branch is None:
             raise GameError("the game has not reported a session yet")
         try:
@@ -115,7 +115,8 @@ class StoryPatches:
         except GameError:
             await self._replay(self.characters(), self.ops())
             raise
-        self._record(record)
+        for entry in [record] if isinstance(record, dict) else record:
+            self._record(entry)
         for op in ops:
             self._record(op)
 

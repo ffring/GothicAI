@@ -27,6 +27,8 @@ from .budget import Budget
 from .cast import TEMPLATES, Cast, Person, PersonTie
 from .casting import PROPOSE as PROPOSE_CHARACTER
 from .casting import Casting
+from .chains import PROPOSE as PROPOSE_CHAIN
+from .chains import ChainAuthor
 from .chests import BACK, CHEST, OWNED, ChestDesk
 from .chronicle import Fact
 from .concerns import Concerns
@@ -3702,6 +3704,151 @@ class CastingScript:
         yield Done("", (call,))
 
 
+class ChainCharacterScript(CastingScript):
+    """The chain's named thief has a separate casting request, rather than an author's personality."""
+
+    name = "chain-character-script"
+
+    async def stream(self, **kwargs: Any) -> AsyncIterator[LLMEvent]:
+        async for event in super().stream(**kwargs):
+            if isinstance(event, ToolCall):
+                args = {
+                    **event.arguments,
+                    "name": "Рудек",
+                    "ru": "Ты — Рудек, мелкий вор. Добычу прячешь при себе и лишнего не болтаешь.",
+                    "en": "Rudek, a furtive petty thief carrying stolen merchandise.",
+                    "past": "Ты стащил товар у бродячего торговца и теперь пережидаешь на дороге.",
+                    "knows": ["Ты украл товар у торговца Гарета."],
+                    "ties": [],
+                    "reason": "вор с пропавшим товаром Гарета",
+                }
+                call = ToolCall(PROPOSE_CHARACTER, args, event.call_id)
+                yield call
+                yield Done("", (call,))
+
+
+class ChainScript:
+    """Garet's two quests; first offer the camp in the farmyard so the author's retry is exercised."""
+
+    name = "chain-script"
+
+    def __init__(self, *, thief: str, camp: str, item: str, gold: int, xp: int) -> None:
+        self.thief, self.camp, self.item = thief, camp, item
+        self.gold, self.xp = gold, xp
+        self.calls: list[str] = []
+
+    async def aclose(self) -> None:
+        pass
+
+    async def stream(
+        self,
+        *,
+        instructions: str,
+        messages: Sequence[Item],
+        tools: list[Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        allowed: Collection[str] | None = None,
+        cache_key: str | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        self.calls.append("\n".join(m.content for m in messages if isinstance(m, Message)))
+
+        def talk(description: str, reply: str, remember: str = "") -> dict[str, Any]:
+            return {
+                "description": description,
+                "lines": [{"speaker": "hero", "text": description}, {"speaker": "npc", "text": reply}],
+                "remember": remember,
+            }
+
+        stolen = {
+            "title": "Украденный товар",
+            "give": talk("У тебя что-то пропало?", "Вор унёс мой товар. Найди его и принеси обратно."),
+            "stages": [
+                {
+                    "journal": "Гарет просит найти вора на дороге.",
+                    "goals": [{"kind": "reach", "npc": "thief"}],
+                },
+                {
+                    "journal": "Я нашёл вора. Надо вернуть товар.",
+                    "goals": [{"kind": "have", "npc": "thief", "item": self.item}],
+                },
+                {
+                    "journal": "Товар у меня. Гарет ждёт его на ферме.",
+                    "goals": [
+                        {
+                            "kind": "bring",
+                            "npc": "giver",
+                            "item": self.item,
+                            "talk": talk(
+                                "Вот твой товар.",
+                                "Всё цело. Держи за труды.",
+                                "Герой вернул тебе украденный товар.",
+                            ),
+                        }
+                    ],
+                },
+            ],
+            "done_journal": "Я вернул Гарету украденный товар и получил награду.",
+            "knows": "У тебя украли товар. Вор скрывается неподалёку.",
+            "asked": "Найти вора и принести украденный товар.",
+            "gold": min(10, self.gold),
+            "xp": self.xp,
+        }
+        camp = {
+            "title": "Лагерь",
+            "give": talk("Куда вор нёс товар?", "У него подельники в лагере. Убей их, иначе опять налетят."),
+            "stages": [
+                {
+                    "journal": "Гарет просит покончить с бандитами лагеря.",
+                    "goals": [{"kind": "kill", "npcs": ["camp"]}],
+                },
+                {
+                    "journal": "Бандиты мертвы. Надо сказать Гарету.",
+                    "goals": [
+                        {
+                            "kind": "talk",
+                            "npc": "giver",
+                            "talk": talk(
+                                "Бандиты мертвы.",
+                                "Теперь можно торговать спокойно. Вот награда.",
+                                "Герой убил всех бандитов лагеря, ты заплатил ему.",
+                            ),
+                        }
+                    ],
+                },
+            ],
+            "done_journal": "Я уничтожил лагерь бандитов и рассказал Гарету. Он заплатил.",
+            "knows": "Вор связан с бандитами лагеря неподалёку.",
+            "asked": "Убить бандитов лагеря и сказать тебе.",
+            "gold": min(15, self.gold),
+            "xp": self.xp,
+        }
+        args = {
+            "cast": [
+                {
+                    "role": "thief",
+                    "kind": "townsman",
+                    "place": self.thief,
+                    "count": 1,
+                    "about": "Мелкий вор Рудек, стащивший товар Гарета.",
+                    "carries": [self.item],
+                },
+                {
+                    "role": "camp",
+                    "kind": "bandit",
+                    "place": "FARM1_OUT" if len(self.calls) == 1 else self.camp,
+                    "count": 3,
+                    "about": "Подельники вора, грабящие торговцев.",
+                    "carries": [],
+                },
+            ],
+            "quests": [stolen, camp],
+            "reason": "У вора украденный товар Гарета; след от него ведёт к лагерю его подельников.",
+        }
+        call = ToolCall(PROPOSE_CHAIN, args, f"chain{len(self.calls)}")
+        yield call
+        yield Done("", (call,))
+
+
 async def director_casts(
     link: GameLink, casting: Casting, author: Author, story: StoryPatches, places: PlaceBook
 ) -> dict[str, str]:
@@ -4182,6 +4329,301 @@ async def book_stages(
         check("once", not any(n.startswith(f"{q.id}_") for n in left), left)
         check("book_done", book.progress(q.id).state == "done" and "герой выполнил" in situation, situation)
     return _logged(results)
+
+
+async def author_chain(
+    link: GameLink, chains: ChainAuthor, places: PlaceBook, slot: int = 7
+) -> dict[str, str]:
+    """Stage 3, layer 4: Garet's chain, built by the author, then played from the book's descriptions.
+
+    With a scripted model the thief holds his stolen merchandise and three bandits wait at their camp.
+    The first proposal puts the bandits in a farmyard and must be refused before anybody is introduced.
+    With a live model the same player handles whatever valid two or three quests it invents.
+    """
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    # v37 has no god-mode command. A large health reserve protects the hero while reach goals can send
+    # him near a live hostile role; kill goals themselves work remotely, before he approaches the camp.
+    await link.debug("player_hp", hp=1_000_000)
+    found = await _peddler(link, chains.casting.cast)
+    if isinstance(found, str):
+        return _logged({"giver": f"failed ({found})"})
+    spec, _ = found
+    made, why = await chains.casting.cast.introduce(spec, GARET)
+    check("giver", made is not None, made or why)
+    if made is None:
+        return _logged(results)
+    giver = spec.npc
+    script: ChainScript | None = None
+    characters_script: ChainCharacterScript | None = None
+    if isinstance(chains.model.llm, FakeBackend):
+        brief = await chains.brief(giver)
+        if brief is None:
+            return _logged({**results, "made": "failed (no author's brief for Garet)"})
+        camps = [p for p in brief.places.values() if brief.bandit_ok(p.id) and len(p.points) >= 3]
+        if not camps:
+            return _logged({**results, "made": "failed (no unoccupied camp in the author's brief)"})
+        camp = camps[0]
+        thief = next((p for p in brief.places.values() if p.id != camp.id), camp)
+        item = next(iter(brief.base.items))
+        for candidate in brief.base.items:
+            if not await link.evaluate(["call", "NPC_HASITEMS", ["inst", "HERO"], ["sym", candidate]]):
+                item = candidate
+                break
+        chains.model.llm = script = ChainScript(
+            thief=thief.id, camp=camp.id, item=item, gold=brief.base.gold, xp=brief.base.xp
+        )
+        chains.casting.model.llm = characters_script = ChainCharacterScript()
+
+    quests = await chains.chain(giver)
+    facts = chains.chronicle.facts
+    rejected = facts("chain_rejected")
+    if script is not None:
+        refusal = [str(why) for f in rejected for why in f.get("why", f.get("errors", []))]
+        check("rejected", len(script.calls) == 2 and bool(refusal), rejected)
+        check("retry_reasons", bool(refusal) and all(why in script.calls[-1] for why in refusal), refusal)
+    check(
+        "made",
+        quests is not None and 2 <= len(quests) <= 3 and all(q.id in chains.book.all() for q in quests),
+        [q.id for q in quests]
+        if quests
+        else {"rejected": rejected, "proposal": script.calls if script else "see chain model log"},
+    )
+    if not quests:
+        return _logged(results)
+    if script is not None:
+        check(
+            "garet_chain",
+            [q.title for q in quests] == ["Украденный товар", "Лагерь"],
+            [q.title for q in quests],
+        )
+        check(
+            "named_cast_only",
+            characters_script is not None and len(characters_script.calls) == 1,
+            len(characters_script.calls) if characters_script else 0,
+        )
+    chain_fact = next((f for f in reversed(facts("chain")) if f.get("quests") == [q.id for q in quests]), {})
+    roles = chain_fact.get("roles", {})
+    npcs = [npc for group in roles.values() for npc in group]
+    world = (await link.story_state(npcs=npcs)).get("npcs", {})
+    # A chain may use only people already in the brief, so an empty cast/role map is valid.
+    check("roles", all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
+    held = []
+    for q in quests:
+        for stage in q.stages:
+            for goal in stage.goals:
+                if goal.kind == questbook.HAVE and goal.npc:
+                    count = await link.evaluate(
+                        ["call", "NPC_HASITEMS", ["inst", "SELF"], ["sym", goal.item]], npc=goal.npc
+                    )
+                    held.append((goal.npc, goal.item, count, goal.count))
+    check("carries", all(count >= needed for _, _, count, needed in held), held)
+    check(
+        "linear",
+        all(q.after == quests[k - 1].id for k, q in enumerate(quests) if k),
+        [q.after for q in quests],
+    )
+    locked = [questbook.give_node(q) not in await link.offered_dialogs(giver) for q in quests[1:]]
+    check("locked", all(locked), locked)
+
+    async def save_and_load(q: questbook.Quest, dead: str, rest: list[str]) -> None:
+        names = [v for quest in quests for v in (quest.id, questbook.stage_var(quest))]
+        before = (await link.story_state(vars=names)).get("vars", {})
+        before_counts = {
+            t["id"]: t["count"]
+            for t in await link.triggers()
+            if any(t["id"].startswith(f"{quest.id}_") for quest in quests)
+        }
+        saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+        await link.debug("save", slot)
+        await saving
+        loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+        await link.debug("load", slot)
+        await loaded
+        await link.wait_world()
+        await asyncio.sleep(2)
+        after = (await link.story_state(vars=names, npcs=[dead, *rest])).copy()
+        after_counts = {
+            t["id"]: t["count"]
+            for t in await link.triggers()
+            if any(t["id"].startswith(f"{quest.id}_") for quest in quests)
+        }
+        actors = after.get("npcs", {})
+        check(
+            "after_load",
+            before == after.get("vars", {})
+            and before_counts == after_counts
+            and actors.get(dead, {}).get("state") == "dead"
+            and all(actors.get(n, {}).get("state") == "alive" for n in rest)
+            and all(quest.id in chains.book.all() for quest in quests),
+            f"{q.id}: {before} -> {after.get('vars')}; counts {before_counts} -> {after_counts}; {actors}",
+        )
+
+    played = await play_book_chain(link, chains.book, quests, after_first_kill=save_and_load)
+    results.update(played)
+    if script is not None and "after_load" not in results:
+        check("after_load", False, "the scripted chain never reached its group kill checkpoint")
+    await chains.book.settle(giver)
+    situation = chains.book.situation(giver) or ""
+    check(
+        "knows",
+        all(q.title in situation and chains.book.progress(q.id).state == "done" for q in quests)
+        and situation.count("герой выполнил") == len(quests),
+        situation,
+    )
+    snap = await link.snapshot(giver, fresh=True)
+    check(
+        "hero_alive",
+        snap.player is not None and snap.player.hp > 0,
+        snap.player.hp if snap.player else "no player",
+    )
+    return _logged(results)
+
+
+async def play_book_chain(
+    link: GameLink,
+    book: questbook.QuestBook,
+    quests: list[questbook.Quest],
+    *,
+    after_first_kill: Callable[[questbook.Quest, str, list[str]], Any] | None = None,
+) -> dict[str, str]:
+    """A debug player for any book description: no Garet ids, items, stages or dialogs are hardcoded."""
+    results: dict[str, str] = {}
+    saved = False
+
+    async def vars(*names: str) -> dict[str, int]:
+        return dict((await link.story_state(vars=list(names))).get("vars", {}))
+
+    async def has(item: str, npc: str = "HERO") -> int:
+        return int(await link.evaluate(["call", "NPC_HASITEMS", ["inst", npc], ["sym", item]]) or 0)
+
+    async def pick(item: str) -> None:
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                await link.debug("player_take", item=item, distance=800)
+                return
+            except GameError as err:
+                if "the hero could not pick it up now" not in str(err) or time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(0.25)
+
+    async def idle() -> None:
+        for _ in range(40):
+            if not (await link.story_state()).get("dialog"):
+                return
+            await asyncio.sleep(0.5)
+        raise RuntimeError("the previous dialog did not finish")
+
+    async def choose(npc: str, node: str) -> None:
+        await link.debug("player_goto", to=npc, distance=300)
+        await idle()
+        if node not in await link.offered_dialogs(npc):
+            raise RuntimeError(f"{npc} does not offer {node}: {await link.offered_dialogs(npc)}")
+        await link.choose_dialog(npc, node)
+
+    for qi, q in enumerate(quests):
+        status, stage_var = q.id, questbook.stage_var(q)
+        try:
+            if qi:
+                results[f"opened_{qi + 1}"] = (
+                    "done" if questbook.give_node(q) in await link.offered_dialogs(q.giver) else "failed"
+                )
+            await choose(q.giver, questbook.give_node(q))
+            if not await _until_async(
+                lambda status=status: vars(status), lambda v, status=status: v.get(status) == 1, 15
+            ):
+                raise RuntimeError(f"quest was not given: {await vars(status, stage_var)}")
+            for si, stage in enumerate(q.stages, 1):
+                last = si == len(q.stages)
+                # World goals first: the last dialog is the turn-in and must wait for all others.
+                ordered = sorted(enumerate(stage.goals, 1), key=lambda x: x[1].kind in questbook.TALKS)
+                for gi, goal in ordered:
+                    await idle()
+                    gid = questbook.goal_id(q, si, gi)
+
+                    async def counts(gid: str = gid) -> int:
+                        return next((t["count"] for t in await link.triggers() if t["id"] == gid), 0)
+
+                    if goal.kind not in questbook.TALKS and await counts() >= 1:
+                        continue
+                    if goal.kind == questbook.REACH:
+                        if goal.point:
+                            await link.debug("player_goto", waypoint=goal.point)
+                        else:
+                            await link.debug("teleport", near=goal.npc, distance=max(50, goal.radius // 2))
+                            await asyncio.sleep(0.5)
+                    elif goal.kind == questbook.HAVE:
+                        if goal.npc:
+                            await link.debug("kill", npc=goal.npc)
+                            await link.debug("teleport", near=goal.npc, distance=100)
+                            await asyncio.sleep(0.5)
+                            before = await has(goal.item, goal.npc)
+                            # v37 only picks things off the ground. Use the existing inventory transfer
+                            # for debug looting, then drop/pick the real transferred item through player_take.
+                            await link.story_effect(
+                                goal.npc, [{"do": "give", "item": goal.item, "count": goal.count}], check=True
+                            )
+                            after = await has(goal.item, goal.npc)
+                            if before - after != goal.count:
+                                raise RuntimeError(f"looting {goal.npc}: {goal.item} {before} -> {after}")
+                            for _ in range(goal.count):
+                                await link.debug("player_drop", item=goal.item)
+                                await asyncio.sleep(2)
+                        elif goal.point:
+                            await link.debug("player_goto", waypoint=goal.point)
+                        for _ in range(max(0, goal.count - await has(goal.item))):
+                            await pick(goal.item)
+                    elif goal.kind == questbook.KILL:
+                        states = (await link.story_state(npcs=goal.npcs)).get("npcs", {})
+                        alive = [n for n in goal.npcs if states.get(n, {}).get("state") == "alive"]
+                        for ni, npc in enumerate(alive):
+                            await link.debug("kill", npc=npc)
+                            if not saved and ni == 0 and len(alive) >= 2 and after_first_kill is not None:
+                                await asyncio.sleep(1)
+                                await after_first_kill(q, npc, alive[1:])
+                                saved = True
+                    elif goal.kind in questbook.TALKS:
+                        if goal.kind == questbook.BRING and goal.point and await has(goal.item) < goal.count:
+                            await link.debug("player_goto", waypoint=goal.point)
+                            for _ in range(goal.count - await has(goal.item)):
+                                await pick(goal.item)
+                        if qi + 1 < len(quests) and last:
+                            next_q = quests[qi + 1]
+                            results[f"locked_until_done_{qi + 2}"] = (
+                                "done"
+                                if questbook.give_node(next_q) not in await link.offered_dialogs(next_q.giver)
+                                else "failed"
+                            )
+                        node = questbook.done_node(q) if last else questbook.goal_node(gid)
+                        await choose(goal.npc, node)
+                    elif goal.kind == questbook.WAIT:
+                        for _ in range(goal.days):
+                            await link.debug("time", hour=23, minute=0)
+                            await link.debug("time", hour=0, minute=0)
+                    if goal.kind not in questbook.TALKS:
+                        if not await _until_async(counts, lambda value: value >= 1, 15):
+                            raise RuntimeError(f"goal {gid} did not fire: {await vars(status, stage_var)}")
+                target = len(q.stages) + 1 if last else si + 1
+                if not await _until_async(
+                    lambda stage_var=stage_var: vars(stage_var),
+                    lambda v, stage_var=stage_var, target=target: v.get(stage_var) == target,
+                    15,
+                ):
+                    raise RuntimeError(f"stage {si} did not end: {await vars(status, stage_var)}")
+            done = (await vars(status)).get(status) == 2
+            results[f"quest_{qi + 1}"] = f"{'done' if done else 'failed'} ({q.id} «{q.title}»)"
+        except (GameError, TimeoutError, RuntimeError) as err:
+            results[f"quest_{qi + 1}"] = f"failed ({q.id} «{q.title}»: {err})"
+            return results
+    return results
 
 
 async def _peddler(link: GameLink, actors: Cast) -> tuple[NpcSpec, str] | str:
