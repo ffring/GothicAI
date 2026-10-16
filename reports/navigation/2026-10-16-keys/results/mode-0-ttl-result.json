@@ -1,0 +1,439 @@
+{
+  "status": "passed",
+  "fixture": {
+    "kind": "keys_setup",
+    "scene": "flat",
+    "anchor": "NW_FARM1_PATH_01",
+    "root_cm": [
+      13881.52344,
+      1672.283325,
+      -15549.84277
+    ],
+    "goal_cm": [
+      13881.52344,
+      1672.283325,
+      -15049.84277
+    ],
+    "forward": [
+      -4.371138829e-08,
+      0,
+      1
+    ],
+    "actors": 1,
+    "frozen_residents": 11,
+    "cv_diagnostics_enabled": true,
+    "hero_parking_cm": [
+      13631.52344,
+      1710.258911,
+      -15729.84277
+    ],
+    "void_reference_cm": null,
+    "void_approach_cm": null,
+    "void_start_back_cm": null,
+    "void_edge_back_cm": null,
+    "void_start_from_original_back_cm": null,
+    "void_goal_beyond_cm": null,
+    "void_support_grid": null,
+    "removed_relaxed_overlay": true,
+    "flat_probe_count": 92,
+    "flat_minimum_y_cm": 1626.334595,
+    "flat_maximum_y_cm": 1702.518311,
+    "climb_probe_animation": "",
+    "climb_probe_height_cm": 0.0,
+    "climb_probe_no_climb": false,
+    "climb_face_cm": [
+      0,
+      0,
+      0
+    ],
+    "hero_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "npc_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "hero_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "npc_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "hero_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97",
+    "npc_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97"
+  },
+  "mode": 0,
+  "npc_cv_active_samples": 0,
+  "npc_walking_samples": 2,
+  "npc_walking_cv_active_samples": 0,
+  "input_travel_cm": 3.835815481132912,
+  "post_ttl_drift_cm": 0.0,
+  "max_post_expiry_travel_cm": 0.0,
+  "max_post_expiry_visual_travel_cm": 0.0,
+  "post_expiry_channels": {
+    "physical_root_cm": {
+      "first_cm": [
+        13882.25391,
+        1671.141235,
+        -15546.07715
+      ],
+      "last_cm": [
+        13882.25391,
+        1671.141235,
+        -15546.07715
+      ],
+      "minimum_cm": [
+        13882.25391,
+        1671.141235,
+        -15546.07715
+      ],
+      "maximum_cm": [
+        13882.25391,
+        1671.141235,
+        -15546.07715
+      ],
+      "max_horizontal_from_first_cm": 0.0,
+      "max_3d_from_first_cm": 0.0,
+      "net_horizontal_cm": 0.0,
+      "horizontal_path_cm": 0.0,
+      "max_derived_horizontal_speed_cm_s": 0.0
+    },
+    "npc_root_cm": {
+      "first_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "last_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "minimum_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "maximum_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "max_horizontal_from_first_cm": 0.0,
+      "max_3d_from_first_cm": 0.0,
+      "net_horizontal_cm": 0.0,
+      "horizontal_path_cm": 0.0,
+      "max_derived_horizontal_speed_cm_s": 0.0
+    },
+    "visual_root_cm": {
+      "first_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "last_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "minimum_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "maximum_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07715
+      ],
+      "max_horizontal_from_first_cm": 0.0,
+      "max_3d_from_first_cm": 0.0,
+      "net_horizontal_cm": 0.0,
+      "horizontal_path_cm": 0.0,
+      "max_derived_horizontal_speed_cm_s": 0.0
+    },
+    "samples": 63,
+    "start_game_ms": 16894,
+    "end_game_ms": 18961,
+    "maximum_visual_to_physical_cm": 1.1644289999999273,
+    "maximum_npc_to_physical_cm": 1.1644289999999273
+  },
+  "expiry_release_game_ms": 16894,
+  "expiry_stop_latency_ms": 0,
+  "first_expired": {
+    "physical_root_cm": [
+      13882.25391,
+      1671.141235,
+      -15546.07715
+    ],
+    "npc_root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "visual_root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "physical_root_source": "npc_physics",
+    "physical_root_valid": true,
+    "cv_root_cm": null,
+    "cv_position_cm": null,
+    "cv_native_position_cm": null,
+    "cv_accepted_cm": null,
+    "cv_diagnostics_valid": false,
+    "cv_ground_state": null,
+    "cv_ground_normal": null,
+    "cv_velocity_cm_s": null,
+    "cv_active": false,
+    "support_physical": {
+      "point_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07812
+      ],
+      "normal": [
+        0.2886331677,
+        0.9554557204,
+        -0.06160486117
+      ],
+      "drop_cm": -1.164428711
+    },
+    "support_npc": {
+      "point_cm": [
+        13882.25391,
+        1672.30603,
+        -15546.07715
+      ],
+      "normal": [
+        0.2886331677,
+        0.9554557204,
+        -0.06160486117
+      ],
+      "drop_cm": -0.0003662109375
+    },
+    "air": false,
+    "falling": false,
+    "jumping": false,
+    "keys_enabled": true,
+    "has_command": false,
+    "remaining_ms": 0,
+    "animations": "S_RUN",
+    "game_ms": 16894,
+    "frame_dt_ms": 33,
+    "anim_root_local_cm": [
+      0,
+      0,
+      0
+    ],
+    "support_probe_above_cm": 50,
+    "support_probe_below_cm": 500,
+    "cv_ground_position_cm": null,
+    "cv_ground_velocity_cm_s": null,
+    "cv_ground_body": null,
+    "cv_contacts": null,
+    "cv_before_cm": null,
+    "cv_before_ground_state": null,
+    "cv_before_ground_normal": null,
+    "cv_after_extended_cm": null,
+    "cv_dt_ms": null,
+    "cv_initial_cm": null,
+    "cv_requested_cm": null,
+    "cv_native_requested_cm": null,
+    "cv_clipped_request_cm": null,
+    "cv_request_clipped": null,
+    "cv_resolved_clipped": null,
+    "cv_blocked": null
+  },
+  "expired_a": {
+    "physical_root_cm": [
+      13882.25391,
+      1671.141235,
+      -15546.07715
+    ],
+    "npc_root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "visual_root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "physical_root_source": "npc_physics",
+    "physical_root_valid": true,
+    "cv_root_cm": null,
+    "cv_position_cm": null,
+    "cv_native_position_cm": null,
+    "cv_accepted_cm": null,
+    "cv_diagnostics_valid": false,
+    "cv_ground_state": null,
+    "cv_ground_normal": null,
+    "cv_velocity_cm_s": null,
+    "cv_active": false,
+    "support_physical": {
+      "point_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07812
+      ],
+      "normal": [
+        0.2886331677,
+        0.9554557204,
+        -0.06160486117
+      ],
+      "drop_cm": -1.164428711
+    },
+    "support_npc": {
+      "point_cm": [
+        13882.25391,
+        1672.30603,
+        -15546.07715
+      ],
+      "normal": [
+        0.2886331677,
+        0.9554557204,
+        -0.06160486117
+      ],
+      "drop_cm": -0.0003662109375
+    },
+    "air": false,
+    "falling": false,
+    "jumping": false,
+    "keys_enabled": true,
+    "has_command": false,
+    "remaining_ms": 0,
+    "animations": "S_RUN",
+    "game_ms": 17994,
+    "frame_dt_ms": 33,
+    "anim_root_local_cm": [
+      0,
+      0,
+      0
+    ],
+    "support_probe_above_cm": 50,
+    "support_probe_below_cm": 500,
+    "cv_ground_position_cm": null,
+    "cv_ground_velocity_cm_s": null,
+    "cv_ground_body": null,
+    "cv_contacts": null,
+    "cv_before_cm": null,
+    "cv_before_ground_state": null,
+    "cv_before_ground_normal": null,
+    "cv_after_extended_cm": null,
+    "cv_dt_ms": null,
+    "cv_initial_cm": null,
+    "cv_requested_cm": null,
+    "cv_native_requested_cm": null,
+    "cv_clipped_request_cm": null,
+    "cv_request_clipped": null,
+    "cv_resolved_clipped": null,
+    "cv_blocked": null
+  },
+  "expired_b": {
+    "physical_root_cm": [
+      13882.25391,
+      1671.141235,
+      -15546.07715
+    ],
+    "npc_root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "visual_root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "root_cm": [
+      13882.25391,
+      1672.305664,
+      -15546.07715
+    ],
+    "physical_root_source": "npc_physics",
+    "physical_root_valid": true,
+    "cv_root_cm": null,
+    "cv_position_cm": null,
+    "cv_native_position_cm": null,
+    "cv_accepted_cm": null,
+    "cv_diagnostics_valid": false,
+    "cv_ground_state": null,
+    "cv_ground_normal": null,
+    "cv_velocity_cm_s": null,
+    "cv_active": false,
+    "support_physical": {
+      "point_cm": [
+        13882.25391,
+        1672.305664,
+        -15546.07812
+      ],
+      "normal": [
+        0.2886331677,
+        0.9554557204,
+        -0.06160486117
+      ],
+      "drop_cm": -1.164428711
+    },
+    "support_npc": {
+      "point_cm": [
+        13882.25391,
+        1672.30603,
+        -15546.07715
+      ],
+      "normal": [
+        0.2886331677,
+        0.9554557204,
+        -0.06160486117
+      ],
+      "drop_cm": -0.0003662109375
+    },
+    "air": false,
+    "falling": false,
+    "jumping": false,
+    "keys_enabled": true,
+    "has_command": false,
+    "remaining_ms": 0,
+    "animations": "S_RUN",
+    "game_ms": 18994,
+    "frame_dt_ms": 33,
+    "anim_root_local_cm": [
+      0,
+      0,
+      0
+    ],
+    "support_probe_above_cm": 50,
+    "support_probe_below_cm": 500,
+    "cv_ground_position_cm": null,
+    "cv_ground_velocity_cm_s": null,
+    "cv_ground_body": null,
+    "cv_contacts": null,
+    "cv_before_cm": null,
+    "cv_before_ground_state": null,
+    "cv_before_ground_normal": null,
+    "cv_after_extended_cm": null,
+    "cv_dt_ms": null,
+    "cv_initial_cm": null,
+    "cv_requested_cm": null,
+    "cv_native_requested_cm": null,
+    "cv_clipped_request_cm": null,
+    "cv_request_clipped": null,
+    "cv_resolved_clipped": null,
+    "cv_blocked": null
+  },
+  "native_goal_cm": [
+    13881.52344,
+    1672.283325,
+    -15049.84277
+  ],
+  "native_start_distance_cm": 496.2349176351914,
+  "native_end_distance_cm": 0.0,
+  "native_progress_cm": 496.2349176351914,
+  "native_end_animations": "S_RUNL",
+  "physical_stop_within_1cm": true,
+  "visual_catchup_within_10cm": true,
+  "keys_check_passed": true
+}

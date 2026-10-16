@@ -9,6 +9,7 @@
 #include "graphics/visualfx.h"
 #include "game/damagecalculator.h"
 #include "game/bodyobservations.h"
+#include "game/npckeys.h"
 #include "game/serialize.h"
 #include "physics/physicsnoise.h"
 #include "game/ragdollsave.h"
@@ -254,6 +255,7 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint, NpcProcessPol
   }
 
 Npc::~Npc(){
+  NpcKeys::forget(this);
   BodyObservations::forget(this);
   TestBench::bodyForget(this);
   if(currentInteract)
@@ -3479,6 +3481,7 @@ void Npc::tickAnimationTags() {
   }
 
 void Npc::tick(uint64_t dt) {
+  headInput.reset();
   static bool dbg = false;
   static int  kId = 432;
   if(dbg && !isPlayer() && hnpc->id!=kId)
@@ -3552,6 +3555,9 @@ void Npc::tick(uint64_t dt) {
   // an archer aiming by hand draws, holds and reloads through the fight AI's waits (game/archerai)
   if(!isPlayer())
     archAi.tick(*this,dt);
+
+  if(NpcKeys::tick(*this,dt))
+    return;
 
   const bool physicalMovement = ragdoll ||
       (Gothic::physicsFlags().ragdoll && isDown() && !ragdollLegacyDown && !ragdollRecovering);
@@ -5676,6 +5682,12 @@ Npc* Npc::talkPartner() const {
   }
 
 Gaze::Source Npc::gazeTarget(Tempest::Vec3& at) const {
+  if(headInput) {
+    const float yaw = rotationRad()+headInput->x*float(M_PI)/180.f;
+    const float pitch = headInput->y*float(M_PI)/180.f;
+    at = mapHeadBone() + Vec3(std::cos(yaw)*std::cos(pitch),std::sin(pitch),std::sin(yaw)*std::cos(pitch))*1000.f;
+    return Gaze::Source::Input;
+    }
   static const float focusDist = 800;
   const Vec3 eyes = {0,6,0}; // the eyes are a bit above the head bone
   if(auto other = talkPartner()) {

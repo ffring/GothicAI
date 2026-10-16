@@ -937,6 +937,7 @@ class Npc final {
     Npc*                           talkWith        =nullptr;
     uint64_t                       talkUntil       =0;
     Attention                      attention;
+    std::optional<Tempest::Vec2>    headInput; // transient yaw/pitch for this tick, no AI ownership
     Archer                         arch;
     ArcherAi                       archAi;
     Tempest::Vec3                  aimDirPrev  = {};  // the manual aim's last direction (a turn shakes it)
@@ -974,5 +975,6 @@ class Npc final {
     Sound                          sfxWeapon;
 
   friend class MoveAlgo;
+  friend class NpcKeys;
   friend bool TestBench::ragdollBodyDrawable(const Npc& npc);
   };

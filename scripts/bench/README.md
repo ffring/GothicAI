@@ -686,6 +686,62 @@ incomplete; the analyzer also writes JSON beside the Markdown output.
 For a deliberately reduced series, repeat `--window-spot market --window-spot harbour` in the
 analyzer; the report then explicitly states the selected coverage.
 
+## NPC movement keys (CPU runner)
+
+`keys` is a test-bench command, available in `gothic-body-runner`; it does not change the AI bridge.
+Targets are a fixture index, an existing script instance such as `NONE_100_XARDAS`, or
+`id:<world NPC index>` for duplicate instances. Existing NPCs need no `keys setup`; enabling
+them preserves their current AI queue, interaction and routine.
+The stand enables individual actors and suspends their native AI while enabled. A command replaces
+all previous keys. TTL uses simulation milliseconds; expiration releases input while retaining stand
+control. On a slope, CharacterVirtual can drift with zero requested movement after release:
+the player and NPC both moved 4.514 cm in the same one-second idle window. This is a shared
+controller limitation, distinct from held input; see the
+[validation report](../../reports/navigation/2026-10-16-keys/README.md).
+`off` restores native control and the previous walk mode without clearing
+the queued destination. Airborne movement finishes naturally after release.
+
+```text
+keys setup flat 1                   # flat|jump|climb|market|void|void-replay, 1..10 human actors
+keys place 0                        # actor index, or hero; same stored start and facing
+keys 0 on
+# actor forward strafe turn walk|run jump climb head_yaw head_pitch ttl_ms
+keys 0 1 0 0 walk 0 0 60 0 3000
+wait 3500
+keys sample released
+keys 0 off
+```
+
+Axes are digital: only their sign is used. Positive strafe/turn means right; positive head yaw
+means left, positive pitch means up, in degrees relative to the body. Climb means forward+jump,
+using the same `tryJump`/`startClimb` tests as the player. `keys hero ...` sends the same digital
+movement through the real `PlayerControl`; head input is measured on the NPC.
+
+`keys trace <tag> on|off` writes per-frame `keys-frames.jsonl`; `keys sample <tag>` writes an explicit
+checkpoint. `keys eye <index> <tag>` writes all rays of a fresh existing `NavigationEye` sensor to
+`keys-eye-snapshots.jsonl`. `keys routine <index>` queues a native `AI_GoToPoint` to the fixture's
+recorded destination. `keys stress begin <seed>` after `keys setup market 10` sends random keys
+with TTL 100 ms; `keys stress end` records executor timing, per-actor travel and sequential-tick
+observations in `keys-events.jsonl`. Setup records the selected stock waypoint and exact geometry.
+The fixture removes its spawned bandit's `Humans_Relaxed.mds` when absent on the hero, then checks
+walk/run/strafe clip equality before comparing motion. The executor itself preserves each NPC's
+authored animation set. `keys info` records clip parameters for diagnosing fixture differences.
+
+Frame journals distinguish the physical feet (`physical_root_cm`), gameplay position
+(`npc_root_cm`) and displayed model (`visual_root_cm`). `support_physical` and `support_npc`
+contain the downward terrain/object ray result, or `null` for a miss. Flat/obstacle/void scenes
+also record native CV requests, accepted positions, contacts and support; market profiling leaves
+that detailed CV instrumentation disabled. `keys setup void 1` finds a supported approach to the
+stock-world support gap near `[6754, 262, -6115]` and records an 81-point support grid. Its goal
+lies beyond the gap and is intentionally not required to have floor.
+`keys setup void-replay 1` uses the supported idle pose recorded before the stress actor's
+takeoff. The report script's `void-replay` case replays that actor's last 54 decisions through
+the real player's input and the NPC executor; it records differing contact trajectories and falls.
+
+Repeat the checks with [`reports/navigation/2026-10-16-keys/run.py`](../../reports/navigation/2026-10-16-keys/run.py).
+Use absolute runner/save/assets/output paths and the shared Ryzen simulation lock; the script takes
+and releases it separately for each case. Run both `npc_character_virtual` settings in fresh processes.
+
 ## Navigation eye (CPU runner)
 
 The `eye` commands are an independent navigation sensor fixture. They leave combat's 16 body rays

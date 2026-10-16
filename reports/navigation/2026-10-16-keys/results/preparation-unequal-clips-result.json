@@ -1,0 +1,49 @@
+{
+  "status": "failed",
+  "fixture": {
+    "kind": "keys_setup",
+    "scene": "flat",
+    "anchor": "NW_FARM1_PATH_01",
+    "root_cm": [
+      13881.52344,
+      1672.283325,
+      -15549.84277
+    ],
+    "goal_cm": [
+      13881.52344,
+      1672.283325,
+      -15049.84277
+    ],
+    "forward": [
+      -4.371138829e-08,
+      0,
+      1
+    ],
+    "actors": 1,
+    "frozen_residents": 11,
+    "flat_probe_count": 92,
+    "flat_minimum_y_cm": 1626.334595,
+    "flat_maximum_y_cm": 1702.518311
+  },
+  "mode": 0,
+  "npc_cv_active_samples": 0,
+  "npc_walking_samples": 304,
+  "npc_walking_cv_active_samples": 0,
+  "segments": [
+    {
+      "segment": "forward",
+      "requested_ms": 3000,
+      "hero_cm": 428.43361743368064,
+      "npc_cm": 247.0188497933042,
+      "vector_error_cm": 181.42594034422405,
+      "hero_yaw_deg": 0,
+      "npc_yaw_deg": 0,
+      "animations": {
+        "hero": "S_WALKL",
+        "0": "S_WALKL"
+      },
+      "relative_error": 0.4234633627280844
+    }
+  ],
+  "error": "forward: displacement differs by >10%: {'segment': 'forward', 'requested_ms': 3000, 'hero_cm': 428.43361743368064, 'npc_cm': 247.0188497933042, 'vector_error_cm': 181.42594034422405, 'hero_yaw_deg': 0, 'npc_yaw_deg': 0, 'animations': {'hero': 'S_WALKL', '0': 'S_WALKL'}, 'relative_error': 0.4234633627280844}"
+}
