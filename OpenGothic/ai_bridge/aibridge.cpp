@@ -66,6 +66,7 @@ namespace {
 constexpr int         ProtocolVersion = 38;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
+constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
 
 constexpr uint32_t    MoodHoldMs      = 2000;  // the face of a line stays this long after it, then fades (a second)
 
@@ -200,7 +201,8 @@ struct AiBridge::Impl final {
   void onStartLoading();
   void onSessionUnload() { voices.clear(); resetBodyObservations(); }
   void onWorldLoaded();
-  void takePendingSession();
+  bool takePendingSession();
+  void skipIntro(World& world);
   void startBranch(std::string parent, int64_t parentSeq, std::string_view reason);
   void sendSession();
   void updateSaveRecord();
@@ -587,11 +589,30 @@ void AiBridge::Impl::onWorldLoaded() {
     send(JsonWriter("saved").str("branch",session.branch).integer("seq",session.seq).finish());
     return;
     }
-  takePendingSession();
+  const bool newGame = takePendingSession();
+  if(newGame && !CommandLine::inst().doIntro() && Gothic::inst().world()!=nullptr)
+    skipIntro(*Gothic::inst().world());
   sendWorld("world_loaded",Gothic::inst().world());
   }
 
-void AiBridge::Impl::takePendingSession() {
+void AiBridge::Impl::skipIntro(World& world) {
+  // -nointro (autotests): the important dialogs of those around the hero at the start count as told, as
+  // `debug skip_important` does: Xardas does not stop him for his first talk (and the addon's intro video)
+  Npc* pl = world.player();
+  if(pl==nullptr)
+    return;
+  uint32_t near = 0;
+  for(uint32_t i=0; i<world.npcCount(); ++i) {
+    Npc* npc = world.npcById(i);
+    if(npc==nullptr || npc==pl || npc->qDistTo(*pl)>IntroCm*IntroCm)
+      continue;
+    world.script().skipImportantInfos(*npc,*pl);
+    near++;
+    }
+  Log::i("[ai] no intro: the important dialogs of ",near," npc's around the hero count as told");
+  }
+
+bool AiBridge::Impl::takePendingSession() {
   bool        pending  = false;
   bool        fromSave = false;
   std::string rec;
@@ -603,9 +624,10 @@ void AiBridge::Impl::takePendingSession() {
   }
   if(!pending) {
     // a world change: same line of play
-    if(session.branch.empty())
-      startBranch("",0,"new_game");
-    return;
+    if(!session.branch.empty())
+      return false;
+    startBranch("",0,"new_game");
+    return true;
     }
   std::string parent;
   int64_t     parentSeq = 0;
@@ -618,6 +640,7 @@ void AiBridge::Impl::takePendingSession() {
       }
     }
   startBranch(std::move(parent),parentSeq,fromSave ? "load" : "new_game");
+  return !fromSave;
   }
 
 void AiBridge::Impl::startBranch(std::string parent, int64_t parentSeq, std::string_view reason) {

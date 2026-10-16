@@ -185,8 +185,10 @@
 #       choices (v24) through the debug commands and through the dialog window as the player has it, and a
 #       program kept across save/load; the director's own lines in the npc's voice (v26). Starts the TTS
 #       service (TTS=fake)
-# A new game first plays the intro video (~80 s), so a run takes ~2 min. SAVE=<file.sav> loads that save
-# instead (copied into LOG_DIR as slot 1): no intro, no opening dialogs. The game runs in LOG_DIR,
+# A new game starts without the intro (`-nointro`): no videos, and the important dialogs of those around
+# the hero count as told, so Xardas does not stop him for his first talk and its addon intro video (over a
+# minute). GOTHIC_INTRO=1 brings both back. SAVE=<file.sav> loads that save instead (copied into LOG_DIR as
+# slot 1). The game runs in LOG_DIR,
 # so its saves and settings stay there; memories go to LOG_DIR/memory.sqlite3.
 #
 #   SCENARIO=m3 LLM=fake ASR=voxtral GOTHIC_DIR=/path/to/Gothic\ II scripts/e2e.sh
@@ -249,6 +251,9 @@ START_ARGS=(-nomenu)
 if [ -n "${SAVE:-}" ]; then
   cp "$SAVE" "$LOG_DIR/save_slot_1.sav"
   START_ARGS=(-save 1)
+fi
+if [ "${GOTHIC_INTRO:-0}" != "1" ]; then
+  START_ARGS+=(-nointro)
 fi
 # Recheck after server startup: another session may have taken the game while it was starting.
 until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
