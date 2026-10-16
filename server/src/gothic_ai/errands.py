@@ -262,7 +262,7 @@ class Errands:
             match g.state:
                 case "agreed" | "away":
                     lines.append(f"Ты собрался {g.when(self.now)}: {g.what()}.")
-                case "going" | "there":
+                case "leaving" | "going" | "there":
                     lines.append(f"Ты идёшь по поручению: {g.what()}.")
         if not lines and self.tools(npc):
             lines.append(
