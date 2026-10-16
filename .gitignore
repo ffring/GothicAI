@@ -27,6 +27,7 @@ data/
 /game/
 *.vdf
 *.VDF
+*.fracture
 
 # Claude Code: per-session worktrees and personal settings
 .claude/worktrees/
