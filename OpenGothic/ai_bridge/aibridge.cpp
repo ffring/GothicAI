@@ -1162,8 +1162,8 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     auto        pos  = at->position();
     pos.x += dist*std::cos(at->rotationRad());
     pos.z += dist*std::sin(at->rotationRad());
-    // on the ground there: on a slope the npc's own height would bury the player or drop him
-    const auto land = world->physic()->landRay(pos+Tempest::Vec3(0,500,0),1500);
+    // Search from the NPC's body height, not above an overhead floor or rock shelf.
+    const auto land = world->physic()->landRay({pos.x,at->centerPosition().y,pos.z},1500);
     if(land.hasCol)
       pos.y = land.v.y;
     pl->setPosition(pos);
@@ -1192,21 +1192,21 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
         sendResult(req,false,"unknown waypoint");
         return;
         }
-      pos = wp->position();
+      pos = wp->groundPos;
       }
     else if(Npc* to = npcBySymbol(*world,JsonRead::str(msg,"to"))) {
       const float d = float(JsonRead::integer(msg,"distance",300));
       pos = to->position();
       pos.x += d*std::cos(to->rotationRad());
       pos.z += d*std::sin(to->rotationRad());
+      const auto land = world->physic()->landRay({pos.x,to->centerPosition().y,pos.z},1500);
+      if(land.hasCol)
+        pos.y = land.v.y;
       }
     else {
       sendResult(req,false,"npc_goto needs waypoint or to");
       return;
       }
-    const auto land = world->physic()->landRay(pos+Tempest::Vec3(0,500,0),1500);
-    if(land.hasCol)
-      pos.y = land.v.y;
     npc->setInteraction(nullptr,true);  // off a bench or a stove first
     npc->clearAiQueue();                // a walk under way would take it back at once
     npc->setPosition(pos);
@@ -1295,7 +1295,7 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       // a point of the world (v21), on the ground there
       Tempest::Vec3 at(float(pos->value[0].GetDouble()),float(pos->value[1].GetDouble()),
                        float(pos->value[2].GetDouble()));
-      const auto land = world->physic()->landRay(at+Tempest::Vec3(0,500,0),1500);
+      const auto land = world->physic()->landRay(at+Tempest::Vec3(0,100,0),1500);
       if(land.hasCol)
         at.y = land.v.y;
       pl->setPosition(at);
@@ -1324,7 +1324,8 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
       sendResult(req,false,"unknown waypoint");
       return;
       }
-    pl->setPosition(wp->position());
+    pl->setPosition(wp->groundPos);
+    pl->updateTransform();
     sendResult(req,true,"");
     return;
     }
