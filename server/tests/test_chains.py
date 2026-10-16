@@ -345,6 +345,72 @@ async def test_the_brief_keeps_author_context_and_marks_people_and_occupied_plac
         assert f"{FIELD} —" in text and f"{LOBART} — Лобарт" in text
 
 
+@pytest.mark.parametrize(
+    ("npc", "personal", "guild", "guild_attitude", "included"),
+    [
+        (LOBART, 0, 3, 2, False),
+        (LOBART, 2, 3, 0, False),
+        (LOBART, 3, 3, 0, False),
+        ("DIR_NPC_BANDIT", 2, 9, 2, False),
+        (LOBART, 2, 3, 2, True),
+        (LOBART, 3, 3, 2, True),
+    ],
+)
+async def test_people_filter_hostility(graph, npc, personal, guild, guild_attitude, included):  # noqa: F811
+    async with _setup(graph) as (fake, chains, _, _):
+        fake.people.append({"npc": npc, "name": "Сосед", "routine": [{"waypoint": "NW_FARM1_FIELD_01"}]})
+        fake.attitudes[npc] = personal
+        fake.fields[(npc, "GUILD")] = guild
+        fake.fields[("HERO", "GUILD")] = 7
+        fake.guild_attitudes[(guild, 7)] = guild_attitude
+        brief = await chains.brief(HILDA)
+        assert brief is not None
+        assert (npc in brief.people) == included
+        assert HILDA in brief.people
+        assert FIELD in brief.occupied and not brief.bandit_ok(FIELD)
+        assert (f"{npc} — Сосед" in brief.text()) == included
+        batches = [r for r in fake.story if r.get("type") == "story_eval" and "NPC_GETATTITUDE" in str(r)]
+        assert len(batches) == 1 and batches[0]["npc"] == HILDA
+
+
+async def test_a_hostile_giver_cannot_start_a_chain_with_an_impossible_turn_in(graph):  # noqa: F811
+    async with _setup(graph, [_proposal()]) as (fake, chains, casting, llm):
+        fake.attitudes[HILDA] = 0
+        assert await chains.chain(HILDA) is None
+        assert not llm.calls and not casting.calls and not chains.book.all()
+
+
+@pytest.mark.parametrize("kind", ["talk", "bring"])
+async def test_a_hostile_person_from_the_world_cannot_be_a_chain_dialog_target(graph, kind):  # noqa: F811
+    async with _setup(graph) as (fake, chains, casting, _):
+        fake.people.append({"npc": LOBART, "name": "Лобарт", "routine": [{"waypoint": "NW_FARM1_OUT_01"}]})
+        fake.attitudes[LOBART] = 0
+        brief = await chains.brief(HILDA)
+        assert brief is not None and LOBART not in brief.people
+        raw = _proposal()
+        raw["quests"][0]["stages"][-1]["goals"] = [
+            {"kind": kind, "npc": LOBART, "item": GOODS if kind == "bring" else "", "talk": _talk("Вот.")}
+        ]
+        made, errors = await chains._try(raw, brief)
+        assert made is None and any(f"NPC '{LOBART}' нет в сводке и ролях" in e for e in errors)
+        assert not casting.calls and not fake.cast and not chains.book.all()
+
+
+@pytest.mark.parametrize("kind", ["talk", "bring"])
+async def test_even_a_single_new_bandit_cannot_be_a_chain_dialog_target(graph, kind):  # noqa: F811
+    async with _setup(graph) as (fake, chains, casting, _):
+        brief = await chains.brief(HILDA)
+        assert brief is not None
+        raw = _proposal()
+        raw["cast"][1]["count"] = 1
+        raw["quests"][0]["stages"][-1]["goals"] = [
+            {"kind": kind, "npc": "camp", "item": GOODS if kind == "bring" else "", "talk": _talk("Вот.")}
+        ]
+        made, errors = await chains._try(raw, brief)
+        assert made is None and any("бандит враждебен герою, talk/bring невозможны" in e for e in errors)
+        assert not casting.calls and not fake.cast and not chains.book.all()
+
+
 async def test_all_roles_are_alive_placeholders_and_earlier_quests_exist_during_preflight(graph, monkeypatch):  # noqa: F811
     async with _setup(graph) as (fake, chains, casting, _):
         seen = []

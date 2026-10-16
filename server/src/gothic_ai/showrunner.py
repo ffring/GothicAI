@@ -16,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from .attitudes import non_hostile
 from .authoring import Author
 from .casting import Casting
 from .chains import ChainAuthor
@@ -314,6 +315,8 @@ class Showrunner:
             and not self.rules.plot_npc(n)
             and n not in budget.busy_givers
         }
+        peaceful = await non_hostile(self.link, candidates, context=context)
+        candidates = {n: description for n, description in candidates.items() if n in peaceful}
         quests = []
         for q in self.book.all().values():
             progress = self.book.progress(q.id)

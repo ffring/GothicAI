@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import questbook
+from .attitudes import non_hostile
 from .authoring import ATTEMPTS, Author, Spot
 from .authoring import Brief as AuthorBrief
 from .casting import KINDS, Casting
@@ -57,6 +58,7 @@ done_journal, knows (что заказчик знает), asked (что прос
 - talk: разговор с npc;
 - wait: days от 1 до 7.
 npc — giver (заказчик), role человека с count=1 или id NPC из сводки. Не выдумывай других людей и вещей.
+Роли bandit враждебны герою: к ним нельзя обращаться с talk или bring.
 Для bring/talk нужен talk: description — строка героя в меню, lines — разговор, remember — память NPC.
 Неиспользуемые строки заполняй "", списки [], count=1, radius=500, days=0, talk=null.
 Цепочка должна проходиться по порядку; не отправляй разговаривать с уже убитым человеком.
@@ -171,7 +173,7 @@ class Brief:
             f"бандиты: {'да' if self.bandit_ok(p.id) else 'нет'}; точек {len(p.points)}"
             for p in self.places.values()
         ]
-        out.append("Люди этих мест (npc — имя; заказчик также giver):")
+        out.append("Люди для разговора и передачи вещей (npc — имя; заказчик также giver):")
         out += [f"- {n} — {name}" for n, name in self.people.items()]
         out.append("Виды новых людей: " + ", ".join(KINDS))
         if self.new_people:
@@ -265,6 +267,11 @@ class ChainAuthor:
                 for e in person.get("routine", [])
             ):
                 people[person["npc"]] = str(person.get("name") or person["npc"])
+        safe = await non_hostile(self.link, people, context=base.npc)
+        if base.npc not in safe:
+            log.info("chain: %s is hostile to the hero", base.npc)
+            return None
+        people = {npc: name for npc, name in people.items() if npc in safe}
         return Brief(base, nearby, people, occupied)
 
     async def chain(
@@ -432,6 +439,11 @@ class ChainAuthor:
                         if ref in roles:
                             if len(roles[ref]) != 1:
                                 errors.append(f"npc роли {ref}: для разговора/вещи/дойти нужен один человек")
+                            if (
+                                goal["kind"] in (questbook.TALK, questbook.BRING)
+                                and descriptions[ref].kind == "bandit"
+                            ):
+                                errors.append(f"роль {ref}: бандит враждебен герою, talk/bring невозможны")
                             goal["npc"] = roles[ref][0].npc
                         elif ref == "giver" or ref == brief.base.npc:
                             goal["npc"] = brief.base.npc

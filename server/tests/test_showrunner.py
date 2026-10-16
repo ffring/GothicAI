@@ -402,6 +402,46 @@ async def test_new_people_canon_respects_remaining_slots_but_existing_quest_can_
         assert w.showrunner.budget(1, occasion()).people_left == 0
 
 
+@pytest.mark.parametrize(
+    ("attitude", "guild_attitude", "included"),
+    [(0, 3, False), (2, 0, False), (2, 2, True), (3, 2, True)],
+)
+async def test_brief_checks_personal_and_directional_guild_hostility(
+    graph, attitude, guild_attitude, included
+):
+    async with world(graph) as w:
+        w.fake.attitudes[HILDA] = attitude
+        w.fake.fields[HILDA, "GUILD"] = 8
+        w.fake.fields["HERO", "GUILD"] = 7
+        w.fake.guild_attitudes[8, 7] = guild_attitude
+        w.fake.guild_attitudes[7, 8] = 3  # the reverse direction must not mask hostility towards HERO
+        brief = await w.showrunner.brief(occasion())
+        assert (HILDA in brief.candidates) is included
+        assert LOBART in brief.candidates
+
+
+async def test_brief_batches_all_candidates_and_keeps_friendly_people_but_not_own_bandits(graph):
+    async with world(graph) as w:
+        await w.author.patches.introduce(spec().model_copy(update={"guild": "GIL_BDT"}))
+        w.fake.npc_states[OWN] = {"state": "alive", "name": "Бандит", "distance": 300}
+        w.fake.fields[OWN, "GUILD"] = 9
+        w.fake.attitudes.update({HILDA: 2, LOBART: 3, OWN: 3})
+        brief = await w.showrunner.brief(occasion())
+        assert set(brief.candidates) == {HILDA, LOBART}
+        batches = [r for r in w.fake.story if r.get("type") == "story_eval" and "NPC_GETATTITUDE" in str(r)]
+        assert len(batches) == 1 and len(batches[0]["exprs"]) == 3
+        assert all("WLD_GETGUILDATTITUDE" in str(e) for e in batches[0]["exprs"])
+
+
+async def test_hostile_giver_is_rejected_before_the_builder_and_neutral_retry_is_accepted(graph):
+    async with world(graph, proposal(giver=HILDA), proposal(giver=LOBART)) as w:
+        w.fake.attitudes[HILDA] = 0
+        result = await w.showrunner.decide(occasion())
+        assert result["fact"] == "line" and result["giver"] == LOBART
+        w.author.quest.assert_awaited_once_with(LOBART, premise=PREMISE)
+        assert HILDA in str(w.chronicle.facts("line_rejected"))
+
+
 async def test_two_canon_failures_stop_without_any_builder(graph):
     async with world(graph, proposal(giver=XARDAS)) as w:
         result = await w.showrunner.decide(occasion())
