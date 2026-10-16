@@ -147,7 +147,7 @@ def _require(condition: bool | np.bool_, message: str) -> None:
         raise ValueError(message)
 
 
-def _validate_chunk(data: np.ndarray) -> None:
+def _validate_chunk(data: np.ndarray, layout: np.ndarray) -> None:
     _finite(data)
     for name in ("keys", "previous_keys"):
         keys = data[name]
@@ -159,6 +159,9 @@ def _validate_chunk(data: np.ndarray) -> None:
         _require((np.abs(keys["head_pitch_deg"]) <= 90).all(), f"{name}: invalid head pitch")
     eye = data["eye"]
     _require((eye["distance_cm"] >= 0).all(), "negative ray distance")
+    max_range = layout[:, 2]
+    tolerance = np.maximum(1e-3, max_range * 1e-6)
+    _require((eye["distance_cm"] <= max_range + tolerance).all(), "ray distance exceeds its max range")
     _require((eye["kind"] <= 5).all(), "unknown ray hit kind")
     _require((np.abs(eye["normal_y"]) <= 1).all(), "ray normal outside [-1,1]")
     for flag in ("complete", "hit"):
@@ -206,13 +209,47 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
     episodes = []
     for file in files:
         if validate:
-            ray_layout(file)
+            layout = ray_layout(file)
+            metadata = json.loads((file.parent / "episode.json").read_text(encoding="utf-8"))
+            expected_records = metadata["decisions"]
+            elapsed_ms = metadata["elapsed_ms"]
+            _require(type(expected_records) is int and expected_records > 0,
+                     f"invalid episode decisions in {file.parent}")
+            _require(type(elapsed_ms) is int and elapsed_ms > 0,
+                     f"invalid episode elapsed_ms in {file.parent}")
+            actions = np.loadtxt(file.parent / "actions.txt", dtype=np.float64, ndmin=2)
+            _require(actions.shape == (expected_records + 1, 9),
+                     f"actions must have decisions+1 rows and 9 columns in {file.parent}")
+            _require(np.isfinite(actions).all(), f"non-finite action in {file.parent}")
+            action_times = actions[:, 0]
+            _require(action_times[0] == 0, f"actions must start at zero in {file.parent}")
+            _require((action_times == np.floor(action_times)).all(), "action times must be integer milliseconds")
+            _require((np.diff(action_times[:-1]) == PERIOD_MS).all(),
+                     "nonterminal actions must be exactly 100 ms apart")
+            _require(0 < action_times[-1] - action_times[-2] <= PERIOD_MS,
+                     "terminal action interval must be within (0,100] ms")
+            _require(action_times[-1] == elapsed_ms, "terminal action time differs from episode elapsed_ms")
+            _require((actions[-1, 1:] == [0, 0, 0, 1, 0, 0, 0, 0]).all(),
+                     "terminal action must release movement, jump, climb and head input")
         record_count = 0
         first_ms = last_ms = None
         last_keys = None
         for data in iter_chunks(file):
+            if first_ms is None:
+                first_ms = int(data["time_ms"][0])
             if validate:
-                _validate_chunk(data)
+                _validate_chunk(data, layout)
+                end_record = record_count + len(data)
+                _require(end_record <= expected_records, "more records than episode decisions")
+                chunk_actions = actions[record_count:end_record]
+                relative_times = data["time_ms"] - first_ms
+                _require((relative_times == chunk_actions[:, 0]).all(),
+                         "record times differ from relative action times")
+                action_fields = ("forward", "strafe", "turn", "walk", "jump", "climb",
+                                 "head_yaw_deg", "head_pitch_deg")
+                for column, name in enumerate(action_fields, start=1):
+                    _require((chunk_actions[:, column].astype(np.float32) == data["keys"][name]).all(),
+                             f"actions.{name} differs from recorded keys")
                 if last_ms is not None:
                     _require(int(data["time_ms"][0]) - last_ms == PERIOD_MS, "time gap between chunks")
                     _require(bool(data["previous_keys"][0] == last_keys), "previous keys mismatch between chunks")
@@ -221,8 +258,6 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
                     _require((times[1:] > times[:-1]).all(), "time is not strictly increasing")
                     _require((np.diff(times) == PERIOD_MS).all(), "decision interval is not 100 ms")
                     _require((data["previous_keys"][1:] == data["keys"][:-1]).all(), "previous keys mismatch")
-            if first_ms is None:
-                first_ms = int(data["time_ms"][0])
             last_ms = int(data["time_ms"][-1])
             last_keys = data["keys"][-1].copy()
             record_count += len(data)
@@ -233,6 +268,7 @@ def summarize(path: str | Path, validate: bool = False) -> dict:
                 counts[name] = counts.get(name, 0) + int(np.count_nonzero(data["body"]["flags"][:, index]))
         if validate:
             _require(record_count > 0, f"empty episode: {file}")
+            _require(record_count == expected_records, "record count differs from episode decisions")
         compressed_bytes = file.stat().st_size
         episodes.append({"episode": str(file.parent), "decisions": record_count,
                          "first_ms": first_ms, "last_ms": last_ms,
@@ -326,7 +362,7 @@ def main() -> int:
                 args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
             public = {key: value for key, value in result.items() if key != "episode_details"}
             print(json.dumps(public, indent=2))
-    except (OSError, ValueError, EOFError) as error:
+    except (OSError, ValueError, EOFError, KeyError) as error:
         print(f"nav_demos: {error}", file=sys.stderr)
         return 1
     return 0
