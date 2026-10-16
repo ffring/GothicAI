@@ -25,6 +25,7 @@ import time
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT = Path.home() / "gothic-ai/nav-demos"
 NPC = "BAU_954_MALETH"
+DAGGER_MAX_ATTEMPTS = 32
 
 
 def write_json(path, value):
@@ -78,10 +79,18 @@ def episode_directory(args, index):
     return args.output / "performance" / f"p{args.parallel}" / f"{index:03d}"
 
 
-def completed(directory, replay=False):
+def unsupported_preparation(directory):
     episode = directory / "episode.json"
-    if episode.is_file() and read_json(episode).get("failure") == "dagger_start_not_supported":
-        return True
+    if not episode.is_file():
+        return False
+    value = read_json(episode)
+    return (value.get("failure") == "dagger_start_not_supported"
+            and value.get("elapsed_ms") == 0 and value.get("decisions") == 0)
+
+
+def completed(directory, replay=False):
+    if unsupported_preparation(directory):
+        return False
     required = ("episode.json", "trajectory.txt")
     if not replay:
         required += ("actions.txt", "samples.bin.gz")
@@ -147,6 +156,41 @@ def dagger_states(args, pairs):
                  yaw_deg=generator.uniform(-180, 180), fraction=0.5) for _ in range(50)]
 
 
+def dagger_candidate(args, pairs, states, index, attempt):
+    if attempt == 0:
+        return states[index]  # Keep all original first candidates unchanged.
+    generator = random.Random((args.seed << 32) ^ index ^ 0xDA66E2A1)
+    for _ in range(attempt):
+        state = dict(pair=generator.randrange(len(pairs)),
+                     lateral_cm=generator.uniform(100, 500) * generator.choice((-1, 1)),
+                     yaw_deg=generator.uniform(-180, 180), fraction=0.5)
+    return state
+
+
+def dagger_rejections(args, index):
+    paths = sorted((args.output / "dagger-rejected").glob(f"{index:03d}-attempt-*"),
+                   key=lambda path: int(path.name.rsplit("-", 1)[1]))
+    for attempt, path in enumerate(paths):
+        if path.name != f"{index:03d}-attempt-{attempt}" or not unsupported_preparation(path):
+            raise RuntimeError(f"Invalid DAgger preparation history: {path}")
+    return paths
+
+
+def archive_dagger_rejection(args, index, directory, rejected):
+    destination = args.output / "dagger-rejected" / f"{index:03d}-attempt-{len(rejected)}"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    directory.rename(destination)
+    rejected.append(destination)
+    print(f"dagger {index:03d}: rejected zero-step preparation -> {destination}", flush=True)
+
+
+def dagger_preparation_metadata(args, rejected, attempt):
+    return dict(dagger_preparation_attempt=attempt, dagger_rejected_preparation_count=len(rejected),
+                dagger_rejected_preparations=[dict(path=str(path.relative_to(args.output)),
+                                                   failure="dagger_start_not_supported",
+                                                   elapsed_ms=0, decisions=0) for path in rejected])
+
+
 def compare_replay(recorded, replayed, tolerance_cm):
     reference = numeric_lines(recorded / "trajectory.txt", 5)
     replay = numeric_lines(replayed / "trajectory.txt", 5)
@@ -187,11 +231,11 @@ def compare_replay(recorded, replayed, tolerance_cm):
     return result
 
 
-def run_episode(args, runner, pairs, states, index):
+def record_episode(args, runner, pairs, states, index, state=None, preparation=None):
     directory = episode_directory(args, index)
     if completed(directory, args.command == "replay"):
         raise ValueError(f"Completed output exists: {directory}; use --resume or a fresh output")
-    state = states[index] if args.command == "dagger" else None
+    state = state if state is not None else (states[index] if args.command == "dagger" else None)
     pair_index = state["pair"] if state else index % len(pairs)
     pair = pairs[pair_index]
     # Known roads are enabled on the actor before the teacher moves it. This keeps
@@ -213,9 +257,8 @@ def run_episode(args, runner, pairs, states, index):
     elapsed = time.monotonic() - started
     check_log(directory)
     if not completed(directory, args.command == "replay"):
-        # Unsupported DAgger placements remain explicit failures among all 50.
-        path = directory / "episode.json"
-        if not path.is_file() or read_json(path).get("failure") != "dagger_start_not_supported":
+        # Only zero-step unsupported placements can be retried by run_episode.
+        if not unsupported_preparation(directory):
             raise RuntimeError(f"Incomplete navdemos output: {directory}")
     episode = read_json(directory / "episode.json")
     if args.command == "replay":
@@ -228,6 +271,8 @@ def run_episode(args, runner, pairs, states, index):
     if state:
         episode.update(dagger=index, dagger_lateral_cm=state["lateral_cm"],
                        dagger_yaw_deg=state["yaw_deg"], dagger_fraction=state["fraction"])
+    if preparation is not None:
+        episode.update(preparation)
     write_json(directory / "episode.json", episode)
     if args.command == "replay":
         comparison = compare_replay(recorded, directory, args.tolerance_cm)
@@ -238,6 +283,27 @@ def run_episode(args, runner, pairs, states, index):
               f"elapsed_ms={episode.get('elapsed_ms')} decisions={count} "
               f"wall_s={elapsed:.3f} decisions/s={count / elapsed:.2f}", flush=True)
     return count
+
+
+def run_episode(args, runner, pairs, states, index):
+    if args.command != "dagger":
+        return record_episode(args, runner, pairs, states, index)
+    directory = episode_directory(args, index)
+    rejected = dagger_rejections(args, index)
+    if unsupported_preparation(directory):
+        # Resume old collections that counted an unsupported placement among 50.
+        archive_dagger_rejection(args, index, directory, rejected)
+    elif (directory / "episode.json").is_file():
+        raise ValueError(f"Existing physical DAgger episode is preserved: {directory}; use --resume")
+    for attempt in range(len(rejected), DAGGER_MAX_ATTEMPTS):
+        state = dagger_candidate(args, pairs, states, index, attempt)
+        count = record_episode(args, runner, pairs, states, index, state,
+                               dagger_preparation_metadata(args, rejected, attempt))
+        if not unsupported_preparation(directory):
+            return count  # Any real failure after control began remains in the 50.
+        archive_dagger_rejection(args, index, directory, rejected)
+    raise RuntimeError(f"DAgger {index:03d}: preparation exhausted {DAGGER_MAX_ATTEMPTS} attempts; "
+                       f"no physical episode collected. Rejected starts: {args.output / 'dagger-rejected'}")
 
 
 def worker(args, pairs, states, indices, worker_index=0, barrier=None):
