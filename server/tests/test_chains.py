@@ -152,12 +152,15 @@ class StubCasting:
 
 @asynccontextmanager
 async def _setup(
-    graph, script: list[dict[str, Any]] | None = None, *, partial_group: bool = False  # noqa: F811
+    story_graph,
+    script: list[dict[str, Any]] | None = None,
+    *,
+    partial_group: bool = False,
 ) -> AsyncIterator[tuple[FakeGame, ChainAuthor, StubCasting, FakeBackend]]:
     fake = FakeGame(branch="A")
     steps = [FakeStep("", [ToolCall(PROPOSE, raw, f"chain{i}")]) for i, raw in enumerate(script or [])]
     llm = FakeBackend(script=steps, delay=0)
-    link_cm, author, _ = await _author(fake, llm, graph, MemoryStore(":memory:"))
+    link_cm, author, _ = await _author(fake, llm, story_graph, MemoryStore(":memory:"))
     try:
         data = deepcopy(BOOK)
         for place, kind in zip(data["places"], ["house", "yard", "field", "street"], strict=True):
@@ -165,9 +168,7 @@ async def _setup(
         author.places = PlaceBook(data)
         author.book.places = author.places
         fake.symbols.update(dict.fromkeys(FUNCS, "func"))
-        fake.people = [
-            {"npc": HILDA, "name": "Хильда", "routine": [{"waypoint": "NW_FARM1_INHOUSE_01"}]}
-        ]
+        fake.people = [{"npc": HILDA, "name": "Хильда", "routine": [{"waypoint": "NW_FARM1_INHOUSE_01"}]}]
         casting = StubCasting(author, partial_group=partial_group)
         chains = ChainAuthor(author, casting)
         await _until(lambda: bool(fake.graph))
@@ -487,3 +488,20 @@ async def test_only_two_failed_proposals_are_spent_and_no_cast_is_left(graph):  
         assert len(llm.calls) == 2 and casting.calls == [] and fake.cast == {}
         assert [fact["attempt"] for fact in chains.chronicle.facts("chain_rejected")] == [1, 2]
         assert chains.chronicle.facts("chain") == [] and chains.book.all() == {}
+
+
+async def test_a_chain_can_use_people_from_the_brief_without_new_roles(graph):  # noqa: F811
+    raw = _proposal()
+    raw["cast"] = []
+    for q in raw["quests"]:
+        q["stages"] = [
+            {
+                "journal": "Надо поговорить с заказчиком.",
+                "goals": [{"kind": "talk", "npc": "giver", "talk": _talk("Дело сделано.")}],
+            }
+        ]
+    async with _setup(graph, [raw]) as (_, chains, casting, _):
+        made = await chains.chain(HILDA)
+        assert made is not None and len(made) == 2 and not casting.calls
+        assert chains.chronicle.facts("chain")[-1]["roles"] == {}
+        assert made[1].after == made[0].id

@@ -4413,7 +4413,8 @@ async def author_chain(
     roles = chain_fact.get("roles", {})
     npcs = [npc for group in roles.values() for npc in group]
     world = (await link.story_state(npcs=npcs)).get("npcs", {})
-    check("roles", bool(npcs) and all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
+    # A chain may use only people already in the brief, so an empty cast/role map is valid.
+    check("roles", all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
     held = []
     for q in quests:
         for stage in q.stages:
