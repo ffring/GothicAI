@@ -321,7 +321,8 @@ class Guide:
         return "lost"
 
     async def _stuck(self, lead: Lead) -> None:
-        """Done once the npc has not moved for STUCK_S on its way (a fence, a cart, the hero in the way)."""
+        """Done once the npc has not moved for STUCK_S on its way (a fence, a cart, the hero in the way).
+        Not while its line is heard: the game starts its walk after it (a live «за мной» takes seconds)."""
         last: tuple[tuple[float, float, float], float] | None = None
         while True:
             await asyncio.sleep(EVERY_S)
@@ -329,7 +330,7 @@ class Guide:
             if snap is None:
                 continue
             now = time.monotonic()
-            if last is None or math.dist(snap.npc.pos, last[0]) > STUCK_CM:
+            if last is None or math.dist(snap.npc.pos, last[0]) > STUCK_CM or self.dialogue.audible(lead.npc):
                 last = (snap.npc.pos, now)
             elif now - last[1] >= STUCK_S:
                 return

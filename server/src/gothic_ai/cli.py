@@ -607,6 +607,13 @@ def _audio_source(args: argparse.Namespace) -> AudioSource:
     return Microphone(device)
 
 
+def _start_showrunner(args: argparse.Namespace, showrunner: Showrunner) -> asyncio.Task[None] | None:
+    """Ordinary play starts the loop; scenarios control their own model calls."""
+    if args.no_showrunner or args.scenario is not None:
+        return None
+    return asyncio.create_task(showrunner.run())
+
+
 async def serve(args: argparse.Namespace) -> int:
     done = asyncio.Event()
     exit_code = 0
@@ -943,8 +950,8 @@ async def serve(args: argparse.Namespace) -> int:
                     state.showrunner = Showrunner(
                         state.occasions, state.author, state.chains, state.casting, llm
                     )
-                    if args.showrunner:
-                        directing.append(asyncio.create_task(state.showrunner.run()))
+                    if (task := _start_showrunner(args, state.showrunner)) is not None:
+                        directing.append(task)
             # a lie found out changes the scripts' dialogs of the one lied to: the quest is not done there
             state.consequences = LieConsequences(
                 link,
@@ -1364,6 +1371,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenario_showrunner.showrunner(link, state.showrunner)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario showrunner: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "showrunner_live":
+                assert state.showrunner is not None
+                results = await scenario_showrunner.showrunner_live(link, state.showrunner)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario showrunner_live: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "character":
                 casting, author, story = state.casting, state.author, state.story
@@ -2082,6 +2095,7 @@ def main() -> None:
             "authored",
             "occasions",
             "showrunner",
+            "showrunner_live",
             "own",
             "trigger",
             "stages",
@@ -2110,7 +2124,7 @@ def main() -> None:
             "rescue_self",
             "tts",
         ],
-        help="run a scripted check when the game connects",
+        help="run a scenario when the game connects (the ordinary showrunner loop stays off)",
     )
     p.add_argument("--exit-after", action="store_true", help="exit when the scenario finishes")
     p.add_argument("--no-console", action="store_true", help="do not read commands from stdin")
@@ -2148,7 +2162,9 @@ def main() -> None:
         "--no-occasions", action="store_true", help="do not watch for the director's story occasions"
     )
     p.add_argument(
-        "--showrunner", action="store_true", help="let the director turn occasions into new plot lines"
+        "--no-showrunner",
+        action="store_true",
+        help="disable the director's new plot lines (enabled by default outside scenarios)",
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"

@@ -35,6 +35,14 @@ class WaypointUnavailable(GameError):
     the watcher and `next` try again on the next sample instead of stopping."""
 
 
+class OccasionFailed(Exception):
+    """An unexpected handoff failure consumed this occasion; the writer must record its outcome."""
+
+    def __init__(self, occasion: Fact, error: Exception) -> None:
+        super().__init__(str(error))
+        self.occasion, self.error = occasion, error
+
+
 def _minutes(fact: Fact) -> int | None:
     if not all(isinstance(fact.get(k), int) for k in ("day", "hour", "minute")):
         return None
@@ -302,8 +310,18 @@ class Occasions:
             self._changed.clear()
             try:
                 async with self._lock:
-                    if (fact := await self._take()) is not None:
-                        return fact
+                    generation = self._generation
+                    pending = self.pending[0] if self.pending else None
+                    try:
+                        if (fact := await self._take()) is not None:
+                            return fact
+                    except (GameError, TimeoutError):
+                        raise
+                    except Exception as error:
+                        if generation == self._generation and pending is not None:
+                            self.pending.remove(pending)
+                            raise OccasionFailed(pending, error) from error
+                        raise
             except (GameError, TimeoutError) as error:
                 log.warning("occasions waiting: %s", error)
             try:

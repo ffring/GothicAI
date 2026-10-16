@@ -71,6 +71,8 @@ class FakeGame:
         self.people: list[dict[str, Any]] = []  # what story_people answers: the world's people and their days
         self.item_names: dict[str, str] = {}
         self.fns: dict[str, int] = {}  # story_eval: what helper predicates of the scripts come to (C_X())
+        self.attitudes: dict[str, int] = {}  # NPC_GETATTITUDE towards HERO; default ATT_NEUTRAL
+        self.guild_attitudes: dict[tuple[int, int], int] = {}  # WLD_GETGUILDATTITUDE, npc -> hero guild
         # story_eval: expressions over vars, npc_states, the hero's items (instances: global -> npc symbol)
         self.hero_items: dict[str, int] = {}
         # story_effect with `check`: the npc's things (the hero's are hero_items), moved by the gives
@@ -478,7 +480,7 @@ class FakeGame:
             case ["int", v, *_]:
                 return v
             case ["var", name]:
-                return self.vars.get(name, 0)
+                return self.vars.get(name, {"ATT_HOSTILE": 0, "GIL_BDT": 9}.get(name, 0))
             case ["field", ["inst", who], name]:
                 return self.fields.get((who, name), 0)
             case ["field", *_]:
@@ -501,6 +503,11 @@ class FakeGame:
                 return self.nearest_waypoint
             case ["call", "NPC_GETDISTTOWP", ["inst", "HERO"], ["str", waypoint]]:
                 return self.waypoint_distances.get(waypoint, 0)
+            case ["call", "NPC_GETATTITUDE", ["inst", who], ["inst", "HERO"]]:
+                return self.attitudes.get(who, 2)
+            case ["call", "WLD_GETGUILDATTITUDE", first, second]:
+                guilds = (self.evaluate(first, npc), self.evaluate(second, npc))
+                return self.guild_attitudes.get(guilds, 2)
             case ["call", "WLD_GETDAY"]:
                 return self.day
             case ["call", "NPC_ISDEAD", ["inst", name]]:
