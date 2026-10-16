@@ -1442,6 +1442,41 @@ namespace {
     requireNear(body->position().y,700.f-6.f*acceleration,.005f,"next sixteen millisecond frame must advance the retained step");
     }
 
+  void testCharacterVirtualInteractiveStep() {
+    constexpr float slope=.785398163f;
+    for(bool movable:{false,true}) for(bool interactive:{false,true}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      // A chair seat and an architectural tread can have the same geometry.
+      // The interactive classification determines whether walking may step up.
+      auto seat=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.5f,.2f,1)),at(100,20,0),.7f,
+                                       DynamicWorld::C_Object,movable);
+      if(interactive)
+        seat->setPayload(nullptr,DynamicWorld::P_Interactive);
+      auto walker=world.createVirtualCharacter(25,180,{0,0,0});
+      float highest=0.f;
+      CollisionWorld::CharacterMoveResult state;
+      for(int i=0;i<60;++i) {
+        state=walker->move({5,0,0},17,50,slope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        }
+      std::printf("CharacterVirtual 40 cm edge: movable %d, interactive %d, max feet %.4f cm, final x %.3f cm\n",
+                  movable,interactive,double(highest),double(state.position.x));
+      if(interactive) {
+        require(highest<1.f && state.position.x<30.f,
+                "automatic world stairs must not step onto or pass through interactive furniture");
+        walker->setPosition({100,40,0});
+        state=walker->move({},17,50,slope,80,nullptr);
+        require(state.grounded,"interactive furniture must retain support for feet explicitly placed on its top");
+        requireNear(state.position.y,40.f,1.f,"disabling automatic furniture stepping must not drop existing top support");
+        } else {
+        require(highest>39.f && state.position.x>200.f,
+                "ordinary architectural C_Object treads must retain automatic world stair walking");
+        }
+      }
+    }
+
   void testCharacterVirtualMovingUtensil() {
     float maximumJump=0.f;
     for(bool kicked:{false,true}) {
@@ -1484,6 +1519,7 @@ namespace {
     }
 
   void testCharacterVirtual() {
+    testCharacterVirtualInteractiveStep();
     testCharacterVirtualMovingUtensil();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {

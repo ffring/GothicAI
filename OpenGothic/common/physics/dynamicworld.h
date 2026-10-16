@@ -2,6 +2,7 @@
 
 #include <zenkit/Mesh.hh>
 #include "physics/physicsnoise.h"
+#include "physics/charactervirtualdiagnostics.h"
 
 #include <Tempest/Matrix4x4>
 #include <functional>
@@ -137,6 +138,8 @@ class DynamicWorld final {
         VirtualMoveResult moveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
                                       float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr);
         void resetVirtual();
+        void setVirtualDiagnosticsEnabled(bool enabled);
+        bool virtualDiagnostics(CharacterVirtualDiagnostics& out) const;
 
         bool  hasCollision() const;
 

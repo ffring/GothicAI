@@ -109,6 +109,8 @@ const bool        ragdollTrace = envStr("OPENGOTHIC_RAGDOLL_TRACE")!=nullptr &&
                                 std::string_view(envStr("OPENGOTHIC_RAGDOLL_TRACE"))=="1";
 const bool        ragdollPerf = envStr("OPENGOTHIC_RAGDOLL_PERF")!=nullptr &&
                                std::string_view(envStr("OPENGOTHIC_RAGDOLL_PERF"))=="1";
+const bool        npcCharacterTrace = envStr("OPENGOTHIC_NPC_CHARACTER_TRACE")!=nullptr &&
+                                     std::string_view(envStr("OPENGOTHIC_NPC_CHARACTER_TRACE"))=="1";
 constexpr uint64_t SpeakTailMs = 400;  // the talk key is held this long after the recording ends
 
 std::FILE* logFile = nullptr;
@@ -691,6 +693,7 @@ struct Bench {
     bool mugContact=false;
     uint64_t supportSince=0;Vec3 preparationSample;
     bool sawPreparationSample=false;
+    std::deque<std::string> supportHistory;
     bool active=false,reached=false,stalled=false,sat=false,standing=false;
   } npcCharacterRoute;
   struct NpcCharacterFrame {
@@ -4472,6 +4475,82 @@ void characterRideCheckpoint(World& world,Npc& player,bool setup=false) {
 
 // NPC stands use real AI_GoToPoint actions. Only fixture preparation moves an
 // actor directly; route frames are ordinary animation-driven MoveAlgo ticks.
+std::string npcCharacterBodyJson(const CharacterVirtualDiagnostics::Body& body,
+                                const std::vector<DynamicWorld::MovableVobSnapshot>& movable) {
+  std::string visual=body.label,kind;
+  if(body.pointerType==DynamicWorld::P_Item)
+    kind="Item";
+  else if(body.pointerType==DynamicWorld::P_Interactive) {
+    if(const auto* rule=MovableVobs::classifyVisual(visual))kind=rule->className;
+    else kind="Interactive";
+    }
+  else if(body.pointerType==DynamicWorld::P_MovableVob) {
+    const auto id=reinterpret_cast<uintptr_t>(body.payload);
+    for(const auto& entry:movable)if(entry.id==id) {visual=entry.visual;kind=entry.className;break;}
+    }
+  if(kind.empty()) {
+    if(const auto* rule=MovableVobs::classifyVisual(visual))kind=rule->className;
+    else if(body.layer==DynamicWorld::C_Landscape)kind="landscape";
+    else kind="vob";
+    }
+  return "{\"present\":"+std::string(body.present?"true":"false")+",\"id\":"+std::to_string(body.id)+
+    ",\"layer\":"+std::to_string(body.layer)+",\"pointer_type\":"+std::to_string(body.pointerType)+
+    ",\"motion_type\":"+std::to_string(body.motionType)+",\"mass_kg\":"+ragdollNumber(body.mass)+
+    ",\"label\":"+jsonStr(body.label)+",\"visual\":"+jsonStr(visual)+",\"class\":"+jsonStr(kind)+
+    ",\"position_cm\":"+ragdollVector(body.position)+",\"linear_velocity_cm_s\":"+ragdollVector(body.linearVelocity)+
+    ",\"angular_velocity_rad_s\":"+ragdollVector(body.angularVelocity)+",\"point_velocity_cm_s\":"+ragdollVector(body.pointVelocity)+"}";
+  }
+
+std::string npcCharacterPoseJson(const CharacterVirtualDiagnostics::Pose& pose,
+                                const std::vector<DynamicWorld::MovableVobSnapshot>& movable) {
+  std::string contacts="[";
+  const auto flag=[](bool value){return value?"true":"false";};
+  for(const auto& c:pose.contacts) {
+    if(contacts.size()>1)contacts+=',';
+    contacts+="{\"body\":"+npcCharacterBodyJson(c.body,movable)+",\"subshape\":"+std::to_string(c.subShape)+
+      ",\"position_cm\":"+ragdollVector(c.position)+",\"normal\":"+ragdollVector(c.contactNormal)+
+      ",\"surface_normal\":"+ragdollVector(c.surfaceNormal)+",\"point_velocity_cm_s\":"+ragdollVector(c.pointVelocity)+
+      ",\"distance_cm\":"+ragdollNumber(c.distance)+",\"supporting_volume_distance_cm\":"+ragdollNumber(c.supportingVolumeDistance)+
+      ",\"had_collision\":"+flag(c.hadCollision)+",\"discarded\":"+flag(c.discarded)+",\"sensor\":"+flag(c.sensor)+
+      ",\"can_push_character\":"+flag(c.canPushCharacter)+",\"within_supporting_volume\":"+flag(c.withinSupportingVolume)+
+      ",\"walkable_slope\":"+flag(c.walkableSlope)+",\"support_allowed_by_policy\":"+flag(c.supportAllowedByPolicy)+
+      ",\"support_eligible\":"+flag(c.supportEligible)+"}";
+    }
+  return "{\"position_cm\":"+ragdollVector(pose.position)+",\"velocity_cm_s\":"+ragdollVector(pose.velocity)+
+    ",\"ground_state\":"+std::to_string(pose.groundState)+",\"ground\":"+npcCharacterBodyJson(pose.ground,movable)+
+    ",\"ground_subshape\":"+std::to_string(pose.groundSubShape)+",\"ground_position_cm\":"+ragdollVector(pose.groundPosition)+
+    ",\"ground_normal\":"+ragdollVector(pose.groundNormal)+",\"ground_velocity_cm_s\":"+ragdollVector(pose.groundVelocity)+
+    ",\"contacts\":"+contacts+"]}";
+  }
+
+void npcCharacterSupportTrace(World& world,const Npc& npc,float physicalJump,float visualJump) {
+  if(!npcCharacterTrace)return;
+  auto& route=bench.npcCharacterRoute;
+  CharacterVirtualDiagnostics d;
+  const bool valid=npc.characterVirtualDiagnostics(d);
+  std::string row="\"tick\":"+std::to_string(world.tickCount())+",\"frame\":"+std::to_string(bench.npcCharacterFrames.size()-1)+
+    ",\"npc_id\":"+std::to_string(world.npcId(&npc))+",\"route\":"+jsonStr(route.name)+
+    ",\"root_cm\":"+ragdollVector(npc.position())+",\"visual_root_cm\":"+ragdollVector(npc.characterVisualPosition())+
+    ",\"physical_dy_cm\":"+ragdollNumber(physicalJump)+",\"visual_dy_cm\":"+ragdollNumber(visualJump)+
+    ",\"cv_active\":"+(npc.characterVirtualActive()?"true":"false")+",\"diagnostics_valid\":"+(valid?"true":"false");
+  if(valid) {
+    const auto movable=world.physic()->movableVobSnapshot();
+    row+=",\"dt_ms\":"+std::to_string(d.dt)+",\"requested_cm\":"+ragdollVector(d.requested)+
+      ",\"stair_attempted\":"+(d.stairAttempted?"true":"false")+",\"stair_succeeded\":"+(d.stairSucceeded?"true":"false")+
+      ",\"before\":"+npcCharacterPoseJson(d.before,movable)+
+      ",\"after_extended_update\":"+npcCharacterPoseJson(d.afterExtendedUpdate,movable)+
+      ",\"after_stairs\":"+npcCharacterPoseJson(d.afterStairs,movable);
+    }
+  route.supportHistory.push_back(std::move(row));
+  if(route.supportHistory.size()>6)route.supportHistory.pop_front();
+  // This threshold selects diagnostic output only; it never changes motion.
+  if(std::abs(physicalJump)<=10.f && std::abs(visualJump)<=10.f)return;
+  const int count=int(route.supportHistory.size());
+  for(int i=0;i<count;++i)
+    event("npc_character_support_trace","\"spike_frame\":"+std::to_string(bench.npcCharacterFrames.size()-1)+
+      ",\"relative_frame\":"+std::to_string(i-count+1)+","+route.supportHistory[size_t(i)]);
+  }
+
 void npcCharacterSnapshot(World& world,Npc& player,std::string_view label) {
   std::string rows="[";
   for(uint32_t id=0;id<world.npcCount();++id) {
@@ -4529,6 +4608,7 @@ void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
   route.destination=WayPoint(route.goal,"FP_NPC_CHARACTER_GOAL");route.destination.groundPos=route.goal;
   npcCharacterPlaceHero(world,player,route.start,route.goal);
   route.npc=npcCharacterActor(world,route.start);if(!route.npc)return;
+  route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace);
   route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
   if(name=="tavern") {
     // Use an actual dropped Item in the free lane beside authored furniture.
@@ -4563,6 +4643,7 @@ void npcCharacterBegin(World& world,std::string_view phase={}) {
   route.active=true;route.reached=false;route.arrived=0;route.began=world.tickCount();route.progressTime=route.began;
   route.lastPosition=route.npc->position();route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;
   route.maxVisualJump=0;route.maxPhysicalJump=0;route.maxAboveFloor=0;route.stalls=0;route.stalled=false;
+  route.supportHistory.clear();route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace);
   bench.npcCharacterHasWall=false;
   event("npc_character_route_begin","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
     ",\"start_cm\":"+ragdollVector(route.npc->position())+",\"goal_cm\":"+ragdollVector(route.goal)+
@@ -4699,6 +4780,7 @@ void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
     world.physic()->physicsStats().stepMilliseconds,wall,nearby,virtualNearby,movingNearby,movingVirtualNearby});
   if(!route.active || !npc)return;
   const auto position=npc->position(),visual=npc->characterVisualPosition();
+  npcCharacterSupportTrace(world,*npc,position.y-route.lastPosition.y,visual.y-route.lastVisual.y);
   route.maxVisualJump=std::max(route.maxVisualJump,std::abs(visual.y-route.lastVisual.y));
   route.maxPhysicalJump=std::max(route.maxPhysicalJump,std::abs(position.y-route.lastPosition.y));
   route.lastVisual=visual;route.lastPosition=position;

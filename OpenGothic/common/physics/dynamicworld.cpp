@@ -177,6 +177,7 @@ struct DynamicWorld::NpcBody {
 
   JPH::ShapeRefC shape;
   std::unique_ptr<CollisionWorld::VirtualCharacter> virtualCharacter;
+  bool virtualDiagnosticsEnabled = false;
   void*         userPointer = nullptr;
   float         radius      = 0.f;
   float         cylinderHeight = 0.f;
@@ -1011,6 +1012,7 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
     obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
   if(obj.body!=nullptr) {
     obj.body->setPayload(&obj,P_MovableVob);
+    obj.body->setLabel(obj.visual);
     obj.body->setNoiseProfile(impactMaterial(shape.material),shape.material,obj.visual);
     }
   // cd_dynamic controls the original mesh queries independently of simulation.
@@ -1023,6 +1025,7 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
       obj.query.push_back(world->addCollisionBody(part.source->shape,matrix,part.source->friction(),category,
                                                  enabled,enabled,&part.source->mesh));
       obj.query.back()->setPayload(&obj,P_MovableVob);
+      obj.query.back()->setLabel(obj.visual);
       }
     }
   obj.pose->transform = obj.current;
@@ -1828,6 +1831,18 @@ void DynamicWorld::NpcItem::resetVirtual() {
     obj->virtualCharacter.reset();
   }
 
+void DynamicWorld::NpcItem::setVirtualDiagnosticsEnabled(bool enabled) {
+  if(obj==nullptr)
+    return;
+  obj->virtualDiagnosticsEnabled = enabled;
+  if(obj->virtualCharacter!=nullptr)
+    obj->virtualCharacter->setDiagnosticsEnabled(enabled);
+  }
+
+bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out) const {
+  return obj!=nullptr && obj->virtualCharacter!=nullptr && obj->virtualCharacter->diagnostics(out);
+  }
+
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
   VirtualMoveResult result;
@@ -1836,8 +1851,10 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   result.position = obj->pos;
   if(!obj->enable)
     return result;
-  if(obj->virtualCharacter==nullptr)
+  if(obj->virtualCharacter==nullptr) {
     obj->virtualCharacter = owner->world->createVirtualCharacter(obj->radius,obj->h,obj->pos);
+    obj->virtualCharacter->setDiagnosticsEnabled(obj->virtualDiagnosticsEnabled);
+    }
 
   const auto initial = obj->pos;
   // Every character retains its legacy ellipsoid. Movement is sequential, so
@@ -2036,6 +2053,7 @@ void DynamicWorld::Item::setItem(::Item* it) {
     const auto surface=material==MAT_WOOD ? zenkit::MaterialGroup::WOOD :
                        material==MAT_METAL ? zenkit::MaterialGroup::METAL : zenkit::MaterialGroup::STONE;
     obj->body->setNoiseProfile(material,surface,it->handle().visual);
+    obj->body->setLabel(it->handle().visual);
     }
   }
 

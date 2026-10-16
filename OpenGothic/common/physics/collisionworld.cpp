@@ -469,21 +469,115 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     return body.IsDynamic() && (layer==DynamicWorld::C_Item || layer==DynamicWorld::C_MovableVob);
     }
 
+  static bool blocksAutomaticStairs(const JPH::Body& body) {
+    if(isPushable(body))
+      return true;
+    // C_Object bodies are CollisionBody wrappers, unlike native ragdoll parts.
+    // Interactive furniture/containers are not architectural treads. Doors
+    // retain their blocking/perception path and ladders use explicit climbing.
+    if(body.GetObjectLayer()!=DynamicWorld::C_Object)
+      return false;
+    const auto* source = reinterpret_cast<const CollisionBody*>(body.GetUserData());
+    return source!=nullptr && source->ptrType()==DynamicWorld::P_Interactive;
+    }
+
+  bool rejectsSupport(const JPH::Body& body, const JPH::CharacterContact& contact) const {
+    if(!isPushable(body) || contact.mIsSensorB)
+      return false;
+    const auto up = character->GetUp();
+    const float mass = 1.f/body.GetMotionProperties()->GetInverseMass();
+    const float contactHeight = JPH::Vec3(contact.mPosition-character->GetPosition()).Dot(up);
+    return mass<10.f ? contact.mSurfaceNormal.Dot(up)>1.e-3f :
+                      contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
+    }
+
+  CharacterVirtualDiagnostics::Body diagnosticBody(JPH::BodyID id, JPH::RVec3Arg point) const {
+    CharacterVirtualDiagnostics::Body result;
+    result.id = id.GetIndexAndSequenceNumber();
+    if(id.IsInvalid())
+      return result;
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),id);
+    if(!lock.SucceededAndIsInBroadPhase())
+      return result;
+    const auto& body = lock.GetBody();
+    result.present = true;
+    result.layer = body.GetObjectLayer();
+    result.motionType = int(body.GetMotionType());
+    result.nativeUserData = uintptr_t(body.GetUserData());
+    result.mass = body.IsDynamic() ? 1.f/body.GetMotionProperties()->GetInverseMass() : 0.f;
+    result.position = toCentimeters(JPH::Vec3(body.GetPosition()));
+    result.linearVelocity = toCentimeters(body.GetLinearVelocity());
+    const auto angular = body.GetAngularVelocity();
+    result.angularVelocity = Tempest::Vec3(angular.GetX(),angular.GetY(),angular.GetZ());
+    result.pointVelocity = toCentimeters(body.GetPointVelocity(point));
+    // Ragdoll / living-body user data is not owned by CollisionBody. Resolve
+    // metadata through this world's actual wrappers rather than casting it.
+    const auto sourceIt = std::find_if(world.bodies.begin(),world.bodies.end(),
+                                      [id](const auto* candidate) { return candidate->id==id; });
+    if(sourceIt!=world.bodies.end()) {
+      const auto* source = *sourceIt;
+      result.pointerType = source->ptrType();
+      result.payload = source->payload();
+      result.label = source->label();
+      }
+    return result;
+    }
+
+  CharacterVirtualDiagnostics::Pose diagnosticPose() const {
+    CharacterVirtualDiagnostics::Pose result;
+    result.position = toCentimeters(JPH::Vec3(character->GetPosition()));
+    result.velocity = toCentimeters(character->GetLinearVelocity());
+    result.groundPosition = toCentimeters(JPH::Vec3(character->GetGroundPosition()));
+    const auto normal = character->GetGroundNormal();
+    result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+    result.groundVelocity = toCentimeters(character->GetGroundVelocity());
+    result.ground = diagnosticBody(character->GetGroundBodyID(),character->GetGroundPosition());
+    result.groundSubShape = character->GetGroundSubShapeID().GetValue();
+    result.groundUserData = uintptr_t(character->GetGroundUserData());
+    result.groundState = uint8_t(character->GetGroundState());
+    const auto inverse = JPH::RMat44::sInverseRotationTranslation(character->GetRotation(),character->GetPosition());
+    result.contacts.reserve(character->GetActiveContacts().size());
+    for(const auto& contact:character->GetActiveContacts()) {
+      CharacterVirtualDiagnostics::Contact out;
+      out.body = diagnosticBody(contact.mBodyB,contact.mPosition);
+      out.subShape = contact.mSubShapeIDB.GetValue();
+      out.contactUserData = uintptr_t(contact.mUserData);
+      out.position = toCentimeters(JPH::Vec3(contact.mPosition));
+      out.contactNormal = Tempest::Vec3(contact.mContactNormal.GetX(),contact.mContactNormal.GetY(),contact.mContactNormal.GetZ());
+      out.surfaceNormal = Tempest::Vec3(contact.mSurfaceNormal.GetX(),contact.mSurfaceNormal.GetY(),contact.mSurfaceNormal.GetZ());
+      out.pointVelocity = toCentimeters(contact.mLinearVelocity);
+      out.distance = contact.mDistance*100.f;
+      const float supportingDistance = character->GetSupportingVolume().SignedDistance(JPH::Vec3(inverse*contact.mPosition));
+      out.supportingVolumeDistance = supportingDistance*100.f;
+      out.hadCollision = contact.mHadCollision;
+      out.discarded = contact.mWasDiscarded;
+      out.sensor = contact.mIsSensorB;
+      out.canPushCharacter = contact.mCanPushCharacter;
+      out.withinSupportingVolume = supportingDistance<=0.f;
+      out.walkableSlope = !character->IsSlopeTooSteep(contact.mSurfaceNormal);
+      out.supportAllowedByPolicy = true;
+      if(out.body.present) {
+        JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
+        if(lock.SucceededAndIsInBroadPhase())
+          out.supportAllowedByPolicy = !rejectsSupport(lock.GetBody(),contact);
+        }
+      out.supportEligible = out.hadCollision && !out.discarded && !out.sensor &&
+                            out.withinSupportingVolume && out.walkableSlope && out.supportAllowedByPolicy;
+      result.contacts.push_back(std::move(out));
+      }
+    return result;
+    }
+
   bool OnContactValidate(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact) override {
     bool rejectSupport = false;
     {
       JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
       if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()) || contact.mIsSensorB)
         return true;
-      const auto up = character->GetUp();
-      const float mass = 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
-      const bool light = mass<10.f;
       // Loose utensils never become a floor. A heavy body's top may support a
       // character placed on it, but walking into it must not acquire that top
       // as a new step. Keep the side contacts, which still stop and push it.
-      const float contactHeight = JPH::Vec3(contact.mPosition-character->GetPosition()).Dot(up);
-      rejectSupport = light ? contact.mSurfaceNormal.Dot(up)>1.e-3f :
-                              contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
+      rejectSupport = rejectsSupport(lock.GetBody(),contact);
       }
     if(!rejectSupport)
       return true;
@@ -607,6 +701,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
 
   CollisionWorld& world;
   std::unique_ptr<JPH::CharacterVirtual> character;
+  std::unique_ptr<CharacterVirtualDiagnostics> diagnostic;
   Npc* culprit = nullptr;
   float pushSeconds = 0.f;
   float pushRemaining = 0.f;
@@ -655,6 +750,20 @@ void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
   impl->ground = JPH::BodyID();
   }
 
+void CollisionWorld::VirtualCharacter::setDiagnosticsEnabled(bool enabled) {
+  if(enabled && impl->diagnostic==nullptr)
+    impl->diagnostic = std::make_unique<CharacterVirtualDiagnostics>();
+  if(!enabled)
+    impl->diagnostic.reset();
+  }
+
+bool CollisionWorld::VirtualCharacter::diagnostics(CharacterVirtualDiagnostics& out) const {
+  if(impl->diagnostic==nullptr || !impl->diagnostic->valid)
+    return false;
+  out = *impl->diagnostic;
+  return true;
+  }
+
 CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
   const auto started = std::chrono::steady_clock::now();
@@ -678,6 +787,16 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
   if(state.contactsDirty) {
     character.RefreshContacts(broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
     state.contactsDirty = false;
+    }
+  // A zero-dt refresh after NPC clipping must not replace the main move's trace.
+  auto* diagnostic = state.diagnostic!=nullptr && (dt>0 || !state.diagnostic->valid) ? state.diagnostic.get() : nullptr;
+  if(diagnostic!=nullptr) {
+    diagnostic->valid = false;
+    diagnostic->dt = dt;
+    diagnostic->requested = displacement;
+    diagnostic->stairAttempted = false;
+    diagnostic->stairSucceeded = false;
+    diagnostic->before = state.diagnosticPose();
     }
   auto inheritedGroundVelocity = character.GetGroundVelocity();
   bool inferredKinematicVelocity = false;
@@ -713,21 +832,23 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const float step = std::max(toMeters(stepHeight),0.f);
     // Run Jolt's ordinary update and floor sticking first. Its automatic stair
     // recipe is applied below only for world geometry, after contact solving
-    // has identified an Item / movable body that should be pushed instead.
+    // has identified pushable objects or interactive walking obstacles.
     settings.mWalkStairsStepUp = JPH::Vec3::sZero();
     settings.mStickToFloorStepDown = JPH::Vec3(0,-step,0);
     const auto oldPosition = character.GetPosition();
     const auto desiredVelocity = character.GetLinearVelocity();
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
-    bool pushingBody = false;
+    if(diagnostic!=nullptr)
+      diagnostic->afterExtendedUpdate = state.diagnosticPose();
+    bool stairObstacle = false;
     for(const auto& contact:character.GetActiveContacts()) {
       if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB ||
          contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f)
         continue;
       JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
-      if(lock.SucceededAndIsInBroadPhase() && Impl::isPushable(lock.GetBody())) {
-        pushingBody = true;
+      if(lock.SucceededAndIsInBroadPhase() && Impl::blocksAutomaticStairs(lock.GetBody())) {
+        stairObstacle = true;
         break;
         }
       }
@@ -736,7 +857,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const auto up = character.GetUp();
     const auto desiredStep = (desiredVelocity-desiredVelocity.Dot(up)*up)*seconds;
     const float desiredLength = desiredStep.Length();
-    if(step>0.f && !pushingBody && desiredLength>0.f && character.CanWalkStairs(desiredVelocity)) {
+    if(step>0.f && !stairObstacle && desiredLength>0.f && character.CanWalkStairs(desiredVelocity)) {
       const auto forward = desiredStep/desiredLength;
       const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
       const float achievedLength = std::max(0.f,achieved.Dot(forward));
@@ -756,10 +877,20 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             }
           }
         const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
-        character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
-                             settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+        const bool stepped = character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
+                                                settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+        if(diagnostic!=nullptr) {
+          diagnostic->stairAttempted = true;
+          diagnostic->stairSucceeded = stepped;
+          }
         }
       }
+    }
+  if(diagnostic!=nullptr) {
+    if(seconds<=0.f)
+      diagnostic->afterExtendedUpdate = state.diagnosticPose();
+    diagnostic->afterStairs = state.diagnosticPose();
+    diagnostic->valid = true;
     }
   const auto previousGround = state.ground;
   state.ground = character.GetGroundBodyID();
