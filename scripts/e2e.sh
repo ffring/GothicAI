@@ -34,7 +34,7 @@
 #       the city (Harad sees him), an hour passes, he comes back and says he was in the city all morning:
 #       Lobart catches the lie by what he saw (model scripted with LLM=fake); the memory follows the save;
 #       story_state's `seen` (check_claim) is the engine's sight
-#   trace: Lobart catches a denial by an arrow in his wall and the hero seen nearby; a stranger's arrow is the control
+#   trace: Lobart catches a lie about an arrow's age by its fresh trace; a stranger's arrow and denied authorship are the control
 #   witness: asking a witness (wave 2 step 3): at 8:00 someone Lobart knows sees the hero in the open, Lobart
 #       does not; later the hero comes up to Lobart with an alibi («это не я топтал твою репу — я всё утро был
 #       в городе»), Lobart calls that one over, it comes and tells what it saw, Lobart catches the lie «со слов»

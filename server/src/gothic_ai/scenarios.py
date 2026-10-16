@@ -6086,13 +6086,14 @@ async def trace_memory(
     farmer: str = LOBART,
 ) -> dict[str, str]:
     """Native arrows at Lobart's house: an unseen NPC's arrow proves no culprit; a new arrow after
-    Lobart saw the hero there contradicts his denial. The bench only shoots and waits for the server;
-    views, memory, model requests, tools and consequences use the ordinary conversation path."""
+    Lobart saw the hero there contradicts his claim that it is a week old. The bench only shoots and
+    waits for the server; views, memory, requests, tools and consequences use the conversation path."""
     results: dict[str, str] = {}
     desk, chronicle = sightings.desk, sightings.chronicle
     directory = Path(log_dir)
     original = dialogue.llm
-    denial = "это не я стрелял в твою стену, я ничего не трогал, я только пришел"
+    control_denial = "это не я стрелял в твою стену, я ничего не трогал, я только пришел"
+    age_lie = "стрела эта давно там торчит, с прошлой недели"
     house = "NW_FARM1_INHOUSE_01"
     parked = "NW_FARM1_PATH_CITY_16"
     target = "BAU_951_HILDA"
@@ -6159,6 +6160,7 @@ async def trace_memory(
         ]
 
     async def deny(*, observation: Sighting | None = None) -> dict[str, Any]:
+        denial = f"Это не я. Да и {age_lie}" if observation is not None else control_denial
         before = {r["id"] for r in turns()}
         await link.debug("teleport", near=farmer, distance=250)
         await _until(lambda: farmer in talk.people and talk.people[farmer].distance < 800, 10)
@@ -6168,8 +6170,8 @@ async def trace_memory(
             if observation is not None:
                 sid, _ = _trace_evidence_line(sightings.situation(farmer) or "", observation)
                 step = FakeStep(
-                    "Врёшь! Свежая стрела в моей стене, а тебя я здесь только что видел.",
-                    [ToolCall("catch_lie", {"said": "это не я стрелял в твою стену", "seen": sid})],
+                    "Не с прошлой недели! Стрела свежая, и я только что её увидел.",
+                    [ToolCall("catch_lie", {"said": age_lie, "seen": sid})],
                 )
             dialogue.llm = ClaimScript([(denial, step)], [], "Я запомню.", only="Лобарт")
         await link.debug("type", text=f"Лобарт, {denial}.")
@@ -6410,17 +6412,25 @@ async def trace_memory(
     observed = sightings.mind(farmer).traces[f"TRACE:{arrow.id}:arrow"]
     check(
         "trace_memory",
-        bool(sid) and bool(line) and view.time - arrow.age <= observed.start <= view.time,
+        bool(sid)
+        and bool(line)
+        and 0 <= arrow.age <= 5
+        and view.time - arrow.age <= observed.start <= view.time,
         f"{line}; appearance {view.time - arrow.age}, age {arrow.age} min",
     )
     row = await deny(observation=observed)
     prompt = request(row)
     actual_sid, actual_line = _trace_evidence_line(prompt, observed)
+    fresh_trace = re.search(
+        rf"{re.escape(trace_name(observed.trace_kind, observed.name))} "
+        rf"\([^)]*{re.escape(observed.places[0])}[^)]*давность [0-5] мин\)",
+        prompt,
+    )
     # Relative age may change during the turn; the stable time/name/place and the В id must survive.
     check(
         "trace_in_request",
-        bool(actual_sid) and "Следы, которые ты видел" in prompt and "давность" in prompt,
-        actual_line,
+        bool(actual_sid) and "Следы, которые ты видел" in prompt and bool(fresh_trace),
+        f"{actual_line}; {fresh_trace.group() if fresh_trace else 'fresh trace absent'}",
     )
     hero_ids = [
         sid
