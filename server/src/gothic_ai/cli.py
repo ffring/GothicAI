@@ -43,6 +43,7 @@ from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
 from .gossip import GossipDesk
 from .group import GroupTalk
+from .guide import Guide
 from .incidents import IncidentDesk
 from .initiative import InitiativeDesk
 from .interject import Interjections
@@ -212,6 +213,7 @@ class ServerState:
         self.sightings: Sightings | None = None
         self.whereabouts: Whereabouts | None = None
         self.lore: lore.Lore | None = None
+        self.guide: Guide | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
         self.beasts: BeastDesk | None = None
@@ -742,6 +744,21 @@ async def serve(args: argparse.Namespace) -> int:
         state.bodies = Bodies(link)
         state.concerns = Concerns(link, state.chronicle, state.deals)
         state.guard = StoryGuard(graph)
+        if args.lead:
+            # it leads the hero to a place, a term of a deal (docs/npc-tools.md, wave 2 step 4)
+            state.guide = Guide(
+                link,
+                state.dialogue,
+                talk,
+                place_book,
+                state.guard,
+                state.chronicle,
+                whereabouts=state.whereabouts,
+                companion=state.talk.orders.companion,
+                journal=journal,
+            )
+            state.deals.guide = state.guide
+            state.dialogue.extensions.append(state.guide)
         # the npc checks the hero's words by asking a witness it knows (wave 2 step 3)
         witnesses = state.witnesses = Witnesses(
             link,
@@ -1065,6 +1082,15 @@ async def serve(args: argparse.Namespace) -> int:
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario knows: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "lead":
+                assert state.dialogue is not None and state.talk is not None and state.deals is not None
+                assert state.guide is not None
+                results = await scenarios.lead_scenario(
+                    link, state.dialogue, state.talk, state.deals, state.guide
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario lead: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "cave":
                 assert state.dialogue is not None and state.talk is not None and state.whereabouts is not None
@@ -1888,6 +1914,7 @@ def main() -> None:
             "hearing",
             "cave",
             "knows",
+            "lead",
             "chests",
             "chests_lobart",
             "group",
@@ -2000,6 +2027,12 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="npc's know what lies in their chests and go to take it out (docs/npc-tools.md «Сундуки»)",
+    )
+    p.add_argument(
+        "--lead",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's lead the hero to a place, a term of a deal (docs/npc-tools.md, wave 2 step 4)",
     )
     p.add_argument(
         "--interject",

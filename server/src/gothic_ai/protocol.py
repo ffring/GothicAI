@@ -18,9 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 37
+PROTOCOL_VERSION = 38
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
+PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace
 
 # --- game -> server -----------------------------------------------------------
 
@@ -914,7 +915,7 @@ def parse_game_message(raw: str | bytes) -> GameMessage:
 # --- server -> game -----------------------------------------------------------
 
 ActionType = Literal[
-    "go_to_waypoint",
+    "go_to_waypoint",  # v38: args.pace run, walk or hero (keeps his: a guide ahead of him, guide.py)
     "go_to_npc",
     "turn_to",
     "play_ani",

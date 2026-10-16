@@ -410,8 +410,8 @@ class Orders:
         status = await self._act(
             npc,
             "go_to_waypoint",
-            waypoint=place.points[0],
-            points=list(place.points),
+            waypoint=place.waynet[0] if place.waynet else "",
+            points=list(place.waynet),
             pos=list(place.center),
             radius=GO_RADIUS_CM,
             timeout_ms=int(GO_S * 1000),
@@ -684,8 +684,8 @@ class Orders:
         status = await self._act(
             npc,
             "go_to_waypoint",
-            waypoint=place.points[0],
-            points=list(place.points),
+            waypoint=place.waynet[0] if place.waynet else "",
+            points=list(place.waynet),
             pos=list(place.center),
             radius=GO_RADIUS_CM,
             timeout_ms=int(GO_S * 1000),

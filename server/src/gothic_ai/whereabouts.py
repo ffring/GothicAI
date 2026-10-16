@@ -108,7 +108,7 @@ class Whereabouts:
             return self.place(npc, place, here)
         if (person := self.person(npc, what, here)) is not None:
             return person
-        if (place := self._named(what, here)) is not None:
+        if (place := self.named(what, here)) is not None:
             return self.place(npc, place, here)
         return f"Ты не знаешь поблизости такого места: «{what}». И не видел недавно никого с таким именем."
 
@@ -169,10 +169,9 @@ class Whereabouts:
                 return text + ("\n" + self.place(npc, place, here) if place is not None else "")
         return None
 
-    # --- helpers ----------------------------------------------------------------------------------
-
-    def _named(self, what: str, here: Sequence[float] | None) -> Place | None:
-        """The place `what` names, the nearest that fits best; or the nearest of the kind it names."""
+    def named(self, what: str, here: Sequence[float] | None) -> Place | None:
+        """The place `what` names, the nearest that fits best; or the nearest of the kind it names (a lead
+        of a deal too, guide.py)."""
         assert self.book is not None
         words = roots(what)
         places = self.book.near(here, WHERE_CM, len(self.book.places)) if here is not None else []
@@ -188,6 +187,8 @@ class Whereabouts:
             if nearest is not None and (best is None or best[0] <= 1 or best[2].kind != kind):
                 return nearest[0]
         return best[2] if best is not None else None
+
+    # --- helpers ----------------------------------------------------------------------------------
 
     def _seen_in(self, npc: str, place: Place) -> list[str]:
         if self.sightings is None:

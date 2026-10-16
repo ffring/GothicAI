@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from gothic_ai import triggers
 from gothic_ai.protocol import (
     NOISE_PROTOCOL,
+    PACE_PROTOCOL,
     PROTOCOL_VERSION,
     TRACE_PROTOCOL,
     ActionCmd,
@@ -376,7 +377,7 @@ def test_v36_investigation_receipt_identifies_action_without_breaking_old_bridge
 
 
 def test_v37_physical_traces_and_noise_clock():
-    assert PROTOCOL_VERSION == TRACE_PROTOCOL == 37
+    assert PROTOCOL_VERSION >= TRACE_PROTOCOL == 37
     msg = parse_game_message(_json({
         "type": "npc_views", "t": 1000, "views": [{
             "npc": "X", "name": "Корагон", "time": 725,
@@ -398,3 +399,9 @@ def test_v37_physical_traces_and_noise_clock():
     assert isinstance(legacy, NpcViews) and legacy.views[0].traces == []
     noise = parse_game_message('{"type":"npc_event","npc":"X","kind":"noise","time":725}')
     assert isinstance(noise, NpcEvent) and noise.time == 725 and noise.other == ""
+
+
+def test_v38_a_guide_keeps_the_heros_pace():
+    assert PROTOCOL_VERSION == PACE_PROTOCOL == 38  # v36, v37 are the physics session's
+    go = ActionCmd(id="a1", npc="BAU_954_MALETH", action="go_to_waypoint", args={"pace": "hero"})
+    assert '"pace":"hero"' in go.to_json()
