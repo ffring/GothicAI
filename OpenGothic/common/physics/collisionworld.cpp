@@ -486,6 +486,8 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
       return false;
     const auto up = character->GetUp();
     const float mass = 1.f/body.GetMotionProperties()->GetInverseMass();
+    if(carrying && body.GetID()==ground && mass>=10.f)
+      return false; // This top was accepted before the supporting body advanced.
     const float contactHeight = JPH::Vec3(contact.mPosition-character->GetPosition()).Dot(up);
     return mass<10.f ? contact.mSurfaceNormal.Dot(up)>1.e-3f :
                       contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
@@ -608,10 +610,11 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     }
 
   void OnContactSolve(const JPH::CharacterVirtual*, const JPH::BodyID& bodyID, const JPH::SubShapeID&,
-                      JPH::RVec3Arg point, JPH::Vec3Arg, JPH::Vec3Arg, const JPH::PhysicsMaterial*,
+                      JPH::RVec3Arg point, JPH::Vec3Arg normal, JPH::Vec3Arg, const JPH::PhysicsMaterial*,
                       JPH::Vec3Arg velocity, JPH::Vec3& newVelocity) override {
     JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),bodyID);
-    if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()))
+    if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()) ||
+       (carrying && bodyID==ground && !character->IsSlopeTooSteep(normal)))
       return;
     const auto up = character->GetUp();
     if(JPH::Vec3(point-character->GetPosition()).Dot(up)<=.02f)
@@ -699,6 +702,14 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   void OnContactPersisted(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
                           JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
 
+  void OnAdjustBodyVelocity(const JPH::CharacterVirtual*, const JPH::Body&, JPH::Vec3& linear,
+                            JPH::Vec3& angular) override {
+    // Carry sweeps through the already integrated world. Predicting the bodies
+    // for another interval here would count their motion a second time.
+    if(carrying)
+      linear = angular = JPH::Vec3::sZero();
+    }
+
   CollisionWorld& world;
   std::unique_ptr<JPH::CharacterVirtual> character;
   std::unique_ptr<CharacterVirtualDiagnostics> diagnostic;
@@ -707,6 +718,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   float pushRemaining = 0.f;
   std::vector<std::pair<JPH::BodyID,float>> pushBodies;
   bool contactsDirty = true;
+  bool carrying = false;
   float radius = 0.f;
   float height = 0.f;
   JPH::BodyID ground;
@@ -800,34 +812,45 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     diagnostic->before = state.diagnosticPose();
     }
   auto inheritedGroundVelocity = character.GetGroundVelocity();
-  bool inferredKinematicVelocity = false;
+  bool inferredGroundVelocity = false;
   if(seconds>0.f) {
-    auto kinematicVelocity = JPH::Vec3::sZero();
+    bool onGround = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
+    auto carriedVelocity = JPH::Vec3::sZero();
     if(character.IsSupported() && state.ground==character.GetGroundBodyID() && !state.ground.IsInvalid()) {
       JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
-      if(lock.Succeeded() && lock.GetBody().IsKinematic()) {
-        // Movers update their transform directly. Infer their motion at the
-        // support point, including rotation, without changing legacy physics.
+      if(!lock.SucceededAndIsInBroadPhase())
+        onGround = false;
+      else if(!lock.GetBody().IsStatic()) {
+        // Both direct-matrix movers and fixed-step dynamic bodies have already
+        // advanced. Carry the observed displacement at the feet, including the
+        // finite rotation, rather than extrapolating their endpoint velocity
+        // over a render interval that may contain a different number of steps.
         const auto transform = lock.GetBody().GetWorldTransform();
         const auto position = character.GetPosition();
-        kinematicVelocity = JPH::Vec3(transform*(state.groundTransform.InversedRotationTranslation()*position)-position)/seconds;
-        inheritedGroundVelocity = kinematicVelocity;
-        inferredKinematicVelocity = true;
+        carriedVelocity = JPH::Vec3(transform*(state.groundTransform.InversedRotationTranslation()*position)-position)/seconds;
+        inheritedGroundVelocity = carriedVelocity;
+        inferredGroundVelocity = true;
         }
       }
     character.UpdateGroundVelocity();
     auto groundVelocity = character.GetGroundVelocity();
-    if(inferredKinematicVelocity) {
-      groundVelocity = kinematicVelocity;
-      // A direct-matrix lift has already advanced vertically. Resolve that new
-      // floor through penetration recovery / floor sticking; adding its upward
-      // speed again would detach the feet from a contact with zero native speed.
+    if(inferredGroundVelocity) {
+      groundVelocity = carriedVelocity;
+      // The floor has already advanced vertically. Resolve its new height
+      // through penetration recovery / floor sticking; adding its upward
+      // speed again would detach the feet from a direct-matrix lift.
       groundVelocity.SetY(0.f);
       }
     auto velocity = toMeters(displacement)/seconds;
-    if(character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround)
+    if(onGround)
       velocity += groundVelocity;
-    velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    // Static friction balances gravity along a walkable support. Keep its
+    // inward normal component for contact solving, but do not turn -g*dt into
+    // requested downhill motion at rest. Flat-ground pushing is unchanged.
+    // ExtendedUpdate still applies weight to the body. Steep / unsupported
+    // movement retains the full acceleration.
+    const auto normal = onGround ? character.GetGroundNormal() : JPH::Vec3::sAxisY();
+    velocity -= normal*(DynamicWorld::gravityMS*seconds*normal.GetY());
     character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);
@@ -920,12 +943,73 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       }
     }
   result.velocity = toCentimeters(solvedVelocity);
-  result.groundVelocity = toCentimeters(inferredKinematicVelocity && previousGround==state.ground ?
+  result.groundVelocity = toCentimeters(inferredGroundVelocity && previousGround==state.ground ?
                                         inheritedGroundVelocity : character.GetGroundVelocity());
   const auto normal = character.GetGroundNormal();
   result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
   result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
   result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
+  world.characterMilliseconds += std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  return result;
+  }
+
+CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::carry(uint64_t dt) {
+  auto& state = *impl;
+  auto& character = *state.character;
+  auto& world = *state.world.impl;
+  CharacterMoveResult result;
+  result.position = toCentimeters(JPH::Vec3(character.GetPosition()));
+  if(dt==0 || character.GetGroundState()!=JPH::CharacterBase::EGroundState::OnGround ||
+     state.ground.IsInvalid() || state.ground!=character.GetGroundBodyID())
+    return result;
+  JPH::RMat44 transform;
+  {
+    JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
+    if(!lock.SucceededAndIsInBroadPhase() || lock.GetBody().IsStatic())
+      return result;
+    transform = lock.GetBody().GetWorldTransform();
+  }
+  const auto position = character.GetPosition();
+  const auto delta = JPH::Vec3(transform*(state.groundTransform.InversedRotationTranslation()*position)-position);
+  state.groundTransform = transform;
+  if(delta.IsNearZero(1.e-7f))
+    return result;
+  const auto started = std::chrono::steady_clock::now();
+  const QueryBroadPhaseFilter broadFilter(characterMask);
+  const QueryLayerFilter layerFilter(characterMask);
+  const JPH::BodyFilter bodyFilter;
+  const JPH::ShapeFilter shapeFilter;
+  const float seconds = float(dt)*.001f;
+  const auto velocity = character.GetLinearVelocity();
+  state.pushSeconds = state.pushRemaining = 0.f;
+  state.carrying = true;
+  // This is a collision sweep of the support's observed motion, never a pose
+  // assignment. No second root input, gravity impulse, push budget or stairs.
+  character.SetLinearVelocity(delta/seconds);
+  character.Update(seconds,JPH::Vec3::sZero(),broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+  // A rising support can separate relative to the frozen body's zero velocity.
+  // Re-evaluate support at the swept endpoint without that velocity test.
+  character.SetLinearVelocity(JPH::Vec3::sZero());
+  character.RefreshContacts(broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+  state.carrying = false;
+  character.SetLinearVelocity(velocity);
+  character.UpdateGroundVelocity();
+  state.ground = character.GetGroundBodyID();
+  if(!state.ground.IsInvalid()) {
+    JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),state.ground);
+    if(lock.SucceededAndIsInBroadPhase())
+      state.groundTransform = lock.GetBody().GetWorldTransform();
+    else
+      state.ground = JPH::BodyID();
+  }
+  result.position = toCentimeters(JPH::Vec3(character.GetPosition()));
+  result.velocity = toCentimeters(velocity);
+  result.groundVelocity = toCentimeters(delta/seconds);
+  const auto normal = character.GetGroundNormal();
+  result.groundNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+  result.grounded = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround;
+  result.steep = character.GetGroundState()==JPH::CharacterBase::EGroundState::OnSteepGround;
+  result.supportMoved = true;
   world.characterMilliseconds += std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
   return result;
   }

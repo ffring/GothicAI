@@ -512,6 +512,7 @@ class Npc final {
     float     physicsMass() const;
     bool      characterVirtualActive() const { return mvAlgo.characterVirtualActive(); }
     Tempest::Vec3 characterVirtualGroundVelocity() const { return mvAlgo.characterVirtualGroundVelocity(); }
+    void      finishCharacterVirtualSupport(uint64_t dt) { mvAlgo.carryCharacterVirtual(dt); }
     void      setCharacterVirtualDiagnosticsEnabled(bool enabled) { physic.setVirtualDiagnosticsEnabled(enabled); }
     bool      characterVirtualDiagnostics(CharacterVirtualDiagnostics& out) const { return physic.virtualDiagnostics(out); }
     Tempest::Vec3 characterVisualPosition() const;
@@ -711,6 +712,7 @@ class Npc final {
     void      tickTimedEvt(Animation::EvCount &ev);
     void      tickRegen(int32_t& v,const int32_t max,const int32_t chg, const uint64_t dt);
     void      setViewPosition(const Tempest::Vec3& pos);
+    void      syncCharacterVirtualSupport(const Tempest::Vec3& pos);
     bool      tickCast(uint64_t dt);
     bool      tickPhysicsInvestigation(uint64_t dt);
 
