@@ -3015,6 +3015,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b) {
   if(isDown())
     return;
 
+  stopPhysicsInvestigation(false);
+
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
   const bool  isJumpb = pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
@@ -3081,6 +3083,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   if(!isSpell || splCat==SpellCategory::SPELL_BAD) {
+    stopPhysicsInvestigation(false);
     perceptionProcess(other,this,0,PERC_ASSESSDAMAGE);
     const auto tracePrimitiveBefore = fghAlgo.queuedAction();
     fghAlgo.onTakeHit();
@@ -3526,6 +3529,9 @@ void Npc::tick(uint64_t dt) {
       }
     physicsNoiseUntil = 0;
     }
+
+  if(tickPhysicsInvestigation(dt))
+    return;
 
   if(waitTime>=owner.tickCount() || aniWaitTime>=owner.tickCount() || outWaitTime>owner.tickCount()) {
     traceCombatGate("tick_wait_or_animation_lock");
@@ -4256,6 +4262,8 @@ void Npc::tickRoutine() {
   }
 
 void Npc::setTarget(Npc *t) {
+  if(t!=nullptr)
+    stopPhysicsInvestigation(false);
   if(currentTarget==t)
     return;
 
@@ -5649,6 +5657,7 @@ void Npc::setPerceptionDisable(PercType t) {
 void Npc::startDialog(Npc& pl) {
   if(pl.isDown() || pl.isInAir() || isPlayer())
     return;
+  stopPhysicsInvestigation(false);
   if(perceptionProcess(pl,nullptr,0,PERC_ASSESSTALK))
     setOther(&pl);
   }
@@ -5756,6 +5765,50 @@ bool Npc::perceptionProcess(Npc &pl, Npc* victim, float quadDist, PercType perc)
     }
   Gothic::inst().onObservedPerception(*this,pl,victim,perc);
 
+  if(isPhysicsInvestigating()) {
+    constexpr auto interrupts = [](PercType observed) {
+      switch(observed) {
+      case PERC_ASSESSENEMY:
+      case PERC_ASSESSFIGHTER:
+      case PERC_ASSESSDAMAGE:
+      case PERC_ASSESSOTHERSDAMAGE:
+      case PERC_ASSESSTHREAT:
+      case PERC_ASSESSFIGHTSOUND:
+      case PERC_ASSESSWARN:
+      case PERC_ASSESSCALL:
+      case PERC_ASSESSTALK:
+      case PERC_DRAWWEAPON:
+      case PERC_ASSESSMURDER:
+      case PERC_ASSESSMAGIC:
+      case PERC_ASSESSCASTER:
+      case PERC_CATCHTHIEF:
+      case PERC_ASSESSTHEFT:
+      case PERC_ASSESSUSEMOB:
+      case PERC_ASSESSENTERROOM:
+      case PERC_MOVEMOB:
+      case PERC_OBSERVEINTRUDER:
+      case PERC_OBSERVESUSPECT:
+      case PERC_ASSESSBODY:
+      case PERC_ASSESSDEFEAT:
+        return true;
+      default:
+        return false;
+        }
+      };
+    // Contract for this active-investigation gate: witnessed crimes reach the scripts,
+    // while ordinary proximity and quiet sounds keep the ongoing check intact.
+    static_assert(interrupts(PERC_CATCHTHIEF) && interrupts(PERC_ASSESSTHEFT));
+    static_assert(interrupts(PERC_ASSESSENTERROOM));
+    static_assert(!interrupts(PERC_ASSESSPLAYER) && !interrupts(PERC_ASSESSQUIETSOUND));
+    if(!interrupts(perc)) {
+      // The planner has observed it above. Routine chatter and ordinary hero
+      // activity must not replace the ongoing check through a script callback.
+      trace("investigating",false,false);
+      return false;
+      }
+    stopPhysicsInvestigation(false);
+    }
+
   if(hasPerc(perc)) {
     auto& intercept = Gothic::inst().interceptPerception;
     if(!percPassThrough && intercept && intercept(*this,pl,victim,perc)) {
@@ -5790,8 +5843,10 @@ bool Npc::canHearPhysicsNoise() const {
 
 bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
   const uint64_t now = owner.tickCount();
-  if(noise.culprit==this || !canHearPhysicsNoise() || now<physicsNoiseNextTime)
+  if(noise.culprit==this || !canHearPhysicsNoise() || isPhysicsInvestigating() || now<physicsNoiseNextTime)
     return false;
+  // The observer checks sight now, before either the native turn or a script callback.
+  Gothic::inst().onPhysicsNoiseHeard(*this,noise);
   physicsNoiseNextTime = now+2001;
   physicsNoisePosition = noise.position;
   physicsNoiseUntil = now+2000;
@@ -5804,6 +5859,86 @@ bool Npc::hearPhysicsNoise(const PhysicsNoise& noise) {
     physicsNoiseCallback = false;
     }
   TestBench::physicsNoiseHeard(*this,noise,callbackDispatched);
+  return true;
+  }
+
+bool Npc::startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs) {
+  if(!canHearPhysicsNoise() || !isHuman() || weaponState()!=WeaponState::NoWeapon)
+    return false;
+  clearAiQueue();
+  physicsInvestigationPosition = at;
+  physicsInvestigationUntil = owner.tickCount()+45000;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationScanMs = std::clamp<uint64_t>(scanMs,2000,8000);
+  physicsInvestigationWalking = false;
+  physicsInvestigationReason = {};
+  return true;
+  }
+
+void Npc::stopPhysicsInvestigation(bool resume, std::string_view reason) {
+  if(physicsInvestigationUntil==0)
+    return;
+  physicsInvestigationUntil = 0;
+  physicsInvestigationScanUntil = 0;
+  physicsInvestigationReason = reason;
+  physicsNoiseUntil = 0;
+  // A new owner or native state may already have installed its own movement.
+  if(go2.flag==GT_Point && (go2.pos-physicsInvestigationPosition).quadLength()<1.f)
+    clearGoTo();
+  if(resume) {
+    clearAiQueue();
+    resumeAiRoutine();
+    }
+  }
+
+bool Npc::tickPhysicsInvestigation(uint64_t dt) {
+  if(physicsInvestigationUntil==0)
+    return false;
+  if(!canHearPhysicsNoise() || weaponState()!=WeaponState::NoWeapon) {
+    stopPhysicsInvestigation(false);
+    return false;
+    }
+  const uint64_t now = owner.tickCount();
+  if(now>=physicsInvestigationUntil) {
+    stopPhysicsInvestigation(true,"timeout");
+    return false;
+    }
+  if(physicsInvestigationScanUntil!=0) {
+    if(now>=physicsInvestigationScanUntil) {
+      stopPhysicsInvestigation(true,"done");
+      return false;
+      }
+    // Look to either side of the impact, then back, while standing at the spot.
+    const uint64_t elapsed = physicsInvestigationScanMs-(physicsInvestigationScanUntil-now);
+    const float offset = elapsed<physicsInvestigationScanMs/3 ? -.7f :
+                         elapsed<2*physicsInvestigationScanMs/3 ? .7f : 0.f;
+    const float facing = physicsInvestigationFacing+offset;
+    implTurnTo(std::cos(facing),std::sin(facing),AnimationSolver::TurnType::Std,dt);
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!setInteraction(nullptr)) {
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if((position()-physicsInvestigationPosition).quadLength()<140.f*140.f) {
+    clearGoTo();
+    stopWalking();
+    physicsInvestigationFacing = rotationRad();
+    physicsInvestigationScanUntil = now+physicsInvestigationScanMs;
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    return true;
+    }
+  if(!physicsInvestigationWalking) {
+    wayPath.clear();
+    attachToPoint(nullptr);
+    go2.clear();
+    go2.set(physicsInvestigationPosition);
+    physicsInvestigationWalking = true;
+    }
+  // Position targets use the same native movement/collision checks as AI_UseMob.
+  // A blocked approach ends at the deadline; it never teleports the listener.
+  implGoTo(dt,60.f);
   return true;
   }
 
@@ -6080,7 +6215,7 @@ std::vector<GameScript::DlgChoice> Npc::dialogChoices(Npc& player,const std::vec
   }
 
 bool Npc::isAiQueueEmpty() const {
-  return aiQueue.size()==0 &&
+  return !isPhysicsInvestigating() && aiQueue.size()==0 &&
          go2.empty() &&
          waitTime<owner.tickCount();
   }
@@ -6092,6 +6227,7 @@ bool Npc::isAiBusy() const {
   }
 
 void Npc::clearAiQueue() {
+  stopPhysicsInvestigation(false);
   currentLookAt    = nullptr;
   currentLookAtNpc = nullptr;
   visual.setHeadRotation(0,0);

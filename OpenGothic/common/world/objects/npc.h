@@ -421,6 +421,11 @@ class Npc final {
     bool      passPerception(Npc& other, Npc* victim, PercType perc);
     // A physical impact has a location, independent of a known actor.
     bool      hearPhysicsNoise(const PhysicsNoise& noise);
+    // A free NPC's brief investigation; normal perceptions and dialogue retain priority.
+    bool      startPhysicsInvestigation(const Tempest::Vec3& at, uint64_t scanMs);
+    bool      isPhysicsInvestigating() const { return physicsInvestigationUntil!=0; }
+    std::string_view physicsInvestigationResult() const { return physicsInvestigationReason; }
+    void      stopPhysicsInvestigation(bool resume, std::string_view reason="interrupted");
     bool      canHearPhysicsNoise() const;
     bool      hasPerc(PercType perc) const;
     uint64_t  percNextTime() const;
@@ -656,6 +661,7 @@ class Npc final {
     void      tickRegen(int32_t& v,const int32_t max,const int32_t chg, const uint64_t dt);
     void      setViewPosition(const Tempest::Vec3& pos);
     bool      tickCast(uint64_t dt);
+    bool      tickPhysicsInvestigation(uint64_t dt);
 
     int       aiOutputOrderId() const;
     bool      performOutput(const AiQueue::AiAction &ai);
@@ -812,6 +818,13 @@ class Npc final {
     uint64_t                       physicsNoiseUntil = 0;
     uint64_t                       physicsNoiseNextTime = 0;
     bool                           physicsNoiseCallback = false;
+    Tempest::Vec3                  physicsInvestigationPosition;
+    uint64_t                       physicsInvestigationUntil = 0;
+    uint64_t                       physicsInvestigationScanUntil = 0;
+    uint64_t                       physicsInvestigationScanMs = 0;
+    float                          physicsInvestigationFacing = 0;
+    bool                           physicsInvestigationWalking = false;
+    std::string_view               physicsInvestigationReason;
 
     // inventory
     Inventory                      invent;

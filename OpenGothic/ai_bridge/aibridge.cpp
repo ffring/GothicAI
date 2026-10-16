@@ -30,6 +30,7 @@
 #include "camera.h"
 #include "commandline.h"
 #include "physics/dynamicworld.h"
+#include "physics/physicsnoise.h"
 #include "world/objects/interactive.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
@@ -62,7 +63,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 35;
+constexpr int         ProtocolVersion = 36;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 
@@ -208,6 +209,7 @@ struct AiBridge::Impl final {
   void runWorldDebug(const rapidjson::Value& msg);
   void onPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
+  void onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise);
   // who drives the npc instead of its scripts: "attached" or nobody
   std::string_view npcOwner(std::string_view symbol) const;
   bool onConsoleCommand(std::string_view cmd, std::string& reply);
@@ -342,6 +344,7 @@ AiBridge::Impl::Impl() {
   gothic.onWorldLoaded       .bind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.bind(this,&Impl::onPerception);
   gothic.onObservedPerception.bind(this,&Impl::onObservedPerception);
+  gothic.onPhysicsNoiseHeard .bind(this,&Impl::onPhysicsNoiseHeard);
   gothic.interceptPerception = [this](Npc& self, Npc& other, Npc* victim, PercType perc) {
     World* world = Gothic::inst().world();
     // the wolves' own (they leave the hero be) without the server too: the console drives them on the bench
@@ -445,6 +448,7 @@ AiBridge::Impl::~Impl() {
   gothic.onWorldLoaded       .ubind(this,&Impl::onWorldLoaded);
   gothic.onExternalPerception.ubind(this,&Impl::onPerception);
   gothic.onObservedPerception.ubind(this,&Impl::onObservedPerception);
+  gothic.onPhysicsNoiseHeard .ubind(this,&Impl::onPhysicsNoiseHeard);
   gothic.interceptPerception = nullptr;
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
@@ -656,6 +660,13 @@ void AiBridge::Impl::onObservedPerception(Npc& self, Npc& other, Npc* victim, Pe
     return;
   if(auto world = Gothic::inst().world())
     observer.perception(*world,self,other,victim,perc);
+  }
+
+void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
+  if(!connected)
+    return;
+  if(auto world = Gothic::inst().world())
+    observer.physicsNoise(*world,self,noise);
   }
 
 std::string_view AiBridge::Impl::npcOwner(std::string_view symbol) const {
@@ -919,7 +930,7 @@ void AiBridge::Impl::onDebug(const rapidjson::Value& msg) {
   if(cmd=="spawn" || cmd=="player_weapon" || cmd=="player_equip" || cmd=="waypoints" || cmd=="player_goto" || cmd=="ptt" || cmd=="type" || cmd=="kill" ||
      cmd=="time" || cmd=="teleport" || cmd=="skip_important" || cmd=="deal" || cmd=="deal_accept" ||
      cmd=="deal_decline" || cmd=="npc_goto" || cmd=="player_hp" || cmd=="player_drop" || cmd=="chest_take" ||
-     cmd=="player_take" || cmd=="own_npc") {
+     cmd=="player_take" || cmd=="own_npc" || cmd=="physics_noise") {
     // world changes that are safe within the tick
     runWorldDebug(msg);
     return;
@@ -970,6 +981,12 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
   Npc*       pl    = world!=nullptr ? world->player() : nullptr;
   if(world==nullptr || pl==nullptr) {
     sendResult(req,false,"no world loaded");
+    return;
+    }
+  if(cmd=="physics_noise") {
+    std::string value, error;
+    const bool ok = TestBench::physicsNoiseDebug(*world,*pl,JsonRead::str(msg,"text"),value,error);
+    sendResult(req,ok,error,value);
     return;
     }
   if(cmd=="spawn") {

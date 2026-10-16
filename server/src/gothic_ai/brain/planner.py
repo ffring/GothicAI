@@ -40,7 +40,7 @@ import logging
 import random
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from ..protocol import (
@@ -48,6 +48,7 @@ from ..protocol import (
     Detached,
     GameMessage,
     Loading,
+    NpcActResult,
     NpcEvent,
     NpcIdle,
     NpcRoster,
@@ -75,6 +76,10 @@ OVERHEAR_CM = 1000  # npc's this close hear what the player says to someone else
 TRACE_PER_MIN = 12  # decision rows per npc a minute: a NEAR npc with an agenda is asked every 6-10 s
 # a quiet npc whose routine is being asked is looked at again this soon (no request, no token spent)
 FETCH_WAIT_S = 1.0
+INVESTIGATION_MAX_S = 60.0  # the bridge ends the walk after at most 45 s; recover a lost receipt/idle
+ROSTER_FRESH_S = 2.0  # the bridge reports positions every 0.5 s
+HERO_STILL_NEAR_CM = 700.0  # NpcObserver::NearLeave, including its proximity hysteresis
+INVESTIGATION_THREATS = {"weapon_drawn", "threatened", "attack", "damage", "combat", "murder", "magic"}
 
 
 def applied_key(choice: str, target: str | None) -> str:
@@ -107,11 +112,12 @@ class PlannerConfig:
     )
     react_threshold: float = 0.5  # below it the npc keeps its routine
     plan_threshold: float = 0.5
-    # per-option thresholds: harmless gestures need less certainty than walking up to the player
+    # Reversible gestures and a brief check of a sound need less certainty than approaching the hero.
     option_threshold: dict[str, float] = field(
         default_factory=lambda: {
             "look_at": 0.25,
             "greet": 0.3,
+            "investigate": 0.3,  # bounded walk and scan; the engine returns it to its routine
             "approach_talk": 0.6,
             "fight": 0.6,  # a fight is not taken back: surer than for a gesture
         }
@@ -175,6 +181,7 @@ class Flight:
     shadow_menu: dict[str, DayOption] = field(default_factory=dict)  # the do menu in shadow
     # what the applied question did, {question, choice, applied, why}: the shadow row's `code`
     outcome: dict[str, Any] = field(default_factory=dict)
+    react_args: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -186,6 +193,12 @@ class RoutineSlot:
     fetched: float = float("-inf")
     failures: int = 0  # in a row
     retry_at: float = 0.0  # after a failure: not asked again before this
+
+
+@dataclass
+class Investigation:
+    since: float
+    act: str | None = None  # provisional until the bridge's queued receipt identifies this command
 
 
 @dataclass
@@ -215,6 +228,9 @@ class NpcRecord:
     missed_urgent: bool = False  # something urgent happened while it was fighting
     last_plan: float = 0.0  # when it last thought of its day (or appeared): the next plan is a period later
     talking: bool = False  # in a conversation with the hero (talk.py has its body): threats only
+    roster_at: float = float("-inf")
+    investigation: Investigation | None = None
+    deferred: list[Stimulus] = field(default_factory=list)  # ordinary observations held during investigation
 
 
 @dataclass
@@ -311,9 +327,15 @@ class NpcPlanner:
                     detail=msg.detail,
                     other_name=msg.other_name,
                     victim=msg.victim,
+                    position=tuple(msg.at) if msg.at is not None else None,
+                    place=msg.place,
+                    loudness=msg.loudness,
+                    source=msg.source,
                 )
             case NpcIdle():
-                self.on_idle(msg.npc, now)
+                self.on_idle(msg.npc, now, act=msg.act, reason=msg.reason)
+            case NpcActResult():
+                self.on_act_result(msg, now)
             case PerceptionHeld():
                 self.on_held(msg, now)
             case Attached():
@@ -346,13 +368,19 @@ class NpcPlanner:
                 if self.agenda_of is not None:
                     rec.agenda = self.agenda_of(npc)
             rec.distance_cm, rec.in_view, rec.guild = e.distance, e.in_view, e.guild
+            rec.roster_at = now
             rec.state, rec.moving = e.state, e.moving
             if rec.activity not in ("dialog", "attached") or e.activity != "routine":
                 rec.activity = e.activity
+            if rec.activity != "routine":
+                self._finish_investigation(rec, now, resume=False)
         if full:
             for npc in [n for n in self.npcs if n not in seen]:
                 del self.npcs[npc]  # its flight's answer will find no record and be ignored
         self._retier(now)
+        for rec in self.npcs.values():
+            if rec.investigation is None and rec.deferred:
+                self._resume_deferred(rec, now)
 
     def on_event(
         self,
@@ -360,15 +388,22 @@ class NpcPlanner:
         kind: str,
         now: float,
         *,
-        other: str = "PLAYER",
+        other: str | None = None,
         distance_cm: float | None = None,
         detail: str | None = None,
         other_name: str | None = None,
         victim: str | None = None,
+        position: tuple[float, float, float] | None = None,
+        place: str | None = None,
+        loudness: float | None = None,
+        source: str | None = None,
     ) -> None:
         rec = self.npcs.get(npc.upper())
         if rec is None or (rec.tier is Tier.OFF and rec.activity != "fight"):
             return
+        if kind == "noise" and (rec.activity != "routine" or rec.talking):
+            return  # the bridge only reports sounds heard by free npc's; do not retain a late one
+        other = (other or "") if kind == "noise" else (other or "PLAYER")
         self.stats.events += 1
         kind, detail = normalize(kind, other, other_name, detail)
         context = ""
@@ -380,11 +415,20 @@ class NpcPlanner:
             context = next((THREAT_CONTEXT[k] for k in THREAT_CONTEXT if k in gone), "")
             if other.upper() == rec.id:
                 other_name = "you"
-        stim = Stimulus(kind, now, other, distance_cm, detail, other_name, context)
+        stim = Stimulus(
+            kind, now, other, distance_cm, detail, other_name, context, position, place, loudness, source
+        )
+        p = policy(kind)
+        if rec.investigation is not None:
+            if p.threat or kind in INVESTIGATION_THREATS:
+                self._finish_investigation(rec, now, resume=False)
+            else:
+                if kind != "noise":
+                    self._defer(rec, stim)
+                return  # an ordinary observation never cancels the walk or asks for a new action yet
         rec.stimuli = merge(rec.stimuli, stim, now)
         if other == "PLAYER":
             rec.last_interaction = now
-        p = policy(kind)
         if p.scripted:  # the game's scripts react; it stays as context for later decisions
             self.stats.scripted_events += 1
             return
@@ -438,8 +482,65 @@ class NpcPlanner:
                 keep.append((hold, at))
         rec.holds = keep
 
-    def on_idle(self, npc: str, now: float) -> None:
+    def on_act_result(self, msg: NpcActResult, now: float) -> None:
+        rec = self.npcs.get(msg.npc.upper())
+        if rec is None or rec.investigation is None or msg.action != "investigate":
+            return
+        if rec.investigation.act is not None:
+            return  # a rejected second command must not release the investigation already running
+        if msg.status == "queued":
+            rec.investigation.act = msg.id
+        else:
+            self._finish_investigation(rec, now, resume=True)
+
+    @staticmethod
+    def _defer(rec: NpcRecord, stimulus: Stimulus) -> None:
+        # Do not expire proximity here: after the walk it is checked against a fresh roster instead.
+        rec.deferred = [s for s in rec.deferred if (s.kind, s.other) != (stimulus.kind, stimulus.other)]
+        rec.deferred.append(stimulus)
+        rec.deferred = rec.deferred[-5:]
+
+    def _finish_investigation(self, rec: NpcRecord, now: float, *, resume: bool) -> None:
+        if rec.investigation is None:
+            if not resume:
+                rec.deferred.clear()
+            return
+        rec.investigation = None
+        rec.version += 1  # answers built while its body was occupied are no longer useful
+        rec.pending = None
+        if resume:
+            self._resume_deferred(rec, now)
+        else:
+            rec.deferred.clear()
+
+    def _resume_deferred(self, rec: NpcRecord, now: float) -> None:
+        if rec.talking or rec.activity != "routine":
+            rec.deferred.clear()
+            return
+        if now - rec.roster_at > ROSTER_FRESH_S:
+            return  # keep waiting for a current position, never use where the hero was before the walk
+        deferred, rec.deferred = rec.deferred, []
+        if not deferred or rec.distance_cm > HERO_STILL_NEAR_CM or rec.tier in (Tier.OFF, Tier.FAR):
+            return
+        for stimulus in deferred:
+            if stimulus.kind == "player_near":
+                stimulus = replace(stimulus, at=now, distance_cm=rec.distance_cm)
+            if stimulus.alive(now):
+                rec.stimuli = merge(rec.stimuli, stimulus, now)
+        if any(s.other == "PLAYER" for s in deferred):
+            # Even an expired greeting/speech is reconsidered as the hero's current presence, without
+            # replaying an old choice or pretending that an old gift/utterance happened again.
+            rec.stimuli = merge(rec.stimuli, Stimulus("player_near", now, "PLAYER", rec.distance_cm), now)
+        if self._has_reason(rec, now):
+            self._want(rec, "react", False, now, not_before=now)
+
+    def on_idle(self, npc: str, now: float, *, act: str | None = None, reason: str | None = None) -> None:
         rec = self.npcs.get(npc.upper())
+        if rec is not None and rec.investigation is not None:
+            if act is None or act != rec.investigation.act:
+                return  # an empty script queue or another command's idle is not the end of this walk
+            self._finish_investigation(rec, now, resume=reason in ("done", "timeout"))
+            return
         if rec is not None:
             rec.body = None  # what the body was doing is over: threats from now on go to the scripts again
         if rec is None or rec.tier is not Tier.NEAR or rec.talking:
@@ -464,6 +565,8 @@ class NpcPlanner:
             return
         rec.talking = on
         rec.version += 1  # an answer asked before is moot
+        if on:
+            self._finish_investigation(rec, self.clock(), resume=False)
         if not on:
             self._after_chat(rec.id, self.clock())
 
@@ -489,6 +592,7 @@ class NpcPlanner:
         if target is None:
             log.info("%s: nothing to %s (%s)", npc, choice, ",".join(s.kind for s in rec.stimuli) or "calm")
             return None
+        self._finish_investigation(rec, now, resume=False)
         rec.version += 1
         rec.last_applied[applied_key(choice, target)] = now
         rec.body = (choice, now)
@@ -513,6 +617,14 @@ class NpcPlanner:
         """Turn due timers into requests and send what the budget allows."""
         self._refill(now)
         for rec in self.npcs.values():
+            if rec.investigation is not None and now - rec.investigation.since >= INVESTIGATION_MAX_S:
+                self._finish_investigation(rec, now, resume=True)
+            if rec.investigation is not None:
+                continue  # neither an agenda nor the day timer can take this bounded action's body
+            if rec.deferred:
+                self._resume_deferred(rec, now)
+                if rec.deferred:
+                    continue
             if rec.tier is Tier.OFF or rec.talking or rec.pending or rec.flight or rec.next_check > now:
                 continue
             soon = False
@@ -534,7 +646,12 @@ class NpcPlanner:
         ready = []
         for rec in self.npcs.values():
             pend = rec.pending
-            if pend is None or rec.flight is not None or pend.not_before > now:
+            if (
+                pend is None
+                or rec.flight is not None
+                or rec.investigation is not None
+                or pend.not_before > now
+            ):
                 continue
             if pend.deadline < now:
                 rec.pending = None
@@ -620,6 +737,8 @@ class NpcPlanner:
         rec = self.npcs.get(npc.upper())
         if rec is not None and rec.activity != activity:
             rec.activity = activity
+            if activity != "routine":
+                self._finish_investigation(rec, self.clock(), resume=False)
             self._retier(self.clock())
 
     def _retier(self, now: float) -> None:
@@ -689,6 +808,7 @@ class NpcPlanner:
         shadow: str | None = None
         options: dict[str, DayOption] = {}
         shadow_menu: dict[str, DayOption] = {}
+        react_args: dict[str, dict[str, Any]] = {}
         if pend.purpose == "plan":
             slot = self.routines.get(rec.id)
             if slot is None or slot.info is None or self.game_time is None:
@@ -721,6 +841,9 @@ class NpcPlanner:
             deadline = self.cfg.deadline_ms["far"]
         else:
             sit = self.builder.react(ctx, rec.stimuli, now, clock)
+            noise = max((s for s in rec.stimuli if s.kind == "noise"), key=lambda s: s.at, default=None)
+            if noise is not None and noise.position is not None:
+                react_args["investigate"] = {"at": list(noise.position), "ms": 5000}
             key = "urgent" if pend.urgent else ("near" if rec.tier is Tier.NEAR else "mid")
             deadline = self.cfg.deadline_ms[key]
         lane: Lane = "urgent" if pend.urgent else "background"
@@ -738,6 +861,7 @@ class NpcPlanner:
             shadow=shadow,
             options=options,
             shadow_menu=shadow_menu,
+            react_args=react_args,
         )
         rec.flight = flight
         self.stats.sent[lane] += 1
@@ -823,7 +947,7 @@ class NpcPlanner:
         # the question whose answer is applied: a plan's may be none (only `do`, in shadow)
         asked = flight.question if flight.purpose == "plan" else flight.purpose
         answer = outcome.answers.get(asked) if asked is not None else None
-        if rec.tier is Tier.OFF or rec.version != flight.version:
+        if rec.tier is Tier.OFF or rec.version != flight.version or rec.investigation is not None:
             self.stats.discarded += 1  # something happened meanwhile: a new pending request covers it
             self._settled(npc, flight, answer, False, "outdated")
             self._shadow(npc, flight, outcome)
@@ -899,9 +1023,19 @@ class NpcPlanner:
             flight.stimuli,
             latency_ms=(now - flight.sent) * 1000,
             target=flight.target,
-            args=flight.plan_args.get(choice),
+            args=(flight.plan_args if flight.purpose == "plan" else flight.react_args).get(choice),
             own=newest is not None and newest.other.upper() == rec.id,
         )
+        if choice == "investigate" and flight.purpose == "react":
+            # The bridge owns the walk, scan and return. An idle/timer must not send it back to the
+            # same noise after it has finished; a newly heard sound gets a fresh observation.
+            for stimulus in rec.stimuli:
+                if stimulus.kind != "noise" and not stimulus.policy.threat:
+                    self._defer(rec, stimulus)
+            rec.stimuli = [s for s in rec.stimuli if s.policy.threat]
+            rec.investigation = Investigation(now)
+            rec.version += 1
+            rec.pending = None
         if flight.purpose == "react":
             rec.body = (choice, now) if choice in TAKES_BODY else None
         if choice == "approach_talk" and flight.purpose == "react" and self.on_approach is not None:

@@ -11,6 +11,7 @@ class Pixmap;
 }
 class PlayerControl;
 class Npc;
+class World;
 struct PhysicsNoise;
 
 // Test bench for developing game mechanics: runs a scenario file inside the game with a fixed time step,
@@ -38,6 +39,11 @@ namespace TestBench {
   // Native impact/audio and accepted NPC hearing; inert outside the noise fixture.
   void     physicsNoise(const PhysicsNoise& noise, std::string_view sound, bool played);
   void     physicsNoiseHeard(const Npc& npc, const PhysicsNoise& noise, bool callbackDispatched = false);
+  // Devmode-only live bridge stand, reusing the actual Coragon tavern fixture.
+  bool     isPhysicsNoiseDebug();
+  void     physicsNoiseBridgeEvent(const Npc& listener, uint64_t tick);
+  bool     physicsNoiseDebug(World& world, Npc& player, std::string_view command,
+                             std::string& value, std::string& error);
   // An arrow (a bolt) has moved to (x, y, z), cm: the overlay draws the way it flew (`overlay trail`)
   void     arrowAt(const void* arrow, float x, float y, float z);
   // Native melee baseline telemetry. Opt in with OPENGOTHIC_BODY_TRACE=1; no events outside an active bench.
