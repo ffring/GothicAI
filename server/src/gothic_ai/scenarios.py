@@ -955,6 +955,8 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     """M5b on the game: threats from others reach the server, the player's drawn weapon is perceived,
     and the new body actions work for free and attached npc's. A wolf is spawned next to the npc."""
     await link.wait_world()
+    # Keep the hero alive during arena placement and the native creatures' attacks.
+    await link.debug("player_hp", hp=5000)
     events: list[NpcEvent] = []
     link.listeners.append(lambda m: events.append(m) if isinstance(m, NpcEvent) else None)
     results: dict[str, str] = {}
@@ -1000,14 +1002,34 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
     await link.act(npc, "return_to_routine")
     # Returning control starts the old tower routine. Hold an ordinary native idle
     # here and wait for its initialization, including its normal enemy perceptions.
+    # Keep the hero outside this NPC's native observation range until arrival
+    # is acknowledged; otherwise ZS_OBSERVEPLAYER can interrupt preparation.
+    senses = int(await link.evaluate(["field", ["inst", npc], "SENSES_RANGE"]))
+    await link.debug("teleport", near=npc, distance=senses + 500)
+    staged = await link.snapshot(npc, fresh=True)
+    if staged.player is None or staged.player.distance <= senses:
+        raise GameError(f"m5b arena preparation: hero inside senses range {senses}; state={staged}")
+    log.info("m5b arena preparation: senses %d cm, hero %.0f cm away", senses, staged.player.distance)
     bodies = Bodies(link)
+    # ArmsCrossed may leave the arena for any available STAND freepoint.
+    # Stand_WP initializes the same normal perceptions and stays at this waypoint.
     ready = await bodies.act(
-        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
-        minutes=60, arrive=True, radius=100, timeout=15,
+        npc, "start_activity", state="ZS_STAND_WP", waypoint=arena,
+        minutes=60, place=True, arrive=True, radius=100, timeout=15,
     )
     if ready.status != "arrived":
         current = (await link.routine(npc)).current
-        raise GameError(f"m5b arena preparation: {ready.status} {ready.detail}; state={current}")
+        failed = await link.snapshot(npc, fresh=True)
+        raise GameError(
+            f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; snapshot={failed}"
+        )
+    await link.debug("teleport", near=npc, distance=300)
+    # Let the hero's native landing/standing animation catch up with teleport.
+    await asyncio.sleep(1.0)
+    staged = await link.snapshot(npc, fresh=True)
+    if staged.player is None or staged.player.hp == 0:
+        raise GameError(f"m5b arena preparation: hero did not survive placement; state={staged}")
+    log.info("m5b arena ready: hero %s hp, %.0f cm away", staged.player.hp, staged.player.distance)
     events.clear()
     await link.debug("player_weapon", state="melee")
     e = await event({"weapon_drawn"}, 5)
