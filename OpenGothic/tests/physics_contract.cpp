@@ -1314,6 +1314,62 @@ namespace {
     const float heavy=push(122,DynamicWorld::C_MovableVob);
     require(light>20 && heavy<light*.5f,"the same character strength must push a light item faster than heavy furniture");
     std::printf("CharacterVirtual push: 1 kg %.2f cm, 122 kg %.2f cm\n",double(light),double(heavy));
+    for(const int category:{DynamicWorld::C_Item,DynamicWorld::C_MovableVob}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto mug=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.07f,.08f,.07f)),at(80,8,0),.7f,5.8f,category,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      float highest=0.f;
+      CollisionWorld::CharacterMoveResult state;
+      for(int i=0;i<60;++i) {
+        state=hero->move({5,0,0},17,50,slope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        world.tick(17);
+        }
+      std::printf("CharacterVirtual loose utensil: category %d moved %.3f cm, max feet %.3f cm\n",
+                  category,double(mug->position().x-80.f),double(highest));
+      require(highest<1.f,"walking into a loose item or small movable utensil must not lift the feet");
+      require(mug->position().x>100.f && mug->touchedByNpc(),
+              "a loose utensil excluded as a support must still receive native contact impulses");
+      require(state.position.x>250.f,"a loose utensil must be pushed aside while the hero keeps walking");
+    }
+    {
+      CollisionWorld world;
+      auto mug=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.2f,.08f,.2f)),at(0,8,0),.7f,5.8f,
+                                     DynamicWorld::C_Item,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,16,0});
+      CollisionWorld::CharacterMoveResult state;
+      // Leave the rigid body suspended without ticking it: the feet can only
+      // remain at 16 cm if this light body is erroneously accepted as a floor.
+      for(int i=0;i<10;++i)
+        state=hero->move({},17,50,slope,80,nullptr);
+      require(!state.grounded && state.position.y<14.f,
+              "even feet initially placed on a light item must fall rather than acquire it as support");
+      requireNear(mug->velocity().y,0,.001f,"an excluded light support must not receive character support weight");
+    }
+    {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      // A low table is deliberately within the 50 cm stair limit, including
+      // the capsule's rounded toe. It must remain furniture rather than a step.
+      auto table=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.2f,.1f,.6f)),at(100,10,0),1.f,122.f,
+                                       DynamicWorld::C_MovableVob,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,0,0});
+      CollisionWorld::CharacterMoveResult state;
+      float highest=0.f;
+      for(int i=0;i<90;++i) {
+        state=hero->move({5,0,0},17,50,slope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        world.tick(17);
+        }
+      std::printf("CharacterVirtual low table: hero %.3f cm, table %.3f cm, max feet %.3f cm\n",
+                  double(state.position.x),double(table->position().x),double(highest));
+      require(highest<1.f,"ordinary walking must neither auto-step nor roll the capsule up a movable table");
+      require(state.position.x<table->position().x-35.f,
+              "a table excluded from automatic stepping must still block the capsule");
+    }
     {
       CollisionWorld world;
       // No floor or simulation tick: measured linear momentum comes only from

@@ -464,6 +464,71 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
 struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListener {
   explicit Impl(CollisionWorld& world):world(world) {}
 
+  static bool isPushable(const JPH::Body& body) {
+    const auto layer = body.GetObjectLayer();
+    return body.IsDynamic() && (layer==DynamicWorld::C_Item || layer==DynamicWorld::C_MovableVob);
+    }
+
+  bool OnContactValidate(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact) override {
+    bool rejectSupport = false;
+    {
+      JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
+      if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()) || contact.mIsSensorB)
+        return true;
+      const auto up = character->GetUp();
+      const float mass = 1.f/lock.GetBody().GetMotionProperties()->GetInverseMass();
+      const bool light = mass<10.f;
+      // Loose utensils never become a floor. A heavy body's top may support a
+      // character placed on it, but walking into it must not acquire that top
+      // as a new step. Keep the side contacts, which still stop and push it.
+      const float contactHeight = JPH::Vec3(contact.mPosition-character->GetPosition()).Dot(up);
+      rejectSupport = light ? contact.mSurfaceNormal.Dot(up)>1.e-3f :
+                              contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
+      }
+    if(!rejectSupport)
+      return true;
+
+    // Rejecting a support in Jolt also removes its solver impulse. Retain the
+    // real contact point and horizontal push, within the same per-move budget.
+    // The capsule's rounded toe must slide through a mug rather than climb it.
+    // Sweeps also validate distant future contacts, so only push a point that
+    // is already touching the current capsule (including its padding).
+    auto local = JPH::Vec3(contact.mPosition-character->GetPosition());
+    auto closest = character->GetUp()*std::clamp(local.Dot(character->GetUp()),radius,height-radius);
+    if((local-closest).Length()<=radius+character->GetCharacterPadding()+.001f) {
+      auto horizontal = contact.mContactNormal-contact.mContactNormal.Dot(character->GetUp())*character->GetUp();
+      if(horizontal.IsNearZero()) {
+        const auto velocity = character->GetLinearVelocity();
+        horizontal = -(velocity-velocity.Dot(character->GetUp())*character->GetUp());
+        }
+      if(!horizontal.IsNearZero()) {
+        auto pushContact = contact;
+        pushContact.mContactNormal = horizontal.Normalized();
+        pushContact.mDistance = std::max(contact.mDistance,0.f);
+        pushContact.mHadCollision = true;
+        JPH::CharacterContactSettings settings;
+        onContact(pushContact,settings);
+        }
+      }
+    return false;
+    }
+
+  void OnContactSolve(const JPH::CharacterVirtual*, const JPH::BodyID& bodyID, const JPH::SubShapeID&,
+                      JPH::RVec3Arg point, JPH::Vec3Arg, JPH::Vec3Arg, const JPH::PhysicsMaterial*,
+                      JPH::Vec3Arg velocity, JPH::Vec3& newVelocity) override {
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),bodyID);
+    if(!lock.SucceededAndIsInBroadPhase() || !isPushable(lock.GetBody()))
+      return;
+    const auto up = character->GetUp();
+    if(JPH::Vec3(point-character->GetPosition()).Dot(up)<=.02f)
+      return; // Existing top support, including a moving body.
+    // The rounded capsule can turn even a vertical furniture side into an
+    // upward velocity. Side contacts still block us, but cannot lift the feet.
+    const float gained = (newVelocity-velocity).Dot(up);
+    if(gained>0.f)
+      newVelocity -= gained*up;
+    }
+
   void onContact(const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) {
     // Jolt's native limit applies afresh to each contact / stair probe. Dose
     // the impulse here instead, sharing one force budget across the whole move.
@@ -541,6 +606,8 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   float pushRemaining = 0.f;
   std::vector<std::pair<JPH::BodyID,float>> pushBodies;
   bool contactsDirty = true;
+  float radius = 0.f;
+  float height = 0.f;
   JPH::BodyID ground;
   JPH::RMat44 groundTransform = JPH::RMat44::sIdentity();
   };
@@ -550,6 +617,8 @@ CollisionWorld::VirtualCharacter::VirtualCharacter(CollisionWorld& owner, float 
   :impl(std::make_unique<Impl>(owner)) {
   const float r = std::max(toMeters(radius),0.01f);
   const float h = std::max(toMeters(height),2.f*r);
+  impl->radius = r;
+  impl->height = h;
   JPH::CharacterVirtualSettings settings;
   settings.mShape = new JPH::CapsuleShape(std::max(h*0.5f-r,0.001f),r);
   settings.mShapeOffset = JPH::Vec3(0,h*0.5f,0);
@@ -636,10 +705,55 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);
-    settings.mWalkStairsStepUp = JPH::Vec3(0,step,0);
+    // Run Jolt's ordinary update and floor sticking first. Its automatic stair
+    // recipe is applied below only for world geometry, after contact solving
+    // has identified an Item / movable body that should be pushed instead.
+    settings.mWalkStairsStepUp = JPH::Vec3::sZero();
     settings.mStickToFloorStepDown = JPH::Vec3(0,-step,0);
+    const auto oldPosition = character.GetPosition();
+    const auto desiredVelocity = character.GetLinearVelocity();
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    bool pushingBody = false;
+    for(const auto& contact:character.GetActiveContacts()) {
+      if(!contact.mHadCollision || contact.mWasDiscarded || contact.mIsSensorB ||
+         contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f)
+        continue;
+      JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
+      if(lock.SucceededAndIsInBroadPhase() && Impl::isPushable(lock.GetBody())) {
+        pushingBody = true;
+        break;
+        }
+      }
+    // The remainder is the WalkStairs part of Jolt's ExtendedUpdate recipe,
+    // including its direction and minimum-distance tests for oblique steps.
+    const auto up = character.GetUp();
+    const auto desiredStep = (desiredVelocity-desiredVelocity.Dot(up)*up)*seconds;
+    const float desiredLength = desiredStep.Length();
+    if(step>0.f && !pushingBody && desiredLength>0.f && character.CanWalkStairs(desiredVelocity)) {
+      const auto forward = desiredStep/desiredLength;
+      const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
+      const float achievedLength = std::max(0.f,achieved.Dot(forward));
+      if(achievedLength+1.e-4f<desiredLength) {
+        auto direction = forward;
+        float best = settings.mWalkStairsCosAngleForwardContact;
+        for(const auto& contact:character.GetActiveContacts()) {
+          if(!contact.mHadCollision || contact.mWasDiscarded ||
+             contact.mSurfaceNormal.Dot(desiredVelocity-contact.mLinearVelocity)>=0.f ||
+             !character.IsSlopeTooSteep(contact.mSurfaceNormal))
+            continue;
+          const auto candidate = contact.mSurfaceNormal.Dot(up)*up-contact.mSurfaceNormal;
+          const float length = candidate.Length();
+          if(length>1.e-6f && candidate.Dot(forward)/length>best) {
+            direction = candidate/length;
+            best = direction.Dot(forward);
+            }
+          }
+        const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
+        character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
+                             settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+        }
+      }
     }
   const auto previousGround = state.ground;
   state.ground = character.GetGroundBodyID();
