@@ -1069,8 +1069,20 @@ void DynamicWorld::setMovableVobsEnabled(bool enabled) {
 
 void DynamicWorld::finalizeMovableVobs() {
   movableVobs->finalized = true;
-  if(movableVobs->enabled)
-    validateMovableVobs();
+  // Capture the authored geometry even when starting with physics disabled:
+  // a later enable must not classify against a moved door or a loaded save.
+  const bool enabled = movableVobs->enabled;
+  if(!enabled) {
+    movableVobs->enabled = true;
+    for(auto* obj:movableVobs->bodies)
+      rebuildMovableVob(*obj);
+    }
+  validateMovableVobs();
+  if(!enabled) {
+    movableVobs->enabled = false;
+    for(auto* obj:movableVobs->bodies)
+      rebuildMovableVob(*obj);
+    }
   }
 
 double DynamicWorld::movableVobValidationMilliseconds() const {

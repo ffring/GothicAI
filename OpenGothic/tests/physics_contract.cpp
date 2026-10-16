@@ -98,6 +98,15 @@ namespace {
     return mesh;
     }
 
+  zenkit::MultiResolutionMesh movableCollisionBox(const Tempest::Vec3& dimensionsCm) {
+    auto mesh=movableBox(dimensionsCm);
+    // movableCube's winding is suitable for its hull-only fixtures. Static
+    // Gothic source meshes need clockwise faces: PhysicVbo reverses them.
+    for(auto& triangle:mesh.sub_meshes[0].triangles)
+      std::swap(triangle.wedges[1],triangle.wedges[2]);
+    return mesh;
+    }
+
   zenkit::Mesh movableFloor() {
     zenkit::Mesh mesh;
     mesh.vertices={{-2000,0,-2000},{-2000,0,2000},{2000,0,2000},{2000,0,-2000}};
@@ -317,10 +326,13 @@ namespace {
   void testMovableVobGeometryPenetration() {
     Resources resources;
     ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP.MRM");
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,200,200}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_WALL.MRM");
     DynamicWorld world(nullptr,movableFloor());
     auto shallow=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(-100,7,0),.25f,true,"table",true,111);
     auto deep=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(0,4,0),.25f,true,"table",true,112);
-    auto structure=world.addStaticObj(proto.attach[0].shape.get(),at(115,10,0),"CONTRACT_STRUCTURE.MRM");
+    // The hull crosses the middle of the wall's -X face by five centimetres,
+    // far from its top/bottom faces and outer edges.
+    auto structure=world.addStaticObj(wall.attach[0].shape.get(),at(115,10,0),"CONTRACT_CLAMP_WALL.MRM");
     auto embedded=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(100,10,0),.25f,true,"table",true,113);
     auto first=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(300,10,0),.25f,true,"table",true,114);
     auto second=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(315,10,0),.25f,true,"table",true,115);
@@ -331,7 +343,12 @@ namespace {
             "three centimetres of landscape penetration must remain below the four-centimetre clamp threshold");
     require(movableContact(contacts,112).disposition=="floor" && deep.mass()==0,
             "more than four centimetres of landscape penetration must restore the static source mesh");
-    require(movableContact(contacts,113).disposition=="structure" && embedded.mass()==0,
+    const auto& blocked=movableContact(contacts,113);
+    std::printf("Movable C_Object fixture: %s, mass %.6f kg",blocked.disposition.c_str(),double(embedded.mass()));
+    for(const auto& contact:blocked.contacts)
+      std::printf(" [%s, side %d, depth %.6f cm]",contact.other.c_str(),contact.side,double(contact.depth));
+    std::puts("");
+    require(blocked.disposition=="structure" && embedded.mass()==0,
             "more than four centimetres of static C_Object penetration must restore the static source mesh");
     for(const auto id:{114u,115u}) {
       const auto& entry=movableContact(contacts,id);
@@ -349,8 +366,8 @@ namespace {
   void testMovableVobGeometryTopObjects() {
     Resources resources;
     ProtoMesh base(PackedMesh(movableBox({100,100,100}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_BASE.MRM");
-    ProtoMesh small(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP_SMALL.MRM");
-    ProtoMesh large(PackedMesh(movableBox({100,20,20}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_LARGE.MRM");
+    ProtoMesh small(PackedMesh(movableCollisionBox({20,20,20}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_SMALL.MRM");
+    ProtoMesh large(PackedMesh(movableCollisionBox({100,20,20}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_LARGE.MRM");
     DynamicWorld world(nullptr,movableFloor());
     auto exempt=world.addMovableVob(base,"CONTRACT_CLAMP_BASE.MRM",at(0,50,0),.25f,true,"table",true,121);
     auto held=world.addMovableVob(base,"CONTRACT_CLAMP_BASE.MRM",at(300,50,0),.25f,true,"table",true,122);
@@ -367,6 +384,33 @@ namespace {
       }),"small-top exemption fixture must exercise penetration deeper than four centimetres");
     require(!movableContact(contacts,122).enabled && movableContact(contacts,122).disposition=="carries" && held.mass()==0,
             "a C_Object larger than eighty centimetres resting on the top must clamp its support");
+    }
+
+  void testMovableVobGeometryAuthoredToggle() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP.MRM");
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,200,200}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_WALL.MRM");
+    DynamicWorld world(nullptr,movableFloor());
+    world.setMovableVobsEnabled(false);
+    auto blocked=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(0,10,0),.25f,true,"table",true,141);
+    auto clear=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(300,10,0),.25f,true,"table",true,142);
+    auto obstacle=world.addStaticObj(wall.attach[0].shape.get(),at(15,10,0),"CONTRACT_CLAMP_WALL.MRM");
+    require(!obstacle.isEmpty(),"runtime-toggle fixture must install its authored C_Object collision");
+    world.finalizeMovableVobs();
+    const auto authored=world.movableVobContacts(1.f);
+    require(!world.movableVobsEnabled() && blocked.mass()==0 && clear.mass()==0,
+            "capturing geometry while disabled must restore the disabled physics setting");
+    require(movableContact(authored,141).disposition=="structure" && movableContact(authored,142).disposition=="ok",
+            "finalization while disabled must capture the original authored obstruction for both candidates");
+    // A door or scripted object can move before physics is enabled. Its current
+    // pose must neither release the original clamp nor create a new one.
+    obstacle.setObjMatrix(at(315,10,0));
+    world.setMovableVobsEnabled(true);
+    const auto enabled=world.movableVobContacts(1.f);
+    require(!movableContact(enabled,141).enabled && blocked.mass()==0,
+            "runtime enable must retain an authored clamp after its static obstruction moves away");
+    require(movableContact(enabled,142).enabled && clear.mass()>0,
+            "runtime enable must not invent a clamp from a static obstruction's later scripted pose");
     }
 
   void testMovableVobClampedSavePose() {
@@ -1527,6 +1571,7 @@ int main() {
     testMovableVobGeometrySupport();
     testMovableVobGeometryPenetration();
     testMovableVobGeometryTopObjects();
+    testMovableVobGeometryAuthoredToggle();
     testMovableVobClampedSavePose();
     testMovableVobSave();
     testMovableTraceThresholds();
