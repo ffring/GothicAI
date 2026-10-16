@@ -193,7 +193,8 @@ async def _giver_ok(link: GameLink, director: Showrunner, line: dict[str, Any]) 
     return bool(
         giver
         and not director.rules.plot_npc(giver)
-        and (not follows or follows in director.author.graph.quests)
+        and follows == RUEBEN
+        and follows in director.author.graph.quests
         and giver not in _participants(director, follows)
         and giver in await non_hostile(link, [giver], context=giver)
     )

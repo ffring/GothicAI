@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from gothic_ai import questbook, scenarios
 from gothic_ai.llm import ToolCall
-from gothic_ai.scenario_vanilla_line import REQUIRES, RUEBEN, Turnips, VanillaLineScript
+from gothic_ai.scenario_vanilla_line import REQUIRES, RUEBEN, Turnips, VanillaLineScript, _giver_ok
 
 
 async def test_script_proposes_vanilla_followup() -> None:
@@ -71,3 +71,21 @@ async def test_common_player_observes_vanilla_goal_without_writing_scripts() -> 
     assert all(value.startswith("done") for value in result.values())
     assert link.vanilla_reads == 1
     assert link.status == 2
+
+
+async def test_live_line_must_follow_the_event_and_cannot_reuse_its_script_giver(monkeypatch) -> None:
+    async def peaceful(link, people, **kwargs):
+        return set(people)
+
+    monkeypatch.setattr("gothic_ai.scenario_vanilla_line.non_hostile", peaceful)
+    graph = SimpleNamespace(
+        quests={RUEBEN: SimpleNamespace(running={"TAKE"}, success={"END"}, failed=set(), obsolete=set())},
+        nodes={"TAKE": SimpleNamespace(npc="LOBART"), "END": SimpleNamespace(npc="LOBART")},
+    )
+    director = SimpleNamespace(
+        author=SimpleNamespace(graph=graph), rules=SimpleNamespace(plot_npc=lambda npc: False)
+    )
+    assert not await _giver_ok(None, director, {"giver": "LOBART", "follows": ""})
+    assert not await _giver_ok(None, director, {"giver": "LOBART", "follows": RUEBEN})
+    assert not await _giver_ok(None, director, {"giver": "HILDA", "follows": ""})
+    assert await _giver_ok(None, director, {"giver": "HILDA", "follows": RUEBEN})
