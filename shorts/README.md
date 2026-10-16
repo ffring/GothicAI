@@ -133,9 +133,15 @@ over the sea; filmed with `MUSIC=0`, a theme of the game under it. A line break 
   scenario, silent in the takes) puts its mark in the corner of both halves; `"music": {"file", "volume"}` lays
   a bed under the whole short, the file under `.shorts/compare/<name>/` (cut from a theme of the game by the
   explainer's `bed.sh`, never in git).
+- A voice: a beat's `"lines": [{"at", "file", "words": [[word, from, to], ...]}]` lays each voiced line at that
+  second of the segment and captions it in place of the beat's title, a page of up to three words at a time with
+  the word being said lit (the timings from `gothic-shorts align`); the game's sound and the bed duck under it.
+  Such a plan (its script, the voice files) stays outside the repository, in the explainer's workspace: give its
+  path as the third argument, the short goes into that folder's `render/`:
+  `uv run --project shorts python shorts/compare/cut.py hits ru ~/.local/share/gothic-ai/explain/hits/plan.json`.
 - `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
   take (with the bed under it), limits the peaks and brings it to -14 LUFS by one gain (loudnorm in two passes,
-  linear: one pass lifts the quiet stretches).
+  linear: one pass lifts the quiet stretches), fading out over the last 80 ms.
 
 Pick spots in daylight and open ground (`clear` sends rats and wolves away), and look at both takes before
 cutting: a difference that does not read at phone size (a flinch on top of the game's stumble) stays out.
