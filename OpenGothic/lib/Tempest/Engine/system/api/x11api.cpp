@@ -7,6 +7,8 @@
 #include <Tempest/Log>
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <unordered_map>
@@ -265,6 +267,10 @@ void X11Api::alignGeometry(SystemApi::Window *w, Tempest::Window& owner) {
   }
 
 SystemApi::Window *X11Api::implCreateWindow(Tempest::Window *owner, uint32_t w, uint32_t h) {
+  return implCreateWindow(owner,w,h,false);
+  }
+
+SystemApi::Window *X11Api::implCreateWindow(Tempest::Window *owner, uint32_t w, uint32_t h, bool fixedSize) {
   if(dpy==nullptr)
     return nullptr;
 
@@ -295,6 +301,15 @@ SystemApi::Window *X11Api::implCreateWindow(Tempest::Window *owner, uint32_t w, 
   XSetWMProtocols(dpy, win, prot, 1);
 
   XStoreName(dpy, win, "");
+
+  if(fixedSize) {
+    // Automated captures need the requested client size, even with a tiling WM.
+    XSizeHints hints = {};
+    hints.flags = PMinSize | PMaxSize;
+    hints.min_width  = hints.max_width  = int(w);
+    hints.min_height = hints.max_height = int(h);
+    XSetWMNormalHints(dpy,win,&hints);
+    }
 
   XFreeColormap( dpy, cmap );
   XFree(vi);
@@ -329,6 +344,16 @@ SystemApi::Window *X11Api::implCreateWindow(Tempest::Window *owner, SystemApi::S
 
   int width = s->width;
   int height = s->height;
+  uint32_t windowWidth = 800, windowHeight = 600;
+  bool fixedSize = false;
+  if(const char* sz = std::getenv("TEMPEST_WINDOW_SIZE")) {
+    unsigned sw = 0, sh = 0;
+    if(std::sscanf(sz,"%ux%u",&sw,&sh)==2 && sw>0 && sh>0) {
+      windowWidth = sw;
+      windowHeight = sh;
+      fixedSize = true;
+      }
+    }
   SystemApi::Window* hwnd = nullptr;
 
   switch(sm) {
@@ -337,11 +362,12 @@ SystemApi::Window *X11Api::implCreateWindow(Tempest::Window *owner, SystemApi::S
       // TODO: make window invisible
       break;
     case Normal:
-      hwnd = implCreateWindow(owner,800, 600);
+      hwnd = implCreateWindow(owner,windowWidth,windowHeight,fixedSize);
       break;
     case Minimized:
       // TODO
-      hwnd = implCreateWindow(owner,width, height);
+      hwnd = fixedSize ? implCreateWindow(owner,windowWidth,windowHeight,true)
+                       : implCreateWindow(owner,width,height);
       break;
     case Maximized:
       // TODO

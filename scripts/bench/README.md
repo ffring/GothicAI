@@ -134,7 +134,7 @@ Output goes to `.bench/<scenario>-<time>/` (not in git):
 | `report.json` | the numbers of `report.md`: per segment, the events, and the tables of the arrows, the dice and the damage (`archery`, `archery_predicted`, `dice`, `damage`, `time_to_kill`, `fights`) |
 | `sheets/<segment>.png` | 16 frames of a segment in a 4x4 grid |
 | `sheets/evNN-*.png` | frames around an event |
-| `<segment>.mp4` | the video, 800x600, 30 fps |
+| `<segment>.mp4` | the video, 800x600 by default (`TEMPEST_WINDOW_SIZE=<w>x<h>` overrides it), 30 fps |
 | `metrics.csv` | a row per frame: player state, IK state, joints before and after IK, ground |
 | `bench.log`, `game.log` | what the scenario did, the engine log |
 | `host.txt` | `ryzen` or `mac`, also shown in the report header |
@@ -561,7 +561,7 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
 and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), an npc's lines of the game and SVMs
 (`TestBench::npcOutput` in `Npc::nextAiAction`), the OpenAL loopback device in Tempest's
-`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
+`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS and X11 backends, `FootIk::playerProbe` (legs before and after IK),
 `Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
 switches bone by bone),
 `LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `EyeBlink::subjectProbe` (blinks), `Camera::setNearClip`
