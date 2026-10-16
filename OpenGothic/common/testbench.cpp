@@ -1,5 +1,6 @@
 #include "appcadence.h"
 #include "testbench.h"
+#include "navbench.h"
 #include "frameprofile.h"
 
 #include <Tempest/Pixmap>
@@ -4431,7 +4432,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     return;
   const std::string& c = a[0];
 
-  if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+  if(c=="navmesh") {
+    if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
+    }
+  else if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","character_virtual",a[1]=="on");
     event("character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
     }
@@ -8235,6 +8239,7 @@ bool waitingForAi() {
   }
 
 void run(World& w, Npc& pl, PlayerControl& ctrl) {
+  if(NavBench::running()) return;
   if(bench.spellEquipPending) {
     if(pl.drawSpell(bench.spellEquipPending)) {bench.spellCastingId=bench.spellEquipPending;bench.spellEquipPending=0;}
     else if(w.tickCount()<bench.spellEquipUntil) return;
@@ -8397,6 +8402,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       }
     const std::string line = bench.prog[bench.pc++];
     exec(line,w,pl,ctrl);
+    if(NavBench::running()) return;
     if(bench.spellWaitFrozen>=0 || bench.spellEquipPending) return;
     if(bench.questWait || bench.questStandingWait) return;
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
@@ -9160,6 +9166,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
   }
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
+  NavBench::reset();
   stopRecording();
   if(bench.csv!=nullptr)
     std::fclose(bench.csv);
@@ -9495,6 +9502,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     }
   if(dt==0)
     return false;
+  NavBench::tick(*world);
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);

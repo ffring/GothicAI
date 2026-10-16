@@ -588,6 +588,14 @@ class Npc final {
       std::string_view name;
       };
     auto      navigationGoal() const -> NavigationGoal;
+    // Radius and full height of the landscape-query capsule, in game centimeters.
+    auto      navigationCapsule() const -> Tempest::Vec2 {
+      return {physic.capsuleRadius(),physic.capsuleHeight()};
+      }
+    // Direct, owned ground-position target for bench-controlled walks; no waypoint graph lookup.
+    // Uses a 20 cm arrival radius even after a collision, to preserve navmesh corners.
+    // Returns false while airborne or while leaving an interaction, so the caller can retry.
+    bool      goToPosition(const Tempest::Vec3& position);
     void      clearGoTo();
     void      stopWalking();
 
@@ -672,6 +680,7 @@ class Npc final {
       Npc*             npc  = nullptr;
       const WayPoint*  wp   = nullptr;
       Tempest::Vec3    pos  = {};
+      float            pointDistance = 0.f; // transient bench precision; zero keeps normal tolerance
 
       void             save(Serialize& fout) const;
       void             load(Serialize&  fin);
