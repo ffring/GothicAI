@@ -2964,7 +2964,8 @@ void noiseCheckpoint(World& world) {
   event("physics_noise_checkpoint","\"phase\":"+jsonStr(bench.noisePhase)+",\"elapsed_ms\":"+
     std::to_string(world.tickCount()-bench.noiseStart)+",\"listeners\":"+noiseListenerRows(world)+
     ",\"perceptions\":"+perceptions+"],\"table_transform\":"+table+
-    ",\"table_maximum_tilt_deg\":"+ragdollNumber(bench.noiseTableMaximumTilt));
+    ",\"table_maximum_tilt_deg\":"+ragdollNumber(bench.noiseTableMaximumTilt)+
+    ",\"table_tilt_above_45_deg\":"+(bench.noiseTableMaximumTilt>45.f?"true":"false"));
   }
 
 void noiseFields(World& world) {
