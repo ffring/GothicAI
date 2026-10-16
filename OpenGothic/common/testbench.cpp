@@ -589,6 +589,10 @@ struct Bench {
   uint64_t    volleyHoldNow = 0;
   uint32_t    lcg          = 1;  // the bench's own random numbers (seed)
   std::vector<Npc*> crew;        // arc: the npcs set out, `all` of fight
+  // wander: the crew walks the waynet from waypoint to waypoint near the hero (docs/navigation.md, stage 0)
+  std::vector<Npc*>            wanderers;
+  std::vector<const WayPoint*> wanderPoints;
+  size_t                       wanderLegs = 0;
   struct LivingWalker { Npc* npc=nullptr; WayPoint ends[2]; bool next=false,queued=false; };
   std::deque<LivingWalker> livingWalkers;
   bool livingFixture=false,livingDebug=false,livingMotion=false,livingMeasuring=false,livingMode=false;
@@ -5863,6 +5867,38 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     say(out);
     }
+  else if(c=="wander" && a.size()>1 && a[1]=="stats") {
+    size_t walking = 0;
+    for(auto* n:bench.wanderers)
+      if(!n->isDown() && n->isAiBusy())
+        ++walking;
+    say("wander stats: " + std::to_string(bench.wanderers.size()) + " npcs, " + std::to_string(walking) +
+        " walking, " + std::to_string(bench.wanderLegs) + " legs");
+    }
+  else if(c=="wander") {
+    // wander [radius cm 3000] [walk|run]: each npc set out by `arc` is held as the AI server holds a body and
+    // walks by the waynet to a waypoint within the radius of the hero, then to another: a crowd for the speed
+    // probe (docs/navigation.md, stage 0)
+    const float r = num(a,1,3000);
+    bench.wanderPoints.clear();
+    w.findWayPoint(pl.position(),[&](const WayPoint& p) {
+      if((p.pos-pl.position()).quadLength()<r*r)
+        bench.wanderPoints.push_back(&p);
+      return false;
+      });
+    const bool run = a.size()>2 && a[2]=="run";
+    bench.wanderers.clear();
+    bench.wanderLegs = 0;
+    for(auto* n:bench.crew) {
+      n->clearAiQueue();
+      n->clearState(false);
+      n->setExternalControl(true);
+      n->setWalkMode(run ? WalkBit::WM_Run : WalkBit::WM_Walk);
+      bench.wanderers.push_back(n);
+      }
+    say("wander " + std::to_string(bench.wanderers.size()) + " npcs, " + std::to_string(bench.wanderPoints.size()) +
+        " waypoints within " + std::to_string(int(r)) + " cm");
+    }
   else if(c=="fight") {
     // fight <npc|all> <target|player>: it attacks as the game's fight starts (ZS_ATTACK, to kill: an
     // archer readies its bow from 9 m); all: the npcs of arc
@@ -6986,6 +7022,14 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     bench.spellWaitFrozen=-1;
     if(!ready) {arenaAbort(bench.spellGuardTrace?"real wind throw did not return standing":"real freeze state did not reach requested transition");return;}
     }
+  if(!bench.wanderPoints.empty())
+    for(auto* n:bench.wanderers) {
+      if(n->isDown() || n->isAiBusy())
+        continue;
+      bench.lcg = bench.lcg*1664525u + 1013904223u;
+      n->aiPush(AiQueue::aiGoToPoint(*bench.wanderPoints[(bench.lcg>>8) % bench.wanderPoints.size()]));
+      ++bench.wanderLegs;
+      }
   if(bench.livingMotion)
     for(auto& walker:bench.livingWalkers) {
       if(walker.npc->isDown()) continue;

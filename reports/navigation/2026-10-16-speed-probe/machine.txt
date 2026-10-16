@@ -1,0 +1,3 @@
+32
+Model name:                              AMD Ryzen 9 3950X 16-Core Processor
+0cca5ecde585c91c
