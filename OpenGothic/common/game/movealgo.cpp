@@ -259,7 +259,8 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
 bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   const auto bs = npc.bodyStateMasked();
   const bool liftOff = bs==BS_JUMP && npc.isFlyAnim();
-  const bool virtualWalking = useCharacterVirtual() && !npcVirtualMobTransition &&
+  const bool virtualEnabled = useCharacterVirtual();
+  const bool virtualWalking = virtualEnabled && !npcVirtualMobTransition &&
                               !npc.isDown() && npc.physic.isEnabled() && !canFlyOverWater() &&
                               (flags==Run || flags==Slide || flags==InWater) && !liftOff;
   if(!virtualWalking) {
@@ -350,6 +351,26 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     }
 
   guardEdgeMove();
+
+  // CV walking can reach a different takeoff pose beside world geometry.
+  // Keep its floor guard through the legacy jump/fall handoff as well: reject
+  // lateral travel into a bottomless region, while lower landing floors and
+  // ordinary vertical flight retain the existing integrator.
+  if(virtualEnabled && !npcVirtualMobTransition && !npc.isDown() && npc.physic.isEnabled() &&
+     !swim && !dive && !canFlyOverWater()) {
+    const auto pos = npc.position();
+    if((pos.x!=pos0.x || pos.z!=pos0.z) &&
+       !npc.physic.hasFloorBelow({pos.x,std::max(pos.y,pos0.y),pos.z})) {
+      npc.setPosition(pos0);
+      DynamicWorld::CollisionTest vertical;
+      if(!tryMove({0,pos.y-pos0.y,0},vertical) && grav)
+        onGravityFailed(vertical,dt);
+      fallSpeed.x = fallSpeed.z = 0.f;
+      virtualJumpVelocity.x = virtualJumpVelocity.z = 0.f;
+      // Do not return before vertical gravity/landing below: an inertial jump
+      // must descend at the supported X/Z instead of freezing at the boundary.
+      }
+    }
 
   if(grav) {
     fallSpeed.y -= gravity*float(dt);
@@ -708,6 +729,13 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   const auto knee = waterDepthKnee();
   if(moved.grounded || moved.steep)
     cache.n = moved.groundNormal;
+
+  if(collision.preFall) {
+    // The common controller retained the supported origin. Match the legacy
+    // fall rejection for both the hero and NPCs, including its AI notification.
+    onMoveFailed(displacement,collision,dt);
+    return false;
+    }
 
   if(std::isfinite(water) && ground<water) {
     if(pos.y+chest<=water+0.01f && npc.hasSwimAnimations()) {

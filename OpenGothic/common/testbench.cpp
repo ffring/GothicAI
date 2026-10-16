@@ -713,6 +713,13 @@ struct Bench {
   std::vector<NpcCharacterFrame> npcCharacterFrames;
   struct NpcCharacterTraceActor { Npc* npc=nullptr;Vec3 lastRoot,lastVisual;bool hasPrevious=false; };
   std::vector<NpcCharacterTraceActor> npcCharacterTraceActors;
+  struct CharacterIdle {
+    Npc* actor=nullptr;
+    Npc* fixtureNpc=nullptr;
+    std::string site,role;
+    Vec3 initial;
+    uint64_t began=0;
+  } characterIdle;
   bool npcCharacterMeasuring=false,npcCharacterHasWall=false,npcCharacterObserving=false;
   std::chrono::steady_clock::time_point npcCharacterLastWall;
   std::string npcCharacterWindow;
@@ -4615,6 +4622,7 @@ std::string npcCharacterSample(World& world,const Npc& npc,float physicalJump,fl
   std::string row="\"tick\":"+std::to_string(world.tickCount())+",\"frame\":"+std::to_string(frame)+
     ",\"frame_dt_ms\":"+std::to_string(dt)+",\"npc_id\":"+std::to_string(world.npcId(&npc))+",\"npc\":"+jsonStr(symName(world,&npc))+
     ",\"root_cm\":"+ragdollVector(npc.position())+",\"visual_root_cm\":"+ragdollVector(npc.characterVisualPosition())+
+    ",\"root_motion_model_cm\":"+ragdollVector(npc.animMoveSpeed(dt))+
     ",\"physical_dy_cm\":"+ragdollNumber(physicalJump)+",\"visual_dy_cm\":"+ragdollNumber(visualJump)+
     ",\"yaw_deg\":"+ragdollNumber(npc.rotation())+",\"body_state\":"+std::to_string(unsigned(npc.bodyState()))+
     ",\"body_state_masked\":"+std::to_string(unsigned(npc.bodyStateMasked()))+",\"state\":"+jsonStr(stateName(world,npc))+
@@ -4717,6 +4725,87 @@ void npcCharacterPlaceHero(World& world,Npc& player,const Vec3& start,const Vec3
   player.stopWalking();player.clearAiQueue();player.setPosition(hero);player.setDirection(start-hero);player.updateTransform();
   }
 
+// Idle regressions use ordinary MoveAlgo ticks, including a real AI wait for
+// the NPC. Coordinates change only here; sampling never pins the actor in place.
+void characterIdlePrepare(World& world,Npc& player,PlayerControl& ctrl,std::string_view role,std::string_view site) {
+  if(role!="hero" && role!="npc") {arenaAbort("character idle requires hero or npc");return;}
+  Vec3 start(13881.523f,1672.283f,-15549.843f);
+  float yaw=0;
+  std::string waypoint="NW_FARM1_PATH_01";
+  if(site=="market") {
+    start=Vec3(6718.370605f,270.145355f,-6029.716797f);yaw=-89.73f;waypoint="market_void";
+    }
+  else if(site=="steeper") {
+    const auto& guild=world.script().guildVal();
+    const float maximum=std::min({32.f,float(guild.slide_angle[player.guild()])-2.f,float(guild.slide_angle[GIL_BDT])-2.f});
+    std::vector<const WayPoint*> points;
+    world.forEachWayPoint([&](const WayPoint& point) {if(!point.underWater)points.push_back(&point);});
+    std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+    bool found=false;
+    for(const auto* point:points) {
+      for(float x:{0.f,-120.f,120.f,-240.f,240.f})for(float z:{0.f,-120.f,120.f,-240.f,240.f}) {
+        if(found)continue;
+        Vec3 floor;if(!characterFloor(world,point->position()+Vec3(x,0,z),floor))continue;
+        const auto hit=world.physic()->landRay(floor+Vec3(0,20,0),50);
+        if(!hit.hasCol || hit.n.y<=0)continue;
+        const float normalAngle=std::acos(std::clamp(hit.n.y,0.f,1.f))*180.f/float(M_PI);
+        if(normalAngle<18.f || normalAngle>maximum)continue;
+        float angle=0,rough=0;Vec3 downhill;
+        if(!slopeAt(world,floor,angle,downhill,rough) || angle<18.f || angle>maximum || rough>3.f)continue;
+        Vec3 low,high;
+        if(!characterFloor(world,floor+downhill*80.f,low) || !characterFloor(world,floor-downhill*80.f,high))continue;
+        if(!characterLane(world,low,high,35.f))continue;
+        start=floor;waypoint=point->name;found=true;
+        }
+      if(found)break;
+      }
+    if(!found) {arenaAbort("character idle steeper slope lacks stock walkable geometry");return;}
+    }
+  else if(site!="gentle") {arenaAbort("unknown character idle site");return;}
+  const auto floor=world.physic()->landRay(start+Vec3(0,20,0),80);
+  if(!floor.hasCol || std::abs(floor.v.y-start.y)>20.f) {arenaAbort("character idle start has no expected floor");return;}
+  npcCharacterStopMotionTrace(&world);
+  auto& idle=bench.characterIdle;
+  bench.subject=nullptr;
+  if(idle.fixtureNpc) {world.removeNpc(*idle.fixtureNpc);idle.fixtureNpc=nullptr;}
+  idle.actor=nullptr;
+  ctrl.clearInput();bench.holds.clear();bench.taps.clear();
+  bench.characterRoute=Bench::CharacterRoute();bench.npcCharacterRoute.active=false;
+  characterFreezeNear(world,player,start,start);
+  player.setInteraction(nullptr,true);player.clearAiQueue();player.clearGoTo();player.clearSpeed();player.stopWalking();player.closeWeapon(true);
+  if(role=="npc") {
+    npcCharacterPlaceHero(world,player,start,start+Vec3(1,0,0));
+    idle.fixtureNpc=world.addNpc(world.script().findSymbolIndex("BDT_1013_BANDIT_L"),start);
+    if(!idle.fixtureNpc) {arenaAbort("character idle NPC insertion failed");return;}
+    auto& npc=*idle.fixtureNpc;
+    npc.setInteraction(nullptr,true);npc.clearAiQueue();npc.clearState(false);npc.clearGoTo();npc.clearSpeed();npc.stopWalking();npc.closeWeapon(true);
+    npc.setExternalControl(true);npc.setProcessPolicy(NpcProcessPolicy::AiNormal);npc.aiPush(AiQueue::aiWait(60000));
+    idle.actor=&npc;bench.subject=&npc;
+    }
+  else idle.actor=&player;
+  idle.actor->setPosition(start);idle.actor->setDirection(yaw);idle.actor->updateTransform();
+  idle.site=site;idle.role=role;idle.initial=idle.actor->position();idle.began=world.tickCount();
+  idle.actor->setCharacterVirtualDiagnosticsEnabled(true);
+  bench.npcCharacterTraceActors.push_back({idle.actor,idle.actor->position(),idle.actor->characterVisualPosition(),false});
+  bench.hasPrev=false;bench.cam=C_Follow;bench.camDist=350;bench.camHeight=110;bench.camAngle=110;bench.camAuto=true;
+  event("character_idle_setup","\"role\":"+jsonStr(role)+",\"site\":"+jsonStr(site)+",\"waypoint\":"+jsonStr(waypoint)+
+    ",\"root_cm\":"+ragdollVector(start)+",\"floor_cm\":"+ragdollVector(floor.v)+",\"floor_normal\":"+ragdollVector(floor.n)+
+    ",\"slope_deg\":"+ragdollNumber(std::acos(std::clamp(floor.n.y,0.f,1.f))*180.f/float(M_PI))+
+    ",\"yaw_deg\":"+ragdollNumber(yaw)+",\"hero_cm\":"+ragdollVector(player.position())+
+    ",\"hero_distance_cm\":"+ragdollNumber((player.position()-idle.actor->position()).length()));
+  }
+
+void characterIdleSnapshot(World& world,std::string_view label,bool begin=false) {
+  auto& idle=bench.characterIdle;
+  if(!idle.actor) {arenaAbort("character idle snapshot needs a prepared actor");return;}
+  if(begin) {idle.initial=idle.actor->position();idle.began=world.tickCount();}
+  const auto delta=idle.actor->position()-idle.initial;
+  event("character_idle_snapshot","\"label\":"+jsonStr(label)+",\"role\":"+jsonStr(idle.role)+",\"site\":"+jsonStr(idle.site)+
+    ",\"elapsed_ms\":"+std::to_string(world.tickCount()-idle.began)+",\"initial_root_cm\":"+ragdollVector(idle.initial)+
+    ",\"drift_cm\":"+ragdollNumber(delta.length())+",\"horizontal_drift_cm\":"+ragdollNumber(std::hypot(delta.x,delta.z))+","+
+    npcCharacterSample(world,*idle.actor,0,0,bench.step,bench.frameMs));
+  }
+
 void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
   auto& route=bench.npcCharacterRoute;
   if(route.npc) {world.removeNpc(*route.npc);route.npc=nullptr;}
@@ -4726,13 +4815,27 @@ void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
     if(!prepareCharacterRoute(world,player,"stairs_up",true,"NW_CITY_TO_FOREST_STAIRS01"))return;
     } else if(name=="doorway" || name=="tavern") {
     if(!prepareCharacterRoute(world,player,name))return;
+    } else if(name=="market_void") {
+    // The target deliberately has no floor. Drive the ordinary AI action
+    // toward it; retaining a real supported position is the expected result.
+    bench.characterRoute=Bench::CharacterRoute();
+    bench.characterRoute.start=Vec3(6718.370605f,270.145355f,-6029.716797f);
+    bench.characterRoute.goal=Vec3(6754.f,262.f,-6115.f);
+    bench.characterRoute.waypoint="market_void";
+    const auto floor=world.physic()->landRay(bench.characterRoute.start+Vec3(0,20,0),80);
+    if(!floor.hasCol || std::abs(floor.v.y-bench.characterRoute.start.y)>20.f) {
+      arenaAbort("NPC market void start has no expected floor");return;
+      }
+    characterFreezeNear(world,player,bench.characterRoute.start,bench.characterRoute.goal);
     } else {arenaAbort("unknown NPC CharacterVirtual route: "+name);return;}
   route.start=bench.characterRoute.start;route.goal=bench.characterRoute.goal;
   route.destination=WayPoint(route.goal,"FP_NPC_CHARACTER_GOAL");route.destination.groundPos=route.goal;
   npcCharacterPlaceHero(world,player,route.start,route.goal);
   route.npc=npcCharacterActor(world,route.start);if(!route.npc)return;
   route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace);
-  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  if(name=="market_void")route.npc->setDirection(-89.73f);
+  else route.npc->setDirection(route.goal-route.start);
+  route.npc->updateTransform();bench.subject=route.npc;
   if(name=="tavern") {
     // Use an actual dropped Item in the free lane beside authored furniture.
     // Remove only the general stand's temporary props so ON/OFF starts agree.
@@ -5323,6 +5426,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       ",\"fixture_max_nearby\":"+std::to_string(bench.npcCharacterCrowdMaxNearby)+",\"fixture_max_distance_cm\":"+ragdollNumber(bench.npcCharacterCrowdMaximumDistance));
     }
 #endif
+  else if(c=="character" && (a.size()==3 || a.size()==4) && a[1]=="idle" && (a[2]=="hero" || a[2]=="npc"))
+    characterIdlePrepare(w,pl,ctrl,a[2],a.size()==4?a[3]:"gentle");
+  else if(c=="character" && a.size()==3 && a[1]=="idle" && a[2]=="begin") characterIdleSnapshot(w,"begin",true);
+  else if(c=="character" && a.size()==4 && a[1]=="idle" && a[2]=="snapshot") characterIdleSnapshot(w,a[3]);
   else if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","character_virtual",a[1]=="on");
     event("character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
@@ -10153,6 +10260,8 @@ void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view 
 
 void TestBench::bodyForget(const Npc* npc) {
   if(bodyTraceAlive) {
+    if(bench.characterIdle.actor==npc)bench.characterIdle.actor=nullptr;
+    if(bench.characterIdle.fixtureNpc==npc)bench.characterIdle.fixtureNpc=nullptr;
     bench.npcCharacterGoals.erase(npc);bench.npcCharacterWalkers.erase(npc);
     std::erase_if(bench.npcCharacterTraceActors,[npc](const auto& actor){return actor.npc==npc;});
     }
