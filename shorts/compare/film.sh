@@ -15,13 +15,15 @@ OFF_ENV="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("
            "$ROOT/shorts/compare/$NAME.json" 2>/dev/null || true)"
 [[ -n "$OFF_ENV" ]] || OFF_ENV="OPENGOTHIC_FOOTIK=0 OPENGOTHIC_GAZE=0 OPENGOTHIC_LEAN=0 OPENGOTHIC_AIM=0 OPENGOTHIC_FLINCH=0
   OPENGOTHIC_ANIBLEND=0 OPENGOTHIC_LIPSYNC=0"
+# the first lines of each take's output; sed reads to the end (head would stop bench.sh by SIGPIPE, and pipefail
+# the script after the first take)
 for take in off on; do
   rm -rf "$OUT/$take"
   # the scenario's `off:` / `on:` lines run in that take only
   if [[ $take == off ]]; then
     # shellcheck disable=SC2086
-    env OPENGOTHIC_BENCH_TAKE=off $OFF_ENV "$ROOT/scripts/bench.sh" "$ROOT/shorts/compare/$NAME.bench" "$OUT/$take" | head -3
+    env OPENGOTHIC_BENCH_TAKE=off $OFF_ENV "$ROOT/scripts/bench.sh" "$ROOT/shorts/compare/$NAME.bench" "$OUT/$take" | sed -n 1,3p
   else
-    env OPENGOTHIC_BENCH_TAKE=on "$ROOT/scripts/bench.sh" "$ROOT/shorts/compare/$NAME.bench" "$OUT/$take" | head -3
+    env OPENGOTHIC_BENCH_TAKE=on "$ROOT/scripts/bench.sh" "$ROOT/shorts/compare/$NAME.bench" "$OUT/$take" | sed -n 1,3p
   fi
 done
