@@ -1024,8 +1024,22 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
             f"m5b arena preparation: {ready.status} {ready.detail}; state={current}; snapshot={failed}"
         )
     await link.debug("teleport", near=npc, distance=300)
-    # Let the hero's native landing/standing animation catch up with teleport.
-    await asyncio.sleep(1.0)
+    # Observe the native landing/get-up after teleport instead of drawing a
+    # weapon while its body state still forbids it. This stream is passive.
+    await link.body_watch(["PLAYER"], rate_hz=10)
+    try:
+        standing = await _until(
+            lambda: any(
+                row.self.body_state_base in (0, 1, 2, 3) and not row.self.in_air
+                and not row.self.down and not row.self.dead
+                for row in link.body_latest.values()
+            ),
+            10,
+        )
+        if not standing:
+            raise GameError(f"m5b arena preparation: hero not standing; body={link.body_latest}")
+    finally:
+        await link.body_watch([])
     staged = await link.snapshot(npc, fresh=True)
     if staged.player is None or staged.player.hp == 0:
         raise GameError(f"m5b arena preparation: hero did not survive placement; state={staged}")
