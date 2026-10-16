@@ -183,6 +183,7 @@ struct DynamicWorld::NpcBody {
   JPH::ShapeRefC shape;
   std::unique_ptr<CollisionWorld::VirtualCharacter> virtualCharacter;
   bool virtualDiagnosticsEnabled = false;
+  std::unique_ptr<CharacterVirtualDiagnostics::NpcMove> virtualDiagnosticMove;
   void*         userPointer = nullptr;
   float         radius      = 0.f;
   float         cylinderHeight = 0.f;
@@ -1837,12 +1838,20 @@ void DynamicWorld::NpcItem::setVirtualDiagnosticsEnabled(bool enabled) {
   if(obj==nullptr)
     return;
   obj->virtualDiagnosticsEnabled = enabled;
+  if(enabled && obj->virtualDiagnosticMove==nullptr)
+    obj->virtualDiagnosticMove = std::make_unique<CharacterVirtualDiagnostics::NpcMove>();
+  if(!enabled)
+    obj->virtualDiagnosticMove.reset();
   if(obj->virtualCharacter!=nullptr)
     obj->virtualCharacter->setDiagnosticsEnabled(enabled);
   }
 
 bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out) const {
-  return obj!=nullptr && obj->virtualCharacter!=nullptr && obj->virtualCharacter->diagnostics(out);
+  if(obj==nullptr || obj->virtualCharacter==nullptr || !obj->virtualCharacter->diagnostics(out))
+    return false;
+  if(obj->virtualDiagnosticMove!=nullptr)
+    out.npcMove = *obj->virtualDiagnosticMove;
+  return true;
   }
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
@@ -1859,10 +1868,17 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     }
 
   const auto initial = obj->pos;
+  auto* npcDiagnostic = obj->virtualDiagnosticMove.get();
+  if(npcDiagnostic!=nullptr) {
+    *npcDiagnostic = {};
+    npcDiagnostic->initial = initial;
+    npcDiagnostic->requested = displacement;
+    }
   // Every character retains its legacy ellipsoid. Movement is sequential, so
   // each sweep sees the latest position of the other characters, including the
   // hero, without applying impulses or moving a neighbour through world walls.
-  auto clipNpc = [&](const Tempest::Vec3& target, bool& clipped) {
+  auto clipNpc = [&](const Tempest::Vec3& target, bool& clipped,
+                     CharacterVirtualDiagnostics::NpcCollision* diagnosticCollision) {
     struct Obstacle {
       NpcBody* body = nullptr;
       float depth = 0;
@@ -1900,6 +1916,14 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
           result.collision.npc = obstacle.body->toNpc();
           result.collision.npcCol = depth;
           result.collision.normal = Tempest::Vec3::normalize(normal);
+          if(diagnosticCollision!=nullptr) {
+            diagnosticCollision->npc = obstacle.body->toNpc();
+            diagnosticCollision->position = obstacle.body->pos;
+            diagnosticCollision->normal = result.collision.normal;
+            diagnosticCollision->testedPosition = obj->pos;
+            diagnosticCollision->allowedDepth = obstacle.depth;
+            diagnosticCollision->rejectedDepth = depth;
+            }
           clipped = true;
           break;
           }
@@ -1915,14 +1939,22 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     return accepted;
     };
   bool requestClipped = false;
-  const auto requested = clipNpc(initial+displacement,requestClipped)-initial;
+  const auto requested = clipNpc(initial+displacement,requestClipped,
+                                 npcDiagnostic!=nullptr ? &npcDiagnostic->requestCollision : nullptr)-initial;
   auto moved = obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
   bool resolvedClipped = false;
-  clipNpc(moved.position,resolvedClipped);
+  clipNpc(moved.position,resolvedClipped,npcDiagnostic!=nullptr ? &npcDiagnostic->resolvedCollision : nullptr);
   // Jolt may have slid around a wall or stepped up: an interpolated point on
   // the chord to that endpoint is not necessarily clear of world geometry.
   // If that resolved motion hits an NPC, retain the known-safe starting feet.
   const auto accepted = resolvedClipped ? initial : moved.position;
+  if(npcDiagnostic!=nullptr) {
+    npcDiagnostic->clippedRequest = requested;
+    npcDiagnostic->nativePosition = moved.position;
+    npcDiagnostic->accepted = accepted;
+    npcDiagnostic->requestClipped = requestClipped;
+    npcDiagnostic->resolvedClipped = resolvedClipped;
+    }
   if(resolvedClipped) {
     obj->virtualCharacter->setPosition(accepted);
     const auto support = obj->virtualCharacter->move({},0,stepHeight,maxSlope,mass,culprit);
@@ -1957,6 +1989,8 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
       result.collision.normal = Tempest::Vec3::normalize(accepted-initial-horizontal);
       }
     }
+  if(npcDiagnostic!=nullptr)
+    npcDiagnostic->blocked = result.blocked;
   return result;
   }
 

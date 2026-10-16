@@ -796,6 +796,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     diagnostic->requested = displacement;
     diagnostic->stairAttempted = false;
     diagnostic->stairSucceeded = false;
+    diagnostic->stairObstacleId = uint32_t(-1);
     diagnostic->before = state.diagnosticPose();
     }
   auto inheritedGroundVelocity = character.GetGroundVelocity();
@@ -849,6 +850,8 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       JPH::BodyLockRead lock(world.system.GetBodyLockInterface(),contact.mBodyB);
       if(lock.SucceededAndIsInBroadPhase() && Impl::blocksAutomaticStairs(lock.GetBody())) {
         stairObstacle = true;
+        if(diagnostic!=nullptr)
+          diagnostic->stairObstacleId = contact.mBodyB.GetIndexAndSequenceNumber();
         break;
         }
       }
