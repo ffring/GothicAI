@@ -5131,6 +5131,17 @@ async def play_book_chain(
                         for _ in range(goal.days):
                             await link.debug("time", hour=23, minute=0)
                             await link.debug("time", hour=0, minute=0)
+                    elif goal.kind == questbook.VANILLA:
+                        target_state = questbook.VANILLA_STATES[goal.state]
+                        if not await _until_async(
+                            lambda quest=goal.quest: vars(quest),
+                            lambda v, quest=goal.quest, target=target_state: v.get(quest) == target,
+                            15,
+                        ):
+                            raise RuntimeError(
+                                f"vanilla quest {goal.quest} has not reached {goal.state}: "
+                                f"{await vars(goal.quest)}"
+                            )
                     if goal.kind not in questbook.TALKS:
                         if not await _until_async(counts, lambda value: value >= 1, 15):
                             raise RuntimeError(f"goal {gid} did not fire: {await vars(status, stage_var)}")

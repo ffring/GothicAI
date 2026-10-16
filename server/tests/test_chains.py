@@ -21,6 +21,7 @@ from tests.fake_game import FakeGame
 from tests.test_authoring import BOOK, _author, graph  # noqa: F401 - the graph fixture
 from tests.test_dialogue import _until
 from tests.test_director import HILDA, LOBART
+from tests.test_director import QUEST as VANILLA_QUEST
 from tests.test_questbook import FUNCS
 
 YARD = "FARM1_ENTRANCE"
@@ -564,6 +565,32 @@ async def test_after_blocks_the_next_offer_until_the_first_quest_succeeds(graph,
         fake.vars[first.id] = state
         give = Patches.of(chains.author.patches.ops()).nodes[f"{second.id}_GIVE"]
         assert fake.evaluate(give["condition"], HILDA) == int(state == LOG_SUCCESS)
+
+
+async def test_a_vanilla_response_opens_only_its_first_quest_and_informs_the_giver(graph):  # noqa: F811
+    async with _setup(graph, [_proposal()]) as (fake, chains, _, llm):
+        fake.vars[VANILLA_QUEST] = LOG_SUCCESS
+        requires = [{"kind": "quest", "quest": VANILLA_QUEST, "state": "success"}]
+        premise = "После уборки репы на ферме стало видно, что из сарая пропал товар."
+        made = await chains.chain(HILDA, premise=premise, requires=requires, follows=VANILLA_QUEST)
+        assert made is not None
+        first, second = made
+        assert first.requires == requires and second.requires == [] and second.after == first.id
+        for q, raw in zip(made, _proposal()["quests"], strict=True):
+            assert q.knows.startswith(raw["knows"])
+            assert graph.quests[VANILLA_QUEST].title in q.knows and premise in q.knows
+            assert VANILLA_QUEST not in q.knows
+        brief = llm.calls[0][1][0].content
+        assert "Поручение отвечает на дело «Убрать поле репы»." in brief and VANILLA_QUEST not in brief
+        nodes = Patches.of(chains.author.patches.ops()).nodes
+        assert fake.evaluate(nodes[f"{first.id}_GIVE"]["condition"], HILDA) == 1
+        fake.vars[VANILLA_QUEST] = LOG_RUNNING
+        assert fake.evaluate(nodes[f"{first.id}_GIVE"]["condition"], HILDA) == 0
+        fake.vars[first.id] = LOG_SUCCESS
+        assert fake.evaluate(nodes[f"{second.id}_GIVE"]["condition"], HILDA) == 1
+        chains.book.quests.clear()
+        chains.book._version = -1
+        assert [chains.book.all()[q.id] for q in made] == made
 
 
 async def test_only_two_failed_proposals_are_spent_and_no_cast_is_left(graph):  # noqa: F811

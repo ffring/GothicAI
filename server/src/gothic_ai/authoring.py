@@ -162,6 +162,8 @@ class Brief:
     gold: int  # the most gold
     given: list[str] = field(default_factory=list)  # titles of its quests the author made before
     premise: str = ""
+    requires: list[dict[str, Any]] = field(default_factory=list)
+    follows: str = ""  # the vanilla quest's title, in words rather than its script variable
 
     def text(self) -> str:
         out = [f"Кто просит: {self.name} ({self.npc})."]
@@ -170,6 +172,8 @@ class Brief:
         if self.home:
             out.append(f"Где живёт и работает: {self.home}.")
         out.append(f"Глава {self.chapter}.")
+        if self.follows:
+            out.append(f"Поручение отвечает на дело «{self.follows}».")
         if self.premise:
             out.append(f"Замысел режиссёра: {self.premise}")
         out.append("Вещи, одна из которых у него пропала (id — название):")
@@ -182,6 +186,15 @@ class Brief:
                 "Его поручения герою уже были, не повторяйся: " + "; ".join(f"«{t}»" for t in self.given)
             )
         return "\n".join(out)
+
+    def knowledge(self, description: str) -> str:
+        if not self.follows:
+            return description
+        return " ".join(
+            part
+            for part in (description, f"Твоё поручение связано с делом «{self.follows}».", self.premise)
+            if part
+        )
 
 
 @dataclass
@@ -312,11 +325,18 @@ class Author:
 
     # --- a quest ------------------------------------------------------------------------------
 
-    async def quest(self, npc: str, premise: str = "") -> questbook.Quest | None:
+    async def quest(
+        self,
+        npc: str,
+        premise: str = "",
+        *,
+        requires: list[dict[str, Any]] | None = None,
+        follows: str = "",
+    ) -> questbook.Quest | None:
         """A quest of the author's that `npc` gives the hero; None if the model has none that passes."""
         npc = npc.upper()
         self.model.warm()
-        brief = await self.brief(npc, premise)
+        brief = await self.brief(npc, premise, requires=requires, follows=follows)
         if brief is None:
             return None
         proposal: Proposal | None = None
@@ -340,7 +360,14 @@ class Author:
         old = [q.title for q in self.old.values() if q.npc == npc]
         return old + [q.title for q in self.book.all().values() if q.giver == npc]
 
-    async def brief(self, npc: str, premise: str = "") -> Brief | None:
+    async def brief(
+        self,
+        npc: str,
+        premise: str = "",
+        *,
+        requires: list[dict[str, Any]] | None = None,
+        follows: str = "",
+    ) -> Brief | None:
         state = await self.link.story_state(
             vars=["KAPITEL", "XP_AMBIENT"], npcs=[npc], symbols=[npc, *ITEMS], items=list(ITEMS)
         )
@@ -373,6 +400,8 @@ class Author:
             gold=xp,
             given=self.given(npc),
             premise=premise,
+            requires=requires if requires is not None else [],
+            follows=quest.title if (quest := self.graph.quests.get(follows.upper())) else "",
         )
 
     async def _spots(self, npc: str) -> tuple[str, list[Spot]]:
@@ -441,12 +470,15 @@ class Author:
             give=Talk(p.give_description, p.give_lines),
             stages=[Stage(p.journal_given, [bring])],
             done_journal=p.journal_done,
-            knows=f"У тебя пропала вещь: {thing}. Она лежит {spot.where}; ты знаешь это примерно.",
+            knows=brief.knowledge(
+                f"У тебя пропала вещь: {thing}. Она лежит {spot.where}; ты знаешь это примерно."
+            ),
             asked=f"найти твою пропавшую вещь — {thing}: она лежит {spot.where}.",
             gold=p.gold,
             xp=p.xp,
             names={brief.npc: brief.name},
             reason=p.reason,
+            requires=brief.requires,
         )
         errors = await self.book.make(q, gold=brief.gold, xp=brief.xp)
         if errors:

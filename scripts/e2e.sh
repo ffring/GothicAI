@@ -113,6 +113,15 @@
 #       chapter occasions consumed by Showrunner.run; every line is finished by play_book_chain before
 #       the next occasion, with a game day and an injected 15 min between them. All three must have a
 #       line/none outcome, at least two lines, all quests completed. SAVE=save_slot_1.sav; TIMEOUT=1200
+#   vanilla_line: LLM=fake only, stage 5 layer 3: take and finish Lobart's turnips through the scripts'
+#       own dialogs. The vanilla success occasion produces a neighbor's line with follows and a success
+#       requirement; its book offer is open, play_book_chain completes it, and save/load keeps the same
+#       line and quest fields. SAVE=save_slot_1.sav; TIMEOUT=420
+#   vanilla_line_live: LLM=chatgpt only: Showrunner.run consumes two real vanilla occasions, taking and
+#       completing Lobart's turnips. Finish the first line, if any, before the second event, then advance
+#       a game day and the budget's wall clock by 15 min. Both events need a line/none outcome, at least
+#       one line, all quests completed; givers must be peaceful and outside their follows quest's cast.
+#       Logs include each event, proposal outcome, built quests and passage. SAVE=save_slot_1.sav; TIMEOUT=1200
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

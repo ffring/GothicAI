@@ -16,7 +16,7 @@ from gothic_ai.story import StoryPatches
 from gothic_ai.validator import Patches, Rules, Story, WorldState, validate
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
-from tests.test_director import GRAPH, HILDA, NAMES, SYMBOLS
+from tests.test_director import GRAPH, HILDA, NAMES, QUEST, SYMBOLS
 
 BOOK = {
     "version": VERSION,
@@ -210,6 +210,31 @@ async def test_no_quest_from_the_plot_or_the_dead(graph):
         assert await author.quest(HILDA) is None
         assert await author.quest("NONE_100_XARDAS") is None
         assert llm.calls == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_vanilla_response_keeps_its_opening_and_the_givers_knowledge(graph):
+    fake = FakeGame(branch="A")
+    llm = FakeBackend(script=[FakeStep("", [_quest()])], delay=0)
+    link_cm, author, _ = await _author(fake, llm, graph, MemoryStore(":memory:"))
+    try:
+        fake.vars[QUEST] = 2
+        requires = [{"kind": "quest", "quest": QUEST, "state": "success"}]
+        premise = "После уборки репы Хильда хочет починить ограду, но потеряла пилу."
+        q = await author.quest(HILDA, premise, requires=requires, follows=QUEST.lower())
+        assert q is not None and q.requires == requires
+        assert "У тебя пропала вещь: Пила." in q.knows
+        assert graph.quests[QUEST].title in q.knows and premise in q.knows and QUEST not in q.knows
+        brief = llm.calls[0][1][0].content
+        assert "Поручение отвечает на дело «Убрать поле репы»." in brief and QUEST not in brief
+        give = next(op["node"] for op in _ops(fake) if op.get("node", {}).get("id") == f"{q.id}_GIVE")
+        assert fake.evaluate(give["condition"], HILDA) == 1
+        fake.vars[QUEST] = 1
+        assert fake.evaluate(give["condition"], HILDA) == 0
+        author.book.quests.clear()
+        author.book._version = -1
+        assert author.book.all()[q.id] == q
     finally:
         await link_cm.__aexit__(None, None, None)
 

@@ -232,8 +232,15 @@ class ChainAuthor:
         self.link = author.link
         self.model = ChainModel(author.model.llm)
 
-    async def brief(self, npc: str, *, premise: str = "") -> Brief | None:
-        base = await self.author.brief(npc.upper(), premise)
+    async def brief(
+        self,
+        npc: str,
+        *,
+        premise: str = "",
+        requires: list[dict[str, Any]] | None = None,
+        follows: str = "",
+    ) -> Brief | None:
+        base = await self.author.brief(npc.upper(), premise, requires=requires, follows=follows)
         places = self.author.places
         if base is None or places is None:
             return None
@@ -281,10 +288,12 @@ class ChainAuthor:
         new_people: bool = False,
         premise: str = "",
         max_people: int | None = None,
+        requires: list[dict[str, Any]] | None = None,
+        follows: str = "",
     ) -> list[questbook.Quest] | None:
         """`new_people`: the chain must bring in someone new (cast not empty), not only the people around."""
         open_ahead(self.model.llm, CACHE_KEY, keep=True)
-        brief = await self.brief(npc, premise=premise)
+        brief = await self.brief(npc, premise=premise, requires=requires, follows=follows)
         if brief is None:
             return None
         brief.new_people = new_people
@@ -476,6 +485,8 @@ class ChainAuthor:
                     "id": self.book.next_id(taken),
                     "giver": brief.base.npc,
                     "after": out[-1].id if out else "",
+                    "requires": [] if out else brief.base.requires,
+                    "knows": brief.base.knowledge(description.knows),
                     "reason": p.reason,
                     "names": {**brief.people, **{s.npc: s.name for specs in roles.values() for s in specs}},
                 }
