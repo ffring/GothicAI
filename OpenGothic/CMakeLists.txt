@@ -306,6 +306,11 @@ if(NOT ANDROID AND NOT IOS)
   add_custom_target(check-navigation-eye
     COMMAND $<TARGET_FILE:gothic-navigation-eye-contract>
     DEPENDS gothic-navigation-eye-contract USES_TERMINAL)
+  add_executable(gothic-navigation-memory-contract EXCLUDE_FROM_ALL tests/navigation_memory_contract.cpp)
+  target_link_libraries(gothic-navigation-memory-contract PRIVATE OpenGothic AiBridge)
+  add_custom_target(check-navigation-memory
+    COMMAND $<TARGET_FILE:gothic-navigation-memory-contract>
+    DEPENDS gothic-navigation-memory-contract USES_TERMINAL)
 endif()
 
 target_sources(Spacer PRIVATE ${SPACER_SOURCES} spacer/main.cpp)

@@ -44,6 +44,7 @@
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
 #include "game/navigationeyebench.h"
+#include "game/navigationmemorybench.h"
 #include "game/npckeysbench.h"
 #include "game/serialize.h"
 #include "game/ragdollsave.h"
@@ -5028,6 +5029,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     return;
   const std::string& c = a[0];
 
+  if(c=="memory") {
+    try {
+      event("memory_command","\"sample\":"+NavigationMemoryBench::command(a,w,pl,ctrl,outDir));
+    } catch(const std::exception& error) {
+      event("memory_error","\"reason\":"+jsonStr(error.what()));
+      arenaAbort(error.what());
+    }
+    return;
+  }
   if(c=="keys") {
     try {
       event("keys_command","\"sample\":"+NpcKeysBench::command(a,w,pl,ctrl,outDir));
@@ -5040,6 +5050,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   // Navigation-eye commands are independent of navigation mesh and body rays.
   if(c=="eye") {
     try {
+      if(a.size()>1 && a[1]=="setup") NavigationMemoryBench::reset(true);
       event("eye_command","\"sample\":"+NavigationEyeBench::command(a,w,pl,outDir));
     } catch(const std::exception& error) {
       event("eye_error","\"reason\":"+jsonStr(error.what()));
@@ -10064,6 +10075,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
   npcCharacterStopMotionTrace(Gothic::inst().world());
+  NavigationMemoryBench::reset();
   NavigationEyeBench::reset();
   NpcKeysBench::reset();
   NavBench::reset();
@@ -10438,6 +10450,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     return false;
   NavBench::tick(*world);
   NavigationEyeBench::tick(world->tickCount());
+  NavigationMemoryBench::tick(*world);
   NpcKeysBench::tick(*world,*player,ctrl,dt);
   arrowFields(*world);
   stickingFields(*world);
