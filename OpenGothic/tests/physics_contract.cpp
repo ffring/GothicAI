@@ -1816,9 +1816,9 @@ namespace {
     }
 
   void testCharacterVirtualSlopeRest() {
-    constexpr float radians=.01745329252f, maxSlope=45.f*radians;
+    constexpr float radians=.01745329252f, maxSlope=50.f*radians;
     constexpr float radius=25.f, padding=1.f;
-    for(unsigned planeKind:{0u,1u,2u}) for(float angle:{14.f,25.f,40.f,55.f}) {
+    for(unsigned planeKind:{0u,1u,2u}) for(float angle:{14.f,25.f,40.f,49.f,55.f}) {
       const float sine=std::sin(angle*radians), cosine=std::cos(angle*radians);
       CollisionWorld world;
       std::unique_ptr<CollisionWorld::CollisionBody> support;
@@ -1862,22 +1862,24 @@ namespace {
       auto state=walker->move({},0,50,maxSlope,80,nullptr);
       requireNear((state.position-initial).length(),0.f,.001f,"zero-dt slope refresh must preserve the analytical initial pose");
       requireNear(state.groundNormal.y,cosine,.001f,"initial slope contact must use the actual plane normal");
-      require(angle>45.f ? state.steep : state.grounded,"slope fixture must acquire its initial support without a warmup");
+      require(angle>50.f ? state.steep : state.grounded,"slope fixture must acquire its initial support without a warmup");
       Tempest::Vec3 atOneSecond;
       float firstSecond=0.f, later=0.f;
-      for(int frame=1;frame<=1000;++frame) {
-        state=walker->move({},10,50,maxSlope,80,nullptr);
-        if(frame<=100)
+      // Include the game's 33 ms acquisition step: one native-gravity solve
+      // alone exceeds 0.5 cm at 49 degrees even from an exact tangent pose.
+      for(int frame=1;frame<=300;++frame) {
+        state=walker->move({},frame%3==0 ? 34 : 33,50,maxSlope,80,nullptr);
+        if(frame<=30)
           firstSecond=std::max(firstSecond,(state.position-initial).length());
-        if(frame==100)
+        if(frame==30)
           atOneSecond=state.position;
-        if(frame>100)
+        if(frame>30)
           later=std::max(later,(state.position-atOneSecond).length());
         }
       std::printf("CharacterVirtual %s slope %.0f deg: 0-1 s %.6f cm, 1-10 s %.6f cm, final (%.6f,%.6f,%.6f) cm\n",
                   planeKind==2?"compound mesh":planeKind==1?"mesh":"box",double(angle),double(firstSecond),double(later),
                   double(state.position.x),double(state.position.y),double(state.position.z));
-      if(angle<=45.f) {
+      if(angle<=50.f) {
         require(firstSecond<=.5f,"an idle virtual human must move at most half a centimetre during the first second on a walkable slope");
         require(later<=.5f,"an idle virtual human must move at most half a centimetre from one to ten seconds on a walkable slope");
         require(state.grounded,"rest correction must preserve walkable slope support");

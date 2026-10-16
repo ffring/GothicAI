@@ -493,6 +493,42 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
                       contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
     }
 
+  JPH::Vec3 initialIdleGravity(JPH::Vec3Arg gravity) const {
+    // A tangent pose can have tiny negative distances from floating-point
+    // contact calculations. Anything beyond one percent of the solver's
+    // collision tolerance still needs the ordinary initial recovery solve.
+    const float numericalPenetration = .01f*character->GetCharacterVirtualSettings().mCollisionTolerance;
+    for(const auto& contact:character->GetActiveContacts())
+      if(!contact.mWasDiscarded && !contact.mIsSensorB && contact.mDistance < -numericalPenetration)
+        return gravity;
+
+    const auto id = character->GetGroundBodyID();
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),id);
+    if(!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsStatic())
+      return gravity;
+    const auto& body = lock.GetBody();
+    const auto subShape = character->GetGroundSubShapeID();
+    JPH::SubShapeID remainder;
+    const auto* leaf = body.GetShape()->GetLeafShape(subShape,remainder);
+    if(leaf==nullptr || (leaf->GetSubType()!=JPH::EShapeSubType::Mesh && leaf->GetSubType()!=JPH::EShapeSubType::Box))
+      return gravity;
+    // Keep the full subshape ID here: compound and decorated shapes must
+    // resolve their leaf's face in the body's world transform.
+    const auto face = body.GetWorldSpaceSurfaceNormal(subShape,character->GetGroundPosition());
+    constexpr float cosTwoDegrees = .999390827f;
+    if(character->IsSlopeTooSteep(face) || face.Dot(character->GetGroundNormal())<cosTwoDegrees)
+      return gravity;
+    for(const auto& contact:character->GetActiveContacts()) {
+      if(contact.mBodyB!=id || contact.mSubShapeIDB!=subShape || !contact.mHadCollision ||
+         contact.mWasDiscarded || contact.mIsSensorB)
+        continue;
+      // A rounded toe on a tread edge is not an already acquired plane.
+      if(face.Dot(contact.mContactNormal)>=cosTwoDegrees && face.Dot(contact.mSurfaceNormal)>=cosTwoDegrees)
+        return face*gravity.Dot(face);
+      }
+    return gravity;
+    }
+
   CharacterVirtualDiagnostics::Body diagnosticBody(JPH::BodyID id, JPH::RVec3Arg point) const {
     CharacterVirtualDiagnostics::Body result;
     result.id = id.GetIndexAndSequenceNumber();
@@ -858,15 +894,19 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     if(onGround)
       velocity += groundVelocity;
     auto gravityStep = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
-    if(displacement==Tempest::Vec3() && onGround && !state.needsInitialUpdate) {
+    if(displacement==Tempest::Vec3() && onGround) {
       // A supported idle character has static friction. Feeding vertical
       // gravity to Jolt's frictionless contact solver adds a downhill tangent
       // every frame, even on a walkable slope. Keep only pressure into the
       // support; moving platforms still carry us through groundVelocity and
       // Update applies the character's weight independently. Steep slopes and
       // requested walking/jumping retain their ordinary gravity response.
-      const auto normal = character.GetGroundNormal();
-      gravityStep = normal*gravityStep.Dot(normal);
+      if(state.needsInitialUpdate)
+        gravityStep = state.initialIdleGravity(gravityStep);
+      else {
+        const auto normal = character.GetGroundNormal();
+        gravityStep = normal*gravityStep.Dot(normal);
+        }
       }
     velocity += gravityStep;
     if(diagnostic!=nullptr)
@@ -895,8 +935,9 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
     // RefreshContacts only classifies the initial overlap. Let the first
-    // physical solve after creation/teleport recover it with native gravity;
-    // changing that solve changes the contact pose used to enter stairs.
+    // physical solve after creation/teleport recover penetration with native
+    // gravity. Only a verified nonpenetrating static plane can start at rest;
+    // edges retain the native contact pose used to enter stairs.
     // A zero-dt refresh does not complete this acquisition.
     state.needsInitialUpdate = false;
     if(diagnostic!=nullptr)
