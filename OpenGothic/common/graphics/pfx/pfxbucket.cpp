@@ -83,6 +83,13 @@ bool PfxBucket::isEmpty() const {
   return impl.size()==0;
   }
 
+void PfxBucket::invalidateDecal() {
+  if(!decl.isDecal())
+    return;
+  for(auto& dirty:forceUpdate)
+    dirty = true;
+  }
+
 size_t PfxBucket::allocBlock() {
   for(size_t i=0; i<Resources::MaxFramesInFlight; ++i)
     forceUpdate[i] = true;

@@ -150,6 +150,7 @@ class DynamicWorld final {
           }
 
         void setObjMatrix(const Tempest::Matrix4x4& m);
+        void setAttachmentMatrix(const Tempest::Matrix4x4& m);
         void setItem(::Item* it);
         void setInteractive(Interactive* it);
         void setPayloadPtr(void* ptr);
@@ -315,6 +316,9 @@ class DynamicWorld final {
                                  float massMultiplier, bool blocksWalking, std::string_view className = {},
                                  bool legacyCollision = true, uint32_t zenId = uint32_t(-1));
     void           setMovableVobsEnabled(bool enabled);
+    // Called after the complete authored vob tree has installed its collisions.
+    void           finalizeMovableVobs();
+    double         movableVobValidationMilliseconds() const;
     bool           movableVobsEnabled() const;
     void           setPhysicsNoiseEnabled(bool enabled);
     bool           physicsNoiseEnabled() const;
@@ -345,6 +349,7 @@ class DynamicWorld final {
     // Diagnostic: what each movable hull touches or penetrates at its origin pose.
     struct MovableVobContact {
       std::string   other;      // visual of the other body, "landscape" for the world mesh
+      uint32_t      otherZenId = uint32_t(-1);
       int           category = 0;
       bool          interactive = false;
       bool          below = false; // contacts under the hull: its support
@@ -360,6 +365,8 @@ class DynamicWorld final {
     struct MovableVobContacts {
       uint32_t      zenId = uint32_t(-1);
       std::string   visual, className;
+      std::string   disposition;
+      bool          enabled = false;
       float         mass = 0;
       Tempest::Vec3 position, hullMin, hullMax; // world centimetres
       std::vector<MovableVobContact> contacts;
@@ -413,6 +420,7 @@ class DynamicWorld final {
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const;
     bool           hasCollision(const NpcItem &it, CollisionTest& out);
     void           rebuildMovableVob(BodyData& body);
+    void           validateMovableVobs();
     void           syncMovableVob(BodyData& body);
 
     std::unique_ptr<CollisionWorld>    world;

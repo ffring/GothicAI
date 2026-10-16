@@ -21,6 +21,7 @@ class ObjVisual {
     void setVisual(const zenkit::IItem& visual, World& world, bool staticDraw);
     void setVisual(const zenkit::VirtualObject& visual, World& world, bool staticDraw, bool enablePhysics = true);
     void setObjMatrix(const Tempest::Matrix4x4& obj);
+    bool renderPosition(Tempest::Vec3& out) const;
 
     void setSlotItem(MeshObjects::Mesh&& itm, std::string_view slot);
 

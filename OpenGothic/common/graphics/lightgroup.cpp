@@ -49,6 +49,13 @@ void LightGroup::Light::setPosition(const Vec3& p) {
   owner->markAsDurty(id);
   }
 
+bool LightGroup::Light::renderPosition(Vec3& out) const {
+  if(owner==nullptr)
+    return false;
+  out = owner->lightSourceData[id].pos;
+  return true;
+  }
+
 void LightGroup::Light::setEnabled(bool e) {
   if(owner==nullptr)
     return;
