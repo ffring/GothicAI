@@ -65,6 +65,8 @@ def functional(directory):
         row['distance_cm'] > row['raw_radius_cm'] for row in far_samples) and table_end['far']['heard'] == 0
     pushes = [row for row in rows if row['kind'] == 'physics_noise_push' and row['phase'] == 'table']
     checks['silent_native_push'] = len(pushes) == 1 and pushes[0]['affected'] > 0 and pushes[0]['reaction_affected'] > 0 and pushes[0]['spell'] is False
+    maximum_table_tilt = checkpoints['table']['table_maximum_tilt_deg']
+    checks['table_maximum_tilt_above_45_deg_within_2s'] = math.isfinite(maximum_table_tilt) and maximum_table_tilt > 45
 
     cup_impacts = [row for row in impacts if row['phase'] == 'cup' and 'BEER' in row['what'].upper()]
     cup_end = roles(checkpoints['cup'])
@@ -110,7 +112,7 @@ def functional(directory):
             'turn_first_under_30_deg_ms': min((row['elapsed_ms'] for row in turns), default=None),
             'turn_best_deg_within_2s': min((row['facing_error_deg'] for row in rows if row['kind'] == 'physics_noise_turn'), default=None),
             'table_tilt_deg': table_tilt, 'table_listeners': table_end,
-            'table_maximum_tilt_deg_within_2s': checkpoints['table']['table_maximum_tilt_deg'],
+            'table_maximum_tilt_deg_within_2s': maximum_table_tilt,
             'wall_acoustic_examples': blocked[:2], 'volume_examples': examples,
             'native_impact_events': len(impacts), 'audio_allocated_events': sum(row['played'] for row in impacts),
             'minimum_body_interval_ms': min(intervals, default=None),

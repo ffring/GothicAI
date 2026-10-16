@@ -34,8 +34,8 @@ log = logging.getLogger(__name__)
 
 ID = re.compile(r"DIR_NPC_[A-Z0-9_]+")
 # nameless npc's of the scripts, of the kinds a stranger may be; what the scripts tie to them stays theirs
-TEMPLATES = re.compile(r"BAU_\d+_BAUER|VLK_\d+_BUERGER(IN)?|SLD_\d+_SOELDNER")
-GUILDS = frozenset({"GIL_BAU", "GIL_VLK", "GIL_OUT", "GIL_SLD"})
+TEMPLATES = re.compile(r"BAU_\d+_BAUER|VLK_\d+_BUERGER(IN)?|SLD_\d+_SOELDNER|BDT_\d+_BANDIT_[LMH]")
+GUILDS = frozenset({"GIL_BAU", "GIL_VLK", "GIL_OUT", "GIL_SLD", "GIL_BDT"})
 # the scripts' heads and faces that are nobody's: no face of a person the hero knows
 MALE_HEADS = ("BALD", "FATBALD", "FIGHTER", "THIEF", "PONY", "PSIONIC")
 HEADS = {
@@ -62,7 +62,9 @@ FEMALE_FACES = frozenset(
 )
 SKINS = frozenset({"BODYTEX_N", "BODYTEX_L", "BODYTEX_B", "BODYTEX_P"})
 ARMORS = {
-    "MALE": frozenset(f"ITAR_{a}" for a in ("BAU_L", "BAU_M", "VLK_L", "VLK_M", "VLK_H", "SLD_L")),
+    "MALE": frozenset(
+        f"ITAR_{a}" for a in ("BAU_L", "BAU_M", "VLK_L", "VLK_M", "VLK_H", "SLD_L", "BDT_M")
+    ),
     "FEMALE": frozenset(
         f"ITAR_{a}BABE_{s}" for a, s in (("BAU", "L"), ("BAU", "M"), ("VLK", "L"), ("VLK", "M"), ("VLK", "H"))
     ),
@@ -197,7 +199,9 @@ def problems(spec: NpcSpec, symbols: Mapping[str, str], taken: Collection[str]) 
     if spec.npc in taken:
         out.append(f"персонаж {spec.npc} уже есть")
     if not TEMPLATES.fullmatch(spec.like):
-        out.append(f"шаблон — безымянный крестьянин, горожанин или наёмник скриптов, а не {spec.like}")
+        out.append(
+            f"шаблон — безымянный крестьянин, горожанин, наёмник или бандит скриптов, а не {spec.like}"
+        )
     else:
         kind(spec.like, "npc", "NPC")
     if not spec.name.strip() or len(spec.name) > NAME_MAX:

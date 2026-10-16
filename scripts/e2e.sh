@@ -83,6 +83,12 @@
 #       and reducing the reward; a save and a load keep it, the hero brings the broom to Lobart, who takes it
 #       and pays; the book follows the quest to success and Lobart knows he paid. On a save:
 #       SAVE=save_slot_1.sav; LLM=fake
+#   chain: Garet's linked quests (docs/director.md, stage 3, layer 4): its model proposes the cast and two
+#       quests together (scripted: stolen merchandise held by a thief, then three bandits in a camp; the
+#       first proposal's farmyard camp is refused). The book introduces the chain atomically; a general
+#       player follows its goals, checks the next quest stays locked until turn-in, saves and loads after
+#       the first bandit's death, finishes both quests, and checks Garet knows. LLM=chatgpt uses the same
+#       player for the model's own chain. On a save: SAVE=save_slot_1.sav
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)

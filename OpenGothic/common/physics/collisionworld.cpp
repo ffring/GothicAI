@@ -596,6 +596,14 @@ Tempest::Vec3 CollisionWorld::CollisionBody::velocity() const {
   return toCentimeters(lock.GetBody().GetLinearVelocity());
   }
 
+Tempest::Vec3 CollisionWorld::CollisionBody::angularVelocity() const {
+  if(owner==nullptr || id.IsInvalid()) return {};
+  JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);
+  if(!lock.Succeeded() || !lock.GetBody().IsDynamic()) return {};
+  const auto velocity=lock.GetBody().GetAngularVelocity();
+  return {velocity.GetX(),velocity.GetY(),velocity.GetZ()};
+  }
+
 bool CollisionWorld::CollisionBody::isSleeping() const {
   if(owner==nullptr || id.IsInvalid()) return true;
   JPH::BodyLockRead lock(owner->impl->system.GetBodyLockInterface(),id);

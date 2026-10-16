@@ -156,6 +156,7 @@ class DynamicWorld final {
         bool isEmpty() const { return obj==nullptr; }
         float mass() const; // kilograms; zero for empty/static/kinematic handles
         Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
+        Tempest::Vec3 angularVelocity() const; // world radians/second; zero without dynamics
         bool isSleeping() const;
         // World-space newton seconds (kg * metres/second), with native wake.
         bool addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);

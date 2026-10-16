@@ -50,6 +50,7 @@ class CollisionWorld final {
         void                getAabb(JPH::Vec3& min, JPH::Vec3& max) const;
         float               mass() const; // kilograms; zero for non-dynamic bodies
         Tempest::Vec3        velocity() const; // centimetres/second
+        Tempest::Vec3        angularVelocity() const; // world radians/second
         bool                isSleeping() const;
         // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
         bool                addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr,

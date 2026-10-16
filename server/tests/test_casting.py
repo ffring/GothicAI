@@ -129,3 +129,114 @@ async def test_the_director_brings_in_a_character_who_gives_a_quest(graph):  # n
         assert "Его характер (написан ему самому): Ты — Гарет" in quests.calls[0][1][0].content
         give = next(op["node"] for m in fake.graph for op in m["ops"] if op.get("op") == "add_node")
         assert give["npc"] == "DIR_NPC_1" and give["id"] == "DIR_Q1_GIVE"
+
+
+BANDIT = "BDT_1013_BANDIT_L"
+
+
+def _bandit_world(fake: FakeGame) -> None:
+    fake.npc_states = {HILDA: {"state": "alive", "name": "Хильда"}}
+    fake.people = [
+        {"npc": TOWNSMAN, "name": "Горожанин", "routine": []},
+        {"npc": BANDIT, "name": "Бандит", "routine": []},
+        {"npc": "BDT_1000_BANDIT_L", "name": "Браго", "routine": []},
+    ]
+    fake.symbols = {
+        TOWNSMAN: "npc",
+        BANDIT: "npc",
+        "GIL_BDT": "const",
+        "GIL_VLK": "const",
+        "ITAR_BDT_M": "item",
+        "ITAR_VLK_L": "item",
+        "ITFO_CHEESE": "item",
+        "ITMI_GOLD": "item",
+        "ITMI_SAW": "item",
+        "FACE_N_NORMAL01": "const",
+        "FACE_N_NORMAL02": "const",
+        "FACE_L_NORMALBART01": "const",
+        "ZS_STAND_GUARDING": "func",
+        "ZS_STAND_ARMSCROSSED": "func",
+        "ZS_STAND_WP": "func",
+    }
+
+
+async def test_a_named_bandit_keeps_the_authors_role_and_carried_goods():
+    fake = FakeGame(branch="A")
+    _bandit_world(fake)
+    llm = FakeBackend(
+        script=[
+            FakeStep("", [_character()]),
+            FakeStep("", [_character(kind="bandit", armor="ITAR_BDT_M", name="Рутгер")]),
+        ],
+        delay=0,
+    )
+    store = MemoryStore(":memory:")
+    async with connected(fake) as link:
+        patches = StoryPatches(link, store)
+        chronicle = Chronicle(link, store)
+        cast = Cast(link, patches, chronicle)
+        casting = Casting(link, cast, llm, PlaceBook(BOOK), chronicle)
+        await _until(lambda: patches.branch is not None and chronicle.branch is not None)
+        spec = await casting.character(
+            "FARM1_ENTRANCE", kind="bandit", about="Вор, укравший товар торговца.", carries=["ITMI_SAW"]
+        )
+        assert spec is not None and spec.like == BANDIT and spec.name == "Рутгер"
+        assert (spec.guild, spec.look.armor) == ("GIL_BDT", "ITAR_BDT_M")
+        assert {t.item: t.count for t in spec.items}["ITMI_SAW"] == 1
+        assert "kind — bandit; about — Вор, укравший товар торговца." in llm.calls[0][1][0].content
+        assert "ITMI_SAW" in llm.calls[0][1][0].content
+        assert "вид задан автором: bandit" in llm.calls[1][1][-1].content
+
+
+async def test_a_bandit_group_uses_distinct_points_of_one_place_without_a_model():
+    fake = FakeGame(branch="A")
+    _bandit_world(fake)
+    llm = FakeBackend(script=[], delay=0)
+    store = MemoryStore(":memory:")
+    async with connected(fake) as link:
+        patches = StoryPatches(link, store)
+        chronicle = Chronicle(link, store)
+        cast = Cast(link, patches, chronicle)
+        places = PlaceBook(BOOK)
+        casting = Casting(link, cast, llm, places, chronicle)
+        await _until(lambda: patches.branch is not None and chronicle.branch is not None)
+        group, errors = await casting.bandits("FARM1_FIELD", 2, ["ITMI_SAW"])
+        assert errors == [] and len(group) == 2 and llm.calls == []
+        assert len({s.at for s in group}) == 2
+        assert {s.name for s in group} == {"Бандит"} and {s.like for s in group} == {BANDIT}
+        for spec in group:
+            assert places.of(spec.at).id == "FARM1_FIELD"
+            assert {r.waypoint for r in spec.routine} == {spec.at}
+            assert [(r.start, r.end) for r in spec.routine] == [("06:00", "21:00"), ("21:00", "06:00")]
+            assert [i.item for i in spec.items] == ["ITMI_SAW"]
+            assert cast.person(spec.npc) is None
+        assert len(cast.characters()) == 2
+        assert (await casting.bandits("FARM1_FIELD", 3))[0] == []
+        assert len(cast.characters()) == 2
+
+
+async def test_a_bandit_group_returns_already_introduced_characters_on_refusal(monkeypatch):
+    fake = FakeGame(branch="A")
+    _bandit_world(fake)
+    store = MemoryStore(":memory:")
+    async with connected(fake) as link:
+        patches = StoryPatches(link, store)
+        chronicle = Chronicle(link, store)
+        cast = Cast(link, patches, chronicle)
+        casting = Casting(link, cast, FakeBackend(script=[], delay=0), PlaceBook(BOOK), chronicle)
+        await _until(lambda: patches.branch is not None and chronicle.branch is not None)
+        introduce = cast.introduce
+
+        async def first_only(spec, person=None):
+            if cast.characters():
+                return None, ["игра не сделала второго бандита"]
+            return await introduce(spec, person)
+
+        monkeypatch.setattr(cast, "introduce", first_only)
+        group, errors = await casting.bandits("FARM1_FIELD", 2)
+        assert len(group) == 1 and errors == ["игра не сделала второго бандита"]
+        assert [c.npc for c in cast.characters()] == [group[0].npc]
+        monkeypatch.setattr(cast, "introduce", introduce)
+        rest, errors = await casting.bandits("FARM1_FIELD", 1, occupied_points=[group[0].at])
+        assert errors == [] and len(rest) == 1 and rest[0].at != group[0].at
+        assert len(cast.characters()) == 2
