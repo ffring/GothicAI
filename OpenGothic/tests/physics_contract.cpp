@@ -103,7 +103,8 @@ namespace {
     mesh.vertices={{-2000,0,-2000},{-2000,0,2000},{2000,0,2000},{2000,0,-2000}};
     mesh.materials.resize(1);
     mesh.materials[0].group=zenkit::MaterialGroup::STONE;
-    mesh.polygons.vertex_indices={0,1,2,0,2,3};
+    // Gothic source faces are reversed by PhysicVbo::addIndex.
+    mesh.polygons.vertex_indices={0,2,1,0,3,2};
     mesh.polygons.material_indices={0,0};
     return mesh;
     }
@@ -184,11 +185,14 @@ namespace {
     Resources resources;
     // NW_CITY_TABLE_PEASANT_01's source bounds are 200 x 90 x 120 cm.
     const Tempest::Vec3 dimensions(200,90,120);
-    constexpr float tableMass=51.82f;
+    constexpr float tableMass=51.81584f;
     const float multiplier=tableMass/(2.f*.9f*1.2f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD));
     ProtoMesh proto(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"CONTRACT_TABLE.MRM");
     const auto origin=at(0,45,0);
     DynamicWorld world(nullptr,movableFloor());
+    const auto floor=world.landRay({0,100,0},200.f);
+    require(floor.hasCol && floor.n.y>.99f,"table fixture must have an upward-facing static floor");
+    requireNear(floor.v.y,0.f,.001f,"table fixture's bottom face must start on the floor");
     auto table=world.addMovableVob(proto,"CONTRACT_TABLE.MRM",origin,multiplier,true,"table",true,45);
     require(!table.isEmpty(),"table couple fixture must use a native movable vob on a static floor");
     requireNear(table.mass(),tableMass,.001f,"table fixture must retain the tavern table's mass");

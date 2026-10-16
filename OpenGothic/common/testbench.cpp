@@ -616,7 +616,7 @@ struct Bench {
   std::vector<LivingPhysics> movablePhysics;
   struct NoiseListener { Npc* npc=nullptr; std::string role; Vec3 initial; unsigned heard=0; };
   std::vector<NoiseListener> noiseListeners;
-  bool noiseTrace=false,noiseHasPushed=false;
+  bool noiseTrace=false,noiseHasPushed=false,noiseTipNegative=false;
   std::string noisePhase;
   uint64_t noiseStart=0;
   Vec3 noiseSource;
@@ -2832,9 +2832,27 @@ void noiseRetireListeners() {
   bench.noiseListeners.clear();
   }
 
-void prepareNoiseFixture(World& world,Npc& player) {
+void prepareNoiseFixture(World& world,Npc& player,bool tipping=false) {
   if(!bench.movableReady)prepareMovableFixture(world,player);
   if(!bench.movableReady)return;
+  bench.noiseTipNegative=tipping;
+  if(tipping) {
+    // The nearest table is wedged between the counter and pub frame; the two
+    // eastern tables have fixed candles. The southern map table has only the
+    // frame beside its local +Z edge. Tip towards its free -Z side.
+    uintptr_t tableId=0;
+    Vec3 tableCenter;
+    float southernmost=std::numeric_limits<float>::infinity();
+    for(const auto& body:world.physic()->movableVobSnapshot()) {
+      if(body.className!="table" || !body.enabled || !bench.movableMapIds.contains(body.id))continue;
+      const auto* mesh=Resources::loadMesh(body.visual);if(!mesh)continue;
+      const auto* bounds=mesh->bbox();
+      auto center=(bounds[0]+bounds[1])*.5f;body.transform.project(center);
+      if(center.z<southernmost) {southernmost=center.z;tableId=body.id;tableCenter=center;}
+      }
+    if(!tableId) {arenaAbort("noise fixture lacks its southern tavern table");return;}
+    bench.movableTable=tableId;bench.movableCenter=tableCenter;
+    }
   for(uint32_t i=0;i<world.npcCount();++i)
     if(auto* npc=world.npcById(i);npc && npc!=&player && (npc->position()-bench.movableCenter).length()<1400.f) {
       npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
@@ -2854,8 +2872,8 @@ void noisePushTable(World& world,Npc* culprit=nullptr) {
     // Push across the narrower tabletop edge so the native hull rotates,
     // rather than receiving another centre-of-mass translation.
     const bool narrowX=bounds[1].x-bounds[0].x<bounds[1].z-bounds[0].z;
-    if(narrowX)point.x=bounds[1].x;
-    else point.z=bounds[1].z;
+    if(narrowX)point.x=bounds[bench.noiseTipNegative?0:1].x;
+    else point.z=bounds[bench.noiseTipNegative?0:1].z;
     body.transform.project(point);
     auto direction=point-center;direction.y=0;
     direction=Vec3::normalize(direction);
@@ -3781,7 +3799,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Gothic::settingsSetI("GAME","physics_noise",a[1]=="on");
     w.physic()->setPhysicsNoiseEnabled(a[1]=="on");
     }
-  else if(c=="noise" && a.size()==2 && a[1]=="setup") prepareNoiseFixture(w,pl);
+  else if(c=="noise" && a.size()==2 && a[1]=="setup") prepareNoiseFixture(w,pl,true);
   else if(c=="noise" && a.size()==2 && a[1]=="table") noiseTableCase(w,pl);
   else if(c=="noise" && a.size()==2 && a[1]=="listeners") noiseTableCase(w,pl,false);
   else if(c=="noise" && a.size()==2 && a[1]=="push") noisePushTable(w);
