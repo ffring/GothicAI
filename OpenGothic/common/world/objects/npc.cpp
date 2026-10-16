@@ -1333,6 +1333,10 @@ World& Npc::world() {
   return owner;
   }
 
+const World& Npc::world() const {
+  return owner;
+  }
+
 Vec3 Npc::position() const {
   return {x,y,z};
   }
@@ -1728,6 +1732,23 @@ const Animation::Sequence* Npc::setAnimAngGet(Anim a, uint8_t comb) {
   const auto before = trace ? combatPoseIdentity() : std::string();
   auto st  = weaponState();
   auto wlk = walkMode();
+  if(isPlayer() && (st==WeaponState::Bow || st==WeaponState::CBow) && !hasManualAim()) {
+    const auto bs = bodyStateMasked() & BS_MAX;
+    if(bs!=BS_AIMNEAR && bs!=BS_AIMFAR) {
+      Tempest::Vec3 dir = {};
+      switch(a) {
+        case Anim::Move:     dir = { 0,0, 1}; break;
+        case Anim::MoveBack: dir = { 0,0,-1}; break;
+        case Anim::MoveL:    dir = {-1,0, 0}; break;
+        case Anim::MoveR:    dir = { 1,0, 0}; break;
+        default: break;
+        }
+      // Input is processed after movement: prevent it from restarting the carried-weapon walk
+      // at the edge every frame. A drawn aim keeps its own animation.
+      if(isEdgeMoveBlocked(dir))
+        a = Anim::Idle;
+      }
+    }
   const auto result = visual.startAnimAndGet(*this,a,comb,st,wlk);
   if(trace)
     traceCombatAttempt(a,result!=nullptr,before,"set_anim");
@@ -6340,6 +6361,91 @@ bool Npc::canSeeNpc(const Npc &oth, bool freeLos) const {
   return false;
   }
 
+Vec3 Npc::aimDirection(const Vec3& target) const {
+  const float a = rotationRad();
+  const Vec3 f(std::cos(a),0,std::sin(a));
+  float shoulder = 145.f;
+  if(const auto sk = visual.visualSkeleton()) {
+    const size_t sh = sk->findNode("BIP01 R UPPERARM");
+    if(sh<sk->tr.size())
+      shoulder = sk->tr[sh].at(3,1);
+    }
+  Vec3 from = position()+Vec3(0,shoulder,0)+f*35.f;
+  if(hasManualAim()) {
+    Vec3 point,dir;
+    if(arrowRay(point,dir) && (target-point).length()>150.f)
+      from = point;
+    return target-from;
+    }
+  if(weaponState()==WeaponState::Bow || weaponState()==WeaponState::CBow)
+    return World::bulletVelocity(from,target);
+  return target-from;
+  }
+
+Vec3 Npc::aimLookAt(const Vec3& target) const {
+  const float a = rotationRad();
+  const Vec3 facing(std::cos(a),0,std::sin(a));
+  // Follow the hero's physical shoulder as the original aim camera did, without the
+  // camera's extra forward displacement. Read the last applied pose, not the hand.
+  const Vec3 shift = aimLeanShift();
+  const Vec3 offset = facing*std::max(Vec3::dotProduct(shift,facing),0.f) + Vec3(0,std::min(shift.y,0.f),0);
+  // A crosshair on the nearby roof edge still looks down from this elevated origin;
+  // the directional clearance rays continue past the hit to find a pose over the edge.
+  const Vec3 direction = target-(Camera::aimShoulder(position(),facing)+offset);
+  return direction.length()>1e-3f ? Vec3::normalize(direction) : facing;
+  }
+
+Vec3 Npc::aimLeanDirection(const Vec3& target) const {
+  if(hasManualAim())
+    return aimLookAt(target);
+  return target-position();
+  }
+
+Vec3 Npc::aimHead(const Vec3& target, float angle) const {
+  const float a = rotationRad();
+  const Vec3 f = {std::cos(a),0,std::sin(a)};
+  return visual.pose().aimIk().headAt(position(),f,aimLeanDirection(target),angle);
+  }
+
+Vec3 Npc::aimCurrentHead() const {
+  const auto& mt = visual.transform();
+  const auto& aim = visual.pose().aimIk();
+  return aim.headAt(Vec3(mt.at(3,0),mt.at(3,1),mt.at(3,2)),
+                    Vec3(mt.at(2,0),0,mt.at(2,2)),aim.appliedDirection(),aim.appliedLean());
+  }
+
+Vec3 Npc::aimLeanShift() const {
+  const auto& mt = visual.transform();
+  const auto& aim = visual.pose().aimIk();
+  const Vec3 origin(mt.at(3,0),mt.at(3,1),mt.at(3,2));
+  const Vec3 facing(mt.at(2,0),0,mt.at(2,2));
+  return aim.headAt(origin,facing,aim.appliedDirection(),aim.appliedLean())-
+         aim.headAt(origin,facing,aim.appliedDirection(),0.f);
+  }
+
+Vec3 Npc::aimArrow(const Vec3& target, float angle) const {
+  const float a = rotationRad();
+  const Vec3 f(std::cos(a),0,std::sin(a));
+  return visual.pose().aimIk().arrowAt(position(),f,aimLeanDirection(target),angle);
+  }
+
+Aim::LeanEdge Npc::aimEdge(const Vec3& direction, float range) const {
+  const auto edge = mvAlgo.edgeAhead(direction,range);
+  return {edge.found,edge.distance,edge.drop,edge.supportY};
+  }
+
+Aim::LeanResult Npc::aimLean(const Vec3& target, bool manual) const {
+  if(!manual) {
+    const auto d = aimDirection(target);
+    Aim::LeanResult result;
+    result.angle = Aim::leanForNpc(-std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z)));
+    return result;
+    }
+  const auto look = aimLookAt(target);
+  const float down = -std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z));
+  return visual.pose().aimIk().leanNeeded(*this,look,look,down,aimEdge(look));
+  }
+
 bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   const auto ws = weaponState();
   if(!Aim::isEnabled() || (ws!=WeaponState::Bow && ws!=WeaponState::CBow && ws!=WeaponState::Mage))
@@ -6348,14 +6454,15 @@ bool Npc::canSeeNpcOverEdge(const Npc& oth) const {
   const Vec3  tg   = oth.physic.center();
   const Vec3  d    = tg - head;
   const float h    = std::sqrt(d.x*d.x+d.z*d.z);
-  const float lean = Aim::leanFor(-std::atan2(d.y,h));
+  const float lean = Aim::leanForNpc(-std::atan2(d.y,h));
   if(lean<=0.f)
     return false;
-  // toward it, straight down where the body faces (as the aim leans)
+  // Classic focus keeps its original angular rule and head estimate.
+  static constexpr float reach = 58.f, drop = 28.f;
   const float a   = rotationRad();
   const Vec3  dir = Vec3::normalize(Vec3(d.x,0,d.z)*(1.f/std::max(h,1.f)) + Vec3(std::cos(a),0,std::sin(a))*0.25f);
-  const float k   = lean/(Aim::LeanMax*float(M_PI)/180.f);
-  const Vec3  eye = head + dir*(Aim::LeanReach*k) - Vec3(0,Aim::LeanDrop*k,0);
+  const float k   = lean/(Aim::NpcLeanMax*float(M_PI)/180.f);
+  const Vec3  eye = head + dir*(reach*k) - Vec3(0,drop*k,0);
   if(owner.physic()->ray(head,eye).hasCol)
     return false; // no room to lean
   return canRayHitPoint(eye,tg,180.f) || canRayHitPoint(eye,oth.visual.mapHeadBone(),180.f);

@@ -15,6 +15,7 @@ import './fonts';
 import {Captions} from './parts/Captions';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {DiceChart} from './parts/DiceChart';
+import {Sight} from './parts/Sight';
 import {Tags} from './parts/Tags';
 import {Hook, Texts} from './parts/Texts';
 import type {Beat, Plan} from './schema';
@@ -130,6 +131,7 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
   return (
     <AbsoluteFill style={{background: '#000', overflow: 'hidden'}}>
       {body}
+      <Sight strokes={beat.strokes} fans={beat.fans} />
       <Tags tags={beat.tags} />
       <Texts texts={beat.texts} />
     </AbsoluteFill>

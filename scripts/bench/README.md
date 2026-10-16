@@ -39,6 +39,8 @@ aim off; a crossbow; a slope; down from three ledges near Xardas' tower, 17, 36 
 from a ship's deck at 70 and 80 degrees; a fire bolt; three shots in a row; last a sheep right at the
 foot of a gallery's wall in Xardas' tower, 78 degrees down: hidden from the head, so without the aim no
 focus; with it the hero leans over the edge, the focus takes it, the arrow kills it).
+Manual bow pole: `bow-pole` (30 cm from Lobart's roof edge, a wolf ~85 degrees below; two shots
+and reloads from the bow side, one from the drawing side, then a slowed bow-side take).
 Flinch: `flinch` (a frozen bandit: blows only to the flinch from the front, behind, both sides, to the
 head, off the middle, a weak one, three in a row, the same with the flinch off; an arrow in his back;
 the hero's fist from the front, behind and the side as the game deals it, with its stumble; his sword
@@ -236,6 +238,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `wheel <delta>` | the mouse wheel as the window gets it (-1 down, 1 up): aiming a bow by hand, down cants it for a quick shot, up straightens it |
 | `cam auto [dist] [height]` | follow the player from the side that sees the feet; switches sides if the feet stay hidden |
 | `cam follow <dist> <height> <angle>` | follow, `angle` from the facing: 0 in front, 90 on the left |
+| `cam lift on\|off` | `follow` and `world` keep the camera above the ground under it (on, the default); off: where it is put, so a floor above it (a gallery, a hall's ceiling) does not lift it there |
 | `cam front <dist> <height>`, `cam world <dist> <height> <yaw>`, `cam fixed`, `cam hold`, `cam look <height>`, `cam game` | `fixed` stays where it is and turns after the player; `hold` keeps the frame as it is (a scene the player may fall out of); `game` is the game's camera as the player has it, without the clip of `view clean` |
 | `cam arrow [dist 600] [height 40] [side 1\|-1] [ahead 80]` | from the side of the newest arrow's way (`overlay trail` records it), `ahead` cm in front of it, kept 1.2 m over the ground; from the hero until an arrow flies. The arrow's drop reads only from the side |
 | `slowmo <k>` | the game runs k times slower than the video (1: normal, up to 20): a smaller game step per recorded frame. The game's sound is recorded as silence while slowed, so it stays in step with the picture |
@@ -303,8 +306,11 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 | `pin <npc\|nearest> <dist> <angle> <height>`, `pin off` | the npc hangs there from the hero, `height` above the hero's feet, every frame: a target above or below |
 | `anims` | what the watched one (or the hero) plays, its body state, weapon and target |
 | `cansee <npc>` | can the hero see it: from the head, leaning over an edge (the aim's lean); what the rays hit; the bow's focus range |
+| `sight <npc\|off> [fan cm]` | each recorded frame and `shot`, the hero's lines of sight to it on the picture: `events.jsonl` kind `sight` (`shot` names the still), points `[x, y]` in pixels of the frame (null behind the camera): `h0` the head when `sight` was given (upright) and `c0` where its ray to the npc's centre hits (null: nothing; `c0d` cm of `d0`); `e` the head leaned over an edge as the focus puts it (`room`), `ec` where its ray hits; `h` the head now, `c` where its ray hits (`cd` of `d`, `down` degrees); `t` the npc's centre; the bow's focus fan from `h0`: `f` level, `g` at `FOCUS_RANGED`'s `elevdo` down (`elev`), `fan` cm long; `seen`, `over`: the focus sees it from the head, over the edge. For lines drawn over a cut |
+| `views <npc> [count] [max dist] [from <min dist>] [shoot <prefix>]` | where a camera sees the hero (head and chest: a wall's top may hide the legs) and the npc in one frame from open air (nothing within 40 cm, a clear line to the hero's head): `cam follow` spots with the `cam look` halfway between them, the nearest of each side (`from`: no nearer, for a wide shot); `shoot`: a shot from each (`<prefix><dist>_<height>_<angle>`) goes into the scenario right after it, with `cam lift off` |
 | `hp <npc> [full]` | hit points of the 3 nearest npcs of that script symbol and how far they are (did the arrow hit); `full`: the nearest gets them all back first |
 | `walls [count]` | spots at the edge of a wall (from a waypoint walking to where the ground falls away) with its foot 2.5..10 m below, 1 m out, hidden from the head and seen leaning over: the waypoint and the yaw for `goto`, `edge` |
+| `perches [radius 3000] [count 15] [min drop 250] [max drop 1000]` | like `walls` on any top around the hero, waypoint or not (a roof, a rock, a wall's top): a grid of the highest surfaces you can stand on (slope up to 35 degrees, 1.9 m free above) at an edge with the foot 1 m out hidden from the head, seen leaning over, the sky above it; one a 2 m cell, the nearest first, as `goto pos <x y z>`, `face <yaw>` |
 | `npcgo <npc\|nearest> <waypoint> [walk\|run]` | the npc goes there by the AI path, running by default (`freeze` it first so its routine does not take it back) |
 | `lookat <npc\|nearest> <npc\|player\|off>` | as the script `AI_LookAtNpc` / `AI_StopLookAt` |
 | `nearby [radius]` | the npcs around the hero to `bench.log`: distance, where the hero is from their facing, where they look and why |

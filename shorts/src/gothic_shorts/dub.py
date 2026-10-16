@@ -46,7 +46,7 @@ from .gpu import GpuError, job
 from .shot import Shot
 from .timeline import Timeline, build, read_events
 from .voice import LEAD_IN_S, VOICE_ID, VoiceError, recording, say
-from .words import CLEAN
+from .words import LEAD, clean_chain
 
 TARGET_LUFS = -14.0  # as the cut
 PEAK_DB = -1.5  # sample peaks of the track, after the limiter
@@ -707,7 +707,8 @@ def dub_explainer(
         for r, en in zip(said, texts_en, strict=True)
     ]
     work = ws / "voice" / lang
-    cleaned = [trim(v, work / v.name, CLEAN) - 0.08 for v in voiced]  # CLEAN keeps 80 ms before the voice
+    # cleaned as the Russian lines were (no declick: TTS has no clicks), LEAD kept before the voice
+    cleaned = [trim(v, work / v.name, clean_chain(v, declick=False)) - LEAD for v in voiced]
     # the English voice as loud as the Russian one, one gain for all of it (the lines keep their differences)
     ru_level = _level_of([ws / line["file"] for line in said], work / "ru.wav")
     en_level = _level_of([work / v.name for v in voiced], work / "en.wav")
@@ -716,8 +717,8 @@ def dub_explainer(
     spans = []
     for v, seconds, slot in zip(voiced, cleaned, slots(rows, dub.duration), strict=True):
         f = fit(seconds, slot)
-        # CLEAN keeps 80 ms before the voice, not LEAD_S: placed so that the voice starts on the first word
-        placed.append((work / v.name, slot.start - (0.08 - LEAD_S), f, gain))
+        # the cleaning keeps LEAD before the voice, not LEAD_S: placed so that the voice starts on the first word
+        placed.append((work / v.name, slot.start - (LEAD - LEAD_S), f, gain))
         spans.append((slot.start, slot.start + f.seconds))
         _report(dub, slot, f, gain, "voice")
 

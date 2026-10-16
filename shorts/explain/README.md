@@ -24,7 +24,9 @@ live there and are served as the public dir.
 - `beats`: in order, each `footage` (an mp4, `freeze` and `zoom` optional), `still` (a png), `split` (two takes,
   top and bottom, with labels) or `card` (a chart); `texts` on top of a beat, `tags` (a label pinned to a point
   of the picture, to its left or right with `side`, lines appearing one by one, a roll counter that stops on the
-  real number);
+  real number), `strokes` (a line drawing itself between two points of the picture; with `cut` it stops at a wall:
+  solid up to it, dashed past it, a cross on it) and `fans` (a sector opening from a point): lines of sight and the
+  bow's focus from the bench's `sight` export;
 - the cards (`chart.type`): `dice` (the chance by distance, curves drawn as they are named), `formula` (the
   terms a line each as they are said, then a worked example computed the way `damagecalculator.cpp` does it:
   rounded at each step, protection not below 0, at least 5), `bars` (groups growing one by one), `dots` (marks
