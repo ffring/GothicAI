@@ -89,8 +89,11 @@ build_storygraph() {
   if [[ ! -x "$build/storygraph" || ! -f "$build/source.sha256" ]] || \
      [[ "$(cat "$build/source.sha256")" != "$digest" ]]; then
     mkdir -p "$build"
+    # Standalone execcheck.cpp uses std::find without <algorithm>. Supply the header
+    # in the build flags so the wrapper works on GCC 15 without editing engine sources.
     cmake -S "$ROOT/OpenGothic/ai_bridge/storygraph" -B "$build" -G Ninja \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_CXX_FLAGS='-include algorithm' \
       >"$build/configure.log" 2>&1 || { cat "$build/configure.log"; return 1; }
     cmake --build "$build" --target storygraph --parallel "${RYZEN_JOBS:-12}" \
       >"$build/build.log" 2>&1 || { tail -80 "$build/build.log"; return 1; }
@@ -130,6 +133,7 @@ remote_run() {
   shift 3
   toolchain
   export GOTHIC_DIR="$HOME/gothic-ai/game"
+  export GOTHIC_AI_DATA="$state/data"
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
   digest="$(source_digest)"
