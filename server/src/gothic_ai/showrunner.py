@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .attitudes import non_hostile
 from .authoring import Author
@@ -22,9 +22,11 @@ from .casting import Casting
 from .chains import ChainAuthor
 from .chronicle import Fact
 from .game import GameError
+from .gamedata.storygraph import QUEST_STATES
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
 from .occasions import DEEDS, NEAREST, OccasionFailed, Occasions
 from .protocol import GameMessage, Loading, Session
+from .questbook import Ground, _vanilla
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +55,15 @@ INSTRUCTIONS = """\
 - place: id места из сводки для stranger, иначе пустая строка.
 - new_people: для chain нужны новые люди (включая бандитов); false — только существующие.
 - premise: 2–3 фразы, что случилось и почему именно сейчас. Это замысел для строителя квестов.
+- follows: переменная квеста скриптов из сводки, на который отвечает линия; иначе пустая строка.
+- requires: список условий открытия, иначе []. Условия: {kind: quest, quest: переменная, state:
+  running|success|failed}, {kind: knows, node: id ванильного диалога}, {kind: chapter, chapter: 1–6}.
 - reason: почему такая линия или почему сейчас не нужна.
+На повод vanilla ответь на само событие: сосед заметил поступок героя и просит о своём. Укажи follows
+этого квеста и requires на его состояние, если линия связана с ним. Заказчик — не тот, кто выдаёт или
+закрывает этот квест скриптов: они перечислены в сводке. Не продолжай и не заканчивай работу скриптов,
+не обещай их наград, не требуй их квестовых вещей. Опирайся на записи журнала, которые уже видел герой,
+а не на будущие развязки. Предпочитай небольшое дело рядом, доступное при текущем ванильном состоянии.
 Людей и места выбирай только из сводки. При нехватке бюджета на людей выбери quest, chain без новых
 людей или none. Отказ кода исправь, не повторяй его."""
 
@@ -67,6 +77,8 @@ class Proposal(BaseModel):
     new_people: bool = False
     premise: str = ""
     reason: str = ""
+    follows: str = ""
+    requires: list[dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def of(cls, raw: dict[str, Any]) -> Proposal:
@@ -85,8 +97,44 @@ PROPOSE_TOOL = Tool(
             "new_people": {"type": "boolean"},
             "premise": {"type": "string"},
             "reason": {"type": "string"},
+            "follows": {"type": "string"},
+            "requires": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["quest"]},
+                                "quest": {"type": "string"},
+                                "state": {"type": "string", "enum": ["running", "success", "failed"]},
+                            },
+                            "required": ["kind", "quest", "state"],
+                            "additionalProperties": False,
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["knows"]},
+                                "node": {"type": "string"},
+                            },
+                            "required": ["kind", "node"],
+                            "additionalProperties": False,
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": ["chapter"]},
+                                "chapter": {"type": "integer"},
+                            },
+                            "required": ["kind", "chapter"],
+                            "additionalProperties": False,
+                        },
+                    ]
+                },
+            },
         },
-        "required": ["kind", "giver", "place", "new_people", "premise", "reason"],
+        "required": ["kind", "giver", "place", "new_people", "premise", "reason", "follows", "requires"],
         "additionalProperties": False,
     },
 )
@@ -127,13 +175,14 @@ class Brief:
     scripted: list[str]
     quests: list[str]
     deeds: list[Fact]
+    vanilla: list[Fact]
     history: list[str]
     budget: Budget
 
     def text(self) -> str:
         return "\n".join(
             [
-                "Повод (вид, место, время; deed — поступок героя): "
+                "Повод (вид, место, время; deed — поступок героя; vanilla — событие квеста скриптов): "
                 + json.dumps(self.occasion, ensure_ascii=False),
                 f"Глава {self.chapter}, день {self.day}, {self.hour:02}:{self.minute:02}.",
                 "Место повода и места рядом (id — название и вид):",
@@ -142,11 +191,12 @@ class Brief:
                 *[f"- {s}" for s in self.residents],
                 "Кандидаты в заказчики (id — имя и характер):",
                 *[f"- {n} — {s}" for n, s in self.candidates.items()],
-                "Открытые квесты скриптов (темы журнала):",
+                "Квесты скриптов (running — открытые; также квесты последних событий):",
                 *[f"- {s}" for s in self.scripted],
                 "Открытые квесты режиссёра (тема, состояние, стадия):",
                 *[f"- {s}" for s in self.quests],
                 "Последние поступки героя: " + json.dumps(self.deeds, ensure_ascii=False),
+                "Последние ванильные события: " + json.dumps(self.vanilla, ensure_ascii=False),
                 "Что режиссёр уже сделал на ветке, не повторяться:",
                 *[f"- {s}" for s in self.history],
                 self.budget.text(),
@@ -322,13 +372,27 @@ class Showrunner:
             progress = self.book.progress(q.id)
             if progress.state not in CLOSED:
                 quests.append(f"{q.id}: «{q.title}», {progress.state}, стадия {progress.stage}")
-        scripted = [
-            title
-            for var, q in self.author.graph.quests.items()
-            if state.get("vars", {}).get(var) == 1
-            for title in q.topics.values()
-        ]
         facts = self.chronicle.facts()
+        vanilla = [f for f in facts if f.get("fact") == "vanilla_quest"][-RECENT_DEEDS:]
+        event_quests = {f.get("quest") for f in [*vanilla, occasion.get("vanilla", {})]}
+        scripted = []
+        for var, q in self.author.graph.quests.items():
+            value = state.get("vars", {}).get(var)
+            if value != 1 and var not in event_quests:
+                continue
+            givers = {
+                self.author.graph.nodes[n].npc
+                for n in q.running
+                if n in self.author.graph.nodes and self.author.graph.nodes[n].npc
+            }
+            giver = description(next(iter(givers))) if len(givers) == 1 else "не единственный"
+            people = self._script_people(var)
+            scripted.append(
+                f"{var}: «{q.title}», {QUEST_STATES.get(value, 'open')}; заказчик: {giver}; "
+                f"выдают или закрывают (не могут быть заказчиками ответа): {', '.join(sorted(people))}; "
+                "известный герою журнал: "
+                + json.dumps(self._told(var), ensure_ascii=False)
+            )
         deeds = [
             f
             for f in facts
@@ -363,9 +427,32 @@ class Showrunner:
             list(dict.fromkeys(scripted)),
             quests,
             deeds,
+            vanilla,
             history,
             budget,
         )
+
+    def _told(self, var: str) -> list[str]:
+        # As in the repair director: the running quest's journal, without its future endings.
+        q = self.author.graph.quests[var]
+        told = []
+        for node in sorted(q.running):
+            for effect in self.author.graph.nodes[node].effects:
+                if (
+                    effect["do"] == "journal_entry"
+                    and effect.get("topic") in q.topics
+                    and effect.get("text") not in told
+                ):
+                    told.append(effect["text"])
+        return told[:4]
+
+    def _script_people(self, var: str) -> set[str]:
+        q = self.author.graph.quests[var]
+        return {
+            self.author.graph.nodes[n].npc
+            for n in q.running | q.success | q.failed | q.obsolete
+            if n in self.author.graph.nodes and self.author.graph.nodes[n].npc
+        }
 
     def canon(self, p: Proposal, brief: Brief) -> list[str]:
         errors = []
@@ -378,6 +465,14 @@ class Showrunner:
                 errors.append(f"{p.giver} — сюжетный NPC, его не трогаем")
         if p.kind == "stranger" and p.place not in brief.places:
             errors.append(f"места {p.place!r} нет в сводке")
+        if p.follows:
+            if p.follows not in self.author.graph.quests:
+                errors.append(f"follows {p.follows!r} — не квест ванильного графа")
+            elif p.giver.upper() in self._script_people(p.follows):
+                errors.append(
+                    f"{p.giver} выдаёт или закрывает квест скриптов {p.follows}: "
+                    "выбери соседа, линия отвечает рядом"
+                )
         if p.kind != "none":
             errors += brief.budget.reasons
             if not p.premise.strip():
@@ -386,6 +481,18 @@ class Showrunner:
             if needs_people and not brief.budget.people_left:
                 errors.append("исчерпан бюджет новых людей за главу")
         return errors
+
+    async def _requirements(self, p: Proposal) -> list[str]:
+        if not p.requires:
+            return []
+        # The book remains the authority, including reachability in the current vanilla graph.
+        ground = Ground({}, {}, self.rules.plot_npc, lambda _: False, 0, 0)
+        ground.story = await self.author.director.story()
+        return [
+            f"условие открытия {i}: {error}"
+            for i, requirement in enumerate(p.requires, 1)
+            for error in _vanilla(requirement, ground)
+        ]
 
     async def run(self) -> None:
         while True:
@@ -503,6 +610,8 @@ class Showrunner:
             try:
                 proposal = Proposal.of(raw)
                 errors = self.canon(proposal, brief)
+                if not errors:
+                    errors = await self._requirements(proposal)
             except ValidationError as error:
                 proposal = None
                 errors = [f"структура предложения: {e['loc']}: {e['msg']}" for e in error.errors()]
@@ -526,19 +635,25 @@ class Showrunner:
         try:
             try:
                 if p.kind == "quest":
-                    made = await self.author.quest(build.giver, premise=p.premise)
+                    made = await self.author.quest(
+                        build.giver, premise=p.premise, follows=p.follows, requires=p.requires
+                    )
                 elif p.kind == "chain":
                     made = await self.chains.chain(
                         build.giver,
                         new_people=p.new_people,
                         premise=p.premise,
                         max_people=brief.budget.people_left if p.new_people else 0,
+                        follows=p.follows,
+                        requires=p.requires,
                     )
                 elif p.kind == "stranger":
                     person = await self.casting.character(p.place, about=p.premise, premise=p.premise)
                     if person is not None:
                         build.giver = person.npc
-                        made = await self.author.quest(build.giver, premise=p.premise)
+                        made = await self.author.quest(
+                            build.giver, premise=p.premise, follows=p.follows, requires=p.requires
+                        )
                 if not made:
                     errors.append("строитель не справился")
             except (GameError, TimeoutError) as error:
@@ -580,6 +695,8 @@ class Showrunner:
             kind=p.kind,
             giver=giver,
             premise=p.premise,
+            follows=p.follows,
+            requires=p.requires,
             reason=p.reason,
             quests=quests,
             characters=characters,

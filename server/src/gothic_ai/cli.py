@@ -23,6 +23,7 @@ from . import (
     scenario_occasions,
     scenario_questlog,
     scenario_showrunner,
+    scenario_vanilla_line,
     scenarios,
 )
 from .amends import Amends
@@ -1413,6 +1414,13 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario showrunner_live: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario in {"vanilla_line", "vanilla_line_live"}:
+                assert state.showrunner is not None and state.questlog is not None
+                scenario = getattr(scenario_vanilla_line, args.scenario)
+                results = await scenario(link, state.showrunner, state.questlog)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "character":
                 casting, author, story = state.casting, state.author, state.story
                 assert casting is not None and author is not None and story is not None and place_book
@@ -2138,6 +2146,8 @@ def main() -> None:
             "questlog",
             "showrunner",
             "showrunner_live",
+            "vanilla_line",
+            "vanilla_line_live",
             "own",
             "trigger",
             "stages",

@@ -1,0 +1,73 @@
+from types import SimpleNamespace
+
+from gothic_ai import questbook, scenarios
+from gothic_ai.llm import ToolCall
+from gothic_ai.scenario_vanilla_line import REQUIRES, RUEBEN, Turnips, VanillaLineScript
+
+
+async def test_script_proposes_vanilla_followup() -> None:
+    script = VanillaLineScript("BAU_952_VINO")
+    calls = [
+        event async for event in script.stream(instructions="", messages=[]) if isinstance(event, ToolCall)
+    ]
+    assert len(calls) == 1
+    assert calls[0].arguments["follows"] == RUEBEN
+    assert calls[0].arguments["requires"] == REQUIRES
+    assert calls[0].arguments["giver"] == "BAU_952_VINO"
+
+
+def test_event_matches_quest_state_and_current_occasion_window() -> None:
+    def event(quest: str, state: str) -> dict:
+        return {"kind": "vanilla", "vanilla": {"quest": quest, "to": state}}
+
+    events = [event(RUEBEN, "running"), event("MIS_OTHER", "success"), event(RUEBEN, "success")]
+    director = SimpleNamespace(chronicle=SimpleNamespace(facts=lambda kind: events))
+    turnips = Turnips(None, director, None)
+    assert turnips.event("running") == events[0]
+    assert turnips.event("running", after=1) is None
+    assert turnips.event("success", after=1) == events[2]
+
+
+async def test_common_player_observes_vanilla_goal_without_writing_scripts() -> None:
+    talk = questbook.Talk("Готово?", [{"speaker": "self", "text": "Да."}])
+    quest = questbook.Quest(
+        id="DIR_Q1",
+        giver="BAU_952_VINO",
+        title="После урожая",
+        give=talk,
+        stages=[
+            questbook.Stage("Репа принята.", [questbook.Goal("vanilla", quest=RUEBEN, state="success")]),
+            questbook.Stage("Сказать соседу.", [questbook.Goal("talk", npc="BAU_952_VINO", talk=talk)]),
+        ],
+        done_journal="Сосед доволен.",
+    )
+
+    class Link:
+        status = stage = vanilla_reads = 0
+        fired = False
+
+        async def debug(self, *args, **kwargs):
+            pass
+
+        async def offered_dialogs(self, npc):
+            return [questbook.give_node(quest), questbook.done_node(quest)]
+
+        async def choose_dialog(self, npc, node):
+            self.status, self.stage = (1, 1) if node == questbook.give_node(quest) else (2, 3)
+
+        async def story_state(self, **kwargs):
+            names = kwargs.get("vars", [])
+            if RUEBEN in names:
+                self.vanilla_reads += 1
+                self.fired, self.stage = True, 2
+            values = {quest.id: self.status, questbook.stage_var(quest): self.stage, RUEBEN: 2}
+            return {"dialog": False, "vars": {name: values[name] for name in names}}
+
+        async def triggers(self):
+            return [{"id": questbook.goal_id(quest, 1, 1), "count": int(self.fired)}]
+
+    link = Link()
+    result = await scenarios.play_book_chain(link, None, [quest])
+    assert all(value.startswith("done") for value in result.values())
+    assert link.vanilla_reads == 1
+    assert link.status == 2

@@ -26,6 +26,8 @@ from gothic_ai.showrunner import (
     MIN_GAME_MINUTES,
     MIN_REAL_SECONDS,
     PROPOSE,
+    PROPOSE_TOOL,
+    Proposal,
     Showrunner,
 )
 from gothic_ai.story import QUEST as QUEST_RECORD
@@ -188,12 +190,14 @@ async def world(story_graph, *proposals):
         runner = Showrunner(occasions, author, chains, casting, llm, clock=clock)
         state = World(fake, clock, runner, author, chains, casting, llm)
 
-        async def make_quest(npc, premise=""):
+        async def make_quest(npc, premise="", *, requires=None, follows=""):
             q = quest(id=author.book.next_id(), giver=npc)
             await state.keep(q)
             return q
 
-        async def make_chain(npc, *, new_people=False, premise="", max_people=None):
+        async def make_chain(
+            npc, *, new_people=False, premise="", max_people=None, requires=None, follows=""
+        ):
             first = quest(id=author.book.next_id(), giver=npc)
             second = quest(id=author.book.next_id({first.id}), giver=npc, title="След пилы")
             await state.keep(first, second)
@@ -348,6 +352,92 @@ async def test_brief_has_local_cards_time_quests_deeds_history_and_only_free_liv
         assert brief.budget.people_left == 7
 
 
+@pytest.mark.parametrize("value", [1, 2])
+async def test_brief_includes_vanilla_event_giver_known_journal_and_no_future_ending(graph, value):
+    async with world(graph) as w:
+        w.fake.vars[SCRIPT_QUEST] = value
+        graph.nodes["DIA_LOBART_RUEBENRUNNING"].effects.append(
+            {"do": "journal_entry", "topic": "TOPIC_RUEBEN", "text": "Будущая тайная развязка."}
+        )
+        event = {
+            "fact": "vanilla_quest",
+            "quest": SCRIPT_QUEST,
+            "title": "Убрать поле репы",
+            "from": "open" if value == 1 else "running",
+            "to": "running" if value == 1 else "success",
+            "giver": LOBART,
+        }
+        for i in range(12):
+            w.chronicle.record({**event, "minute": i})
+        brief = await w.showrunner.brief(occasion(kind="vanilla", vanilla=event))
+        text = brief.text()
+        assert len(brief.vanilla) == 10
+        assert brief.vanilla == w.chronicle.facts("vanilla_quest")[-10:]
+        for known in (SCRIPT_QUEST, "Убрать поле репы", "Лобарт", LOBART, event["to"]):
+            assert known in text
+        assert "Лобарт хочет, чтобы я собрал репу." in text
+        assert "Будущая тайная развязка" not in text
+        assert brief.occasion["vanilla"] == event
+
+
+def test_proposal_parses_follows_and_all_three_requirements_and_keeps_old_defaults():
+    requires = [
+        {"kind": "quest", "quest": SCRIPT_QUEST, "state": "success"},
+        {"kind": "knows", "node": "DIA_LOBART_WORKNOW"},
+        {"kind": "chapter", "chapter": 2},
+    ]
+    p = Proposal.of(proposal(follows=SCRIPT_QUEST, requires=requires))
+    assert (p.follows, p.requires) == (SCRIPT_QUEST, requires)
+    assert Proposal.of(proposal()).follows == "" and Proposal.of(proposal()).requires == []
+    assert {"follows", "requires"} <= set(PROPOSE_TOOL.parameters["required"])
+
+
+@pytest.mark.parametrize(
+    ("bad", "reason"),
+    [
+        ({"follows": "MIS_INVENTED"}, "не квест ванильного графа"),
+        ({"giver": LOBART, "follows": SCRIPT_QUEST}, "выдаёт или закрывает"),
+        ({"requires": [{"kind": "quest", "quest": SCRIPT_QUEST, "state": "success"}]}, "недостижимо"),
+        ({"requires": [{"kind": "quest", "quest": "MIS_INVENTED", "state": "running"}]}, "не переменная"),
+        ({"requires": [{"kind": "knows", "node": "DIA_INVENTED"}]}, "нет ванильного диалога"),
+        ({"requires": [{"kind": "chapter", "chapter": 7}]}, "от 1 до 6"),
+        ({"requires": {}}, "requires"),
+        ({"follows": 12}, "follows"),
+    ],
+)
+async def test_vanilla_canon_rejection_returns_the_reason_before_building(graph, bad, reason):
+    async with world(graph, proposal(**bad), proposal()) as w:
+        w.fake.vars[SCRIPT_QUEST] = 3
+        result = await w.showrunner.decide(occasion(kind="vanilla"))
+        assert result["fact"] == "line"
+        [rejected] = w.chronicle.facts("line_rejected")
+        assert reason in str(rejected["why"])
+        correction = "\n".join(getattr(item, "content", "") for item in w.llm.calls[1][1])
+        assert all(e in correction for e in rejected["why"])
+        w.author.quest.assert_awaited_once()
+
+
+async def test_canon_also_excludes_a_different_npc_who_only_closes_the_followed_quest(graph):
+    graph.nodes["DIA_LOBART_RUEBENRUNNING"].npc = HILDA
+    async with world(graph, proposal(follows=SCRIPT_QUEST), proposal()) as w:
+        assert (await w.showrunner.decide(occasion()))["fact"] == "line"
+        assert "выдаёт или закрывает" in str(w.chronicle.facts("line_rejected"))
+
+
+@pytest.mark.parametrize("kind", ["quest", "chain", "stranger"])
+async def test_vanilla_fields_reach_every_builder_and_survive_chronicle_reload(graph, kind):
+    requires = [{"kind": "quest", "quest": SCRIPT_QUEST, "state": "success"}]
+    async with world(graph, proposal(kind=kind, place=HOME, follows=SCRIPT_QUEST, requires=requires)) as w:
+        w.fake.vars[SCRIPT_QUEST] = 2
+        result = await w.showrunner.decide(occasion(kind="vanilla"))
+        assert result["fact"] == "line"
+        assert result["follows"] == SCRIPT_QUEST and result["requires"] == requires
+        call = w.chains.chain.await_args if kind == "chain" else w.author.quest.await_args
+        assert call.kwargs["follows"] == SCRIPT_QUEST and call.kwargs["requires"] == requires
+        await load(w.fake, w.chronicle, branch="restored")
+        assert w.showrunner.lines == [result]
+
+
 @pytest.mark.parametrize(
     ("bad", "reason"),
     [
@@ -438,7 +528,7 @@ async def test_hostile_giver_is_rejected_before_the_builder_and_neutral_retry_is
         w.fake.attitudes[HILDA] = 0
         result = await w.showrunner.decide(occasion())
         assert result["fact"] == "line" and result["giver"] == LOBART
-        w.author.quest.assert_awaited_once_with(LOBART, premise=PREMISE)
+        w.author.quest.assert_awaited_once_with(LOBART, premise=PREMISE, follows="", requires=[])
         assert HILDA in str(w.chronicle.facts("line_rejected"))
 
 
