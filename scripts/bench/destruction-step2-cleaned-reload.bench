@@ -1,0 +1,5 @@
+# A new process loads the archive created after native debris cleanup.
+destruction2 initial cleaned-restored
+wait 1000
+destruction2 snapshot cleaned-continued
+physics stats

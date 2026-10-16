@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline fixed-seed Voronoi fracture of stock-world crates, barrels and pots.
+# Offline fixed-seed fracture of stock-world crates, barrels, pots and fences.
 # Requires a legally installed Gothic II. The cache contains game geometry and
 # stays outside git, just like HD textures. No game, GPU or model is started.
 #

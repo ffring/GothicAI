@@ -1,0 +1,91 @@
+# Real ev.def_opt_frame damage; no direct movable damage calls.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+destruction on
+overlay off
+view full
+
+destruction2 setup crate fist
+wait 600
+rec destruction2-crate-fist
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup crate 1h
+wait 600
+rec destruction2-crate-1h
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup crate 2h
+wait 600
+rec destruction2-crate-2h
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup barrel fist
+wait 600
+rec destruction2-barrel-fist
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup barrel 1h
+wait 600
+rec destruction2-barrel-1h
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup barrel 2h
+wait 600
+rec destruction2-barrel-2h
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup fence fist
+wait 600
+rec destruction2-fence-fist
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup fence 1h
+wait 600
+rec destruction2-fence-1h
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+destruction2 setup fence 2h
+wait 600
+rec destruction2-fence-2h
+destruction2 attack
+wait 600
+destruction2 checkpoint
+stop
+
+# A real NPC attack uses the same animation event.
+destruction2 setup crate 1h npc
+wait 600
+rec destruction2-npc-sword
+destruction2 attack
+destruction2 checkpoint
+stop
+physics stats

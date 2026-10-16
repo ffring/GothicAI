@@ -16,6 +16,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Geometry/ClosestPoint.h>
 
 #include <algorithm>
 #include <cmath>
@@ -167,6 +168,8 @@ struct DynamicWorld::BodyData {
   Tempest::Vec3 breakPoint;
   bool pendingBreak = false, fragmentsWereSleeping = true;
   std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments;
+  std::vector<int64_t> fragmentSleepTime;
+  std::vector<bool> fragmentPermanent;
   std::function<void(bool,const std::vector<Tempest::Matrix4x4>&)> fractureCallback;
   };
 
@@ -1002,27 +1005,16 @@ DynamicWorld::Item DynamicWorld::addMovableVob(const ProtoMesh& proto, std::stri
   obj->localBounds[0] = proto.bbox()[0];
   obj->localBounds[1] = proto.bbox()[1];
   rebuildMovableVob(*obj);
-  if(movableVobs->enabled && obj->body==nullptr)
+  if((movableVobs->enabled || className=="fence") && obj->body==nullptr)
     return {};
   obj->movableOwner = movableVobs.get();
   movableVobs->bodies.push_back(obj.get());
   return Item(this,obj.release());
   }
 
-void DynamicWorld::rebuildMovableVob(BodyData& obj) {
-  obj.body.reset();
-  obj.query.clear();
-  obj.fragments.clear();
-  obj.pendingBreak=false;
-  obj.pose->broken=false;
-  obj.health=obj.fractureRule!=nullptr ? obj.fractureRule->health : 0.f;
-  obj.current = obj.origin;
-  obj.wasSleeping = true;
-  obj.trace = obj.tilted = false;
-  obj.traceTime = -1;
-  obj.traceCulprit.clear();
+void DynamicWorld::prepareMovableVobShape(BodyData& obj) {
   auto& shape = *obj.movableShape;
-  if(movableVobs->enabled && !shape.hullAttempted) {
+  if(!shape.hullAttempted) {
     shape.hullAttempted = true;
     std::vector<JPH::Vec3> points;
     for(const auto& part:shape.parts)
@@ -1041,10 +1033,37 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
     }
   if(shape.hull!=nullptr)
     obj.movableMass = float(shape.hull->GetVolume()*volumeScale(obj.origin)*materialDensity(shape.material)*obj.massMultiplier);
+  }
+
+void DynamicWorld::rebuildMovableVob(BodyData& obj) {
+  obj.body.reset();
+  obj.query.clear();
+  obj.fragments.clear();
+  obj.fragmentSleepTime.clear();
+  obj.fragmentPermanent.clear();
+  obj.pendingBreak=false;
+  obj.pose->broken=false;
+  obj.health=obj.fractureRule!=nullptr ? obj.fractureRule->health : 0.f;
+  obj.current = obj.origin;
+  obj.wasSleeping = true;
+  obj.trace = obj.tilted = false;
+  obj.traceTime = -1;
+  obj.traceCulprit.clear();
+  auto& shape = *obj.movableShape;
+  const bool fence=obj.className=="fence";
+  if(movableVobs->enabled || fence)
+    prepareMovableVobShape(obj);
   const bool allowed = obj.disposition.empty() || obj.disposition=="ok" || obj.disposition=="item";
-  const bool enabled = movableVobs->enabled && allowed && shape.hull!=nullptr && std::isfinite(obj.movableMass) && obj.movableMass>0.f;
-  if(enabled)
-    obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
+  const bool enabled = (movableVobs->enabled || fence) && (allowed || fence) && shape.hull!=nullptr &&
+                       std::isfinite(obj.movableMass) && obj.movableMass>0.f;
+  if(enabled) {
+    if(fence)
+      // The authored mesh remains the exact static obstacle. This sensor hull
+      // only owns destruction identity and the mass used by its future pieces.
+      obj.body=world->addCollisionBody(shape.hull,obj.origin,shape.friction,C_MovableVob,false,true);
+    else
+      obj.body = world->addDynamicBody(shape.hull,obj.origin,shape.friction,obj.movableMass,C_MovableVob,true);
+    }
   if(obj.body!=nullptr) {
     obj.body->setPayload(&obj,P_MovableVob);
     obj.body->setLabel(obj.visual);
@@ -1053,12 +1072,12 @@ void DynamicWorld::rebuildMovableVob(BodyData& obj) {
   // cd_dynamic controls the original mesh queries independently of simulation.
   // The hull can move and receive impacts without becoming a new walking/ray obstacle.
   if(obj.legacyCollision) {
-    const int category = !enabled ? C_Object : obj.blocksWalking ? C_MovableQuery : C_SmallVobQuery;
+    const int category = !enabled || fence ? C_Object : obj.blocksWalking ? C_MovableQuery : C_SmallVobQuery;
     for(const auto& part:shape.parts) {
       auto matrix = obj.origin;
       matrix.mul(part.local);
       obj.query.push_back(world->addCollisionBody(part.source->shape,matrix,part.source->friction(),category,
-                                                 enabled,enabled,&part.source->mesh));
+                                                 enabled && !fence,enabled && !fence,&part.source->mesh));
       obj.query.back()->setPayload(&obj,P_MovableVob);
       obj.query.back()->setLabel(obj.visual);
       }
@@ -1102,7 +1121,8 @@ void DynamicWorld::setMovableVobsEnabled(bool enabled) {
     return;
   movableVobs->enabled = enabled;
   for(auto* obj:movableVobs->bodies)
-    rebuildMovableVob(*obj);
+    if(obj->className!="fence" && !obj->pose->broken)
+      rebuildMovableVob(*obj);
   if(enabled && movableVobs->finalized && movableVobs->census.empty())
     validateMovableVobs();
   }
@@ -1129,13 +1149,15 @@ void DynamicWorld::finalizeMovableVobs() {
   if(!enabled) {
     movableVobs->enabled = true;
     for(auto* obj:movableVobs->bodies)
-      rebuildMovableVob(*obj);
+      if(obj->className!="fence" && !obj->pose->broken)
+        rebuildMovableVob(*obj);
     }
   validateMovableVobs();
   if(!enabled) {
     movableVobs->enabled = false;
     for(auto* obj:movableVobs->bodies)
-      rebuildMovableVob(*obj);
+      if(obj->className!="fence" && !obj->pose->broken)
+        rebuildMovableVob(*obj);
     }
   }
 
@@ -1232,7 +1254,49 @@ std::shared_ptr<const DynamicWorld::MovableVobPose> DynamicWorld::rayMovableVob(
   return static_cast<BodyData*>(hit.body->payload())->pose;
   }
 
+size_t DynamicWorld::meleeMovableVobs(const Tempest::Vec3& origin,const Tempest::Vec3& forward,
+                                     float rangeCm,float weaponDamage,float strength,FractureRule::Melee kind,
+                                     Npc* attacker) {
+  if(!movableVobs->destructionEnabled || !std::isfinite(rangeCm) || rangeCm<=0.f ||
+     !std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z) ||
+     !std::isfinite(forward.x) || !std::isfinite(forward.z)) return 0;
+  const auto facing=Tempest::Vec3(forward.x,0,forward.z);
+  if(facing.quadLength()<1.e-6f) return 0;
+  const float heading=std::atan2(facing.z,facing.x);
+  const int arc=kind==FractureRule::Melee::Fist ? 20 : 60;
+  std::unordered_set<BodyData*> touched;
+  size_t count=0;
+  // Test the swept striking arc against the source collision meshes, including
+  // downstrokes at low crates. Every ray stops at its first wall or object;
+  // range and facing alone never count as a contact. NPC damage keeps its own
+  // existing target/defence calculation and consumes exactly the same RNG.
+  for(int yaw=-arc;yaw<=arc;yaw+=10) for(int pitch=-40;pitch<=20;pitch+=20) {
+    const float a=heading+float(yaw)*(float(M_PI)/180.f);
+    const float p=float(pitch)*(float(M_PI)/180.f);
+    const Tempest::Vec3 direction(std::cos(a)*std::cos(p),std::sin(p),std::sin(a)*std::cos(p));
+    const auto hit=world->rayCast(origin,origin+direction*rangeCm,visualMask,false);
+    if(!hit.hasHit || hit.body==nullptr || hit.body->ptrType()!=P_MovableVob) continue;
+    auto& obj=*static_cast<BodyData*>(hit.body->payload());
+    if(obj.body==nullptr || obj.pose->broken || obj.pendingBreak || obj.fractureRule==nullptr ||
+       obj.movableShape->fracture==nullptr || (!movableVobs->enabled && obj.className!="fence") ||
+       touched.find(&obj)!=touched.end()) continue;
+    const float damage=obj.fractureRule->meleeDamage(kind,weaponDamage,strength);
+    if(!std::isfinite(damage) || damage<=0.f) continue;
+    touched.insert(&obj);
+    ++count;
+    const float impulse=damage*.02f;
+    obj.body->addImpulseAtPoint(direction*impulse,hit.point,attacker);
+    obj.health=std::max(0.f,obj.health-damage);
+    if(obj.health>.001f) continue;
+    obj.pendingBreak=true;
+    obj.breakImpulse=impulse;
+    obj.breakPoint=hit.point;
+    }
+  return count;
+  }
+
 void DynamicWorld::saveMovableVobs(Serialize& fout) const {
+  saveDestructionVobs(fout);
   if(!movableVobs->enabled)
     return;
   std::vector<const BodyData*> moved;
@@ -1250,6 +1314,7 @@ void DynamicWorld::saveMovableVobs(Serialize& fout) const {
   }
 
 void DynamicWorld::loadMovableVobs(Serialize& fin) {
+  loadDestructionVobs(fin);
   if(!movableVobs->enabled || !fin.setEntry("worlds/",fin.worldName(),"/movable-vobs"))
     return;
   try {
@@ -1301,8 +1366,142 @@ void DynamicWorld::loadMovableVobs(Serialize& fin) {
     }
   }
 
+void DynamicWorld::saveDestructionVobs(Serialize& fout) const {
+  if(!movableVobs->destructionEnabled)
+    return;
+  std::vector<const BodyData*> changed;
+  for(const auto* obj:movableVobs->bodies)
+    if(obj->pose->zenId!=uint32_t(-1) && obj->fractureRule!=nullptr && obj->movableShape->fracture!=nullptr &&
+       (obj->pose->broken || obj->health<obj->fractureRule->health))
+      changed.push_back(obj);
+  if(changed.empty())
+    return;
+  // Separate optional archive entry: older saves have no destruction state,
+  // and movable-vobs readers keep their existing schema and meaning.
+  fout.setEntry("worlds/",fout.worldName(),"/destruction-vobs");
+  fout.write(uint32_t(0x31534544),uint16_t(1),fout.worldName(),uint32_t(changed.size()));
+  for(const auto* obj:changed) {
+    fout.write(obj->pose->zenId,obj->visual,obj->origin,obj->current,obj->health,obj->pose->broken,
+               uint32_t(obj->fragments.size()));
+    for(size_t i=0;i<obj->fragments.size();++i) {
+      const auto& piece=obj->fragments[i];
+      fout.write(piece!=nullptr,obj->fragmentPermanent[i],uint64_t(obj->fragmentSleepTime[i])+1);
+      if(piece!=nullptr)
+        fout.write(piece->matrix(),piece->velocity(),piece->angularVelocity(),piece->isSleeping());
+      }
+    }
+  }
+
+void DynamicWorld::loadDestructionVobs(Serialize& fin) {
+  if(!movableVobs->destructionEnabled || !fin.setEntry("worlds/",fin.worldName(),"/destruction-vobs"))
+    return;
+  try {
+    uint32_t magic=0,count=0;
+    uint16_t schema=0;
+    std::string worldName;
+    fin.read(magic,schema,worldName,count);
+    if(magic!=0x31534544 || schema!=1 || worldName!=fin.worldName() || count>100000)
+      return;
+    struct Piece {
+      bool present=false,permanent=false,sleeping=true;
+      uint64_t sleepTime=0;
+      Tempest::Matrix4x4 matrix;
+      Tempest::Vec3 velocity,omega;
+      };
+    const auto finiteVelocity=[](const Tempest::Vec3& v) {
+      return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && v.quadLength()<1.e14f;
+      };
+    for(uint32_t record=0;record<count;++record) {
+      uint32_t id=uint32_t(-1),pieceCount=0;
+      std::string visual;
+      Tempest::Matrix4x4 origin,matrix;
+      float health=0;
+      bool broken=false;
+      fin.read(id,visual,origin,matrix,health,broken,pieceCount);
+      if(pieceCount>20)
+        return;
+      std::vector<Piece> pieces(pieceCount);
+      bool valid=std::isfinite(health) && health>=0.f && PhysicsSave::validTransform(matrix) &&
+                 PhysicsSave::sameScale(matrix,origin) && (broken || pieceCount==0);
+      size_t permanentCount=0;
+      for(auto& piece:pieces) {
+        fin.read(piece.present,piece.permanent,piece.sleepTime);
+        permanentCount+=piece.permanent;
+        valid &= piece.sleepTime<=uint64_t(std::numeric_limits<int64_t>::max())+1;
+        valid &= !piece.permanent || piece.present;
+        if(piece.present) {
+          fin.read(piece.matrix,piece.velocity,piece.omega,piece.sleeping);
+          valid &= PhysicsSave::validTransform(piece.matrix) && PhysicsSave::sameScale(piece.matrix,origin) &&
+                   finiteVelocity(piece.velocity) && finiteVelocity(piece.omega);
+          }
+        }
+      if(!valid || (broken && permanentCount!=std::min(size_t(3),pieces.size())))
+        continue;
+      for(auto* obj:movableVobs->bodies) {
+        if(id==uint32_t(-1) || obj->pose->zenId!=id || obj->visual!=visual ||
+           !PhysicsSave::sameTransform(obj->origin,origin) || obj->fractureRule==nullptr ||
+           obj->movableShape->fracture==nullptr || health>obj->fractureRule->health)
+          continue;
+        if(!broken) {
+          obj->health=health;
+          break;
+          }
+        const auto& mesh=*obj->movableShape->fracture;
+        if(pieces.size()!=mesh.pieces.size())
+          break;
+        // Loading debris does not enable movement of any intact prop. Its
+        // authored hull is needed only to recover the original fragment mass.
+        prepareMovableVobShape(*obj);
+        if(!std::isfinite(obj->movableMass) || obj->movableMass<=0.f)
+          break;
+        std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments(pieces.size());
+        for(size_t i=0;i<pieces.size();++i) {
+          const auto& piece=pieces[i];
+          if(!piece.present)
+            continue;
+          const float mass=float(obj->movableMass*mesh.pieces[i].volume/mesh.volume);
+          auto body=world->addDynamicBody(mesh.pieces[i].hull,piece.matrix,obj->movableShape->friction,mass,C_Fragment);
+          body->setLabel(obj->visual+" fragment");
+          body->restoreTransform(piece.matrix,piece.sleeping);
+          if(!piece.sleeping)
+            body->setVelocity(piece.velocity,piece.omega);
+          fragments[i]=std::move(body);
+          }
+        obj->body.reset();
+        obj->query.clear();
+        obj->current=matrix;
+        obj->pose->transform=matrix;
+        obj->pose->broken=true;
+        obj->health=0.f;
+        obj->pendingBreak=false;
+        obj->trace=obj->tilted=false;
+        obj->traceTime=-1;
+        obj->traceCulprit.clear();
+        obj->fragments=std::move(fragments);
+        obj->fragmentSleepTime.resize(pieces.size());
+        obj->fragmentPermanent.resize(pieces.size());
+        for(size_t i=0;i<pieces.size();++i) {
+          obj->fragmentSleepTime[i]=pieces[i].sleepTime==0 ? -1 : int64_t(pieces[i].sleepTime-1);
+          obj->fragmentPermanent[i]=pieces[i].permanent;
+          }
+        obj->fragmentsWereSleeping=false;
+        syncFragments(*obj);
+        break;
+        }
+      }
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("destruction vob load: ",e.what());
+    }
+  }
+
 void DynamicWorld::setTraceTime(int64_t minutes) {
   traceTime = std::max(int64_t(-1),minutes);
+  }
+
+void DynamicWorld::setFragmentObserver(const Tempest::Vec3& position) {
+  fragmentObserver=position;
+  hasFragmentObserver=true;
   }
 
 bool DynamicWorld::setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4x4& matrix, Npc* culprit) {
@@ -1335,7 +1534,7 @@ std::vector<DynamicWorld::MovableVobContacts> DynamicWorld::movableVobContacts(f
   constexpr uint32_t mask = (1u<<C_Landscape)|(1u<<C_Object)|(1u<<C_MovableVob);
   std::vector<MovableVobContacts> result;
   for(const auto* obj:movableVobs->bodies) {
-    if(obj->body==nullptr)
+    if(obj->body==nullptr || obj->className=="fence")
       continue;
     MovableVobContacts entry;
     entry.zenId = obj->pose->zenId;
@@ -1448,10 +1647,104 @@ std::vector<DynamicWorld::FragmentSnapshot> DynamicWorld::fragmentSnapshot() con
   std::vector<FragmentSnapshot> result;
   for(const auto* obj:movableVobs->bodies)
     for(size_t i=0;i<obj->fragments.size();++i) {
+      if(obj->fragments[i]==nullptr)
+        continue;
       const auto& body=*obj->fragments[i];
       result.push_back({reinterpret_cast<uintptr_t>(obj),obj->pose->zenId,i,body.isSleeping(),
-                        body.matrix(),body.velocity(),body.angularVelocity()});
+                        body.matrix(),body.velocity(),body.angularVelocity(),obj->fragmentPermanent[i],
+                        obj->fragmentSleepTime[i]});
       }
+  return result;
+  }
+
+std::vector<DynamicWorld::RagdollSupport> DynamicWorld::ragdollSupports(const Ragdoll& ragdoll,float marginCm) const {
+  std::vector<RagdollSupport> result;
+  for(const auto& contact:world->ragdollContacts(ragdoll,marginCm)) {
+    RagdollSupport entry;
+    entry.bone=contact.bone;
+    entry.partBodyId=contact.partBodyId;
+    entry.supportBodyId=contact.supportBodyId;
+    entry.category=contact.category;
+    entry.sleeping=contact.sleeping;
+    entry.depth=contact.depth;
+    entry.axis=contact.axis;
+    entry.point1=contact.point1;
+    entry.point2=contact.point2;
+    entry.visibleDistance=contact.sourceDistance;
+    entry.visiblePoint=contact.sourcePoint;
+    entry.sourceTriangle=contact.sourceTriangle;
+    entry.kind=contact.category==C_Landscape ? "landscape" : "body";
+    if(contact.body!=nullptr)
+      entry.visual=contact.body->label();
+    const auto queryPoint=CollisionWorld::toMeters(contact.point1);
+    float closestSquared=std::numeric_limits<float>::infinity();
+    const auto triangle=[&](const Tempest::Vec3 (&vertices)[3],const Tempest::Matrix4x4& matrix) {
+      JPH::Vec3 points[3];
+      for(size_t i=0;i<3;++i) {
+        auto point=vertices[i];
+        matrix.project(point);
+        points[i]=CollisionWorld::toMeters(point)-queryPoint;
+        }
+      JPH::uint32 feature=0;
+      const auto nearest=JPH::ClosestPoint::GetClosestPointOnTriangle(points[0],points[1],points[2],feature);
+      const float distance=nearest.LengthSq();
+      if(distance<closestSquared) {
+        closestSquared=distance;
+        entry.visiblePoint=CollisionWorld::toCentimeters(nearest+queryPoint);
+        }
+      };
+    for(const auto* obj:movableVobs->bodies) {
+      size_t piece=size_t(-1);
+      bool matches=obj->body.get()==contact.body;
+      std::string kind=matches ? "hull" : "query";
+      if(!matches)
+        for(const auto& query:obj->query)
+          matches|=query.get()==contact.body;
+      if(!matches)
+        for(size_t i=0;i<obj->fragments.size();++i)
+          if(obj->fragments[i].get()==contact.body && contact.body!=nullptr) {
+            matches=true;
+            piece=i;
+            kind="fragment";
+            break;
+            }
+      if(!matches || contact.body==nullptr)
+        continue;
+      entry.parentId=reinterpret_cast<uintptr_t>(obj);
+      entry.zenId=obj->pose->zenId;
+      entry.visual=obj->visual;
+      entry.kind=std::move(kind);
+      entry.piece=piece;
+      entry.broken=obj->pose->broken;
+      entry.visible=piece!=size_t(-1) || !entry.broken;
+      if(piece!=size_t(-1)) {
+        const auto matrix=obj->fragments[piece]->matrix();
+        for(const auto& face:obj->movableShape->fracture->pieces[piece].triangles) {
+          const Tempest::Vec3 vertices[]={face.vertices[0].position,face.vertices[1].position,face.vertices[2].position};
+          triangle(vertices,matrix);
+          }
+        }
+      else if(entry.visible) {
+        for(const auto& part:obj->movableShape->parts) {
+          auto matrix=obj->current;
+          matrix.mul(part.local);
+          for(size_t t=0;t<part.source->mesh.triangleCount();++t) {
+            JPH::Vec3 points[3];
+            if(!part.source->mesh.triangleVertices(uint32_t(t),points))
+              continue;
+            const Tempest::Vec3 vertices[]={CollisionWorld::toCentimeters(points[0]),
+                                           CollisionWorld::toCentimeters(points[1]),
+                                           CollisionWorld::toCentimeters(points[2])};
+            triangle(vertices,matrix);
+            }
+          }
+        }
+      break;
+      }
+    if(std::isfinite(closestSquared))
+      entry.visibleDistance=std::sqrt(closestSquared)*100.f;
+    result.push_back(std::move(entry));
+    }
   return result;
   }
 
@@ -1499,6 +1792,17 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
   obj.body.reset();
   obj.query.clear();
   obj.fragments=std::move(fragments);
+  obj.fragmentSleepTime.assign(obj.fragments.size(),-1);
+  obj.fragmentPermanent.assign(obj.fragments.size(),false);
+  // Keep stable piece indices throughout cleanup and save/load. Equal-volume
+  // pieces are ordered by their authored cache index, making the choice fixed.
+  std::vector<size_t> largest(obj.fragments.size());
+  for(size_t i=0;i<largest.size();++i) largest[i]=i;
+  std::stable_sort(largest.begin(),largest.end(),[&](size_t a,size_t b) {
+    return mesh.pieces[a].volume>mesh.pieces[b].volume;
+    });
+  for(size_t i=0;i<std::min(size_t(3),largest.size());++i)
+    obj.fragmentPermanent[largest[i]]=true;
   obj.pendingBreak=false;
   obj.trace=obj.tilted=false;
   obj.traceTime=-1;
@@ -1510,7 +1814,8 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
   // Some wooden Gothic barrels label their source mesh as stone. Keep that
   // authored density/friction for physics, but use the destructible class for
   // the sound of the newly exposed material.
-  const bool wooden=obj.fractureRule->className=="crate" || obj.fractureRule->className=="barrel";
+  const bool wooden=obj.fractureRule->className=="crate" || obj.fractureRule->className=="barrel" ||
+                    obj.fractureRule->className=="fence";
   noise.material=wooden ? MAT_WOOD : MAT_CLAY;
   noise.surface=wooden ? zenkit::MaterialGroup::WOOD : zenkit::MaterialGroup::STONE;
   noise.what=obj.visual+" break";
@@ -1526,24 +1831,60 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
 
 void DynamicWorld::syncFragments(BodyData& obj) {
   if(obj.fragments.empty()) return;
-  const bool sleeping=std::all_of(obj.fragments.begin(),obj.fragments.end(),[](const auto& body) { return body->isSleeping(); });
+  const bool sleeping=std::all_of(obj.fragments.begin(),obj.fragments.end(),[](const auto& body) {
+    return body==nullptr || body->isSleeping();
+    });
   if(sleeping && obj.fragmentsWereSleeping) return;
   obj.fragmentsWereSleeping=sleeping;
   if(!obj.fractureCallback) return;
   std::vector<Tempest::Matrix4x4> matrices;
   matrices.reserve(obj.fragments.size());
-  for(const auto& body:obj.fragments) matrices.push_back(body->matrix());
+  for(const auto& body:obj.fragments) {
+    if(body!=nullptr) {
+      matrices.push_back(body->matrix());
+      }
+    else {
+      // Preserve the mesh batch-to-piece mapping while hiding retired pieces.
+      auto hidden=Tempest::Matrix4x4::mkIdentity();
+      hidden.translate(0,-10000000.f,0);
+      matrices.push_back(hidden);
+      }
+    }
   obj.fractureCallback(true,matrices);
+  }
+
+void DynamicWorld::cleanupFragments(BodyData& obj) {
+  bool changed=false;
+  for(size_t i=0;i<obj.fragments.size();++i) {
+    auto& body=obj.fragments[i];
+    if(body==nullptr)
+      continue;
+    auto& since=obj.fragmentSleepTime[i];
+    if(!body->isSleeping()) {
+      since=-1;
+      continue;
+      }
+    if(traceTime>=0 && (since<0 || traceTime<since))
+      since=traceTime;
+    const bool expired=since>=0 && traceTime>=since && traceTime-since>=30;
+    const bool distant=hasFragmentObserver && (body->centerOfMass()-fragmentObserver).quadLength()>3000.f*3000.f;
+    if(!obj.fragmentPermanent[i] && (expired || distant)) {
+      body.reset();
+      changed=true;
+      }
+    }
+  if(changed)
+    obj.fragmentsWereSleeping=false;
   }
 
 size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float radius,
                                            const std::function<Tempest::Vec3(const Tempest::Vec3&,float)>& impulse,
                                            Npc* culprit, const Tempest::Vec3* pointCm) {
-  if(!movableVobs->enabled || !std::isfinite(radius) || radius<=0.f || !impulse)
+  if(!std::isfinite(radius) || radius<=0.f || !impulse)
     return 0;
   size_t count = 0;
   for(auto* obj:movableVobs->bodies) {
-    if(obj->body==nullptr)
+    if(obj->body==nullptr || (!movableVobs->enabled && obj->className!="fence"))
       continue;
     const auto target = obj->body->centerOfMass();
     if((target-center).quadLength()>radius*radius)
@@ -1557,7 +1898,7 @@ size_t DynamicWorld::applyMovableVobImpulse(const Tempest::Vec3& center, float r
       excluded.push_back(part.get());
     if(world->rayCast(center,target,visualMask,false,nullptr,&excluded).hasHit)
       continue;
-    if(obj->body->addImpulse(force,culprit,pointCm)) {
+    if(obj->className=="fence" || obj->body->addImpulse(force,culprit,pointCm)) {
       ++count;
       damageMovableVob(*obj,force.length(),pointCm!=nullptr ? *pointCm : target);
       }
@@ -1715,10 +2056,11 @@ void DynamicWorld::tick(uint64_t dt) {
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);
-  if(movableVobs->enabled)
-    for(auto* obj:movableVobs->bodies) {
+  for(auto* obj:movableVobs->bodies)
+    if(movableVobs->enabled || obj->className=="fence" || obj->pose->broken) {
       if(obj->pendingBreak) breakMovableVob(*obj);
       syncMovableVob(*obj);
+      cleanupFragments(*obj);
       syncFragments(*obj);
       }
   // NPC walking runs before native body integration. Finish only the motion
@@ -2295,10 +2637,12 @@ void DynamicWorld::Item::setObjMatrix(const Tempest::Matrix4x4& m) {
   }
 
 void DynamicWorld::Item::setAttachmentMatrix(const Tempest::Matrix4x4& m) {
-  if(obj==nullptr || obj->movableShape==nullptr || obj->body!=nullptr)
+  if(obj==nullptr || obj->movableShape==nullptr || (obj->body!=nullptr && obj->body->mass()>0.f) || obj->pose->broken)
     return;
   obj->current = m;
   obj->pose->transform = m;
+  if(obj->body!=nullptr)
+    obj->body->setObjMatrix(m);
   for(size_t i=0;i<obj->query.size();++i) {
     auto matrix = m;
     matrix.mul(obj->movableShape->parts[i].local);

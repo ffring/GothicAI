@@ -373,9 +373,15 @@ class DynamicWorld final {
     // Absolute game minutes. Trace creation is recorded at the physics tick,
     // independently of which NPC happens to inspect the body.
     void           setTraceTime(int64_t minutes);
+    // Hero position in world centimetres, used only to retire sleeping debris.
+    void           setFragmentObserver(const Tempest::Vec3& position);
     bool           setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4x4& matrix, Npc* culprit = nullptr);
     std::shared_ptr<const MovableVobPose> movableVobPose(uint32_t zenId) const;
     std::shared_ptr<const MovableVobPose> rayMovableVob(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
+    // One animation's optimal hit frame: each first-contact body takes damage once.
+    size_t         meleeMovableVobs(const Tempest::Vec3& origin, const Tempest::Vec3& forward,
+                                    float rangeCm, float weaponDamage, float strength, FractureRule::Melee kind,
+                                    Npc* attacker = nullptr);
     struct MovableVobSnapshot {
       uintptr_t          id = 0;
       uint32_t           zenId = uint32_t(-1);
@@ -400,8 +406,29 @@ class DynamicWorld final {
       bool sleeping = true;
       Tempest::Matrix4x4 transform;
       Tempest::Vec3 velocity, angularVelocity;
+      bool permanent = false;
+      int64_t asleepSince = -1;
       };
     std::vector<FragmentSnapshot> fragmentSnapshot() const;
+    struct RagdollSupport {
+      size_t        bone = 0;
+      uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);
+      int           category = 0;
+      bool          sleeping = false;
+      float         depth = 0;
+      Tempest::Vec3 axis, point1, point2;
+      uintptr_t     parentId = 0;
+      uint32_t      zenId = uint32_t(-1);
+      size_t        piece = size_t(-1);
+      std::string   visual, kind;
+      bool          broken = false, visible = true;
+      float         visibleDistance = -1;
+      Tempest::Vec3 visiblePoint;
+      uint32_t      sourceTriangle = uint32_t(-1);
+      };
+    // Native contacts, including sleeping parts, annotated with exact source
+    // faces to distinguish real visible support from a convex hull's cavity.
+    std::vector<RagdollSupport> ragdollSupports(const Ragdoll& ragdoll, float marginCm) const;
     // Diagnostic: what each movable hull touches or penetrates at its origin pose.
     struct MovableVobContact {
       std::string   other;      // visual of the other body, "landscape" for the world mesh
@@ -478,12 +505,16 @@ class DynamicWorld final {
     void           moveBullet(BulletBody& b, const Tempest::Vec3& dir, uint64_t dt);
     RayWaterResult implWaterRay(const Tempest::Vec3& from, const Tempest::Vec3& to, float stepHeight) const;
     bool           hasCollision(const NpcItem &it, CollisionTest& out);
+    void           prepareMovableVobShape(BodyData& body);
     void           rebuildMovableVob(BodyData& body);
     void           validateMovableVobs();
     void           syncMovableVob(BodyData& body);
     void           damageMovableVob(BodyData& body, float impulse, const Tempest::Vec3& point, bool arrow = false);
     void           breakMovableVob(BodyData& body);
     void           syncFragments(BodyData& body);
+    void           cleanupFragments(BodyData& body);
+    void           saveDestructionVobs(Serialize& fout) const;
+    void           loadDestructionVobs(Serialize& fin);
 
     std::unique_ptr<CollisionWorld>    world;
 
@@ -498,6 +529,8 @@ class DynamicWorld final {
     std::unique_ptr<BBoxList>          bboxList;
     std::unique_ptr<MovableVobs>       movableVobs;
     int64_t                           traceTime = -1;
+    Tempest::Vec3                     fragmentObserver;
+    bool                              hasFragmentObserver = false;
 
     static const float                 worldHeight;
   };

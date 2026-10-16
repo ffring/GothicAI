@@ -1,8 +1,13 @@
-# Visual basename glob (case-insensitive, no extension),class,health,impact threshold Ns/kg,health per excess Ns/kg,arrow health per Ns
+# Visual basename glob (case-insensitive, no extension),class,health,impact threshold Ns/kg,health per excess Ns/kg,arrow health per Ns,melee weapon coefficient,melee strength coefficient,fist multiplier,one-hand multiplier,two-hand multiplier
 # The threshold excludes walking and ordinary handling; a five metre fall or
 # a nearby blast exceeds it. Arrows deposit their own 0.12 kg momentum.
-NW_HARBOUR_BARREL_01,barrel,120,5,250,8.333334
-NW_CITY_WEAPON_BARREL_01,barrel,120,5,250,8.333334
-OC_BARREL_V?,barrel,120,5,250,8.333334
-NW_HARBOUR_CRATE_01,crate,100,5,250,8.333334
-AW_CRATE_01,crate,100,5,250,8.333334
+# Melee health = (weapon damage * weapon coefficient + STR * strength coefficient)
+# multiplied by the selected weapon kind. No critical-hit roll is consumed.
+NW_HARBOUR_BARREL_01,barrel,120,5,250,8.333334,0.5,0.5,0.35,1,1.3
+NW_CITY_WEAPON_BARREL_01,barrel,120,5,250,8.333334,0.5,0.5,0.35,1,1.3
+OC_BARREL_V?,barrel,120,5,250,8.333334,0.5,0.5,0.35,1,1.3
+NW_HARBOUR_CRATE_01,crate,100,5,250,8.333334,0.5,0.5,0.35,1,1.3
+AW_CRATE_01,crate,100,5,250,8.333334,0.5,0.5,0.35,1,1.3
+NW_NATURE_FENCE_01,fence,100,5,250,8.333334,0.5,0.5,0.35,1,1.3
+OW_LOB_FENCE_V?,fence,100,5,250,8.333334,0.5,0.5,0.35,1,1.3
+MIN_LOB_HANDRAIL_3,fence,100,5,250,8.333334,0.5,0.5,0.35,1,1.3

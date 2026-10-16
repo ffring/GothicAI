@@ -122,6 +122,7 @@ class MoveAlgo final {
     bool    implTick  (uint64_t dt, MvFlags fai);
     bool    tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement);
     bool    useCharacterVirtual();
+    bool    preserveMovementImpulse(uint64_t generation, State previousState, std::string_view backend);
 
     bool    tryMove   (float x, float y, float z);
     bool    tryMove   (float x, float y, float z, DynamicWorld::CollisionTest& out);
@@ -167,6 +168,8 @@ class MoveAlgo final {
     Npc&                npc;
     MovementTrace*      movementTrace = nullptr;
     uint64_t            movementTraceSerial = 0;
+    // Transient: projectile callbacks may accept a new impulse during a move.
+    uint64_t            movementImpulseGeneration = 0;
     mutable CacheLand   cache;
     mutable CacheWater  cacheW;
 

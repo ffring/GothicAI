@@ -114,6 +114,7 @@ class Ragdoll final {
     void prepareKinematicStep(float deltaSeconds);
     void finishKinematicStep();
     size_t boneForBodyId(uint32_t id) const;
+    std::vector<uint32_t> diagnosticBodyIds() const;
     Npc* noiseNpc() const;
     Npc* noiseCulprit() const;
     bool acceptNoise(uint64_t step);

@@ -281,6 +281,7 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     }
 
   const auto state = flags;
+  const auto impulseGeneration=movementImpulseGeneration;
   const bool dead  = npc.isDead();
   const bool swim  = (state==Swim);
   const bool dive  = (state==Dive);
@@ -310,6 +311,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     if(state!=Slide)
       dp.y = 0.f; // walking root bob cannot detach the controller from its support
     const bool moved = tickCharacterVirtual(dt,dp);
+    if(impulseGeneration!=movementImpulseGeneration)
+      return moved;
     guardEdgeMove();
     return moved;
     }
@@ -320,7 +323,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     dp += virtualJumpVelocity*float(dt);
 
   DynamicWorld::CollisionTest info;
-  if(!tryMove(dp,info)) {
+  const bool moved=tryMove(dp,info);
+  if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+    return true;
+  if(!moved) {
     info.preFall = false;
     if(state==Slide) {
       onGravityFailed(info,dt);
@@ -363,7 +369,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
        !npc.physic.hasFloorBelow({pos.x,std::max(pos.y,pos0.y),pos.z})) {
       npc.setPosition(pos0);
       DynamicWorld::CollisionTest vertical;
-      if(!tryMove({0,pos.y-pos0.y,0},vertical) && grav)
+      const bool movedVertical=tryMove({0,pos.y-pos0.y,0},vertical);
+      if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+        return true;
+      if(!movedVertical && grav)
         onGravityFailed(vertical,dt);
       fallSpeed.x = fallSpeed.z = 0.f;
       virtualJumpVelocity.x = virtualJumpVelocity.z = 0.f;
@@ -576,8 +585,11 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     // A protected return records the landing source before leaving this tick.
     // Attach its root to the detected floor first, as the normal path does below;
     // the fall step can otherwise leave that source below ground for one tick.
-    if(npc.needsRagdollQuestReturn())
+    if(npc.needsRagdollQuestReturn()) {
       npc.tryMove(Tempest::Vec3(0,-dY,0));
+      if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+        return true;
+      }
     // Resolve the protected throw before landing damage can lose the NPC.
     if(npc.recoverSpellThrow())
       return true;
@@ -611,6 +623,8 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     if(state==InAir && ground>=pos.y) {
       // rough landing
       npc.tryMove(Tempest::Vec3(0,-dY,0));
+      if(preserveMovementImpulse(impulseGeneration,state,"legacy"))
+        return true;
       //npc.setAnim(AnimationSolver::Idle);
       npc.setAnim(AnimationSolver::SlideA);
       }
@@ -682,7 +696,11 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   for(auto* item:nearbyItems)
     item->setPhysicsEnable(world);
   const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
+  const auto impulseGeneration=movementImpulseGeneration;
+  const auto previousState=flags;
   const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
+  if(preserveMovementImpulse(impulseGeneration,previousState,"virtual"))
+    return true;
   npc.setViewPosition(moved.position);
   virtualMovementActive = true;
   virtualGroundVelocity = moved.groundVelocity;
@@ -787,6 +805,19 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   return true;
   }
 
+bool MoveAlgo::preserveMovementImpulse(uint64_t generation,State previousState,std::string_view backend) {
+  if(generation==movementImpulseGeneration)
+    return false;
+  // Moving the controller also tests live projectiles. Their callbacks can
+  // launch this NPC before the move returns; its earlier ground result must
+  // not clear that new velocity or replace the airborne state with Run.
+  npc.setViewPosition(npc.physic.position());
+  resetCharacterVirtual();
+  if(TestBench::isActive())
+    TestBench::movementImpulseHandoff(npc,backend,uint32_t(previousState),uint32_t(flags),spellVelocity());
+  return true;
+  }
+
 void MoveAlgo::clearSpeed() {
   fallSpeed.x = 0;
   fallSpeed.y = 0;
@@ -843,6 +874,7 @@ bool MoveAlgo::addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, boo
     fallSpeed *= 2.f/speed;
   fallCount = 0;
   setState(InAir);
+  ++movementImpulseGeneration;
   return true;
   }
 
@@ -869,6 +901,7 @@ bool MoveAlgo::accessDamFly(float dx, float dz, char hitType) {
   fallSpeed = vec*0.75f;
   fallCount = 0;
   setState(InAir);
+  ++movementImpulseGeneration;
   return true;
   }
 

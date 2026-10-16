@@ -787,6 +787,7 @@ class Npc final {
     Tempest::Matrix4x4 mkPositionMatrix() const;
     void               resetCharacterVisualHeight();
     void               updateCharacterVisualHeight();
+    bool               updateLyingVisualHeight();
     void               releaseRagdoll(bool blend);
     bool               recoverRagdoll();
     bool               createRagdoll();
@@ -828,6 +829,8 @@ class Npc final {
       };
     std::vector<CharacterVisualStep> characterVisualSteps;
     float                          characterVisualYOffset = 0;
+    // Transient placement of an animated lying mesh; never changes the walking root.
+    float                          lieVisualYOffset = 0;
     Tempest::Vec3                  characterVisualSamplePosition;
     Tempest::Vec3                  characterVisualSampleNormal;
     uint64_t                       characterVisualSampleTick = 0;

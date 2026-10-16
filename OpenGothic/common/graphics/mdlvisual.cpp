@@ -1,6 +1,7 @@
 #include "mdlvisual.h"
 
 #include "graphics/mesh/skeleton.h"
+#include "graphics/mesh/protomesh.h"
 #include "game/serialize.h"
 #include "world/objects/npc.h"
 #include "world/objects/interactive.h"
@@ -735,6 +736,14 @@ void MdlVisual::setObjMatrix(const Tempest::Matrix4x4 &m, bool syncAttach) {
   view.setPose(m,renderedPose.empty() ? skInst->transform() : renderedPose.data());
   if(syncAttach)
     syncAttaches();
+  }
+
+bool MdlVisual::minSkinnedVertex(float fatness,Vec3& point) const {
+  const auto* mesh=view.protoMesh();
+  if(mesh==nullptr)
+    return false;
+  const auto* bones=renderedPose.empty() ? skInst->transform() : renderedPose.data();
+  return mesh->minSkinnedVertex(bones,skInst->boneCount(),pos,fatness,point);
   }
 
 void MdlVisual::setHeadRotation(float dx, float dz) {

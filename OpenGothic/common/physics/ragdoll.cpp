@@ -1081,6 +1081,13 @@ size_t Ragdoll::boneForBodyId(uint32_t id) const {
       return impl->rig->boneIndices[i];
   return noBone;
   }
+std::vector<uint32_t> Ragdoll::diagnosticBodyIds() const {
+  std::vector<uint32_t> result;
+  result.reserve(partCount());
+  for(size_t i=0;i<partCount();++i)
+    result.push_back(impl->native->GetBodyID(int(i)).GetIndexAndSequenceNumber());
+  return result;
+  }
 size_t Ragdoll::boneCount() const { return impl->rig!=nullptr ? impl->rig->numBones : 0; }
 float Ragdoll::mass() const { return valid() ? impl->actualMass : 0.f; }
 

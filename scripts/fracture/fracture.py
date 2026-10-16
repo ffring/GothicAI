@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed-seed Voronoi fracture of a convex outer shell, in Gothic centimetres.
+"""Fixed-seed Voronoi fracture of source shells, in Gothic centimetres.
 
 The source meshes and generated pieces contain game assets and belong in the
 local cache, never in git. Requires numpy and scipy (installed by fracture.sh).
@@ -111,7 +111,7 @@ def fracture(source, textures, seed, count):
             distance = np.dot(site, site) - np.dot(other, other)
             norm = np.linalg.norm(normal)
             bisectors.append(np.r_[normal / norm, distance / norm])
-        halfspaces = np.vstack((planes, bisectors))
+        halfspaces = np.vstack((planes, bisectors)) if bisectors else planes
         intersections = HalfspaceIntersection(halfspaces, site).intersections
         points, hull, faces = outward_triangles(intersections)
         centroid = np.zeros(3)
@@ -157,6 +157,43 @@ def fracture(source, textures, seed, count):
     if not 0.9 <= ratio <= 1.1:
         raise ValueError(f"fracture volume ratio {ratio} outside [0.9, 1.1]")
     return out.getvalue().encode("ascii"), outer.volume, ratio
+
+
+def fracture_boards(source, textures, seed, count):
+    """Cut each connected fence board separately, keeping the gaps empty."""
+    positions, indices = np.unique(source[:, :, :3].reshape(-1, 3), axis=0, return_inverse=True)
+    triangles = indices.reshape(-1, 3)
+    parents = list(range(len(positions)))
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    for triangle in triangles:
+        first = root(int(triangle[0]))
+        for index in triangle[1:]:
+            parents[root(int(index))] = first
+    groups = {}
+    for index, triangle in enumerate(triangles):
+        groups.setdefault(root(int(triangle[0])), []).append(index)
+    boards = [source[group] for _, group in sorted(groups.items())]
+    materials = [[textures[i] for i in group] for _, group in sorted(groups.items())]
+    if len(boards) > count:
+        raise ValueError(f"fence has {len(boards)} boards, exceeding {count} pieces")
+    volumes = [ConvexHull(board[:, :, :3].reshape(-1, 3)).volume for board in boards]
+    allocation = [1] * len(boards)
+    # Stable, volume-weighted allocation, with at least one piece per board.
+    for _ in range(count - len(boards)):
+        largest = max(range(len(boards)), key=lambda i: volumes[i] / (allocation[i] + 1))
+        allocation[largest] += 1
+    pieces = []
+    for index, (board, material, amount) in enumerate(zip(boards, materials, allocation)):
+        data, _, _ = fracture(board, material, seed + index, amount)
+        pieces.extend(data.decode("ascii").splitlines()[2:])
+    data = (f"GOTHIC_FRACTURE 1\npieces {count}\n" + "\n".join(pieces) + "\n").encode("ascii")
+    return data, sum(volumes), 1.0
 
 
 def validate(data):
@@ -218,11 +255,17 @@ def main():
     parser.add_argument("--verify", action="store_true", help="re-cut and compare bytes without overwriting")
     args = parser.parse_args()
     source_dir = args.cache / "source"
+    classes = {}
+    listing = source_dir / "visuals.csv"
+    if listing.exists():
+        with listing.open() as stream:
+            classes = {row["visual"]: row["class"] for row in csv.DictReader(stream)}
     rows = []
     for path in sorted(source_dir.glob("*.mesh")):
         source, textures = read_source(path)
         started = time.monotonic()
-        data, shell_volume, ratio = fracture(source, textures, args.seed, args.pieces)
+        cutter = fracture_boards if classes.get(path.stem) == "fence" else fracture
+        data, shell_volume, ratio = cutter(source, textures, args.seed, args.pieces)
         elapsed = time.monotonic() - started
         count, actual_volume = validate(data)
         ratio = actual_volume / shell_volume
