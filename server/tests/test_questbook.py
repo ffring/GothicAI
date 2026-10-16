@@ -17,6 +17,7 @@ from tests.fake_game import FakeGame, connected
 from tests.test_authoring import BOOK, graph  # noqa: F401 - the graph fixture
 from tests.test_dialogue import _until
 from tests.test_director import HILDA, LOBART, NAMES, SYMBOLS
+from tests.test_director import QUEST as VANILLA_QUEST
 
 THIEF = "DIR_NPC_2"
 GOODS = "ITFO_WINE"
@@ -78,6 +79,24 @@ def _ground(**change: Any) -> Ground:
             xp=50,
         ),
         **change,
+    )
+
+
+def _vanilla_story(graph, *, patches: Patches | None = None, **state: Any) -> Story:  # noqa: F811
+    world = WorldState(
+        vars={VANILLA_QUEST: 0, "KAPITEL": 1},
+        npcs={n: "alive" for n in NAMES},
+        symbols=dict(SYMBOLS),
+    )
+    return Story(graph, replace(world, **state), patches)
+
+
+def _vanilla_goal(state: str = "running", quest: str = VANILLA_QUEST) -> Quest:
+    return _quest(
+        stages=[
+            Stage("Дождаться работы на ферме.", [Goal("vanilla", quest=quest, state=state)]),
+            Stage("Рассказать Хильде.", [Goal("talk", npc=HILDA, talk=_talk("Работа началась."))]),
+        ]
     )
 
 
@@ -201,6 +220,165 @@ def test_goals_of_every_kind():
     assert Quest.of(q.to_dict()) == q
 
 
+@pytest.mark.parametrize(
+    ("requirement", "expression"),
+    [
+        (
+            {"kind": "quest", "quest": VANILLA_QUEST, "state": "success"},
+            ["==", ["var", VANILLA_QUEST], ["int", LOG_SUCCESS, "LOG_SUCCESS"]],
+        ),
+        (
+            {"kind": "knows", "node": "DIA_LOBART_WORKNOW"},
+            ["call", "NPC_KNOWSINFO", ["inst", "HERO"], ["sym", "DIA_LOBART_WORKNOW"]],
+        ),
+        ({"kind": "chapter", "chapter": 2}, [">=", ["var", "KAPITEL"], ["int", 2]]),
+    ],
+)
+def test_each_vanilla_requirement_is_a_condition_of_the_giving_dialog(requirement, expression):
+    q = _quest(requires=[requirement])
+    give = build(q)[1]["node"]
+    assert give["condition"] == ["&&", ["==", ["var", q.id], ["int", 0]], expression]
+    assert Quest.of(q.to_dict()) == q
+
+
+def test_all_vanilla_requirements_and_the_previous_quest_must_hold_together():
+    q = _quest(
+        after="DIR_Q0",
+        requires=[
+            {"kind": "quest", "quest": VANILLA_QUEST, "state": "running"},
+            {"kind": "knows", "node": "DIA_LOBART_WORKNOW"},
+            {"kind": "chapter", "chapter": 2},
+        ],
+    )
+    assert build(q)[1]["node"]["condition"] == [
+        "&&",
+        ["==", ["var", q.id], ["int", 0]],
+        ["==", ["var", "DIR_Q0"], ["int", LOG_SUCCESS, "LOG_SUCCESS"]],
+        ["==", ["var", VANILLA_QUEST], ["int", LOG_RUNNING, "LOG_RUNNING"]],
+        ["call", "NPC_KNOWSINFO", ["inst", "HERO"], ["sym", "DIA_LOBART_WORKNOW"]],
+        [">=", ["var", "KAPITEL"], ["int", 2]],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("state", "value"), [("running", LOG_RUNNING), ("success", LOG_SUCCESS), ("failed", LOG_FAILED)]
+)
+def test_a_vanilla_goal_waits_for_the_scripts_quest_state(state, value):
+    q = _vanilla_goal(state)
+    trigger = next(op for op in build(q) if op.get("id") == "DIR_Q1_S1G1")
+    assert trigger["on"] == "state" and trigger["steps"] == []
+    assert trigger["when"] == [
+        "&&",
+        ["==", ["var", q.id], ["int", LOG_RUNNING, "LOG_RUNNING"]],
+        ["==", ["var", "DIR_Q1_STAGE"], ["int", 1]],
+        ["==", ["var", VANILLA_QUEST], ["int", value, f"LOG_{state.upper()}"]],
+    ]
+    assert Quest.of(q.to_dict()) == q
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        {"kind": "quest", "quest": VANILLA_QUEST, "state": "running"},
+        {"kind": "quest", "quest": VANILLA_QUEST, "state": "success"},
+        {"kind": "knows", "node": "DIA_LOBART_WORKNOW"},
+        {"kind": "chapter", "chapter": 1},
+        {"kind": "chapter", "chapter": 6},
+    ],
+)
+def test_possible_vanilla_requirements_are_allowed(graph, requirement):  # noqa: F811
+    assert problems(_quest(requires=[requirement]), _ground(story=_vanilla_story(graph))) == []
+
+
+@pytest.mark.parametrize(
+    ("requirement", "why"),
+    [
+        ({"kind": "quest", "quest": "MIS_OTHER", "state": "running"}, "не переменная квеста"),
+        ({"kind": "quest", "quest": "KAPITEL", "state": "running"}, "не переменная квеста"),
+        ({"kind": "quest", "quest": VANILLA_QUEST, "state": "obsolete"}, "состояние квеста"),
+        ({"kind": "quest", "quest": VANILLA_QUEST, "state": "unknown"}, "состояние квеста"),
+        ({"kind": "knows", "node": "DIA_LOBART_WORKNOW_OK"}, "вариант ответа"),
+        ({"kind": "knows", "node": "DIA_NOWHERE"}, "нет ванильного диалога"),
+        ({"kind": "chapter", "chapter": 0}, "от 1 до 6"),
+        ({"kind": "chapter", "chapter": 7}, "от 1 до 6"),
+        ({"kind": "chapter", "chapter": True}, "от 1 до 6"),
+        ({"kind": "chapter", "chapter": 2.5}, "от 1 до 6"),
+        ({"kind": "chapter", "chapter": "2"}, "от 1 до 6"),
+    ],
+)
+def test_bad_vanilla_requirements_explain_why_the_quest_is_refused(graph, requirement, why):  # noqa: F811
+    errors = problems(_quest(requires=[requirement]), _ground(story=_vanilla_story(graph)))
+    assert any(why in error for error in errors), errors
+
+
+@pytest.mark.parametrize("kind", ["requirement", "goal"])
+@pytest.mark.parametrize("status", [LOG_FAILED, LOG_OBSOLETE])
+def test_a_closed_scripts_quest_cannot_be_required_to_succeed(graph, kind, status):  # noqa: F811
+    q = (
+        _quest(requires=[{"kind": "quest", "quest": VANILLA_QUEST, "state": "success"}])
+        if kind == "requirement"
+        else _vanilla_goal("success")
+    )
+    story = _vanilla_story(graph, vars={VANILLA_QUEST: status, "KAPITEL": 1})
+    errors = problems(q, _ground(story=story))
+    assert errors and any(VANILLA_QUEST in error for error in errors), errors
+
+
+@pytest.mark.parametrize("kind", ["requirement", "goal"])
+def test_a_scripts_quest_with_no_living_ending_cannot_be_required_to_succeed(graph, kind):  # noqa: F811
+    q = (
+        _quest(requires=[{"kind": "quest", "quest": VANILLA_QUEST, "state": "success"}])
+        if kind == "requirement"
+        else _vanilla_goal("success")
+    )
+    story = _vanilla_story(graph, npcs={**dict.fromkeys(NAMES, "alive"), LOBART: "dead"})
+    errors = problems(q, _ground(story=story))
+    assert errors and any(VANILLA_QUEST in error for error in errors), errors
+
+
+@pytest.mark.parametrize("reason", ["dead", "disabled", "chapter"])
+def test_a_requirement_cannot_wait_for_a_dialog_that_will_never_be_offered(graph, reason):  # noqa: F811
+    state: dict[str, Any] = {}
+    patches = Patches()
+    if reason == "dead":
+        state["npcs"] = {**dict.fromkeys(NAMES, "alive"), LOBART: "dead"}
+    elif reason == "disabled":
+        patches.disabled.add("DIA_LOBART_WORKNOW")
+    else:
+        state["vars"] = {VANILLA_QUEST: 0, "KAPITEL": 3}
+    story = _vanilla_story(graph, patches=patches, **state)
+    q = _quest(requires=[{"kind": "knows", "node": "DIA_LOBART_WORKNOW"}])
+    errors = problems(q, _ground(story=story))
+    assert errors and any("DIA_LOBART_WORKNOW" in error for error in errors), errors
+
+
+def test_a_dialog_already_known_is_allowed_even_when_its_owner_is_dead(graph):  # noqa: F811
+    story = _vanilla_story(
+        graph,
+        npcs={**dict.fromkeys(NAMES, "alive"), LOBART: "dead"},
+        knows={"DIA_LOBART_WORKNOW": True},
+    )
+    q = _quest(requires=[{"kind": "knows", "node": "DIA_LOBART_WORKNOW"}])
+    assert problems(q, _ground(story=story)) == []
+
+
+@pytest.mark.parametrize(
+    ("quest", "state"), [("MIS_OTHER", "running"), ("KAPITEL", "running"), (VANILLA_QUEST, "obsolete")]
+)
+def test_a_vanilla_goal_requires_a_graph_quest_and_a_supported_state(graph, quest, state):  # noqa: F811
+    errors = problems(_vanilla_goal(state, quest), _ground(story=_vanilla_story(graph)))
+    assert errors and any("стадия 1, цель 1" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("status", "state"),
+    [(0, "running"), (0, "success"), (LOG_SUCCESS, "success"), (LOG_FAILED, "failed")],
+)
+def test_a_vanilla_goal_accepts_achievable_or_already_reached_states(graph, status, state):  # noqa: F811
+    story = _vanilla_story(graph, vars={VANILLA_QUEST: status, "KAPITEL": 1})
+    assert problems(_vanilla_goal(state), _ground(story=story)) == []
+
+
 def test_the_code_goes_through_a_quest_before_it_is_made():
     assert problems(_quest(), _ground()) == []
     # the last stage ends in one talk
@@ -321,6 +499,58 @@ async def test_the_book_makes_a_quest_and_follows_it(graph):  # noqa: F811
 
         # the same title again is refused
         assert await book.make(_quest(id="DIR_Q2")) == ["поручение «Украденное вино» уже было"]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_vanilla_requirements_and_goals_survive_the_branch_log_and_load(graph):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        fake.vars[VANILLA_QUEST] = 0
+        fake.symbols["DIA_LOBART_WORKNOW"] = "info"
+        q = replace(
+            _vanilla_goal("success"),
+            requires=[
+                {"kind": "quest", "quest": VANILLA_QUEST, "state": "running"},
+                {"kind": "knows", "node": "DIA_LOBART_WORKNOW"},
+                {"kind": "chapter", "chapter": 2},
+            ],
+        )
+        assert await book.make(q) == []
+        assert patches.records(QUEST) == [{"op": QUEST, "quest": q.to_dict()}]
+        assert book.progress(q.id) == questbook.Progress("open", 0)
+        original_ops = patches.ops()
+        saved_seq = patches.memory.head("A")  # the quest's chronicle fact belongs to the save too
+        await _until(lambda: fake.heads[-1:] == [("A", saved_seq)])
+        await fake.send(type="session", branch="B", parent="A", parent_seq=saved_seq, reason="load")
+        await _until(lambda: patches.branch == "B" and chronicle.branch == "B")
+        assert book.all() == {q.id: q}
+        assert patches.records(QUEST) == [{"op": QUEST, "quest": q.to_dict()}]
+        assert patches.ops() == original_ops
+        assert book.progress(q.id) == questbook.Progress("open", 0)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_book_quest_cannot_write_a_scripts_variable(graph, monkeypatch):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, patches, _ = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        original_build = questbook.build
+
+        def writes_scripts_variable(q):
+            ops = original_build(q)
+            ops[1]["node"]["effects"].append({"do": "set", "var": VANILLA_QUEST, "value": LOG_SUCCESS})
+            return ops
+
+        monkeypatch.setattr(questbook, "build", writes_scripts_variable)
+        await _until(lambda: bool(fake.graph))
+        before = len(fake.graph)
+        errors = await book.make(_quest())
+        assert any("квест книги не меняет переменную скриптов" in error for error in errors), errors
+        assert book.all() == {} and patches.records(QUEST) == [] and patches.ops() == []
+        assert len(fake.graph) == before
     finally:
         await link_cm.__aexit__(None, None, None)
 

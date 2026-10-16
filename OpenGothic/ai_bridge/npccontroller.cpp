@@ -582,14 +582,16 @@ bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std
     return false;
     }
   a.state     = fn;
+  a.stateStart = a.start;
   a.toPlayer  = target->isPlayer();
   a.target    = target->instanceSymbol();
   a.targetNpc = target;
   a.deadline = a.type=="fight" ? 60000 : 20000;
-  c.scripted = true;
-  npc.setExternalControl(false);
+  // Keep perceptions external while queued speech and weapon removal finish.
+  // Release script control only once the queue has installed the requested state.
   npc.setTarget(target);
   npc.aiPush(AiQueue::aiStartState(fn,0,target,nullptr,""));
+  c.scripted = true;
   return true;
   }
 
@@ -597,11 +599,18 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
   auto& a  = *c.act;
   Npc&  npc = *c.npc;
   const bool in = npc.isInState(a.state);
+  if(in && npc.isExternalControl())
+    npc.setExternalControl(false);
   if(!a.entered) {
-    if(in) {
+    if(in && npc.isStateStarted()) {
       a.entered = true;
       } else {
-      if(now>a.start+StateStartMs)
+      if(npc.haveOutput()) {
+        // Queued speech goes first, just as for the other body actions.
+        a.stateStart = now;
+        a.deadline = now + a.timeout;
+        }
+      if(now>a.stateStart+StateStartMs)
         finishAction(c,"failed","the npc did not start to " + a.type);
       return;
       }
