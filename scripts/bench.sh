@@ -5,6 +5,10 @@
 #   scripts/bench.sh <scenario file | name from scripts/bench/> [out dir]
 #
 # env: GOTHIC_DIR    game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
+#      BENCH_HOST    auto (default): Ryzen first, ryzen: require Ryzen, local: this machine
+#      RYZEN_HOST    SSH host for Ryzen (default: ryzen)
+#      RYZEN_LOCK_WAIT seconds to wait for Ryzen (default: auto 120, ryzen 900)
+#      GAME_BIN      game executable (default: OpenGothic/build/opengothic/Gothic2Notr)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)
 #      WORLD         start a fresh game in this world instead (NEWWORLD.ZEN, OLDWORLD.ZEN, ADDONWORLD.ZEN, DRAGONISLAND.ZEN)
 #      NO_BUILD=1    do not rebuild the engine first
@@ -19,8 +23,16 @@
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
+DEFAULT_GOTHIC_DIR="/Volumes/DevSSD/Dev/games/Gothic II"
+GOTHIC_DIR="${GOTHIC_DIR:-$DEFAULT_GOTHIC_DIR}"
 BIN="$ROOT/OpenGothic/build/opengothic/Gothic2Notr"
+GAME_BIN="${GAME_BIN:-$BIN}"
+HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
+BENCH_HOST="${BENCH_HOST:-auto}"
+case "$BENCH_HOST" in
+  auto|ryzen|local) ;;
+  *) echo "bench: BENCH_HOST must be auto, ryzen or local" >&2; exit 2 ;;
+esac
 
 SCEN="${1:?usage: scripts/bench.sh <scenario> [out dir]}"
 [[ -f "$SCEN" ]] || SCEN="$ROOT/scripts/bench/$SCEN.bench"
@@ -30,6 +42,71 @@ NAME="$(basename "$SCEN" .bench)"
 OUT="${2:-$ROOT/.bench/$NAME-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
+
+if [[ "$BENCH_HOST" != local ]]; then
+  LOCAL_REASON=""
+  if [[ "${KEEP:-}" == 1 ]]; then
+    LOCAL_REASON="KEEP=1 needs the local game"
+  elif [[ "${OPENGOTHIC_BENCH_ENCODER:-}" == *videotoolbox* ]]; then
+    LOCAL_REASON="the videotoolbox encoder needs macOS"
+  elif [[ "$GOTHIC_DIR" != "$DEFAULT_GOTHIC_DIR" ]]; then
+    LOCAL_REASON="GOTHIC_DIR uses local game data"
+  else
+    LOCAL_REASON="$(python3 - "$OUT" "$HD_TEXTURES" <<'PY'
+import os
+import sys
+
+def path(value):
+    return os.path.realpath(os.path.expanduser(value))
+
+out, textures = map(path, sys.argv[1:])
+for name, value in sorted(os.environ.items()):
+    if not name.startswith(("OPENGOTHIC_", "GOTHIC_", "TEMPEST_")):
+        continue
+    if name in ("GOTHIC_DIR", "GOTHIC_AI_URL"):
+        continue
+    if not value.startswith(("/", "~/")):
+        continue
+    value = path(value)
+    if name == "OPENGOTHIC_TEXTURES" and value == textures:
+        continue
+    if os.path.commonpath((out, value)) == out:
+        continue
+    print(f"{name} points to a local path outside OUT")
+    break
+PY
+)"
+  fi
+  if [[ -n "$LOCAL_REASON" ]]; then
+    if [[ "$BENCH_HOST" == ryzen ]]; then
+      echo "bench: cannot run on Ryzen: $LOCAL_REASON" >&2
+      exit 2
+    fi
+    echo "bench: falling back to Mac: $LOCAL_REASON" >&2
+  else
+    if [[ "$BENCH_HOST" == auto ]]; then
+      LOCK_WAIT="${RYZEN_LOCK_WAIT:-120}"
+    else
+      LOCK_WAIT="${RYZEN_LOCK_WAIT:-900}"
+    fi
+    RYZEN_RC=0
+    RYZEN_LOCK_WAIT="$LOCK_WAIT" "$ROOT/scripts/ryzen.sh" bench "$SCEN" "$OUT" >"$OUT/ryzen.log" 2>&1 || RYZEN_RC=$?
+    if [[ -f "$OUT/game.log" ]]; then
+      printf 'ryzen\n' >"$OUT/host.txt"
+      echo "bench: ran on ryzen"
+      echo "$OUT"
+      exit "$RYZEN_RC"
+    fi
+    if [[ "$BENCH_HOST" == ryzen ]]; then
+      cat "$OUT/ryzen.log" >&2
+      # A successful transport without a game log is still a failed launch.
+      [[ "$RYZEN_RC" != 0 ]] || RYZEN_RC=1
+      exit "$RYZEN_RC"
+    fi
+    LOCAL_REASON="$(awk 'NF && !/^Ryzen: removed / && !/^bench: output in / { line=$0 } END { print line }' "$OUT/ryzen.log")"
+    echo "bench: falling back to Mac: ${LOCAL_REASON:-Ryzen did not start the game (exit $RYZEN_RC)}" >&2
+  fi
+fi
 
 if [[ -n "${WORLD:-}" ]]; then
   START_ARGS=(-nomenu -w "$WORLD")
@@ -80,14 +157,13 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${CHARACTER_VIRT
 fi
 
 # the sharper textures the launcher gives the game too (scripts/hd-textures.sh)
-HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
 if [[ -z "${OPENGOTHIC_TEXTURES+set}" && -d "$HD_TEXTURES" ]]; then
   export OPENGOTHIC_TEXTURES="$HD_TEXTURES"
 fi
 
 START=$(date +%s)
 (cd "$RUN" && exec env TEMPEST_BACKGROUND=1 OPENGOTHIC_BENCH="$SCEN" OPENGOTHIC_BENCH_OUT="$OUT" ${KEEP:+OPENGOTHIC_BENCH_KEEP=1} \
-  "$BIN" -g "$GOTHIC_DIR" -window -devmode "${START_ARGS[@]}") >"$OUT/game.log" 2>&1 &
+  "$GAME_BIN" -g "$GOTHIC_DIR" -window -devmode "${START_ARGS[@]}") >"$OUT/game.log" 2>&1 &
 PID=$!
 for ((i = 0; i < ${TIMEOUT:-300} * 4; i++)); do
   kill -0 "$PID" 2>/dev/null || break
@@ -101,4 +177,11 @@ wait "$PID" || true
 echo "bench: game ran $(( $(date +%s) - START )) s, output in $OUT"
 grep -E "^\[bench\] (scenario|can not|unknown|marvin failed|goto failed|walkto: no|foreach|waitarrive)" "$OUT/game.log" || true
 
-python3 "$ROOT/scripts/bench_report.py" "$OUT"
+HOST=mac
+[[ "${RYZEN_BENCH:-}" != 1 ]] || HOST=ryzen
+printf '%s\n' "$HOST" >"$OUT/host.txt"
+REPORT_RC=0
+python3 "$ROOT/scripts/bench_report.py" "$OUT" || REPORT_RC=$?
+echo "bench: ran on $HOST"
+echo "$OUT"
+exit "$REPORT_RC"

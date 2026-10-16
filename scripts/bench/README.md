@@ -6,11 +6,23 @@ cases of a mechanic (foot IK first) without a person watching the game.
 
 ```bash
 scripts/bench.sh smoke                      # a scenario from scripts/bench/<name>.bench, or a path
-NO_BUILD=1 scripts/bench.sh ik-sweep        # skip the incremental build
+BENCH_HOST=local NO_BUILD=1 scripts/bench.sh ik-sweep  # local, skip the incremental build
 ```
 
-A run takes the game start (~10 s from a save) plus the scenario time. The game window is minimized,
-does not take the focus and plays no sound, so it can run while someone works on the same Mac.
+`BENCH_HOST=auto` (default) runs on Ryzen through `scripts/ryzen.sh` and copies all output back.
+It falls back to this Mac with one line explaining why if SSH, setup, the lock or game startup fails.
+Once the returned output contains `game.log`, the Ryzen result is final, including a failing exit code;
+the game is not run again locally. The lock wait defaults to 120 seconds (`RYZEN_LOCK_WAIT`).
+`BENCH_HOST=ryzen` requires Ryzen, defaults to a 900-second lock wait and never falls back;
+`BENCH_HOST=local` runs on this machine. `KEEP=1`, a VideoToolbox encoder, a custom `GOTHIC_DIR`
+or other Mac-only game paths require local execution (`auto` falls back, `ryzen` exits with code 2).
+`NO_BUILD=1` only skips a local build; Ryzen always checks its engine source hash.
+
+For performance comparisons (before/after or FPS), run both takes on the same machine:
+pin `BENCH_HOST=ryzen` or `BENCH_HOST=local`. `host.txt` and the report header identify the host.
+
+A run takes the game start (~10 s from a save) plus the scenario time. On Mac the game window is minimized,
+does not take the focus and plays no sound, so it can run while someone works on the same machine.
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the
 random idle animations the game picks).
 
@@ -125,6 +137,7 @@ Output goes to `.bench/<scenario>-<time>/` (not in git):
 | `<segment>.mp4` | the video, 800x600, 30 fps |
 | `metrics.csv` | a row per frame: player state, IK state, joints before and after IK, ground |
 | `bench.log`, `game.log` | what the scenario did, the engine log |
+| `host.txt` | `ryzen` or `mac`, also shown in the report header |
 
 More frames or a comparison:
 
