@@ -1,0 +1,532 @@
+{
+  "navmesh": {
+    "key": "dbf24e265365ef39",
+    "complete": true,
+    "whole_world": true,
+    "movable_vobs": false,
+    "from_cache": false,
+    "build_seconds": 10.2463693,
+    "load_seconds": 0.0874844,
+    "extraction_seconds": 0.089552143,
+    "cache_bytes": 11266644,
+    "triangles": 1395670,
+    "water_triangles": 10530,
+    "tiles": 1537,
+    "polygons": 48286,
+    "radius_m": 0.0817193016,
+    "height_m": 1.40181518,
+    "climb_m": 0.599999964,
+    "capsule_height_m": 0.6259076,
+    "capsule_center_height_m": 1.08886135,
+    "slope_deg": 50,
+    "cell_size_m": 0.200000003,
+    "cell_height_m": 0.100000001,
+    "water_depth_m": 1.39999998,
+    "tile_cells": 128
+  },
+  "cache_load": {
+    "key": "dbf24e265365ef39",
+    "complete": true,
+    "whole_world": true,
+    "movable_vobs": false,
+    "from_cache": true,
+    "build_seconds": 10.2463693,
+    "load_seconds": 0.08704924,
+    "extraction_seconds": 0.089037324,
+    "cache_bytes": 11266644,
+    "triangles": 1395670,
+    "water_triangles": 10530,
+    "tiles": 1537,
+    "polygons": 48286,
+    "radius_m": 0.0817193016,
+    "height_m": 1.40181518,
+    "climb_m": 0.599999964,
+    "capsule_height_m": 0.6259076,
+    "capsule_center_height_m": 1.08886135,
+    "slope_deg": 50,
+    "cell_size_m": 0.200000003,
+    "cell_height_m": 0.100000001,
+    "water_depth_m": 1.39999998,
+    "tile_cells": 128
+  },
+  "coverage": {
+    "edges": 3402,
+    "reachable": 3368,
+    "reachable_pct": 99.00058788947678,
+    "longer_than_1_5": 2,
+    "longer_than_1_5_pct": 0.058788947677836566,
+    "longer_than_1_5_reachable_pct": 0.05938242280285035,
+    "top20_missing": [
+      {
+        "from": "NW_CITY_HABOUR_SHIP_01",
+        "to": "NW_CITY_PIRATESCAMP_01",
+        "from_place": "набережная Хориниса",
+        "to_place": "стоянка Скипа на берегу",
+        "edge_length_cm": 9389,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_LAKE_GREG_TREASURE_01",
+        "to": "NW_LAKE__WATER_04",
+        "from_place": "озеро у большой фермы",
+        "to_place": "озеро у большой фермы",
+        "edge_length_cm": 3801,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_FARM1_OUT_10",
+        "to": "NW_FARM1_OUT_15",
+        "from_place": "двор фермы Лобарта",
+        "to_place": "двор фермы Лобарта",
+        "edge_length_cm": 2434,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_FARM1_OUT_07",
+        "to": "NW_FARM1_OUT_10",
+        "from_place": "двор фермы Лобарта",
+        "to_place": "двор фермы Лобарта",
+        "edge_length_cm": 1706,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_FARM1_MILL_04",
+        "to": "NW_FARM1_OUT_10",
+        "from_place": "мельница фермы Лобарта",
+        "to_place": "двор фермы Лобарта",
+        "edge_length_cm": 1605,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_PATH_TO_MONASTER_AREA_04",
+        "to": "NW_PATH_TO_MONASTER_AREA_05",
+        "from_place": "окрестности дороги к монастырю",
+        "to_place": "окрестности дороги к монастырю",
+        "edge_length_cm": 1398,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_PATH_TO_MONASTER_AREA_04",
+        "to": "NW_PATH_TO_MONASTER_AREA_10",
+        "from_place": "окрестности дороги к монастырю",
+        "to_place": "окрестности дороги к монастырю",
+        "edge_length_cm": 1230,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_FOREST_PATH_66",
+        "to": "NW_FOREST_PATH_67",
+        "from_place": "лес с кострищами",
+        "to_place": "лес с кострищами",
+        "edge_length_cm": 1048,
+        "reason": "end_off_mesh"
+      },
+      {
+        "from": "NW_CITY_KANAL_07",
+        "to": "NW_CITY_KANAL_08",
+        "from_place": "проходы канализации Хориниса",
+        "to_place": "проходы канализации Хориниса",
+        "edge_length_cm": 1030,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_PATH_TO_MONASTER_AREA_03",
+        "to": "NW_PATH_TO_MONASTER_AREA_04",
+        "from_place": "окрестности дороги к монастырю",
+        "to_place": "окрестности дороги к монастырю",
+        "edge_length_cm": 945,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_CITY_MERCHANT_PATCH_45",
+        "to": "NW_CITY_MERCHANT_PATCH_45_B",
+        "from_place": "проход от городских ворот к рынку",
+        "to_place": "проход от городских ворот к рынку",
+        "edge_length_cm": 910,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_PATH_TO_MONASTERY_06",
+        "to": "NW_PATH_TO_MONASTER_AREA_04",
+        "from_place": "дорога к монастырю",
+        "to_place": "окрестности дороги к монастырю",
+        "edge_length_cm": 758,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_PATH_TO_MONASTER_AREA_04",
+        "to": "NW_PATH_TO_MONASTER_AREA_09",
+        "from_place": "окрестности дороги к монастырю",
+        "to_place": "окрестности дороги к монастырю",
+        "edge_length_cm": 691,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_LIGHTHOUSE_IN_15",
+        "to": "NW_LIGHTHOUSE_IN_16",
+        "from_place": "внутренние помещения маяка",
+        "to_place": "внутренние помещения маяка",
+        "edge_length_cm": 600,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_CITY_MERCHANT_PATCH_45_B",
+        "to": "NW_CITY_MERCHANT_PATCH_45_C",
+        "from_place": "проход от городских ворот к рынку",
+        "to_place": "проход от городских ворот к рынку",
+        "edge_length_cm": 596,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_CASTLEMINE_TROLL_04_A",
+        "to": "NW_CASTLEMINE_TROLL_04_B",
+        "from_place": "стоянка лесоруба Грома",
+        "to_place": "стоянка лесоруба Грома",
+        "edge_length_cm": 578,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_LIGHTHOUSE_IN_11",
+        "to": "NW_LIGHTHOUSE_IN_13",
+        "from_place": "внутренние помещения маяка",
+        "to_place": "внутренние помещения маяка",
+        "edge_length_cm": 571,
+        "reason": "end_off_mesh"
+      },
+      {
+        "from": "NW_LIGHTHOUSE_IN_10",
+        "to": "NW_LIGHTHOUSE_IN_11",
+        "from_place": "внутренние помещения маяка",
+        "to_place": "внутренние помещения маяка",
+        "edge_length_cm": 567,
+        "reason": "disconnected"
+      },
+      {
+        "from": "NW_LIGHTHOUSE_IN_13",
+        "to": "NW_LIGHTHOUSE_IN_14",
+        "from_place": "внутренние помещения маяка",
+        "to_place": "внутренние помещения маяка",
+        "edge_length_cm": 551,
+        "reason": "start_off_mesh"
+      },
+      {
+        "from": "NW_TROLLAREA_PORTALTEMPEL_27",
+        "to": "NW_TROLLAREA_PORTALTEMPEL_DEADALLIGATOR",
+        "from_place": "храм древнего портала",
+        "to_place": "храм древнего портала",
+        "edge_length_cm": 528,
+        "reason": "disconnected"
+      }
+    ]
+  },
+  "measurements": [
+    {
+      "region": "all",
+      "mode": "direct",
+      "n": 204,
+      "arrived": 61,
+      "arrival_pct": 29.901960784313726,
+      "stuck_events": 314,
+      "no_path": 0,
+      "stuck_per_100": 153.92156862745097,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 26133
+    },
+    {
+      "region": "all",
+      "mode": "mesh",
+      "n": 204,
+      "arrived": 155,
+      "arrival_pct": 75.98039215686275,
+      "stuck_events": 27,
+      "no_path": 4,
+      "stuck_per_100": 13.235294117647058,
+      "median_elapsed_ms": 49100.0,
+      "median_arrival_ms": 39867
+    },
+    {
+      "region": "harbour",
+      "mode": "direct",
+      "n": 34,
+      "arrived": 7,
+      "arrival_pct": 20.58823529411765,
+      "stuck_events": 48,
+      "no_path": 0,
+      "stuck_per_100": 141.1764705882353,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 26033
+    },
+    {
+      "region": "harbour",
+      "mode": "mesh",
+      "n": 34,
+      "arrived": 29,
+      "arrival_pct": 85.29411764705883,
+      "stuck_events": 2,
+      "no_path": 0,
+      "stuck_per_100": 5.882352941176471,
+      "median_elapsed_ms": 53783.5,
+      "median_arrival_ms": 50933
+    },
+    {
+      "region": "lobart",
+      "mode": "direct",
+      "n": 34,
+      "arrived": 20,
+      "arrival_pct": 58.8235294117647,
+      "stuck_events": 33,
+      "no_path": 0,
+      "stuck_per_100": 97.05882352941177,
+      "median_elapsed_ms": 43600.0,
+      "median_arrival_ms": 32650.0
+    },
+    {
+      "region": "lobart",
+      "mode": "mesh",
+      "n": 34,
+      "arrived": 30,
+      "arrival_pct": 88.23529411764706,
+      "stuck_events": 8,
+      "no_path": 1,
+      "stuck_per_100": 23.529411764705884,
+      "median_elapsed_ms": 36133.0,
+      "median_arrival_ms": 35416.5
+    },
+    {
+      "region": "market",
+      "mode": "direct",
+      "n": 34,
+      "arrived": 8,
+      "arrival_pct": 23.529411764705884,
+      "stuck_events": 63,
+      "no_path": 0,
+      "stuck_per_100": 185.2941176470588,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 21433.5
+    },
+    {
+      "region": "market",
+      "mode": "mesh",
+      "n": 34,
+      "arrived": 22,
+      "arrival_pct": 64.70588235294117,
+      "stuck_events": 7,
+      "no_path": 1,
+      "stuck_per_100": 20.58823529411765,
+      "median_elapsed_ms": 64650.0,
+      "median_arrival_ms": 33283.0
+    },
+    {
+      "region": "onar",
+      "mode": "direct",
+      "n": 34,
+      "arrived": 12,
+      "arrival_pct": 35.294117647058826,
+      "stuck_events": 47,
+      "no_path": 0,
+      "stuck_per_100": 138.23529411764707,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 31883.5
+    },
+    {
+      "region": "onar",
+      "mode": "mesh",
+      "n": 34,
+      "arrived": 29,
+      "arrival_pct": 85.29411764705883,
+      "stuck_events": 5,
+      "no_path": 0,
+      "stuck_per_100": 14.705882352941176,
+      "median_elapsed_ms": 45733.0,
+      "median_arrival_ms": 43900
+    },
+    {
+      "region": "port_streets",
+      "mode": "direct",
+      "n": 34,
+      "arrived": 6,
+      "arrival_pct": 17.647058823529413,
+      "stuck_events": 52,
+      "no_path": 0,
+      "stuck_per_100": 152.94117647058823,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 29900.0
+    },
+    {
+      "region": "port_streets",
+      "mode": "mesh",
+      "n": 34,
+      "arrived": 31,
+      "arrival_pct": 91.17647058823529,
+      "stuck_events": 2,
+      "no_path": 1,
+      "stuck_per_100": 5.882352941176471,
+      "median_elapsed_ms": 52116.5,
+      "median_arrival_ms": 50867
+    },
+    {
+      "region": "upper_streets",
+      "mode": "direct",
+      "n": 34,
+      "arrived": 8,
+      "arrival_pct": 23.529411764705884,
+      "stuck_events": 71,
+      "no_path": 0,
+      "stuck_per_100": 208.8235294117647,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 15533.5
+    },
+    {
+      "region": "upper_streets",
+      "mode": "mesh",
+      "n": 34,
+      "arrived": 14,
+      "arrival_pct": 41.1764705882353,
+      "stuck_events": 3,
+      "no_path": 1,
+      "stuck_per_100": 8.823529411764707,
+      "median_elapsed_ms": 90000.0,
+      "median_arrival_ms": 24350.0
+    }
+  ],
+  "paired": {
+    "n": 204,
+    "both_arrive": 61,
+    "only_mesh_arrives": 94,
+    "only_direct_arrives": 0,
+    "neither_arrives": 49,
+    "common_arrival_direct_ms": 26133,
+    "common_arrival_mesh_ms": 24133,
+    "common_arrival_delta_ms": 0
+  },
+  "control": [
+    {
+      "mode": "direct",
+      "start": "intentional",
+      "goal": "FP_ROAM_FARM1_SHEEP_09",
+      "success": false,
+      "elapsed_ms": 90000,
+      "limit_ms": 90000,
+      "distance_cm": 1253.22437,
+      "path_complete": true,
+      "path_reason": "ok",
+      "corners": 3,
+      "corners_visited": 1,
+      "final_position": [
+        14111.7979,
+        1799.73108,
+        -15989.3154
+      ],
+      "target_position": [
+        12875.9541,
+        1629.75745,
+        -15869.4385
+      ],
+      "sample": "intentional-direct",
+      "region": "intentional",
+      "npc": "BAU_954_MALETH",
+      "seed": 7,
+      "stuck_events": 1
+    },
+    {
+      "mode": "mesh",
+      "start": "intentional",
+      "goal": "FP_ROAM_FARM1_SHEEP_09",
+      "success": true,
+      "elapsed_ms": 23767,
+      "limit_ms": 90000,
+      "distance_cm": 98.554657,
+      "path_complete": true,
+      "path_reason": "ok",
+      "corners": 3,
+      "corners_visited": 3,
+      "final_position": [
+        12971.9385,
+        1650.88574,
+        -15862.1162
+      ],
+      "target_position": [
+        12875.9541,
+        1629.75745,
+        -15869.4385
+      ],
+      "sample": "intentional-mesh",
+      "region": "intentional",
+      "npc": "BAU_954_MALETH",
+      "seed": 7,
+      "stuck_events": 0
+    }
+  ],
+  "top10_direct_stuck_places": [
+    {
+      "place": "бедные дома портового квартала",
+      "walks": 30,
+      "failures": 30,
+      "stuck_events": 46
+    },
+    {
+      "place": "дома Верхнего квартала у лавки Лютеро",
+      "walks": 15,
+      "failures": 15,
+      "stuck_events": 36
+    },
+    {
+      "place": "улицы Верхнего квартала",
+      "walks": 9,
+      "failures": 9,
+      "stuck_events": 25
+    },
+    {
+      "place": "дома и склад у гавани",
+      "walks": 8,
+      "failures": 7,
+      "stuck_events": 17
+    },
+    {
+      "place": "рыночная площадь Хориниса",
+      "walks": 8,
+      "failures": 8,
+      "stuck_events": 16
+    },
+    {
+      "place": "бордель портового квартала",
+      "walks": 6,
+      "failures": 6,
+      "stuck_events": 16
+    },
+    {
+      "place": "кухня большой фермы",
+      "walks": 6,
+      "failures": 5,
+      "stuck_events": 15
+    },
+    {
+      "place": "покои Ли и Халеда",
+      "walks": 5,
+      "failures": 5,
+      "stuck_events": 12
+    },
+    {
+      "place": "дорога от фермы Лобарта к Хоринису",
+      "walks": 6,
+      "failures": 5,
+      "stuck_events": 11
+    },
+    {
+      "place": "проход от городских ворот к рынку",
+      "walks": 2,
+      "failures": 2,
+      "stuck_events": 10
+    }
+  ],
+  "pursuit": {
+    "n": 0,
+    "reason": "The existing come/approach commands only support NPC-to-hero or hero-to-NPC. There is no NPC-to-routine-NPC chase command or moving-target navmesh replanning fixture."
+  },
+  "raw_omitted": [
+    {
+      "name": "stuck.jsonl",
+      "bytes": 3228733
+    }
+  ]
+}

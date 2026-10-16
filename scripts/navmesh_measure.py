@@ -321,6 +321,7 @@ def summarize(args):
                   "stuck_events": value["stuck_events"]} for name, value in direct_places.items()]
     top_stuck.sort(key=lambda row: (row["stuck_events"], row["failures"]), reverse=True)
     matched = [value for value in paired.values() if "direct" in value and "mesh" in value]
+    common = [pair for pair in matched if pair["direct"].get("success") and pair["mesh"].get("success")]
     outcome = Counter((bool(pair["direct"].get("success")), bool(pair["mesh"].get("success"))) for pair in matched)
     stats = json.loads((args.output / "prepare" / "navmesh-stats.json").read_text())
     load_path = args.output / "cache-load" / "navmesh-stats.json"
@@ -329,7 +330,10 @@ def summarize(args):
             longer_than_1_5=long, longer_than_1_5_pct=100*long/len(coverage) if coverage else 0,
             longer_than_1_5_reachable_pct=100*long/complete if complete else 0, top20_missing=top_missing),
         measurements=measurements, paired=dict(n=len(matched), both_arrive=outcome[True, True],
-            only_mesh_arrives=outcome[False, True], only_direct_arrives=outcome[True, False], neither_arrives=outcome[False, False]),
+            only_mesh_arrives=outcome[False, True], only_direct_arrives=outcome[True, False], neither_arrives=outcome[False, False],
+            common_arrival_direct_ms=statistics.median(pair["direct"]["elapsed_ms"] for pair in common) if common else None,
+            common_arrival_mesh_ms=statistics.median(pair["mesh"]["elapsed_ms"] for pair in common) if common else None,
+            common_arrival_delta_ms=statistics.median(pair["mesh"]["elapsed_ms"]-pair["direct"]["elapsed_ms"] for pair in common) if common else None),
         control=[row for row in trials if row.get("region") == "intentional"], top10_direct_stuck_places=top_stuck[:10],
         pursuit={"n": 0, "reason": "The existing come/approach commands only support NPC-to-hero or hero-to-NPC. There is no NPC-to-routine-NPC chase command or moving-target navmesh replanning fixture."})
     raw_dir = report / "raw"

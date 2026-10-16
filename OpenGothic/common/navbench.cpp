@@ -125,7 +125,7 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
         auto path=mesh->findPath(meters(wp.groundPos),meters(c.point->groundPos));
         edges<<"{\"from\":"<<std::quoted(wp.name)<<",\"to\":"<<std::quoted(c.point->name)
              <<",\"complete\":"<<path.complete<<",\"reason\":"<<std::quoted(path.reason)
-             <<",\"edge_length_cm\":"<<(wp.groundPos-c.point->groundPos).length()
+             <<",\"edge_length_cm\":"<<c.len
              <<",\"path_length_cm\":"<<path.length*100<<",\"start_snap_m\":"<<path.startSnapDistance
              <<",\"end_snap_m\":"<<path.endSnapDistance<<"}\n";
       }
