@@ -982,6 +982,7 @@ struct Bench {
   uint64_t    busyAt    = 0;      // an npc of the AI spoke (or had a line waiting)
   bool        waitReply = false;
   std::string waitAiKey, waitAiStage;  // waitai: until the bridge says it got that far
+  std::unordered_set<std::string> brokenSignals; // explicit server barriers, independent of NPC lines
   uint64_t    waitAiEnd = 0;
   bool        replyNeed = false;  // a line has to start after replyFrom first
   uint64_t    replyFrom = 0;
@@ -10585,7 +10586,8 @@ bool waitingForReply() {
 bool waitingForAi() {
   if(bench.waitAiKey.empty())
     return false;
-  if(TestBench::aiReached && TestBench::aiReached(bench.waitAiKey,bench.waitAiStage)) {
+  const bool signalled=bench.waitAiKey=="broken" && bench.brokenSignals.count(bench.waitAiStage)>0;
+  if(signalled || (TestBench::aiReached && TestBench::aiReached(bench.waitAiKey,bench.waitAiStage))) {
     say("waitai " + bench.waitAiKey + " " + bench.waitAiStage);
     bench.waitAiKey.clear();
     return false;
@@ -11457,6 +11459,11 @@ bool TestBench::physicsTracesDebug(World& world,Npc& player,std::string_view com
 
 bool TestBench::destructionTracesDebug(World& world,Npc& player,std::string_view command,
                                       std::string& value,std::string& error) {
+  if(command.starts_with("signal ")) {
+    bench.brokenSignals.insert(std::string(command.substr(7)));
+    value="{}";
+    return true;
+    }
   const auto fail=[&](std::string_view message) {error=message;return false;};
   const auto park=[&](Npc& npc,const Vec3& point) {
     npc.clearAiQueue();npc.clearState(false);npc.clearGoTo();npc.stopWalking();npc.setInteraction(nullptr,true);

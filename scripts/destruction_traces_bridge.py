@@ -93,6 +93,7 @@ async def create(link: GameLink, directory: Path) -> dict[str, Any]:
     blocked_truth = await native(link, "blocked")
     blocked = await view(link, sample["npc"], directory, "behind-wall")
     assert not any(row["id"] == sample["trace_id"] for row in blocked["traces"]), blocked
+    assert trace_truth(blocked_truth)["distance_cm"] <= 1500, blocked_truth
     assert not trace_truth(blocked_truth)["can_ray_hit_point"], blocked_truth
     before_advance = await native(link, "visible")
     target = (before_advance["game_minutes"] + 17) % (24 * 60)
@@ -119,6 +120,13 @@ async def reload(link: GameLink, directory: Path, created: dict[str, Any]) -> di
     for key in ("appeared_at", "actor_truth", "position_cm", "name", "waypoint"):
         assert truth[key] == original[key], (key, original, truth)
     assert loaded["age"] >= 17, loaded
+    # Prepare the requested single m5b run after preserving the untouched slot-2
+    # evidence archive. Its first check needs Xardas active before arena setup.
+    await link.debug("player_weapon", state="none")
+    await link.debug("teleport", near="NONE_100_XARDAS", distance=300)
+    await link.debug("player_hp", hp=5000)
+    await link.debug("skip_important", near="NONE_100_XARDAS")
+    await save_completed(link, 9)
     return {"pass": True, "loaded_broken_traces": 1, "same_appearance_times": 1,
             "same_actors": 1, "same_source_positions": 1, "age_minutes": loaded["age"]}
 
@@ -214,8 +222,10 @@ async def run(args) -> dict[str, Any]:
     created = await process(args, "create", args.save, create)
     saved = args.output / "create" / "run" / "save_slot_2.sav"
     loaded = await process(args, "reload", saved, lambda link, directory: reload(link, directory, created))
+    m5b = args.output / "m5b-input.sav"
+    shutil.copyfile(args.output / "reload" / "run" / "save_slot_9.sav", m5b)
     result = {"pass": True, "game_processes": 2, "create": created, "reload": loaded,
-              "saved_archive": str(saved)}
+              "saved_archive": str(saved), "m5b_input": str(m5b)}
     if args.legacy_save:
         result["legacy"] = await process(args, "legacy", args.legacy_save,
                                          lambda link, directory: legacy(link, directory, args.legacy_zen_id))

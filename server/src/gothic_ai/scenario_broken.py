@@ -15,7 +15,7 @@ from .game import GameError, GameLink
 from .llm import ToolCall
 from .llm.fake import FakeBackend, FakeStep
 from .perception import trace_name
-from .protocol import DebugCmd, SayCmd
+from .protocol import DebugCmd
 from .scenarios import (
     LOBART,
     ClaimScript,
@@ -49,8 +49,8 @@ async def broken_memory(
     results: dict[str, str] = {}
     directory, desk, chronicle = Path(log_dir), sightings.desk, sightings.chronicle
     original = dialogue.llm
-    age_lie = "этот забор давно сломан, ещё с весны"
-    control_denial = "этот забор сломал не я, я только пришёл и ничего здесь не трогал"
+    age_lie = "этот забор давно сломан, еще с весны"
+    control_denial = "этот забор сломал не я, я только пришел и ничего здесь не трогал"
 
     def check(name: str, ok: bool, detail: object = "") -> bool:
         results[name] = f"{'done' if ok else 'failed'} ({detail})"
@@ -69,7 +69,7 @@ async def broken_memory(
             raise RuntimeError(f"broken bench did not reach {name}")
 
     async def release(name: str) -> None:
-        await link.send(SayCmd(npc=LOBART, line=f"AIB_BROKEN_{name}", text=".", overlay=True))
+        await link.debug("destruction_traces", text=f"signal {name}")
 
     async def move(
         who: str, *, waypoint: str | None = None, near: str | None = None, distance: int = 0

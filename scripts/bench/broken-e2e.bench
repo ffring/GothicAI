@@ -8,31 +8,31 @@ destruction on
 overlay off
 view full
 mark broken_ready
-waitreply 120000 100
+waitai broken control_setup 120000
 
 destruction2 farm 19355 npc
 wait 600
 mark control_ready
-waitreply 120000 100
+waitai broken control_attack 120000
 rec broken-control-sword
 destruction2 attack
 wait 1200
 stop
 mark control_broken
-waitreply 180000 100
+waitai broken positive_setup 180000
 waitquiet 1500 120000
 
 destruction2 farm-nearby
 wait 600
 mark positive_ready
-waitreply 120000 100
+waitai broken hero_attack 120000
 rec broken-hero-sword
 destruction2 attack
 wait 1200
 stop
 mark hero_broken
-waitreply 180000 100
+waitai broken save 180000
 destruction2 save step3-broken
 mark broken_saved
-waitreply 30000 100
+waitai broken done 30000
 quit

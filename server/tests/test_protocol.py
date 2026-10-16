@@ -455,6 +455,8 @@ def test_v39_errands_mission_items_and_a_give_to_an_npc():
 @pytest.mark.parametrize("age", [0, 9, None])
 def test_v40_broken_trace_has_age_and_no_culprit(age):
     assert PROTOCOL_VERSION == BROKEN_TRACE_PROTOCOL == 40
+    command = DebugCmd(req="stand", cmd="destruction_traces", text="sample")
+    assert '"cmd":"destruction_traces"' in command.to_json()
     msg = parse_game_message(_json({
         "type": "npc_views", "t": 10,
         "views": [{"npc": "BAU_950_LOBART", "name": "Лобарт", "time": 725, "traces": [{

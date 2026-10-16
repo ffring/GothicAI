@@ -1211,6 +1211,7 @@ DebugCommand = Literal[
     "triggers",
     "physics_noise",  # v36: native tavern fixture, devmode only
     "physics_traces",  # v37: physical traces fixture, devmode only
+    "destruction_traces",  # v40: broken debris fixture, devmode only
 ]
 
 
