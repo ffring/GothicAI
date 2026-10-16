@@ -463,6 +463,12 @@ ProtoMesh::Morph ProtoMesh::mkAnimation(const zenkit::MorphAnimation& a) {
       const float d = std::sqrt(s.x*s.x + s.y*s.y + s.z*s.z);
       sum     += d;
       ret.peak = std::max(ret.peak,d);
+      ret.moveMin.x = std::min(ret.moveMin.x,s.x);
+      ret.moveMin.y = std::min(ret.moveMin.y,s.y);
+      ret.moveMin.z = std::min(ret.moveMin.z,s.z);
+      ret.moveMax.x = std::max(ret.moveMax.x,s.x);
+      ret.moveMax.y = std::max(ret.moveMax.y,s.y);
+      ret.moveMax.z = std::max(ret.moveMax.z,s.z);
       }
     ret.strength[f] = sum/float(ret.samplesPerFrame);
     maxStrength     = std::max(maxStrength, ret.strength[f]);

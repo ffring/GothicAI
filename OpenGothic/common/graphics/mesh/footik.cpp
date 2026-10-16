@@ -1,4 +1,5 @@
 #include "footik.h"
+#include "aimwalk.h"
 
 #include <Tempest/Log>
 
@@ -277,7 +278,7 @@ void FootIk::setSkeleton(const Skeleton* sk) {
   }
 
 FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj,
-                              bool alignedToGround, uint64_t dt) const {
+                              bool alignedToGround, uint64_t dt, const AimWalk* walk) const {
   Input in;
   in.dt     = dt;
   in.floorY = obj.at(3,1);
@@ -337,6 +338,25 @@ FootIk::Input FootIk::mkInput(const Npc& npc, World& world, const Matrix4x4& obj
       auto t = physic->ray({toe.x, top, toe.z}, {toe.x, bottom, toe.z});
       in.ground[i].toeCol = t.hasCol && !isWall(t.n);
       in.ground[i].toeY   = t.v.y;
+      }
+    }
+  if(walk!=nullptr && !quadruped) {
+    float ground[2] = {};
+    bool supported = true;
+    for(size_t i=0; i<2; ++i) {
+      Vec3 foot;
+      if(!walk->stanceFoot(i,foot)) {
+        supported = false;
+        break;
+        }
+      auto ray = physic->ray({foot.x,in.floorY+MaxRaise+RayMargin,foot.z},
+                             {foot.x,in.floorY-MaxDrop,foot.z});
+      supported &= ray.hasCol && !isWall(ray.n);
+      ground[i] = ray.v.y;
+      }
+    if(supported && std::abs(ground[0]-ground[1])<MaxStep) {
+      in.hasStanceFloor = true;
+      in.stanceFloor = std::min(ground[0],ground[1]);
       }
     }
   in.enable = enabled && !alignedToGround;
@@ -463,7 +483,9 @@ bool FootIk::update(const Input& in) {
     return (i%2==0) ? s : -s;
     };
   auto bodyTarget = [&](size_t p) {
-    const float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1)) - crouchOf(p);
+    float h = std::min(legHeight(2*p)-side(2*p), legHeight(2*p+1)-side(2*p+1)) - crouchOf(p);
+    if(p==0 && in.hasStanceFloor && !quadruped)
+      h = in.stanceFloor-in.floorY-crouchOf(p);
     return std::clamp(h, bodyLow(p), bodyTop(p));
     };
   crouch = in.crouch;
@@ -572,7 +594,7 @@ bool FootIk::update(const Input& in) {
   return changed;
   }
 
-void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
+void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor, const Vec3& bodyOffset, AimWalk* walk) {
   if(!valid)
     return;
   for(size_t i=0; i<numLegs; ++i) {
@@ -635,16 +657,20 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
         c.dbgAnim[k] = c.dbgFinal[k] = position(tr[id[k]]);
       }
     }
-  if(weight<=0.f) {
+  if(weight<=0.f && length(bodyOffset)<=0.f) {
     for(auto& c:legs)
       c.kneeDev = c.tilt = c.roll = c.yaw = 0;
     return;
     }
 
   const float dy = pelvis*weight;
-  if(dy!=0.f) {
-    for(size_t i=0; i<numBones; ++i)
-      tr[i].set(3,1,tr[i].at(3,1)+dy);
+  if(dy!=0.f || length(bodyOffset)>0.f) {
+    // The hips counterbalance an edge lean; retain the animated ankle targets recorded above.
+    for(size_t i=0; i<numBones; ++i) {
+      tr[i].set(3,0,tr[i].at(3,0)+bodyOffset.x);
+      tr[i].set(3,1,tr[i].at(3,1)+dy+bodyOffset.y);
+      tr[i].set(3,2,tr[i].at(3,2)+bodyOffset.z);
+      }
     }
   if(quadruped) {
     // the body pitches around the hips: the shoulders go down to the front paws' ground
@@ -677,6 +703,9 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
     if(quadruped)
       body += std::tan(roll)*pairWidth[i/2]*0.5f*(i%2==0 ? 1.f : -1.f);
     target.y += swingOffset(c,floor,low,body)*weight;
+    const Vec3 normalTarget = target;
+    if(walk!=nullptr && !quadruped)
+      walk->constrainFoot(i,target);
     // the smoothed normal lags behind a turning foot: limit it to the current heading once more
     const Vec3 n = normalize(Up*(1.f-weight) + footTilt(c.normal,c.heading)*weight);
     Vec3      animBend;
@@ -684,6 +713,8 @@ void FootIk::apply(Matrix4x4* tr, size_t numBones, float floor) {
       animBend = kneeBend(tr,c.thigh,c.calf,c.foot);
     solve(tr,c,target,n,c.outward*weight,c.plant*c.behind*weight);
     c.finalAnkle = position(tr[c.foot]);
+    if(walk!=nullptr && !quadruped)
+      walk->captureFootTarget(i,normalTarget,c.finalAnkle);
     if(dbg) {
       const size_t id[4] = {c.thigh, c.calf, c.foot, c.toe!=size_t(-1) ? c.toe : c.foot};
       for(size_t k=0; k<4; ++k)

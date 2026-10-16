@@ -1,0 +1,61 @@
+# A wall in front of the right shoulder limits the new forward camera shift.
+# Actual mouse-driven game camera; aim-camera records near-plane and origin-shell wall rays.
+cheat god
+set time 12 0
+view full
+overlay off
+manual on
+equip ItRw_Bow_L_01
+give ItRw_Arrow 100
+stats str 120 dex 120 bow 100 talent 0
+goto NW_CITY_MERCHANT_PATH_09
+wait 500
+corner left go 4
+draw bow
+wait 1500
+cam game
+ui on
+press action
+wait 1000
+aimat ahead 1000 -1850 mouse
+wait 1200
+rec steep_wall
+wait 600
+shot steep_wall_60
+aimat ahead 300 -1850 mouse
+wait 1200
+shot steep_wall_80
+aimat ahead 100 -1850 mouse
+wait 1200
+shot steep_wall_89
+stop
+release action
+aimat off
+# The mouse points at the roof lip rather than at an NPC below it. Disable stepping
+# to isolate looking past the close ray hit; the elevated hero reference must still lean.
+disarm
+goto pos 14591 2349 -14597
+cheat full
+ani player S_RUN
+wait 500
+face 247.5
+aimwalk off
+aim off
+draw bow
+wait 1500
+press action
+wait 1500
+goto pos 14591 2349 -14597
+wait 400
+face 247.5
+edge 247.5 2000 90 exact
+aimat ahead 75 -14 mouse
+aim on
+wait 1800
+rec crosshair_edge
+wait 1000
+shot crosshair_edge_drawn
+stop
+release action
+aimat off
+aimwalk on

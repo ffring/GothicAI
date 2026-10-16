@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ikmath.h"
+#include "aimframe.h"
 #include "skeleton.h"
 
 using namespace Tempest;
@@ -358,7 +359,8 @@ void BowDraw::measurePose(const Matrix4x4* tr, size_t numBones, const Vec3& slot
   atMiddle = over(rest);
   square   = std::acos(std::clamp(std::abs(dot(up,axis)),0.f,1.f))*180.f/float(M_PI);
   // upright: the limbs in the plane of the arrow and up
-  const Vec3 vert = normalize(Vec3(0,1,0) - axis*axis.y);
+  const Vec3 forward = normalize(Vec3(frameNow.at(2,0),0,frameNow.at(2,2)));
+  const Vec3 vert = normalize(active ? AimFrame::up(axis,forward) : Up-axis*axis.y);
   const Vec3 lean = normalize(up - axis*dot(up,axis));
   cant     = std::acos(std::clamp(dot(vert,lean),-1.f,1.f))*180.f/float(M_PI);
   // the nock goes as the hand does (the reload: none till the hand brings the next arrow)
@@ -466,12 +468,14 @@ void BowDraw::implApply(Matrix4x4* tr, size_t numBones) {
     const Vec3 high = turnOf(tr[bowHand],stringHigh);
     up = normalize(turnOf(tr[bowHand],bowAxis));
     // the limbs up: as the arrow is up (shot up or down too)
-    const Vec3 vert = Vec3(0,1,0) - axis*axis.y;
+    const Vec3 forward = normalize(Vec3(frameNow.at(2,0),0,frameNow.at(2,2)));
+    const Vec3 vert = active ? AimFrame::up(axis,forward) : Up-axis*axis.y;
     if(dot(up,vert)<0.f)
       up = up*-1.f;
     // where the animation draws the string to: there the hand holds it
     nock = slotAt + axis*dot(rest+high-slotAt,axis);
-    if(align>0.f && length(up)>0.5f && length(vert)>0.1f && !lHandTree.empty() && lHandTree.back()<numBones) {
+    if(align>0.f && length(up)>0.5f && (active || length(vert)>0.1f) &&
+       !lHandTree.empty() && lHandTree.back()<numBones) {
       // upright, or canted for a quick shot: round the arrow, the top limb toward the drawing hand (the side
       // of its shoulder), the fingers on the string with it. So much from upright whatever the animation
       // leans it (the trained ones hold the bow canted ~60 degrees: canted more, it would lie flat)

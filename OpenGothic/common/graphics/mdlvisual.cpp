@@ -963,17 +963,14 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       if(manual) {
         // by hand: the arrow straight at the crosshair (the archer holds over by himself), from where
         // the arrow is (not too close: the turn moves it)
-        const Tempest::Vec3 at = aimAt();
-        Tempest::Vec3       ap, ad;
-        Tempest::Vec3       o  = from;
-        if(arrowRay(ap,ad) && (at-ap).length()>150.f)
-          o = ap;
-        in.dir    = at - o;
+        in.dir    = npc.aimDirection(aimAt());
+        in.referenceDir = aimAt()-from;
         in.sway   = npc.manualAimSway();
         in.tremor = npc.manualAimTremor();
         in.manual = true;
         in.follow = (1.f - CrouchSlow*npc.aimCrouch())*(1.f + CantQuick*(ws==WeaponState::Bow ? npc.aimCant() : 0.f));
         in.reload = pose.animProgress(ws==WeaponState::CBow ? Archery::CBowReload : Archery::BowReload,npc.world().tickCount())>=0.f;
+        in.holdOrigin = npc.archer().stage()==Archer::Reloading;
         // the shot leaves along the arrow (the bolt) as it lies: in the crossbow it is in the left hand
         in.slot   = ammunition.boneId;
         } else {
@@ -997,21 +994,25 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
       in.side = peek*room*Aim::SideMax*float(M_PI)/180.f;
       }
     if(in.active) {
-      // steeply down: lean over the edge, if there is room in front of the head; by hand as steeply as the
-      // hero looks down too (the center of the screen on the edge right in front: leaning looks past it)
-      const Tempest::Vec3 d    = in.dir;
-      const Tempest::Vec3 look = manual ? npc.aimLook() : Tempest::Vec3();
-      float               down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
-      if(look.y<0.f)
-        down = std::max(down,-std::atan2(look.y,std::sqrt(look.x*look.x+look.z*look.z)));
-      in.lean = Aim::leanFor(down);
-      if(in.lean>0.f) {
-        const float         k    = in.lean/(Aim::LeanMax*float(M_PI)/180.f);
-        const Tempest::Vec3 dir  = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
-        const Tempest::Vec3 head = mapHeadBone();
-        const Tempest::Vec3 to   = head + dir*(Aim::LeanReach*k) - Tempest::Vec3(0,Aim::LeanDrop*k,0);
-        if(npc.world().physic()->ray(head,to).hasCol)
-          in.lean = 0;
+      if(npc.isPlayer() && manual) {
+        in.leanDirection = npc.aimLeanDirection(aimAt());
+        in.lean = npc.aimLean(aimAt(),true).angle;
+        if(Aim::playerLeanOverride>=0.f)
+          in.lean = Aim::playerLeanOverride;
+        } else {
+        // Classic aiming and NPCs keep their original angular rule and room check.
+        static constexpr float reach = 58.f, drop = 28.f;
+        const Tempest::Vec3 d = in.dir;
+        const float down = -std::atan2(d.y,std::sqrt(d.x*d.x+d.z*d.z));
+        in.lean = Aim::leanForNpc(down);
+        if(in.lean>0.f) {
+          const float k = in.lean/(Aim::NpcLeanMax*float(M_PI)/180.f);
+          const auto dir = Tempest::Vec3::normalize(Tempest::Vec3::normalize(Tempest::Vec3(d.x,0,d.z)) + in.forward*0.25f);
+          const auto head = mapHeadBone();
+          const auto to = head + dir*(reach*k) - Tempest::Vec3(0,drop*k,0);
+          if(npc.world().physic()->ray(head,to).hasCol)
+            in.lean = 0;
+          }
         }
       }
     }
@@ -1019,7 +1020,15 @@ bool MdlVisual::updateAim(Npc& npc, uint64_t dt) {
   // (the crossbow), slowly
   AimWalk::Input wk;
   wk.dt   = dt;
-  wk.walk = manual && in.active ? npc.aimWalk() : 0.f;
+  wk.active = manual && in.active;
+  const float requestedWalk = manual && in.active ? npc.aimWalk() : 0.f;
+  Tempest::Vec3 walkDirection(0,0,requestedWalk);
+  if(requestedWalk==0.f && pose.aimWalk().isActive())
+    walkDirection = pose.aimWalk().move(dt);
+  const bool edgeBlocked = manual && in.active && npc.isEdgeMoveBlocked(walkDirection);
+  wk.blocked = edgeBlocked || npc.isAimWalkStopped();
+  wk.walk = edgeBlocked ? 0.f : requestedWalk;
+  // Keep the gait while the stopped legs ease back into the stance, without further root motion.
   if(wk.walk!=0.f || pose.aimWalk().isActive()) {
     const bool cbow = ws==WeaponState::CBow;
     wk.legs = solver.solveFrm(cbow ? "S_CBOWSNEAKL" : "S_BOWSNEAKL");
@@ -1145,7 +1154,7 @@ bool MdlVisual::updateFootIk(Npc& npc, World& world, uint64_t dt, bool alignedTo
     return false;
     }
 
-  auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt);
+  auto       in      = ik.mkInput(npc,world,pos,alignedToGround,dt,&pose.aimWalk());
   // crouched stepping with the bow drawn: the steps are low already (sneaking), as low as crouched standing
   in.crouch = std::max(0.f, in.crouch - pose.aimWalk().lowered());
   const bool changed = pose.updateFootIk(in);
@@ -1209,6 +1218,25 @@ bool MdlVisual::arrowRay(Vec3& p, Vec3& d) const {
   const auto& m = skInst->bone(id);
   p = Vec3(m.at(3,0),m.at(3,1),m.at(3,2));
   d = Vec3::normalize(Vec3(-m.at(0,0),-m.at(0,1),-m.at(0,2)));
+  return true;
+  }
+
+bool MdlVisual::aimAttachmentBounds(bool ammo, Matrix4x4& matrix, Vec3 (&bounds)[2]) const {
+  const auto& mesh = ammo ? ammunition.view : bow.view;
+  const auto* proto = mesh.protoMesh();
+  if(mesh.isEmpty() || proto==nullptr)
+    return false;
+  matrix = mesh.node(0).position();
+  bounds[0] = proto->bboxMesh[0];
+  bounds[1] = proto->bboxMesh[1];
+  // Frame interpolation stays within each morph's component bounds. Sum the currently
+  // shown morphs, as the vertex shader does; a string pulled along the arrow must not
+  // expand the bow by its full draw length sideways as well.
+  for(const auto& morph:proto->morph) {
+    const float weight = mesh.morphWeight(morph.name);
+    bounds[0] += morph.moveMin*weight;
+    bounds[1] += morph.moveMax*weight;
+    }
   return true;
   }
 

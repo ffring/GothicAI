@@ -130,6 +130,7 @@ class Npc final {
     bool       startClimb(JumpStatus jump);
 
     auto       world() -> World&;
+    auto       world() const -> const World&;
 
     auto       centerPosition() const -> Tempest::Vec3;
     auto       collosionCenter() const -> Tempest::Vec3;
@@ -315,15 +316,20 @@ class Npc final {
     // the stance aiming by hand: crouched 0..1, leaning out sideways -1 (left)..1 (right), the bow canted
     // for a quick shot 0..1, as smooth as whoever drives it makes it (PlayerControl); stepping -1 (back)..1
     // (forward)
-    void      setAimStance(float crouch, float peek, float cant = 0, float walk = 0) {
+    void      setAimStance(float crouch, float peek, float cant = 0, float walk = 0, bool stopWalk = false) {
       stanceCrouch = crouch; stancePeek = peek; stanceCant = cant; stanceWalk = walk;
+      stanceWalkStopped = stopWalk;
       }
     float     aimCrouch() const { return stanceCrouch; }
     float     aimPeek()   const { return stancePeek; }
     float     aimCant()   const { return stanceCant; }
     float     aimWalk()   const { return stanceWalk; }
-    // where the hero looks aiming by hand (the center of the screen), zero if not known (an npc): leaning
-    // over an edge goes by it too
+    bool      isAimWalkStopped() const { return stanceWalkStopped; }
+    bool      isEdgeMoveBlocked(const Tempest::Vec3& modelDirection) const {
+      return mvAlgo.isEdgeMoveBlocked(modelDirection);
+      }
+    // The manual stance looks from the hero's shoulder toward the crosshair, independently of the camera.
+    auto      aimLookAt(const Tempest::Vec3& target) const -> Tempest::Vec3;
     void      setAimLook(const Tempest::Vec3& dir) { stanceLook = dir; }
     auto      aimLook()   const -> Tempest::Vec3 { return stanceLook; }
     // the animation of that name plays k times as fast from its next start (the reload by dexterity)
@@ -337,6 +343,9 @@ class Npc final {
     float     aimTrackError() const { return visual.aimTrackError(); }
     // the arrow on the string as posed: its nock, where it points (the crosshair, the shot)
     bool      arrowRay(Tempest::Vec3& pos, Tempest::Vec3& dir) const;
+    bool      aimAttachmentBounds(bool ammo, Tempest::Matrix4x4& matrix, Tempest::Vec3 (&bounds)[2]) const {
+      return visual.aimAttachmentBounds(ammo,matrix,bounds);
+      }
     // lets the arrow go along the arrow: drawn that far, thrown off by the release
     bool      releaseArrow(float draw, const Archery::Stats& st);
     // one frame of the bow aimed by hand at `at`, the hero's (PlayerControl) or an npc's (ArcherAi): the
@@ -539,6 +548,14 @@ class Npc final {
     Item*     currentShield();
     auto      mapWeaponBone() const -> Tempest::Vec3;
     auto      mapHeadBone() const -> Tempest::Vec3;
+    auto      aimDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
+    auto      aimLeanDirection(const Tempest::Vec3& target) const -> Tempest::Vec3;
+    auto      aimHead(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;
+    auto      aimCurrentHead() const -> Tempest::Vec3;
+    auto      aimLeanShift() const -> Tempest::Vec3;
+    auto      aimArrow(const Tempest::Vec3& target, float angle) const -> Tempest::Vec3;
+    auto      aimEdge(const Tempest::Vec3& direction, float range=100.f) const -> Aim::LeanEdge;
+    auto      aimLean(const Tempest::Vec3& target, bool manual=false) const -> Aim::LeanResult;
     auto      mapBone(std::string_view bone) const -> Tempest::Vec3;
 
     bool      turnTo  (float dx, float dz, bool noAnim, uint64_t dt);
@@ -884,6 +901,7 @@ class Npc final {
     float                          stancePeek   = 0;
     float                          stanceCant   = 0;
     float                          stanceWalk   = 0;
+    bool                           stanceWalkStopped = false;
     Tempest::Vec3                  stanceLook   = {};
     bool                           benchStill   = false;
     Npc*                           currentTarget  =nullptr;

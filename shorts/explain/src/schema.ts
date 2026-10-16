@@ -29,6 +29,35 @@ const Tag = z.object({
   side: z.enum(['center', 'right', 'left']).default('center'), // where the box opens from the pin
 });
 
+const Point = z.tuple([z.number(), z.number()]); // px of the 1080x1920 frame, from the bench's data
+
+// a line over the picture (a line of sight from the bench's `sight`): it draws itself from `from` toward `to`; with
+// `cut` it stops there (a wall in the way): solid up to it, `cutColor` and dashed past it from `cutAt`, a cross on it
+const Stroke = z.object({
+  from: Point,
+  to: Point,
+  cut: Point.optional(),
+  color: z.string(),
+  cutColor: z.string().optional(),
+  at: z.number().default(0),
+  dur: z.number().default(0.6),
+  cutAt: z.number().optional(),
+  until: z.number().optional(),
+  width: z.number().default(8),
+});
+
+// a fan from a point (the bow's focus from the head): it opens from the edge toward `a` to the edge toward `b`, as
+// long as the one toward `b`
+const Fan = z.object({
+  apex: Point,
+  a: Point,
+  b: Point,
+  color: z.string(),
+  at: z.number().default(0),
+  dur: z.number().default(0.8),
+  until: z.number().optional(),
+});
+
 const CurveKind = z.enum(['exe', 'opengothic']);
 
 const DiceChart = z.object({
@@ -113,6 +142,8 @@ const Beat = z.object({
   game: z.number().default(1), // the game's volume in this beat (ducked under the voice on top of it)
   texts: z.array(Text).default([]),
   tags: z.array(Tag).default([]),
+  strokes: z.array(Stroke).default([]),
+  fans: z.array(Fan).default([]),
   chart: Chart.optional(),
 });
 
@@ -146,5 +177,7 @@ export type BarsCard = z.infer<typeof BarsCard>;
 export type DotsCard = z.infer<typeof DotsCard>;
 export type StatsCard = z.infer<typeof StatsCard>;
 export type TagT = z.infer<typeof Tag>;
+export type StrokeT = z.infer<typeof Stroke>;
+export type FanT = z.infer<typeof Fan>;
 export type TextT = z.infer<typeof Text>;
 export type Word = z.infer<typeof Word>;
