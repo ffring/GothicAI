@@ -294,6 +294,7 @@ def test_possible_vanilla_requirements_are_allowed(graph, requirement):  # noqa:
     ("requirement", "why"),
     [
         ({"kind": "quest", "quest": "MIS_OTHER", "state": "running"}, "не переменная квеста"),
+        ({"kind": "quest", "quest": "KAPITEL", "state": "running"}, "не переменная квеста"),
         ({"kind": "quest", "quest": VANILLA_QUEST, "state": "obsolete"}, "состояние квеста"),
         ({"kind": "quest", "quest": VANILLA_QUEST, "state": "unknown"}, "состояние квеста"),
         ({"kind": "knows", "node": "DIA_LOBART_WORKNOW_OK"}, "вариант ответа"),
@@ -361,7 +362,9 @@ def test_a_dialog_already_known_is_allowed_even_when_its_owner_is_dead(graph):  
     assert problems(q, _ground(story=story)) == []
 
 
-@pytest.mark.parametrize(("quest", "state"), [("MIS_OTHER", "running"), (VANILLA_QUEST, "obsolete")])
+@pytest.mark.parametrize(
+    ("quest", "state"), [("MIS_OTHER", "running"), ("KAPITEL", "running"), (VANILLA_QUEST, "obsolete")]
+)
 def test_a_vanilla_goal_requires_a_graph_quest_and_a_supported_state(graph, quest, state):  # noqa: F811
     errors = problems(_vanilla_goal(state, quest), _ground(story=_vanilla_story(graph)))
     assert errors and any("стадия 1, цель 1" in error for error in errors), errors

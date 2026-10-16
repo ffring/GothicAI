@@ -32,9 +32,7 @@ def _dialog(**change: Any) -> dict[str, Any]:
                 {
                     "do": "choice",
                     "text": "Хорошо.",
-                    "steps": [
-                        {"do": "if", "cond": ["int", 1], "then": [_set(QUEST)], "else": [_set(QUEST)]}
-                    ],
+                    "steps": [{"do": "if", "cond": ["int", 1], "then": [_set(QUEST)], "else": [_set(QUEST)]}],
                 }
             ]
         ),
@@ -80,10 +78,13 @@ def test_a_book_quest_can_write_its_director_variables_everywhere(graph):
 
 def test_an_ordinary_repair_can_still_finish_a_script_quest(graph):
     story = Story(graph, _state(dead={LOBART}))
-    assert validate(
-        [_repair_node(HILDA)],
-        story,
-        Rules.of(graph),
-        repairs=QUEST,
-        caps=Caps(xp=50, items={"ITMI_GOLD": 5}),
-    ) == []
+    assert (
+        validate(
+            [_repair_node(HILDA)],
+            story,
+            Rules.of(graph),
+            repairs=QUEST,
+            caps=Caps(xp=50, items={"ITMI_GOLD": 5}),
+        )
+        == []
+    )
