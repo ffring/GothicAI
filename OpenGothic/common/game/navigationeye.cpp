@@ -53,15 +53,11 @@ DynamicWorld::NavigationRayResult DynamicWorld::navigationRay(const Vec3& from, 
   result.normal = hit.normal;
   if(!hit.hasHit)
     return result;
-  if(hit.ragdoll!=nullptr) {
-    result.kind = NavigationHit::Npc;
-    return result;
-    }
-  if(hit.body==nullptr) {
-    result.kind = NavigationHit::Npc; // a native animated/physical rig has no CollisionBody wrapper
-    return result;
-    }
-  switch(hit.body->category()) {
+  const int category = hit.body!=nullptr ? hit.body->category() : world->navigationBodyCategory(hit.nativeBodyId);
+  switch(category) {
+    case C_Ragdoll:
+    case C_LivingBody:
+    case C_ActiveBody: result.kind = NavigationHit::Npc; break;
     case C_Landscape: result.kind = NavigationHit::World; break;
     case C_Water: result.kind = NavigationHit::Water; break;
     case C_Object:

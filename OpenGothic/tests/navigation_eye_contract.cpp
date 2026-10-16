@@ -1,12 +1,17 @@
 #include "game/navigationeye.h"
+#include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicmeshshape.h"
+#include "physics/ragdoll.h"
+#include "graphics/mesh/hitzones.h"
+#include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 
@@ -106,6 +111,110 @@ void staticAndMovingVobs() {
   hit = world.navigationRay(Vec3(0,180,0),Vec3(1000,180,0),nullptr);
   require(hit.hasCol && hit.kind==DynamicWorld::NavigationHit::MovableVob,"kinematic door/lift category");
   }
+
+zenkit::ModelHierarchy humanoidHierarchy() {
+  zenkit::ModelHierarchy source;
+  struct Bone { const char* name; int16_t parent; Vec3 offset; };
+  const Bone bones[] = {
+    {"BIP01",-1,{0,0,0}}, {"BIP01 PELVIS",0,{0,95,0}},
+    {"BIP01 SPINE",1,{0,22,0}}, {"BIP01 SPINE1",2,{0,22,0}},
+    {"BIP01 NECK",3,{0,15,0}}, {"BIP01 HEAD",4,{0,15,0}},
+    {"BIP01 L UPPERARM",3,{25,0,0}}, {"BIP01 L FOREARM",6,{25,0,0}},
+    {"BIP01 L HAND",7,{23,0,0}},
+    {"BIP01 R UPPERARM",3,{-25,0,0}}, {"BIP01 R FOREARM",9,{-25,0,0}},
+    {"BIP01 R HAND",10,{-23,0,0}},
+    {"BIP01 L THIGH",1,{12,-8,0}}, {"BIP01 L CALF",12,{0,-42,0}},
+    {"BIP01 L FOOT",13,{0,-40,0}}, {"BIP01 L TOE",14,{0,0,15}},
+    {"BIP01 R THIGH",1,{-12,-8,0}}, {"BIP01 R CALF",16,{0,-42,0}},
+    {"BIP01 R FOOT",17,{0,-40,0}}, {"BIP01 R TOE",18,{0,0,15}}
+    };
+  for(const auto& bone:bones) {
+    zenkit::ModelHierarchyNode node;
+    node.name = bone.name;
+    node.parent_index = bone.parent;
+    auto transform = Tempest::Matrix4x4::mkIdentity();
+    transform.translate(bone.offset);
+    static_assert(sizeof(node.transform)==sizeof(transform));
+    std::memcpy(&node.transform,&transform,sizeof(transform));
+    source.nodes.push_back(node);
+    }
+  source.bbox.min = {-80,0,-20}; source.bbox.max = {80,190,25};
+  source.collision_bbox = source.bbox;
+  return source;
+  }
+
+void livingRigQuerySemantics() {
+  constexpr size_t forearm = 7;
+  Skeleton skeleton(humanoidHierarchy(),nullptr,"HUMANS.MDS");
+  HitZones zones;
+  zones.setSkeleton(&skeleton);
+  require(zones.isValid(),"humanoid fixture needs real physical hit capsules");
+  auto object = Tempest::Matrix4x4::mkIdentity();
+  object.translate(0,1000,0);
+  auto pose = skeleton.tr;
+  for(auto& bone:pose)
+    bone = object*bone;
+  const auto forearmPoint = [](const Ragdoll& body) {
+    std::vector<Tempest::Matrix4x4> actual;
+    require(body.getPose(actual),"live rig must expose its actual native pose");
+    const auto& bone = actual[forearm];
+    return Vec3(bone.at(3,0)+12.f,bone.at(3,1),bone.at(3,2));
+    };
+
+  // Exercise the established low-level API on actual living and promoted active parts.
+  CollisionWorld collision;
+  auto body = collision.createKinematicBody(skeleton,zones,pose.data(),pose.size(),object);
+  require(body && body->isKinematic(),"regression fixture must create a native living rig");
+  const auto checkGeneric = [&](int category) {
+    const auto point = forearmPoint(*body);
+    const auto from = point+Vec3(0,0,300), to = point-Vec3(0,0,300);
+    const uint32_t mask = 1u<<category;
+    const auto hit = collision.rayCast(from,to,mask);
+    require(hit.hasHit,"explicit live/active layer must be hit by the generic ray");
+    require(hit.ragdoll==nullptr && hit.bone==size_t(-1),
+            "generic live/active hits must not acquire corpse attachment metadata");
+    require(collision.navigationBodyCategory(hit.nativeBodyId)==category,
+            "navigation must resolve the selected native live/active layer independently");
+    std::vector<CollisionWorld::QueryResult> all;
+    collision.rayCast(from,to,mask,false,&all);
+    require(!all.empty(),"all-hit query must hit the real live/active parts");
+    for(const auto& part:all)
+      require(part.ragdoll==nullptr && part.bone==size_t(-1),
+              "generic all-hit live/active metadata must retain its prior semantics");
+    require(!collision.rayCast(from,to,mask,false,nullptr,nullptr,body.get()).hasHit,
+            "eye self exclusion must omit every part of the current living/active rig");
+    };
+  checkGeneric(DynamicWorld::C_LivingBody);
+  require(body->queueHit(forearm,forearmPoint(*body),Vec3(0,0,3),1.f),"forearm reaction must queue");
+  collision.tick(17);
+  require(!body->reactionBones().empty(),"the fixture must promote an actual active limb chain");
+  checkGeneric(DynamicWorld::C_ActiveBody);
+
+  // The engine-facing eye API sees both states as NPCs, without asking generic rays for a ragdoll.
+  DynamicWorld navigation(nullptr,zenkit::Mesh{});
+  auto seen = navigation.createKinematicBody(skeleton,zones,pose.data(),pose.size(),object);
+  require(seen && seen->isKinematic(),"navigation fixture must create a native living rig");
+  const auto checkEye = [&] {
+    const auto point = forearmPoint(*seen);
+    const auto hit = navigation.navigationRay(point+Vec3(0,0,300),point-Vec3(0,0,300),nullptr);
+    require(hit.hasCol && hit.kind==DynamicWorld::NavigationHit::Npc,
+            "navigation ray must classify a living/active native rig as NPC");
+    };
+  checkEye();
+  require(seen->queueHit(forearm,forearmPoint(*seen),Vec3(0,0,3),1.f),"navigation reaction must queue");
+  navigation.tick(17);
+  require(!seen->reactionBones().empty(),"navigation fixture must contain actual active parts");
+  checkEye();
+
+  // Corpse attachment consumers keep their original selected rig and bone.
+  CollisionWorld corpseWorld;
+  auto corpse = corpseWorld.createRagdoll(skeleton,zones,pose.data(),pose.size(),object);
+  require(corpse && corpse->valid(),"corpse fixture must create native parts");
+  const auto point = forearmPoint(*corpse);
+  const auto corpseHit = corpseWorld.rayCast(point+Vec3(0,0,300),point-Vec3(0,0,300),1u<<DynamicWorld::C_Ragdoll);
+  require(corpseHit.hasHit && corpseHit.ragdoll==corpse.get() && corpseHit.bone!=size_t(-1),
+          "generic corpse hits must preserve rig and bone attachment metadata");
+  }
 }
 
 int main() {
@@ -114,5 +223,6 @@ int main() {
   layoutAndPhysicalWall(1000,1036);
   rangesAndWater();
   staticAndMovingVobs();
+  livingRigQuerySemantics();
   std::puts("navigation eye contracts passed");
   }

@@ -1269,6 +1269,13 @@ void CollisionWorld::fillRagdoll(QueryResult& result, JPH::BodyID native) const 
     }
   }
 
+int CollisionWorld::navigationBodyCategory(JPH::BodyID native) const {
+  if(native.IsInvalid())
+    return 0;
+  JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),native);
+  return lock.Succeeded() ? int(lock.GetBody().GetObjectLayer()) : 0;
+  }
+
 CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, const Tempest::Vec3& to, uint32_t mask,
                                                     bool backfaces, std::vector<QueryResult>* all,
                                                     const std::vector<const CollisionBody*>* excluded,
@@ -1315,6 +1322,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
     const auto& body = lock.GetBody();
     value.hasHit = true;
     value.fraction = hit.mFraction;
+    value.nativeBodyId = hit.mBodyID;
     value.body = reinterpret_cast<CollisionBody*>(body.GetUserData());
     value.point = toCentimeters(origin*(1.f-hit.mFraction)+end*hit.mFraction);
     const auto normal = body.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2,ray.GetPointOnRay(hit.mFraction));
@@ -1362,8 +1370,7 @@ CollisionWorld::QueryResult CollisionWorld::rayCast(const Tempest::Vec3& from, c
       value.material = mesh->materialId(triangle);
       value.sector = mesh->sectorName(triangle);
       }
-    if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll || body.GetObjectLayer()==DynamicWorld::C_LivingBody ||
-       body.GetObjectLayer()==DynamicWorld::C_ActiveBody)
+    if(body.GetObjectLayer()==DynamicWorld::C_Ragdoll)
       fillRagdoll(value,hit.mBodyID);
     return value;
     };
