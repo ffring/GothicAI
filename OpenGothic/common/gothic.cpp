@@ -101,7 +101,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "movable_vobs",        1);
   defaults->set("GAME", "physics_noise",       1);
   defaults->set("GAME", "character_virtual",   1);
-  defaults->set("GAME", "npc_character_virtual",0);
+  defaults->set("GAME", "npc_character_virtual",1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
