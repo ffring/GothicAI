@@ -505,3 +505,22 @@ async def test_a_chain_can_use_people_from_the_brief_without_new_roles(graph):  
         assert made is not None and len(made) == 2 and not casting.calls
         assert chains.chronicle.facts("chain")[-1]["roles"] == {}
         assert made[1].after == made[0].id
+
+
+async def test_asked_for_someone_new_a_chain_of_the_people_around_is_refused(graph):  # noqa: F811
+    raw = _proposal()
+    raw["cast"] = []
+    for q in raw["quests"]:
+        q["stages"] = [
+            {
+                "journal": "Надо поговорить с заказчиком.",
+                "goals": [{"kind": "talk", "npc": "giver", "talk": _talk("Дело сделано.")}],
+            }
+        ]
+    async with _setup(graph, [raw, _proposal()]) as (_, chains, casting, llm):
+        made = await chains.chain(HILDA, new_people=True)
+        assert made is not None and len(casting.calls) == 2
+        assert "нужен новый человек" in llm.calls[0][1][0].content
+        assert "cast пуст" in llm.calls[1][1][-1].content
+        [rejected] = chains.chronicle.facts("chain_rejected")
+        assert any("cast пуст" in why for why in rejected["why"])

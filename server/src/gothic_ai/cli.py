@@ -147,7 +147,7 @@ HELP = """commands (npc defaults to the last attached one):
   day [npc]         the npc's last menus of its next hour (the old plan, do) and the trip it is on
   amends            the director's storylets of amends for the hero's lies, and where they stand
   author [npc]      the director makes up a quest the npc gives the hero (docs/director.md); none: the quests
-  chain <npc>       the director makes a linear chain of quests and the characters it needs
+  chain <npc> [new] the director makes a linear chain of quests and the characters it needs; new: someone new
   cast              the director's own characters on this branch (docs/director.md, stage 2)
   triggers          the director's triggers in the game: counts and conditions (stage 3, -devmode)
   character <place> the director makes up a character for the place (places.py id), and a quest he gives
@@ -368,7 +368,7 @@ class Console:
                         f"{q.reward()}"
                     )
             case "chain" if self.state.chains is not None and rest:
-                quests = await self.state.chains.chain(rest[0])
+                quests = await self.state.chains.chain(rest[0], new_people="new" in rest[1:])
                 if quests is None:
                     print("(no chain: see the log)")
                 else:

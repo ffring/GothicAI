@@ -4382,7 +4382,7 @@ async def author_chain(
         )
         chains.casting.model.llm = characters_script = ChainCharacterScript()
 
-    quests = await chains.chain(giver)
+    quests = await chains.chain(giver, new_people=True)  # a chain of the director's own people
     facts = chains.chronicle.facts
     rejected = facts("chain_rejected")
     if script is not None:
@@ -4413,8 +4413,8 @@ async def author_chain(
     roles = chain_fact.get("roles", {})
     npcs = [npc for group in roles.values() for npc in group]
     world = (await link.story_state(npcs=npcs)).get("npcs", {})
-    # A chain may use only people already in the brief, so an empty cast/role map is valid.
-    check("roles", all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
+    # asked for someone new: the cast is not empty, and all of it is in the world
+    check("roles", bool(npcs) and all(world.get(n, {}).get("state") == "alive" for n in npcs), roles)
     held = []
     for q in quests:
         for stage in q.stages:
