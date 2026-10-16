@@ -3,6 +3,9 @@
 seed 73013
 mark trace_ready
 waitreply 120000 100
+physics dump 1 73013 trace-rays.tsv
+mark wall_sample
+waitreply 120000 100
 
 npcequip BAU_952_VINO ItRw_Bow_L_01
 npcequip BAU_952_VINO ItRw_Arrow 20
@@ -14,16 +17,21 @@ wait 6000
 archer off
 mark control_shot
 waitreply 120000 100
+waitquiet 1500 120000
 
 mark positive_ready
 waitreply 120000 100
 manual on
+release all
+cam follow 260 30 55
+cam look 105
 equip ItRw_Bow_L_01
 give ItRw_Arrow 10
 stats dex 150 bow 100
 tap bow
 wait 1500
-aimat BAU_951_HILDA body
+face wp NW_FARM1_INHOUSE_01
+aimat ahead 750 140
 volley 1 300
 tap bow
 wait 600
