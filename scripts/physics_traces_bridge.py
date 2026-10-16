@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server" / "src"))
 
 from gothic_ai.game import GameLink, GameServer
-from gothic_ai.protocol import DebugCmd, NpcViewCmd
+from gothic_ai.protocol import DebugCmd, NpcViewCmd, Saved
 
 
 def append(path: Path, row: Any) -> None:
@@ -79,6 +79,23 @@ async def view(link: GameLink, npc: str, directory: Path, label: str) -> dict[st
     return row
 
 
+async def save_completed(link: GameLink, slot: int) -> None:
+    # The debug reply acknowledges the start of an asynchronous save. The archive
+    # is complete only when the loading thread has finished and the bridge sends saved.
+    finished = asyncio.get_running_loop().create_future()
+
+    def observe(message):
+        if isinstance(message, Saved) and not finished.done():
+            finished.set_result(None)
+
+    link.listeners.append(observe)
+    try:
+        await link.debug("save", slot=slot, timeout=30)
+        await asyncio.wait_for(finished, 60)
+    finally:
+        link.listeners.remove(observe)
+
+
 def check_visible(actual: dict[str, Any], sample: dict[str, Any]) -> list[dict[str, Any]]:
     traces = actual["traces"]
     assert len(traces) == 2, traces
@@ -119,8 +136,12 @@ async def create(link: GameLink, directory: Path) -> dict[str, Any]:
     assert not any(row["id"] in ids for row in blocked["traces"]), blocked
     assert all(not row["can_ray_hit_point"] for row in blocked_truth["truth"] if row["id"] in ids), blocked_truth
     await native(link, "visible")
+    # Loading must retain creation time rather than stamp the saved clock again.
+    await link.debug("time", hour=12, minute=17)
     saved_truth = await native(link, "sample")
-    await link.debug("save", slot=2, timeout=30)
+    assert all(saved_truth["game_minutes"] - row["appeared_at"] >= 17
+               for row in saved_truth["truth"] if row["id"] in ids), saved_truth
+    await save_completed(link, 2)
     return {"pass": True, "npc": npc, "table_zen_id": setup["table_zen_id"], "table_trace_id": table,
             "visible_traces": len(traces), "small_table_traces": 0, "blocked_traces": 0,
             "saved_truth": {row["id"]: row for row in saved_truth["truth"] if row["id"] in ids}}
@@ -162,7 +183,7 @@ async def reload(link: GameLink, directory: Path, created: dict[str, Any]) -> di
     await link.debug("teleport", near="NONE_100_XARDAS", distance=300)
     await link.debug("player_hp", hp=5000)
     await link.debug("skip_important", near="NONE_100_XARDAS")
-    await link.debug("save", slot=9, timeout=30)
+    await save_completed(link, 9)
     return {"pass": True, "loaded_traces": len(traces), "same_appearance_times": len(traces),
             "same_actors": len(traces), "tilted_traces": 1, "far_traces": 0,
             "far_unobstructed_native_traces": sum(row["can_ray_hit_point"] for row in distant),
