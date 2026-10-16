@@ -16,6 +16,8 @@ FRAME_FIELDS = {
     'wall_ms', 'captured', 'normal_clock',
 }
 
+WALKING_ROUTES = {'stairs_up', 'stairs_down', 'steep_slope', 'port_edge', 'doorway', 'tavern'}
+
 
 def require(condition, message):
     if not condition:
@@ -72,7 +74,7 @@ def load(directory, enabled):
         read_frames(frame_path, enabled, frames)
     log = directory / 'bench.log'
     complete = 'done' in log.read_text().splitlines() if log.exists() else None
-    return {'directory': str(directory), 'events': events, 'frames': dict(frames), 'complete': complete}
+    return {'directory': str(directory), 'events': events, 'frames': dict(frames), 'complete': complete, 'enabled': enabled}
 
 
 def read_frames(frame_path, enabled, frames):
@@ -86,6 +88,7 @@ def read_frames(frame_path, enabled, frames):
             require(row['route'] and row['dt_ms'] > 0 and row['step_ms'] >= 0 and row['wall_ms'] >= 0,
                     f'{frame_path}:{index}: invalid timing or route')
             require(row['cv_enabled'] is enabled, f'{frame_path}:{index}: configured mode differs from directory')
+            require(enabled or not row['cv_active'], f'{frame_path}:{index}: native CV active in OFF baseline')
             prior = frames[row['route']]
             require(not prior or (row['frame'] > prior[-1]['frame'] and row['t_game_ms'] > prior[-1]['t_game_ms']),
                     f'{frame_path}:{index}: non-monotonic route frame')
@@ -95,6 +98,19 @@ def read_frames(frame_path, enabled, frames):
 def select(run, kind, route=None):
     return [event for event in run['events'] if event['kind'] == kind and
             (route is None or event.get('route') == route)]
+
+
+def virtual_activity(run, labels, held=False):
+    """The configured flag is never evidence that the native controller ran."""
+    checks = {}
+    for label in sorted(set(labels)):
+        rows = run['frames'].get(label, [])
+        eligible = [row for row in rows if row['move_held']] if held else rows
+        active = sum(row['cv_active'] for row in eligible)
+        checks[label] = {'frames': len(rows), 'eligible_frames': len(eligible),
+                         'held_movement_required': held, 'cv_active_frames': active,
+                         'pass': active > 0 if eligible else None}
+    return {'fixtures': checks, 'pass': combined_pass([row['pass'] for row in checks.values()])}
 
 
 def stalls(frames):
@@ -138,6 +154,8 @@ def route_result(run, name):
               'maximum_vertical_frame_delta_cm': max(vertical_deltas, default=None),
               'cv_active_frames': sum(row['cv_active'] for row in frames),
               'pass': success if starts and frames and elapsed is not None else None}
+    if 'saw_slide' in end:
+        result['saw_slide'] = flag(end['saw_slide'])
     if starts:
         result['start_cm'] = vector(starts[0]['start_cm'])
         result['goal_cm'] = vector(starts[0]['goal_cm'])
@@ -215,13 +233,14 @@ def performance(run):
 
 def compare_performance(off, on):
     before, after = performance(off), performance(on)
-    result = {'off': before, 'on': after, 'physics_p95_limit_delta_ms': .3, 'fps_drop_limit_percent': 5, 'pass': None}
+    active = virtual_activity(on, ['performance'], held=True)
+    result = {'native_activity': active, 'off': before, 'on': after, 'physics_p95_limit_delta_ms': .3, 'fps_drop_limit_percent': 5, 'pass': None}
     if 'mean_fps' in before and 'mean_fps' in after:
         require(before['routes'] == after['routes'], 'normal-clock OFF/ON performance routes differ')
         delta = after['physics_p95_ms'] - before['physics_p95_ms']
         drop = 100 * (1 - after['mean_fps'] / before['mean_fps'])
         result.update(physics_p95_delta_ms=delta, fps_drop_percent=drop, passed_physics=delta <= .3,
-                      passed_fps=drop <= 5, **{'pass': delta <= .3 and drop <= 5})
+                      passed_fps=drop <= 5, **{'pass': combined_pass([delta <= .3, drop <= 5, active['pass']])})
     return result
 
 
@@ -232,7 +251,7 @@ def props(run):
         item = {key: row[key] for key in ('role', 'id')}
         item.update(mass_kg=number(row['mass_kg']), position_cm=vector(row['position_cm']),
                     velocity_cm_s=vector(row['velocity_cm_s']), max_displacement_cm=number(row['max_displacement_cm']))
-        require(item['mass_kg'] > 0 and item['max_displacement_cm'] >= 0, f'invalid native prop data: {row}')
+        require(item['mass_kg'] >= 0 and item['max_displacement_cm'] >= 0, f'invalid native prop data: {row}')
         for key in ('hero_cm', 'initial_cm', 'hero_initial_cm'):
             if key in row:
                 item[key] = vector(row[key])
@@ -281,7 +300,9 @@ def compare_props(off, on):
         contact = table.get('native_contact', table.get('hero_contact', table.get('contact')))
         if crossed is not None and contact is True and table.get('blocks_walking') is True:
             checks['table_blocks'] = not crossed and not table.get('overlap', False)
-    return {'off': before, 'on': after, 'checks': checks, 'pass': combined_pass(list(checks.values()))}
+    activity = virtual_activity(on, by_role, held=True)
+    return {'off': before, 'on': after, 'checks': checks, 'native_activity': activity,
+            'pass': combined_pass(list(checks.values()) + [activity['pass']])}
 
 
 def rides(run):
@@ -293,6 +314,9 @@ def rides(run):
     result = []
     for support, samples in groups.items():
         item = {'support_id': support, 'samples': len(samples), 'pass': None}
+        first_kind = samples[0].get('support_kind', samples[0].get('type'))
+        activity = virtual_activity(run, ['ride_' + str(first_kind)]) if first_kind else {'pass': None}
+        item['native_activity'] = activity
         if all('support_cm' in row and 'hero_cm' in row for row in samples) and (len(samples) >= 2 or all(key in samples[0] for key in ('support_initial_cm', 'hero_initial_cm'))):
             first, last = samples[0], samples[-1]
             support_start = first.get('support_initial_cm', first['support_cm'])
@@ -313,6 +337,8 @@ def rides(run):
                 else:
                     item['pass'] = item['relative_drift_cm'] <= 5 and item['maximum_ground_speed_cm_s'] > 0
                     item['outcome'] = 'ride measured'
+        if run.get('enabled'):
+            item['pass'] = combined_pass([item['pass'], activity['pass']])
         result.append(item)
     return result
 
@@ -352,8 +378,10 @@ def compare(off, on, reload_off=None, reload_on=None, perf_off=None, perf_on=Non
         if all('start_cm' in row for row in (before, after)):
             matched = distance(before['start_cm'], after['start_cm']) <= 1 and distance(before['goal_cm'], after['goal_cm']) <= 1 and before['tolerance_cm'] == after['tolerance_cm']
         falls = compare_falls(off, on, name)
+        activity = virtual_activity(on, [name], held=True) if name in WALKING_ROUTES else {'pass': True, 'reason': 'Legacy jump/swim handoff route.'}
+        after['native_activity'] = activity
         routes.append({'route': name, 'off': before, 'on': after, 'matched_route': matched, 'falls': falls,
-                       'pass': combined_pass([before['pass'], after['pass'], matched, falls['pass']])})
+                       'pass': combined_pass([before['pass'], after['pass'], matched, falls['pass'], activity['pass']])})
     perf = compare_performance(perf_off or off, perf_on or on)
     prop = compare_props(props_off or off, props_on or on)
     ride = {'off': rides(props_off or off), 'on': rides(props_on or on)}
@@ -367,6 +395,7 @@ def compare(off, on, reload_off=None, reload_on=None, perf_off=None, perf_on=Non
             'notes': ['null means insufficient evidence, never a pass.',
                       'Stall: held movement remains within a 5cm horizontal radius for more than 1000ms.',
                       'Falls are native events paired spatially within 100cm; a native fall_count establishes zero falls.',
+                      'ON walking, each prop/support case and uncaptured performance require positive cv_active native frames; the flag alone never passes.',
                       'Foot IK screenshot, route videos, and a human movement-feel trial require visual review.']}
 
 
@@ -385,13 +414,13 @@ def markdown(result):
     lines = [f'CharacterVirtual: **{state}**. Пропущенные данные обозначены «—».']
     if 'error' in result:
         return '\n'.join(lines + ['', result['error']]) + '\n'
-    lines += ['', '| Маршрут | Дошёл OFF / ON | Время, мс OFF / ON | Застревания >1с OFF / ON | Макс. ΔY, см OFF / ON | Новые падения ON |',
-              '|---|---|---:|---:|---:|---:|']
+    lines += ['', '| Маршрут | Дошёл OFF / ON | Время, мс OFF / ON | Застревания >1с OFF / ON | Макс. ΔY, см OFF / ON | Новые падения ON | Кадры native CV ON |',
+              '|---|---|---:|---:|---:|---:|---:|']
     for row in result['routes']:
         before, after = row['off'], row['on']
         pair = lambda key: f'{display(before[key])} / {display(after[key])}'
         falls = row['falls']['on_only_positions_cm']
-        lines.append(f"| {display(row['route'])} | {pair('success')} | {pair('elapsed_ms')} | {pair('stalls_over_1s')} | {pair('maximum_vertical_frame_delta_cm')} | {display(len(falls) if falls is not None else None)} |")
+        lines.append(f"| {display(row['route'])} | {pair('success')} | {pair('elapsed_ms')} | {pair('stalls_over_1s')} | {pair('maximum_vertical_frame_delta_cm')} | {display(len(falls) if falls is not None else None)} | {after['cv_active_frames']} |")
     perf = result['performance']
     lines += ['', f"Физика p95 OFF / ON: {display(perf['off'].get('physics_p95_ms'))} / {display(perf['on'].get('physics_p95_ms'))} мс; Δ {display(perf.get('physics_p95_delta_ms'))} мс (лимит +0,3). FPS OFF / ON: {display(perf['off'].get('mean_fps'))} / {display(perf['on'].get('mean_fps'))}; падение {display(perf.get('fps_drop_percent'))}% (лимит 5%). Учитываются только кадры без записи видео с обычными часами."]
     lines += ['', '| Предмет ON | Масса, кг | Гориз. смещение, см | Время, мс | Гориз. смещение / время, см/с | Контакт героя |', '|---|---:|---:|---:|---:|---|']

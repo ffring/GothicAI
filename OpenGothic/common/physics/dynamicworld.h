@@ -43,6 +43,7 @@ class DynamicWorld final {
     static constexpr float gravity     = gravityMS*100.f/(1000.f*1000.f); // centimeters per milliseconds^2
     static constexpr float bulletSpeed = 3; // centimeters per milliseconds
     static constexpr float spellSpeed  = 1; // centimeters per milliseconds
+    static constexpr float characterItemRange = 300.f; // centimetres around the opt-in hero
 
     DynamicWorld(World *world, const zenkit::Mesh& mesh);
     DynamicWorld(const DynamicWorld&)=delete;
@@ -112,6 +113,7 @@ class DynamicWorld final {
         void  debugDraw(DbgPainter& p) const;
 
         void  setEnable(bool e);
+        bool  isEnabled() const;
         void  setUserPointer(void* p);
 
         auto  center()  const -> Tempest::Vec3;

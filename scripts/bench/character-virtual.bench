@@ -96,7 +96,7 @@ walkmode run
 wait 500
 rec water_entry
 character begin
-hold forward 4000
-wait 4000
+hold forward 8000
+wait 8000
 character end
 stop

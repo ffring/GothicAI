@@ -457,6 +457,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
   uint64_t lastRayCount = 0;
   float stepMilliseconds = 0;
   float characterMilliseconds = 0;
+  std::vector<VirtualCharacter*> virtualCharacters;
   };
 
 struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListener {
@@ -513,9 +514,13 @@ CollisionWorld::VirtualCharacter::VirtualCharacter(CollisionWorld& owner, float 
   impl->character = std::make_unique<JPH::CharacterVirtual>(&settings,JPH::RVec3(toMeters(feet)),
                                                           JPH::Quat::sIdentity(),&owner.impl->system);
   impl->character->SetListener(impl.get());
+  owner.impl->virtualCharacters.push_back(this);
   }
 
-CollisionWorld::VirtualCharacter::~VirtualCharacter() = default;
+CollisionWorld::VirtualCharacter::~VirtualCharacter() {
+  auto& characters = impl->world.impl->virtualCharacters;
+  characters.erase(std::remove(characters.begin(),characters.end(),this),characters.end());
+  }
 
 std::unique_ptr<CollisionWorld::VirtualCharacter> CollisionWorld::createVirtualCharacter(
     float radius, float height, const Tempest::Vec3& feet) {
@@ -1361,7 +1366,20 @@ void CollisionWorld::tick(uint64_t dt) {
       m[13] *= 100.f;
       m[14] *= 100.f;
       matrix.setData(m);
-      disable = !native.IsActive() || native.GetPosition().GetY()<bboxMin.GetY()-100.f;
+      bool keepSleeping = false;
+      if(!native.IsActive()) {
+        const float range = toMeters(DynamicWorld::characterItemRange);
+        for(const auto* character:impl->virtualCharacters) {
+          if((native.GetPosition()-character->impl->character->GetPosition()).LengthSq()<=range*range) {
+            keepSleeping = true;
+            break;
+            }
+          }
+        }
+      // Legacy items lose their body at rest. A nearby virtual character needs
+      // that sleeping body to remain queryable so a native contact can wake it.
+      // Removing the opt-in controller restores the original cleanup policy.
+      disable = (!native.IsActive() && !keepSleeping) || native.GetPosition().GetY()<bboxMin.GetY()-100.f;
       }
     item->setObjMatrix(matrix);
     if(disable)

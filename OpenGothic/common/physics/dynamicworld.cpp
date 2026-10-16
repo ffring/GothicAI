@@ -1532,6 +1532,10 @@ void DynamicWorld::NpcItem::setEnable(bool e) {
   owner->world->touchAabbs();
   }
 
+bool DynamicWorld::NpcItem::isEnabled() const {
+  return obj!=nullptr && obj->enable;
+  }
+
 void DynamicWorld::NpcItem::setUserPointer(void *p) {
   obj->userPointer = p;
   }

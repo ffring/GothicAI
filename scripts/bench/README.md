@@ -519,21 +519,26 @@ NO_BUILD=1 MOVABLE_VOBS=1 CHARACTER_VIRTUAL=0 OPENGOTHIC_BENCH_TAKE=off scripts/
 NO_BUILD=1 MOVABLE_VOBS=1 CHARACTER_VIRTUAL=1 OPENGOTHIC_BENCH_TAKE=on scripts/bench.sh character-virtual .bench/character-on
 ```
 
-Preparation searches actual supported geometry deterministically, in waypoint-name order. It
+Preparation searches actual supported geometry deterministically, in waypoint-name order. Nearby NPCs use
+the existing bench freeze policy before each route’s first native tick, so automatic important dialogs
+cannot consume held movement; this fixture does not change production NPC behavior. It
 prints every selected waypoint, start XYZ, goal XYZ and yaw as `character_route_setup` in
 `events.jsonl`. Missing geometry produces `character_error`; the probe visits all eight
 preparations before ending, while the actual scenario stops on a missing fixture. Routes are
-Khorinis stairs up/down, a smooth 44–65° slope, a harbour lane within 95 cm of a drop, a narrow
+Khorinis stairs up/down, a smooth slope above the hero guild’s legacy slide threshold (up to 65°), a harbour lane within 95 cm of a drop, a narrow
 opening, Coragon's furnished tavern, a 55–110 cm ledge and a waterfront with a swimming destination (the quay may enter via falling).
-These coordinates are also the teleport points for a manual trial. Only the initial placement
+Stairs additionally require at least three distinct 6–32 cm risers and level treads, excluding bed waypoints.
+The port lane stays within 30 cm of its starting height. These coordinates are also the teleport points for a manual trial. Only the initial placement
 teleports the hero; route movement uses the real player's held keys. The jump and water routes
 exercise the legacy-path handoff.
 
+Held movement is released as soon as the destination is reached; the remainder of the video records the natural stop.
 Each route has its own MP4 and ordinary IK metrics; `foot-ik-stairs.png` is captured on the first
 stair route. `character-frames.csv` additionally records root position, held movement, falling,
 swimming, actual CV use, support velocity and native physics cost after each world tick. A route
 succeeds only after crossing its destination plane within the stated lateral/height tolerance;
-water entry additionally requires the real swimming state. The analyzer counts continuous held
+water entry additionally requires the real swimming state. Route-end `saw_slide` establishes whether the
+legacy slope take entered the actual slide state. The analyzer counts continuous held
 input with less than 5 cm of horizontal progress for more than one second, maximum absolute Y
 change per frame and native falls more than 100 cm below the last supported root (planned ledge
 jumps and swimming are excluded). Unmatched falls are compared within a 1 m spatial radius.

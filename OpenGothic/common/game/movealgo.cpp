@@ -4,6 +4,7 @@
 
 #include "world/objects/npc.h"
 #include "world/objects/interactive.h"
+#include "world/objects/item.h"
 #include "world/world.h"
 #include "gothic.h"
 #include "serialize.h"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 // Read-only measurement around the existing movement step. Collision fields describe only calls
 // through MoveAlgo::tryMove: Npc::tryMove exposes success, not DynamicWorld's internal MoveCode.
@@ -253,7 +255,7 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   const auto bs = npc.bodyStateMasked();
   const bool liftOff = bs==BS_JUMP && npc.isFlyAnim();
   const bool virtualWalking = npc.isPlayer() && Gothic::physicsFlags().characterVirtual &&
-                              !npc.isDown() && npc.hasCollision() && !canFlyOverWater() &&
+                              !npc.isDown() && npc.physic.isEnabled() && !canFlyOverWater() &&
                               (flags==Run || flags==Slide || flags==InWater) && !liftOff;
   if(!virtualWalking) {
     if(virtualMovementActive && flags==Run && liftOff)
@@ -607,6 +609,16 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
 
 bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement) {
   const auto origin = npc.position();
+  auto& world = npc.world();
+  std::vector<Item*> nearbyItems;
+  world.detectItem(origin,DynamicWorld::characterItemRange,[&](Item& item) {
+    if(!item.isDynamic())
+      nearbyItems.push_back(&item);
+    });
+  // Creating a native body invalidates the item query index. Finish detection first,
+  // and preserve existing bodies with their current mass, sleep state and velocity.
+  for(auto* item:nearbyItems)
+    item->setPhysicsEnable(world);
   const float maxSlope = std::acos(std::clamp(slideAngle(),0.f,1.f));
   const auto moved = npc.physic.moveVirtual(displacement,dt,stepHeight(),maxSlope,npc.physicsMass(),&npc);
   npc.setViewPosition(moved.position);

@@ -620,7 +620,7 @@ struct Bench {
     std::string name,waypoint;
     Vec3 start,goal,direction;
     float tolerance=80;
-    bool prepared=false,active=false,reached=false,sawSwim=false,falling=false;
+    bool prepared=false,active=false,reached=false,sawSwim=false,sawSlide=false,falling=false;
     unsigned fallCount=0;
     Vec3 lastSupported;
     uint64_t began=0,arrived=0;
@@ -3786,6 +3786,35 @@ bool characterLane(World& world,const Vec3& start,const Vec3& end,float maximumS
   return true;
   }
 
+bool characterStairsProfile(World& world,const Vec3& low,const Vec3& high,unsigned& risers,float& maximumRiser) {
+  risers=0;maximumRiser=0;unsigned plateaus=0;
+  Vec3 previous=low;
+  for(unsigned i=1;i<=40;++i) {
+    Vec3 floor;
+    if(!characterFloor(world,low+(high-low)*(float(i)/40.f),floor))return false;
+    const float rise=floor.y-previous.y;
+    if(rise< -2.f || rise>32.f)return false;
+    if(rise>=6.f) {++risers;maximumRiser=std::max(maximumRiser,rise);}
+    if(std::abs(rise)<2.f)++plateaus;
+    previous=floor;
+    }
+  // Several discrete risers and level treads distinguish stairs from one
+  // furniture top or a sloping ramp picked by the broad IK roughness probe.
+  return risers>=3 && plateaus>=8 && high.y-low.y>=45.f;
+  }
+
+void characterFreezeNear(World& world,Npc& player,const Vec3& start,const Vec3& goal) {
+  size_t count=0;
+  for(uint32_t id=0;id<world.npcCount();++id)
+    if(auto* npc=world.npcById(id);npc && npc!=&player &&
+       ((npc->position()-start).length()<2200.f || (npc->position()-goal).length()<2200.f)) {
+      // Match the existing `freeze` bench command before the teleport's first
+      // native tick, so automatic important dialogs cannot consume player keys.
+      npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);++count;
+      }
+  event("character_fixture_freeze","\"npcs\":"+std::to_string(count)+",\"radius_cm\":2200");
+  }
+
 bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool abortMissing=true) {
   Bench::CharacterRoute route;route.name=name;
   std::vector<const WayPoint*> points;
@@ -3794,16 +3823,23 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
     });
   std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
   auto* physics=world.physic();
+  const auto& guild=world.script().guildVal();
+  const float legacySlideAngle=float(guild.slide_angle[player.guild()]);
+  const float legacySlideEnd=float(guild.slide_angle2[player.guild()]);
+  const float steepMinimum=std::max(40.f,legacySlideAngle+1.f);
+  const float steepMaximum=std::min(65.f,89.f-legacySlideEnd);
   const auto city=[](const WayPoint& point) {return point.name.starts_with("NW_CITY_");};
   const auto harbour=[](const WayPoint& point) {
     return point.name.starts_with("NW_CITY_") && (point.name.find("HABOUR")!=std::string::npos ||
       point.name.find("HARBOUR")!=std::string::npos || point.name.find("HARBOR")!=std::string::npos);
     };
+  if(name=="port_edge")
+    std::stable_partition(points.begin(),points.end(),[](const auto* point){return point->name=="NW_CITY_HABOUR_POOR_AREA_PATH_01_03";});
   bool found=false;
   if(name=="stairs_up" || name=="stairs_down" || name=="steep_slope") {
     const bool stairs=name!="steep_slope";
     for(const auto* point:points) {
-      if(stairs && !city(*point)) continue;
+      if(stairs && (!city(*point) || point->name.find("BED")!=std::string::npos)) continue;
       const std::vector<float> offsets=stairs?std::vector<float>{0.f,-80.f,80.f}:std::vector<float>{0.f,-120.f,120.f,-240.f,240.f};
       for(const float x:offsets)for(const float z:offsets) {
         if(found)continue;
@@ -3811,17 +3847,25 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
         if(!characterFloor(world,point->position()+Vec3(x,0,z),center))continue;
         float angle=0,rough=0;Vec3 downhill;
         if(!slopeAt(world,center,angle,downhill,rough)) continue;
-        if(stairs ? !(angle>=18 && angle<=40 && rough>=6 && rough<=25) : !(angle>=44 && angle<=65 && rough<6)) continue;
+        if(stairs ? !(angle>=18 && angle<=40 && rough>=6 && rough<=25) : !(angle>=steepMinimum && angle<=steepMaximum && rough<6)) continue;
         Vec3 low,high;
         if(!characterFloor(world,center+downhill*100.f,low) || !characterFloor(world,center-downhill*100.f,high)) continue;
-        if(stairs && (!characterLane(world,low,high,38) || high.y-low.y<35)) continue;
+        unsigned risers=0;float maximumRiser=0;
+        if(stairs && (!characterLane(world,low,high,32) || !characterStairsProfile(world,low,high,risers,maximumRiser)))continue;
         if(!stairs && high.y-low.y<100) continue;
+        if(!stairs) {
+          const auto surface=physics->landRay(center+Vec3(0,20,0),50);
+          const float k=float(M_PI)/180.f;
+          if(!surface.hasCol || !(std::sin(legacySlideEnd*k)<surface.n.y && surface.n.y<std::cos(legacySlideAngle*k)))continue;
+          }
         route.waypoint=point->name;
         route.start=name=="stairs_down" ? high : low;
         route.goal=name=="stairs_down" ? low : high;
         route.tolerance=55;found=true;
         event("character_route_surface","\"route\":"+jsonStr(name)+",\"angle_deg\":"+ragdollNumber(angle)+
-          ",\"roughness_cm\":"+ragdollNumber(rough)+",\"sample_cm\":"+ragdollVector(center));
+          ",\"roughness_cm\":"+ragdollNumber(rough)+",\"riser_count\":"+std::to_string(risers)+
+          ",\"maximum_riser_cm\":"+ragdollNumber(maximumRiser)+",\"legacy_slide_angle_deg\":"+ragdollNumber(legacySlideAngle)+
+          ",\"legacy_slide_end_deg\":"+ragdollNumber(legacySlideEnd)+",\"sample_cm\":"+ragdollVector(center));
         }
       if(found)break;
       }
@@ -3834,7 +3878,7 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
         const float angle=float(i)*float(M_PI)/12.f;
         const Vec3 along(std::cos(angle),0,std::sin(angle)),side(-along.z,0,along.x);
         Vec3 end;
-        if(!characterFloor(world,center+along*300.f,end) || !characterLane(world,center,end,20)) continue;
+        if(!characterFloor(world,center+along*300.f,end) || !characterLane(world,center,end,20) || std::abs(end.y-center.y)>30) continue;
         bool nearEdge=true;
         for(float distance:{0.f,150.f,300.f}) {
           const auto edge=physics->landRay(center+along*distance+side*95.f+Vec3(0,80,0),700);
@@ -3928,6 +3972,7 @@ bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool
     }
   route.direction=route.goal-route.start;route.direction.y=0;route.direction=Vec3::normalize(route.direction);
   route.prepared=true;route.lastSupported=route.start;
+  characterFreezeNear(world,player,route.start,route.goal);
   player.stopWalking();player.clearAiQueue();player.setPosition(route.start);player.setDirection(route.direction);player.updateTransform();
   bench.hasPrev=false;bench.characterRoute=route;
   bench.cam=C_Follow;bench.camDist=240;bench.camHeight=70;bench.camAngle=110;bench.camAuto=true;
@@ -3952,10 +3997,10 @@ void characterRouteEnd(World& world,Npc& player) {
     ",\"elapsed_ms\":"+std::to_string((route.reached?route.arrived:world.tickCount())-route.began)+
     ",\"window_ms\":"+std::to_string(world.tickCount()-route.began)+",\"start_cm\":"+ragdollVector(route.start)+
     ",\"goal_cm\":"+ragdollVector(route.goal)+",\"end_cm\":"+ragdollVector(player.position())+
-    ",\"fall_count\":"+std::to_string(route.fallCount)+",\"saw_swim\":"+(route.sawSwim?"true":"false"));
+    ",\"fall_count\":"+std::to_string(route.fallCount)+",\"saw_slide\":"+(route.sawSlide?"true":"false")+",\"saw_swim\":"+(route.sawSwim?"true":"false"));
   }
 
-void characterFields(World& world,Npc& player,uint64_t dt) {
+void characterFields(World& world,Npc& player,uint64_t dt,PlayerControl& ctrl) {
   auto& route=bench.characterRoute;
   if(!route.active && !bench.characterMeasuring && bench.characterPropRole.empty() && !bench.characterRiding)return;
   const auto now=std::chrono::steady_clock::now();
@@ -3969,7 +4014,8 @@ void characterFields(World& world,Npc& player,uint64_t dt) {
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
   normal=AppCadence::normalClock();
 #endif
-  const std::string label=bench.characterMeasuring?"performance":route.active?route.name:bench.characterRiding?"ride":bench.characterPropRole;
+  const std::string rideLabel=bench.characterMover?"ride_mover":bench.characterPlatform?"ride_kinematic":"ride_dynamic";
+  const std::string label=bench.characterMeasuring?"performance":route.active?route.name:bench.characterRiding?rideLabel:bench.characterPropRole;
   if(!normal || wall>0)bench.characterFrames.push_back({label,bench.characterFrame++,world.tickCount(),dt,position,
     player.characterVirtualGroundVelocity(),move,player.isInAir(),player.isFalling(),player.isSwim(),
     Gothic::physicsFlags().characterVirtual,player.characterVirtualActive(),bench.rec && bench.recVideo,normal,
@@ -3979,7 +4025,7 @@ void characterFields(World& world,Npc& player,uint64_t dt) {
     player.setDirection(bench.characterRoute.direction*sign);
     }
   if(route.active) {
-    route.sawSwim|=player.isSwim();
+    route.sawSwim|=player.isSwim();route.sawSlide|=player.isSlide();
     if(!player.isInAir() && !player.isFalling() && !player.isSwim())route.lastSupported=position;
     const bool edgeFall=route.name!="jump_ledge" && route.name!="water_entry" && player.isFalling() &&
       route.lastSupported.y-position.y>100.f;
@@ -3995,6 +4041,11 @@ void characterFields(World& world,Npc& player,uint64_t dt) {
     const bool height=route.name=="water_entry"?route.sawSwim:std::abs(position.y-route.goal.y)<60.f;
     if(!route.reached && remaining<=route.tolerance && side<route.tolerance && height) {
       route.reached=true;route.arrived=world.tickCount();
+      std::erase_if(bench.holds,[&](const Hold& hold) {
+        const bool moving=hold.a==KeyCodec::Forward || hold.a==KeyCodec::Back || hold.a==KeyCodec::Left || hold.a==KeyCodec::Right;
+        if(moving)release(ctrl,hold.a);
+        return moving;
+        });
       event("character_route_arrive","\"route\":"+jsonStr(route.name)+",\"elapsed_ms\":"+
         std::to_string(route.arrived-route.began)+",\"root_cm\":"+ragdollVector(position));
       }
@@ -4080,19 +4131,25 @@ void prepareCharacterProp(World& world,Npc& player,const std::string& role) {
     for(const auto& body:world.physic()->movableVobSnapshot())
       if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;}))bench.characterPropId=body.id;
     }
+  characterFreezeNear(world,player,bench.movableWalkStart,bench.movableWalkEnd);
   player.stopWalking();player.clearAiQueue();player.setPosition(bench.movableWalkStart);player.setDirection(direction);player.updateTransform();
   bench.characterPropHeroInitial=player.position();bench.characterPropDirection=direction;bench.characterPropBegan=world.tickCount();bench.characterHasWall=false;
   event("character_prop_setup","\"role\":"+jsonStr(role)+",\"initial_cm\":"+ragdollVector(bench.characterPropInitial)+
     ",\"hero_cm\":"+ragdollVector(player.position())+",\"direction\":"+ragdollVector(direction));
   }
 
-void characterRideCheckpoint(World& world,Npc& player) {
+Vec3 characterSupportPosition(World& world) {
+  if(bench.characterMover)return bench.characterMover->position();
+  if(bench.characterPlatform)return movablePosition(bench.characterPlatformMatrix);
+  for(const auto& row:world.physic()->movableVobSnapshot())
+    if(row.id==bench.characterPropId)return movablePosition(row.transform);
+  return {};
+  }
+
+void characterRideCheckpoint(World& world,Npc& player,bool setup=false) {
   if(!bench.characterRiding) {arenaAbort("character ride checkpoint needs a support body");return;}
-  Vec3 body;
-  if(bench.characterMover)body=bench.characterMover->position();
-  else if(bench.characterPlatform)body=movablePosition(bench.characterPlatformMatrix);
-  else for(const auto& row:world.physic()->movableVobSnapshot())if(row.id==bench.characterPropId) {body=movablePosition(row.transform);break;}
-  event("character_ride_checkpoint","\"support_kind\":"+jsonStr(bench.characterMover?"mover":bench.characterPlatform?"kinematic":"dynamic")+
+  const auto body=characterSupportPosition(world);
+  event(setup?"character_ride_setup":"character_ride_checkpoint","\"support_kind\":"+jsonStr(bench.characterMover?"mover":bench.characterPlatform?"kinematic":"dynamic")+
     ",\"support_cm\":"+ragdollVector(body)+",\"support_initial_cm\":"+ragdollVector(bench.characterRideStart)+
     ",\"hero_cm\":"+ragdollVector(player.position())+",\"hero_initial_cm\":"+ragdollVector(bench.characterRideHeroStart)+
     ",\"ground_velocity_cm_s\":"+ragdollVector(player.characterVirtualGroundVelocity())+
@@ -4119,7 +4176,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="character" && a.size()==2 && a[1]=="begin") {
     auto& route=bench.characterRoute;
     if(!route.prepared || route.active) {arenaAbort("character begin needs a prepared route");return;}
-    route.active=true;route.reached=false;route.sawSwim=false;route.fallCount=0;route.falling=false;
+    route.active=true;route.reached=false;route.sawSwim=false;route.sawSlide=false;route.fallCount=0;route.falling=false;
     // Idle settling can already slide on the steep route. Start held input
     // from the same prepared coordinate in both modes after the camera settles.
     pl.setPosition(route.start);pl.updateTransform();
@@ -4207,15 +4264,21 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       bench.characterRideStart=movablePosition(matrix);bench.characterPropRole.clear();
       }
     else {arenaAbort("unknown character ride support: "+a[2]);return;}
+    characterFreezeNear(w,pl,pl.position(),pl.position());
     bench.characterRideHeroStart=pl.position();bench.characterHasWall=false;bench.characterRiding=true;
-    characterRideCheckpoint(w,pl);
+    characterRideCheckpoint(w,pl,true);
     }
   else if(c=="character" && a.size()==2 && a[1]=="ride-start") {
     if(!bench.characterRiding)return; // explicit unavailable mover event already identifies missing coverage
+    // The setup already selects Idle through stopWalking(). Animation blending
+    // and native contact recovery can still settle during its 700ms wait; begin
+    // the carry measurement from the actual pose immediately before movement.
+    bench.characterRideStart=characterSupportPosition(w);
+    bench.characterRideHeroStart=pl.position();
+    characterRideCheckpoint(w,pl);
     bench.characterRideMoving=true;
     if(bench.characterMover)w.triggerEvent(TriggerEvent(std::string(bench.characterMover->name()),"CHARACTER_BENCH",TriggerEvent::T_Trigger));
     else if(bench.characterProp)bench.characterProp->body.addImpulse(Vec3(1.8f,0,0)*bench.characterProp->body.mass(),&pl);
-    characterRideCheckpoint(w,pl);
     }
   else if(c=="character" && a.size()==2 && a[1]=="ride-checkpoint") {
     if(bench.characterRiding)characterRideCheckpoint(w,pl);
@@ -8736,7 +8799,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
             ",\"truth_target_position_cm\":["+std::to_string(target.x)+","+std::to_string(target.y)+","+std::to_string(target.z)+"]");
       }
     }
-  characterFields(*world,*player,dt);
+  characterFields(*world,*player,dt,ctrl);
   bench.time += dt;
   if(aiBusy && aiBusy())
     bench.busyAt = bench.time;
