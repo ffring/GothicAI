@@ -42,6 +42,7 @@ export CV=${CV:-0}
 export NAV_TEACHER_REPO
 NAV_TEACHER_REPO=$(cd -- "$(dirname -- "$0")/../../.." && pwd)
 mkdir -p -- "$OUT" "$CACHE" "$HOME/gothic-ai"
+df -h "$HOME"
 
 flock -w "${LOCK_WAIT_SECONDS:-60}" -E 75 "$HOME/gothic-ai/body-simulation.lock" \
   python3 - "$@" <<'PY'
@@ -71,6 +72,8 @@ if cv not in (0, 1):
 out = Path(os.environ['OUT'])
 cache = Path(os.environ['CACHE'])
 links = Path(os.environ['LINKS']) if os.environ.get('LINKS') else None
+if options.stage == 'probe' and links is not None:
+    parser.error('Probe the original gaps on the mesh without LINKS')
 for path in (cache, links):
     if path is not None and any(char.isspace() for char in str(path)):
         parser.error('CACHE and LINKS cannot contain whitespace (bench command syntax)')

@@ -26,7 +26,9 @@ std::string meshWorld;
 float capsuleHeight=0, capsuleCenter=0;
 // Bench teacher only. Distances are centimetres; clocks are simulation milliseconds.
 constexpr float cornerRadius=45.f, cornerHeight=100.f, progressStep=20.f;
+constexpr float linkTakeoffRadius=20.f, linkLandingRadius=60.f;
 constexpr uint64_t progressTimeout=3000, fallbackTimeout=25000;
+constexpr uint64_t linkLandingTime=300, linkTimeout=6000;
 constexpr unsigned maxReplans=2, maxFallbacks=1;
 struct Trial {
   Npc* npc=nullptr;
@@ -34,12 +36,16 @@ struct Trial {
   std::string mode,start,target,output;
   NavMesh::Path path;
   uint64_t began=0,limit=0,elapsed=0;
+  uint64_t frames=0,cvFrames=0,normalFrames=0;
   size_t corner=1;
   unsigned replans=0,fallbacks=0;
-  uint64_t progressAt=0,fallbackAt=0,sampleAt=0,linkAt=0;
+  uint64_t progressAt=0,fallbackAt=0,sampleAt=0,linkAt=0,landedAt=0;
   float bestRemaining=std::numeric_limits<float>::max();
   const WayPoint* fallback=nullptr;
   bool onFallback=false,linkStarted=false;
+  bool sawAir=false,sawJump=false,sawClimb=false;
+  int linkHp=0;
+  Vec3 linkOrigin,linkEnd;
   std::string failure;
   std::ofstream trace;
   bool active=false,success=false,finished=false;
@@ -81,11 +87,12 @@ bool closeCorner(const Vec3& at,const Vec3& to) {
   return d.x*d.x+d.z*d.z<=cornerRadius*cornerRadius && std::abs(d.y)<=cornerHeight;
 }
 Vec3 destination() {
+  if(trial.linkStarted) return trial.linkEnd;
   return trial.corner<trial.path.corners.size()?centimeters(trial.path.corners[trial.corner]):trial.goal;
 }
 float remaining(const Vec3& at) {
   float value=(at-destination()).length();
-  for(size_t i=trial.corner+1;i<trial.path.corners.size();++i)
+  for(size_t i=trial.corner+(trial.linkStarted?2:1);i<trial.path.corners.size();++i)
     value+=(centimeters(trial.path.corners[i])-centimeters(trial.path.corners[i-1])).length();
   return value;
 }
@@ -93,8 +100,8 @@ void replan(World& w) {
   auto& n=*trial.npc;
   n.clearAiQueue();n.clearGoTo();n.setWalkMode(WalkBit::WM_Walk);
   trial.path=mesh->findPath(meters(n.position()),meters(trial.goal));
-  trial.corner=1;trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
   trial.linkStarted=false;
+  trial.corner=0;trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
 }
 void fallback(World& w) {
   auto& n=*trial.npc;
@@ -120,7 +127,8 @@ void finish(World& w) {
      <<",\"failure\":"<<std::quoted(trial.failure)<<",\"next_position\":";vec(out,destination());
   out<<",\"goal_direct_move_clear\":"<<n.testMove(trial.goal)
      <<",\"path_length_cm\":"<<trial.path.length*100
-     <<",\"start_snap_m\":"<<trial.path.startSnapDistance<<",\"end_snap_m\":"<<trial.path.endSnapDistance;
+     <<",\"start_snap_m\":"<<trial.path.startSnapDistance<<",\"end_snap_m\":"<<trial.path.endSnapDistance
+     <<",\"frames\":"<<trial.frames<<",\"cv_frames\":"<<trial.cvFrames<<",\"normal_ai_frames\":"<<trial.normalFrames;
   const auto hit=w.physic()->navigationRay(n.centerPosition(),destination()+Vec3(0,100,0),&n);
   out<<",\"blocker_category\":"<<int(hit.kind)<<",\"blocker_position\":";vec(out,hit.point);out<<"}\n";
   trial.trace.close();
@@ -251,6 +259,7 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
     trial.start=place?a[4]:"intentional";trial.target=goal->name;trial.output=output;
     trial.limit=std::stoull(a[place?6:5]);trial.began=w.tickCount();trial.active=true;
     trial.path=mesh->findPath(meters(n.position()),meters(trial.goal));
+    if(trial.mode=="teacher") trial.corner=0;
     trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
     if(trial.mode=="teacher") trial.trace=file(output,"teacher-trace.jsonl");
     if(trial.mode=="direct") n.aiPush(AiQueue::aiGoToPoint(*goal));
@@ -264,7 +273,9 @@ void NavBench::tick(World& w) {
   NavTransitions::tick(w);
   if(!trial.active || !trial.npc) return;
   auto& n=*trial.npc;trial.elapsed=w.tickCount()-trial.began;
-  if((n.position()-trial.goal).length()<100) {trial.success=true;finish(w);return;}
+  ++trial.frames;if(n.characterVirtualActive()) ++trial.cvFrames;
+  if(n.processPolicy()==NpcProcessPolicy::AiNormal) ++trial.normalFrames;
+  if((n.position()-trial.goal).length()<100 && !trial.linkStarted) {trial.success=true;trial.failure.clear();finish(w);return;}
   if(trial.elapsed>=trial.limit) {finish(w);return;}
   if(trial.mode=="teacher") {
     if(w.tickCount()>=trial.sampleAt) {
@@ -285,7 +296,7 @@ void NavBench::tick(World& w) {
       return;
     }
     // Advance only after the body actually reaches the corner. Preserve link takeoffs.
-    while(trial.corner<trial.path.corners.size() && closeCorner(n.position(),destination())) {
+    while(!trial.linkStarted && trial.corner<trial.path.corners.size() && closeCorner(n.position(),destination())) {
       bool takeoff=false;
       for(const auto& link:trial.path.transitions) if(link.cornerIndex==trial.corner) takeoff=true;
       if(takeoff) break;
@@ -293,16 +304,46 @@ void NavBench::tick(World& w) {
     }
     for(const auto& link:trial.path.transitions) {
       if(link.cornerIndex!=trial.corner) continue;
-      if(!trial.linkStarted && closeCorner(n.position(),centimeters(link.start)) && !n.isInAir()) {
+      if(!trial.linkStarted && (n.position()-centimeters(link.start)).length()<=linkTakeoffRadius && NavTransitions::supported(w,n)) {
         n.clearGoTo();n.setDirection(centimeters(link.end)-n.position());
         n.setWalkMode(WalkBit::WM_Run);
-        n.goToPosition(centimeters(link.end));
-        if(link.type==NavMesh::LinkType::Climb) n.startClimb(n.tryJump());
-        else if(link.type==NavMesh::LinkType::Jump) {const auto jump=n.tryJump();if(jump.anim==AnimationSolver::Jump) n.setAnim(jump.anim);}
-        trial.linkStarted=true;trial.linkAt=w.tickCount();
+        bool started=false;
+        if(link.type==NavMesh::LinkType::Drop) started=n.goToPosition(centimeters(link.end));
+        else {
+          const auto jump=n.tryJump();
+          if(link.type==NavMesh::LinkType::Climb && jump.anim!=Npc::Anim::Jump && jump.anim!=Npc::Anim::Idle) started=n.startClimb(jump);
+          else if(link.type==NavMesh::LinkType::Jump && jump.anim==Npc::Anim::Jump) started=n.setAnim(jump.anim);
+        }
+        if(started) {
+          trial.linkStarted=true;trial.linkAt=trial.progressAt=w.tickCount();trial.landedAt=0;
+          trial.sawAir=trial.sawJump=trial.sawClimb=false;
+          trial.linkOrigin=n.position();trial.linkEnd=centimeters(link.end);trial.linkHp=n.attribute(ATR_HITPOINTS);
+          trial.bestRemaining=remaining(n.position());
+        } else n.setWalkMode(WalkBit::WM_Walk);
       }
-      if(trial.linkStarted && !n.isInAir() && closeCorner(n.position(),centimeters(link.end))) {
-        trial.corner+=2;trial.linkStarted=false;n.setWalkMode(WalkBit::WM_Walk);n.clearGoTo();
+      if(trial.linkStarted) {
+        trial.sawAir|=n.isInAir() || n.isFalling();
+        trial.sawJump|=n.isJump() || n.isJumpAnim();
+        trial.sawClimb|=n.bodyStateMasked()==BS_CLIMB;
+        if(n.attribute(ATR_HITPOINTS)<trial.linkHp) {trial.failure="link_damage";finish(w);return;}
+        const bool witnessed=link.type==NavMesh::LinkType::Drop?trial.sawAir && trial.linkOrigin.y-n.position().y>20.f:
+                             link.type==NavMesh::LinkType::Climb?trial.sawClimb:trial.sawJump && trial.sawAir;
+        bool landing=false;
+        if(witnessed && NavTransitions::supported(w,n) && (n.position()-trial.linkEnd).length()<=linkLandingRadius) {
+          const auto local=mesh->findPath(meters(n.position()),link.end);
+          landing=local.complete && local.transitions.empty() && local.length<=1.5f && local.startSnapDistance<=.25f;
+        }
+        if(landing) {
+          n.clearGoTo();n.stopWalking();
+          if(trial.landedAt==0) trial.landedAt=w.tickCount();
+          if(w.tickCount()-trial.landedAt>=linkLandingTime) {
+            trial.corner+=2;trial.linkStarted=false;n.setWalkMode(WalkBit::WM_Walk);
+          }
+        } else {
+          trial.landedAt=0;
+          if(NavTransitions::supported(w,n) && n.moveHint()==Npc::GT_No) n.goToPosition(trial.linkEnd);
+        }
+        if(trial.linkStarted && w.tickCount()-trial.linkAt<linkTimeout) return;
       }
     }
     const float left=remaining(n.position());

@@ -67,7 +67,7 @@ std::ofstream outputFile(const char* name,bool append=false) {
   out<<std::setprecision(9)<<std::boolalpha;
   return out;
   }
-bool supported(World& w,Npc& npc) {
+bool supportedImpl(World& w,Npc& npc) {
   if(npc.isInAir() || npc.isFalling() || npc.isJump() || npc.isJumpUp() ||
      npc.isJumpAnim() || npc.bodyStateMasked()==BS_CLIMB || npc.isDown() || npc.isSwim())
     return false;
@@ -76,7 +76,7 @@ bool supported(World& w,Npc& npc) {
   return ground.hasCol && std::abs(ground.v.y-p.y)<=SupportToleranceCm;
   }
 bool stableFor(World& w,uint64_t duration) {
-  if(!supported(w,*session.npc)) {session.stableSince=0;return false;}
+  if(!supportedImpl(w,*session.npc)) {session.stableSince=0;return false;}
   if(session.stableSince==0) session.stableSince=w.tickCount();
   return w.tickCount()-session.stableSince>=duration;
   }
@@ -123,7 +123,7 @@ void record(World& w,const std::string& reason,bool accepted) {
      <<",\"hp_min\":"<<session.hpMin<<",\"native_action_started\":"<<session.actionStarted
      <<",\"saw_air\":"<<session.sawAir<<",\"saw_jump\":"<<session.sawJump
      <<",\"saw_climb\":"<<session.sawClimb<<",\"max_rise_cm\":"<<session.maxRise
-     <<",\"max_drop_cm\":"<<session.maxDrop<<",\"supported\":"<<supported(w,*session.npc)
+     <<",\"max_drop_cm\":"<<session.maxDrop<<",\"supported\":"<<supportedImpl(w,*session.npc)
      <<",\"obstruction_kind\":"<<int(obstruction.kind)<<",\"takeoff_cm\":";
   vectorJson(out,session.takeoff);out<<",\"expected_landing_cm\":";vectorJson(out,centimeters(a.end));
   out<<",\"final_position_cm\":";vectorJson(out,position);
@@ -192,6 +192,7 @@ void startAction(World& w) {
 
 void NavTransitions::reset() { session=Session{}; }
 bool NavTransitions::running() { return session.active; }
+bool NavTransitions::supported(World& world,Npc& npc) { return supportedImpl(world,npc); }
 
 bool NavTransitions::command(const std::vector<std::string>& args,World& world,Npc& player,
                              NavMesh& mesh,const std::string& output) {
@@ -261,7 +262,7 @@ void NavTransitions::tick(World& world) {
                        a.type==NavMesh::LinkType::Climb ? session.sawClimb && session.maxRise>15.f :
                        session.sawJump && (session.sawAir || session.maxRise>10.f);
   const bool close=(p-centimeters(a.end)).length()<=LandingRadiusCm;
-  if(close && witnessed && supported(world,npc)) {
+  if(close && witnessed && supportedImpl(world,npc)) {
     // Proximity across a narrow crack is not proof of landing on the other component.
     const auto landing=session.mesh->findPath(meters(p),a.end);
     if(landing.complete && landing.length<=1.5f && landing.startSnapDistance<=.25f) {
@@ -277,5 +278,5 @@ void NavTransitions::tick(World& world) {
     record(world,witnessed?"landing_not_reached":"native_transition_not_witnessed",false);return;
     }
   // Do not replace a native jump/climb animation with walking. Resume only on real support.
-  if(supported(world,npc) && npc.moveHint()==Npc::GT_No) npc.goToPosition(centimeters(a.end));
+  if(supportedImpl(world,npc) && npc.moveHint()==Npc::GT_No) npc.goToPosition(centimeters(a.end));
   }
