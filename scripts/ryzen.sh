@@ -485,8 +485,8 @@ PY
   # Preserve game options, translating paths into this run's output directory.
   while IFS= read -r name; do
     case "$name" in
-      GOTHIC_DIR|OPENGOTHIC_TEXTURES) continue ;;
-      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
+      GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE) continue ;;
+      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL)
         value="$(bench_path "${!name}")"
         ENV_ARGS+=("$name=$value") ;;
     esac
@@ -518,6 +518,24 @@ PY
   else
     # An explicit empty value disables HD textures, including on the remote host.
     ENV_ARGS+=("OPENGOTHIC_TEXTURES=$(bench_path "${OPENGOTHIC_TEXTURES}")")
+  fi
+  FRACTURE_CACHE="${OPENGOTHIC_FRACTURE-$HOME/.local/share/gothic-ai/fracture}"
+  if [[ -n "$FRACTURE_CACHE" ]]; then
+    FRACTURE_CACHE="$(python3 - "$FRACTURE_CACHE" <<'PY'
+import os
+import sys
+print(os.path.realpath(os.path.expanduser(sys.argv[1])))
+PY
+)"
+  fi
+  if [[ -n "$FRACTURE_CACHE" && -d "$FRACTURE_CACHE" ]]; then
+    # Keep this worktree's cache beside its source, away from other sessions.
+    remote mkdir -p "$STATE/fracture"
+    rsync -a --delete "$FRACTURE_CACHE/" "$RYZEN_HOST:$REMOTE/fracture/"
+    ENV_ARGS+=("OPENGOTHIC_FRACTURE=$STATE/fracture")
+  else
+    # Missing and explicitly disabled local caches must not select a remote default.
+    ENV_ARGS+=("OPENGOTHIC_FRACTURE=")
   fi
   rsync -a -- "$BENCH_SCENARIO" "$RYZEN_HOST:$REMOTE/inputs/$RUN/"
   if [[ -z "${WORLD:-}" ]]; then

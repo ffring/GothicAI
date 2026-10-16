@@ -1,0 +1,69 @@
+# A real fireball in Coragon's tavern, then native projectiles, drops and walking.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+noise on
+destruction on
+overlay off
+view full
+destruction setup fireball
+spell equip 23
+wait 1200
+shot destruction-before
+rec destruction-fireball
+destruction begin
+spell cast 600
+wait 2000
+shot destruction-after
+wait 17000
+destruction checkpoint
+noise checkpoint
+movable save destruction-scattered
+stop
+
+destruction setup arrows
+wait 500
+rec destruction-arrows
+destruction begin
+wait 16000
+destruction checkpoint
+stop
+
+destruction setup drop1
+wait 500
+rec destruction-drop1
+destruction begin
+wait 5000
+destruction checkpoint
+stop
+
+destruction setup drop5
+wait 500
+rec destruction-drop5
+destruction begin
+wait 17000
+destruction checkpoint
+stop
+
+release all
+destruction setup walk-npc
+wait 500
+rec destruction-walk-npc
+destruction begin
+wait 5000
+destruction checkpoint
+stop
+
+release all
+destruction setup walk-hero
+wait 500
+rec destruction-walk-hero
+destruction begin
+hold forward 5000
+wait 5000
+release all
+destruction checkpoint
+stop
+physics stats

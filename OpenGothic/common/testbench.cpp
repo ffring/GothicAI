@@ -670,6 +670,19 @@ struct Bench {
   std::string movablePhase;
   uint64_t movablePhaseStart=0,movableSampleTick=0;
   std::vector<LivingPhysics> movablePhysics;
+  std::vector<std::unique_ptr<MovableFixture>> destructionFixtures;
+  std::vector<uintptr_t> destructionIds;
+  std::map<std::pair<uintptr_t,size_t>,Vec3> destructionFragmentOrigins;
+  std::map<std::pair<uintptr_t,size_t>,float> destructionFragmentTravel;
+  std::string destructionCase;
+  Vec3 destructionCaster,destructionTarget,destructionDirection,destructionActorStart;
+  Npc* destructionActor=nullptr;
+  WayPoint destructionDestination;
+  uint64_t destructionStart=0,destructionNextArrow=0;
+  uint64_t destructionLastBreak=0;
+  unsigned destructionArrows=0;
+  bool destructionReady=false,destructionTrace=false,destructionShooting=false;
+  bool destructionSleepSampled=false;
   struct CharacterRoute {
     std::string name,waypoint;
     Vec3 start,goal,direction;
@@ -1376,6 +1389,7 @@ void finish() {
       } else event("npc_character_error","\"reason\":\"cannot write native NPC character frames\"");
     }
   bench.characterProp.reset();bench.characterPlatform.reset();bench.characterPlatformVisual.reset();
+  bench.destructionFixtures.clear();
   bench.movableFixtures.clear();
   if(ragdollPerf) {
     std::FILE* perf=std::fopen((outDir+"/ragdoll-performance.csv").c_str(),"w");
@@ -3441,6 +3455,264 @@ void prepareMovableCast(World& world,Npc& player) {
   Gothic::settingsSetI("GAME","spell_physics",1);
   event("movable_cast_setup","\"spell_id\":23,\"npc_free_lane_radius_cm\":100,\"target_cm\":"+
     ragdollVector(target)+",\"caster_cm\":"+ragdollVector(player.position()));
+  }
+
+bool destructionOwns(uintptr_t id) {
+  return std::find(bench.destructionIds.begin(),bench.destructionIds.end(),id)!=bench.destructionIds.end();
+  }
+
+std::string destructionRows(World& world) {
+  std::string result="[";
+  for(const auto& body:world.physic()->movableVobSnapshot()) {
+    if(!destructionOwns(body.id))continue;
+    if(result.size()>1)result+=',';
+    result+="{\"id\":"+std::to_string(body.id)+",\"visual\":"+jsonStr(body.visual)+
+      ",\"class\":"+jsonStr(body.className)+",\"destructible\":"+(body.destructible?"true":"false")+
+      ",\"broken\":"+(body.broken?"true":"false")+",\"health\":"+ragdollNumber(body.health)+
+      ",\"max_health\":"+ragdollNumber(body.maxHealth)+",\"mass_kg\":"+ragdollNumber(body.mass)+
+      ",\"sleeping\":"+(body.sleeping?"true":"false")+",\"npc_contact\":"+(body.touchedByNpc?"true":"false")+
+      ",\"position_cm\":"+ragdollVector(movablePosition(body.transform))+"}";
+    }
+  return result+"]";
+  }
+
+std::string destructionFragments(World& world) {
+  std::string result="[";
+  for(const auto& part:world.physic()->fragmentSnapshot()) {
+    if(!destructionOwns(part.parentId))continue;
+    if(result.size()>1)result+=',';
+    const auto key=std::make_pair(part.parentId,part.piece);
+    result+="{\"parent_id\":"+std::to_string(part.parentId)+",\"piece\":"+std::to_string(part.piece)+
+      ",\"sleeping\":"+(part.sleeping?"true":"false")+",\"position_cm\":"+ragdollVector(movablePosition(part.transform))+
+      ",\"velocity_cm_s\":"+ragdollVector(part.velocity)+",\"max_displacement_cm\":"+
+      ragdollNumber(bench.destructionFragmentTravel[key])+"}";
+    }
+  return result+"]";
+  }
+
+void destructionFields(World& world) {
+  if(!bench.destructionTrace)return;
+  const bool sleepSample=bench.destructionLastBreak!=0 && !bench.destructionSleepSampled &&
+                         world.tickCount()-bench.destructionLastBreak>=15000;
+  if(bench.movableMeasuring && !sleepSample)return;
+  for(const auto& part:world.physic()->fragmentSnapshot()) {
+    if(!destructionOwns(part.parentId))continue;
+    const auto key=std::make_pair(part.parentId,part.piece);
+    const auto point=movablePosition(part.transform);
+    const auto [entry,inserted]=bench.destructionFragmentOrigins.emplace(key,point);
+    bench.destructionFragmentTravel[key]=std::max(bench.destructionFragmentTravel[key],(point-entry->second).length());
+    }
+  if(sleepSample) {
+    bench.destructionSleepSampled=true;
+    event("destruction_sleep15","\"case\":"+jsonStr(bench.destructionCase)+",\"elapsed_since_last_break_ms\":"+
+      std::to_string(world.tickCount()-bench.destructionLastBreak)+",\"fragments\":"+destructionFragments(world));
+    }
+  }
+
+uintptr_t destructionAdd(World& world,std::string_view name,const Vec3& support) {
+  const std::string visual(name);
+  const auto* mesh=Resources::loadMesh(visual);const auto* rule=MovableVobs::classifyVisual(visual);
+  if(!mesh || !rule)return 0;
+  const auto* bounds=mesh->bbox();
+  zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+  data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
+  data.position={support.x-(bounds[0].x+bounds[1].x)*.5f,support.y-bounds[0].y+.2f,support.z-(bounds[0].z+bounds[1].z)*.5f};
+  data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  const auto before=world.physic()->movableVobSnapshot();
+  auto fixture=std::make_unique<Bench::MovableFixture>();
+  fixture->visual.setVisual(data,world,false,false);
+  auto matrix=Matrix4x4::mkIdentity();matrix.translate(data.position.x,data.position.y,data.position.z);
+  fixture->visual.setObjMatrix(matrix);
+  fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
+  if(fixture->body.isEmpty())return 0;
+  fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& pose){view->setObjMatrix(pose);});
+  fixture->visual.setupFracture(world,fixture->body);
+  bench.destructionFixtures.emplace_back(std::move(fixture));
+  for(const auto& body:world.physic()->movableVobSnapshot())
+    if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==body.id;})) {
+      bench.destructionIds.push_back(body.id);bench.movableIds.push_back(body.id);return body.id;
+      }
+  return 0;
+  }
+
+bool destructionDropFloor(World& world,Vec3& result) {
+  // A five-metre drop must start under open sky, not intersect the tavern roof.
+  for(float distance:{600.f,900.f,1200.f,1600.f,2000.f})
+    for(unsigned i=0;i<64;++i) {
+      const float angle=float(i)*float(M_PI)/32.f;
+      const auto point=bench.movableCenter+Vec3(std::cos(angle)*distance,0,std::sin(angle)*distance);
+      const auto floor=world.physic()->landRay(point+Vec3(0,180,0),500);
+      if(!floor.hasCol || floor.n.y<.95f || std::abs(floor.v.y-bench.movableWalkStart.y)>200)continue;
+      bool clear=true;
+      for(const auto delta:{Vec3(),Vec3(70,0,0),Vec3(-70,0,0),Vec3(0,0,70),Vec3(0,0,-70)}) {
+        const auto support=world.physic()->landRay(floor.v+delta+Vec3(0,30,0),60);
+        if(!support.hasCol || support.n.y<.95f || std::abs(support.v.y-floor.v.y)>2 ||
+           world.physic()->ray(floor.v+delta+Vec3(0,10,0),floor.v+delta+Vec3(0,720,0)).hasCol)clear=false;
+        }
+      if(clear) {result=floor.v;return true;}
+      }
+  return false;
+  }
+
+void destructionSetup(World& world,Npc& player,std::string_view name) {
+  if(!bench.destructionReady) {
+    if(!bench.movableReady)prepareMovableFixture(world,player);
+    if(!bench.movableReady)return;
+    prepareMovableCast(world,player);
+    if(bench.spellActors.empty())return;
+    bench.destructionCaster=player.position();bench.destructionTarget=bench.spellActors.back().npc->position();
+    bench.destructionDirection=Vec3::normalize(bench.destructionTarget-bench.destructionCaster);
+    bench.destructionDirection.y=0;
+    bench.destructionReady=true;
+    }
+  noiseRetireListeners();
+  if(bench.destructionActor && bench.destructionActor!=&player) {
+    bench.destructionActor->clearAiQueue();bench.destructionActor->setExternalControl(true);
+    }
+  bench.destructionActor=nullptr;
+  bench.destructionShooting=false;bench.destructionTrace=false;
+  bench.destructionFixtures.clear();bench.destructionIds.clear();
+  bench.destructionFragmentOrigins.clear();bench.destructionFragmentTravel.clear();
+  bench.destructionCase=name;bench.destructionArrows=0;
+  player.clearAiQueue();player.clearGoTo();player.stopWalking();player.closeWeapon(true);
+  player.setPosition(bench.destructionCaster);player.setDirection(bench.destructionDirection);player.updateTransform();
+  const auto direction=bench.destructionDirection,side=Vec3(-direction.z,0,direction.x);
+  auto source=bench.destructionTarget;
+  if(name=="drop1" || name=="drop5") {
+    if(!destructionDropFloor(world,source)) {arenaAbort("destruction drop needs flat open-sky native ground");return;}
+    const float height=name=="drop1"?100.f:500.f;
+    if(!destructionAdd(world,"NW_HARBOUR_CRATE_01.3DS",source+Vec3(0,height,0))) {
+      arenaAbort("destruction drop crate insertion failed");return;
+      }
+    player.setPosition(source-direction*250.f);player.updateTransform();
+    bench.cam=C_Hold;lookFrom(source-direction*450.f+side*180.f+Vec3(0,250,0),source+Vec3(0,200,0));
+    event("destruction_drop_setup","\"case\":"+jsonStr(name)+",\"height_cm\":"+ragdollNumber(height)+
+      ",\"floor_cm\":"+ragdollVector(source)+",\"clear_vertical_cm\":720");
+    }
+  else if(name=="fireball" || name=="five") {
+    const unsigned count=name=="five"?5:2;
+    // The old spell target sits at the edge of a table. Put the pair beyond
+    // that edge; the five-body ring needs its own open patch farther along.
+    if(name=="five") {
+      source+=direction*250.f;
+      const auto floor=world.physic()->landRay(source+Vec3(0,30,0),80);
+      if(!floor.hasCol || std::abs(floor.v.y-source.y)>20.f) {
+        event("destruction_preparation","\"case\":"+jsonStr(name)+",\"source_cm\":"+ragdollVector(source)+
+          ",\"has_floor\":"+(floor.hasCol?"true":"false")+",\"floor_cm\":"+ragdollVector(floor.v));
+        arenaAbort("destruction five-body target has no native tavern floor");return;
+        }
+      source.y=floor.v.y;
+      auto* target=bench.spellActors[0].npc;target->setPosition(source);target->setDirection(player.position()-source);target->updateTransform();
+      }
+    for(unsigned i=0;i<count;++i) {
+      const float angle=float(i)*float(2*M_PI)/float(count);
+      const auto at=name=="five" ? source+(side*std::cos(angle)+direction*std::sin(angle))*150.f :
+                                      source+side*(i?100.f:-100.f)+direction*40.f;
+      // Start below tabletop height: the ground query must not mistake
+      // nearby authored furniture for the floor of the tavern.
+      const auto floor=world.physic()->landRay(at+Vec3(0,30,0),80);
+      const bool supported=floor.hasCol && floor.n.y>.8f && std::abs(floor.v.y-source.y)<=20.f;
+      event("destruction_preparation","\"case\":"+jsonStr(name)+",\"ordinal\":"+std::to_string(i)+
+        ",\"at_cm\":"+ragdollVector(at)+",\"has_floor\":"+(floor.hasCol?"true":"false")+
+        ",\"floor_cm\":"+ragdollVector(floor.v)+",\"normal\":"+ragdollVector(floor.n)+
+        ",\"supported\":"+(supported?"true":"false"));
+      if(!supported || !destructionAdd(world,(i%2)?"NW_HARBOUR_BARREL_01.3DS":"NW_HARBOUR_CRATE_01.3DS",floor.v)) {
+        arenaAbort("destruction fireball needs supported real crate/barrel positions");return;
+        }
+      }
+    noiseBegin(world,name,source+Vec3(0,60,0));
+    Vec3 near;
+    if(!noiseFloor(world,bench.noiseSource,500.f,false,near) || !noiseAddListener(world,"destruction-near",near))return;
+    bench.cam=C_Hold;lookFrom(bench.destructionCaster+side*170.f+Vec3(0,190,0),source+Vec3(0,70,0));
+    }
+  else if(name=="arrows" || name=="walk-hero" || name=="walk-npc") {
+    source=bench.destructionTarget+direction*80.f;
+    // The fireball target is no longer a participant in these cases.
+    auto* spellTarget=bench.spellActors[0].npc;
+    spellTarget->setPosition(bench.destructionCaster);spellTarget->updateTransform();
+    const auto floor=world.physic()->landRay(source+Vec3(0,30,0),80);
+    if(!floor.hasCol || !destructionAdd(world,"NW_HARBOUR_CRATE_01.3DS",floor.v)) {
+      arenaAbort("destruction single-crate insertion failed");return;
+      }
+    source=floor.v;
+    if(name!="arrows") {
+      const auto approach=direction*-1.f;
+      auto start=source-approach*170.f;
+      const auto ground=world.physic()->landRay(start+Vec3(0,80,0),180);
+      if(!ground.hasCol) {arenaAbort("destruction walking actor has no native floor");return;}
+      start.y=ground.v.y;
+      auto* actor=name=="walk-hero"?&player:world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),start);
+      if(!actor) {arenaAbort("destruction walking actor unavailable");return;}
+      actor->clearAiQueue();actor->clearState(false);actor->stopWalking();actor->closeWeapon(true);
+      actor->setPosition(start);actor->setDirection(approach);actor->updateTransform();actor->setWalkMode(WalkBit::WM_Walk);
+      if(actor!=&player) {actor->setExternalControl(false);actor->setProcessPolicy(NpcProcessPolicy::AiNormal);
+        player.setPosition(start+side*160.f);player.updateTransform();}
+      bench.destructionActor=actor;bench.destructionActorStart=start;
+      bench.destructionDestination=WayPoint(source+approach*170.f,"FP_DESTRUCTION_CRATE_WALK");
+      bench.destructionDestination.groundPos=source+approach*170.f;
+      }
+    bench.cam=C_Hold;lookFrom(source-direction*280.f+side*230.f+Vec3(0,190,0),source+Vec3(0,55,0));
+    }
+  else {arenaAbort("unknown destruction fixture case");return;}
+  bench.destructionStart=world.tickCount();
+  event("destruction_setup","\"case\":"+jsonStr(name)+",\"world\":"+jsonStr(world.name())+
+    ",\"host\":"+jsonStr(symName(world,bench.noiseHost))+",\"enabled\":"+
+    (world.physic()->destructionEnabled()?"true":"false")+",\"bodies\":"+destructionRows(world));
+  }
+
+void destructionBegin(World& world) {
+  bench.destructionTrace=true;bench.destructionStart=world.tickCount();
+  bench.destructionLastBreak=0;bench.destructionSleepSampled=false;
+  bench.destructionFragmentOrigins.clear();bench.destructionFragmentTravel.clear();
+  if(bench.destructionCase=="arrows") {bench.destructionShooting=true;bench.destructionNextArrow=world.tickCount();}
+  if(bench.destructionCase=="drop1" || bench.destructionCase=="drop5")
+    for(auto& fixture:bench.destructionFixtures)fixture->body.addImpulse(Vec3(0,-.001f,0));
+  if(bench.destructionCase=="walk-npc" && bench.destructionActor)
+    bench.destructionActor->aiPush(AiQueue::aiGoToPoint(bench.destructionDestination));
+  unsigned pins=0;
+  for(size_t i=0;i<world.stuckArrowCount();++i) {uint32_t zenId;Matrix4x4 local;if(world.stuckArrowAttachment(i,zenId,local))++pins;}
+  event("destruction_begin","\"case\":"+jsonStr(bench.destructionCase)+",\"bodies\":"+destructionRows(world)+
+    ",\"world_pinned_arrows\":"+std::to_string(pins));
+  }
+
+void destructionShoot(World& world,Npc& player) {
+  if(!bench.destructionShooting || world.tickCount()<bench.destructionNextArrow)return;
+  const auto all=world.physic()->movableVobSnapshot();
+  const auto found=std::find_if(all.begin(),all.end(),[](const auto& body){return destructionOwns(body.id);});
+  if(found==all.end() || found->broken || bench.destructionArrows>=30) {bench.destructionShooting=false;return;}
+  const auto* mesh=Resources::loadMesh(found->visual);if(!mesh) {arenaAbort("destruction arrow crate mesh missing");return;}
+  const auto* bounds=mesh->bbox();
+  auto center=(bounds[0]+bounds[1])*.5f;found->transform.project(center);
+  auto top=Vec3((bounds[0].x+bounds[1].x)*.5f,bounds[1].y,(bounds[0].z+bounds[1].z)*.5f);found->transform.project(top);
+  const auto from=top+Vec3(0,80,0);
+  const auto hit=world.physic()->rayMovableVob(from,center);
+  if(!hit || hit->visual!=found->visual || (movablePosition(hit->transform)-movablePosition(found->transform)).length()>1.f) {
+    arenaAbort("destruction arrow has no exposed native path to its exact crate");return;
+    }
+  const auto symbol=world.script().findSymbolIndex("ITRW_ARROW");
+  if(symbol==size_t(-1)) {arenaAbort("destruction arrow instance unavailable");return;}
+  Item arrow(world,symbol,Item::T_Inventory);
+  auto& bullet=world.shootArrow(arrow,from,Vec3::normalize(center-from),DynamicWorld::bulletSpeed);
+  bullet.setOrigin(&player);bullet.setPrecise(1.f);
+  ++bench.destructionArrows;bench.destructionNextArrow=world.tickCount()+500;
+  event("destruction_arrow","\"ordinal\":"+std::to_string(bench.destructionArrows)+",\"health_before\":"+
+    ragdollNumber(found->health)+",\"from_cm\":"+ragdollVector(from)+",\"to_cm\":"+ragdollVector(center));
+  }
+
+void destructionCheckpoint(World& world) {
+  destructionFields(world);
+  unsigned attached=0;
+  for(size_t i=0;i<world.stuckArrowCount();++i) {
+    uint32_t zenId;Matrix4x4 local;
+    if(world.stuckArrowAttachment(i,zenId,local))++attached;
+    }
+  event("destruction_checkpoint","\"case\":"+jsonStr(bench.destructionCase)+",\"elapsed_ms\":"+
+    std::to_string(world.tickCount()-bench.destructionStart)+",\"arrows\":"+std::to_string(bench.destructionArrows)+
+    ",\"bodies\":"+destructionRows(world)+",\"fragments\":"+destructionFragments(world)+
+    ",\"listeners\":"+noiseListenerRows(world)+",\"world_pinned_arrows\":"+std::to_string(attached)+
+    ",\"actor_start_cm\":"+ragdollVector(bench.destructionActorStart)+",\"actor_cm\":"+
+    (bench.destructionActor?ragdollVector(bench.destructionActor->position()):"null"));
+  bench.destructionShooting=false;
   }
 
 void movableSaveSnapshot(World& world,std::string_view label) {
@@ -5929,6 +6201,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(!TestBench::physicsTracesDebug(w,pl,command,value,error)) {arenaAbort(error);return;}
     event("physics_traces_debug","\"command\":"+jsonStr(command)+",\"sample\":"+value);
     }
+  else if(c=="destruction" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","destruction",a[1]=="on");
+    w.physic()->setDestructionEnabled(a[1]=="on");
+    }
+  else if(c=="destruction" && a.size()==3 && a[1]=="setup") destructionSetup(w,pl,a[2]);
+  else if(c=="destruction" && a.size()==2 && a[1]=="begin") destructionBegin(w);
+  else if(c=="destruction" && a.size()==2 && a[1]=="checkpoint") destructionCheckpoint(w);
   else if(c=="noise" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","physics_noise",a[1]=="on");
     w.physic()->setPhysicsNoiseEnabled(a[1]=="on");
@@ -10399,6 +10678,18 @@ bool TestBench::physicsTracesDebug(World& world,Npc& player,std::string_view com
   return true;
   }
 
+void TestBench::destructionBreak(uintptr_t body,size_t pieces,float milliseconds) {
+  if(scenarioPath==nullptr || !bench.destructionTrace || !destructionOwns(body))return;
+  auto* world=Gothic::inst().world();
+  if(world)destructionFields(*world);
+  bench.destructionLastBreak=world?world->tickCount():0;bench.destructionSleepSampled=false;
+  event("destruction_break","\"case\":"+jsonStr(bench.destructionCase)+",\"body\":"+std::to_string(body)+
+    ",\"pieces\":"+std::to_string(pieces)+",\"break_ms\":"+ragdollNumber(milliseconds)+
+    ",\"wall_ns\":"+std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count())+
+    ",\"t_game_ms\":"+std::to_string(world?world->tickCount():0)+",\"arrows\":"+std::to_string(bench.destructionArrows));
+  }
+
 void TestBench::physicsNoise(const PhysicsNoise& noise,std::string_view sound,bool played) {
   if(bench.noiseBridgeDebug && (noise.position-bench.noiseSource).quadLength()<250.f*250.f) {
     ++bench.noiseBridgeImpacts;
@@ -10864,6 +11155,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);
+  destructionFields(*world);
+  destructionShoot(*world,*player);
   movableFields(*world);
   movableCandleFields(*world);
   noiseFields(*world);

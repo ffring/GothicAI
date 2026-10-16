@@ -7,11 +7,97 @@
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/skeleton.h"
 #include "utils/fileext.h"
+#include "physics/fracture.h"
+
+#include <map>
+#include <unordered_map>
+
+namespace {
+Tempest::Matrix4x4 hiddenFractureMatrix() {
+  auto matrix = Tempest::Matrix4x4::mkIdentity();
+  matrix.translate(0,-10000000.f,0);
+  return matrix;
+  }
+}
+
+struct ObjVisual::FractureView {
+  struct Geometry {
+    struct Batch {
+      size_t piece = 0;
+      std::unique_ptr<ProtoMesh> mesh;
+      };
+    std::shared_ptr<const FractureMesh> source;
+    std::vector<Batch> batches;
+    };
+
+  ObjVisual* owner = nullptr;
+  std::shared_ptr<Geometry> geometry;
+  std::vector<MeshObjects::Mesh> views;
+  bool broken = false;
+
+  static std::shared_ptr<Geometry> load(std::shared_ptr<const FractureMesh> mesh) {
+    static std::unordered_map<const FractureMesh*,std::weak_ptr<Geometry>> cache;
+    if(auto existing = cache[mesh.get()].lock())
+      return existing;
+    auto geometry = std::make_shared<Geometry>();
+    geometry->source = std::move(mesh);
+    for(size_t piece=0;piece<geometry->source->pieces.size();++piece) {
+      std::map<std::string,std::vector<const FractureMesh::Triangle*>> materials;
+      for(const auto& triangle:geometry->source->pieces[piece].triangles)
+        materials[triangle.texture].push_back(&triangle);
+      for(const auto& [texture,triangles]:materials) {
+        Material material;
+        material.tex = Resources::loadTexture(texture);
+        material.alpha = Material::Solid;
+        // The small-mesh constructor accepts one 64-vertex meshlet. Keep flat
+        // face normals and independent UVs by batching at most 20 triangles.
+        for(size_t first=0;first<triangles.size();first+=20) {
+          std::vector<Resources::Vertex> vertices;
+          std::vector<uint32_t> indices;
+          const size_t end = std::min(first+20,triangles.size());
+          for(size_t t=first;t<end;++t)
+            // Gothic draw meshes wind clockwise around their outward normal;
+            // the cache winds outward counterclockwise for hull validation.
+            for(const size_t corner:{size_t(0),size_t(2),size_t(1)}) {
+              const auto& vertex = triangles[t]->vertices[corner];
+              Resources::Vertex out = {};
+              out.pos[0] = vertex.position.x;
+              out.pos[1] = vertex.position.y;
+              out.pos[2] = vertex.position.z;
+              out.norm[0] = vertex.normal.x;
+              out.norm[1] = vertex.normal.y;
+              out.norm[2] = vertex.normal.z;
+              out.uv[0] = vertex.uv.x;
+              out.uv[1] = vertex.uv.y;
+              out.color = 0xFFFFFFFFu;
+              indices.push_back(uint32_t(vertices.size()));
+              vertices.push_back(out);
+              }
+          geometry->batches.push_back({piece,std::make_unique<ProtoMesh>(material,std::move(vertices),std::move(indices))});
+          }
+        }
+      }
+    cache[geometry->source.get()] = geometry;
+    return geometry;
+    }
+
+  void update(bool value, const std::vector<Tempest::Matrix4x4>& matrices) {
+    const bool changed = broken!=value;
+    broken = value;
+    if(changed)
+      owner->setObjMatrix(owner->renderMatrix);
+    for(size_t i=0;i<views.size();++i) {
+      const size_t piece = geometry->batches[i].piece;
+      views[i].setObjMatrix(broken && piece<matrices.size() ? matrices[piece] : hiddenFractureMatrix());
+      }
+    }
+  };
 
 ObjVisual::ObjVisual() {
   }
 
 ObjVisual::ObjVisual(ObjVisual&& other) {
+  renderMatrix = other.renderMatrix;
   setType(other.type);
   other.type = M_None;
 
@@ -23,6 +109,7 @@ ObjVisual::ObjVisual(ObjVisual&& other) {
       break;
     case M_Mesh:
       mesh = std::move(other.mesh);
+      break;
     case M_Pfx:
       pfx = std::move(other.pfx);
       break;
@@ -30,11 +117,16 @@ ObjVisual::ObjVisual(ObjVisual&& other) {
       bundle = std::move(other.bundle);
       break;
     }
+  fracture = std::move(other.fracture);
+  if(fracture)
+    fracture->owner = this;
   }
 
 ObjVisual& ObjVisual::operator =(ObjVisual&& other) {
   if(this==&other)
     return *this;
+  renderMatrix = other.renderMatrix;
+  fracture.reset();
   setType(other.type);
   other.type = M_None;
 
@@ -46,6 +138,7 @@ ObjVisual& ObjVisual::operator =(ObjVisual&& other) {
       break;
     case M_Mesh:
       mesh = std::move(other.mesh);
+      break;
     case M_Pfx:
       pfx = std::move(other.pfx);
       break;
@@ -53,6 +146,9 @@ ObjVisual& ObjVisual::operator =(ObjVisual&& other) {
       bundle = std::move(other.bundle);
       break;
     }
+  fracture = std::move(other.fracture);
+  if(fracture)
+    fracture->owner = this;
   return *this;
   }
 
@@ -71,6 +167,7 @@ void ObjVisual::load(Serialize& fin, Interactive& mob) {
   }
 
 void ObjVisual::cleanup() {
+  fracture.reset();
   switch(type) {
     case M_None:
       break;
@@ -211,6 +308,7 @@ void ObjVisual::setVisual(const zenkit::VirtualObject& vob, World& world, bool s
   }
 
 void ObjVisual::setObjMatrix(const Tempest::Matrix4x4& obj) {
+  renderMatrix = obj;
   switch(type) {
     case M_None:
       break;
@@ -219,7 +317,7 @@ void ObjVisual::setObjMatrix(const Tempest::Matrix4x4& obj) {
       mdl.physic.setObjMatrix(obj);
       break;
     case M_Mesh:
-      mesh.view.setObjMatrix(obj);
+      mesh.view.setObjMatrix(fracture && fracture->broken ? hiddenFractureMatrix() : obj);
       mesh.physic.setObjMatrix(obj);
       break;
     case M_Pfx:
@@ -231,7 +329,26 @@ void ObjVisual::setObjMatrix(const Tempest::Matrix4x4& obj) {
     }
   }
 
+void ObjVisual::setupFracture(World& world, DynamicWorld::Item& body) {
+  auto source = body.fractureMesh();
+  if(source==nullptr || type!=M_Mesh)
+    return;
+  fracture = std::make_shared<FractureView>();
+  fracture->owner = this;
+  fracture->geometry = FractureView::load(std::move(source));
+  for(const auto& batch:fracture->geometry->batches) {
+    fracture->views.push_back(world.addView(batch.mesh.get()));
+    fracture->views.back().setObjMatrix(hiddenFractureMatrix());
+    }
+  body.setFractureCallback([view=std::weak_ptr<FractureView>(fracture)](bool broken, const std::vector<Tempest::Matrix4x4>& matrices) {
+    if(auto locked = view.lock())
+      locked->update(broken,matrices);
+    });
+  }
+
 bool ObjVisual::renderPosition(Tempest::Vec3& out) const {
+  if(fracture && fracture->broken)
+    return false;
   if(type==M_Pfx)
     return pfx.renderPosition(out);
   if(type==M_Mesh && !mesh.view.isEmpty()) {

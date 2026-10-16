@@ -52,6 +52,7 @@ class Gothic final {
       bool spellPhysics  = false;
       bool movableVobs   = false;
       bool physicsNoise  = false;
+      bool destruction   = false;
       bool characterVirtual = false;
       bool npcCharacterVirtual = false;
       };

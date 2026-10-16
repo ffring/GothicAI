@@ -97,6 +97,9 @@ target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES})
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/movable-vobs.csv")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/movable-vobs.csv" MOVABLE_VOBS_CSV)
 configure_file(common/world/movablevobsdata.h.in generated/movablevobsdata.h @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/destructible-vobs.csv")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/destructible-vobs.csv" DESTRUCTIBLE_VOBS_CSV)
+configure_file(common/physics/fracturedata.h.in generated/fracturedata.h @ONLY)
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 # shaders

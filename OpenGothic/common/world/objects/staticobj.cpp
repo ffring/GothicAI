@@ -26,6 +26,7 @@ StaticObj::StaticObj(Vob* parent, World& world, const zenkit::VirtualObject& vob
                                    rule->blocksWalking,rule->className,vob.cd_dynamic,vob.id);
     if(!movable.isEmpty()) {
       movable.setTransformCallback([this](const Matrix4x4& matrix) { setPhysicsTransform(matrix); });
+      visual.setupFracture(world,movable);
       } else {
       // An invalid hull must preserve the original collision and rendering.
       visual.setVisual(vob,world,(flags & Flags::Static));

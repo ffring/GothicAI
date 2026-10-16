@@ -60,6 +60,7 @@ class CollisionWorld final {
                                        const Tempest::Vec3* pointCm = nullptr);
         bool                addImpulseAtPoint(const Tempest::Vec3& impulseNs, const Tempest::Vec3& pointCm,
                                               Npc* culprit = nullptr);
+        void                setVelocity(const Tempest::Vec3& velocityCm, const Tempest::Vec3& angularRadians);
         void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
         // The latest engine-known cause survives the short noise attribution
         // window and NPC destruction, until a new impulse replaces it.
@@ -154,6 +155,9 @@ class CollisionWorld final {
     void setPhysicsNoiseEnabled(bool enabled);
     bool physicsNoiseEnabled() const;
     void setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
+    // Deferred until native workers finish; excludes walking/living rig contact.
+    void setBodyImpactCallback(std::function<void(CollisionBody&,float,const Tempest::Vec3&)> callback);
+    void emitPhysicsNoise(const PhysicsNoise& noise);
 
     // BodyInterface updates the broad phase immediately when a body moves.
     void updateAabbs() const {}
@@ -225,6 +229,7 @@ class CollisionWorld final {
     uint32_t nextRagdollGroup = 1;
     std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
     std::function<void(const PhysicsNoise&)> physicsNoise;
+    std::function<void(CollisionBody&,float,const Tempest::Vec3&)> bodyImpact;
     JPH::Vec3 bboxMin = JPH::Vec3::sZero();
     float accumulatedTime = 0;
     friend class Ragdoll;

@@ -21,6 +21,8 @@ class ObjVisual {
     void setVisual(const zenkit::IItem& visual, World& world, bool staticDraw);
     void setVisual(const zenkit::VirtualObject& visual, World& world, bool staticDraw, bool enablePhysics = true);
     void setObjMatrix(const Tempest::Matrix4x4& obj);
+    // Preload the cached cut surfaces and their draw instances before impacts.
+    void setupFracture(World& world, DynamicWorld::Item& body);
     bool renderPosition(Tempest::Vec3& out) const;
 
     void setSlotItem(MeshObjects::Mesh&& itm, std::string_view slot);
@@ -65,6 +67,10 @@ class ObjVisual {
       VobBundle  bundle;
       };
     Type type = M_None;
+
+    struct FractureView;
+    std::shared_ptr<FractureView> fracture;
+    Tempest::Matrix4x4 renderMatrix = Tempest::Matrix4x4::mkIdentity();
 
     void cleanup();
     void setType(Type t);

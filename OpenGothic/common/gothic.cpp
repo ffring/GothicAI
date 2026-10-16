@@ -100,6 +100,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "spell_physics",       1);
   defaults->set("GAME", "movable_vobs",        1);
   defaults->set("GAME", "physics_noise",       1);
+  defaults->set("GAME", "destruction",         1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
 
@@ -912,6 +913,7 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","spell_physics")!=0,
     settingsGetI("GAME","movable_vobs")!=0,
     settingsGetI("GAME","physics_noise")!=0,
+    settingsGetI("GAME","destruction")!=0,
     settingsGetI("GAME","character_virtual")!=0,
     settingsGetI("GAME","npc_character_virtual")!=0
     };
@@ -926,6 +928,7 @@ void Gothic::setupSettings() {
   if(auto* activeWorld = world()) {
     activeWorld->physic()->setMovableVobsEnabled(physicsFlagsCache.movableVobs);
     activeWorld->physic()->setPhysicsNoiseEnabled(physicsFlagsCache.physicsNoise);
+    activeWorld->physic()->setDestructionEnabled(physicsFlagsCache.destruction);
     }
 
   const float soundVolume = settingsSoundVolume();
