@@ -1,4 +1,5 @@
 #include "navbench.h"
+#include "navtransitions.h"
 #include "physics/navmesh.h"
 #include "world/world.h"
 #include "world/objects/npc.h"
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <limits>
 #include <random>
 #include <set>
 #include <stdexcept>
@@ -22,6 +24,10 @@ using Tempest::Vec3;
 std::unique_ptr<NavMesh> mesh;
 std::string meshWorld;
 float capsuleHeight=0, capsuleCenter=0;
+// Bench teacher only. Distances are centimetres; clocks are simulation milliseconds.
+constexpr float cornerRadius=45.f, cornerHeight=100.f, progressStep=20.f;
+constexpr uint64_t progressTimeout=3000, fallbackTimeout=25000;
+constexpr unsigned maxReplans=2, maxFallbacks=1;
 struct Trial {
   Npc* npc=nullptr;
   Vec3 goal;
@@ -29,6 +35,13 @@ struct Trial {
   NavMesh::Path path;
   uint64_t began=0,limit=0,elapsed=0;
   size_t corner=1;
+  unsigned replans=0,fallbacks=0;
+  uint64_t progressAt=0,fallbackAt=0,sampleAt=0,linkAt=0;
+  float bestRemaining=std::numeric_limits<float>::max();
+  const WayPoint* fallback=nullptr;
+  bool onFallback=false,linkStarted=false;
+  std::string failure;
+  std::ofstream trace;
   bool active=false,success=false,finished=false;
 } trial;
 
@@ -61,7 +74,35 @@ void stats(const std::string& output,double extractionSeconds,double cacheLoadSe
      <<",\"radius_m\":"<<p.radius<<",\"height_m\":"<<p.height<<",\"climb_m\":"<<p.climb
      <<",\"capsule_height_m\":"<<capsuleHeight<<",\"capsule_center_height_m\":"<<capsuleCenter
      <<",\"slope_deg\":"<<p.slope<<",\"cell_size_m\":"<<p.cellSize<<",\"cell_height_m\":"<<p.cellHeight
-     <<",\"water_depth_m\":"<<p.waterDepth<<",\"tile_cells\":"<<p.tileSize<<"}\n";
+     <<",\"water_depth_m\":"<<p.waterDepth<<",\"tile_cells\":"<<p.tileSize<<",\"links\":"<<p.links.size()<<"}\n";
+}
+bool closeCorner(const Vec3& at,const Vec3& to) {
+  const auto d=at-to;
+  return d.x*d.x+d.z*d.z<=cornerRadius*cornerRadius && std::abs(d.y)<=cornerHeight;
+}
+Vec3 destination() {
+  return trial.corner<trial.path.corners.size()?centimeters(trial.path.corners[trial.corner]):trial.goal;
+}
+float remaining(const Vec3& at) {
+  float value=(at-destination()).length();
+  for(size_t i=trial.corner+1;i<trial.path.corners.size();++i)
+    value+=(centimeters(trial.path.corners[i])-centimeters(trial.path.corners[i-1])).length();
+  return value;
+}
+void replan(World& w) {
+  auto& n=*trial.npc;
+  n.clearAiQueue();n.clearGoTo();n.setWalkMode(WalkBit::WM_Walk);
+  trial.path=mesh->findPath(meters(n.position()),meters(trial.goal));
+  trial.corner=1;trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
+  trial.linkStarted=false;
+}
+void fallback(World& w) {
+  auto& n=*trial.npc;
+  n.clearAiQueue();n.clearGoTo();n.setWalkMode(WalkBit::WM_Walk);
+  trial.fallback=w.findWayPoint(trial.goal,[](const WayPoint& p){return p.isConnected();});
+  ++trial.fallbacks;trial.fallbackAt=trial.progressAt=w.tickCount();trial.onFallback=true;
+  if(trial.fallback) n.aiPush(AiQueue::aiGoToPoint(*trial.fallback));
+  else {trial.onFallback=false;trial.failure="no_waypoint";}
 }
 void finish(World& w) {
   if(trial.npc==nullptr) throw std::runtime_error("navmesh finish without trial");
@@ -74,18 +115,26 @@ void finish(World& w) {
      <<",\"distance_cm\":"<<(n.position()-trial.goal).length()<<",\"path_complete\":"<<trial.path.complete
      <<",\"path_reason\":"<<std::quoted(trial.path.reason)<<",\"corners\":"<<trial.path.corners.size()
      <<",\"corners_visited\":"<<trial.corner<<",\"final_position\":";
-  vec(out,n.position());out<<",\"target_position\":";vec(out,trial.goal);out<<"}\n";
+  vec(out,n.position());out<<",\"target_position\":";vec(out,trial.goal);
+  out<<",\"replans\":"<<trial.replans<<",\"fallbacks\":"<<trial.fallbacks
+     <<",\"failure\":"<<std::quoted(trial.failure)<<",\"next_position\":";vec(out,destination());
+  out<<",\"goal_direct_move_clear\":"<<n.testMove(trial.goal)
+     <<",\"path_length_cm\":"<<trial.path.length*100
+     <<",\"start_snap_m\":"<<trial.path.startSnapDistance<<",\"end_snap_m\":"<<trial.path.endSnapDistance;
+  const auto hit=w.physic()->navigationRay(n.centerPosition(),destination()+Vec3(0,100,0),&n);
+  out<<",\"blocker_category\":"<<int(hit.kind)<<",\"blocker_position\":";vec(out,hit.point);out<<"}\n";
+  trial.trace.close();
   n.clearAiQueue();n.clearGoTo();n.stopWalking();
   trial.finished=true;
 }
 }
 
-void NavBench::reset() { trial=Trial{}; }
-bool NavBench::running() { return trial.active; }
+void NavBench::reset() { trial=Trial{};NavTransitions::reset(); }
+bool NavBench::running() { return trial.active || NavTransitions::running(); }
 
 void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const std::string& output) {
   if(a.size()<2) throw std::runtime_error("navmesh: expected build|coverage|pairs|start|follow|finish");
-  if(a[1]=="build" && a.size()==3) {
+  if(a[1]=="build" && (a.size()==3 || a.size()==4)) {
     if(Gothic::physicsFlags().movableVobs) throw std::runtime_error("navmesh measurement requires movable_vobs=0 before world load");
     if(!std::filesystem::path(a[2]).is_absolute()) throw std::runtime_error("navmesh cache must be absolute");
     const auto before=std::chrono::steady_clock::now();
@@ -98,6 +147,17 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
     capsuleHeight=capsule.y*.01f;capsuleCenter=p.height-capsuleHeight*.5f;
     p.climb=float(guild.step_height[g])*.01f;if(p.climb<=0) p.climb=.5f;
     p.slope=float(guild.slide_angle[g]);p.waterDepth=float(guild.water_depth_chest[g])*.01f;
+    if(a.size()==4) {
+      if(!std::filesystem::path(a[3]).is_absolute()) throw std::runtime_error("navmesh links must be absolute");
+      std::ifstream input(a[3]);
+      if(!input) throw std::runtime_error("navmesh cannot read links");
+      NavMesh::OffMeshLink link;unsigned type=0;
+      while(input>>link.start[0]>>link.start[1]>>link.start[2]>>link.end[0]>>link.end[1]>>link.end[2]>>type>>link.id) {
+        if(type<1 || type>3) throw std::runtime_error("navmesh invalid link type");
+        link.type=NavMesh::LinkType(type);p.links.push_back(link);
+      }
+      if(!input.eof()) throw std::runtime_error("navmesh invalid links file");
+    }
     mesh=std::make_unique<NavMesh>();meshWorld=w.name();
     mesh->buildOrLoad(geometry,p,a[2],meshWorld);
     if(!mesh->stats().complete) {
@@ -115,6 +175,7 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
     return;
   }
   requireMesh(w);
+  if(NavTransitions::command(a,w,pl,*mesh,output)) return;
   if(a[1]=="coverage" && a.size()==2) {
     auto edges=file(output,"coverage.jsonl"),points=file(output,"points.jsonl");
     w.forEachWayPoint([&](const WayPoint& wp) {
@@ -174,7 +235,7 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
   }
   if((a[1]=="start" && a.size()==7) || (a[1]=="follow" && a.size()==6)) {
     const bool place=a[1]=="start";
-    if(a[2]!="direct" && a[2]!="mesh") throw std::runtime_error("navmesh: mode direct|mesh");
+    if(a[2]!="direct" && a[2]!="mesh" && a[2]!="teacher") throw std::runtime_error("navmesh: mode direct|mesh|teacher");
     auto& n=actor(w,a[3]);
     const auto* goal=w.findPoint(a[place?5:4],false);
     const auto* start=place?w.findPoint(a[4],false):nullptr;
@@ -190,6 +251,8 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
     trial.start=place?a[4]:"intentional";trial.target=goal->name;trial.output=output;
     trial.limit=std::stoull(a[place?6:5]);trial.began=w.tickCount();trial.active=true;
     trial.path=mesh->findPath(meters(n.position()),meters(trial.goal));
+    trial.progressAt=w.tickCount();trial.bestRemaining=remaining(n.position());
+    if(trial.mode=="teacher") trial.trace=file(output,"teacher-trace.jsonl");
     if(trial.mode=="direct") n.aiPush(AiQueue::aiGoToPoint(*goal));
     return;
   }
@@ -198,10 +261,62 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
 }
 
 void NavBench::tick(World& w) {
+  NavTransitions::tick(w);
   if(!trial.active || !trial.npc) return;
   auto& n=*trial.npc;trial.elapsed=w.tickCount()-trial.began;
   if((n.position()-trial.goal).length()<100) {trial.success=true;finish(w);return;}
   if(trial.elapsed>=trial.limit) {finish(w);return;}
+  if(trial.mode=="teacher") {
+    if(w.tickCount()>=trial.sampleAt) {
+      trial.sampleAt=w.tickCount()+1000;
+      trial.trace<<"{\"elapsed_ms\":"<<trial.elapsed<<",\"corner\":"<<trial.corner<<",\"fallback\":"<<trial.onFallback<<",\"position\":";
+      vec(trial.trace,n.position());trial.trace<<",\"next\":";vec(trial.trace,destination());trial.trace<<"}\n";
+    }
+    if(trial.onFallback) {
+      const bool reached=trial.fallback && (n.position()-trial.fallback->groundPos).length()<150.f;
+      if(reached || (n.isAiQueueEmpty() && n.moveHint()==Npc::GT_No) || w.tickCount()-trial.fallbackAt>=fallbackTimeout) {
+        trial.onFallback=false;replan(w);
+      }
+      return;
+    }
+    if(!trial.path.complete) {
+      trial.failure="no_path:"+trial.path.reason;
+      if(trial.fallbacks<maxFallbacks) fallback(w);
+      return;
+    }
+    // Advance only after the body actually reaches the corner. Preserve link takeoffs.
+    while(trial.corner<trial.path.corners.size() && closeCorner(n.position(),destination())) {
+      bool takeoff=false;
+      for(const auto& link:trial.path.transitions) if(link.cornerIndex==trial.corner) takeoff=true;
+      if(takeoff) break;
+      ++trial.corner;trial.linkStarted=false;n.clearGoTo();
+    }
+    for(const auto& link:trial.path.transitions) {
+      if(link.cornerIndex!=trial.corner) continue;
+      if(!trial.linkStarted && closeCorner(n.position(),centimeters(link.start)) && !n.isInAir()) {
+        n.clearGoTo();n.setDirection(centimeters(link.end)-n.position());
+        n.setWalkMode(WalkBit::WM_Run);
+        n.goToPosition(centimeters(link.end));
+        if(link.type==NavMesh::LinkType::Climb) n.startClimb(n.tryJump());
+        else if(link.type==NavMesh::LinkType::Jump) {const auto jump=n.tryJump();if(jump.anim==AnimationSolver::Jump) n.setAnim(jump.anim);}
+        trial.linkStarted=true;trial.linkAt=w.tickCount();
+      }
+      if(trial.linkStarted && !n.isInAir() && closeCorner(n.position(),centimeters(link.end))) {
+        trial.corner+=2;trial.linkStarted=false;n.setWalkMode(WalkBit::WM_Walk);n.clearGoTo();
+      }
+    }
+    const float left=remaining(n.position());
+    if(left+progressStep<trial.bestRemaining) {trial.bestRemaining=left;trial.progressAt=w.tickCount();}
+    if(w.tickCount()-trial.progressAt>=progressTimeout) {
+      trial.failure="body_blocked";
+      if(trial.replans<maxReplans) {++trial.replans;replan(w);}
+      else if(trial.fallbacks<maxFallbacks) fallback(w);
+      else trial.progressAt=w.tickCount();
+      return;
+    }
+    if(n.moveHint()==Npc::GT_No && !trial.linkStarted) n.goToPosition(destination());
+    return;
+  }
   if(trial.mode!="mesh" || !trial.path.complete) return;
   if(n.moveHint()!=Npc::GT_No) return;
   if(trial.corner<trial.path.corners.size()) {

@@ -94,10 +94,59 @@ int main() {
     NavMesh cave;
     cave.buildOrLoad(basin,params,cache,"cave");
     check(cave.findPath({3,0,10},{17,0,10}).complete,"water above a solid ceiling must not flood cave floor");
+    NavMesh::Geometry gap;
+    floor(gap,0,0,8,8);
+    floor(gap,10,0,18,8);
+    NavMesh separated;
+    separated.buildOrLoad(gap,params,cache,"gap");
+    const Point takeoff={3,0,4}, landing={15,0,4};
+    check(!separated.findPath(takeoff,landing).complete,"unproven gap must stay disconnected");
+    const auto candidates=separated.gapCandidates(takeoff,landing);
+    check(!candidates.empty() && candidates.front().horizontalDistance<=4.f,"disconnected components must expose nearby boundary probe sites");
+    check(separated.gapCandidates(takeoff,landing,1.f).empty(),"boundary search must respect jump distance bound");
+    check(separated.gapCandidates(takeoff,{4,0,4}).empty(),"connected ground must not produce gap candidates");
+    auto linkedParams=params;
+    NavMesh::OffMeshLink link;
+    link.start=candidates.front().start;
+    link.end=candidates.front().end;
+    link.type=NavMesh::LinkType::Jump;
+    link.id=42;
+    linkedParams.links.push_back(link);
+    NavMesh linked;
+    linked.buildOrLoad(gap,linkedParams,cache,"gap");
+    check(linked.stats().key!=separated.stats().key,"proven transition must invalidate mesh cache");
+    const auto crossed=linked.findPath(takeoff,landing);
+    check(crossed.complete && crossed.transitions.size()==1,"proven jump must connect islands");
+    const auto& transition=crossed.transitions.front();
+    check(transition.type==NavMesh::LinkType::Jump && transition.id==42,"path must retain transition kind and identity");
+    check(transition.cornerIndex+1<crossed.corners.size() &&
+          crossed.corners[transition.cornerIndex]==transition.start &&
+          crossed.corners[transition.cornerIndex+1]==transition.end,"path must expose both directed transition endpoints as corners");
+    check(!linked.findPath(landing,takeoff).complete,"one successful probe must not authorize reverse traversal");
+    NavMesh linkedLoaded;
+    linkedLoaded.buildOrLoad(gap,linkedParams,cache,"gap");
+    const auto cachedCrossing=linkedLoaded.findPath(takeoff,landing);
+    check(linkedLoaded.stats().fromCache && cachedCrossing.complete && cachedCrossing.transitions.size()==1 &&
+          cachedCrossing.transitions.front().type==NavMesh::LinkType::Jump &&
+          cachedCrossing.transitions.front().id==42,"cached transition must retain its connectivity, type and identity");
+    linkedParams.links.front().type=NavMesh::LinkType::Climb;
+    linkedParams.links.front().bidirectional=true;
+    NavMesh climb;
+    climb.buildOrLoad(gap,linkedParams,cache,"gap");
+    const auto reverseClimb=climb.findPath(landing,takeoff);
+    check(climb.stats().key!=linked.stats().key && reverseClimb.complete &&
+          reverseClimb.transitions.size()==1 && reverseClimb.transitions.front().type==NavMesh::LinkType::Climb,
+          "explicitly verified reverse climb must be typed and cached separately");
+    linkedParams.links.front().type=NavMesh::LinkType::Drop;
+    NavMesh drop;
+    drop.buildOrLoad(gap,linkedParams,cache,"gap");
+    const auto dropped=drop.findPath(takeoff,landing);
+    check(drop.stats().key!=climb.stats().key && dropped.complete &&
+          dropped.transitions.front().type==NavMesh::LinkType::Drop,"drop kind must survive mesh construction and change cache key");
     mesh.writePolygons(cache/"polygons.jsonl");
     check(std::filesystem::file_size(cache/"polygons.jsonl")>0,"polygon plot export must be nonempty");
     std::filesystem::remove_all(cache);
-    std::cout << "navmesh contract: detour, disconnected/off-mesh rejection, tiled cache, invalidation, corruption, deep/shallow water, cave, export passed\n";
+    std::cout << "navmesh contract: detour, disconnected/off-mesh rejection, tiled cache, invalidation, corruption, deep/shallow water, cave, gap boundaries, directed jump/climb/drop links, export passed\n";
     return 0;
   } catch(const std::exception& error) {
     std::filesystem::remove_all(cache);
