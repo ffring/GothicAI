@@ -295,7 +295,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
     JPH::BodyID body,other;
     Tempest::Vec3 point;
     zenkit::MaterialGroup surface;
-    float impulse;
+    float impulse, structuralImpulse;
     uint64_t step;
     uint64_t logicalBody;
     bool otherPushing;
@@ -367,11 +367,21 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
         // Resting contacts do not need the native impulse solver. Slow contact
         // with an NPC rig still retains who pushed a body before its fall.
         if(speed>=.9f || firstPushed || secondPushed) {
-          float impulse=0.f;
+          float impulse=0.f,structuralImpulse=0.f;
           if(speed>=.9f) {
             JPH::CollisionEstimationResult response;
             JPH::EstimateCollisionResponse(a,b,manifold,response,settings.mCombinedFriction,settings.mCombinedRestitution);
             for(float contact:response.mContactImpulse) impulse+=contact;
+            // A slightly tilted floor first contacts one corner. The native
+            // manifold response then spends part of its impulse on rotation;
+            // it is only a fraction of the whole impact before later corners
+            // arrive. Structural damage uses the incoming normal momentum of
+            // the collision pair, independent of how triangles split contacts.
+            // A static/kinematic support contributes no inverse mass; dynamic
+            // impactors contribute their finite mass through the reduced mass.
+            const float inverseMass=(a.IsDynamic() ? a.GetMotionProperties()->GetInverseMass() : 0.f)+
+                                    (b.IsDynamic() ? b.GetMotionProperties()->GetInverseMass() : 0.f);
+            if(inverseMass>0.f) structuralImpulse=speed/inverseMass;
             }
           auto surface=[](const JPH::Body& body,JPH::SubShapeID subShape) {
             const auto layer=body.GetObjectLayer();
@@ -391,10 +401,10 @@ struct CollisionWorld::Impl final : JPH::ContactListener {
             };
           std::lock_guard<std::mutex> guard(impactMutex);
           if(first && (impulse>=.08f || firstPushed))
-            noises.push_back({a.GetID(),b.GetID(),toCentimeters(point),surface(b,manifold.mSubShapeID2),impulse,simulationStep,identity(a),
+            noises.push_back({a.GetID(),b.GetID(),toCentimeters(point),surface(b,manifold.mSubShapeID2),impulse,structuralImpulse,simulationStep,identity(a),
                               firstPushed});
           if(second && (impulse>=.08f || secondPushed))
-            noises.push_back({b.GetID(),a.GetID(),toCentimeters(point),surface(a,manifold.mSubShapeID1),impulse,simulationStep,identity(b),
+            noises.push_back({b.GetID(),a.GetID(),toCentimeters(point),surface(a,manifold.mSubShapeID1),impulse,structuralImpulse,simulationStep,identity(b),
                               secondPushed});
           }
         }
@@ -1842,12 +1852,18 @@ void CollisionWorld::tick(uint64_t dt) {
       ++impl->simulationStep;
       for(auto* body:ragdolls) body->prepareKinematicStep(step);
       const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
+      const bool activeFragments=std::any_of(rigid.begin(),rigid.end(),[](const DynamicBody* body) {
+        return body->category()==DynamicWorld::C_Fragment && !body->isSleeping();
+        });
       // A capsule stopped by CCD otherwise compresses its connected limb while
       // the rest of the rig finishes the 1/60 s step. Two native collision steps
       // keep that late-contact displacement small. The public fixed-step clock
-      // and two-update frame budget stay unchanged; worlds without corpses keep
-      // their original single collision step.
-      impl->system.Update(float(step),dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
+      // and two-update frame budget stay unchanged.
+      // Linear CCD rotates first, then casts translation. A fast piece can
+      // rotate through a one-sided terrain seam before that cast sees it.
+      // Smaller collision steps retain its angular velocity while preventing
+      // this gap. Sleeping fragments leave the previous simulation cost intact.
+      impl->system.Update(float(step),activeFragments ? 4 : dynamicRagdolls ? 2 : 1,&impl->allocator,&impl->jobs);
       for(auto* body:ragdolls) body->finishKinematicStep();
       advanced = true;
       }
@@ -1915,11 +1931,20 @@ void CollisionWorld::tick(uint64_t dt) {
            std::make_tuple(b.step,b.logicalBody,-b.impulse,b.body.GetIndexAndSequenceNumber());
     });
   if(bodyImpact) {
+    std::vector<const Impl::NoiseImpact*> structural;
+    structural.reserve(noises.size());
+    for(const auto& impact:noises)
+      if(impact.structuralImpulse>0.f) structural.push_back(&impact);
+    std::sort(structural.begin(),structural.end(),[](const auto* a,const auto* b) {
+      return std::make_tuple(a->step,a->body.GetIndexAndSequenceNumber(),-a->structuralImpulse) <
+             std::make_tuple(b->step,b->body.GetIndexAndSequenceNumber(),-b->structuralImpulse);
+      });
     JPH::BodyID previous;
     uint64_t previousStep=uint64_t(-1);
-    for(const auto& impact:noises) {
-      // The sorted strongest contact is the impact, rather than every resting
-      // manifold point. Character walking never contributes structural damage.
+    for(const auto* candidate:structural) {
+      const auto& impact=*candidate;
+      // Count the strongest collision once, rather than summing duplicate
+      // terrain triangles. The audible impulse and its ordering stay unchanged.
       if(impact.body==previous && impact.step==previousStep) continue;
       CollisionBody* body=nullptr;
       {
@@ -1935,7 +1960,7 @@ void CollisionWorld::tick(uint64_t dt) {
         }
       previous=impact.body;
       previousStep=impact.step;
-      if(body!=nullptr) bodyImpact(*body,impact.impulse,impact.point);
+      if(body!=nullptr) bodyImpact(*body,impact.structuralImpulse,impact.point);
       }
     }
   if(impl->noiseEnabled && physicsNoise) {

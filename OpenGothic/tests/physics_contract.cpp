@@ -772,6 +772,7 @@ namespace {
             }
           }
         file.close();
+        std::filesystem::copy_file(path/"NW_HARBOUR_CRATE_01.fracture",path/"NW_HARBOUR_BARREL_01.fracture");
         setenv("OPENGOTHIC_FRACTURE",path.string().c_str(),1);
         }
       ~CacheFixture() {
@@ -844,14 +845,33 @@ namespace {
       world.tick(17);
       require(!object.isBroken(),"destruction=0 must ignore otherwise destructive impulses");
       }
-    for(const float height:{100.f,500.f}) {
-      DynamicWorld world(nullptr,movableFloor());
+    {
+      auto source=movableCollisionBox({100,100,100});
+      source.sub_meshes[0].mat.group=zenkit::MaterialGroup::STONE;
+      ProtoMesh barrel(PackedMesh(source,PackedMesh::PK_Visual),"NW_HARBOUR_BARREL_01.MRM");
+      DynamicWorld world(nullptr,zenkit::Mesh{});
+      auto object=world.addMovableVob(barrel,"NW_HARBOUR_BARREL_01.MRM",at(0,1000,0),.03f,true,"barrel");
+      std::vector<PhysicsNoise> noises;
+      world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { noises.push_back(noise); });
+      requireNear(object.mass(),DynamicWorld::materialDensity(zenkit::MaterialGroup::STONE)*.03f,.01f,
+                  "destructible class must not change the authored mesh density");
+      object.addImpulse({object.mass()*10.f,0,0});
+      world.tick(17);
+      require(object.isBroken() && !noises.empty() && noises.back().material==MAT_WOOD &&
+              noises.back().surface==zenkit::MaterialGroup::WOOD,
+              "a wooden barrel mislabeled as stone must still emit a wooden break sound");
+      }
+    for(const bool tilted:{false,true}) for(const float height:{100.f,500.f}) {
+      auto floor=movableFloor();
+      if(tilted)
+        for(auto& vertex:floor.vertices) vertex.y=vertex.x*std::tan(.5f*3.141592654f/180.f);
+      DynamicWorld world(nullptr,floor);
       auto object=make(world,at(0,height+50.f,0));
       require(object.addImpulse({0,-.001f,0}),"drop fixture must wake without structural damage");
       for(int i=0;i<900;++i) world.tick(17);
       const auto state=world.movableVobSnapshot()[0];
-      std::printf("Destruction drop %.0f cm: broken %d, health %.3f, fragments %zu\n",
-                  double(height),int(state.broken),double(state.health),world.fragmentSnapshot().size());
+      std::printf("Destruction drop %.0f cm, floor tilt %.1f deg: broken %d, health %.3f, fragments %zu\n",
+                  double(height),tilted ? .5 : 0.,int(state.broken),double(state.health),world.fragmentSnapshot().size());
       require(state.broken==(height>100.f),"a one metre fall must survive and a five metre fall must break");
       for(const auto& piece:world.fragmentSnapshot())
         require(piece.sleeping,"fragments must settle and sleep after fifteen seconds");
@@ -899,6 +919,64 @@ namespace {
       require(!object.isBroken() && world.fragmentSnapshot().empty(),
               "uncached visuals must preserve intact legacy physics even after a large impulse");
       }
+    }
+
+  void testRotatingFragments() {
+    CollisionWorld world;
+    // A single-sided terrain mesh, rather than a thick box that catches an
+    // already penetrating piece from below. The wedge has no asset dependency.
+    constexpr float slope=.00872686779f; // half a degree
+    JPH::TriangleList triangles;
+    // Triangle seams on mildly uneven ground reproduce rotational tunnelling;
+    // a single flat pair of triangles misses the failure even at the same spin.
+    const auto terrain=[](float x,float z) { return slope*x+.03f*std::sin(2.3f*x)*std::cos(1.7f*z); };
+    for(int x=-40;x<40;++x) for(int z=-40;z<40;++z) {
+      const auto point=[&](int dx,int dz) {
+        const float px=float(x+dx)*.5f,pz=float(z+dz)*.5f;
+        return JPH::Float3(px,terrain(px,pz),pz);
+        };
+      triangles.emplace_back(point(0,0),point(0,1),point(1,0));
+      triangles.emplace_back(point(1,0),point(0,1),point(1,1));
+      }
+    const auto floorShape=JPH::MeshShapeSettings(triangles).Create();
+    require(!floorShape.HasError(),"the fragment rotation fixture needs one-sided terrain");
+    auto floor=world.addCollisionBody(floorShape.Get(),at(0,0,0),.8f,DynamicWorld::C_Landscape);
+    const std::vector<JPH::Vec3> points={{-.15f,-.08f,-.16f},{.15f,-.08f,-.16f},
+                                       {-.15f,.40f,-.16f},{.15f,.40f,-.16f},
+                                       {-.15f,.40f,.16f},{.15f,.40f,.16f}};
+    const auto shape=JPH::ConvexHullShapeSettings(points.data(),int(points.size()),.001f).Create();
+    require(!shape.HasError(),"the fragment rotation wedge must have a native convex hull");
+    std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments;
+    for(int axis=0;axis<3;++axis) for(int orientation=0;orientation<8;++orientation) {
+      const float x=float(orientation-4)*250.f,z=float(axis-1)*250.f;
+      auto rotation=Tempest::Matrix4x4::mkIdentity();
+      rotation.rotateOX(float(orientation)*45.f);
+      rotation.rotateOZ(float(axis)*37.f);
+      float lowest=std::numeric_limits<float>::max();
+      for(const auto& point:points) {
+        Tempest::Vec3 rotated(point.GetX()*100.f,point.GetY()*100.f,point.GetZ()*100.f);
+        rotation.project(rotated);
+        lowest=std::min(lowest,rotated.y-slope*rotated.x);
+        }
+      auto matrix=at(x,slope*x-lowest+4.f,z);
+      matrix.mul(rotation);
+      auto body=world.addDynamicBody(shape.Get(),matrix,.8f,1.f,DynamicWorld::C_Fragment);
+      const Tempest::Vec3 omega=axis==0 ? Tempest::Vec3(47.f,0,0) :
+                                axis==1 ? Tempest::Vec3(0,0,47.f) : Tempest::Vec3(27.f,27.f,27.f);
+      body->setVelocity({0,-1000,0},omega);
+      fragments.push_back(std::move(body));
+      }
+    float lowestCenter=std::numeric_limits<float>::max();
+    for(int i=0;i<300;++i) {
+      world.tick(17);
+      for(const auto& body:fragments) {
+        const auto center=body->centerOfMass();
+        lowestCenter=std::min(lowestCenter,center.y-terrain(center.x*.01f,center.z*.01f)*100.f);
+        }
+      }
+    std::printf("Rotating fragments: %zu convex wedges, minimum centre over one-sided floor %.3f cm\n",
+                fragments.size(),double(lowestCenter));
+    require(lowestCenter>=0.f,"a rapidly rotating convex fragment must never fall through one-sided terrain");
     }
 
   void testMovableVobLegacyCollision() {
@@ -2698,6 +2776,7 @@ int main() {
     testMovableTraceThresholds();
     testMovableVobArrowIdentity();
     testDestruction();
+    testRotatingFragments();
     testPhysicsNoise();
     testRagdollNoise();
     testOffCenterImpulse();

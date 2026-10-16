@@ -155,7 +155,8 @@ class CollisionWorld final {
     void setPhysicsNoiseEnabled(bool enabled);
     bool physicsNoiseEnabled() const;
     void setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
-    // Deferred until native workers finish; excludes walking/living rig contact.
+    // Whole collision-pair normal momentum (Ns), deferred until native workers
+    // finish. Excludes walking/living rig contact; noise retains solver impulse.
     void setBodyImpactCallback(std::function<void(CollisionBody&,float,const Tempest::Vec3&)> callback);
     void emitPhysicsNoise(const PhysicsNoise& noise);
 

@@ -34,8 +34,8 @@ struct FractureMesh {
 struct FractureRule {
   std::string visualPattern, className;
   float health = 100;
-  float threshold = 6; // newton seconds per kilogram (delta velocity, m/s)
-  float impactDamage = 50; // health / (Ns/kg) above threshold
+  float threshold = 5; // newton seconds per kilogram (delta velocity, m/s)
+  float impactDamage = 250; // health / (Ns/kg) above threshold
   float arrowDamage = 8.333334f; // health / Ns; 0.12 kg arrow at 30 m/s => 30 health
   static const FractureRule* classify(std::string_view visual);
   };

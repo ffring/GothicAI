@@ -338,7 +338,7 @@ std::vector<World::PhysicsTrace> World::physicsTraces() const {
   if(Gothic::physicsFlags().arrowSticking) {
     for(const auto& pin:stuckArrows) {
       auto pose = pin.movable.lock();
-      if(pin.mesh.isEmpty() || (pin.attached && (pose==nullptr || pose->broken)) ||
+      if(pin.mesh.isEmpty() || (pin.attached && pose==nullptr) ||
          (!pin.attached && (pin.surface=="ground" || pin.surface=="unknown")))
         continue;
       PhysicsTrace trace;

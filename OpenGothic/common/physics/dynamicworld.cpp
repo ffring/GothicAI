@@ -1507,8 +1507,12 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
   syncFragments(obj);
   PhysicsNoise noise;
   noise.position=center;
-  noise.material=impactMaterial(obj.movableShape->material);
-  noise.surface=obj.movableShape->material;
+  // Some wooden Gothic barrels label their source mesh as stone. Keep that
+  // authored density/friction for physics, but use the destructible class for
+  // the sound of the newly exposed material.
+  const bool wooden=obj.fractureRule->className=="crate" || obj.fractureRule->className=="barrel";
+  noise.material=wooden ? MAT_WOOD : MAT_CLAY;
+  noise.surface=wooden ? zenkit::MaterialGroup::WOOD : zenkit::MaterialGroup::STONE;
   noise.what=obj.visual+" break";
   noise.impulse=obj.breakImpulse;
   noise.volume=1.f;
