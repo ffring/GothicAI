@@ -40,6 +40,17 @@ take_lock() {
   echo "Ryzen: lock acquired in $((SECONDS - started))s"
 }
 
+disk_usage() {
+  local available directory size usage=''
+  available="$(df -h --output=avail "$HOME" | awk 'NR == 2 {print $1}')" || available='?'
+  for directory in "$HOME/gothic-ai/e2e/"*; do
+    [[ -d "$directory" ]] || continue
+    size="$(du -sh -- "$directory" 2>/dev/null | cut -f1)" || size='?'
+    usage+="${usage:+, }${directory##*/}=$size"
+  done
+  echo "Ryzen: disk free $available; e2e worktrees: ${usage:-none}"
+}
+
 desktop() {
   export XDG_RUNTIME_DIR="/run/user/$(id -u)"
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
@@ -206,14 +217,54 @@ remote() {
   ssh -o BatchMode=yes -o ConnectTimeout=10 ryzen "$command"
 }
 
+finish_run() {
+  local found
+  # A lost connection or interrupted caller may leave the remote task running.
+  if [[ "$RUN_STARTED" == 1 && "$RUN_FINISHED" == 0 ]] || [[ "$RUN_RC" == 255 ]]; then
+    echo "Ryzen: remote task status unknown; keeping artifacts for $RUN on Ryzen" >&2
+  elif [[ "$ACTION" == pytest ]]; then
+    remote rm -rf -- "$STATE/inputs/$RUN" || echo "Ryzen: could not remove $STATE/inputs/$RUN" >&2
+  else
+    remote test -d "$STATE/runs/$RUN" && found=0 || found=$?
+    case "$found" in
+      0)
+        if rsync -a "ryzen:$REMOTE/runs/$RUN/" "$LOG_DIR/"; then
+          if remote rm -rf -- "$STATE/runs/$RUN" "$STATE/inputs/$RUN"; then
+            echo "Ryzen: removed runs/$RUN and inputs/$RUN"
+          else
+            echo "Ryzen: could not remove remote artifacts for $RUN" >&2
+          fi
+        else
+          echo "Ryzen: could not collect all logs; keeping $STATE/runs/$RUN and $STATE/inputs/$RUN on Ryzen" >&2
+        fi
+        ;;
+      1)
+        # Preparation failed before a log directory was created.
+        remote rm -rf -- "$STATE/inputs/$RUN" || echo "Ryzen: could not remove $STATE/inputs/$RUN" >&2
+        ;;
+      *)
+        echo "Ryzen: could not check remote logs; keeping artifacts for $RUN on Ryzen" >&2
+        ;;
+    esac
+  fi
+  [[ "$ACTION" != e2e ]] || echo "logs: $LOG_DIR"
+}
+
 # Hold one SSH session open across upload and execution. This protects the snapshot
 # even from concurrent invocations in the same worktree (including clean/setup).
 SESSION="$(mktemp -d "${TMPDIR:-/tmp}/gothic-ryzen-control.XXXXXX")"
 SSH_PID=''
+RUN_CREATED=0
+RUN_STARTED=0
+RUN_FINISHED=0
+RUN_RC=0
 cleanup() {
+  local status=$?
   exec 8>&- || true
   if [[ -n "$SSH_PID" ]]; then kill "$SSH_PID" 2>/dev/null || true; wait "$SSH_PID" 2>/dev/null || true; fi
-  rm -rf -- "$SESSION"
+  if [[ "$RUN_CREATED" == 1 ]]; then finish_run || true; fi
+  rm -rf -- "$SESSION" || true
+  return "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -227,10 +278,11 @@ if [[ "$ACTION" == e2e ]]; then
   LOG_DIR="$(cd "$LOG_DIR" && pwd)"
   OUTPUT="$LOG_DIR/launcher.log"
 fi
-bootstrap="$(declare -f take_lock)
+bootstrap="$(declare -f take_lock disk_usage)
 set -euo pipefail
 LOCK_WAIT=$LOCK_WAIT
 take_lock
+disk_usage
 exec bash -se"
 printf -v bootstrap_command 'bash -c %q' "$bootstrap"
 : >"$OUTPUT"
@@ -248,12 +300,15 @@ done
 
 run_locked() {
   local arg
+  RUN_STARTED=1
   printf 'exec' >&8
   for arg in "$@"; do printf ' %q' "$arg" >&8; done
   printf '\n' >&8
   exec 8>&-
   wait "$SSH_PID" && rc=0 || rc=$?
   SSH_PID=''
+  RUN_FINISHED=1
+  RUN_RC="$rc"
   return "$rc"
 }
 
@@ -287,6 +342,7 @@ if [[ "$ACTION" == clean ]]; then
 fi
 
 RUN="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+RUN_CREATED=1
 remote mkdir -p "$STATE/source" "$STATE/inputs/$RUN"
 started=$SECONDS
 rsync -a --checksum --delete \
@@ -319,11 +375,6 @@ echo "Ryzen: upload $((SECONDS - started))s ($WORKTREE)"
 
 if [[ "$ACTION" == e2e ]]; then
   run_locked env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote e2e "$STATE" "$RUN" && rc=0 || rc=$?
-  # Collect after failures too. A lock timeout has no remote run directory yet.
-  if remote test -d "$STATE/runs/$RUN"; then
-    rsync -a "ryzen:$REMOTE/runs/$RUN/" "$LOG_DIR/" || echo 'Could not collect all Ryzen logs' >&2
-  fi
-  echo "logs: $LOG_DIR"
   exit "$rc"
 fi
 run_locked env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote pytest "$STATE" "$RUN" "$@"
