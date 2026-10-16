@@ -130,6 +130,7 @@ class DynamicWorld final {
         bool  testMove(const Tempest::Vec3& to, CollisionTest& out);
         bool  testMove(const Tempest::Vec3& to, const Tempest::Vec3& from, CollisionTest& out);
         auto  tryMove (const Tempest::Vec3& to, CollisionTest& out) -> DynamicWorld::MoveCode;
+        bool  hasFloorBelow(const Tempest::Vec3& feet) const;
 
         struct VirtualMoveResult {
           Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};

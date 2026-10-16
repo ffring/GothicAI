@@ -1914,6 +1914,9 @@ namespace {
       walker.setPosition({-35,0,0});
       walker.moveVirtual({},17,50,slope,80);
       const auto start=walker.position();
+      require(walker.hasFloorBelow(start),"the virtual floor guard fixture must start over supported world");
+      require(walker.hasFloorBelow({45,80,20})==lowerFloor,
+              "jump handoff must distinguish a bottomless lateral step from a lower landing floor");
       auto moved=walker.moveVirtual({80,0,20},100,50,slope,80);
       if(!lowerFloor) {
         require(moved.blocked && moved.collision.preFall,

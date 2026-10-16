@@ -4724,6 +4724,7 @@ void characterIdlePrepare(World& world,Npc& player,PlayerControl& ctrl,std::stri
   if(!floor.hasCol || std::abs(floor.v.y-start.y)>20.f) {arenaAbort("character idle start has no expected floor");return;}
   npcCharacterStopMotionTrace(&world);
   auto& idle=bench.characterIdle;
+  bench.subject=nullptr;
   if(idle.fixtureNpc) {world.removeNpc(*idle.fixtureNpc);idle.fixtureNpc=nullptr;}
   idle.actor=nullptr;
   ctrl.clearInput();bench.holds.clear();bench.taps.clear();

@@ -1863,6 +1863,10 @@ void DynamicWorld::NpcItem::resetVirtual() {
     obj->virtualCharacter.reset();
   }
 
+bool DynamicWorld::NpcItem::hasFloorBelow(const Tempest::Vec3& feet) const {
+  return obj!=nullptr && owner->landRay(feet+Tempest::Vec3(0,obj->groundOffset()+1.f,0)).hasCol;
+  }
+
 void DynamicWorld::NpcItem::setVirtualDiagnosticsEnabled(bool enabled) {
   if(obj==nullptr)
     return;
@@ -1981,8 +1985,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   // query: a lower landing is allowed, a bottomless step is not. Test the
   // resolved endpoint too, since wall sliding can change the requested X/Z.
   const auto candidate = resolvedClipped ? initial : moved.position;
-  const auto floor = owner->landRay({candidate.x,std::max(initial.y,candidate.y)+obj->groundOffset()+1.f,candidate.z});
-  const bool preFall = !floor.hasCol;
+  const bool preFall = !hasFloorBelow({candidate.x,std::max(initial.y,candidate.y),candidate.z});
   const auto accepted = preFall ? initial : candidate;
   if(preFall) {
     result.collision.preFall = true;
