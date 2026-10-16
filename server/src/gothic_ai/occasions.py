@@ -30,8 +30,9 @@ AWAY_CM = 5000
 NEAREST = ["call", "NPC_GETNEARESTWP", ["inst", "HERO"]]
 
 
-class WaypointUnavailable(RuntimeError):
-    """The existing bridge cannot supply the hero's nearest waypoint. Do not change the protocol."""
+class WaypointUnavailable(GameError):
+    """No nearest waypoint of the hero from story_eval this time (a world in between, say); a GameError, so
+    the watcher and `next` try again on the next sample instead of stopping."""
 
 
 def _minutes(fact: Fact) -> int | None:
@@ -137,9 +138,6 @@ class Occasions:
             self._wake.clear()
             try:
                 await self.poll()
-            except WaypointUnavailable as error:
-                log.error("occasions stopped: %s; protocol unchanged", error)
-                return
             except (GameError, TimeoutError) as error:
                 log.warning("occasions: %s", error)
             try:
