@@ -9,7 +9,7 @@ import sys
 SCRIPT = Path(__file__).resolve().parents[1]/"body_schedule_equivalence.py"
 
 
-def write(folder, *, action=4, wall=1, skip=False, late=False):
+def write(folder, *, action=4, wall=1, skip=False, late=False, rejected=False):
     folder.mkdir(parents=True)
     initial = {"scenario": "native_duel", "seed": 90000, "side": 0, "distance_cm": 250, "primary_entity_id": 1}
     final = {**initial, "reason": "opponent_down", "start_game_ms": 16294, "game_ms": 30000, "elapsed_wall_ms": wall}
@@ -27,6 +27,9 @@ def write(folder, *, action=4, wall=1, skip=False, late=False):
     for index, step in enumerate(steps[1:], start=2):
         ipc += [{"direction": "request", "value": {"id": index, "cmd": "body_observations"}},
                 {"direction": "response", "value": {"id": index, "sim_step": step, "arena": {"game_ms": 16294+34*(step-16)}}}]
+    if rejected:
+        ipc += [{"direction": "request", "value": {"id": 90, "cmd": "body_action", "action_id": 1}},
+                {"direction": "response", "value": {"id": 90, "accepted": False, "reason": "stale_observation", "game_ms": 16327}}]
     (folder/"ipc.jsonl").write_text(lines(ipc))
 
 
@@ -64,3 +67,13 @@ def test_late_realtime_command_explains_a_later_divergence(tmp_path):
     assert code == 2 and pair["realtime_late_commands"] == [{"game_ms": 16361, "observation_game_ms": 16327, "action_id": 4}]
     assert pair["divergence_after_realtime_fault"] is True
     assert value["totals"]["realtime_late_commands"] == 1 == value["totals"]["diverged_after_realtime_fault"]
+
+
+def test_a_command_realtime_refused_explains_the_divergence(tmp_path):
+    write(tmp_path/"rt/a", rejected=True)
+    write(tmp_path/"ls/a", action=1)
+    code, value = run(tmp_path, tmp_path/"rt", tmp_path/"ls")
+    totals = value["totals"]
+    assert code == 2 and totals["realtime_rejected_commands"] == 1
+    assert totals["diverged_after_realtime_fault"] == 1 and totals["diverged_without_fault"] == 0
+    assert value["pairs"][0]["realtime_rejected_commands"][0]["reason"] == "stale_observation"

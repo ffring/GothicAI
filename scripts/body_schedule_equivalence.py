@@ -84,6 +84,20 @@ def late_commands(folder):
             row["t_game_ms"] > observed[row["observation_seq"]]]
 
 
+def rejected_commands(folder):
+    """Realtime commands the engine refused (e.g. stale_observation: a newer row arrived first); lockstep accepts them."""
+    pending, rejected = {}, []
+    for row in rows(folder/"ipc.jsonl"):
+        value = row["value"]
+        if row["direction"] == "request":
+            pending[value.get("id")] = value
+            continue
+        request = pending.get(value.get("id")) or {}
+        if request.get("cmd") == "body_action" and value.get("accepted") is False:
+            rejected.append({"game_ms": value.get("game_ms"), "action_id": request.get("action_id"), "reason": value.get("reason")})
+    return rejected
+
+
 def first_difference(a, b):
     for index, (left, right) in enumerate(zip(a, b)):
         if left != right:
@@ -111,22 +125,25 @@ def main() -> int:
     keys = sorted(set(realtime) & set(lockstep))
     pairs, totals = [], {"pairs": len(keys), "identical": 0, "identical_commands": 0, "same_outcome": 0,
                          "diverged_after_realtime_fault": 0, "diverged_without_fault": 0,
-                         "realtime_skipped_polls": 0, "realtime_late_commands": 0, "realtime_accepted_commands": 0}
+                         "realtime_skipped_polls": 0, "realtime_late_commands": 0, "realtime_rejected_commands": 0,
+                         "realtime_accepted_commands": 0}
     for key in keys:
         a, b = realtime[key], lockstep[key]
         command_diff = first_difference(a["commands"], b["commands"])
         observation_diff = first_difference(a["observations"], b["observations"])
         identical = command_diff is None and observation_diff is None and a["final"] == b["final"]
         skips, late = skipped_ticks(Path(a["folder"])), late_commands(Path(a["folder"]))
+        rejected = rejected_commands(Path(a["folder"]))
         diverged_ms = min([diff["game_ms"] for diff in (command_diff, observation_diff) if diff and diff["game_ms"] is not None],
                           default=None)
         explained = (not identical and diverged_ms is not None and
-                     any(fault["game_ms"] is not None and fault["game_ms"] <= diverged_ms for fault in skips+late))
+                     any(fault["game_ms"] is not None and fault["game_ms"] <= diverged_ms for fault in skips+late+rejected))
         totals["identical"] += identical
         totals["identical_commands"] += command_diff is None
         totals["same_outcome"] += (a["final"] or {}).get("reason") == (b["final"] or {}).get("reason")
         totals["realtime_skipped_polls"] += len(skips)
         totals["realtime_late_commands"] += len(late)
+        totals["realtime_rejected_commands"] += len(rejected)
         totals["realtime_accepted_commands"] += sum(row.get("phase") == "accepted" for row in a["commands"])
         if not identical:
             totals["diverged_after_realtime_fault" if explained else "diverged_without_fault"] += 1
@@ -135,7 +152,7 @@ def main() -> int:
                       "realtime_reason": (a["final"] or {}).get("reason"), "lockstep_reason": (b["final"] or {}).get("reason"),
                       "commands": [len(a["commands"]), len(b["commands"])],
                       "observations": [len(a["observations"]), len(b["observations"])],
-                      "realtime_skipped_ticks": skips, "realtime_late_commands": late,
+                      "realtime_skipped_ticks": skips, "realtime_late_commands": late, "realtime_rejected_commands": rejected,
                       "divergence_after_realtime_fault": explained})
     value = {"schema_version": 1, "kind": "body_schedule_equivalence", "quality_credit": False,
              "realtime": str(args.realtime), "lockstep": str(args.lockstep), "ignored_fields": list(IGNORED),
@@ -147,7 +164,7 @@ def main() -> int:
         if not pair["identical"]:
             print("diverged", pair["key"], "commands", pair["first_command_difference"], "observations",
                   pair["first_observation_difference"], "skips", pair["realtime_skipped_ticks"][:2],
-                  "late", pair["realtime_late_commands"][:2], flush=True)
+                  "late", pair["realtime_late_commands"][:2], "rejected", pair["realtime_rejected_commands"][:2], flush=True)
     return 0 if totals["identical"] == totals["pairs"] else 2
 
 

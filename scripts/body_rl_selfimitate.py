@@ -94,16 +94,23 @@ def export_bc(args):
     Path(str(args.output)+".json").write_text(json.dumps(meta, indent=2)+"\n")
 
 
-def select_episodes(collect_dirs, top_fraction):
-    summaries = [json.loads(line) for directory in collect_dirs for path in sorted(Path(directory).glob("worker-*/episodes.jsonl"))
-                 for line in path.read_text().splitlines()]
-    for row in summaries:
-        row["npz"] = str(next(Path(directory) for directory in collect_dirs
-                              if (Path(directory)/f"worker-{row['worker']:02d}"/f"{row['name']}.npz").exists())
-                         /f"worker-{row['worker']:02d}"/f"{row['name']}.npz")
-    ranked = sorted((row for row in summaries if row["reason"] == "opponent_down" and not row.get("fallbacks")),
-                    key=lambda row: row["score"], reverse=True)
-    return summaries, ranked[:max(1, int(len(summaries)*top_fraction))]
+def select_episodes(collect_dirs, top_fraction, per_collect=False):
+    """The best wins without fallback, over all collections or within each one (a geometry mix keeps its shares)."""
+    groups = []
+    for directory in collect_dirs:
+        rows = [json.loads(line) for path in sorted(Path(directory).glob("worker-*/episodes.jsonl")) for line in path.read_text().splitlines()]
+        for row in rows:
+            row["npz"] = str(Path(directory)/f"worker-{row['worker']:02d}"/f"{row['name']}.npz")
+        groups.append(rows)
+    if not per_collect:
+        groups = [[row for rows in groups for row in rows]]
+    summaries, selected = [], []
+    for rows in groups:
+        ranked = sorted((row for row in rows if row["reason"] == "opponent_down" and not row.get("fallbacks")),
+                        key=lambda row: row["score"], reverse=True)
+        summaries += rows
+        selected += ranked[:max(1, int(len(rows)*top_fraction))]
+    return summaries, sorted(selected, key=lambda row: row["score"], reverse=True)
 
 
 def evaluate(model, chunks, weights, device):
@@ -126,7 +133,7 @@ def train(args):
     model, normalizer = parent["model"], parent["normalizer"]
     bc = numpy.load(args.bc_chunks)
     bc_train, bc_eval = unpack_chunks(bc, "train_"), unpack_chunks(bc, "eval_")
-    summaries, selected = select_episodes(args.collect, args.top_fraction)
+    summaries, selected = select_episodes(args.collect, args.top_fraction, args.select_per_collect)
     self_chunks = [chunk for row in selected for chunk in episode_chunks(numpy.load(row["npz"]))]
     if not self_chunks:
         raise ValueError("No selected episode carries a decision")
@@ -168,7 +175,8 @@ def train(args):
     record = {"kind": "filtered_self_imitation", "parent_checkpoint_sha256": parent["checkpoint_sha256"],
               "parent_training_kind": parent["metadata"]["training"].get("kind"),
               "collect": [str(path) for path in args.collect], "episodes_seen": len(summaries),
-              "episodes_selected": len(selected), "selection": "wins without fallback, top fraction by score",
+              "episodes_selected": len(selected), "selection": "wins without fallback, top fraction by score"+
+              (" within each collection" if args.select_per_collect else ""),
               "top_fraction": args.top_fraction, "selected_score_min": selected[-1]["score"],
               "self_chunks": len(self_chunks), "bc_ratio": args.bc_ratio, "epochs": args.epochs,
               "learning_rate": args.learning_rate, "seed": args.seed, "self_weighting": args.self_weighting,
@@ -197,6 +205,8 @@ def main() -> int:
     fit.add_argument("--collect", type=Path, action="append", required=True)
     fit.add_argument("--output", type=Path, required=True)
     fit.add_argument("--top-fraction", type=float, default=0.25)
+    fit.add_argument("--select-per-collect", action="store_true",
+                     help="the top fraction of each --collect separately, e.g. one per arena geometry")
     fit.add_argument("--epochs", type=int, default=4)
     fit.add_argument("--batch-size", type=int, default=16)
     fit.add_argument("--bc-ratio", type=int, default=1)
