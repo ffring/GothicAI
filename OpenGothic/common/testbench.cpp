@@ -9054,7 +9054,10 @@ float aimBoxDistance(const Vec3& from, const Vec3& to, const Vec3 (&box)[2]) {
         const float t=(bound-p[i])/d[i];
         if(t>0 && t<1) cuts[count++]=t;
         }
-  std::sort(cuts,cuts+count);
+  // at most 8: insertion sort (std::sort over the array trips GCC 15's -Warray-bounds on Linux)
+  for(size_t a=1;a<count;++a)
+    for(size_t b=a;b>0 && cuts[b-1]>cuts[b];--b)
+      std::swap(cuts[b-1],cuts[b]);
   auto distance2=[&](float t) {
     float value=0;
     for(size_t i=0;i<3;++i) {
