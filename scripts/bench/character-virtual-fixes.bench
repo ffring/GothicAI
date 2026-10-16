@@ -314,4 +314,16 @@ walkmode run
 wait 1200
 character idle snapshot market-end
 npccharacter trace off
+
+# Native NPC AI approaches the same unsupported point; reaching it is not required.
+character on
+npccharacter on
+npccharacter route market_void
+npccharacter trace watched
+wait 700
+npccharacter begin
+wait 6000
+npccharacter snapshot market_void_end
+npccharacter end
+npccharacter trace off
 label done

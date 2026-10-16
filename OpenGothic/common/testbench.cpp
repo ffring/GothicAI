@@ -4814,13 +4814,27 @@ void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
     if(!prepareCharacterRoute(world,player,"stairs_up",true,"NW_CITY_TO_FOREST_STAIRS01"))return;
     } else if(name=="doorway" || name=="tavern") {
     if(!prepareCharacterRoute(world,player,name))return;
+    } else if(name=="market_void") {
+    // The target deliberately has no floor. Drive the ordinary AI action
+    // toward it; retaining a real supported position is the expected result.
+    bench.characterRoute=Bench::CharacterRoute();
+    bench.characterRoute.start=Vec3(6718.370605f,270.145355f,-6029.716797f);
+    bench.characterRoute.goal=Vec3(6754.f,262.f,-6115.f);
+    bench.characterRoute.waypoint="market_void";
+    const auto floor=world.physic()->landRay(bench.characterRoute.start+Vec3(0,20,0),80);
+    if(!floor.hasCol || std::abs(floor.v.y-bench.characterRoute.start.y)>20.f) {
+      arenaAbort("NPC market void start has no expected floor");return;
+      }
+    characterFreezeNear(world,player,bench.characterRoute.start,bench.characterRoute.goal);
     } else {arenaAbort("unknown NPC CharacterVirtual route: "+name);return;}
   route.start=bench.characterRoute.start;route.goal=bench.characterRoute.goal;
   route.destination=WayPoint(route.goal,"FP_NPC_CHARACTER_GOAL");route.destination.groundPos=route.goal;
   npcCharacterPlaceHero(world,player,route.start,route.goal);
   route.npc=npcCharacterActor(world,route.start);if(!route.npc)return;
   route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace);
-  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  if(name=="market_void")route.npc->setDirection(-89.73f);
+  else route.npc->setDirection(route.goal-route.start);
+  route.npc->updateTransform();bench.subject=route.npc;
   if(name=="tavern") {
     // Use an actual dropped Item in the free lane beside authored furniture.
     // Remove only the general stand's temporary props so ON/OFF starts agree.

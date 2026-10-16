@@ -845,7 +845,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     if(onGround)
       velocity += groundVelocity;
     auto gravityStep = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
-    if(displacement==Tempest::Vec3() && character.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround) {
+    if(displacement==Tempest::Vec3() && onGround) {
       // A supported idle character has static friction. Feeding vertical
       // gravity to Jolt's frictionless contact solver adds a downhill tangent
       // every frame, even on a walkable slope. Keep only pressure into the
