@@ -171,7 +171,6 @@ if [[ -z "${OPENGOTHIC_TEXTURES+set}" && -d "$HD_TEXTURES" ]]; then
   export OPENGOTHIC_TEXTURES="$HD_TEXTURES"
 fi
 
-until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr' >/dev/null; do sleep 5; done
 START=$(date +%s)
 (cd "$RUN" && exec env TEMPEST_BACKGROUND=1 TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE:-800x600}" \
   OPENGOTHIC_BENCH="$SCEN" OPENGOTHIC_BENCH_OUT="$OUT" ${KEEP:+OPENGOTHIC_BENCH_KEEP=1} \
