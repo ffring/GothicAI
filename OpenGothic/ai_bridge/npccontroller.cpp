@@ -582,6 +582,7 @@ bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std
     return false;
     }
   a.state     = fn;
+  a.stateStart = a.start;
   a.toPlayer  = target->isPlayer();
   a.target    = target->instanceSymbol();
   a.targetNpc = target;
@@ -604,7 +605,12 @@ void NpcController::updateStateAction(World& world, Controlled& c, uint64_t now)
     if(in && npc.isStateStarted()) {
       a.entered = true;
       } else {
-      if(now>a.start+StateStartMs)
+      if(npc.haveOutput()) {
+        // Queued speech goes first, just as for the other body actions.
+        a.stateStart = now;
+        a.deadline = now + a.timeout;
+        }
+      if(now>a.stateStart+StateStartMs)
         finishAction(c,"failed","the npc did not start to " + a.type);
       return;
       }
