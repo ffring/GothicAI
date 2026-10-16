@@ -331,7 +331,7 @@ def summarize(args):
         measurements=measurements, paired=dict(n=len(matched), both_arrive=outcome[True, True],
             only_mesh_arrives=outcome[False, True], only_direct_arrives=outcome[True, False], neither_arrives=outcome[False, False]),
         control=[row for row in trials if row.get("region") == "intentional"], top10_direct_stuck_places=top_stuck[:10],
-        pursuit={"n": 0, "reason": "No native NPC-follow bench command; npcgo accepts static waypoints/freepoints only."})
+        pursuit={"n": 0, "reason": "The existing come/approach commands only support NPC-to-hero or hero-to-NPC. There is no NPC-to-routine-NPC chase command or moving-target navmesh replanning fixture."})
     raw_dir = report / "raw"
     raw_dir.mkdir(exist_ok=True)
     omitted = []
@@ -376,19 +376,13 @@ FONT = {
 
 
 def render_map(path, region, polygons, coverage, points, pairs):
-    selected = []
-    for pair in pairs:
-        place, start, goal = pair_fields(pair)
-        if place == region:
-            selected += [points[name] for name in (start, goal) if name in points]
-    if not selected:
-        prefixes = ("NW_FARM1", "FP_ROAM_FARM1") if region == "lobart" else ("NW_CITY_MERCHANT",)
-        selected = [point for name, point in points.items() if name and name.startswith(prefixes)]
-    if not selected:
-        raise RuntimeError(f"No points for map {region}")
-    x0, x1 = min(p[0] for p in selected)-500, max(p[0] for p in selected)+500
-    z0, z1 = min(p[2] for p in selected)-500, max(p[2] for p in selected)+500
     width, height = 1200, 1000
+    anchor_name = {"lobart": "NW_FARM1_ENTRANCE_01", "market": "NW_CITY_MERCHANT_PATH_20"}[region]
+    anchor = points[anchor_name]
+    half_x = 7000 if region == "lobart" else 5000
+    half_z = half_x*(height-140)/(width-80)
+    x0, x1 = anchor[0]-half_x, anchor[0]+half_x
+    z0, z1 = anchor[2]-half_z, anchor[2]+half_z
     scale = min((width-80)/(x1-x0), (height-140)/(z1-z0))
     image = bytearray([249, 249, 245])*(width*height)
 
@@ -422,14 +416,14 @@ def render_map(path, region, polygons, coverage, points, pairs):
         if len(vertices) < 3 or max(p[0] for p in vertices) < x0 or min(p[0] for p in vertices) > x1 or max(p[2] for p in vertices) < z0 or min(p[2] for p in vertices) > z1:
             continue
         poly = [project(p) for p in vertices]
-        for y in range(max(75, min(p[1] for p in poly)), min(height-30, max(p[1] for p in poly))+1):
+        for y in range(max(100, min(p[1] for p in poly)), min(height-40, max(p[1] for p in poly))+1):
             crossings = []
             for a, b in zip(poly, poly[1:]+poly[:1]):
                 if (a[1] <= y < b[1]) or (b[1] <= y < a[1]):
                     crossings.append(a[0]+(y-a[1])*(b[0]-a[0])/(b[1]-a[1]))
             crossings.sort()
             for a, b in zip(crossings[::2], crossings[1::2]):
-                first, last = max(30, math.ceil(a)), min(width-30, math.floor(b))
+                first, last = max(40, math.ceil(a)), min(width-40, math.floor(b))
                 if last >= first:
                     offset = (y*width+first)*3
                     image[offset:offset+(last-first+1)*3] = bytes((174, 213, 183))*(last-first+1)
@@ -448,6 +442,17 @@ def render_map(path, region, polygons, coverage, points, pairs):
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     pixel(x+dx, y+dy, (25, 42, 55))
+    # Keep geometry outlines outside the plotting rectangle out of the legend.
+    background = bytes((249, 249, 245))
+    image[:100*width*3] = background*(100*width)
+    image[(height-40)*width*3:] = background*(40*width)
+    for y in range(100, height-40):
+        image[y*width*3:(y*width+40)*3] = background*40
+        image[(y*width+width-40)*3:(y+1)*width*3] = background*40
+    ax, ay = project(anchor)
+    line((ax-6, ay), (ax+6, ay), (40, 80, 165))
+    line((ax, ay-6), (ax, ay+6), (40, 80, 165))
+    text(ax+10, ay-7, "ANCHOR", (40, 80, 165), zoom=1)
     text(40, 20, region.upper())
     text(40, 48, "NAVMESH", (90, 150, 105))
     text(200, 48, "WAYNET", (48, 64, 78))
