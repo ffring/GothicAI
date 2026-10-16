@@ -586,10 +586,15 @@ bool NpcController::startScriptState(World& world, Controlled& c, Action& a, std
   a.target    = target->instanceSymbol();
   a.targetNpc = target;
   a.deadline = a.type=="fight" ? 60000 : 20000;
+  // Install the state before releasing perceptions. A queued start can sit behind
+  // regainControl's RemoveWeapon until a damage perception replaces it with ATTACK.
+  npc.clearAiQueue();
+  npc.startState(fn,"",gtime::endOfTime(),true);
+  npc.setOther(target);
+  npc.setVictim(nullptr);
+  npc.setTarget(target);
   c.scripted = true;
   npc.setExternalControl(false);
-  npc.setTarget(target);
-  npc.aiPush(AiQueue::aiStartState(fn,0,target,nullptr,""));
   return true;
   }
 
