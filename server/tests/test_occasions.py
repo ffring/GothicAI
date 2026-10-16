@@ -8,7 +8,7 @@ import pytest
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.game import GameError
 from gothic_ai.memory import MemoryStore
-from gothic_ai.occasions import Occasions, WaypointUnavailable
+from gothic_ai.occasions import OccasionFailed, Occasions, WaypointUnavailable
 from gothic_ai.places import PlaceBook
 from tests.fake_game import FakeGame, connected
 from tests.fakes import Clock
@@ -523,3 +523,19 @@ async def test_next_retries_a_transient_game_error_without_losing_the_occasion(p
         monkeypatch.setattr(chronicle.link, "story_state", interrupted)
         assert (await asyncio.wait_for(occasions.next(), 1))["kind"] == "arrived"
         assert calls == 2 and occasions.pending == []
+
+
+async def test_next_passes_an_unexpected_handoff_failure_with_the_consumed_occasion(places, monkeypatch):
+    async with world(places) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "HOME")
+        [pending] = occasions.pending
+
+        async def broken(**kwargs):
+            raise RuntimeError("handoff broken")
+
+        monkeypatch.setattr(chronicle.link, "story_state", broken)
+        with pytest.raises(OccasionFailed) as caught:
+            await occasions.next()
+        assert caught.value.occasion == pending
+        assert isinstance(caught.value.error, RuntimeError)
+        assert occasions.pending == []
