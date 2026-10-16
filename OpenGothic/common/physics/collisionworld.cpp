@@ -493,6 +493,42 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
                       contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
     }
 
+  JPH::Vec3 initialIdleGravity(JPH::Vec3Arg gravity) const {
+    // A tangent pose can have tiny negative distances from floating-point
+    // contact calculations. Anything beyond one percent of the solver's
+    // collision tolerance still needs the ordinary initial recovery solve.
+    const float numericalPenetration = .01f*character->GetCharacterVirtualSettings().mCollisionTolerance;
+    for(const auto& contact:character->GetActiveContacts())
+      if(!contact.mWasDiscarded && !contact.mIsSensorB && contact.mDistance < -numericalPenetration)
+        return gravity;
+
+    const auto id = character->GetGroundBodyID();
+    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),id);
+    if(!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsStatic())
+      return gravity;
+    const auto& body = lock.GetBody();
+    const auto subShape = character->GetGroundSubShapeID();
+    JPH::SubShapeID remainder;
+    const auto* leaf = body.GetShape()->GetLeafShape(subShape,remainder);
+    if(leaf==nullptr || (leaf->GetSubType()!=JPH::EShapeSubType::Mesh && leaf->GetSubType()!=JPH::EShapeSubType::Box))
+      return gravity;
+    // Keep the full subshape ID here: compound and decorated shapes must
+    // resolve their leaf's face in the body's world transform.
+    const auto face = body.GetWorldSpaceSurfaceNormal(subShape,character->GetGroundPosition());
+    constexpr float cosTwoDegrees = .999390827f;
+    if(character->IsSlopeTooSteep(face) || face.Dot(character->GetGroundNormal())<cosTwoDegrees)
+      return gravity;
+    for(const auto& contact:character->GetActiveContacts()) {
+      if(contact.mBodyB!=id || contact.mSubShapeIDB!=subShape || !contact.mHadCollision ||
+         contact.mWasDiscarded || contact.mIsSensorB)
+        continue;
+      // A rounded toe on a tread edge is not an already acquired plane.
+      if(face.Dot(contact.mContactNormal)>=cosTwoDegrees && face.Dot(contact.mSurfaceNormal)>=cosTwoDegrees)
+        return face*gravity.Dot(face);
+      }
+    return gravity;
+    }
+
   CharacterVirtualDiagnostics::Body diagnosticBody(JPH::BodyID id, JPH::RVec3Arg point) const {
     CharacterVirtualDiagnostics::Body result;
     result.id = id.GetIndexAndSequenceNumber();
@@ -702,11 +738,13 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   void OnContactPersisted(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
                           JPH::CharacterContactSettings& settings) override { onContact(contact,settings); }
 
-  void OnAdjustBodyVelocity(const JPH::CharacterVirtual*, const JPH::Body&, JPH::Vec3& linear,
+  void OnAdjustBodyVelocity(const JPH::CharacterVirtual*, const JPH::Body& body, JPH::Vec3& linear,
                             JPH::Vec3& angular) override {
     // Carry sweeps through the already integrated world. Predicting the bodies
     // for another interval here would count their motion a second time.
-    if(carrying)
+    // An idle update also already accounts for its tracked support's observed
+    // motion; its endpoint velocity must not advance that support again.
+    if(carrying || (idleSupportMotionObserved && body.GetID()==ground))
       linear = angular = JPH::Vec3::sZero();
     }
 
@@ -720,6 +758,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   bool contactsDirty = true;
   bool needsInitialUpdate = true;
   bool carrying = false;
+  bool idleSupportMotionObserved = false;
   float radius = 0.f;
   float height = 0.f;
   JPH::BodyID ground;
@@ -808,6 +847,17 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     diagnostic->valid = false;
     diagnostic->dt = dt;
     diagnostic->requested = displacement;
+    diagnostic->requestedVelocity = {};
+    diagnostic->stairDesiredVelocity = {};
+    diagnostic->maxSlopeRadians = maxSlope;
+    diagnostic->stairHeight = stepHeight;
+    diagnostic->stairDesiredDistance = 0.f;
+    diagnostic->stairAchievedDistance = 0.f;
+    diagnostic->stairSupported = false;
+    diagnostic->stairCanWalk = false;
+    diagnostic->stairBlockedByPolicy = false;
+    diagnostic->stairProgressBlocked = false;
+    diagnostic->stairProbe = {};
     diagnostic->stairAttempted = false;
     diagnostic->stairSucceeded = false;
     diagnostic->stairObstacleId = uint32_t(-1);
@@ -847,20 +897,35 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     if(onGround)
       velocity += groundVelocity;
     auto gravityStep = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
-    if(displacement==Tempest::Vec3() && onGround && !state.needsInitialUpdate) {
+    if(displacement==Tempest::Vec3() && onGround) {
       // A supported idle character has static friction. Feeding vertical
       // gravity to Jolt's frictionless contact solver adds a downhill tangent
       // every frame, even on a walkable slope. Keep only pressure into the
       // support; moving platforms still carry us through groundVelocity and
       // Update applies the character's weight independently. Steep slopes and
       // requested walking/jumping retain their ordinary gravity response.
-      const auto normal = character.GetGroundNormal();
-      gravityStep = normal*gravityStep.Dot(normal);
+      if(state.needsInitialUpdate)
+        gravityStep = state.initialIdleGravity(gravityStep);
+      else {
+        const auto normal = character.GetGroundNormal();
+        gravityStep = normal*gravityStep.Dot(normal);
+        }
       }
     velocity += gravityStep;
-    character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
+    if(diagnostic!=nullptr)
+      diagnostic->requestedVelocity = toCentimeters(velocity);
+    // ExtendedUpdate cancels steep-slope motion internally, while preserving
+    // this original request for the separate world-stair recipe below.
+    character.SetLinearVelocity(velocity);
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);
+    // A steep, slanted riser can be longer than Jolt's fixed 15 cm probe.
+    // Search its possible horizontal run, bounded by the permitted step's
+    // height and slope, plus the toe. This changes only the support test;
+    // accepted forward travel still uses the original per-frame request.
+    const float riserRun = maxSlope>0.f ? std::min(step,step/std::tan(maxSlope)) : step;
+    settings.mWalkStairsStepForwardTest = std::max(settings.mWalkStairsStepForwardTest,
+                                                  riserRun+state.radius+character.GetCharacterPadding());
     // Run Jolt's ordinary update and floor sticking first. Its automatic stair
     // recipe is applied below only for world geometry, after contact solving
     // has identified pushable objects or interactive walking obstacles.
@@ -868,11 +933,16 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     settings.mStickToFloorStepDown = JPH::Vec3(0,-step,0);
     const auto oldPosition = character.GetPosition();
     const auto desiredVelocity = character.GetLinearVelocity();
+    if(diagnostic!=nullptr)
+      diagnostic->stairDesiredVelocity = toCentimeters(desiredVelocity);
+    state.idleSupportMotionObserved = inferredGroundVelocity && onGround && displacement==Tempest::Vec3();
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    state.idleSupportMotionObserved = false;
     // RefreshContacts only classifies the initial overlap. Let the first
-    // physical solve after creation/teleport recover it with native gravity;
-    // changing that solve changes the contact pose used to enter stairs.
+    // physical solve after creation/teleport recover penetration with native
+    // gravity. Only a verified nonpenetrating static plane can start at rest;
+    // edges retain the native contact pose used to enter stairs.
     // A zero-dt refresh does not complete this acquisition.
     state.needsInitialUpdate = false;
     if(diagnostic!=nullptr)
@@ -893,8 +963,21 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     // The remainder is the WalkStairs part of Jolt's ExtendedUpdate recipe,
     // including its direction and minimum-distance tests for oblique steps.
     const auto up = character.GetUp();
-    const auto desiredStep = (desiredVelocity-desiredVelocity.Dot(up)*up)*seconds;
+    // Static friction has a horizontal component on a slope; it is a contact
+    // force, not a walking request. Keep support motion in the stair intent.
+    const auto stairVelocity = desiredVelocity-gravityStep;
+    const auto desiredStep = (stairVelocity-stairVelocity.Dot(up)*up)*seconds;
     const float desiredLength = desiredStep.Length();
+    if(diagnostic!=nullptr) {
+      const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
+      const float achievedLength = desiredLength>0.f ? std::max(0.f,achieved.Dot(desiredStep/desiredLength)) : 0.f;
+      diagnostic->stairDesiredDistance = desiredLength*100.f;
+      diagnostic->stairAchievedDistance = achievedLength*100.f;
+      diagnostic->stairSupported = character.IsSupported();
+      diagnostic->stairCanWalk = character.CanWalkStairs(desiredVelocity);
+      diagnostic->stairBlockedByPolicy = stairObstacle;
+      diagnostic->stairProgressBlocked = achievedLength+1.e-4f<desiredLength;
+      }
     if(step>0.f && !stairObstacle && desiredLength>0.f && character.CanWalkStairs(desiredVelocity)) {
       const auto forward = desiredStep/desiredLength;
       const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
@@ -915,11 +998,28 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             }
           }
         const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
+        JPH::CharacterVirtual::WalkStairsDiagnostics stairProbe;
         const bool stepped = character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
-                                                settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+                                                settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator,
+                                                diagnostic!=nullptr ? &stairProbe : nullptr);
         if(diagnostic!=nullptr) {
           diagnostic->stairAttempted = true;
           diagnostic->stairSucceeded = stepped;
+          static constexpr const char* reasons[]={"notAttempted","upBlocked","noSteep","noHorizontal","noProgress","noFloor",
+                                                   "noForwardTest","testNoProgress","testNoFloor","testSteep","noHeight","success"};
+          auto& probe=diagnostic->stairProbe;
+          probe.reason = reasons[unsigned(stairProbe.mResult)];
+          probe.upPosition = toCentimeters(JPH::Vec3(stairProbe.mUpPosition));
+          probe.forwardPosition = toCentimeters(JPH::Vec3(stairProbe.mForwardPosition));
+          probe.finalPosition = toCentimeters(JPH::Vec3(stairProbe.mFinalPosition));
+          probe.testPosition = toCentimeters(JPH::Vec3(stairProbe.mTestPosition));
+          probe.testFinalPosition = toCentimeters(JPH::Vec3(stairProbe.mTestFinalPosition));
+          const auto normal=stairProbe.mLandingNormal, testNormal=stairProbe.mTestLandingNormal;
+          probe.landingNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+          probe.testLandingNormal = Tempest::Vec3(testNormal.GetX(),testNormal.GetY(),testNormal.GetZ());
+          probe.upFraction = stairProbe.mUpFraction;
+          probe.landingFraction = stairProbe.mLandingFraction;
+          probe.testLandingFraction = stairProbe.mTestLandingFraction;
           }
         }
       }

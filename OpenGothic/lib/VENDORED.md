@@ -33,6 +33,14 @@ retained in `BulletCompat.LICENSE`; the Jolt library and its existing code retai
 
 Keep these when updating a library from upstream.
 
+- `JoltPhysics/Jolt/Physics/Character/CharacterVirtual.{h,cpp}`: optional transient
+  `WalkStairsDiagnostics` records the rejection stage and sweep results. The stair support test
+  tests the full lookahead endpoint first, then at most four intermediate positions, checking the
+  first downward hit at every position. Spacing uses contact tolerance and half the shape's inner
+  radius, with a hard budget of five lookahead probes per attempt. OpenGothic bounds that lookahead
+  by the permitted riser height, slope and capsule toe; actual forward travel is unchanged.
+  This lets finite slanted risers and narrow treads work without accepting continuous steep
+  slopes. Contracts live in `tests/physics_contract.cpp`.
 - `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_BACKGROUND=1` starts the app without taking the
   focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
 - `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_WINDOW_SIZE=<w>x<h>` sets the size of a window created

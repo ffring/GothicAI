@@ -1,0 +1,10 @@
+# Kernel timing only: eleven actual human Skeleton/NpcItem controllers coexist
+# on an isolated continuous 55-degree mesh for exactly 600 steps / 10 simulated
+# seconds. Every step supplies uphill input to every actor, independently of AI.
+# No recording, model calls, settling warmup or diagnostics enter formal timing.
+# Compare main and PR with both flags ON; read character-stair-performance.csv
+# step_ms and batch_wall_ms p95, plus the post-timing actor coverage events.
+seed 73013
+character on
+npccharacter on
+character stair-performance

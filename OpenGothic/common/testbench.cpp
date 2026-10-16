@@ -679,6 +679,12 @@ struct Bench {
     Vec3 lastSupported;
     uint64_t began=0,arrived=0;
   } characterRoute;
+  struct CharacterIdleSlope {
+    bool prepared=false,npc=false;
+    float angle=0;
+    uint64_t began=0,previousTick=0;
+    Vec3 start,previous;
+  } characterIdleSlope;
   struct CharacterFrame {
     std::string route;
     uint64_t frame=0,time=0,dt=0;
@@ -4147,6 +4153,19 @@ void characterFreezeNear(World& world,Npc& player,const Vec3& start,const Vec3& 
   event("character_fixture_freeze","\"npcs\":"+std::to_string(count)+",\"radius_cm\":2200");
   }
 
+void characterIdleGuards(World& world,const Npc& player) {
+  size_t count=0;
+  // A loaded archive does not retain external control. Guard the full ten
+  // second idle window against nearby creatures, without relying on one
+  // archive's NPC indices or changing the measured human's state or pose.
+  for(uint32_t id=0;id<world.npcCount();++id)
+    if(auto* npc=world.npcById(id);npc && npc!=&player && !npc->isHuman() &&
+       (npc->position()-player.position()).length()<10000.f) {
+      npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);++count;
+      }
+  event("character_idle_guards","\"creatures\":"+std::to_string(count)+",\"radius_cm\":10000");
+  }
+
 bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool abortMissing=true,std::string_view onlyWaypoint={}) {
   Bench::CharacterRoute route;route.name=name;
   std::vector<const WayPoint*> points;
@@ -4647,7 +4666,24 @@ std::string npcCharacterSample(World& world,const Npc& npc,float physicalJump,fl
     if(npcCharacterNeedsMovableLookup(d.before) || npcCharacterNeedsMovableLookup(d.afterExtendedUpdate) ||
        npcCharacterNeedsMovableLookup(d.afterStairs))movable=world.physic()->movableVobSnapshot();
     row+=",\"dt_ms\":"+std::to_string(d.dt)+",\"requested_cm\":"+ragdollVector(d.requested)+
+      ",\"requested_velocity_cm_s\":"+ragdollVector(d.requestedVelocity)+
+      ",\"stair_desired_velocity_cm_s\":"+ragdollVector(d.stairDesiredVelocity)+
+      ",\"max_slope_rad\":"+ragdollNumber(d.maxSlopeRadians)+",\"stair_height_cm\":"+ragdollNumber(d.stairHeight)+
+      ",\"stair_desired_distance_cm\":"+ragdollNumber(d.stairDesiredDistance)+
+      ",\"stair_achieved_distance_cm\":"+ragdollNumber(d.stairAchievedDistance)+
+      ",\"stair_supported\":"+(d.stairSupported?"true":"false")+",\"stair_can_walk\":"+(d.stairCanWalk?"true":"false")+
+      ",\"stair_blocked_by_policy\":"+(d.stairBlockedByPolicy?"true":"false")+
+      ",\"stair_progress_blocked\":"+(d.stairProgressBlocked?"true":"false")+
       ",\"stair_attempted\":"+(d.stairAttempted?"true":"false")+",\"stair_succeeded\":"+(d.stairSucceeded?"true":"false")+
+      ",\"stair_probe\":{\"reason\":"+jsonStr(d.stairProbe.reason)+
+      ",\"up_cm\":"+ragdollVector(d.stairProbe.upPosition)+",\"forward_cm\":"+ragdollVector(d.stairProbe.forwardPosition)+
+      ",\"final_cm\":"+ragdollVector(d.stairProbe.finalPosition)+",\"test_cm\":"+ragdollVector(d.stairProbe.testPosition)+
+      ",\"test_final_cm\":"+ragdollVector(d.stairProbe.testFinalPosition)+
+      ",\"landing_normal\":"+ragdollVector(d.stairProbe.landingNormal)+
+      ",\"test_landing_normal\":"+ragdollVector(d.stairProbe.testLandingNormal)+
+      ",\"up_fraction\":"+ragdollNumber(d.stairProbe.upFraction)+
+      ",\"landing_fraction\":"+ragdollNumber(d.stairProbe.landingFraction)+
+      ",\"test_landing_fraction\":"+ragdollNumber(d.stairProbe.testLandingFraction)+"}"+
       ",\"stair_obstacle_id\":"+std::to_string(d.stairObstacleId)+",\"npc_move\":"+npcCharacterMoveJson(world,d.npcMove)+
       ",\"before\":"+npcCharacterPoseJson(d.before,movable)+
       ",\"after_extended_update\":"+npcCharacterPoseJson(d.afterExtendedUpdate,movable)+
@@ -4724,6 +4760,126 @@ void npcCharacterPlaceHero(World& world,Npc& player,const Vec3& start,const Vec3
     }
   if(!found)hero=start-along*250.f;
   player.stopWalking();player.clearAiQueue();player.setPosition(hero);player.setDirection(start-hero);player.updateTransform();
+  }
+
+void characterIdleSlopeSample(World& world,Npc& player,std::string_view label) {
+  auto& fixture=bench.characterIdleSlope;
+  auto* actor=fixture.npc?bench.npcCharacterRoute.npc:&player;
+  if(!fixture.prepared || !actor) {arenaAbort("character idle slope sample needs a prepared fixture");return;}
+  const auto position=actor->position();
+  const auto displacement=position-fixture.start,interval=position-fixture.previous;
+  event("character_idle_slope_sample","\"label\":"+jsonStr(label)+",\"actor\":"+jsonStr(fixture.npc?"npc":"hero")+
+    ",\"angle_deg\":"+ragdollNumber(fixture.angle)+",\"elapsed_ms\":"+std::to_string(world.tickCount()-fixture.began)+
+    ",\"interval_ms\":"+std::to_string(world.tickCount()-fixture.previousTick)+
+    ",\"start_cm\":"+ragdollVector(fixture.start)+",\"displacement_cm\":"+ragdollVector(displacement)+
+    ",\"displacement_length_cm\":"+ragdollNumber(displacement.length())+
+    ",\"interval_displacement_cm\":"+ragdollVector(interval)+",\"interval_displacement_length_cm\":"+ragdollNumber(interval.length())+
+    ","+npcCharacterSample(world,*actor,0,0,bench.step,bench.frameMs));
+  fixture.previous=position;fixture.previousTick=world.tickCount();
+  }
+
+void characterIdleSlopePrepare(World& world,Npc& player,float requestedAngle,bool npc) {
+  if(!std::isfinite(requestedAngle) || requestedAngle<5.f || requestedAngle>65.f) {
+    arenaAbort("character idle slope angle must be between 5 and 65 degrees");return;
+    }
+  npcCharacterStopMotionTrace(&world);
+  auto& route=bench.npcCharacterRoute;
+  if(route.npc) {
+    if(bench.subject==route.npc)bench.subject=nullptr;
+    world.removeNpc(*route.npc);
+    }
+  route=Bench::NpcCharacterRoute();bench.characterIdleSlope=Bench::CharacterIdleSlope();
+  bench.characterRoute.active=false;
+  auto* actor=&player;
+  if(npc) {
+    route.npc=npcCharacterActor(world,player.position()+Vec3(400,0,0));
+    if(!route.npc)return;
+    actor=route.npc;
+    }
+  const auto capsule=actor->navigationCapsule();
+  const float radius=capsule.x;
+  const auto* bounds=actor->bBoxCol();
+  const float height=bounds?std::max(bounds[1].y-bounds[0].y,2.f*radius):capsule.y;
+  // Match the native capsule's 1 cm padding. Placing the logical feet directly
+  // on a sloping triangle would insert its lower sphere into the ground and
+  // count the first depenetration as idle movement. This is an analytic tangent
+  // pose, with no simulation tick, settling period or discarded measurement.
+  constexpr float padding=1.f;
+  const float footprint=std::max(60.f,2.f*(radius+padding));
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& point) {if(!point.underWater)points.push_back(&point);});
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  auto* physics=world.physic();
+  Vec3 floor,normal;std::string waypoint;float measuredAngle=0,maximumPlaneError=0,maximumNormalAngle=0;
+  const float radians=float(M_PI)/180.f;
+  // The waypoint order and offsets are fixed, so separate ON/OFF processes
+  // select exactly the same authored landscape triangle.
+  for(const auto* point:points) {
+    for(float x:{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f,-400.f,400.f})
+      for(float z:{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f,-400.f,400.f}) {
+        if(!waypoint.empty())continue;
+        const auto center=physics->landRay(point->position()+Vec3(x,300,z),1200.f);
+        // landRay only exposes normals for C_Landscape, which is static stock
+        // geometry; zero-normal object tops and movable props are excluded.
+        if(!center.hasCol || center.n.length()<.99f || center.n.y<=.25f)continue;
+        const auto n=Vec3::normalize(center.n);
+        const float angle=std::acos(std::clamp(n.y,-1.f,1.f))/radians;
+        const float angleTolerance=requestedAngle>=45.f && requestedAngle<50.f?.75f:2.f;
+        if(std::abs(angle-requestedAngle)>angleTolerance)continue;
+        float planeError=0,normalAngle=0;bool planar=true;
+        for(int ix=-2;ix<=2 && planar;++ix)for(int iz=-2;iz<=2;++iz) {
+          const auto offset=Vec3(float(ix)*footprint*.5f,0,float(iz)*footprint*.5f);
+          const float y=center.v.y-Vec3::dotProduct(n,offset)/n.y;
+          const auto hit=physics->landRay(Vec3(center.v.x+offset.x,y+30.f,center.v.z+offset.z),60.f);
+          if(!hit.hasCol || hit.n.length()<.99f) {planar=false;break;}
+          const float error=std::abs(Vec3::dotProduct(hit.v-center.v,n));
+          const float normalError=std::acos(std::clamp(Vec3::dotProduct(n,Vec3::normalize(hit.n)),-1.f,1.f))/radians;
+          if(error>.25f || normalError>1.f) {planar=false;break;}
+          planeError=std::max(planeError,error);normalAngle=std::max(normalAngle,normalError);
+          }
+        if(!planar)continue;
+        const auto feet=center.v+Vec3(0,(radius+padding)/n.y-radius-padding,0);
+        if(physics->ray(feet+Vec3(0,radius+padding,0),feet+Vec3(0,height+padding,0)).hasCol)continue;
+        for(unsigned direction=0;direction<8 && planar;++direction) {
+          const float yaw=float(direction)*float(M_PI)/4.f;
+          const Vec3 delta(std::cos(yaw)*(radius+padding),0,std::sin(yaw)*(radius+padding));
+          for(float y:{radius+padding,height-radius})
+            if(physics->ray(feet+Vec3(0,y,0),feet+Vec3(0,y,0)+delta).hasCol) {planar=false;break;}
+          }
+        if(!planar)continue;
+        floor=center.v;normal=n;waypoint=point->name;measuredAngle=angle;
+        maximumPlaneError=planeError;maximumNormalAngle=normalAngle;
+        }
+    if(!waypoint.empty())break;
+    }
+  if(waypoint.empty()) {arenaAbort("no static planar landscape footprint for idle slope "+std::to_string(requestedAngle));return;}
+  auto downhill=Vec3(normal.x,0,normal.z);downhill=Vec3::normalize(downhill);
+  // Jolt also translates the shape upward by its padding.
+  const float verticalOffset=(radius+padding)/normal.y-radius-padding;
+  const auto start=floor+Vec3(0,verticalOffset,0);
+  characterFreezeNear(world,player,floor,floor);
+  actor->setInteraction(nullptr,true);actor->clearAiQueue();actor->stopWalking();actor->clearSpeed();
+  actor->setPosition(start);actor->setDirection(downhill);actor->updateTransform();
+  actor->setCharacterVirtualDiagnosticsEnabled(true);
+  bench.npcCharacterTraceActors.push_back({actor,start,actor->characterVisualPosition(),false});
+  if(npc) {
+    actor->aiPush(AiQueue::aiWait(60000));
+    npcCharacterPlaceHero(world,player,start,start+downhill*200.f);
+    bench.subject=actor;
+    } else bench.subject=nullptr;
+  auto& fixture=bench.characterIdleSlope;
+  fixture.prepared=true;fixture.npc=npc;fixture.angle=measuredAngle;
+  fixture.began=world.tickCount();fixture.previousTick=world.tickCount();fixture.start=start;fixture.previous=start;
+  bench.hasPrev=false;
+  bench.cam=C_Follow;bench.camDist=300;bench.camHeight=100;bench.camAngle=110;bench.camAuto=true;
+  event("character_idle_slope_setup","\"actor\":"+jsonStr(npc?"npc":"hero")+",\"waypoint\":"+jsonStr(waypoint)+
+    ",\"requested_angle_deg\":"+ragdollNumber(requestedAngle)+",\"angle_deg\":"+ragdollNumber(measuredAngle)+
+    ",\"floor_cm\":"+ragdollVector(floor)+",\"normal\":"+ragdollVector(normal)+",\"start_cm\":"+ragdollVector(start)+
+    ",\"capsule_radius_cm\":"+ragdollNumber(radius)+",\"capsule_height_cm\":"+ragdollNumber(height)+
+    ",\"character_padding_cm\":"+ragdollNumber(padding)+",\"vertical_offset_cm\":"+ragdollNumber(verticalOffset)+
+    ",\"footprint_half_width_cm\":"+ragdollNumber(footprint)+",\"footprint_samples\":25,\"warmup_ms\":0"+
+    ",\"maximum_plane_error_cm\":"+ragdollNumber(maximumPlaneError)+",\"maximum_normal_angle_deg\":"+ragdollNumber(maximumNormalAngle));
+  characterIdleSlopeSample(world,player,"initial");
   }
 
 // Idle regressions use ordinary MoveAlgo ticks, including a real AI wait for
@@ -4895,6 +5051,116 @@ void npcCharacterEnd(World& world) {
     ",\"max_physical_jump_cm\":"+ragdollNumber(route.maxPhysicalJump)+",\"max_above_floor_cm\":"+ragdollNumber(route.maxAboveFloor)+
     ",\"sat\":"+(route.sat?"true":"false")+",\"standing\":"+(route.standing?"true":"false")+
     ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false")+mug);
+  }
+
+void characterStairPerformance(World& world,Npc& player) {
+  if(!Gothic::physicsFlags().characterVirtual || !Gothic::settingsGetI("GAME","npc_character_virtual")) {
+    arenaAbort("stair performance requires both human CharacterVirtual flags on");return;
+    }
+  std::vector<const Npc*> sources{&player};
+  for(uint32_t id=0;id<world.npcCount() && sources.size()<11;++id) {
+    const auto* npc=world.npcById(id);
+    if(npc && npc!=&player && npc->isHuman() && !npc->isDown() && npc->visualSkeleton() &&
+       npc->navigationCapsule().x>0.f && npc->navigationCapsule().y>0.f)
+      sources.push_back(npc);
+    }
+  if(sources.size()!=11 || !player.visualSkeleton()) {
+    arenaAbort("stair performance needs one loaded hero and ten loaded live human skeletons");return;
+    }
+  constexpr float radians=float(M_PI)/180.f, angle=55.f*radians, padding=1.f;
+  const float cosine=std::cos(angle), tangent=std::tan(angle);
+  zenkit::Mesh plane;
+  plane.vertices={{-2000,-2000*tangent,-2000},{-2000,-2000*tangent,2000},
+                  {2000,2000*tangent,2000},{2000,2000*tangent,-2000}};
+  plane.materials.resize(1);plane.materials[0].group=zenkit::MaterialGroup::STONE;
+  // PhysicVbo reverses Gothic source winding into upward-facing native triangles.
+  plane.polygons.vertex_indices={0,2,1,0,3,2};plane.polygons.material_indices={0,0};
+  DynamicWorld isolated(nullptr,plane);
+  struct Actor {
+    DynamicWorld::NpcItem body;
+    const Npc* source=nullptr;
+    float step=0,slope=0,mass=0;
+    };
+  std::vector<Actor> actors;actors.reserve(11);
+  const auto& guild=world.script().guildVal();
+  for(size_t index=0;index<sources.size();++index) {
+    const auto* source=sources[index];
+    auto body=isolated.addGhostObj(source->visualSkeleton());
+    const auto capsule=source->navigationCapsule();
+    if(std::abs(body.capsuleRadius()-capsule.x)>.01f || std::abs(body.capsuleHeight()-capsule.y)>.01f) {
+      arenaAbort("stair performance human skeleton must retain its actual landscape capsule dimensions");return;
+      }
+    const float step=std::max(float(guild.step_height[source->guild()]),0.f);
+    const float slope=float(guild.slide_angle[source->guild()])*radians;
+    if(!(slope>0.f && slope<angle && std::isfinite(slope))) {
+      arenaAbort("stair performance requires every human to treat 55 degrees as non-walkable");return;
+      }
+    const Vec3 initial(0,(capsule.x+padding)/cosine-capsule.x-padding,(float(index)-5.f)*150.f);
+    body.setPosition(initial);
+    const float mass=source->physicsMass(), stepHeight=step>0.f?step:50.f;
+    const auto state=body.moveVirtual({},0,stepHeight,slope,mass);
+    if(!state.steep || (state.position-initial).length()>.001f) {
+      arenaAbort("stair performance must acquire all eleven analytic steep supports without settling");return;
+      }
+    actors.push_back({std::move(body),source,stepHeight,slope,mass});
+    }
+  // Flush only zero-dt contact preparation from the production timer. No
+  // positive-dt warmup or measured steps are discarded.
+  isolated.tick(0);
+  struct Sample { uint64_t frame=0,time=0,dt=0;float physics=0,wall=0;unsigned steep=0,grounded=0; };
+  std::vector<Sample> samples;samples.reserve(600);
+  uint64_t elapsed=0;
+  unsigned minimumSteep=11;
+  for(uint64_t frame=0;frame<600;++frame) {
+    const uint64_t dt=frame%3==0?16:17;
+    const Vec3 request(4.f*float(dt)/17.f,0,0);
+    unsigned steep=0,grounded=0;
+    const auto began=std::chrono::steady_clock::now();
+    // All eleven controllers coexist. Direct wrapper requests keep stressing
+    // the uphill stair sweeps even though normal MoveAlgo would enter Slide.
+    for(auto& actor:actors) {
+      const auto state=actor.body.moveVirtual(request,dt,actor.step,actor.slope,actor.mass);
+      steep+=state.steep;grounded+=state.grounded;
+      }
+    isolated.tick(dt);
+    const float wall=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-began).count();
+    elapsed+=dt;
+    samples.push_back({frame,elapsed,dt,isolated.physicsStats().stepMilliseconds,wall,steep,grounded});
+    minimumSteep=std::min(minimumSteep,steep);
+    }
+  auto* file=std::fopen((outDir+"/character-stair-performance.csv").c_str(),"w");
+  if(!file) {arenaAbort("cannot write stair performance samples");return;}
+  std::fprintf(file,"frame,t_sim_ms,dt_ms,actors,uphill_requests,steep_actors,grounded_actors,step_ms,batch_wall_ms\n");
+  std::vector<float> physics,wall;physics.reserve(samples.size());wall.reserve(samples.size());
+  for(const auto& sample:samples) {
+    std::fprintf(file,"%llu,%llu,%llu,11,11,%u,%u,%.9g,%.9g\n",(unsigned long long)sample.frame,
+                 (unsigned long long)sample.time,(unsigned long long)sample.dt,sample.steep,sample.grounded,
+                 double(sample.physics),double(sample.wall));
+    physics.push_back(sample.physics);wall.push_back(sample.wall);
+    }
+  std::fclose(file);std::sort(physics.begin(),physics.end());std::sort(wall.begin(),wall.end());
+  const auto p95=size_t(std::ceil(.95*double(samples.size())))-1;
+  event("character_stair_performance","\"actors\":11,\"hero\":1,\"npcs\":10,\"samples\":"+std::to_string(samples.size())+
+    ",\"simulated_ms\":"+std::to_string(elapsed)+",\"angle_deg\":55,\"minimum_steep_actors\":"+std::to_string(minimumSteep)+
+    ",\"p95_step_ms\":"+ragdollNumber(physics[p95])+",\"p95_batch_wall_ms\":"+ragdollNumber(wall[p95])+
+    ",\"timing_diagnostics\":false,\"source\":\"eleven independent human NpcItem controllers in isolated DynamicWorld\"");
+  // Enable tracing only after formal timing. One extra uphill step per actor
+  // proves the measured configuration without charging diagnostics to p95.
+  for(size_t index=0;index<actors.size();++index) {
+    auto& actor=actors[index];actor.body.setVirtualDiagnosticsEnabled(true);
+    const auto state=actor.body.moveVirtual({4,0,0},17,actor.step,actor.slope,actor.mass);
+    CharacterVirtualDiagnostics diagnostic;
+    if(!actor.body.virtualDiagnostics(diagnostic)) {arenaAbort("stair performance coverage diagnostics are unavailable");return;}
+    event("character_stair_performance_actor","\"actor\":"+std::to_string(index)+",\"role\":"+jsonStr(index?"npc":"hero")+
+      ",\"source_npc_id\":"+std::to_string(world.npcId(actor.source))+",\"source_npc\":"+jsonStr(symName(world,actor.source))+
+      ",\"radius_cm\":"+ragdollNumber(actor.body.capsuleRadius())+",\"height_cm\":"+ragdollNumber(actor.body.capsuleHeight())+
+      ",\"mass_kg\":"+ragdollNumber(actor.mass)+",\"step_height_cm\":"+ragdollNumber(actor.step)+
+      ",\"max_slope_rad\":"+ragdollNumber(actor.slope)+",\"root_cm\":"+ragdollVector(state.position)+
+      ",\"ground_normal\":"+ragdollVector(state.groundNormal)+",\"ground_state\":"+std::to_string(diagnostic.afterStairs.groundState)+
+      ",\"steep\":"+(state.steep?"true":"false")+",\"stair_attempted\":"+(diagnostic.stairAttempted?"true":"false")+
+      ",\"stair_succeeded\":"+(diagnostic.stairSucceeded?"true":"false")+",\"reason\":"+jsonStr(diagnostic.stairProbe.reason));
+    }
+  if(minimumSteep!=11 || elapsed!=10000)arenaAbort("stair performance lost its eleven continuous steep-slope actors or ten-second window");
   }
 
 void npcCharacterMarket(World& world,Npc& player) {
@@ -5451,6 +5717,26 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("character_probe_complete","\"prepared\":"+std::to_string(prepared)+",\"expected\":8");
     }
   else if(c=="character" && a.size()==3 && a[1]=="route") prepareCharacterRoute(w,pl,a[2]);
+  else if(c=="character" && a.size()==2 && a[1]=="stair-performance") characterStairPerformance(w,pl);
+  else if(c=="character" && a.size()==4 && a[1]=="idle-slope") {
+    if(a[3]!="hero" && a[3]!="npc") {arenaAbort("character idle-slope expects hero or npc");return;}
+    characterIdleSlopePrepare(w,pl,num(a,2,0),a[3]=="npc");
+    }
+  else if(c=="character" && a.size()==3 && a[1]=="idle-slope-sample") characterIdleSlopeSample(w,pl,a[2]);
+  else if(c=="character" && a.size()==6 && a[1]=="approach") {
+    auto& route=bench.characterRoute;
+    if(!route.prepared || route.active) {arenaAbort("character approach needs a prepared route");return;}
+    const Vec3 side(-route.direction.z,0,route.direction.x);
+    const auto shifted=route.start+side*num(a,3,0)+route.direction*num(a,4,0);
+    Vec3 floor;
+    if(!characterFloor(w,shifted,floor)) {arenaAbort("character approach has no floor");return;}
+    route.start=floor;route.name+='_'+a[2];
+    pl.setPosition(route.start);pl.setDirection(route.direction);
+    const float yaw=(pl.rotation()+num(a,5,0))*float(M_PI)/180.f;
+    pl.setDirection(Vec3(std::cos(yaw),0,std::sin(yaw)));pl.updateTransform();
+    event("character_approach","\"route\":"+jsonStr(route.name)+",\"start_cm\":"+ragdollVector(route.start)+
+      ",\"goal_cm\":"+ragdollVector(route.goal)+",\"yaw_deg\":"+ragdollNumber(pl.rotation()));
+    }
   else if(c=="character" && a.size()==2 && a[1]=="begin") {
     auto& route=bench.characterRoute;
     if(!route.prepared || route.active) {arenaAbort("character begin needs a prepared route");return;}
@@ -10540,6 +10826,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
       else if(args.size()==2 && args[0]=="npccharacter" && args[1]=="initial") {
         ++bench.pc;npcCharacterSnapshot(*world,*player,"initial");
+        characterIdleGuards(*world,*player);
         // The first native step recreates the transient controller. Observe it
         // before normal command dispatch can advance past that initial contact.
         std::string trace="npccharacter trace";
@@ -10553,6 +10840,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
       else if(args.size()==2 && args[0]=="character" && args[1]=="initial") {
         ++bench.pc;characterSnapshot(*world,*player,"initial");
+        characterIdleGuards(*world,*player);
         exec("npccharacter trace player",*world,*player,ctrl);
         }
       else if(args.size()==3 && args[0]=="movable" && args[1]=="initial") {

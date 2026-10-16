@@ -1,9 +1,6 @@
 # Load the hero's standing stair save with CHARACTER_VIRTUAL=1. No actor input.
-# `initial` runs before the first native tick in both main and this branch.
+# `initial` snapshots and guards nearby creatures before the first native tick.
 character initial
-# The archived stair fixture has a wolf outside its original 22m freeze radius.
-# Keep that actor in place so its attack cannot become measured idle motion.
-freeze id:984
 npccharacter trace player
 rec idle_10s
 # Ordinary commands first run at 33ms; the remaining 967ms ends at exactly 1s.
