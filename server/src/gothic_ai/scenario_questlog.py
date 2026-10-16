@@ -114,7 +114,8 @@ async def questlog(
         and occasion is not None
         and occasions.current is not None
         and occasion.get("place") == occasions.current.id
-        and LOBART in occasion.get("people", []),
+        and occasion.get("waypoint") == occasions.waypoint
+        and isinstance(occasion.get("people"), list),
         occasion,
     )
 
