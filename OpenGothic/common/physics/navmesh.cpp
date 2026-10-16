@@ -21,7 +21,7 @@
 namespace {
 using Clock = std::chrono::steady_clock;
 using Point = NavMesh::Point;
-constexpr uint32_t cacheVersion = 1;
+constexpr uint32_t cacheVersion = 2;
 constexpr uint64_t hashSeed = 14695981039346656037ull;
 constexpr int maxPath = 32768;
 
@@ -148,7 +148,7 @@ struct NavMesh::Impl {
 
   void initializeQuery() {
     query.reset(dtAllocNavMeshQuery());
-    if(!query || dtStatusFailed(query->init(mesh.get(),65536)))
+    if(!query || dtStatusFailed(query->init(mesh.get(),65535)))
       throw std::runtime_error("navmesh cannot initialize Detour query");
     }
 
@@ -269,7 +269,9 @@ struct NavMesh::Impl {
     config.ch = params.cellHeight;
     config.walkableSlopeAngle = params.slope;
     config.walkableHeight = int(std::ceil(params.height/config.ch));
-    config.walkableClimb = int(std::floor(params.climb/config.ch));
+    // Preserve exact centimetre guild steps at a voxel boundary (60cm / 10cm
+    // must be six cells despite the float conversion from engine centimetres).
+    config.walkableClimb = int(std::floor(params.climb/config.ch+1.e-4f));
     config.walkableRadius = int(std::ceil(params.radius/config.cs));
     config.maxEdgeLen = int(12.f/config.cs);
     config.maxSimplificationError = 1.3f;

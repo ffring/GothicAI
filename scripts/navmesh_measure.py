@@ -55,6 +55,16 @@ class Runner:
         workdir.mkdir(parents=True, exist_ok=True)
         if args.ini:
             shutil.copyfile(args.ini, workdir / "Gothic.ini")
+        # Compare static authored collision meshes in both takes. With movable
+        # vobs enabled the legacy controller queries kinematic copies of props.
+        ini = workdir / "Gothic.ini"
+        settings = ini.read_text(encoding="utf-8") if ini.exists() else ""
+        settings = re.sub(r"(?im)^\s*movable_vobs\s*=.*$", "", settings)
+        if re.search(r"(?im)^\[GAME\]\s*$", settings):
+            settings = re.sub(r"(?im)^(\[GAME\])\s*$", r"\1\nmovable_vobs=0", settings, count=1)
+        else:
+            settings += "\n[GAME]\nmovable_vobs=0\n"
+        ini.write_text(settings, encoding="utf-8")
         self.stderr = (args.output / "runner-stderr.log").open("ab")
         env = dict(os.environ, GOTHIC_AI="0", OPENGOTHIC_BODY_ANIMATION_RNG="isolated",
                    OPENGOTHIC_STUCK_LOG=str(args.output / "stuck.jsonl"),
@@ -225,7 +235,13 @@ def run(args):
                     stream.write(json.dumps(trial, ensure_ascii=False, separators=(",", ":"))+"\n")
                 print(f"{sample}: success={trial.get('success')} elapsed_ms={trial.get('elapsed_ms')}", flush=True)
     finally:
-        runner.close()
+        if sys.exc_info()[0] is None:
+            runner.close()
+        else:
+            try:
+                runner.close()
+            except Exception as exc:
+                print(f"Runner cleanup after failure: {exc}", file=sys.stderr)
 
 
 def edge_fields(row):
@@ -268,7 +284,7 @@ def summarize(args):
                      key=lambda row: edge_fields(row)[3], reverse=True)
     top_missing = [{"from": edge_fields(row)[0], "to": edge_fields(row)[1],
                     "from_place": place(edge_fields(row)[0]), "to_place": place(edge_fields(row)[1]),
-                    "edge_length_cm": edge_fields(row)[3]} for row in missing[:20]]
+                    "edge_length_cm": edge_fields(row)[3], "reason": row.get("reason")} for row in missing[:20]]
     groups = defaultdict(list)
     for trial in trials:
         if trial.get("region") != "intentional":
@@ -282,19 +298,27 @@ def summarize(args):
         events = sum(row["stuck_events"] for row in group)
         measurements.append(dict(region=region, mode=mode, n=len(group), arrived=len(arrived),
             arrival_pct=100*len(arrived)/len(group), stuck_events=events,
+            no_path=sum(not row.get("path_complete") for row in group) if mode == "mesh" else 0,
             stuck_per_100=100*events/len(group), median_elapsed_ms=statistics.median(times) if times else None,
             median_arrival_ms=statistics.median(arrival_times) if arrival_times else None))
-    direct_places = defaultdict(lambda: {"walks": 0, "failures": 0, "stuck_events": 0})
+    direct_places = defaultdict(lambda: {"walks": set(), "failures": set(), "stuck_events": 0})
+    direct_trials = {trial["sample"]: trial for trial in trials
+                     if trial["mode"] == "direct" and trial.get("region") != "intentional"}
     paired = defaultdict(dict)
     for trial in trials:
         if "pair" in trial:
             paired[trial["pair"]][trial["mode"]] = trial
-        if trial["mode"] == "direct" and trial.get("region") != "intentional":
-            row = direct_places[place(trial["start"])]
-            row["walks"] += 1
-            row["failures"] += not trial.get("success", False)
-            row["stuck_events"] += trial["stuck_events"]
-    top_stuck = [{"place": name, **value} for name, value in direct_places.items() if value["stuck_events"]]
+    for episode in stuck:
+        trial = direct_trials.get(episode.get("sample"))
+        if episode.get("type") != "npc_stuck" or trial is None or episode.get("npc") != trial.get("npc", NPC):
+            continue
+        row = direct_places[place(episode.get("nearest_waypoint"))]
+        row["walks"].add(trial["sample"])
+        if not trial.get("success"):
+            row["failures"].add(trial["sample"])
+        row["stuck_events"] += 1
+    top_stuck = [{"place": name, "walks": len(value["walks"]), "failures": len(value["failures"]),
+                  "stuck_events": value["stuck_events"]} for name, value in direct_places.items()]
     top_stuck.sort(key=lambda row: (row["stuck_events"], row["failures"]), reverse=True)
     matched = [value for value in paired.values() if "direct" in value and "mesh" in value]
     outcome = Counter((bool(pair["direct"].get("success")), bool(pair["mesh"].get("success"))) for pair in matched)

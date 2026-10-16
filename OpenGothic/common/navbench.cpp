@@ -4,6 +4,7 @@
 #include "world/objects/npc.h"
 #include "world/aiqueue.h"
 #include "testbench.h"
+#include "gothic.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,7 @@ namespace {
 using Tempest::Vec3;
 std::unique_ptr<NavMesh> mesh;
 std::string meshWorld;
+float capsuleHeight=0, capsuleCenter=0;
 struct Trial {
   Npc* npc=nullptr;
   Vec3 goal;
@@ -50,12 +52,14 @@ void requireMesh(World& w) {
 void stats(const std::string& output,double extractionSeconds,double cacheLoadSeconds) {
   const auto& s=mesh->stats();const auto& p=mesh->params();
   auto out=file(output,"navmesh-stats.json");
-  out<<"{\"key\":"<<std::quoted(s.key)<<",\"complete\":"<<s.complete
+  out<<"{\"key\":"<<std::quoted(s.key)<<",\"complete\":"<<s.complete<<",\"whole_world\":"<<p.regions.empty()
+     <<",\"movable_vobs\":false"
      <<",\"from_cache\":"<<s.fromCache<<",\"build_seconds\":"<<s.buildSeconds
      <<",\"load_seconds\":"<<cacheLoadSeconds<<",\"extraction_seconds\":"<<extractionSeconds
      <<",\"cache_bytes\":"<<s.cacheBytes<<",\"triangles\":"<<s.triangles
      <<",\"water_triangles\":"<<s.waterTriangles<<",\"tiles\":"<<s.tiles<<",\"polygons\":"<<s.polygons
      <<",\"radius_m\":"<<p.radius<<",\"height_m\":"<<p.height<<",\"climb_m\":"<<p.climb
+     <<",\"capsule_height_m\":"<<capsuleHeight<<",\"capsule_center_height_m\":"<<capsuleCenter
      <<",\"slope_deg\":"<<p.slope<<",\"cell_size_m\":"<<p.cellSize<<",\"cell_height_m\":"<<p.cellHeight
      <<",\"water_depth_m\":"<<p.waterDepth<<",\"tile_cells\":"<<p.tileSize<<"}\n";
 }
@@ -82,6 +86,7 @@ bool NavBench::running() { return trial.active; }
 void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const std::string& output) {
   if(a.size()<2) throw std::runtime_error("navmesh: expected build|coverage|pairs|start|follow|finish");
   if(a[1]=="build" && a.size()==3) {
+    if(Gothic::physicsFlags().movableVobs) throw std::runtime_error("navmesh measurement requires movable_vobs=0 before world load");
     if(!std::filesystem::path(a[2]).is_absolute()) throw std::runtime_error("navmesh cache must be absolute");
     const auto before=std::chrono::steady_clock::now();
     auto geometry=w.physic()->navigationGeometry();
@@ -89,7 +94,8 @@ void NavBench::command(const std::vector<std::string>& a,World& w,Npc& pl,const 
     auto& human=actor(w,"BAU_954_MALETH");
     const auto capsule=human.navigationCapsule();
     const auto& guild=w.script().guildVal();const auto g=human.guild();
-    NavMesh::Params p;p.radius=capsule.x*.01f;p.height=capsule.y*.01f;
+    NavMesh::Params p;p.radius=capsule.x*.01f;p.height=human.navigationClearance()*.01f;
+    capsuleHeight=capsule.y*.01f;capsuleCenter=p.height-capsuleHeight*.5f;
     p.climb=float(guild.step_height[g])*.01f;if(p.climb<=0) p.climb=.5f;
     p.slope=float(guild.slide_angle[g]);p.waterDepth=float(guild.water_depth_chest[g])*.01f;
     mesh=std::make_unique<NavMesh>();meshWorld=w.name();

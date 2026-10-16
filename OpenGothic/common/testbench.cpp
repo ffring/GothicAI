@@ -559,6 +559,7 @@ struct BodyAnimationControl {
   };
 
 struct Bench {
+  bool navigationOnly = false; // navigation trials use the independent stuck journal
   ~Bench() { bodyTraceAlive = false; }
   std::vector<std::string> prog;
   size_t      pc        = 0;
@@ -4433,6 +4434,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   const std::string& c = a[0];
 
   if(c=="navmesh") {
+    bench.navigationOnly = true;
     if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
     }
   else if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
@@ -9209,7 +9211,7 @@ std::vector<Npc*> TestBench::bodyObservationActors() {
   }
 
 bool TestBench::bodyTracing() {
-  return bodyTrace && bodyTraceAlive && scenarioPath!=nullptr && bench.started && !bench.done;
+  return bodyTrace && !bench.navigationOnly && bodyTraceAlive && scenarioPath!=nullptr && bench.started && !bench.done;
   }
 
 void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view phase, uint64_t gameTime,

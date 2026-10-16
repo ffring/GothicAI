@@ -592,6 +592,9 @@ class Npc final {
     auto      navigationCapsule() const -> Tempest::Vec2 {
       return {physic.capsuleRadius(),physic.capsuleHeight()};
       }
+    float     navigationClearance() const {
+      return physic.groundOffset()+physic.capsuleHeight()*0.5f;
+      }
     // Direct, owned ground-position target for bench-controlled walks; no waypoint graph lookup.
     // Uses a 20 cm arrival radius even after a collision, to preserve navmesh corners.
     // Returns false while airborne or while leaving an interaction, so the caller can retry.
