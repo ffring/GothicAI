@@ -1442,7 +1442,49 @@ namespace {
     requireNear(body->position().y,700.f-6.f*acceleration,.005f,"next sixteen millisecond frame must advance the retained step");
     }
 
+  void testCharacterVirtualMovingUtensil() {
+    float maximumJump=0.f;
+    for(bool kicked:{false,true}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto matrix=at(150,25,0);
+      if(!kicked)
+        matrix.rotateOZ(45.f);
+      // Real dropped items have a centred proxy padded to 15 cm per half-axis.
+      // Its mass is still calculated from the smaller visual, like ITFO_BEER.
+      auto mug=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.15f,.15f,.15f)),matrix,.5f,5.80991459f,
+                                     DynamicWorld::C_Item,false);
+      for(int i=0;i<90;++i)
+        world.tick(17);
+      auto walker=world.createVirtualCharacter(25,180,{0,0,0});
+      float highest=0.f,jump=0.f,last=0.f;
+      CollisionWorld::CharacterMoveResult state;
+      for(int frame=0;frame<65;++frame) {
+        if(kicked && frame==8) {
+          const auto point=mug->position()+Tempest::Vec3(0,10,10);
+          require(mug->addImpulseAtPoint({-5,0,0},point),
+                  "moving utensil fixture must apply its off-centre native impulse");
+          }
+        state=walker->move({11,0,0},33,50,.785398163f,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        jump=std::max(jump,state.position.y-last);
+        last=state.position.y;
+        world.tick(33);
+        }
+      maximumJump=std::max(maximumJump,std::max(highest,jump));
+      std::printf("CharacterVirtual moving 5.81 kg utensil: kicked %d, max feet %.4f cm, max jump %.4f cm, final x %.3f cm\n",
+                  kicked,double(highest),double(jump),double(state.position.x));
+      require(mug->touchedByNpc() && mug->position().x>200.f,
+              "a rotating loose utensil must retain its native character contact and walking push");
+      require(state.position.x>600.f,"a moving loose utensil must not prevent ordinary walking progress");
+      }
+    require(maximumJump<1.f,
+            "a moving or rotating light item's side velocity must not lift feet through the floor contact solver");
+    }
+
   void testCharacterVirtual() {
+    testCharacterVirtualMovingUtensil();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
       std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",

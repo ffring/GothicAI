@@ -540,6 +540,16 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     const auto layer = nativeBody.GetObjectLayer();
     if((layer!=DynamicWorld::C_Item && layer!=DynamicWorld::C_MovableVob) || !nativeBody.IsDynamic() || contact.mIsSensorB)
       return;
+    const float inverseMass = nativeBody.GetMotionProperties()->GetInverseMass();
+    if(inverseMass<=0.f)
+      return;
+    const float bodyMass = 1.f/inverseMass;
+    // A rotating utensil's side-point velocity can enter the combined floor
+    // constraint and lift the feet even with a perfectly horizontal normal.
+    // Keep it as a blocking, pushable object without letting it move the walker.
+    // Heavy supports retain their native velocity and continue to carry feet.
+    if(bodyMass<10.f)
+      settings.mCanPushCharacter = false;
     auto* body = reinterpret_cast<CollisionBody*>(contact.mUserData);
     if(body==nullptr)
       return;
@@ -558,9 +568,6 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     // off-centre push. Penetration recovery has the same damping as Jolt.
     const float deltaVelocity = -projectedVelocity*0.9f-std::min(contact.mDistance,0.f)*0.4f/pushSeconds;
     if(deltaVelocity<=0.f)
-      return;
-    const float inverseMass = nativeBody.GetMotionProperties()->GetInverseMass();
-    if(inverseMass<=0.f)
       return;
     const auto jacobian = JPH::Vec3(contact.mPosition-nativeBody.GetCenterOfMassPosition()).Cross(contact.mContactNormal);
     const float inverseEffectiveMass = nativeBody.GetInverseInertia().Multiply3x3(jacobian).Dot(jacobian)+inverseMass;
@@ -581,7 +588,6 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
       }
     // Ordinary walking has less effective effort against a heavier load than
     // a braced push. Keep this continuous in both masses; no furniture classes.
-    const float bodyMass = 1.f/inverseMass;
     const float force = character->GetMaxStrength()*character->GetMass()/(character->GetMass()+bodyMass);
     const float available = std::min(pushRemaining,std::max(0.f,force*pushSeconds-used->second));
     const float amount = std::min(magnitude,available);
