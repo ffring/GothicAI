@@ -60,6 +60,7 @@ class MoveAlgo final {
     void    multSpeed(float s){ mulSpeed=s; }
     void    clearSpeed();
     void    resetCharacterVirtual(bool mobTransition=false);
+    void    carryCharacterVirtual(uint64_t dt);
     void    takeRagdollControl();
     bool    accessDamFly(float dx, float dz, char hitType);
     bool    addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction);

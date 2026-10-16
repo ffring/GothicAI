@@ -1,0 +1,13 @@
+{
+  "mode": 1,
+  "status": "passed",
+  "goal_cm": [
+    29467.34375,
+    5198.253906,
+    -15396.02344
+  ],
+  "distance_at_expiry_cm": 586.6700330254585,
+  "distance_after_off_cm": 273.39573949705397,
+  "native_progress_cm": 313.2742935284045,
+  "native_end_animations": "S_WALKL"
+}

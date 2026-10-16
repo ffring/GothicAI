@@ -803,6 +803,16 @@ void MoveAlgo::resetCharacterVirtual(bool mobTransition) {
   npcVirtualMobTransition |= mobTransition && !npc.isPlayer() && npc.isHuman();
   }
 
+void MoveAlgo::carryCharacterVirtual(uint64_t dt) {
+  if(!virtualMovementActive || (flags!=Run && flags!=InWater))
+    return;
+  const auto moved = npc.physic.carryVirtual(dt,&npc);
+  if(!moved.supportMoved)
+    return;
+  virtualGroundVelocity = moved.groundVelocity;
+  npc.syncCharacterVirtualSupport(moved.position);
+  }
+
 void MoveAlgo::takeRagdollControl() {
   // Native bodies replace this movement state machine, including airborne/climbing state.
   // Its stale InAir gate must not block queued script actions after the body settles.

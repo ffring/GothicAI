@@ -31,6 +31,7 @@
 
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "world/objects/item.h"
+#include "world/objects/npc.h"
 #include "world/bullet.h"
 #include "world/world.h"
 #include "game/serialize.h"
@@ -1566,6 +1567,17 @@ void DynamicWorld::tick(uint64_t dt) {
   if(movableVobs->enabled)
     for(auto* obj:movableVobs->bodies)
       syncMovableVob(*obj);
+  // NPC walking runs before native body integration. Finish only the motion
+  // of an already accepted moving support against the integrated world.
+  // onMove may thaw a frozen entry, so collect pointers before updating them.
+  std::vector<Npc*> riders;
+  for(const auto* records:{&npcList->body,&npcList->frozen})
+    for(const auto& record:*records)
+      if(record.body!=nullptr && record.body->virtualCharacter!=nullptr)
+        if(auto* npc=record.body->toNpc())
+          riders.push_back(npc);
+  for(auto* npc:riders)
+    npc->finishCharacterVirtualSupport(dt);
   }
 
 std::unique_ptr<Ragdoll> DynamicWorld::createRagdoll(const Skeleton& skeleton, const HitZones& zones,
@@ -1889,11 +1901,20 @@ bool DynamicWorld::NpcItem::virtualDiagnostics(CharacterVirtualDiagnostics& out)
 
 DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit) {
+  return implMoveVirtual(displacement,dt,stepHeight,maxSlope,mass,culprit,false);
+  }
+
+DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::carryVirtual(uint64_t dt, Npc* culprit) {
+  return implMoveVirtual({},dt,0,0,0,culprit,true);
+  }
+
+DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::implMoveVirtual(
+    const Tempest::Vec3& displacement, uint64_t dt, float stepHeight, float maxSlope, float mass, Npc* culprit, bool carry) {
   VirtualMoveResult result;
   if(obj==nullptr)
     return result;
   result.position = obj->pos;
-  if(!obj->enable)
+  if(!obj->enable || (carry && obj->virtualCharacter==nullptr))
     return result;
   if(obj->virtualCharacter==nullptr) {
     obj->virtualCharacter = owner->world->createVirtualCharacter(obj->radius,obj->h,obj->pos);
@@ -1901,7 +1922,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     }
 
   const auto initial = obj->pos;
-  auto* npcDiagnostic = obj->virtualDiagnosticMove.get();
+  auto* npcDiagnostic = carry ? nullptr : obj->virtualDiagnosticMove.get();
   if(npcDiagnostic!=nullptr) {
     *npcDiagnostic = {};
     npcDiagnostic->initial = initial;
@@ -1974,7 +1995,10 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   bool requestClipped = false;
   const auto requested = clipNpc(initial+displacement,requestClipped,
                                  npcDiagnostic!=nullptr ? &npcDiagnostic->requestCollision : nullptr)-initial;
-  auto moved = obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
+  auto moved = carry ? obj->virtualCharacter->carry(dt) :
+                       obj->virtualCharacter->move(requested,dt,stepHeight,maxSlope,mass,culprit);
+  if(carry && !moved.supportMoved)
+    return result;
   bool resolvedClipped = false;
   clipNpc(moved.position,resolvedClipped,npcDiagnostic!=nullptr ? &npcDiagnostic->resolvedCollision : nullptr);
   // Jolt may have slid around a wall or stepped up: an interpolated point on
@@ -2000,11 +2024,13 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
     }
   if(resolvedClipped || preFall) {
     obj->virtualCharacter->setPosition(accepted);
-    const auto support = obj->virtualCharacter->move({},0,stepHeight,maxSlope,mass,culprit);
-    moved.groundNormal = support.groundNormal;
-    moved.groundVelocity = support.groundVelocity;
-    moved.grounded = support.grounded;
-    moved.steep = support.steep;
+    if(!carry) {
+      const auto support = obj->virtualCharacter->move({},0,stepHeight,maxSlope,mass,culprit);
+      moved.groundNormal = support.groundNormal;
+      moved.groundVelocity = support.groundVelocity;
+      moved.grounded = support.grounded;
+      moved.steep = support.steep;
+      }
     }
   obj->setPosition(accepted);
   owner->npcList->onMove(*obj);
@@ -2023,6 +2049,7 @@ DynamicWorld::NpcItem::VirtualMoveResult DynamicWorld::NpcItem::moveVirtual(
   result.grounded = moved.grounded;
   result.steep = moved.steep;
   result.blocked = preFall;
+  result.supportMoved = moved.supportMoved;
   const Tempest::Vec3 horizontal(displacement.x,0,displacement.z);
   const float desiredLength = horizontal.length();
   if(!isNpcMoveSkipped(displacement) && desiredLength>0.1f) {

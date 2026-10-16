@@ -125,6 +125,7 @@ class CollisionWorld final {
       Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
       bool grounded = false;
       bool steep = false;
+      bool supportMoved = false;
       };
 
     // Transient, feet-based walking controller. Nothing in this object is saved.
@@ -133,6 +134,7 @@ class CollisionWorld final {
         ~VirtualCharacter();
         CharacterMoveResult move(const Tempest::Vec3& displacement, uint64_t dt,
                                  float stepHeight, float maxSlope, float mass, Npc* culprit);
+        CharacterMoveResult carry(uint64_t dt);
         void setPosition(const Tempest::Vec3& feet);
         void setDiagnosticsEnabled(bool enabled);
         bool diagnostics(CharacterVirtualDiagnostics& out) const;

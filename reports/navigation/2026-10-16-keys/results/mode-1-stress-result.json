@@ -1,0 +1,1378 @@
+{
+  "status": "limitation",
+  "fixture": {
+    "kind": "keys_setup",
+    "scene": "market",
+    "anchor": "NW_CITY_MERCHANT_PATH_01",
+    "root_cm": [
+      7366.621582,
+      270.1096497,
+      -5655.810547
+    ],
+    "goal_cm": [
+      7366.621582,
+      270.1096497,
+      -5155.810547
+    ],
+    "forward": [
+      0,
+      0,
+      1
+    ],
+    "actors": 10,
+    "frozen_residents": 15,
+    "cv_diagnostics_enabled": false,
+    "hero_parking_cm": [
+      7116.621582,
+      270.1186829,
+      -5835.810059
+    ],
+    "void_reference_cm": null,
+    "void_approach_cm": null,
+    "void_start_back_cm": null,
+    "void_edge_back_cm": null,
+    "void_start_from_original_back_cm": null,
+    "void_goal_beyond_cm": null,
+    "void_support_grid": null,
+    "removed_relaxed_overlay": true,
+    "flat_probe_count": 0,
+    "flat_minimum_y_cm": 0.0,
+    "flat_maximum_y_cm": 0.0,
+    "climb_probe_animation": "",
+    "climb_probe_height_cm": 0.0,
+    "climb_probe_no_climb": false,
+    "climb_face_cm": [
+      0,
+      0,
+      0
+    ],
+    "hero_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "npc_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "hero_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "npc_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "hero_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97",
+    "npc_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97"
+  },
+  "mode": 1,
+  "npc_cv_active_samples": 17297,
+  "npc_walking_samples": 15629,
+  "npc_walking_cv_active_samples": 14887,
+  "kind": "keys_stress_end",
+  "elapsed_ms": 60000,
+  "actors": 10,
+  "frames": 1800,
+  "commands": 9000,
+  "invalid_roots": 0,
+  "maximum_frame_travel_cm": 244.099411,
+  "requested_motion_frames": 16026,
+  "still_motion_frames": 1218,
+  "near_peer_frames": 3220,
+  "minimum_peer_distance_cm": 19.66190338,
+  "executor_ticks": 18000,
+  "executor_total_ns": 510453082,
+  "executor_mean_us": 28.35850456,
+  "executor_max_us": 13465.546,
+  "partial_peer_ticks": 16200,
+  "peer_checks": 162000,
+  "travel_cm": [
+    6112.899663,
+    7249.552765,
+    6257.398141,
+    6952.320801,
+    5991.424428,
+    7352.537333,
+    32709.18571,
+    6831.142602,
+    7117.216618,
+    6057.382007
+  ],
+  "actor_support": {
+    "0": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7366.621582,
+            270.1096497,
+            -5655.810547
+          ],
+          "last_cm": [
+            7558.157227,
+            270.1241455,
+            -5900.601562
+          ],
+          "minimum_cm": [
+            7267.261719,
+            264.5921631,
+            -5917.298828
+          ],
+          "maximum_cm": [
+            7861.254883,
+            327.2659912,
+            -5420.027832
+          ],
+          "max_horizontal_from_first_cm": 511.23569721860946,
+          "max_3d_from_first_cm": 511.2356993900336,
+          "net_horizontal_cm": 310.8191505205175,
+          "horizontal_path_cm": 6078.937095815562,
+          "max_derived_horizontal_speed_cm_s": 379.439463939032
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7366.621582,
+            270.1096497,
+            -5655.810547
+          ],
+          "last_cm": [
+            7558.157227,
+            270.1241455,
+            -5900.601562
+          ],
+          "minimum_cm": [
+            7267.261719,
+            264.5921631,
+            -5917.298828
+          ],
+          "maximum_cm": [
+            7861.254883,
+            327.2659912,
+            -5420.027832
+          ],
+          "max_horizontal_from_first_cm": 511.23569721860946,
+          "max_3d_from_first_cm": 511.2356993900336,
+          "net_horizontal_cm": 310.8191505205175,
+          "horizontal_path_cm": 6078.937095815562,
+          "max_derived_horizontal_speed_cm_s": 379.439463939032
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7366.621582,
+            270.1096497,
+            -5655.810547
+          ],
+          "last_cm": [
+            7558.157227,
+            270.1241455,
+            -5900.601562
+          ],
+          "minimum_cm": [
+            7267.261719,
+            264.5921631,
+            -5917.298828
+          ],
+          "maximum_cm": [
+            7861.254883,
+            327.2659912,
+            -5420.027832
+          ],
+          "max_horizontal_from_first_cm": 511.23569721860946,
+          "max_3d_from_first_cm": 511.2356993900336,
+          "net_horizontal_cm": 310.8191505205175,
+          "horizontal_path_cm": 6078.937095815562,
+          "max_derived_horizontal_speed_cm_s": 379.439463939032
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 1.4639587000000347,
+        "maximum_npc_to_physical_cm": 1.4639587000000347
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 1,
+      "maximum_root_below_probe_surface_cm": 5.535308838,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.535308838,
+        57.15344238
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "1": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7546.621582,
+            270.1021729,
+            -5655.811035
+          ],
+          "last_cm": [
+            7218.69043,
+            323.7746582,
+            -5079.942871
+          ],
+          "minimum_cm": [
+            7107.330078,
+            264.5903931,
+            -5835.9375
+          ],
+          "maximum_cm": [
+            7624.246094,
+            346.5146179,
+            -4839.144531
+          ],
+          "max_horizontal_from_first_cm": 887.3754552241752,
+          "max_3d_from_first_cm": 889.4004841835236,
+          "net_horizontal_cm": 662.6937322479952,
+          "horizontal_path_cm": 6705.922695075312,
+          "max_derived_horizontal_speed_cm_s": 632.0092176791647
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7546.621582,
+            270.1021729,
+            -5655.811035
+          ],
+          "last_cm": [
+            7218.69043,
+            323.7746582,
+            -5079.942871
+          ],
+          "minimum_cm": [
+            7107.330078,
+            264.5903931,
+            -5835.9375
+          ],
+          "maximum_cm": [
+            7624.246094,
+            346.5146179,
+            -4839.144531
+          ],
+          "max_horizontal_from_first_cm": 887.3754552241752,
+          "max_3d_from_first_cm": 889.4004841835236,
+          "net_horizontal_cm": 662.6937322479952,
+          "horizontal_path_cm": 6705.922695075312,
+          "max_derived_horizontal_speed_cm_s": 632.0092176791647
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7546.621582,
+            270.1021729,
+            -5655.811035
+          ],
+          "last_cm": [
+            7218.69043,
+            323.7746582,
+            -5079.942871
+          ],
+          "minimum_cm": [
+            7107.330078,
+            264.5903931,
+            -5835.9375
+          ],
+          "maximum_cm": [
+            7624.246094,
+            346.5146179,
+            -4839.144531
+          ],
+          "max_horizontal_from_first_cm": 887.3754552241752,
+          "max_3d_from_first_cm": 889.4004841835236,
+          "net_horizontal_cm": 662.6937322479952,
+          "horizontal_path_cm": 6705.922695075312,
+          "max_derived_horizontal_speed_cm_s": 632.0092176791647
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 10.0,
+        "maximum_npc_to_physical_cm": 1.805633499999999
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 1,
+      "maximum_root_below_probe_surface_cm": 5.523040771,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.523040771,
+        76.40960693
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "2": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7456.621582,
+            270.092865,
+            -5499.925293
+          ],
+          "last_cm": [
+            7678.966309,
+            270.0842896,
+            -5730.500977
+          ],
+          "minimum_cm": [
+            7107.529297,
+            264.5666504,
+            -5793.78418
+          ],
+          "maximum_cm": [
+            7704.557617,
+            327.6499939,
+            -5296.464844
+          ],
+          "max_horizontal_from_first_cm": 354.09646628539963,
+          "max_3d_from_first_cm": 354.0964664926671,
+          "net_horizontal_cm": 320.3159747448953,
+          "horizontal_path_cm": 6223.219755127126,
+          "max_derived_horizontal_speed_cm_s": 368.24711861279593
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7456.621582,
+            270.092865,
+            -5499.925293
+          ],
+          "last_cm": [
+            7678.966309,
+            270.0842896,
+            -5730.500977
+          ],
+          "minimum_cm": [
+            7107.529297,
+            264.5666504,
+            -5793.78418
+          ],
+          "maximum_cm": [
+            7704.557617,
+            327.6499939,
+            -5296.464844
+          ],
+          "max_horizontal_from_first_cm": 354.09646628539963,
+          "max_3d_from_first_cm": 354.0964664926671,
+          "net_horizontal_cm": 320.3159747448953,
+          "horizontal_path_cm": 6223.219755127126,
+          "max_derived_horizontal_speed_cm_s": 368.24711861279593
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7456.621582,
+            270.092865,
+            -5499.925293
+          ],
+          "last_cm": [
+            7678.966309,
+            270.0842896,
+            -5730.500977
+          ],
+          "minimum_cm": [
+            7107.529297,
+            264.5666504,
+            -5793.78418
+          ],
+          "maximum_cm": [
+            7704.557617,
+            327.6499939,
+            -5296.464844
+          ],
+          "max_horizontal_from_first_cm": 354.09646628539963,
+          "max_3d_from_first_cm": 354.0964664926671,
+          "net_horizontal_cm": 320.3159747448953,
+          "horizontal_path_cm": 6223.219755127126,
+          "max_derived_horizontal_speed_cm_s": 368.24711861279593
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 0.9119261999999821,
+        "maximum_npc_to_physical_cm": 0.9119261999999821
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 1,
+      "maximum_root_below_probe_surface_cm": 5.523284912,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.523284912,
+        57.55511475
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "3": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7276.621094,
+            270.1049805,
+            -5499.925293
+          ],
+          "last_cm": [
+            7051.506836,
+            270.1016235,
+            -4529.433105
+          ],
+          "minimum_cm": [
+            6862.86377,
+            264.5535278,
+            -5518.556641
+          ],
+          "maximum_cm": [
+            7594.297852,
+            375.305603,
+            -4363.806641
+          ],
+          "max_horizontal_from_first_cm": 1157.523251056946,
+          "max_3d_from_first_cm": 1157.523251119397,
+          "net_horizontal_cm": 996.2587596221769,
+          "horizontal_path_cm": 6638.962751642018,
+          "max_derived_horizontal_speed_cm_s": 785.6969908706994
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7276.621094,
+            270.1049805,
+            -5499.925293
+          ],
+          "last_cm": [
+            7051.506836,
+            270.1016235,
+            -4529.433105
+          ],
+          "minimum_cm": [
+            6862.86377,
+            264.5535278,
+            -5518.556641
+          ],
+          "maximum_cm": [
+            7594.297852,
+            375.305603,
+            -4363.806641
+          ],
+          "max_horizontal_from_first_cm": 1157.523251056946,
+          "max_3d_from_first_cm": 1157.523251119397,
+          "net_horizontal_cm": 996.2587596221769,
+          "horizontal_path_cm": 6638.962751642019,
+          "max_derived_horizontal_speed_cm_s": 785.6969908706994
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7276.621094,
+            270.1049805,
+            -5499.925293
+          ],
+          "last_cm": [
+            7051.506836,
+            270.1016235,
+            -4529.433105
+          ],
+          "minimum_cm": [
+            6862.86377,
+            264.5535278,
+            -5518.556641
+          ],
+          "maximum_cm": [
+            7594.297852,
+            375.305603,
+            -4363.806641
+          ],
+          "max_horizontal_from_first_cm": 1157.523251056946,
+          "max_3d_from_first_cm": 1157.523251119397,
+          "net_horizontal_cm": 996.2587596221769,
+          "horizontal_path_cm": 6638.962751642019,
+          "max_derived_horizontal_speed_cm_s": 785.6969908706994
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 1.0899226456578373,
+        "maximum_npc_to_physical_cm": 1.0899226456578373
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 6,
+      "maximum_root_below_probe_surface_cm": 6.443054199,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -6.443054199,
+        83.22497559
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "4": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7186.621094,
+            270.1091614,
+            -5655.810547
+          ],
+          "last_cm": [
+            6497.44873,
+            270.105011,
+            -5395.627441
+          ],
+          "minimum_cm": [
+            6262.519531,
+            264.5785828,
+            -5727.862305
+          ],
+          "maximum_cm": [
+            7186.621094,
+            346.4812622,
+            -5294.821777
+          ],
+          "max_horizontal_from_first_cm": 924.7819348604916,
+          "max_3d_from_first_cm": 924.7819348700808,
+          "net_horizontal_cm": 736.6503892275873,
+          "horizontal_path_cm": 5878.70572601567,
+          "max_derived_horizontal_speed_cm_s": 556.4449168432948
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7186.621094,
+            270.1091614,
+            -5655.810547
+          ],
+          "last_cm": [
+            6497.44873,
+            270.105011,
+            -5395.627441
+          ],
+          "minimum_cm": [
+            6262.519531,
+            264.5785828,
+            -5727.862305
+          ],
+          "maximum_cm": [
+            7186.621094,
+            346.4812622,
+            -5294.821777
+          ],
+          "max_horizontal_from_first_cm": 924.7819348604916,
+          "max_3d_from_first_cm": 924.7819348700808,
+          "net_horizontal_cm": 736.6503892275873,
+          "horizontal_path_cm": 5878.70572601567,
+          "max_derived_horizontal_speed_cm_s": 556.4449168432948
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7186.621094,
+            270.1091614,
+            -5655.810547
+          ],
+          "last_cm": [
+            6497.44873,
+            270.105011,
+            -5395.627441
+          ],
+          "minimum_cm": [
+            6262.519531,
+            264.5785828,
+            -5727.862305
+          ],
+          "maximum_cm": [
+            7186.621094,
+            346.4812622,
+            -5294.821777
+          ],
+          "max_horizontal_from_first_cm": 924.7819348604916,
+          "max_3d_from_first_cm": 924.7819348700808,
+          "net_horizontal_cm": 736.6503892275873,
+          "horizontal_path_cm": 5878.70572601567,
+          "max_derived_horizontal_speed_cm_s": 556.4449168432948
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 10.0,
+        "maximum_npc_to_physical_cm": 0.9020691000000056
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 1,
+      "maximum_root_below_probe_surface_cm": 5.52130127,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.52130127,
+        76.38021851
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "5": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7276.621094,
+            270.1302795,
+            -5811.695312
+          ],
+          "last_cm": [
+            6936.680664,
+            270.107605,
+            -6115.47168
+          ],
+          "minimum_cm": [
+            6460.017578,
+            264.5828857,
+            -6116.369141
+          ],
+          "maximum_cm": [
+            7276.621094,
+            346.5146179,
+            -5483.479492
+          ],
+          "max_horizontal_from_first_cm": 817.0356686359169,
+          "max_3d_from_first_cm": 817.0356690285458,
+          "net_horizontal_cm": 455.8942615386335,
+          "horizontal_path_cm": 6914.436590513698,
+          "max_derived_horizontal_speed_cm_s": 632.0063294873396
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7276.621094,
+            270.1302795,
+            -5811.695312
+          ],
+          "last_cm": [
+            6936.680664,
+            270.107605,
+            -6115.47168
+          ],
+          "minimum_cm": [
+            6460.017578,
+            264.5828857,
+            -6116.369141
+          ],
+          "maximum_cm": [
+            7276.621094,
+            346.5146179,
+            -5483.479492
+          ],
+          "max_horizontal_from_first_cm": 817.0356686359169,
+          "max_3d_from_first_cm": 817.0356690285458,
+          "net_horizontal_cm": 455.8942615386335,
+          "horizontal_path_cm": 6914.436590513698,
+          "max_derived_horizontal_speed_cm_s": 632.0063294873396
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7276.621094,
+            270.1302795,
+            -5811.695312
+          ],
+          "last_cm": [
+            6936.680664,
+            270.107605,
+            -6115.47168
+          ],
+          "minimum_cm": [
+            6460.017578,
+            264.5828857,
+            -6116.369141
+          ],
+          "maximum_cm": [
+            7276.621094,
+            346.5146179,
+            -5483.479492
+          ],
+          "max_horizontal_from_first_cm": 817.0356686359169,
+          "max_3d_from_first_cm": 817.0356690285458,
+          "net_horizontal_cm": 455.8942615386335,
+          "horizontal_path_cm": 6914.436590513698,
+          "max_derived_horizontal_speed_cm_s": 632.0063294873396
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 10.0,
+        "maximum_npc_to_physical_cm": 0.8801575000000526
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 4,
+      "maximum_root_below_probe_surface_cm": 5.522155762,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.522155762,
+        76.40960693
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "6": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7456.621582,
+            270.1220398,
+            -5811.695312
+          ],
+          "last_cm": [
+            6501.307617,
+            -26335.04102,
+            -7536.957031
+          ],
+          "minimum_cm": [
+            6352.867676,
+            -26335.04102,
+            -7536.957031
+          ],
+          "maximum_cm": [
+            7480.833496,
+            346.5799561,
+            -5369.80957
+          ],
+          "max_horizontal_from_first_cm": 1972.0934995001771,
+          "max_3d_from_first_cm": 26678.15312590655,
+          "net_horizontal_cm": 1972.0934995001771,
+          "horizontal_path_cm": 7347.034135125583,
+          "max_derived_horizontal_speed_cm_s": 553.0242423456507
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7456.621582,
+            270.1220398,
+            -5811.695312
+          ],
+          "last_cm": [
+            6501.307617,
+            -26335.04102,
+            -7536.957031
+          ],
+          "minimum_cm": [
+            6352.867676,
+            -26335.04102,
+            -7536.957031
+          ],
+          "maximum_cm": [
+            7480.833496,
+            346.5799561,
+            -5369.80957
+          ],
+          "max_horizontal_from_first_cm": 1972.0934995001771,
+          "max_3d_from_first_cm": 26678.15312590655,
+          "net_horizontal_cm": 1972.0934995001771,
+          "horizontal_path_cm": 7347.034135125583,
+          "max_derived_horizontal_speed_cm_s": 553.0242423456507
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7456.621582,
+            270.1220398,
+            -5811.695312
+          ],
+          "last_cm": [
+            6501.307617,
+            -26335.04102,
+            -7536.957031
+          ],
+          "minimum_cm": [
+            6352.867676,
+            -26335.04102,
+            -7536.957031
+          ],
+          "maximum_cm": [
+            7480.833496,
+            346.5799561,
+            -5369.80957
+          ],
+          "max_horizontal_from_first_cm": 1972.0934995001771,
+          "max_3d_from_first_cm": 26678.15312590655,
+          "net_horizontal_cm": 1972.0934995001771,
+          "horizontal_path_cm": 7347.034135125583,
+          "max_derived_horizontal_speed_cm_s": 553.0242423456507
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 1.1551819000000023,
+        "maximum_npc_to_physical_cm": 1.1551819000000023
+      },
+      "missing_physical_support_frames": 254,
+      "missing_npc_support_frames": 254,
+      "below_last_support_frames": 206,
+      "maximum_below_last_support_cm": 26605.1850019,
+      "support_loss_episodes": [
+        {
+          "start_game_ms": 68361,
+          "end_game_ms": 76794,
+          "frames": 254,
+          "first": {
+            "physical_root_cm": [
+              6738.958984,
+              275.87677,
+              -6073.331055
+            ],
+            "npc_root_cm": [
+              6738.958984,
+              275.87677,
+              -6073.331055
+            ],
+            "visual_root_cm": [
+              6738.958984,
+              275.87677,
+              -6073.331055
+            ],
+            "root_cm": [
+              6738.958984,
+              275.87677,
+              -6073.331055
+            ],
+            "physical_root_source": "npc_physics",
+            "physical_root_valid": true,
+            "cv_root_cm": null,
+            "cv_position_cm": null,
+            "cv_native_position_cm": null,
+            "cv_accepted_cm": null,
+            "cv_diagnostics_valid": false,
+            "cv_ground_state": null,
+            "cv_ground_normal": null,
+            "cv_velocity_cm_s": null,
+            "cv_active": false,
+            "support_physical": null,
+            "support_npc": null,
+            "air": false,
+            "falling": false,
+            "jumping": true,
+            "keys_enabled": true,
+            "has_command": true,
+            "remaining_ms": 100,
+            "animations": "T_RUNL_2_JUMP",
+            "game_ms": 68361,
+            "frame_dt_ms": 34,
+            "anim_root_local_cm": [
+              0,
+              5.732916355,
+              18.80269814
+            ],
+            "support_probe_above_cm": 50,
+            "support_probe_below_cm": 500,
+            "cv_ground_position_cm": null,
+            "cv_ground_velocity_cm_s": null,
+            "cv_ground_body": null,
+            "cv_contacts": null,
+            "cv_before_cm": null,
+            "cv_before_ground_state": null,
+            "cv_before_ground_normal": null,
+            "cv_after_extended_cm": null,
+            "cv_dt_ms": null,
+            "cv_initial_cm": null,
+            "cv_requested_cm": null,
+            "cv_native_requested_cm": null,
+            "cv_clipped_request_cm": null,
+            "cv_request_clipped": null,
+            "cv_resolved_clipped": null,
+            "cv_blocked": null
+          },
+          "last_supported": {
+            "game_ms": 68327,
+            "root_cm": [
+              6738.811523,
+              270.1438599,
+              -6054.528809
+            ],
+            "point_cm": [
+              6738.811523,
+              270.1439819,
+              -6054.528809
+            ]
+          },
+          "minimum_y_cm": -26335.04102,
+          "maximum_y_cm": 346.5799561
+        }
+      ],
+      "root_below_probe_surface_frames": 3,
+      "maximum_root_below_probe_surface_cm": 5.537261963,
+      "first_support_issue": {
+        "reason": "persistent_missing_support_and_physical_fall",
+        "sample": {
+          "physical_root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "npc_root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "visual_root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "physical_root_source": "npc_physics",
+          "physical_root_valid": true,
+          "cv_root_cm": null,
+          "cv_position_cm": null,
+          "cv_native_position_cm": null,
+          "cv_accepted_cm": null,
+          "cv_diagnostics_valid": false,
+          "cv_ground_state": null,
+          "cv_ground_normal": null,
+          "cv_velocity_cm_s": null,
+          "cv_active": false,
+          "support_physical": null,
+          "support_npc": null,
+          "air": false,
+          "falling": false,
+          "jumping": true,
+          "keys_enabled": true,
+          "has_command": true,
+          "remaining_ms": 100,
+          "animations": "T_RUNL_2_JUMP",
+          "game_ms": 68361,
+          "frame_dt_ms": 34,
+          "anim_root_local_cm": [
+            0,
+            5.732916355,
+            18.80269814
+          ],
+          "support_probe_above_cm": 50,
+          "support_probe_below_cm": 500,
+          "cv_ground_position_cm": null,
+          "cv_ground_velocity_cm_s": null,
+          "cv_ground_body": null,
+          "cv_contacts": null,
+          "cv_before_cm": null,
+          "cv_before_ground_state": null,
+          "cv_before_ground_normal": null,
+          "cv_after_extended_cm": null,
+          "cv_dt_ms": null,
+          "cv_initial_cm": null,
+          "cv_requested_cm": null,
+          "cv_native_requested_cm": null,
+          "cv_clipped_request_cm": null,
+          "cv_request_clipped": null,
+          "cv_resolved_clipped": null,
+          "cv_blocked": null
+        }
+      },
+      "physical_support_drop_range_cm": [
+        -5.537261963,
+        57.60427856
+      ],
+      "persistent_support_loss_episodes": 1,
+      "physical_fall_episodes": 1,
+      "support_issue_detected": true
+    },
+    "7": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7706.621582,
+            270.0717468,
+            -5655.810547
+          ],
+          "last_cm": [
+            8393.078125,
+            270.0697021,
+            -6104.708984
+          ],
+          "minimum_cm": [
+            7611.99707,
+            264.5670166,
+            -6131.041504
+          ],
+          "maximum_cm": [
+            8568.958984,
+            327.9699402,
+            -5630.069824
+          ],
+          "max_horizontal_from_first_cm": 963.298842534976,
+          "max_3d_from_first_cm": 963.2988428156609,
+          "net_horizontal_cm": 820.2026531099214,
+          "horizontal_path_cm": 6761.809314243353,
+          "max_derived_horizontal_speed_cm_s": 368.2634363770644
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7706.621582,
+            270.0717468,
+            -5655.810547
+          ],
+          "last_cm": [
+            8393.078125,
+            270.0697021,
+            -6104.708984
+          ],
+          "minimum_cm": [
+            7611.99707,
+            264.5670166,
+            -6131.041504
+          ],
+          "maximum_cm": [
+            8568.958984,
+            327.9699402,
+            -5630.069824
+          ],
+          "max_horizontal_from_first_cm": 963.298842534976,
+          "max_3d_from_first_cm": 963.2988428156609,
+          "net_horizontal_cm": 820.2026531099214,
+          "horizontal_path_cm": 6761.809314243353,
+          "max_derived_horizontal_speed_cm_s": 368.2634363770644
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7706.621582,
+            270.0717468,
+            -5655.810547
+          ],
+          "last_cm": [
+            8393.078125,
+            270.0697021,
+            -6104.708984
+          ],
+          "minimum_cm": [
+            7611.99707,
+            264.5670166,
+            -6131.041504
+          ],
+          "maximum_cm": [
+            8568.958984,
+            327.9699402,
+            -5630.069824
+          ],
+          "max_horizontal_from_first_cm": 963.298842534976,
+          "max_3d_from_first_cm": 963.2988428156609,
+          "net_horizontal_cm": 820.2026531099214,
+          "horizontal_path_cm": 6761.809314243353,
+          "max_derived_horizontal_speed_cm_s": 368.2634363770644
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 0.0003356999999937216,
+        "maximum_npc_to_physical_cm": 0.0003356999999937216
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 2,
+      "maximum_root_below_probe_surface_cm": 5.52166748,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.52166748,
+        57.89401245
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "8": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7661.070312,
+            270.0668335,
+            -5485.811035
+          ],
+          "last_cm": [
+            8091.074219,
+            270.1052551,
+            -5325.927246
+          ],
+          "minimum_cm": [
+            7346.770508,
+            264.553009,
+            -5716.194336
+          ],
+          "maximum_cm": [
+            8091.074219,
+            346.4856567,
+            -4917.484375
+          ],
+          "max_horizontal_from_first_cm": 568.6074830865016,
+          "max_3d_from_first_cm": 568.6074841266735,
+          "net_horizontal_cm": 458.765938164835,
+          "horizontal_path_cm": 6999.380594445828,
+          "max_derived_horizontal_speed_cm_s": 556.4422725434324
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7661.070312,
+            270.0668335,
+            -5485.811035
+          ],
+          "last_cm": [
+            8091.074219,
+            270.1052551,
+            -5325.927246
+          ],
+          "minimum_cm": [
+            7346.770508,
+            264.553009,
+            -5716.194336
+          ],
+          "maximum_cm": [
+            8091.074219,
+            346.4856567,
+            -4917.484375
+          ],
+          "max_horizontal_from_first_cm": 568.6074830865016,
+          "max_3d_from_first_cm": 568.6074841266735,
+          "net_horizontal_cm": 458.765938164835,
+          "horizontal_path_cm": 6999.380594445828,
+          "max_derived_horizontal_speed_cm_s": 556.4422725434324
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7661.070312,
+            270.0668335,
+            -5485.811035
+          ],
+          "last_cm": [
+            8091.074219,
+            270.1052551,
+            -5325.927246
+          ],
+          "minimum_cm": [
+            7346.770508,
+            264.553009,
+            -5716.194336
+          ],
+          "maximum_cm": [
+            8091.074219,
+            346.4856567,
+            -4917.484375
+          ],
+          "max_horizontal_from_first_cm": 568.6074830865016,
+          "max_3d_from_first_cm": 568.6074841266735,
+          "net_horizontal_cm": 458.765938164835,
+          "horizontal_path_cm": 6999.380594445828,
+          "max_derived_horizontal_speed_cm_s": 556.4422725434324
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 1.6765442000000235,
+        "maximum_npc_to_physical_cm": 1.6765442000000235
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 2,
+      "maximum_root_below_probe_surface_cm": 5.522247314,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.522247314,
+        76.39730835
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    },
+    "9": {
+      "positions": {
+        "physical_root_cm": {
+          "first_cm": [
+            7536.621094,
+            270.0795593,
+            -5361.361816
+          ],
+          "last_cm": [
+            7447.386719,
+            270.0988159,
+            -5111.21875
+          ],
+          "minimum_cm": [
+            7280.748535,
+            264.5446167,
+            -5497.602539
+          ],
+          "maximum_cm": [
+            8002.364258,
+            327.7028809,
+            -4938.477051
+          ],
+          "max_horizontal_from_first_cm": 475.09646954741885,
+          "max_3d_from_first_cm": 475.0964701270349,
+          "net_horizontal_cm": 265.58299484251773,
+          "horizontal_path_cm": 6023.288148455833,
+          "max_derived_horizontal_speed_cm_s": 379.45604711653
+        },
+        "npc_root_cm": {
+          "first_cm": [
+            7536.621094,
+            270.0795593,
+            -5361.361816
+          ],
+          "last_cm": [
+            7447.386719,
+            270.0988159,
+            -5111.21875
+          ],
+          "minimum_cm": [
+            7280.748535,
+            264.5446167,
+            -5497.602539
+          ],
+          "maximum_cm": [
+            8002.364258,
+            327.7028809,
+            -4938.477051
+          ],
+          "max_horizontal_from_first_cm": 475.09646954741885,
+          "max_3d_from_first_cm": 475.0964701270349,
+          "net_horizontal_cm": 265.58299484251773,
+          "horizontal_path_cm": 6023.288148455833,
+          "max_derived_horizontal_speed_cm_s": 379.45604711653
+        },
+        "visual_root_cm": {
+          "first_cm": [
+            7536.621094,
+            270.0795593,
+            -5361.361816
+          ],
+          "last_cm": [
+            7447.386719,
+            270.0988159,
+            -5111.21875
+          ],
+          "minimum_cm": [
+            7280.748535,
+            264.5446167,
+            -5497.602539
+          ],
+          "maximum_cm": [
+            8002.364258,
+            327.7028809,
+            -4938.477051
+          ],
+          "max_horizontal_from_first_cm": 475.09646954741885,
+          "max_3d_from_first_cm": 475.0964701270349,
+          "net_horizontal_cm": 265.58299484251773,
+          "horizontal_path_cm": 6023.288148455833,
+          "max_derived_horizontal_speed_cm_s": 379.45604711653
+        },
+        "samples": 1801,
+        "start_game_ms": 16794,
+        "end_game_ms": 76794,
+        "maximum_visual_to_physical_cm": 1.0296326000000136,
+        "maximum_npc_to_physical_cm": 1.0296326000000136
+      },
+      "missing_physical_support_frames": 0,
+      "missing_npc_support_frames": 0,
+      "below_last_support_frames": 0,
+      "maximum_below_last_support_cm": 0,
+      "support_loss_episodes": [],
+      "root_below_probe_surface_frames": 1,
+      "maximum_root_below_probe_surface_cm": 5.534912109,
+      "first_support_issue": null,
+      "physical_support_drop_range_cm": [
+        -5.534912109,
+        57.61734009
+      ],
+      "persistent_support_loss_episodes": 0,
+      "physical_fall_episodes": 0,
+      "support_issue_detected": false
+    }
+  },
+  "actors_with_support_issues": [
+    {
+      "actor": "6",
+      "first": {
+        "reason": "persistent_missing_support_and_physical_fall",
+        "sample": {
+          "physical_root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "npc_root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "visual_root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "root_cm": [
+            6738.958984,
+            275.87677,
+            -6073.331055
+          ],
+          "physical_root_source": "npc_physics",
+          "physical_root_valid": true,
+          "cv_root_cm": null,
+          "cv_position_cm": null,
+          "cv_native_position_cm": null,
+          "cv_accepted_cm": null,
+          "cv_diagnostics_valid": false,
+          "cv_ground_state": null,
+          "cv_ground_normal": null,
+          "cv_velocity_cm_s": null,
+          "cv_active": false,
+          "support_physical": null,
+          "support_npc": null,
+          "air": false,
+          "falling": false,
+          "jumping": true,
+          "keys_enabled": true,
+          "has_command": true,
+          "remaining_ms": 100,
+          "animations": "T_RUNL_2_JUMP",
+          "game_ms": 68361,
+          "frame_dt_ms": 34,
+          "anim_root_local_cm": [
+            0,
+            5.732916355,
+            18.80269814
+          ],
+          "support_probe_above_cm": 50,
+          "support_probe_below_cm": 500,
+          "cv_ground_position_cm": null,
+          "cv_ground_velocity_cm_s": null,
+          "cv_ground_body": null,
+          "cv_contacts": null,
+          "cv_before_cm": null,
+          "cv_before_ground_state": null,
+          "cv_before_ground_normal": null,
+          "cv_after_extended_cm": null,
+          "cv_dt_ms": null,
+          "cv_initial_cm": null,
+          "cv_requested_cm": null,
+          "cv_native_requested_cm": null,
+          "cv_clipped_request_cm": null,
+          "cv_request_clipped": null,
+          "cv_resolved_clipped": null,
+          "cv_blocked": null
+        }
+      }
+    }
+  ],
+  "partial_peer_fraction": 0.9,
+  "still_motion_fraction": 0.07600149756645451,
+  "tick_order_interpretation": "Sequential updates expose some already-started peer actions. All ten actors moved; requested/still-motion and near-peer counts include animation starts and ordinary contacts. Travel can include falls, so support evidence is checked separately. This run is not a causal comparison with synchronous decisions.",
+  "classification": "world_support_loss",
+  "error": "Static support loss detected in stress actors: [{'actor': '6', 'first': {'reason': 'persistent_missing_support_and_physical_fall', 'sample': {'physical_root_cm': [6738.958984, 275.87677, -6073.331055], 'npc_root_cm': [6738.958984, 275.87677, -6073.331055], 'visual_root_cm': [6738.958984, 275.87677, -6073.331055], 'root_cm': [6738.958984, 275.87677, -6073.331055], 'physical_root_source': 'npc_physics', 'physical_root_valid': True, 'cv_root_cm': None, 'cv_position_cm': None, 'cv_native_position_cm': None, 'cv_accepted_cm': None, 'cv_diagnostics_valid': False, 'cv_ground_state': None, 'cv_ground_normal': None, 'cv_velocity_cm_s': None, 'cv_active': False, 'support_physical': None, 'support_npc': None, 'air': False, 'falling': False, 'jumping': True, 'keys_enabled': True, 'has_command': True, 'remaining_ms': 100, 'animations': 'T_RUNL_2_JUMP', 'game_ms': 68361, 'frame_dt_ms': 34, 'anim_root_local_cm': [0, 5.732916355, 18.80269814], 'support_probe_above_cm': 50, 'support_probe_below_cm': 500, 'cv_ground_position_cm': None, 'cv_ground_velocity_cm_s': None, 'cv_ground_body': None, 'cv_contacts': None, 'cv_before_cm': None, 'cv_before_ground_state': None, 'cv_before_ground_normal': None, 'cv_after_extended_cm': None, 'cv_dt_ms': None, 'cv_initial_cm': None, 'cv_requested_cm': None, 'cv_native_requested_cm': None, 'cv_clipped_request_cm': None, 'cv_request_clipped': None, 'cv_resolved_clipped': None, 'cv_blocked': None}}}]"
+}

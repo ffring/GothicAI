@@ -1596,11 +1596,214 @@ namespace {
       }
     }
 
+  void testCharacterVirtualSupports() {
+    constexpr float slope=.785398163f;
+    // Sample every rider immediately after move(), against the support pose
+    // that move() actually observed. Comparing a pre-physics rider with a
+    // post-physics body hides a one-frame error inside the drift tolerance.
+    const auto frameDt=[](int frame) -> uint64_t { return frame%3==2 ? 16 : 17; };
+    const auto carriedPoint=[](const Tempest::Matrix4x4& matrix, Tempest::Vec3 local) {
+      matrix.project(local);
+      return local;
+      };
+    for(bool gamePhase:{false,true}) for(bool rotating:{false,true}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto platform=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,90,0),.7f,
+                                           DynamicWorld::C_Object,true);
+      // Hero and a second human-sized controller exercise distinct points of
+      // the same support, including a nonzero radius for the turning platform.
+      std::array<std::unique_ptr<CollisionWorld::VirtualCharacter>,2> riders={
+        world.createVirtualCharacter(25,180,{100,100,-60}),
+        world.createVirtualCharacter(25,180,{-80,100,70})};
+      std::array<CollisionWorld::CharacterMoveResult,2> state;
+      std::array<Tempest::Vec3,2> initial,local;
+      std::array<float,2> maximumDrift={};
+      for(size_t rider=0;rider<riders.size();++rider) {
+        state[rider]=riders[rider]->move({},17,50,slope,80,nullptr);
+        require(state[rider].grounded,"both virtual riders must acquire the initial kinematic support");
+        initial[rider]=state[rider].position;
+        local[rider]=initial[rider]-platform->position();
+        }
+      uint64_t elapsed=0;
+      const int frames=rotating ? 180 : 240;
+      bool supported=true;
+      for(int frame=0;frame<frames;++frame) {
+        const auto dt=frameDt(frame);
+        if(gamePhase)
+          for(size_t rider=0;rider<riders.size();++rider)
+            state[rider]=riders[rider]->move({},dt,50,slope,80,nullptr);
+        elapsed+=dt;
+        auto matrix=rotating ? at(0,90,0) : at(.08f*float(elapsed),90.f+.0045f*float(elapsed),0);
+        if(rotating)
+          matrix.rotateOY(.04f*float(elapsed)); // 120 degrees in three seconds.
+        platform->setObjMatrix(matrix);
+        world.tick(dt);
+        for(size_t rider=0;rider<riders.size();++rider) {
+          if(gamePhase) {
+            const auto carried=riders[rider]->carry(dt);
+            require(carried.supportMoved,"a mover updated after NPC movement must exercise the late carry sweep");
+            state[rider]=carried;
+            } else {
+            state[rider]=riders[rider]->move({},dt,50,slope,80,nullptr);
+            }
+          supported&=state[rider].grounded;
+          maximumDrift[rider]=std::max(maximumDrift[rider],
+                                      (state[rider].position-carriedPoint(matrix,local[rider])).length());
+          }
+        }
+      const auto matrix=platform->matrix();
+      for(size_t rider=0;rider<riders.size();++rider) {
+        const auto expected=carriedPoint(matrix,local[rider]);
+        const auto drift=state[rider].position-expected;
+        const auto displacement=state[rider].position-initial[rider];
+        std::printf("CharacterVirtual %s %s support rider %zu: support travel %.6f cm, angle %.3f deg, "
+                    "rider displacement (%.6f, %.6f, %.6f) cm, drift (%.6f, %.6f, %.6f) cm, "
+                    "final %.6f / maximum %.6f cm, ground speed %.6f cm/s\n",
+                    gamePhase ? "NPC->mover->physics->carry" : "physics->NPC",
+                    rotating ? "turning kinematic" : "linear kinematic",rider,
+                    double((platform->position()-Tempest::Vec3(0,90,0)).length()),
+                    rotating ? .04*double(elapsed) : 0.,
+                    double(displacement.x),double(displacement.y),double(displacement.z),
+                    double(drift.x),double(drift.y),double(drift.z),double(drift.length()),
+                    double(maximumDrift[rider]),double(state[rider].groundVelocity.length()));
+        }
+      require(supported,"both virtual riders must retain kinematic support throughout movement");
+      if(rotating)
+        require(.04f*float(elapsed)>=90.f,"the turning support contract must rotate at least ninety degrees");
+      else
+        require(platform->position().x>=300.f,"the linear support contract must travel at least three metres");
+      for(const float drift:maximumDrift)
+        requireNear(drift,0,rotating ? 2.f : 1.f,
+                    rotating ? "a turning support must retain each rider's local point within two centimetres" :
+                               "a three-metre kinematic translation must carry each rider within one centimetre");
+      require(state[0].groundVelocity.length()>50.f,
+              "kinematic support must expose its actual support-point velocity for a later jump");
+      // No residual inferred velocity is allowed after the transform stops.
+      for(size_t rider=0;rider<riders.size();++rider) {
+        const auto stopped=riders[rider]->move({},17,50,slope,80,nullptr);
+        requireNear((stopped.position-state[rider].position).length(),0,.1f,
+                    "stopping a direct-matrix support must not retain its previous carried displacement");
+        if(gamePhase) {
+          world.tick(17);
+          const auto carried=riders[rider]->carry(17);
+          require(!carried.supportMoved,"a stopped mover must not schedule another carry sweep");
+          requireNear((carried.position-stopped.position).length(),0,.001f,
+                      "the late carry phase must not move feet after their support has stopped");
+          }
+        }
+      platform.reset();
+      if(gamePhase)
+        require(!riders[0]->carry(17).supportMoved,"removing a support must invalidate its late carry sweep");
+      const auto falling=riders[0]->move({},17,50,slope,80,nullptr);
+      require(!falling.grounded && falling.position.y<state[0].position.y,
+              "virtual feet must lose support and fall after the moving platform disappears");
+      }
+    for(bool gamePhase:{false,true}) for(bool variableCadence:{false,true}) {
+      if(!gamePhase && variableCadence)
+        continue; // Preserve the original nominal physics-before-NPC contract.
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.01f,
+                                        DynamicWorld::C_Landscape);
+      // A heavy, broad platform has an accepted horizontal top under the step-1
+      // support policy. Low floor friction makes the impulse travel observable;
+      // a nearly stationary body cannot establish a carry-distance contract.
+      auto platform=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,10,0),.01f,122.f,
+                                         DynamicWorld::C_MovableVob,true);
+      auto rider=world.createVirtualCharacter(25,180,{0,20,0});
+      auto state=rider->move({},17,50,slope,80,nullptr);
+      require(state.grounded,"virtual feet must acquire the heavy dynamic support before its impulse");
+      require(platform->mass()>=10.f,"the dynamic carry contract must use an accepted support mass");
+      const auto bodyStart=platform->position(),riderStart=state.position;
+      const auto local=riderStart-bodyStart;
+      require(platform->addImpulse({1.8f*platform->mass(),0,0}),
+              "the dynamic support must receive one native linear impulse");
+      float maximumDrift=0.f,maximumTravel=0.f;
+      Tempest::Vec3 endpointPrediction;
+      float maximumPredictionError=0.f,spikeObserved=0.f,spikePredicted=0.f;
+      bool supported=true;
+      for(int frame=0;frame<120;++frame) {
+        constexpr std::array<uint64_t,4> cadence={25,45,16,65};
+        const auto dt=variableCadence ? cadence[size_t(frame)%cadence.size()] : frameDt(frame);
+        if(gamePhase)
+          state=rider->move({},dt,50,slope,80,nullptr);
+        // Physics advances before this character sample, just as the preceding
+        // World::tick has already advanced bodies before the next NPC tick.
+        const auto previous=platform->position();
+        world.tick(dt);
+        const auto velocityBeforeCarry=platform->velocity();
+        const auto angularBeforeCarry=platform->angularVelocity();
+        endpointPrediction+=velocityBeforeCarry*(float(dt)*.001f);
+        maximumPredictionError=std::max(maximumPredictionError,
+                                        (endpointPrediction-(platform->position()-bodyStart)).length());
+        if(dt==65) {
+          spikeObserved=(platform->position()-previous).length();
+          spikePredicted=velocityBeforeCarry.length()*.065f;
+          }
+        if(gamePhase) {
+          const auto carried=rider->carry(dt);
+          if(carried.supportMoved)
+            state=carried;
+          requireNear((platform->velocity()-velocityBeforeCarry).length(),0,.0001f,
+                      "a late carry sweep must not apply a second weight or contact impulse to its support");
+          requireNear((platform->angularVelocity()-angularBeforeCarry).length(),0,.000001f,
+                      "a late carry sweep must not apply torque to its support");
+          } else {
+          state=rider->move({},dt,50,slope,80,nullptr);
+          }
+        supported&=state.grounded;
+        maximumTravel=std::max(maximumTravel,(platform->position()-bodyStart).length());
+        maximumDrift=std::max(maximumDrift,(state.position-carriedPoint(platform->matrix(),local)).length());
+        }
+      const auto drift=state.position-carriedPoint(platform->matrix(),local);
+      std::printf("CharacterVirtual %s dynamic support %s: mass %.6f kg, impulse %.6f Ns, "
+                  "support travel %.6f cm, rider travel %.6f cm, drift (%.6f, %.6f, %.6f) cm, "
+                  "final %.6f / maximum %.6f cm; endpoint-v*dt prediction error %.6f cm, "
+                  "last 65 ms observed %.6f vs predicted %.6f cm\n",
+                  gamePhase ? "NPC->physics->carry" : "physics->NPC",variableCadence ? "25/45/16/65 ms" : "17/17/16 ms",
+                  double(platform->mass()),double(1.8f*platform->mass()),
+                  double(maximumTravel),double((state.position-riderStart).length()),
+                  double(drift.x),double(drift.y),double(drift.z),double(drift.length()),double(maximumDrift),
+                  double(maximumPredictionError),double(spikeObserved),double(spikePredicted));
+      require(maximumTravel>=50.f,"the impulse-driven dynamic support must travel at least fifty centimetres");
+      require(supported,"the rider must remain grounded throughout the dynamic carry contract");
+      requireNear(maximumDrift,0,2.f,"a heavy impulse-driven support must carry virtual feet within two centimetres");
+      if(variableCadence)
+        require(maximumPredictionError>2.f,
+                "the variable cadence must expose endpoint velocity integration differing from native fixed-step displacement");
+      }
+    {
+      CollisionWorld world;
+      auto platform=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(4,.1f,2)),at(0,90,0),.7f,
+                                           DynamicWorld::C_Object,true);
+      auto wall=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.1f,2,2)),at(100,200,0),.7f,
+                                       DynamicWorld::C_Object);
+      auto rider=world.createVirtualCharacter(25,180,{0,100,0});
+      auto state=rider->move({},17,50,slope,80,nullptr);
+      require(state.grounded,"the blocked carry fixture must begin on its kinematic support");
+      for(int frame=1;frame<=160;++frame) {
+        state=rider->move({},17,50,slope,80,nullptr);
+        platform->setObjMatrix(at(2.f*float(frame),90,0));
+        world.tick(17);
+        const auto carried=rider->carry(17);
+        if(carried.supportMoved)
+          state=carried;
+        require(state.position.x<=65.1f,"a late carry sweep must stop at a world wall instead of pinning feet to the support");
+        }
+      std::printf("CharacterVirtual late carry blocked by wall: support %.6f cm, rider %.6f cm, slip %.6f cm\n",
+                  double(platform->position().x),double(state.position.x),double(platform->position().x-state.position.x));
+      require(state.position.x>50.f && platform->position().x-state.position.x>250.f,
+              "the wall fixture must carry the rider to the obstruction while the support continues underneath");
+      }
+    }
+
   void testCharacterVirtual() {
     testCharacterVirtualSkippedMove();
     testCharacterVirtualInteractiveStep();
     testCharacterVirtualMovingUtensil();
     testCharacterVirtualIdleSlopes();
+    testCharacterVirtualSupports();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
       std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",
@@ -1750,47 +1953,6 @@ namespace {
               "all contacts of one body must share its mass-dependent walking effort");
       require(impulseA+impulseB<=totalLimit+.01f,
               "all bodies and repeated contacts must share one 450 newton walking budget per move");
-    }
-    {
-      CollisionWorld world;
-      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
-                                        DynamicWorld::C_Landscape);
-      auto platform=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,90,0),.7f,
-                                           DynamicWorld::C_Object,true);
-      auto hero=world.createVirtualCharacter(25,180,{0,100,0});
-      auto state=hero->move({},17,50,slope,80,nullptr);
-      require(state.grounded,"virtual feet must find the initial kinematic support");
-      for(int i=1;i<=60;++i) {
-        platform->setObjMatrix(at(float(i),90.f+.3f*float(i),0));
-        state=hero->move({},17,50,slope,80,nullptr);
-        }
-      printState("kinematic-support-end",60,state);
-      requireNear(state.position.x,60,2,"a direct-matrix mover must carry standing virtual feet horizontally");
-      requireNear(state.position.y,118,2,"a direct-matrix mover must carry standing virtual feet vertically");
-      require(state.grounded && state.groundVelocity.x>50,
-              "kinematic support must expose inherited velocity for a later jump");
-      platform.reset();
-      state=hero->move({},17,50,slope,80,nullptr);
-      require(!state.grounded && state.position.y<118,
-              "virtual feet must lose support and fall after the moving platform disappears");
-    }
-    {
-      CollisionWorld world;
-      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.01f,
-                                        DynamicWorld::C_Landscape);
-      auto platform=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(2,.1f,2)),at(0,10,0),.01f,10000,
-                                         DynamicWorld::C_MovableVob,true);
-      auto hero=world.createVirtualCharacter(25,180,{0,20,0});
-      auto state=hero->move({},17,50,slope,80,nullptr);
-      require(state.grounded,"virtual feet must find a simulated support body");
-      require(platform->addImpulse({10000,0,0}),"support fixture must accept its native impulse");
-      for(int i=0;i<60;++i) {
-        state=hero->move({},17,50,slope,80,nullptr);
-        world.tick(17);
-        }
-      printState("dynamic-support-end",60,state);
-      require(state.grounded && state.position.x>60,"a moving simulated body must carry a standing virtual character");
-      requireNear(state.position.x,platform->position().x,5,"virtual feet must keep their location relative to a moving body");
     }
     {
       zenkit::ModelHierarchy hierarchy;

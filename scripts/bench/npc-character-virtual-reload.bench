@@ -1,4 +1,9 @@
 # First command is captured before the first native tick after loading the save.
 npccharacter initial
+# Ordinary commands start after the first 33ms native step.
+wait 67
+npccharacter snapshot first_100ms
+wait 400
+npccharacter snapshot first_500ms
 wait 500
 npccharacter snapshot settled

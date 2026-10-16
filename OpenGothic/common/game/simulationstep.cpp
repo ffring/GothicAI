@@ -11,6 +11,7 @@
 void SimulationStep::worldPlayerStep(uint64_t dt, PlayerControl& player,
                                       const std::function<void()>& afterFocus) {
   BodyObservations::beginStep(BodyObservations::currentStep()+1);
+  TestBench::beforeWorldTick(dt);
   Gothic::inst().tick(dt);
   player.tickFocus();
   if(afterFocus)
