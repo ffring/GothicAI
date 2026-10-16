@@ -129,11 +129,17 @@ def main() -> int:
     parser.add_argument("--gate", type=Path, required=True, help="preregistered BC gate run")
     parser.add_argument("--candidate", type=Path, required=True, help="candidate run with the same phases")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--wire-max-ulps", type=int, default=2,
+                        help="RapidJSON roundtrip tolerance of the native/wire observation check (the gate's: 2); "
+                             "a wider one is recorded in the output as a reader deviation")
     args = parser.parse_args()
     scripts = args.candidate.resolve()/"code/scripts"
     sys.path.insert(0, str(scripts))
     import body_bc_report as bc
     import body_combat_report as combat
+    if args.wire_max_ulps != 2:
+        frozen = bc.native_wire_relation
+        bc.native_wire_relation = lambda native, wire, max_ulps=2: frozen(native, wire, max_ulps=args.wire_max_ulps)
     readers = (load("stage9_final_reader", scripts/"body_stage8_final_report.py"), bc, combat,
                load("stage9_reaction_reader", scripts/"body_block_reaction_report.py"))
     gate, candidate = args.gate.resolve(), args.candidate.resolve()
@@ -144,7 +150,9 @@ def main() -> int:
     mlp_control = {task: paired(base_cases, other_cases, "screening", task, "mlp") for task in ("native_duel",)}
     value = {"schema_version": 1, "kind": "body_stage9_gate_procedure_comparison", "stage8_quality_credit": False,
              "candidate_preregistered": False, "bc": base, "candidate": other, "paired_gru": comparison,
-             "paired_mlp_same_weights": mlp_control}
+             "paired_mlp_same_weights": mlp_control,
+             "reader_deviations": [] if args.wire_max_ulps == 2 else
+             [{"check": "native_wire_relation", "gate_max_ulps": 2, "used_max_ulps": args.wire_max_ulps}]}
     args.output.write_text(json.dumps(value, indent=2)+"\n")
     for name, run in (("BC", base), ("candidate", other)):
         print(name, run["gru_sha256"][:12], "passed" if run["passed"] else "FAILED", run["issues"][:5])

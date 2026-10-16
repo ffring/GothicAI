@@ -11,7 +11,8 @@ CAPTURE_RUN="${3:-}"
 LOCK_WAIT_SECONDS="${GOTHIC_BODY_LOCK_WAIT_SECONDS:-0}"
 [[ "$RUN_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid run name' >&2; exit 2; }
 [[ -z "$CAPTURE_RUN" || "$CAPTURE_RUN" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || { echo 'Invalid capture run name' >&2; exit 2; }
-[[ "$LOCK_WAIT_SECONDS" =~ ^([0-9]|[1-5][0-9]|60)$ ]] || { echo 'Lock wait must be an integer from 0 to 60 seconds' >&2; exit 2; }
+# Other sessions queue on the same Ryzen lock with long blocking waits; a phase may wait up to 10 h.
+[[ "$LOCK_WAIT_SECONDS" =~ ^[0-9]{1,5}$ ]] && ((LOCK_WAIT_SECONDS <= 36000)) || { echo 'Lock wait must be an integer from 0 to 36000 seconds' >&2; exit 2; }
 
 remote_script() {
   local remote_args="" arg
@@ -268,7 +269,7 @@ out="$task_root/data/$3"
 phase="$4"
 capture_run="$5"
 lock_wait_seconds="$6"
-[[ "$lock_wait_seconds" =~ ^([0-9]|[1-5][0-9]|60)$ ]] || { echo 'Invalid remote lock wait' >&2; exit 2; }
+[[ "$lock_wait_seconds" =~ ^[0-9]{1,5}$ ]] && ((lock_wait_seconds <= 36000)) || { echo 'Invalid remote lock wait' >&2; exit 2; }
 code="$out/code"
 [[ -f "$out/environment.json" && -x "$out/reference/gothic-body-runner" ]] || {
   echo 'Prepare a frozen run first' >&2; exit 1;

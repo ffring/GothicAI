@@ -1,0 +1,595 @@
+{
+  "schema_version": 1,
+  "kind": "body_stage9_r3m_p30_gate",
+  "quality_credit": false,
+  "runs": {
+    "bc_gate_v16": "stage8-final-gate-v16",
+    "r3m": "stage9-rt-eval-v3",
+    "p30": "stage9-rt-eval-v4"
+  },
+  "bc": {
+    "gru_sha256": "e9a605b4ae15e30ad7e2dd632c10c882c56f98b19f40cace3d8b2343a693b3eb",
+    "mlp_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+    "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+    "gate_thresholds_passed": true,
+    "issues": [],
+    "ordinary_realtime": {
+      "episodes": 6,
+      "neural_control_min": 1.0,
+      "model_step_ms_p95_max": 1.240337,
+      "collector_to_command_send_ms_p95_max": 1.766167,
+      "observation_to_arbitration_ms_p95_max": 3.041149
+    },
+    "realtime_reaction": {
+      "episodes": 2,
+      "neural_control_min": 1.0,
+      "model_step_ms_p95_max": 1.134939,
+      "collector_to_command_send_ms_p95_max": 6.783119,
+      "observation_to_arbitration_ms_p95_max": 8.463234
+    },
+    "four_actor_load": {
+      "episodes": 4,
+      "neural_control_min": 0.9885057471264368,
+      "model_step_ms_p95_max": 1.137884,
+      "collector_to_command_send_ms_p95_max": 3.723555,
+      "observation_to_arbitration_ms_p95_max": 5.983071
+    },
+    "block_reactions": [
+      {
+        "episode": "block-reaction-223-0-gru",
+        "block_after_windup_game_ms": 66,
+        "window_game_ms": 166,
+        "hp_preserved": true
+      },
+      {
+        "episode": "block-reaction-223-1-gru",
+        "block_after_windup_game_ms": 66,
+        "window_game_ms": 166,
+        "hp_preserved": true
+      }
+    ],
+    "fresh_screening_gru": {
+      "distance": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "attack": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "block": {
+        "episodes": 20,
+        "native_successes": 0,
+        "candidate_successes": 20,
+        "native_success_rate": 0.0,
+        "candidate_success_rate": 1.0,
+        "delta": 1.0,
+        "passed": true
+      },
+      "native_duel": {
+        "episodes": 20,
+        "native_successes": 9,
+        "candidate_successes": 20,
+        "native_success_rate": 0.45,
+        "candidate_success_rate": 1.0,
+        "delta": 0.55,
+        "passed": true
+      }
+    }
+  },
+  "r3m": {
+    "gru_sha256": "af012975fe4e12e2531bf07a37d755009852eb9a29d2acd51a04725c83e97eda",
+    "mlp_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+    "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+    "gate_thresholds_passed": true,
+    "issues": [],
+    "ordinary_realtime": {
+      "episodes": 6,
+      "neural_control_min": 1.0,
+      "model_step_ms_p95_max": 1.379569,
+      "collector_to_command_send_ms_p95_max": 1.574175,
+      "observation_to_arbitration_ms_p95_max": 9.986471
+    },
+    "realtime_reaction": {
+      "episodes": 2,
+      "neural_control_min": 1.0,
+      "model_step_ms_p95_max": 1.395208,
+      "collector_to_command_send_ms_p95_max": 6.640578,
+      "observation_to_arbitration_ms_p95_max": 8.259728
+    },
+    "four_actor_load": {
+      "episodes": 4,
+      "neural_control_min": 0.9936708860759493,
+      "model_step_ms_p95_max": 1.093149,
+      "collector_to_command_send_ms_p95_max": 3.550119,
+      "observation_to_arbitration_ms_p95_max": 5.407669
+    },
+    "block_reactions": [
+      {
+        "episode": "block-reaction-223-0-gru",
+        "block_after_windup_game_ms": 66,
+        "window_game_ms": 166,
+        "hp_preserved": true
+      },
+      {
+        "episode": "block-reaction-223-1-gru",
+        "block_after_windup_game_ms": 66,
+        "window_game_ms": 166,
+        "hp_preserved": true
+      }
+    ],
+    "fresh_screening_gru": {
+      "distance": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "attack": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "block": {
+        "episodes": 20,
+        "native_successes": 0,
+        "candidate_successes": 20,
+        "native_success_rate": 0.0,
+        "candidate_success_rate": 1.0,
+        "delta": 1.0,
+        "passed": true
+      },
+      "native_duel": {
+        "episodes": 20,
+        "native_successes": 9,
+        "candidate_successes": 20,
+        "native_success_rate": 0.45,
+        "candidate_success_rate": 1.0,
+        "delta": 0.55,
+        "passed": true
+      }
+    },
+    "reader_deviations": [
+      {
+        "check": "native_wire_relation",
+        "gate_max_ulps": 2,
+        "used_max_ulps": 3
+      }
+    ],
+    "paired_gru": {
+      "realtime": {
+        "distance": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 230.0,
+          "candidate_opponent_hp_mean": 230.0,
+          "bc_elapsed_s_mean": 1.433,
+          "candidate_elapsed_s_mean": 1.433
+        },
+        "attack": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 230.0,
+          "candidate_opponent_hp_mean": 230.0,
+          "bc_elapsed_s_mean": 0.133,
+          "candidate_elapsed_s_mean": 0.133
+        },
+        "block": {
+          "cases": 2,
+          "bc_successes": 0,
+          "candidate_successes": 0,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 8.0,
+          "candidate_opponent_hp_mean": 4.0,
+          "bc_elapsed_s_mean": 5.0,
+          "candidate_elapsed_s_mean": 4.4665
+        },
+        "native_duel": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 259.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 0.0,
+          "candidate_opponent_hp_mean": 0.0,
+          "bc_elapsed_s_mean": 12.583,
+          "candidate_elapsed_s_mean": 10.533
+        }
+      },
+      "realtime-reaction": {
+        "distance": null,
+        "attack": null,
+        "block": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 300.0,
+          "candidate_opponent_hp_mean": 300.0,
+          "bc_elapsed_s_mean": 0.233,
+          "candidate_elapsed_s_mean": 0.233
+        },
+        "native_duel": null
+      },
+      "screening": {
+        "distance": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 300.0,
+          "candidate_opponent_hp_mean": 300.0,
+          "bc_elapsed_s_mean": 1.433,
+          "candidate_elapsed_s_mean": 1.433
+        },
+        "attack": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 265.2,
+          "candidate_opponent_hp_mean": 265.2,
+          "bc_elapsed_s_mean": 0.267,
+          "candidate_elapsed_s_mean": 0.267
+        },
+        "block": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 300.0,
+          "candidate_opponent_hp_mean": 300.0,
+          "bc_elapsed_s_mean": 0.233,
+          "candidate_elapsed_s_mean": 0.233
+        },
+        "native_duel": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 231.9,
+          "candidate_hp_mean": 254.1,
+          "bc_opponent_hp_mean": 0.0,
+          "candidate_opponent_hp_mean": 0.0,
+          "bc_elapsed_s_mean": 13.628200000000001,
+          "candidate_elapsed_s_mean": 12.9882
+        }
+      }
+    }
+  },
+  "p30": {
+    "gru_sha256": "edcb77c36358a2d2646e78621c529d5efb818537c9f6bcbede476d9a4d67b97a",
+    "mlp_sha256": "d17752fd0fc765f2ab841eec107f0a8ccbf77fd5db83ceabbee866e33a1073c9",
+    "normalizer_sha256": "c6ee3acdea6a065c04f6de2e88eb4fe7af189d50aee3c699f925ffadbd7438fe",
+    "gate_thresholds_passed": true,
+    "issues": [],
+    "ordinary_realtime": {
+      "episodes": 6,
+      "neural_control_min": 1.0,
+      "model_step_ms_p95_max": 1.186535,
+      "collector_to_command_send_ms_p95_max": 1.626153,
+      "observation_to_arbitration_ms_p95_max": 2.883862
+    },
+    "realtime_reaction": {
+      "episodes": 2,
+      "neural_control_min": 1.0,
+      "model_step_ms_p95_max": 1.138384,
+      "collector_to_command_send_ms_p95_max": 7.067382,
+      "observation_to_arbitration_ms_p95_max": 8.628664
+    },
+    "four_actor_load": {
+      "episodes": 4,
+      "neural_control_min": 0.9855072463768116,
+      "model_step_ms_p95_max": 1.111003,
+      "collector_to_command_send_ms_p95_max": 3.711501,
+      "observation_to_arbitration_ms_p95_max": 5.683475
+    },
+    "block_reactions": [
+      {
+        "episode": "block-reaction-223-0-gru",
+        "block_after_windup_game_ms": 66,
+        "window_game_ms": 166,
+        "hp_preserved": true
+      },
+      {
+        "episode": "block-reaction-223-1-gru",
+        "block_after_windup_game_ms": 66,
+        "window_game_ms": 166,
+        "hp_preserved": true
+      }
+    ],
+    "fresh_screening_gru": {
+      "distance": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "attack": {
+        "episodes": 20,
+        "native_successes": 20,
+        "candidate_successes": 20,
+        "native_success_rate": 1.0,
+        "candidate_success_rate": 1.0,
+        "delta": 0.0,
+        "passed": true
+      },
+      "block": {
+        "episodes": 20,
+        "native_successes": 0,
+        "candidate_successes": 20,
+        "native_success_rate": 0.0,
+        "candidate_success_rate": 1.0,
+        "delta": 1.0,
+        "passed": true
+      },
+      "native_duel": {
+        "episodes": 20,
+        "native_successes": 9,
+        "candidate_successes": 20,
+        "native_success_rate": 0.45,
+        "candidate_success_rate": 1.0,
+        "delta": 0.55,
+        "passed": true
+      }
+    },
+    "reader_deviations": [],
+    "paired_gru": {
+      "realtime": {
+        "distance": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 230.0,
+          "candidate_opponent_hp_mean": 230.0,
+          "bc_elapsed_s_mean": 1.433,
+          "candidate_elapsed_s_mean": 1.433
+        },
+        "attack": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 230.0,
+          "candidate_opponent_hp_mean": 230.0,
+          "bc_elapsed_s_mean": 0.133,
+          "candidate_elapsed_s_mean": 0.133
+        },
+        "block": {
+          "cases": 2,
+          "bc_successes": 0,
+          "candidate_successes": 0,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 8.0,
+          "candidate_opponent_hp_mean": 0.0,
+          "bc_elapsed_s_mean": 5.0,
+          "candidate_elapsed_s_mean": 4.4665
+        },
+        "native_duel": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 259.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 0.0,
+          "candidate_opponent_hp_mean": 0.0,
+          "bc_elapsed_s_mean": 12.583,
+          "candidate_elapsed_s_mean": 8.7
+        }
+      },
+      "realtime-reaction": {
+        "distance": null,
+        "attack": null,
+        "block": {
+          "cases": 2,
+          "bc_successes": 2,
+          "candidate_successes": 2,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 300.0,
+          "candidate_opponent_hp_mean": 300.0,
+          "bc_elapsed_s_mean": 0.233,
+          "candidate_elapsed_s_mean": 0.233
+        },
+        "native_duel": null
+      },
+      "screening": {
+        "distance": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 300.0,
+          "candidate_opponent_hp_mean": 281.0,
+          "bc_elapsed_s_mean": 1.433,
+          "candidate_elapsed_s_mean": 1.433
+        },
+        "attack": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 265.2,
+          "candidate_opponent_hp_mean": 249.2,
+          "bc_elapsed_s_mean": 0.267,
+          "candidate_elapsed_s_mean": 0.167
+        },
+        "block": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 300.0,
+          "candidate_hp_mean": 300.0,
+          "bc_opponent_hp_mean": 300.0,
+          "candidate_opponent_hp_mean": 300.0,
+          "bc_elapsed_s_mean": 0.233,
+          "candidate_elapsed_s_mean": 0.233
+        },
+        "native_duel": {
+          "cases": 20,
+          "bc_successes": 20,
+          "candidate_successes": 20,
+          "only_bc": 0,
+          "only_candidate": 0,
+          "bc_hp_mean": 231.9,
+          "candidate_hp_mean": 280.1,
+          "bc_opponent_hp_mean": 0.0,
+          "candidate_opponent_hp_mean": 0.0,
+          "bc_elapsed_s_mean": 13.628200000000001,
+          "candidate_elapsed_s_mean": 10.386700000000001
+        }
+      }
+    }
+  },
+  "p30_realtime_duels": {
+    "open_vs_r3m": {
+      "cases": 64,
+      "wins_a": 64,
+      "wins_b": 64,
+      "only_a": 0,
+      "only_b": 0,
+      "mcnemar_p": 1.0,
+      "hp_a": 271.78125,
+      "hp_b": 293.96875,
+      "hp_delta_mean": 22.1875,
+      "both_win_elapsed_s_a": 11.90771875,
+      "both_win_elapsed_s_b": 10.011984375
+    },
+    "near_wall_vs_r3m": {
+      "cases": 64,
+      "wins_a": 64,
+      "wins_b": 64,
+      "only_a": 0,
+      "only_b": 0,
+      "mcnemar_p": 1.0,
+      "hp_a": 272.25,
+      "hp_b": 282.46875,
+      "hp_delta_mean": 10.21875,
+      "both_win_elapsed_s_a": 11.108703125,
+      "both_win_elapsed_s_b": 9.93796875
+    },
+    "near_wall_vs_bc": {
+      "cases": 64,
+      "wins_a": 61,
+      "wins_b": 64,
+      "only_a": 0,
+      "only_b": 3,
+      "mcnemar_p": 0.25,
+      "hp_a": 260.71875,
+      "hp_b": 282.46875,
+      "hp_delta_mean": 21.75,
+      "both_win_elapsed_s_a": 11.484573770491803,
+      "both_win_elapsed_s_b": 9.979196721311475
+    },
+    "health_near_wall": {
+      "fallbacks": 0,
+      "no_fallback_credit": 64,
+      "control_min": 0.9411764705882353,
+      "outcomes": {
+        "death_or_down": 64
+      }
+    },
+    "lockstep_equivalence_open": {
+      "pairs": 64,
+      "identical": 64,
+      "identical_commands": 64,
+      "same_outcome": 64,
+      "diverged_after_realtime_fault": 0,
+      "diverged_without_fault": 0,
+      "realtime_skipped_polls": 1,
+      "realtime_late_commands": 0,
+      "realtime_rejected_commands": 0,
+      "realtime_accepted_commands": 1136
+    },
+    "lockstep_equivalence_near_wall": {
+      "pairs": 64,
+      "identical": 63,
+      "identical_commands": 63,
+      "same_outcome": 64,
+      "diverged_after_realtime_fault": 1,
+      "diverged_without_fault": 0,
+      "realtime_skipped_polls": 20,
+      "realtime_late_commands": 0,
+      "realtime_rejected_commands": 1,
+      "realtime_accepted_commands": 1057
+    }
+  },
+  "evidence_sha256": {
+    "body/data/stage9-rt-eval-v3/environment.json": "3a85db840919b054130a70321ba0d7aecd9c0c8256920f91d48d0564983cc47c",
+    "body/data/stage9-rt-eval-v4/environment.json": "1b4742ac4d89ee5778c46f7d95842290f17eb4cdb0b3e9be894ea2a5467a17ca",
+    "body/rl/gate-compare-v3/compare.json": "8525bed96b8020cd1c166d25a429f2f61ea8df799bf9b72421883f6f13b2196d",
+    "body/rl/gate-compare-v4/compare.json": "702fc0ba05a822f38475c4ad42a877a73295c5454db78dc28ca01ec6cb1bffd8",
+    "body/rl/rt-duels-v2/config-v3.json": "7334fdd80552b424866a40359a5913c33376be13ede13c897e5980b5d819bea7",
+    "body/rl/rt-duels-v2/config-wall.json": "f626789a0be10ff8dc1e347b82920153f26494dd4076d1d373a0f0a153e6dfb4"
+  }
+}

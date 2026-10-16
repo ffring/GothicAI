@@ -5,7 +5,7 @@
 # DUELS_CODE (code root, default the frozen run's), DUELS_CONFIG and DUELS_SUFFIX select a variant;
 # DUELS_RUNNER replaces the frozen runner, DUELS_MODELS ("bc round2") the checkpoints and DUELS_SETENV
 # adds space-separated KEY=VALUE pairs to the unit environment; DUELS_CHECKPOINTS ("name=path ...")
-# names GRU checkpoints beyond bc and round2.
+# names GRU checkpoints beyond bc and round2. DUELS_LOCK_WAIT: seconds to queue for the Ryzen lock (3600).
 set -euo pipefail
 phase="${1:-realtime}"
 suffix="${DUELS_SUFFIX-}"
@@ -25,7 +25,7 @@ config="${DUELS_CONFIG:-$work/config-v2.json}"
 [[ -f "$config" ]] || "$python" "$work/body_stage9_realtime_duels.py" config \
   --base "$code/evals/npc-body/body-stage8-v1.json" --output "$config" --duels 64 --seed-start 90000
 exec 9>"$HOME/gothic-ai/body-simulation.lock"
-flock -w 3600 9
+flock -w "${DUELS_LOCK_WAIT:-3600}" 9
 for name in ${DUELS_MODELS:-bc round2}; do
   [[ ! -e "$work/$name$suffix" ]] || continue
   gru="$bc/gru/best.pt"
