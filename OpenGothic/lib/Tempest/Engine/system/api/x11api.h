@@ -16,6 +16,7 @@ class X11Api final: SystemApi {
 
     Window*  implCreateWindow(Tempest::Window *owner, uint32_t width, uint32_t height) override;
     Window*  implCreateWindow(Tempest::Window *owner, ShowMode sm) override;
+    Window*  implCreateWindow(Tempest::Window *owner, uint32_t width, uint32_t height, bool fixedSize);
     void     implDestroyWindow(Window* w) override;
     void     implExit() override;
 

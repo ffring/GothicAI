@@ -1,0 +1,116 @@
+{
+  "status": "passed",
+  "fixture": {
+    "kind": "keys_setup",
+    "scene": "jump",
+    "anchor": "NW_CITY_BALTRAM",
+    "root_cm": [
+      9021.600586,
+      270.0111389,
+      4333.573242
+    ],
+    "goal_cm": [
+      8783.017578,
+      270.0220947,
+      4746.812012
+    ],
+    "forward": [
+      -0.5000000596,
+      0,
+      0.8660253882
+    ],
+    "actors": 1,
+    "frozen_residents": 19,
+    "cv_diagnostics_enabled": true,
+    "hero_parking_cm": [
+      9271.600586,
+      345.3087463,
+      4333.573242
+    ],
+    "void_reference_cm": null,
+    "void_approach_cm": null,
+    "void_start_back_cm": null,
+    "void_edge_back_cm": null,
+    "void_start_from_original_back_cm": null,
+    "void_goal_beyond_cm": null,
+    "void_support_grid": null,
+    "removed_relaxed_overlay": true,
+    "flat_probe_count": 0,
+    "flat_minimum_y_cm": 0.0,
+    "flat_maximum_y_cm": 0.0,
+    "climb_probe_animation": "",
+    "climb_probe_height_cm": 0.0,
+    "climb_probe_no_climb": false,
+    "climb_face_cm": [
+      0,
+      0,
+      0
+    ],
+    "hero_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "npc_walk_animation": "S_WALKL: layer 1 loop frames 24 fps 25.0 960 ms nodes 34 move 1 tr -0 -0 132 (137 cm/s) next S_WALKL; hips bind -180, at frames 0:172/94 6:-179/98 12:-175/93 18:177/98",
+    "hero_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "npc_run_animation": "S_RUNL: layer 1 loop frames 20 fps 25.0 800 ms nodes 34 move 1 tr -2 2 262 (328 cm/s) next S_RUNL; hips bind -180, at frames 0:-179/95 5:180/99 10:179/95 15:180/99",
+    "hero_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97",
+    "npc_strafe_animation": "T_WALKWSTRAFER: layer 1 trans frames 17 fps 25.0 680 ms nodes 33 move 1 tr -43 1 -1 (64 cm/s) next ; moves BIP01 BIP01 PELVIS BIP01 SPINE BIP01 SPINE1 BIP01 SPINE2 BIP01 NECK BIP01 HEAD BIP01 L CLAVICLE BIP01 L UPPERARM BIP01 L FOREARM BIP01 L HAND BIP01 L FINGER0 ZS_LEFTHAND ZS_LEFTARM BIP01 R CLAVICLE BIP01 R UPPERARM BIP01 R FOREARM BIP01 R HAND BIP01 R FINGER0 ZS_RIGHTHAND ZS_CROSSBOW ZS_LONGSWORD ZS_SHIELD ZS_BOW BIP01 L THIGH BIP01 L CALF BIP01 L FOOT BIP01 L TOE0 BIP01 R THIGH BIP01 R CALF BIP01 R FOOT BIP01 R TOE0 ZS_SWORD; hips bind -180, at frames 0:179/92 4:180/93 8:-180/90 12:180/97"
+  },
+  "mode": 0,
+  "npc_cv_active_samples": 0,
+  "npc_walking_samples": 93,
+  "npc_walking_cv_active_samples": 0,
+  "actors": {
+    "hero": {
+      "crossed": true,
+      "elapsed_to_cross_ms": 1533,
+      "start_cm": [
+        9021.600586,
+        270.0111694,
+        4333.573242
+      ],
+      "end_cm": [
+        8435.606445,
+        270.0899353,
+        5347.76123
+      ],
+      "maximum_rise_cm": 76.44366459999998,
+      "animations": {
+        "S_WALK": 60,
+        "S_RUNL": 59,
+        "T_RUNL_2_JUMP": 26,
+        "T_RUN_2_RUNL": 15,
+        "S_JUMP": 5
+      },
+      "saw_air": true
+    },
+    "0": {
+      "crossed": true,
+      "elapsed_to_cross_ms": 1533,
+      "start_cm": [
+        9021.600586,
+        270.0111694,
+        4333.573242
+      ],
+      "end_cm": [
+        8435.606445,
+        270.0899353,
+        5347.76123
+      ],
+      "maximum_rise_cm": 76.44366459999998,
+      "animations": {
+        "S_RUNL": 59,
+        "S_RUN": 28,
+        "T_RUNL_2_JUMP": 26,
+        "T_RUN_2_RUNL": 15,
+        "S_JUMP": 5,
+        "S_WALK": 2
+      },
+      "saw_air": true,
+      "airborne_ttl_100_survival_frames": 6
+    }
+  },
+  "actual_start_gap_cm": 0.0,
+  "actual_start_yaw_gap_deg": 0,
+  "actual_start_shift_cm": {
+    "hero": 3.050000003668174e-05,
+    "0": 3.050000003668174e-05
+  }
+}

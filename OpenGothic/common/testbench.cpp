@@ -44,6 +44,7 @@
 #include "game/playercontrol.h"
 #include "game/bodyobservations.h"
 #include "game/navigationeyebench.h"
+#include "game/npckeysbench.h"
 #include "game/serialize.h"
 #include "game/ragdollsave.h"
 #include "game/definitions/sounddefinitions.h"
@@ -736,8 +737,13 @@ struct Bench {
   std::unique_ptr<PhysicMesh> characterPlatform;
   Matrix4x4 characterPlatformMatrix;
   MoveTrigger* characterMover=nullptr;
-  Vec3 characterRideStart,characterRideHeroStart;
-  bool characterRiding=false,characterRideMoving=false;
+  Npc* characterRideNpc=nullptr;
+  Vec3 characterRideStart,characterRideHeroStart,characterRideLocalStart,characterRideDirection,characterRidePivot;
+  Matrix4x4 characterRideMatrixStart;
+  float characterRideAngle=0,characterRideTravel=0,characterRideMaximumDrift=0;
+  float characterRideMaximumHorizontalDrift=0,characterRideMaximumLocalDrift=0;
+  uint64_t characterRideBegan=0;
+  bool characterRiding=false,characterRideMoving=false,characterRideRotating=false;
   uint64_t movableWakeStart=0;
   bool movableWakeTrace=false;
   std::unordered_map<uintptr_t,float> movableWakeTravel;
@@ -1510,6 +1516,7 @@ const char* gazeSource(Gaze::Source s) {
     case Gaze::Source::Script:    return "script";
     case Gaze::Source::Focus:     return "focus";
     case Gaze::Source::Attention: return "attention";
+    case Gaze::Source::Input:     return "input";
     }
   return "?";
   }
@@ -4330,13 +4337,41 @@ void characterRouteEnd(World& world,Npc& player) {
     ",\"fall_count\":"+std::to_string(route.fallCount)+",\"saw_slide\":"+(route.sawSlide?"true":"false")+",\"saw_swim\":"+(route.sawSwim?"true":"false"));
   }
 
+Matrix4x4 characterSupportMatrix(World& world) {
+  if(bench.characterMover)return bench.characterMover->transform();
+  if(bench.characterPlatform)return bench.characterPlatformMatrix;
+  for(const auto& row:world.physic()->movableVobSnapshot())
+    if(row.id==bench.characterPropId)return row.transform;
+  return Matrix4x4::mkIdentity();
+  }
+
+void characterRideSample(World& world,const Npc& rider) {
+  const auto matrix=characterSupportMatrix(world);
+  auto expected=bench.characterRideLocalStart;matrix.project(expected);
+  const auto error=rider.position()-expected;
+  auto local=rider.position();auto inverse=matrix;inverse.inverse();inverse.project(local);
+  bench.characterRideMaximumDrift=std::max(bench.characterRideMaximumDrift,error.length());
+  bench.characterRideMaximumHorizontalDrift=std::max(bench.characterRideMaximumHorizontalDrift,std::hypot(error.x,error.z));
+  bench.characterRideMaximumLocalDrift=std::max(bench.characterRideMaximumLocalDrift,(local-bench.characterRideLocalStart).length());
+  event("character_ride_sample","\"support_kind\":"+jsonStr(bench.characterMover?"mover":bench.characterPlatform?"kinematic":"dynamic")+
+    ",\"rider\":"+jsonStr(bench.characterRideNpc?"npc":"hero")+",\"rotation\":"+(bench.characterRideRotating?"true":"false")+
+    ",\"elapsed_ms\":"+std::to_string(world.tickCount()-bench.characterRideBegan)+
+    ",\"support_cm\":"+ragdollVector(movablePosition(matrix))+",\"rider_cm\":"+ragdollVector(rider.position())+
+    ",\"expected_cm\":"+ragdollVector(expected)+",\"error_cm\":"+ragdollVector(error)+
+    ",\"local_cm\":"+ragdollVector(local)+",\"angle_deg\":"+ragdollNumber(bench.characterRideAngle)+
+    ",\"ground_velocity_cm_s\":"+ragdollVector(rider.characterVirtualGroundVelocity())+
+    ",\"cv_active\":"+(rider.characterVirtualActive()?"true":"false")+
+    ",\"falling\":"+(rider.isFalling()?"true":"false")+",\"in_air\":"+(rider.isInAir()?"true":"false"));
+  }
+
 void characterFields(World& world,Npc& player,uint64_t dt,PlayerControl& ctrl) {
   auto& route=bench.characterRoute;
   if(!route.active && !bench.characterMeasuring && bench.characterPropRole.empty() && !bench.characterRiding)return;
   const auto now=std::chrono::steady_clock::now();
   const float wall=bench.characterHasWall?std::chrono::duration<float,std::milli>(now-bench.characterLastWall).count():0;
   bench.characterHasWall=true;bench.characterLastWall=now;
-  const auto position=player.position();
+  const auto& character=bench.characterRiding && bench.characterRideNpc?*bench.characterRideNpc:player;
+  const auto position=character.position();
   bool move=false;
   for(const auto& hold:bench.holds)
     move|=hold.a==KeyCodec::Forward || hold.a==KeyCodec::Back || hold.a==KeyCodec::Left || hold.a==KeyCodec::Right;
@@ -4344,11 +4379,13 @@ void characterFields(World& world,Npc& player,uint64_t dt,PlayerControl& ctrl) {
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
   normal=AppCadence::normalClock();
 #endif
-  const std::string rideLabel=bench.characterMover?"ride_mover":bench.characterPlatform?"ride_kinematic":"ride_dynamic";
+  const std::string rideLabel=std::string(bench.characterMover?"ride_mover":bench.characterPlatform?
+    bench.characterRideRotating?"ride_rotation":"ride_kinematic":"ride_dynamic")+(bench.characterRideNpc?"_npc":"");
   const std::string label=bench.characterMeasuring?"performance":route.active?route.name:bench.characterRiding?rideLabel:bench.characterPropRole;
   if(!normal || wall>0)bench.characterFrames.push_back({label,bench.characterFrame++,world.tickCount(),dt,position,
-    player.characterVirtualGroundVelocity(),player.characterVisualPosition(),move,player.isInAir(),player.isFalling(),player.isSwim(),
-    Gothic::physicsFlags().characterVirtual,player.characterVirtualActive(),bench.rec && bench.recVideo,normal,
+    character.characterVirtualGroundVelocity(),character.characterVisualPosition(),move,character.isInAir(),character.isFalling(),character.isSwim(),
+    bench.characterRideNpc?bool(Gothic::settingsGetI("GAME","npc_character_virtual")):Gothic::physicsFlags().characterVirtual,
+    character.characterVirtualActive(),bench.rec && bench.recVideo,normal,
     world.physic()->physicsStats().stepMilliseconds,wall});
   if(bench.characterMeasuring) {
     const float sign=((world.tickCount()-bench.characterMeasureStart)/700)%2==0?1.f:-1.f;
@@ -4380,11 +4417,7 @@ void characterFields(World& world,Npc& player,uint64_t dt,PlayerControl& ctrl) {
         std::to_string(route.arrived-route.began)+",\"root_cm\":"+ragdollVector(position));
       }
     }
-  if(bench.characterRideMoving && bench.characterPlatform) {
-    bench.characterPlatformMatrix.translate(80.f*float(dt)*.001f,0,0);
-    bench.characterPlatform->setObjMatrix(bench.characterPlatformMatrix);
-    bench.characterPlatformVisual->setObjMatrix(bench.characterPlatformMatrix);
-    }
+  if(bench.characterRideMoving)characterRideSample(world,character);
   if(bench.characterItem)
     bench.characterPropTravel=std::max(bench.characterPropTravel,(bench.characterItem->position()-bench.characterPropInitial).length());
   if(bench.characterPropId)
@@ -4468,22 +4501,29 @@ void prepareCharacterProp(World& world,Npc& player,const std::string& role) {
     ",\"hero_cm\":"+ragdollVector(player.position())+",\"direction\":"+ragdollVector(direction));
   }
 
-Vec3 characterSupportPosition(World& world) {
-  if(bench.characterMover)return bench.characterMover->position();
-  if(bench.characterPlatform)return movablePosition(bench.characterPlatformMatrix);
-  for(const auto& row:world.physic()->movableVobSnapshot())
-    if(row.id==bench.characterPropId)return movablePosition(row.transform);
-  return {};
-  }
-
 void characterRideCheckpoint(World& world,Npc& player,bool setup=false) {
   if(!bench.characterRiding) {arenaAbort("character ride checkpoint needs a support body");return;}
-  const auto body=characterSupportPosition(world);
+  const auto& rider=bench.characterRideNpc?*bench.characterRideNpc:player;
+  const auto matrix=characterSupportMatrix(world);
+  const auto body=movablePosition(matrix);
+  auto expected=bench.characterRideLocalStart;matrix.project(expected);
+  auto local=rider.position();auto inverse=matrix;inverse.inverse();inverse.project(local);
+  const auto error=rider.position()-expected;
   event(setup?"character_ride_setup":"character_ride_checkpoint","\"support_kind\":"+jsonStr(bench.characterMover?"mover":bench.characterPlatform?"kinematic":"dynamic")+
     ",\"support_cm\":"+ragdollVector(body)+",\"support_initial_cm\":"+ragdollVector(bench.characterRideStart)+
     ",\"hero_cm\":"+ragdollVector(player.position())+",\"hero_initial_cm\":"+ragdollVector(bench.characterRideHeroStart)+
-    ",\"ground_velocity_cm_s\":"+ragdollVector(player.characterVirtualGroundVelocity())+
-    ",\"falling\":"+(player.isFalling()?"true":"false")+",\"in_air\":"+(player.isInAir()?"true":"false"));
+    ",\"rider\":"+jsonStr(bench.characterRideNpc?"npc":"hero")+",\"rider_cm\":"+ragdollVector(rider.position())+
+    ",\"local_initial_cm\":"+ragdollVector(bench.characterRideLocalStart)+",\"local_cm\":"+ragdollVector(local)+
+    ",\"expected_cm\":"+ragdollVector(expected)+",\"error_cm\":"+ragdollVector(error)+
+    ",\"support_displacement_cm\":"+ragdollNumber((body-bench.characterRideStart).length())+
+    ",\"angle_deg\":"+ragdollNumber(bench.characterRideAngle)+",\"elapsed_ms\":"+std::to_string(world.tickCount()-bench.characterRideBegan)+
+    ",\"max_drift_cm\":"+ragdollNumber(bench.characterRideMaximumDrift)+
+    ",\"max_horizontal_drift_cm\":"+ragdollNumber(bench.characterRideMaximumHorizontalDrift)+
+    ",\"max_local_drift_cm\":"+ragdollNumber(bench.characterRideMaximumLocalDrift)+
+    ",\"mass_kg\":"+ragdollNumber(bench.characterProp?bench.characterProp->body.mass():0.f)+
+    ",\"support_velocity_cm_s\":"+ragdollVector(bench.characterProp?bench.characterProp->body.velocity():Vec3())+
+    ",\"ground_velocity_cm_s\":"+ragdollVector(rider.characterVirtualGroundVelocity())+
+    ",\"falling\":"+(rider.isFalling()?"true":"false")+",\"in_air\":"+(rider.isInAir()?"true":"false"));
   }
 
 // NPC stands use real AI_GoToPoint actions. Only fixture preparation moves an
@@ -4584,7 +4624,8 @@ std::string npcCharacterSample(World& world,const Npc& npc,float physicalJump,fl
     ",\"output_wait_ms\":"+std::to_string(observed.outputWaitMs)+",\"fai_wait_ms\":"+std::to_string(observed.faiWaitMs)+
     ",\"animations\":"+jsonStr(npc.animNames())+",\"ai_queue_empty\":"+(npc.isAiQueueEmpty()?"true":"false")+
     ",\"ai_busy\":"+(npc.isAiBusy()?"true":"false")+",\"move_hint\":"+std::to_string(unsigned(npc.moveHint()))+
-    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false")+
+    ",\"cv_enabled\":"+((npc.isPlayer() ? Gothic::physicsFlags().characterVirtual :
+                                         Gothic::physicsFlags().npcCharacterVirtual)?"true":"false")+
     ",\"cv_active\":"+(npc.characterVirtualActive()?"true":"false")+",\"diagnostics_valid\":"+(valid?"true":"false")+
     ",\"nav_goal\":{\"active\":"+(goal.active?"true":"false")+",\"kind\":"+jsonStr(goal.kind)+",\"name\":"+jsonStr(goal.name)+
     ",\"position_cm\":"+ragdollVector(goal.position)+",\"npc_id\":"+(target?std::to_string(goalId):"null")+
@@ -4897,12 +4938,105 @@ void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
     }
   }
 
+bool prepareCharacterRideSupport(World& world,Npc& player,bool kinematic,bool rotating,Vec3& top) {
+  // The former fixture moved a tavern table along global X, unrelated to the
+  // inspected free walking lane. A support test needs clearance for the whole
+  // moving hull and the standing actor, including the elevated kinematic top.
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& point) {
+    if(!point.underWater && point.name.starts_with("NW_CITY_"))points.push_back(&point);
+    });
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  Vec3 floor,along;std::string waypoint;
+  for(const auto* point:points) {
+    Vec3 center;if(!characterFloor(world,point->position(),center))continue;
+    for(unsigned step=0;step<8 && waypoint.empty();++step) {
+      const float yaw=float(step)*float(M_PI)/4.f;
+      const Vec3 direction(std::cos(yaw),0,std::sin(yaw)),side(-direction.z,0,direction.x);
+      bool clear=true;
+      for(float offset:{-120.f,-60.f,0.f,60.f,120.f}) {
+        Vec3 previous;
+        for(int distance=-120;distance<=480 && clear;distance+=60) {
+          Vec3 ground;
+          if(!characterFloor(world,center+direction*float(distance)+side*offset,ground) ||
+             std::abs(ground.y-center.y)>3.f) {clear=false;break;}
+          if(world.physic()->ray(ground+Vec3(0,5,0),ground+Vec3(0,450,0)).hasCol) {clear=false;break;}
+          if(distance>-120)
+            for(float height:{10.f,60.f,120.f,200.f,300.f,420.f})
+              if(world.physic()->ray(previous+Vec3(0,height,0),ground+Vec3(0,height,0)).hasCol)clear=false;
+          previous=ground;
+          }
+        if(!clear)break;
+        }
+      if(!clear)continue;
+      for(uint32_t id=0;id<world.npcCount();++id) {
+        const auto* npc=world.npcById(id);if(!npc || npc==&player)continue;
+        const auto delta=npc->position()-(center+direction*180.f);
+        if(std::abs(Vec3::dotProduct(delta,direction))<420.f && std::abs(Vec3::dotProduct(delta,side))<180.f &&
+           std::abs(delta.y)<300.f) {clear=false;break;}
+        }
+      if(clear) {floor=center;along=direction;waypoint=point->name;}
+      }
+    if(!waypoint.empty())break;
+    }
+  if(waypoint.empty()) {arenaAbort("character support requires a clear level 6m city lane and 4.5m headroom");return false;}
+  std::string visual;
+  for(const auto& row:world.physic()->movableVobSnapshot())if(row.className=="table" && row.mass>=10.f) {visual=row.visual;break;}
+  const auto* mesh=Resources::loadMesh(visual);const auto* rule=MovableVobs::classifyVisual(visual);
+  if(!mesh || !rule) {arenaAbort("character support stock table unavailable");return false;}
+  const auto* bounds=mesh->bbox();
+  bench.characterRidePivot=(bounds[0]+bounds[1])*.5f;bench.characterRidePivot.y=0;
+  auto matrix=Matrix4x4::mkIdentity();
+  matrix.translate(floor.x-(bounds[0].x+bounds[1].x)*.5f,floor.y-bounds[0].y+.2f+(kinematic?150.f:0.f),
+                   floor.z-(bounds[0].z+bounds[1].z)*.5f);
+  top=(bounds[0]+bounds[1])*.5f;top.y=bounds[1].y;
+  if(rotating) {
+    // A noncentral point proves angular carry; the actor remains inside the
+    // real tabletop rather than standing over the rotation axis.
+    if(bounds[1].x-bounds[0].x>=bounds[1].z-bounds[0].z)top.x+=std::min(40.f,(bounds[1].x-bounds[0].x)*.2f);
+    else top.z+=std::min(40.f,(bounds[1].z-bounds[0].z)*.2f);
+    }
+  matrix.project(top);
+  zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+  data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
+  data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  if(kinematic) {
+    bench.characterPlatformVisual=std::make_unique<ObjVisual>();bench.characterPlatformVisual->setVisual(data,world,false,false);
+    bench.characterPlatform=std::make_unique<PhysicMesh>(*mesh,*world.physic(),true);
+    bench.characterPlatformMatrix=matrix;bench.characterPlatform->setObjMatrix(matrix);bench.characterPlatformVisual->setObjMatrix(matrix);
+    }
+  else {
+    const auto before=world.physic()->movableVobSnapshot();
+    auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
+    fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
+    if(fixture->body.isEmpty() || fixture->body.mass()<10.f) {arenaAbort("character dynamic support requires at least 10kg");return false;}
+    fixture->body.setTransformCallback([view=&fixture->visual](const Matrix4x4& pose){view->setObjMatrix(pose);});
+    bench.characterProp=std::move(fixture);
+    for(const auto& row:world.physic()->movableVobSnapshot())
+      if(std::none_of(before.begin(),before.end(),[&](const auto& old){return old.id==row.id;}))bench.characterPropId=row.id;
+    }
+  bench.characterRideDirection=along;
+  event("character_support_site","\"waypoint\":"+jsonStr(waypoint)+",\"floor_cm\":"+ragdollVector(floor)+
+    ",\"direction\":"+ragdollVector(along)+",\"visual\":"+jsonStr(visual)+
+    ",\"bounds_min_cm\":"+ragdollVector(bounds[0])+",\"bounds_max_cm\":"+ragdollVector(bounds[1]));
+  return true;
+  }
+
 void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   const auto a = split(line);
   if(a.empty())
     return;
   const std::string& c = a[0];
 
+  if(c=="keys") {
+    try {
+      event("keys_command","\"sample\":"+NpcKeysBench::command(a,w,pl,ctrl,outDir));
+    } catch(const std::exception& error) {
+      event("keys_error","\"reason\":"+jsonStr(error.what()));
+      arenaAbort(error.what());
+    }
+    return;
+  }
   // Navigation-eye commands are independent of navigation mesh and body rays.
   if(c=="eye") {
     try {
@@ -5226,15 +5360,26 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(bench.characterItem)w.removeItem(*bench.characterItem);
     bench.characterItem=nullptr;bench.characterProp.reset();bench.characterPropId=0;bench.characterPropRole.clear();
     bench.characterPlatform.reset();bench.characterPlatformVisual.reset();bench.characterMover=nullptr;
-    bench.characterRiding=false;bench.characterRideMoving=false;
+    if(bench.characterRideNpc) {
+      if(bench.subject==bench.characterRideNpc)bench.subject=nullptr;
+      w.removeNpc(*bench.characterRideNpc);bench.characterRideNpc=nullptr;
+      }
+    bench.characterRiding=false;bench.characterRideMoving=false;bench.characterRideRotating=false;
     }
-  else if(c=="character" && a.size()==3 && a[1]=="ride") {
+  else if(c=="character" && (a.size()==3 || a.size()==4) && a[1]=="ride") {
+    if(a.size()==4 && a[3]!="npc") {arenaAbort("character ride rider must be npc");return;}
+    if(bench.characterRideNpc || bench.characterPlatform || bench.characterProp) {arenaAbort("character ride needs cleanup before another support");return;}
     bench.characterRiding=false;bench.characterRideMoving=false;bench.characterMover=nullptr;
+    bench.characterRideRotating=a[2]=="rotation";
+    bench.characterRideDirection=Vec3(1,0,0);
+    bench.characterRideAngle=0;bench.characterRideTravel=0;
+    bench.characterRideMaximumDrift=0;bench.characterRideMaximumHorizontalDrift=0;bench.characterRideMaximumLocalDrift=0;
+    Vec3 top;
     if(a[2]=="mover") {
       std::vector<MoveTrigger*> movers;
       w.detectMover([&](MoveTrigger& mover){movers.push_back(&mover);});
       std::sort(movers.begin(),movers.end(),[](const auto* a,const auto* b){return a->name()<b->name();});
-      Vec3 top;bool selected=false;
+      bool selected=false;
       for(auto* mover:movers) {
         const auto* mesh=Resources::loadMesh(mover->visualNameView());
         if(!mesh || mover->keyFrameCount()<2)continue;
@@ -5257,31 +5402,22 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
         }
       if(!selected) {event("character_mover_unavailable","\"movers\":"+std::to_string(movers.size())+
         ",\"reason\":\"no mover has an exposed supported horizontal top at least 1m wide\"");return;}
-      pl.stopWalking();pl.setPosition(top+Vec3(0,1,0));pl.updateTransform();
-      bench.characterRideStart=bench.characterMover->position();
       }
-    else if(a[2]=="dynamic" || a[2]=="kinematic") {
-      prepareCharacterProp(w,pl,"table");
-      if(!bench.characterProp)return;
-      auto matrix=Matrix4x4::mkIdentity();std::string visual;
-      for(const auto& row:w.physic()->movableVobSnapshot())if(row.id==bench.characterPropId) {matrix=row.transform;visual=row.visual;break;}
-      const auto* mesh=Resources::loadMesh(visual);if(!mesh){arenaAbort("character support mesh absent");return;}
-      auto top=(mesh->bbox()[0]+mesh->bbox()[1])*.5f;top.y=mesh->bbox()[1].y;matrix.project(top);
-      if(a[2]=="kinematic") {
-        // A visible native moving mesh, matching the path real mover vobs use.
-        bench.characterProp.reset();bench.characterPropId=0;
-        matrix.translate(0,150,0);top.y+=150;
-        zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;
-        data.show_visual=true;data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
-        bench.characterPlatformVisual=std::make_unique<ObjVisual>();bench.characterPlatformVisual->setVisual(data,w,false,false);
-        bench.characterPlatform=std::make_unique<PhysicMesh>(*mesh,*w.physic(),true);
-        bench.characterPlatformMatrix=matrix;bench.characterPlatform->setObjMatrix(matrix);bench.characterPlatformVisual->setObjMatrix(matrix);
-        }
-      pl.stopWalking();pl.setPosition(top+Vec3(0,1,0));pl.updateTransform();
-      bench.characterRideStart=movablePosition(matrix);bench.characterPropRole.clear();
+    else if(a[2]=="dynamic" || a[2]=="kinematic" || a[2]=="rotation") {
+      if(!prepareCharacterRideSupport(w,pl,a[2]!="dynamic",bench.characterRideRotating,top))return;
       }
     else {arenaAbort("unknown character ride support: "+a[2]);return;}
-    characterFreezeNear(w,pl,pl.position(),pl.position());
+    characterFreezeNear(w,pl,top,top+bench.characterRideDirection*400.f);
+    if(a.size()==4) {
+      npcCharacterPlaceHero(w,pl,top,top+bench.characterRideDirection*400.f);
+      bench.characterRideNpc=npcCharacterActor(w,top+Vec3(0,1,0));if(!bench.characterRideNpc)return;
+      bench.subject=bench.characterRideNpc;
+      }
+    else {pl.stopWalking();pl.clearAiQueue();pl.setPosition(top+Vec3(0,1,0));pl.updateTransform();}
+    const auto& rider=bench.characterRideNpc?*bench.characterRideNpc:pl;
+    bench.characterRideMatrixStart=characterSupportMatrix(w);bench.characterRideStart=movablePosition(bench.characterRideMatrixStart);
+    auto inverse=bench.characterRideMatrixStart;inverse.inverse();bench.characterRideLocalStart=rider.position();inverse.project(bench.characterRideLocalStart);
+    bench.characterRideBegan=w.tickCount();bench.characterPropRole.clear();
     bench.characterRideHeroStart=pl.position();bench.characterHasWall=false;bench.characterRiding=true;
     characterRideCheckpoint(w,pl,true);
     }
@@ -5290,12 +5426,22 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     // The setup already selects Idle through stopWalking(). Animation blending
     // and native contact recovery can still settle during its 700ms wait; begin
     // the carry measurement from the actual pose immediately before movement.
-    bench.characterRideStart=characterSupportPosition(w);
+    const auto& rider=bench.characterRideNpc?*bench.characterRideNpc:pl;
+    bench.characterRideMatrixStart=characterSupportMatrix(w);bench.characterRideStart=movablePosition(bench.characterRideMatrixStart);
+    auto inverse=bench.characterRideMatrixStart;inverse.inverse();bench.characterRideLocalStart=rider.position();inverse.project(bench.characterRideLocalStart);
+    bench.characterRideBegan=w.tickCount();
+    bench.characterRideMaximumDrift=0;bench.characterRideMaximumHorizontalDrift=0;bench.characterRideMaximumLocalDrift=0;
     bench.characterRideHeroStart=pl.position();
     characterRideCheckpoint(w,pl);
     bench.characterRideMoving=true;
     if(bench.characterMover)w.triggerEvent(TriggerEvent(std::string(bench.characterMover->name()),"CHARACTER_BENCH",TriggerEvent::T_Trigger));
-    else if(bench.characterProp)bench.characterProp->body.addImpulse(Vec3(1.8f,0,0)*bench.characterProp->body.mass(),&pl);
+    else if(bench.characterProp) {
+      const auto impulse=bench.characterRideDirection*(5.f*bench.characterProp->body.mass());
+      const bool accepted=bench.characterProp->body.addImpulse(impulse,&pl);
+      event("character_ride_impulse","\"mass_kg\":"+ragdollNumber(bench.characterProp->body.mass())+
+        ",\"impulse_ns\":"+ragdollVector(impulse)+",\"accepted\":"+(accepted?"true":"false")+
+        ",\"velocity_cm_s\":"+ragdollVector(bench.characterProp->body.velocity()));
+      }
     }
   else if(c=="character" && a.size()==2 && a[1]=="ride-checkpoint") {
     if(bench.characterRiding)characterRideCheckpoint(w,pl);
@@ -9919,6 +10065,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
   npcCharacterStopMotionTrace(Gothic::inst().world());
   NavigationEyeBench::reset();
+  NpcKeysBench::reset();
   NavBench::reset();
   stopRecording();
   if(bench.csv!=nullptr)
@@ -10124,6 +10271,21 @@ uint64_t TestBench::frameDt(uint64_t dt) {
   return dtGame;
   }
 
+void TestBench::beforeWorldTick(uint64_t dt) {
+  if(scenarioPath==nullptr || !bench.started || bench.done || !bench.characterRideMoving || !bench.characterPlatform || dt==0)return;
+  auto matrix=bench.characterRideMatrixStart;
+  if(bench.characterRideRotating) {
+    bench.characterRideAngle+=25.f*float(dt)*.001f;
+    matrix.translate(bench.characterRidePivot);matrix.rotate(bench.characterRideAngle,0,1,0);matrix.translate(-bench.characterRidePivot);
+    }
+  else {
+    bench.characterRideTravel+=80.f*float(dt)*.001f;
+    matrix.translate(bench.characterRideDirection*bench.characterRideTravel);
+    }
+  bench.characterPlatformMatrix=matrix;
+  bench.characterPlatform->setObjMatrix(matrix);bench.characterPlatformVisual->setObjMatrix(matrix);
+  }
+
 namespace {
 // the game's sound for `dt` ms of game time, into the recording when there is one
 void renderSound(uint64_t dt) {
@@ -10245,9 +10407,20 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
         }
       else if(args.size()==2 && args[0]=="npccharacter" && args[1]=="initial") {
         ++bench.pc;npcCharacterSnapshot(*world,*player,"initial");
+        // The first native step recreates the transient controller. Observe it
+        // before normal command dispatch can advance past that initial contact.
+        std::string trace="npccharacter trace";
+        for(uint32_t id=0;id<world->npcCount();++id) {
+          const auto* npc=world->npcById(id);
+          if(npc && npc!=player && npc->isHuman() && !npc->isDown() &&
+             (npc->position()-player->position()).length()<=2300.f)
+            trace+=' '+std::to_string(id);
+          }
+        if(trace!="npccharacter trace")exec(trace,*world,*player,ctrl);
         }
       else if(args.size()==2 && args[0]=="character" && args[1]=="initial") {
         ++bench.pc;characterSnapshot(*world,*player,"initial");
+        exec("npccharacter trace player",*world,*player,ctrl);
         }
       else if(args.size()==3 && args[0]=="movable" && args[1]=="initial") {
         ++bench.pc;
@@ -10265,6 +10438,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
     return false;
   NavBench::tick(*world);
   NavigationEyeBench::tick(world->tickCount());
+  NpcKeysBench::tick(*world,*player,ctrl,dt);
   arrowFields(*world);
   stickingFields(*world);
   spellFields(*world);

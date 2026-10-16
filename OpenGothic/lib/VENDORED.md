@@ -37,6 +37,9 @@ Keep these when updating a library from upstream.
   focus and without a Dock icon (used by the test bench, `scripts/bench.sh`).
 - `Tempest/Engine/system/api/macosapi.mm`: `TEMPEST_WINDOW_SIZE=<w>x<h>` sets the size of a window created
   by show mode (points; shorts are filmed in a 9:16 window, `shorts/`).
+- `Tempest/Engine/system/api/x11api.{h,cpp}`: the same `TEMPEST_WINDOW_SIZE` on X11, in pixels, with the size
+  fixed by WM hints; with it a minimized window gets that size instead of the whole screen (the test bench
+  on Ryzen).
 - `Tempest/Engine/sound/sounddevice.{h,cpp}`: `TEMPEST_AUDIO_LOOPBACK=<rate>` opens an OpenAL loopback
   device instead of the speakers; `SoundDevice::renderLoopback` mixes the next frames of every context
   (the test bench records the game's sound in step with the frames).

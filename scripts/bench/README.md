@@ -6,11 +6,23 @@ cases of a mechanic (foot IK first) without a person watching the game.
 
 ```bash
 scripts/bench.sh smoke                      # a scenario from scripts/bench/<name>.bench, or a path
-NO_BUILD=1 scripts/bench.sh ik-sweep        # skip the incremental build
+BENCH_HOST=local NO_BUILD=1 scripts/bench.sh ik-sweep  # local, skip the incremental build
 ```
 
-A run takes the game start (~10 s from a save) plus the scenario time. The game window is minimized,
-does not take the focus and plays no sound, so it can run while someone works on the same Mac.
+`BENCH_HOST=auto` (default) runs on Ryzen through `scripts/ryzen.sh` and copies all output back.
+It falls back to this Mac with one line explaining why if SSH, setup, the lock or game startup fails.
+Once the returned output contains `game.log`, the Ryzen result is final, including a failing exit code;
+the game is not run again locally. The lock wait defaults to 120 seconds (`RYZEN_LOCK_WAIT`).
+`BENCH_HOST=ryzen` requires Ryzen, defaults to a 900-second lock wait and never falls back;
+`BENCH_HOST=local` runs on this machine. `KEEP=1`, a VideoToolbox encoder, a custom `GOTHIC_DIR`
+or other Mac-only game paths require local execution (`auto` falls back, `ryzen` exits with code 2).
+`NO_BUILD=1` only skips a local build; Ryzen always checks its engine source hash.
+
+For performance comparisons (before/after or FPS), run both takes on the same machine:
+pin `BENCH_HOST=ryzen` or `BENCH_HOST=local`. `host.txt` and the report header identify the host.
+
+A run takes the game start (~10 s from a save) plus the scenario time. On Mac the game window is minimized,
+does not take the focus and plays no sound, so it can run while someone works on the same machine.
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the
 random idle animations the game picks).
 
@@ -122,9 +134,10 @@ Output goes to `.bench/<scenario>-<time>/` (not in git):
 | `report.json` | the numbers of `report.md`: per segment, the events, and the tables of the arrows, the dice and the damage (`archery`, `archery_predicted`, `dice`, `damage`, `time_to_kill`, `fights`) |
 | `sheets/<segment>.png` | 16 frames of a segment in a 4x4 grid |
 | `sheets/evNN-*.png` | frames around an event |
-| `<segment>.mp4` | the video, 800x600, 30 fps |
+| `<segment>.mp4` | the video, 800x600 by default (`TEMPEST_WINDOW_SIZE=<w>x<h>` overrides it), 30 fps |
 | `metrics.csv` | a row per frame: player state, IK state, joints before and after IK, ground |
 | `bench.log`, `game.log` | what the scenario did, the engine log |
+| `host.txt` | `ryzen` or `mac`, also shown in the report header |
 
 More frames or a comparison:
 
@@ -548,7 +561,7 @@ forest), `NW_XARDAS_TOWER_IN1_*` (ramp inside the tower), `NW_XARDAS_STAIRS_01`.
 the capture in `MainWindow` (in film mode the captured frame replaces the window's), the AI bridge's lines
 and voices (`TestBench::aiLine`, `aiVoiceEnd`, `aiHeard`, `aiBusy`), an npc's lines of the game and SVMs
 (`TestBench::npcOutput` in `Npc::nextAiAction`), the OpenAL loopback device in Tempest's
-`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS backend, `FootIk::playerProbe` (legs before and after IK),
+`SoundDevice`, `TEMPEST_WINDOW_SIZE` in Tempest's macOS and X11 backends, `FootIk::playerProbe` (legs before and after IK),
 `Pose::playerProbe` (the animated pose, what plays, `AnimBlend`; `OPENGOTHIC_ANIBLEND_LOG=1` logs the hero's
 switches bone by bone),
 `LipSync::subjectProbe` (the mouth), `Flinch::subjectProbe` (blows), `TalkGestures::subjectProbe` (the hands), `EyeBlink::subjectProbe` (blinks), `Camera::setNearClip`
@@ -630,7 +643,7 @@ for the single requested `SCENARIO=m5b` check, without changing the user's Gothi
 ### Nearby human NPC CharacterVirtual comparison
 
 `NPC_CHARACTER_VIRTUAL=0|1` sets the independent `[GAME] npc_character_virtual` before loading
-in both `bench.sh` and `e2e.sh`. The production default is **0**; the hero's setting is independent.
+in both `bench.sh` and `e2e.sh`. The production default is **1** since 2026-10-16; the hero's setting is independent.
 `OPENGOTHIC_BENCH_TAKE=off|on` selects the same NPC flag inside the comparison scripts.
 
 `npc-character-virtual` sends its own human NPC through the stock forest stairs, doorway and
@@ -672,6 +685,62 @@ Run `scripts/npc_character_virtual_compare.py .bench/npc-character-virtual --out
 incomplete; the analyzer also writes JSON beside the Markdown output.
 For a deliberately reduced series, repeat `--window-spot market --window-spot harbour` in the
 analyzer; the report then explicitly states the selected coverage.
+
+## NPC movement keys (CPU runner)
+
+`keys` is a test-bench command, available in `gothic-body-runner`; it does not change the AI bridge.
+Targets are a fixture index, an existing script instance such as `NONE_100_XARDAS`, or
+`id:<world NPC index>` for duplicate instances. Existing NPCs need no `keys setup`; enabling
+them preserves their current AI queue, interaction and routine.
+The stand enables individual actors and suspends their native AI while enabled. A command replaces
+all previous keys. TTL uses simulation milliseconds; expiration releases input while retaining stand
+control. On a slope, CharacterVirtual can drift with zero requested movement after release:
+the player and NPC both moved 4.514 cm in the same one-second idle window. This is a shared
+controller limitation, distinct from held input; see the
+[validation report](../../reports/navigation/2026-10-16-keys/README.md).
+`off` restores native control and the previous walk mode without clearing
+the queued destination. Airborne movement finishes naturally after release.
+
+```text
+keys setup flat 1                   # flat|jump|climb|market|void|void-replay, 1..10 human actors
+keys place 0                        # actor index, or hero; same stored start and facing
+keys 0 on
+# actor forward strafe turn walk|run jump climb head_yaw head_pitch ttl_ms
+keys 0 1 0 0 walk 0 0 60 0 3000
+wait 3500
+keys sample released
+keys 0 off
+```
+
+Axes are digital: only their sign is used. Positive strafe/turn means right; positive head yaw
+means left, positive pitch means up, in degrees relative to the body. Climb means forward+jump,
+using the same `tryJump`/`startClimb` tests as the player. `keys hero ...` sends the same digital
+movement through the real `PlayerControl`; head input is measured on the NPC.
+
+`keys trace <tag> on|off` writes per-frame `keys-frames.jsonl`; `keys sample <tag>` writes an explicit
+checkpoint. `keys eye <index> <tag>` writes all rays of a fresh existing `NavigationEye` sensor to
+`keys-eye-snapshots.jsonl`. `keys routine <index>` queues a native `AI_GoToPoint` to the fixture's
+recorded destination. `keys stress begin <seed>` after `keys setup market 10` sends random keys
+with TTL 100 ms; `keys stress end` records executor timing, per-actor travel and sequential-tick
+observations in `keys-events.jsonl`. Setup records the selected stock waypoint and exact geometry.
+The fixture removes its spawned bandit's `Humans_Relaxed.mds` when absent on the hero, then checks
+walk/run/strafe clip equality before comparing motion. The executor itself preserves each NPC's
+authored animation set. `keys info` records clip parameters for diagnosing fixture differences.
+
+Frame journals distinguish the physical feet (`physical_root_cm`), gameplay position
+(`npc_root_cm`) and displayed model (`visual_root_cm`). `support_physical` and `support_npc`
+contain the downward terrain/object ray result, or `null` for a miss. Flat/obstacle/void scenes
+also record native CV requests, accepted positions, contacts and support; market profiling leaves
+that detailed CV instrumentation disabled. `keys setup void 1` finds a supported approach to the
+stock-world support gap near `[6754, 262, -6115]` and records an 81-point support grid. Its goal
+lies beyond the gap and is intentionally not required to have floor.
+`keys setup void-replay 1` uses the supported idle pose recorded before the stress actor's
+takeoff. The report script's `void-replay` case replays that actor's last 54 decisions through
+the real player's input and the NPC executor; it records differing contact trajectories and falls.
+
+Repeat the checks with [`reports/navigation/2026-10-16-keys/run.py`](../../reports/navigation/2026-10-16-keys/run.py).
+Use absolute runner/save/assets/output paths and the shared Ryzen simulation lock; the script takes
+and releases it separately for each case. Run both `npc_character_virtual` settings in fresh processes.
 
 ## Navigation eye (CPU runner)
 

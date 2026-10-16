@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Run the current worktree on Ryzen. No system packages or training files are changed.
-# Usage: scripts/ryzen.sh setup|e2e|pytest [pytest args...]|clean
+# Usage: scripts/ryzen.sh setup|e2e|pytest [pytest args...]|bench <scenario> <out>|clean
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RYZEN_HOST="${RYZEN_HOST:-ryzen}"
 LOCK_WAIT="${RYZEN_LOCK_WAIT:-900}"
 [[ "$LOCK_WAIT" =~ ^[0-9]+$ ]] || { echo 'RYZEN_LOCK_WAIT must be seconds' >&2; exit 2; }
 
@@ -139,6 +140,32 @@ build_engine() {
   echo "Ryzen: engine configure + build $((SECONDS - started))s"
 }
 
+remote_bench() {
+  local state="$1" run="$2" scenario="$3" digest rc started=$SECONDS
+  toolchain
+  export GOTHIC_DIR="$HOME/gothic-ai/game"
+  [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
+  command -v ffmpeg >/dev/null || { echo 'Missing tool: ffmpeg' >&2; return 1; }
+  digest="$(source_digest)"
+  build_engine "$state" "$digest"
+  desktop
+  local out="$state/runs/$run"
+  mkdir -p "$out"
+  export RYZEN_GAME_BIN="$state/build/opengothic/Gothic2Notr"
+  cat >"$out/game.sh" <<'WRAPPER'
+#!/usr/bin/env bash
+exec "$RYZEN_GAME_BIN" "$@" -g2 -window
+WRAPPER
+  chmod +x "$out/game.sh"
+  export GAME_BIN="$out/game.sh"
+  echo "Ryzen: prepare/start overhead $((SECONDS - started))s"
+  started=$SECONDS
+  # bench.sh produces the report here, before the complete output is collected.
+  BENCH_HOST=local NO_BUILD=1 RYZEN_BENCH=1 bash "$ROOT/scripts/bench.sh" "$scenario" "$out" && rc=0 || rc=$?
+  echo "Ryzen: bench $((SECONDS - started))s, exit $rc"
+  return "$rc"
+}
+
 remote_run() {
   local action="$1" state="$2" run="$3"
   shift 3
@@ -203,18 +230,39 @@ WRAPPER
 # Internal entry point inherits fd 9 from the lock-holding SSH session.
 if [[ "${1:-}" == __remote ]]; then
   shift
+  if [[ "${1:-}" == bench ]]; then
+    shift
+    remote_bench "$@"
+    exit $?
+  fi
   remote_run "$@"
   exit $?
 fi
 
 ACTION="${1:-}"
-case "$ACTION" in setup|e2e|pytest|clean) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|clean' >&2; exit 2 ;; esac
-[[ "$ACTION" == pytest || $# == 0 ]] || { echo 'Only pytest accepts arguments' >&2; exit 2; }
+case "$ACTION" in setup|e2e|pytest|bench|clean) shift ;; *) echo 'Usage: scripts/ryzen.sh setup|e2e|pytest [args...]|bench <scenario> <out>|clean' >&2; exit 2 ;; esac
+if [[ "$ACTION" == bench ]]; then
+  [[ $# == 2 ]] || { echo 'Usage: scripts/ryzen.sh bench <scenario> <out>' >&2; exit 2; }
+  BENCH_SCENARIO="$1"
+  [[ -f "$BENCH_SCENARIO" ]] || BENCH_SCENARIO="$ROOT/scripts/bench/$1.bench"
+  [[ -f "$BENCH_SCENARIO" ]] || { echo "No scenario: $1" >&2; exit 2; }
+  BENCH_SCENARIO="$(cd "$(dirname "$BENCH_SCENARIO")" && pwd)/$(basename "$BENCH_SCENARIO")"
+  LOG_DIR="$2"
+  mkdir -p "$LOG_DIR"
+  LOG_DIR="$(cd "$LOG_DIR" && pwd)"
+  if [[ -z "${WORLD:-}" && -z "${SAVE:-}" ]]; then
+    COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
+    SAVE="$(dirname "$COMMON")/save_slot_1.sav"
+  fi
+elif [[ "$ACTION" != pytest && $# != 0 ]]; then
+  echo 'Only pytest and bench accept arguments' >&2
+  exit 2
+fi
 
 remote() {
   local command='' arg
   for arg in "$@"; do printf -v command '%s %q' "$command" "$arg"; done
-  ssh -o BatchMode=yes -o ConnectTimeout=10 ryzen "$command"
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$command"
 }
 
 finish_run() {
@@ -228,7 +276,41 @@ finish_run() {
     remote test -d "$STATE/runs/$RUN" && found=0 || found=$?
     case "$found" in
       0)
-        if rsync -a "ryzen:$REMOTE/runs/$RUN/" "$LOG_DIR/"; then
+        if rsync -a "$RYZEN_HOST:$REMOTE/runs/$RUN/" "$LOG_DIR/"; then
+          if [[ "$ACTION" == bench ]]; then
+            # Reports are built on Ryzen; collected links must point at the local output.
+            if ! python3 - "$STATE/runs/$RUN" "$LOG_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+remote_out, local_out = sys.argv[1:]
+out = Path(local_out)
+report = out / 'report.md'
+if report.is_file():
+    text = report.read_text().replace(remote_out, local_out)
+    text = text.replace(f'# Bench report: {Path(remote_out).name}\n',
+                        f'# Bench report: {out.name}\n', 1)
+    report.write_text(text)
+
+def localize(value):
+    if isinstance(value, str):
+        return value.replace(remote_out, local_out)
+    if isinstance(value, list):
+        return [localize(item) for item in value]
+    if isinstance(value, dict):
+        return {key: localize(item) for key, item in value.items()}
+    return value
+
+report = out / 'report.json'
+if report.is_file():
+    report.write_text(json.dumps(localize(json.loads(report.read_text())), indent=2) + '\n')
+PY
+            then
+              echo "Ryzen: could not localize reports; keeping remote artifacts for $RUN" >&2
+              return 1
+            fi
+          fi
           if remote rm -rf -- "$STATE/runs/$RUN" "$STATE/inputs/$RUN"; then
             echo "Ryzen: removed runs/$RUN and inputs/$RUN"
           else
@@ -248,12 +330,14 @@ finish_run() {
     esac
   fi
   [[ "$ACTION" != e2e ]] || echo "logs: $LOG_DIR"
+  [[ "$ACTION" != bench ]] || echo "bench: output in $LOG_DIR"
 }
 
 # Hold one SSH session open across upload and execution. This protects the snapshot
 # even from concurrent invocations in the same worktree (including clean/setup).
 SESSION="$(mktemp -d "${TMPDIR:-/tmp}/gothic-ryzen-control.XXXXXX")"
 SSH_PID=''
+TUNNEL_OPEN=0
 RUN_CREATED=0
 RUN_STARTED=0
 RUN_FINISHED=0
@@ -262,6 +346,9 @@ cleanup() {
   local status=$?
   exec 8>&- || true
   if [[ -n "$SSH_PID" ]]; then kill "$SSH_PID" 2>/dev/null || true; wait "$SSH_PID" 2>/dev/null || true; fi
+  if [[ "$TUNNEL_OPEN" == 1 ]]; then
+    ssh -S "$SESSION/tunnel" -O exit "$RYZEN_HOST" >/dev/null 2>&1 || true
+  fi
   if [[ "$RUN_CREATED" == 1 ]]; then finish_run || true; fi
   rm -rf -- "$SESSION" || true
   return "$status"
@@ -286,7 +373,7 @@ disk_usage
 exec bash -se"
 printf -v bootstrap_command 'bash -c %q' "$bootstrap"
 : >"$OUTPUT"
-ssh -o BatchMode=yes -o ConnectTimeout=10 ryzen "$bootstrap_command" \
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$bootstrap_command" \
   8>&- <"$SESSION/input" > >(exec 8>&-; tee "$OUTPUT") 2>&1 &
 SSH_PID=$!
 until [[ -f "$OUTPUT" ]] && grep -q '^Ryzen: lock acquired ' "$OUTPUT"; do
@@ -297,6 +384,30 @@ until [[ -f "$OUTPUT" ]] && grep -q '^Ryzen: lock acquired ' "$OUTPUT"; do
   fi
   sleep 0.1
 done
+
+if [[ "$ACTION" == bench && -n "${GOTHIC_AI_URL:-}" ]]; then
+  # Only loopback endpoints need forwarding. Bind remotely to loopback as well.
+  AI_PORT="$(python3 - "$GOTHIC_AI_URL" <<'PY'
+import sys
+from urllib.parse import urlsplit
+url = urlsplit(sys.argv[1])
+if url.hostname in ('127.0.0.1', 'localhost'):
+    print(url.port or (443 if url.scheme == 'wss' else 80))
+PY
+)"
+  if [[ -n "$AI_PORT" ]]; then
+    if ssh -f -N -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=yes \
+      -o ControlMaster=yes -o ControlPath="$SESSION/tunnel" \
+      -R "127.0.0.1:$AI_PORT:127.0.0.1:$AI_PORT" "$RYZEN_HOST" 8>&- >"$SESSION/tunnel.log" 2>&1; then
+      TUNNEL_OPEN=1
+      echo "Ryzen: AI tunnel ready on port $AI_PORT"
+    else
+      cat "$SESSION/tunnel.log" >&2
+      echo "Ryzen: could not open AI tunnel on port $AI_PORT" >&2
+      exit 1
+    fi
+  fi
+fi
 
 run_locked() {
   local arg
@@ -322,7 +433,7 @@ REMOTE
   GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
   [[ -d "$GOTHIC_DIR/Data" ]] || { echo "No game Data directory: $GOTHIC_DIR" >&2; exit 1; }
   started=$SECONDS
-  rsync -a --exclude=.DS_Store "$GOTHIC_DIR/" ryzen:gothic-ai/game/
+  rsync -a --exclude=.DS_Store "$GOTHIC_DIR/" "$RYZEN_HOST:gothic-ai/game/"
   echo "Ryzen: game data ready, sync $((SECONDS - started))s"
   run_locked true
   exit
@@ -353,9 +464,72 @@ rsync -a --checksum --delete \
   --exclude='*.sav' --exclude='*.vdf' --exclude='*.VDF' --exclude='*.o' --exclude='*.a' \
   --exclude=/.bench/ --exclude=/.shorts/ --exclude=/.ryzen/ --exclude=/game/ --exclude=/data/ \
   --exclude=/tts-samples/ --exclude=/site/_build/ \
-  "$ROOT/" "ryzen:$REMOTE/source/"
+  "$ROOT/" "$RYZEN_HOST:$REMOTE/source/"
 
 ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=${RYZEN_JOBS:-12}")
+if [[ "$ACTION" == bench ]]; then
+  REMOTE_OUT="$STATE/runs/$RUN"
+  bench_path() {
+    python3 - "$1" "$LOG_DIR" "$REMOTE_OUT" <<'PY'
+import os
+import sys
+value, local, remote = sys.argv[1:]
+if value.startswith(('/', '~/')):
+    path = os.path.realpath(os.path.expanduser(value))
+    local = os.path.realpath(local)
+    if os.path.commonpath((path, local)) == local:
+        value = os.path.join(remote, os.path.relpath(path, local))
+print(value, end='')
+PY
+  }
+  # Preserve game options, translating paths into this run's output directory.
+  while IFS= read -r name; do
+    case "$name" in
+      GOTHIC_DIR|OPENGOTHIC_TEXTURES) continue ;;
+      OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|CHARACTER_VIRTUAL)
+        value="$(bench_path "${!name}")"
+        ENV_ARGS+=("$name=$value") ;;
+    esac
+  done < <(compgen -e)
+  HD_TEXTURES="$HOME/.local/share/gothic-ai/hd-textures/textures"
+  HD_TEXTURES="$(python3 - "$HD_TEXTURES" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+  TEXTURES="${OPENGOTHIC_TEXTURES-$HD_TEXTURES}"
+  if [[ -n "$TEXTURES" ]]; then
+    TEXTURES="$(python3 - "$TEXTURES" <<'PY'
+import os
+import sys
+print(os.path.realpath(os.path.expanduser(sys.argv[1])))
+PY
+)"
+  fi
+  if [[ "$TEXTURES" == "$HD_TEXTURES" ]]; then
+    if [[ -d "$HD_TEXTURES" ]]; then
+      remote mkdir -p "$REMOTE_HOME/gothic-ai/hd-textures/textures"
+      rsync -a --delete "$HD_TEXTURES/" "$RYZEN_HOST:gothic-ai/hd-textures/textures/"
+      ENV_ARGS+=("OPENGOTHIC_TEXTURES=$REMOTE_HOME/gothic-ai/hd-textures/textures")
+    else
+      ENV_ARGS+=("OPENGOTHIC_TEXTURES=")
+    fi
+  else
+    # An explicit empty value disables HD textures, including on the remote host.
+    ENV_ARGS+=("OPENGOTHIC_TEXTURES=$(bench_path "${OPENGOTHIC_TEXTURES}")")
+  fi
+  rsync -a -- "$BENCH_SCENARIO" "$RYZEN_HOST:$REMOTE/inputs/$RUN/"
+  if [[ -z "${WORLD:-}" ]]; then
+    [[ -f "$SAVE" ]] || { echo "Missing SAVE: $SAVE" >&2; exit 2; }
+    rsync -a -- "$SAVE" "$RYZEN_HOST:$REMOTE/inputs/$RUN/SAVE"
+    ENV_ARGS+=("SAVE=$STATE/inputs/$RUN/SAVE")
+  fi
+  echo "Ryzen: upload $((SECONDS - started))s ($WORKTREE)"
+  run_locked env "${ENV_ARGS[@]}" bash "$STATE/source/scripts/ryzen.sh" __remote bench \
+    "$STATE" "$RUN" "$STATE/inputs/$RUN/$(basename "$BENCH_SCENARIO")" && rc=0 || rc=$?
+  exit "$rc"
+fi
 # Carry e2e options, including scenario-specific GOTHIC_* settings; paths are remapped below.
 while IFS= read -r name; do
   case "$name" in
@@ -367,7 +541,7 @@ done < <(compgen -e)
 for name in SAVE VOICE_FILE; do
   if [[ -n "${!name:-}" ]]; then
     [[ -f "${!name}" ]] || { echo "Missing $name: ${!name}" >&2; exit 2; }
-    rsync -a -- "${!name}" "ryzen:$REMOTE/inputs/$RUN/$name"
+    rsync -a -- "${!name}" "$RYZEN_HOST:$REMOTE/inputs/$RUN/$name"
     ENV_ARGS+=("$name=$STATE/inputs/$RUN/$name")
   fi
 done
