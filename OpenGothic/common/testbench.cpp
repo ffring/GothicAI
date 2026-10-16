@@ -677,6 +677,12 @@ struct Bench {
     Vec3 lastSupported;
     uint64_t began=0,arrived=0;
   } characterRoute;
+  struct CharacterIdleSlope {
+    bool prepared=false,npc=false;
+    float angle=0;
+    uint64_t began=0,previousTick=0;
+    Vec3 start,previous;
+  } characterIdleSlope;
   struct CharacterFrame {
     std::string route;
     uint64_t frame=0,time=0,dt=0;
@@ -4637,7 +4643,24 @@ std::string npcCharacterSample(World& world,const Npc& npc,float physicalJump,fl
     if(npcCharacterNeedsMovableLookup(d.before) || npcCharacterNeedsMovableLookup(d.afterExtendedUpdate) ||
        npcCharacterNeedsMovableLookup(d.afterStairs))movable=world.physic()->movableVobSnapshot();
     row+=",\"dt_ms\":"+std::to_string(d.dt)+",\"requested_cm\":"+ragdollVector(d.requested)+
+      ",\"requested_velocity_cm_s\":"+ragdollVector(d.requestedVelocity)+
+      ",\"stair_desired_velocity_cm_s\":"+ragdollVector(d.stairDesiredVelocity)+
+      ",\"max_slope_rad\":"+ragdollNumber(d.maxSlopeRadians)+",\"stair_height_cm\":"+ragdollNumber(d.stairHeight)+
+      ",\"stair_desired_distance_cm\":"+ragdollNumber(d.stairDesiredDistance)+
+      ",\"stair_achieved_distance_cm\":"+ragdollNumber(d.stairAchievedDistance)+
+      ",\"stair_supported\":"+(d.stairSupported?"true":"false")+",\"stair_can_walk\":"+(d.stairCanWalk?"true":"false")+
+      ",\"stair_blocked_by_policy\":"+(d.stairBlockedByPolicy?"true":"false")+
+      ",\"stair_progress_blocked\":"+(d.stairProgressBlocked?"true":"false")+
       ",\"stair_attempted\":"+(d.stairAttempted?"true":"false")+",\"stair_succeeded\":"+(d.stairSucceeded?"true":"false")+
+      ",\"stair_probe\":{\"reason\":"+jsonStr(d.stairProbe.reason)+
+      ",\"up_cm\":"+ragdollVector(d.stairProbe.upPosition)+",\"forward_cm\":"+ragdollVector(d.stairProbe.forwardPosition)+
+      ",\"final_cm\":"+ragdollVector(d.stairProbe.finalPosition)+",\"test_cm\":"+ragdollVector(d.stairProbe.testPosition)+
+      ",\"test_final_cm\":"+ragdollVector(d.stairProbe.testFinalPosition)+
+      ",\"landing_normal\":"+ragdollVector(d.stairProbe.landingNormal)+
+      ",\"test_landing_normal\":"+ragdollVector(d.stairProbe.testLandingNormal)+
+      ",\"up_fraction\":"+ragdollNumber(d.stairProbe.upFraction)+
+      ",\"landing_fraction\":"+ragdollNumber(d.stairProbe.landingFraction)+
+      ",\"test_landing_fraction\":"+ragdollNumber(d.stairProbe.testLandingFraction)+"}"+
       ",\"stair_obstacle_id\":"+std::to_string(d.stairObstacleId)+",\"npc_move\":"+npcCharacterMoveJson(world,d.npcMove)+
       ",\"before\":"+npcCharacterPoseJson(d.before,movable)+
       ",\"after_extended_update\":"+npcCharacterPoseJson(d.afterExtendedUpdate,movable)+
@@ -4714,6 +4737,125 @@ void npcCharacterPlaceHero(World& world,Npc& player,const Vec3& start,const Vec3
     }
   if(!found)hero=start-along*250.f;
   player.stopWalking();player.clearAiQueue();player.setPosition(hero);player.setDirection(start-hero);player.updateTransform();
+  }
+
+void characterIdleSlopeSample(World& world,Npc& player,std::string_view label) {
+  auto& fixture=bench.characterIdleSlope;
+  auto* actor=fixture.npc?bench.npcCharacterRoute.npc:&player;
+  if(!fixture.prepared || !actor) {arenaAbort("character idle slope sample needs a prepared fixture");return;}
+  const auto position=actor->position();
+  const auto displacement=position-fixture.start,interval=position-fixture.previous;
+  event("character_idle_slope_sample","\"label\":"+jsonStr(label)+",\"actor\":"+jsonStr(fixture.npc?"npc":"hero")+
+    ",\"angle_deg\":"+ragdollNumber(fixture.angle)+",\"elapsed_ms\":"+std::to_string(world.tickCount()-fixture.began)+
+    ",\"interval_ms\":"+std::to_string(world.tickCount()-fixture.previousTick)+
+    ",\"start_cm\":"+ragdollVector(fixture.start)+",\"displacement_cm\":"+ragdollVector(displacement)+
+    ",\"displacement_length_cm\":"+ragdollNumber(displacement.length())+
+    ",\"interval_displacement_cm\":"+ragdollVector(interval)+",\"interval_displacement_length_cm\":"+ragdollNumber(interval.length())+
+    ","+npcCharacterSample(world,*actor,0,0,bench.step,bench.frameMs));
+  fixture.previous=position;fixture.previousTick=world.tickCount();
+  }
+
+void characterIdleSlopePrepare(World& world,Npc& player,float requestedAngle,bool npc) {
+  if(!std::isfinite(requestedAngle) || requestedAngle<5.f || requestedAngle>65.f) {
+    arenaAbort("character idle slope angle must be between 5 and 65 degrees");return;
+    }
+  npcCharacterStopMotionTrace(&world);
+  auto& route=bench.npcCharacterRoute;
+  if(route.npc) {
+    if(bench.subject==route.npc)bench.subject=nullptr;
+    world.removeNpc(*route.npc);
+    }
+  route=Bench::NpcCharacterRoute();bench.characterIdleSlope=Bench::CharacterIdleSlope();
+  bench.characterRoute.active=false;
+  auto* actor=&player;
+  if(npc) {
+    route.npc=npcCharacterActor(world,player.position()+Vec3(400,0,0));
+    if(!route.npc)return;
+    actor=route.npc;
+    }
+  const auto capsule=actor->navigationCapsule();
+  const float radius=capsule.x;
+  const auto* bounds=actor->bBoxCol();
+  const float height=bounds?std::max(bounds[1].y-bounds[0].y,2.f*radius):capsule.y;
+  // Match the native capsule's 1 cm padding. Placing the logical feet directly
+  // on a sloping triangle would insert its lower sphere into the ground and
+  // count the first depenetration as idle movement. This is an analytic tangent
+  // pose, with no simulation tick, settling period or discarded measurement.
+  constexpr float padding=1.f;
+  const float footprint=std::max(60.f,2.f*(radius+padding));
+  std::vector<const WayPoint*> points;
+  world.forEachWayPoint([&](const WayPoint& point) {if(!point.underWater)points.push_back(&point);});
+  std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
+  auto* physics=world.physic();
+  Vec3 floor,normal;std::string waypoint;float measuredAngle=0,maximumPlaneError=0,maximumNormalAngle=0;
+  const float radians=float(M_PI)/180.f;
+  // The waypoint order and offsets are fixed, so separate ON/OFF processes
+  // select exactly the same authored landscape triangle.
+  for(const auto* point:points) {
+    for(float x:{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f,-400.f,400.f})
+      for(float z:{0.f,-80.f,80.f,-160.f,160.f,-240.f,240.f,-400.f,400.f}) {
+        if(!waypoint.empty())continue;
+        const auto center=physics->landRay(point->position()+Vec3(x,300,z),1200.f);
+        // landRay only exposes normals for C_Landscape, which is static stock
+        // geometry; zero-normal object tops and movable props are excluded.
+        if(!center.hasCol || center.n.length()<.99f || center.n.y<=.25f)continue;
+        const auto n=Vec3::normalize(center.n);
+        const float angle=std::acos(std::clamp(n.y,-1.f,1.f))/radians;
+        const float angleTolerance=requestedAngle>=45.f && requestedAngle<50.f?.75f:2.f;
+        if(std::abs(angle-requestedAngle)>angleTolerance)continue;
+        float planeError=0,normalAngle=0;bool planar=true;
+        for(int ix=-2;ix<=2 && planar;++ix)for(int iz=-2;iz<=2;++iz) {
+          const auto offset=Vec3(float(ix)*footprint*.5f,0,float(iz)*footprint*.5f);
+          const float y=center.v.y-Vec3::dotProduct(n,offset)/n.y;
+          const auto hit=physics->landRay(Vec3(center.v.x+offset.x,y+30.f,center.v.z+offset.z),60.f);
+          if(!hit.hasCol || hit.n.length()<.99f) {planar=false;break;}
+          const float error=std::abs(Vec3::dotProduct(hit.v-center.v,n));
+          const float normalError=std::acos(std::clamp(Vec3::dotProduct(n,Vec3::normalize(hit.n)),-1.f,1.f))/radians;
+          if(error>.25f || normalError>1.f) {planar=false;break;}
+          planeError=std::max(planeError,error);normalAngle=std::max(normalAngle,normalError);
+          }
+        if(!planar)continue;
+        const auto feet=center.v+Vec3(0,(radius+padding)/n.y-radius,0);
+        if(physics->ray(feet+Vec3(0,radius+padding,0),feet+Vec3(0,height+padding,0)).hasCol)continue;
+        for(unsigned direction=0;direction<8 && planar;++direction) {
+          const float yaw=float(direction)*float(M_PI)/4.f;
+          const Vec3 delta(std::cos(yaw)*(radius+padding),0,std::sin(yaw)*(radius+padding));
+          for(float y:{radius+padding,height-radius})
+            if(physics->ray(feet+Vec3(0,y,0),feet+Vec3(0,y,0)+delta).hasCol) {planar=false;break;}
+          }
+        if(!planar)continue;
+        floor=center.v;normal=n;waypoint=point->name;measuredAngle=angle;
+        maximumPlaneError=planeError;maximumNormalAngle=normalAngle;
+        }
+    if(!waypoint.empty())break;
+    }
+  if(waypoint.empty()) {arenaAbort("no static planar landscape footprint for idle slope "+std::to_string(requestedAngle));return;}
+  auto downhill=Vec3(normal.x,0,normal.z);downhill=Vec3::normalize(downhill);
+  const float verticalOffset=(radius+padding)/normal.y-radius;
+  const auto start=floor+Vec3(0,verticalOffset,0);
+  characterFreezeNear(world,player,floor,floor);
+  actor->setInteraction(nullptr,true);actor->clearAiQueue();actor->stopWalking();actor->clearSpeed();
+  actor->setPosition(start);actor->setDirection(downhill);actor->updateTransform();
+  actor->setCharacterVirtualDiagnosticsEnabled(true);
+  bench.npcCharacterTraceActors.push_back({actor,start,actor->characterVisualPosition(),false});
+  if(npc) {
+    actor->aiPush(AiQueue::aiWait(60000));
+    npcCharacterPlaceHero(world,player,start,start+downhill*200.f);
+    bench.subject=actor;
+    } else bench.subject=nullptr;
+  auto& fixture=bench.characterIdleSlope;
+  fixture.prepared=true;fixture.npc=npc;fixture.angle=measuredAngle;
+  fixture.began=world.tickCount();fixture.previousTick=world.tickCount();fixture.start=start;fixture.previous=start;
+  bench.hasPrev=false;
+  bench.cam=C_Follow;bench.camDist=300;bench.camHeight=100;bench.camAngle=110;bench.camAuto=true;
+  event("character_idle_slope_setup","\"actor\":"+jsonStr(npc?"npc":"hero")+",\"waypoint\":"+jsonStr(waypoint)+
+    ",\"requested_angle_deg\":"+ragdollNumber(requestedAngle)+",\"angle_deg\":"+ragdollNumber(measuredAngle)+
+    ",\"floor_cm\":"+ragdollVector(floor)+",\"normal\":"+ragdollVector(normal)+",\"start_cm\":"+ragdollVector(start)+
+    ",\"capsule_radius_cm\":"+ragdollNumber(radius)+",\"capsule_height_cm\":"+ragdollNumber(height)+
+    ",\"character_padding_cm\":"+ragdollNumber(padding)+",\"vertical_offset_cm\":"+ragdollNumber(verticalOffset)+
+    ",\"footprint_half_width_cm\":"+ragdollNumber(footprint)+",\"footprint_samples\":25,\"warmup_ms\":0"+
+    ",\"maximum_plane_error_cm\":"+ragdollNumber(maximumPlaneError)+",\"maximum_normal_angle_deg\":"+ragdollNumber(maximumNormalAngle));
+  characterIdleSlopeSample(world,player,"initial");
   }
 
 void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
@@ -5323,6 +5465,25 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("character_probe_complete","\"prepared\":"+std::to_string(prepared)+",\"expected\":8");
     }
   else if(c=="character" && a.size()==3 && a[1]=="route") prepareCharacterRoute(w,pl,a[2]);
+  else if(c=="character" && a.size()==4 && a[1]=="idle-slope") {
+    if(a[3]!="hero" && a[3]!="npc") {arenaAbort("character idle-slope expects hero or npc");return;}
+    characterIdleSlopePrepare(w,pl,num(a,2,0),a[3]=="npc");
+    }
+  else if(c=="character" && a.size()==3 && a[1]=="idle-slope-sample") characterIdleSlopeSample(w,pl,a[2]);
+  else if(c=="character" && a.size()==6 && a[1]=="approach") {
+    auto& route=bench.characterRoute;
+    if(!route.prepared || route.active) {arenaAbort("character approach needs a prepared route");return;}
+    const Vec3 side(-route.direction.z,0,route.direction.x);
+    const auto shifted=route.start+side*num(a,3,0)+route.direction*num(a,4,0);
+    Vec3 floor;
+    if(!characterFloor(w,shifted,floor)) {arenaAbort("character approach has no floor");return;}
+    route.start=floor;route.name+='_'+a[2];
+    pl.setPosition(route.start);pl.setDirection(route.direction);
+    const float yaw=(pl.rotation()+num(a,5,0))*float(M_PI)/180.f;
+    pl.setDirection(Vec3(std::cos(yaw),0,std::sin(yaw)));pl.updateTransform();
+    event("character_approach","\"route\":"+jsonStr(route.name)+",\"start_cm\":"+ragdollVector(route.start)+
+      ",\"goal_cm\":"+ragdollVector(route.goal)+",\"yaw_deg\":"+ragdollNumber(pl.rotation()));
+    }
   else if(c=="character" && a.size()==2 && a[1]=="begin") {
     auto& route=bench.characterRoute;
     if(!route.prepared || route.active) {arenaAbort("character begin needs a prepared route");return;}

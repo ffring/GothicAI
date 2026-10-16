@@ -399,6 +399,22 @@ public:
 	/// @param inLinearVelocity The linear velocity that the player desired. This is used to determine if we're pushing into a step.
 	bool								CanWalkStairs(Vec3Arg inLinearVelocity) const;
 
+	enum class EWalkStairsResult : uint8
+	{
+		NotAttempted, UpBlocked, NoSteep, NoHorizontal, NoProgress, NoFloor,
+		NoForwardTest, TestNoProgress, TestNoFloor, TestSteep, NoHeight, Success
+	};
+
+	/// Optional transient data describing the existing stair probes. Positions use world space metres.
+	struct WalkStairsDiagnostics
+	{
+		EWalkStairsResult			mResult = EWalkStairsResult::NotAttempted;
+		RVec3						mUpPosition = RVec3::sZero(), mForwardPosition = RVec3::sZero(), mFinalPosition = RVec3::sZero();
+		RVec3						mTestPosition = RVec3::sZero(), mTestFinalPosition = RVec3::sZero();
+		Vec3						mLandingNormal = Vec3::sZero(), mTestLandingNormal = Vec3::sZero();
+		float						mUpFraction = 1.0f, mLandingFraction = -1.0f, mTestLandingFraction = -1.0f;
+	};
+
 	/// When stair walking is needed, you can call the WalkStairs function to cast up, forward and down again to try to find a valid position
 	/// @param inDeltaTime Time step to simulate.
 	/// @param inStepUp The direction and distance to step up (this corresponds to the max step height)
@@ -411,7 +427,7 @@ public:
 	/// @param inShapeFilter Filter that is used to check if a character collides with a subshape.
 	/// @param inAllocator An allocator for temporary allocations. All memory will be freed by the time this function returns.
 	/// @return true if the stair walk was successful
-	bool								WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg inStepForward, Vec3Arg inStepForwardTest, Vec3Arg inStepDownExtra, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter, const BodyFilter &inBodyFilter, const ShapeFilter &inShapeFilter, TempAllocator &inAllocator);
+	bool								WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg inStepForward, Vec3Arg inStepForwardTest, Vec3Arg inStepDownExtra, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter, const BodyFilter &inBodyFilter, const ShapeFilter &inShapeFilter, TempAllocator &inAllocator, WalkStairsDiagnostics *outDiagnostics = nullptr);
 
 	/// This function can be used to artificially keep the character to the floor. Normally when a character is on a small step and starts moving horizontally, the character will
 	/// lose contact with the floor because the initial vertical velocity is zero while the horizontal velocity is quite high. To prevent the character from losing contact with the floor,

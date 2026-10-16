@@ -1608,10 +1608,18 @@ bool CharacterVirtual::CanWalkStairs(Vec3Arg inLinearVelocity) const
 	return false;
 }
 
-bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg inStepForward, Vec3Arg inStepForwardTest, Vec3Arg inStepDownExtra, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter, const BodyFilter &inBodyFilter, const ShapeFilter &inShapeFilter, TempAllocator &inAllocator)
+bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg inStepForward, Vec3Arg inStepForwardTest, Vec3Arg inStepDownExtra, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter, const BodyFilter &inBodyFilter, const ShapeFilter &inShapeFilter, TempAllocator &inAllocator, WalkStairsDiagnostics *outDiagnostics)
 {
 	StartTrackingContactChanges();
 	JPH_SCOPE_EXIT([this]() { FinishTrackingContactChanges(); });
+	if (outDiagnostics != nullptr)
+		*outDiagnostics = WalkStairsDiagnostics();
+	const auto finish = [outDiagnostics](EWalkStairsResult inResult)
+	{
+		if (outDiagnostics != nullptr)
+			outDiagnostics->mResult = inResult;
+		return inResult == EWalkStairsResult::Success;
+	};
 
 	// Move up. Note that we used ValidateMovement here so that we ignore initial collisions and character padding on the sides while moving up. This makes moving up a bit easier.
 	Vec3 up = inStepUp;
@@ -1619,13 +1627,20 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 	IgnoredContactList dummy_ignored_contacts(inAllocator);
 	if (ValidateMovement(mPosition, up, contact, dummy_ignored_contacts, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter))
 	{
+		if (outDiagnostics != nullptr)
+		{
+			outDiagnostics->mUpFraction = contact.mFraction;
+			outDiagnostics->mUpPosition = mPosition + contact.mFraction * up;
+		}
 		if (contact.mFraction < 1.0e-6f)
-			return false; // No movement, cancel
+			return finish(EWalkStairsResult::UpBlocked); // No movement, cancel
 
 		// Limit up movement to the first contact point
 		up *= contact.mFraction;
 	}
 	RVec3 up_position = mPosition + up;
+	if (outDiagnostics != nullptr)
+		outDiagnostics->mUpPosition = up_position;
 
 #ifdef JPH_DEBUG_RENDERER
 	// Draw sweep up
@@ -1645,15 +1660,17 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 			&& IsSlopeTooSteep(c.mSurfaceNormal)) // Slope too steep
 			steep_slope_normals.push_back(c.mSurfaceNormal);
 	if (steep_slope_normals.empty())
-		return false; // No steep slopes, cancel
+		return finish(EWalkStairsResult::NoSteep); // No steep slopes, cancel
 
 	// Horizontal movement
 	RVec3 new_position = up_position;
 	MoveShape(new_position, character_velocity, inDeltaTime, nullptr, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter, inAllocator);
+	if (outDiagnostics != nullptr)
+		outDiagnostics->mForwardPosition = new_position;
 	Vec3 horizontal_movement = Vec3(new_position - up_position);
 	float horizontal_movement_sq = horizontal_movement.LengthSq();
 	if (horizontal_movement_sq < 1.0e-8f)
-		return false; // No movement, cancel
+		return finish(EWalkStairsResult::NoHorizontal); // No movement, cancel
 
 	// Check if we made any progress towards any of the steep slopes, if not we just slid along the slope
 	// so we need to cancel the stair walk or else we will move faster than we should as we've done
@@ -1677,7 +1694,7 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 		}
 	}
 	if (!made_progress)
-		return false;
+		return finish(EWalkStairsResult::NoProgress);
 
 #ifdef JPH_DEBUG_RENDERER
 	// Draw horizontal sweep
@@ -1689,8 +1706,14 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 	// Note that we travel the same amount down as we traveled up with the specified extra
 	Vec3 down = -up + inStepDownExtra;
 	if (!GetFirstContactForSweep(new_position, down, contact, dummy_ignored_contacts, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter))
-		return false; // No floor found, we're in mid air, cancel stair walk
+		return finish(EWalkStairsResult::NoFloor); // No floor found, we're in mid air, cancel stair walk
 	RVec3 final_position = new_position + contact.mFraction * down;
+	if (outDiagnostics != nullptr)
+	{
+		outDiagnostics->mFinalPosition = final_position;
+		outDiagnostics->mLandingFraction = contact.mFraction;
+		outDiagnostics->mLandingNormal = contact.mSurfaceNormal;
+	}
 
 	Vec3 surface_normal = contact.mSurfaceNormal;
 	bool too_steep = IsSlopeTooSteep(surface_normal);
@@ -1711,16 +1734,18 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 	{
 		// If no test position was provided, we cancel the stair walk
 		if (inStepForwardTest.IsNearZero())
-			return false;
+			return finish(EWalkStairsResult::NoForwardTest);
 
 		// Delta time may be very small, so it may be that we hit the edge of a step and the normal is too horizontal.
 		// In order to judge if the floor is flat further along the sweep, we test again for a floor at inStepForwardTest
 		// and check if the normal is valid there.
 		RVec3 test_position = up_position;
 		MoveShape(test_position, inStepForwardTest / inDeltaTime, inDeltaTime, nullptr, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter, inAllocator);
+		if (outDiagnostics != nullptr)
+			outDiagnostics->mTestPosition = test_position;
 		float test_horizontal_movement_sq = Vec3(test_position - up_position).LengthSq();
 		if (test_horizontal_movement_sq <= horizontal_movement_sq + 1.0e-8f)
-			return false; // We didn't move any further than in the previous test
+			return finish(EWalkStairsResult::TestNoProgress); // We didn't move any further than in the previous test
 
 	#ifdef JPH_DEBUG_RENDERER
 		// Draw 2nd sweep horizontal
@@ -1731,7 +1756,13 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 		// Then sweep down
 		CharacterContact test_contact;
 		if (!GetFirstContactForSweep(test_position, down, test_contact, dummy_ignored_contacts, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter))
-			return false;
+			return finish(EWalkStairsResult::TestNoFloor);
+		if (outDiagnostics != nullptr)
+		{
+			outDiagnostics->mTestFinalPosition = test_position + test_contact.mFraction * down;
+			outDiagnostics->mTestLandingFraction = test_contact.mFraction;
+			outDiagnostics->mTestLandingNormal = test_contact.mSurfaceNormal;
+		}
 
 		surface_normal = test_contact.mSurfaceNormal;
 		too_steep = IsSlopeTooSteep(surface_normal);
@@ -1749,12 +1780,12 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 	#endif // JPH_DEBUG_RENDERER
 
 		if (too_steep)
-			return false;
+			return finish(EWalkStairsResult::TestSteep);
 	}
 
 	// If we don't gain any height compared to our contact then the stair walk is pointless
 	if (Vec3(final_position - mPosition).Dot(surface_normal) < 1.0e-4f)
-		return false;
+		return finish(EWalkStairsResult::NoHeight);
 
 	// Move the character to the new location
 	MoveToContact(final_position, contact, inBroadPhaseLayerFilter, inObjectLayerFilter, inBodyFilter, inShapeFilter, inAllocator);
@@ -1762,7 +1793,7 @@ bool CharacterVirtual::WalkStairs(float inDeltaTime, Vec3Arg inStepUp, Vec3Arg i
 	// Override ground state to 'on ground', it is possible that the contact normal is too steep, but in this case the inStepForwardTest has found a contact normal that is not too steep
 	mGroundState = EGroundState::OnGround;
 
-	return true;
+	return finish(EWalkStairsResult::Success);
 }
 
 bool CharacterVirtual::StickToFloor(Vec3Arg inStepDown, const BroadPhaseLayerFilter &inBroadPhaseLayerFilter, const ObjectLayerFilter &inObjectLayerFilter, const BodyFilter &inBodyFilter, const ShapeFilter &inShapeFilter, TempAllocator &inAllocator)

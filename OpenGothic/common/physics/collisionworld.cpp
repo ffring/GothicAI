@@ -806,6 +806,17 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     diagnostic->valid = false;
     diagnostic->dt = dt;
     diagnostic->requested = displacement;
+    diagnostic->requestedVelocity = {};
+    diagnostic->stairDesiredVelocity = {};
+    diagnostic->maxSlopeRadians = maxSlope;
+    diagnostic->stairHeight = stepHeight;
+    diagnostic->stairDesiredDistance = 0.f;
+    diagnostic->stairAchievedDistance = 0.f;
+    diagnostic->stairSupported = false;
+    diagnostic->stairCanWalk = false;
+    diagnostic->stairBlockedByPolicy = false;
+    diagnostic->stairProgressBlocked = false;
+    diagnostic->stairProbe = {};
     diagnostic->stairAttempted = false;
     diagnostic->stairSucceeded = false;
     diagnostic->stairObstacleId = uint32_t(-1);
@@ -845,6 +856,8 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     if(onGround)
       velocity += groundVelocity;
     velocity += JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    if(diagnostic!=nullptr)
+      diagnostic->requestedVelocity = toCentimeters(velocity);
     character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     const float step = std::max(toMeters(stepHeight),0.f);
@@ -855,6 +868,8 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     settings.mStickToFloorStepDown = JPH::Vec3(0,-step,0);
     const auto oldPosition = character.GetPosition();
     const auto desiredVelocity = character.GetLinearVelocity();
+    if(diagnostic!=nullptr)
+      diagnostic->stairDesiredVelocity = toCentimeters(desiredVelocity);
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
     if(diagnostic!=nullptr)
@@ -877,6 +892,16 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const auto up = character.GetUp();
     const auto desiredStep = (desiredVelocity-desiredVelocity.Dot(up)*up)*seconds;
     const float desiredLength = desiredStep.Length();
+    if(diagnostic!=nullptr) {
+      const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
+      const float achievedLength = desiredLength>0.f ? std::max(0.f,achieved.Dot(desiredStep/desiredLength)) : 0.f;
+      diagnostic->stairDesiredDistance = desiredLength*100.f;
+      diagnostic->stairAchievedDistance = achievedLength*100.f;
+      diagnostic->stairSupported = character.IsSupported();
+      diagnostic->stairCanWalk = character.CanWalkStairs(desiredVelocity);
+      diagnostic->stairBlockedByPolicy = stairObstacle;
+      diagnostic->stairProgressBlocked = achievedLength+1.e-4f<desiredLength;
+      }
     if(step>0.f && !stairObstacle && desiredLength>0.f && character.CanWalkStairs(desiredVelocity)) {
       const auto forward = desiredStep/desiredLength;
       const auto achieved = JPH::Vec3(character.GetPosition()-oldPosition);
@@ -897,11 +922,28 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
             }
           }
         const auto forwardStep = direction*std::max(settings.mWalkStairsMinStepForward,desiredLength-achievedLength);
+        JPH::CharacterVirtual::WalkStairsDiagnostics stairProbe;
         const bool stepped = character.WalkStairs(seconds,up*step,forwardStep,direction*settings.mWalkStairsStepForwardTest,
-                                                settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+                                                settings.mWalkStairsStepDownExtra,broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator,
+                                                diagnostic!=nullptr ? &stairProbe : nullptr);
         if(diagnostic!=nullptr) {
           diagnostic->stairAttempted = true;
           diagnostic->stairSucceeded = stepped;
+          static constexpr const char* reasons[]={"notAttempted","upBlocked","noSteep","noHorizontal","noProgress","noFloor",
+                                                   "noForwardTest","testNoProgress","testNoFloor","testSteep","noHeight","success"};
+          auto& probe=diagnostic->stairProbe;
+          probe.reason = reasons[unsigned(stairProbe.mResult)];
+          probe.upPosition = toCentimeters(JPH::Vec3(stairProbe.mUpPosition));
+          probe.forwardPosition = toCentimeters(JPH::Vec3(stairProbe.mForwardPosition));
+          probe.finalPosition = toCentimeters(JPH::Vec3(stairProbe.mFinalPosition));
+          probe.testPosition = toCentimeters(JPH::Vec3(stairProbe.mTestPosition));
+          probe.testFinalPosition = toCentimeters(JPH::Vec3(stairProbe.mTestFinalPosition));
+          const auto normal=stairProbe.mLandingNormal, testNormal=stairProbe.mTestLandingNormal;
+          probe.landingNormal = Tempest::Vec3(normal.GetX(),normal.GetY(),normal.GetZ());
+          probe.testLandingNormal = Tempest::Vec3(testNormal.GetX(),testNormal.GetY(),testNormal.GetZ());
+          probe.upFraction = stairProbe.mUpFraction;
+          probe.landingFraction = stairProbe.mLandingFraction;
+          probe.testLandingFraction = stairProbe.mTestLandingFraction;
           }
         }
       }

@@ -59,12 +59,26 @@ struct CharacterVirtualDiagnostics {
     std::vector<Contact> contacts;
     };
 
+  struct StairProbe {
+    std::string reason = "notAttempted";
+    Tempest::Vec3 upPosition = {}, forwardPosition = {}, finalPosition = {};
+    Tempest::Vec3 testPosition = {}, testFinalPosition = {};
+    Tempest::Vec3 landingNormal = {}, testLandingNormal = {};
+    float upFraction = 1.f, landingFraction = -1.f, testLandingFraction = -1.f;
+    };
+
   uint64_t dt = 0;
   Tempest::Vec3 requested = {};
+  Tempest::Vec3 requestedVelocity = {}, stairDesiredVelocity = {};
+  float maxSlopeRadians = 0.f, stairHeight = 0.f;
+  float stairDesiredDistance = 0.f, stairAchievedDistance = 0.f;
   Pose before, afterExtendedUpdate, afterStairs;
   NpcMove npcMove;
+  StairProbe stairProbe;
   uint32_t stairObstacleId = uint32_t(-1);
   // ExtendedUpdate includes native floor sticking; automatic native stairs are
   // disabled there. afterStairs is the separate world-stair recipe's result.
+  bool stairSupported = false, stairCanWalk = false, stairBlockedByPolicy = false;
+  bool stairProgressBlocked = false;
   bool stairAttempted = false, stairSucceeded = false, valid = false;
   };
