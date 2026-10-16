@@ -7244,31 +7244,34 @@ async def trace_memory(
             inside.pos[1],
             inside.pos[2] + 750 * math.sin(angle * math.pi / 72),
         )
-        for height in (140, 170)
         for angle in range(144)
     ]
     rays = [
         (*point[:1], point[1] + height, point[2], inside.pos[0], inside.pos[1] + 140, inside.pos[2], 1)
         for height in (140, 170)
-        for point in candidates[:144]
+        for point in candidates
     ]
     (directory / "trace-rays.tsv").write_text(
         "".join(" ".join(str(value) for value in ray) + "\n" for ray in rays), encoding="utf-8"
     )
     await release("wall_query")
     await mark("wall_sample")
-    surfaces = [
-        r
+    surfaces = {
+        r["id"]: r
         for r in read_trace(directory / "physics-results.jsonl")
         if r.get("kind") == "ray"
         and r.get("hit")
-        and abs(r["normal"][1]) < 0.7
-        and r.get("material") not in (1, 2, 255)
-    ]
-    surfaces.sort(key=lambda r: r["material"] != 3)
+        and r.get("material") == 3
+        and 0.2 <= r.get("fraction", 0) <= 0.9
+    }
+    # Vob rays may have a zero normal. Keep the shooter at the ray's supported
+    # origin, rather than placing him in the hit surface and letting collision
+    # recovery move him through the wall. Both nock-height rays must hit wood:
+    # an occluded NPC view alone does not guarantee an arrow misses a doorway.
     candidates = [
-        (r["point"][0] + r["normal"][0] * 150, inside.pos[1], r["point"][2] + r["normal"][2] * 150)
-        for r in surfaces
+        point
+        for angle, point in enumerate(candidates)
+        if angle in surfaces and angle + 144 in surfaces
     ]
     outside = None
     for point in candidates:
@@ -7282,11 +7285,45 @@ async def trace_memory(
             and not view.hero.seen
             and view.hero.distance < 1500
             and abs(position[1] - inside.pos[1]) < 180
+            and math.dist((position[0], position[2]), (point[0], point[2])) < 20
         ):
             outside = position
             break
     if not check(
         "house_wall", bool(outside), f"inside {house}, outside {outside}; {len(candidates)} candidates"
+    ):
+        return _logged(results)
+    # Settling may change ground height. Check the actual shot corridor again
+    # before releasing the archer, at and around the bow's nock height.
+    confirmation = [
+        (
+            outside[0],
+            outside[1] + height,
+            outside[2],
+            inside.pos[0],
+            inside.pos[1] + 140,
+            inside.pos[2],
+            1,
+        )
+        for height in (140, 155, 170)
+    ]
+    (directory / "trace-shot-rays.tsv").write_text(
+        "".join(" ".join(str(value) for value in ray) + "\n" for ray in confirmation),
+        encoding="utf-8",
+    )
+    await release("shot_query")
+    await mark("shot_sample")
+    corridor = [
+        r for r in read_trace(directory / "physics-results.jsonl") if r.get("kind") == "ray"
+    ]
+    if not check(
+        "wooden_shot_corridor",
+        len(corridor) == len(confirmation)
+        and all(
+            r.get("hit") and r.get("material") == 3 and 0.2 <= r.get("fraction", 0) <= 0.9
+            for r in corridor
+        ),
+        corridor,
     ):
         return _logged(results)
     view = await desk.fresh(farmer)
