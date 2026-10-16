@@ -1,3 +1,5 @@
+import pytest
+
 from gothic_ai.cast import Cast, Person, PersonTie, person_problems, problems
 from gothic_ai.characters import Card, Cards, Traits
 from gothic_ai.chronicle import Chronicle
@@ -152,6 +154,34 @@ async def test_a_rejected_character_is_not_kept():
         await _until(lambda: patches.branch is not None)
         made, issues = await cast.introduce(_peddler(like="BAU_950_LOBART"))
         assert made is None and issues and fake.cast == {} and cast.characters() == []
+
+
+@pytest.mark.parametrize("name", ["Хильда", " хИлЬдА "])
+async def test_a_new_character_cannot_take_a_name_of_any_person_of_the_world(name):
+    fake = FakeGame(branch="A")
+    fake.symbols = dict(SYMBOLS)
+    fake.people = [{"npc": "BAU_951_HILDA", "name": "Хильда", "routine": []}]
+    async with connected(fake) as link:
+        patches = StoryPatches(link, MemoryStore(":memory:"))
+        cast = Cast(link, patches)
+        await _until(lambda: patches.branch is not None)
+        made, issues = await cast.introduce(_peddler(name=name))
+        assert made is None and issues == [f"имя «{name.strip()}» уже есть у человека мира"]
+        assert fake.cast == {} and cast.characters() == []
+
+
+async def test_a_new_character_cannot_take_a_name_of_a_directors_character():
+    fake = FakeGame(branch="A")
+    fake.symbols = dict(SYMBOLS)
+    async with connected(fake) as link:
+        patches = StoryPatches(link, MemoryStore(":memory:"))
+        cast = Cast(link, patches)
+        await _until(lambda: patches.branch is not None)
+        made, issues = await cast.introduce(_peddler())
+        assert made is not None and issues == []
+        made, issues = await cast.introduce(_peddler(npc="DIR_NPC_2"))
+        assert made is None and issues == ["имя «Гарет» уже есть у человека мира"]
+        assert len(cast.characters()) == 1
 
 
 GARET = Person(

@@ -112,7 +112,8 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
     llm = FakeBackend(script=[FakeStep("", [greedy]), FakeStep("", [_quest()])], delay=0)
     link_cm, author, chronicle = await _author(fake, llm, graph, MemoryStore(":memory:"))
     try:
-        q = await author.quest(HILDA)
+        premise = "Хильда потеряла пилу после ночного переполоха. Работу надо закончить до дождя."
+        q = await author.quest(HILDA, premise)
         assert q is not None and (q.id, q.giver, q.gold, q.xp) == ("DIR_Q1", HILDA, 20, 50)
         # one stage: bring the saw back, it lies at a point of the field
         [stage] = q.stages
@@ -126,6 +127,8 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
         assert "- FARM1_FIELD — на полях фермы Лобарта, 25 м" in brief and "FARM1_INHOUSE —" not in brief
         assert "- FARM1_ENTRANCE — во дворе перед домом Лобарта, 8 м" in brief and "CITY" not in brief
         assert "Награда: опыт до 50, золото до 50." in brief
+        assert f"Замысел режиссёра: {premise}" in brief
+        assert f"Замысел режиссёра: {premise}" in llm.calls[1][1][0].content
         rejected = llm.calls[1][1][-1].content
         assert "места 'CITY' нет в сводке" in rejected and "золота 500, а можно от 0 до 50" in rejected
 
@@ -193,6 +196,7 @@ async def test_the_author_makes_a_quest_after_a_rejected_proposal(graph):
         again = await author.quest(HILDA)
         assert again is not None and again.id == "DIR_Q2"
         assert "уже были, не повторяйся: «Пила Хильды»" in llm.calls[-1][1][0].content
+        assert "Замысел режиссёра:" not in llm.calls[-1][1][0].content
     finally:
         await link_cm.__aexit__(None, None, None)
 
