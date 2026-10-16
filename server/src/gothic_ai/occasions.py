@@ -20,7 +20,7 @@ from .protocol import GameMessage, Loading, Session, WorldLoaded
 
 log = logging.getLogger(__name__)
 
-PRIORITY = {"deed": 0, "chapter": 1, "arrived": 2, "quiet": 3}
+PRIORITY = {"deed": 0, "vanilla": 1, "chapter": 2, "arrived": 3, "quiet": 4}
 # `claim` is recorded after the ending/reward succeeds. Only a truthful accepted claim counts;
 # a paid lie is no completed quest (vanilla.py and quests.py).
 DEEDS = {"found_out", "story_quest_done", "authored_done", "claim"}
@@ -138,7 +138,7 @@ class Occasions:
             self._wake.set()
 
     def _on_fact(self, fact: Fact) -> None:
-        if fact.get("fact") in DEEDS | LINES | {"died"}:
+        if fact.get("fact") in DEEDS | LINES | {"died", "vanilla_quest"}:
             self._events.append(dict(fact))
 
     async def run(self) -> None:
@@ -240,6 +240,8 @@ class Occasions:
                 fact = self._events.popleft()
                 if fact["fact"] in LINES:
                     self._reset_quiet()
+                elif fact["fact"] == "vanilla_quest":
+                    self._occasion("vanilla", vanilla=fact)
                 elif self._is_deed(fact):
                     self._occasion("deed", deed=fact)
             at = _minutes(self._time)

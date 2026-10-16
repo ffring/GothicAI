@@ -43,3 +43,16 @@ def test_showrunner_opt_in_flag_is_removed(monkeypatch, capsys):
         cli.main()
     assert exit.value.code == 2
     assert "unrecognized arguments: --showrunner" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flags", [[], ["--scenario", "questlog"], ["--no-questlog"]])
+def test_questlog_is_enabled_by_default_including_scenarios(monkeypatch, flags):
+    async def serve(args):
+        assert args.no_questlog == ("--no-questlog" in flags)
+        return 0
+
+    monkeypatch.setattr(cli, "serve", serve)
+    monkeypatch.setattr("sys.argv", ["gothic-ai", "serve", *flags])
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+    assert exit.value.code == 0
