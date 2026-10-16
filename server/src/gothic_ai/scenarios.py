@@ -48,7 +48,7 @@ from .llm import Done, Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, Tool
 from .llm.fake import FakeBackend, FakeStep
 from .lore import Lore
 from .npc_tools import GESTURES as NPC_GESTURES
-from .perception import PerceptionDesk, Sight, trace_name
+from .perception import BEASTS, PerceptionDesk, Sight, trace_name
 from .persona import PersonaProvider, habits_of
 from .places import SIDES, PlaceBook
 from .protocol import (
@@ -976,10 +976,32 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         f"{'done' if queued else 'failed'} (line started after {time.monotonic() - t0:.1f} s)"
     )
 
+    # Fight on the same open, level ground used by the native physics benches.
+    # A tower save can leave the hero on a ledge with no standing room at its height.
+    arena = "NW_XARDAS_TOWER_VALLEY_091"
+    await link.debug("player_goto", waypoint=arena)
+    await link.debug("npc_goto", npc=npc, waypoint=arena, face="PLAYER")
+    # Native animals can otherwise start a different fight before the test wolf.
+    around = (await link.snapshot(npc, fresh=True)).nearby_npcs
+    for other in around:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
+    await link.debug("teleport", near=npc, distance=300)
+
     # 1. the player draws a weapon next to the npc: the npc perceives it (it is free, scripts run)
     await attach_when_free(link, npc)
     await link.act(npc, "go_to_npc", npc="PLAYER", radius=300)
     await link.act(npc, "return_to_routine")
+    # Returning control starts the old tower routine. Hold an ordinary native idle
+    # here and wait for its initialization, including its normal enemy perceptions.
+    bodies = Bodies(link)
+    ready = await bodies.act(
+        npc, "start_activity", state="ZS_STAND_ARMSCROSSED", waypoint=arena,
+        minutes=60, arrive=True, radius=100, timeout=15,
+    )
+    if ready.status != "arrived":
+        current = (await link.routine(npc)).current
+        raise GameError(f"m5b arena preparation: {ready.status} {ready.detail}; state={current}")
     events.clear()
     await link.debug("player_weapon", state="melee")
     e = await event({"weapon_drawn"}, 5)
