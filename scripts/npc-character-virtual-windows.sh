@@ -80,7 +80,7 @@ npccharacter observe end
 stuck end
 label done
 EOF
-      while pgrep -f '^[^ ]*Gothic2Notr[^ /]*( |$)' >/dev/null; do sleep 5; done
+      while pgrep -f '^[^ ]*Gothic2Notr[^ /]*( |$)|^[^ ]*python[0-9.]* [^ ]*bin/pytest' >/dev/null; do sleep 5; done
       if [[ -n "${RUNNER:-}" ]]; then
         mkdir -p "$run/run"
         printf '[GAME]\nnpc_character_virtual=%s\n' "$value" >"$run/run/Gothic.ini"

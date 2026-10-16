@@ -111,7 +111,10 @@ struct StuckLogger::Impl final {
       const auto* activity = npc->interactive();
       const bool occupied = activity!=nullptr && !activity->isLadder() && !activity->isTrueDoor(*npc);
       const bool dialog = Gothic::inst().isNpcInDialogFn && Gothic::inst().isNpcInDialog(*npc);
-      const bool eligible = inRange && !occupied && !dialog &&
+      // A queued destination may already be visible while an uninterruptible
+      // drink/eat animation finishes. Its root sway is not attempted walking.
+      const bool itemInteraction = (npc->bodyState() & BS_MAX)==(BS_ITEMINTERACT & BS_MAX);
+      const bool eligible = inRange && !occupied && !dialog && !itemInteraction &&
                             !npc->isPlayer() && !npc->isDown() && !npc->isTalk() &&
                             npc->talkPartner()==nullptr && !npc->isAttack() && npc->target()==nullptr &&
                             npc->moveHint()!=Npc::GT_Flee && npc->moveHint()!=Npc::GT_Enemy &&
