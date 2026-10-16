@@ -21,7 +21,8 @@ struct StoryEffect final {
   std::string teach;    // teach: attribute, fight, circle, rune, thief, alchemy, smith, trophy (v17)
   std::string arg;      // teach: the scripts' constant (ATR_STRENGTH, NPC_TALENT_1H, SPL_*, POTION_*...)
   std::string var;      // set: global int variable
-  std::string target;   // routine: the npc whose routine changes (instance symbol), empty: this npc
+  std::string target;   // routine: the npc whose routine changes (instance symbol), empty: this npc;
+                        // give with to=npc (v39): the npc that gets it
   std::string routine;  // routine: its name in the scripts (Rtn_<name>_<id>), e.g. START
   std::string topic;    // journal: topic, game codepage
   std::string text;     // journal: entry, game codepage
@@ -32,6 +33,7 @@ struct StoryEffect final {
   int32_t     count  = 1;  // give, create: count; xp: amount; set: value; refuse_talk: seconds;
                            // teach: points (attribute), percent (fight), circle (circle); party: 1 on, 0 off
   bool        toHero = true;  // give: the npc gives to the hero, else the hero to the npc
+  bool        toNpc  = false; // give (v39): the npc gives to another npc (`target`), far from the hero
 
   // `{"do": "give", "item": ..., ...}`; an error if it is malformed or, with a VM, names something
   // the scripts don't have

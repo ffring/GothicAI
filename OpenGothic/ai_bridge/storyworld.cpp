@@ -11,6 +11,8 @@
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/addon/daedalus.hh>
 
+#include "game/inventory.h"
+#include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 
@@ -205,6 +207,14 @@ bool StoryWorld::effects(World& world, const rapidjson::Value& msg, std::string&
       if(!error.empty())
         return false;
       list.push_back(std::move(e));
+      }
+    }
+  for(auto& e : list) {
+    // v39: a mission item (ITEM_MISSION) never goes from one npc to another
+    const size_t id = e.kind=="give" && e.toNpc ? world.script().findSymbolIndex(e.item) : size_t(-1);
+    if(auto* it = id==size_t(-1) ? nullptr : const_cast<Inventory&>(npc->inventory()).getItem(id); it!=nullptr && it->isMission()) {
+      error = "a mission item: " + e.item;
+      return false;
       }
     }
   if(JsonRead::boolean(msg,"check",false)) {

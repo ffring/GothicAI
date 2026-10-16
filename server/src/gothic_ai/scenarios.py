@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from . import characters, programs, questbook, triggers
 from .amends import Amends
@@ -37,6 +37,7 @@ from .daylife import DayDesk
 from .deals import GOLD, Deals
 from .dialogue import DialogueManager, SceneLine, line_duration
 from .director import PROPOSE, Director
+from .errands import Errands
 from .game import GameError, GameLink
 from .gamedata.storygraph import Expr
 from .gossip import WORDS_CM, GossipDesk, Scene
@@ -9430,4 +9431,221 @@ async def witness_check(
             told and t is not None and t.get("tier") == "far" and calls == others,
             {k: t.get(k) for k in ("tier", "told")} if t else "none",
         )
+    return _logged(results)
+
+
+ERRAND_LINES = (
+    (0, "Андре, слушай. Этот бродяга мне про репу наврал — сказал, что в амбаре, а там пусто.", "angry"),
+    (1, "Вот как? Запомню. В ополчении такие не нужны.", "neutral"),
+)
+ERRAND_FAR_WP = "NW_XARDAS_START"  # the tower: far from the farm and from the city
+
+
+async def errand_scenario(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    errands: Errands,
+    rumors: Rumors,
+    gossip: GossipDesk | None,
+    *,
+    variant: Literal["near", "fork", "far"] = "near",
+    npc: str = LOBART,
+    to: str = ANDRE,
+) -> dict[str, str]:
+    """An errand (docs/npc-tools.md, wave 2 step 5: `plan`): Lobart catches the hero lying about the turnips,
+    and to «ты кому-нибудь расскажешь?» sets out to tell Andre tomorrow at 7:00 (model scripted with
+    LLM=fake; every pair's rumor held closed meanwhile, so that only the errand passes it). Checks:
+    - planned: the goal, a fact;
+    - near (SCENARIO=errand): the hero waits where Andre is by then; Lobart sets off at 7:00 from the farm,
+      walks there for real (`there`), finds Andre and tells him in front of the hero: a rumor fact with
+      `how: told` and `goal_done` (`told`), a scene of two voices (`scene`);
+    - fork (SCENARIO=errand_fork): Andre is taken away before Lobart comes, another of the militia stands
+      there: he hears it instead (`goal_done.instead_of`);
+    - far (SCENARIO=errand_far): the hero is at the tower; at 7:00 nothing walks, and when Lobart would be
+      there the fact comes (`far`), his body still at his routine, no model called."""
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    facts = errands.chronicle.facts
+    live = None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm
+    if not await _until(lambda: rumors.social is not None, 30):
+        return _logged({"social": "failed (no people)"})
+    rumors.gate = lambda r, a, b: False  # the schedule passes nothing meanwhile: only the errand does
+    try:
+        await link.debug("time", hour=9, minute=0)
+        ok, claim = await _caught_by(link, dialogue, talk, npc, facts)
+        check("caught", ok, facts("caught")[-1:])
+        if not ok or claim is None:
+            return _logged(results)
+        snap = await link.snapshot(npc, fresh=True)
+        tomorrow = snap.world.day + 2  # as the npc sees days: from 1
+        plan = {"do": "tell", "who": "Андре", "item": "", "count": 0, "day": tomorrow, "hour": 7, "minute": 0}
+        claim.said.append(
+            ("расскажешь", FakeStep("Ещё как. Завтра с утра схожу к Андре, пусть ополчение знает.",
+                                    [ToolCall("plan", plan)]))
+        )  # fmt: skip
+        model = _Recorded(GossipScript(claim, claim, live, lines=ERRAND_LINES, quiet=False))
+        dialogue.llm = model
+        name = talk.people[npc].name if npc in talk.people else "Лобарт"
+        await link.debug("type", text=f"{name}, ты кому-нибудь расскажешь?")
+
+        def goal() -> Any:
+            return next((g for g in errands.goals.values() if g.npc == npc and g.do == "tell"), None)
+
+        planned = await _until(lambda: goal() is not None, 60)
+        g = goal()
+        check("planned", planned and g is not None and g.to == to, g.what() if g is not None else "no goal")
+        if g is None:
+            return _logged(results)
+        talk.end()
+
+        # the night goes by (a leap, as a sleep: everyone at their routine's spots); the hero goes where
+        # Andre will be, or far off
+        before = g.start - 2
+        await link.debug("time", hour=before % GAME_DAY // 60, minute=before % 60)
+        await asyncio.sleep(2)
+        here = await link.snapshot(npc, fresh=True)
+        walk = math.ceil(math.dist(here.npc.pos, errands._spot(to, g.start).pos) / 100 * 1.5 / 3.0)  # type: ignore[union-attr]
+        there = errands._spot(to, g.start + walk)
+        if there is None:
+            return _logged({**results, "spot": f"failed (no spot of {to})"})
+        if variant == "far":
+            await link.debug("player_goto", waypoint=ERRAND_FAR_WP)
+        else:
+            await link.debug("player_goto", waypoint=there.waypoint)
+            await link.debug("skip_important", near=to)  # Andre's greeting would stop the hero
+        asked = len(model.asked)
+        scenes = gossip.scenes if gossip is not None else 0  # before it sets off: the scene may come fast
+        set_off = await _until(lambda: g.state not in ("agreed", "leaving"), 60)
+        if variant == "far":
+            check("away", set_off and g.state == "away", f"{g.state}, there at {clock(g.arrive)}")
+            if g.state != "away":
+                return _logged(results)
+            then = g.arrive + 2
+            await link.debug("time", hour=then % GAME_DAY // 60, minute=then % 60)
+            done = await _until(lambda: g.state in ("done", "failed"), 30)
+            fact = next((f for f in facts("rumor") if f.get("from") == npc and f.get("to") == to), None)
+            snap = await link.snapshot(npc, fresh=True)
+            home = rumors.social.spot(npc, then) if rumors.social is not None else None
+            far = math.dist(snap.npc.pos, home.pos) / 100 if home is not None and home.pos else -1
+            check("far", done and fact is not None and fact.get("how") == "told", f"{g.state}, {fact}")
+            check("body", 0 <= far < 20, f"{far:.0f} m from its routine's spot")
+            check("no_model", len(model.asked) == asked, f"{len(model.asked) - asked} request(s)")
+            return _logged(results)
+        check("set_off", set_off and g.state in ("going", "there"), f"{g.state}, to {there.waypoint}")
+        if g.state not in ("going", "there"):
+            return _logged(results)
+        if variant == "fork":
+            # Andre is taken away before Lobart comes (held there), and one of the militia stands there
+            social = rumors.social
+            guild = social.guilds.get(to) if social is not None else None
+            others = sorted(
+                (n for n, spot in (social.spots() if social is not None else ())
+                 if n not in (npc, to) and social is not None and social.guilds.get(n) == guild
+                 and spot.pos is not None and social.spot(n, g.start + walk) is spot),
+                key=lambda n: math.dist(social.spot(n, g.start + walk).pos, there.pos),  # type: ignore[union-attr, arg-type]
+            )  # fmt: skip
+            if not others:
+                return _logged({**results, "fork": "failed (no other of the guild)"})
+            stand_in = others[0]
+            await link.debug("npc_goto", npc=to, waypoint=ERRAND_FAR_WP)
+            await link.attach(to)
+            await link.debug("npc_goto", npc=stand_in, waypoint=there.waypoint)
+        arrived = await _until(lambda: g.state in ("there", "done", "failed"), 1200)
+        snap = await link.snapshot(npc, fresh=True)
+        far = math.dist(snap.npc.pos, there.pos) / 100
+        check("there", arrived and far < 15, f"{g.state}, {far:.0f} m from {there.waypoint}")
+        done = await _until(lambda: g.state in ("done", "failed"), 120)
+        got = next((f for f in facts("goal_done") if f.get("goal") == g.id), None)
+        hearer = got.get("to") if got else None
+        fact = next((f for f in facts("rumor") if f.get("from") == npc and f.get("to") == hearer), None)
+        if variant == "fork":
+            ok = done and got is not None and got.get("instead_of") == to and hearer != to
+        else:
+            ok = done and got is not None and hearer == to
+        check("told", ok and fact is not None and fact.get("how") == "told", f"{g.state}, {got}, {fact}")
+        played = await _until(lambda: gossip is None or gossip.scenes > scenes, 60)
+        check("scene", played, f"{gossip.scenes if gossip else 0} scene(s)")
+        if variant == "fork":
+            await link.detach(to)
+        return _logged(results)
+    finally:
+        rumors.gate = None
+
+
+async def errand_give_scenario(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, errands: Errands, *, npc: str = HILDA
+) -> dict[str, str]:
+    """A thing taken to someone (docs/npc-tools.md, wave 2 step 5: `plan` with give): the hero asks Hilda to
+    take Lobart 25 gold; she walks out to him and hands it over: her gold −25, his +25, a fact `gave`
+    (`gave`). Then Canthar's letter (a mission item, v39): the errand is turned down with the reason
+    (`letter`). The model scripted with LLM=fake."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    gold, letter = "ITMI_GOLD", "ITWR_CANTHARS_KOMPROBRIEF_MIS"
+    await link.debug("time", hour=9, minute=0)
+    await link.debug("skip_important", near=npc)
+    await link.debug("skip_important", near=LOBART)
+    await link.story_effect(
+        npc, [{"do": "create", "item": gold, "count": 25}, {"do": "create", "item": letter}]
+    )
+    await link.debug("player_goto", to=npc, distance=250)
+    if not await _until(lambda: npc in talk.people and talk.people[npc].distance <= 600, 20):
+        return _logged({"roster": f"failed ({npc} is not around the hero)"})
+
+    def count(snap: Snapshot, item: str) -> int:
+        return next((i.count for i in snap.npc.inventory if i.item.upper() == item), 0)
+
+    hers, his = await link.snapshot(npc, fresh=True), await link.snapshot(LOBART, fresh=True)
+    marked = next((i.mission for i in hers.npc.inventory if i.item.upper() == letter), None)
+    check("marked", marked is True, f"mission: {marked}")
+    name = talk.people[npc].name
+    give = {"do": "give", "who": "Лобарт", "item": gold, "count": 25, "day": 0, "hour": 0, "minute": 0}
+    script = ClaimScript(
+        said=[
+            ("письмо", FakeStep("Письмо? Ладно, отнесу.", [ToolCall("plan", {**give, "item": letter,
+                                                                             "count": 1})])),
+            ("золот", FakeStep("Ладно, отнесу ему.", [ToolCall("plan", give)])),
+        ],
+        told=[],
+        default="Чего тебе?",
+        only=name,
+        others=None if isinstance(dialogue.llm, FakeBackend) else dialogue.llm,
+    )  # fmt: skip
+    dialogue.llm = script
+    await link.debug("type", text=f"{name}, отнеси Лобарту 25 золотых.")
+
+    def goal() -> Any:
+        return next((g for g in errands.goals.values() if g.npc == npc and g.item == gold), None)
+
+    planned = await _until(lambda: goal() is not None, 60)
+    g = goal()
+    check("planned", planned and g is not None, g.what() if g is not None else script.outputs[-1:])
+    if g is None:
+        return _logged(results)
+    talk.end()
+    done = await _until(lambda: g.state in ("done", "failed"), 180)
+    gave = next((f for f in errands.chronicle.facts("gave") if f.get("goal") == g.id), None)
+    hers2, his2 = await link.snapshot(npc, fresh=True), await link.snapshot(LOBART, fresh=True)
+    moved = (count(hers, gold) - count(hers2, gold), count(his2, gold) - count(his, gold))
+    check("gave", done and gave is not None and moved == (25, 25), f"{g.state}, {moved}, {gave}")
+    await asyncio.sleep(3)
+    await link.debug("player_goto", to=npc, distance=250)
+    await _until(lambda: npc in talk.people and talk.people[npc].distance <= 600, 20)
+    outputs = len(script.outputs)
+    await link.debug("type", text=f"{name}, а ещё отнеси Лобарту письмо.")
+    answered = await _until(lambda: len(script.outputs) > outputs, 60)
+    said = script.outputs[outputs:]
+    refused = any("вещь для задания" in o for o in said)
+    check("letter", answered and refused and not any(x.item == letter for x in errands.goals.values()), said)
     return _logged(results)

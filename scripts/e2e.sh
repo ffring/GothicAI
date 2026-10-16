@@ -189,6 +189,16 @@
 #   meet_missed: the clock to a little before he sets off, Malet walks there himself and waits; the hero does
 #       not come: the clock past the end, his word broken (`broken`, promise meet), Malet back to his routine,
 #       and when the hero comes up the missed meeting is before him; TIMEOUT=700
+#   errand: an errand (docs/npc-tools.md, wave 2 step 5, `plan`): Lobart catches the hero lying and, asked
+#       «ты кому-нибудь расскажешь?», sets out to tell Andre tomorrow at 7:00; the night goes by (a leap), the
+#       hero waits where Andre will be; Lobart walks there from the farm, finds Andre and tells him in front of
+#       the hero: a rumor with `how: told`, `goal_done`, a scene of two voices. Starts the TTS service
+#       (TTS=fake); model scripted with LLM=fake; TIMEOUT=1500 (the walk is ~8 min of real time)
+#   errand_fork: the same, but Andre is taken away before Lobart comes: another of the militia there hears it
+#   errand_far: the same, the hero at the tower: nothing walks, the rumor comes as a fact when Lobart would be
+#       there, his body stays at his routine, no model call
+#   errand_give: Hilda takes Lobart 25 gold the hero asks her to (`npc_act give`): her −25, his +25, a fact
+#       `gave`; Canthar's letter (a mission item, v39) is turned down with the reason
 #   programs: the director's programs (docs/story-graph.md, «Исполнение без VM»): a dialog's program read
 #       and given back, the director's in place of an information (a line of its own, gold, experience) and of
 #       a condition, the scripts' one back, a bad one rejected, a dialog of the director with a program, its
@@ -233,7 +243,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

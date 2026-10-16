@@ -37,6 +37,7 @@ from .daylife import DayDesk
 from .deals import Deals
 from .dialogue import DialogueManager
 from .director import Director
+from .errands import Errands
 from .executor import Intent
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
@@ -223,6 +224,7 @@ class ServerState:
         self.lore: lore.Lore | None = None
         self.guide: Guide | None = None
         self.meetings: Meetings | None = None
+        self.errands: Errands | None = None
         self.witnesses: Witnesses | None = None
         self.wrath: Wrath | None = None
         self.beasts: BeastDesk | None = None
@@ -816,6 +818,23 @@ async def serve(args: argparse.Namespace) -> int:
             state.dialogue.extensions.append(state.meetings)
             state.concerns.extra.append(state.meetings.concerns)  # a meeting he did not come to
             meets = asyncio.create_task(state.meetings.run())  # the game's clock, while one is pending
+        errand_clock: asyncio.Task[None] | None = None
+        if args.errands and state.guide is not None:
+            # an npc's goal: go and tell someone of the hero, or take it a thing (docs/npc-tools.md, step 5)
+            state.errands = Errands(
+                link,
+                state.dialogue,
+                talk,
+                state.guide,
+                state.chronicle,
+                state.bodies,
+                rumors=lambda: state.rumors,
+                graph=graph,
+                journal=journal,
+            )
+            state.dialogue.extensions.append(state.errands)
+            state.concerns.extra.append(state.errands.concerns)  # a thing it was to take and did not
+            errand_clock = asyncio.create_task(state.errands.run())
         # the npc checks the hero's words by asking a witness it knows (wave 2 step 3)
         witnesses = state.witnesses = Witnesses(
             link,
@@ -1031,6 +1050,8 @@ async def serve(args: argparse.Namespace) -> int:
             state.day.follow(planner, state.gossip, state.initiative)
             if state.meetings is not None:  # an npc on its way to a meeting or waiting there: first veto
                 state.meetings.attach_planner(planner)
+            if state.errands is not None:  # an npc on an errand
+                state.errands.attach_planner(planner)
             brain = asyncio.create_task(planner.run())
         try:
             await _run_scenario(link)
@@ -1041,6 +1062,8 @@ async def serve(args: argparse.Namespace) -> int:
             asks.cancel()
             if meets is not None:
                 meets.cancel()
+            if errand_clock is not None:
+                errand_clock.cancel()
             for task in directing:
                 task.cancel()
             if brain is not None:
@@ -1172,6 +1195,29 @@ async def serve(args: argparse.Namespace) -> int:
                     state.deals,
                     state.meetings,
                     missed=args.scenario == "meet_missed",
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario in ("errand", "errand_fork", "errand_far"):
+                assert state.dialogue is not None and state.talk is not None and state.errands is not None
+                assert state.rumors is not None
+                results = await scenarios.errand_scenario(
+                    link,
+                    state.dialogue,
+                    state.talk,
+                    state.errands,
+                    state.rumors,
+                    state.gossip,
+                    variant={"errand": "near", "errand_fork": "fork", "errand_far": "far"}[args.scenario],
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "errand_give":
+                assert state.dialogue is not None and state.talk is not None and state.errands is not None
+                results = await scenarios.errand_give_scenario(
+                    link, state.dialogue, state.talk, state.errands
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2013,6 +2059,10 @@ def main() -> None:
             "lead",
             "meet",
             "meet_missed",
+            "errand",
+            "errand_fork",
+            "errand_far",
+            "errand_give",
             "chests",
             "chests_lobart",
             "group",
@@ -2146,6 +2196,13 @@ def main() -> None:
         default=True,
         help="npc's set the hero meetings, a term of a deal, and come there by the hour (docs/npc-tools.md, "
         "wave 2 step 4; needs --lead)",
+    )
+    p.add_argument(
+        "--errands",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="npc's set themselves errands: go and tell someone of the hero, take someone a thing, now or at "
+        "an hour (docs/npc-tools.md, wave 2 step 5; needs --lead)",
     )
     p.add_argument(
         "--interject",

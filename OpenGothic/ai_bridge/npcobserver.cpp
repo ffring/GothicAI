@@ -9,12 +9,14 @@
 #include <utility>
 
 #include "game/gamescript.h"
+#include "game/inventory.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicsnoise.h"
 #include "testbench.h"
 #include "world/aiqueue.h"
 #include "world/movablevobs.h"
 #include "world/waypoint.h"
+#include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
 
@@ -628,6 +630,10 @@ void NpcObserver::act(World& world, const rapidjson::Value& msg) {
     const size_t have = cls==size_t(-1) ? 0 : npc->inventory().itemCount(cls);
     if(have==0) {
       result("rejected","npc has no item " + name);
+      return;
+      }
+    if(auto* it = const_cast<Inventory&>(npc->inventory()).getItem(cls); it!=nullptr && it->isMission()) {
+      result("rejected","a mission item: " + name);  // v39: never between npc's
       return;
       }
     run.item   = cls;

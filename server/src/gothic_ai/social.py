@@ -413,6 +413,21 @@ class Rumors:
         self._pass(r, a, b, clock, how, staging)
         return "told"
 
+    def tell(self, r: Rumor, a: str, b: str) -> Literal["told", "wait", "no"]:
+        """a has set out to tell b (an errand, errands.py): no lot and no day's count, it means to; only the
+        living, what each knows and a's word to keep silent (deals.py). how: told, also when near the hero
+        it is a scene of two voices (gossip.py)."""
+        clock = self.clock
+        if clock is None or self.social is None or a in self.dead or b in self.dead:
+            return "no"
+        if a not in r.known or b in r.known or a in r.silent:
+            return "no"
+        staging = self._staging(r, a, b)
+        if staging is not None and staging.tier == "wait":
+            return "wait"
+        self._pass(r, a, b, clock, "told", staging)
+        return "told"
+
     def offer(self, r: Rumor, a: str, b: str) -> bool:
         """offer_status of a meeting: True if it passed (busy now: the view trigger asks again later)."""
         return self.offer_status(r, a, b) == "told"
@@ -457,8 +472,8 @@ class Rumors:
     def _pass(self, r: Rumor, a: str, b: str, t: int, how: str, staging: Staging | None) -> None:
         """b hears it from a: the fact first; then, said or seen, how it looks (gossip.py)."""
         shown = staging if staging is not None and staging.tier in ("words", "sight") else None
-        if shown is not None and shown.tier == "words":
-            how = "talked"
+        if shown is not None and shown.tier == "words" and how != "told":
+            how = "talked"  # an errand's stays told: it went to tell it
         fact = self._learn(r, b, a, t, how, shown.keys() if shown is not None else None)
         if self.waiting:
             self.waiting.pop((r.key, a, b), None)

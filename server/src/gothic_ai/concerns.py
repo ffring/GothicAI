@@ -25,7 +25,7 @@ from .deals import GOLD, Deals, Debt
 from .game import GameLink
 from .protocol import GameMessage, Loading, Session
 
-RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "debt_due": 2}
+RANK = {"debt_broken": 0, "lied": 1, "witness": 1, "debt_due": 2, "errand": 2}
 # the facts that change what an npc has on its mind; deals.py updates its debts before it records them
 FACTS = frozenset(
     {
