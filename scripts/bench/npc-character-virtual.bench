@@ -7,7 +7,7 @@ movable on
 off: npccharacter off
 on: npccharacter on
 view full
-overlay on
+overlay off
 
 npccharacter route stairs
 cam auto 400 130

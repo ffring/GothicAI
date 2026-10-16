@@ -1,5 +1,5 @@
-# Candidate authored Lobart farm BENCH at the living-seat anchor.
-# Incomplete: the current source save fails the available-BENCH precondition.
+# One authored harbour BENCH pinned by its nearest exact stock waypoint.
+# Every rejected candidate and the actual chosen geometry are recorded in events.jsonl.
 # Native grounded AI_GoToPoint -> AI_UseMob -> native stand. One fixed clear view.
 seed 73013
 cheat god
@@ -8,7 +8,7 @@ off: npccharacter off
 on: npccharacter on
 view full
 overlay off
-npccharacter seat
+npccharacter seat NW_CITY_HABOUR_06_C
 wait 1000
 rec npc_seat_and_rise
 npccharacter sit

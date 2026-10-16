@@ -4849,77 +4849,121 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));route.npc->aiPush(AiQueue::aiWait(60000));
     }
   else if(c=="npccharacter" && a.size()==2 && a[1]=="end") npcCharacterEnd(w);
-  else if(c=="npccharacter" && a.size()==2 && a[1]=="seat") {
+  else if(c=="npccharacter" && (a.size()==2 || a.size()==3) && a[1]=="seat") {
     auto& route=bench.npcCharacterRoute;
     if(route.npc) {w.removeNpc(*route.npc);route.npc=nullptr;}
     if(bench.characterItem) {w.removeItem(*bench.characterItem);bench.characterItem=nullptr;}
     route=Bench::NpcCharacterRoute();route.name="seat";
-    // Use the authored BENCH at the same farm anchor as living-seat.bench.
-    // Coragon's nearest BENCH is behind the bar and cannot be filmed clearly.
-    const auto* anchor=w.findPoint("NW_FARM1_INHOUSE_01");
-    if(!anchor) {arenaAbort("NPC character BENCH fixture lacks its farm anchor");return;}
-    const auto reference=w.physic()->landRay(anchor->position()+Vec3(0,80,0),200.f);
-    if(!reference.hasCol) {arenaAbort("NPC character farm anchor has no supported floor");return;}
-    const float floorReference=reference.v.y;
-    characterFreezeNear(w,pl,reference.v,reference.v);
-    pl.stopWalking();pl.setPosition(reference.v);pl.updateTransform();
-    route.npc=npcCharacterActor(w,reference.v);if(!route.npc)return;
-    bench.subject=route.npc;
-    route.seat=w.availableMob(*route.npc,"BENCH");
-    if(!route.seat) {arenaAbort("NPC character seat requires the available authored BENCH near NW_FARM1_INHOUSE_01");return;}
-    const auto socket=route.seat->nearestPoint(*route.npc);
-    bool prepared=false;
-    // The animation socket can lie on a furniture top. Approach it from the
-    // actual supported floor, below tabletop/seat ray hits, with a free capsule.
-    for(float distance:{240.f,280.f,320.f})for(unsigned step=0;step<24 && !prepared;++step) {
-      const float yaw=float(step)*float(M_PI)/12.f;
-      auto at=socket+Vec3(std::cos(yaw)*distance,0,std::sin(yaw)*distance);
-      const auto floor=w.physic()->landRay(Vec3(at.x,floorReference+50.f,at.z),150.f);
-      if(!floor.hasCol || std::abs(floor.v.y-floorReference)>20.f)continue;
-      at.y=floor.v.y;route.npc->setPosition(at);route.npc->updateTransform();
-      if(route.npc->hasCollision())continue;
-      if(w.availableMob(*route.npc,"BENCH")!=route.seat)continue;
-      auto toward=socket-at;toward.y=0;toward=Vec3::normalize(toward);
-      const auto approachEnd=socket-toward*120.f;
-      auto previous=at;bool lane=true;
-      for(unsigned sample=1;sample<=12;++sample) {
-        auto point=at+(approachEnd-at)*(float(sample)/12.f);
-        const auto support=w.physic()->landRay(Vec3(point.x,floorReference+50.f,point.z),150.f);
-        if(!support.hasCol || std::abs(support.v.y-at.y)>20.f) {lane=false;break;}
-        point.y=support.v.y;
-        if(w.physic()->ray(previous+Vec3(0,100,0),point+Vec3(0,100,0)).hasCol) {lane=false;break;}
-        previous=point;
+    const WayPoint* requestedAnchor=a.size()==3?w.findPoint(a[2],false):nullptr;
+    if(a.size()==3 && !requestedAnchor) {arenaAbort("NPC character seat requested an unknown exact waypoint");return;}
+    struct Candidate {Interactive* mob=nullptr;const WayPoint* waypoint=nullptr;uint32_t id=0;unsigned region=0;float distance=0;};
+    std::vector<Candidate> candidates;
+    Npc* coragon=nullptr;
+    for(uint32_t id=0;id<w.npcCount();++id)
+      if(auto* npc=w.npcById(id);npc && symName(w,npc)=="VLK_420_CORAGON") {coragon=npc;break;}
+    for(uint32_t id=0;;++id) {
+      auto* mob=w.mobsiById(id);if(!mob)break;
+      if(mob->schemeName()!="BENCH")continue;
+      const auto* waypoint=w.findWayPoint(mob->position());
+      if(requestedAnchor && (!waypoint || waypoint->name!=requestedAnchor->name))continue;
+      unsigned region=4;
+      if(waypoint) {
+        const auto& name=waypoint->name;
+        const bool harbour=name.starts_with("NW_CITY_") &&
+          (name.find("HABOUR")!=std::string::npos || name.find("HARBOUR")!=std::string::npos || name.find("HARBOR")!=std::string::npos);
+        region=harbour?0:(name.starts_with("NW_BIGFARM") || name.starts_with("NW_FARM")?1:name.starts_with("NW_CITY_")?3:2);
         }
-      if(!lane)continue;
-      route.npc->setPosition(previous);route.npc->updateTransform();
-      const auto usePosition=route.seat->nearestPoint(*route.npc);
-      if(route.npc->hasCollision() || (route.npc->centerPosition()-usePosition).length()>140.f ||
-         w.availableMob(*route.npc,"BENCH")!=route.seat)continue;
-      route.destination=WayPoint(previous,"FP_NPC_CHARACTER_SEAT_APPROACH");route.destination.groundPos=previous;
-      route.start=at;prepared=true;
+      candidates.push_back({mob,waypoint,id,region,waypoint?(waypoint->position()-mob->position()).length():1e10f});
       }
-    if(!prepared) {arenaAbort("NPC character BENCH has no supported collision-free floor approach");return;}
-    route.goal=socket;route.name="seat";
+    std::sort(candidates.begin(),candidates.end(),[](const Candidate& a,const Candidate& b) {
+      if(a.region!=b.region)return a.region<b.region;
+      if(a.distance!=b.distance)return a.distance<b.distance;
+      return a.id<b.id;
+      });
+    // An explicit waypoint pins one authored BENCH by geometry. Occupancy or
+    // failed native preconditions must not silently select a different seat.
+    if(requestedAnchor && candidates.size()>1)candidates.resize(1);
+    event("npc_character_seat_candidates","\"count\":"+std::to_string(candidates.size())+
+      ",\"requested_waypoint\":"+jsonStr(requestedAnchor?requestedAnchor->name:std::string()));
+    Vec3 socket,camera,focus;std::string anchorName;bool selected=false;
+    uint32_t selectedId=uint32_t(-1);
+    for(const auto& candidate:candidates) {
+      auto* mob=candidate.mob;
+      const auto candidateEvent=[&](std::string_view reason) {
+        event("npc_character_seat_candidate","\"mob_id\":"+std::to_string(candidate.id)+",\"scheme\":"+jsonStr(mob->schemeName())+
+          ",\"vob\":"+jsonStr(mob->vobNameStr())+",\"mob_cm\":"+ragdollVector(mob->position())+
+          ",\"waypoint\":"+jsonStr(candidate.waypoint?candidate.waypoint->name:std::string())+
+          ",\"available\":"+(mob->isAvailable()?"true":"false")+",\"state\":"+std::to_string(mob->stateId())+
+          ",\"reason\":"+jsonStr(reason));
+        };
+      if(!mob->isAvailable() || mob->stateId()>0) {candidateEvent("occupied_or_active");continue;}
+      if(coragon && (mob->position()-coragon->position()).length()<1500.f) {candidateEvent("coragon_bar_excluded");continue;}
+      if(!candidate.waypoint || candidate.distance>1000.f) {candidateEvent("no_nearby_authored_waypoint");continue;}
+      const auto reference=w.physic()->landRay(candidate.waypoint->position()+Vec3(0,80,0),200.f);
+      if(!reference.hasCol) {candidateEvent("waypoint_has_no_supported_floor");continue;}
+      const float floorReference=reference.v.y;
+      if(std::abs(mob->position().y-floorReference)>200.f) {candidateEvent("floor_in_different_storey");continue;}
+      if(!route.npc)route.npc=npcCharacterActor(w,reference.v);
+      if(!route.npc)return;
+      route.npc->setPosition(reference.v);route.npc->updateTransform();
+      socket=mob->nearestPoint(*route.npc);
+      bool prepared=false;
+      // A native animation socket is not an approach point. Find ordinary
+      // supported floor for a real GoToPoint, within UseMob's 165 cm range.
+      for(float distance:{240.f,280.f,320.f})for(unsigned step=0;step<24 && !prepared;++step) {
+        const float yaw=float(step)*float(M_PI)/12.f;
+        auto at=socket+Vec3(std::cos(yaw)*distance,0,std::sin(yaw)*distance);
+        const auto floor=w.physic()->landRay(Vec3(at.x,floorReference+50.f,at.z),150.f);
+        if(!floor.hasCol || std::abs(floor.v.y-floorReference)>20.f)continue;
+        at.y=floor.v.y;route.npc->setPosition(at);route.npc->updateTransform();
+        if(route.npc->hasCollision() || w.availableMob(*route.npc,"BENCH")!=mob)continue;
+        auto toward=socket-at;toward.y=0;toward=Vec3::normalize(toward);
+        const auto approachEnd=socket-toward*120.f;
+        auto previous=at;bool lane=true;
+        for(unsigned sample=1;sample<=12;++sample) {
+          auto point=at+(approachEnd-at)*(float(sample)/12.f);
+          const auto support=w.physic()->landRay(Vec3(point.x,floorReference+50.f,point.z),150.f);
+          if(!support.hasCol || std::abs(support.v.y-at.y)>20.f) {lane=false;break;}
+          point.y=support.v.y;
+          if(w.physic()->ray(previous+Vec3(0,100,0),point+Vec3(0,100,0)).hasCol) {lane=false;break;}
+          previous=point;
+          }
+        if(!lane)continue;
+        route.npc->setPosition(previous);route.npc->updateTransform();
+        const auto usePosition=mob->nearestPoint(*route.npc);
+        if(route.npc->hasCollision() || (route.npc->centerPosition()-usePosition).length()>140.f ||
+           w.availableMob(*route.npc,"BENCH")!=mob)continue;
+        route.destination=WayPoint(previous,"FP_NPC_CHARACTER_SEAT_APPROACH");route.destination.groundPos=previous;
+        route.start=at;prepared=true;
+        }
+      if(!prepared) {candidateEvent("no_supported_collision_free_approach");continue;}
+      // Check one fixed camera against both the approach and the actual
+      // seated/standing socket area, rather than hiding room geometry.
+      focus=(route.start+socket)*.5f;focus.y=floorReference+130.f;
+      const Vec3 targets[]{route.start+Vec3(0,10,0),route.start+Vec3(0,130,0),
+                           route.destination.position()+Vec3(0,10,0),route.destination.position()+Vec3(0,130,0),
+                           Vec3(socket.x,floorReference+50.f,socket.z),socket+Vec3(0,60,0),socket+Vec3(0,150,0)};
+      bool visible=false;
+      for(float distance:{450.f,550.f,350.f})for(float height:{170.f,140.f,220.f})for(unsigned step=0;step<48 && !visible;++step) {
+        const float yaw=float(step)*float(M_PI)/24.f;
+        const Vec3 at(focus.x+std::cos(yaw)*distance,floorReference+height,focus.z+std::sin(yaw)*distance);
+        bool clear=true;
+        for(const auto& target:targets)if(hidden(w,at,target)) {clear=false;break;}
+        if(clear) {camera=at;visible=true;}
+        }
+      if(!visible) {candidateEvent("no_clear_fixed_view");continue;}
+      route.seat=mob;route.goal=socket;anchorName=candidate.waypoint->name;selectedId=candidate.id;
+      selected=true;candidateEvent("selected");break;
+      }
+    if(!selected) {arenaAbort("no free authored BENCH has a supported native approach and clear fixed view");return;}
+    characterFreezeNear(w,pl,route.start,route.goal);
     route.npc->stopWalking();route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+    route.npc->setExternalControl(true);route.npc->aiPush(AiQueue::aiWait(60000));
     route.preparationSample=route.start;route.sawPreparationSample=true;route.supportSince=w.tickCount();
-    npcCharacterPlaceHero(w,pl,route.start,route.goal);
-    // Hold one clear world-space view for the whole approach/sit/rise. Camera
-    // auto-follow can otherwise flip through the room's walls during root alignment.
-    auto focus=(route.start+socket)*.5f;focus.y=floorReference+130.f;
-    const Vec3 targets[]{route.start+Vec3(0,130,0),route.destination.position()+Vec3(0,130,0),
-                         socket+Vec3(0,60,0),socket+Vec3(0,150,0)};
-    Vec3 camera;bool visible=false;
-    for(float distance:{450.f,550.f,350.f})for(float height:{170.f,140.f,220.f})for(unsigned step=0;step<48 && !visible;++step) {
-      const float yaw=float(step)*float(M_PI)/24.f;
-      const Vec3 candidate(focus.x+std::cos(yaw)*distance,floorReference+height,focus.z+std::sin(yaw)*distance);
-      bool clear=true;
-      for(const auto& target:targets)if(hidden(w,candidate,target)) {clear=false;break;}
-      if(clear) {camera=candidate;visible=true;}
-      }
-    if(!visible) {arenaAbort("NPC character BENCH lacks a clear fixed view of its approach and seated pose");return;}
+    bench.subject=route.npc;npcCharacterPlaceHero(w,pl,route.start,route.goal);
     bench.cam=C_Hold;bench.camAuto=false;lookFrom(camera,focus);
     event("npc_character_seat_setup","\"scheme\":"+jsonStr(route.seat->schemeName())+",\"vob\":"+jsonStr(route.seat->vobNameStr())+
-      ",\"anchor\":\"NW_FARM1_INHOUSE_01\",\"mob_cm\":"+ragdollVector(route.seat->position())+
+      ",\"mob_id\":"+std::to_string(selectedId)+",\"anchor\":"+jsonStr(anchorName)+",\"mob_cm\":"+ragdollVector(route.seat->position())+
       ",\"socket_cm\":"+ragdollVector(socket)+",\"start_cm\":"+ragdollVector(route.start)+
       ",\"approach_cm\":"+ragdollVector(route.destination.position())+",\"camera_cm\":"+ragdollVector(camera)+
       ",\"camera_target_cm\":"+ragdollVector(focus)+",\"camera_clear\":true");

@@ -10,8 +10,9 @@ from collections import defaultdict
 from pathlib import Path
 
 
-WINDOWS = ('market-7', 'market-20', 'harbour-7', 'harbour-20',
-           'onar-7', 'onar-20', 'lobart-7', 'lobart-20')
+SPOTS = ('market', 'harbour', 'onar', 'lobart')
+WINDOWS = tuple(f'{spot}-{hour}' for spot in SPOTS for hour in (7, 20))
+WINDOW_MS = 248300
 ROUTES = ('stairs', 'doorway', 'tavern', 'seat')
 BOOLEAN_COLUMNS = {'cv_enabled', 'cv_active', 'moving', 'in_air', 'interactive',
                    'captured', 'normal_clock'}
@@ -109,7 +110,10 @@ def load_run(directory, enabled, require_frames=True):
             run['errors'].append(str(error))
     log = directory / 'bench.log'
     if log.is_file():
-        run['complete'] = 'done' in log.read_text().splitlines()
+        lines = log.read_text().splitlines()
+        run['complete'] = 'done' in lines
+        run['errors'] += [f'bench error: {line}' for line in lines
+                          if 'failed' in line or 'unknown command' in line]
     run['pass'] = combined([False if run['errors'] else True,
                             None if run['missing'] else True,
                             True if run['complete'] is True else None])
@@ -327,14 +331,26 @@ def stuck_observation(directory, label):
             'stuck_events': count, 'censored_events': censored, 'unique_walkers': int(row['unique_walkers'])}
 
 
-def window_result(directory, label, enabled):
+def window_result(directory, label, enabled, require_runner_summary=False):
     run = load_run(directory, enabled, require_frames=False)
     stuck = stuck_observation(directory, label)
+    begin = unique_event(run, 'npc_character_observe_begin', 'window', label)
     observe = unique_event(run, 'npc_character_observe_end', 'window', label)
+    summary_path = directory / 'runner-summary.json'
+    runner_summary = json.loads(summary_path.read_text()) if summary_path.is_file() else None
+    runner_complete = None if require_runner_summary else True
+    if runner_summary is not None:
+        runner_complete = (runner_summary.get('done') is True and runner_summary.get('loaded') is True and
+                           runner_summary.get('mode') == 'lockstep' and
+                           runner_summary.get('graphics_device_created') is False and
+                           runner_summary.get('window_created') is False and
+                           runner_summary.get('audio_device_created') is False and
+                           number(runner_summary.get('simulated_ms', 0)) >= WINDOW_MS)
     result = {'directory': str(directory), 'run': run_status(run), 'stuck': stuck,
               'native_observe': observe, 'unique_reached_humans': None,
               'reached_human_ids': None, 'arrival_event_count': None,
-              'arrival_event_count_matches': None, 'pass': None}
+              'arrival_event_count_matches': None, 'observation_complete': None,
+              'runner_summary': runner_summary, 'runner_complete': runner_complete, 'pass': None}
     if observe is not None:
         required = ('window_ms', 'unique_walkers', 'reached_goals', 'frames', 'cv_actor_frames', 'max_nearby_humans')
         require(all(number(observe[key]) >= 0 for key in required), f'{directory}: negative observe metric')
@@ -344,9 +360,17 @@ def window_result(directory, label, enabled):
             npc_id = number(row['npc_id'])
             require(npc_id >= 0 and npc_id.is_integer(), f'{directory}: invalid arrival NPC id')
             reached_ids.add(int(npc_id))
+        observation_complete = None
+        if begin is not None:
+            observation_complete = (abs(number(observe['window_ms']) - WINDOW_MS) <= 100 and
+                                    number(observe['t']) - number(begin['t']) == number(observe['window_ms']) and
+                                    all(number(begin['t']) <= number(row['t']) <= number(observe['t']) for row in arrivals) and
+                                    number(begin['radius_cm']) == number(observe['radius_cm']) and
+                                    flag(begin['humans_only']))
         result.update(unique_reached_humans=len(reached_ids), reached_human_ids=sorted(reached_ids),
                       arrival_event_count=len(arrivals),
-                      arrival_event_count_matches=len(arrivals) == number(observe['reached_goals']))
+                      arrival_event_count_matches=len(arrivals) == number(observe['reached_goals']),
+                      observation_complete=observation_complete)
         native = number(observe['frames']) > 0 and (number(observe['cv_actor_frames']) > 0 if enabled
                                                    else number(observe['cv_actor_frames']) == 0)
         summary = stuck.get('summary')
@@ -358,15 +382,16 @@ def window_result(directory, label, enabled):
         result['same_sample'] = same_sample
         result['pass'] = combined([run['pass'], stuck['pass'], native, same_sample,
                                    result['arrival_event_count_matches'],
-                                   flag(observe['humans_only'])])
+                                   flag(observe['humans_only']), observation_complete, runner_complete])
     return result
 
 
-def compare_windows(directory):
+def compare_windows(directory, spots=None, require_runner_summary=False):
     rows = []
-    for label in WINDOWS:
-        before = window_result(directory / 'off' / label, label, False)
-        after = window_result(directory / 'on' / label, label, True)
+    labels = [f'{spot}-{hour}' for spot in dict.fromkeys(spots or SPOTS) for hour in (7, 20)]
+    for label in labels:
+        before = window_result(directory / 'off' / label, label, False, require_runner_summary)
+        after = window_result(directory / 'on' / label, label, True, require_runner_summary)
         matched = progress = None
         a, b = before['stuck'].get('summary'), after['stuck'].get('summary')
         if a is not None and b is not None:
@@ -384,7 +409,8 @@ def compare_windows(directory):
         rows.append({'window': label, 'off': before, 'on': after, 'matched_window': matched,
                      'progress_pass': progress,
                      'pass': combined([before['pass'], after['pass'], matched, progress])})
-    return {'windows': rows, 'pass': combined([row['pass'] for row in rows])}
+    return {'windows': rows, 'selected_windows': labels, 'full_suite': set(labels) == set(WINDOWS),
+            'expected_runs': len(labels) * 2, 'pass': combined([row['pass'] for row in rows])}
 
 
 def run_status(run):
@@ -424,7 +450,10 @@ def markdown(result):
                            ('Макс. высота корня над полом, см', 'max_above_floor_cm')):
             lines.append(f"| {label} | {display(tavern['off'].get(key))} | {display(tavern['on'].get(key))} |")
         lines += ['', 'Высота над полом приведена как измерение; она сама по себе не доказывает отсутствие опоры на кружку.']
-    lines += ['', '| Окно | Застревания OFF / ON | Цензурированные OFF / ON | Уникальные идущие (детектор) OFF / ON | Уникальные идущие (native observe) OFF / ON | Людей дошло OFF / ON | Достигнутые цели OFF / ON | CV actor-frames ON | Та же выборка | Итог |',
+    selected = result['windows']['selected_windows']
+    coverage = 'полный набор' if result['windows']['full_suite'] else 'выбранная часть набора'
+    lines += ['', f"Окна: {len(selected)}/8 пар OFF/ON ({coverage}); требуются все {result['windows']['expected_runs']} запусков выбранных пар по {WINDOW_MS} мс наблюдения.",
+              '', '| Окно | Застревания OFF / ON | Цензурированные OFF / ON | Уникальные идущие (детектор) OFF / ON | Уникальные идущие (native observe) OFF / ON | Людей дошло OFF / ON | Достигнутые цели OFF / ON | CV actor-frames ON | Та же выборка | Итог |',
               '|---|---:|---:|---:|---:|---:|---:|---:|---|---|']
     for row in result['windows']['windows']:
         before, after = row['off'], row['on']
@@ -458,10 +487,30 @@ def main():
     parser.add_argument('--performance-off', '--perf-off', type=Path)
     parser.add_argument('--performance-on', '--perf-on', type=Path)
     parser.add_argument('--windows', type=Path)
+    parser.add_argument('--window-spot', action='append', choices=SPOTS,
+                        help='Repeat to compare selected spots (both hours and both modes); default all four')
+    parser.add_argument('--check-window', type=Path, help='Validate one completed observation and exit')
+    parser.add_argument('--window-label', choices=WINDOWS)
+    parser.add_argument('--window-mode', choices=('off', 'on'))
+    parser.add_argument('--require-runner-summary', action='store_true', help='Require completed CPU-runner metadata for every selected window')
     parser.add_argument('--required-route', action='append', default=[], help='Repeat to require a fixture even when no route end was recorded')
     parser.add_argument('--min-nearby-humans', type=int, default=18)
     parser.add_argument('--output', type=Path, help='Markdown output and JSON beside it; .json selects the JSON destination')
     args = parser.parse_args()
+    if args.check_window is not None:
+        if args.window_label is None or args.window_mode is None:
+            parser.error('--check-window requires --window-label and --window-mode')
+        try:
+            checked = window_result(args.check_window, args.window_label, args.window_mode == 'on',
+                                    args.require_runner_summary)
+            result = {key: checked[key] for key in ('pass', 'unique_reached_humans', 'arrival_event_count',
+                       'arrival_event_count_matches', 'observation_complete', 'runner_complete')}
+            result.update(window=args.window_label, mode=args.window_mode, run=checked['run'],
+                          stuck_pass=checked['stuck']['pass'], same_sample=checked.get('same_sample'))
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            result = {'pass': False, 'error': str(error)}
+        print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+        return 0 if result['pass'] is True else 1 if result['pass'] is False else 2
     try:
         require(args.min_nearby_humans > 0, 'minimum nearby humans must be positive')
         root = args.directory
@@ -471,7 +520,7 @@ def main():
         perf_on = load_run(args.performance_on or root / 'performance-on', True)
         routes = compare_routes(routes_off, routes_on, args.required_route)
         perf = compare_performance(perf_off, perf_on, args.min_nearby_humans)
-        windows = compare_windows(args.windows or root / 'windows')
+        windows = compare_windows(args.windows or root / 'windows', args.window_spot, args.require_runner_summary)
         result = {'pass': combined([routes['pass'], perf['pass'], windows['pass']]),
                   'minimum_nearby_humans': args.min_nearby_humans, 'routes': routes,
                   'performance': perf, 'windows': windows,
