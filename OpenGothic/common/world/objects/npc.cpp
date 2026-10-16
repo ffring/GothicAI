@@ -349,6 +349,7 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
 
   fin.read(x,y,z,angle,sz);
   resetCharacterVisualHeight();
+  lieVisualYOffset=0;
   fin.read(wlkMode,trGuild,talentsSk,talentsVl,refuseTalkMilis);
   durtyTranform = TR_Pos|TR_Rot|TR_Scale;
   if(fin.version()<55)
@@ -1362,8 +1363,9 @@ Matrix4x4 Npc::transform() const {
   auto matrix = visual.transform();
   // Gameplay users of this matrix retain the exact origin. The presentation
   // correction belongs to the model, its attachments and the foot IK frame only.
-  if(characterVisualYOffset!=0)
-    matrix.set(3,1,matrix.at(3,1)-characterVisualYOffset);
+  const float visualOffset=characterVisualYOffset+lieVisualYOffset;
+  if(visualOffset!=0)
+    matrix.set(3,1,matrix.at(3,1)-visualOffset);
   return matrix;
   }
 
@@ -3310,7 +3312,9 @@ void Npc::takeFallDamage(const Vec3& fallSpeed) {
       if(std::cos(da*M_PI/180.0)<0 || Vec2(fallSpeed.x,fallSpeed.z).length()<0.1f)
         lastHitType='A'; else
         lastHitType='B';
-      setAnim(lastHitType=='A' ? Anim::FallenA : Anim::FallenB);
+      // Match the incoming fall so its authored transition refreshes every
+      // bone before the sparse lying loop inherits the pose.
+      setAnim(Anim::Fallen);
       }
     }
   auto dmg = DamageCalculator::damageFall(*this,fallSpeed.length());
@@ -6910,6 +6914,13 @@ void Npc::updateCharacterVisualHeight() {
 
 void Npc::updateAnimation(uint64_t dt, bool force) {
   FrameProfile::Scope timing(FrameProfile::Zone::ActorAnimationCpu,FrameProfile::watchedActor(this));
+  if(lieVisualYOffset!=0) {
+    auto matrix=visual.transform();
+    matrix.set(3,1,matrix.at(3,1)-lieVisualYOffset);
+    lieVisualYOffset=0;
+    // Rebuild even when another animation update happens at the same timestamp.
+    visual.setObjMatrix(matrix,true);
+    }
   const bool frozen = spellFrozen();
   const bool clearedPhysicalPose = visual.clearPhysicalPose();
   const auto camera = Gothic::inst().camera();
@@ -6960,6 +6971,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   syncAtt |= visual.updateAim(*this,dt);
   syncAtt |= visual.updateGaze(*this,dt);
   syncAtt |= visual.updateFlinch(*this,dt);
+  syncAtt |= updateLyingVisualHeight();
   if(living)
     livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
                                               float(std::max<uint64_t>(dt,1))*0.001f);
@@ -6967,4 +6979,28 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)
     visual.syncAttaches();
+  }
+
+bool Npc::updateLyingVisualHeight() {
+  if(!isHuman() || ragdoll || spellFrozen() || !isLie() || mvAlgo.state()!=MoveAlgo::Run || interactive()!=nullptr)
+    return false;
+  Vec3 lowest;
+  if(!visual.minSkinnedVertex(fatness(),lowest))
+    return false;
+  // Look only around the current root and posed surface. A hand over a ledge
+  // must not pull the whole animation down toward a distant lower floor.
+  constexpr float rayMargin=20.f;
+  const Vec3 from(lowest.x,std::max(y,lowest.y)+rayMargin,lowest.z);
+  const float distance=from.y-(std::min(y,lowest.y)-rayMargin);
+  const auto floor=owner.physic()->landRay(from,distance);
+  if(!floor.hasCol || floor.n.y<=.5f)
+    return false;
+  const float offset=floor.v.y-lowest.y;
+  if(!std::isfinite(offset) || offset==0)
+    return false;
+  auto matrix=visual.transform();
+  matrix.set(3,1,matrix.at(3,1)+offset);
+  lieVisualYOffset=offset;
+  visual.setObjMatrix(matrix,true);
+  return true;
   }

@@ -747,6 +747,66 @@ namespace {
             "removing a vob must expire weak arrow attachments without leaving a dangling body");
     }
 
+  void testSkinnedMeshMinimum() {
+    Resources resources;
+    require(!Resources::hasGraphicsDevice(),"skinned minimum geometry contracts must run without a GPU device");
+    zenkit::ModelMesh model;
+    model.meshes.resize(1);
+    auto& skin=model.meshes[0];
+    skin.mesh.positions={{0,10,0},{10,-10,0},{0,20,10},{0,-10000,0}};
+    skin.mesh.bbox={{0,-10000,0},{10,20,10}};
+    skin.mesh.sub_meshes.resize(1);
+    auto& surface=skin.mesh.sub_meshes[0];
+    surface.mat.group=zenkit::MaterialGroup::WOOD;
+    for(uint16_t i=0;i<skin.mesh.positions.size();++i)
+      surface.wedges.push_back({{.6f,-.48f,.64f},{0,0},i});
+    surface.triangles={{{0,1,2}}};
+    skin.weights={{{.4f,{0,10,0},0},{.3f,{0,10,0},1},{.2f,{0,10,0},2},{.1f,{0,10,0},3}},
+                  {{1.f,{10,-10,0},0}},{{1.f,{0,20,10},0}},{{1.f,{0,-10000,0},0}}};
+    skin.nodes={0,1,2,3};
+    const PackedMesh packed(skin);
+    require(packed.verticesA.size()>3,"the skin fixture must contain actual meshlet vertex padding");
+    ProtoMesh mesh(model,nullptr,"CONTRACT_SKIN.MDM");
+    const std::array<Tempest::Matrix4x4,4> localBones={at(0,20,0),at(0,-40,0),at(0,-20,0),at(0,-30,0)};
+    Tempest::Vec3 minimum;
+    require(mesh.minSkinnedVertex(localBones.data(),localBones.size(),at(0,0,0),0,minimum),
+            "an indexed headless soft-skin mesh must expose its posed minimum");
+    // The four heights of the first vertex are 30, -30, -10 and -20 cm.
+    // Their weighted height is -1; dominant-bone sampling instead selects the
+    // second vertex at 10 cm and misses the actual lowest rendered vertex.
+    requireNear(minimum.x,0,.0001f,"four-bone minimum must retain the selected vertex's X");
+    requireNear(minimum.y,-1,.0001f,"all four weighted bones must determine the visible minimum");
+    requireNear(minimum.z,0,.0001f,"four-bone minimum must retain the selected vertex's Z");
+
+    auto object=at(7,100,-11);
+    object.rotateOY(90);
+    object.scale(2,3,4);
+    std::array<Tempest::Matrix4x4,4> worldBones;
+    for(size_t i=0;i<worldBones.size();++i) worldBones[i]=object*localBones[i];
+    require(mesh.minSkinnedVertex(worldBones.data(),worldBones.size(),object,4,minimum),
+            "the minimum must accept an already world-transformed palette and nonuniform object scale");
+    // Rotation and scale put the weighted point at (7,97,-11). The unit
+    // source normal becomes (2.56,-1.44,-1.2); shader fatness 4 adds twice it.
+    requireNear(minimum.x,12.12f,.0001f,"fatness must use the full rotated and scaled source normal");
+    requireNear(minimum.y,94.12f,.0001f,
+                "unindexed vertices and meshlet padding must not lower the rendered skin minimum");
+    requireNear(minimum.z,-13.4f,.0001f,"object translation must not be applied twice to skinned positions");
+    Tempest::Vec3 repeated;
+    require(mesh.minSkinnedVertex(worldBones.data(),worldBones.size(),object,4,repeated),
+            "the same posed geometry must remain queryable without consuming or changing the cache");
+    requireNear((repeated-minimum).length(),0,.0001f,"repeated minimum queries must not accumulate an offset");
+
+    const Tempest::Vec3 sentinel(123,456,789);
+    minimum=sentinel;
+    require(!mesh.minSkinnedVertex(worldBones.data(),3,object,4,minimum),
+            "a missing weighted bone must reject the palette instead of approximating the mesh");
+    requireNear((minimum-sentinel).length(),0,0,"a rejected minimum query must leave its output unchanged");
+    ProtoMesh empty(zenkit::ModelMesh{},nullptr,"CONTRACT_EMPTY_SKIN.MDM");
+    require(!empty.minSkinnedVertex(worldBones.data(),worldBones.size(),object,4,minimum),
+            "a model without rendered skin geometry must have no skinned minimum");
+    requireNear((minimum-sentinel).length(),0,0,"an absent skin must leave the minimum output unchanged");
+    }
+
   void testDestruction() {
     struct CacheFixture {
       std::filesystem::path path;
@@ -3080,6 +3140,7 @@ int main() {
     testMovableVobSave();
     testMovableTraceThresholds();
     testMovableVobArrowIdentity();
+    testSkinnedMeshMinimum();
     testDestruction();
     testRotatingFragments();
     testPhysicsNoise();

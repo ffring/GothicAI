@@ -3865,7 +3865,23 @@ void destructionCheckpoint(World& world) {
   bench.destructionShooting=false;
   }
 
-void destructionSkinSample(const Npc& npc,const ProtoMesh& proto,const Matrix4x4& object) {
+std::string destructionFloorProbe(const Npc& npc,std::string_view label,const Vec3& point) {
+  const auto root=npc.position();
+  const Vec3 from(point.x,std::max(root.y+20.f,point.y+20.f),point.z);
+  const Vec3 to(point.x,std::min(root.y,point.y)-600.f,point.z);
+  const auto hit=npc.world().physic()->landRay(from,from.y-to.y);
+  return "{\"label\":"+jsonStr(label)+",\"reference_cm\":"+ragdollVector(point)+
+    ",\"ray_from_cm\":"+ragdollVector(from)+",\"ray_to_cm\":"+ragdollVector(to)+
+    ",\"found\":"+(hit.hasCol?"true":"false")+
+    ",\"point_cm\":"+(hit.hasCol?ragdollVector(hit.v):"null")+
+    ",\"normal\":"+(hit.hasCol?ragdollVector(hit.n):"null")+
+    ",\"material\":"+std::to_string(int(hit.mat))+
+    ",\"sector\":"+(hit.sector?jsonStr(hit.sector):"null")+
+    ",\"interactive\":"+(hit.vob?"true":"false")+
+    ",\"vertical_delta_cm\":"+(hit.hasCol?ragdollNumber(point.y-hit.v.y):"null")+"}";
+  }
+
+void destructionSkinSample(const Npc& npc,const ProtoMesh& proto,const Matrix4x4& object,const Pose& pose) {
   auto [cache,inserted]=bench.destructionSkinGeometry.try_emplace(&proto);
   if(inserted)
     for(const auto& mesh:proto.skined) {
@@ -3883,8 +3899,26 @@ void destructionSkinSample(const Npc& npc,const ProtoMesh& proto,const Matrix4x4
       }
   const auto* skeleton=npc.visualSkeleton();
   if(cache->second.empty() || !skeleton)return;
-  Vec3 lowest;
+  // Probe a copy because AnimBlend::probe consumes its diagnostic counters.
+  // The real animation and its telemetry remain untouched.
+  Pose rawPose=pose;
+  Pose::Probe raw;
+  rawPose.probe(raw);
+  std::string rawBones="[";
+  if(raw.valid)
+    for(std::string_view name:{"BIP01 PELVIS","BIP01 SPINE2","BIP01 L THIGH","BIP01 L CALF","BIP01 L FOOT",
+                              "BIP01 R THIGH","BIP01 R CALF","BIP01 R FOOT"}) {
+      const auto bone=arrowBone(*skeleton,name);
+      if(bone>=raw.numBones)continue;
+      if(rawBones.size()>1)rawBones+=',';
+      rawBones+="{\"name\":"+jsonStr(name)+",\"bone\":"+std::to_string(bone)+
+        ",\"raw_model_cm\":"+ragdollVector(raw.joint[bone])+"}";
+      }
+  rawBones+=']';
+  Vec3 lowest,highest;
   lowest.y=std::numeric_limits<float>::infinity();
+  highest.y=-std::numeric_limits<float>::infinity();
+  size_t lowestBone=size_t(-1);
   size_t count=0;
   for(const auto& vertex:cache->second) {
     Vec3 point;
@@ -3906,15 +3940,22 @@ void destructionSkinSample(const Npc& npc,const ProtoMesh& proto,const Matrix4x4
     point+=normal*(npc.fatness()*.5f);
     if(!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))continue;
     ++count;
-    if(point.y<lowest.y)lowest=point;
+    if(point.y<lowest.y) {
+      lowest=point;
+      lowestBone=vertex.boneId[size_t(std::max_element(vertex.weights,vertex.weights+4)-vertex.weights)];
+      }
+    if(point.y>highest.y)highest=point;
     }
   if(!count)return;
   auto& physics=*npc.world().physic();
   // The ordinary ray uses exact authored query triangles, excluding the NPC's
-  // own body. A short allowance also measures signed floor penetration.
-  const auto floor=physics.landRay(lowest+Vec3(0,20,0),620.f);
+  // own body. Begin above both the walking root and the lowest skin vertex:
+  // the latter can already be below the visible floor in the failing pose.
+  const Vec3 rayFrom(lowest.x,std::max(npc.position().y+20.f,lowest.y+20.f),lowest.z);
+  const Vec3 rayTo(lowest.x,std::min(npc.position().y,lowest.y)-600.f,lowest.z);
+  const auto floor=physics.landRay(rayFrom,rayFrom.y-rayTo.y);
   bool found=floor.hasCol;
-  Vec3 support=floor.v;
+  Vec3 support=floor.v,supportNormal=floor.n;
   std::string kind="source_mesh",visual;
   uintptr_t parent=0;
   size_t piece=size_t(-1);
@@ -3939,18 +3980,47 @@ void destructionSkinSample(const Npc& npc,const ProtoMesh& proto,const Matrix4x4
       const float u=(p.x*b.z-p.z*b.x)/determinant,v=(a.x*p.z-a.z*p.x)/determinant;
       if(u<0.f || v<0.f || u+v>1.f)continue;
       const float y=vertices[0].y+u*a.y+v*b.y;
-      if(y>lowest.y+20.f || y<lowest.y-600.f || (found && y<=support.y))continue;
+      if(y>rayFrom.y || y<rayTo.y || (found && y<=support.y))continue;
       found=true;support=Vec3(lowest.x,y,lowest.z);
+      supportNormal=Vec3::crossProduct(a,b);
+      if(supportNormal.quadLength()>1.e-8f)supportNormal=Vec3::normalize(supportNormal);
+      if(supportNormal.y<0.f)supportNormal*=-1.f;
       kind="fragment";visual=entry->second;parent=fragment.parentId;piece=fragment.piece;
       }
     }
+  std::string probes="[";
+  const auto probe=[&](std::string_view label,const Vec3& point) {
+    if(probes.size()>1)probes+=',';
+    probes+=destructionFloorProbe(npc,label,point);
+    };
+  probe("root",npc.position());
+  probe("skin_lowest",lowest);probe("skin_highest",highest);
+  for(std::string_view name:{"BIP01 PELVIS","BIP01 L CALF","BIP01 L FOOT","BIP01 R CALF","BIP01 R FOOT"}) {
+    const auto bone=arrowBone(*skeleton,name);
+    if(bone==size_t(-1))continue;
+    Vec3 point;
+    npc.renderedBone(bone).project(point);
+    probe(name,point);
+    }
+  for(const auto center:{std::pair("root",npc.position()),std::pair("skin_lowest",lowest)})
+    for(const auto offset:{std::pair("+x",Vec3(30,0,0)),std::pair("-x",Vec3(-30,0,0)),
+                           std::pair("+z",Vec3(0,0,30)),std::pair("-z",Vec3(0,0,-30))})
+      probe(std::string(center.first)+offset.first,center.second+offset.second);
+  probes+=']';
   bench.destructionSkinSample="{\"mesh\":"+jsonStr(proto.fname)+",\"indexed_vertices\":"+std::to_string(count)+
-    ",\"lowest_world_cm\":"+ragdollVector(lowest)+",\"support_found\":"+(found?"true":"false")+
+    ",\"object_matrix\":"+ragdollMatrix(object)+
+    ",\"object_up\":"+ragdollVector(Vec3(object.at(1,0),object.at(1,1),object.at(1,2)))+
+    ",\"raw_model_bones\":"+rawBones+
+    ",\"lowest_world_cm\":"+ragdollVector(lowest)+",\"highest_world_cm\":"+ragdollVector(highest)+
+    ",\"lowest_dominant_bone\":"+(lowestBone<skeleton->nodes.size()?jsonStr(skeleton->nodes[lowestBone].name):"null")+
+    ",\"ray_from_cm\":"+ragdollVector(rayFrom)+",\"ray_to_cm\":"+ragdollVector(rayTo)+
+    ",\"support_found\":"+(found?"true":"false")+
     ",\"support_kind\":"+jsonStr(kind)+",\"support_visual\":"+jsonStr(visual)+
     ",\"support_parent_id\":"+std::to_string(parent)+",\"support_piece\":"+
     (piece==size_t(-1)?"null":std::to_string(piece))+
     ",\"support_world_cm\":"+(found?ragdollVector(support):"null")+
-    ",\"gap_cm\":"+(found?ragdollNumber(lowest.y-support.y):"null")+"}";
+    ",\"support_normal\":"+(found?ragdollVector(supportNormal):"null")+
+    ",\"gap_cm\":"+(found?ragdollNumber(lowest.y-support.y):"null")+",\"floor_probes\":"+probes+"}";
   }
 
 void destructionSupportSample(World& world) {
@@ -4028,6 +4098,9 @@ void destructionSupportSample(World& world) {
     ",\"reaction_weight\":"+ragdollNumber(rig?rig->reactionWeight():0.f)+
     ",\"ragdoll_enabled\":"+(Gothic::physicsFlags().ragdoll?"true":"false")+
     ",\"spell_physics_enabled\":"+(Gothic::physicsFlags().spellPhysics?"true":"false")+
+    ",\"npc_character_virtual\":"+(Gothic::physicsFlags().npcCharacterVirtual?"true":"false")+
+    ",\"cv_active\":"+(npc.characterVirtualActive()?"true":"false")+
+    ",\"visual_root_cm\":"+ragdollVector(npc.characterVisualPosition())+
     ",\"external_control\":"+(npc.isExternalControl()?"true":"false")+
     ",\"process_policy\":"+std::to_string(int(npc.processPolicy()))+
     ",\"body_state\":"+std::to_string(int(npc.bodyState()))+
@@ -11731,7 +11804,7 @@ bool TestBench::ragdollBodyDrawable(const Npc& npc) {
   const auto& mesh=npc.visual.view;
   if(mesh.cpuOnly) return false;
   if(bench.destructionSkinRequest==&npc && mesh.protoMesh()!=nullptr)
-    destructionSkinSample(npc,*mesh.protoMesh(),npc.visual.transform());
+    destructionSkinSample(npc,*mesh.protoMesh(),npc.visual.transform(),npc.visual.pose());
   for(size_t i=0;i<mesh.subCount;++i) {
     const auto& item=mesh.sub[i];
     if(item.isEmpty()) continue;

@@ -18,7 +18,7 @@ def finite_vector(value, label):
             f'{label}: invalid native vector')
 
 
-def read(directory, start_ms, end_ms, max_gap_cm, strict):
+def read(directory, start_ms, end_ms, max_gap_cm, strict, require_handoff=False, expected_cv=None):
     require('done' in (directory / 'bench.log').read_text().splitlines(), f'{directory}: incomplete scenario')
     rows = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
     errors = [row for row in rows if row['kind'].endswith('_error')]
@@ -52,7 +52,7 @@ def read(directory, start_ms, end_ms, max_gap_cm, strict):
     # walking callback; the old result must hand control to that upward impulse.
     accepted_handoffs = [row for row in handoffs if row['from_state'] == 0 and row['to_state'] == 1 and
                          row['impulse_velocity_cm_s'][1] > 0 and row['backend'] in ('virtual', 'legacy')]
-    if strict and not accepted_handoffs:
+    if strict and require_handoff and not accepted_handoffs:
         problems.append('real fireball has no preserved Run→InAir upward-impulse handoff')
     supports = {}
     observations = []
@@ -64,6 +64,9 @@ def read(directory, start_ms, end_ms, max_gap_cm, strict):
         require(sample['actor'] == 'BAU_904_BAUER' and sample['actor_id'] == begin['spell_target_npc_id'],
                 f'{directory}: support snapshot addresses another NPC')
         finite_vector(sample['position_cm'], f'{time} position')
+        if expected_cv is not None:
+            require(sample.get('npc_character_virtual') is expected_cv,
+                    f'{time}: expected npc_character_virtual={int(expected_cv)}')
         dynamic_ragdoll = sample['rig_kind'] == 'ragdoll' and not sample['kinematic']
         if strict:
             animations = re.findall(r'[A-Z][A-Z0-9_]*', sample.get('animations', '').upper())
@@ -80,6 +83,16 @@ def read(directory, start_ms, end_ms, max_gap_cm, strict):
         else:
             require(skin['indexed_vertices'] > 0, f'{time}: rendered skin has no indexed vertices')
             finite_vector(skin['lowest_world_cm'], f'{time} rendered skin')
+            for probe in skin.get('floor_probes', []):
+                for key in ('reference_cm', 'ray_from_cm', 'ray_to_cm'):
+                    finite_vector(probe[key], f'{time} {probe["label"]} {key}')
+                if not probe['found']:
+                    continue
+                finite_vector(probe['point_cm'], f'{time} {probe["label"]} floor')
+                finite_vector(probe['normal'], f'{time} {probe["label"]} floor normal')
+                require(math.isfinite(probe['vertical_delta_cm']) and
+                        abs(probe['reference_cm'][1] - probe['point_cm'][1] - probe['vertical_delta_cm']) < .02,
+                        f'{time}: floor probe differs from native witness points')
             if not skin['support_found'] or skin['gap_cm'] is None:
                 problems.append(f'{time}: rendered skin has no visible surface below it')
             else:
@@ -148,7 +161,14 @@ def read(directory, start_ms, end_ms, max_gap_cm, strict):
         observations.append({'elapsed_ms': time, 'rig_kind': sample['rig_kind'],
                              'kinematic': sample['kinematic'], 'sleeping': sample['sleeping'],
                              'dynamic_ragdoll': dynamic_ragdoll,
+                             'npc_character_virtual': sample.get('npc_character_virtual'),
+                             'cv_active': sample.get('cv_active'),
+                             'animations': sample.get('animations'), 'root_cm': sample['position_cm'],
+                             'visual_root_cm': sample.get('visual_root_cm'),
+                             'object_up': skin.get('object_up') if skin is not None else None,
+                             'lowest_world_cm': skin['lowest_world_cm'] if skin is not None else None,
                              'rendered_skin_gap_cm': skin['gap_cm'] if skin is not None else None,
+                             'floor_probes': skin.get('floor_probes', []) if skin is not None else [],
                              'supports': len(weight_contacts),
                              'maximum_visible_gap_cm': max((c['visible_gap_cm'] for c in weight_contacts
                                                             if c['visible_gap_cm'] is not None), default=None)})
@@ -157,6 +177,9 @@ def read(directory, start_ms, end_ms, max_gap_cm, strict):
         'interval_ms': [times[0], times[-1]], 'samples': len(samples), 'rig_kinds': sorted(rig_kinds),
         'maximum_visible_gap_cm': max(gaps, default=None), 'allowed_visible_gap_cm': max_gap_cm,
         'maximum_rendered_skin_gap_cm': max(skin_gaps, default=None),
+        'minimum_rendered_skin_gap_cm': min(skin_gaps, default=None),
+        'maximum_absolute_rendered_skin_gap_cm': max(map(abs, skin_gaps), default=None),
+        'npc_character_virtual': expected_cv,
         'movement_impulse_handoffs': handoffs,
         'supports': sorted(supports.values(), key=lambda row: row['body_id']),
         'observations': observations, 'problems': list(dict.fromkeys(problems)),
@@ -169,26 +192,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--before', type=Path, help='diagnostic baseline; geometry failures are reported')
     parser.add_argument('--after', type=Path, help='repaired run; any unsupported/invisible/gapped body fails')
+    parser.add_argument('--off', type=Path, help='unchanged fireball scene with NPC_CHARACTER_VIRTUAL=0')
+    parser.add_argument('--on', type=Path, help='unchanged fireball scene with NPC_CHARACTER_VIRTUAL=1')
+    parser.add_argument('--require-handoff', action='store_true',
+                        help='also require the reentrant upward-impulse handoff (optional for legacy movement)')
     parser.add_argument('--start-ms', type=int, default=6000)
     parser.add_argument('--end-ms', type=int, default=19000)
     parser.add_argument('--max-gap-cm', type=float, default=5)
     args = parser.parse_args()
-    require(args.before or args.after, 'provide --before and/or --after')
+    require(args.before or args.after or args.off or args.on, 'provide --before/--after or the --off/--on pair')
+    require(bool(args.off) == bool(args.on), '--off and --on must be provided together')
+    require(not (args.off and (args.before or args.after)), 'use --off/--on separately from --before/--after')
     require(0 <= args.start_ms < args.end_ms and math.isfinite(args.max_gap_cm) and args.max_gap_cm > 0,
             'invalid interval or gap limit')
     output = {}
     fixtures = []
-    for phase, directory in (('before', args.before), ('after', args.after)):
+    for phase, directory, expected_cv in (('before', args.before, None), ('after', args.after, None),
+                                          ('off', args.off, False), ('on', args.on, True)):
         if directory is None:
             continue
-        output[phase], fixture = read(directory, args.start_ms, args.end_ms, args.max_gap_cm, phase == 'after')
+        output[phase], fixture = read(directory, args.start_ms, args.end_ms, args.max_gap_cm, phase != 'before',
+                                      args.require_handoff, expected_cv)
         fixtures.append(fixture)
     if len(fixtures) == 2:
         require(fixtures[0]['world'] == fixtures[1]['world'] and fixtures[0]['location'] == fixtures[1]['location'] and
                 math.dist(fixtures[0]['spell_target_cm'], fixtures[1]['spell_target_cm']) <= 1,
-                'before/after fireball fixture moved by more than 1 cm')
+                'paired fireball fixture moved by more than 1 cm')
     print(json.dumps(output, ensure_ascii=False, indent=2))
-    return 0 if 'after' not in output or output['after']['pass'] else 1
+    return 0 if all(value['pass'] for value in output.values() if value['strict']) else 1
 
 
 if __name__ == '__main__':
