@@ -6,6 +6,7 @@
 #include "world/world.h"
 #include "world/objects/npc.h"
 #include "gothic.h"
+#include "camera.h"
 
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -103,7 +104,7 @@ std::string setup(World& world,Npc& player,const std::string& scene,size_t count
   for(auto* actor:state.actors) world.removeNpc(*actor);
   state.actors.clear();state.eyes.clear();
   state.scene=scene;
-  state.anchor=scene=="market" ? "NW_CITY_MERCHANT_PATH_20" : "NW_FARM1_PATH_01";
+  state.anchor=scene=="market" ? "NW_CITY_MERCHANT_PATH_01" : "NW_FARM1_PATH_01";
   const auto* point=world.findWayPoint(state.anchor);
   if(!point) throw std::runtime_error("eye fixture stock waypoint unavailable: "+state.anchor);
   Vec3 origin;
@@ -139,22 +140,56 @@ std::string setup(World& world,Npc& player,const std::string& scene,size_t count
     }
   freeze(player);
   Vec3 playerFloor;
-  if(floorAt(world,origin-forward*180.f+side*130.f,playerFloor)) player.setPosition(playerFloor);
+  bool playerPlaced=floorAt(world,origin-forward*180.f+side*130.f,playerFloor);
+  size_t heroAttempts=1;
+  // A blocked preferred offset must never leave the hero in the loaded save:
+  // the rig-radius guard below is measured from the hero's real destination.
+  for(float radius=150.f;!playerPlaced && radius<=600.f;radius+=75.f)
+    for(unsigned angle=0;!playerPlaced && angle<24;++angle) {
+      const float yaw=Pi+float(angle)*Pi/12.f;
+      const auto candidate=origin+(forward*std::cos(yaw)+side*std::sin(yaw))*radius;
+      ++heroAttempts;
+      playerPlaced=floorAt(world,candidate,playerFloor) && std::abs(playerFloor.y-origin.y)<180.f;
+    }
+  if(!playerPlaced) throw std::runtime_error("eye hero has no supported offset after "+std::to_string(heroAttempts)+" candidates at "+state.anchor);
+  player.setPosition(playerFloor);
   player.setDirection(forward);player.updateTransform();
+  Gothic::inst().camera()->reset(&player);
   std::vector<Vec3> positions{origin};
+  size_t candidates=0,rejectedFloor=0,rejectedHeight=0,rejectedRange=0,rejectedCrowded=0;
+  const auto tryRoot=[&](const Vec3& candidate) {
+    ++candidates;
+    Vec3 floor;
+    if(!floorAt(world,candidate,floor)) {++rejectedFloor;return;}
+    if(std::abs(floor.y-origin.y)>350.f) {++rejectedHeight;return;}
+    if((floor-player.position()).quadLength()>1850.f*1850.f) {++rejectedRange;return;}
+    bool crowded=(floor-player.position()).quadLength()<100.f*100.f;
+    for(const auto& existing:positions) crowded=crowded || (floor-existing).quadLength()<130.f*130.f;
+    if(crowded) {++rejectedCrowded;return;}
+    positions.push_back(floor);
+  };
   // Distinct supported roots behind actor 0 keep the calibration view open.
   // Stay inside the 20 m living-rig birth radius, measured from the hero.
   for(size_t row=0;positions.size()<count && row<14;++row)
     for(int column=-6;column<=6 && positions.size()<count;++column) {
       const auto candidate=origin-forward*(250.f+float(row)*180.f)+side*(float(column)*180.f);
-      Vec3 floor;
-      if(!floorAt(world,candidate,floor) || std::abs(floor.y-origin.y)>350.f ||
-         (floor-player.position()).quadLength()>1850.f*1850.f) continue;
-      bool crowded=(floor-player.position()).quadLength()<100.f*100.f;
-      for(const auto& existing:positions) crowded=crowded || (floor-existing).quadLength()<130.f*130.f;
-      if(!crowded) positions.push_back(floor);
+      tryRoot(candidate);
     }
-  if(positions.size()!=count) throw std::runtime_error("not enough clear supported roots for eye fixture");
+  // Streets need not extend behind the waypoint. Search the rest of the real
+  // surrounding floor too, retaining an open central 120-degree view for actor 0.
+  for(float radius=250.f;positions.size()<count && radius<=1900.f;radius+=140.f) {
+    const unsigned sectors=unsigned(std::ceil(2.f*Pi*radius/145.f));
+    for(unsigned angle=0;positions.size()<count && angle<sectors;++angle) {
+      const float yaw=Pi+float(angle)*2.f*Pi/float(sectors);
+      if(std::cos(yaw)>.5f) continue;
+      tryRoot(origin+(forward*std::cos(yaw)+side*std::sin(yaw))*radius);
+    }
+  }
+  if(positions.size()!=count)
+    throw std::runtime_error("eye fixture roots "+std::to_string(positions.size())+"/"+std::to_string(count)+
+      " at "+state.anchor+"; candidates="+std::to_string(candidates)+" floor="+std::to_string(rejectedFloor)+
+      " height="+std::to_string(rejectedHeight)+" rig_range="+std::to_string(rejectedRange)+
+      " crowded="+std::to_string(rejectedCrowded)+" hero="+vector(player.position())+" anchor="+vector(origin));
   std::ostringstream actors;
   actors << '[';
   for(size_t i=0;i<count;++i) {

@@ -143,7 +143,7 @@ NavigationEye::Update NavigationEye::update(const Npc& npc, uint64_t gameMs) {
   const auto* physics = npc.world().physic();
   if(physics==nullptr)
     return result;
-  const float nearRange = cfg.nearRangeCm*cfg.rangeMultiplier;
+  const float nearRange = cfg.nearRangeCm;
   for(size_t i=0; i<rays.size(); ++i) {
     auto& ray = rays[i];
     const auto& local = localDirections[i];

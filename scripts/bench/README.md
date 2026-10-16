@@ -605,6 +605,8 @@ for the single requested `SCENARIO=m5b` check, without changing the user's Gothi
 The `eye` commands are an independent navigation sensor fixture. They leave combat's 16 body rays
 and bridge observations unchanged. Run with `gothic-body-runner --mode lockstep`; all output paths
 must be absolute. The runner also builds on macOS (POSIX target).
+For timing, set `OPENGOTHIC_BODY_TRACE=0` to suppress the runner's default combat journal;
+`run.sh` below sets this explicitly. Eye timing and snapshots use their own journals.
 
 ```text
 eye setup market 20                 # market|lobart; 1, 10, 20 or 50 distinct frozen human NPCs

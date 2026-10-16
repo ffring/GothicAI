@@ -9188,7 +9188,8 @@ void TestBench::configure(std::string scenario, std::string output, int64_t seed
   configuredScenario = std::move(scenario);
   scenarioPath = configuredScenario.c_str();
   outDir = std::move(output);
-  bodyTrace = bodyTrace || Resources::isHeadless();
+  const auto traceSetting = envStr("OPENGOTHIC_BODY_TRACE");
+  bodyTrace = traceSetting!=nullptr ? std::string_view(traceSetting)=="1" : bodyTrace || Resources::isHeadless();
   Pose::probeNpc = nullptr;
   loadScenario();
   if(seedOverride>=0) {
