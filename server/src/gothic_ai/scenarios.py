@@ -951,10 +951,34 @@ async def m5_turn_loop(
     return results
 
 
+async def _m5b_player_weapon(link: GameLink, state: Literal["none", "melee"], *, timeout: float = 5) -> None:
+    """Wait out a saved or newly started weapon transition, with one deadline for all retries."""
+    try:
+        async with asyncio.timeout(timeout):
+            await link.body_watch(["PLAYER"], rate_hz=10)
+            while True:
+                # Weapon mode changes inside the clip: an already matching mode can report
+                # success before the transition ends. Wait for the animation gate as well.
+                if any(row.self.interruptible for row in link.body_latest.values()):
+                    try:
+                        await link.debug("player_weapon", state=state)
+                        return
+                    except GameError as err:
+                        if str(err) != "the player cannot switch weapons now":
+                            raise
+                        log.info("m5b player_weapon %s refused (%s), retrying", state, err)
+                await asyncio.sleep(0.1)
+    except TimeoutError as err:
+        raise GameError(f"m5b player_weapon {state}: not ready within {timeout:g} s") from err
+    finally:
+        await link.body_watch([], timeout=1)
+
+
 async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, str]:
     """M5b on the game: threats from others reach the server, the player's drawn weapon is perceived,
     and the new body actions work for free and attached npc's. A wolf is spawned next to the npc."""
     await link.wait_world()
+    await _m5b_player_weapon(link, "none")
     events: list[NpcEvent] = []
     link.listeners.append(lambda m: events.append(m) if isinstance(m, NpcEvent) else None)
     results: dict[str, str] = {}
@@ -1009,10 +1033,10 @@ async def m5b_bridge(link: GameLink, npc: str = "NONE_100_XARDAS") -> dict[str, 
         current = (await link.routine(npc)).current
         raise GameError(f"m5b arena preparation: {ready.status} {ready.detail}; state={current}")
     events.clear()
-    await link.debug("player_weapon", state="melee")
+    await _m5b_player_weapon(link, "melee")
     e = await event({"weapon_drawn"}, 5)
     results["weapon_drawn"] = f"done ({e.npc}, {e.distance:.0f} cm)" if e else "failed (no weapon_drawn)"
-    await link.debug("player_weapon", state="none")
+    await _m5b_player_weapon(link, "none")
 
     # 2. a wolf next to the npc: the npc senses it or sees it attack
     events.clear()
