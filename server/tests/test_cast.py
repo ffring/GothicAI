@@ -56,7 +56,9 @@ def test_a_description_is_checked():
         SYMBOLS,
         set(),
     )
-    assert "шаблон — безымянный крестьянин, горожанин или наёмник скриптов, а не BAU_950_LOBART" in bad
+    assert (
+        "шаблон — безымянный крестьянин, горожанин, наёмник или бандит скриптов, а не BAU_950_LOBART" in bad
+    )
     assert any(p.startswith("голова Hum_Head_Unicorn не годится") for p in bad)
     assert "лицо FACE_N_LEE не годится: только лица безымянных" in bad
     assert any(p.startswith("кожа — одна из") for p in bad)
@@ -78,6 +80,24 @@ def test_a_description_is_checked():
     assert problems(_peddler(npc="NPC_1"), SYMBOLS, set()) == [
         "персонаж режиссёра называется DIR_NPC_…: NPC_1"
     ]
+
+
+def test_a_bandit_has_a_nameless_template_guild_and_armor():
+    symbols = {**SYMBOLS, "BDT_1013_BANDIT_L": "npc", "GIL_BDT": "const", "ITAR_BDT_M": "item"}
+    spec = _peddler(
+        like="BDT_1013_BANDIT_L",
+        name="Бандит",
+        guild="GIL_BDT",
+        look=NpcLook(
+            gender="MALE",
+            head="HUM_HEAD_FIGHTER",
+            face="FACE_N_NORMAL05",
+            skin="BODYTEX_N",
+            armor="ITAR_BDT_M",
+        ),
+    )
+    assert problems(spec, symbols, set()) == []
+    assert problems(spec.model_copy(update={"like": "BDT_1090_ADDON_RAVEN"}), symbols, set())
 
 
 async def test_a_character_comes_once_and_stays_with_its_saves():

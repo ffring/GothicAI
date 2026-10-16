@@ -21,6 +21,7 @@
 #include <Jolt/Physics/Collision/CastSphereVsTriangles.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -32,6 +33,7 @@
 #include <exception>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -61,6 +63,13 @@ namespace {
     return matrix;
     }
 
+  void requireMatrix(const Tempest::Matrix4x4& actual, const Tempest::Matrix4x4& expected,
+                     const char* message) {
+    for(int c=0;c<4;++c)
+      for(int r=0;r<4;++r)
+        requireNear(actual.at(c,r),expected.at(c,r),c==3 ? .001f : .00001f,message);
+    }
+
   zenkit::MultiResolutionMesh movableCube() {
     zenkit::MultiResolutionMesh mesh;
     mesh.positions = {{-10,-10,-10},{10,-10,-10},{10,10,-10},{-10,10,-10},
@@ -77,6 +86,148 @@ namespace {
     return mesh;
     }
 
+  zenkit::MultiResolutionMesh movableBox(const Tempest::Vec3& dimensionsCm) {
+    auto mesh=movableCube();
+    for(auto& vertex:mesh.positions) {
+      vertex.x*=dimensionsCm.x/20.f;
+      vertex.y*=dimensionsCm.y/20.f;
+      vertex.z*=dimensionsCm.z/20.f;
+      }
+    mesh.bbox={{-.5f*dimensionsCm.x,-.5f*dimensionsCm.y,-.5f*dimensionsCm.z},
+               { .5f*dimensionsCm.x, .5f*dimensionsCm.y, .5f*dimensionsCm.z}};
+    return mesh;
+    }
+
+  zenkit::Mesh movableFloor() {
+    zenkit::Mesh mesh;
+    mesh.vertices={{-2000,0,-2000},{-2000,0,2000},{2000,0,2000},{2000,0,-2000}};
+    mesh.materials.resize(1);
+    mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+    // Gothic source faces are reversed by PhysicVbo::addIndex.
+    mesh.polygons.vertex_indices={0,2,1,0,3,2};
+    mesh.polygons.material_indices={0,0};
+    return mesh;
+    }
+
+  void requireVectorRelative(const Tempest::Vec3& actual, const Tempest::Vec3& expected,
+                             const char* message) {
+    requireNear(actual.x,expected.x,std::max(std::abs(expected.x)*.02f,.0001f),message);
+    requireNear(actual.y,expected.y,std::max(std::abs(expected.y)*.02f,.0001f),message);
+    requireNear(actual.z,expected.z,std::max(std::abs(expected.z)*.02f,.0001f),message);
+    }
+
+  struct ImpulseResponse {
+    float mass;
+    Tempest::Vec3 impulse,linear,angular;
+    };
+
+  ImpulseResponse movableImpulseResponse(const ProtoMesh& proto, const Tempest::Vec3& dimensionsCm,
+                                         float massMultiplier, const Tempest::Vec3* sameImpulse=nullptr) {
+    DynamicWorld world(nullptr,zenkit::Mesh{});
+    const Tempest::Vec3 center(123,10000,-257);
+    const auto origin=at(center.x,center.y,center.z);
+    auto object=world.addMovableVob(proto,"CONTRACT_IMPULSE.MRM",origin,massMultiplier,true,"table",true,44);
+    require(!object.isEmpty() && object.mass()>0,"impulse fixture must use a native movable vob");
+    const float mass=object.mass();
+    const auto impulse=sameImpulse!=nullptr ? *sameImpulse : Tempest::Vec3(.2f,.4f,-.1f)*mass;
+    const Tempest::Vec3 r(dimensionsCm.x*.0035f,dimensionsCm.y*.003f,-dimensionsCm.z*.002f);
+    const auto point=center+r*100.f;
+    require(world.applyMovableVobImpulse(center,1.f,[&](const Tempest::Vec3&,float) { return impulse; },
+                                        nullptr,&point)==1,
+            "airborne movable vob must receive exactly one impulse at a world point");
+    world.tick(17);
+
+    const auto size=dimensionsCm*.01f;
+    const Tempest::Vec3 inertia(mass*(size.y*size.y+size.z*size.z)/12.f,
+                                mass*(size.x*size.x+size.z*size.z)/12.f,
+                                mass*(size.x*size.x+size.y*size.y)/12.f);
+    const Tempest::Vec3 momentum(r.y*impulse.z-r.z*impulse.y,
+                                 r.z*impulse.x-r.x*impulse.z,
+                                 r.x*impulse.y-r.y*impulse.x);
+    const Tempest::Vec3 expectedAngular(momentum.x/inertia.x,momentum.y/inertia.y,momentum.z/inertia.z);
+    auto expectedLinear=impulse*(100.f/mass);
+    expectedLinear.y-=DynamicWorld::gravityMS*100.f/60.f;
+    const auto actualAngular=object.angularVelocity(),actualLinear=object.velocity();
+    std::printf("Movable impulse %.0fx%.0fx%.0f cm, multiplier %.3f, mass %.6f kg: "
+                "omega expected (%.6f, %.6f, %.6f), actual (%.6f, %.6f, %.6f) rad/s; "
+                "v expected (%.6f, %.6f, %.6f), actual (%.6f, %.6f, %.6f) cm/s\n",
+                double(dimensionsCm.x),double(dimensionsCm.y),double(dimensionsCm.z),
+                double(massMultiplier),double(mass),
+                double(expectedAngular.x),double(expectedAngular.y),double(expectedAngular.z),
+                double(actualAngular.x),double(actualAngular.y),double(actualAngular.z),
+                double(expectedLinear.x),double(expectedLinear.y),double(expectedLinear.z),
+                double(actualLinear.x),double(actualLinear.y),double(actualLinear.z));
+    requireVectorRelative(actualAngular,expectedAngular,
+                          "movable angular velocity after one step must match I^-1(r cross J) within two percent");
+    requireVectorRelative(actualLinear,expectedLinear,
+                          "movable linear velocity after one step must match J/m plus gravity within two percent");
+    return {mass,impulse,actualLinear,actualAngular};
+    }
+
+  void testMovableVobImpulseInertia() {
+    Resources resources;
+    for(const auto dimensions:{Tempest::Vec3(20,20,20),Tempest::Vec3(40,60,80)}) {
+      ProtoMesh proto(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"CONTRACT_IMPULSE.MRM");
+      const auto normal=movableImpulseResponse(proto,dimensions,.25f);
+      const auto doubled=movableImpulseResponse(proto,dimensions,.5f,&normal.impulse);
+      requireNear(doubled.mass,normal.mass*2.f,normal.mass*.0001f,
+                  "doubling massMultiplier must double native movable mass");
+      requireVectorRelative(doubled.angular,normal.angular*.5f,
+                            "doubling massMultiplier must halve angular response to the same impulse");
+      requireNear(doubled.linear.x,normal.linear.x*.5f,.0001f,
+                  "doubling massMultiplier must halve X velocity from the same impulse");
+      requireNear(doubled.linear.z,normal.linear.z*.5f,.0001f,
+                  "doubling massMultiplier must halve Z velocity from the same impulse");
+      }
+    }
+
+  void testMovableTableImpulseCouple() {
+    Resources resources;
+    // NW_CITY_TABLE_PEASANT_01's source bounds are 200 x 90 x 120 cm.
+    const Tempest::Vec3 dimensions(200,90,120);
+    constexpr float tableMass=51.81584f;
+    const float multiplier=tableMass/(2.f*.9f*1.2f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD));
+    ProtoMesh proto(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"CONTRACT_TABLE.MRM");
+    const auto origin=at(0,45,0);
+    DynamicWorld world(nullptr,movableFloor());
+    const auto floor=world.landRay({0,100,0},200.f);
+    require(floor.hasCol && floor.n.y>.99f,"table fixture must have an upward-facing static floor");
+    requireNear(floor.v.y,0.f,.001f,"table fixture's bottom face must start on the floor");
+    auto table=world.addMovableVob(proto,"CONTRACT_TABLE.MRM",origin,multiplier,true,"table",true,45);
+    require(!table.isEmpty(),"table couple fixture must use a native movable vob on a static floor");
+    requireNear(table.mass(),tableMass,.001f,"table fixture must retain the tavern table's mass");
+    const Tempest::Vec3 center(0,45,0),point(0,90,60);
+    const Tempest::Vec3 force(0,0,6.f*table.mass());
+    for(const auto& application:{std::pair(force,point),std::pair(force*-1.f,center)})
+      require(world.applyMovableVobImpulse(center,140.f,[&](const Tempest::Vec3&,float) { return application.first; },
+                                          nullptr,&application.second)==1,
+              "table fixture must receive both opposing bench impulses");
+    const auto afterPair=table.angularVelocity();
+    float maximumTilt=0;
+    for(int i=0;i<120;++i) {
+      world.tick(i%3==2 ? 16 : 17);
+      const auto matrix=world.movableVobSnapshot()[0].transform;
+      const Tempest::Vec3 up(matrix.at(1,0),matrix.at(1,1),matrix.at(1,2));
+      const float cosine=std::clamp(up.y/up.length(),-1.f,1.f);
+      maximumTilt=std::max(maximumTilt,std::acos(cosine)*(180.f/3.14159265358979323846f));
+      }
+    std::printf("Movable table couple %.6f Ns: omega after pair (%.6f, %.6f, %.6f) rad/s; maximum tilt %.6f deg\n",
+                double(force.z),double(afterPair.x),double(afterPair.y),double(afterPair.z),double(maximumTilt));
+    require(maximumTilt>45.f,"the bench impulse couple must tilt a free-standing table beyond forty-five degrees");
+
+    DynamicWorld untouched(nullptr,movableFloor());
+    auto resting=untouched.addMovableVob(proto,"CONTRACT_TABLE.MRM",origin,multiplier,true,"table",true,46);
+    for(int i=0;i<3600;++i)
+      untouched.tick(i%3==2 ? 16 : 17);
+    const auto settled=untouched.movableVobSnapshot()[0].transform;
+    const Tempest::Vec3 displacement(settled.at(3,0)-origin.at(3,0),settled.at(3,1)-origin.at(3,1),
+                                      settled.at(3,2)-origin.at(3,2));
+    std::printf("Movable table untouched for 60 s: drift %.9f cm\n",double(displacement.length()));
+    require(resting.isSleeping(),"an untouched table must remain asleep for sixty seconds");
+    requireNear(displacement.length(),0.f,.00001f,"an untouched table must have zero drift after sixty seconds");
+    requireMatrix(settled,origin,"an untouched table must retain its complete pose for sixty seconds");
+    }
+
   std::vector<uint8_t> saveArchive(const std::function<void(Serialize&)>& write) {
     std::vector<uint8_t> bytes;
     Tempest::MemWriter writer(bytes);
@@ -85,13 +236,6 @@ namespace {
       write(output);
     }
     return bytes;
-    }
-
-  void requireMatrix(const Tempest::Matrix4x4& actual, const Tempest::Matrix4x4& expected,
-                     const char* message) {
-    for(int c=0;c<4;++c)
-      for(int r=0;r<4;++r)
-        requireNear(actual.at(c,r),expected.at(c,r),c==3 ? .001f : .00001f,message);
     }
 
   void loadMovables(DynamicWorld& world, const std::vector<uint8_t>& bytes) {
@@ -1343,6 +1487,8 @@ namespace {
 
 int main() {
   try {
+    testMovableVobImpulseInertia();
+    testMovableTableImpulseCouple();
     testMeshRayEdges();
     testCoincidentMaterials();
     testSharedRayEdge();

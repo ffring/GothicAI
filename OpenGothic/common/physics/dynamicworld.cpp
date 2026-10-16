@@ -1815,6 +1815,10 @@ Tempest::Vec3 DynamicWorld::Item::velocity() const {
   return obj!=nullptr && obj->body!=nullptr ? obj->body->velocity() : Tempest::Vec3{};
   }
 
+Tempest::Vec3 DynamicWorld::Item::angularVelocity() const {
+  return obj!=nullptr && obj->body!=nullptr ? obj->body->angularVelocity() : Tempest::Vec3{};
+  }
+
 bool DynamicWorld::Item::isSleeping() const {
   return obj==nullptr || obj->body==nullptr || obj->body->isSleeping();
   }
