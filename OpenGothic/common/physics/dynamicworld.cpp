@@ -22,6 +22,7 @@
 #include <cassert>
 #include <cstddef>
 #include <list>
+#include <map>
 #include <unordered_map>
 #include <cctype>
 
@@ -707,6 +708,7 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh) {
   if(!landMesh->isEmpty() && landMesh->shape()!=nullptr) {
     bodies->landscape = world->addCollisionBody(landMesh->shape(),mt,materialFriction(zenkit::MaterialGroup::NONE),
                                                C_Landscape,false,false,landMesh.get());
+    bodies->landscape->setLabel("landscape");
     JPH::Vec3 min, max;
     bodies->landscape->getAabb(min,max);
     bbox[0] = JPH::Vec3::sMin(bbox[0],min);
@@ -858,20 +860,22 @@ DynamicWorld::NpcItem DynamicWorld::addGhostObj(const Skeleton* src) {
   return NpcItem(this,obj);
   }
 
-DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
+DynamicWorld::Item DynamicWorld::addStaticObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m, std::string_view label) {
   if(shape==nullptr || shape->shape==nullptr)
     return Item();
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,false,false,&shape->mesh);
+  obj->body->setLabel(label);
   obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
   return Item(this,obj.release());
   }
 
-DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m) {
+DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, const Tempest::Matrix4x4& m, std::string_view label) {
   if(shape==nullptr || shape->shape==nullptr)
     return Item();
   auto obj = std::make_unique<BodyData>();
   obj->body = world->addCollisionBody(shape->shape,m,shape->friction(),C_Object,true,false,&shape->mesh);
+  obj->body->setLabel(label);
   obj->body->setNoiseProfile(impactMaterial(shape->material),shape->material,"vob");
   return Item(this,obj.release());
   }
@@ -1168,6 +1172,81 @@ bool DynamicWorld::setMovableVobTransform(uint32_t zenId, const Tempest::Matrix4
     return true;
     }
   return false;
+  }
+
+std::vector<DynamicWorld::MovableVobContacts> DynamicWorld::movableVobContacts(float marginCm) const {
+  static const char* materials[] = {"undef","metal","stone","wood","earth","water","snow","none"};
+  constexpr uint32_t mask = (1u<<C_Landscape)|(1u<<C_Object)|(1u<<C_MovableVob);
+  std::vector<MovableVobContacts> result;
+  for(const auto* obj:movableVobs->bodies) {
+    if(obj->body==nullptr)
+      continue;
+    MovableVobContacts entry;
+    entry.zenId = obj->pose->zenId;
+    entry.visual = obj->visual;
+    entry.className = obj->className;
+    entry.mass = obj->movableMass;
+    entry.position = obj->body->position();
+    JPH::Vec3 min, max;
+    obj->body->getAabb(min,max);
+    entry.hullMin = CollisionWorld::toCentimeters(min);
+    entry.hullMax = CollisionWorld::toCentimeters(max);
+    // One entry per body and side: the world mesh is a single body holding both floor and walls.
+    using Key = std::pair<const CollisionWorld::CollisionBody*,int>;
+    std::vector<Key> order;
+    std::map<Key,MovableVobContact> byBody;
+    const float height = std::max(entry.hullMax.y-entry.hullMin.y,1.f);
+    for(const auto& hit:world->overlaps(*obj->body,marginCm,mask)) {
+      const bool below = hit.axis.y<=-0.6f && hit.point1.y<=entry.hullMin.y+0.3f*height;
+      // side: 0 below, 1 above, 2..5 = +x,-x,+z,-z by the dominant horizontal component
+      int side = below ? 0 : hit.axis.y>=0.6f ? 1 :
+                 std::abs(hit.axis.x)>=std::abs(hit.axis.z) ? (hit.axis.x>=0 ? 2 : 3) : (hit.axis.z>=0 ? 4 : 5);
+      const Key key{hit.body,side};
+      auto [it,inserted] = byBody.try_emplace(key);
+      auto& c = it->second;
+      if(inserted) {
+        order.push_back(key);
+        c.below = below;
+        c.side = side;
+        c.category = hit.category;
+        c.depth = hit.depth;
+        c.pointYMin = c.pointYMax = hit.point1.y;
+        if(hit.body!=nullptr) {
+          c.interactive = hit.body->ptrType()==P_Interactive;
+          c.other = hit.body->label();
+          if(hit.body->ptrType()==P_MovableVob)
+            c.other = static_cast<const BodyData*>(hit.body->payload())->visual;
+          hit.body->getAabb(min,max);
+          c.otherMin = CollisionWorld::toCentimeters(min);
+          c.otherMax = CollisionWorld::toCentimeters(max);
+          }
+        }
+      c.count++;
+      c.pointYMin = std::min(c.pointYMin,hit.point1.y);
+      c.pointYMax = std::max(c.pointYMax,hit.point1.y);
+      if(inserted || hit.depth>c.depth) {
+        c.depth = hit.depth;
+        c.axis = hit.axis;
+        c.point = hit.point1;
+        c.material = materials[std::min<size_t>(size_t(hit.material),7)];
+        c.sector = hit.sector==nullptr ? "" : hit.sector;
+        }
+      }
+    for(const auto& key:order)
+      entry.contacts.push_back(byBody[key]);
+    result.push_back(std::move(entry));
+    }
+  return result;
+  }
+
+size_t DynamicWorld::wakeMovableVobs() {
+  size_t count = 0;
+  for(auto* obj:movableVobs->bodies)
+    if(obj->body!=nullptr) {
+      obj->body->restoreTransform(obj->body->matrix(),false);
+      ++count;
+      }
+  return count;
   }
 
 std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot() const {

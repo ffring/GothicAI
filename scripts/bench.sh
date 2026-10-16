@@ -6,6 +6,7 @@
 #
 # env: GOTHIC_DIR    game data (default: /Volumes/DevSSD/Dev/games/Gothic II)
 #      SAVE          save to start from (default: save_slot_1.sav in the main checkout)
+#      WORLD         start a fresh game in this world instead (NEWWORLD.ZEN, OLDWORLD.ZEN, ADDONWORLD.ZEN, DRAGONISLAND.ZEN)
 #      NO_BUILD=1    do not rebuild the engine first
 #      TIMEOUT=300   seconds before the game is killed
 #      KEEP=1        the game stays open after the scenario
@@ -29,12 +30,17 @@ OUT="${2:-$ROOT/.bench/$NAME-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
-if [[ -z "${SAVE:-}" ]]; then
-  # worktrees share the save of the main checkout
-  COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
-  SAVE="$(dirname "$COMMON")/save_slot_1.sav"
+if [[ -n "${WORLD:-}" ]]; then
+  START_ARGS=(-nomenu -w "$WORLD")
+else
+  if [[ -z "${SAVE:-}" ]]; then
+    # worktrees share the save of the main checkout
+    COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
+    SAVE="$(dirname "$COMMON")/save_slot_1.sav"
+  fi
+  [[ -f "$SAVE" ]] || { echo "no save: $SAVE (set SAVE=...)" >&2; exit 2; }
+  START_ARGS=(-save 1)
 fi
-[[ -f "$SAVE" ]] || { echo "no save: $SAVE (set SAVE=...)" >&2; exit 2; }
 
 if [[ "${NO_BUILD:-}" != 1 ]]; then
   cmake --build "$ROOT/OpenGothic/build" --target Gothic2Notr >"$OUT/build.log" 2>&1 \
@@ -44,7 +50,7 @@ fi
 # the game reads Gothic.ini and saves from its working directory
 RUN="$OUT/run"
 mkdir -p "$RUN"
-cp "$SAVE" "$RUN/save_slot_1.sav"
+[[ -n "${WORLD:-}" ]] || cp "$SAVE" "$RUN/save_slot_1.sav"
 cat >"$RUN/Gothic.ini" <<EOF
 [INTERNAL]
 vidResIndex=2
@@ -76,7 +82,7 @@ fi
 
 START=$(date +%s)
 (cd "$RUN" && exec env TEMPEST_BACKGROUND=1 OPENGOTHIC_BENCH="$SCEN" OPENGOTHIC_BENCH_OUT="$OUT" ${KEEP:+OPENGOTHIC_BENCH_KEEP=1} \
-  "$BIN" -g "$GOTHIC_DIR" -window -devmode -save 1) >"$OUT/game.log" 2>&1 &
+  "$BIN" -g "$GOTHIC_DIR" -window -devmode "${START_ARGS[@]}") >"$OUT/game.log" 2>&1 &
 PID=$!
 for ((i = 0; i < ${TIMEOUT:-300} * 4; i++)); do
   kill -0 "$PID" 2>/dev/null || break

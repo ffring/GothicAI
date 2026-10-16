@@ -69,6 +69,8 @@ class CollisionWorld final {
         int                 ptrType() const { return pointerType; }
         void*               payload() const { return pointer; }
         const JPH::Shape*    shape() const { return scaledShape.GetPtr(); }
+        void                setLabel(std::string_view value) { debugLabel = value; }
+        const std::string&  label() const { return debugLabel; }
 
       private:
         CollisionBody(CollisionWorld& owner, JPH::ShapeRefC shape, int category);
@@ -89,6 +91,7 @@ class CollisionWorld final {
         uint64_t            noiseCulpritUntilStep = 0;
         uint64_t            nextNoiseStep = 0;
         std::string         traceCause;
+        std::string         debugLabel;
 
       friend class CollisionWorld;
       friend class DynamicBody;
@@ -125,6 +128,19 @@ class CollisionWorld final {
     void touchAabbs() const {}
 
     bool hasCollision(const JPH::Shape* shape, const Tempest::Vec3& center, Tempest::Vec3& normal, Interactive*& vob) const;
+
+    // Diagnostic: every contact of the body's own shape at its current pose,
+    // including separated ones within marginCm. Depth is positive when penetrating.
+    struct Overlap {
+      CollisionBody*        body = nullptr;
+      int                   category = 0;
+      float                 depth = 0; // centimetres
+      Tempest::Vec3         axis = {}; // unit direction that moves the other body out
+      Tempest::Vec3         point1 = {}, point2 = {}; // world centimetres
+      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      const char*           sector = nullptr;
+      };
+    std::vector<Overlap> overlaps(const CollisionBody& body, float marginCm, uint32_t mask) const;
 
     std::unique_ptr<CollisionBody> addCollisionBody(JPH::ShapeRefC shape, const Tempest::Matrix4x4& matrix, float friction,
                                                    int category, bool movable = false, bool sensor = false, const PhysicVbo* mesh = nullptr);

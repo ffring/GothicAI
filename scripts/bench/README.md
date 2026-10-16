@@ -475,6 +475,19 @@ MOVABLE_VOBS=1 NO_BUILD=1 SAVE="$PWD/.bench/movable-input.sav" scripts/bench.sh 
 python3 scripts/movable_vobs_compare.py performance .bench/movable-performance --output .bench/movable-performance/result.json
 ```
 
+`movable-census.bench` checks every movable vob of a map against the level, on a fresh world
+(`WORLD` starts a new game in that world instead of loading a save). `movable clamps [margin cm]`
+writes `movable-clamps.jsonl`: for each movable hull at its ZEN pose, every static or movable body
+it touches or penetrates, with the simulation's own contact settings, grouped by body and side
+(0 below, 1 above, 2..5 = +x, -x, +z, -z towards the other body). `movable wake` wakes every
+movable body without an impulse; `movable drift` writes how far each moved (`movable-drift.jsonl`).
+
+```sh
+for w in NEWWORLD OLDWORLD ADDONWORLD DRAGONISLAND; do
+  WORLD=$w.ZEN MOVABLE_VOBS=1 NO_BUILD=1 scripts/bench.sh movable-census .bench/movable-census-$w
+done
+```
+
 `MOVABLE_VOBS` writes the initial `[GAME] movable_vobs` setting before constructing the world;
 toggling after load cannot measure disabled world-loading cost. Each performance run records
 30 seconds of ordinary app-frame completion cadence, with the real fireball at the start,

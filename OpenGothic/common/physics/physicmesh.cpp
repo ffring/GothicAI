@@ -13,8 +13,8 @@ PhysicMesh::PhysicMesh(const ProtoMesh& proto, DynamicWorld& owner, bool movable
   for(auto& i:proto.attach) {
     DynamicWorld::Item physic;
     if(movable)
-      physic = owner.addMovableObj(i.shape.get(),pos); else
-      physic = owner.addStaticObj (i.shape.get(),pos);
+      physic = owner.addMovableObj(i.shape.get(),pos,proto.fname); else
+      physic = owner.addStaticObj (i.shape.get(),pos,proto.fname);
     sub.emplace_back(std::move(physic));
     }
   }

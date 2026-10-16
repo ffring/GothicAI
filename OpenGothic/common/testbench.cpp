@@ -3819,6 +3819,59 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     w.physic()->setMovableVobsEnabled(a[1]=="on");
     }
   else if(c=="movable" && a.size()==2 && a[1]=="setup") prepareMovableFixture(w,pl);
+  else if(c=="movable" && a.size()==2 && a[1]=="wake") {
+    say("movable wake: "+std::to_string(w.physic()->wakeMovableVobs()));
+    }
+  else if(c=="movable" && a.size()==2 && a[1]=="drift") {
+    std::FILE* f = std::fopen((outDir+"/movable-drift.jsonl").c_str(),"a");
+    size_t moved = 0, total = 0;
+    for(const auto& body:w.physic()->movableVobSnapshot()) {
+      if(!body.enabled) continue;
+      ++total;
+      const auto shift = (movablePosition(body.transform)-movablePosition(body.origin)).length();
+      const auto* before=body.origin.data();const auto* after=body.transform.data();
+      const Vec3 ua(before[4],before[5],before[6]),ub(after[4],after[5],after[6]);
+      const float tilt=std::acos(std::clamp((ua.x*ub.x+ua.y*ub.y+ua.z*ub.z)/(ua.length()*ub.length()),-1.f,1.f))*180.f/float(M_PI);
+      if(shift>1.f || tilt>1.f) ++moved;
+      if(f!=nullptr)
+        std::fprintf(f,"%s\n",("{\"world\":"+jsonStr(w.name())+",\"zen_id\":"+std::to_string(body.zenId)+
+          ",\"visual\":"+jsonStr(body.visual)+",\"shift_cm\":"+ragdollNumber(shift)+",\"tilt_deg\":"+ragdollNumber(tilt)+
+          ",\"sleeping\":"+(body.sleeping?"true":"false")+"}").c_str());
+      }
+    if(f!=nullptr) std::fclose(f);
+    say("movable drift: "+std::to_string(moved)+" of "+std::to_string(total)+" moved more than 1 cm or 1 deg");
+    }
+  else if(c=="movable" && (a.size()==2 || a.size()==3) && a[1]=="clamps") {
+    const float margin = a.size()==3 ? std::stof(a[2]) : 1.f;
+    const auto all = w.physic()->movableVobContacts(margin);
+    std::FILE* f = std::fopen((outDir+"/movable-clamps.jsonl").c_str(),"a");
+    size_t touched = 0;
+    for(const auto& body:all) {
+      std::string row = "{\"world\":"+jsonStr(w.name())+",\"zen_id\":"+std::to_string(body.zenId)+
+        ",\"visual\":"+jsonStr(body.visual)+",\"class\":"+jsonStr(body.className)+
+        ",\"mass_kg\":"+ragdollNumber(body.mass)+",\"position_cm\":"+ragdollVector(body.position)+
+        ",\"hull_min_cm\":"+ragdollVector(body.hullMin)+",\"hull_max_cm\":"+ragdollVector(body.hullMax)+
+        ",\"contacts\":[";
+      for(size_t i=0;i<body.contacts.size();++i) {
+        const auto& t = body.contacts[i];
+        if(i>0) row += ",";
+        row += "{\"other\":"+jsonStr(t.other)+",\"category\":"+std::to_string(t.category)+
+          ",\"interactive\":"+(t.interactive?"true":"false")+",\"below\":"+(t.below?"true":"false")+",\"side\":"+std::to_string(t.side)+
+          ",\"other_min_cm\":"+ragdollVector(t.otherMin)+",\"other_max_cm\":"+ragdollVector(t.otherMax)+
+          ",\"depth_cm\":"+ragdollNumber(t.depth)+",\"count\":"+std::to_string(t.count)+
+          ",\"axis\":"+ragdollVector(t.axis)+",\"point_cm\":"+ragdollVector(t.point)+
+          ",\"point_y_min_cm\":"+ragdollNumber(t.pointYMin)+",\"point_y_max_cm\":"+ragdollNumber(t.pointYMax)+
+          ",\"material\":"+jsonStr(t.material)+",\"sector\":"+jsonStr(t.sector)+"}";
+        }
+      row += "]}";
+      if(!body.contacts.empty()) ++touched;
+      if(f!=nullptr) std::fprintf(f,"%s\n",row.c_str());
+      }
+    if(f!=nullptr) std::fclose(f);
+    say("movable clamps: "+std::to_string(all.size())+" bodies, "+std::to_string(touched)+" with contacts");
+    event("movable_clamps","\"world\":"+jsonStr(w.name())+",\"bodies\":"+std::to_string(all.size())+
+      ",\"with_contacts\":"+std::to_string(touched)+",\"margin_cm\":"+ragdollNumber(margin));
+    }
   else if(c=="movable" && a.size()==2 && a[1]=="observe") {
     bench.movableIds.clear();bench.movableMapIds.clear();
     for(const auto& body:w.physic()->movableVobSnapshot())

@@ -308,8 +308,8 @@ class DynamicWorld final {
     float          soundOclusion(const Tempest::Vec3& from, const Tempest::Vec3& to) const;
 
     NpcItem        addGhostObj  (const Skeleton* src);
-    Item           addStaticObj (const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
-    Item           addMovableObj(const PhysicMeshShape *src, const Tempest::Matrix4x4& m);
+    Item           addStaticObj (const PhysicMeshShape *src, const Tempest::Matrix4x4& m, std::string_view label = {});
+    Item           addMovableObj(const PhysicMeshShape *src, const Tempest::Matrix4x4& m, std::string_view label = {});
     Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, zenkit::MaterialGroup mat);
     Item           addMovableVob(const ProtoMesh& mesh, std::string_view visual, const Tempest::Matrix4x4& matrix,
                                  float massMultiplier, bool blocksWalking, std::string_view className = {},
@@ -342,6 +342,31 @@ class DynamicWorld final {
       std::string        traceCulprit;
       };
     std::vector<MovableVobSnapshot> movableVobSnapshot() const;
+    // Diagnostic: what each movable hull touches or penetrates at its origin pose.
+    struct MovableVobContact {
+      std::string   other;      // visual of the other body, "landscape" for the world mesh
+      int           category = 0;
+      bool          interactive = false;
+      bool          below = false; // contacts under the hull: its support
+      int           side = 0;      // 0 below, 1 above, 2..5 = +x,-x,+z,-z (direction into the other body)
+      Tempest::Vec3 otherMin, otherMax; // world AABB, centimetres
+      float         depth = 0;  // deepest contact, centimetres; positive = penetration
+      size_t        count = 0;  // contact pairs (triangles)
+      Tempest::Vec3 axis;       // axis of the deepest contact, moves the other body out
+      Tempest::Vec3 point;      // deepest contact on the movable hull
+      float         pointYMin = 0, pointYMax = 0; // contact heights on the hull
+      std::string   material, sector;
+      };
+    struct MovableVobContacts {
+      uint32_t      zenId = uint32_t(-1);
+      std::string   visual, className;
+      float         mass = 0;
+      Tempest::Vec3 position, hullMin, hullMax; // world centimetres
+      std::vector<MovableVobContact> contacts;
+      };
+    std::vector<MovableVobContacts> movableVobContacts(float marginCm) const;
+    // Diagnostic: wakes every movable body at rest, without any impulse.
+    size_t         wakeMovableVobs();
     // callback returns a world-space impulse in newton seconds; target is the
     // centre of mass in world centimetres. Geometry occludes the blast, with the
     // target's own mesh excluded from the visibility query.
