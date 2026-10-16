@@ -2644,6 +2644,11 @@ void prepareMovableFixture(World& world,Npc& player) {
   if(!host) {arenaAbort("movable fixture requires Coragon in the loaded Khorinis world");return;}
   bench.noiseHost=host;
   const auto all=world.physic()->movableVobSnapshot();
+  // Use the same authored geometry subset in ON and OFF fixtures. Rejected
+  // map props remain in the real world, outside the dynamic test catalog.
+  std::unordered_set<uint32_t> allowedMapVobs;
+  for(const auto& body:world.physic()->movableVobContacts(1.f))
+    if(body.disposition=="ok" || body.disposition=="item")allowedMapVobs.insert(body.zenId);
   std::map<std::string,size_t> noncollidingClasses,mapClasses;
   for(const auto& body:all)
     if(!body.legacyCollision)++noncollidingClasses[body.className];
@@ -2660,6 +2665,7 @@ void prepareMovableFixture(World& world,Npc& player) {
   if(!Resources::loadMesh(barrelVisual))barrelVisual.clear();
   Matrix4x4 tableTransform;float nearest=1400.f*1400.f;
   for(const auto& body:all) {
+    if(!allowedMapVobs.contains(body.zenId))continue;
     if(body.className=="utensil" && utensilVisual.empty()) utensilVisual=body.visual;
     if(body.className=="barrel" && barrelVisual.empty()) barrelVisual=body.visual;
     if(body.className!="table")continue;
@@ -2679,6 +2685,7 @@ void prepareMovableFixture(World& world,Npc& player) {
     }
   bench.movableTable=tableId;bench.movableCenter=tableCenter;
   for(const auto& body:all) {
+    if(!allowedMapVobs.contains(body.zenId))continue;
     const auto delta=movablePosition(body.transform)-tableCenter;
     if(delta.x*delta.x+delta.z*delta.z<900.f*900.f && std::abs(delta.y)<350) {
       bench.movableIds.push_back(body.id);bench.movableMapIds.insert(body.id);++mapClasses[body.className];
@@ -2736,7 +2743,8 @@ void prepareMovableFixture(World& world,Npc& player) {
   bench.movableDish=add(utensilVisual,(laneStart+laneEnd)*.5f);
   if(!bench.movableDish) {arenaAbort("movable floor utensil insertion failed");return;}
   bool hasBarrel=false;
-  for(const auto& body:all)if(body.className=="barrel" && std::find(bench.movableIds.begin(),bench.movableIds.end(),body.id)!=bench.movableIds.end())hasBarrel=true;
+  for(const auto& body:all)
+    if(body.className=="barrel" && allowedMapVobs.contains(body.zenId) && bench.movableMapIds.contains(body.id))hasBarrel=true;
   if(!hasBarrel && !barrelVisual.empty()) {
     const auto side=Vec3::normalize(laneEnd-laneStart);
     const auto point=(laneStart+laneEnd)*.5f+side*110.f;

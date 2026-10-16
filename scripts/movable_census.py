@@ -17,6 +17,7 @@ import argparse
 import collections
 import csv
 import json
+import math
 import statistics
 from pathlib import Path
 
@@ -103,6 +104,14 @@ def is_candle(body):
     return body["visual"].rsplit(".", 1)[0].upper() == "NW_CITY_CANDLE_01"
 
 
+def is_books(body):
+    return body["visual"].rsplit(".", 1)[0].upper() == "DT_BOOKS_01"
+
+
+def valid_shift(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
 def contact_notes(body):
     contacts = sorted(body["contacts"], key=lambda c: c["depth_cm"], reverse=True)
     return "; ".join(f"{name(c)} {c['depth_cm']:.2f} cm, side {c['side']}, category {c['category']}"
@@ -133,11 +142,15 @@ def main():
         bodies += load(run, "movable-clamps.jsonl")
         drift = load(run, "movable-drift.jsonl")
         for row in drift:  # the last checkpoint wins
-            shift[(row["world"], row["zen_id"])] = row.get("max_shift_cm", row["shift_cm"])
+            shift[(row["world"], row["zen_id"])] = row.get("max_shift_cm", row.get("shift_cm"))
 
     decisions = decide_all(bodies, args.depth)
     by_world, by_class = collections.defaultdict(collections.Counter), collections.defaultdict(collections.Counter)
     candles = collections.defaultdict(collections.Counter)
+    books = collections.defaultdict(collections.Counter)
+    top_items = collections.Counter()
+    enabled_seen = collections.Counter()
+    invalid_shifts = collections.Counter()
     enabled_shifts = collections.defaultdict(list)
     large_shifts = []
     moved, causes, curve, rows = collections.defaultdict(list), collections.defaultdict(collections.Counter), \
@@ -154,10 +167,23 @@ def main():
         if is_candle(body):
             candles[body["world"]][group] += 1
             candles["all"][group] += 1
+        if is_books(body):
+            books[body["world"]][group] += 1
+            books["all"][group] += 1
+        if group == "item":
+            top_items.update({name(c) for c in body["contacts"]
+                              if on_top(body, c) and size(c) <= SMALL_CM and
+                              name(c) not in {"NW_CITY_CANDLE_01", "DT_BOOKS_01"}})
         if contact is not None:
             causes[group][name(contact)] += 1
         s = shift.get(key)
-        if s is not None:
+        if key in shift and enabled:
+            enabled_seen[body["world"]] += 1
+            enabled_seen["all"] += 1
+            if not valid_shift(s):
+                invalid_shifts[body["world"]] += 1
+                invalid_shifts["all"] += 1
+        if valid_shift(s):
             moved[group].append(s)
             if enabled:
                 enabled_shifts[body["world"]].append(s)
@@ -169,10 +195,11 @@ def main():
                 band = next(i for i in range(len(edges) - 1) if edges[i] <= deepest < edges[i + 1])
                 curve[band].append(s)
         rows.append({"world": body["world"], "zen_id": body["zen_id"], "visual": body["visual"],
-                     "class": body["class"], "group": group, "enabled": enabled, "candle": is_candle(body),
+                     "class": body["class"], "group": group, "enabled": enabled,
+                     "candle": is_candle(body), "books": is_books(body),
                      "by": name(contact) if contact else "",
                      "depth_cm": round(contact["depth_cm"], 1) if contact else "",
-                     "wake_shift_cm": round(s, 1) if s is not None else "",
+                     "wake_shift_cm": round(s, 1) if valid_shift(s) else "",
                      "x": round(body["position_cm"][0]), "y": round(body["position_cm"][1]),
                      "z": round(body["position_cm"][2])})
 
@@ -181,6 +208,11 @@ def main():
     table("map", worlds, by_world)
     table("class", sorted(by_class), by_class)
     table("candles by map", worlds, candles)
+    table("books by map", worlds, books)
+
+    print(f"\nitem: {by_world['all']['item']} movable vobs with small static things on top; "
+          "excluding candle/books: " +
+          (", ".join(f"{visual} ({count})" for visual, count in top_items.most_common()) or "none"))
 
     print("\n| map | total | static | movable | candles static | candles movable |")
     print("|---|---:|---:|---:|---:|---:|")
@@ -191,15 +223,19 @@ def main():
         print(f"| {world} | {total} | {total - enabled} | {enabled} | "
               f"{sum(candles[world].values()) - candle_enabled} | {candle_enabled} |")
 
-    print("\n| wake: remaining movable | movable | observed | < 5 cm | max, cm | > 30 cm |")
-    print("|---|---:|---:|---:|---:|---:|")
+    print("\nWake acceptance uses the combined population (all); map rows show the same thresholds locally.")
+    print("\n| wake: remaining movable | samples / movable | invalid | < 5 cm | max, cm | > 100 cm | result |")
+    print("|---|---:|---:|---:|---:|---:|---|")
     for world in worlds:
         enabled = sum(by_world[world][g] for g in MOVABLE_GROUPS)
         values = enabled_shifts[world]
-        below5 = f"{sum(s < 5 for s in values) / len(values):.2%}" if values else "—"
-        maximum = f"{max(values):.2f}" if values else "—"
-        print(f"| {world} | {enabled} | {len(values)} | {below5} | {maximum} | "
-              f"{sum(s > 30 for s in values)} |")
+        small = sum(s < 5 for s in values)
+        below5 = f"{small / len(values):.2%}" if values else "—" if enabled else "100.00%"
+        maximum = f"{max(values):.2f}" if values else "—" if enabled else "0.00"
+        passed = (enabled_seen[world] == enabled and invalid_shifts[world] == 0 and
+                  len(values) == enabled and small * 100 >= 95 * enabled and all(s <= 100 for s in values))
+        print(f"| {world} | {enabled_seen[world]} / {enabled} | {invalid_shifts[world]} | {below5} | "
+              f"{maximum} | {sum(s > 100 for s in values)} | {'PASS' if passed else 'FAIL'} |")
 
     if large_shifts:
         print("\nRemaining movable vobs shifted > 10 cm (contacts at the original pose):")
