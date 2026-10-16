@@ -45,6 +45,7 @@
 #include "game/bodyobservations.h"
 #include "game/navigationeyebench.h"
 #include "game/navigationmemorybench.h"
+#include "game/knownroadsbench.h"
 #include "game/npckeysbench.h"
 #include "game/serialize.h"
 #include "game/ragdollsave.h"
@@ -5132,6 +5133,15 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     return;
   const std::string& c = a[0];
 
+  if(c=="roads") {
+    try {
+      event("roads_command","\"sample\":"+KnownRoadsBench::command(a,w,outDir));
+    } catch(const std::exception& error) {
+      event("roads_error","\"reason\":"+jsonStr(error.what()));
+      arenaAbort(error.what());
+    }
+    return;
+  }
   if(c=="memory") {
     try {
       event("memory_command","\"sample\":"+NavigationMemoryBench::command(a,w,pl,ctrl,outDir));
@@ -10182,6 +10192,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
   npcCharacterStopMotionTrace(Gothic::inst().world());
+  KnownRoadsBench::reset();
   NavigationMemoryBench::reset();
   NavigationEyeBench::reset();
   NpcKeysBench::reset();
@@ -10503,6 +10514,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
 
   auto world  = Gothic::inst().world();
   auto player = Gothic::inst().player();
+  KnownRoadsBench::tick(Gothic::inst().checkLoading()==Gothic::LoadState::Idle?world:nullptr);
   if(world==nullptr || player==nullptr || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) {
     renderSound(dt);
     return false;

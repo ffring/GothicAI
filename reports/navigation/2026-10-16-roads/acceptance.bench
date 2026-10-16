@@ -1,0 +1,27 @@
+seed 7
+cheat god
+set time 12 0
+roads load @PLACES_JSON@
+roads on VLK_449_LARES
+roads stranger VLK_458_RUPERT NW_CITY_ENTRANCE_MAIN
+roads path VLK_449_LARES NW_CITY_HABOUR_PUFF_02_01 NW_CITY_ENTRANCE_MAIN
+roads snapshot local VLK_449_LARES
+roads path VLK_458_RUPERT NW_CITY_HABOUR_PUFF_02_01 NW_CITY_ENTRANCE_MAIN
+roads snapshot stranger VLK_458_RUPERT
+roads on BAU_950_LOBART
+roads path BAU_950_LOBART CITY_HABOUR_TAVERN01 NW_FARM1_LOBART
+roads snapshot lobart-before BAU_950_LOBART
+roads add BAU_950_LOBART CITY_HABOUR_TAVERN01
+roads path BAU_950_LOBART CITY_HABOUR_TAVERN01 NW_FARM1_LOBART
+roads snapshot lobart-after BAU_950_LOBART
+roads on BAU_954_MALETH
+roads snapshot maleth BAU_954_MALETH
+roads on MIL_309_STADTWACHE
+roads snapshot gate-guard MIL_309_STADTWACHE
+roads on VLK_408_JORA
+roads snapshot jora VLK_408_JORA
+roads on NONE_100_XARDAS
+roads snapshot xardas NONE_100_XARDAS
+roads actors MIL_309_
+roads bench 50 NW_CITY_HABOUR_PUFF_02_01 20
+label done
