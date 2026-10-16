@@ -1192,7 +1192,8 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   }
 
 void MainWindow::onVideo(std::string_view fname) {
-  if(Gothic::inst().isBenchmarkMode())
+  // -nointro (autotests): no videos, Xardas's first dialog plays the addon's intro for over a minute
+  if(Gothic::inst().isBenchmarkMode() || !CommandLine::inst().doIntro())
     return;
   video.pushVideo(fname);
   }
