@@ -18,10 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 38
+PROTOCOL_VERSION = 39
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
+ERRAND_PROTOCOL = 39  # inventory items' `mission`; story_effect give to another npc (errands.py)
 
 # --- game -> server -----------------------------------------------------------
 
@@ -118,6 +119,7 @@ class InventoryItem(_GameMessage):
     name: str
     count: int
     equipped: bool = False
+    mission: bool = False  # v39: a mission item (ITEM_MISSION), never given from one npc to another
 
 
 class NpcState(_GameMessage):
@@ -1382,7 +1384,10 @@ class StoryEffectCmd(_Command):
     answers `result`.
 
     `check` (v10): the gives are checked first, and nothing happens unless each giver has all it gives
-    (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)")."""
+    (`error`: what is missing, "missing: hero ITMI_GOLD 30 (has 12)").
+
+    v39: `give` with `to: "npc"` and `npc` (an instance symbol): the npc gives it to that other npc (an
+    errand far from the hero, errands.py); a mission item never (`error`: "a mission item: …")."""
 
     type: Literal["story_effect"] = "story_effect"
     req: str

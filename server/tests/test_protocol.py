@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from gothic_ai import triggers
 from gothic_ai.protocol import (
+    ERRAND_PROTOCOL,
     NOISE_PROTOCOL,
     PACE_PROTOCOL,
     PROTOCOL_VERSION,
@@ -356,9 +357,7 @@ def test_v36_physics_noise_and_investigation():
     assert noise.at == (100, 20, 300) and noise.place == "NW_CITY_TAVERN_01"
     assert noise.loudness == 0.54 and noise.source == "table" and noise.distance == 502
     assert noise.other == "" and noise.other_name is None
-    seen = parse_game_message(
-        '{"type":"npc_event","npc":"X","kind":"noise","other":"PLAYER","at":[1,2,3]}'
-    )
+    seen = parse_game_message('{"type":"npc_event","npc":"X","kind":"noise","other":"PLAYER","at":[1,2,3]}')
     assert isinstance(seen, NpcEvent) and seen.other == "PLAYER"
     legacy = parse_game_message('{"type":"npc_event","npc":"X","kind":"player_near"}')
     assert isinstance(legacy, NpcEvent) and legacy.other == "PLAYER" and legacy.at is None
@@ -378,22 +377,51 @@ def test_v36_investigation_receipt_identifies_action_without_breaking_old_bridge
 
 def test_v37_physical_traces_and_noise_clock():
     assert PROTOCOL_VERSION >= TRACE_PROTOCOL == 37
-    msg = parse_game_message(_json({
-        "type": "npc_views", "t": 1000, "views": [{
-            "npc": "X", "name": "Корагон", "time": 725,
-            "traces": [{"id": "NEWWORLD.ZEN:vob:42", "kind": "tilted", "name": "стол",
-                        "waypoint": "NW_CITY_TAVERN_01", "distance": 210, "hero_cm": 300,
-                        "from_hero": "left", "age": 5}],
-        }],
-    }))
+    msg = parse_game_message(
+        _json(
+            {
+                "type": "npc_views",
+                "t": 1000,
+                "views": [
+                    {
+                        "npc": "X",
+                        "name": "Корагон",
+                        "time": 725,
+                        "traces": [
+                            {
+                                "id": "NEWWORLD.ZEN:vob:42",
+                                "kind": "tilted",
+                                "name": "стол",
+                                "waypoint": "NW_CITY_TAVERN_01",
+                                "distance": 210,
+                                "hero_cm": 300,
+                                "from_hero": "left",
+                                "age": 5,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
     assert isinstance(msg, NpcViews)
     trace = msg.views[0].traces[0]
     assert (trace.kind, trace.name, trace.waypoint, trace.age) == (
-        "tilted", "стол", "NW_CITY_TAVERN_01", 5,
+        "tilted",
+        "стол",
+        "NW_CITY_TAVERN_01",
+        5,
     )
     assert trace.hero_cm == 300 and trace.from_hero == "left"
     assert set(trace.model_dump()) == {
-        "id", "kind", "name", "waypoint", "distance", "hero_cm", "from_hero", "age",
+        "id",
+        "kind",
+        "name",
+        "waypoint",
+        "distance",
+        "hero_cm",
+        "from_hero",
+        "age",
     }
     legacy = parse_game_message('{"type":"npc_views","t":1,"views":[{"npc":"X","name":"x"}]}')
     assert isinstance(legacy, NpcViews) and legacy.views[0].traces == []
@@ -402,6 +430,22 @@ def test_v37_physical_traces_and_noise_clock():
 
 
 def test_v38_a_guide_keeps_the_heros_pace():
-    assert PROTOCOL_VERSION == PACE_PROTOCOL == 38  # v36, v37 are the physics session's
+    assert PROTOCOL_VERSION >= PACE_PROTOCOL == 38  # v36, v37 are the physics session's
     go = ActionCmd(id="a1", npc="BAU_954_MALETH", action="go_to_waypoint", args={"pace": "hero"})
     assert '"pace":"hero"' in go.to_json()
+
+
+def test_v39_errands_mission_items_and_a_give_to_an_npc():
+    assert PROTOCOL_VERSION == ERRAND_PROTOCOL == 39
+    snap = parse_game_message(_json({
+        "type": "snapshot", "req": "r1", "t": 1,
+        "npc": {"id": "X", "name": "Хильда", "pos": [0, 0, 0], "rot": 0, "hp": 1, "hp_max": 1, "busy": False,
+                "inventory": [{"item": "ITWR_CANTHARS_KOMPROBRIEF_MIS", "name": "Письмо", "count": 1,
+                               "mission": True}, {"item": "ITMI_GOLD", "name": "Золото", "count": 25}]},
+        "world": {"name": "NEWWORLD.ZEN", "day": 1, "hour": 7, "minute": 0},
+    }))  # fmt: skip
+    assert isinstance(snap, Snapshot)
+    assert [i.mission for i in snap.npc.inventory] == [True, False]
+    effect = {"do": "give", "item": "ITMI_GOLD", "count": 25, "to": "npc", "npc": "BAU_950_LOBART"}
+    give = StoryEffectCmd(req="e1", npc="BAU_951_HILDA", effects=[effect])
+    assert '"to":"npc","npc":"BAU_950_LOBART"' in give.to_json()

@@ -1021,8 +1021,10 @@ void NpcController::emitSnapshot(World& world, Npc& npc, std::string_view symbol
        .str("item",itemSymbol(world,it->clsId()))
        .str("name",TextCodec::toUtf8(it->displayName()))
        .integer("count",int64_t(it.count()))
-       .boolean("equipped",it.isEquipped())
-     .end();
+       .boolean("equipped",it.isEquipped());
+    if(it->isMission())
+      j.boolean("mission",true);  // v39: a mission item (ITEM_MISSION) never changes hands between npc's
+    j.end();
     }
   j.endArray();
   j.end();

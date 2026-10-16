@@ -203,6 +203,10 @@ class Guide:
                 return None, f"вы и так здесь: {place.where_ru}"
         return way, ""
 
+    async def free(self, npc: str) -> str | None:
+        """Why the npc may not leave its spot (None: it may): for a lead, and for an errand (errands.py)."""
+        return (await self._free(npc.upper()))[0]
+
     async def _free(self, npc: str) -> tuple[str | None, list[RoutineEntry]]:
         """Why the npc may not leave its spot to lead the hero (None: it may), and its routine."""
         if self.companion(npc):

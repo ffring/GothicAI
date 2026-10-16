@@ -83,7 +83,8 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
   e.routine = upper(JsonRead::str(x,"routine"));
   e.count  = int32_t(JsonRead::integer(x,"count",JsonRead::integer(x,"amount",
                      JsonRead::integer(x,"value",JsonRead::integer(x,"seconds",1)))));
-  e.toHero = JsonRead::str(x,"to")!="self";
+  e.toNpc  = JsonRead::str(x,"to")=="npc";
+  e.toHero = JsonRead::str(x,"to")!="self" && !e.toNpc;
   auto* item = vm ? vm->find_symbol_by_name(e.item) : nullptr;
   auto* var  = vm ? vm->find_symbol_by_name(e.var) : nullptr;
   if(e.kind=="give" || e.kind=="create") {
@@ -91,6 +92,11 @@ std::string StoryEffect::read(const rapidjson::Value& x, zenkit::DaedalusVm* vm,
       return e.kind + ": no item " + e.item;
     if(e.count<=0)
       return e.kind + ": count must be positive";
+    if(e.kind=="give" && e.toNpc) {
+      auto* t = vm && !e.target.empty() ? vm->find_symbol_by_name(e.target) : nullptr;
+      if(e.target.empty() || (vm && (t==nullptr || t->type()!=DaedalusDataType::INSTANCE)))
+        return "give: no npc " + e.target;
+      }
     return {};
     }
   if(e.kind=="teach") {
@@ -182,7 +188,17 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
   self->set_instance(npc.handlePtr());
   other->set_instance(player.handlePtr());
 
-  if(kind=="give") {
+  if(kind=="give" && toNpc) {
+    // to another npc (v39): an errand far from the hero, the walk taken as done (errands.py)
+    auto* s = vm.find_symbol_by_name(item);
+    auto* t = vm.find_symbol_by_name(target);
+    auto  inst = t!=nullptr ? t->get_instance() : nullptr;
+    if(s!=nullptr && inst!=nullptr)
+      call("B_GIVEINVITEMS",{Value::instance(npc.handlePtr()),Value::instance(inst),
+                             Value::integer(int32_t(s->index())),Value::integer(count)}); else
+      Log::e("[story] ",who,": give to ",target,": no such npc in the world");
+    }
+  else if(kind=="give") {
     if(auto* s = vm.find_symbol_by_name(item)) {
       auto& from = toHero ? npc : player;
       auto& to   = toHero ? player : npc;
