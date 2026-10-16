@@ -29,7 +29,7 @@ stop
 
 npccharacter route tavern
 cam auto 350 110
-wait 1000
+wait 2200
 rec npc_tavern_mug
 npccharacter begin
 wait 6000
@@ -37,7 +37,6 @@ npccharacter end
 stop
 
 npccharacter seat
-cam auto 350 110
 wait 700
 rec npc_seat_and_rise
 npccharacter sit

@@ -599,3 +599,35 @@ must never be presented as game FPS. Limits are +0.3 ms native physics p95 and 5
 `character ride-checkpoint`, `character cleanup`, `character save <label>` and the first-command
 `character initial` are test-only commands. `CHARACTER_VIRTUAL=1` also works with `scripts/e2e.sh`
 for the single requested `SCENARIO=m5b` check, without changing the user's Gothic.ini.
+
+### Nearby human NPC CharacterVirtual comparison
+
+`NPC_CHARACTER_VIRTUAL=0|1` sets the independent `[GAME] npc_character_virtual` before loading
+in both `bench.sh` and `e2e.sh`. The production default is **0**; the hero's setting is independent.
+`OPENGOTHIC_BENCH_TAKE=off|on` selects the same NPC flag inside the comparison scripts.
+
+`npc-character-virtual` sends its own human NPC through the stock forest stairs, doorway and
+Coragon tavern using native `AI_GoToPoint`, then records native bench sitting and standing.
+`npc-character-virtual-seat` prepares an authored bench near Lobart's house, with a fixed
+camera checked for visibility. The current source save fails its available-BENCH precondition;
+this fixture and the NPC comparison remain unaccepted (see the stage-5 validation notes). Actors use the bench's external-control policy so routines cannot
+replace a queued test leg; ordinary observation windows do not change NPC control or goals.
+The mug must settle on the floor before recording. `npc-character-frames.csv` and
+`npc_character_route_end` contain actual NPC root/model heights, controller activity, arrival,
+stalls, prop mass/contact/displacement and the maximum frame-to-frame height change.
+Sitting also records the authored animation-socket alignment, which is included in that maximum.
+
+`npc-character-virtual-performance` keeps twenty human actors walking in supported market
+lanes for a normal, uncaptured 30-second window. It checks all twenty remain inside 20 m;
+limits are +0.5 ms physics p95 and 5% mean app FPS loss. `npc-character-virtual-radius`
+checks the 20/22 m hysteresis and live toggles. `npc-character-virtual-save` writes a complete
+`session-standing.sav`; load it with the matching initial flag and `npc-character-virtual-reload`.
+
+`scripts/npc-character-virtual-windows.sh` runs the eight passive morning/evening windows from
+the navigation baseline in both modes. Set absolute `RUNNER`, `SAVE`, `GOTHIC_DIR` for the
+existing CPU-only body runner, or omit `RUNNER` to use the Mac game. Completed windows are
+preserved on restart; `NPC_CV_MODES='on off'` changes run order. Native observation counts
+unique humans reaching a goal separately from the stuck detector's all-NPC walking population.
+Run `scripts/npc_character_virtual_compare.py .bench/npc-character-virtual --output
+.bench/npc-character-virtual/comparison.md` to compare the raw data. Missing evidence stays
+incomplete; the analyzer also writes JSON beside the Markdown output.

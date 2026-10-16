@@ -687,7 +687,10 @@ struct Bench {
     Vec3 start,goal,lastPosition,lastVisual,progressPosition;
     uint64_t began=0,arrived=0,progressTime=0;
     unsigned stalls=0;
-    float maxVisualJump=0,maxPhysicalJump=0,maxAboveFloor=0;
+    float maxVisualJump=0,maxPhysicalJump=0,maxAboveFloor=0,mugMassKg=0;
+    bool mugContact=false;
+    uint64_t supportSince=0;Vec3 preparationSample;
+    bool sawPreparationSample=false;
     bool active=false,reached=false,stalled=false,sat=false,standing=false;
   } npcCharacterRoute;
   struct NpcCharacterFrame {
@@ -707,7 +710,8 @@ struct Bench {
   std::unordered_map<const Npc*,NpcCharacterGoal> npcCharacterGoals;
   std::unordered_set<const Npc*> npcCharacterWalkers;
   uint64_t npcCharacterObservedFrames=0,npcCharacterCvFrames=0,npcCharacterArrivals=0,npcCharacterObserveStart=0;
-  unsigned npcCharacterMaxNearby=0;
+  unsigned npcCharacterMaxNearby=0,npcCharacterCrowdMinNearby=20,npcCharacterCrowdMaxNearby=0;
+  float npcCharacterCrowdMaximumDistance=0;
   std::chrono::steady_clock::time_point characterLastWall;
   bool characterHasWall=false,characterMeasuring=false;
   uint64_t characterFrame=0;
@@ -4489,7 +4493,9 @@ Npc* npcCharacterActor(World& world,const Vec3& position) {
   auto* npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),position);
   if(!npc) {arenaAbort("NPC CharacterVirtual fixture actor insertion failed");return nullptr;}
   npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->closeWeapon(true);
-  npc->setExternalControl(false);npc->setProcessPolicy(NpcProcessPolicy::AiNormal);npc->setWalkMode(WalkBit::WM_Run);
+  // Keep native queued actions and movement; suppress source-save routines
+  // and perception callbacks between scripted fixture legs.
+  npc->setExternalControl(true);npc->setProcessPolicy(NpcProcessPolicy::AiNormal);npc->setWalkMode(WalkBit::WM_Run);
   npc->aiPush(AiQueue::aiWait(60000));npc->setPosition(position);npc->updateTransform();
   return npc;
   }
@@ -4499,7 +4505,7 @@ void npcCharacterPlaceHero(World& world,Npc& player,const Vec3& start,const Vec3
   along=along.length()>0?Vec3::normalize(along):Vec3(1,0,0);
   const Vec3 side(-along.z,0,along.x);
   Vec3 hero;bool found=false;
-  for(float distance:{260.f,-260.f,400.f,-400.f,600.f,-600.f}) {
+  for(float distance:{400.f,-400.f,600.f,-600.f,800.f,-800.f}) {
     const auto at=start+side*distance;
     if(!characterFloor(world,at,hero) || std::abs(hero.y-start.y)>150)continue;
     if(world.physic()->ray(hero+Vec3(0,100,0),hero+along*40.f+Vec3(0,100,0)).hasCol)continue;
@@ -4528,10 +4534,21 @@ void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
     // Use an actual dropped Item in the free lane beside authored furniture.
     // Remove only the general stand's temporary props so ON/OFF starts agree.
     bench.movableFixtures.clear();
-    auto matrix=Matrix4x4::mkIdentity();matrix.translate((route.start+route.goal)*.5f+Vec3(0,10,0));
+    auto matrix=Matrix4x4::mkIdentity();matrix.translate((route.start+route.goal)*.5f);
     bench.characterItem=world.addItemDyn(world.script().findSymbolIndex("ITFO_BEER"),matrix,size_t(-1));
     if(!bench.characterItem) {arenaAbort("NPC tavern real beer mug insertion failed");return;}
-    bench.characterItem->setPhysicsEnable(world);bench.characterPropInitial=bench.characterItem->position();bench.characterPropTravel=0;
+    // Item proxies are centred boxes with at least 15 cm half-height. Keep
+    // both the proxy and real visual bounds above the floor before settling.
+    const auto* bounds=bench.characterItem->bBox();
+    if(!bounds) {arenaAbort("NPC tavern beer mug has no native visual bounds");return;}
+    const float height=std::max({15.f,(bounds[1].y-bounds[0].y)*.5f,-bounds[0].y})+2.f;
+    matrix.translate(0,height,0);bench.characterItem->setObjMatrix(matrix);
+    bench.characterItem->setPhysicsEnable(world);
+    bench.characterPropInitial=bench.characterItem->position();bench.characterPropTravel=0;
+    route.mugMassKg=bench.characterItem->physicsMass();route.mugContact=false;
+    event("npc_character_mug_setup","\"position_cm\":"+ragdollVector(bench.characterPropInitial)+
+      ",\"floor_cm\":"+ragdollVector((route.start+route.goal)*.5f)+",\"bounds_min_cm\":"+ragdollVector(bounds[0])+
+      ",\"bounds_max_cm\":"+ragdollVector(bounds[1])+",\"mass_kg\":"+ragdollNumber(bench.characterItem->physicsMass()));
     }
   bench.cam=C_Follow;bench.camDist=350;bench.camHeight=110;bench.camAngle=110;bench.camAuto=true;bench.hasPrev=false;
   event("npc_character_route_setup","\"route\":"+jsonStr(name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
@@ -4558,9 +4575,9 @@ void npcCharacterEnd(World& world) {
   route.active=false;
   std::string mug;
   if(bench.characterItem)
-    mug=",\"mug_mass_kg\":"+ragdollNumber(bench.characterItem->physicsMass())+
+    mug=",\"mug_mass_kg\":"+ragdollNumber(route.mugMassKg)+
       ",\"mug_max_displacement_cm\":"+ragdollNumber(bench.characterPropTravel)+
-      ",\"mug_native_contact\":"+(bench.characterItem->physicsTouchedByNpc()?"true":"false");
+      ",\"mug_native_contact\":"+(route.mugContact?"true":"false");
   event("npc_character_route_end","\"route\":"+jsonStr(route.name)+",\"success\":"+(route.reached?"true":"false")+
     ",\"elapsed_ms\":"+std::to_string((route.reached?route.arrived:world.tickCount())-route.began)+
     ",\"window_ms\":"+std::to_string(world.tickCount()-route.began)+",\"start_cm\":"+ragdollVector(route.start)+
@@ -4609,7 +4626,7 @@ void npcCharacterMarket(World& world,Npc& player) {
   for(size_t i=0;i<lanes.size();++i) {
     auto* npc=i<actors.size()?actors[i]:npcCharacterActor(world,lanes[i].first);
     if(!npc)return;
-    npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(false);
+    npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
     npc->setProcessPolicy(NpcProcessPolicy::AiNormal);npc->setWalkMode(WalkBit::WM_Run);
     npc->setPosition(lanes[i].first);npc->setDirection(lanes[i].second-lanes[i].first);npc->updateTransform();
     bench.npcCharacterCrowd.emplace_back();auto& walker=bench.npcCharacterCrowd.back();walker.npc=npc;
@@ -4623,6 +4640,12 @@ void npcCharacterMarket(World& world,Npc& player) {
 
 void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
   auto& route=bench.npcCharacterRoute;
+  if(route.npc && !route.active && route.seat) {
+    const auto at=route.npc->position();
+    const bool supported=!route.npc->isInAir() && !route.npc->isFalling() && std::abs(at.y-route.start.y)<5.f;
+    if(!supported || !route.sawPreparationSample || (at-route.preparationSample).length()>1.f)route.supportSince=world.tickCount();
+    route.preparationSample=at;route.sawPreparationSample=true;
+    }
   if(!route.active && !bench.npcCharacterMeasuring && !bench.npcCharacterObserving)return;
   unsigned nearby=0,virtualNearby=0,movingNearby=0,movingVirtualNearby=0;
   for(uint32_t id=0;id<world.npcCount();++id) {
@@ -4650,6 +4673,16 @@ void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
     }
   if(bench.npcCharacterObserving) {++bench.npcCharacterObservedFrames;bench.npcCharacterMaxNearby=std::max(bench.npcCharacterMaxNearby,nearby);}
   if(!route.active && !bench.npcCharacterMeasuring)return;
+  if(bench.npcCharacterMeasuring && !bench.npcCharacterCrowd.empty()) {
+    unsigned close=0;float maximumDistance=0;
+    for(const auto& walker:bench.npcCharacterCrowd) {
+      const float distance=(walker.npc->position()-player.position()).length();
+      close+=distance<2000.f;maximumDistance=std::max(maximumDistance,distance);
+      }
+    bench.npcCharacterCrowdMinNearby=std::min(bench.npcCharacterCrowdMinNearby,close);
+    bench.npcCharacterCrowdMaxNearby=std::max(bench.npcCharacterCrowdMaxNearby,close);
+    bench.npcCharacterCrowdMaximumDistance=std::max(bench.npcCharacterCrowdMaximumDistance,maximumDistance);
+    }
   const auto now=std::chrono::steady_clock::now();
   const float wall=bench.npcCharacterHasWall?std::chrono::duration<float,std::milli>(now-bench.npcCharacterLastWall).count():0;
   bench.npcCharacterLastWall=now;bench.npcCharacterHasWall=true;
@@ -4671,9 +4704,14 @@ void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
   route.lastVisual=visual;route.lastPosition=position;
   if(const auto floor=world.physic()->landRay(position+Vec3(0,20,0),600);floor.hasCol)
     route.maxAboveFloor=std::max(route.maxAboveFloor,position.y-floor.v.y);
-  if(bench.characterItem)bench.characterPropTravel=std::max(bench.characterPropTravel,(bench.characterItem->position()-bench.characterPropInitial).length());
+  if(bench.characterItem) {
+    bench.characterPropTravel=std::max(bench.characterPropTravel,(bench.characterItem->position()-bench.characterPropInitial).length());
+    route.mugContact|=bench.characterItem->physicsTouchedByNpc();
+    route.mugMassKg=std::max(route.mugMassKg,bench.characterItem->physicsMass());
+    }
   bool arrived=false;
   if(route.seat) {
+    if(npc->interactive()!=nullptr && npc->interactive()!=route.seat) {arenaAbort("NPC native AI_UseMob selected a different BENCH");return;}
     route.sat|=npc->interactive()==route.seat && route.seat->stateId()>=1;
     route.standing=route.sat && npc->interactive()==nullptr && npc->isStanding();
     arrived=route.standing;
@@ -4705,34 +4743,122 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     Gothic::settingsSetI("GAME","npc_character_virtual",a[1]=="on");
     event("npc_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
     }
-  else if(c=="npccharacter" && a.size()==3 && a[1]=="route") npcCharacterPrepare(w,pl,a[2]);
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="route") {
+    npcCharacterPrepare(w,pl,a[2]);
+    if(bench.npcCharacterRoute.npc)exec("watch watched",w,pl,ctrl);
+    }
   else if(c=="npccharacter" && a.size()==2 && a[1]=="begin") {
     auto& route=bench.npcCharacterRoute;
     if(!route.npc) {arenaAbort("NPC character begin needs a prepared route");return;}
+    if(bench.characterItem) {
+      const auto position=bench.characterItem->position(),velocity=bench.characterItem->physicsVelocity();
+      auto along=route.goal-route.start;along.y=0;along=Vec3::normalize(along);
+      const auto delta=position-(route.start+route.goal)*.5f;
+      const float side=std::abs(delta.x*along.z-delta.z*along.x),forward=std::abs(Vec3::dotProduct(delta,along));
+      const bool ready=side<45.f && forward<60.f && velocity.length()<5.f && delta.y>=0 && delta.y<60.f;
+      event("npc_character_mug_prebegin","\"position_cm\":"+ragdollVector(position)+",\"velocity_cm_s\":"+ragdollVector(velocity)+
+        ",\"settling_displacement_cm\":"+ragdollNumber((position-bench.characterPropInitial).length())+
+        ",\"lane_side_cm\":"+ragdollNumber(side)+",\"lane_forward_cm\":"+ragdollNumber(forward)+",\"ready\":"+(ready?"true":"false"));
+      if(!ready) {arenaAbort("NPC tavern mug did not settle inside its route lane");return;}
+      bench.characterPropInitial=position;bench.characterPropTravel=0;
+      }
     route.npc->clearAiQueue();route.npc->stopWalking();route.npc->setPosition(route.start);route.npc->updateTransform();
     npcCharacterBegin(w);
     route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));route.npc->aiPush(AiQueue::aiWait(60000));
     }
   else if(c=="npccharacter" && a.size()==2 && a[1]=="end") npcCharacterEnd(w);
   else if(c=="npccharacter" && a.size()==2 && a[1]=="seat") {
-    npcCharacterPrepare(w,pl,"tavern");auto& route=bench.npcCharacterRoute;
-    if(!route.npc)return;
+    auto& route=bench.npcCharacterRoute;
+    if(route.npc) {w.removeNpc(*route.npc);route.npc=nullptr;}
     if(bench.characterItem) {w.removeItem(*bench.characterItem);bench.characterItem=nullptr;}
+    route=Bench::NpcCharacterRoute();route.name="seat";
+    // Use the authored BENCH at the same farm anchor as living-seat.bench.
+    // Coragon's nearest BENCH is behind the bar and cannot be filmed clearly.
+    const auto* anchor=w.findPoint("NW_FARM1_INHOUSE_01");
+    if(!anchor) {arenaAbort("NPC character BENCH fixture lacks its farm anchor");return;}
+    const auto reference=w.physic()->landRay(anchor->position()+Vec3(0,80,0),200.f);
+    if(!reference.hasCol) {arenaAbort("NPC character farm anchor has no supported floor");return;}
+    const float floorReference=reference.v.y;
+    characterFreezeNear(w,pl,reference.v,reference.v);
+    pl.stopWalking();pl.setPosition(reference.v);pl.updateTransform();
+    route.npc=npcCharacterActor(w,reference.v);if(!route.npc)return;
+    bench.subject=route.npc;
     route.seat=w.availableMob(*route.npc,"BENCH");
-    if(!route.seat) {arenaAbort("NPC character seat requires an available authored BENCH in Coragon tavern");return;}
-    route.start=route.seat->nearestPoint(*route.npc);
-    if(const auto floor=w.physic()->landRay(route.start+Vec3(0,180,0),500);floor.hasCol)route.start.y=floor.v.y;
-    route.goal=route.start;route.name="seat";
-    route.npc->stopWalking();route.npc->setPosition(route.start);route.npc->setDirection(route.seat->position()-route.start);route.npc->updateTransform();
-    npcCharacterPlaceHero(w,pl,route.start,route.start);
-    event("npc_character_seat_setup","\"scheme\":"+jsonStr(route.seat->schemeName())+",\"mob_cm\":"+ragdollVector(route.seat->position())+
-      ",\"start_cm\":"+ragdollVector(route.start));
+    if(!route.seat) {arenaAbort("NPC character seat requires the available authored BENCH near NW_FARM1_INHOUSE_01");return;}
+    const auto socket=route.seat->nearestPoint(*route.npc);
+    bool prepared=false;
+    // The animation socket can lie on a furniture top. Approach it from the
+    // actual supported floor, below tabletop/seat ray hits, with a free capsule.
+    for(float distance:{240.f,280.f,320.f})for(unsigned step=0;step<24 && !prepared;++step) {
+      const float yaw=float(step)*float(M_PI)/12.f;
+      auto at=socket+Vec3(std::cos(yaw)*distance,0,std::sin(yaw)*distance);
+      const auto floor=w.physic()->landRay(Vec3(at.x,floorReference+50.f,at.z),150.f);
+      if(!floor.hasCol || std::abs(floor.v.y-floorReference)>20.f)continue;
+      at.y=floor.v.y;route.npc->setPosition(at);route.npc->updateTransform();
+      if(route.npc->hasCollision())continue;
+      if(w.availableMob(*route.npc,"BENCH")!=route.seat)continue;
+      auto toward=socket-at;toward.y=0;toward=Vec3::normalize(toward);
+      const auto approachEnd=socket-toward*120.f;
+      auto previous=at;bool lane=true;
+      for(unsigned sample=1;sample<=12;++sample) {
+        auto point=at+(approachEnd-at)*(float(sample)/12.f);
+        const auto support=w.physic()->landRay(Vec3(point.x,floorReference+50.f,point.z),150.f);
+        if(!support.hasCol || std::abs(support.v.y-at.y)>20.f) {lane=false;break;}
+        point.y=support.v.y;
+        if(w.physic()->ray(previous+Vec3(0,100,0),point+Vec3(0,100,0)).hasCol) {lane=false;break;}
+        previous=point;
+        }
+      if(!lane)continue;
+      route.npc->setPosition(previous);route.npc->updateTransform();
+      const auto usePosition=route.seat->nearestPoint(*route.npc);
+      if(route.npc->hasCollision() || (route.npc->centerPosition()-usePosition).length()>140.f ||
+         w.availableMob(*route.npc,"BENCH")!=route.seat)continue;
+      route.destination=WayPoint(previous,"FP_NPC_CHARACTER_SEAT_APPROACH");route.destination.groundPos=previous;
+      route.start=at;prepared=true;
+      }
+    if(!prepared) {arenaAbort("NPC character BENCH has no supported collision-free floor approach");return;}
+    route.goal=socket;route.name="seat";
+    route.npc->stopWalking();route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+    route.preparationSample=route.start;route.sawPreparationSample=true;route.supportSince=w.tickCount();
+    npcCharacterPlaceHero(w,pl,route.start,route.goal);
+    // Hold one clear world-space view for the whole approach/sit/rise. Camera
+    // auto-follow can otherwise flip through the room's walls during root alignment.
+    auto focus=(route.start+socket)*.5f;focus.y=floorReference+130.f;
+    const Vec3 targets[]{route.start+Vec3(0,130,0),route.destination.position()+Vec3(0,130,0),
+                         socket+Vec3(0,60,0),socket+Vec3(0,150,0)};
+    Vec3 camera;bool visible=false;
+    for(float distance:{450.f,550.f,350.f})for(float height:{170.f,140.f,220.f})for(unsigned step=0;step<48 && !visible;++step) {
+      const float yaw=float(step)*float(M_PI)/24.f;
+      const Vec3 candidate(focus.x+std::cos(yaw)*distance,floorReference+height,focus.z+std::sin(yaw)*distance);
+      bool clear=true;
+      for(const auto& target:targets)if(hidden(w,candidate,target)) {clear=false;break;}
+      if(clear) {camera=candidate;visible=true;}
+      }
+    if(!visible) {arenaAbort("NPC character BENCH lacks a clear fixed view of its approach and seated pose");return;}
+    bench.cam=C_Hold;bench.camAuto=false;lookFrom(camera,focus);
+    event("npc_character_seat_setup","\"scheme\":"+jsonStr(route.seat->schemeName())+",\"vob\":"+jsonStr(route.seat->vobNameStr())+
+      ",\"anchor\":\"NW_FARM1_INHOUSE_01\",\"mob_cm\":"+ragdollVector(route.seat->position())+
+      ",\"socket_cm\":"+ragdollVector(socket)+",\"start_cm\":"+ragdollVector(route.start)+
+      ",\"approach_cm\":"+ragdollVector(route.destination.position())+",\"camera_cm\":"+ragdollVector(camera)+
+      ",\"camera_target_cm\":"+ragdollVector(focus)+",\"camera_clear\":true");
+    exec("watch watched",w,pl,ctrl);
     }
   else if(c=="npccharacter" && a.size()==2 && a[1]=="sit") {
     auto& route=bench.npcCharacterRoute;
     if(!route.npc || !route.seat) {arenaAbort("NPC character sit needs its BENCH fixture");return;}
+    const bool stable=route.sawPreparationSample && w.tickCount()-route.supportSince>=300 &&
+      !route.npc->isInAir() && !route.npc->isFalling() && (route.npc->position()-route.start).length()<5.f;
+    event("npc_character_seat_prebegin","\"ready\":"+std::string(stable?"true":"false")+
+      ",\"root_cm\":"+ragdollVector(route.npc->position())+",\"supported_ms\":"+std::to_string(w.tickCount()-route.supportSince)+
+      ",\"selected_vob\":"+jsonStr(route.seat->vobNameStr()));
+    if(!stable) {arenaAbort("NPC character seat approach did not settle supported before sit");return;}
     npcCharacterBegin(w);
-    route.npc->clearAiQueue();route.npc->aiPush(AiQueue::aiUseMob(route.seat->schemeName(),1));route.npc->aiPush(AiQueue::aiWait(60000));
+    route.npc->clearAiQueue();
+    // Scripted routines normally approach a grounded waypoint before UseMob.
+    // A direct far UseMob chases the elevated animation socket to a 20 cm
+    // position-goal, which can send the legacy actor onto adjacent furniture.
+    route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));
+    route.npc->aiPush(AiQueue::aiUseMob(route.seat->schemeName(),1));route.npc->aiPush(AiQueue::aiWait(60000));
     }
   else if(c=="npccharacter" && a.size()==2 && a[1]=="stand") {
     auto& route=bench.npcCharacterRoute;
@@ -4794,13 +4920,16 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="npccharacter" && a.size()==3 && a[1]=="measure") {
     if(!AppCadence::normalClock() || !AppCadence::arm(a[2]=="on")) {arenaAbort("NPC character normal cadence arm failed");return;}
     bench.npcCharacterMeasuring=true;bench.npcCharacterHasWall=false;
+    bench.npcCharacterCrowdMinNearby=20;bench.npcCharacterCrowdMaxNearby=0;bench.npcCharacterCrowdMaximumDistance=0;
     AppCadence::counts(true,uint32_t(bench.npcCharacterCrowd.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
     event("npc_character_measure_begin","\"cv_enabled\":"+std::string(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false"));
     }
   else if(c=="npccharacter" && a.size()==2 && a[1]=="report") {
     bench.npcCharacterMeasuring=false;
     AppCadence::counts(false,uint32_t(bench.npcCharacterCrowd.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
-    event("npc_character_measure_end","\"frames\":"+std::to_string(bench.npcCharacterFrames.size()));
+    event("npc_character_measure_end","\"frames\":"+std::to_string(bench.npcCharacterFrames.size())+
+      ",\"fixture_actors\":"+std::to_string(bench.npcCharacterCrowd.size())+",\"fixture_min_nearby\":"+std::to_string(bench.npcCharacterCrowdMinNearby)+
+      ",\"fixture_max_nearby\":"+std::to_string(bench.npcCharacterCrowdMaxNearby)+",\"fixture_max_distance_cm\":"+ragdollNumber(bench.npcCharacterCrowdMaximumDistance));
     }
 #endif
   else if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {

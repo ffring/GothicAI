@@ -7,7 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/.bench/npc-character-virtual/windows}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
-for mode in off on; do
+for mode in ${NPC_CV_MODES:-off on}; do
+  [[ "$mode" == off || "$mode" == on ]] || { echo 'NPC_CV_MODES must contain off and/or on' >&2; exit 2; }
   value=0
   [[ "$mode" != on ]] || value=1
   for spot in market harbour onar lobart; do
@@ -21,7 +22,14 @@ for mode in off on; do
       name="$spot-$hour"
       run="$OUT/$mode/$name"
       mkdir -p "$run"
-      [[ ! -e "$run/events.jsonl" ]] || { echo "Already measured: $run" >&2; exit 2; }
+      if [[ -e "$run/events.jsonl" ]]; then
+        if rg -q '^done$' "$run/bench.log" && ! rg -q 'failed|unknown command|goto failed' "$run/bench.log"; then
+          echo "$mode $name already complete"
+          continue
+        fi
+        echo "Incomplete earlier measurement: $run" >&2
+        exit 2
+      fi
       scenario="$run/window.bench"
       cat >"$scenario" <<EOF
 seed 7

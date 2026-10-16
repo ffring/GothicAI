@@ -260,13 +260,25 @@ def performance(run, minimum_nearby):
     enough = sum(count >= minimum_nearby for count in near) / len(near)
     costs = [row['step_ms'] for row in frames]
     app = cadence(Path(run['directory']), run['enabled'])
+    fixture_end = unique_event(run, 'npc_character_measure_end')
+    fixture_keys = ('fixture_actors', 'fixture_min_nearby', 'fixture_max_nearby', 'fixture_max_distance_cm')
+    fixture = {key: number(fixture_end[key]) for key in fixture_keys
+               if fixture_end is not None and key in fixture_end}
+    fixture['pass'] = None
+    if all(key in fixture for key in fixture_keys):
+        require(all(fixture[key] >= 0 for key in fixture_keys),
+                f"{run['directory']}: negative native performance fixture metric")
+        fixture['pass'] = (fixture['fixture_actors'] == 20 and fixture['fixture_min_nearby'] == 20 and
+                           fixture['fixture_max_nearby'] == 20 and fixture['fixture_max_distance_cm'] < 2000)
+    result['native_fixture'] = fixture
     result.update(samples=len(frames), physics_p95_ms=percentile(costs), physics_mean_ms=statistics.mean(costs),
                   nearby_humans_min=min(near), nearby_humans_mean=statistics.mean(near), nearby_humans_max=max(near),
                   nearby_humans_minimum=minimum_nearby, nearby_sufficient_sample_fraction=enough,
                   nearby_cv_max=max(row['nearby_cv'] for row in frames), app_cadence=app)
     if 'mean_fps' in app:
         result['mean_fps'] = app['mean_fps']
-    result['pass'] = combined([run['pass'], app['pass'], result['native_activity']['pass'], enough >= .95])
+    result['pass'] = combined([run['pass'], app['pass'], result['native_activity']['pass'],
+                               fixture['pass'], enough >= .95])
     return result
 
 
@@ -320,10 +332,21 @@ def window_result(directory, label, enabled):
     stuck = stuck_observation(directory, label)
     observe = unique_event(run, 'npc_character_observe_end', 'window', label)
     result = {'directory': str(directory), 'run': run_status(run), 'stuck': stuck,
-              'native_observe': observe, 'pass': None}
+              'native_observe': observe, 'unique_reached_humans': None,
+              'reached_human_ids': None, 'arrival_event_count': None,
+              'arrival_event_count_matches': None, 'pass': None}
     if observe is not None:
         required = ('window_ms', 'unique_walkers', 'reached_goals', 'frames', 'cv_actor_frames', 'max_nearby_humans')
         require(all(number(observe[key]) >= 0 for key in required), f'{directory}: negative observe metric')
+        arrivals = [row for row in select(run, 'npc_character_goal_arrive') if row.get('window') == label]
+        reached_ids = set()
+        for row in arrivals:
+            npc_id = number(row['npc_id'])
+            require(npc_id >= 0 and npc_id.is_integer(), f'{directory}: invalid arrival NPC id')
+            reached_ids.add(int(npc_id))
+        result.update(unique_reached_humans=len(reached_ids), reached_human_ids=sorted(reached_ids),
+                      arrival_event_count=len(arrivals),
+                      arrival_event_count_matches=len(arrivals) == number(observe['reached_goals']))
         native = number(observe['frames']) > 0 and (number(observe['cv_actor_frames']) > 0 if enabled
                                                    else number(observe['cv_actor_frames']) == 0)
         summary = stuck.get('summary')
@@ -333,7 +356,9 @@ def window_result(directory, label, enabled):
             same_sample = (abs(number(observe['window_ms']) - number(summary['simulation_duration_ms'])) <= 500 and
                            number(observe['radius_cm']) == number(summary['radius_cm']))
         result['same_sample'] = same_sample
-        result['pass'] = combined([run['pass'], stuck['pass'], native, same_sample])
+        result['pass'] = combined([run['pass'], stuck['pass'], native, same_sample,
+                                   result['arrival_event_count_matches'],
+                                   flag(observe['humans_only'])])
     return result
 
 
@@ -354,7 +379,8 @@ def compare_windows(directory):
         native_off, native_on = before['native_observe'], after['native_observe']
         if native_off is not None and native_on is not None and a is not None and b is not None:
             progress = (number(b['stuck_events']) <= number(a['stuck_events']) and
-                        number(native_on['reached_goals']) >= number(native_off['reached_goals']))
+                        number(native_on['reached_goals']) >= number(native_off['reached_goals']) and
+                        after['unique_reached_humans'] >= before['unique_reached_humans'])
         rows.append({'window': label, 'off': before, 'on': after, 'matched_window': matched,
                      'progress_pass': progress,
                      'pass': combined([before['pass'], after['pass'], matched, progress])})
@@ -398,21 +424,24 @@ def markdown(result):
                            ('Макс. высота корня над полом, см', 'max_above_floor_cm')):
             lines.append(f"| {label} | {display(tavern['off'].get(key))} | {display(tavern['on'].get(key))} |")
         lines += ['', 'Высота над полом приведена как измерение; она сама по себе не доказывает отсутствие опоры на кружку.']
-    lines += ['', '| Окно | Застревания OFF / ON | Цензурированные OFF / ON | Уникальные идущие (детектор) OFF / ON | Уникальные идущие (native observe) OFF / ON | Достигнутые цели OFF / ON | CV actor-frames ON | Та же выборка | Итог |',
-              '|---|---:|---:|---:|---:|---:|---:|---|---|']
+    lines += ['', '| Окно | Застревания OFF / ON | Цензурированные OFF / ON | Уникальные идущие (детектор) OFF / ON | Уникальные идущие (native observe) OFF / ON | Людей дошло OFF / ON | Достигнутые цели OFF / ON | CV actor-frames ON | Та же выборка | Итог |',
+              '|---|---:|---:|---:|---:|---:|---:|---:|---|---|']
     for row in result['windows']['windows']:
         before, after = row['off'], row['on']
         stuck_pair = lambda key: f"{display(before['stuck'].get(key))} / {display(after['stuck'].get(key))}"
         native_pair = lambda key: f"{display((before['native_observe'] or {}).get(key))} / {display((after['native_observe'] or {}).get(key))}"
-        lines.append(f"| {row['window']} | {stuck_pair('stuck_events')} | {stuck_pair('censored_events')} | {stuck_pair('unique_walkers')} | {native_pair('unique_walkers')} | {native_pair('reached_goals')} | {display((after['native_observe'] or {}).get('cv_actor_frames'))} | {display(row['matched_window'])} | {state(row['pass'])} |")
+        unique_pair = f"{display(before['unique_reached_humans'])} / {display(after['unique_reached_humans'])}"
+        lines.append(f"| {row['window']} | {stuck_pair('stuck_events')} | {stuck_pair('censored_events')} | {stuck_pair('unique_walkers')} | {native_pair('unique_walkers')} | {unique_pair} | {native_pair('reached_goals')} | {display((after['native_observe'] or {}).get('cv_actor_frames'))} | {display(row['matched_window'])} | {state(row['pass'])} |")
     perf = result['performance']
     a, b = perf['off'], perf['on']
     lines += ['', '| Производительность | OFF | ON | Изменение | Лимит |', '|---|---:|---:|---:|---:|',
               f"| Шаг физики p95, мс | {display(a.get('physics_p95_ms'))} | {display(b.get('physics_p95_ms'))} | {display(perf.get('physics_p95_delta_ms'))} | +0,5 мс |",
               f"| Средний FPS приложения | {display(a.get('mean_fps'))} | {display(b.get('mean_fps'))} | {display(perf.get('fps_drop_percent'))}% потери | 5% |",
               f"| NPC-люди рядом, мин / среднее / макс | {' / '.join(display(a.get('nearby_humans_' + key)) for key in ('min', 'mean', 'max'))} | {' / '.join(display(b.get('nearby_humans_' + key)) for key in ('min', 'mean', 'max'))} | — | ≥{result['minimum_nearby_humans']} в ≥95% кадров |",
+              f"| Акторы стенда в 20 м, мин / макс | {' / '.join(display(a.get('native_fixture', {}).get('fixture_' + key + '_nearby')) for key in ('min', 'max'))} | {' / '.join(display(b.get('native_fixture', {}).get('fixture_' + key + '_nearby')) for key in ('min', 'max'))} | — | 20 / 20 во всех тиках |",
+              f"| Макс. расстояние актора стенда, см | {display(a.get('native_fixture', {}).get('fixture_max_distance_cm'))} | {display(b.get('native_fixture', {}).get('fixture_max_distance_cm'))} | — | <2000 |",
               '', 'FPS — завершённые кадры приложения за обычное 30-секундное окно; физика — только кадры без видеозаписи и с обычными часами. Флаг ON сам по себе не доказывает работу контроллера.',
-              '', 'Детектор учитывает всех подходящих NPC, native observe — людей; счётчики уникальных идущих независимы и не означают число дошедших. Достигнутые цели берутся только из native observe. Цензурированные застревания включены в общее число.']
+              '', 'Детектор учитывает всех подходящих NPC, native observe — людей; счётчики уникальных идущих независимы и не означают число дошедших. «Людей дошло» — уникальные npc_id из событий достижения цели того же окна. Число событий сверяется с native reached_goals; один человек может достичь нескольких целей. Цензурированные застревания включены в общее число.']
     for section in ('routes', 'performance'):
         for mode in ('off', 'on'):
             run = result['runs'][section][mode]
