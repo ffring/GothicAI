@@ -1134,42 +1134,71 @@ namespace {
     const auto floorShape=JPH::MeshShapeSettings(triangles).Create();
     require(!floorShape.HasError(),"the fragment rotation fixture needs one-sided terrain");
     auto floor=world.addCollisionBody(floorShape.Get(),at(0,0,0),.8f,DynamicWorld::C_Landscape);
-    const std::vector<JPH::Vec3> points={{-.15f,-.08f,-.16f},{.15f,-.08f,-.16f},
-                                       {-.15f,.40f,-.16f},{.15f,.40f,-.16f},
-                                       {-.15f,.40f,.16f},{.15f,.40f,.16f}};
-    const auto shape=JPH::ConvexHullShapeSettings(points.data(),int(points.size()),.001f).Create();
-    require(!shape.HasError(),"the fragment rotation wedge must have a native convex hull");
+    const std::vector<std::vector<JPH::Vec3>> clouds={
+      {{-.15f,-.08f,-.16f},{.15f,-.08f,-.16f},{-.15f,.40f,-.16f},
+       {.15f,.40f,-.16f},{-.15f,.40f,.16f},{.15f,.40f,.16f}},
+      // Narrow pieces and long boards have a much larger sweep radius relative
+      // to their inner sphere than the original fixture's compact wedge.
+      {{-.02f,-.08f,-.16f},{.02f,-.08f,-.16f},{-.02f,.40f,-.16f},
+       {.02f,.40f,-.16f},{-.02f,.40f,.16f},{.02f,.40f,.16f}},
+      {{-.08f,-.60f,-.12f},{.08f,-.60f,-.12f},{-.08f,.60f,-.12f},
+       {.08f,.60f,-.12f},{-.08f,.60f,.12f},{.08f,.60f,.12f}}
+      };
     std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> fragments;
-    for(int axis=0;axis<3;++axis) for(int orientation=0;orientation<8;++orientation) {
-      const float x=float(orientation-4)*250.f,z=float(axis-1)*250.f;
-      auto rotation=Tempest::Matrix4x4::mkIdentity();
-      rotation.rotateOX(float(orientation)*45.f);
-      rotation.rotateOZ(float(axis)*37.f);
-      float lowest=std::numeric_limits<float>::max();
-      for(const auto& point:points) {
-        Tempest::Vec3 rotated(point.GetX()*100.f,point.GetY()*100.f,point.GetZ()*100.f);
-        rotation.project(rotated);
-        lowest=std::min(lowest,rotated.y-slope*rotated.x);
+    std::vector<size_t> cloudByBody;
+    std::unique_ptr<CollisionWorld::DynamicBody> ordinary;
+    for(size_t kind=0;kind<clouds.size();++kind) {
+      const auto& points=clouds[kind];
+      const auto shape=JPH::ConvexHullShapeSettings(points.data(),int(points.size()),.001f).Create();
+      require(!shape.HasError(),"the fragment rotation wedge must have a native convex hull");
+      if(kind==0) {
+        ordinary=world.addDynamicBody(shape.Get(),at(0,5000,0),.8f,1.f,DynamicWorld::C_Item);
+        ordinary->setVelocity({0,0,0},{47,0,0});
         }
-      auto matrix=at(x,slope*x-lowest+4.f,z);
-      matrix.mul(rotation);
-      auto body=world.addDynamicBody(shape.Get(),matrix,.8f,1.f,DynamicWorld::C_Fragment);
-      const Tempest::Vec3 omega=axis==0 ? Tempest::Vec3(47.f,0,0) :
-                                axis==1 ? Tempest::Vec3(0,0,47.f) : Tempest::Vec3(27.f,27.f,27.f);
-      body->setVelocity({0,-1000,0},omega);
-      fragments.push_back(std::move(body));
-      }
+      for(int axis=0;axis<3;++axis) for(int orientation=0;orientation<8;++orientation) {
+        const float x=float(orientation-4)*250.f,z=float(axis-1)*250.f+(float(kind)-1.f)*800.f;
+        auto rotation=Tempest::Matrix4x4::mkIdentity();
+        rotation.rotateOX(float(orientation)*45.f);
+        rotation.rotateOZ(float(axis)*37.f);
+        float lowest=std::numeric_limits<float>::max();
+        for(const auto& point:points) {
+          Tempest::Vec3 rotated(point.GetX()*100.f,point.GetY()*100.f,point.GetZ()*100.f);
+          rotation.project(rotated);
+          lowest=std::min(lowest,rotated.y-slope*rotated.x);
+          }
+        auto matrix=at(x,slope*x-lowest+4.f,z);
+        matrix.mul(rotation);
+        auto body=world.addDynamicBody(shape.Get(),matrix,.8f,1.f,DynamicWorld::C_Fragment);
+        const Tempest::Vec3 omega=axis==0 ? Tempest::Vec3(47.f,0,0) :
+                                  axis==1 ? Tempest::Vec3(0,0,47.f) : Tempest::Vec3(27.f,27.f,27.f);
+        body->setVelocity({200,-2000,100},omega);
+        fragments.push_back(std::move(body));
+        cloudByBody.push_back(kind);
+        }
+    }
     float lowestCenter=std::numeric_limits<float>::max();
+    float lowestVertex=std::numeric_limits<float>::max();
     for(int i=0;i<300;++i) {
       world.tick(17);
-      for(const auto& body:fragments) {
+      if(i==0)
+        require(ordinary->angularVelocity().length()>40.f,
+                "fragment stability must not limit ordinary item angular motion");
+      for(size_t piece=0;piece<fragments.size();++piece) {
+        const auto& body=fragments[piece];
         const auto center=body->centerOfMass();
         lowestCenter=std::min(lowestCenter,center.y-terrain(center.x*.01f,center.z*.01f)*100.f);
+        const auto matrix=body->matrix();
+        for(const auto& point:clouds[cloudByBody[piece]]) {
+          Tempest::Vec3 vertex(point.GetX()*100.f,point.GetY()*100.f,point.GetZ()*100.f);
+          matrix.project(vertex);
+          lowestVertex=std::min(lowestVertex,vertex.y-terrain(vertex.x*.01f,vertex.z*.01f)*100.f);
+          }
         }
       }
-    std::printf("Rotating fragments: %zu convex wedges, minimum centre over one-sided floor %.3f cm\n",
-                fragments.size(),double(lowestCenter));
+    std::printf("Rotating fragments: %zu convex wedges/boards, minimum centre %.3f cm, vertex %.3f cm over one-sided floor\n",
+                fragments.size(),double(lowestCenter),double(lowestVertex));
     require(lowestCenter>=0.f,"a rapidly rotating convex fragment must never fall through one-sided terrain");
+    require(lowestVertex>=-6.f,"rotating fragment vertices must stay within the native contact band of uneven terrain");
     }
 
   void testMovableVobLegacyCollision() {
