@@ -1,0 +1,15 @@
+seed 7
+cheat god
+set time 12 0
+eye setup market 20
+wait 2000
+eye begin 500 100 off mac-20-baseline
+wait 12000
+eye end
+eye begin 250 100 on mac-20-250-100
+wait 12000
+eye end
+eye begin 500 100 on mac-20-500-100
+wait 12000
+eye end
+label done
