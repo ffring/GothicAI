@@ -72,6 +72,16 @@ int main() {
             "link takeoff must aim at its directed landing and use running input");
       check(d.keys.jump==(type==NavMesh::LinkType::Jump) && d.keys.climb==(type==NavMesh::LinkType::Climb),
             "jump/climb/drop links must retain their keyboard action");
+      if(type==NavMesh::LinkType::Climb) {
+        body.standing=false;
+        d=NavKeyTeacher::decide(body,linked,linked.corners.back());
+        check(d.hint.onTransition && d.keys.forward==0 && !d.keys.jump && !d.keys.climb,
+              "moving at a climb takeoff must release forward until the native standing gate opens");
+        body.standing=true;
+        d=NavKeyTeacher::decide(body,linked,linked.corners.back());
+        check(d.keys.forward==1 && d.keys.climb && !d.keys.jump,
+              "standing at a climb takeoff must resume forward plus climb without a remembered phase");
+        }
       body.yawDegrees=9;
       d=NavKeyTeacher::decide(body,linked,linked.corners.back());
       check(type==NavMesh::LinkType::Drop || (d.keys.forward==0 && !d.keys.jump && !d.keys.climb),
@@ -95,7 +105,7 @@ int main() {
     body.position[0]=std::numeric_limits<float>::quiet_NaN();
     d=NavKeyTeacher::decide(body,straight,{10,0,0});
     check(d.replan && std::isfinite(d.keys.turn),"non-finite body must not create non-finite actions");
-    std::cout<<"navkeyteacher contract: digital yaw, walking, little graph, five off-route states, passed corner, jump/climb/drop, midair reconstruction, landing, invalid input passed\n";
+    std::cout<<"navkeyteacher contract: digital yaw, walking, little graph, five off-route states, passed corner, jump/climb/drop, climb standing gate, midair reconstruction, landing, invalid input passed\n";
     return 0;
   } catch(const std::exception& error) {
     std::cerr<<"navkeyteacher contract: "<<error.what()<<'\n';

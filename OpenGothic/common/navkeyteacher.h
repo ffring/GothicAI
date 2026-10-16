@@ -13,6 +13,7 @@ class NavKeyTeacher final {
       NavMesh::Point velocity = {};       // metres/second
       float yawDegrees = 0;               // NPC convention: 0 = +X, 90 = +Z
       bool supported = true;
+      bool standing = true;               // native animation gate for tryJump/startClimb
       bool inAir = false;
       bool falling = false;
       bool sliding = false;

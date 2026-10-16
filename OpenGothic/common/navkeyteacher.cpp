@@ -164,8 +164,12 @@ NavKeyTeacher::Decision NavKeyTeacher::decide(const State& body,const NavMesh::P
          aligned) {
         if(active->type==NavMesh::LinkType::Jump)
           out.keys.jump=true;
-        else if(active->type==NavMesh::LinkType::Climb)
-          out.keys.climb=true;
+        else if(active->type==NavMesh::LinkType::Climb) {
+          if(body.standing)
+            out.keys.climb=true;
+          else
+            out.keys.forward=0;
+          }
         }
       return out;
       }

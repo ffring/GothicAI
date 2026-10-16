@@ -153,6 +153,7 @@ void decide(World& w) {
   body.position=meters(n.position());body.velocity=meters(ep.velocity);body.yawDegrees=n.rotation();
   body.inAir=n.isInAir();body.falling=n.isFalling();body.sliding=n.isSlide();
   body.climbing=n.navigationClimbing();body.swimming=n.isSwim();body.jumping=n.isJump()||n.isJumpUp();
+  body.standing=n.isStanding();
   body.supported=NavTransitions::supported(w,n);
   body.turnSpeedDegrees=n.weaponState()==WeaponState::NoWeapon?90.f:180.f;
   const auto present=NavKeyTeacher::decide(body,ep.path,meters(ep.goal));
