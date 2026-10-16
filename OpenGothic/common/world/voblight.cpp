@@ -44,3 +44,9 @@ VobLight::VobLight(Vob* parent, World& world, const zenkit::VLight& vob, Flags f
 void VobLight::moveEvent() {
   light.setPosition(position());
   }
+
+void VobLight::fillAttachmentSnapshot(AttachmentSnapshot& out) const {
+  Vob::fillAttachmentSnapshot(out);
+  out.isLight = true;
+  out.hasRenderedPosition = light.renderPosition(out.renderedPosition);
+  }

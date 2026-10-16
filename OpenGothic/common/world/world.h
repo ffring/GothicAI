@@ -221,6 +221,7 @@ class World final {
     void                 addSound      (const zenkit::VirtualObject& vob);
 
     void                 invalidateVobIndex();
+    std::vector<Vob::AttachmentSnapshot> vobAttachmentSnapshot(uint32_t zenId) const { return wobj.vobAttachmentSnapshot(zenId); }
 
   private:
     double               worldLoadMs = 0;

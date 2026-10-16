@@ -98,6 +98,15 @@ namespace {
     return mesh;
     }
 
+  zenkit::MultiResolutionMesh movableCollisionBox(const Tempest::Vec3& dimensionsCm) {
+    auto mesh=movableBox(dimensionsCm);
+    // movableCube's winding is suitable for its hull-only fixtures. Static
+    // Gothic source meshes need clockwise faces: PhysicVbo reverses them.
+    for(auto& triangle:mesh.sub_meshes[0].triangles)
+      std::swap(triangle.wedges[1],triangle.wedges[2]);
+    return mesh;
+    }
+
   zenkit::Mesh movableFloor() {
     zenkit::Mesh mesh;
     mesh.vertices={{-2000,0,-2000},{-2000,0,2000},{2000,0,2000},{2000,0,-2000}};
@@ -242,6 +251,195 @@ namespace {
     Tempest::MemReader reader(bytes);
     Serialize input(reader);
     world.loadMovableVobs(input);
+    }
+
+  const DynamicWorld::MovableVobContacts& movableContact(
+      const std::vector<DynamicWorld::MovableVobContacts>& contacts, uint32_t zenId) {
+    const auto found=std::find_if(contacts.begin(),contacts.end(),[&](const auto& entry) {
+      return entry.zenId==zenId;
+      });
+    require(found!=contacts.end(),"geometry census must retain every candidate's ZEN identity");
+    return *found;
+    }
+
+  void testMovableVobGeometrySupport() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP.MRM");
+    for(const bool initiallyEnabled:{false,true}) {
+      DynamicWorld world(nullptr,movableFloor());
+      world.setMovableVobsEnabled(initiallyEnabled);
+      const auto supportedOrigin=at(0,10,0),hangingOrigin=at(100,100,0);
+      auto supported=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",supportedOrigin,.25f,false,"utensil",true,101);
+      auto hanging=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",hangingOrigin,.25f,false,"utensil",true,102);
+      auto nonColliding=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(200,100,0),.25f,false,"utensil",false,103);
+      require(!supported.isEmpty() && !hanging.isEmpty() && !nonColliding.isEmpty(),
+              "geometry fixtures must retain handles with movable_vobs initially on or off");
+      world.finalizeMovableVobs();
+      world.setMovableVobsEnabled(true);
+      const auto contacts=world.movableVobContacts(1.f);
+      require(contacts.size()==3,"geometry validation must include colliding and non-colliding candidates");
+      const auto& allowed=movableContact(contacts,101);
+      require(allowed.enabled && allowed.disposition=="ok" && supported.mass()>0,
+              "a hull resting on landscape must remain dynamic after load or runtime enable");
+      for(const auto id:{102u,103u}) {
+        const auto& rejected=movableContact(contacts,id);
+        require(!rejected.enabled && rejected.disposition=="hangs",
+                "a hull with no support within one centimetre must remain static");
+        }
+      require(hanging.mass()==0 && !hanging.addImpulse({1,0,0}),
+              "a geometry-rejected vob must have no dynamic body or impulse response");
+      require(!world.setMovableVobTransform(102,at(150,100,0)),
+              "a geometry-rejected vob must not accept controlled dynamic movement");
+      requireMatrix(world.movableVobPose(102)->transform,hangingOrigin,
+                    "a rejected vob's attachment pose must remain at its original ZEN frame");
+      require(world.landRay({100,130,0},60).hasCol && world.ray({70,100,0},{130,100,0}).hasCol,
+              "a rejected small vob must restore its original C_Object source mesh queries");
+      require(!world.landRay({200,130,0},60).hasCol && !world.ray({170,100,0},{230,100,0}).hasCol,
+              "a rejected cd_dynamic=0 vob must preserve the original absence of C_Object collision");
+      require(world.physicsStats().bodies==4,
+              "rejected hulls must be removed, leaving landscape, one hull and two eligible source meshes");
+      const auto state=world.movableVobSnapshot();
+      const auto staticState=std::find_if(state.begin(),state.end(),[](const auto& entry) { return entry.zenId==102; });
+      require(staticState!=state.end() && !staticState->trace && !staticState->tilted && staticState->traceTime==-1,
+              "geometry rejection must not create a fallen-furniture trace");
+      require(std::isfinite(world.movableVobValidationMilliseconds()) && world.movableVobValidationMilliseconds()>=0,
+              "load-time geometry validation must expose a finite nonnegative duration");
+      // A second toggle must preserve the authored decision and original pose.
+      world.setMovableVobsEnabled(false);
+      world.setMovableVobsEnabled(true);
+      require(supported.mass()>0 && hanging.mass()==0 && nonColliding.mass()==0,
+              "runtime re-enable must preserve geometry decisions for each individual vob");
+      requireMatrix(world.movableVobPose(102)->transform,hangingOrigin,
+                    "runtime toggles must not move a rejected static source mesh");
+      }
+    DynamicWorld gaps(nullptr,movableFloor());
+    auto nearSupport=gaps.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(0,10.5f,0),.25f,true,"table",true,104);
+    auto farSupport=gaps.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(100,11.5f,0),.25f,true,"table",true,105);
+    gaps.finalizeMovableVobs();
+    const auto gapContacts=gaps.movableVobContacts(1.f);
+    require(movableContact(gapContacts,104).enabled && nearSupport.mass()>0,
+            "a half-centimetre gap above landscape must count as support within the one-centimetre margin");
+    require(movableContact(gapContacts,105).disposition=="hangs" && farSupport.mass()==0,
+            "landscape one and a half centimetres below a hull must not count as support");
+    }
+
+  void testMovableVobGeometryPenetration() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP.MRM");
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,200,200}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_WALL.MRM");
+    DynamicWorld world(nullptr,movableFloor());
+    auto shallow=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(-100,7,0),.25f,true,"table",true,111);
+    auto deep=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(0,4,0),.25f,true,"table",true,112);
+    // The hull crosses the middle of the wall's -X face by five centimetres,
+    // far from its top/bottom faces and outer edges.
+    auto structure=world.addStaticObj(wall.attach[0].shape.get(),at(115,10,0),"CONTRACT_CLAMP_WALL.MRM");
+    auto embedded=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(100,10,0),.25f,true,"table",true,113);
+    auto first=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(300,10,0),.25f,true,"table",true,114);
+    auto second=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(315,10,0),.25f,true,"table",true,115);
+    require(!structure.isEmpty(),"penetration fixture must install its authored static C_Object before validation");
+    world.finalizeMovableVobs();
+    const auto contacts=world.movableVobContacts(1.f);
+    require(movableContact(contacts,111).enabled && shallow.mass()>0,
+            "three centimetres of landscape penetration must remain below the four-centimetre clamp threshold");
+    require(movableContact(contacts,112).disposition=="floor" && deep.mass()==0,
+            "more than four centimetres of landscape penetration must restore the static source mesh");
+    const auto& blocked=movableContact(contacts,113);
+    std::printf("Movable C_Object fixture: %s, mass %.6f kg",blocked.disposition.c_str(),double(embedded.mass()));
+    for(const auto& contact:blocked.contacts)
+      std::printf(" [%s, side %d, depth %.6f cm]",contact.other.c_str(),contact.side,double(contact.depth));
+    std::puts("");
+    require(blocked.disposition=="structure" && embedded.mass()==0,
+            "more than four centimetres of static C_Object penetration must restore the static source mesh");
+    for(const auto id:{114u,115u}) {
+      const auto& entry=movableContact(contacts,id);
+      require(!entry.enabled && entry.disposition=="neighbour",
+              "both members of a deeply intersecting movable pair must become static together");
+      require(std::any_of(entry.contacts.begin(),entry.contacts.end(),[&](const auto& contact) {
+        return contact.category==DynamicWorld::C_MovableVob && contact.otherZenId==(id==114 ? 115u : 114u) &&
+               contact.depth>4.f;
+        }),"the retained origin census must identify the deeply intersecting movable neighbour");
+      }
+    require(first.mass()==0 && second.mass()==0,
+            "deep-pair decisions must be computed before replacing either member's hull");
+    }
+
+  void testMovableVobGeometryTopObjects() {
+    Resources resources;
+    ProtoMesh base(PackedMesh(movableBox({100,100,100}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_BASE.MRM");
+    ProtoMesh small(PackedMesh(movableCollisionBox({20,20,20}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_SMALL.MRM");
+    ProtoMesh large(PackedMesh(movableCollisionBox({100,20,20}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_LARGE.MRM");
+    DynamicWorld world(nullptr,movableFloor());
+    auto exempt=world.addMovableVob(base,"CONTRACT_CLAMP_BASE.MRM",at(0,50,0),.25f,true,"table",true,121);
+    auto held=world.addMovableVob(base,"CONTRACT_CLAMP_BASE.MRM",at(300,50,0),.25f,true,"table",true,122);
+    auto trinket=world.addStaticObj(small.attach[0].shape.get(),at(0,105,0),"CONTRACT_CLAMP_SMALL.MRM");
+    auto load=world.addStaticObj(large.attach[0].shape.get(),at(300,110,0),"CONTRACT_CLAMP_LARGE.MRM");
+    require(!trinket.isEmpty() && !load.isEmpty(),"top-object fixture must install both static source meshes");
+    world.finalizeMovableVobs();
+    const auto contacts=world.movableVobContacts(1.f);
+    const auto& item=movableContact(contacts,121);
+    require(item.enabled && item.disposition=="item" && exempt.mass()>0,
+            "a small C_Object beginning above ninety percent of hull height must not clamp its support");
+    require(std::any_of(item.contacts.begin(),item.contacts.end(),[](const auto& contact) {
+      return contact.category==DynamicWorld::C_Object && contact.depth>4.f;
+      }),"small-top exemption fixture must exercise penetration deeper than four centimetres");
+    require(!movableContact(contacts,122).enabled && movableContact(contacts,122).disposition=="carries" && held.mass()==0,
+            "a C_Object larger than eighty centimetres resting on the top must clamp its support");
+    }
+
+  void testMovableVobGeometryAuthoredToggle() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP.MRM");
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,200,200}),PackedMesh::PK_Visual),"CONTRACT_CLAMP_WALL.MRM");
+    DynamicWorld world(nullptr,movableFloor());
+    world.setMovableVobsEnabled(false);
+    auto blocked=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(0,10,0),.25f,true,"table",true,141);
+    auto clear=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",at(300,10,0),.25f,true,"table",true,142);
+    auto obstacle=world.addStaticObj(wall.attach[0].shape.get(),at(15,10,0),"CONTRACT_CLAMP_WALL.MRM");
+    require(!obstacle.isEmpty(),"runtime-toggle fixture must install its authored C_Object collision");
+    world.finalizeMovableVobs();
+    const auto authored=world.movableVobContacts(1.f);
+    require(!world.movableVobsEnabled() && blocked.mass()==0 && clear.mass()==0,
+            "capturing geometry while disabled must restore the disabled physics setting");
+    require(movableContact(authored,141).disposition=="structure" && movableContact(authored,142).disposition=="ok",
+            "finalization while disabled must capture the original authored obstruction for both candidates");
+    // A door or scripted object can move before physics is enabled. Its current
+    // pose must neither release the original clamp nor create a new one.
+    obstacle.setObjMatrix(at(315,10,0));
+    world.setMovableVobsEnabled(true);
+    const auto enabled=world.movableVobContacts(1.f);
+    require(!movableContact(enabled,141).enabled && blocked.mass()==0,
+            "runtime enable must retain an authored clamp after its static obstruction moves away");
+    require(movableContact(enabled,142).enabled && clear.mass()>0,
+            "runtime enable must not invent a clamp from a static obstruction's later scripted pose");
+    }
+
+  void testMovableVobClampedSavePose() {
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CLAMP.MRM");
+    const auto origin=at(0,100,0);
+    auto moved=at(75,125,0);
+    moved.rotateOZ(60);
+    const auto saved=saveArchive([&](Serialize& output) {
+      output.setEntry("worlds/_/movable-vobs");
+      output.write(uint32_t(0x31564f4d),uint16_t(2),std::string_view("_"),uint32_t(1));
+      output.write(uint32_t(131),std::string_view("CONTRACT_CLAMP.MRM"),origin,moved,true);
+      output.write(true,uint64_t(1501),std::string_view("PLAYER"));
+      });
+    DynamicWorld world(nullptr,movableFloor());
+    auto object=world.addMovableVob(proto,"CONTRACT_CLAMP.MRM",origin,.25f,true,"table",true,131);
+    Tempest::Matrix4x4 rendered=origin;
+    object.setTransformCallback([&](const auto& matrix) { rendered=matrix; });
+    world.finalizeMovableVobs();
+    loadMovables(world,saved);
+    const auto state=world.movableVobSnapshot();
+    require(state.size()==1 && !state[0].enabled && object.mass()==0,
+            "a saved pose must not restore a dynamic body for an authored geometry clamp");
+    requireMatrix(state[0].transform,origin,"a shifted save record for a clamped vob must retain the original ZEN pose");
+    requireMatrix(rendered,origin,"ignoring a clamped saved pose must retain the original render transform");
+    requireMatrix(world.movableVobPose(131)->transform,origin,
+                  "ignoring a clamped saved pose must retain the original attachment transform");
+    require(!state[0].trace && !state[0].tilted && state[0].traceTime==-1 && state[0].traceCulprit.empty(),
+            "ignoring a clamped saved pose must also ignore its moved trace metadata");
     }
 
   void testMovableVobSave() {
@@ -1370,6 +1568,11 @@ int main() {
     testContracts();
     testMovableVobBodies();
     testMovableVobLegacyCollision();
+    testMovableVobGeometrySupport();
+    testMovableVobGeometryPenetration();
+    testMovableVobGeometryTopObjects();
+    testMovableVobGeometryAuthoredToggle();
+    testMovableVobClampedSavePose();
     testMovableVobSave();
     testMovableTraceThresholds();
     testMovableVobArrowIdentity();

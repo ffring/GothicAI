@@ -10,6 +10,7 @@
 #include "game/gametime.h"
 #include "game/perceptionmsg.h"
 #include "game/constants.h"
+#include "objects/vob.h"
 
 class Npc;
 class Item;
@@ -117,6 +118,7 @@ class WorldObjects final {
     void           addStatic     (StaticObj*           obj);
     void           addRoot       (const std::shared_ptr<zenkit::VirtualObject>& vob, bool startup);
     void           invalidateVobIndex();
+    std::vector<Vob::AttachmentSnapshot> vobAttachmentSnapshot(uint32_t zenId) const;
 
     Interactive*   validateInteractive(Interactive *def);
     Npc*           validateNpc        (Npc         *def);

@@ -25,7 +25,7 @@ StaticObj::StaticObj(Vob* parent, World& world, const zenkit::VirtualObject& vob
     movable = physics.addMovableVob(*visual.protoMesh(),scheme,transform(),rule->massMultiplier,
                                    rule->blocksWalking,rule->className,vob.cd_dynamic,vob.id);
     if(!movable.isEmpty()) {
-      movable.setTransformCallback([this](const Matrix4x4& matrix) { visual.setObjMatrix(matrix); });
+      movable.setTransformCallback([this](const Matrix4x4& matrix) { setPhysicsTransform(matrix); });
       } else {
       // An invalid hull must preserve the original collision and rendering.
       visual.setVisual(vob,world,(flags & Flags::Static));
@@ -39,6 +39,23 @@ void StaticObj::moveEvent() {
   visual.setObjMatrix(transform());
   if(!movable.isEmpty())
     movable.setObjMatrix(transform());
+  }
+
+void StaticObj::physicsMoveEvent() {
+  visual.setObjMatrix(transform());
+  // Clamped or disabled child props keep their source collision as they follow
+  // a parent; an independent dynamic body is excluded by Vob's propagation.
+  movable.setAttachmentMatrix(transform());
+  }
+
+bool StaticObj::hasDynamicBody() const {
+  return movable.mass()>0.f;
+  }
+
+void StaticObj::fillAttachmentSnapshot(AttachmentSnapshot& out) const {
+  Vob::fillAttachmentSnapshot(out);
+  out.visual = scheme;
+  out.hasRenderedPosition = visual.renderPosition(out.renderedPosition);
   }
 
 bool StaticObj::setMobState(std::string_view sc, int32_t st) {

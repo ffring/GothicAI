@@ -735,6 +735,13 @@ void WorldObjects::addRoot(const std::shared_ptr<zenkit::VirtualObject>& vob, bo
   rootVobs.emplace_back(std::move(p));
   }
 
+std::vector<Vob::AttachmentSnapshot> WorldObjects::vobAttachmentSnapshot(uint32_t zenId) const {
+  std::vector<Vob::AttachmentSnapshot> result;
+  for(const auto& root:rootVobs)
+    if(root->attachmentSnapshot(zenId,result))break;
+  return result;
+  }
+
 void WorldObjects::invalidateVobIndex() {
   items.invalidate();
   interactiveObj.invalidate();

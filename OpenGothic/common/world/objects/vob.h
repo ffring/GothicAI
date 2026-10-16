@@ -2,6 +2,8 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Vec>
+#include <string>
+#include <vector>
 
 #include <zenkit/world/VobTree.hh>
 
@@ -10,6 +12,14 @@ class Serialize;
 
 class Vob {
   public:
+    struct AttachmentSnapshot {
+      uint32_t zenId = uint32_t(-1), parentZenId = uint32_t(-1);
+      std::string visual;
+      bool isLight = false, hasRenderedPosition = false;
+      Tempest::Matrix4x4 transform;
+      Tempest::Vec3 renderedPosition;
+      };
+
     enum Flags:uint8_t {
       None    = 0,
       Startup = 0x1 << 0,
@@ -31,7 +41,7 @@ class Vob {
     virtual void  load(Serialize& fin);
 
     Tempest::Vec3 position() const;
-    auto          transform() const -> const Tempest::Matrix4x4& { return pos; }
+    auto          transform() const -> const Tempest::Matrix4x4& { return hasPhysicsPos ? physicsPos : pos; }
     void          setGlobalTransform(const Tempest::Matrix4x4& p);
 
     auto          localTransform() const -> const Tempest::Matrix4x4& { return local; }
@@ -40,6 +50,7 @@ class Vob {
 
     virtual bool  isDynamic() const;
     virtual float extendedSearchRadius() const;
+    bool          attachmentSnapshot(uint32_t zenId, std::vector<AttachmentSnapshot>& out) const;
 
   protected:
     World&                            world;
@@ -47,13 +58,20 @@ class Vob {
     uint32_t                          vobObjectID = uint32_t(-1);
 
     virtual void  moveEvent();
+    virtual void  physicsMoveEvent();
+    virtual bool  hasDynamicBody() const;
+    virtual void  fillAttachmentSnapshot(AttachmentSnapshot& out) const;
+    void          setPhysicsTransform(const Tempest::Matrix4x4& p);
 
   private:
     std::vector<std::unique_ptr<Vob>> child;
 
-    Tempest::Matrix4x4                pos, local;
+    // Physics poses are transient: pos/local retain the authored save identity.
+    Tempest::Matrix4x4                pos, local, physicsPos;
+    bool                              hasPhysicsPos = false;
     Vob*                              parent = nullptr;
 
     void          recalculateTransform();
+    void          collectAttachmentSnapshots(std::vector<AttachmentSnapshot>& out) const;
   };
 
