@@ -1553,6 +1553,66 @@ namespace {
             "a moving or rotating light item's side velocity must not lift feet through the floor contact solver");
     }
 
+  void testCharacterVirtualIdleSlopes() {
+    constexpr float maxSlope=.785398163f;
+    const auto slopeNormal=[](float degrees) {
+      const float angle=degrees*.01745329252f;
+      const auto heading=JPH::Vec3(.120f,0,-.071f).Normalized();
+      return heading*std::sin(angle)+JPH::Vec3::sAxisY()*std::cos(angle);
+      };
+    // The first normal is the reported farm-path support; the others approach
+    // the walkable limit and cross it. Exercise both human capsule sizes.
+    const std::array<JPH::Vec3,4> normals={JPH::Vec3(.120f,.990f,-.071f).Normalized(),
+                                          slopeNormal(25),slopeNormal(44),slopeNormal(60)};
+    for(float radius:{25.f,20.f}) for(const auto normal:normals) {
+      CollisionWorld world;
+      const auto vertex=[&](float x,float z) {return JPH::Vec3(x,-(normal.GetX()*x+normal.GetZ()*z)/normal.GetY(),z);};
+      JPH::TriangleList triangles;
+      triangles.emplace_back(vertex(-20,-20),vertex(-20,20),vertex(20,20));
+      triangles.emplace_back(vertex(-20,-20),vertex(20,20),vertex(20,-20));
+      const auto mesh=JPH::MeshShapeSettings(triangles).Create();
+      require(!mesh.HasError(),"idle-slope fixture must construct its landscape plane");
+      auto floor=world.addCollisionBody(mesh.Get(),at(0,0,0),.7f,DynamicWorld::C_Landscape);
+      auto walker=world.createVirtualCharacter(radius,180,{0,radius*(1.f/normal.GetY()-1.f),0});
+      auto reference=world.createVirtualCharacter(radius,180,{0,radius*(1.f/normal.GetY()-1.f),0});
+      const Tempest::Vec3 initialFeet(0,radius*(1.f/normal.GetY()-1.f),0);
+      for(bool teleport:{false,true}) {
+        if(teleport) {
+          walker->setPosition(initialFeet);
+          reference->setPosition(initialFeet);
+          walker->move({},0,50,maxSlope,80,nullptr);
+          }
+        const auto idleContact=walker->move({},33,50,maxSlope,80,nullptr);
+        // An infinitesimal vertical request uses the native gravity solve.
+        // Acquiring an idle contact must be continuous with that solve,
+        // including after a teleport followed by a zero-dt contact refresh.
+        const auto nativeContact=reference->move({0,.0001f,0},33,50,maxSlope,80,nullptr);
+        requireNear((idleContact.position-nativeContact.position).length(),0,.001f,
+                    "initial idle contact recovery must preserve the native contact pose used for stairs");
+        }
+      CollisionWorld::CharacterMoveResult state;
+      for(int frame=0;frame<30;++frame)
+        state=walker->move({},17,50,maxSlope,80,nullptr);
+      const auto initial=state.position;
+      const bool walkable=normal.GetY()>std::cos(maxSlope);
+      require(walkable ? state.grounded : state.steep,"idle-slope fixture must identify walkable and sliding support");
+      for(int frame=0;frame<180;++frame)
+        state=walker->move({},frame%3==0 ? 16 : 17,50,maxSlope,80,nullptr);
+      const float drift=(state.position-initial).length();
+      std::printf("CharacterVirtual idle slope: radius %.0f cm, incline %.3f degrees, 3 s drift %.5f cm, grounded %d, steep %d\n",
+                  double(radius),double(std::acos(normal.GetY())*57.2957795f),double(drift),state.grounded,state.steep);
+      if(walkable) {
+        require(state.grounded && drift<.5f,"idle human capsules must drift less than half a centimetre in three seconds below the slide threshold");
+        const auto jumped=walker->move({0,20,0},17,50,maxSlope,80,nullptr);
+        require(!jumped.grounded && jumped.position.y>state.position.y+10.f,
+                "static slope friction must preserve an explicit jump away from support");
+        } else {
+        require(state.steep && state.position.y<initial.y-1.f,
+                "idle human capsules must retain downhill sliding above the slide threshold");
+        }
+      }
+    }
+
   void testCharacterVirtualSupports() {
     constexpr float slope=.785398163f;
     // Sample every rider immediately after move(), against the support pose
@@ -1965,6 +2025,7 @@ namespace {
     testCharacterVirtualSkippedMove();
     testCharacterVirtualInteractiveStep();
     testCharacterVirtualMovingUtensil();
+    testCharacterVirtualIdleSlopes();
     testCharacterVirtualSupports();
     testCharacterVirtualSlopeRest();
     testCharacterVirtualIdleStairIntent();
@@ -2257,6 +2318,55 @@ namespace {
     }
     }
 
+  void testVirtualFloorGuard() {
+    constexpr float slope=.785398163f;
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox={{-25,0,-25},{25,180,25}};
+    Skeleton shape(hierarchy,nullptr,"VIRTUAL_FLOOR_GUARD_CONTRACT");
+    auto ledge=movableFloor();
+    for(auto& vertex:ledge.vertices)
+      vertex.x=vertex.x>0 ? 0.f : vertex.x;
+    for(bool lowerFloor:{false,true}) {
+      auto mesh=ledge;
+      if(lowerFloor) {
+        auto lower=movableFloor();
+        for(auto vertex:lower.vertices) {
+          vertex.y=-500.f;
+          mesh.vertices.push_back(vertex);
+          }
+        for(auto index:lower.polygons.vertex_indices)
+          mesh.polygons.vertex_indices.push_back(index+4);
+        mesh.polygons.material_indices.insert(mesh.polygons.material_indices.end(),{0,0});
+        }
+      DynamicWorld world(nullptr,mesh);
+      auto walker=world.addGhostObj(&shape);
+      walker.setPosition({-35,0,0});
+      walker.moveVirtual({},17,50,slope,80);
+      const auto start=walker.position();
+      require(walker.hasFloorBelow(start),"the virtual floor guard fixture must start over supported world");
+      require(walker.hasFloorBelow({45,80,20})==lowerFloor,
+              "jump handoff must distinguish a bottomless lateral step from a lower landing floor");
+      auto moved=walker.moveVirtual({80,0,20},100,50,slope,80);
+      if(!lowerFloor) {
+        require(moved.blocked && moved.collision.preFall,
+                "a virtual step beyond all floor must report the legacy pre-fall failure");
+        requireNear((moved.position-start).length(),0,.001f,
+                    "a rejected bottomless virtual step must retain the known-safe feet");
+        for(int i=0;i<180;++i)
+          moved=walker.moveVirtual({5,0,1},17,50,slope,80);
+        require(moved.position.x<=0.f && moved.position.y>-.5f,
+                "repeated virtual steps must not enter a bottomless world boundary");
+        } else {
+        require(!moved.collision.preFall && moved.position.x>0.f,
+                "a real drop with a lower floor must remain accessible to virtual walking");
+        for(int i=0;i<180;++i)
+          moved=walker.moveVirtual({0,moved.velocity.y*.017f,0},17,50,slope,80);
+        require(moved.position.y<-450.f && moved.grounded,
+                "virtual feet must be able to fall and land on a lower floor");
+        }
+      }
+    }
+
   void testContracts() {
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),
@@ -2382,6 +2492,7 @@ int main() {
     testFixedStepCadence();
     testContracts();
     testCharacterVirtual();
+    testVirtualFloorGuard();
     testMovableVobBodies();
     testMovableVobLegacyCollision();
     testMovableVobGeometrySupport();

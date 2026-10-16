@@ -493,37 +493,6 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
                       contact.mSurfaceNormal.Dot(up)>.99f && contactHeight>.02f;
     }
 
-  JPH::Vec3 idleGravity(JPH::Vec3Arg gravity) const {
-    const auto id = character->GetGroundBodyID();
-    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),id);
-    if(!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsStatic())
-      return gravity;
-    const auto& body = lock.GetBody();
-    const auto subShape = character->GetGroundSubShapeID();
-    JPH::SubShapeID remainder;
-    const auto* leaf = body.GetShape()->GetLeafShape(subShape,remainder);
-    if(leaf==nullptr)
-      return gravity;
-    const auto type = leaf->GetSubType();
-    if(type!=JPH::EShapeSubType::Mesh && type!=JPH::EShapeSubType::Box)
-      return gravity;
-    const auto face = body.GetWorldSpaceSurfaceNormal(subShape,character->GetGroundPosition());
-    constexpr float cosTwoDegrees = .999390827f;
-    if(character->IsSlopeTooSteep(face) || face.Dot(character->GetGroundNormal())<cosTwoDegrees)
-      return gravity;
-    for(const auto& contact:character->GetActiveContacts()) {
-      if(contact.mBodyB!=id || contact.mSubShapeIDB!=subShape || !contact.mHadCollision ||
-         contact.mWasDiscarded || contact.mIsSensorB)
-        continue;
-      // A rounded toe on a tread edge is not a plane. Use the real full
-      // subshape normal, rather than balancing gravity along that artificial
-      // slope (which would also disturb ordinary walking at the harbour edge).
-      if(face.Dot(contact.mContactNormal)>=cosTwoDegrees && face.Dot(contact.mSurfaceNormal)>=cosTwoDegrees)
-        return face*gravity.Dot(face);
-      }
-    return gravity;
-    }
-
   CharacterVirtualDiagnostics::Body diagnosticBody(JPH::BodyID id, JPH::RVec3Arg point) const {
     CharacterVirtualDiagnostics::Body result;
     result.id = id.GetIndexAndSequenceNumber();
@@ -749,6 +718,7 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   float pushRemaining = 0.f;
   std::vector<std::pair<JPH::BodyID,float>> pushBodies;
   bool contactsDirty = true;
+  bool needsInitialUpdate = true;
   bool carrying = false;
   float radius = 0.f;
   float height = 0.f;
@@ -790,6 +760,7 @@ std::unique_ptr<CollisionWorld::VirtualCharacter> CollisionWorld::createVirtualC
 void CollisionWorld::VirtualCharacter::setPosition(const Tempest::Vec3& feet) {
   impl->character->SetPosition(JPH::RVec3(toMeters(feet)));
   impl->contactsDirty = true;
+  impl->needsInitialUpdate = true;
   impl->ground = JPH::BodyID();
   }
 
@@ -886,13 +857,18 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     auto velocity = toMeters(displacement)/seconds;
     if(onGround)
       velocity += groundVelocity;
-    auto gravity = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
-    // At rest, static friction balances only the tangential gravity on a
-    // verified walkable plane. Retain inward pressure, native body weight,
-    // all requested movement, and gravity on steep or moving supports.
-    if(onGround && displacement.x==0.f && displacement.z==0.f)
-      gravity = state.idleGravity(gravity);
-    velocity += gravity;
+    auto gravityStep = JPH::Vec3(0,-DynamicWorld::gravityMS*seconds,0);
+    if(displacement==Tempest::Vec3() && onGround && !state.needsInitialUpdate) {
+      // A supported idle character has static friction. Feeding vertical
+      // gravity to Jolt's frictionless contact solver adds a downhill tangent
+      // every frame, even on a walkable slope. Keep only pressure into the
+      // support; moving platforms still carry us through groundVelocity and
+      // Update applies the character's weight independently. Steep slopes and
+      // requested walking/jumping retain their ordinary gravity response.
+      const auto normal = character.GetGroundNormal();
+      gravityStep = normal*gravityStep.Dot(normal);
+      }
+    velocity += gravityStep;
     if(diagnostic!=nullptr)
       diagnostic->requestedVelocity = toCentimeters(velocity);
     // ExtendedUpdate cancels steep-slope motion internally, while preserving
@@ -918,6 +894,11 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
       diagnostic->stairDesiredVelocity = toCentimeters(desiredVelocity);
     character.ExtendedUpdate(seconds,JPH::Vec3(0,-DynamicWorld::gravityMS,0),settings,
                              broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
+    // RefreshContacts only classifies the initial overlap. Let the first
+    // physical solve after creation/teleport recover it with native gravity;
+    // changing that solve changes the contact pose used to enter stairs.
+    // A zero-dt refresh does not complete this acquisition.
+    state.needsInitialUpdate = false;
     if(diagnostic!=nullptr)
       diagnostic->afterExtendedUpdate = state.diagnosticPose();
     bool stairObstacle = false;
@@ -938,7 +919,7 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     const auto up = character.GetUp();
     // Static friction has a horizontal component on a slope; it is a contact
     // force, not a walking request. Keep support motion in the stair intent.
-    const auto stairVelocity = desiredVelocity-gravity;
+    const auto stairVelocity = desiredVelocity-gravityStep;
     const auto desiredStep = (stairVelocity-stairVelocity.Dot(up)*up)*seconds;
     const float desiredLength = desiredStep.Length();
     if(diagnostic!=nullptr) {

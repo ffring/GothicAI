@@ -17,6 +17,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -60,6 +62,18 @@ uint64_t geometryHash(const NavMesh::Geometry& g, const NavMesh::Params& p, cons
   for(const auto& region:p.regions) {
     for(float value:region.min) h = hashValue(h,value);
     for(float value:region.max) h = hashValue(h,value);
+    }
+  // Keep the stage 2a cache usable when there are no proven transitions.
+  if(!p.links.empty()) {
+    h = hashValue(h,uint64_t(p.links.size()));
+    for(const auto& link:p.links) {
+      for(float value:link.start) h = hashValue(h,value);
+      for(float value:link.end) h = hashValue(h,value);
+      h = hashValue(h,link.radius);
+      h = hashValue(h,uint8_t(link.type));
+      h = hashValue(h,uint8_t(link.bidirectional));
+      h = hashValue(h,link.id);
+      }
     }
   return h;
   }
@@ -285,6 +299,20 @@ struct NavMesh::Impl {
     config.detailSampleMaxError = config.ch;
     const float border = float(config.borderSize)*config.cs;
 
+    std::vector<float> linkVertices, linkRadii;
+    std::vector<unsigned short> linkFlags;
+    std::vector<unsigned char> linkAreas, linkDirections;
+    std::vector<unsigned int> linkIds;
+    for(const auto& link:params.links) {
+      linkVertices.insert(linkVertices.end(),link.start.begin(),link.start.end());
+      linkVertices.insert(linkVertices.end(),link.end.begin(),link.end.end());
+      linkRadii.push_back(link.radius);
+      linkFlags.push_back(1);
+      linkAreas.push_back(uint8_t(link.type));
+      linkDirections.push_back(link.bidirectional ? DT_OFFMESH_CON_BIDIR : 0);
+      linkIds.push_back(link.id);
+      }
+
     // Index input triangles once. Tile building never scans the complete world.
     std::vector<std::vector<int>> solidBins(tileCount), waterBins(tileCount);
     auto bin = [&](const std::vector<float>& vertices, const std::vector<int>& triangles,
@@ -365,6 +393,10 @@ struct NavMesh::Impl {
         create.detailMeshes=detail->meshes; create.detailVerts=detail->verts;
         create.detailVertsCount=detail->nverts; create.detailTris=detail->tris;
         create.detailTriCount=detail->ntris;
+        create.offMeshConVerts=linkVertices.data(); create.offMeshConRad=linkRadii.data();
+        create.offMeshConFlags=linkFlags.data(); create.offMeshConAreas=linkAreas.data();
+        create.offMeshConDir=linkDirections.data(); create.offMeshConUserID=linkIds.data();
+        create.offMeshConCount=int(params.links.size());
         create.walkableHeight=params.height; create.walkableRadius=params.radius; create.walkableClimb=params.climb;
         create.tileX=x; create.tileY=z;
         rcVcopy(create.bmin,polys->bmin); rcVcopy(create.bmax,polys->bmax);
@@ -377,7 +409,7 @@ struct NavMesh::Impl {
           throw std::runtime_error("navmesh cannot add Detour tile");
           }
         ++stats.tiles;
-        stats.polygons += uint64_t(polys->npolys);
+        stats.polygons += uint64_t(reinterpret_cast<const dtMeshHeader*>(data)->polyCount);
         }
       if(!stats.complete) break;
       }
@@ -402,6 +434,17 @@ void NavMesh::buildOrLoad(const Geometry& geometry, const Params& parameters,
        parameters.tileSize<=1024 && parameters.maxBuildSeconds>0.f &&
        parameters.nearestHorizontal>0.f && parameters.nearestVertical>0.f))
     throw std::runtime_error("navmesh invalid agent/build parameters");
+  if(parameters.links.size()>size_t(std::numeric_limits<int>::max()))
+    throw std::runtime_error("navmesh too many off-mesh links");
+  for(const auto& link:parameters.links) {
+    for(float value:link.start)
+      if(!std::isfinite(value)) throw std::runtime_error("navmesh non-finite link start");
+    for(float value:link.end)
+      if(!std::isfinite(value)) throw std::runtime_error("navmesh non-finite link end");
+    if(!std::isfinite(link.radius) || link.radius<=0.f ||
+       (link.type!=LinkType::Jump && link.type!=LinkType::Climb && link.type!=LinkType::Drop))
+      throw std::runtime_error("navmesh invalid off-mesh link");
+    }
   impl = std::make_unique<Impl>();
   impl->params = parameters;
   impl->stats.triangles = uint64_t(geometry.triangles.size()/3);
@@ -455,18 +498,179 @@ NavMesh::Path NavMesh::findPath(const Point& start, const Point& end) const {
     }
   std::vector<float> points(size_t(maxPath)*3);
   std::vector<unsigned char> flags(maxPath);
-  int pointCount=0;
-  const dtStatus straight=impl->query->findStraightPath(snappedStart.data(),snappedEnd.data(),corridor.data(),count,
-                                                       points.data(),flags.data(),nullptr,&pointCount,maxPath);
-  if(dtStatusFailed(straight) || dtStatusDetail(straight,DT_BUFFER_TOO_SMALL) || pointCount==0 ||
-     !(flags[size_t(pointCount-1)]&DT_STRAIGHTPATH_END)) {
+  // String-pull ground legs separately so an off-mesh connection can never be
+  // mistaken for ordinary walking, even when its two endpoints are collinear.
+  auto appendGroundLeg = [&](const Point& a, const Point& b, int begin, int length) {
+    if(length<=0) return false;
+    int pointCount=0;
+    const dtStatus straight=impl->query->findStraightPath(a.data(),b.data(),corridor.data()+begin,length,
+                                                         points.data(),flags.data(),nullptr,&pointCount,maxPath);
+    if(dtStatusFailed(straight) || dtStatusDetail(straight,DT_BUFFER_TOO_SMALL) || pointCount==0 ||
+       !(flags[size_t(pointCount-1)]&DT_STRAIGHTPATH_END)) return false;
+    for(int i=0; i<pointCount; ++i) {
+      const Point p={points[size_t(i)*3],points[size_t(i)*3+1],points[size_t(i)*3+2]};
+      if(result.corners.empty() || distance(result.corners.back(),p)>1.e-5f) result.corners.push_back(p);
+      }
+    return true;
+    };
+  int legBegin=0;
+  Point legStart=snappedStart;
+  for(int i=1; i<count; ++i) {
+    const auto* connection=impl->mesh->getOffMeshConnectionByRef(corridor[size_t(i)]);
+    if(connection==nullptr) continue;
+    Path::Transition transition;
+    const dtMeshTile* tile=nullptr;
+    const dtPoly* poly=nullptr;
+    if(dtStatusFailed(impl->mesh->getTileAndPolyByRef(corridor[size_t(i)],&tile,&poly)) ||
+       dtStatusFailed(impl->mesh->getOffMeshConnectionPolyEndPoints(corridor[size_t(i-1)],corridor[size_t(i)],
+                                                                  transition.start.data(),transition.end.data())) ||
+       !appendGroundLeg(legStart,transition.start,legBegin,i-legBegin)) {
+      result.reason="string_pull_failed"; return result;
+      }
+    transition.type=LinkType(poly->getArea());
+    transition.id=connection->userId;
+    transition.cornerIndex=result.corners.size()-1;
+    result.corners.back()=transition.start;
+    // Retain even a coincident endpoint: cornerIndex+1 always means landing.
+    result.corners.push_back(transition.end);
+    result.transitions.push_back(transition);
+    legStart=transition.end;
+    legBegin=i+1;
+    }
+  if(!appendGroundLeg(legStart,snappedEnd,legBegin,count-legBegin)) {
     result.reason="string_pull_failed"; return result;
     }
-  result.corners.reserve(size_t(pointCount));
-  for(int i=0; i<pointCount; ++i) result.corners.push_back({points[size_t(i)*3],points[size_t(i)*3+1],points[size_t(i)*3+2]});
   for(size_t i=1; i<result.corners.size(); ++i) result.length += distance(result.corners[i-1],result.corners[i]);
   result.complete=true;
   result.reason="ok";
+  return result;
+  }
+
+std::vector<NavMesh::GapCandidate> NavMesh::gapCandidates(const Point& start, const Point& end,
+                                                        float maxHorizontal, float maxVertical,
+                                                        size_t maxCandidates) const {
+  std::vector<GapCandidate> candidates;
+  if(!impl->query || !std::isfinite(maxHorizontal) || !std::isfinite(maxVertical) ||
+     maxHorizontal<=0 || maxVertical<0 || maxCandidates==0) return candidates;
+  for(float value:start) if(!std::isfinite(value)) return candidates;
+  for(float value:end) if(!std::isfinite(value)) return candidates;
+  dtQueryFilter filter;
+  filter.setIncludeFlags(1);
+  const float extents[3]={impl->params.nearestHorizontal,impl->params.nearestVertical,impl->params.nearestHorizontal};
+  dtPolyRef startRef=0, endRef=0;
+  Point snapped{};
+  if(dtStatusFailed(impl->query->findNearestPoly(start.data(),extents,&filter,&startRef,snapped.data())) || !startRef ||
+     dtStatusFailed(impl->query->findNearestPoly(end.data(),extents,&filter,&endRef,snapped.data())) || !endRef)
+    return candidates;
+  // Ground-only flood: a candidate joins walkable components; already proven
+  // off-mesh actions must not silently change which native action is probed.
+  auto component = [&](dtPolyRef root) {
+    std::unordered_set<dtPolyRef> seen{root};
+    std::vector<dtPolyRef> pending{root};
+    for(size_t at=0; at<pending.size(); ++at) {
+      const dtMeshTile* tile=nullptr;
+      const dtPoly* poly=nullptr;
+      if(dtStatusFailed(impl->mesh->getTileAndPolyByRef(pending[at],&tile,&poly))) continue;
+      for(unsigned int link=poly->firstLink; link!=DT_NULL_LINK; link=tile->links[link].next) {
+        const auto ref=tile->links[link].ref;
+        const dtMeshTile* otherTile=nullptr;
+        const dtPoly* other=nullptr;
+        if(ref && seen.find(ref)==seen.end() &&
+           dtStatusSucceed(impl->mesh->getTileAndPolyByRef(ref,&otherTile,&other)) &&
+           other->getType()==DT_POLYTYPE_GROUND && (other->flags&1)) {
+          seen.insert(ref);
+          pending.push_back(ref);
+          }
+        }
+      }
+    return pending;
+    };
+  const auto from=component(startRef);
+  if(std::find(from.begin(),from.end(),endRef)!=from.end()) return candidates;
+  const auto to=component(endRef);
+  struct Segment { Point a,b; };
+  auto boundaries = [&](const std::vector<dtPolyRef>& polygons) {
+    std::vector<Segment> result;
+    for(const auto ref:polygons) {
+      float vertices[64*6];
+      dtPolyRef neighbors[64];
+      int count=0;
+      const auto status=impl->query->getPolyWallSegments(ref,&filter,vertices,neighbors,&count,64);
+      if(dtStatusFailed(status) || dtStatusDetail(status,DT_BUFFER_TOO_SMALL))
+        throw std::runtime_error("navmesh boundary query capacity");
+      for(int i=0; i<count; ++i) {
+        if(neighbors[i]) continue;
+        const auto* p=vertices+i*6;
+        result.push_back({{p[0],p[1],p[2]},{p[3],p[4],p[5]}});
+        }
+      }
+    return result;
+    };
+  const auto a=boundaries(from), b=boundaries(to);
+  auto cell = [&](float value) { return int(std::floor(value/maxHorizontal)); };
+  auto cellKey = [](int x, int z) { return (uint64_t(uint32_t(x))<<32)|uint32_t(z); };
+  std::unordered_map<uint64_t,std::vector<size_t>> bins;
+  for(size_t i=0; i<b.size(); ++i) {
+    for(int z=cell(std::min(b[i].a[2],b[i].b[2])); z<=cell(std::max(b[i].a[2],b[i].b[2])); ++z)
+      for(int x=cell(std::min(b[i].a[0],b[i].b[0])); x<=cell(std::max(b[i].a[0],b[i].b[0])); ++x)
+        bins[cellKey(x,z)].push_back(i);
+    }
+  auto dot = [](const Point& u, const Point& v) { return u[0]*v[0]+u[2]*v[2]; };
+  auto subtract = [](const Point& u, const Point& v) { return Point{u[0]-v[0],u[1]-v[1],u[2]-v[2]}; };
+  auto interpolate = [](const Segment& s, float t) {
+    return Point{s.a[0]+(s.b[0]-s.a[0])*t,s.a[1]+(s.b[1]-s.a[1])*t,s.a[2]+(s.b[2]-s.a[2])*t};
+    };
+  for(const auto& first:a) {
+    std::unordered_set<size_t> checked;
+    for(int z=cell(std::min(first.a[2],first.b[2])-maxHorizontal); z<=cell(std::max(first.a[2],first.b[2])+maxHorizontal); ++z) {
+      for(int x=cell(std::min(first.a[0],first.b[0])-maxHorizontal); x<=cell(std::max(first.a[0],first.b[0])+maxHorizontal); ++x) {
+        const auto found=bins.find(cellKey(x,z));
+        if(found==bins.end()) continue;
+        for(const auto index:found->second) {
+          if(!checked.insert(index).second) continue;
+          const auto& second=b[index];
+          const auto u=subtract(first.b,first.a), v=subtract(second.b,second.a), w=subtract(first.a,second.a);
+          const float uu=dot(u,u), vv=dot(v,v), uv=dot(u,v), uw=dot(u,w), vw=dot(v,w);
+          float s=0, t=0;
+          if(uu<1.e-8f) t=vv>1.e-8f ? std::clamp(vw/vv,0.f,1.f) : 0.f;
+          else if(vv<1.e-8f) s=std::clamp(-uw/uu,0.f,1.f);
+          else {
+            const float determinant=uu*vv-uv*uv;
+            if(determinant>1.e-8f) s=std::clamp((uv*vw-uw*vv)/determinant,0.f,1.f);
+            t=(uv*s+vw)/vv;
+            if(t<0) { t=0; s=std::clamp(-uw/uu,0.f,1.f); }
+            else if(t>1) { t=1; s=std::clamp((uv-uw)/uu,0.f,1.f); }
+            }
+          GapCandidate candidate;
+          candidate.start=interpolate(first,s);
+          candidate.end=interpolate(second,t);
+          const float dx=candidate.end[0]-candidate.start[0], dz=candidate.end[2]-candidate.start[2];
+          candidate.horizontalDistance=std::sqrt(dx*dx+dz*dz);
+          candidate.verticalDistance=std::abs(candidate.end[1]-candidate.start[1]);
+          if(candidate.horizontalDistance<=maxHorizontal && candidate.verticalDistance<=maxVertical)
+            candidates.push_back(candidate);
+          }
+        }
+      }
+    }
+  std::sort(candidates.begin(),candidates.end(),[&](const GapCandidate& a, const GapCandidate& b) {
+    // Prefer nearby probe sites when multiple parallel boundary pairs tie.
+    const float scoreA=a.horizontalDistance+0.25f*a.verticalDistance+
+                       0.01f*(distance(a.start,start)+distance(a.end,end));
+    const float scoreB=b.horizontalDistance+0.25f*b.verticalDistance+
+                       0.01f*(distance(b.start,start)+distance(b.end,end));
+    if(scoreA!=scoreB) return scoreA<scoreB;
+    if(a.start!=b.start) return a.start<b.start;
+    return a.end<b.end;
+    });
+  std::vector<GapCandidate> result;
+  for(const auto& candidate:candidates) {
+    bool duplicate=false;
+    for(const auto& kept:result)
+      if(distance(candidate.start,kept.start)<0.75f && distance(candidate.end,kept.end)<0.75f) duplicate=true;
+    if(!duplicate) result.push_back(candidate);
+    if(result.size()==maxCandidates) break;
+    }
   return result;
   }
 

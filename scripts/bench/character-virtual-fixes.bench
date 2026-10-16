@@ -1,0 +1,329 @@
+# Physics regressions, both CV flags ON: passive slopes and the market void.
+# Market: seed 73013, NPC 6 decisions 767..820, ordinary PlayerControl keys.
+# The navigation branch/executor is not required. Head input has no hero movement channel.
+seed 73013
+cheat god
+character on
+npccharacter on
+release all
+character idle hero gentle
+wait 1000
+character idle begin
+character idle snapshot gentle-hero-start
+wait 3000
+character idle snapshot gentle-hero-end
+character idle npc gentle
+wait 1000
+character idle begin
+character idle snapshot gentle-npc-start
+wait 3000
+character idle snapshot gentle-npc-end
+character idle hero steeper
+wait 1000
+character idle begin
+character idle snapshot steeper-hero-start
+wait 3000
+character idle snapshot steeper-hero-end
+character idle npc steeper
+wait 1000
+character idle begin
+character idle snapshot steeper-npc-start
+wait 3000
+character idle snapshot steeper-npc-end
+
+seed 73013
+cheat god
+set time 10 0
+release all
+character idle hero market
+wait 1000
+character idle begin
+character idle snapshot market-start
+release all
+walkmode run
+press turnr
+wait 66
+release all
+walkmode run
+press forward
+press right
+press turnl
+wait 66
+release all
+walkmode run
+press forward
+press right
+press turnl
+wait 66
+release all
+walkmode run
+press left
+press turnr
+wait 66
+release all
+walkmode run
+press forward
+wait 66
+release all
+walkmode walk
+press back
+press right
+press jump
+wait 66
+release all
+walkmode run
+press back
+press left
+press turnr
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode walk
+press left
+wait 66
+release all
+walkmode run
+press left
+wait 66
+release all
+walkmode run
+press turnr
+wait 66
+release all
+walkmode run
+press right
+press turnl
+press jump
+wait 66
+release all
+walkmode run
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode run
+wait 66
+release all
+walkmode walk
+press forward
+press right
+wait 66
+release all
+walkmode walk
+press turnr
+wait 66
+release all
+walkmode run
+press forward
+press turnr
+wait 66
+release all
+walkmode run
+press right
+press turnr
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode run
+press forward
+press turnl
+wait 66
+release all
+walkmode walk
+press left
+wait 66
+release all
+walkmode walk
+press back
+press turnl
+wait 66
+release all
+walkmode walk
+press forward
+press right
+wait 66
+release all
+walkmode walk
+press back
+wait 66
+release all
+walkmode walk
+press turnr
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode walk
+press forward
+press turnr
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode walk
+press left
+press turnl
+wait 66
+release all
+walkmode walk
+wait 66
+release all
+walkmode walk
+press back
+press right
+press turnl
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode run
+press back
+press right
+wait 66
+release all
+walkmode walk
+press right
+wait 66
+release all
+walkmode walk
+press forward
+press right
+press turnl
+wait 66
+release all
+walkmode run
+press forward
+press left
+press turnr
+wait 66
+release all
+walkmode run
+press turnl
+wait 66
+release all
+walkmode run
+press back
+press left
+wait 66
+release all
+walkmode walk
+press back
+press left
+press turnl
+wait 66
+release all
+walkmode run
+press left
+press turnr
+wait 66
+release all
+walkmode run
+press back
+press left
+press turnr
+wait 66
+release all
+walkmode run
+press right
+wait 66
+release all
+walkmode run
+press back
+press right
+wait 66
+release all
+walkmode walk
+press back
+press right
+wait 66
+release all
+walkmode walk
+press back
+wait 66
+release all
+walkmode walk
+press forward
+press turnl
+wait 66
+release all
+walkmode run
+press back
+press right
+press turnr
+wait 66
+release all
+walkmode walk
+press back
+press left
+press turnl
+wait 66
+release all
+walkmode run
+press right
+wait 66
+release all
+walkmode run
+press forward
+press turnl
+wait 66
+release all
+walkmode run
+press forward
+press right
+press turnr
+wait 66
+release all
+walkmode run
+press back
+press turnl
+wait 66
+release all
+walkmode walk
+press back
+press turnr
+wait 66
+release all
+walkmode run
+wait 1200
+character idle snapshot market-end
+npccharacter trace off
+
+# Native NPC AI approaches the same unsupported point; reaching it is not required.
+npccharacter route market_void
+npccharacter trace watched
+wait 700
+npccharacter begin
+wait 6000
+npccharacter snapshot market_void_end
+npccharacter end
+npccharacter trace off
+label done
