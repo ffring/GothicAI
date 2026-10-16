@@ -162,6 +162,9 @@ include_directories(lib/miniz)
 add_definitions(-DMINIZ_NO_STDIO)
 add_library(miniz STATIC EXCLUDE_FROM_ALL "lib/miniz/miniz.h" "lib/miniz/miniz.c")
 target_link_libraries(${PROJECT_NAME} miniz)
+target_link_libraries(${PROJECT_NAME} zlibstatic)
+target_include_directories(${PROJECT_NAME} PRIVATE
+  lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
 
 # Recast/Detour are used only by the opt-in body-runner navmesh commands.
 add_subdirectory(lib/recastnavigation)
@@ -254,6 +257,13 @@ endif()
 
 # Asset-free contracts; run explicitly with their check-* targets.
 if(NOT ANDROID AND NOT IOS)
+  add_executable(gothic-navkeyteacher-contract EXCLUDE_FROM_ALL
+    tests/navkeyteacher_contract.cpp common/navkeyteacher.cpp)
+  target_include_directories(gothic-navkeyteacher-contract PRIVATE
+    common lib/Tempest/Engine/include lib/Tempest/Engine)
+  add_custom_target(check-navkeyteacher
+    COMMAND $<TARGET_FILE:gothic-navkeyteacher-contract>
+    DEPENDS gothic-navkeyteacher-contract USES_TERMINAL)
   add_executable(gothic-navmesh-contract EXCLUDE_FROM_ALL
     tests/navmesh_contract.cpp common/physics/navmesh.cpp)
   target_link_libraries(gothic-navmesh-contract PRIVATE Recast Detour)
