@@ -12,6 +12,7 @@ begins, the last one ends the quest. The goals are what the code checks:
 - `kill` — npc's of the director's dead: a state trigger on Npc_IsDead. Its own: their symbols outlive a load,
   while the bridge forgets creatures under a tag (story_spawn) after one;
 - `wait` — so many days gone: a trigger on Wld_GetDay and the day the stage began.
+- `vanilla` — a scripts' quest reaches a state: a state trigger on its variable.
 The last stage ends in a talk: its one goal that is a dialog (bring or talk) is the turn-in, which pays and
 closes the quest.
 
@@ -43,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 from . import triggers
 from .chronicle import Chronicle, Fact
 from .game import GameError, GameLink
-from .gamedata.storygraph import Expr, StoryGraph
+from .gamedata.storygraph import QUEST_STATES, Expr, StoryGraph
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .places import PlaceBook
@@ -75,8 +76,9 @@ log = logging.getLogger(__name__)
 Op = dict[str, Any]
 Step = dict[str, Any]
 
-BRING, TALK, REACH, HAVE, KILL, WAIT = "bring", "talk", "reach", "have", "kill", "wait"
-KINDS = (BRING, TALK, REACH, HAVE, KILL, WAIT)
+BRING, TALK, REACH, HAVE, KILL, WAIT, VANILLA = "bring", "talk", "reach", "have", "kill", "wait", "vanilla"
+KINDS = (BRING, TALK, REACH, HAVE, KILL, WAIT, VANILLA)
+VANILLA_STATES = {name: value for value, name in QUEST_STATES.items() if value != LOG_OBSOLETE}
 TALKS = (BRING, TALK)  # the goals that are dialogs
 GOLD = "ITMI_GOLD"
 OWN_NPC = f"{DIRECTOR_PREFIX}NPC_"  # the director's characters (cast.py): the only ones a quest kills
@@ -124,6 +126,8 @@ class Goal:
     days: int = 0  # wait
     talk: Talk | None = None  # bring, talk
     journal: str = ""  # an entry when it is done
+    quest: str = ""  # vanilla: a quest variable of the scripts
+    state: str = ""  # vanilla: running, success, failed
 
     @classmethod
     def of(cls, d: dict[str, Any]) -> Goal:
@@ -159,6 +163,7 @@ class Quest:
     names: dict[str, str] = field(default_factory=dict)  # npc -> its name in the game
     reason: str = ""
     repairs: list[dict[str, str]] = field(default_factory=list)
+    requires: list[dict[str, Any]] = field(default_factory=list)  # vanilla conditions that open the quest
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -248,6 +253,22 @@ def _set(var: str, value: Expr) -> Step:
     return {"do": "set", "target": ["var", var], "value": value}
 
 
+def _quest_state(quest: str, state: str) -> Expr:
+    return ["==", ["var", quest.upper()], _int(VANILLA_STATES[state], f"LOG_{state.upper()}")]
+
+
+def _requirement(condition: dict[str, Any]) -> Expr:
+    """The small vocabulary of vanilla requirements, checked before building."""
+    match condition["kind"]:
+        case "quest":
+            return _quest_state(condition["quest"], condition["state"])
+        case "knows":
+            return ["call", "NPC_KNOWSINFO", ["inst", "HERO"], ["sym", condition["node"].upper()]]
+        case "chapter":
+            return [">=", ["var", "KAPITEL"], _int(condition["chapter"])]
+    raise ValueError(f"unknown requirement: {condition!r}")
+
+
 def _entry(q: Quest, text: str) -> list[Step]:
     """A journal entry from a program, under the quest's topic."""
     return [{"do": "call", "call": ["fn", "B_LOGENTRY", ["str", q.title], ["str", text]]}] if text else []
@@ -277,6 +298,8 @@ def _world(q: Quest, g: Goal) -> Expr:
             return triggers.hero_has(g.item, g.count)
         case "kill":
             return triggers.all_of(*(triggers.dead(n) for n in g.npcs))
+        case "vanilla":
+            return _quest_state(g.quest, g.state)
         case _:
             return [">=", ["call", "WLD_GETDAY"], ["+", ["var", day_var(q)], _int(g.days)]]
 
@@ -319,6 +342,8 @@ def build(q: Quest) -> list[Op]:
     opens: Expr = ["==", status, _int(0)]
     if q.after:
         opens = ["&&", opens, ["==", ["var", q.after.upper()], _int(LOG_SUCCESS, "LOG_SUCCESS")]]
+    if q.requires:
+        opens = triggers.all_of(opens, *(_requirement(r) for r in q.requires))
     begin = _begin(q, 1)
     if q.days:
         begin.append(_set(due_var(q), ["+", ["call", "WLD_GETDAY"], _int(q.days)]))
@@ -444,6 +469,7 @@ class Ground:
     gold: int  # the most of the reward
     xp: int
     quests: dict[str, Quest] = field(default_factory=dict)  # the branch's others
+    story: Story | None = None  # vanilla graph, its current state and the branch's changes
 
 
 def problems(q: Quest, ground: Ground) -> list[str]:
@@ -472,6 +498,11 @@ def problems(q: Quest, ground: Ground) -> list[str]:
         errors.append("у квеста со сроком нужна запись журнала о провале")
     if q.after and q.after.upper() not in ground.quests:
         errors.append(f"квест {q.after} не найден: этот открывается после него")
+    if not isinstance(q.requires, list):
+        errors.append("requires — список условий открытия")
+    else:
+        for i, requirement in enumerate(q.requires, 1):
+            errors += [f"условие открытия {i}: {e}" for e in _vanilla(requirement, ground)]
     if errors:
         return errors
 
@@ -511,6 +542,43 @@ def _person(npc: str, who: str, ground: Ground) -> list[str]:
         return [f"{who}: {npc} — сюжетный NPC, его не трогаем"]
     if ground.states.get(npc) != "alive":
         return [f"{who}: {npc} {'мёртв' if ground.states.get(npc) == 'dead' else 'не в мире'}"]
+    return []
+
+
+def _vanilla(condition: dict[str, Any], ground: Ground) -> list[str]:
+    """A requirement or a vanilla goal must name the graph and still be attainable."""
+    if not isinstance(condition, dict):
+        return ["условие — словарь с kind: quest, knows или chapter"]
+    story = ground.story
+    if story is None:
+        return ["нет состояния ванильного графа для проверки условия"]
+    kind = condition.get("kind")
+    match kind:
+        case "quest":
+            quest = str(condition.get("quest", "")).upper()
+            state = condition.get("state")
+            if quest not in story.graph.quests:
+                return [f"{quest} — не переменная квеста ванильного графа"]
+            if not isinstance(state, str) or state not in VANILLA_STATES:
+                return [f"состояние квеста — running, success или failed, а не {state!r}"]
+            now = story.state.vars.get(quest)
+            if now in (LOG_SUCCESS, LOG_FAILED, LOG_OBSOLETE) and now != VANILLA_STATES[state]:
+                return [f"квест {quest} уже закрыт ({QUEST_STATES[now]}): состояние {state} недостижимо"]
+        case "knows":
+            node = str(condition.get("node", "")).upper()
+            dialog = story.graph.nodes.get(node)
+            if dialog is None:
+                return [f"нет ванильного диалога {node} в графе"]
+            if dialog.is_choice:
+                return [f"{node} — вариант ответа, нужен ванильный диалог"]
+        case "chapter":
+            chapter = condition.get("chapter")
+            if type(chapter) is not int or not 1 <= chapter <= 6:
+                return [f"глава — целое число от 1 до 6, а не {chapter!r}"]
+        case _:
+            return [f"вид условия — quest, knows или chapter, а не {kind!r}"]
+    if not story.possible(_requirement(condition)):
+        return [f"условие {condition} уже не может выполниться в этом состоянии мира"]
     return []
 
 
@@ -567,6 +635,8 @@ def _goal(g: Goal, ground: Ground, killed: set[str], held: set[str]) -> list[str
                 errors.append(f"нет такого NPC {n}")
     if g.kind == WAIT and not 1 <= g.days <= MAX_WAIT:
         errors.append(f"ждать: от 1 до {MAX_WAIT} дней, а не {g.days}")
+    if g.kind == VANILLA:
+        errors += _vanilla({"kind": "quest", "quest": g.quest, "state": g.state}, ground)
     return errors
 
 
@@ -856,6 +926,7 @@ class QuestBook:
         state = await self.link.story_state(vars=["XP_AMBIENT"], npcs=sorted(names), symbols=sorted(names))
         xp = int((state.get("vars") or {}).get("XP_AMBIENT") or XP_FALLBACK)
         places = self.places
+        vanilla = q.requires or any(g.kind == VANILLA for s in q.stages for g in s.goals)
         return Ground(
             symbols=state.get("symbols") or {},
             states={n: str(s.get("state")) for n, s in (state.get("npcs") or {}).items()},
@@ -864,6 +935,7 @@ class QuestBook:
             gold=xp,
             xp=xp,
             quests=self.all(),
+            story=await self.director.story() if vanilla else None,
         )
 
     async def make(self, q: Quest, *, gold: int | None = None, xp: int | None = None) -> list[str]:
@@ -902,7 +974,9 @@ class QuestBook:
             story = await self.director.with_symbols(await self.director.story(), names_in(ops))
         except (GameError, TimeoutError) as err:
             return None, [f"игра не ответила: {err}"]
-        errors = validate(ops, story, self.rules, caps=Caps(xp=ground.xp, items={GOLD: ground.gold}))
+        errors = validate(
+            ops, story, self.rules, caps=Caps(xp=ground.xp, items={GOLD: ground.gold}), book=True
+        )
         if errors:
             return None, errors
         try:

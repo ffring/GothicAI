@@ -4629,6 +4629,231 @@ async def book_stages(
     return _logged(results)
 
 
+async def book_requires(link: GameLink, book: questbook.QuestBook, slot: int = 7) -> dict[str, str]:
+    """Stage 5, layer 2: Hilda's book quest opens after Lobart's turnips, then waits for her pan quest.
+
+    No model: vanilla effects take and finish the turnips; the native shopping dialog gives the other
+    quest. A save and load while its vanilla goal waits must keep both the stage and its unfired trigger.
+    """
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> None:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    pan = "MIS_HILDA_PFANNEKAUFEN"
+    shopping = "DIA_HILDA_EINKAUFEN"
+    hero = ["inst", "HERO"]
+
+    async def vars(*names: str) -> dict[str, int]:
+        return dict((await link.story_state(vars=list(names))).get("vars", {}))
+
+    async def come_to_her() -> None:
+        await link.debug("player_goto", to=HILDA, distance=300)
+        for _ in range(40):  # her native greeting may start as he comes in
+            if not (await link.story_state()).get("dialog"):
+                break
+            await asyncio.sleep(0.5)
+
+    def talk(said: str, answer: str) -> questbook.Talk:
+        return questbook.Talk(said, [{"speaker": "self", "text": answer}])
+
+    initial = await vars(RUEBEN, pan, "KAPITEL")
+    ready = initial.get(RUEBEN) == 0 and initial.get(pan) == 0 and initial.get("KAPITEL") == 1
+    check("prepared", ready, initial)
+    if not ready:
+        return _logged(results)
+
+    q = questbook.Quest(
+        id=book.next_id(),
+        giver=HILDA,
+        title="Помощник по хозяйству",
+        give=talk("Лобарт доволен моей работой. Есть ещё дело?", "Есть. Поговорим о покупках для кухни."),
+        stages=[
+            questbook.Stage(
+                "После работы у Лобарта Хильда хочет поговорить о покупках.",
+                [
+                    questbook.Goal(
+                        "talk",
+                        npc=HILDA,
+                        talk=talk("Что тебе нужно для кухни?", "Нужна сковорода. Возьмись за моё поручение."),
+                    )
+                ],
+            ),
+            questbook.Stage(
+                "Нужно взять у Хильды поручение «Сковорода для Хильды».",
+                [questbook.Goal("vanilla", quest=pan, state="running")],
+            ),
+            questbook.Stage(
+                "Поручение о сковороде взято. Можно сказать Хильде, что я готов помочь.",
+                [
+                    questbook.Goal(
+                        "talk",
+                        npc=HILDA,
+                        talk=talk(
+                            "Я взялся за твою сковороду.", "Вот тебе за готовность. Саму сковороду ещё жду."
+                        ),
+                    )
+                ],
+            ),
+        ],
+        done_journal="Хильда заплатила за готовность помогать. Сковороду ещё нужно принести.",
+        asked="поговорить о покупках и взять поручение о сковороде",
+        gold=5,
+        xp=10,
+        names={HILDA: "Хильда"},
+        requires=[{"kind": "quest", "quest": RUEBEN, "state": "success"}],
+        reason="e2e: открытие и цель по состоянию ванильных квестов",
+    )
+    errors = await book.make(q)
+    status, stage = q.id, questbook.stage_var(q)
+    give, done = questbook.give_node(q), questbook.done_node(q)
+    now = await vars(status, stage)
+    offered = await link.offered_dialogs(HILDA) if not errors else []
+    check(
+        "locked",
+        not errors
+        and now == {status: 0, stage: 0}
+        and book.progress(q.id).state == "open"
+        and give not in offered
+        and done not in offered,
+        errors or f"{now}; {' '.join(offered)}",
+    )
+    if errors:
+        return _logged(results)
+
+    # The vanilla setup has the same quest variable and journal effects as Lobart's own dialogs.
+    await link.story_effect(
+        LOBART,
+        [
+            {"do": "set", "var": RUEBEN, "value": 1},
+            {
+                "do": "journal",
+                "topic": "Убрать поле репы",
+                "text": "Лобарт поручил мне собрать репу на поле.",
+                "status": "LOG_RUNNING",
+            },
+        ],
+    )
+    offered = await link.offered_dialogs(HILDA)
+    check(
+        "running_locked",
+        (await vars(RUEBEN)).get(RUEBEN) == 1 and give not in offered and book.progress(q.id).state == "open",
+        offered,
+    )
+    await link.story_effect(
+        LOBART,
+        [
+            {"do": "set", "var": RUEBEN, "value": 2},
+            {
+                "do": "journal",
+                "topic": "Убрать поле репы",
+                "text": "Я собрал репу для Лобарта.",
+                "status": "LOG_SUCCESS",
+            },
+        ],
+    )
+    # Delivering the harvest is the prerequisite of Hilda's native offer to shop for a pan.
+    await link.story_effect(
+        HILDA,
+        [
+            {"do": "set", "var": RUEBEN_TO_HILDA, "value": 2},
+            {
+                "do": "journal",
+                "topic": "Отнести репу Хильде",
+                "text": "Я доставил Хильде собранную репу.",
+                "status": "LOG_SUCCESS",
+            },
+        ],
+    )
+    offered = await link.offered_dialogs(HILDA)
+    check(
+        "unlocked",
+        (await vars(RUEBEN)).get(RUEBEN) == 2
+        and give in offered
+        and shopping in offered
+        and book.progress(q.id).state == "open",
+        offered,
+    )
+
+    await come_to_her()
+    await link.choose_dialog(HILDA, give)
+    ok = await _until_async(lambda: vars(status, stage), lambda v: v == {status: 1, stage: 1}, 15)
+    await _until(lambda: book.progress(q.id).state == "given", 5)
+    check("given", ok and book.progress(q.id).state == "given", await vars(status, stage))
+    await link.choose_dialog(HILDA, questbook.goal_node(questbook.goal_id(q, 1, 1)))
+    ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 15)
+    await _until(lambda: book.progress(q.id).stage == 2, 5)
+    check(
+        "waiting",
+        ok
+        and book.progress(q.id).stage == 2
+        and (await vars(pan)).get(pan) == 0
+        and done not in await link.offered_dialogs(HILDA),
+        await vars(status, stage, pan),
+    )
+
+    saving = asyncio.ensure_future(wait_message(link, Saved, timeout=60))
+    await link.debug("save", slot)
+    await saving
+    loaded = asyncio.ensure_future(wait_message(link, Session, lambda m: m.reason == "load"))
+    await link.debug("load", slot)
+    await loaded
+    await link.wait_world()
+    await asyncio.sleep(2)
+    counts = {t["id"]: t["count"] for t in await link.triggers()}
+    mine = {k: v for k, v in counts.items() if k.startswith(f"{q.id}_")}
+    restored = book.all().get(q.id)
+    check(
+        "after_load",
+        await vars(status, stage, pan) == {status: 1, stage: 2, pan: 0}
+        and book.progress(q.id).stage == 2
+        and restored is not None
+        and restored.requires == q.requires
+        and restored.stages[1].goals[0] == q.stages[1].goals[0]
+        and mine == {f"{q.id}_S1": 1, f"{q.id}_S2G1": 0, f"{q.id}_S2": 0}
+        and done not in await link.offered_dialogs(HILDA),
+        f"{await vars(status, stage, pan)}; {mine}",
+    )
+
+    await come_to_her()
+    offered = await link.offered_dialogs(HILDA)
+    if shopping not in offered:
+        check("vanilla", False, offered)
+        return _logged(results)
+    await link.choose_dialog(HILDA, shopping)
+    ok = await _until_async(lambda: vars(stage, pan), lambda v: v == {stage: 3, pan: 1}, 20)
+    await _until(lambda: book.progress(q.id).stage == 3, 5)
+    check(
+        "vanilla",
+        ok and book.progress(q.id).stage == 3 and done in await link.offered_dialogs(HILDA),
+        await vars(status, stage, pan),
+    )
+
+    gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    exp = int(await link.evaluate(["field", hero, "EXP"]) or 0)
+    await link.choose_dialog(HILDA, done)
+    ok = await _until_async(lambda: vars(status, stage), lambda v: v == {status: 2, stage: 4}, 15)
+    await _until(lambda: book.progress(q.id).state == "done", 5)
+    left = await link.offered_dialogs(HILDA)
+    after_gold = int(await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]) or 0)
+    after_exp = int(await link.evaluate(["field", hero, "EXP"]) or 0)
+    check(
+        "done",
+        ok
+        and book.progress(q.id).state == "done"
+        and after_gold == gold + q.gold
+        and after_exp == exp + q.xp
+        and await vars(RUEBEN, pan) == {RUEBEN: 2, pan: 1}
+        and not any(n.startswith(f"{q.id}_") for n in left),
+        f"{await vars(status, stage, RUEBEN, pan)}; gold, exp {(gold, exp)} -> {(after_gold, after_exp)}",
+    )
+    return _logged(results)
+
+
 async def author_chain(
     link: GameLink, chains: ChainAuthor, places: PlaceBook, slot: int = 7
 ) -> dict[str, str]:

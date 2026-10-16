@@ -486,6 +486,7 @@ def validate(
     *,
     repairs: str | None = None,
     caps: Caps | None = None,
+    book: bool = False,
 ) -> list[str]:
     """Why the change can't be made (in the words the director's model reads); empty: it can."""
     errors: list[str] = []
@@ -504,6 +505,8 @@ def validate(
             errors += _check_trigger(op, story, after.symbols, rules, caps)
         else:
             errors.append(f"операция {kind!r} режиссёру недоступна")
+        if book:
+            errors += _check_book_writes(op)
     if errors:
         return errors
     before = set(story.dead_ends())
@@ -513,6 +516,30 @@ def validate(
         elif q not in before:
             errors.append(f"после правки квест {q} остаётся без концовки")
     return errors
+
+
+def _check_book_writes(op: dict[str, Any]) -> list[str]:
+    """Book quests only observe the scripts; repairs retain their right to change them."""
+    effects = []
+    steps = None
+    if op.get("op") == "add_node":
+        made = op.get("node") or {}
+        effects = made.get("effects") or []
+        steps = made.get("program")
+    elif op.get("op") in ("program", "trigger"):
+        steps = op.get("steps")
+    if isinstance(steps, list):
+        effects = [*effects, *programs.effects(steps)]
+    forbidden = sorted(
+        {
+            str(e.get("var", "")).upper()
+            for e in effects
+            if e.get("do") == "set" and not str(e.get("var", "")).upper().startswith(DIRECTOR_PREFIX)
+        }
+    )
+    return [
+        f"квест книги не меняет переменную скриптов {var}: разрешены только свои DIR_…" for var in forbidden
+    ]
 
 
 def _check_node(
