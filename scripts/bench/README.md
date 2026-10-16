@@ -627,6 +627,52 @@ must never be presented as game FPS. Limits are +0.3 ms native physics p95 and 5
 `character initial` are test-only commands. `CHARACTER_VIRTUAL=1` also works with `scripts/e2e.sh`
 for the single requested `SCENARIO=m5b` check, without changing the user's Gothic.ini.
 
+### Nearby human NPC CharacterVirtual comparison
+
+`NPC_CHARACTER_VIRTUAL=0|1` sets the independent `[GAME] npc_character_virtual` before loading
+in both `bench.sh` and `e2e.sh`. The production default is **0**; the hero's setting is independent.
+`OPENGOTHIC_BENCH_TAKE=off|on` selects the same NPC flag inside the comparison scripts.
+
+`npc-character-virtual` sends its own human NPC through the stock forest stairs, doorway and
+Coragon tavern using native `AI_GoToPoint`, then records native bench sitting and standing.
+`npc-character-virtual-seat` pins one free authored bench at `NW_CITY_HABOUR_06_C`, with a fixed
+camera checked for visibility of the approach, feet and seated pose. `npccharacter seat <waypoint>`
+selects the nearest authored BENCH assigned to that exact waypoint; occupied or invalid fixtures
+fail rather than silently choosing a different bench. Without an argument, the full route stand
+searches free authored benches, preferring the harbour and farms. Actors use the bench's external-control policy so routines cannot
+replace a queued test leg; ordinary observation windows do not change NPC control or goals.
+The mug must settle on the floor before recording. `npc-character-frames.csv` and
+`npc_character_route_end` contain actual NPC root/model heights, controller activity, arrival,
+stalls, prop mass/contact/displacement and the maximum frame-to-frame height change.
+Sitting also records the authored animation-socket alignment, which is included in that maximum.
+
+`OPENGOTHIC_NPC_CHARACTER_TRACE=1` enables opt-in support/contact diagnostics for the route actor.
+On a physical or model height change above 10 cm, `npc_character_support_trace` records that frame
+and five preceding frames, with native body ID, layer, mass, visual/class, support normal/velocity
+and all active contacts. Each sample distinguishes the state before movement, after native update
+and floor sticking, and after the separate world-stair recipe. The output threshold only selects
+diagnostic records; it never changes movement. Ordinary runs allocate no native diagnostic snapshot.
+
+`npc-character-virtual-performance` keeps twenty human actors walking in supported market
+lanes for a normal, uncaptured 30-second window. It checks all twenty remain inside 20 m;
+limits are +0.5 ms physics p95 and 5% mean app FPS loss. `npc-character-virtual-radius`
+checks the 20/22 m hysteresis and live toggles. `npc-character-virtual-save` writes a complete
+`session-standing.sav`; load it with the matching initial flag and `npc-character-virtual-reload`.
+
+`scripts/npc-character-virtual-windows.sh` runs the eight passive morning/evening windows from
+the navigation baseline in both modes. Set absolute `RUNNER`, `SAVE`, `GOTHIC_DIR` for the
+existing CPU-only body runner, or omit `RUNNER` to use the Mac game. Completed windows are
+preserved on restart after validating the complete interval and native/stuck evidence;
+`NPC_CV_MODES='on off'` changes run order. `NPC_CV_TIMEOUT=600` limits each process, including loading.
+The default covers all sixteen runs; `NPC_CV_SPOTS='market harbour'` selects the four city pairs.
+Use a fresh output directory after rebuilding. Native observation counts
+unique humans reaching a goal separately from the stuck detector's all-NPC walking population.
+Run `scripts/npc_character_virtual_compare.py .bench/npc-character-virtual --output
+.bench/npc-character-virtual/comparison.md` to compare the raw data. Missing evidence stays
+incomplete; the analyzer also writes JSON beside the Markdown output.
+For a deliberately reduced series, repeat `--window-spot market --window-spot harbour` in the
+analyzer; the report then explicitly states the selected coverage.
+
 ## Navigation eye (CPU runner)
 
 The `eye` commands are an independent navigation sensor fixture. They leave combat's 16 body rays

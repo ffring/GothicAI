@@ -1,0 +1,4 @@
+# First command is captured before the first native tick after loading the save.
+npccharacter initial
+wait 500
+npccharacter snapshot settled

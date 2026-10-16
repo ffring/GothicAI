@@ -87,6 +87,7 @@ class Marvin {
       C_ToggleMovableVobs,
       C_TogglePhysicsNoise,
       C_ToggleCharacterVirtual,
+      C_ToggleNpcCharacterVirtual,
       };
 
     struct Cmd {

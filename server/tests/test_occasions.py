@@ -85,6 +85,21 @@ def kinds(occasions):
     return [f["kind"] for f in occasions.pending]
 
 
+def vanilla_quest(**change):
+    return {
+        "fact": "vanilla_quest",
+        "quest": "MIS_LOBART_RUEBEN",
+        "title": "Убрать поле репы",
+        "from": "open",
+        "to": "running",
+        "giver": LOBART,
+        "day": 1,
+        "hour": 8,
+        "minute": 0,
+        **change,
+    }
+
+
 async def test_a_place_must_hold_for_ten_seconds_not_just_one_waypoint(places):
     async with world(places) as (fake, clock, chronicle, occasions):
         fake.nearest_waypoint = "HOME_1"
@@ -272,6 +287,28 @@ async def test_deeds_preserve_the_original_chronicle_fact(places, kind):
         assert occasions.pending == []
 
 
+async def test_every_vanilla_quest_change_is_an_occasion_with_the_heros_current_context(places):
+    async with world(places) as (fake, clock, chronicle, occasions):
+        await settle(fake, clock, occasions, "ROAD")
+        started = vanilla_quest(node="DIA_LOBART_RUEBEN", npc=LOBART)
+        completed = vanilla_quest(**{"from": "running", "to": "success"})
+        chronicle.record(started)
+        chronicle.record(completed)
+        fake.nearest_waypoint = "HOME_1"
+        await occasions.poll()
+        assert occasions.current is None  # the event uses the live location, even before settling
+        assert kinds(occasions) == ["vanilla", "vanilla"]
+        changes = [await occasions.next(), await occasions.next()]
+        assert [f["vanilla"] for f in changes] == [started, completed]
+        assert all(f["place"] == "HOME" and f["people"] == [LOBART] for f in changes)
+        assert all(f["waypoint"] == "HOME_1" for f in changes)
+        assert occasions.pending == []
+        await load(fake, chronicle)
+        await occasions.poll()
+        assert occasions.pending == []
+        assert chronicle.facts("occasion") == changes
+
+
 async def test_only_a_person_killed_by_the_hero_is_a_deed(places):
     async with world(places) as (fake, clock, chronicle, occasions):
         await occasions.poll()
@@ -372,12 +409,14 @@ async def test_the_single_take_call_returns_priority_order_and_consumes_once(pla
         fake.vars["KAPITEL"] = 2
         clock.t += 30
         await occasions.poll()
+        chronicle.record(vanilla_quest())
         chronicle.record({"fact": "found_out", "quest": "LIE"})
         await occasions.poll()
-        assert kinds(occasions) == ["deed", "chapter", "arrived", "quiet"]
-        assert [(await occasions.next())["kind"] for _ in range(4)] == ["deed", "chapter", "arrived", "quiet"]
+        expected = ["deed", "vanilla", "chapter", "arrived", "quiet"]
+        assert kinds(occasions) == expected
+        assert [(await occasions.next())["kind"] for _ in expected] == expected
         assert occasions.pending == []
-        assert len(chronicle.facts("occasion")) == 4
+        assert len(chronicle.facts("occasion")) == 5
 
 
 @pytest.mark.parametrize("kind", ["arrived", "quiet"])
@@ -403,18 +442,19 @@ async def test_local_occasions_expire_only_after_leaving_more_than_fifty_metres(
         assert any(f["kind"] == kind for f in chronicle.facts("occasion"))  # history stays
 
 
-async def test_every_kind_expires_after_a_game_day_but_deeds_and_chapters_survive_distance(places):
+async def test_every_kind_expires_after_a_game_day_but_deeds_vanilla_and_chapters_survive_distance(places):
     async with world(places) as (fake, clock, chronicle, occasions):
         await settle(fake, clock, occasions, "HOME")
         fake.vars["KAPITEL"] = 2
         clock.t += 30
         await occasions.poll()
+        chronicle.record(vanilla_quest())
         chronicle.record({"fact": "found_out", "quest": "LIE"})
         await occasions.poll()
         fake.nearest_waypoint = "ROAD_1"
         fake.waypoint_distances.update(HOME_1=100000, HOME_2=100000)
         await occasions.poll()
-        assert kinds(occasions) == ["deed", "chapter"]
+        assert kinds(occasions) == ["deed", "vanilla", "chapter"]
         clock.t += 10
         await occasions.poll()
         fake.day += 1

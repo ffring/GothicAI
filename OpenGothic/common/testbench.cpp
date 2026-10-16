@@ -111,6 +111,8 @@ const bool        ragdollTrace = envStr("OPENGOTHIC_RAGDOLL_TRACE")!=nullptr &&
                                 std::string_view(envStr("OPENGOTHIC_RAGDOLL_TRACE"))=="1";
 const bool        ragdollPerf = envStr("OPENGOTHIC_RAGDOLL_PERF")!=nullptr &&
                                std::string_view(envStr("OPENGOTHIC_RAGDOLL_PERF"))=="1";
+const bool        npcCharacterTrace = envStr("OPENGOTHIC_NPC_CHARACTER_TRACE")!=nullptr &&
+                                     std::string_view(envStr("OPENGOTHIC_NPC_CHARACTER_TRACE"))=="1";
 constexpr uint64_t SpeakTailMs = 400;  // the talk key is held this long after the recording ends
 
 std::FILE* logFile = nullptr;
@@ -682,6 +684,42 @@ struct Bench {
     float physics=0,wall=0;
   };
   std::vector<CharacterFrame> characterFrames;
+  struct NpcCharacterRoute {
+    Npc* npc=nullptr;
+    WayPoint destination;
+    Interactive* seat=nullptr;
+    std::string name;
+    Vec3 start,goal,lastPosition,lastVisual,progressPosition;
+    uint64_t began=0,arrived=0,progressTime=0;
+    unsigned stalls=0;
+    float maxVisualJump=0,maxPhysicalJump=0,maxAboveFloor=0,mugMassKg=0;
+    bool mugContact=false;
+    uint64_t supportSince=0;Vec3 preparationSample;
+    bool sawPreparationSample=false;
+    std::deque<std::string> supportHistory;
+    bool active=false,reached=false,stalled=false,sat=false,standing=false;
+  } npcCharacterRoute;
+  struct NpcCharacterFrame {
+    std::string phase;
+    uint64_t frame=0,time=0,dt=0,npc=0;
+    Vec3 root,visual;
+    bool enabled=false,active=false,moving=false,air=false,interactive=false,captured=false,normal=false;
+    float physics=0,wall=0;
+    unsigned nearby=0,virtualNearby=0,movingNearby=0,movingVirtualNearby=0;
+  };
+  std::deque<LivingWalker> npcCharacterCrowd;
+  std::vector<NpcCharacterFrame> npcCharacterFrames;
+  struct NpcCharacterTraceActor { Npc* npc=nullptr;Vec3 lastRoot,lastVisual;bool hasPrevious=false; };
+  std::vector<NpcCharacterTraceActor> npcCharacterTraceActors;
+  bool npcCharacterMeasuring=false,npcCharacterHasWall=false,npcCharacterObserving=false;
+  std::chrono::steady_clock::time_point npcCharacterLastWall;
+  std::string npcCharacterWindow;
+  struct NpcCharacterGoal { Vec3 target;const Npc* npc=nullptr;std::string name,kind;bool active=false; };
+  std::unordered_map<const Npc*,NpcCharacterGoal> npcCharacterGoals;
+  std::unordered_set<const Npc*> npcCharacterWalkers;
+  uint64_t npcCharacterObservedFrames=0,npcCharacterCvFrames=0,npcCharacterArrivals=0,npcCharacterObserveStart=0;
+  unsigned npcCharacterMaxNearby=0,npcCharacterCrowdMinNearby=20,npcCharacterCrowdMaxNearby=0;
+  float npcCharacterCrowdMaximumDistance=0;
   std::chrono::steady_clock::time_point characterLastWall;
   bool characterHasWall=false,characterMeasuring=false;
   uint64_t characterFrame=0;
@@ -1274,7 +1312,15 @@ void stopRecording() {
   bench.rec = false;
   }
 
+void npcCharacterStopMotionTrace(World* world) {
+  if(world)
+    for(const auto& actor:bench.npcCharacterTraceActors)
+      if(world->npcId(actor.npc)!=uint32_t(-1))actor.npc->setCharacterVirtualDiagnosticsEnabled(false);
+  bench.npcCharacterTraceActors.clear();
+  }
+
 void finish() {
+  npcCharacterStopMotionTrace(Gothic::inst().world());
   endAnimationControl();
   animationControlTotals();
   if(bench.speaking) {
@@ -1295,6 +1341,18 @@ void finish() {
           double(row.visualRoot.x),double(row.visualRoot.y),double(row.visualRoot.z));
       std::fclose(file);
       } else event("character_error","\"reason\":\"cannot write native character frames\"");
+    }
+  if(!bench.npcCharacterFrames.empty()) {
+    if(auto* file=std::fopen((outDir+"/npc-character-frames.csv").c_str(),"w")) {
+      std::fprintf(file,"phase,frame,t_game_ms,dt_ms,npc_id,x_cm,y_cm,z_cm,visual_x_cm,visual_y_cm,visual_z_cm,cv_enabled,cv_active,moving,in_air,interactive,step_ms,wall_ms,nearby_humans,nearby_cv,moving_humans,moving_cv,captured,normal_clock\n");
+      for(const auto& row:bench.npcCharacterFrames)
+        std::fprintf(file,"%s,%llu,%llu,%llu,%llu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%d,%d,%d,%d,%d,%.9g,%.9g,%u,%u,%u,%u,%d,%d\n",
+          row.phase.c_str(),(unsigned long long)row.frame,(unsigned long long)row.time,(unsigned long long)row.dt,
+          (unsigned long long)row.npc,double(row.root.x),double(row.root.y),double(row.root.z),
+          double(row.visual.x),double(row.visual.y),double(row.visual.z),int(row.enabled),int(row.active),int(row.moving),
+          int(row.air),int(row.interactive),double(row.physics),double(row.wall),row.nearby,row.virtualNearby,row.movingNearby,row.movingVirtualNearby,int(row.captured),int(row.normal));
+      std::fclose(file);
+      } else event("npc_character_error","\"reason\":\"cannot write native NPC character frames\"");
     }
   bench.characterProp.reset();bench.characterPlatform.reset();bench.characterPlatformVisual.reset();
   bench.movableFixtures.clear();
@@ -4073,11 +4131,11 @@ void characterFreezeNear(World& world,Npc& player,const Vec3& start,const Vec3& 
   event("character_fixture_freeze","\"npcs\":"+std::to_string(count)+",\"radius_cm\":2200");
   }
 
-bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool abortMissing=true) {
+bool prepareCharacterRoute(World& world,Npc& player,const std::string& name,bool abortMissing=true,std::string_view onlyWaypoint={}) {
   Bench::CharacterRoute route;route.name=name;
   std::vector<const WayPoint*> points;
   world.forEachWayPoint([&](const WayPoint& point) {
-    if(!point.underWater) points.push_back(&point);
+    if(!point.underWater && (onlyWaypoint.empty() || point.name==onlyWaypoint)) points.push_back(&point);
     });
   std::sort(points.begin(),points.end(),[](const auto* a,const auto* b){return a->name<b->name;});
   auto* physics=world.physic();
@@ -4428,6 +4486,417 @@ void characterRideCheckpoint(World& world,Npc& player,bool setup=false) {
     ",\"falling\":"+(player.isFalling()?"true":"false")+",\"in_air\":"+(player.isInAir()?"true":"false"));
   }
 
+// NPC stands use real AI_GoToPoint actions. Only fixture preparation moves an
+// actor directly; route frames are ordinary animation-driven MoveAlgo ticks.
+std::string npcCharacterBodyJson(const CharacterVirtualDiagnostics::Body& body,
+                                const std::vector<DynamicWorld::MovableVobSnapshot>& movable) {
+  std::string visual=body.label,kind;
+  if(body.pointerType==DynamicWorld::P_Item)
+    kind="Item";
+  else if(body.pointerType==DynamicWorld::P_Interactive) {
+    if(const auto* rule=MovableVobs::classifyVisual(visual))kind=rule->className;
+    else kind="Interactive";
+    }
+  else if(body.pointerType==DynamicWorld::P_MovableVob) {
+    const auto id=reinterpret_cast<uintptr_t>(body.payload);
+    for(const auto& entry:movable)if(entry.id==id) {visual=entry.visual;kind=entry.className;break;}
+    }
+  if(kind.empty()) {
+    if(const auto* rule=MovableVobs::classifyVisual(visual))kind=rule->className;
+    else if(body.layer==DynamicWorld::C_Landscape)kind="landscape";
+    else kind="vob";
+    }
+  return "{\"present\":"+std::string(body.present?"true":"false")+",\"id\":"+std::to_string(body.id)+
+    ",\"layer\":"+std::to_string(body.layer)+",\"pointer_type\":"+std::to_string(body.pointerType)+
+    ",\"motion_type\":"+std::to_string(body.motionType)+",\"mass_kg\":"+ragdollNumber(body.mass)+
+    ",\"label\":"+jsonStr(body.label)+",\"visual\":"+jsonStr(visual)+",\"class\":"+jsonStr(kind)+
+    ",\"position_cm\":"+ragdollVector(body.position)+",\"linear_velocity_cm_s\":"+ragdollVector(body.linearVelocity)+
+    ",\"angular_velocity_rad_s\":"+ragdollVector(body.angularVelocity)+",\"point_velocity_cm_s\":"+ragdollVector(body.pointVelocity)+"}";
+  }
+
+std::string npcCharacterPoseJson(const CharacterVirtualDiagnostics::Pose& pose,
+                                const std::vector<DynamicWorld::MovableVobSnapshot>& movable) {
+  std::string contacts="[";
+  const auto flag=[](bool value){return value?"true":"false";};
+  for(const auto& c:pose.contacts) {
+    if(contacts.size()>1)contacts+=',';
+    contacts+="{\"body\":"+npcCharacterBodyJson(c.body,movable)+",\"subshape\":"+std::to_string(c.subShape)+
+      ",\"position_cm\":"+ragdollVector(c.position)+",\"normal\":"+ragdollVector(c.contactNormal)+
+      ",\"surface_normal\":"+ragdollVector(c.surfaceNormal)+",\"point_velocity_cm_s\":"+ragdollVector(c.pointVelocity)+
+      ",\"distance_cm\":"+ragdollNumber(c.distance)+",\"supporting_volume_distance_cm\":"+ragdollNumber(c.supportingVolumeDistance)+
+      ",\"had_collision\":"+flag(c.hadCollision)+",\"discarded\":"+flag(c.discarded)+",\"sensor\":"+flag(c.sensor)+
+      ",\"can_push_character\":"+flag(c.canPushCharacter)+",\"within_supporting_volume\":"+flag(c.withinSupportingVolume)+
+      ",\"walkable_slope\":"+flag(c.walkableSlope)+",\"support_allowed_by_policy\":"+flag(c.supportAllowedByPolicy)+
+      ",\"support_eligible\":"+flag(c.supportEligible)+"}";
+    }
+  return "{\"position_cm\":"+ragdollVector(pose.position)+",\"velocity_cm_s\":"+ragdollVector(pose.velocity)+
+    ",\"ground_state\":"+std::to_string(pose.groundState)+",\"ground\":"+npcCharacterBodyJson(pose.ground,movable)+
+    ",\"ground_subshape\":"+std::to_string(pose.groundSubShape)+",\"ground_position_cm\":"+ragdollVector(pose.groundPosition)+
+    ",\"ground_normal\":"+ragdollVector(pose.groundNormal)+",\"ground_velocity_cm_s\":"+ragdollVector(pose.groundVelocity)+
+    ",\"contacts\":"+contacts+"]}";
+  }
+
+std::string npcCharacterCollisionJson(World& world,const CharacterVirtualDiagnostics::NpcCollision& collision) {
+  // Resolve a borrowed neighbour immediately; historical samples retain JSON
+  // values, never pointers to actors that may despawn later in the frame.
+  const auto id=world.npcId(collision.npc);
+  const auto* blocker=id!=uint32_t(-1)?world.npcById(id):nullptr;
+  return "{\"npc_id\":"+(blocker?std::to_string(id):"null")+",\"npc\":"+jsonStr(blocker?symName(world,blocker):"none")+
+    ",\"position_cm\":"+ragdollVector(collision.position)+",\"normal\":"+ragdollVector(collision.normal)+
+    ",\"allowed_depth_cm\":"+ragdollNumber(collision.allowedDepth)+",\"rejected_depth_cm\":"+ragdollNumber(collision.rejectedDepth)+
+    ",\"tested_position_cm\":"+ragdollVector(collision.testedPosition)+"}";
+  }
+
+std::string npcCharacterMoveJson(World& world,const CharacterVirtualDiagnostics::NpcMove& move) {
+  const auto flag=[](bool value){return value?"true":"false";};
+  return "{\"initial_cm\":"+ragdollVector(move.initial)+",\"requested_cm\":"+ragdollVector(move.requested)+
+    ",\"clipped_request_cm\":"+ragdollVector(move.clippedRequest)+",\"native_position_cm\":"+ragdollVector(move.nativePosition)+
+    ",\"accepted_cm\":"+ragdollVector(move.accepted)+",\"request_clipped\":"+flag(move.requestClipped)+
+    ",\"resolved_clipped\":"+flag(move.resolvedClipped)+",\"blocked\":"+flag(move.blocked)+
+    ",\"request_collision\":"+npcCharacterCollisionJson(world,move.requestCollision)+
+    ",\"resolved_collision\":"+npcCharacterCollisionJson(world,move.resolvedCollision)+"}";
+  }
+
+bool npcCharacterNeedsMovableLookup(const CharacterVirtualDiagnostics::Pose& pose) {
+  if(pose.ground.pointerType==DynamicWorld::P_MovableVob)return true;
+  return std::any_of(pose.contacts.begin(),pose.contacts.end(),[](const auto& contact) {
+    return contact.body.pointerType==DynamicWorld::P_MovableVob;
+    });
+  }
+
+std::string npcCharacterSample(World& world,const Npc& npc,float physicalJump,float visualJump,uint64_t frame,uint64_t dt) {
+  const auto goal=npc.navigationGoal();
+  const auto observed=npc.bodyObservationState();
+  const auto goalId=world.npcId(goal.npc);
+  const auto* target=goalId!=uint32_t(-1)?world.npcById(goalId):nullptr;
+  CharacterVirtualDiagnostics d;
+  const bool valid=npc.characterVirtualDiagnostics(d);
+  std::string row="\"tick\":"+std::to_string(world.tickCount())+",\"frame\":"+std::to_string(frame)+
+    ",\"frame_dt_ms\":"+std::to_string(dt)+",\"npc_id\":"+std::to_string(world.npcId(&npc))+",\"npc\":"+jsonStr(symName(world,&npc))+
+    ",\"root_cm\":"+ragdollVector(npc.position())+",\"visual_root_cm\":"+ragdollVector(npc.characterVisualPosition())+
+    ",\"physical_dy_cm\":"+ragdollNumber(physicalJump)+",\"visual_dy_cm\":"+ragdollNumber(visualJump)+
+    ",\"yaw_deg\":"+ragdollNumber(npc.rotation())+",\"body_state\":"+std::to_string(unsigned(npc.bodyState()))+
+    ",\"body_state_masked\":"+std::to_string(unsigned(npc.bodyStateMasked()))+",\"state\":"+jsonStr(stateName(world,npc))+
+    ",\"in_air\":"+(npc.isInAir()?"true":"false")+",\"falling\":"+(npc.isFalling()?"true":"false")+
+    ",\"interactive\":"+(npc.interactive()?"true":"false")+",\"external_control\":"+(npc.isExternalControl()?"true":"false")+
+    ",\"process_policy\":"+std::to_string(int(npc.processPolicy()))+
+    ",\"ai_wait_ms\":"+std::to_string(observed.aiWaitMs)+",\"ani_wait_ms\":"+std::to_string(observed.aniWaitMs)+
+    ",\"output_wait_ms\":"+std::to_string(observed.outputWaitMs)+",\"fai_wait_ms\":"+std::to_string(observed.faiWaitMs)+
+    ",\"animations\":"+jsonStr(npc.animNames())+",\"ai_queue_empty\":"+(npc.isAiQueueEmpty()?"true":"false")+
+    ",\"ai_busy\":"+(npc.isAiBusy()?"true":"false")+",\"move_hint\":"+std::to_string(unsigned(npc.moveHint()))+
+    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false")+
+    ",\"cv_active\":"+(npc.characterVirtualActive()?"true":"false")+",\"diagnostics_valid\":"+(valid?"true":"false")+
+    ",\"nav_goal\":{\"active\":"+(goal.active?"true":"false")+",\"kind\":"+jsonStr(goal.kind)+",\"name\":"+jsonStr(goal.name)+
+    ",\"position_cm\":"+ragdollVector(goal.position)+",\"npc_id\":"+(target?std::to_string(goalId):"null")+
+    ",\"npc\":"+jsonStr(target?symName(world,target):"none")+"}";
+  if(valid) {
+    // Look up movable visual/class names only when a sampled native body needs
+    // them. The trace writes referenced contacts, not the world's full catalog.
+    std::vector<DynamicWorld::MovableVobSnapshot> movable;
+    if(npcCharacterNeedsMovableLookup(d.before) || npcCharacterNeedsMovableLookup(d.afterExtendedUpdate) ||
+       npcCharacterNeedsMovableLookup(d.afterStairs))movable=world.physic()->movableVobSnapshot();
+    row+=",\"dt_ms\":"+std::to_string(d.dt)+",\"requested_cm\":"+ragdollVector(d.requested)+
+      ",\"stair_attempted\":"+(d.stairAttempted?"true":"false")+",\"stair_succeeded\":"+(d.stairSucceeded?"true":"false")+
+      ",\"stair_obstacle_id\":"+std::to_string(d.stairObstacleId)+",\"npc_move\":"+npcCharacterMoveJson(world,d.npcMove)+
+      ",\"before\":"+npcCharacterPoseJson(d.before,movable)+
+      ",\"after_extended_update\":"+npcCharacterPoseJson(d.afterExtendedUpdate,movable)+
+      ",\"after_stairs\":"+npcCharacterPoseJson(d.afterStairs,movable);
+    }
+  return row;
+  }
+
+void npcCharacterSupportTrace(World& world,const Npc& npc,float physicalJump,float visualJump) {
+  if(!npcCharacterTrace)return;
+  auto& route=bench.npcCharacterRoute;
+  auto row="\"route\":"+jsonStr(route.name)+","+
+    npcCharacterSample(world,npc,physicalJump,visualJump,bench.npcCharacterFrames.size()-1,bench.frameMs);
+  route.supportHistory.push_back(std::move(row));
+  if(route.supportHistory.size()>6)route.supportHistory.pop_front();
+  // This threshold selects diagnostic output only; it never changes motion.
+  if(std::abs(physicalJump)<=10.f && std::abs(visualJump)<=10.f)return;
+  const int count=int(route.supportHistory.size());
+  for(int i=0;i<count;++i)
+    event("npc_character_support_trace","\"spike_frame\":"+std::to_string(bench.npcCharacterFrames.size()-1)+
+      ",\"relative_frame\":"+std::to_string(i-count+1)+","+route.supportHistory[size_t(i)]);
+  }
+
+void npcCharacterMotionTrace(World& world,uint64_t dt) {
+  for(auto& actor:bench.npcCharacterTraceActors) {
+    const auto& npc=*actor.npc;
+    const auto root=npc.position(),visual=npc.characterVisualPosition();
+    const float physicalJump=actor.hasPrevious?root.y-actor.lastRoot.y:0.f;
+    const float visualJump=actor.hasPrevious?visual.y-actor.lastVisual.y:0.f;
+    event("npc_character_motion_trace","\"window\":"+jsonStr(bench.npcCharacterObserving?bench.npcCharacterWindow:std::string())+","+
+      npcCharacterSample(world,npc,physicalJump,visualJump,bench.step,dt));
+    actor.lastRoot=root;actor.lastVisual=visual;actor.hasPrevious=true;
+    }
+  }
+
+void npcCharacterSnapshot(World& world,Npc& player,std::string_view label) {
+  std::string rows="[";
+  for(uint32_t id=0;id<world.npcCount();++id) {
+    const auto* npc=world.npcById(id);
+    if(!npc || npc==&player || !npc->isHuman() || npc->isDown() ||
+       (npc->position()-player.position()).length()>2300.f)continue;
+    if(rows.size()>1)rows+=',';
+    rows+="{\"npc_id\":"+std::to_string(id)+",\"npc\":"+jsonStr(symName(world,npc))+
+      ",\"root_cm\":"+ragdollVector(npc->position())+",\"visual_root_cm\":"+ragdollVector(npc->characterVisualPosition())+
+      ",\"cv_active\":"+(npc->characterVirtualActive()?"true":"false")+
+      ",\"interactive\":"+(npc->interactive()?"true":"false")+"}";
+    }
+  event("npc_character_snapshot","\"label\":"+jsonStr(label)+",\"world\":"+jsonStr(world.name())+
+    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false")+
+    ",\"hero_cm\":"+ragdollVector(player.position())+",\"actors\":"+rows+"]");
+  }
+
+Npc* npcCharacterActor(World& world,const Vec3& position) {
+  auto* npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),position);
+  if(!npc) {arenaAbort("NPC CharacterVirtual fixture actor insertion failed");return nullptr;}
+  npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->closeWeapon(true);
+  // Keep native queued actions and movement; suppress source-save routines
+  // and perception callbacks between scripted fixture legs.
+  npc->setExternalControl(true);npc->setProcessPolicy(NpcProcessPolicy::AiNormal);npc->setWalkMode(WalkBit::WM_Run);
+  npc->aiPush(AiQueue::aiWait(60000));npc->setPosition(position);npc->updateTransform();
+  return npc;
+  }
+
+void npcCharacterPlaceHero(World& world,Npc& player,const Vec3& start,const Vec3& goal) {
+  auto along=goal-start;along.y=0;
+  along=along.length()>0?Vec3::normalize(along):Vec3(1,0,0);
+  const Vec3 side(-along.z,0,along.x);
+  Vec3 hero;bool found=false;
+  for(float distance:{400.f,-400.f,600.f,-600.f,800.f,-800.f}) {
+    const auto at=start+side*distance;
+    if(!characterFloor(world,at,hero) || std::abs(hero.y-start.y)>150)continue;
+    if(world.physic()->ray(hero+Vec3(0,100,0),hero+along*40.f+Vec3(0,100,0)).hasCol)continue;
+    found=true;break;
+    }
+  if(!found)hero=start-along*250.f;
+  player.stopWalking();player.clearAiQueue();player.setPosition(hero);player.setDirection(start-hero);player.updateTransform();
+  }
+
+void npcCharacterPrepare(World& world,Npc& player,const std::string& name) {
+  auto& route=bench.npcCharacterRoute;
+  if(route.npc) {world.removeNpc(*route.npc);route.npc=nullptr;}
+  if(bench.characterItem) {world.removeItem(*bench.characterItem);bench.characterItem=nullptr;}
+  route=Bench::NpcCharacterRoute();route.name=name;
+  if(name=="stairs") {
+    if(!prepareCharacterRoute(world,player,"stairs_up",true,"NW_CITY_TO_FOREST_STAIRS01"))return;
+    } else if(name=="doorway" || name=="tavern") {
+    if(!prepareCharacterRoute(world,player,name))return;
+    } else {arenaAbort("unknown NPC CharacterVirtual route: "+name);return;}
+  route.start=bench.characterRoute.start;route.goal=bench.characterRoute.goal;
+  route.destination=WayPoint(route.goal,"FP_NPC_CHARACTER_GOAL");route.destination.groundPos=route.goal;
+  npcCharacterPlaceHero(world,player,route.start,route.goal);
+  route.npc=npcCharacterActor(world,route.start);if(!route.npc)return;
+  route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace);
+  route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();bench.subject=route.npc;
+  if(name=="tavern") {
+    // Use an actual dropped Item in the free lane beside authored furniture.
+    // Remove only the general stand's temporary props so ON/OFF starts agree.
+    bench.movableFixtures.clear();
+    auto matrix=Matrix4x4::mkIdentity();matrix.translate((route.start+route.goal)*.5f);
+    bench.characterItem=world.addItemDyn(world.script().findSymbolIndex("ITFO_BEER"),matrix,size_t(-1));
+    if(!bench.characterItem) {arenaAbort("NPC tavern real beer mug insertion failed");return;}
+    // Item proxies are centred boxes with at least 15 cm half-height. Keep
+    // both the proxy and real visual bounds above the floor before settling.
+    const auto* bounds=bench.characterItem->bBox();
+    if(!bounds) {arenaAbort("NPC tavern beer mug has no native visual bounds");return;}
+    const float height=std::max({15.f,(bounds[1].y-bounds[0].y)*.5f,-bounds[0].y})+2.f;
+    matrix.translate(0,height,0);bench.characterItem->setObjMatrix(matrix);
+    bench.characterItem->setPhysicsEnable(world);
+    bench.characterPropInitial=bench.characterItem->position();bench.characterPropTravel=0;
+    route.mugMassKg=bench.characterItem->physicsMass();route.mugContact=false;
+    event("npc_character_mug_setup","\"position_cm\":"+ragdollVector(bench.characterPropInitial)+
+      ",\"floor_cm\":"+ragdollVector((route.start+route.goal)*.5f)+",\"bounds_min_cm\":"+ragdollVector(bounds[0])+
+      ",\"bounds_max_cm\":"+ragdollVector(bounds[1])+",\"mass_kg\":"+ragdollNumber(bench.characterItem->physicsMass()));
+    }
+  bench.cam=C_Follow;bench.camDist=350;bench.camHeight=110;bench.camAngle=110;bench.camAuto=true;bench.hasPrev=false;
+  event("npc_character_route_setup","\"route\":"+jsonStr(name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
+    ",\"waypoint\":"+jsonStr(bench.characterRoute.waypoint)+",\"start_cm\":"+ragdollVector(route.start)+
+    ",\"goal_cm\":"+ragdollVector(route.goal)+",\"hero_cm\":"+ragdollVector(player.position()));
+  }
+
+void npcCharacterBegin(World& world,std::string_view phase={}) {
+  auto& route=bench.npcCharacterRoute;
+  if(!route.npc) {arenaAbort("NPC character begin requires its fixture actor");return;}
+  if(!phase.empty())route.name=phase;
+  route.active=true;route.reached=false;route.arrived=0;route.began=world.tickCount();route.progressTime=route.began;
+  route.lastPosition=route.npc->position();route.lastVisual=route.npc->characterVisualPosition();route.progressPosition=route.lastPosition;
+  route.maxVisualJump=0;route.maxPhysicalJump=0;route.maxAboveFloor=0;route.stalls=0;route.stalled=false;
+  route.supportHistory.clear();route.npc->setCharacterVirtualDiagnosticsEnabled(npcCharacterTrace ||
+    std::any_of(bench.npcCharacterTraceActors.begin(),bench.npcCharacterTraceActors.end(),[&](const auto& actor){return actor.npc==route.npc;}));
+  bench.npcCharacterHasWall=false;
+  event("npc_character_route_begin","\"route\":"+jsonStr(route.name)+",\"npc_id\":"+std::to_string(world.npcId(route.npc))+
+    ",\"start_cm\":"+ragdollVector(route.npc->position())+",\"goal_cm\":"+ragdollVector(route.goal)+
+    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false"));
+  }
+
+void npcCharacterEnd(World& world) {
+  auto& route=bench.npcCharacterRoute;
+  if(!route.active || !route.npc) {arenaAbort("NPC character end without active fixture");return;}
+  route.active=false;
+  std::string mug;
+  if(bench.characterItem)
+    mug=",\"mug_mass_kg\":"+ragdollNumber(route.mugMassKg)+
+      ",\"mug_max_displacement_cm\":"+ragdollNumber(bench.characterPropTravel)+
+      ",\"mug_native_contact\":"+(route.mugContact?"true":"false");
+  event("npc_character_route_end","\"route\":"+jsonStr(route.name)+",\"success\":"+(route.reached?"true":"false")+
+    ",\"elapsed_ms\":"+std::to_string((route.reached?route.arrived:world.tickCount())-route.began)+
+    ",\"window_ms\":"+std::to_string(world.tickCount()-route.began)+",\"start_cm\":"+ragdollVector(route.start)+
+    ",\"goal_cm\":"+ragdollVector(route.goal)+",\"end_cm\":"+ragdollVector(route.npc->position())+
+    ",\"stalls\":"+std::to_string(route.stalls)+",\"max_visual_jump_cm\":"+ragdollNumber(route.maxVisualJump)+
+    ",\"max_physical_jump_cm\":"+ragdollNumber(route.maxPhysicalJump)+",\"max_above_floor_cm\":"+ragdollNumber(route.maxAboveFloor)+
+    ",\"sat\":"+(route.sat?"true":"false")+",\"standing\":"+(route.standing?"true":"false")+
+    ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false")+mug);
+  }
+
+void npcCharacterMarket(World& world,Npc& player) {
+  const WayPoint* center=world.findPoint("NW_CITY_MERCHANT_PATH_20");
+  if(!center) {arenaAbort("NPC character market fixture has no stock market waypoint");return;}
+  if(bench.npcCharacterRoute.npc) {world.removeNpc(*bench.npcCharacterRoute.npc);bench.npcCharacterRoute=Bench::NpcCharacterRoute();}
+  std::vector<Npc*> actors;
+  for(uint32_t id=0;id<world.npcCount();++id) {
+    auto* npc=world.npcById(id);
+    if(npc && npc!=&player && npc->isHuman() && !npc->isDown() && (npc->position()-center->position()).length()<2000.f)
+      actors.push_back(npc);
+    }
+  characterFreezeNear(world,player,center->position(),center->position());
+  // Keep precisely twenty live humans inside the measured radius even when
+  // the source save has a larger native market population.
+  for(size_t i=20;i<actors.size();++i) {
+    actors[i]->setPosition(center->position()+Vec3(3000.f+float(i-20)*100.f,0,0));actors[i]->updateTransform();
+    }
+  std::vector<std::pair<Vec3,Vec3>> lanes;
+  for(float radius:{200.f,400.f,600.f,800.f,1000.f,1200.f,1400.f})for(unsigned step=0;step<24 && lanes.size()<20;++step) {
+    const float angle=float(step)*float(M_PI)/12.f;
+    Vec3 start,end;
+    if(!characterFloor(world,center->position()+Vec3(std::cos(angle)*radius,0,std::sin(angle)*radius),start) ||
+       std::abs(start.y-center->position().y)>100)continue;
+    if(std::any_of(lanes.begin(),lanes.end(),[&](const auto& lane){return (start-lane.first).length()<120.f;}))continue;
+    bool found=false;
+    for(unsigned direction=0;direction<8;++direction) {
+      const float yaw=float(direction)*float(M_PI)/4.f;
+      const Vec3 along(std::cos(yaw),0,std::sin(yaw));
+      if(characterFloor(world,start+along*280.f,end) && characterLane(world,start,end,20.f) && std::abs(end.y-start.y)<45 &&
+         std::none_of(lanes.begin(),lanes.end(),[&](const auto& lane){return (end-lane.first).length()<100.f || (end-lane.second).length()<100.f;})) {found=true;break;}
+      }
+    if(found)lanes.emplace_back(start,end);
+    }
+  if(lanes.size()!=20) {arenaAbort("market fixture lacks twenty supported walking lanes");return;}
+  player.stopWalking();player.setPosition(center->position());player.updateTransform();
+  bench.npcCharacterCrowd.clear();
+  for(size_t i=0;i<lanes.size();++i) {
+    auto* npc=i<actors.size()?actors[i]:npcCharacterActor(world,lanes[i].first);
+    if(!npc)return;
+    npc->setInteraction(nullptr,true);npc->clearAiQueue();npc->clearState(false);npc->stopWalking();npc->setExternalControl(true);
+    npc->setProcessPolicy(NpcProcessPolicy::AiNormal);npc->setWalkMode(WalkBit::WM_Run);
+    npc->setPosition(lanes[i].first);npc->setDirection(lanes[i].second-lanes[i].first);npc->updateTransform();
+    bench.npcCharacterCrowd.emplace_back();auto& walker=bench.npcCharacterCrowd.back();walker.npc=npc;
+    walker.ends[0]=WayPoint(lanes[i].second,"FP_NPC_CHARACTER_MARKET_B");walker.ends[1]=WayPoint(lanes[i].first,"FP_NPC_CHARACTER_MARKET_A");
+    for(auto& point:walker.ends)point.groundPos=point.pos;
+    }
+  bench.subject=nullptr;bench.cam=C_World;bench.camDist=1000;bench.camHeight=800;bench.camAngle=45;bench.camAuto=false;
+  event("npc_character_market_setup","\"actors\":20,\"reused_npcs\":"+std::to_string(std::min(size_t(20),actors.size()))+
+    ",\"waypoint\":"+jsonStr(center->name)+",\"hero_cm\":"+ragdollVector(player.position()));
+  }
+
+void npcCharacterFields(World& world,Npc& player,uint64_t dt) {
+  auto& route=bench.npcCharacterRoute;
+  if(route.npc && !route.active && route.seat) {
+    const auto at=route.npc->position();
+    const bool supported=!route.npc->isInAir() && !route.npc->isFalling() && std::abs(at.y-route.start.y)<5.f;
+    if(!supported || !route.sawPreparationSample || (at-route.preparationSample).length()>1.f)route.supportSince=world.tickCount();
+    route.preparationSample=at;route.sawPreparationSample=true;
+    }
+  if(!route.active && !bench.npcCharacterMeasuring && !bench.npcCharacterObserving)return;
+  unsigned nearby=0,virtualNearby=0,movingNearby=0,movingVirtualNearby=0;
+  for(uint32_t id=0;id<world.npcCount();++id) {
+    auto* npc=world.npcById(id);
+    if(!npc || npc==&player || !npc->isHuman() || npc->isDown())continue;
+    const bool near=(npc->position()-player.position()).quadLength()<2000.f*2000.f;
+    nearby+=near;virtualNearby+=near && npc->characterVirtualActive();
+    const auto goal=npc->navigationGoal();
+    movingNearby+=near && goal.active;movingVirtualNearby+=near && goal.active && npc->characterVirtualActive();
+    if(!bench.npcCharacterObserving || (npc->position()-player.position()).length()>3000.f)continue;
+    if(npc->characterVirtualActive())++bench.npcCharacterCvFrames;
+    auto& prior=bench.npcCharacterGoals[npc];
+    const bool same=goal.active && prior.active && prior.kind==goal.kind && prior.name==goal.name && prior.npc==goal.npc &&
+      (goal.npc!=nullptr || (goal.position-prior.target).length()<10.f);
+    if(prior.active && !same) {
+      const auto delta=npc->position()-prior.target;
+      if(delta.x*delta.x+delta.z*delta.z<=150.f*150.f && std::abs(delta.y)<=200.f) {
+        ++bench.npcCharacterArrivals;
+        event("npc_character_goal_arrive","\"window\":"+jsonStr(bench.npcCharacterWindow)+",\"npc_id\":"+std::to_string(id)+
+          ",\"goal\":"+jsonStr(prior.name)+",\"goal_cm\":"+ragdollVector(prior.target)+",\"root_cm\":"+ragdollVector(npc->position()));
+        }
+      }
+    prior.active=goal.active;
+    if(goal.active) {prior.target=goal.position;prior.npc=goal.npc;prior.kind=goal.kind;prior.name=goal.name;bench.npcCharacterWalkers.insert(npc);}
+    }
+  if(bench.npcCharacterObserving) {++bench.npcCharacterObservedFrames;bench.npcCharacterMaxNearby=std::max(bench.npcCharacterMaxNearby,nearby);}
+  if(!route.active && !bench.npcCharacterMeasuring)return;
+  if(bench.npcCharacterMeasuring && !bench.npcCharacterCrowd.empty()) {
+    unsigned close=0;float maximumDistance=0;
+    for(const auto& walker:bench.npcCharacterCrowd) {
+      const float distance=(walker.npc->position()-player.position()).length();
+      close+=distance<2000.f;maximumDistance=std::max(maximumDistance,distance);
+      }
+    bench.npcCharacterCrowdMinNearby=std::min(bench.npcCharacterCrowdMinNearby,close);
+    bench.npcCharacterCrowdMaxNearby=std::max(bench.npcCharacterCrowdMaxNearby,close);
+    bench.npcCharacterCrowdMaximumDistance=std::max(bench.npcCharacterCrowdMaximumDistance,maximumDistance);
+    }
+  const auto now=std::chrono::steady_clock::now();
+  const float wall=bench.npcCharacterHasWall?std::chrono::duration<float,std::milli>(now-bench.npcCharacterLastWall).count():0;
+  bench.npcCharacterLastWall=now;bench.npcCharacterHasWall=true;
+  bool normal=false;
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  normal=AppCadence::normalClock();
+#endif
+  const auto* npc=route.active?route.npc:nullptr;
+  bench.npcCharacterFrames.push_back({bench.npcCharacterMeasuring?"performance":route.name,
+    uint64_t(bench.npcCharacterFrames.size()),world.tickCount(),dt,npc?uint64_t(world.npcId(npc)):uint64_t(-1),
+    npc?npc->position():player.position(),npc?npc->characterVisualPosition():player.characterVisualPosition(),
+    bool(Gothic::settingsGetI("GAME","npc_character_virtual")),npc && npc->characterVirtualActive(),
+    npc && npc->navigationGoal().active,npc && npc->isInAir(),npc && npc->interactive(),bench.rec && bench.recVideo,normal,
+    world.physic()->physicsStats().stepMilliseconds,wall,nearby,virtualNearby,movingNearby,movingVirtualNearby});
+  if(!route.active || !npc)return;
+  const auto position=npc->position(),visual=npc->characterVisualPosition();
+  npcCharacterSupportTrace(world,*npc,position.y-route.lastPosition.y,visual.y-route.lastVisual.y);
+  route.maxVisualJump=std::max(route.maxVisualJump,std::abs(visual.y-route.lastVisual.y));
+  route.maxPhysicalJump=std::max(route.maxPhysicalJump,std::abs(position.y-route.lastPosition.y));
+  route.lastVisual=visual;route.lastPosition=position;
+  if(const auto floor=world.physic()->landRay(position+Vec3(0,20,0),600);floor.hasCol)
+    route.maxAboveFloor=std::max(route.maxAboveFloor,position.y-floor.v.y);
+  if(bench.characterItem) {
+    bench.characterPropTravel=std::max(bench.characterPropTravel,(bench.characterItem->position()-bench.characterPropInitial).length());
+    route.mugContact|=bench.characterItem->physicsTouchedByNpc();
+    route.mugMassKg=std::max(route.mugMassKg,bench.characterItem->physicsMass());
+    }
+  bool arrived=false;
+  if(route.seat) {
+    if(npc->interactive()!=nullptr && npc->interactive()!=route.seat) {arenaAbort("NPC native AI_UseMob selected a different BENCH");return;}
+    route.sat|=npc->interactive()==route.seat && route.seat->stateId()>=1;
+    route.standing=route.sat && npc->interactive()==nullptr && npc->isStanding();
+    arrived=route.standing;
+    } else {
+    const auto delta=position-route.goal;
+    arrived=delta.x*delta.x+delta.z*delta.z<=70.f*70.f && std::abs(delta.y)<60;
+    }
+  if(!route.reached && arrived) {
+    route.reached=true;route.arrived=world.tickCount();
+    event("npc_character_route_arrive","\"route\":"+jsonStr(route.name)+",\"elapsed_ms\":"+std::to_string(route.arrived-route.began)+
+      ",\"root_cm\":"+ragdollVector(position));
+    }
+  if(!route.reached && !route.seat && npc->navigationGoal().active) {
+    if((position-route.progressPosition).length()>=10.f) {route.progressPosition=position;route.progressTime=world.tickCount();route.stalled=false;}
+    if(world.tickCount()-route.progressTime>=2000 && !route.stalled) {
+      ++route.stalls;route.stalled=true;
+      event("npc_character_route_stall","\"route\":"+jsonStr(route.name)+",\"root_cm\":"+ragdollVector(position));
+      }
+    }
+  }
+
 void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   const auto a = split(line);
   if(a.empty())
@@ -4448,6 +4917,267 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.navigationOnly = true;
     if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
     }
+  else if(c=="npccharacter" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+    Gothic::settingsSetI("GAME","npc_character_virtual",a[1]=="on");
+    event("npc_character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
+    }
+  else if(c=="npccharacter" && a.size()>=3 && a[1]=="trace") {
+    if(a.size()==3 && a[2]=="off") {
+      const auto count=bench.npcCharacterTraceActors.size();npcCharacterStopMotionTrace(&w);
+      event("npc_character_trace_end","\"actors\":"+std::to_string(count));
+      return;
+      }
+    std::vector<Npc*> selected;
+    for(size_t i=2;i<a.size();++i) {
+      const bool numeric=!a[i].empty() && std::all_of(a[i].begin(),a[i].end(),[](char ch){return ch>='0' && ch<='9';});
+      auto* npc=findNpc(w,pl,numeric?"id:"+a[i]:a[i]);
+      if(!npc) {arenaAbort("NPC character trace has no existing actor: "+a[i]);return;}
+      if(std::find(selected.begin(),selected.end(),npc)==selected.end())selected.push_back(npc);
+      }
+    npcCharacterStopMotionTrace(&w);
+    std::string actors="[";
+    for(auto* npc:selected) {
+      npc->setCharacterVirtualDiagnosticsEnabled(true);
+      bench.npcCharacterTraceActors.push_back({npc,npc->position(),npc->characterVisualPosition(),false});
+      if(actors.size()>1)actors+=',';
+      actors+="{\"npc_id\":"+std::to_string(w.npcId(npc))+",\"npc\":"+jsonStr(symName(w,npc))+
+        ",\"root_cm\":"+ragdollVector(npc->position())+"}";
+      }
+    event("npc_character_trace_begin","\"actors\":"+actors+"]");
+    }
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="route") {
+    npcCharacterPrepare(w,pl,a[2]);
+    if(bench.npcCharacterRoute.npc)exec("watch watched",w,pl,ctrl);
+    }
+  else if(c=="npccharacter" && a.size()==2 && a[1]=="begin") {
+    auto& route=bench.npcCharacterRoute;
+    if(!route.npc) {arenaAbort("NPC character begin needs a prepared route");return;}
+    if(bench.characterItem) {
+      const auto position=bench.characterItem->position(),velocity=bench.characterItem->physicsVelocity();
+      auto along=route.goal-route.start;along.y=0;along=Vec3::normalize(along);
+      const auto delta=position-(route.start+route.goal)*.5f;
+      const float side=std::abs(delta.x*along.z-delta.z*along.x),forward=std::abs(Vec3::dotProduct(delta,along));
+      const bool ready=side<45.f && forward<60.f && velocity.length()<5.f && delta.y>=0 && delta.y<60.f;
+      event("npc_character_mug_prebegin","\"position_cm\":"+ragdollVector(position)+",\"velocity_cm_s\":"+ragdollVector(velocity)+
+        ",\"settling_displacement_cm\":"+ragdollNumber((position-bench.characterPropInitial).length())+
+        ",\"lane_side_cm\":"+ragdollNumber(side)+",\"lane_forward_cm\":"+ragdollNumber(forward)+",\"ready\":"+(ready?"true":"false"));
+      if(!ready) {arenaAbort("NPC tavern mug did not settle inside its route lane");return;}
+      bench.characterPropInitial=position;bench.characterPropTravel=0;
+      }
+    route.npc->clearAiQueue();route.npc->stopWalking();route.npc->setPosition(route.start);route.npc->updateTransform();
+    npcCharacterBegin(w);
+    route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));route.npc->aiPush(AiQueue::aiWait(60000));
+    }
+  else if(c=="npccharacter" && a.size()==2 && a[1]=="end") npcCharacterEnd(w);
+  else if(c=="npccharacter" && (a.size()==2 || a.size()==3) && a[1]=="seat") {
+    auto& route=bench.npcCharacterRoute;
+    if(route.npc) {w.removeNpc(*route.npc);route.npc=nullptr;}
+    if(bench.characterItem) {w.removeItem(*bench.characterItem);bench.characterItem=nullptr;}
+    route=Bench::NpcCharacterRoute();route.name="seat";
+    const WayPoint* requestedAnchor=a.size()==3?w.findPoint(a[2],false):nullptr;
+    if(a.size()==3 && !requestedAnchor) {arenaAbort("NPC character seat requested an unknown exact waypoint");return;}
+    struct Candidate {Interactive* mob=nullptr;const WayPoint* waypoint=nullptr;uint32_t id=0;unsigned region=0;float distance=0;};
+    std::vector<Candidate> candidates;
+    Npc* coragon=nullptr;
+    for(uint32_t id=0;id<w.npcCount();++id)
+      if(auto* npc=w.npcById(id);npc && symName(w,npc)=="VLK_420_CORAGON") {coragon=npc;break;}
+    for(uint32_t id=0;;++id) {
+      auto* mob=w.mobsiById(id);if(!mob)break;
+      if(mob->schemeName()!="BENCH")continue;
+      const auto* waypoint=w.findWayPoint(mob->position());
+      if(requestedAnchor && (!waypoint || waypoint->name!=requestedAnchor->name))continue;
+      unsigned region=4;
+      if(waypoint) {
+        const auto& name=waypoint->name;
+        const bool harbour=name.starts_with("NW_CITY_") &&
+          (name.find("HABOUR")!=std::string::npos || name.find("HARBOUR")!=std::string::npos || name.find("HARBOR")!=std::string::npos);
+        region=harbour?0:(name.starts_with("NW_BIGFARM") || name.starts_with("NW_FARM")?1:name.starts_with("NW_CITY_")?3:2);
+        }
+      candidates.push_back({mob,waypoint,id,region,waypoint?(waypoint->position()-mob->position()).length():1e10f});
+      }
+    std::sort(candidates.begin(),candidates.end(),[](const Candidate& a,const Candidate& b) {
+      if(a.region!=b.region)return a.region<b.region;
+      if(a.distance!=b.distance)return a.distance<b.distance;
+      return a.id<b.id;
+      });
+    // An explicit waypoint pins one authored BENCH by geometry. Occupancy or
+    // failed native preconditions must not silently select a different seat.
+    if(requestedAnchor && candidates.size()>1)candidates.resize(1);
+    event("npc_character_seat_candidates","\"count\":"+std::to_string(candidates.size())+
+      ",\"requested_waypoint\":"+jsonStr(requestedAnchor?requestedAnchor->name:std::string()));
+    Vec3 socket,camera,focus;std::string anchorName;bool selected=false;
+    uint32_t selectedId=uint32_t(-1);
+    for(const auto& candidate:candidates) {
+      auto* mob=candidate.mob;
+      const auto candidateEvent=[&](std::string_view reason) {
+        event("npc_character_seat_candidate","\"mob_id\":"+std::to_string(candidate.id)+",\"scheme\":"+jsonStr(mob->schemeName())+
+          ",\"vob\":"+jsonStr(mob->vobNameStr())+",\"mob_cm\":"+ragdollVector(mob->position())+
+          ",\"waypoint\":"+jsonStr(candidate.waypoint?candidate.waypoint->name:std::string())+
+          ",\"available\":"+(mob->isAvailable()?"true":"false")+",\"state\":"+std::to_string(mob->stateId())+
+          ",\"reason\":"+jsonStr(reason));
+        };
+      if(!mob->isAvailable() || mob->stateId()>0) {candidateEvent("occupied_or_active");continue;}
+      if(coragon && (mob->position()-coragon->position()).length()<1500.f) {candidateEvent("coragon_bar_excluded");continue;}
+      if(!candidate.waypoint || candidate.distance>1000.f) {candidateEvent("no_nearby_authored_waypoint");continue;}
+      const auto reference=w.physic()->landRay(candidate.waypoint->position()+Vec3(0,80,0),200.f);
+      if(!reference.hasCol) {candidateEvent("waypoint_has_no_supported_floor");continue;}
+      const float floorReference=reference.v.y;
+      if(std::abs(mob->position().y-floorReference)>200.f) {candidateEvent("floor_in_different_storey");continue;}
+      if(!route.npc)route.npc=npcCharacterActor(w,reference.v);
+      if(!route.npc)return;
+      route.npc->setPosition(reference.v);route.npc->updateTransform();
+      socket=mob->nearestPoint(*route.npc);
+      bool prepared=false;
+      // A native animation socket is not an approach point. Find ordinary
+      // supported floor for a real GoToPoint, within UseMob's 165 cm range.
+      for(float distance:{240.f,280.f,320.f})for(unsigned step=0;step<24 && !prepared;++step) {
+        const float yaw=float(step)*float(M_PI)/12.f;
+        auto at=socket+Vec3(std::cos(yaw)*distance,0,std::sin(yaw)*distance);
+        const auto floor=w.physic()->landRay(Vec3(at.x,floorReference+50.f,at.z),150.f);
+        if(!floor.hasCol || std::abs(floor.v.y-floorReference)>20.f)continue;
+        at.y=floor.v.y;route.npc->setPosition(at);route.npc->updateTransform();
+        if(route.npc->hasCollision() || w.availableMob(*route.npc,"BENCH")!=mob)continue;
+        auto toward=socket-at;toward.y=0;toward=Vec3::normalize(toward);
+        const auto approachEnd=socket-toward*120.f;
+        auto previous=at;bool lane=true;
+        for(unsigned sample=1;sample<=12;++sample) {
+          auto point=at+(approachEnd-at)*(float(sample)/12.f);
+          const auto support=w.physic()->landRay(Vec3(point.x,floorReference+50.f,point.z),150.f);
+          if(!support.hasCol || std::abs(support.v.y-at.y)>20.f) {lane=false;break;}
+          point.y=support.v.y;
+          if(w.physic()->ray(previous+Vec3(0,100,0),point+Vec3(0,100,0)).hasCol) {lane=false;break;}
+          previous=point;
+          }
+        if(!lane)continue;
+        route.npc->setPosition(previous);route.npc->updateTransform();
+        const auto usePosition=mob->nearestPoint(*route.npc);
+        if(route.npc->hasCollision() || (route.npc->centerPosition()-usePosition).length()>140.f ||
+           w.availableMob(*route.npc,"BENCH")!=mob)continue;
+        route.destination=WayPoint(previous,"FP_NPC_CHARACTER_SEAT_APPROACH");route.destination.groundPos=previous;
+        route.start=at;prepared=true;
+        }
+      if(!prepared) {candidateEvent("no_supported_collision_free_approach");continue;}
+      // Check one fixed camera against both the approach and the actual
+      // seated/standing socket area, rather than hiding room geometry.
+      focus=(route.start+socket)*.5f;focus.y=floorReference+130.f;
+      const Vec3 targets[]{route.start+Vec3(0,10,0),route.start+Vec3(0,130,0),
+                           route.destination.position()+Vec3(0,10,0),route.destination.position()+Vec3(0,130,0),
+                           Vec3(socket.x,floorReference+50.f,socket.z),socket+Vec3(0,60,0),socket+Vec3(0,150,0)};
+      bool visible=false;
+      for(float distance:{450.f,550.f,350.f})for(float height:{170.f,140.f,220.f})for(unsigned step=0;step<48 && !visible;++step) {
+        const float yaw=float(step)*float(M_PI)/24.f;
+        const Vec3 at(focus.x+std::cos(yaw)*distance,floorReference+height,focus.z+std::sin(yaw)*distance);
+        bool clear=true;
+        for(const auto& target:targets)if(hidden(w,at,target)) {clear=false;break;}
+        if(clear) {camera=at;visible=true;}
+        }
+      if(!visible) {candidateEvent("no_clear_fixed_view");continue;}
+      route.seat=mob;route.goal=socket;anchorName=candidate.waypoint->name;selectedId=candidate.id;
+      selected=true;candidateEvent("selected");break;
+      }
+    if(!selected) {arenaAbort("no free authored BENCH has a supported native approach and clear fixed view");return;}
+    characterFreezeNear(w,pl,route.start,route.goal);
+    route.npc->stopWalking();route.npc->setPosition(route.start);route.npc->setDirection(route.goal-route.start);route.npc->updateTransform();
+    route.npc->setExternalControl(true);route.npc->aiPush(AiQueue::aiWait(60000));
+    route.preparationSample=route.start;route.sawPreparationSample=true;route.supportSince=w.tickCount();
+    bench.subject=route.npc;npcCharacterPlaceHero(w,pl,route.start,route.goal);
+    bench.cam=C_Hold;bench.camAuto=false;lookFrom(camera,focus);
+    event("npc_character_seat_setup","\"scheme\":"+jsonStr(route.seat->schemeName())+",\"vob\":"+jsonStr(route.seat->vobNameStr())+
+      ",\"mob_id\":"+std::to_string(selectedId)+",\"anchor\":"+jsonStr(anchorName)+",\"mob_cm\":"+ragdollVector(route.seat->position())+
+      ",\"socket_cm\":"+ragdollVector(socket)+",\"start_cm\":"+ragdollVector(route.start)+
+      ",\"approach_cm\":"+ragdollVector(route.destination.position())+",\"camera_cm\":"+ragdollVector(camera)+
+      ",\"camera_target_cm\":"+ragdollVector(focus)+",\"camera_clear\":true");
+    exec("watch watched",w,pl,ctrl);
+    }
+  else if(c=="npccharacter" && a.size()==2 && a[1]=="sit") {
+    auto& route=bench.npcCharacterRoute;
+    if(!route.npc || !route.seat) {arenaAbort("NPC character sit needs its BENCH fixture");return;}
+    const bool stable=route.sawPreparationSample && w.tickCount()-route.supportSince>=300 &&
+      !route.npc->isInAir() && !route.npc->isFalling() && (route.npc->position()-route.start).length()<5.f;
+    event("npc_character_seat_prebegin","\"ready\":"+std::string(stable?"true":"false")+
+      ",\"root_cm\":"+ragdollVector(route.npc->position())+",\"supported_ms\":"+std::to_string(w.tickCount()-route.supportSince)+
+      ",\"selected_vob\":"+jsonStr(route.seat->vobNameStr()));
+    if(!stable) {arenaAbort("NPC character seat approach did not settle supported before sit");return;}
+    npcCharacterBegin(w);
+    route.npc->clearAiQueue();
+    // Scripted routines normally approach a grounded waypoint before UseMob.
+    // A direct far UseMob chases the elevated animation socket to a 20 cm
+    // position-goal, which can send the legacy actor onto adjacent furniture.
+    route.npc->aiPush(AiQueue::aiGoToPoint(route.destination));
+    route.npc->aiPush(AiQueue::aiUseMob(route.seat->schemeName(),1));route.npc->aiPush(AiQueue::aiWait(60000));
+    }
+  else if(c=="npccharacter" && a.size()==2 && a[1]=="stand") {
+    auto& route=bench.npcCharacterRoute;
+    if(!route.npc || !route.seat || !route.sat) {arenaAbort("NPC character did not reach real sitting state before stand");return;}
+    route.npc->clearAiQueue();route.npc->aiPush(AiQueue::aiUseMob(route.seat->schemeName(),-1));route.npc->aiPush(AiQueue::aiWait(60000));
+    event("npc_character_stand","\"root_cm\":"+ragdollVector(route.npc->position()));
+    }
+  else if(c=="npccharacter" && a.size()==2 && a[1]=="market") npcCharacterMarket(w,pl);
+  else if(c=="npccharacter" && a.size()>=3 && a[1]=="observe" && a[2]=="begin") {
+    bench.npcCharacterObserving=true;bench.npcCharacterWindow=a.size()>3?a[3]:"window";
+    bench.npcCharacterGoals.clear();bench.npcCharacterWalkers.clear();bench.npcCharacterArrivals=0;
+    bench.npcCharacterObservedFrames=0;bench.npcCharacterCvFrames=0;bench.npcCharacterMaxNearby=0;bench.npcCharacterObserveStart=w.tickCount();
+    event("npc_character_observe_begin","\"window\":"+jsonStr(bench.npcCharacterWindow)+",\"radius_cm\":3000,\"humans_only\":true,\"cv_enabled\":"+
+      (Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false"));
+    }
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="observe" && a[2]=="end") {
+    bench.npcCharacterObserving=false;
+    event("npc_character_observe_end","\"window\":"+jsonStr(bench.npcCharacterWindow)+",\"window_ms\":"+std::to_string(w.tickCount()-bench.npcCharacterObserveStart)+
+      ",\"radius_cm\":3000,\"humans_only\":true,\"unique_walkers\":"+std::to_string(bench.npcCharacterWalkers.size())+
+      ",\"reached_goals\":"+std::to_string(bench.npcCharacterArrivals)+",\"frames\":"+std::to_string(bench.npcCharacterObservedFrames)+
+      ",\"cv_actor_frames\":"+std::to_string(bench.npcCharacterCvFrames)+",\"max_nearby_humans\":"+std::to_string(bench.npcCharacterMaxNearby)+
+      ",\"cv_enabled\":"+(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false"));
+    }
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="snapshot") npcCharacterSnapshot(w,pl,a[2]);
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="distance") {
+    const auto* npc=bench.npcCharacterRoute.npc;
+    if(!npc) {arenaAbort("NPC character distance needs a fixture actor");return;}
+    pl.setPosition(npc->centerPosition()+Vec3(num(a,2,400),0,0)-(pl.centerPosition()-pl.position()));pl.updateTransform();
+    event("npc_character_distance","\"distance_cm\":"+ragdollNumber((npc->centerPosition()-pl.centerPosition()).length())+
+      ",\"npc_cm\":"+ragdollVector(npc->position()));
+    }
+  else if(c=="npccharacter" && a.size()==2 && (a[1]=="teleport" || a[1]=="setposition")) {
+    auto& route=bench.npcCharacterRoute;
+    if(!route.npc) {arenaAbort("NPC character relocation needs its fixture actor");return;}
+    route.npc->setInteraction(nullptr,true);route.npc->clearAiQueue();route.npc->stopWalking();
+    const auto target=a[1]=="teleport"?route.start:route.goal;
+    if(a[1]=="teleport") {
+      route.destination=WayPoint(target,"FP_NPC_CHARACTER_TELEPORT");route.destination.groundPos=target;
+      route.npc->aiPush(AiQueue::aiTeleport(route.destination));
+      } else {route.npc->setPosition(target);route.npc->updateTransform();}
+    route.npc->aiPush(AiQueue::aiWait(60000));
+    event("npc_character_relocate","\"kind\":"+jsonStr(a[1])+",\"target_cm\":"+ragdollVector(target));
+    }
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="save") {
+    if(a[2].empty() || a[2].find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos) {
+      arenaAbort("invalid NPC character save label");return;
+      }
+    try {
+      npcCharacterSnapshot(w,pl,"saved");std::vector<uint8_t> bytes;
+      {MemWriter writer(bytes);Serialize out(writer);Pixmap preview(1,1,TextureFormat::RGBA8);std::memset(preview.data(),0,4);
+      Gothic::inst().gameSession()->save(out,"npc character "+a[2],preview);}
+      std::ofstream file(outDir+"/session-"+a[2]+".sav",std::ios::binary);
+      file.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+      if(!file)throw std::runtime_error("cannot write complete NPC CharacterVirtual session save");
+      event("npc_character_save","\"archive\":"+jsonStr("session-"+a[2]+".sav")+",\"bytes\":"+std::to_string(bytes.size()));
+      } catch(const std::exception& error) {arenaAbort(error.what());}
+    }
+#ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="npccharacter" && a.size()==3 && a[1]=="measure") {
+    if(!AppCadence::normalClock() || !AppCadence::arm(a[2]=="on")) {arenaAbort("NPC character normal cadence arm failed");return;}
+    bench.npcCharacterMeasuring=true;bench.npcCharacterHasWall=false;
+    bench.npcCharacterCrowdMinNearby=20;bench.npcCharacterCrowdMaxNearby=0;bench.npcCharacterCrowdMaximumDistance=0;
+    AppCadence::counts(true,uint32_t(bench.npcCharacterCrowd.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("npc_character_measure_begin","\"cv_enabled\":"+std::string(Gothic::settingsGetI("GAME","npc_character_virtual")?"true":"false"));
+    }
+  else if(c=="npccharacter" && a.size()==2 && a[1]=="report") {
+    bench.npcCharacterMeasuring=false;
+    AppCadence::counts(false,uint32_t(bench.npcCharacterCrowd.size()),0,uint32_t(w.physic()->physicsStats().bodies),0,0);
+    event("npc_character_measure_end","\"frames\":"+std::to_string(bench.npcCharacterFrames.size())+
+      ",\"fixture_actors\":"+std::to_string(bench.npcCharacterCrowd.size())+",\"fixture_min_nearby\":"+std::to_string(bench.npcCharacterCrowdMinNearby)+
+      ",\"fixture_max_nearby\":"+std::to_string(bench.npcCharacterCrowdMaxNearby)+",\"fixture_max_distance_cm\":"+ragdollNumber(bench.npcCharacterCrowdMaximumDistance));
+    }
+#endif
   else if(c=="character" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","character_virtual",a[1]=="on");
     event("character_toggle","\"enabled\":"+std::string(a[1]=="on"?"true":"false"));
@@ -8289,6 +9019,14 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
         walker.npc->aiPush(AiQueue::aiGoToPoint(walker.ends[walker.next?1:0]));walker.queued=true;
         }
       }
+  for(auto& walker:bench.npcCharacterCrowd) {
+    if(walker.npc->isDown())continue;
+    const auto& target=walker.ends[walker.next?1:0];
+    if(!walker.queued || ((walker.npc->position()-target.pos).length()<90 && walker.npc->isAiQueueEmpty())) {
+      if(walker.queued)walker.next=!walker.next;
+      walker.npc->aiPush(AiQueue::aiGoToPoint(walker.ends[walker.next?1:0]));walker.queued=true;
+      }
+    }
   if(bench.questNpc!=nullptr && !bench.questCase.empty()) questFields(w,*bench.questNpc,false);
   if(bench.questStandingWait) {
     const auto* npc=bench.questNpc;
@@ -9179,6 +9917,7 @@ void TestBench::physicsNoiseHeard(const Npc& npc,const PhysicsNoise& noise,bool 
   }
 
 void TestBench::configure(std::string scenario, std::string output, int64_t seedOverride) {
+  npcCharacterStopMotionTrace(Gothic::inst().world());
   NavigationEyeBench::reset();
   NavBench::reset();
   stopRecording();
@@ -9254,6 +9993,10 @@ void TestBench::bodyEvent(const Npc& actor, const Npc* target, std::string_view 
   }
 
 void TestBench::bodyForget(const Npc* npc) {
+  if(bodyTraceAlive) {
+    bench.npcCharacterGoals.erase(npc);bench.npcCharacterWalkers.erase(npc);
+    std::erase_if(bench.npcCharacterTraceActors,[npc](const auto& actor){return actor.npc==npc;});
+    }
   if(bodyTraceAlive && bench.noiseTrace)bench.noiseNpcIds.erase(npc);
   if(bodyTracing() || (ragdollTrace && bodyTraceAlive && bench.started && !bench.done)) {
     bench.bodyIds.erase(npc);
@@ -9500,6 +10243,9 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           event("ragdoll_error","\"command\":"+jsonStr(line)+",\"reason\":"+jsonStr(error.what()));
           }
         }
+      else if(args.size()==2 && args[0]=="npccharacter" && args[1]=="initial") {
+        ++bench.pc;npcCharacterSnapshot(*world,*player,"initial");
+        }
       else if(args.size()==2 && args[0]=="character" && args[1]=="initial") {
         ++bench.pc;characterSnapshot(*world,*player,"initial");
         }
@@ -9562,6 +10308,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
       }
     }
   characterFields(*world,*player,dt,ctrl);
+  npcCharacterFields(*world,*player,dt);
+  npcCharacterMotionTrace(*world,dt);
   bench.time += dt;
   if(aiBusy && aiBusy())
     bench.busyAt = bench.time;

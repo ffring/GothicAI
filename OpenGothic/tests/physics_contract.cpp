@@ -1442,7 +1442,120 @@ namespace {
     requireNear(body->position().y,700.f-6.f*acceleration,.005f,"next sixteen millisecond frame must advance the retained step");
     }
 
+  void testCharacterVirtualSkippedMove() {
+    Resources resources;
+    ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,600}),PackedMesh::PK_Visual),"VIRTUAL_SKIP_WALL.MRM");
+    zenkit::ModelHierarchy hierarchy;
+    hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+    Skeleton shape(hierarchy,nullptr,"VIRTUAL_SKIP_CONTRACT");
+    for(bool obstructed:{false,true}) {
+      DynamicWorld world(nullptr,movableFloor());
+      auto structure=obstructed ? world.addStaticObj(wall.attach[0].shape.get(),at(50,200,0),"VIRTUAL_SKIP_WALL.MRM") :
+                                 DynamicWorld::Item();
+      auto walker=world.addGhostObj(&shape);
+      const Tempest::Vec3 initial(14,0,0);
+      for(const Tempest::Vec3 request:{Tempest::Vec3(.11f,0,0),Tempest::Vec3(1.9f,0,1.9f)}) {
+        walker.setPosition(initial);
+        DynamicWorld::CollisionTest collision;
+        require(walker.tryMove(initial+request,collision)==DynamicWorld::MC_Skip,
+                "legacy skip must remain component-wise even when the diagonal length exceeds two centimetres");
+        const auto moved=walker.moveVirtual(request,17,50,.785398163f,80);
+        require(!moved.blocked,"a legacy-skipped animation sway must not report virtual movement failure, with or without a wall");
+        }
+      walker.setPosition(initial);
+      DynamicWorld::CollisionTest collision;
+      require(walker.tryMove(initial+Tempest::Vec3(2,0,0),collision)!=DynamicWorld::MC_Skip,
+              "a component exactly two centimetres must retain the legacy non-skip boundary");
+      walker.setPosition(initial);
+      const auto step=walker.moveVirtual({5,0,0},17,50,.785398163f,80);
+      require(step.blocked==obstructed,"a real walking step must report a blocking wall while remaining free on an unobstructed floor");
+      if(obstructed)
+        require(!structure.isEmpty() && step.collision.landCol,"a blocked virtual walking step must retain its world collision notification");
+      else
+        require(step.position.x>initial.x+4.f,"suppressing animation-sway failures must preserve native walking displacement");
+      }
+    }
+
+  void testCharacterVirtualInteractiveStep() {
+    constexpr float slope=.785398163f;
+    for(bool movable:{false,true}) for(bool interactive:{false,true}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      // A chair seat and an architectural tread can have the same geometry.
+      // The interactive classification determines whether walking may step up.
+      auto seat=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.5f,.2f,1)),at(100,20,0),.7f,
+                                       DynamicWorld::C_Object,movable);
+      if(interactive)
+        seat->setPayload(nullptr,DynamicWorld::P_Interactive);
+      auto walker=world.createVirtualCharacter(25,180,{0,0,0});
+      float highest=0.f;
+      CollisionWorld::CharacterMoveResult state;
+      for(int i=0;i<60;++i) {
+        state=walker->move({5,0,0},17,50,slope,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        }
+      std::printf("CharacterVirtual 40 cm edge: movable %d, interactive %d, max feet %.4f cm, final x %.3f cm\n",
+                  movable,interactive,double(highest),double(state.position.x));
+      if(interactive) {
+        require(highest<1.f && state.position.x<30.f,
+                "automatic world stairs must not step onto or pass through interactive furniture");
+        walker->setPosition({100,40,0});
+        state=walker->move({},17,50,slope,80,nullptr);
+        require(state.grounded,"interactive furniture must retain support for feet explicitly placed on its top");
+        requireNear(state.position.y,40.f,1.f,"disabling automatic furniture stepping must not drop existing top support");
+        } else {
+        require(highest>39.f && state.position.x>200.f,
+                "ordinary architectural C_Object treads must retain automatic world stair walking");
+        }
+      }
+    }
+
+  void testCharacterVirtualMovingUtensil() {
+    float maximumJump=0.f;
+    for(bool kicked:{false,true}) {
+      CollisionWorld world;
+      auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
+                                        DynamicWorld::C_Landscape);
+      auto matrix=at(150,25,0);
+      if(!kicked)
+        matrix.rotateOZ(45.f);
+      // Real dropped items have a centred proxy padded to 15 cm per half-axis.
+      // Its mass is still calculated from the smaller visual, like ITFO_BEER.
+      auto mug=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.15f,.15f,.15f)),matrix,.5f,5.80991459f,
+                                     DynamicWorld::C_Item,false);
+      for(int i=0;i<90;++i)
+        world.tick(17);
+      auto walker=world.createVirtualCharacter(25,180,{0,0,0});
+      float highest=0.f,jump=0.f,last=0.f;
+      CollisionWorld::CharacterMoveResult state;
+      for(int frame=0;frame<65;++frame) {
+        if(kicked && frame==8) {
+          const auto point=mug->position()+Tempest::Vec3(0,10,10);
+          require(mug->addImpulseAtPoint({-5,0,0},point),
+                  "moving utensil fixture must apply its off-centre native impulse");
+          }
+        state=walker->move({11,0,0},33,50,.785398163f,80,nullptr);
+        highest=std::max(highest,state.position.y);
+        jump=std::max(jump,state.position.y-last);
+        last=state.position.y;
+        world.tick(33);
+        }
+      maximumJump=std::max(maximumJump,std::max(highest,jump));
+      std::printf("CharacterVirtual moving 5.81 kg utensil: kicked %d, max feet %.4f cm, max jump %.4f cm, final x %.3f cm\n",
+                  kicked,double(highest),double(jump),double(state.position.x));
+      require(mug->touchedByNpc() && mug->position().x>200.f,
+              "a rotating loose utensil must retain its native character contact and walking push");
+      require(state.position.x>600.f,"a moving loose utensil must not prevent ordinary walking progress");
+      }
+    require(maximumJump<1.f,
+            "a moving or rotating light item's side velocity must not lift feet through the floor contact solver");
+    }
+
   void testCharacterVirtual() {
+    testCharacterVirtualSkippedMove();
+    testCharacterVirtualInteractiveStep();
+    testCharacterVirtualMovingUtensil();
     constexpr float slope = .785398163f;
     const auto printState=[](const char* stage, int frames, const CollisionWorld::CharacterMoveResult& state) {
       std::fprintf(stderr,"CharacterVirtual %s: frames=%d feet=(%.3f,%.3f,%.3f) velocity=(%.3f,%.3f,%.3f) grounded=%d steep=%d normal=(%.3f,%.3f,%.3f)\n",
@@ -1655,6 +1768,79 @@ namespace {
       requireNear(after.position.x,-200,.001f,"controller recreation must retain the saved or teleported feet x");
       requireNear(after.position.y,50,.001f,"controller recreation must retain the saved or teleported feet y");
       requireNear(after.position.z,30,.001f,"controller recreation must retain the saved or teleported feet z");
+    }
+    {
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_PAIR_CONTRACT");
+      DynamicWorld world(nullptr,movableFloor());
+      auto left=world.addGhostObj(&shape);
+      auto right=world.addGhostObj(&shape);
+      left.setPosition({0,0,0});
+      right.setPosition({200,0,0});
+      world.tick(0);
+      world.tick(0);
+      for(int i=0;i<40;++i) {
+        left.moveVirtual({5,0,0},17,50,slope,80);
+        right.moveVirtual({-5,0,0},17,50,slope,80);
+        require(right.position().x-left.position().x>=49.9f,
+                "two virtual NPCs moving towards each other must never cross or interpenetrate");
+        }
+      require(left.position().x>60.f && right.position().x<140.f,
+              "both virtual NPCs must advance before their mutual blocking contact");
+      requireNear(left.position().y,0.f,1.f,"an NPC contact must not lift virtual feet onto another NPC");
+      requireNear(right.position().y,0.f,1.f,"an opposing NPC contact must retain floor support");
+      const auto stoppedRight=right.position();
+      const auto blocked=left.moveVirtual({5,0,0},17,50,slope,80);
+      require(blocked.blocked && blocked.collision.npcCol>0.f,
+              "unsuccessful virtual NPC advancement must expose its blocking character contact to MoveAlgo");
+      requireNear(right.position().x,stoppedRight.x,0.f,"a virtual NPC contact must never push its neighbour");
+      const auto sway=left.moveVirtual({1.9f,0,0},17,50,slope,80);
+      require(!sway.blocked,"a legacy-skipped sway into another NPC must not notify AI of movement failure");
+      requireNear(right.position().x,stoppedRight.x,0.f,"a skipped sway must preserve the neighbouring NPC obstacle");
+      right.setEnable(false);
+      for(int i=0;i<20;++i)
+        left.moveVirtual({5,0,0},17,50,slope,80);
+      require(left.position().x>150.f,"a seated character with disabled collision must not leave a virtual obstacle");
+    }
+    {
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_OVERLAP_CONTRACT");
+      DynamicWorld world(nullptr,movableFloor());
+      auto walker=world.addGhostObj(&shape);
+      auto overlapping=world.addGhostObj(&shape);
+      auto clearNeighbour=world.addGhostObj(&shape);
+      walker.setPosition({0,0,0});
+      overlapping.setPosition({40,0,0});
+      clearNeighbour.setPosition({-55,0,0});
+      for(int i=0;i<4;++i)
+        walker.moveVirtual({-5,0,0},17,50,slope,80);
+      require(walker.position().x>=-5.01f && walker.position().x<-4.f,
+              "separating a teleported overlap must not transfer penetration to a previously clear neighbour");
+      requireNear(overlapping.position().x,40.f,0.f,"overlap recovery must not displace the original neighbour");
+      requireNear(clearNeighbour.position().x,-55.f,0.f,"overlap recovery must not displace the clear neighbour");
+    }
+    {
+      Resources resources;
+      ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,600}),PackedMesh::PK_Visual),"VIRTUAL_NPC_WALL.MRM");
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_WALL_CONTRACT");
+      DynamicWorld world(nullptr,movableFloor());
+      auto structure=world.addStaticObj(wall.attach[0].shape.get(),at(50,200,0),"VIRTUAL_NPC_WALL.MRM");
+      auto walker=world.addGhostObj(&shape);
+      auto obstacle=world.addGhostObj(&shape);
+      walker.setPosition({0,0,0});
+      obstacle.setPosition({15,0,150});
+      // The diagonal desired motion misses the NPC, while wall sliding would
+      // encounter it. The post-solve clip must retain a world-safe pose.
+      const auto stopped=walker.moveVirtual({200,0,200},100,50,slope,80);
+      require(!structure.isEmpty(),"virtual NPC wall fixture must install its static collision mesh");
+      require(stopped.position.x<=15.1f && stopped.position.z<100.f,
+              "a wall-resolved virtual move must not cross a character or interpolate feet into the wall");
+      requireNear(obstacle.position().x,15.f,0.f,"wall sliding must not push a neighbouring NPC through the wall");
+      requireNear(obstacle.position().z,150.f,0.f,"wall sliding must leave the neighbouring NPC at its own feet");
     }
     }
 

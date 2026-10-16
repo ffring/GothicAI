@@ -101,6 +101,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "movable_vobs",        1);
   defaults->set("GAME", "physics_noise",       1);
   defaults->set("GAME", "character_virtual",   1);
+  defaults->set("GAME", "npc_character_virtual",0);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -911,7 +912,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","spell_physics")!=0,
     settingsGetI("GAME","movable_vobs")!=0,
     settingsGetI("GAME","physics_noise")!=0,
-    settingsGetI("GAME","character_virtual")!=0
+    settingsGetI("GAME","character_virtual")!=0,
+    settingsGetI("GAME","npc_character_virtual")!=0
     };
   }
 

@@ -2,6 +2,7 @@
 
 #include <zenkit/Mesh.hh>
 #include "physics/physicsnoise.h"
+#include "physics/charactervirtualdiagnostics.h"
 #include "physics/navmesh.h"
 
 #include <Tempest/Matrix4x4>
@@ -132,13 +133,17 @@ class DynamicWorld final {
 
         struct VirtualMoveResult {
           Tempest::Vec3 position = {}, velocity = {}, groundNormal = {}, groundVelocity = {};
+          CollisionTest collision;
           bool grounded = false;
           bool steep = false;
+          bool blocked = false;
           };
         // Walking only: displacement in cm, dt in ms, slope in radians, mass in kg.
         VirtualMoveResult moveVirtual(const Tempest::Vec3& displacement, uint64_t dt,
                                       float stepHeight, float maxSlope, float mass, Npc* culprit = nullptr);
         void resetVirtual();
+        void setVirtualDiagnosticsEnabled(bool enabled);
+        bool virtualDiagnostics(CharacterVirtualDiagnostics& out) const;
 
         bool  hasCollision() const;
 

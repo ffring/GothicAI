@@ -512,6 +512,8 @@ class Npc final {
     float     physicsMass() const;
     bool      characterVirtualActive() const { return mvAlgo.characterVirtualActive(); }
     Tempest::Vec3 characterVirtualGroundVelocity() const { return mvAlgo.characterVirtualGroundVelocity(); }
+    void      setCharacterVirtualDiagnosticsEnabled(bool enabled) { physic.setVirtualDiagnosticsEnabled(enabled); }
+    bool      characterVirtualDiagnostics(CharacterVirtualDiagnostics& out) const { return physic.virtualDiagnostics(out); }
     Tempest::Vec3 characterVisualPosition() const;
     bool      addSpellImpulse(const Tempest::Vec3& impulseNs, bool reaction=true, Npc* culprit=nullptr);
     Tempest::Vec3 spellVelocity() const { return mvAlgo.spellVelocity(); }

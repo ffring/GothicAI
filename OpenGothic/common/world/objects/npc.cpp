@@ -546,6 +546,8 @@ bool Npc::setPosition(float ix, float iy, float iz) {
   y = iy;
   z = iz;
   resetCharacterVisualHeight();
+  if(!isPlayer() && isHuman())
+    mvAlgo.resetCharacterVirtual();
   if(liveTeleport) {
     // Recreate at the destination instead of sweeping a kinematic body through
     // every item between a scripted teleport's endpoints.
@@ -6056,6 +6058,10 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 
   if(id->attach(*this)) {
     currentInteract = id;
+    if(!isPlayer() && isHuman()) {
+      mvAlgo.resetCharacterVirtual(true);
+      resetCharacterVisualHeight();
+      }
     // Remove the contact rig in the sequential physics handoff, including
     // when an immediate detach leaves only its transition animation behind.
     livingWasInteracting = true;
@@ -6073,6 +6079,10 @@ bool Npc::setInteraction(Interactive *id, bool quick) {
 void Npc::quitInteraction() {
   if(currentInteract==nullptr)
     return;
+  if(!isPlayer() && isHuman()) {
+    mvAlgo.resetCharacterVirtual(true);
+    resetCharacterVisualHeight();
+    }
   if(invTorch)
     processDefInvTorch();
   setDirectionY(0);
@@ -6769,7 +6779,7 @@ void Npc::resetCharacterVisualHeight() {
   }
 
 void Npc::updateCharacterVisualHeight() {
-  if(!isPlayer()) {
+  if(!isPlayer() && (!isHuman() || (!Gothic::physicsFlags().npcCharacterVirtual && characterVisualSteps.empty()))) {
     if(characterVisualHasSample)
       resetCharacterVisualHeight();
     return;
@@ -6783,11 +6793,15 @@ void Npc::updateCharacterVisualHeight() {
   const bool groundState = !isDown() && !spellFrozen() && interactive()==nullptr &&
                            mvAlgo.state()==MoveAlgo::Run &&
                            !(bodyStateMasked()==BS_JUMP && isFlyAnim());
-  const bool enabled = Gothic::physicsFlags().characterVirtual &&
+  const bool enabled = (isPlayer() ? Gothic::physicsFlags().characterVirtual :
+                                    Gothic::physicsFlags().npcCharacterVirtual) &&
                         mvAlgo.characterVirtualActive() && groundState;
+  // A radius/flag handoff keeps the remaining 100 ms of a stair blend. Removing
+  // that visual offset immediately would pop the model even though its feet agree.
+  const bool finishNpcBlend = !isPlayer() && groundState && !characterVisualSteps.empty();
   const float previousOffset = characterVisualYOffset;
 
-  if(!enabled || (characterVisualHasSample && now<characterVisualSampleTick)) {
+  if((!enabled && !finishNpcBlend) || (characterVisualHasSample && now<characterVisualSampleTick)) {
     characterVisualSteps.clear();
     characterVisualYOffset = 0;
     }
@@ -6796,27 +6810,25 @@ void Npc::updateCharacterVisualHeight() {
       return now-step.tick<blendMilliseconds;
       });
     characterVisualSteps.erase(characterVisualSteps.begin(),alive);
-    if(characterVisualHasSample && characterVisualGroundSample) {
+    if(enabled && characterVisualHasSample && characterVisualGroundSample) {
       const auto delta = at-characterVisualSamplePosition;
       const auto support = mvAlgo.characterVirtualGroundVelocity()*(float(now-characterVisualSampleTick)*0.001f);
       const auto relative = delta-support;
-      float predictedMin = 0, predictedMax = 0;
-      bool hasPrediction = false;
+      float predictedMin = support.y, predictedMax = support.y;
       // Relative travel along the support plane explains an ordinary slope.
       // Either endpoint normal may explain a transition between two surfaces.
+      // Include support-only travel: a blended normal must not turn continued
+      // ascent relative to that support into a fictitious downward step.
       for(const auto& n:{characterVisualSampleNormal,normal}) {
         if(n.y<=1.e-3f)
           continue;
         const float predicted = support.y-(n.x*relative.x+n.z*relative.z)/n.y;
         if(!std::isfinite(predicted))
           continue;
-        if(!hasPrediction)
-          predictedMin = predictedMax = predicted;
         predictedMin = std::min(predictedMin,predicted);
         predictedMax = std::max(predictedMax,predicted);
-        hasPrediction = true;
         }
-      const float explained = hasPrediction ? std::clamp(delta.y,predictedMin,predictedMax) : support.y;
+      const float explained = std::clamp(delta.y,predictedMin,predictedMax);
       const float residual = delta.y-explained;
       const float correction = std::copysign(std::max(0.f,std::abs(residual)-heightNoise),residual);
       if(correction!=0)
@@ -6826,8 +6838,14 @@ void Npc::updateCharacterVisualHeight() {
     for(const auto& step:characterVisualSteps)
       characterVisualYOffset += step.offset*(1.f-float(now-step.tick)/float(blendMilliseconds));
     if(std::abs(characterVisualYOffset)>maxVisualLag) {
-      characterVisualSteps.clear();
-      characterVisualYOffset = 0;
+      const float limited = std::clamp(characterVisualYOffset,-maxVisualLag,maxVisualLag);
+      const float scale = limited/characterVisualYOffset;
+      // Keep each correction's remaining lifetime while discarding excess lag.
+      // Clamping only the shown offset would retain a hidden backlog; clearing
+      // the history would instead snap the model to its physical feet.
+      for(auto& step:characterVisualSteps)
+        step.offset *= scale;
+      characterVisualYOffset = limited;
       }
     }
 

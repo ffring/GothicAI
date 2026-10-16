@@ -89,10 +89,9 @@ MoveAlgo::MoveAlgo(Npc& unit)
   }
 
 void MoveAlgo::load(Serialize &fin) {
-  npc.physic.resetVirtual();
-  virtualMovementActive = false;
-  virtualGroundVelocity = {};
-  virtualJumpVelocity = {};
+  resetCharacterVirtual();
+  npcVirtualInRange = false;
+  npcVirtualMobTransition = false;
   fin.read(reinterpret_cast<uint32_t&>(flags));
   fin.read(mulSpeed,fallSpeed,fallCount,climbStart,climbPos0,climbHeight);
   fin.read(reinterpret_cast<uint8_t&>(jmp));
@@ -231,12 +230,17 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
     }
 
   if(npc.interactive()!=nullptr) {
-    npc.physic.resetVirtual();
-    virtualMovementActive = false;
-    virtualGroundVelocity = {};
-    virtualJumpVelocity = {};
+    resetCharacterVirtual(true);
     tickMobsi(dt);
     return;
+    }
+
+  if(npcVirtualMobTransition) {
+    const auto& pose = npc.visual.pose();
+    // Detach can precede ToStand's last frame. Its root remains animation-owned,
+    // just like the seated/bed/kettle clip, until normal standing or movement resumes.
+    if(pose.isStanding() || (!pose.hasState(BS_MOBINTERACT) && !pose.hasState(BS_CLIMB)))
+      npcVirtualMobTransition = false;
     }
 
   if(!implTick(dt,moveFlg))
@@ -255,7 +259,7 @@ void MoveAlgo::tick(uint64_t dt, MvFlags moveFlg) {
 bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   const auto bs = npc.bodyStateMasked();
   const bool liftOff = bs==BS_JUMP && npc.isFlyAnim();
-  const bool virtualWalking = npc.isPlayer() && Gothic::physicsFlags().characterVirtual &&
+  const bool virtualWalking = useCharacterVirtual() && !npcVirtualMobTransition &&
                               !npc.isDown() && npc.physic.isEnabled() && !canFlyOverWater() &&
                               (flags==Run || flags==Slide || flags==InWater) && !liftOff;
   if(!virtualWalking) {
@@ -629,6 +633,21 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   return true;
   }
 
+bool MoveAlgo::useCharacterVirtual() {
+  if(npc.isPlayer())
+    return Gothic::physicsFlags().characterVirtual;
+  const auto* hero = npc.world().player();
+  if(!Gothic::physicsFlags().npcCharacterVirtual || !npc.isHuman() || npc.isDown() || hero==nullptr) {
+    npcVirtualInRange = false;
+    return false;
+    }
+  constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
+  const float distance = npc.qDistTo(*hero);
+  npcVirtualInRange = npcVirtualInRange ? distance<=leaveRadius*leaveRadius
+                                       : distance<enterRadius*enterRadius;
+  return npcVirtualInRange;
+  }
+
 bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement) {
   const auto origin = npc.position();
   auto& world = npc.world();
@@ -647,11 +666,36 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   virtualMovementActive = true;
   virtualGroundVelocity = moved.groundVelocity;
 
+  auto collision = moved.collision;
+  if(!npc.isPlayer() && moved.blocked) {
+    DynamicWorld::CollisionTest legacy;
+    // Enrich only the AI notification, after Jolt has accepted the final origin.
+    // In particular, doors need their Interactive pointer for PERC_MOVEMOB.
+    // testMove restores the ellipsoid and leaves the native controller untouched.
+    npc.physic.testMove(origin+displacement,origin,legacy);
+    if(legacy.vob!=nullptr || legacy.npc!=nullptr || legacy.landCol) {
+      if(legacy.normal!=Tempest::Vec3())
+        collision.normal = legacy.normal;
+      collision.vob = legacy.vob;
+      if(collision.npc==nullptr) {
+        collision.npc = legacy.npc;
+        collision.npcCol = legacy.npcCol;
+        }
+      collision.landCol |= legacy.landCol;
+      collision.preFall |= legacy.preFall;
+      }
+    }
+
   if(movementTrace!=nullptr) {
+    const bool failed = !npc.isPlayer() && moved.blocked;
     DynamicWorld::CollisionTest contact;
-    contact.normal = moved.groundNormal;
-    contact.landCol = moved.grounded || moved.steep;
-    movementTrace->collision(displacement,true,contact);
+    if(failed) {
+      contact = collision;
+      } else {
+      contact.normal = moved.groundNormal;
+      contact.landCol = moved.grounded || moved.steep;
+      }
+    movementTrace->collision(displacement,!failed,contact);
     }
 
   // Keep the native material/room cache and water state machine. Controller support is
@@ -695,6 +739,12 @@ bool MoveAlgo::tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displaceme
   if(moved.grounded) {
     setState(pos.y+knee<=water && ground<water ? InWater : Run);
     clearSpeed();
+    if(!npc.isPlayer() && moved.blocked) {
+      // Jolt owns collision resolution; retain the existing AI response when a
+      // wall or another actor prevents progress (bounce, climb, or mob perception).
+      onMoveFailed(displacement,collision,dt);
+      return false;
+      }
     return true;
     }
 
@@ -715,6 +765,14 @@ void MoveAlgo::clearSpeed() {
   fallSpeed.z = 0;
   fallCount   = 0;
   virtualJumpVelocity = {};
+  }
+
+void MoveAlgo::resetCharacterVirtual(bool mobTransition) {
+  npc.physic.resetVirtual();
+  virtualMovementActive = false;
+  virtualGroundVelocity = {};
+  virtualJumpVelocity = {};
+  npcVirtualMobTransition |= mobTransition && !npc.isPlayer() && npc.isHuman();
   }
 
 void MoveAlgo::takeRagdollControl() {
