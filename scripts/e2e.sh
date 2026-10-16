@@ -288,7 +288,7 @@ if [ "${GOTHIC_INTRO:-0}" != "1" ]; then
   START_ARGS+=(-nointro)
 fi
 # Recheck after server startup: another session may have taken the game while it was starting.
-until ! pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
+until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT")
 if [ "$SCENARIO" = "trace" ]; then
   GAME_ENV+=("OPENGOTHIC_BENCH=$ROOT/scripts/bench/trace-e2e.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
