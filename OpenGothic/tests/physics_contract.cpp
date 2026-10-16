@@ -1311,9 +1311,34 @@ namespace {
       return prop->position().x-80.f;
       };
     const float light=push(1,DynamicWorld::C_Item);
-    const float heavy=push(400,DynamicWorld::C_MovableVob);
+    const float heavy=push(122,DynamicWorld::C_MovableVob);
     require(light>20 && heavy<light*.5f,"the same character strength must push a light item faster than heavy furniture");
-    std::printf("CharacterVirtual push: 1 kg %.2f cm, 400 kg %.2f cm\n",double(light),double(heavy));
+    std::printf("CharacterVirtual push: 1 kg %.2f cm, 122 kg %.2f cm\n",double(light),double(heavy));
+    {
+      CollisionWorld world;
+      // No floor or simulation tick: measured linear momentum comes only from
+      // character contact impulses, without gravity, support weight or friction.
+      // Two narrow bodies block the same capsule. Each can demand a full force
+      // allowance; repeated contacts / stair probes must share the move budget.
+      constexpr float mass=20.f,seconds=.1f;
+      auto a=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.1f,.9f,.1f)),at(50,190,-20),.4f,mass,
+                                  DynamicWorld::C_MovableVob,true);
+      auto b=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3(.1f,.9f,.1f)),at(50,190,20),.4f,mass,
+                                  DynamicWorld::C_MovableVob,true);
+      auto hero=world.createVirtualCharacter(25,180,{0,100,0});
+      hero->move({100,0,0},100,50,slope,80,nullptr);
+      const float impulseA=a->velocity().length()*.01f*mass;
+      const float impulseB=b->velocity().length()*.01f*mass;
+      constexpr float totalLimit=450.f*seconds;
+      constexpr float bodyLimit=450.f*80.f/(80.f+mass)*seconds;
+      std::printf("CharacterVirtual shared push: %.3f + %.3f Ns, total limit %.3f Ns, per-body %.3f Ns\n",
+                  double(impulseA),double(impulseB),double(totalLimit),double(bodyLimit));
+      require(impulseA>1.f && impulseB>1.f,"the shared push fixture must exercise two native contact bodies");
+      require(impulseA<=bodyLimit+.01f && impulseB<=bodyLimit+.01f,
+              "all contacts of one body must share its mass-dependent walking effort");
+      require(impulseA+impulseB<=totalLimit+.01f,
+              "all bodies and repeated contacts must share one 450 newton walking budget per move");
+    }
     {
       CollisionWorld world;
       auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,

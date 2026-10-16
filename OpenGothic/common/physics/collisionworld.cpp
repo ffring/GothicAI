@@ -34,6 +34,7 @@
 #include <cmath>
 #include <mutex>
 #include <limits>
+#include <iterator>
 #include <stdexcept>
 #include <thread>
 #include <tuple>
@@ -464,14 +465,15 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   explicit Impl(CollisionWorld& world):world(world) {}
 
   void onContact(const JPH::CharacterContact& contact, JPH::CharacterContactSettings& settings) {
-    JPH::BodyLockRead lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
-    if(!lock.Succeeded()) {
-      settings.mCanReceiveImpulses = false;
+    // Jolt's native limit applies afresh to each contact / stair probe. Dose
+    // the impulse here instead, sharing one force budget across the whole move.
+    settings.mCanReceiveImpulses = false;
+    JPH::BodyLockWrite lock(world.impl->system.GetBodyLockInterface(),contact.mBodyB);
+    if(!lock.SucceededAndIsInBroadPhase())
       return;
-      }
-    const auto layer = lock.GetBody().GetObjectLayer();
-    settings.mCanReceiveImpulses = layer==DynamicWorld::C_Item || layer==DynamicWorld::C_MovableVob;
-    if(!settings.mCanReceiveImpulses || contact.mMotionTypeB!=JPH::EMotionType::Dynamic)
+    const auto& nativeBody = lock.GetBody();
+    const auto layer = nativeBody.GetObjectLayer();
+    if((layer!=DynamicWorld::C_Item && layer!=DynamicWorld::C_MovableVob) || !nativeBody.IsDynamic() || contact.mIsSensorB)
       return;
     auto* body = reinterpret_cast<CollisionBody*>(contact.mUserData);
     if(body==nullptr)
@@ -479,10 +481,52 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
     // Attribute an approaching contact, including the character's weight on a
     // simulated support, rather than a separating or predictive-only contact.
     const auto relative = character->GetLinearVelocity()-contact.mLinearVelocity;
-    if(relative.Dot(contact.mContactNormal)>=-0.01f)
+    const float projectedVelocity = relative.Dot(contact.mContactNormal);
+    if(projectedVelocity<-0.01f) {
+      body->npcContact.store(true,std::memory_order_relaxed);
+      body->setTraceCulprit(culprit);
+      }
+    if(!contact.mHadCollision || pushSeconds<=0.f || pushRemaining<=0.f)
       return;
-    body->npcContact.store(true,std::memory_order_relaxed);
-    body->setTraceCulprit(culprit);
+
+    // Use the native effective contact mass, including the torque caused by an
+    // off-centre push. Penetration recovery has the same damping as Jolt.
+    const float deltaVelocity = -projectedVelocity*0.9f-std::min(contact.mDistance,0.f)*0.4f/pushSeconds;
+    if(deltaVelocity<=0.f)
+      return;
+    const float inverseMass = nativeBody.GetMotionProperties()->GetInverseMass();
+    if(inverseMass<=0.f)
+      return;
+    const auto jacobian = JPH::Vec3(contact.mPosition-nativeBody.GetCenterOfMassPosition()).Cross(contact.mContactNormal);
+    const float inverseEffectiveMass = nativeBody.GetInverseInertia().Multiply3x3(jacobian).Dot(jacobian)+inverseMass;
+    auto impulse = -(deltaVelocity/inverseEffectiveMass)*contact.mContactNormal;
+    // Downward weight is applied independently by CharacterVirtual::Update;
+    // do not spend the walking push budget on that supporting contact.
+    const float down = impulse.Dot(character->GetUp());
+    if(down<0.f)
+      impulse -= down*character->GetUp();
+    const float magnitude = impulse.Length();
+    if(magnitude<=0.f)
+      return;
+
+    auto used = std::find_if(pushBodies.begin(),pushBodies.end(),[&](const auto& entry) {return entry.first==contact.mBodyB;});
+    if(used==pushBodies.end()) {
+      pushBodies.emplace_back(contact.mBodyB,0.f);
+      used = std::prev(pushBodies.end());
+      }
+    // Ordinary walking has less effective effort against a heavier load than
+    // a braced push. Keep this continuous in both masses; no furniture classes.
+    const float bodyMass = 1.f/inverseMass;
+    const float force = character->GetMaxStrength()*character->GetMass()/(character->GetMass()+bodyMass);
+    const float available = std::min(pushRemaining,std::max(0.f,force*pushSeconds-used->second));
+    const float amount = std::min(magnitude,available);
+    if(amount<=0.f)
+      return;
+    pushRemaining -= amount;
+    used->second += amount;
+    // The write lock is already held. AddImpulse activates a sleeping body and
+    // applies the torque at the real contact point, in native SI units.
+    world.impl->system.GetBodyInterfaceNoLock().AddImpulse(contact.mBodyB,impulse*(amount/magnitude),contact.mPosition);
     }
 
   void OnContactAdded(const JPH::CharacterVirtual*, const JPH::CharacterContact& contact,
@@ -493,6 +537,9 @@ struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListe
   CollisionWorld& world;
   std::unique_ptr<JPH::CharacterVirtual> character;
   Npc* culprit = nullptr;
+  float pushSeconds = 0.f;
+  float pushRemaining = 0.f;
+  std::vector<std::pair<JPH::BodyID,float>> pushBodies;
   bool contactsDirty = true;
   JPH::BodyID ground;
   JPH::RMat44 groundTransform = JPH::RMat44::sIdentity();
@@ -545,7 +592,13 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
   const JPH::ShapeFilter shapeFilter;
   state.culprit = culprit;
   character.SetMass(std::max(mass,1.f));
-  character.SetMaxStrength(character.GetMass()*DynamicWorld::gravityMS);
+  // Jolt uses metres, kilograms and seconds: this is a 450 N human push,
+  // capped independently of the character's weight on a supporting body.
+  character.SetMaxStrength(std::min(character.GetMass()*DynamicWorld::gravityMS,450.f));
+  const float seconds = float(dt)*0.001f;
+  state.pushSeconds = seconds;
+  state.pushRemaining = character.GetMaxStrength()*seconds;
+  state.pushBodies.clear();
   character.SetMaxSlopeAngle(maxSlope);
   if(state.contactsDirty) {
     character.RefreshContacts(broadFilter,layerFilter,bodyFilter,shapeFilter,world.allocator);
@@ -553,7 +606,6 @@ CollisionWorld::CharacterMoveResult CollisionWorld::VirtualCharacter::move(
     }
   auto inheritedGroundVelocity = character.GetGroundVelocity();
   bool inferredKinematicVelocity = false;
-  const float seconds = float(dt)*0.001f;
   if(seconds>0.f) {
     auto kinematicVelocity = JPH::Vec3::sZero();
     if(character.IsSupported() && state.ground==character.GetGroundBodyID() && !state.ground.IsInvalid()) {
