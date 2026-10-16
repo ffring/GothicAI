@@ -776,3 +776,40 @@ enters the AI bridge. Repeat the full matrix with
 [`reports/navigation/2026-10-16-eye/run.sh`](../../reports/navigation/2026-10-16-eye/run.sh).
 `lobart-fence` places the calibration actor outside the pasture, near Maleth's previously confirmed
 collision with the fence; the performance pool `lobart` stays inside the field at `NW_FARM1_PATH_01`.
+
+### Cached destruction
+
+Build the local stock-world cache once with `scripts/fracture.sh`; `OPENGOTHIC_FRACTURE` overrides
+`~/.local/share/gothic-ai/fracture`. `scripts/fracture.sh verify` repeats the cut with seed 601 and
+compares bytes, closed surfaces, convexity, UVs and shell volume. Game assets stay outside git.
+
+`destruction` runs a real fireball against a crate and barrel in Coragon's tavern, native arrows,
+one/five metre drops and NPC/hero walking. `destruction-fireball` is the shorter fireball/hearing
+reproducer. Both require the same old Khorinis save as `movable-vobs`. The listener stands beyond
+ordinary furniture-impact range so the existing per-NPC noise cooldown cannot consume the break.
+
+```sh
+SOUND=1 TEMPEST_AUDIO_LOOPBACK=48000 scripts/bench.sh destruction .bench/destruction-functional
+python3 scripts/destruction_compare.py functional .bench/destruction-functional
+DESTRUCTION=0 scripts/bench.sh destruction-off .bench/destruction-performance/off
+DESTRUCTION=1 scripts/bench.sh destruction-on .bench/destruction-performance/on
+python3 scripts/destruction_compare.py performance .bench/destruction-performance
+DESTRUCTION=0 scripts/bench.sh destruction-disabled .bench/destruction-disabled
+OPENGOTHIC_FRACTURE= scripts/bench.sh destruction-disabled .bench/destruction-no-cache
+python3 scripts/destruction_compare.py disabled .bench/destruction-disabled
+python3 scripts/destruction_compare.py disabled .bench/destruction-no-cache
+```
+
+Use the same host and binary for both performance runs. They measure thirty seconds of completed app
+frames with the normal game clock, including the exact frame containing five native breaks, and
+native physics-step costs. Configure local builds with `-DOPENGOTHIC_ENABLE_APP_CADENCE=ON`;
+the Ryzen runner enables it automatically. Capture cadence is not game FPS.
+The five-body comparison uses an open stock-world arena with native floor and projectile/blast
+visibility checks; the crate/barrel acceptance pair stays in Coragon's tavern.
+
+`destruction on|off`, `destruction setup fireball|five|arrows|drop1|drop5|walk-npc|walk-hero`,
+`destruction begin` and `destruction checkpoint` control only the fixture. Geometry, body replacement,
+spell/arrow contacts and hearing use production paths. `destruction_*` events retain health, body
+identity, real drop trajectories, piece movement/sleep and break wall time. The scenario writes PNGs,
+six videos with optional WAV audio, and `session-destruction-scattered.sav` beneath its output directory.
+The save uses the previous format; transient fixture props and fragments are not saved.

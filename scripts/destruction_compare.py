@@ -37,7 +37,14 @@ def bodies(row):
 def fixture(rows, case, enabled=True):
     setup = one(rows, 'destruction_setup', case=case)
     require(setup['enabled'] is enabled, f'{case}: destruction mode mismatch')
-    require('CORAGON' in setup['host'].upper() or 'KORAGON' in setup['host'].upper(), 'fixture is not Coragon tavern')
+    if case == 'five':
+        require(setup.get('location') == 'stock_outdoor_arena', 'five-body fixture must identify its native outdoor site')
+        site = one(rows, 'destruction_site', case='five')
+        require(site['waypoint'] and site['location'] == 'stock_outdoor_arena', 'native five-body site metadata missing')
+        los = one(rows, 'destruction_five_los')
+        require(los['flight_clear'] and los['unobstructed_bodies'] == 5, 'five-body native projectile or blast path blocked')
+    else:
+        require('CORAGON' in setup['host'].upper() or 'KORAGON' in setup['host'].upper(), 'fixture is not Coragon tavern')
     catalog = bodies(setup)
     if enabled:
         require(all(body['destructible'] and not body['broken'] and body['health'] > 0
@@ -69,7 +76,7 @@ def asleep15(rows, case):
     return row['elapsed_since_last_break_ms']
 
 
-def functional(directory):
+def functional(directory, fireball_only=False):
     rows = events(directory)
     setup, _, final = fixture(rows, 'fireball')
     require(sorted(body['class'] for body in setup['bodies']) == ['barrel', 'crate'], 'fireball fixture lacks crate/barrel')
@@ -87,6 +94,18 @@ def functional(directory):
     listeners = [row for row in final['listeners'] if row['role'] == 'destruction-near']
     require(listeners and any(row['heard'] > 0 and row['facing_error_deg'] < 10 for row in listeners),
             'native NPC hearing did not turn listener to destruction')
+    for filename in ['destruction-before.png', 'destruction-after.png', 'destruction-fireball.mp4']:
+        require((directory / filename).is_file(), f'artifact missing: {filename}')
+    saved = one(rows, 'movable_session_save')
+    archive = directory / saved['archive']
+    require(archive.is_file() and archive.stat().st_size == saved['bytes'], 'native session save missing/truncated')
+    result = {'pass': True, 'fireball_pieces': len(parts), 'sleep_observed_ms': sleeping,
+              'break_ms': [row['break_ms'] for row in breaks], 'npc_heard_breaks': len(heard),
+              'npc_final_facing': listeners,
+              'artifacts': [str(path.relative_to(directory)) for path in sorted(directory.glob('*.mp4'))] +
+                           ['destruction-before.png', 'destruction-after.png', saved['archive']]}
+    if fireball_only:
+        return result
     arrow_setup, arrow_begin, arrow_final = fixture(rows, 'arrows')
     arrow_break, _ = broken(rows, 'arrows', arrow_final, 1)
     require(2 <= arrow_final['arrows'] <= 30 and arrow_break[0]['arrows'] == arrow_final['arrows'], 'arrow count invalid')
@@ -113,16 +132,9 @@ def functional(directory):
                     for key, row in bodies(after).items()), f'{case}: walking damaged the crate')
         walks[case] = {'travel_cm': math.dist(after['actor_cm'], after['actor_start_cm']),
                        'npc_contact': after['bodies'][0]['npc_contact'], 'health': after['bodies'][0]['health']}
-    for filename in ['destruction-before.png', 'destruction-after.png', 'destruction-fireball.mp4']:
-        require((directory / filename).is_file(), f'artifact missing: {filename}')
-    saved = one(rows, 'movable_session_save')
-    archive = directory / saved['archive']
-    require(archive.is_file() and archive.stat().st_size == saved['bytes'], 'native session save missing/truncated')
-    return {'pass': True, 'fireball_pieces': len(parts), 'sleep_observed_ms': sleeping,
-            'break_ms': [row['break_ms'] for row in breaks], 'arrows_to_break_crate': arrow_final['arrows'],
-            'drops': drop_results, 'walks': walks, 'npc_heard_breaks': len(heard), 'npc_final_facing': listeners,
-            'artifacts': [str(path.relative_to(directory)) for path in sorted(directory.glob('*.mp4'))] +
-                         ['destruction-before.png', 'destruction-after.png', saved['archive']]}
+    result.update({'arrows_to_break_crate': arrow_final['arrows'], 'drops': drop_results, 'walks': walks})
+    return result
+
 
 
 def percentile(values):
@@ -195,10 +207,11 @@ def disabled(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['functional', 'performance', 'disabled'])
+    parser.add_argument('mode', choices=['functional', 'fireball', 'performance', 'disabled'])
     parser.add_argument('directory', type=Path)
     args = parser.parse_args()
-    result = {'functional': functional, 'performance': performance, 'disabled': disabled}[args.mode](args.directory)
+    result = {'functional': functional, 'fireball': lambda directory: functional(directory, True),
+              'performance': performance, 'disabled': disabled}[args.mode](args.directory)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result['pass']:
         raise SystemExit(1)

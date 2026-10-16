@@ -120,8 +120,9 @@ build_storygraph() {
 
 build_engine() {
   local state="$1" digest="$2" started=$SECONDS
-  if [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" ]] && \
-     [[ "$(cat "$state/build/source.sha256")" == "$digest" ]]; then
+  if [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
+     [[ "$(cat "$state/build/source.sha256")" == "$digest" ]] && \
+     grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt"; then
     echo "Ryzen: engine unchanged, build skipped ($((SECONDS - started))s)"
     return
   fi
@@ -131,6 +132,7 @@ build_engine() {
   # Reconfigure on tree changes: OpenGothic's source globs need this for new .cpp files.
   cmake -S "$ROOT/OpenGothic" -B "$state/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DOPENGOTHIC_ENABLE_APP_CADENCE=ON \
     -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib" \
     >"$state/build/configure.log" 2>&1 || { cat "$state/build/configure.log"; return 1; }
   cmake --build "$state/build" --target Gothic2Notr --parallel "$jobs" \
