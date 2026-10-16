@@ -119,7 +119,7 @@ NavMesh::Path plan(World& world,bool blocked) {
   fallback.corners.push_back(meters(n.position()));
   for(size_t i=1;i<points.size();++i) {
     auto segment=mesh.findPath(meters(points[i-1]),meters(points[i]));
-    if(!segment.complete || (blocked && segment.transitions.empty())) {
+    if(!segment.complete) {
       // A verified authored road may connect mesh components; still execute it with keys.
       fallback.corners.push_back(meters(points[i]));continue;
     }
