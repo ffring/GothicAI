@@ -341,10 +341,10 @@ std::string actors(World& world,const std::string& filter) {
   std::ostringstream out;out << "{\"kind\":\"roads_actors\",\"actors\":[";bool first=true;
   for(uint32_t id=0;id<world.npcCount();++id) if(auto* npc=world.npcById(id)) {
     const auto instance=symbol(world,*npc);
-    if(!filter.empty() && upper(instance).find(upper(filter))==std::string::npos && upper(std::string(npc->displayName())).find(upper(filter))==std::string::npos) continue;
+    if(!filter.empty() && upper(instance).find(upper(filter))==std::string::npos) continue;
     if(!first) out << ',';
     first=false;
-    out << "{\"npc_id\":" << id << ",\"instance\":" << quote(instance) << ",\"name\":" << quote(npc->displayName())
+    out << "{\"npc_id\":" << id << ",\"instance\":" << quote(instance)
         << ",\"position_cm\":" << vector(npc->position()) << ",\"routines\":" << routineJson(routines(world,*npc)) << '}';
   }
   out << "]}";return out.str();
