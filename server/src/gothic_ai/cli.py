@@ -1444,6 +1444,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario stages: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "requires":
+                assert state.book is not None
+                results = await scenarios.book_requires(link, state.book)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario requires: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "own_repair":
                 assert state.book is not None and state.director is not None and place_book is not None
                 results = await scenarios.own_repair(link, state.book, state.director, place_book)
@@ -2135,6 +2141,7 @@ def main() -> None:
             "own",
             "trigger",
             "stages",
+            "requires",
             "chain",
             "own_repair",
             "cast",
