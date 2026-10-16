@@ -473,6 +473,8 @@ class FakeGame:
             ">=": lambda a, b: a >= b,
         }
         match e:
+            case ["inst", "HERO"]:
+                return "PC_HERO"
             case ["int", v, *_]:
                 return v
             case ["var", name]:

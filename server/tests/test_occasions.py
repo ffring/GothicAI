@@ -139,6 +139,9 @@ async def test_every_visit_is_kept_but_only_inhabited_places_camps_and_caves_are
             "minute": 0,
         }
         assert sum(m["type"] == "story_people" for m in fake.received) == 1
+        # story_eval needs a concrete SELF; story_state.near likewise needs HERO's actual instance.
+        assert all(m["npc"] == LOBART for m in fake.received if m["type"] == "story_eval")
+        assert all(m["near"] == "PC_HERO" for m in fake.received if m["type"] == "story_state")
 
 
 async def test_return_and_load_keep_visits_without_repeating_or_requeueing_occasions(places):

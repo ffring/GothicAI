@@ -66,6 +66,7 @@ class Occasions:
         self._wake = asyncio.Event()
         self._events: deque[Fact] = deque()
         self._people: list[dict[str, Any]] | None = None
+        self._context = "PC_HERO"
         self._residents: dict[str, set[str]] = {}
         self._candidate: str | None = None
         self._since = self.clock()
@@ -91,6 +92,7 @@ class Occasions:
         self.pending.clear()
         self._events.clear()
         self._people = None
+        self._context = "PC_HERO"
         self._residents.clear()
         self._candidate = self._raw_place = None
         self._since = self.clock()
@@ -172,12 +174,15 @@ class Occasions:
                 if generation != self._generation:
                     return
                 self._people = people
+                # story_eval's SELF is a concrete NPC symbol, not the HERO global. The expression
+                # itself reads HERO, so any existing person supplies the otherwise unused context.
+                self._context = people[0]["npc"] if people else "PC_HERO"
                 for person in people:
                     for entry in person.get("routine", []):
                         if (place := self.places.of(entry.get("waypoint"))) is not None:
                             self._residents.setdefault(place.id, set()).add(person["npc"])
             owners, distances = self._distance_exprs()
-            values = await self.link.story_eval("HERO", [NEAREST, *distances])
+            values = await self.link.story_eval(self._context, [NEAREST, ["inst", "HERO"], *distances])
             if generation != self._generation:
                 return
             if not values or not isinstance(values[0], str) or not values[0]:
@@ -187,7 +192,7 @@ class Occasions:
             chapter_due = self.clock() - self._chapter_checked >= self.chapter_s
             residents = self._residents.get(place.id, set()) if place else set()
             state = await self.link.story_state(
-                vars=["KAPITEL"] if chapter_due else (), npcs=sorted(residents), near="HERO"
+                vars=["KAPITEL"] if chapter_due else (), npcs=sorted(residents), near=values[1]
             )
             if generation != self._generation:
                 return
@@ -195,7 +200,7 @@ class Occasions:
             if not self._time:
                 return
             self.waypoint, self._raw_place = waypoint, place.id if place else None
-            self._set_distances(owners, values[1:])
+            self._set_distances(owners, values[2:])
             self._nearby = sorted(
                 npc
                 for npc, info in state.get("npcs", {}).items()
@@ -320,7 +325,7 @@ class Occasions:
             return None
         # Refresh movement at handoff too: the hero may have left since the last tick.
         owners, exprs = self._distance_exprs()
-        values = await self.link.story_eval("HERO", [NEAREST, *exprs])
+        values = await self.link.story_eval(self._context, [NEAREST, *exprs])
         if generation != self._generation:
             return None
         if not values or not isinstance(values[0], str) or not values[0]:

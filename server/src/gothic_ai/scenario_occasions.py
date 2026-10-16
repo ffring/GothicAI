@@ -40,7 +40,9 @@ async def occasions(link: GameLink, service: Occasions, slot: int = 7) -> dict[s
         await wait_message(link, Session, timeout=10)
 
     # This is the production reader, including its read-only whitelist, rather than debug eval.
-    nearest = await link.story_eval("HERO", [["call", "NPC_GETNEARESTWP", ["inst", "HERO"]]])
+    people = await link.story_people()
+    context = people[0]["npc"] if people else "PC_HERO"
+    nearest = await link.story_eval(context, [["call", "NPC_GETNEARESTWP", ["inst", "HERO"]]])
     if not nearest or not isinstance(nearest[0], str) or not nearest[0]:
         check("nearest_waypoint", False, "story_eval has no nearest waypoint; protocol left unchanged")
         return _logged(results)
@@ -51,7 +53,6 @@ async def occasions(link: GameLink, service: Occasions, slot: int = 7) -> dict[s
 
     # Pick a real resident's waypoint in a new, safe place near the loaded hero. Avoid the bandits'
     # routines here: the human death below is separate, and nobody should attack during settling.
-    people = await link.story_people()
     points = {p["name"].upper(): p for p in await link.waypoints() if not p.get("fp")}
     homes: dict[str, tuple[str, list[str]]] = {}
     for person in people:
@@ -130,7 +131,7 @@ async def occasions(link: GameLink, service: Occasions, slot: int = 7) -> dict[s
     state = await link.story_state(vars=["KAPITEL"])
     chapter = int(state.get("vars", {}).get("KAPITEL", 0))
     chapters = len(facts("chapter"))
-    await link.story_effect("HERO", [{"do": "set", "var": "KAPITEL", "value": chapter + 1}])
+    await link.story_effect(context, [{"do": "set", "var": "KAPITEL", "value": chapter + 1}])
     raised = await _until(lambda: len(facts("chapter")) > chapters, 37)
     new_chapters = facts("chapter")[chapters:]
     actual = int((await link.story_state(vars=["KAPITEL"]))["vars"]["KAPITEL"])
