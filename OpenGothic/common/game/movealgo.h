@@ -59,6 +59,7 @@ class MoveAlgo final {
 
     void    multSpeed(float s){ mulSpeed=s; }
     void    clearSpeed();
+    void    resetCharacterVirtual(bool mobTransition=false);
     void    takeRagdollControl();
     bool    accessDamFly(float dx, float dz, char hitType);
     bool    addSpellImpulse(const Tempest::Vec3& impulseNs, float massKg, bool reaction);
@@ -119,6 +120,7 @@ class MoveAlgo final {
     void    tickJumpup(uint64_t dt);
     bool    implTick  (uint64_t dt, MvFlags fai);
     bool    tickCharacterVirtual(uint64_t dt, const Tempest::Vec3& displacement);
+    bool    useCharacterVirtual();
 
     bool    tryMove   (float x, float y, float z);
     bool    tryMove   (float x, float y, float z, DynamicWorld::CollisionTest& out);
@@ -177,6 +179,8 @@ class MoveAlgo final {
 
     // Controller contacts are transient: the saved origin and movement state stay unchanged.
     bool                virtualMovementActive = false;
+    bool                npcVirtualInRange = false;
+    bool                npcVirtualMobTransition = false;
     Tempest::Vec3       virtualGroundVelocity = {}; // cm/s
     Tempest::Vec3       virtualJumpVelocity = {};   // cm/ms, inherited during jump root motion
 

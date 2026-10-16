@@ -1,0 +1,50 @@
+# Independent ON/OFF processes; subjects follow native AI_GoToPoint actions.
+# OPENGOTHIC_BENCH_TAKE=off|on selects only the NPC flag. Hero flag stays unchanged.
+seed 73013
+cheat god
+set time 12 0
+movable on
+off: npccharacter off
+on: npccharacter on
+view full
+overlay on
+
+npccharacter route stairs
+cam auto 400 130
+wait 700
+rec npc_stairs
+npccharacter begin
+wait 6000
+npccharacter end
+stop
+
+npccharacter route doorway
+cam auto 400 130
+wait 700
+rec npc_doorway
+npccharacter begin
+wait 6000
+npccharacter end
+stop
+
+npccharacter route tavern
+cam auto 350 110
+wait 1000
+rec npc_tavern_mug
+npccharacter begin
+wait 6000
+npccharacter end
+stop
+
+npccharacter seat
+cam auto 350 110
+wait 700
+rec npc_seat_and_rise
+npccharacter sit
+wait 5500
+npccharacter snapshot seated
+npccharacter stand
+wait 5500
+npccharacter end
+npccharacter snapshot standing
+stop

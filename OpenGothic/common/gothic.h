@@ -53,6 +53,7 @@ class Gothic final {
       bool movableVobs   = false;
       bool physicsNoise  = false;
       bool characterVirtual = false;
+      bool npcCharacterVirtual = false;
       };
 
     struct Options {

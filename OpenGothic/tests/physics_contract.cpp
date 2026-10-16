@@ -1656,6 +1656,76 @@ namespace {
       requireNear(after.position.y,50,.001f,"controller recreation must retain the saved or teleported feet y");
       requireNear(after.position.z,30,.001f,"controller recreation must retain the saved or teleported feet z");
     }
+    {
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_PAIR_CONTRACT");
+      DynamicWorld world(nullptr,movableFloor());
+      auto left=world.addGhostObj(&shape);
+      auto right=world.addGhostObj(&shape);
+      left.setPosition({0,0,0});
+      right.setPosition({200,0,0});
+      world.tick(0);
+      world.tick(0);
+      for(int i=0;i<40;++i) {
+        left.moveVirtual({5,0,0},17,50,slope,80);
+        right.moveVirtual({-5,0,0},17,50,slope,80);
+        require(right.position().x-left.position().x>=49.9f,
+                "two virtual NPCs moving towards each other must never cross or interpenetrate");
+        }
+      require(left.position().x>60.f && right.position().x<140.f,
+              "both virtual NPCs must advance before their mutual blocking contact");
+      requireNear(left.position().y,0.f,1.f,"an NPC contact must not lift virtual feet onto another NPC");
+      requireNear(right.position().y,0.f,1.f,"an opposing NPC contact must retain floor support");
+      const auto stoppedRight=right.position();
+      const auto blocked=left.moveVirtual({5,0,0},17,50,slope,80);
+      require(blocked.blocked && blocked.collision.npcCol>0.f,
+              "unsuccessful virtual NPC advancement must expose its blocking character contact to MoveAlgo");
+      requireNear(right.position().x,stoppedRight.x,0.f,"a virtual NPC contact must never push its neighbour");
+      right.setEnable(false);
+      for(int i=0;i<20;++i)
+        left.moveVirtual({5,0,0},17,50,slope,80);
+      require(left.position().x>150.f,"a seated character with disabled collision must not leave a virtual obstacle");
+    }
+    {
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_OVERLAP_CONTRACT");
+      DynamicWorld world(nullptr,movableFloor());
+      auto walker=world.addGhostObj(&shape);
+      auto overlapping=world.addGhostObj(&shape);
+      auto clearNeighbour=world.addGhostObj(&shape);
+      walker.setPosition({0,0,0});
+      overlapping.setPosition({40,0,0});
+      clearNeighbour.setPosition({-55,0,0});
+      for(int i=0;i<4;++i)
+        walker.moveVirtual({-5,0,0},17,50,slope,80);
+      require(walker.position().x>=-5.01f && walker.position().x<-4.f,
+              "separating a teleported overlap must not transfer penetration to a previously clear neighbour");
+      requireNear(overlapping.position().x,40.f,0.f,"overlap recovery must not displace the original neighbour");
+      requireNear(clearNeighbour.position().x,-55.f,0.f,"overlap recovery must not displace the clear neighbour");
+    }
+    {
+      Resources resources;
+      ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,600}),PackedMesh::PK_Visual),"VIRTUAL_NPC_WALL.MRM");
+      zenkit::ModelHierarchy hierarchy;
+      hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
+      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_WALL_CONTRACT");
+      DynamicWorld world(nullptr,movableFloor());
+      auto structure=world.addStaticObj(wall.attach[0].shape.get(),at(50,200,0),"VIRTUAL_NPC_WALL.MRM");
+      auto walker=world.addGhostObj(&shape);
+      auto obstacle=world.addGhostObj(&shape);
+      walker.setPosition({0,0,0});
+      obstacle.setPosition({15,0,150});
+      // The diagonal desired motion misses the NPC, while wall sliding would
+      // encounter it. The post-solve clip must retain a world-safe pose.
+      const auto stopped=walker.moveVirtual({200,0,200},100,50,slope,80);
+      require(!structure.isEmpty(),"virtual NPC wall fixture must install its static collision mesh");
+      require(stopped.position.x<=15.1f && stopped.position.z<100.f,
+              "a wall-resolved virtual move must not cross a character or interpolate feet into the wall");
+      requireNear(obstacle.position().x,15.f,0.f,"wall sliding must not push a neighbouring NPC through the wall");
+      requireNear(obstacle.position().z,150.f,0.f,"wall sliding must leave the neighbouring NPC at its own feet");
+    }
     }
 
   void testContracts() {

@@ -181,6 +181,7 @@ Marvin::Marvin() {
     {"toggle movable_vobs",       C_ToggleMovableVobs},
     {"toggle physics_noise",      C_TogglePhysicsNoise},
     {"toggle character_virtual",  C_ToggleCharacterVirtual},
+    {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
     };
   }
 
@@ -577,6 +578,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().characterVirtual;
       Gothic::settingsSetI("GAME","character_virtual",enabled ? 1 : 0);
       print(enabled ? "CharacterVirtual: ON (hero)" : "CharacterVirtual: OFF");
+      return true;
+      }
+    case C_ToggleNpcCharacterVirtual: {
+      const bool enabled = !Gothic::physicsFlags().npcCharacterVirtual;
+      Gothic::settingsSetI("GAME","npc_character_virtual",enabled ? 1 : 0);
+      print(enabled ? "CharacterVirtual: ON (nearby human NPCs)" : "CharacterVirtual: OFF (NPCs)");
       return true;
       }
     }
